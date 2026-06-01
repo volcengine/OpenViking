@@ -2,10 +2,9 @@
 # SPDX-License-Identifier: AGPL-3.0
 """SemanticQueue: Semantic extraction queue."""
 
-import threading
-import time
 from typing import Optional
 
+from openviking.service.coordinator import get_coordinator
 from openviking_cli.utils.logger import get_logger
 
 from .named_queue import NamedQueue
@@ -15,28 +14,32 @@ logger = get_logger(__name__)
 
 # Coalesce rapid re-enqueues for the same memory parent directory (github #769).
 _MEMORY_PARENT_SEMANTIC_DEDUPE_SEC = 45.0
-_SEMANTIC_COALESCE_LOCK = threading.Lock()
-_SEMANTIC_COALESCE_VERSION: dict[str, int] = {}
+
+
+def _coalesce_coord_key(coalesce_key: str) -> str:
+    return f"coalesce:{coalesce_key}"
 
 
 def is_semantic_coalesce_stale(coalesce_key: str, coalesce_version: int) -> bool:
     if not coalesce_key or coalesce_version <= 0:
         return False
-    with _SEMANTIC_COALESCE_LOCK:
-        return coalesce_version < _SEMANTIC_COALESCE_VERSION.get(coalesce_key, 0)
+    # Strongly-consistent read: the Coordinator backend (in-process dict or
+    # Redis) guarantees this reflects the latest enqueue's incr, including the
+    # lock-inside TOCTOU re-check in write_semantic_sidecars.
+    current = get_coordinator().get_int(_coalesce_coord_key(coalesce_key))
+    return coalesce_version < current
 
 
 def is_semantic_msg_stale(msg: SemanticMsg) -> bool:
     return is_semantic_coalesce_stale(msg.coalesce_key, msg.coalesce_version)
 
 
+def _memory_dedupe_coord_key(key: str) -> str:
+    return f"mem_dedupe:{key}"
+
+
 class SemanticQueue(NamedQueue):
     """Semantic extraction queue for async generation of .abstract.md and .overview.md."""
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._memory_parent_semantic_last: dict[str, float] = {}
-        self._memory_parent_semantic_lock = threading.Lock()
 
     @staticmethod
     def _memory_parent_semantic_key(msg: SemanticMsg) -> str:
@@ -46,29 +49,25 @@ class SemanticQueue(NamedQueue):
         """Serialize SemanticMsg object and store in queue."""
         if msg.context_type == "memory" and not msg.coalesce_key:
             key = self._memory_parent_semantic_key(msg)
-            now = time.monotonic()
-            with self._memory_parent_semantic_lock:
-                last = self._memory_parent_semantic_last.get(key, 0.0)
-                if now - last < _MEMORY_PARENT_SEMANTIC_DEDUPE_SEC:
-                    logger.debug(
-                        "[SemanticQueue] Skipping duplicate memory semantic enqueue for %s "
-                        "(within %.0fs dedupe window; see #769)",
-                        msg.uri,
-                        _MEMORY_PARENT_SEMANTIC_DEDUPE_SEC,
-                    )
-                    return "deduplicated"
-                self._memory_parent_semantic_last[key] = now
-                if len(self._memory_parent_semantic_last) > 2000:
-                    cutoff = now - (_MEMORY_PARENT_SEMANTIC_DEDUPE_SEC * 4)
-                    stale = [k for k, t in self._memory_parent_semantic_last.items() if t < cutoff]
-                    for k in stale[:800]:
-                        self._memory_parent_semantic_last.pop(k, None)
+            coord = get_coordinator()
+            coord_key = _memory_dedupe_coord_key(key)
+            # Atomic claim: only the first caller within the dedupe window wins.
+            # SET NX EX is a single round-trip, so concurrent enqueues across
+            # instances cannot both pass the check (no get-then-set TOCTOU).
+            # The window is the claim's TTL; it re-arms once it expires.
+            claimed = coord.set_if_absent(coord_key, int(_MEMORY_PARENT_SEMANTIC_DEDUPE_SEC))
+            if not claimed:
+                logger.debug(
+                    "[SemanticQueue] Skipping duplicate memory semantic enqueue for %s "
+                    "(within %.0fs dedupe window; see #769)",
+                    msg.uri,
+                    _MEMORY_PARENT_SEMANTIC_DEDUPE_SEC,
+                )
+                return "deduplicated"
 
         if msg.coalesce_key:
-            with _SEMANTIC_COALESCE_LOCK:
-                version = _SEMANTIC_COALESCE_VERSION.get(msg.coalesce_key, 0) + 1
-                _SEMANTIC_COALESCE_VERSION[msg.coalesce_key] = version
-                msg.coalesce_version = version
+            # Atomic, cross-instance-safe version bump via the Coordinator.
+            msg.coalesce_version = get_coordinator().incr(_coalesce_coord_key(msg.coalesce_key))
 
         return await super().enqueue(msg.to_dict())
 

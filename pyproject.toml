@@ -174,6 +174,9 @@ bot-opencode = ["opencode-ai>=0.1.0a0"]
 bot-full = [
     "openviking[bot,bot-langfuse,bot-telegram,bot-feishu,bot-dingtalk,bot-slack,bot-qq,bot-sandbox,bot-fuse,bot-opencode]",
 ]
+# Multi-instance coordination backend (Redis). Optional: only needed when
+# storage.coordination.backend = "redis" for multi-instance consistency.
+coordination = ["redis>=5.0.0"]
 benchmark = [
     "langchain>=1.0.0",
     "langchain-core>=1.0.0",

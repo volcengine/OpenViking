@@ -8,16 +8,37 @@ import threading
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional
 
+from openviking.service.coordinator import get_coordinator
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# How often the owner-side completion poller re-reads the shared remaining
+# counter under the distributed backend. The memory backend never polls (its
+# decrement is in-process and drives completion synchronously).
+_POLL_INTERVAL_SEC = 0.5
+
+
+
+def _remaining_key(semantic_msg_id: str) -> str:
+    return f"emb:{semantic_msg_id}:remaining"
+
+
+def _reg_key(semantic_msg_id: str) -> str:
+    return f"emb:{semantic_msg_id}:reg"
+
 
 @dataclass
 class _EmbeddingTaskRecord:
-    """Coordinator state for a single semantic message."""
+    """Owner-instance-local state for a single semantic message.
 
-    remaining: int
+    The remaining-task *count* lives in the Coordinator (so embedding messages
+    dequeued by any instance decrement the same total). Only this record's
+    owner instance holds the completion callback and the loop it must run on,
+    because the callback closes an in-memory lock lease that cannot cross a
+    process boundary.
+    """
+
     total: int
     on_complete: Optional[Callable[[], Any]]
     metadata: Dict[str, Any]
@@ -27,13 +48,15 @@ class _EmbeddingTaskRecord:
 class EmbeddingTaskTracker:
     """Track embedding task completion status for each SemanticMsg.
 
-    This tracker maintains a process-global registry of embedding tasks associated
-    with each SemanticMsg. Because semantic and embedding queues run on separate
-    worker threads with distinct event loops, its internal state must be guarded
-    by thread-safe primitives rather than loop-bound asyncio locks.
+    The shared remaining-task counter is held in the Coordinator, making the
+    count consistent across load-balanced instances that dequeue embedding
+    messages from the same queue. The completion callback (which releases an
+    owner-local lock lease and marks the semantic root done) stays on the
+    instance/loop that registered it.
 
-    When all embedding tasks for a SemanticMsg are completed, it triggers the
-    registered callback and removes the entry.
+    Because semantic and embedding queues run on separate worker threads with
+    distinct event loops, the owner-local registry is guarded by a thread-safe
+    primitive rather than a loop-bound asyncio lock.
     """
 
     _instance: Optional["EmbeddingTaskTracker"] = None
@@ -136,37 +159,48 @@ class EmbeddingTaskTracker:
             metadata: Optional metadata to store with the task
         """
         owner_loop = asyncio.get_running_loop()
-        record_to_finalize: Optional[_EmbeddingTaskRecord] = None
+        record = _EmbeddingTaskRecord(
+            total=total_count,
+            on_complete=on_complete,
+            metadata=metadata or {},
+            owner_loop=owner_loop,
+        )
+
+        if total_count <= 0:
+            logger.info(
+                f"No embedding tasks for SemanticMsg {semantic_msg_id}, "
+                f"running completion callback immediately"
+            )
+            await self._run_on_complete(semantic_msg_id, record)
+            return
+
+        coord = get_coordinator()
+        # Authoritative set: drop any stale counter from a reused id, then seed
+        # the total. The reg marker lets decrement distinguish a tracked id
+        # (all-tasks-pending) from an unknown one.
+        coord.delete(_remaining_key(semantic_msg_id))
+        coord.incr(_remaining_key(semantic_msg_id), total_count)
+        coord.sadd(_reg_key(semantic_msg_id), "1")
 
         with self._lock:
-            existing = self._tasks.get(semantic_msg_id)
-            if existing is not None:
+            if self._tasks.get(semantic_msg_id) is not None:
                 logger.warning(
                     "Overwriting existing embedding tracker record for SemanticMsg %s",
                     semantic_msg_id,
                 )
+            self._tasks[semantic_msg_id] = record
 
-            self._tasks[semantic_msg_id] = _EmbeddingTaskRecord(
-                remaining=total_count,
-                total=total_count,
-                on_complete=on_complete,
-                metadata=metadata or {},
-                owner_loop=owner_loop,
-            )
-            logger.info(
-                f"Registered embedding tracker for SemanticMsg {semantic_msg_id}: "
-                f"{total_count} tasks"
-            )
+        logger.info(
+            f"Registered embedding tracker for SemanticMsg {semantic_msg_id}: "
+            f"{total_count} tasks"
+        )
 
-            if total_count <= 0:
-                record_to_finalize = self._tasks.pop(semantic_msg_id)
-                logger.info(
-                    f"No embedding tasks for SemanticMsg {semantic_msg_id}, "
-                    f"clearing tracker entry immediately"
-                )
-
-        if record_to_finalize is not None:
-            await self._run_on_complete(semantic_msg_id, record_to_finalize)
+        # Under the distributed backend the final decrement may land on a
+        # different instance that holds neither the callback nor the loop it
+        # must run on. The owner watches the shared counter and fires the
+        # callback locally when it reaches zero.
+        if coord.is_distributed:
+            asyncio.create_task(self._poll_until_complete(semantic_msg_id))
 
     async def decrement(self, semantic_msg_id: str) -> Optional[int]:
         """Decrement the remaining task count for a SemanticMsg.
@@ -181,22 +215,58 @@ class EmbeddingTaskTracker:
         Returns:
             The remaining count after decrement, or None if not found
         """
-        record_to_finalize: Optional[_EmbeddingTaskRecord] = None
+        coord = get_coordinator()
+        if coord.scard(_reg_key(semantic_msg_id)) == 0:
+            return None
 
-        with self._lock:
-            record = self._tasks.get(semantic_msg_id)
-            if record is None:
-                return None
+        remaining = coord.incr(_remaining_key(semantic_msg_id), -1)
 
-            record.remaining -= 1
-            remaining = record.remaining
+        # Distributed backend: completion is driven exclusively by the owner's
+        # poller (this decrement may be running on a non-owner instance that
+        # has no callback). Avoid a double fire by not completing here.
+        if coord.is_distributed:
+            return remaining
 
-            if remaining <= 0:
-                record_to_finalize = self._tasks.pop(semantic_msg_id)
-                logger.info(
-                    f"All embedding tasks({record.total}) completed for SemanticMsg {semantic_msg_id}"
-                )
-
-        if record_to_finalize is not None:
-            await self._run_on_complete(semantic_msg_id, record_to_finalize)
+        if remaining <= 0:
+            record = self._tasks.pop(semantic_msg_id, None)
+            coord.delete(_remaining_key(semantic_msg_id), _reg_key(semantic_msg_id))
+            logger.info(
+                f"All embedding tasks completed for SemanticMsg {semantic_msg_id}"
+            )
+            if record is not None:
+                await self._run_on_complete(semantic_msg_id, record)
         return remaining
+
+    async def _poll_until_complete(self, semantic_msg_id: str) -> None:
+        """Owner-side waiter: fire the callback once the shared counter is drained.
+
+        Runs only under the distributed backend, on the owner's event loop.
+        Fires when remaining <= 0 while the registration is still live; bails
+        without firing if the registration vanished (TTL expiry / external
+        cleanup) so abandoned requests do not trigger a false completion.
+        """
+        coord = get_coordinator()
+        while True:
+            await asyncio.sleep(_POLL_INTERVAL_SEC)
+            if coord.scard(_reg_key(semantic_msg_id)) == 0:
+                self._tasks.pop(semantic_msg_id, None)
+                logger.warning(
+                    "Embedding tracker registration for %s expired before "
+                    "completion; abandoning completion callback",
+                    semantic_msg_id,
+                )
+                return
+            if coord.default_ttl_sec > 0:
+                coord.expire(_reg_key(semantic_msg_id), coord.default_ttl_sec)
+                coord.expire(_remaining_key(semantic_msg_id), coord.default_ttl_sec)
+            if coord.get_int(_remaining_key(semantic_msg_id)) <= 0:
+                record = self._tasks.pop(semantic_msg_id, None)
+                coord.delete(
+                    _remaining_key(semantic_msg_id), _reg_key(semantic_msg_id)
+                )
+                logger.info(
+                    f"All embedding tasks completed for SemanticMsg {semantic_msg_id}"
+                )
+                if record is not None:
+                    await self._run_on_complete(semantic_msg_id, record)
+                return

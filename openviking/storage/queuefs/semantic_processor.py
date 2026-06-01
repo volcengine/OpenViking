@@ -37,6 +37,10 @@ from openviking.storage.queuefs.semantic_sidecar import write_semantic_sidecars
 from openviking.storage.transaction import NO_LOCK, LockLease
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import bind_telemetry, bind_telemetry_stage, resolve_telemetry
+from openviking.telemetry.request_queue_stats import (
+    RequestQueueStats,
+    RequestStatsAccumulator,
+)
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.span_models import create_root_span_attributes
 from openviking.utils.circuit_breaker import (
@@ -71,12 +75,6 @@ class DiffResult:
         }
 
 
-class RequestQueueStats:
-    processed: int = 0
-    requeue_count: int = 0
-    error_count: int = 0
-
-
 class SemanticProcessor(DequeueHandlerBase):
     """
     Semantic processor, generates .abstract.md and .overview.md bottom-up.
@@ -92,8 +90,7 @@ class SemanticProcessor(DequeueHandlerBase):
     _dag_stats_by_telemetry_id: Dict[str, DagStats] = {}
     _dag_stats_by_uri: Dict[str, DagStats] = {}
     _dag_stats_order: List[Tuple[str, str]] = []
-    _request_stats_by_telemetry_id: Dict[str, RequestQueueStats] = {}
-    _request_stats_order: List[str] = []
+    _request_stats = RequestStatsAccumulator("semantic", max_tracked=256)
     _max_cached_stats = 256
 
     def __init__(self, max_concurrent_llm: int = 64):
@@ -144,25 +141,16 @@ class SemanticProcessor(DequeueHandlerBase):
         requeue_count: int = 0,
         error_count: int = 0,
     ) -> None:
-        if not telemetry_id:
-            return
-        with cls._stats_lock:
-            stats = cls._request_stats_by_telemetry_id.setdefault(telemetry_id, RequestQueueStats())
-            stats.processed += processed
-            stats.requeue_count += requeue_count
-            stats.error_count += error_count
-            cls._request_stats_order.append(telemetry_id)
-            if len(cls._request_stats_order) > cls._max_cached_stats:
-                old_telemetry_id = cls._request_stats_order.pop(0)
-                if old_telemetry_id != telemetry_id:
-                    cls._request_stats_by_telemetry_id.pop(old_telemetry_id, None)
+        cls._request_stats.merge(
+            telemetry_id,
+            processed=processed,
+            requeue_count=requeue_count,
+            error_count=error_count,
+        )
 
     @classmethod
     def consume_request_stats(cls, telemetry_id: str) -> Optional[RequestQueueStats]:
-        if not telemetry_id:
-            return None
-        with cls._stats_lock:
-            return cls._request_stats_by_telemetry_id.pop(telemetry_id, None)
+        return cls._request_stats.consume(telemetry_id)
 
     @staticmethod
     def _ctx_from_semantic_msg(msg: SemanticMsg) -> RequestContext:

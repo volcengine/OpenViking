@@ -8,6 +8,11 @@ import time
 
 import pytest
 
+from openviking.service.coordinator import (
+    InProcessCoordinator,
+    get_coordinator,
+    set_coordinator,
+)
 from openviking.storage.queuefs.embedding_tracker import EmbeddingTaskTracker
 
 
@@ -55,9 +60,13 @@ class _LoopThread:
 def _reset_tracker_singleton():
     EmbeddingTaskTracker._instance = None
     EmbeddingTaskTracker._initialized = False
+    # The remaining-task counter now lives in the Coordinator; isolate each
+    # test on a fresh in-process store (the default, non-distributed backend).
+    set_coordinator(InProcessCoordinator())
     yield
     EmbeddingTaskTracker._instance = None
     EmbeddingTaskTracker._initialized = False
+    set_coordinator(InProcessCoordinator())
 
 
 def test_tracker_runs_completion_callback_on_register_loop():
@@ -185,3 +194,95 @@ async def test_tracker_clears_zero_task_entry_without_callback():
     await tracker.register("semantic-msg", 0, on_complete=None)
 
     assert await tracker.decrement("semantic-msg") is None
+
+
+# --- Distributed backend: cross-instance completion -------------------------
+#
+# Under the distributed (multi-instance) backend the remaining-task counter is
+# shared, so embedding messages for one SemanticMsg can be decremented by an
+# instance that holds neither the completion callback nor the loop it must run
+# on. The owner instance watches the shared counter and fires the callback
+# locally when it drains. A single shared coordinator store models two
+# instances pointing at the same backend.
+
+
+class _SharedDistributedCoordinator(InProcessCoordinator):
+    """In-process store that advertises itself as cross-instance shared.
+
+    Behaviourally identical to ``InProcessCoordinator`` (so the test needs no
+    Redis), but ``is_distributed`` flips the tracker onto its owner-polls-for-
+    completion path, exercising the exact multi-instance code under test.
+    """
+
+    is_distributed = True
+
+
+class TestDistributedCompletion:
+    def test_owner_fires_callback_on_remote_decrement(self):
+        # A shared store stands in for two instances on one backend. The owner
+        # registers on loop A; a different loop drives the decrements; the
+        # owner's poller must run the callback on loop A exactly when the
+        # shared counter reaches zero.
+        set_coordinator(_SharedDistributedCoordinator())
+        tracker = EmbeddingTaskTracker.get_instance()
+        owner = _LoopThread()
+        worker = _LoopThread()
+        callback_info = concurrent.futures.Future()
+
+        async def on_complete():
+            callback_info.set_result((threading.get_ident(), asyncio.get_running_loop()))
+
+        async def register():
+            await tracker.register("semantic-msg", 2, on_complete=on_complete)
+
+        async def decrement():
+            return await tracker.decrement("semantic-msg")
+
+        try:
+            owner.submit(register()).result(timeout=2)
+            assert not callback_info.done()
+            assert worker.submit(decrement()).result(timeout=2) == 1
+            assert not callback_info.done()
+            assert worker.submit(decrement()).result(timeout=2) == 0
+            callback_thread_id, callback_loop = callback_info.result(timeout=3)
+        finally:
+            owner.stop()
+            worker.stop()
+
+        assert callback_thread_id == owner.thread.ident
+        assert callback_loop is owner.loop
+        coord = get_coordinator()
+        assert coord.scard("emb:semantic-msg:reg") == 0
+        assert coord.get_int("emb:semantic-msg:remaining") == 0
+
+    def test_extra_decrements_do_not_double_fire(self):
+        set_coordinator(_SharedDistributedCoordinator())
+        tracker = EmbeddingTaskTracker.get_instance()
+        owner = _LoopThread()
+        worker = _LoopThread()
+        fires = []
+        fired = concurrent.futures.Future()
+
+        async def on_complete():
+            fires.append(1)
+            fired.set_result(True)
+
+        async def register():
+            await tracker.register("semantic-msg", 1, on_complete=on_complete)
+
+        async def decrement():
+            return await tracker.decrement("semantic-msg")
+
+        try:
+            owner.submit(register()).result(timeout=2)
+            assert worker.submit(decrement()).result(timeout=2) == 0
+            fired.result(timeout=3)
+            # Registration is cleared on completion, so later decrements are
+            # no-ops and the poller has already exited.
+            assert worker.submit(decrement()).result(timeout=2) is None
+            time.sleep(0.7)  # span another poll interval to catch a double fire
+        finally:
+            owner.stop()
+            worker.stop()
+
+        assert fires == [1]
