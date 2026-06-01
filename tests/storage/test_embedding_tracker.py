@@ -179,6 +179,34 @@ async def test_tracker_supports_sync_callback_and_missing_task():
 
 
 @pytest.mark.asyncio
+async def test_tracker_adds_tasks_after_registration():
+    tracker = EmbeddingTaskTracker.get_instance()
+    callback_calls = []
+
+    await tracker.register("semantic-msg", 1, on_complete=lambda: callback_calls.append("done"))
+
+    assert await tracker.add_tasks("semantic-msg", 2) == 3
+    assert await tracker.decrement("semantic-msg") == 2
+    assert callback_calls == []
+    assert await tracker.decrement("semantic-msg") == 1
+    assert callback_calls == []
+    assert await tracker.decrement("semantic-msg") == 0
+    assert callback_calls == ["done"]
+
+
+@pytest.mark.asyncio
+async def test_tracker_clear_removes_record_without_callback():
+    tracker = EmbeddingTaskTracker.get_instance()
+    callback_calls = []
+
+    await tracker.register("semantic-msg", 1, on_complete=lambda: callback_calls.append("done"))
+    await tracker.clear("semantic-msg")
+
+    assert await tracker.decrement("semantic-msg") is None
+    assert callback_calls == []
+
+
+@pytest.mark.asyncio
 async def test_tracker_clears_zero_task_entry_without_callback():
     tracker = EmbeddingTaskTracker.get_instance()
 

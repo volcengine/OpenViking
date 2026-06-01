@@ -83,9 +83,24 @@ class _TrackingProcessor(_FakeProcessor):
 class _DummyTracker:
     def __init__(self):
         self.register_calls = []
+        self.add_calls = []
+        self.decrement_calls = []
+        self.clear_calls = []
 
     async def register(self, **_kwargs):
         self.register_calls.append(_kwargs)
+        return None
+
+    async def add_tasks(self, semantic_msg_id, count):
+        self.add_calls.append({"semantic_msg_id": semantic_msg_id, "count": count})
+        return None
+
+    async def decrement(self, semantic_msg_id):
+        self.decrement_calls.append(semantic_msg_id)
+        return None
+
+    async def clear(self, semantic_msg_id):
+        self.clear_calls.append(semantic_msg_id)
         return None
 
 
@@ -223,6 +238,46 @@ async def test_semantic_dag_shares_node_scheduler_across_roots(monkeypatch):
     assert processor.max_active_summaries <= 4
     assert executor_a.get_stats().done_nodes == 21
     assert executor_b.get_stats().done_nodes == 21
+
+
+@pytest.mark.asyncio
+async def test_semantic_dag_streams_vectorize_work_to_tracker(monkeypatch):
+    root_uri = "viking://resources/root"
+    tree = {
+        root_uri: [
+            {"name": "a.txt", "isDir": False},
+            {"name": "b.txt", "isDir": False},
+        ],
+    }
+    fake_fs = _FakeVikingFS(tree)
+    tracker = _DummyTracker()
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.embedding_tracker.EmbeddingTaskTracker.get_instance",
+        lambda: tracker,
+    )
+
+    processor = _FakeProcessor()
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1", "agent1"), role=Role.USER)
+    executor = SemanticDagExecutor(
+        processor=processor,
+        context_type="resource",
+        max_concurrent_llm=2,
+        ctx=ctx,
+        semantic_msg_id="semantic-msg",
+    )
+    await executor.run(root_uri)
+
+    assert len(tracker.register_calls) == 1
+    assert tracker.register_calls[0]["semantic_msg_id"] == "semantic-msg"
+    assert tracker.register_calls[0]["total_count"] == 1
+    assert sum(call["count"] for call in tracker.add_calls) == 4
+    assert tracker.decrement_calls == ["semantic-msg"]
+    assert tracker.clear_calls == []
+    assert processor.vectorized_dirs == [root_uri]
+    assert sorted(processor.vectorized_files) == sorted(
+        [f"{root_uri}/a.txt", f"{root_uri}/b.txt"]
+    )
 
 
 @pytest.mark.asyncio

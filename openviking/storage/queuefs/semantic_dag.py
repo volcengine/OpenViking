@@ -203,11 +203,10 @@ class SemanticDagExecutor:
         self._closed = False
         self._failure: Optional[Exception] = None
         self._stats = DagStats()
-        self._vectorize_task_count: int = 0
-        self._pending_vectorize_tasks: List[VectorizeTask] = []
+        self._vectorize_tracker_registered = False
         self._pending_vectorize_work = 0
-        self._vectorize_done: Optional[asyncio.Event] = None
-        self._vectorize_lock = asyncio.Lock()
+        self._vectorize_done = asyncio.Event()
+        self._vectorize_done.set()
         self._file_change_status: Dict[str, bool] = {}
         self._dir_change_status: Dict[str, bool] = {}
         self._overview_cache: Dict[str, Dict[str, str]] = {}
@@ -221,12 +220,6 @@ class SemanticDagExecutor:
 
         try:
             self._register_active()
-            self._schedule_dir(root_uri, parent_uri=None)
-            await self._root_done.wait()
-            if self._failure:
-                raise self._failure
-
-            # Release owned semantic locks after downstream vectorization finishes.
             async def wrapped_on_complete() -> None:
                 try:
                     if self._telemetry_id and self._semantic_msg_id:
@@ -236,30 +229,23 @@ class SemanticDagExecutor:
                 finally:
                     await self._lock.close()
 
-            async with self._vectorize_lock:
-                task_count = self._vectorize_task_count
-                tasks = list(self._pending_vectorize_tasks)
+            await self._register_vectorize_tracker(root_uri, wrapped_on_complete)
+            self._schedule_dir(root_uri, parent_uri=None)
+            await self._root_done.wait()
+            if self._failure:
+                raise self._failure
 
-            if task_count > 0:
-                from .embedding_tracker import EmbeddingTaskTracker
-
-                tracker = EmbeddingTaskTracker.get_instance()
-                await tracker.register(
-                    semantic_msg_id=self._semantic_msg_id,
-                    total_count=task_count,
-                    on_complete=wrapped_on_complete,
-                    metadata={"uri": root_uri},
-                )
-
-                await self._dispatch_vectorize_tasks(tasks)
+            if self._vectorize_tracker_registered:
+                await self._finish_vectorize_scheduling()
+                await self._wait_vectorize_work()
             else:
-                # No vectorize tasks — release lock immediately (via wrapped callback)
                 try:
                     await wrapped_on_complete()
                 except Exception as e:
                     logger.error(f"Error in on_complete callback: {e}", exc_info=True)
         except BaseException:
             self._closed = True
+            await self._clear_vectorize_tracker()
             try:
                 await self._lock.close()
             except Exception:
@@ -316,8 +302,50 @@ class SemanticDagExecutor:
         self._closed = True
         if self._root_done:
             self._root_done.set()
-        if self._vectorize_done:
+        self._vectorize_done.set()
+
+    async def _register_vectorize_tracker(self, root_uri: str, on_complete) -> None:
+        if self._skip_vectorization or not self._semantic_msg_id:
+            return
+        from .embedding_tracker import EmbeddingTaskTracker
+
+        tracker = EmbeddingTaskTracker.get_instance()
+        await tracker.register(
+            semantic_msg_id=self._semantic_msg_id,
+            total_count=1,
+            on_complete=on_complete,
+            metadata={"uri": root_uri},
+        )
+        self._vectorize_tracker_registered = True
+
+    async def _finish_vectorize_scheduling(self) -> None:
+        if not self._vectorize_tracker_registered or not self._semantic_msg_id:
+            return
+        from .embedding_tracker import EmbeddingTaskTracker
+
+        tracker = EmbeddingTaskTracker.get_instance()
+        await tracker.decrement(self._semantic_msg_id)
+
+    async def _clear_vectorize_tracker(self) -> None:
+        if not self._vectorize_tracker_registered or not self._semantic_msg_id:
+            return
+        from .embedding_tracker import EmbeddingTaskTracker
+
+        tracker = EmbeddingTaskTracker.get_instance()
+        await tracker.clear(self._semantic_msg_id)
+
+    def _mark_vectorize_work_scheduled(self) -> None:
+        self._pending_vectorize_work += 1
+        self._vectorize_done.clear()
+
+    def _mark_vectorize_work_done(self) -> None:
+        self._pending_vectorize_work = max(0, self._pending_vectorize_work - 1)
+        if self._pending_vectorize_work == 0:
             self._vectorize_done.set()
+
+    async def _wait_vectorize_work(self) -> None:
+        if self._pending_vectorize_work > 0:
+            await self._vectorize_done.wait()
 
     def _register_active(self) -> None:
         with self._active_lock:
@@ -372,19 +400,6 @@ class SemanticDagExecutor:
         self._mark_node_done()
         logger.warning("Unknown semantic DAG work kind: %s", work.kind)
 
-    async def _dispatch_vectorize_tasks(self, tasks: List[VectorizeTask]) -> None:
-        self._vectorize_done = asyncio.Event()
-        self._pending_vectorize_work = len(tasks)
-        for task in tasks:
-            self._schedule_work(
-                DagWork(
-                    kind="vectorize",
-                    dir_uri=task.uri,
-                    vectorize_task=task,
-                )
-            )
-        await self._vectorize_done.wait()
-
     async def _run_vectorize_work(self, task: Optional[VectorizeTask]) -> None:
         try:
             if task is not None:
@@ -392,9 +407,7 @@ class SemanticDagExecutor:
         except Exception as exc:
             logger.error("Vectorization dispatch task failed: %s", exc, exc_info=True)
         finally:
-            self._pending_vectorize_work = max(0, self._pending_vectorize_work - 1)
-            if self._pending_vectorize_work == 0 and self._vectorize_done:
-                self._vectorize_done.set()
+            self._mark_vectorize_work_done()
 
     async def _run_vectorize_task(self, task: VectorizeTask) -> None:
         if task.task_type == "file":
@@ -857,19 +870,33 @@ class SemanticDagExecutor:
         self._release_dir_node(dir_uri)
 
     async def _add_vectorize_task(self, task: VectorizeTask) -> None:
-        """Add a vectorize task to the pending list."""
+        """Schedule vectorization work without retaining a root-sized task list."""
         if self._skip_vectorization:
             logger.info(
                 "Skipping vectorization task for %s (requested via SemanticMsg)",
                 task.uri,
             )
             return
-        async with self._vectorize_lock:
-            self._pending_vectorize_tasks.append(task)
-            if task.task_type == "file":
-                self._vectorize_task_count += 1
-            else:  # directory
-                self._vectorize_task_count += 2
+
+        expected_embeddings = 1 if task.task_type == "file" else 2
+        self._mark_vectorize_work_scheduled()
+        try:
+            if self._vectorize_tracker_registered and self._semantic_msg_id:
+                from .embedding_tracker import EmbeddingTaskTracker
+
+                tracker = EmbeddingTaskTracker.get_instance()
+                await tracker.add_tasks(self._semantic_msg_id, expected_embeddings)
+
+            self._schedule_work(
+                DagWork(
+                    kind="vectorize",
+                    dir_uri=task.uri,
+                    vectorize_task=task,
+                )
+            )
+        except Exception:
+            self._mark_vectorize_work_done()
+            raise
 
     def get_stats(self) -> DagStats:
         return DagStats(

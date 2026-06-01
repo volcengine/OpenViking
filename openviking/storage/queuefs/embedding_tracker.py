@@ -168,6 +168,30 @@ class EmbeddingTaskTracker:
         if record_to_finalize is not None:
             await self._run_on_complete(semantic_msg_id, record_to_finalize)
 
+    async def add_tasks(self, semantic_msg_id: str, count: int) -> Optional[int]:
+        """Add embedding tasks to an existing SemanticMsg tracker record."""
+        if count <= 0:
+            return None
+
+        with self._lock:
+            record = self._tasks.get(semantic_msg_id)
+            if record is None:
+                logger.warning(
+                    "Cannot add %s embedding tasks to missing SemanticMsg %s",
+                    count,
+                    semantic_msg_id,
+                )
+                return None
+
+            record.remaining += count
+            record.total += count
+            return record.remaining
+
+    async def clear(self, semantic_msg_id: str) -> None:
+        """Remove a SemanticMsg tracker record without running its completion callback."""
+        with self._lock:
+            self._tasks.pop(semantic_msg_id, None)
+
     async def decrement(self, semantic_msg_id: str) -> Optional[int]:
         """Decrement the remaining task count for a SemanticMsg.
 
