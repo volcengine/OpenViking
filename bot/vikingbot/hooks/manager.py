@@ -1,7 +1,7 @@
 import asyncio
 import importlib
 from collections import defaultdict
-from typing import List, Any, Dict, Type
+from typing import Any, Dict, List, Type
 
 from loguru import logger
 
@@ -47,9 +47,6 @@ class HookManager:
         async_hooks = [hook for hook in self._hooks[context.event_type] if not hook.is_sync]
         sync_hooks = [hook for hook in self._hooks[context.event_type] if hook.is_sync]
         if async_hooks:
-            logger.debug(
-                f"Executing {len(async_hooks)} async hooks for event '{context.event_type}'"
-            )
             async_results = await asyncio.gather(
                 *[hook.execute(context, **kwargs) for hook in async_hooks], return_exceptions=True
             )

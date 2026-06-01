@@ -38,7 +38,7 @@ results = await client.search(
 
 ## Intent Analysis
 
-IntentAnalyzer uses LLM to analyze query intent and generate 0-5 TypedQueries.
+IntentAnalyzer uses LLM to analyze query intent and generate 0-5 TypedQueries. The model used for this stage is separately configurable via the [`query_planner`](../guides/01-configuration.md#query_planner) config, falling back to `vlm` when unset.
 
 ### Input
 

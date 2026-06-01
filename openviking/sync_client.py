@@ -115,10 +115,27 @@ class SyncOpenViking:
             )
         )
 
+    def batch_add_messages(
+        self,
+        session_id: str,
+        messages: list[dict],
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Add multiple messages to a session in a single request."""
+        return run_async(
+            self._async_client.batch_add_messages(
+                session_id,
+                messages,
+                telemetry,
+            )
+        )
+
     def commit_session(
         self,
         session_id: str,
         telemetry: TelemetryRequest = False,
+        *,
+        keep_recent_count: int = 0,
         memory_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Commit a session (archive and extract memories)."""
@@ -126,6 +143,7 @@ class SyncOpenViking:
             self._async_client.commit_session(
                 session_id,
                 telemetry=telemetry,
+                keep_recent_count=keep_recent_count,
                 memory_policy=memory_policy,
             )
         )

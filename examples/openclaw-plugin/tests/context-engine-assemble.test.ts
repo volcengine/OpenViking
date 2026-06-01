@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenVikingClient } from "../client.js";
 import { memoryOpenVikingConfigSchema } from "../config.js";
 import { createMemoryOpenVikingContextEngine } from "../context-engine.js";
+import { estimateAgentMessagesTokens, estimateTextTokens } from "../token-estimator.js";
 
 const cfg = memoryOpenVikingConfigSchema.parse({
   mode: "remote",
@@ -14,11 +15,11 @@ const cfg = memoryOpenVikingConfigSchema.parse({
 });
 
 function roughEstimate(messages: unknown[]): number {
-  return Math.ceil(JSON.stringify(messages).length / 4);
+  return estimateAgentMessagesTokens(messages);
 }
 
 function systemPromptTokens(text?: string): number {
-  return text ? Math.ceil(text.length / 4) : 0;
+  return estimateTextTokens(text);
 }
 
 function makeLogger() {

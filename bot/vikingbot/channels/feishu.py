@@ -759,6 +759,8 @@ class FeishuChannel(BaseChannel):
 
             except Exception as e:
                 logger.warning(f"Failed to process {msg_type} message: {e}")
+        elif msg_type =="interactive":
+            content = message.content
         else:
             content = MSG_TYPE_MAP.get(msg_type, f"[{msg_type}]")
 

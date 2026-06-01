@@ -1111,9 +1111,25 @@ openviking-server --config /path/to/ov.conf
 
 The config sections documented above (embedding, vlm, rerank, storage) all belong to `ov.conf`. SDK embedded mode and server share this file.
 
+For memory-related settings, add a `memory` section in `ov.conf`:
+
+```json
+{
+  "memory": {
+    "version": "v2",
+    "agent_memory_enabled": false
+  }
+}
+```
+
+| Field | Description | Default |
+|-------|-------------|---------|
+| `version` | Memory implementation version. Only `"v2"` is supported (legacy `"v1"` removed in #2264 — passing `"v1"` now raises a `ValueError` at config load). | `"v2"` |
+| `agent_memory_enabled` | Enables trajectory/experience memory extraction after user-memory extraction. | `false` |
+
 ### ovcli.conf
 
-You can edit this file by hand, or generate it interactively with `ov config setup-cli`. If you maintain configurations for multiple servers, switch between them with `ov config switch`.
+You can edit this file by hand, or generate it interactively with `ov config`. If you maintain configurations for multiple servers, switch between them with `ov config switch`.
 
 Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI to connect to a remote server:
 

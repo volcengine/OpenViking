@@ -481,6 +481,8 @@ class LocalClient(BaseClient):
         self,
         session_id: str,
         telemetry: TelemetryRequest = False,
+        *,
+        keep_recent_count: int = 0,
         memory_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Commit a session (archive and extract memories)."""
@@ -490,6 +492,7 @@ class LocalClient(BaseClient):
             fn=lambda: self._service.sessions.commit(
                 session_id,
                 self._ctx,
+                keep_recent_count=keep_recent_count,
                 memory_policy=memory_policy,
             ),
         )
@@ -611,7 +614,7 @@ class LocalClient(BaseClient):
             elif message.get("content") is not None:
                 message_parts = [TextPart(text=str(message["content"]))]
             else:
-                raise ValueError(f"messages[{index}]: either content or parts must be provided")
+                raise ValueError(f"messages[{index}]: Either content or parts must be provided")
 
             specs.append(
                 {

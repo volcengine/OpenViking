@@ -31,6 +31,9 @@ pub enum Error {
 
     #[error("Zip error: {0}")]
     Zip(#[from] zip::result::ZipError),
+
+    #[error("already reported")]
+    AlreadyReported,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -83,6 +86,7 @@ impl From<Error> for CliError {
             Error::Io(e) => CliError::new(format!("IO error: {}", e)),
             Error::Serialization(e) => CliError::new(format!("Serialization error: {}", e)),
             Error::Zip(e) => CliError::new(format!("Zip error: {}", e)),
+            Error::AlreadyReported => CliError::new("already reported"),
         }
     }
 }

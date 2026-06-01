@@ -8,7 +8,12 @@ import {
   postSessionIdCommit,
   postSessionIdMessages,
 } from '#/gen/ov-client/sdk.gen'
-import { getOvResult, normalizeOvClientError, ovClient } from '#/lib/ov-client'
+import {
+  getOvResult,
+  normalizeOvClientError,
+  OvClientError,
+  ovClient,
+} from '#/lib/ov-client'
 
 import type { BotChatRequest, BotChatResponse } from '@ov-server/bot/v1/chat'
 import type { Message, MessagePart } from './types/message'
@@ -117,6 +122,27 @@ export async function commitSession(
 // Bot Chat
 // ---------------------------------------------------------------------------
 
+function extractErrorMessage(text: string, fallback: string): string {
+  if (!text.trim()) return fallback
+
+  try {
+    const parsed = JSON.parse(text) as unknown
+    if (parsed && typeof parsed === 'object') {
+      const record = parsed as Record<string, unknown>
+      if (typeof record.detail === 'string') return record.detail
+      const error = record.error
+      if (error && typeof error === 'object') {
+        const message = (error as Record<string, unknown>).message
+        if (typeof message === 'string') return message
+      }
+    }
+  } catch {
+    // Fall through to raw text.
+  }
+
+  return text
+}
+
 function buildFetchHeaders(): Record<string, string> {
   const conn = ovClient.getConnection()
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
@@ -125,6 +151,29 @@ function buildFetchHeaders(): Record<string, string> {
   if (conn.userId) headers['X-OpenViking-User'] = conn.userId
   headers['X-OpenViking-Agent'] = conn.agentId || 'web-studio'
   return headers
+}
+
+export async function fetchBotHealth(): Promise<unknown> {
+  const baseUrl = ovClient.getOptions().baseUrl
+  const response = await fetch(`${baseUrl}/bot/v1/health`, {
+    method: 'GET',
+    headers: buildFetchHeaders(),
+  })
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => '')
+    throw new OvClientError({
+      code: response.status === 503 ? 'BOT_MODE_DISABLED' : 'BOT_HEALTH_FAILED',
+      message: extractErrorMessage(
+        text,
+        `Bot health check failed (${response.status})`,
+      ),
+      responseBody: text,
+      statusCode: response.status,
+    })
+  }
+
+  return response.json().catch(() => ({ status: 'ok' }))
 }
 
 /**

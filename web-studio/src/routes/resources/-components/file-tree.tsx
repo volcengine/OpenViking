@@ -4,7 +4,6 @@ import { useTranslation } from 'react-i18next'
 
 import { cn } from '#/lib/utils'
 
-import { fileNameFromUri } from '../-lib/normalize'
 import { usePrefetchVikingFsList, useVikingFsList } from '../-hooks/viking-fm'
 import type { VikingFsEntry } from '../-types/viking-fm'
 

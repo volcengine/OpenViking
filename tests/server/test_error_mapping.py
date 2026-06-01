@@ -3,10 +3,15 @@
 
 """Focused tests for HTTP server exception-to-error mapping."""
 
-from openviking.pyagfs.exceptions import AGFSClientError, AGFSHTTPError
+from openviking.pyagfs.exceptions import AGFSClientError, AGFSHTTPError, AGFSIsADirectoryError
 from openviking.server.error_mapping import map_exception
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
-from openviking_cli.exceptions import FailedPreconditionError, InvalidURIError, NotFoundError
+from openviking_cli.exceptions import (
+    FailedPreconditionError,
+    InvalidArgumentError,
+    InvalidURIError,
+    NotFoundError,
+)
 
 
 class _UpstreamHTTPError(Exception):
@@ -59,6 +64,22 @@ def test_agfs_http_status_keeps_storage_mapping():
     assert isinstance(mapped, NotFoundError)
     assert mapped.code == "NOT_FOUND"
     assert mapped.message == "File not found: viking://missing"
+
+
+def test_agfs_is_directory_maps_to_structured_invalid_argument():
+    mapped = map_exception(
+        AGFSIsADirectoryError("Cannot read directory as file: viking://resources/docs"),
+        resource="viking://resources/docs",
+        resource_type="file",
+    )
+
+    assert isinstance(mapped, InvalidArgumentError)
+    assert mapped.code == "INVALID_ARGUMENT"
+    assert mapped.details == {
+        "resource": "viking://resources/docs",
+        "expected": "file",
+        "actual": "directory",
+    }
 
 
 def test_value_error_invalid_uri_maps_to_invalid_uri():

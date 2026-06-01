@@ -205,10 +205,26 @@ class AsyncOpenViking:
             telemetry=telemetry,
         )
 
+    async def batch_add_messages(
+        self,
+        session_id: str,
+        messages: list[dict],
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Add multiple messages to a session in a single request."""
+        await self._ensure_initialized()
+        return await self._client.batch_add_messages(
+            session_id=session_id,
+            messages=messages,
+            telemetry=telemetry,
+        )
+
     async def commit_session(
         self,
         session_id: str,
         telemetry: TelemetryRequest = False,
+        *,
+        keep_recent_count: int = 0,
         memory_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Commit a session (archive and extract memories)."""
@@ -216,6 +232,7 @@ class AsyncOpenViking:
         return await self._client.commit_session(
             session_id,
             telemetry=telemetry,
+            keep_recent_count=keep_recent_count,
             memory_policy=memory_policy,
         )
 

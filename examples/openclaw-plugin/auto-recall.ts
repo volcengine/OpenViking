@@ -8,6 +8,7 @@ import {
 } from "./memory-ranking.js";
 import { quickRecallPrecheck, withTimeout } from "./process-manager.js";
 import { sanitizeUserTextForCapture } from "./text-utils.js";
+import { estimateTextTokens } from "./token-estimator.js";
 
 const AUTO_RECALL_TIMEOUT_MS = 5_000;
 const RECALL_QUERY_MAX_CHARS = 4_000;
@@ -51,15 +52,43 @@ export function prepareRecallQuery(rawText: string): PreparedRecallQuery {
   };
 }
 
-/** Estimate token count using chars/4 heuristic for diagnostics. */
+/** Estimate token count using the shared CJK-aware fallback for diagnostics. */
 export function estimateTokenCount(text: string): number {
-  if (!text) return 0;
-  return Math.ceil(text.length / 4);
+  return estimateTextTokens(text);
 }
 
 export type BuildMemoryLinesOptions = {
   recallPreferAbstract: boolean;
+  includeUri?: boolean;
 };
+
+function memoryCategory(item: FindResultItem): string {
+  return item.category?.trim() || "memory";
+}
+
+function indentContent(content: string): string {
+  return content
+    .split("\n")
+    .map((line) => `  ${line}`)
+    .join("\n");
+}
+
+function formatMemoryLine(
+  item: FindResultItem,
+  content: string,
+  options: BuildMemoryLinesOptions,
+): string {
+  const category = memoryCategory(item);
+  if (!options.includeUri) {
+    return `- [${category}] ${content}`;
+  }
+
+  return [
+    `- [${category}]`,
+    `  <uri>${item.uri}</uri>`,
+    indentContent(content),
+  ].join("\n");
+}
 
 async function resolveMemoryContent(
   item: FindResultItem,
@@ -95,7 +124,7 @@ export async function buildMemoryLines(
   const lines: string[] = [];
   for (const item of memories) {
     const content = await resolveMemoryContent(item, readFn, options);
-    lines.push(`- [${item.category ?? "memory"}] ${content}`);
+    lines.push(formatMemoryLine(item, content, options));
   }
   return lines;
 }
@@ -128,7 +157,7 @@ export async function buildMemoryLinesWithBudget(
     }
 
     const content = await resolveMemoryContent(item, readFn, options);
-    const line = `- [${item.category ?? "memory"}] ${content}`;
+    const line = formatMemoryLine(item, content, options);
     const separatorChars = lines.length > 0 ? 1 : 0;
     const projectedChars = totalChars + separatorChars + line.length;
 
@@ -235,6 +264,7 @@ export async function buildAutoRecallContext(params: {
         {
           recallPreferAbstract: cfg.recallPreferAbstract,
           recallMaxInjectedChars: cfg.recallMaxInjectedChars,
+          includeUri: true,
         },
       );
 

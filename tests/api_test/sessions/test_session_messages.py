@@ -1,4 +1,5 @@
 import uuid
+from math import ceil
 
 
 class TestSessionMessages:
@@ -172,6 +173,61 @@ class TestSessionMessages:
         finally:
             if session_id:
                 api_client.delete_session(session_id)
+
+    def test_cjk_message_uses_cjk_aware_token_estimate(self, api_client):
+        cjk_session_id = None
+        ascii_session_id = None
+        try:
+            cjk_text = "你好世界" * 100
+            ascii_text = "abcd" * 100
+            cjk_expected_min = ceil(len(cjk_text) * 1.5)
+            naive_chars_div_4 = ceil(len(cjk_text) / 4)
+
+            cjk_resp = api_client.create_session()
+            assert cjk_resp.status_code == 200
+            cjk_session_id = cjk_resp.json()["result"]["session_id"]
+            add_cjk = api_client.add_message(cjk_session_id, "user", cjk_text)
+            assert add_cjk.status_code == 200
+
+            cjk_detail = api_client.get_session(cjk_session_id)
+            assert cjk_detail.status_code == 200
+            cjk_pending = cjk_detail.json().get("result", {}).get("pending_tokens", 0)
+            assert cjk_pending >= cjk_expected_min, (
+                "pending_tokens should use the CJK-aware estimate; "
+                f"got {cjk_pending}, expected at least {cjk_expected_min}, "
+                f"old chars/4 estimate would be {naive_chars_div_4}"
+            )
+
+            cjk_ctx = api_client.get_session_context(cjk_session_id, token_budget=128000)
+            assert cjk_ctx.status_code == 200
+            cjk_result = cjk_ctx.json().get("result", {})
+            cjk_estimated = cjk_result.get("estimatedTokens", 0)
+            cjk_active = cjk_result.get("stats", {}).get("activeTokens", 0)
+            assert cjk_estimated >= cjk_expected_min, (
+                f"context estimatedTokens should preserve CJK-aware estimate, got {cjk_estimated}"
+            )
+            assert cjk_active >= cjk_expected_min, (
+                f"context stats.activeTokens should preserve CJK-aware estimate, got {cjk_active}"
+            )
+
+            ascii_resp = api_client.create_session()
+            assert ascii_resp.status_code == 200
+            ascii_session_id = ascii_resp.json()["result"]["session_id"]
+            add_ascii = api_client.add_message(ascii_session_id, "user", ascii_text)
+            assert add_ascii.status_code == 200
+
+            ascii_detail = api_client.get_session(ascii_session_id)
+            assert ascii_detail.status_code == 200
+            ascii_pending = ascii_detail.json().get("result", {}).get("pending_tokens", 0)
+            assert cjk_pending >= ascii_pending * 4, (
+                "same-length CJK should be estimated much higher than ASCII; "
+                f"cjk={cjk_pending}, ascii={ascii_pending}"
+            )
+        finally:
+            if cjk_session_id:
+                api_client.delete_session(cjk_session_id)
+            if ascii_session_id:
+                api_client.delete_session(ascii_session_id)
 
     def test_multiline_content_preserved(self, api_client):
         session_id = None

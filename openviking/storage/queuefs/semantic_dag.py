@@ -3,8 +3,10 @@
 """Semantic DAG executor with event-driven lazy dispatch."""
 
 import asyncio
+import threading
+from weakref import WeakKeyDictionary
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import ClassVar, Dict, List, Optional, Set
 
 from openviking.server.identity import RequestContext
 from openviking.storage.queuefs.semantic_sidecar import write_semantic_sidecars
@@ -66,8 +68,93 @@ class VectorizeTask:
     overview: Optional[str] = None
 
 
+@dataclass(frozen=True)
+class DagWork:
+    """A scheduled unit of DAG work."""
+
+    kind: str
+    dir_uri: str
+    parent_uri: Optional[str] = None
+    file_path: Optional[str] = None
+    vectorize_task: Optional[VectorizeTask] = None
+
+
+@dataclass(frozen=True)
+class ScheduledDagWork:
+    executor: "SemanticDagExecutor"
+    work: DagWork
+
+
+class SemanticNodeScheduler:
+    """Shared node executor for semantic DAG work in one event loop."""
+
+    _idle_timeout = 0.05
+
+    def __init__(self, max_workers: int):
+        self._max_workers = max(1, max_workers)
+        self._queue: asyncio.Queue[ScheduledDagWork] = asyncio.Queue()
+        self._workers: Set[asyncio.Task] = set()
+
+    def configure(self, max_workers: int) -> None:
+        self._max_workers = max(1, max_workers)
+        self._ensure_workers()
+
+    def submit(self, executor: "SemanticDagExecutor", work: DagWork) -> None:
+        self._queue.put_nowait(ScheduledDagWork(executor=executor, work=work))
+        self._ensure_workers()
+
+    def _ensure_workers(self) -> None:
+        self._workers = {task for task in self._workers if not task.done()}
+        target = min(self._max_workers, self._queue.qsize())
+        while len(self._workers) < target:
+            task = asyncio.create_task(self._worker())
+            task.add_done_callback(self._workers.discard)
+            self._workers.add(task)
+
+    async def _worker(self) -> None:
+        while True:
+            try:
+                item = await asyncio.wait_for(
+                    self._queue.get(),
+                    timeout=self._idle_timeout,
+                )
+            except asyncio.TimeoutError:
+                if self._queue.empty():
+                    return
+                continue
+
+            try:
+                if not item.executor.closed:
+                    await item.executor._run_work(item.work)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                item.executor.fail(exc)
+            finally:
+                self._queue.task_done()
+
+
+_node_schedulers: "WeakKeyDictionary[asyncio.AbstractEventLoop, SemanticNodeScheduler]" = (
+    WeakKeyDictionary()
+)
+
+
+def get_semantic_node_scheduler(max_workers: int) -> SemanticNodeScheduler:
+    loop = asyncio.get_running_loop()
+    scheduler = _node_schedulers.get(loop)
+    if scheduler is None:
+        scheduler = SemanticNodeScheduler(max_workers=max_workers)
+        _node_schedulers[loop] = scheduler
+    else:
+        scheduler.configure(max_workers)
+    return scheduler
+
+
 class SemanticDagExecutor:
     """Execute semantic generation with DAG-style, event-driven lazy dispatch."""
+
+    _active_lock: ClassVar[threading.Lock] = threading.Lock()
+    _active_executors: ClassVar[Set["SemanticDagExecutor"]] = set()
 
     def __init__(
         self,
@@ -89,7 +176,6 @@ class SemanticDagExecutor:
     ):
         self._processor = processor
         self._context_type = context_type
-        self._max_concurrent_llm = max_concurrent_llm
         self._ctx = ctx
         self._incremental_update = incremental_update
         self._target_uri = target_uri
@@ -106,15 +192,21 @@ class SemanticDagExecutor:
         self._changed_paths = {
             path for key in ("added", "modified", "deleted") for path in self._changes.get(key, [])
         }
+        self._node_concurrency = max(1, max_concurrent_llm)
         self._llm_sem = asyncio.Semaphore(max_concurrent_llm)
         self._viking_fs = get_viking_fs()
         self._nodes: Dict[str, DirNode] = {}
         self._parent: Dict[str, Optional[str]] = {}
         self._root_uri: Optional[str] = None
         self._root_done: Optional[asyncio.Event] = None
+        self._scheduler: Optional[SemanticNodeScheduler] = None
+        self._closed = False
+        self._failure: Optional[Exception] = None
         self._stats = DagStats()
         self._vectorize_task_count: int = 0
         self._pending_vectorize_tasks: List[VectorizeTask] = []
+        self._pending_vectorize_work = 0
+        self._vectorize_done: Optional[asyncio.Event] = None
         self._vectorize_lock = asyncio.Lock()
         self._file_change_status: Dict[str, bool] = {}
         self._dir_change_status: Dict[str, bool] = {}
@@ -125,74 +217,211 @@ class SemanticDagExecutor:
         """Run DAG execution starting from root_uri."""
         self._root_uri = root_uri
         self._root_done = asyncio.Event()
+        self._scheduler = get_semantic_node_scheduler(self._node_concurrency)
 
         try:
-            await self._dispatch_dir(root_uri, parent_uri=None)
+            self._register_active()
+            self._schedule_dir(root_uri, parent_uri=None)
             await self._root_done.wait()
-        except Exception:
-            await self._lock.close()
-            raise
+            if self._failure:
+                raise self._failure
 
-        # Release owned semantic locks after downstream vectorization finishes.
-        async def wrapped_on_complete() -> None:
+            # Release owned semantic locks after downstream vectorization finishes.
+            async def wrapped_on_complete() -> None:
+                try:
+                    if self._telemetry_id and self._semantic_msg_id:
+                        get_request_wait_tracker().mark_semantic_done(
+                            self._telemetry_id, self._semantic_msg_id
+                        )
+                finally:
+                    await self._lock.close()
+
+            async with self._vectorize_lock:
+                task_count = self._vectorize_task_count
+                tasks = list(self._pending_vectorize_tasks)
+
+            if task_count > 0:
+                from .embedding_tracker import EmbeddingTaskTracker
+
+                tracker = EmbeddingTaskTracker.get_instance()
+                await tracker.register(
+                    semantic_msg_id=self._semantic_msg_id,
+                    total_count=task_count,
+                    on_complete=wrapped_on_complete,
+                    metadata={"uri": root_uri},
+                )
+
+                await self._dispatch_vectorize_tasks(tasks)
+            else:
+                # No vectorize tasks — release lock immediately (via wrapped callback)
+                try:
+                    await wrapped_on_complete()
+                except Exception as e:
+                    logger.error(f"Error in on_complete callback: {e}", exc_info=True)
+        except BaseException:
+            self._closed = True
             try:
-                if self._telemetry_id and self._semantic_msg_id:
-                    get_request_wait_tracker().mark_semantic_done(
-                        self._telemetry_id, self._semantic_msg_id
-                    )
-            finally:
                 await self._lock.close()
+            except Exception:
+                pass
+            raise
+        finally:
+            self._closed = True
+            self._unregister_active()
 
-        async with self._vectorize_lock:
-            task_count = self._vectorize_task_count
-            tasks = list(self._pending_vectorize_tasks)
+    def _schedule_work(self, work: DagWork) -> None:
+        if self._closed:
+            return
+        if self._scheduler is None:
+            self._scheduler = get_semantic_node_scheduler(self._node_concurrency)
+        self._scheduler.submit(self, work)
 
-        if task_count > 0:
-            from .embedding_tracker import EmbeddingTaskTracker
+    def _schedule_dir(self, dir_uri: str, parent_uri: Optional[str]) -> None:
+        if self._closed:
+            return
+        self._stats.total_nodes += 1
+        self._stats.pending_nodes += 1
+        self._schedule_work(DagWork(kind="dir", dir_uri=dir_uri, parent_uri=parent_uri))
 
-            tracker = EmbeddingTaskTracker.get_instance()
-            await tracker.register(
-                semantic_msg_id=self._semantic_msg_id,
-                total_count=task_count,
-                on_complete=wrapped_on_complete,
-                metadata={"uri": root_uri},
-            )
+    def _schedule_file(self, parent_uri: str, file_path: str) -> None:
+        if self._closed:
+            return
+        self._stats.total_nodes += 1
+        self._stats.pending_nodes += 1
+        self._schedule_work(DagWork(kind="file", dir_uri=parent_uri, file_path=file_path))
 
-            for task in tasks:
-                if task.task_type == "file":
-                    asyncio.create_task(
-                        self._processor._vectorize_single_file(
-                            parent_uri=task.parent_uri,
-                            context_type=task.context_type,
-                            file_path=task.file_path,
-                            summary_dict=task.summary_dict,
-                            ctx=task.ctx,
-                            semantic_msg_id=task.semantic_msg_id,
-                            use_summary=task.use_summary,
-                        )
-                    )
-                else:
-                    asyncio.create_task(
-                        self._processor._vectorize_directory(
-                            task.uri,
-                            task.context_type,
-                            task.abstract,
-                            task.overview,
-                            ctx=task.ctx,
-                            semantic_msg_id=task.semantic_msg_id,
-                        )
-                    )
-        else:
-            # No vectorize tasks — release lock immediately (via wrapped callback)
+    def _mark_node_started(self) -> None:
+        self._stats.pending_nodes = max(0, self._stats.pending_nodes - 1)
+        self._stats.in_progress_nodes += 1
+
+    def _mark_node_waiting(self) -> None:
+        self._stats.in_progress_nodes = max(0, self._stats.in_progress_nodes - 1)
+        self._stats.pending_nodes += 1
+
+    def _mark_node_done(self) -> None:
+        self._stats.done_nodes += 1
+        self._stats.in_progress_nodes = max(0, self._stats.in_progress_nodes - 1)
+
+    def _release_dir_node(self, dir_uri: str) -> None:
+        self._nodes.pop(dir_uri, None)
+        self._parent.pop(dir_uri, None)
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    def fail(self, exc: Exception) -> None:
+        if self._failure is None:
+            self._failure = exc
+        self._closed = True
+        if self._root_done:
+            self._root_done.set()
+        if self._vectorize_done:
+            self._vectorize_done.set()
+
+    def _register_active(self) -> None:
+        with self._active_lock:
+            self._active_executors.add(self)
+
+    def _unregister_active(self) -> None:
+        with self._active_lock:
+            self._active_executors.discard(self)
+
+    @classmethod
+    def get_active_stats(cls) -> DagStats:
+        stats = DagStats()
+        with cls._active_lock:
+            executors = list(cls._active_executors)
+        for executor in executors:
+            current = executor.get_stats()
+            stats.total_nodes += current.total_nodes
+            stats.pending_nodes += current.pending_nodes
+            stats.in_progress_nodes += current.in_progress_nodes
+            stats.done_nodes += current.done_nodes
+        return stats
+
+    async def _run_work(self, work: DagWork) -> None:
+        if work.kind == "vectorize":
+            await self._run_vectorize_work(work.vectorize_task)
+            return
+
+        self._mark_node_started()
+
+        if work.kind == "dir":
+            terminal = False
             try:
-                await wrapped_on_complete()
-            except Exception as e:
-                logger.error(f"Error in on_complete callback: {e}", exc_info=True)
+                terminal = await self._dispatch_dir(work.dir_uri, work.parent_uri)
+            finally:
+                if terminal:
+                    self._mark_node_done()
+                else:
+                    self._mark_node_waiting()
+            return
 
-    async def _dispatch_dir(self, dir_uri: str, parent_uri: Optional[str]) -> None:
+        if work.kind == "file":
+            if work.file_path is None:
+                self._mark_node_done()
+                return
+            await self._file_summary_task(work.dir_uri, work.file_path)
+            return
+
+        if work.kind == "overview":
+            await self._overview_task(work.dir_uri)
+            return
+
+        self._mark_node_done()
+        logger.warning("Unknown semantic DAG work kind: %s", work.kind)
+
+    async def _dispatch_vectorize_tasks(self, tasks: List[VectorizeTask]) -> None:
+        self._vectorize_done = asyncio.Event()
+        self._pending_vectorize_work = len(tasks)
+        for task in tasks:
+            self._schedule_work(
+                DagWork(
+                    kind="vectorize",
+                    dir_uri=task.uri,
+                    vectorize_task=task,
+                )
+            )
+        await self._vectorize_done.wait()
+
+    async def _run_vectorize_work(self, task: Optional[VectorizeTask]) -> None:
+        try:
+            if task is not None:
+                await self._run_vectorize_task(task)
+        except Exception as exc:
+            logger.error("Vectorization dispatch task failed: %s", exc, exc_info=True)
+        finally:
+            self._pending_vectorize_work = max(0, self._pending_vectorize_work - 1)
+            if self._pending_vectorize_work == 0 and self._vectorize_done:
+                self._vectorize_done.set()
+
+    async def _run_vectorize_task(self, task: VectorizeTask) -> None:
+        if task.task_type == "file":
+            await self._processor._vectorize_single_file(
+                parent_uri=task.parent_uri,
+                context_type=task.context_type,
+                file_path=task.file_path,
+                summary_dict=task.summary_dict,
+                ctx=task.ctx,
+                semantic_msg_id=task.semantic_msg_id,
+                use_summary=task.use_summary,
+            )
+            return
+
+        await self._processor._vectorize_directory(
+            task.uri,
+            task.context_type,
+            task.abstract,
+            task.overview,
+            ctx=task.ctx,
+            semantic_msg_id=task.semantic_msg_id,
+        )
+
+    async def _dispatch_dir(self, dir_uri: str, parent_uri: Optional[str]) -> bool:
         """Lazy-dispatch tasks for a directory when it is triggered."""
         if dir_uri in self._nodes:
-            return
+            return True
 
         self._parent[dir_uri] = parent_uri
 
@@ -217,31 +446,26 @@ class SemanticDagExecutor:
                 dispatched=True,
             )
             self._nodes[dir_uri] = node
-            self._stats.total_nodes += 1
-            self._stats.pending_nodes += 1
 
             if pending == 0:
                 self._schedule_overview(dir_uri)
-                return
+                return False
 
             for file_path in file_paths:
-                self._stats.total_nodes += 1
-                # File nodes are scheduled immediately: pending -> in_progress.
-                self._stats.pending_nodes += 1
-                self._stats.pending_nodes = max(0, self._stats.pending_nodes - 1)
-                self._stats.in_progress_nodes += 1
-                asyncio.create_task(self._file_summary_task(dir_uri, file_path))
+                self._schedule_file(dir_uri, file_path)
 
             if children_dirs:
                 if self._recursive:
                     for child_uri in children_dirs:
-                        asyncio.create_task(self._dispatch_dir(child_uri, dir_uri))
+                        self._schedule_dir(child_uri, dir_uri)
+            return False
         except Exception as e:
             logger.error(f"Failed to dispatch directory {dir_uri}: {e}", exc_info=True)
             if parent_uri:
                 await self._on_child_done(parent_uri, dir_uri, "")
             elif self._root_done:
                 self._root_done.set()
+            return True
 
     async def _list_dir(self, uri: str, from_hint: str) -> tuple[list[str], list[str]]:
         """List directory entries and return (child_dirs, file_paths)."""
@@ -272,7 +496,8 @@ class SemanticDagExecutor:
     def _get_target_file_path(self, current_uri: str) -> Optional[str]:
         if not self._incremental_update or not self._target_uri or not self._root_uri:
             logger.warning(
-                f"Invalid target_uri or root_uri for incremental update: target_uri={self._target_uri}, root_uri={self._root_uri}"
+                "Invalid target_uri or root_uri for incremental update: "
+                f"target_uri={self._target_uri}, root_uri={self._root_uri}"
             )
             return None
         if self._target_uri != self._root_uri:
@@ -485,10 +710,7 @@ class SemanticDagExecutor:
                 node.file_summaries[idx] = summary_dict
             node.pending -= 1
             if node.pending == 0 and not node.overview_scheduled:
-                node.overview_scheduled = True
-                self._stats.pending_nodes = max(0, self._stats.pending_nodes - 1)
-                self._stats.in_progress_nodes += 1
-                asyncio.create_task(self._overview_task(parent_uri))
+                self._schedule_overview(parent_uri)
 
     async def _on_child_done(self, parent_uri: str, child_uri: str, abstract: str) -> None:
         node = self._nodes.get(parent_uri)
@@ -502,21 +724,14 @@ class SemanticDagExecutor:
                 node.children_abstracts[idx] = {"name": child_name, "abstract": abstract}
             node.pending -= 1
             if node.pending == 0 and not node.overview_scheduled:
-                node.overview_scheduled = True
-                self._stats.pending_nodes = max(0, self._stats.pending_nodes - 1)
-                self._stats.in_progress_nodes += 1
-                asyncio.create_task(self._overview_task(parent_uri))
+                self._schedule_overview(parent_uri)
 
     def _schedule_overview(self, dir_uri: str) -> None:
         node = self._nodes.get(dir_uri)
-        if not node:
-            return
-        if node.overview_scheduled:
+        if not node or node.overview_scheduled:
             return
         node.overview_scheduled = True
-        self._stats.pending_nodes = max(0, self._stats.pending_nodes - 1)
-        self._stats.in_progress_nodes += 1
-        asyncio.create_task(self._overview_task(dir_uri))
+        self._schedule_work(DagWork(kind="overview", dir_uri=dir_uri))
 
     def _finalize_file_summaries(self, node: DirNode) -> List[Dict[str, str]]:
         summaries: List[Dict[str, str]] = []
@@ -633,11 +848,13 @@ class SemanticDagExecutor:
 
         parent_uri = self._parent.get(dir_uri)
         if parent_uri is None:
+            self._release_dir_node(dir_uri)
             if self._root_done:
                 self._root_done.set()
             return
 
         await self._on_child_done(parent_uri, dir_uri, abstract)
+        self._release_dir_node(dir_uri)
 
     async def _add_vectorize_task(self, task: VectorizeTask) -> None:
         """Add a vectorize task to the pending list."""

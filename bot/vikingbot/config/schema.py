@@ -433,6 +433,10 @@ class AgentsConfig(BaseModel):
     model: str = "openai/doubao-seed-2-0-pro-260215"
     max_tool_iterations: int = 50
     memory_window: int = 50
+    session_context_enabled: bool = False
+    session_context_token_budget: int = 3000
+    commit_token_threshold: int = 20000
+    commit_keep_recent_count: int = 5
     gen_image_model: str = "openai/doubao-seedream-4-5-251128"
     provider: str = ""
     api_key: str = ""

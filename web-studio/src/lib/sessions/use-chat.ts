@@ -6,18 +6,19 @@ import { addMessage, sendChatStream, serializeParts } from './api'
 import { generateTitle } from './generate-title'
 import { parseSseStream, streamEventDataToText } from './sse'
 import { setSessionTitle } from './use-session-titles'
-
-function generateId(): string {
-  return `msg_${crypto.randomUUID().replace(/-/g, '')}`
-}
+import { createBrowserId } from '../browser-crypto'
 
 function createUserMessage(content: string): Message {
   return {
-    id: generateId(),
+    id: createBrowserId('msg'),
     role: 'user',
     parts: [{ type: 'text', text: content }],
     created_at: new Date().toISOString(),
   }
+}
+
+type SendOptions = {
+  displayMessage?: string
 }
 
 function buildAssistantMessage(
@@ -51,7 +52,7 @@ function buildAssistantMessage(
   }
 
   return {
-    id: generateId(),
+    id: createBrowserId('msg'),
     role: 'assistant',
     parts,
     created_at: new Date().toISOString(),
@@ -74,7 +75,7 @@ export interface UseChatReturn {
   streamingToolCalls: StreamToolCall[]
   streamingReasoning: string
   iteration: number
-  send: (message: string) => Promise<void>
+  send: (message: string, options?: SendOptions) => Promise<void>
   abort: () => void
   reset: () => void
   setMessages: React.Dispatch<React.SetStateAction<Message[]>>
@@ -95,12 +96,16 @@ export function useChat(options: UseChatOptions): UseChatReturn {
 
   const abortRef = useRef<AbortController | null>(null)
   const messagesRef = useRef<Message[]>(messages)
+  const lastSyncedInitialMessagesRef = useRef<Message[] | undefined>(undefined)
+  const pendingInitialMessagesRef = useRef<Message[] | undefined>(undefined)
   messagesRef.current = messages
 
   // Reset state when sessionId changes
   useEffect(() => {
     abortRef.current?.abort()
     abortRef.current = null
+    lastSyncedInitialMessagesRef.current = undefined
+    pendingInitialMessagesRef.current = undefined
     setMessages([])
     setStatus('idle')
     setError(undefined)
@@ -110,16 +115,25 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     setIteration(0)
   }, [sessionId])
 
-  // Sync initialMessages into state when they load (e.g. history fetched)
+  // Sync initialMessages into state when they load or when switching sessions.
   useEffect(() => {
-    if (
-      initialMessages &&
-      initialMessages.length > 0 &&
-      status !== 'streaming'
-    ) {
-      setMessages(initialMessages)
+    if (!initialMessages) return
+
+    if (status === 'streaming') {
+      pendingInitialMessagesRef.current = initialMessages
+      return
     }
-  }, [initialMessages])
+
+    const nextInitialMessages =
+      pendingInitialMessagesRef.current ?? initialMessages
+    // Consume the deferred snapshot on every non-streaming run so it can never
+    // permanently shadow later initialMessages updates.
+    pendingInitialMessagesRef.current = undefined
+    if (lastSyncedInitialMessagesRef.current === nextInitialMessages) return
+
+    lastSyncedInitialMessagesRef.current = nextInitialMessages
+    setMessages(nextInitialMessages)
+  }, [initialMessages, sessionId, status])
 
   const abort = useCallback(() => {
     abortRef.current?.abort()
@@ -138,12 +152,13 @@ export function useChat(options: UseChatOptions): UseChatReturn {
   }, [abort, initialMessages])
 
   const send = useCallback(
-    async (message: string) => {
+    async (message: string, options?: SendOptions) => {
       if (status === 'streaming') return
 
       const isFirstExchange = messagesRef.current.length === 0
+      const displayMessage = options?.displayMessage ?? message
 
-      const userMsg = createUserMessage(message)
+      const userMsg = createUserMessage(displayMessage)
       setMessages((prev) => [...prev, userMsg])
       setStatus('streaming')
       setError(undefined)
@@ -240,7 +255,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         if (persistMessages) {
           try {
             // Sequential: user message must precede assistant message
-            await addMessage(sessionId, 'user', message)
+            await addMessage(sessionId, 'user', displayMessage)
             await addMessage(
               sessionId,
               'assistant',
@@ -255,9 +270,9 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         // Generate session title on first exchange
         if (sessionId && isFirstExchange) {
           // Immediate: use first user message as temp title
-          setSessionTitle(sessionId, message.slice(0, 20))
+          setSessionTitle(sessionId, displayMessage.slice(0, 20))
           // Async: ask AI for a better title
-          generateTitle(message, accContent)
+          generateTitle(displayMessage, accContent)
             .then((title) => {
               if (title) setSessionTitle(sessionId, title)
             })

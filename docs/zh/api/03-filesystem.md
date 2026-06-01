@@ -130,6 +130,7 @@ openviking overview viking://resources/docs/
 | uri | str | 是 | - | Viking URI |
 | offset | int | 否 | 0 | 起始行号（0 开始） |
 | limit | int | 否 | -1 | 读取的行数，`-1` 表示读到结尾 |
+| raw | bool | 否 | false | 返回未过滤 MEMORY_FIELDS 的原始存储内容（仅 HTTP API，Python SDK 暂未暴露）。 |
 
 **说明**
 

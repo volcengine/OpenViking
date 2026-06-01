@@ -1083,9 +1083,25 @@ openviking-server --config /path/to/ov.conf
 
 本文档上方各配置段（embedding、vlm、rerank、storage）均属于 `ov.conf`。SDK 嵌入模式和服务端共用此文件。
 
+如需配置 memory 相关行为，可在 `ov.conf` 中添加 `memory` 段：
+
+```json
+{
+  "memory": {
+    "version": "v2",
+    "agent_memory_enabled": false
+  }
+}
+```
+
+| 字段 | 说明 | 默认值 |
+|------|------|--------|
+| `version` | 记忆实现版本。仅支持 `"v2"`（#2264 已移除旧版 `"v1"`；传入 `"v1"` 会在配置加载时抛出 `ValueError`）。 | `"v2"` |
+| `agent_memory_enabled` | 在用户记忆抽取之后启用 trajectory/experience 记忆抽取。 | `false` |
+
 ### ovcli.conf
 
-你可以手动编辑此文件，也可以用 `ov config setup-cli` 交互式生成。如果你维护着多个服务端的配置，可以用 `ov config switch` 在它们之间切换。
+你可以手动编辑此文件，也可以用 `ov config` 交互式生成。如果你维护着多个服务端的配置，可以用 `ov config switch` 在它们之间切换。
 
 HTTP 客户端（`SyncHTTPClient` / `AsyncHTTPClient`）和 CLI 工具连接远程服务端的配置文件：
 

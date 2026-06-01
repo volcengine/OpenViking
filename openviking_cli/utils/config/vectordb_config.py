@@ -50,6 +50,32 @@ class VikingDBConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class QdrantConfig(BaseModel):
+    """Configuration for Qdrant backend."""
+
+    url: Optional[str] = Field(default=None, description="Qdrant service URL")
+    api_key: Optional[str] = Field(default=None, description="Optional Qdrant API key")
+    timeout_seconds: int = Field(default=10, description="HTTP timeout for Qdrant requests")
+    dense_vector_name: str = Field(
+        default="vector",
+        description="Named dense vector field in Qdrant collection.",
+    )
+    sparse_vector_name: str = Field(
+        default="sparse_vector",
+        description="Named sparse vector field in Qdrant collection.",
+    )
+    meta_collection_name: str = Field(
+        default="__openviking_meta",
+        description="Sidecar collection name for OpenViking metadata in Qdrant.",
+    )
+    enable_text_index: bool = Field(
+        default=True,
+        description="Whether to create text payload indexes for supported text fields.",
+    )
+
+    model_config = {"extra": "forbid"}
+
+
 class VectorDBBackendConfig(BaseModel):
     """
     Configuration for VectorDB backend.
@@ -63,7 +89,7 @@ class VectorDBBackendConfig(BaseModel):
         description=(
             "VectorDB backend type: 'local', 'http', "
             "'volcengine' (AK/SK signed or API key data-plane only), "
-            "or 'vikingdb' (private deployment)"
+            "'vikingdb' (private deployment), or 'qdrant'"
         ),
     )
 
@@ -117,6 +143,11 @@ class VectorDBBackendConfig(BaseModel):
         description="VikingDB private deployment configuration for 'vikingdb' type",
     )
 
+    qdrant: Optional[QdrantConfig] = Field(
+        default_factory=QdrantConfig,
+        description="Qdrant configuration for 'qdrant' type",
+    )
+
     custom_params: Dict[str, Any] = Field(
         default_factory=dict,
         description="Custom parameters for custom backend adapters",
@@ -127,7 +158,7 @@ class VectorDBBackendConfig(BaseModel):
     @model_validator(mode="after")
     def validate_config(self):
         """Validate configuration completeness and consistency"""
-        standard_backends = ["local", "http", "volcengine", "vikingdb"]
+        standard_backends = ["local", "http", "volcengine", "vikingdb", "qdrant"]
 
         # Allow custom backend classes (containing dot) without standard validation
         if "." in self.backend:
@@ -175,5 +206,19 @@ class VectorDBBackendConfig(BaseModel):
         elif self.backend == "vikingdb":
             if not self.vikingdb or not self.vikingdb.host:
                 raise ValueError("VectorDB vikingdb backend requires 'host' to be set")
+
+        elif self.backend == "qdrant":
+            qdrant_url = (
+                (self.qdrant.url if self.qdrant else None)
+                or self.url
+                or self.custom_params.get("url")
+            )
+            if not qdrant_url:
+                raise ValueError("VectorDB qdrant backend requires 'qdrant.url' or 'url' to be set")
+            if self.qdrant is None:
+                self.qdrant = QdrantConfig()
+            self.qdrant.url = str(qdrant_url).strip().rstrip("/")
+            if self.url:
+                self.url = self.url.strip().rstrip("/")
 
         return self

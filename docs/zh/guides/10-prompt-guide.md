@@ -248,6 +248,12 @@ operation_mode: "upsert"
   - 作用：定义工具调用统计和工具使用经验的存储结构
   - 关键字段：`tool_name`、`static_desc`、`call_count`、`success_time`、`when_to_use`、`optimal_params`
 
+- `trajectories`
+  - 生效环节：agent 轨迹型记忆落盘阶段（agent_only，仅追加）
+  - 影响能力：agent 任务轨迹中可复用的操作契约沉淀——多步决策、工具调用、执行链路
+  - 作用：定义"任务轨迹中提炼出哪些可复用的操作/契约"这一类轨迹型记忆
+  - 关键字段：`trajectory_name`、`outcome`、`retrieval_anchor`、`content`
+
 ### Parsing
 
 这一类 prompt 主要用于把原始资源内容转成适合检索和理解的结构化节点、章节、摘要或图像概述。

@@ -120,7 +120,7 @@ Once connected, OpenViking exposes 14 tools:
 | `add_resource` | Add a local file or URL as a resource (local files trigger a progressive upload flow) | `path`, `temp_file_id` (optional), `description` (optional), `watch_interval` (optional, minutes — auto-refresh cadence for remote URLs), `to` (optional, target `viking://resources/...` URI; required when `watch_interval > 0`) |
 | `list_watches` | List watch tasks (auto-refresh subscriptions) visible to the current agent. Each entry shows target URI, refresh interval (minutes), active/paused status, and next scheduled execution time | none |
 | `cancel_watch` | Cancel (delete) a watch task by its target URI. To change the cadence or pause temporarily, cancel and re-add with a new `watch_interval` | `to_uri` (must match the watch task's `to` value, e.g. `viking://resources/...`) |
-| `grep` | Regex content search across `viking://` files | `uri`, `pattern` (string or array), `case_insensitive` |
+| `grep` | Regex content search across `viking://` files | `uri`, `pattern` (string), `case_insensitive` |
 | `glob` | Find files matching a glob pattern | `pattern`, `uri` (optional scope) |
 | `forget` | Delete any `viking://` URI (use `search` to find it first; pass `recursive=true` to delete a directory) | `uri`, `recursive` (optional) |
 | `code_outline` | Show a file's symbol structure (classes, functions, methods, line ranges) without reading bodies. Survey a file before deciding what to `read`. | `uri` (must be a `viking://` **file** URI) |

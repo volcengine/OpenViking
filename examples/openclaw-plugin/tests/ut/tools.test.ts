@@ -350,6 +350,8 @@ describe("Tool: memory_store (behavioral)", () => {
     expect(store).toBeDefined();
     expect(store!.name).toBe("memory_store");
     expect(store!.description).toContain("Store text");
+    expect(store!.description).toContain("explicitly asks to remember");
+    expect(store!.description).toContain("threshold/commit dependent");
   });
 
   it("uses requesterSenderId to populate peer_id for user writes", async () => {
@@ -382,7 +384,7 @@ describe("Tool: memory_store (behavioral)", () => {
       requesterSenderId: "wx/user-01@abc",
     });
 
-    await tool.execute("tc-memory-store", { text: "hello from tool" });
+    const result = await tool.execute("tc-memory-store", { text: "hello from tool" }) as ToolResult;
 
     const messageCall = fetchMock.mock.calls.find(([url]) =>
       String(url).includes("/api/v1/sessions/") && String(url).includes("/messages"),
@@ -392,6 +394,9 @@ describe("Tool: memory_store (behavioral)", () => {
     const body = JSON.parse(String(init.body));
     expect(body.role).toBe("user");
     expect(body.peer_id).toBe("wx_user-01_abc");
+    expect(result.content[0]!.text).toContain("committed 1 memories");
+    expect(result.details.action).toBe("stored");
+    expect(result.details.memoriesCount).toBe(1);
 
     const createCall = fetchMock.mock.calls.find(([url]) =>
       String(url).endsWith("/api/v1/sessions"),
@@ -498,7 +503,7 @@ describe("Tool: memory_store (behavioral)", () => {
         return okResponse({ session_id: "sess-1" });
       }
       if (url.endsWith("/commit")) {
-        return okResponse({ status: "completed", archived: false, memories_extracted: {} });
+        return okResponse({ status: "completed", archived: false, memories_extracted: { core: 1 } });
       }
       return okResponse({});
     });
@@ -528,7 +533,7 @@ describe("Tool: memory_store (behavioral)", () => {
         return okResponse({ session_id: "sess-1" });
       }
       if (url.endsWith("/commit")) {
-        return okResponse({ status: "completed", archived: false, memories_extracted: {} });
+        return okResponse({ status: "completed", archived: false, memories_extracted: { core: 1 } });
       }
       return okResponse({});
     });
@@ -552,6 +557,111 @@ describe("Tool: memory_store (behavioral)", () => {
     expect(String(messageCall?.[0])).not.toContain("runtime-session");
     expect(String(messageCall?.[0])).not.toContain("agent%3Amain%3Amain");
     expect(String(messageCall?.[0])).toMatch(/\/api\/v1\/sessions\/[a-f0-9]{64}\/messages$/);
+  });
+
+  it("returns a tool-visible failure when commit extracts zero memories", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/api/v1/system/status")) {
+        return okResponse({ user: "default" });
+      }
+      if (url.includes("/messages")) {
+        return okResponse({ session_id: "sess-1" });
+      }
+      if (url.endsWith("/commit")) {
+        return okResponse({ status: "completed", archived: true, memories_extracted: {} });
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { factoryTools, api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+    const tool = factoryTools.get("memory_store")!({
+      sessionId: "runtime-session",
+      sessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("tc-memory-store-zero", {
+      text: "Remember this important thing",
+    }) as ToolResult;
+
+    expect(result.content[0]!.text).toContain("produced 0 memories");
+    expect(result.content[0]!.text).toContain("No OpenViking-managed long-term memory was stored");
+    expect(result.details.action).toBe("failed");
+    expect(result.details.error).toBe("no_memories_extracted");
+    expect(result.details.memoriesCount).toBe(0);
+    expect(result.details.archived).toBe(true);
+  });
+
+  it("returns commit failure details to the model", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/api/v1/system/status")) {
+        return okResponse({ user: "default" });
+      }
+      if (url.includes("/messages")) {
+        return okResponse({ session_id: "sess-1" });
+      }
+      if (url.endsWith("/commit")) {
+        return okResponse({
+          status: "failed",
+          error: "memory extraction provider unavailable",
+        });
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { factoryTools, api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+    const tool = factoryTools.get("memory_store")!({
+      sessionId: "runtime-session",
+      sessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("tc-memory-store-failed", {
+      text: "Remember this important thing",
+    }) as ToolResult;
+
+    expect(result.content[0]!.text).toContain("Memory extraction failed");
+    expect(result.content[0]!.text).toContain("memory extraction provider unavailable");
+    expect(result.details.action).toBe("failed");
+    expect(result.details.status).toBe("failed");
+    expect(result.details.error).toBe("memory extraction provider unavailable");
+  });
+
+  it("returns commit timeout details to the model", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/api/v1/system/status")) {
+        return okResponse({ user: "default" });
+      }
+      if (url.includes("/messages")) {
+        return okResponse({ session_id: "sess-1" });
+      }
+      if (url.endsWith("/commit")) {
+        return okResponse({
+          status: "timeout",
+        });
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { factoryTools, api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+    const tool = factoryTools.get("memory_store")!({
+      sessionId: "runtime-session",
+      sessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("tc-memory-store-timeout", {
+      text: "Remember this important thing",
+    }) as ToolResult;
+
+    expect(result.content[0]!.text).toContain("Memory extraction timed out");
+    expect(result.content[0]!.text).toContain("task_id=none");
+    expect(result.details.action).toBe("timeout");
+    expect(result.details.status).toBe("timeout");
+    expect(result.details.taskId).toBeUndefined();
   });
 });
 
