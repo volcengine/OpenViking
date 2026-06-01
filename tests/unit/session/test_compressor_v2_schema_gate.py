@@ -66,9 +66,7 @@ def test_structured_string_patch_schema_rejects_plain_string_outputs():
     valid = model.model_validate(
         {
             "page_id": 1,
-            "content": StrPatch(
-                blocks=[SearchReplaceBlock(search="old", replace="new")]
-            ),
+            "content": StrPatch(blocks=[SearchReplaceBlock(search="old", replace="new")]),
         }
     )
     assert valid.content.blocks[0].replace == "new"

@@ -568,11 +568,7 @@ def _concrete_memory_matches(memories: list[Any]) -> list[Any]:
     concrete = []
     for match in memories:
         uri = str(getattr(match, "uri", "") or "")
-        if (
-            not uri.endswith(".md")
-            or uri.endswith(".overview.md")
-            or uri.endswith(".abstract.md")
-        ):
+        if not uri.endswith(".md") or uri.endswith(".overview.md") or uri.endswith(".abstract.md"):
             continue
         concrete.append(match)
     return concrete
@@ -754,7 +750,9 @@ def _retrieval_trace_summary(trace_path: Path) -> dict[str, Any]:
     }
 
 
-def _effect_evidence_summary(metrics: dict[str, Any], trace_summary: dict[str, Any]) -> dict[str, Any]:
+def _effect_evidence_summary(
+    metrics: dict[str, Any], trace_summary: dict[str, Any]
+) -> dict[str, Any]:
     issues: list[str] = []
     if int(metrics.get("simulation_count") or 0) <= 0:
         issues.append("simulation_count=0")

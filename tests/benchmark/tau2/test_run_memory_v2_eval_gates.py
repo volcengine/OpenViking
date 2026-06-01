@@ -3,8 +3,8 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
-from types import SimpleNamespace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -171,9 +171,7 @@ def test_concrete_memory_matches_skip_overviews_and_directories():
         ]
     )
 
-    assert [match.uri for match in matches] == [
-        "viking://agent/a/memories/experiences/foo.md"
-    ]
+    assert [match.uri for match in matches] == ["viking://agent/a/memories/experiences/foo.md"]
 
 
 def test_corpus_probe_read_non_empty_requires_successful_read():

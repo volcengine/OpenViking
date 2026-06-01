@@ -55,9 +55,7 @@ _EXACT_FILE_LOCK_SUPPORTED_MEMORY_TYPES = {
     "experiences",
 }
 
-ExtractPostApply = Callable[
-    [MemoryUpdateResult, Dict[str, List[str]], Any, bool], Awaitable[None]
-]
+ExtractPostApply = Callable[[MemoryUpdateResult, Dict[str, List[str]], Any, bool], Awaitable[None]]
 
 
 def _filename_has_variables(schema: Any) -> bool:
@@ -395,10 +393,7 @@ class SessionCompressorV2:
             read_scope = isolation_handler.get_read_scope()
             if lock_manager:
                 schemas = orchestrator.context_provider.get_memory_schemas(ctx)
-            if (
-                lock_manager
-                and exact_file_apply_enabled
-            ):
+            if lock_manager and exact_file_apply_enabled:
                 get_current_telemetry().increment(
                     "memory.extract.schema_tree_lock_skipped_for_exact_apply"
                 )
@@ -831,14 +826,9 @@ class SessionCompressorV2:
                         string_patch_exact_safe=exact_config_enabled,
                     )
                 )
-                exact_file_apply_enabled = (
-                    exact_config_enabled and exact_apply_supported
-                )
+                exact_file_apply_enabled = exact_config_enabled and exact_apply_supported
                 orchestrator.structured_string_patches_only = exact_file_apply_enabled
-            if (
-                lock_manager
-                and exact_file_apply_enabled
-            ):
+            if lock_manager and exact_file_apply_enabled:
                 get_current_telemetry().increment(
                     "memory.extract.schema_tree_lock_skipped_for_exact_apply"
                 )

@@ -23,7 +23,9 @@ def _memory_root_uri(search_uri: str) -> str:
     try:
         memory_index = segments.index("memories")
     except ValueError as exc:
-        raise ValueError(f"search_uri does not contain a memories path segment: {search_uri}") from exc
+        raise ValueError(
+            f"search_uri does not contain a memories path segment: {search_uri}"
+        ) from exc
     return f"{prefix}{separator}{'/'.join(segments[: memory_index + 1])}"
 
 
@@ -119,7 +121,9 @@ def _ratio(numerator: Any, denominator: Any) -> float | None:
         return None
 
 
-def _collect(manifest_paths: list[Path], *, node_limit: int, sample_limit: int) -> list[dict[str, Any]]:
+def _collect(
+    manifest_paths: list[Path], *, node_limit: int, sample_limit: int
+) -> list[dict[str, Any]]:
     from openviking_cli.client.sync_http import SyncHTTPClient
 
     rows: list[dict[str, Any]] = []
@@ -178,8 +182,7 @@ def _print_markdown(rows: list[dict[str, Any]]) -> None:
         nonzero = {key: value for key, value in breakdown.items() if value}
         if nonzero:
             print(
-                f"\n### Graph issue breakdown: {row.get('domain')} "
-                f"c{row.get('commit_concurrency')}"
+                f"\n### Graph issue breakdown: {row.get('domain')} c{row.get('commit_concurrency')}"
             )
             for key, value in nonzero.items():
                 print(f"- {key}: {value}")
@@ -188,10 +191,15 @@ def _print_markdown(rows: list[dict[str, Any]]) -> None:
         examples = row.get("duplicate_exact_source_set_examples") or []
         if not examples:
             continue
-        print(f"\n### Duplicate source-set examples: {row.get('domain')} c{row.get('commit_concurrency')}")
+        print(
+            f"\n### Duplicate source-set examples: {row.get('domain')} c{row.get('commit_concurrency')}"
+        )
         for example in examples:
             uris = example.get("uris") or []
-            print(f"- source_count={example.get('source_count')}: " + ", ".join(_basename(uri) for uri in uris))
+            print(
+                f"- source_count={example.get('source_count')}: "
+                + ", ".join(_basename(uri) for uri in uris)
+            )
 
 
 def _basename(uri: str) -> str:

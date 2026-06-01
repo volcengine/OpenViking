@@ -265,6 +265,25 @@ def test_openviking_config_accepts_long_term_extraction_switch(monkeypatch):
     OpenVikingConfigSingleton.reset_instance()
 
 
+def test_openviking_config_accepts_session_skill_extraction_switch(monkeypatch):
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
+
+    from openviking_cli.utils.config.open_viking_config import (
+        OpenVikingConfig,
+        OpenVikingConfigSingleton,
+    )
+
+    default_config = OpenVikingConfig.from_dict({})
+    enabled_config = OpenVikingConfig.from_dict(
+        {"memory": {"session_skill_extraction_enabled": True}}
+    )
+
+    assert default_config.memory.session_skill_extraction_enabled is False
+    assert enabled_config.memory.session_skill_extraction_enabled is True
+
+    OpenVikingConfigSingleton.reset_instance()
+
+
 def test_openviking_config_retrieval_hotness_alpha_defaults_to_zero(monkeypatch):
     monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
 

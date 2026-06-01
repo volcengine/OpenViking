@@ -18,13 +18,16 @@ from openviking.message import Message, Part
 from openviking.message.part import ContextPart, TextPart, ToolPart
 from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.server.identity import RequestContext, Role
-from openviking.session.tool_result_synopsis import ToolResultSynopsis, generate_tool_result_synopsis
 from openviking.session.tool_result_store import (
     ToolResultStore,
     build_tool_result_id,
     make_preview,
     render_preview_from_synopsis,
     sha256_text,
+)
+from openviking.session.tool_result_synopsis import (
+    ToolResultSynopsis,
+    generate_tool_result_synopsis,
 )
 from openviking.telemetry import get_current_telemetry, tracer
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
@@ -708,9 +711,7 @@ class Session:
         group_original_chars = sum(len(p.tool_output or "") for _, p in tool_parts)
         normal_indices: List[int] = []
         selected: set[int] = set()
-        externalized_preview_cache: Dict[
-            tuple[int, int, str], tuple[ToolResultSynopsis, int]
-        ] = {}
+        externalized_preview_cache: Dict[tuple[int, int, str], tuple[ToolResultSynopsis, int]] = {}
 
         for idx, (_msg, part) in enumerate(tool_parts):
             part.tool_output_group_id = group_id
@@ -766,7 +767,9 @@ class Session:
             for idx, (_, part) in enumerate(tool_parts):
                 output_len = len(part.tool_output or "")
                 if idx in selected_indices:
-                    _synopsis, rendered_len = prepared_externalized_preview(idx, part, preview_chars)
+                    _synopsis, rendered_len = prepared_externalized_preview(
+                        idx, part, preview_chars
+                    )
                     total += rendered_len
                 else:
                     total += output_len
@@ -905,12 +908,16 @@ class Session:
         A user message containing only multiple tool results is treated as a
         transport aggregate and stored as one message per tool result.
         """
-        msgs = self.add_messages([{
-            "role": role,
-            "parts": parts,
-            "role_id": role_id,
-            "created_at": created_at,
-        }])
+        msgs = self.add_messages(
+            [
+                {
+                    "role": role,
+                    "parts": parts,
+                    "role_id": role_id,
+                    "created_at": created_at,
+                }
+            ]
+        )
         return msgs[0]
 
     def _record_participant(self, msg: Message) -> None:

@@ -6,8 +6,8 @@ from openviking.message.part import ToolPart
 from openviking.session.tool_skill_utils import (
     calibrate_skill_name,
     calibrate_tool_name,
-    collect_tool_parts_from_messages,
     collect_skill_stats,
+    collect_tool_parts_from_messages,
     collect_tool_stats,
     normalize_name,
 )
@@ -80,24 +80,12 @@ class TestToolSkillUtils:
             Message(
                 id="call-1",
                 role="assistant",
-                parts=[
-                    TextPart(
-                        "tool-call:\n"
-                        "name: search_orders\n"
-                        "arguments: {}"
-                    )
-                ],
+                parts=[TextPart("tool-call:\nname: search_orders\narguments: {}")],
             ),
             Message(
                 id="response-1",
                 role="assistant",
-                parts=[
-                    TextPart(
-                        "tool-response:\n"
-                        "name: search_orders\n"
-                        "output: ok"
-                    )
-                ],
+                parts=[TextPart("tool-response:\nname: search_orders\noutput: ok")],
             ),
         ]
 

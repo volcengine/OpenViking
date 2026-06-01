@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from openviking.message import Message, TextPart, ToolPart
-from openviking.session.memory.extract_loop import ExtractLoop
 from openviking.session.memory.dataclass import (
     MemoryField,
     MemoryFile,
@@ -15,14 +14,13 @@ from openviking.session.memory.dataclass import (
     ResolvedOperation,
     WikiLink,
 )
+from openviking.session.memory.extract_loop import ExtractLoop
 from openviking.session.memory.merge_op import FieldType, MergeOp
 from openviking.session.memory.page_id_map import PageIdMap
 
 
 class AttrDict(dict):
     __getattr__ = dict.get
-
-
 
 
 class TestResolveOperations:
@@ -503,9 +501,10 @@ class TestResolveOperations:
 
         raw_links = [WikiLink(f=100, t=102, match_text="trip")]
 
-        with patch("openviking.session.memory.extract_loop.tracer.info") as mock_info, patch(
-            "openviking.session.memory.extract_loop.tracer.error"
-        ) as mock_error:
+        with (
+            patch("openviking.session.memory.extract_loop.tracer.info") as mock_info,
+            patch("openviking.session.memory.extract_loop.tracer.error") as mock_error,
+        ):
             resolved = loop._resolve_links(raw_links, upsert_operations=[])
 
         assert resolved == []
@@ -566,7 +565,9 @@ class TestPageIdInstruction:
     @pytest.mark.asyncio
     async def test_run_always_includes_page_id_rules_when_links_disabled(self):
         context_provider = Mock()
-        context_provider.get_memory_schemas.return_value = [SimpleNamespace(memory_type="experiences")]
+        context_provider.get_memory_schemas.return_value = [
+            SimpleNamespace(memory_type="experiences")
+        ]
         context_provider.get_output_language.return_value = "zh-CN"
         context_provider.get_tools.return_value = []
         extract_context = Mock()
@@ -626,9 +627,15 @@ class TestPageIdInstruction:
         assert "## Page ID Rules" in system_content
         assert "## Read Format Rules" in system_content
         assert 'Every memory item you create or edit MUST include "page_id".' in system_content
-        assert "The read tool accepts `uri`, optional `offset` (0-indexed), and optional `limit`." in system_content
+        assert (
+            "The read tool accepts `uri`, optional `offset` (0-indexed), and optional `limit`."
+            in system_content
+        )
         assert "each visible line is prefixed with `line_number<TAB>`" in system_content
-        assert "Never include the line-number prefix itself in `search` or `replace`." in system_content
+        assert (
+            "Never include the line-number prefix itself in `search` or `replace`."
+            in system_content
+        )
         assert "For existing items, use the page_id shown in read/search results." in system_content
         assert "For new items, assign a unique page_id >= 100." in system_content
         assert "When editing an existing item, reuse its existing page_id." in system_content
@@ -637,7 +644,9 @@ class TestPageIdInstruction:
     @pytest.mark.asyncio
     async def test_run_includes_link_page_id_rule_when_links_enabled(self):
         context_provider = Mock()
-        context_provider.get_memory_schemas.return_value = [SimpleNamespace(memory_type="experiences")]
+        context_provider.get_memory_schemas.return_value = [
+            SimpleNamespace(memory_type="experiences")
+        ]
         context_provider.get_output_language.return_value = "zh-CN"
         context_provider.get_tools.return_value = []
         extract_context = Mock()
@@ -706,7 +715,9 @@ class TestPageIdInstruction:
 class TestFinalOperationsHydration:
     @pytest.mark.asyncio
     async def test_run_logs_final_operations_after_old_memory_file_is_hydrated(self):
-        old_file = MemoryFile(uri="viking://user/Caroline/memories/experiences/chat.md", content="old")
+        old_file = MemoryFile(
+            uri="viking://user/Caroline/memories/experiences/chat.md", content="old"
+        )
 
         context_provider = Mock()
         schema = SimpleNamespace(memory_type="experiences", fields=[])
@@ -766,5 +777,7 @@ class TestFinalOperationsHydration:
         assert op.old_memory_file_content is old_file
         assert final_operations.resolved_links == []
         logged_messages = [call.args[0] for call in mock_tracer_info.call_args_list]
-        final_log = next(message for message in logged_messages if message.startswith("final_operations="))
+        final_log = next(
+            message for message in logged_messages if message.startswith("final_operations=")
+        )
         assert '"old_memory_file_content":null' not in final_log

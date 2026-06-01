@@ -936,9 +936,7 @@ class TestConsecutivePatchesSameURI:
         assert "plain replacement text" in written
 
     @pytest.mark.asyncio
-    async def test_exact_plain_string_patch_does_not_apply_as_substring_patch(
-        self, monkeypatch
-    ):
+    async def test_exact_plain_string_patch_does_not_apply_as_substring_patch(self, monkeypatch):
         memory_type = "notes"
         uri = "viking://user/test/memories/notes/demo.md"
 
@@ -1149,9 +1147,7 @@ class TestConsecutivePatchesSameURI:
         mock_viking_fs.write_file.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_apply_upsert_allows_null_string_patch_under_file_lock_mode(
-        self, monkeypatch
-    ):
+    async def test_apply_upsert_allows_null_string_patch_under_file_lock_mode(self, monkeypatch):
         memory_type = "notes"
         uri = "viking://user/test/memories/notes/demo.md"
 
@@ -1242,9 +1238,7 @@ class TestConsecutivePatchesSameURI:
         assert "plain replacement text" in written
 
     @pytest.mark.asyncio
-    async def test_tree_mode_plain_string_patch_keeps_legacy_full_replacement(
-        self, monkeypatch
-    ):
+    async def test_tree_mode_plain_string_patch_keeps_legacy_full_replacement(self, monkeypatch):
         memory_type = "notes"
         uri = "viking://user/test/memories/notes/demo.md"
 

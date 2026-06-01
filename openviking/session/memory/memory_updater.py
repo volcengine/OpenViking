@@ -119,9 +119,7 @@ def _wrap_patch_with_read_base(
         try:
             patch_value = StrPatch(
                 blocks=[
-                    block
-                    if isinstance(block, SearchReplaceBlock)
-                    else SearchReplaceBlock(**block)
+                    block if isinstance(block, SearchReplaceBlock) else SearchReplaceBlock(**block)
                     for block in patch_value.get("blocks") or []
                 ]
             )
@@ -1039,10 +1037,7 @@ class MemoryUpdater:
             # Create-new files may legitimately be absent at write time.  In
             # exact-lock mode, an update whose old snapshot disappeared is
             # stale and should not silently resurrect the old content.
-            if (
-                self._use_exact_file_lock()
-                and resolved_op.old_memory_file_content is not None
-            ):
+            if self._use_exact_file_lock() and resolved_op.old_memory_file_content is not None:
                 get_current_telemetry().increment("memory.apply.latest_read.missing_file_lock")
                 raise RuntimeError(
                     f"latest read found missing file under exact file-lock mode: uri={uri}"
