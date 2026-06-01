@@ -75,8 +75,9 @@ async def test_session_compressor_v2_extract_agent_memories_returns_session_skil
         strict_extract_errors,
         phase_label,
         post_apply=None,
+        archive_uri="",
     ):
-        del self, messages, ctx, strict_extract_errors, post_apply
+        del self, messages, ctx, strict_extract_errors, post_apply, archive_uri
         assert phase_label == "trajectory"
         assert provider._include_trajectories is False
         assert provider._include_session_skills is True
