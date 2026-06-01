@@ -205,14 +205,114 @@ export function estimateReadingMinutes(text = '', lang = 'en') {
 
 export const THEME_LIGHT = 'kami';
 export const THEME_DARK = 'washi';
+const PREFERENCE_COOKIE_KEY = 'openviking-preferences';
+const SHARED_THEME_LIGHT = 'light';
+const SHARED_THEME_DARK = 'dark';
+
+function isBrowser() {
+  return typeof window !== 'undefined' && typeof document !== 'undefined';
+}
+
+function isLanguage(value) {
+  return LANGS.some(lang => lang.code === value);
+}
+
+function isBlogTheme(value) {
+  return value === THEME_LIGHT || value === THEME_DARK;
+}
+
+function isSharedTheme(value) {
+  return value === SHARED_THEME_LIGHT || value === SHARED_THEME_DARK;
+}
+
+export function sharedThemeToBlogTheme(theme) {
+  if (theme === SHARED_THEME_DARK) return THEME_DARK;
+  if (theme === SHARED_THEME_LIGHT) return THEME_LIGHT;
+  return undefined;
+}
+
+export function blogThemeToSharedTheme(theme) {
+  if (theme === THEME_DARK) return SHARED_THEME_DARK;
+  if (theme === THEME_LIGHT) return SHARED_THEME_LIGHT;
+  return undefined;
+}
+
+function mergePreferences(base, incoming) {
+  return {
+    lang: incoming.lang ?? base.lang,
+    theme: incoming.theme ?? base.theme,
+  };
+}
+
+function readLocalPreferences() {
+  if (!isBrowser()) return {};
+
+  const lang = localStorage.getItem('blog.lang');
+  const theme = localStorage.getItem('blog.theme');
+  return {
+    lang: isLanguage(lang) ? lang : undefined,
+    theme: isBlogTheme(theme) ? blogThemeToSharedTheme(theme) : undefined,
+  };
+}
+
+export function readCookiePreferences() {
+  if (!isBrowser()) return {};
+
+  const cookie = document.cookie
+    .split('; ')
+    .find(item => item.startsWith(`${PREFERENCE_COOKIE_KEY}=`));
+
+  if (!cookie) return {};
+
+  try {
+    const preference = JSON.parse(decodeURIComponent(cookie.slice(PREFERENCE_COOKIE_KEY.length + 1)));
+    return {
+      lang: isLanguage(preference.lang) ? preference.lang : undefined,
+      theme: isSharedTheme(preference.theme) ? preference.theme : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
+function cookieDomain() {
+  const hostname = window.location.hostname;
+  if (hostname === 'localhost' || hostname === '127.0.0.1') return '';
+  if (hostname.endsWith('.openviking.ai') || hostname === 'openviking.ai') return 'Domain=.openviking.ai';
+  if (hostname.endsWith('.openviking.net') || hostname === 'openviking.net') return 'Domain=.openviking.net';
+  return '';
+}
+
+export function writeCookiePreferences(preference) {
+  if (!isBrowser()) return;
+
+  const nextPreference = mergePreferences(readCookiePreferences(), preference);
+  document.cookie = [
+    `${PREFERENCE_COOKIE_KEY}=${encodeURIComponent(JSON.stringify(nextPreference))}`,
+    'Path=/',
+    'Max-Age=31536000',
+    'SameSite=Lax',
+    cookieDomain(),
+  ].filter(Boolean).join('; ');
+}
+
+export function readPersistedPreferences() {
+  return mergePreferences(readLocalPreferences(), readCookiePreferences());
+}
+
+export function getInitialLang(queryLang) {
+  if (isLanguage(queryLang)) return queryLang;
+  return readPersistedPreferences().lang || 'en';
+}
 
 export function getSystemTheme() {
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? THEME_DARK : THEME_LIGHT;
 }
 
 export function getInitialTheme() {
-  const stored = localStorage.getItem('blog.theme');
-  if (stored === THEME_LIGHT || stored === THEME_DARK) return stored;
+  const sharedTheme = readPersistedPreferences().theme;
+  const sharedBlogTheme = sharedThemeToBlogTheme(sharedTheme);
+  if (sharedBlogTheme) return sharedBlogTheme;
   return getSystemTheme();
 }
 
