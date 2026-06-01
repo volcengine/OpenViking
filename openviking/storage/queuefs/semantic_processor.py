@@ -96,7 +96,7 @@ class SemanticProcessor(DequeueHandlerBase):
     _request_stats_order: List[str] = []
     _max_cached_stats = 256
 
-    def __init__(self, max_concurrent_llm: int = 100):
+    def __init__(self, max_concurrent_llm: int = 64):
         """
         Initialize SemanticProcessor.
 
@@ -104,9 +104,7 @@ class SemanticProcessor(DequeueHandlerBase):
             max_concurrent_llm: Maximum concurrent LLM calls
         """
         self.max_concurrent_llm = max_concurrent_llm
-        self._dag_executor: Optional[SemanticDagExecutor] = None
-        self._current_ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
-        self._current_msg: Optional[SemanticMsg] = None
+        self._default_ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
         self._circuit_breaker = CircuitBreaker()
 
     @classmethod
@@ -356,8 +354,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 root_attrs.agent_id = msg.agent_id
                 root_context_token = bind_root_observability_context(root_attrs)
                 try:
-                    self._current_msg = msg
-                    self._current_ctx = self._ctx_from_semantic_msg(msg)
+                    current_ctx = self._ctx_from_semantic_msg(msg)
                     logger.info(
                         f"Processing semantic generation for: {msg.uri} (recursive={msg.recursive})"
                     )
@@ -374,6 +371,7 @@ class SemanticProcessor(DequeueHandlerBase):
                             lock_transferred = True
                             await self._process_memory_directory(
                                 msg,
+                                ctx=current_ctx,
                                 lock=semantic_lock.lock,
                             )
                         else:
@@ -384,7 +382,7 @@ class SemanticProcessor(DequeueHandlerBase):
                             viking_fs = get_viking_fs()
                             if msg.target_uri:
                                 target_exists = await viking_fs.exists(
-                                    msg.target_uri, ctx=self._current_ctx
+                                    msg.target_uri, ctx=current_ctx
                                 )
                                 if msg.uri != msg.target_uri:
                                     logger.info(
@@ -394,7 +392,7 @@ class SemanticProcessor(DequeueHandlerBase):
                                     diff = await self._sync_topdown_recursive(
                                         msg.uri,
                                         msg.target_uri,
-                                        ctx=self._current_ctx,
+                                        ctx=current_ctx,
                                         lock=semantic_lock.lock,
                                     )
                                     logger.info(
@@ -425,7 +423,7 @@ class SemanticProcessor(DequeueHandlerBase):
                                 processor=self,
                                 context_type=msg.context_type,
                                 max_concurrent_llm=self.max_concurrent_llm,
-                                ctx=self._current_ctx,
+                                ctx=current_ctx,
                                 incremental_update=is_incremental,
                                 target_uri=target_uri,
                                 semantic_msg_id=msg.id,
@@ -438,7 +436,6 @@ class SemanticProcessor(DequeueHandlerBase):
                                 coalesce_key=msg.coalesce_key,
                                 coalesce_version=msg.coalesce_version,
                             )
-                            self._dag_executor = executor
                             lock_transferred = True
                             await executor.run(run_uri)
                             self._cache_dag_stats(
@@ -509,16 +506,15 @@ class SemanticProcessor(DequeueHandlerBase):
                 else:
                     self.report_error(str(e), data)
             return None
-        finally:
-            self._current_msg = None
-            self._current_ctx = None
-
     def get_dag_stats(self) -> Optional["DagStats"]:
-        if not self._dag_executor:
-            return None
-        return self._dag_executor.get_stats()
+        return SemanticDagExecutor.get_active_stats()
 
-    async def _process_memory_directory(self, msg: SemanticMsg, lock: LockLease = NO_LOCK) -> None:
+    async def _process_memory_directory(
+        self,
+        msg: SemanticMsg,
+        ctx: Optional[RequestContext] = None,
+        lock: LockLease = NO_LOCK,
+    ) -> None:
         """Process a memory directory with special handling.
 
         For memory directories:
@@ -531,7 +527,7 @@ class SemanticProcessor(DequeueHandlerBase):
         """
         viking_fs = get_viking_fs()
         dir_uri = msg.uri
-        ctx = self._current_ctx
+        ctx = ctx or self._default_ctx
         llm_sem = asyncio.Semaphore(self.max_concurrent_llm)
         request_wait_tracker = get_request_wait_tracker()
 
@@ -959,7 +955,7 @@ class SemanticProcessor(DequeueHandlerBase):
         """Generate summary for a single text file (code, documentation, or other text)."""
         viking_fs = get_viking_fs()
         vlm = get_openviking_config().vlm
-        active_ctx = ctx or self._current_ctx
+        active_ctx = ctx or self._default_ctx
 
         content = await viking_fs.read_file(file_path, ctx=active_ctx)
         if isinstance(content, bytes):
@@ -1437,13 +1433,9 @@ class SemanticProcessor(DequeueHandlerBase):
     ) -> None:
         """Create directory Context and enqueue to EmbeddingQueue."""
 
-        if self._current_msg and getattr(self._current_msg, "skip_vectorization", False):
-            logger.info(f"Skipping vectorization for {uri} (requested via SemanticMsg)")
-            return
-
         from openviking.utils.embedding_utils import vectorize_directory_meta
 
-        active_ctx = ctx or self._current_ctx
+        active_ctx = ctx or self._default_ctx
         await vectorize_directory_meta(
             uri=uri,
             abstract=abstract,
@@ -1467,7 +1459,7 @@ class SemanticProcessor(DequeueHandlerBase):
         """Vectorize a single file using its content or summary."""
         from openviking.utils.embedding_utils import vectorize_file
 
-        active_ctx = ctx or self._current_ctx
+        active_ctx = ctx or self._default_ctx
         await vectorize_file(
             file_path=file_path,
             summary_dict=summary_dict,

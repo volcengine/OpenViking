@@ -14,6 +14,7 @@ import shutil
 import socket
 import threading
 import time
+from functools import lru_cache
 from pathlib import Path
 
 import httpx
@@ -49,6 +50,39 @@ requires_volcengine_kms = pytest.mark.skipif(
     not (VOLCENGINE_ACCESS_KEY and VOLCENGINE_SECRET_KEY and VOLCENGINE_KMS_KEY_ID),
     reason="VOLCENGINE_ACCESS_KEY, VOLCENGINE_SECRET_KEY, or VOLCENGINE_KMS_KEY_ID not set",
 )
+
+# ── Qdrant integration test helpers ─────────────────────────────────────────
+QDRANT_URL = os.environ.get("QDRANT_URL", "http://127.0.0.1:6333").rstrip("/")
+QDRANT_API_KEY = os.environ.get("QDRANT_API_KEY", "")
+
+
+@lru_cache(maxsize=1)
+def _qdrant_available() -> bool:
+    try:
+        headers = {"api-key": QDRANT_API_KEY} if QDRANT_API_KEY else None
+        response = httpx.get(
+            f"{QDRANT_URL}/collections",
+            headers=headers,
+            timeout=2.0,
+        )
+        return response.status_code == 200
+    except Exception:
+        return False
+
+
+requires_qdrant = pytest.mark.qdrant
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "qdrant: requires a reachable Qdrant instance")
+
+
+@pytest.fixture(autouse=True)
+def _skip_when_qdrant_unavailable(request):
+    if request.node.get_closest_marker("qdrant") is None:
+        return
+    if not _qdrant_available():
+        pytest.skip(f"Qdrant not available at {QDRANT_URL}")
 
 # (model_name, default_dimension, token_limit)
 GEMINI_MODELS = [

@@ -5,11 +5,13 @@ import { useTranslation } from 'react-i18next'
 import {
   CheckCircle2Icon,
   CircleAlertIcon,
+  FileTextIcon,
   LoaderIcon,
   WrenchIcon,
 } from 'lucide-react'
 
 import { cn } from '#/lib/utils'
+import { cleanVikingUri, VIKING_URI_RE } from '#/lib/viking-uri'
 
 const plugins = { code, cjk }
 
@@ -104,6 +106,7 @@ interface ToolCallBlockProps {
   result?: string
   isError?: boolean
   isRunning: boolean
+  onResourceClick?: (uri: string) => void
 }
 
 export function ToolCallBlock({
@@ -112,8 +115,10 @@ export function ToolCallBlock({
   result,
   isError,
   isRunning,
+  onResourceClick,
 }: ToolCallBlockProps) {
   const { t } = useTranslation('sessions')
+  const refs = extractVikingUris(result)
 
   return (
     <details className="my-2 rounded-lg border border-border/30 bg-muted/20">
@@ -155,6 +160,23 @@ export function ToolCallBlock({
             >
               {result}
             </pre>
+            {refs.length > 0 && onResourceClick ? (
+              <div className="mt-2 grid gap-1.5">
+                {refs.map((uri) => (
+                  <button
+                    key={uri}
+                    type="button"
+                    className="flex min-w-0 items-center gap-2 rounded-md border bg-background px-2 py-1.5 text-left transition-colors hover:border-primary/50 hover:bg-primary/5"
+                    onClick={() => onResourceClick(uri)}
+                  >
+                    <FileTextIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                    <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-primary">
+                      {uri}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
           </div>
         )}
       </div>
@@ -173,4 +195,56 @@ function ToolStatusIcon({
     return <LoaderIcon className="size-3 animate-spin text-muted-foreground" />
   if (isError) return <CircleAlertIcon className="size-3 text-destructive" />
   return <CheckCircle2Icon className="size-3 text-primary/70" />
+}
+
+function extractVikingUris(text: string | undefined): string[] {
+  if (!text) return []
+  const seen = new Set<string>()
+
+  const parsed = parseJsonResult(text)
+  if (parsed !== undefined) {
+    collectStructuredUris(parsed, seen)
+  }
+
+  // Always scan the raw text too: URIs embedded in free-text fields or under
+  // keys other than `uri` are invisible to the structured pass. The Set keeps
+  // the two passes deduped.
+  const matches = text.match(VIKING_URI_RE) ?? []
+  for (const match of matches) {
+    const uri = cleanVikingUri(match)
+    if (uri) seen.add(uri)
+  }
+  return [...seen]
+}
+
+function parseJsonResult(text: string): unknown {
+  const trimmed = text.trim()
+  if (!trimmed) return undefined
+
+  try {
+    return JSON.parse(trimmed) as unknown
+  } catch {
+    return undefined
+  }
+}
+
+function collectStructuredUris(value: unknown, seen: Set<string>): void {
+  if (Array.isArray(value)) {
+    for (const item of value) collectStructuredUris(item, seen)
+    return
+  }
+
+  if (!value || typeof value !== 'object') return
+
+  for (const [key, nested] of Object.entries(value)) {
+    if (key === 'uri' && typeof nested === 'string') {
+      const uri = cleanVikingUri(nested)
+      if (uri) seen.add(uri)
+      continue
+    }
+
+    if (Array.isArray(nested) || (nested && typeof nested === 'object')) {
+      collectStructuredUris(nested, seen)
+    }
+  }
 }

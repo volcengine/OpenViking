@@ -139,12 +139,14 @@ describe("Slice E: character budget enforcement", () => {
     expect(estimatedTokens).toBeLessThanOrEqual(53);
   });
 
-  it("should estimate tokens as ceil(chars/4)", async () => {
+  it("should estimate tokens with CJK-aware fallback weights", async () => {
     const { estimateTokenCount } = await import("../index.js");
     expect(estimateTokenCount("")).toBe(0);
     expect(estimateTokenCount("abcd")).toBe(1);
     expect(estimateTokenCount("abcde")).toBe(2);
     expect(estimateTokenCount("A".repeat(100))).toBe(25);
+    expect(estimateTokenCount("\u4f60\u597d\u4e16\u754c")).toBe(6);
+    expect(estimateTokenCount("A\u4f60\ud83d\ude42")).toBe(4);
   });
 
   it("should have recallMaxInjectedChars in parsed config with default 4000-character budget", () => {

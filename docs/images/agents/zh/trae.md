@@ -122,7 +122,3 @@
 |连接失败 / 网络超时<br>|确认网络可访问 `api\.vikingdb\.cn\-beijing\.volces\.com`；企业网络请配置代理白名单|
 |Agent 无法识别工具|检查 MCP Server 是否已\&\#34;启用\&\#34;；部分客户端需重启进程后加载新配置|
 |mcp工具因 argument schema 与当前模型不兼容，请切换/修复 mcp server 或切换模型 \(4027\)|![Image](https://internal-api-drive-stream.larkoffice.com/space/api/box/stream/download/authcode/?code=MDYwNjgxYmY1ZWRjOTZmMDIwNzFjOTFjYjA0ZTljOWZfNTE4MTllMDkxYTNiNDBlYTViYmIyMWExYWI0Y2I2YjBfSUQ6NzY0NDU2NzQwNDg1NjU0NDE5OF8xNzgwMDM5ODY4OjE3ODAxMjYyNjhfVjM)<br>![Image](https://internal-api-drive-stream.larkoffice.com/space/api/box/stream/download/authcode/?code=MGYxMzAwNTM5OGE2ZDExZTU0NmZjZDU3YmRhYjljMjZfMzgwZDhiOTVmMjcwNGM0MTU2ZWYxMzZlNTJmY2RmODNfSUQ6NzY0NDU2NzU2MjU4NzgwMjU4NF8xNzgwMDM5ODY4OjE3ODAxMjYyNjhfVjM)<br>尝试切换模型或升级到最新版 Trae|
-
-
-
-> (注：内容由 AI 生成，请谨慎参考）

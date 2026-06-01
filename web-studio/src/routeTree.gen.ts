@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as StudioRouteRouteImport } from './routes/studio/route'
 import { Route as SettingsRouteRouteImport } from './routes/settings/route'
 import { Route as SessionsRouteRouteImport } from './routes/sessions/route'
 import { Route as RetrievalRouteRouteImport } from './routes/retrieval/route'
@@ -22,6 +23,11 @@ import { Route as OauthVerifyRouteImport } from './routes/oauth/verify'
 import { Route as OauthSetupRouteImport } from './routes/oauth/setup'
 import { Route as OauthConsentRouteImport } from './routes/oauth/consent'
 
+const StudioRouteRoute = StudioRouteRouteImport.update({
+  id: '/studio',
+  path: '/studio',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SettingsRouteRoute = SettingsRouteRouteImport.update({
   id: '/settings',
   path: '/settings',
@@ -91,6 +97,7 @@ export interface FileRoutesByFullPath {
   '/retrieval': typeof RetrievalRouteRoute
   '/sessions': typeof SessionsRouteRouteWithChildren
   '/settings': typeof SettingsRouteRoute
+  '/studio': typeof StudioRouteRoute
   '/oauth/consent': typeof OauthConsentRoute
   '/oauth/setup': typeof OauthSetupRoute
   '/oauth/verify': typeof OauthVerifyRoute
@@ -103,6 +110,7 @@ export interface FileRoutesByTo {
   '/request-logs': typeof RequestLogsRouteRoute
   '/retrieval': typeof RetrievalRouteRoute
   '/settings': typeof SettingsRouteRoute
+  '/studio': typeof StudioRouteRoute
   '/oauth/consent': typeof OauthConsentRoute
   '/oauth/setup': typeof OauthSetupRoute
   '/oauth/verify': typeof OauthVerifyRoute
@@ -118,6 +126,7 @@ export interface FileRoutesById {
   '/retrieval': typeof RetrievalRouteRoute
   '/sessions': typeof SessionsRouteRouteWithChildren
   '/settings': typeof SettingsRouteRoute
+  '/studio': typeof StudioRouteRoute
   '/oauth/consent': typeof OauthConsentRoute
   '/oauth/setup': typeof OauthSetupRoute
   '/oauth/verify': typeof OauthVerifyRoute
@@ -134,6 +143,7 @@ export interface FileRouteTypes {
     | '/retrieval'
     | '/sessions'
     | '/settings'
+    | '/studio'
     | '/oauth/consent'
     | '/oauth/setup'
     | '/oauth/verify'
@@ -146,6 +156,7 @@ export interface FileRouteTypes {
     | '/request-logs'
     | '/retrieval'
     | '/settings'
+    | '/studio'
     | '/oauth/consent'
     | '/oauth/setup'
     | '/oauth/verify'
@@ -160,6 +171,7 @@ export interface FileRouteTypes {
     | '/retrieval'
     | '/sessions'
     | '/settings'
+    | '/studio'
     | '/oauth/consent'
     | '/oauth/setup'
     | '/oauth/verify'
@@ -175,6 +187,7 @@ export interface RootRouteChildren {
   RetrievalRouteRoute: typeof RetrievalRouteRoute
   SessionsRouteRoute: typeof SessionsRouteRouteWithChildren
   SettingsRouteRoute: typeof SettingsRouteRoute
+  StudioRouteRoute: typeof StudioRouteRoute
   OauthConsentRoute: typeof OauthConsentRoute
   OauthSetupRoute: typeof OauthSetupRoute
   OauthVerifyRoute: typeof OauthVerifyRoute
@@ -182,6 +195,13 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/studio': {
+      id: '/studio'
+      path: '/studio'
+      fullPath: '/studio'
+      preLoaderRoute: typeof StudioRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/settings': {
       id: '/settings'
       path: '/settings'
@@ -301,6 +321,7 @@ const rootRouteChildren: RootRouteChildren = {
   RetrievalRouteRoute: RetrievalRouteRoute,
   SessionsRouteRoute: SessionsRouteRouteWithChildren,
   SettingsRouteRoute: SettingsRouteRoute,
+  StudioRouteRoute: StudioRouteRoute,
   OauthConsentRoute: OauthConsentRoute,
   OauthSetupRoute: OauthSetupRoute,
   OauthVerifyRoute: OauthVerifyRoute,

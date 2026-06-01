@@ -8,6 +8,7 @@ import {
 } from "./memory-ranking.js";
 import { quickRecallPrecheck, withTimeout } from "./process-manager.js";
 import { sanitizeUserTextForCapture } from "./text-utils.js";
+import { estimateTextTokens } from "./token-estimator.js";
 
 const AUTO_RECALL_TIMEOUT_MS = 5_000;
 const RECALL_QUERY_MAX_CHARS = 4_000;
@@ -51,10 +52,9 @@ export function prepareRecallQuery(rawText: string): PreparedRecallQuery {
   };
 }
 
-/** Estimate token count using chars/4 heuristic for diagnostics. */
+/** Estimate token count using the shared CJK-aware fallback for diagnostics. */
 export function estimateTokenCount(text: string): number {
-  if (!text) return 0;
-  return Math.ceil(text.length / 4);
+  return estimateTextTokens(text);
 }
 
 export type BuildMemoryLinesOptions = {

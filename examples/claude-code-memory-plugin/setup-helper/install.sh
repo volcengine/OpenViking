@@ -305,17 +305,40 @@ install_legacy() {
 install_modern() {
   # `--scope` intentionally omitted. Default scope is already user; passing it
   # breaks older 2.0.x builds that don't recognize the flag.
-  info 'claude plugin marketplace add'
-  ( cd "$REPO_DIR" && claude plugin marketplace add "$REPO_DIR/examples" ) || \
-    warn 'marketplace add returned non-zero (likely already added) — continuing'
-  info 'claude plugin install'
-  ( cd "$REPO_DIR" && claude plugin install claude-code-memory-plugin@openviking-plugins-local ) || {
-    warn 'plugin install failed — falling back to legacy mode'
-    install_legacy
-    return $?
-  }
-  # Belt-and-suspenders: ensure enabled even if `install` left it disabled.
-  claude plugin enable claude-code-memory-plugin@openviking-plugins-local >/dev/null 2>&1 || true
+  local mp='openviking-plugins-local'
+  local plugin='claude-code-memory-plugin@openviking-plugins-local'
+
+  # Marketplace: add when missing, else UPDATE. `marketplace add` on an existing
+  # entry is a no-op that does NOT re-read the source, so a bumped plugin version
+  # in the checkout is never picked up on re-run. Re-running the installer is the
+  # supported upgrade path, so the already-present branch must re-sync the catalog.
+  if claude plugin marketplace list 2>/dev/null | grep -qF "$mp"; then
+    info "claude plugin marketplace update ($mp)"
+    claude plugin marketplace update "$mp" || \
+      warn 'marketplace update returned non-zero — continuing'
+  else
+    info 'claude plugin marketplace add'
+    ( cd "$REPO_DIR" && claude plugin marketplace add "$REPO_DIR/examples" ) || \
+      warn 'marketplace add returned non-zero — continuing'
+  fi
+
+  # Plugin: update when already installed, else install. `plugin install` is a
+  # no-op on an existing install (it will NOT pull a newer version), so an
+  # explicit `plugin update` is required for the re-run-to-upgrade path.
+  if claude plugin list 2>/dev/null | grep -qF "$plugin"; then
+    info "claude plugin update ($plugin)"
+    ( cd "$REPO_DIR" && claude plugin update "$plugin" ) || \
+      warn 'plugin update returned non-zero — continuing'
+  else
+    info 'claude plugin install'
+    ( cd "$REPO_DIR" && claude plugin install "$plugin" ) || {
+      warn 'plugin install failed — falling back to legacy mode'
+      install_legacy
+      return $?
+    }
+  fi
+  # Belt-and-suspenders: ensure enabled even if install/update left it disabled.
+  claude plugin enable "$plugin" >/dev/null 2>&1 || true
 }
 
 # Statusline registration. CC's plugin manifest doesn't accept a statusLine

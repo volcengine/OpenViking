@@ -47,6 +47,15 @@ function getTextFromParts(message: Message): string {
     .join('\n')
 }
 
+function stripStudioContextSuffix(text: string): string {
+  return text
+    .replace(/\n\n当前选中的上下文资源：\s*viking:\/\/[\s\S]*$/u, '')
+    .replace(
+      /\n\n当前用户在 Studio 中选中的上下文资源是：\s*viking:\/\/[\s\S]*$/u,
+      '',
+    )
+}
+
 /** Format relative time */
 function formatRelativeTime(iso: string): string {
   const now = Date.now()
@@ -99,9 +108,14 @@ interface MessageListProps {
     reasoning: string
     iteration: number
   }
+  onResourceClick?: (uri: string) => void
 }
 
-export function MessageList({ messages, streaming }: MessageListProps) {
+export function MessageList({
+  messages,
+  onResourceClick,
+  streaming,
+}: MessageListProps) {
   return (
     <>
       {messages.map((msg, idx) => {
@@ -110,10 +124,20 @@ export function MessageList({ messages, streaming }: MessageListProps) {
         return msg.role === 'user' ? (
           <UserMessage key={msg.id} message={msg} compact={sameRole} />
         ) : (
-          <AssistantMessage key={msg.id} message={msg} compact={sameRole} />
+          <AssistantMessage
+            key={msg.id}
+            message={msg}
+            compact={sameRole}
+            onResourceClick={onResourceClick}
+          />
         )
       })}
-      {streaming && <StreamingAssistantMessage {...streaming} />}
+      {streaming && (
+        <StreamingAssistantMessage
+          {...streaming}
+          onResourceClick={onResourceClick}
+        />
+      )}
     </>
   )
 }
@@ -129,7 +153,7 @@ const UserMessage = memo(function UserMessage({
   message: Message
   compact?: boolean
 }) {
-  const text = getTextFromParts(message)
+  const text = stripStudioContextSuffix(getTextFromParts(message))
 
   return (
     <div
@@ -143,14 +167,14 @@ const UserMessage = memo(function UserMessage({
       </div>
       <div className="max-w-[75%] space-y-1.5">
         {text && (
-          <div className="rounded-2xl rounded-tr-sm bg-primary px-4 py-2.5 text-sm text-primary-foreground whitespace-pre-wrap shadow-sm">
+          <div className="whitespace-pre-wrap rounded-2xl rounded-tr-sm border border-border/70 bg-muted/70 px-4 py-2.5 text-sm leading-6 text-foreground shadow-sm">
             {text}
           </div>
         )}
       </div>
       {!compact && (
-        <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/10">
-          <UserIcon className="size-3.5 text-primary" />
+        <div className="flex size-7 shrink-0 items-center justify-center rounded-full border border-border/70 bg-muted/60">
+          <UserIcon className="size-3.5 text-muted-foreground" />
         </div>
       )}
       {compact && <div className="w-7 shrink-0" />}
@@ -165,9 +189,11 @@ const UserMessage = memo(function UserMessage({
 const AssistantMessage = memo(function AssistantMessage({
   message,
   compact,
+  onResourceClick,
 }: {
   message: Message
   compact?: boolean
+  onResourceClick?: (uri: string) => void
 }) {
   const textContent = getTextFromParts(message)
 
@@ -190,6 +216,7 @@ const AssistantMessage = memo(function AssistantMessage({
                   result={part.tool_output}
                   isError={part.tool_status === 'error'}
                   isRunning={false}
+                  onResourceClick={onResourceClick}
                 />
               )
             case 'context':
@@ -216,11 +243,13 @@ function StreamingAssistantMessage({
   toolCalls,
   reasoning,
   iteration,
+  onResourceClick,
 }: {
   content: string
   toolCalls: StreamToolCall[]
   reasoning: string
   iteration: number
+  onResourceClick?: (uri: string) => void
 }) {
   const { t } = useTranslation('sessions')
   const hasContent = content || toolCalls.length > 0 || reasoning
@@ -253,6 +282,7 @@ function StreamingAssistantMessage({
               args={args}
               result={tc.result}
               isRunning={!tc.result}
+              onResourceClick={onResourceClick}
             />
           )
         })}

@@ -1,7 +1,37 @@
 {
   "version": 1,
-  "updatedAt": "2026-05-29",
+  "updatedAt": "2026-06-01",
   "cdnBaseUrl": "https://docs.openviking.net/",
+  "accessMethods": [
+    {
+      "id": "mcp",
+      "name": "MCP 接入",
+      "icon": "link",
+      "summary": "与任意支持 MCP 的客户端接入",
+      "detailPath": "https://docs.openviking.net/agents/zh/mcp.md"
+    },
+    {
+      "id": "cli",
+      "name": "CLI 接入",
+      "icon": "terminal",
+      "summary": "命令行接入 Agent，使用灵活性更高",
+      "detailPath": "https://docs.openviking.net/agents/zh/cli.md"
+    },
+    {
+      "id": "api",
+      "name": "API 接入",
+      "icon": "code",
+      "summary": "标准 REST API，灵活调用所有能力",
+      "detailPath": "https://docs.openviking.net/agents/zh/api.md"
+    },
+    {
+      "id": "sdk",
+      "name": "SDK 接入",
+      "icon": "paperclip",
+      "summary": "多语言 SDK 封装，集成更便捷、高效",
+      "detailPath": "https://docs.openviking.net/agents/zh/sdk.md"
+    }
+  ],
   "agents": [
     {
       "id": "openclaw",
@@ -9,7 +39,7 @@
       "tags": ["Plugin"],
       "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/OpenClaw.png",
       "summary": "Plugin 接入，作为 OpenClaw 的 context engine，支持多 Agent 跨会话记忆与自迭代，通过 npm 安装助手工具一键完成配置",
-      "detailPath": "https://docs.openviking.net/agents/openclaw.md"
+      "detailPath": "https://docs.openviking.net/agents/zh/openclaw.md"
     },
     {
       "id": "hermes",
@@ -17,7 +47,7 @@
       "tags": ["Provider"],
       "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/Hermes-Agent.png",
       "summary": "Hermes 官方内置 OpenViking 作为记忆提供方。无需安装插件——直接把 Hermes 指向你的 OpenViking 服务即可，记忆存储、召回和抽取均原生支持",
-      "detailPath": "https://docs.openviking.net/agents/hermes.md"
+      "detailPath": "https://docs.openviking.net/agents/zh/hermes.md"
     },
     {
       "id": "claude-code",
@@ -25,7 +55,7 @@
       "tags": ["Plugin"],
       "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/Claude-Code.png",
       "summary": "为 Claude Code 提供跨项目、跨 session 的长期记忆，越用越聪明。安装一次，每次对话自动召回和捕获，模型不需要主动调用任何工具",
-      "detailPath": "https://docs.openviking.net/agents/claude-code.md"
+      "detailPath": "https://docs.openviking.net/agents/zh/claude-code.md"
     },
     {
       "id": "codex",
@@ -33,7 +63,7 @@
       "tags": ["Plugin"],
       "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/codex.png",
       "summary": "为 Codex 提供持久化的跨 session 记忆。安装一次——每次用户输入前自动召回，每轮结束后增量捕获，compaction 前提交给记忆抽取器",
-      "detailPath": "https://docs.openviking.net/agents/codex.md"
+      "detailPath": "https://docs.openviking.net/agents/zh/codex.md"
     },
     {
       "id": "cursor",
@@ -41,7 +71,7 @@
       "tags": ["MCP"],
       "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/Cursor.png",
       "summary": "通过 MCP 标准协议接入，为 Codex 提供支撑日常编码 和 Agent 开发场景的上下文管理",
-      "detailPath": "https://docs.openviking.net/agents/cursor.md"
+      "detailPath": "https://docs.openviking.net/agents/zh/cursor.md"
     },
     {
       "id": "trae",
@@ -49,7 +79,7 @@
       "tags": ["MCP"],
       "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/Trae.png",
       "summary": "通过 MCP 标准协议接入，为 TRAE 提供支撑日常编码 和 Agent 开发场景的上下文管理，可以修改规则和命令来保证更稳定的 MCP 工具使用",
-      "detailPath": "https://docs.openviking.net/agents/trae.md"
+      "detailPath": "https://docs.openviking.net/agents/zh/trae.md"
     },
     {
       "id": "opencode",
@@ -57,7 +87,7 @@
       "tags": ["Plugin"],
       "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/OpenCode.png",
       "summary": "提供两种 OpenCode 插件，可以模型自主选择使用，也可以注入上下文使用",
-      "detailPath": "https://docs.openviking.net/agents/opencode.md"
+      "detailPath": "https://docs.openviking.net/agents/zh/opencode.md"
     }
   ]
 }

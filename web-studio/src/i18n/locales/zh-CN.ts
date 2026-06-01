@@ -30,6 +30,9 @@ const zhCN = {
       sessions: {
         title: '会话',
       },
+      studio: {
+        title: '实验场',
+      },
     },
     sidebar: {
       loadingSessions: '加载中...',
@@ -747,6 +750,121 @@ const zhCN = {
       noApiKey: '没有可用的 API key。请选择一个身份或粘贴 key。',
       signInRequired:
         '请先在“连接与身份”中登录 OpenViking Studio，或在下方临时粘贴 API key 完成授权。',
+    },
+  },
+  studio: {
+    copyUri: '复制当前 URI',
+    copied: '已复制 URI',
+    resizeContext: '调整上下文目录宽度',
+    resizeAction: '调整 Terminal 和 Agent 宽度',
+    readFailed: '无法读取 {{uri}}',
+    tabs: {
+      terminal: '终端',
+      agent: 'Agent',
+    },
+    addResource: {
+      title: '添加资源',
+      description:
+        '添加完成后左侧目录树会刷新，右侧 Terminal 可继续定位新资源。',
+      submitted: '资源添加任务已提交',
+    },
+    explorer: {
+      title: '上下文目录',
+      addResource: '添加资源',
+      refresh: '刷新目录',
+      namespaces: {
+        user: '用户个性化记忆',
+        session: '用户与 Agent 的原始会话',
+        agent: 'Agent 的能力、工具和经验',
+        resources: 'Agent 可引用的外部资源',
+      },
+    },
+    agent: {
+      autoRetrieve: 'Agent 会根据消息和工具自主检索',
+      history: '历史会话',
+      newSession: '新建会话',
+      creating: '正在创建 Studio 会话...',
+      detectingBot: '正在检测 bot 模式...',
+      createFailed: '创建会话失败：{{error}}',
+      retry: '重试',
+      botDisabledFooter: '开启 bot 模式后可使用 Agent 对话',
+      historyTitle: 'Agent 会话历史',
+      historyDescription:
+        '这里只展示实验场右侧 Agent 使用过的会话；新建会话会开启一个空白 Agent 上下文。',
+      loadingSessions: '正在加载会话...',
+      noSessions: '暂无历史会话',
+      createTimeout: '创建 Studio 会话超时，请检查连接设置后重试。',
+      newSessionTitle: '新建 Studio 会话',
+      botPrompt: {
+        title: '请开启 bot 模式',
+        description:
+          '当前服务未启用 Agent 对话能力，请使用 bot 模式启动服务后重试。',
+        retry: '重新检测',
+      },
+      empty: {
+        heading: 'Agent 动作会和左侧目录联动',
+        body: '发送问题后，tool call 输出里的 `viking://` 文件会变成可点击链接，点击即可在左侧定位并在中间打开。',
+        prompts: [
+          '总结当前目录',
+          '递归查找相关文档',
+          '解释这个资源和项目的关系',
+        ],
+      },
+    },
+    terminal: {
+      welcomeTitle: 'Terminal 已连接上下文目录',
+      welcomeBody:
+        '可执行 /status、/ls、/search、/read、/add-resource。输出中的资源链接会定位左侧目录并打开中间预览。',
+      opened: '已打开资源',
+      onlineTitle: '服务在线',
+      onlineBody: 'OpenViking API 正常响应，根目录下发现 {{count}} 个节点。',
+      lsBody: '{{uri}} 下共展示 {{count}} 个节点。',
+      fileEmpty: '文件为空，已在中间预览区打开。',
+      searchUsage: '用法：{{name}} 查询词',
+      readUsage: '用法：/read viking://resources/...',
+      enterUri: '请输入 viking:// URI',
+      hits: '命中 resources {{resources}} 条，memory {{memories}} 条，skill {{skills}} 条。',
+      addResourceBody:
+        '已打开添加资源弹窗。提交后左侧目录会刷新，也可以用 /ls 或 /search 继续定位新内容。',
+      addResourceTitle: '添加资源',
+      unknownCommand:
+        '未知命令。可用命令：/status、/ls、/search、/find、/read、/add-resource。',
+      commandFailed: '命令失败',
+      running: '正在执行命令...',
+      placeholder: '输入 CLI 命令，例如 /status',
+      suggestionsTitle: '命令建议',
+      suggestionsHint: '↑↓ 选择 · Tab 补全 · Enter 执行',
+      groupLabels: {
+        resources: '资源',
+        memories: '记忆',
+        skills: '技能',
+      },
+      commands: {
+        status: {
+          description: '检查 OpenViking API 和根目录',
+          usage: '/status',
+        },
+        ls: {
+          description: '列出当前目录或指定目录',
+          usage: '/ls [viking://resources/...]',
+        },
+        search: {
+          description: '在当前上下文范围内语义搜索',
+          usage: '/search 查询词',
+        },
+        find: {
+          description: '查找相关上下文资源',
+          usage: '/find 查询词',
+        },
+        read: {
+          description: '读取并打开一个资源文件',
+          usage: '/read viking://resources/.../file.md',
+        },
+        addResource: {
+          description: '打开添加资源表单',
+          usage: '/add-resource',
+        },
+      },
     },
   },
 } as const

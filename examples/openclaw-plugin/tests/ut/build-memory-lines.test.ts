@@ -23,10 +23,15 @@ describe("estimateTokenCount", () => {
     expect(estimateTokenCount("")).toBe(0);
   });
 
-  it("estimates tokens as ceil(chars/4)", () => {
+  it("keeps the legacy ASCII estimate close to ceil(chars/4)", () => {
     expect(estimateTokenCount("hello")).toBe(2); // ceil(5/4)
     expect(estimateTokenCount("abcd")).toBe(1); // ceil(4/4)
     expect(estimateTokenCount("abcde")).toBe(2); // ceil(5/4)
+  });
+
+  it("uses CJK-aware weighting for non-Latin text and emoji", () => {
+    expect(estimateTokenCount("\u4f60\u597d\u4e16\u754c")).toBe(6);
+    expect(estimateTokenCount("A\u4f60\ud83d\ude42")).toBe(4);
   });
 
   it("handles long text", () => {

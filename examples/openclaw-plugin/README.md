@@ -23,8 +23,9 @@ The agent runs install → setup → restart → verify automatically. See [INST
 
 | Stage | What happens |
 |-------|-------------|
-| **Every turn** (`afterTurn`) | Your messages are archived into an OpenViking session |
-| **On `/compact`** (`compact`) | Archived messages are extracted into long-term memories |
+| **Every turn** (`afterTurn`) | New messages are appended to an OpenViking session; commit/extraction is threshold-triggered |
+| **Explicit remember** (`memory_store`) | Important long-term facts can be written and committed immediately |
+| **On `/compact`** (`compact`) | Pending session messages are committed and extracted into long-term memories |
 | **Before each reply** (`assemble`) | Relevant memories are auto-retrieved and injected into context |
 
 ## Tools
@@ -34,7 +35,7 @@ Once installed, the plugin provides these agent tools:
 | Tool | Purpose |
 |------|---------|
 | `memory_recall` | Explicit long-term memory search |
-| `memory_store` | Persist important information immediately |
+| `memory_store` | Persist explicit long-term facts immediately |
 | `memory_forget` | Delete memories by URI or query |
 | `ov_archive_search` | Search across archives by keyword |
 | `ov_archive_expand` | Expand an archive back to raw messages |
@@ -206,6 +207,18 @@ After that, the plugin checks `pending_tokens`. Once the session crosses `commit
 - the current turn is not blocked waiting for extraction
 - if `logFindRequests` is enabled, the logs include the task id and follow-up extraction detail
 
+This automatic path is best-effort and commit-dependent. Short but important facts can stay only in the live session until a threshold commit, `/compact`, or an explicit store happens.
+
+### Explicit long-term memory writes
+
+When the user explicitly asks the agent to remember, save, or store an important long-term fact, preference, project, or decision, prefer `memory_store` over waiting for normal auto-capture. `memory_store` writes the text to an OpenViking session and calls `commit(wait=true)`, so it is the reliable integration-side path for facts that should be available as long-term memory as soon as possible.
+
+Use it as a complement to auto-capture, not a replacement:
+
+- auto-capture still preserves ordinary conversation flow and batches extraction for cost and latency
+- `memory_store` is for explicit durable-memory intent such as "remember my main project is X" or "save this preference"
+- if `memory_store` commits but extracts 0 memories, check the OpenViking server extraction/model configuration; the explicit path triggered extraction, but the extractor did not produce a memory
+
 ### What `compact()` does
 
 `compact()` is the stricter synchronous boundary:
@@ -222,7 +235,7 @@ So `afterTurn()` is closer to "incremental append plus threshold-triggered async
 Beyond automatic behavior, the plugin exposes seven tools directly:
 
 - `memory_recall`: explicit long-term memory search
-- `memory_store`: write text into an OpenViking session and trigger commit
+- `memory_store`: write explicit long-term facts into an OpenViking session and trigger commit
 - `memory_forget`: delete by URI, or search first and remove a single strong match
 - `ov_archive_expand`: expand a concrete archive back into raw messages
 - `add_resource`: import a document, directory, URL, or Git repository as an OpenViking resource
@@ -233,7 +246,7 @@ They serve different roles:
 
 - automatic recall covers the default case where the model does not know what to search yet
 - `memory_recall` gives the model an explicit follow-up search path
-- `memory_store` is for immediately persisting clearly important information
+- `memory_store` is for immediately persisting clearly important information when the user expresses durable-memory intent
 - `ov_archive_expand` is the "go back to archive detail" escape hatch when summaries are not enough
 - `add_resource` lets the agent save explicit document or repository import requests without asking the user to remember slash commands
 - `add_skill` imports skills into OpenViking, while `add_resource` imports resources

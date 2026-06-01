@@ -64,6 +64,22 @@ class _FakeProcessor:
         await self._vectorize_directory(uri, context_type, abstract, overview, ctx=ctx)
 
 
+class _TrackingProcessor(_FakeProcessor):
+    def __init__(self):
+        super().__init__()
+        self.active_summaries = 0
+        self.max_active_summaries = 0
+
+    async def _generate_single_file_summary(self, file_path, llm_sem=None, ctx=None):
+        self.active_summaries += 1
+        self.max_active_summaries = max(self.max_active_summaries, self.active_summaries)
+        try:
+            await asyncio.sleep(0.01)
+            return {"name": file_path.split("/")[-1], "summary": "summary"}
+        finally:
+            self.active_summaries -= 1
+
+
 class _DummyTracker:
     def __init__(self):
         self.register_calls = []
@@ -129,6 +145,84 @@ async def test_semantic_dag_stats_collects_nodes(monkeypatch):
     assert sorted(processor.vectorized_files) == sorted(
         [f"{root_uri}/a.txt", f"{root_uri}/b.txt", f"{root_uri}/child/c.txt"]
     )
+
+
+@pytest.mark.asyncio
+async def test_semantic_dag_bounds_active_node_work(monkeypatch):
+    root_uri = "viking://resources/root"
+    tree = {
+        root_uri: [{"name": f"file-{idx}.txt", "isDir": False} for idx in range(40)],
+    }
+    fake_fs = _FakeVikingFS(tree)
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.embedding_tracker.EmbeddingTaskTracker.get_instance",
+        lambda: _DummyTracker(),
+    )
+
+    processor = _TrackingProcessor()
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1", "agent1"), role=Role.USER)
+    executor = SemanticDagExecutor(
+        processor=processor,
+        context_type="resource",
+        max_concurrent_llm=3,
+        ctx=ctx,
+        skip_vectorization=True,
+    )
+
+    max_running = 0
+    run_task = asyncio.create_task(executor.run(root_uri))
+    while not run_task.done():
+        max_running = max(max_running, executor.get_stats().in_progress_nodes)
+        await asyncio.sleep(0)
+    await run_task
+
+    stats = executor.get_stats()
+    assert stats.total_nodes == 41
+    assert stats.done_nodes == 41
+    assert stats.pending_nodes == 0
+    assert stats.in_progress_nodes == 0
+    assert processor.max_active_summaries <= 3
+    assert max_running <= 3
+
+
+@pytest.mark.asyncio
+async def test_semantic_dag_shares_node_scheduler_across_roots(monkeypatch):
+    root_a = "viking://resources/root-a"
+    root_b = "viking://resources/root-b"
+    tree = {
+        root_a: [{"name": f"a-{idx}.txt", "isDir": False} for idx in range(20)],
+        root_b: [{"name": f"b-{idx}.txt", "isDir": False} for idx in range(20)],
+    }
+    fake_fs = _FakeVikingFS(tree)
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.embedding_tracker.EmbeddingTaskTracker.get_instance",
+        lambda: _DummyTracker(),
+    )
+
+    processor = _TrackingProcessor()
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1", "agent1"), role=Role.USER)
+    executor_a = SemanticDagExecutor(
+        processor=processor,
+        context_type="resource",
+        max_concurrent_llm=4,
+        ctx=ctx,
+        skip_vectorization=True,
+    )
+    executor_b = SemanticDagExecutor(
+        processor=processor,
+        context_type="resource",
+        max_concurrent_llm=4,
+        ctx=ctx,
+        skip_vectorization=True,
+    )
+
+    await asyncio.gather(executor_a.run(root_a), executor_b.run(root_b))
+
+    assert processor.max_active_summaries <= 4
+    assert executor_a.get_stats().done_nodes == 21
+    assert executor_b.get_stats().done_nodes == 21
 
 
 @pytest.mark.asyncio

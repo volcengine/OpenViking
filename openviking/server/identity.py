@@ -126,3 +126,7 @@ class ToolContext:
     @property
     def account_id(self) -> str:
         return self.request_ctx.user.account_id
+
+    @property
+    def namespace_policy(self) -> AccountNamespacePolicy:
+        return self.request_ctx.namespace_policy

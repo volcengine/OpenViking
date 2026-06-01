@@ -1,0 +1,95 @@
+## 步骤 1 选择 API Key
+复制页面中展示的 API Key 到你的 Agent 终端
+
+## 步骤 2 写入资源
+参考 GitHub 提供的资源写入示例，自动填入 API Key 和域名
+
+```python
+import json
+from pathlib import Path
+
+import requests
+
+url = " `https://api.vikingdb.cn-beijing.volces.com/openviking` "
+api_key = "[TODO]your-api-key"
+agent_id = "[TODO]your-agent-id"
+file_path = Path("[TODO]your-file-path") # e.g. test.txt
+resource_to = "[TODO]your-resource-path" # e.g. viking://resources/test.txt
+reason = "[TODO]your-reason" # e.g. External API documentation
+
+# 1. Initialize request headers.
+headers = {
+    "Content-Type": "application/json",
+    "Authorization": "Bearer " + api_key,
+    "X-OpenViking-Agent": agent_id,
+}
+
+def post_json(path: str, payload: dict, timeout: float):
+    response = requests.post(f"{url}{path}", headers=headers, json=payload, timeout=timeout)
+    response.raise_for_status()
+    return response.json()
+
+
+# 2. Upload the local file to a temporary resource.
+with file_path.open("rb") as file:
+    result = requests.post(
+        f"{url}/api/v1/resources/temp_upload",
+        headers={
+            "Authorization": "Bearer " + api_key,
+            "X-OpenViking-Agent": agent_id,
+        },
+        files={"file": (file_path.name, file, "application/octet-stream")},
+        timeout=120.0,
+    )
+result.raise_for_status()
+result = result.json()
+print(json.dumps(result, ensure_ascii=False, indent=2))
+temp_file_id = result["result"]["temp_file_id"]
+
+# 3. Create a resource from the temporary file.
+result = post_json(
+    "/api/v1/resources",
+    {
+        "temp_file_id": temp_file_id,
+        "source_name": file_path.name,
+        "to": resource_to,
+        "reason": reason,
+    },
+    120.0,
+)
+print(json.dumps(result, ensure_ascii=False, indent=2))
+```
+
+## 步骤 3 写入记忆
+参考 GitHub 提供的记忆写入示例，自动填入 API Key 和域名
+
+```python
+text = "[TODO]your-message-text" # e.g. I am a developer
+    
+def post_json(path: str, payload: dict, timeout: float):
+    response = requests.post(f"{url}{path}", headers=headers, json=payload, timeout=timeout)
+    response.raise_for_status()
+    return response.json()
+
+# Create a session.
+session = post_json("/api/v1/sessions", {}, 360.0)
+session_id = session["result"]["session_id"]
+
+# Add a message.
+post_json(
+    f"/api/v1/sessions/{session_id}/messages",
+    {
+        "role": "user",
+        "parts": [{"type": "text", "text": text}],
+    },
+    360.0,
+)
+
+# Commit the session.
+result = post_json(
+    f"/api/v1/sessions/{session_id}/commit",
+    {"telemetry": False},
+    360.0,
+)
+print(json.dumps(result, ensure_ascii=False, indent=2))
+```

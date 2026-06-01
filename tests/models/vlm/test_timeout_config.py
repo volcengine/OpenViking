@@ -131,7 +131,7 @@ def test_codex_vlm_propagates_config_timeout():
     )
 
     with mock.patch("openviking.models.vlm.backends.codex_vlm.openai.OpenAI") as fake:
-        fake.return_value.responses.stream.return_value = _MockResponsesStream(
+        fake.return_value.responses.create.return_value = _MockResponsesStream(
             _build_final_response("timeout ok")
         )
         assert vlm.get_completion("hello") == "timeout ok"
