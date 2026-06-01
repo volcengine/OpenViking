@@ -1109,14 +1109,47 @@ In the official container, the initial `omm` user may be restricted for remote l
         "password": "your-password",
         "db_name": "postgres",
         "schema": "public",
-        "mode": "standalone"
+        "mode": "standalone",
+        "shard_count": 32,
+        "connect_timeout": 10,
+        "dense_vector_name": "vector",
+        "sparse_vector_name": "sparse_vector"
       }
     }
   }
 }
 ```
 
-Set `mode` to `"distributed"` for openGauss distributed deployments; OpenViking will attempt to mark metadata tables as reference tables and distribute collection tables by `id`.
+Set `mode` to `"distributed"` for openGauss distributed deployments; OpenViking will attempt to mark metadata tables as reference tables and distribute collection tables by `id` (`shard_count` controls the number of shards).
+</details>
+
+<details>
+<summary><b>Qdrant</b></summary>
+
+Connects to a running Qdrant service over its REST API.
+
+```json
+{
+  "storage": {
+    "vectordb": {
+      "name": "context",
+      "backend": "qdrant",
+      "project": "default",
+      "distance_metric": "cosine",
+      "dimension": 1024,
+      "qdrant": {
+        "url": "http://localhost:6333",
+        "api_key": "your-api-key",
+        "timeout_seconds": 10,
+        "dense_vector_name": "vector",
+        "sparse_vector_name": "sparse_vector",
+        "meta_collection_name": "__openviking_meta",
+        "enable_text_index": true
+      }
+    }
+  }
+}
+```
 </details>
 
 
