@@ -911,7 +911,15 @@ class MemoryUpdater:
         # LLM issues a Replace with the same experience_name (delete old + create same-name new),
         # which is semantically an Update. Executing the delete would remove the just-written file.
         upserted_uris = set(result.written_uris + result.edited_uris)
+        processed_delete_uris: set[str] = set()
         for file_content in operations.delete_file_contents:
+            if file_content.uri in processed_delete_uris:
+                tracer.info(
+                    f"[apply_operations] skipping duplicate delete for {file_content.uri}: "
+                    "URI was already processed in the same batch"
+                )
+                continue
+            processed_delete_uris.add(file_content.uri)
             if file_content.uri in upserted_uris:
                 tracer.info(
                     f"[apply_operations] skipping delete for {file_content.uri}: "

@@ -435,6 +435,34 @@ class TestMemoryUpdater:
         mock_viking_fs.read_file.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_apply_operations_dedupes_duplicate_delete_uris(self):
+        deleted_uri = "viking://agent/demo/memories/experiences/old.md"
+
+        updater = MemoryUpdater(registry=MagicMock())
+        updater._get_viking_fs = MagicMock(return_value=MagicMock())
+        updater._apply_upsert = AsyncMock(return_value=None)
+        updater._apply_delete = AsyncMock(return_value=True)
+        updater._vectorize_memories = AsyncMock()
+        updater.generate_overview = AsyncMock()
+
+        resolved = ResolvedOperations(
+            upsert_operations=[],
+            delete_file_contents=[
+                MemoryFile(uri=deleted_uri, extra_fields={"memory_type": "experiences"}),
+                MemoryFile(uri=deleted_uri, extra_fields={"memory_type": "experiences"}),
+            ],
+            errors=[],
+        )
+        ctx = RequestContext(user=UserIdentifier("acme", "alice", "bot"), role=Role.USER)
+
+        result = await updater.apply_operations(operations=resolved, ctx=ctx)
+
+        updater._apply_delete.assert_awaited_once()
+        assert updater._apply_delete.await_args.args[0] == deleted_uri
+        assert result.deleted_uris == [deleted_uri]
+        updater.generate_overview.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_apply_operations_routes_backlinks_to_matching_uri_only(self):
         caroline_uri = (
             "viking://user/Caroline/memories/events/2023/05/08/career_education_planning.md"
