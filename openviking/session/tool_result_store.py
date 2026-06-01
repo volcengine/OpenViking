@@ -10,6 +10,11 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+from openviking.session.tool_result_synopsis import (
+    ToolResultSynopsis,
+    generate_tool_result_synopsis,
+    render_tool_result_stub,
+)
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 
@@ -40,35 +45,46 @@ def make_preview(
     sha256: str = "",
     reason: str = "",
     original_chars: Optional[int] = None,
+    mime_type: str = "text/plain",
 ) -> str:
-    """Build a deterministic head+tail preview."""
+    """Build a deterministic, typed synopsis stub."""
     original = len(content) if original_chars is None else original_chars
-    if preview_chars <= 0 or len(content) <= preview_chars:
-        body = content
-    else:
-        half = max(1, preview_chars // 2)
-        body = (
-            "--- BEGIN PREVIEW HEAD ---\n"
-            f"{content[:half]}\n"
-            "--- END PREVIEW HEAD ---\n\n"
-            "--- BEGIN PREVIEW TAIL ---\n"
-            f"{content[-half:]}\n"
-            "--- END PREVIEW TAIL ---"
-        )
+    synopsis = generate_tool_result_synopsis(
+        content,
+        preview_chars=preview_chars,
+        tool_name=tool_name,
+        mime_type=mime_type,
+    )
+    return render_preview_from_synopsis(
+        synopsis,
+        ref=ref,
+        tool_name=tool_name,
+        sha256=sha256,
+        reason=reason,
+        original_chars=original,
+        preview_chars=min(len(content), max(preview_chars, 0)),
+    )
 
-    header = [
-        "[OpenViking tool result externalized]",
-        f"tool_name: {tool_name or 'tool'}",
-        f"original_chars: {original}",
-        f"preview_chars: {min(len(content), max(preview_chars, 0))}",
-    ]
-    if ref:
-        header.append(f"ref: {ref}")
-    if sha256:
-        header.append(f"sha256: {sha256[:16]}")
-    if reason:
-        header.append(f"reason: {reason}")
-    return "\n".join(header) + "\n\n" + body
+
+def render_preview_from_synopsis(
+    synopsis: ToolResultSynopsis,
+    *,
+    ref: str = "",
+    tool_name: str = "",
+    sha256: str = "",
+    reason: str = "",
+    original_chars: int,
+    preview_chars: int,
+) -> str:
+    return render_tool_result_stub(
+        synopsis,
+        ref=ref,
+        tool_name=tool_name,
+        sha256=sha256,
+        reason=reason,
+        original_chars=original_chars,
+        preview_chars=max(preview_chars, 0),
+    )
 
 
 @dataclass
@@ -78,6 +94,7 @@ class StoredToolResult:
     output_uri: str
     metadata_uri: str
     metadata: Dict[str, Any]
+    synopsis: ToolResultSynopsis
 
 
 class ToolResultStore:
@@ -115,6 +132,7 @@ class ToolResultStore:
         created_at: Optional[str],
         preview_chars: int,
         mime_type: str = "text/plain",
+        synopsis: Optional[ToolResultSynopsis] = None,
     ) -> StoredToolResult:
         digest = sha256_text(content)
         tool_result_id = build_tool_result_id(tool_id, digest)
@@ -125,16 +143,34 @@ class ToolResultStore:
         try:
             existing_metadata = await self.read_metadata(tool_result_id)
             if existing_metadata.get("sha256") == digest:
+                synopsis_data = existing_metadata.get("synopsis")
+                synopsis = (
+                    ToolResultSynopsis.from_dict(synopsis_data)
+                    if isinstance(synopsis_data, dict)
+                    else generate_tool_result_synopsis(
+                        content,
+                        preview_chars=preview_chars,
+                        tool_name=tool_name,
+                        mime_type=mime_type,
+                    )
+                )
                 return StoredToolResult(
                     tool_result_id=tool_result_id,
                     storage_uri=storage_uri,
                     output_uri=output_uri,
                     metadata_uri=metadata_uri,
                     metadata=existing_metadata,
+                    synopsis=synopsis,
                 )
         except NotFoundError:
             pass
 
+        synopsis = synopsis or generate_tool_result_synopsis(
+            content,
+            preview_chars=preview_chars,
+            tool_name=tool_name,
+            mime_type=mime_type,
+        )
         metadata = {
             "tool_result_id": tool_result_id,
             "session_id": self._session_id,
@@ -147,6 +183,8 @@ class ToolResultStore:
             "preview_chars": min(len(content), max(preview_chars, 0)),
             "sha256": digest,
             "mime_type": mime_type,
+            "synopsis_kind": synopsis.kind,
+            "synopsis": synopsis.to_dict(),
             "storage_uri": storage_uri,
             "output_uri": output_uri,
             "offset_unit": "unicode_code_point",
@@ -163,6 +201,7 @@ class ToolResultStore:
             output_uri=output_uri,
             metadata_uri=metadata_uri,
             metadata=metadata,
+            synopsis=synopsis,
         )
 
     async def read_metadata(self, tool_result_id: str) -> Dict[str, Any]:

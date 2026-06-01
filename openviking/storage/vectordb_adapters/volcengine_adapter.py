@@ -21,6 +21,7 @@ from .base import VIKINGDB_TEXT_FIELD_BYTE_LIMIT, CollectionAdapter
 class VolcengineCollectionAdapter(CollectionAdapter):
     """Adapter for Volcengine-hosted VikingDB."""
 
+    _DATA_BATCH_SIZE = 100
     _TEXT_FIELD_BYTE_LIMIT = VIKINGDB_TEXT_FIELD_BYTE_LIMIT
 
     def __init__(

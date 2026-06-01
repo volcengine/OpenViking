@@ -18,10 +18,21 @@ from openviking.message import Message, Part
 from openviking.message.part import ContextPart, TextPart, ToolPart
 from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.server.identity import RequestContext, Role
-from openviking.session.tool_result_store import ToolResultStore, make_preview, sha256_text
+from openviking.session.tool_result_store import (
+    ToolResultStore,
+    build_tool_result_id,
+    make_preview,
+    render_preview_from_synopsis,
+    sha256_text,
+)
+from openviking.session.tool_result_synopsis import (
+    ToolResultSynopsis,
+    generate_tool_result_synopsis,
+)
 from openviking.telemetry import get_current_telemetry, tracer
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.time_utils import get_current_timestamp
+from openviking.utils.token_estimation import estimate_text_tokens
 from openviking_cli.exceptions import FailedPreconditionError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger, run_async
@@ -187,6 +198,8 @@ class SessionMeta:
             "prompt_tokens": 0,
             "completion_tokens": 0,
             "total_tokens": 0,
+            "cached_tokens": 0,
+            "reasoning_tokens": 0,
         }
     )
     embedding_token_usage: Dict[str, int] = field(
@@ -258,6 +271,8 @@ class SessionMeta:
                 "prompt_tokens": llm_token_usage.get("prompt_tokens", 0),
                 "completion_tokens": llm_token_usage.get("completion_tokens", 0),
                 "total_tokens": llm_token_usage.get("total_tokens", 0),
+                "cached_tokens": llm_token_usage.get("cached_tokens", 0),
+                "reasoning_tokens": llm_token_usage.get("reasoning_tokens", 0),
             },
             embedding_token_usage={
                 "total_tokens": embedding_token_usage.get("total_tokens", 0),
@@ -581,6 +596,7 @@ class Session:
             sha256=sha256_text(output) if output else "",
             reason="source_read",
             original_chars=len(output),
+            mime_type=part.tool_output_mime_type or "text/plain",
         )
         part.tool_output = preview
         part.tool_output_ref = source_ref
@@ -608,6 +624,7 @@ class Session:
         reason: str,
         group_id: str,
         group_original_chars: int,
+        synopsis: Optional[ToolResultSynopsis] = None,
     ) -> None:
         store = self._tool_result_store()
         original_output = part.tool_output or ""
@@ -626,6 +643,7 @@ class Session:
                     created_at=msg.created_at,
                     preview_chars=preview_chars,
                     mime_type=part.tool_output_mime_type or "text/plain",
+                    synopsis=synopsis,
                 )
             )
         except Exception as exc:
@@ -644,6 +662,7 @@ class Session:
                     sha256=digest,
                     reason=f"{reason}:externalization_failed",
                     original_chars=len(original_output),
+                    mime_type=part.tool_output_mime_type or "text/plain",
                 )
                 part.tool_output_ref = ""
                 part.tool_output_truncated = True
@@ -654,14 +673,14 @@ class Session:
             return
 
         ref = stored.storage_uri
-        part.tool_output = make_preview(
-            original_output,
-            preview_chars=preview_chars,
+        part.tool_output = render_preview_from_synopsis(
+            stored.synopsis,
             ref=ref,
             tool_name=part.tool_name,
             sha256=digest,
             reason=reason,
             original_chars=len(original_output),
+            preview_chars=min(len(original_output), max(preview_chars, 0)),
         )
         part.tool_output_ref = ref
         part.tool_output_truncated = True
@@ -693,6 +712,7 @@ class Session:
         group_original_chars = sum(len(p.tool_output or "") for _, p in tool_parts)
         normal_indices: List[int] = []
         selected: set[int] = set()
+        externalized_preview_cache: Dict[tuple[int, int, str], tuple[ToolResultSynopsis, int]] = {}
 
         for idx, (_msg, part) in enumerate(tool_parts):
             part.tool_output_group_id = group_id
@@ -711,13 +731,47 @@ class Session:
             if len(part.tool_output or "") > cfg.threshold_chars:
                 selected.add(idx)
 
+        def prepared_externalized_preview(
+            idx: int, part: ToolPart, preview_chars: int
+        ) -> tuple[ToolResultSynopsis, int]:
+            content = part.tool_output or ""
+            reason = "single_threshold" if len(content) > cfg.threshold_chars else "turn_budget"
+            cache_key = (idx, preview_chars, reason)
+            cached = externalized_preview_cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+            synopsis = generate_tool_result_synopsis(
+                content,
+                preview_chars=preview_chars,
+                tool_name=part.tool_name,
+                mime_type=part.tool_output_mime_type or "text/plain",
+            )
+            digest = sha256_text(content)
+            ref = f"{self._session_uri}/tool-results/{build_tool_result_id(part.tool_id, digest)}"
+            rendered = render_preview_from_synopsis(
+                synopsis,
+                ref=ref,
+                tool_name=part.tool_name,
+                sha256=digest,
+                reason=reason,
+                original_chars=len(content),
+                preview_chars=min(len(content), max(preview_chars, 0)),
+            )
+            prepared = (synopsis, len(rendered))
+            externalized_preview_cache[cache_key] = prepared
+            return prepared
+
         def projected_inline_chars(selected_indices: set[int]) -> int:
             preview_chars = self._effective_tool_preview_chars(cfg, len(selected_indices))
             total = 0
             for idx, (_, part) in enumerate(tool_parts):
                 output_len = len(part.tool_output or "")
                 if idx in selected_indices:
-                    total += min(output_len, preview_chars)
+                    _synopsis, rendered_len = prepared_externalized_preview(
+                        idx, part, preview_chars
+                    )
+                    total += rendered_len
                 else:
                     total += output_len
             return total
@@ -730,7 +784,17 @@ class Session:
         while (
             projected_inline_chars(selected) > cfg.assistant_turn_inline_budget_chars and remaining
         ):
-            selected.add(remaining.pop(0))
+            baseline = projected_inline_chars(selected)
+            chosen_pos = None
+            for pos, idx in enumerate(remaining):
+                candidate = set(selected)
+                candidate.add(idx)
+                if projected_inline_chars(candidate) < baseline:
+                    chosen_pos = pos
+                    break
+            if chosen_pos is None:
+                break
+            selected.add(remaining.pop(chosen_pos))
 
         preview_chars = self._effective_tool_preview_chars(cfg, len(selected))
         for idx in sorted(selected):
@@ -740,6 +804,7 @@ class Session:
                 if len(part.tool_output or "") > cfg.threshold_chars
                 else "turn_budget"
             )
+            synopsis, _rendered_len = prepared_externalized_preview(idx, part, preview_chars)
             self._externalize_tool_part(
                 msg,
                 part,
@@ -748,6 +813,7 @@ class Session:
                 reason=reason,
                 group_id=group_id,
                 group_original_chars=group_original_chars,
+                synopsis=synopsis,
             )
 
     def _externalize_large_tool_outputs(self, msg: Message) -> None:
@@ -843,12 +909,16 @@ class Session:
         A user message containing only multiple tool results is treated as a
         transport aggregate and stored as one message per tool result.
         """
-        msgs = self.add_messages([{
-            "role": role,
-            "parts": parts,
-            "role_id": role_id,
-            "created_at": created_at,
-        }])
+        msgs = self.add_messages(
+            [
+                {
+                    "role": role,
+                    "parts": parts,
+                    "role_id": role_id,
+                    "created_at": created_at,
+                }
+            ]
+        )
         return msgs[0]
 
     def _record_participant(self, msg: Message) -> None:
@@ -1225,8 +1295,8 @@ class Session:
                                 uri=f"{archive_uri}/.meta.json",
                                 content=json.dumps(
                                     {
-                                        "overview_tokens": -(-len(summary) // 4),
-                                        "abstract_tokens": -(-len(abstract) // 4),
+                                        "overview_tokens": estimate_text_tokens(summary),
+                                        "abstract_tokens": estimate_text_tokens(abstract),
                                     }
                                 ),
                                 ctx=self.ctx,
@@ -1416,7 +1486,9 @@ class Session:
                         "embedding": dict(self._meta.embedding_token_usage),
                         "total": {
                             "total_tokens": self._meta.llm_token_usage["total_tokens"]
-                            + self._meta.embedding_token_usage["total_tokens"]
+                            + self._meta.embedding_token_usage["total_tokens"],
+                            "cached_tokens": self._meta.llm_token_usage["cached_tokens"],
+                            "reasoning_tokens": self._meta.llm_token_usage["reasoning_tokens"],
                         },
                     },
                 },
@@ -1662,7 +1734,7 @@ class Session:
                     {
                         "archive_id": archive["archive_id"],
                         "abstract": abstract,
-                        "tokens": -(-len(abstract) // 4),
+                        "tokens": estimate_text_tokens(abstract),
                     }
                 )
             else:
@@ -1767,12 +1839,13 @@ class Session:
 
     async def _read_archive_overview_tokens(self, archive_uri: str, overview: str) -> int:
         """Read overview token estimate from archive metadata."""
-        overview_tokens = -(-len(overview) // 4)
+        overview_tokens = estimate_text_tokens(overview)
         try:
             meta_content = await self._viking_fs.read_file(
                 f"{archive_uri}/.meta.json", ctx=self.ctx
             )
-            overview_tokens = json.loads(meta_content).get("overview_tokens", overview_tokens)
+            meta_tokens = int(json.loads(meta_content).get("overview_tokens", overview_tokens))
+            overview_tokens = max(overview_tokens, meta_tokens)
         except Exception:
             pass
         return overview_tokens
@@ -1898,6 +1971,8 @@ class Session:
             latest_meta.llm_token_usage["prompt_tokens"] += llm.get("input", 0)
             latest_meta.llm_token_usage["completion_tokens"] += llm.get("output", 0)
             latest_meta.llm_token_usage["total_tokens"] += llm.get("total", 0)
+            latest_meta.llm_token_usage["cached_tokens"] += llm.get("prompt_cached", 0)
+            latest_meta.llm_token_usage["reasoning_tokens"] += llm.get("completion_reasoning", 0)
             embedding = telemetry_snapshot.summary.get("tokens", {}).get("embedding", {})
             latest_meta.embedding_token_usage["total_tokens"] += embedding.get("total", 0)
 
@@ -2282,7 +2357,7 @@ class Session:
             if name in Session._WM_APPEND_ONLY_SECTIONS:
                 continue
             items = Session._wm_extract_bullet_items(body)
-            est_tokens = len(body) // 4
+            est_tokens = estimate_text_tokens(body)
             if (
                 len(items) > Session._WM_SECTION_BULLET_THRESHOLD
                 or est_tokens > Session._WM_SECTION_TOKEN_THRESHOLD
@@ -2664,7 +2739,7 @@ class Session:
             return op
         if op_name == "APPEND":
             old_items = Session._wm_extract_bullet_items(old_content or "")
-            est_tokens = len(old_content or "") // 4
+            est_tokens = estimate_text_tokens(old_content or "")
             bullet_over = len(old_items) > Session._WM_SECTION_BULLET_THRESHOLD
             token_over = est_tokens > Session._WM_SECTION_TOKEN_THRESHOLD
             if not bullet_over and not token_over:
@@ -2718,7 +2793,7 @@ class Session:
         if not old_items:
             return op
 
-        est_tokens = len(old_content or "") // 4
+        est_tokens = estimate_text_tokens(old_content or "")
         is_emergency = (
             len(old_items) > Session._WM_SECTION_BULLET_THRESHOLD * 2
             or est_tokens > Session._WM_SECTION_TOKEN_THRESHOLD * 2

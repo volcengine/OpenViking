@@ -202,6 +202,90 @@ async def test_sdk_session_lifecycle(http_client):
     assert isinstance(sessions, list)
 
 
+async def test_sdk_batch_add_messages_and_commit_keep_recent_count(http_client):
+    client, _ = http_client
+
+    session_info = await client.create_session()
+    session_id = session_info["session_id"]
+
+    batch_result = await client.batch_add_messages(
+        session_id,
+        [
+            {
+                "role": "user",
+                "role_id": "sdk-user-1",
+                "created_at": "2026-05-01T12:00:00Z",
+                "parts": [{"type": "text", "text": "Batch hello"}],
+            },
+            {
+                "role": "assistant",
+                "role_id": "sdk-bot-1",
+                "created_at": "2026-05-01T12:00:05Z",
+                "parts": [
+                    {"type": "text", "text": "Batch answer"},
+                    {
+                        "type": "context",
+                        "uri": "viking://resources/sdk-doc",
+                        "context_type": "resource",
+                        "abstract": "SDK doc abstract",
+                    },
+                ],
+            },
+            {
+                "role": "user",
+                "content": "Keep me live",
+            },
+        ],
+    )
+    assert batch_result["added"] == 3
+
+    pre_commit = await client.get_session_context(session_id)
+    assert [m["role"] for m in pre_commit["messages"]] == ["user", "assistant", "user"]
+    assert pre_commit["messages"][0]["role_id"] == "sdk-user-1"
+    assert pre_commit["messages"][0]["created_at"] == "2026-05-01T12:00:00Z"
+    assert pre_commit["messages"][1]["parts"][1]["type"] == "context"
+    assert pre_commit["messages"][1]["parts"][1]["abstract"] == "SDK doc abstract"
+
+    commit_result = await client.commit_session(session_id, keep_recent_count=1)
+    task_id = commit_result["task_id"]
+
+    for _ in range(100):
+        task = await client.get_task(task_id)
+        if task and task["status"] in ("completed", "failed"):
+            break
+        await asyncio.sleep(0.1)
+
+    post_commit = await client.get_session_context(session_id)
+    assert post_commit["latest_archive_overview"]
+    assert [m["role"] for m in post_commit["messages"]] == ["user"]
+    assert post_commit["messages"][0]["parts"][0]["text"] == "Keep me live"
+
+
+async def test_sdk_commit_session_keeps_telemetry_as_second_positional_argument():
+    calls = []
+
+    class _FakeHTTP:
+        async def post(self, path, json):
+            calls.append((path, json))
+            return httpx.Response(
+                200,
+                json={"status": "success", "result": {"task_id": "task-1"}},
+            )
+
+    client = AsyncHTTPClient(url="http://127.0.0.1:1933")
+    client._http = _FakeHTTP()
+
+    result = await client.commit_session("s1", True)
+
+    assert result == {"task_id": "task-1"}
+    assert calls == [
+        (
+            "/api/v1/sessions/s1/commit",
+            {"keep_recent_count": 0, "telemetry": True},
+        )
+    ]
+
+
 async def test_sdk_get_session_archive(http_client):
     client, _ = http_client
 

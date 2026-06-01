@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
 import {
+  ArrowLeft,
   ChevronRight,
   FolderOpen,
   RefreshCcw,
@@ -109,13 +110,7 @@ export function VikingFileManager({
   useEffect(() => {
     const normalized = normalizeDirUri(initialUri || 'viking://')
     setCurrentUri(normalized)
-    setExpandedKeys((prev) => {
-      const next = new Set(prev)
-      for (const ancestor of getAncestorUris(normalized)) {
-        next.add(ancestor)
-      }
-      return next
-    })
+    setExpandedKeys(new Set(getAncestorUris(normalized)))
   }, [initialUri])
 
   useEffect(() => {
@@ -150,6 +145,7 @@ export function VikingFileManager({
     const normalized = normalizeDirUri(uri)
     setCurrentUri(normalized)
     setSelectedFile(null)
+    setExpandedKeys(new Set(getAncestorUris(normalized)))
   }, [])
 
   const handleOpenDirectory = useCallback((entry: VikingFsEntry) => {
@@ -160,6 +156,7 @@ export function VikingFileManager({
       uri: normalized,
       isDir: true,
     })
+    setExpandedKeys(new Set(getAncestorUris(normalized)))
   }, [])
 
   const handleNavigateFromSearch = useCallback((uri: string) => {
@@ -167,9 +164,11 @@ export function VikingFileManager({
       const normalized = normalizeDirUri(uri)
       setCurrentUri(normalized)
       setSelectedFile(null)
+      setExpandedKeys(new Set(getAncestorUris(normalized)))
     } else {
       const dirUri = parentUri(uri)
-      setCurrentUri(normalizeDirUri(dirUri))
+      const normalizedDir = normalizeDirUri(dirUri)
+      setCurrentUri(normalizedDir)
       const name = uri.split('/').pop() || uri
       setSelectedFile({
         uri: normalizeFileUri(uri),
@@ -182,6 +181,7 @@ export function VikingFileManager({
         abstract: '',
         overview: '',
       })
+      setExpandedKeys(new Set(getAncestorUris(normalizedDir)))
     }
   }, [])
 
@@ -400,8 +400,19 @@ export function VikingFileManager({
     }
   }, [])
 
+  const isRoot = currentUri === 'viking://'
+
   const toolbar = (
     <div className="flex h-10 items-center gap-1 border-b px-3">
+      <button
+        type="button"
+        disabled={isRoot}
+        aria-label={t('dirBrowser.back')}
+        className="inline-flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+        onClick={() => updateUri(parentUri(currentUri))}
+      >
+        <ArrowLeft className="size-3.5" />
+      </button>
       <nav className="flex flex-1 items-center gap-0.5 overflow-x-auto whitespace-nowrap text-xs text-muted-foreground md:text-sm">
         {breadcrumbs.map((crumb, i) => (
           <span key={crumb.uri} className="flex shrink-0 items-center gap-0.5">
@@ -420,7 +431,7 @@ export function VikingFileManager({
   )
 
   return (
-    <div className="web-studio-resource-fs -mx-4 -my-6 flex h-[calc(100svh-6rem)] flex-col md:-mx-6">
+    <div className="web-studio-resource-fs -mx-4 -my-6 flex h-[calc(100svh-3rem)] flex-col md:-mx-6">
       <div ref={layoutRef} className="flex min-h-0 flex-1 flex-col md:flex-row">
         <section
           className="flex h-[var(--resource-tree-height)] min-h-[190px] min-w-0 flex-col bg-muted/30 md:h-auto md:min-h-0 md:w-[var(--resource-tree-width)] md:min-w-[var(--resource-tree-width)]"

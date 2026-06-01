@@ -1033,7 +1033,7 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
-| `backend` | str | VectorDB 后端类型: 'local'（基于文件）, 'http'（远程服务）, 'volcengine'（云上VikingDB）或 'vikingdb'（私有部署） | "local" |
+| `backend` | str | VectorDB 后端类型: 'local'（基于文件）, 'http'（远程服务）, 'volcengine'（云上 VikingDB）, 'vikingdb'（私有部署）, 'qdrant' 或 'opengauss' | "local" |
 | `name` | str | VectorDB 的集合名称 | "context" |
 | `url` | str | 'http' 类型的远程服务 URL（例如 'http://localhost:5000'） | null |
 | `project_name` | str | 项目名称（别名 project） | "default" |
@@ -1042,6 +1042,8 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 | `sparse_weight` | float | 混合向量搜索的稀疏权重，仅在使用混合索引时生效 | 0.0 |
 | `volcengine` | object | 'volcengine' 类型的 VikingDB 配置 | - |
 | `vikingdb` | object | 'vikingdb' 类型的私有部署配置 | - |
+| `qdrant` | object | 'qdrant' 类型的 Qdrant 配置 | - |
+| `opengauss` | object | 'opengauss' 原生向量后端配置 | - |
 
 默认使用本地模式
 ```
@@ -1073,6 +1075,39 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
   }
 }
 ```
+</details>
+
+<details>
+<summary><b>openGauss</b></summary>
+
+需要 openGauss 服务端支持原生 `vector` 类型，并使用允许远程连接的数据库用户。
+可通过 `pip install "openviking[opengauss]"` 安装可选驱动。
+官方容器中的初始 `omm` 用户可能限制远程登录，必要时请为 OpenViking 创建普通数据库用户。
+
+```json
+{
+  "storage": {
+    "vectordb": {
+      "name": "context",
+      "backend": "opengauss",
+      "project": "default",
+      "distance_metric": "cosine",
+      "dimension": 1024,
+      "opengauss": {
+        "host": "127.0.0.1",
+        "port": 5432,
+        "user": "openviking",
+        "password": "your-password",
+        "db_name": "postgres",
+        "schema": "public",
+        "mode": "standalone"
+      }
+    }
+  }
+}
+```
+
+分布式 openGauss 部署可将 `mode` 设为 `"distributed"`；OpenViking 会尝试把元数据表标记为 reference table，并按 `id` 分布集合表。
 </details>
 
 
@@ -1108,6 +1143,7 @@ openviking-server --config /path/to/ov.conf
 ```json
 {
   "memory": {
+    "version": "v2",
     "agent_scope_mode": "user+agent"
   }
 }
@@ -1115,13 +1151,14 @@ openviking-server --config /path/to/ov.conf
 
 | 字段 | 说明 | 默认值 |
 |------|------|--------|
+| `version` | 记忆实现版本。仅支持 `"v2"`（#2264 已移除旧版 `"v1"`；传入 `"v1"` 会在配置加载时抛出 `ValueError`）。 | `"v2"` |
 | `agent_scope_mode` | 已废弃且被忽略。仅为兼容旧版 `ov.conf` 保留。当前 agent/user 命名空间行为由 account 级 namespace policy 控制。 | `"user+agent"` |
 
 `agent_scope_mode` 不再影响命名空间行为。服务端现在根据 account 级 namespace policy 在 `viking://agent/{agent_id}/...` 与 `viking://agent/{agent_id}/user/{user_id}/...` 之间选择。
 
 ### ovcli.conf
 
-你可以手动编辑此文件，也可以用 `ov config setup-cli` 交互式生成。如果你维护着多个服务端的配置，可以用 `ov config switch` 在它们之间切换。
+你可以手动编辑此文件，也可以用 `ov config` 交互式生成。如果你维护着多个服务端的配置，可以用 `ov config switch` 在它们之间切换。
 
 HTTP 客户端（`SyncHTTPClient` / `AsyncHTTPClient`）和 CLI 工具连接远程服务端的配置文件：
 

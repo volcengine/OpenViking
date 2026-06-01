@@ -214,6 +214,8 @@ async def test_tool_result_externalization_read_and_search(client: httpx.AsyncCl
     assert part["tool_output_truncated"] is True
     assert part["tool_output_ref"].startswith(f"viking://session/{session_id}/tool-results/")
     assert raw not in part["tool_output"]
+    assert "kind: text" in part["tool_output"]
+    assert "openviking_tool_result_search" in part["tool_output"]
 
     tool_result_id = part["tool_output_ref"].rsplit("/", 1)[-1]
     read_resp = await client.get(
@@ -223,6 +225,16 @@ async def test_tool_result_externalization_read_and_search(client: httpx.AsyncCl
     read_body = read_resp.json()["result"]
     assert read_body["content"] == raw
     assert read_body["offset_unit"] == "unicode_code_point"
+    assert read_body["metadata"]["synopsis_kind"] == "text"
+    assert read_body["metadata"]["synopsis"]["kind"] == "text"
+
+    list_resp = await client.get(f"/api/v1/sessions/{session_id}/tool-results")
+    assert list_resp.status_code == 200
+    listed = list_resp.json()["result"]["tool_results"]
+    assert len(listed) == 1
+    assert listed[0]["tool_result_id"] == tool_result_id
+    assert listed[0]["synopsis_kind"] == "text"
+    assert listed[0]["synopsis"]["kind"] == "text"
 
     search_resp = await client.get(
         f"/api/v1/sessions/{session_id}/tool-results/{tool_result_id}/search",

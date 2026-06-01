@@ -465,13 +465,21 @@ class LocalClient(BaseClient):
         await self._service.sessions.delete(session_id, self._ctx)
 
     async def commit_session(
-        self, session_id: str, telemetry: TelemetryRequest = False
+        self,
+        session_id: str,
+        telemetry: TelemetryRequest = False,
+        *,
+        keep_recent_count: int = 0,
     ) -> Dict[str, Any]:
         """Commit a session (archive and extract memories)."""
         execution = await run_with_telemetry(
             operation="session.commit",
             telemetry=telemetry,
-            fn=lambda: self._service.sessions.commit(session_id, self._ctx),
+            fn=lambda: self._service.sessions.commit(
+                session_id,
+                self._ctx,
+                keep_recent_count=keep_recent_count,
+            ),
         )
         return attach_telemetry_payload(
             execution.result,
@@ -556,20 +564,10 @@ class LocalClient(BaseClient):
     async def batch_add_messages(
         self,
         session_id: str,
-        messages: list[dict],
+        messages: List[Dict[str, Any]],
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
-        """Add multiple messages to a session in a single request.
-
-        Args:
-            session_id: Session ID
-            messages: List of message dicts, each with "role" and optionally
-                      "content", "parts", "created_at", "role_id".
-            telemetry: Whether to attach operation telemetry data to the result.
-
-        Returns:
-            Result dict with session_id, message_count, and added count.
-        """
+        """Add multiple messages to a session in one batch."""
         execution = await run_with_telemetry(
             operation="session.batch_add_messages",
             telemetry=telemetry,
@@ -583,28 +581,27 @@ class LocalClient(BaseClient):
     async def _batch_add_messages_impl(
         self,
         session_id: str,
-        messages: list[dict],
+        messages: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
-        from openviking.message.part import TextPart, part_from_dict
+        from openviking.message.part import Part, TextPart, part_from_dict
 
         session = await self._service.sessions.get(session_id, self._ctx, auto_create=True)
+        specs: list[dict[str, Any]] = []
 
-        specs = []
-        for msg in messages:
-            role = msg.get("role")
+        for index, message in enumerate(messages):
+            role = message.get("role")
             if not role:
-                raise ValueError("Each message must have a 'role' key")
+                raise ValueError(f"messages[{index}]: missing required key 'role'")
 
-            parts_data = msg.get("parts")
-            content = msg.get("content")
-            if parts_data is not None:
-                message_parts = [part_from_dict(p) for p in parts_data]
-            elif content is not None:
-                message_parts = [TextPart(text=content)]
+            message_parts: list[Part]
+            if message.get("parts") is not None:
+                message_parts = [part_from_dict(part) for part in message["parts"]]
+            elif message.get("content") is not None:
+                message_parts = [TextPart(text=str(message["content"]))]
             else:
-                raise ValueError("Each message must have either 'content' or 'parts'")
+                raise ValueError(f"messages[{index}]: either content or parts must be provided")
 
-            role_id = msg.get("role_id")
+            role_id = message.get("role_id")
             if role_id is None and role == "user":
                 role_id = self._ctx.user.user_id
             elif role_id is None and role == "assistant":
@@ -613,9 +610,9 @@ class LocalClient(BaseClient):
             specs.append(
                 {
                     "role": role,
-                    "parts": [p.model_dump() for p in message_parts],
+                    "parts": message_parts,
                     "role_id": role_id,
-                    "created_at": msg.get("created_at"),
+                    "created_at": message.get("created_at"),
                 }
             )
 

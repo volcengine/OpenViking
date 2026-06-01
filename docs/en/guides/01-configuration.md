@@ -1062,7 +1062,7 @@ Vector database storage configuration
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `backend` | str | VectorDB backend type: 'local' (file-based), 'http' (remote service), 'volcengine' (cloud VikingDB), or 'vikingdb' (private deployment) | "local" |
+| `backend` | str | VectorDB backend type: 'local' (file-based), 'http' (remote service), 'volcengine' (cloud VikingDB), 'vikingdb' (private deployment), 'qdrant', or 'opengauss' | "local" |
 | `name` | str | VectorDB collection name | "context" |
 | `url` | str | Remote service URL for 'http' type (e.g., 'http://localhost:5000') | null |
 | `project_name` | str | Project name (alias project) | "default" |
@@ -1071,6 +1071,8 @@ Vector database storage configuration
 | `sparse_weight` | float | Sparse weight for hybrid vector search, only effective when using hybrid index | 0.0 |
 | `volcengine` | object | 'volcengine' type VikingDB configuration | - |
 | `vikingdb` | object | 'vikingdb' type private deployment configuration | - |
+| `qdrant` | object | 'qdrant' type Qdrant configuration | - |
+| `opengauss` | object | 'opengauss' native vector backend configuration | - |
 
 Default local mode
 ```
@@ -1102,6 +1104,39 @@ Supports cloud-deployed VikingDB on Volcengine
   }
 }
 ```
+</details>
+
+<details>
+<summary><b>openGauss</b></summary>
+
+Requires an openGauss server with native `vector` support and a remote-capable database user.
+Install the optional driver with `pip install "openviking[opengauss]"`.
+In the official container, the initial `omm` user may be restricted for remote login; create a normal user for OpenViking if needed.
+
+```json
+{
+  "storage": {
+    "vectordb": {
+      "name": "context",
+      "backend": "opengauss",
+      "project": "default",
+      "distance_metric": "cosine",
+      "dimension": 1024,
+      "opengauss": {
+        "host": "127.0.0.1",
+        "port": 5432,
+        "user": "openviking",
+        "password": "your-password",
+        "db_name": "postgres",
+        "schema": "public",
+        "mode": "standalone"
+      }
+    }
+  }
+}
+```
+
+Set `mode` to `"distributed"` for openGauss distributed deployments; OpenViking will attempt to mark metadata tables as reference tables and distribute collection tables by `id`.
 </details>
 
 
@@ -1136,6 +1171,7 @@ For memory-related settings, add a `memory` section in `ov.conf`:
 ```json
 {
   "memory": {
+    "version": "v2",
     "agent_scope_mode": "user+agent"
   }
 }
@@ -1143,13 +1179,14 @@ For memory-related settings, add a `memory` section in `ov.conf`:
 
 | Field | Description | Default |
 |-------|-------------|---------|
+| `version` | Memory implementation version. Only `"v2"` is supported (legacy `"v1"` removed in #2264 — passing `"v1"` now raises a `ValueError` at config load). | `"v2"` |
 | `agent_scope_mode` | Deprecated and ignored. Kept only for backward compatibility with older `ov.conf` files. Agent/user namespace behavior is now controlled by per-account namespace policy. | `"user+agent"` |
 
 `agent_scope_mode` no longer changes namespace behavior. The server now uses account-level namespace policy to choose between `viking://agent/{agent_id}/...` and `viking://agent/{agent_id}/user/{user_id}/...`.
 
 ### ovcli.conf
 
-You can edit this file by hand, or generate it interactively with `ov config setup-cli`. If you maintain configurations for multiple servers, switch between them with `ov config switch`.
+You can edit this file by hand, or generate it interactively with `ov config`. If you maintain configurations for multiple servers, switch between them with `ov config switch`.
 
 Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI to connect to a remote server:
 

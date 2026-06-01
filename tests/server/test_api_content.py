@@ -42,6 +42,11 @@ async def test_read_directory_uri_returns_invalid_argument(client_with_resource)
     assert body["status"] == "error"
     assert body["error"]["code"] == "INVALID_ARGUMENT"
     assert "Cannot read directory as file" in body["error"]["message"]
+    assert body["error"]["details"] == {
+        "resource": uri,
+        "expected": "file",
+        "actual": "directory",
+    }
 
 
 @pytest.mark.parametrize("uri", ["viking://temp/generated", "viking://queue/tasks"])

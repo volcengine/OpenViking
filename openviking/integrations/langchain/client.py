@@ -158,12 +158,12 @@ def ensure_client(connection: OpenVikingConnection) -> Any:
     return client
 
 
-def maybe_commit_session(
+def apply_commit_policy(
     client: Any,
     session_id: str,
     policy: OpenVikingCommitPolicy | None,
 ) -> dict[str, Any] | None:
-    """Commit a session if the configured policy says the live tail is ready."""
+    """Apply the configured session commit policy."""
 
     if policy is None or policy.mode == "never":
         return None

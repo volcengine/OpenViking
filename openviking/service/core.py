@@ -115,7 +115,7 @@ class OpenVikingService:
         self,
         config: StorageConfig,
         max_concurrent_embedding: int = 10,
-        max_concurrent_semantic: int = 100,
+        max_concurrent_semantic: int = 64,
     ) -> None:
         """Initialize storage resources."""
         from openviking.utils.agfs_utils import create_agfs_client

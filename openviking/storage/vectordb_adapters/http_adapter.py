@@ -24,6 +24,7 @@ from .base import (
 class HttpCollectionAdapter(CollectionAdapter):
     """Adapter for remote HTTP vectordb project."""
 
+    _DATA_BATCH_SIZE = 100
     _TEXT_FIELD_BYTE_LIMIT = VIKINGDB_TEXT_FIELD_BYTE_LIMIT
 
     def __init__(

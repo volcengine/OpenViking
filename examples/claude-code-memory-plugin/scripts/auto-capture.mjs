@@ -214,6 +214,86 @@ function extractToolResultText(content) {
     .join("\n");
 }
 
+// ---------------------------------------------------------------------------
+// Structured parts (parts-mode capture)
+//
+// Tool calls / results become dedicated `tool` parts (tool_id / tool_name /
+// tool_input / tool_output / tool_status) instead of being inlined into the
+// message content, so the server can process call vs result separately. The
+// `text` field above is kept only to drive the capture heuristics (length /
+// keyword); `parts` is what we actually send. Part shape mirrors openclaw-plugin
+// (examples/openclaw-plugin context-engine.ts afterTurn).
+// ---------------------------------------------------------------------------
+
+// Tool output retention for the part path. Unlike the legacy prose path
+// (TOOL_RESULT_MAX_CHARS, which drops outputs to keep the extractor's text
+// clean), results here land in a separable tool_output field, so we keep them —
+// bounded so we don't store whole files / web pages / command stdout verbatim.
+const TOOL_OUTPUT_PART_MAX_CHARS = 2000;
+
+function truncateToolOutput(s) {
+  if (typeof s !== "string") s = String(s ?? "");
+  if (s.length <= TOOL_OUTPUT_PART_MAX_CHARS) return s;
+  return (
+    s.slice(0, TOOL_OUTPUT_PART_MAX_CHARS) +
+    `\n... [truncated, ${s.length - TOOL_OUTPUT_PART_MAX_CHARS} more chars]`
+  );
+}
+
+// tool_result blocks carry only tool_use_id, not the tool name. Pre-scan all
+// messages so result parts can be labelled with the matching call's name.
+function collectToolNamesById(messages) {
+  const map = {};
+  for (const msg of messages) {
+    const content = msg?.content ?? msg?.message?.content;
+    if (!Array.isArray(content)) continue;
+    for (const block of content) {
+      if (
+        block?.type === "tool_use" &&
+        typeof block.id === "string" &&
+        typeof block.name === "string"
+      ) {
+        map[block.id] = block.name;
+      }
+    }
+  }
+  return map;
+}
+
+function buildParts(content, toolNameById) {
+  const out = [];
+  if (typeof content === "string") {
+    if (content.trim()) out.push({ type: "text", text: content });
+    return out;
+  }
+  if (!Array.isArray(content)) return out;
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue;
+    if (block.type === "text" && typeof block.text === "string") {
+      if (block.text.trim()) out.push({ type: "text", text: block.text });
+    } else if (block.type === "tool_use" && typeof block.name === "string") {
+      out.push({
+        type: "tool",
+        tool_id: typeof block.id === "string" ? block.id : undefined,
+        tool_name: block.name,
+        tool_input:
+          block.input && typeof block.input === "object" ? block.input : undefined,
+        tool_status: "running",
+      });
+    } else if (block.type === "tool_result") {
+      const id = typeof block.tool_use_id === "string" ? block.tool_use_id : undefined;
+      out.push({
+        type: "tool",
+        tool_id: id,
+        tool_name: id ? toolNameById[id] : undefined,
+        tool_output: truncateToolOutput(extractToolResultText(block.content)),
+        tool_status: block.is_error ? "error" : "completed",
+      });
+    }
+  }
+  return out;
+}
+
 /**
  * Extract user/assistant turns. Captures plain text + tool_use input (verbatim) and,
  * if TOOL_RESULT_MAX_CHARS > 0, tool_result output (truncated). Tool blocks are inlined
@@ -221,6 +301,7 @@ function extractToolResultText(content) {
  * substance, not just tool names.
  */
 function extractAllTurns(messages) {
+  const toolNameById = collectToolNamesById(messages);
   const turns = [];
   for (const msg of messages) {
     if (!msg || typeof msg !== "object") continue;
@@ -228,6 +309,7 @@ function extractAllTurns(messages) {
     let role = msg.role;
     let text = "";
     let toolNames = [];
+    let parts = [];
 
     const harvestContent = (content) => {
       if (typeof content === "string") {
@@ -253,16 +335,22 @@ function extractAllTurns(messages) {
       }
     };
 
+    let rawContent;
     if (msg.content !== undefined) {
-      harvestContent(msg.content);
+      rawContent = msg.content;
     } else if (typeof msg.message === "object" && msg.message) {
       role = msg.message.role || role;
-      harvestContent(msg.message.content);
+      rawContent = msg.message.content;
     }
+    harvestContent(rawContent);
+    parts = buildParts(rawContent, toolNameById);
 
     if (role !== "user" && role !== "assistant") continue;
-    if (!text.trim() && toolNames.length === 0) continue;
-    turns.push({ role, text: text.trim(), toolNames });
+    // Keep turns that carry any structured part. This also retains tool_result-
+    // only user turns (previously dropped because their inlined `text` was empty
+    // once TOOL_RESULT_MAX_CHARS=0), so tool outputs reach OV as tool parts.
+    if (parts.length === 0) continue;
+    turns.push({ role, text: text.trim(), toolNames, parts });
   }
   return turns;
 }
@@ -285,16 +373,32 @@ function formatTurnsAsText(turns) {
 // Persistent-session capture
 // ---------------------------------------------------------------------------
 
+// Strip plugin-injected blocks from text parts (tool parts pass through), and
+// drop parts that become empty. Mirrors the old content-path stripInjectedBlocks
+// + trim, but per text part so tool I/O is never collapsed.
+function sanitizePartsForSend(parts) {
+  const out = [];
+  for (const p of parts || []) {
+    if (p.type === "text") {
+      const t = stripInjectedBlocks(p.text).trim();
+      if (t) out.push({ type: "text", text: t });
+    } else {
+      out.push(p);
+    }
+  }
+  return out;
+}
+
 async function pushTurnsToOv(ovSessionId, turns) {
   let ok = 0;
   let failed = 0;
   for (const turn of turns) {
-    // Tool input + tool_result are already inlined as `[tool: NAME]` / `[tool result]`
-    // blocks during harvesting, so no separate suffix is needed here.
-    const content = stripInjectedBlocks(turn.text).trim();
-    if (!content) continue;
+    // Send structured parts: tool calls/results are dedicated `tool` parts, not
+    // inlined into content, so the server can process them separately.
+    const parts = sanitizePartsForSend(turn.parts);
+    if (parts.length === 0) continue;
 
-    const res = await addMessage(fetchJSON, ovSessionId, { role: turn.role, content });
+    const res = await addMessage(fetchJSON, ovSessionId, { role: turn.role, parts });
     if (res.ok) ok++;
     else failed++;
   }

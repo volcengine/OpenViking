@@ -25,10 +25,10 @@ except ImportError as exc:  # pragma: no cover - exercised by optional import pa
 from openviking.integrations.langchain.client import (
     OpenVikingCommitPolicy,
     OpenVikingConnection,
+    apply_commit_policy,
     call_openviking,
     ensure_client,
     extract_message_text,
-    maybe_commit_session,
 )
 
 logger = logging.getLogger(__name__)
@@ -121,7 +121,7 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
                 session_id=self.session_id,
                 messages=batch,
             )
-            maybe_commit_session(client, self.session_id, self.commit_policy)
+            apply_commit_policy(client, self.session_id, self.commit_policy)
 
     def clear(self) -> None:
         client = self._get_client()

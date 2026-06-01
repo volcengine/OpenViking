@@ -6,6 +6,27 @@ import { defineConfig, type DefaultTheme } from 'vitepress'
 const docsRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const repo = process.env.GITHUB_REPOSITORY || 'volcengine/OpenViking'
 const base = process.env.DOCS_BASE || '/'
+const withTrailingSlash = (url: string) => (url.endsWith('/') ? url : `${url}/`)
+const mainSiteBase = withTrailingSlash(process.env.OPENVIKING_SITE_BASE || 'https://www.openviking.ai/')
+const preferenceBootstrapScript = `;(() => {
+  const prefix = 'openviking-preferences:'
+  const cookieKey = 'openviking-preferences'
+  const readCookiePreference = () => {
+    const cookie = document.cookie.split('; ').find((item) => item.startsWith(cookieKey + '='))
+    if (!cookie) return {}
+    return JSON.parse(decodeURIComponent(cookie.slice(cookieKey.length + 1)))
+  }
+  const readTransferPreference = () => {
+    if (!window.name.startsWith(prefix)) return {}
+    return JSON.parse(window.name.slice(prefix.length))
+  }
+  try {
+    const preference = { ...readCookiePreference(), ...readTransferPreference() }
+    if (preference.theme !== 'light' && preference.theme !== 'dark') return
+    localStorage.setItem('vitepress-theme-appearance', preference.theme)
+    document.documentElement.classList.toggle('dark', preference.theme === 'dark')
+  } catch {}
+})()`
 
 const sectionNames: Record<string, string> = {
   'getting-started': 'Getting Started',
@@ -206,7 +227,8 @@ export default defineConfig({
   head: [
     ['link', { rel: 'icon', type: 'image/x-icon', href: `${base}favicon.ico` }],
     ['link', { rel: 'icon', type: 'image/png', sizes: '32x32', href: `${base}favicon-32.png` }],
-    ['link', { rel: 'apple-touch-icon', href: `${base}apple-touch-icon.png` }]
+    ['link', { rel: 'apple-touch-icon', href: `${base}apple-touch-icon.png` }],
+    ['script', {}, preferenceBootstrapScript]
   ],
   transformPageData(pageData, { siteConfig }) {
     const srcPath = path.join(siteConfig.srcDir, pageData.relativePath)
@@ -242,7 +264,7 @@ export default defineConfig({
   },
   themeConfig: {
     logo: '/ov-logo.png',
-    logoLink: 'https://openviking.ai/',
+    logoLink: mainSiteBase,
     search: {
       provider: 'local'
     },

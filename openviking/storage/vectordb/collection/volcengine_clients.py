@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: AGPL-3.0
 import json
 
-import openviking
 import requests  # type: ignore
 from volcengine.auth.SignerV4 import SignerV4
 from volcengine.base.Request import Request
 from volcengine.Credentials import Credentials
+
+import openviking
 
 # Default request timeout (seconds)
 DEFAULT_TIMEOUT = 30
@@ -20,6 +21,7 @@ class ClientForConsoleApi:
         "cn-beijing": "vikingdb.cn-beijing.volcengineapi.com",
         "cn-shanghai": "vikingdb.cn-shanghai.volcengineapi.com",
         "cn-guangzhou": "vikingdb.cn-guangzhou.volcengineapi.com",
+        "ap-southeast-1": "vikingdb.ap-southeast-1.volcengineapi.com",
     }
 
     def __init__(self, ak, sk, region, host=None, session_token=None):
@@ -84,6 +86,7 @@ class ClientForDataApi:
         "cn-beijing": "api-vikingdb.vikingdb.cn-beijing.volces.com",
         "cn-shanghai": "api-vikingdb.vikingdb.cn-shanghai.volces.com",
         "cn-guangzhou": "api-vikingdb.vikingdb.cn-guangzhou.volces.com",
+        "ap-southeast-1": "api-vikingdb.vikingdb.ap-southeast-1.volces.com",
     }
 
     def __init__(self, ak, sk, region, host=None, session_token=None):
