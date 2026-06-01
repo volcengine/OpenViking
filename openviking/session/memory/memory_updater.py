@@ -1450,14 +1450,18 @@ class MemoryUpdater:
                 try:
                     current_raw = await viking_fs.read_file(uri, ctx=ctx)
                 except NotFoundError:
-                    get_current_telemetry().increment("memory.apply.stale_delete.already_missing_skipped")
+                    get_current_telemetry().increment(
+                        "memory.apply.stale_delete.already_missing_skipped"
+                    )
                     tracer.info(
                         f"[memory_updater] skipping stale delete: uri={uri}, "
                         "file already missing after delete was planned"
                     )
                     return False
                 if not current_raw:
-                    get_current_telemetry().increment("memory.apply.stale_delete.already_missing_skipped")
+                    get_current_telemetry().increment(
+                        "memory.apply.stale_delete.already_missing_skipped"
+                    )
                     tracer.info(
                         f"[memory_updater] skipping stale delete: uri={uri}, "
                         "file already empty after delete was planned"
