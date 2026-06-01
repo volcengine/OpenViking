@@ -1,7 +1,37 @@
 {
   "version": 1,
-  "updatedAt": "2026-05-29",
+  "updatedAt": "2026-06-01",
   "cdnBaseUrl": "https://docs.openviking.net/",
+  "accessMethods": [
+    {
+      "id": "mcp",
+      "name": "MCP 接入",
+      "icon": "link",
+      "summary": "与任意支持 MCP 的客户端接入",
+      "detailPath": "https://docs.openviking.net/agents/mcp.md"
+    },
+    {
+      "id": "cli",
+      "name": "CLI 接入",
+      "icon": "terminal",
+      "summary": "命令行接入 Agent，使用灵活性更高",
+      "detailPath": "https://docs.openviking.net/agents/cli.md"
+    },
+    {
+      "id": "api",
+      "name": "API 接入",
+      "icon": "code",
+      "summary": "标准 REST API，灵活调用所有能力",
+      "detailPath": "https://docs.openviking.net/agents/api.md"
+    },
+    {
+      "id": "sdk",
+      "name": "SDK 接入",
+      "icon": "paperclip",
+      "summary": "多语言 SDK 封装，集成更便捷、高效",
+      "detailPath": "https://docs.openviking.net/agents/sdk.md"
+    }
+  ],
   "agents": [
     {
       "id": "openclaw",
