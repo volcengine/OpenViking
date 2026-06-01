@@ -1193,7 +1193,7 @@ class TestConsecutivePatchesSameURI:
         mock_viking_fs.write_file.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_apply_upsert_rejects_plain_string_patch_without_read_base_under_file_lock_mode(
+    async def test_apply_operations_exact_plain_string_patch_skips_unread_existing_latest(
         self, monkeypatch
     ):
         memory_type = "notes"
@@ -1224,6 +1224,7 @@ class TestConsecutivePatchesSameURI:
 
         updater = MemoryUpdater(registry=registry)
         updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
+        updater.generate_overview = AsyncMock()
         monkeypatch.setattr(
             "openviking.session.memory.memory_updater._memory_apply_exact_file_lock_enabled",
             lambda: True,
@@ -1240,10 +1241,30 @@ class TestConsecutivePatchesSameURI:
             uris=[uri],
         )
 
-        with pytest.raises(RuntimeError, match="unstructured string patch requires read-time base"):
-            await updater._apply_upsert(op, MagicMock())
+        result = await updater.apply_operations(
+            ResolvedOperations(upsert_operations=[op], delete_file_contents=[], errors=[]),
+            MagicMock(),
+        )
 
         mock_viking_fs.write_file.assert_not_awaited()
+        updater.generate_overview.assert_not_awaited()
+        assert result.written_uris == []
+        assert result.edited_uris == []
+        assert result.deleted_uris == []
+        assert result.errors == []
+        assert len(result.apply_traces) == 1
+        trace = result.apply_traces[0]
+        assert trace["uri"] == uri
+        assert trace["field"] == "content"
+        assert trace["merge_op"] == "patch"
+        assert trace["input_shape"] == "str"
+        assert trace["wrapper_shape"] == "str"
+        assert trace["base_digest"] is None
+        assert trace["latest_digest"] is not None
+        assert trace["stale_detected"] is True
+        assert trace["rewrite_attempted"] == "not_applicable_unread_existing"
+        assert trace["status"] == "skipped_stale_unread_existing"
+        assert trace["changed"] is False
 
     @pytest.mark.asyncio
     async def test_apply_upsert_wraps_unstructured_patch_value_with_read_base_under_file_lock_mode(
@@ -1481,7 +1502,7 @@ class TestConsecutivePatchesSameURI:
         assert parsed["content"] == "B"
 
     @pytest.mark.asyncio
-    async def test_apply_upsert_rejects_replace_update_without_read_base_under_file_lock_mode(
+    async def test_apply_operations_exact_create_conflict_skips_unread_existing_latest(
         self, monkeypatch
     ):
         memory_type = "notes"
@@ -1494,7 +1515,7 @@ class TestConsecutivePatchesSameURI:
                 MemoryField(name="content", field_type=FieldType.STRING, merge_op=MergeOp.REPLACE),
             ],
         )
-        registry = MemoryTypeRegistry()
+        registry = MemoryTypeRegistry(load_schemas=False)
         registry.register(schema)
 
         class FakeExactLock:
@@ -1512,6 +1533,7 @@ class TestConsecutivePatchesSameURI:
 
         updater = MemoryUpdater(registry=registry)
         updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
+        updater.generate_overview = AsyncMock()
         monkeypatch.setattr(
             "openviking.session.memory.memory_updater._memory_apply_exact_file_lock_enabled",
             lambda: True,
@@ -1528,10 +1550,31 @@ class TestConsecutivePatchesSameURI:
             uris=[uri],
         )
 
-        with pytest.raises(RuntimeError, match="replace update requires read-time base"):
-            await updater._apply_upsert(op, MagicMock())
+        result = await updater.apply_operations(
+            ResolvedOperations(upsert_operations=[op], delete_file_contents=[], errors=[]),
+            MagicMock(),
+        )
 
         mock_viking_fs.write_file.assert_not_awaited()
+        updater.generate_overview.assert_not_awaited()
+        assert result.written_uris == []
+        assert result.edited_uris == []
+        assert result.deleted_uris == []
+        assert result.errors == []
+        assert len(result.apply_traces) == 1
+        trace = result.apply_traces[0]
+        assert trace["uri"] == uri
+        assert trace["field"] == "content"
+        assert trace["merge_op"] == "replace"
+        assert trace["input_shape"] == "str"
+        assert trace["wrapper_shape"] == "str"
+        assert trace["base_digest"] is None
+        assert trace["latest_digest"] is not None
+        assert trace["base_matches_latest"] is None
+        assert trace["stale_detected"] is True
+        assert trace["rewrite_attempted"] == "not_applicable_unread_existing"
+        assert trace["status"] == "skipped_stale_unread_existing"
+        assert trace["changed"] is False
 
     @pytest.mark.asyncio
     async def test_apply_upsert_raises_latest_read_failure_under_file_lock_mode(self, monkeypatch):
@@ -1776,7 +1819,9 @@ class TestConsecutivePatchesSameURI:
         assert mock_viking_fs.write_file.await_count == 1
 
     @pytest.mark.asyncio
-    async def test_apply_upsert_exact_existing_update_rejects_missing_latest(self, monkeypatch):
+    async def test_apply_operations_exact_existing_update_skips_stale_deleted_latest(
+        self, monkeypatch
+    ):
         memory_type = "notes"
         uri = "viking://user/test/memories/notes/demo.md"
 
@@ -1794,7 +1839,7 @@ class TestConsecutivePatchesSameURI:
                 MemoryField(name="content", field_type=FieldType.STRING, merge_op=MergeOp.REPLACE),
             ],
         )
-        registry = MemoryTypeRegistry()
+        registry = MemoryTypeRegistry(load_schemas=False)
         registry.register(schema)
 
         mock_viking_fs = MagicMock()
@@ -1803,6 +1848,7 @@ class TestConsecutivePatchesSameURI:
 
         updater = MemoryUpdater(registry=registry)
         updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
+        updater.generate_overview = AsyncMock()
         monkeypatch.setattr(
             "openviking.session.memory.memory_updater._memory_apply_exact_file_lock_enabled",
             lambda: True,
@@ -1819,10 +1865,29 @@ class TestConsecutivePatchesSameURI:
             uris=[uri],
         )
 
-        with pytest.raises(RuntimeError, match="latest read found missing file"):
-            await updater._apply_upsert(op, MagicMock())
+        result = await updater.apply_operations(
+            ResolvedOperations(upsert_operations=[op], delete_file_contents=[], errors=[]),
+            MagicMock(),
+        )
 
         mock_viking_fs.write_file.assert_not_awaited()
+        updater.generate_overview.assert_not_awaited()
+        assert result.written_uris == []
+        assert result.edited_uris == []
+        assert result.deleted_uris == []
+        assert result.errors == []
+        assert len(result.apply_traces) == 1
+        trace = result.apply_traces[0]
+        assert trace["uri"] == uri
+        assert trace["field"] == "content"
+        assert trace["merge_op"] == "replace"
+        assert trace["input_shape"] == "str"
+        assert trace["wrapper_shape"] == "str"
+        assert trace["latest_digest"] is None
+        assert trace["stale_detected"] is True
+        assert trace["rewrite_attempted"] == "not_applicable_latest_deleted"
+        assert trace["status"] == "skipped_stale_deleted"
+        assert trace["changed"] is False
 
     @pytest.mark.asyncio
     async def test_write_stored_links_exact_lock_wraps_endpoint_update(self, monkeypatch):

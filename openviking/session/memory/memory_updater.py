@@ -799,6 +799,134 @@ class MemoryUpdateResult:
         )
 
 
+_SKIPPED_EXACT_APPLY_STATUSES = {
+    "skipped_stale_deleted",
+    "skipped_stale_unread_existing",
+}
+
+
+def _uri_apply_was_skipped(apply_traces: List[Dict[str, Any]], uri: str) -> bool:
+    if not apply_traces:
+        return False
+    uri_traces = [trace for trace in apply_traces if trace.get("uri") == uri]
+    return bool(uri_traces) and all(
+        trace.get("status") in _SKIPPED_EXACT_APPLY_STATUSES for trace in uri_traces
+    )
+
+
+def _stale_deleted_apply_traces(
+    *,
+    resolved_op: ResolvedOperation,
+    uri: str,
+    schema,
+    read_base_content: Optional[MemoryFile],
+    error: Exception,
+) -> List[Dict[str, Any]]:
+    traces: List[Dict[str, Any]] = []
+    for field in schema.fields:
+        if field.name not in resolved_op.memory_fields:
+            continue
+        patch_value = resolved_op.memory_fields[field.name]
+        base_value = _field_value_from_memory_file(read_base_content, field.name)
+        merge_op_name = getattr(getattr(field, "merge_op", ""), "value", None) or str(
+            getattr(field, "merge_op", "")
+        )
+        traces.append(
+            {
+                "uri": uri,
+                "memory_type": resolved_op.memory_type,
+                "field": field.name,
+                "merge_op": merge_op_name,
+                "input_shape": _merge_value_shape(patch_value),
+                "base_digest": _field_trace_digest(base_value),
+                "latest_digest": None,
+                "base_matches_latest": False if base_value is not None else None,
+                "stale_detected": True,
+                "wrapper_shape": _merge_value_shape(patch_value),
+                "rewrite_attempted": "not_applicable_latest_deleted",
+                "status": "skipped_stale_deleted",
+                "changed": False,
+                "error_type": type(error).__name__,
+                "error": str(error)[:500],
+            }
+        )
+    if not traces:
+        traces.append(
+            {
+                "uri": uri,
+                "memory_type": resolved_op.memory_type,
+                "field": None,
+                "merge_op": None,
+                "input_shape": None,
+                "base_digest": None,
+                "latest_digest": None,
+                "base_matches_latest": None,
+                "stale_detected": True,
+                "wrapper_shape": None,
+                "rewrite_attempted": "not_applicable_latest_deleted",
+                "status": "skipped_stale_deleted",
+                "changed": False,
+                "error_type": type(error).__name__,
+                "error": str(error)[:500],
+            }
+        )
+    return traces
+
+
+def _stale_unread_existing_apply_traces(
+    *,
+    resolved_op: ResolvedOperation,
+    uri: str,
+    schema,
+    latest_content: MemoryFile,
+) -> List[Dict[str, Any]]:
+    traces: List[Dict[str, Any]] = []
+    for field in schema.fields:
+        if field.name not in resolved_op.memory_fields:
+            continue
+        patch_value = resolved_op.memory_fields[field.name]
+        latest_value = _field_value_from_memory_file(latest_content, field.name)
+        merge_op_name = getattr(getattr(field, "merge_op", ""), "value", None) or str(
+            getattr(field, "merge_op", "")
+        )
+        traces.append(
+            {
+                "uri": uri,
+                "memory_type": resolved_op.memory_type,
+                "field": field.name,
+                "merge_op": merge_op_name,
+                "input_shape": _merge_value_shape(patch_value),
+                "base_digest": None,
+                "latest_digest": _field_trace_digest(latest_value),
+                "base_matches_latest": None,
+                "stale_detected": True,
+                "wrapper_shape": _merge_value_shape(patch_value),
+                "rewrite_attempted": "not_applicable_unread_existing",
+                "status": "skipped_stale_unread_existing",
+                "changed": False,
+            }
+        )
+    if not traces:
+        traces.append(
+            {
+                "uri": uri,
+                "memory_type": resolved_op.memory_type,
+                "field": None,
+                "merge_op": None,
+                "input_shape": None,
+                "base_digest": None,
+                "latest_digest": _memory_file_digest(latest_content),
+                "base_matches_latest": None,
+                "stale_detected": True,
+                "wrapper_shape": None,
+                "rewrite_attempted": "not_applicable_unread_existing",
+                "status": "skipped_stale_unread_existing",
+                "changed": False,
+            }
+        )
+    return traces
+
+
 class MemoryUpdater:
     """
     Applies MemoryOperations to storage.
@@ -884,14 +1012,19 @@ class MemoryUpdater:
                     ctx,
                     extract_context=extract_context,
                 )
+                apply_traces = apply_traces or []
                 if apply_traces:
                     result.apply_traces.extend(apply_traces)
                 # Add all uris to result (uris is List[str])
                 if resolved_op.is_edit():
                     for uri in resolved_op.uris:
+                        if _uri_apply_was_skipped(apply_traces, uri):
+                            continue
                         result.add_edited(uri)
                 else:
                     for uri in resolved_op.uris:
+                        if _uri_apply_was_skipped(apply_traces, uri):
+                            continue
                         result.add_written(uri)
             except Exception as e:
                 tracer.error(
@@ -965,8 +1098,11 @@ class MemoryUpdater:
         # Collect directories that need overview generation
         # uri is now a string, so extract directory using os.path
         dirs = {}
+        changed_upsert_uris = set(result.written_uris + result.edited_uris)
         for operation in operations.upsert_operations:
             for uri_str in operation.uris:
+                if uri_str not in changed_upsert_uris:
+                    continue
                 dir_path = "/".join(uri_str.split("/")[:-1])
                 dirs[dir_path] = operation.memory_type
         for file_content in operations.delete_file_contents:
@@ -1043,12 +1179,24 @@ class MemoryUpdater:
         except NotFoundError as exc:
             # Create-new files may legitimately be absent at write time.  In
             # exact-lock mode, an update whose old snapshot disappeared is
-            # stale and should not silently resurrect the old content.
+            # stale and should not silently resurrect the old content. Treat
+            # it as a skipped conflict so concurrent supersedes/delete wins.
             if self._use_exact_file_lock() and resolved_op.old_memory_file_content is not None:
                 get_current_telemetry().increment("memory.apply.latest_read.missing_file_lock")
-                raise RuntimeError(
-                    f"latest read found missing file under exact file-lock mode: uri={uri}"
-                ) from exc
+                get_current_telemetry().increment(
+                    "memory.apply.latest_read.stale_deleted_skipped_file_lock"
+                )
+                tracer.info(
+                    "[memory_updater] Skipping stale-deleted exact file update: "
+                    f"uri={uri}, memory_type={resolved_op.memory_type}"
+                )
+                return _stale_deleted_apply_traces(
+                    resolved_op=resolved_op,
+                    uri=uri,
+                    schema=schema,
+                    read_base_content=read_base_content,
+                    error=exc,
+                )
         except Exception as exc:
             if self._use_exact_file_lock():
                 get_current_telemetry().increment("memory.apply.latest_read.failed_file_lock")
@@ -1060,6 +1208,20 @@ class MemoryUpdater:
         # Fall back to pre-fetched content if disk read failed
         if old_content is None:
             old_content = resolved_op.old_memory_file_content
+        elif self._use_exact_file_lock() and resolved_op.old_memory_file_content is None:
+            get_current_telemetry().increment(
+                "memory.apply.latest_read.stale_unread_existing_skipped_file_lock"
+            )
+            tracer.info(
+                "[memory_updater] Skipping stale unread-existing exact file update: "
+                f"uri={uri}, memory_type={resolved_op.memory_type}"
+            )
+            return _stale_unread_existing_apply_traces(
+                resolved_op=resolved_op,
+                uri=uri,
+                schema=schema,
+                latest_content=old_content,
+            )
 
         metadata: Dict[str, Any] = dict(resolved_op.memory_fields)
         # Process fields defined in schema (apply merge_op)
