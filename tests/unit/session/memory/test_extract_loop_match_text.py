@@ -6,10 +6,17 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from openviking.session.memory.dataclass import MemoryField, MemoryFile, MemoryTypeSchema, ResolvedOperation, WikiLink
+from openviking.message import Message, TextPart, ToolPart
+from openviking.session.memory.extract_loop import ExtractLoop
+from openviking.session.memory.dataclass import (
+    MemoryField,
+    MemoryFile,
+    MemoryTypeSchema,
+    ResolvedOperation,
+    WikiLink,
+)
 from openviking.session.memory.merge_op import FieldType, MergeOp
 from openviking.session.memory.page_id_map import PageIdMap
-from openviking.session.memory.extract_loop import ExtractLoop
 
 
 class AttrDict(dict):
@@ -27,7 +34,7 @@ class TestResolveOperations:
             directory="viking://user/{{ user_space }}/memories/entities",
             filename_template="{{ name }}.md",
             fields=[
-                MemoryField(name="name", field_type=FieldType.STRING, merge_op=MergeOp.REPLACE),
+                MemoryField(name="name", field_type=FieldType.STRING, merge_op=MergeOp.IMMUTABLE),
                 MemoryField(name="content", field_type=FieldType.STRING, merge_op=MergeOp.PATCH),
             ],
         )
@@ -71,6 +78,416 @@ class TestResolveOperations:
         assert operation.memory_fields["name"] == "Melanie"
         assert operation.memory_fields["content"] == "new content"
         isolation_handler.calculate_memory_uris.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_existing_page_id_does_not_copy_old_sum_fields_as_delta(self):
+        schema = MemoryTypeSchema(
+            memory_type="tools",
+            description="tool memory",
+            directory="viking://agent/{{ agent_space }}/memories/tools",
+            filename_template="{{ tool_name }}.md",
+            fields=[
+                MemoryField(
+                    name="tool_name",
+                    field_type=FieldType.STRING,
+                    merge_op=MergeOp.IMMUTABLE,
+                ),
+                MemoryField(
+                    name="call_count",
+                    field_type=FieldType.INT64,
+                    merge_op=MergeOp.SUM,
+                ),
+                MemoryField(
+                    name="success_time",
+                    field_type=FieldType.INT64,
+                    merge_op=MergeOp.SUM,
+                ),
+            ],
+        )
+        existing_uri = "viking://agent/default/memories/tools/return_delivered_order_items.md"
+        old_file = MemoryFile(
+            uri=existing_uri,
+            content="old",
+            memory_type="tools",
+            extra_fields={
+                "tool_name": "return_delivered_order_items",
+                "call_count": 8,
+                "success_time": 8,
+            },
+        )
+
+        context_provider = Mock()
+        context_provider.get_memory_schemas.return_value = [schema]
+        context_provider._get_registry.return_value = Mock(get=Mock(return_value=schema))
+        context_provider.read_file_contents = {existing_uri: old_file}
+
+        isolation_handler = Mock()
+        isolation_handler.get_read_scope.return_value = None
+        isolation_handler.fill_role_ids.side_effect = lambda item, role_scope=None: item
+
+        loop = ExtractLoop(
+            vlm=Mock(model="test-model"),
+            viking_fs=Mock(),
+            context_provider=context_provider,
+            isolation_handler=isolation_handler,
+        )
+        loop._extract_context = SimpleNamespace(
+            messages=[
+                Message(
+                    id="tool-1",
+                    role="assistant",
+                    parts=[
+                        ToolPart(
+                            tool_name="return_delivered_order_items",
+                            tool_status="completed",
+                        )
+                    ],
+                )
+            ],
+            page_id_map=SimpleNamespace(resolve=lambda page_id: existing_uri),
+        )
+
+        operations, _ = await loop.resolve_operations(
+            AttrDict(
+                tools=[
+                    {
+                        "tool_name": "wrong_name_from_model",
+                        "call_count": 8,
+                        "success_time": 8,
+                        "page_id": 7,
+                    }
+                ],
+                delete_uris=[],
+            )
+        )
+
+        operation = operations.upsert_operations[0]
+        assert operation.memory_fields["tool_name"] == "return_delivered_order_items"
+        assert operation.memory_fields["call_count"] == 1
+        assert operation.memory_fields["success_time"] == 1
+
+    @pytest.mark.asyncio
+    async def test_unmatched_tool_counter_deltas_are_zeroed(self):
+        schema = MemoryTypeSchema(
+            memory_type="tools",
+            description="tool memory",
+            directory="viking://agent/{{ agent_space }}/memories/tools",
+            filename_template="{{ tool_name }}.md",
+            fields=[
+                MemoryField(
+                    name="tool_name",
+                    field_type=FieldType.STRING,
+                    merge_op=MergeOp.IMMUTABLE,
+                ),
+                MemoryField(
+                    name="call_count",
+                    field_type=FieldType.INT64,
+                    merge_op=MergeOp.SUM,
+                ),
+                MemoryField(
+                    name="success_time",
+                    field_type=FieldType.INT64,
+                    merge_op=MergeOp.SUM,
+                ),
+            ],
+        )
+
+        context_provider = Mock()
+        context_provider.get_memory_schemas.return_value = [schema]
+        context_provider._get_registry.return_value = Mock(get=Mock(return_value=schema))
+        context_provider.read_file_contents = {}
+
+        isolation_handler = Mock()
+        isolation_handler.get_read_scope.return_value = None
+        isolation_handler.fill_role_ids.side_effect = lambda item, role_scope=None: item
+        isolation_handler.calculate_memory_uris.return_value = [
+            "viking://agent/default/memories/tools/model_guessed_tool.md"
+        ]
+
+        loop = ExtractLoop(
+            vlm=Mock(model="test-model"),
+            viking_fs=Mock(),
+            context_provider=context_provider,
+            isolation_handler=isolation_handler,
+        )
+        loop._extract_context = SimpleNamespace(
+            messages=[],
+            page_id_map=SimpleNamespace(resolve=lambda page_id: None),
+        )
+
+        operations, _ = await loop.resolve_operations(
+            AttrDict(
+                tools=[
+                    {
+                        "tool_name": "model_guessed_tool",
+                        "call_count": 99,
+                        "success_time": 99,
+                        "page_id": 100,
+                    }
+                ],
+                delete_uris=[],
+            )
+        )
+
+        operation = operations.upsert_operations[0]
+        assert operation.memory_fields["call_count"] == 0
+        assert operation.memory_fields["success_time"] == 0
+
+    @pytest.mark.asyncio
+    async def test_tool_counter_deltas_are_consumed_once_for_duplicate_ops(self):
+        schema = MemoryTypeSchema(
+            memory_type="tools",
+            description="tool memory",
+            directory="viking://agent/{{ agent_space }}/memories/tools",
+            filename_template="{{ tool_name }}.md",
+            fields=[
+                MemoryField(
+                    name="tool_name",
+                    field_type=FieldType.STRING,
+                    merge_op=MergeOp.IMMUTABLE,
+                ),
+                MemoryField(
+                    name="call_count",
+                    field_type=FieldType.INT64,
+                    merge_op=MergeOp.SUM,
+                ),
+                MemoryField(
+                    name="success_time",
+                    field_type=FieldType.INT64,
+                    merge_op=MergeOp.SUM,
+                ),
+            ],
+        )
+
+        context_provider = Mock()
+        context_provider.get_memory_schemas.return_value = [schema]
+        context_provider._get_registry.return_value = Mock(get=Mock(return_value=schema))
+        context_provider.read_file_contents = {}
+
+        isolation_handler = Mock()
+        isolation_handler.get_read_scope.return_value = None
+        isolation_handler.fill_role_ids.side_effect = lambda item, role_scope=None: item
+        isolation_handler.calculate_memory_uris.side_effect = [
+            ["viking://agent/default/memories/tools/search_orders.md"],
+            ["viking://agent/default/memories/tools/search_orders.md"],
+        ]
+
+        loop = ExtractLoop(
+            vlm=Mock(model="test-model"),
+            viking_fs=Mock(),
+            context_provider=context_provider,
+            isolation_handler=isolation_handler,
+        )
+        loop._extract_context = SimpleNamespace(
+            messages=[
+                Message(
+                    id="tool-1",
+                    role="assistant",
+                    parts=[
+                        ToolPart(tool_name="search_orders", tool_status="completed"),
+                        ToolPart(tool_name="search_orders", tool_status="error"),
+                    ],
+                )
+            ],
+            page_id_map=SimpleNamespace(resolve=lambda page_id: None),
+        )
+
+        operations, _ = await loop.resolve_operations(
+            AttrDict(
+                tools=[
+                    {"tool_name": "search_orders", "page_id": 100},
+                    {"tool_name": "search_orders", "page_id": 101},
+                ],
+                delete_uris=[],
+            )
+        )
+
+        first, second = operations.upsert_operations
+        assert first.memory_fields["call_count"] == 2
+        assert first.memory_fields["success_time"] == 1
+        assert second.memory_fields["call_count"] == 0
+        assert second.memory_fields["success_time"] == 0
+
+    @pytest.mark.asyncio
+    async def test_skill_counter_deltas_map_from_transcript_stats(self):
+        schema = MemoryTypeSchema(
+            memory_type="skills",
+            description="skill memory",
+            directory="viking://agent/{{ agent_space }}/memories/skills",
+            filename_template="{{ skill_name }}.md",
+            fields=[
+                MemoryField(
+                    name="skill_name",
+                    field_type=FieldType.STRING,
+                    merge_op=MergeOp.IMMUTABLE,
+                ),
+                MemoryField(
+                    name="total_executions",
+                    field_type=FieldType.INT64,
+                    merge_op=MergeOp.SUM,
+                ),
+                MemoryField(
+                    name="success_count",
+                    field_type=FieldType.INT64,
+                    merge_op=MergeOp.SUM,
+                ),
+                MemoryField(
+                    name="fail_count",
+                    field_type=FieldType.INT64,
+                    merge_op=MergeOp.SUM,
+                ),
+            ],
+        )
+
+        context_provider = Mock()
+        context_provider.get_memory_schemas.return_value = [schema]
+        context_provider._get_registry.return_value = Mock(get=Mock(return_value=schema))
+        context_provider.read_file_contents = {}
+
+        isolation_handler = Mock()
+        isolation_handler.get_read_scope.return_value = None
+        isolation_handler.fill_role_ids.side_effect = lambda item, role_scope=None: item
+        isolation_handler.calculate_memory_uris.return_value = [
+            "viking://agent/default/memories/skills/weather.md"
+        ]
+
+        loop = ExtractLoop(
+            vlm=Mock(model="test-model"),
+            viking_fs=Mock(),
+            context_provider=context_provider,
+            isolation_handler=isolation_handler,
+        )
+        loop._extract_context = SimpleNamespace(
+            messages=[
+                Message(
+                    id="skill-1",
+                    role="assistant",
+                    parts=[
+                        ToolPart(
+                            skill_uri="viking://agent/default/skills/weather",
+                            tool_status="completed",
+                        ),
+                        ToolPart(
+                            skill_uri="viking://agent/default/skills/weather",
+                            tool_status="error",
+                        ),
+                    ],
+                )
+            ],
+            page_id_map=SimpleNamespace(resolve=lambda page_id: None),
+        )
+
+        operations, _ = await loop.resolve_operations(
+            AttrDict(
+                skills=[
+                    {
+                        "skill_name": "weather",
+                        "total_executions": 99,
+                        "success_count": 98,
+                        "fail_count": 1,
+                        "page_id": 100,
+                    }
+                ],
+                delete_uris=[],
+            )
+        )
+
+        operation = operations.upsert_operations[0]
+        assert operation.memory_fields["total_executions"] == 2
+        assert operation.memory_fields["success_count"] == 1
+        assert operation.memory_fields["fail_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_text_tool_markers_produce_deterministic_tool_counter_deltas(self):
+        schema = MemoryTypeSchema(
+            memory_type="tools",
+            description="tool memory",
+            directory="viking://agent/{{ agent_space }}/memories/tools",
+            filename_template="{{ tool_name }}.md",
+            fields=[
+                MemoryField(
+                    name="tool_name",
+                    field_type=FieldType.STRING,
+                    merge_op=MergeOp.IMMUTABLE,
+                ),
+                MemoryField(
+                    name="call_count",
+                    field_type=FieldType.INT64,
+                    merge_op=MergeOp.SUM,
+                ),
+                MemoryField(
+                    name="success_time",
+                    field_type=FieldType.INT64,
+                    merge_op=MergeOp.SUM,
+                ),
+            ],
+        )
+
+        context_provider = Mock()
+        context_provider.get_memory_schemas.return_value = [schema]
+        context_provider._get_registry.return_value = Mock(get=Mock(return_value=schema))
+        context_provider.read_file_contents = {}
+
+        isolation_handler = Mock()
+        isolation_handler.get_read_scope.return_value = None
+        isolation_handler.fill_role_ids.side_effect = lambda item, role_scope=None: item
+        isolation_handler.calculate_memory_uris.return_value = [
+            "viking://agent/default/memories/tools/return_delivered_order_items.md"
+        ]
+
+        loop = ExtractLoop(
+            vlm=Mock(model="test-model"),
+            viking_fs=Mock(),
+            context_provider=context_provider,
+            isolation_handler=isolation_handler,
+        )
+        loop._extract_context = SimpleNamespace(
+            messages=[
+                Message(
+                    id="call-1",
+                    role="assistant",
+                    parts=[
+                        TextPart(
+                            "tool-call:\n"
+                            "call_id: abc\n"
+                            "name: return_delivered_order_items\n"
+                            "arguments: {}"
+                        )
+                    ],
+                ),
+                Message(
+                    id="response-1",
+                    role="assistant",
+                    parts=[
+                        TextPart(
+                            "tool-response:\n"
+                            "call_id: abc\n"
+                            "name: return_delivered_order_items\n"
+                            "output: ok"
+                        )
+                    ],
+                ),
+            ],
+            page_id_map=SimpleNamespace(resolve=lambda page_id: None),
+        )
+
+        operations, _ = await loop.resolve_operations(
+            AttrDict(
+                tools=[
+                    {
+                        "tool_name": "return_delivered_order_items",
+                        "call_count": 99,
+                        "success_time": 99,
+                        "page_id": 100,
+                    }
+                ],
+                delete_uris=[],
+            )
+        )
+
+        operation = operations.upsert_operations[0]
+        assert operation.memory_fields["call_count"] == 1
+        assert operation.memory_fields["success_time"] == 1
 
     def test_unresolved_page_ids_logs_at_info(self):
         loop = ExtractLoop(vlm=Mock(model="test-model"), viking_fs=Mock(), context_provider=Mock())

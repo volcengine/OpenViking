@@ -371,6 +371,37 @@ class TestReplaceOp:
         with pytest.raises(PatchParseError, match="stale non-string replacement"):
             asyncio.run(op.apply_async({"items": ["latest"]}, value))
 
+    def test_rewrite_stale_replace_prompt_requests_value_object(self, monkeypatch):
+        from openviking.session.memory.merge_op import replace as replace_module
+
+        prompts = []
+
+        class FakeStructuredLLM:
+            async def complete_model_async(self, prompt, model_class):
+                prompts.append(prompt)
+                return model_class(final_value="merged")
+
+        monkeypatch.setattr("openviking_cli.utils.llm.StructuredLLM", FakeStructuredLLM)
+
+        result = asyncio.run(
+            replace_module._rewrite_stale_replace(
+                current_value="latest",
+                patch_value=ReplaceValueWithBase(
+                    proposed_value="proposed",
+                    base_value="base",
+                    source_operation_id="memory://example:content",
+                ),
+                intent_diff="diff",
+                reason="base_digest_mismatch",
+            )
+        )
+
+        assert result == "merged"
+        assert len(prompts) == 1
+        assert "Do not return a JSON schema" in prompts[0]
+        assert '{"final_value":' in prompts[0]
+        assert "Return ONLY the JSON schema" not in prompts[0]
+
 
 class TestImmutableOp:
     """Tests for ImmutableOp."""
@@ -505,7 +536,11 @@ class TestStrPatchWithBase:
         assert wrapped.source_operation_id == "op-1"
         assert wrapped.attempt_id == 0
 
-    def test_wrap_patch_with_read_base_adds_digest(self):
+    def test_wrap_patch_with_read_base_adds_digest(self, monkeypatch):
+        monkeypatch.setattr(
+            "openviking.session.memory.memory_updater._memory_apply_exact_file_lock_enabled",
+            lambda: True,
+        )
         patch = StrPatch(
             blocks=[SearchReplaceBlock(search="old", replace="new")],
         )
@@ -514,6 +549,7 @@ class TestStrPatchWithBase:
             patch,
             base_value="hello old",
             source_operation_id="memory://example:content",
+            exact_file_lock_enabled=True,
         )
 
         assert isinstance(wrapped, StrPatchWithBase)
@@ -522,7 +558,11 @@ class TestStrPatchWithBase:
         assert wrapped.base_digest is not None
         assert wrapped.source_operation_id == "memory://example:content"
 
-    def test_wrap_merge_value_with_read_base_wraps_replace_values(self):
+    def test_wrap_merge_value_with_read_base_wraps_replace_values(self, monkeypatch):
+        monkeypatch.setattr(
+            "openviking.session.memory.memory_updater._memory_apply_exact_file_lock_enabled",
+            lambda: True,
+        )
         field = MemoryField(
             name="content",
             field_type=FieldType.STRING,
@@ -534,6 +574,7 @@ class TestStrPatchWithBase:
             "new content",
             base_value="old content",
             source_operation_id="memory://example:content",
+            exact_file_lock_enabled=True,
         )
 
         assert isinstance(wrapped, ReplaceValueWithBase)

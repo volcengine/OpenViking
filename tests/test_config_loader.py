@@ -246,6 +246,25 @@ def test_openviking_config_memory_experimental_switch_defaults_agent_memory(monk
     OpenVikingConfigSingleton.reset_instance()
 
 
+def test_openviking_config_accepts_long_term_extraction_switch(monkeypatch):
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
+
+    from openviking_cli.utils.config.open_viking_config import (
+        OpenVikingConfig,
+        OpenVikingConfigSingleton,
+    )
+
+    default_config = OpenVikingConfig.from_dict({})
+    disabled_config = OpenVikingConfig.from_dict(
+        {"memory": {"long_term_extraction_enabled": False}}
+    )
+
+    assert default_config.memory.long_term_extraction_enabled is True
+    assert disabled_config.memory.long_term_extraction_enabled is False
+
+    OpenVikingConfigSingleton.reset_instance()
+
+
 def test_openviking_config_retrieval_hotness_alpha_defaults_to_zero(monkeypatch):
     monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
 

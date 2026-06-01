@@ -64,6 +64,8 @@ class TestCommit:
     ):
         config = MagicMock()
         config.memory.extraction_enabled = False
+        config.memory.long_term_extraction_enabled = False
+        config.memory.agent_memory_enabled = False
         config.memory.session_skill_extraction_enabled = True
         monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
 
@@ -90,11 +92,42 @@ class TestCommit:
         session_with_messages._session_compressor.extract_long_term_memories.assert_not_awaited()
         session_with_messages._session_compressor.extract_agent_memories.assert_awaited_once()
 
+    async def test_commit_can_run_agent_memory_without_long_term_or_session_skills(
+        self, session_with_messages: Session, monkeypatch
+    ):
+        config = MagicMock()
+        config.memory.extraction_enabled = True
+        config.memory.long_term_extraction_enabled = False
+        config.memory.agent_memory_enabled = True
+        config.memory.session_skill_extraction_enabled = False
+        config.memory.memory_apply_exact_file_lock_enabled = True
+        monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
+
+        agent_context = MagicMock()
+        agent_context.category = "memory_write"
+        session_with_messages._session_compressor.extract_long_term_memories = AsyncMock(
+            return_value=[]
+        )
+        session_with_messages._session_compressor.extract_agent_memories = AsyncMock(
+            return_value={"contexts": [agent_context], "session_skills": []}
+        )
+
+        result = await session_with_messages.commit_async()
+        task_result = await _wait_for_task(result["task_id"])
+
+        assert task_result["status"] == "completed"
+        assert task_result["result"]["memories_extracted"] == {"memory_write": 1}
+        assert task_result["result"]["session_skills_extracted"] == 0
+        session_with_messages._session_compressor.extract_long_term_memories.assert_not_awaited()
+        session_with_messages._session_compressor.extract_agent_memories.assert_awaited_once()
+
     async def test_commit_skips_session_skill_extraction_when_disabled(
         self, session_with_messages: Session, monkeypatch
     ):
         config = MagicMock()
         config.memory.extraction_enabled = True
+        config.memory.long_term_extraction_enabled = True
+        config.memory.agent_memory_enabled = True
         config.memory.session_skill_extraction_enabled = False
         monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
 
@@ -114,6 +147,31 @@ class TestCommit:
         assert task_result["result"]["session_skill_uris"] == []
         session_with_messages._session_compressor.extract_long_term_memories.assert_awaited_once()
         session_with_messages._session_compressor.extract_agent_memories.assert_awaited_once()
+
+    async def test_commit_exact_mode_fails_agent_memory_extraction_errors(
+        self, session_with_messages: Session, monkeypatch
+    ):
+        config = MagicMock()
+        config.memory.extraction_enabled = True
+        config.memory.long_term_extraction_enabled = True
+        config.memory.agent_memory_enabled = True
+        config.memory.session_skill_extraction_enabled = False
+        config.memory.memory_apply_exact_file_lock_enabled = True
+        monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
+
+        session_with_messages._session_compressor.extract_long_term_memories = AsyncMock(
+            return_value=[]
+        )
+        if hasattr(session_with_messages._session_compressor, "extract_agent_memories"):
+            session_with_messages._session_compressor.extract_agent_memories = AsyncMock(
+                side_effect=RuntimeError("agent apply failed")
+            )
+
+        result = await session_with_messages.commit_async()
+        task_result = await _wait_for_task(result["task_id"])
+
+        assert task_result["status"] == "failed"
+        assert "agent apply failed" in task_result["error"]
 
     async def test_commit_archives_messages(self, session_with_messages: Session):
         """Test commit archives messages"""

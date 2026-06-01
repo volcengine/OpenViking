@@ -1297,11 +1297,25 @@ class Session:
                     # Summary generation, user memory and agent memory all run concurrently.
                     ov_config = get_openviking_config()
                     memory_extraction_enabled = ov_config.memory.extraction_enabled
+                    long_term_extraction_enabled = bool(
+                        memory_extraction_enabled
+                        and getattr(ov_config.memory, "long_term_extraction_enabled", True)
+                    )
+                    agent_memory_extraction_enabled = bool(
+                        memory_extraction_enabled
+                        and getattr(ov_config.memory, "agent_memory_enabled", False)
+                    )
+                    exact_memory_apply_enabled = bool(
+                        getattr(ov_config.memory, "memory_apply_exact_file_lock_enabled", False)
+                    )
                     session_skill_extraction_enabled = (
                         ov_config.memory.session_skill_extraction_enabled
                     )
+                    agent_pipeline_enabled = (
+                        agent_memory_extraction_enabled or session_skill_extraction_enabled
+                    )
                     if self._session_compressor and (
-                        memory_extraction_enabled or session_skill_extraction_enabled
+                        long_term_extraction_enabled or agent_pipeline_enabled
                     ):
                         logger.info(
                             "Starting post-commit extraction from %s archived messages",
@@ -1319,7 +1333,7 @@ class Session:
                             return {"contexts": [], "session_skills": []}
 
                         async def _run_long_term_memories():
-                            if not memory_extraction_enabled:
+                            if not long_term_extraction_enabled:
                                 return []
                             return await self._session_compressor.extract_long_term_memories(
                                 messages=extraction_messages,
@@ -1333,7 +1347,7 @@ class Session:
                         async def _run_agent_memories():
                             if not has_agent_memory:
                                 return {"contexts": [], "session_skills": []}
-                            if not (memory_extraction_enabled or session_skill_extraction_enabled):
+                            if not agent_pipeline_enabled:
                                 return {"contexts": [], "session_skills": []}
                             return await self._session_compressor.extract_agent_memories(
                                 messages=extraction_messages,
@@ -1369,13 +1383,15 @@ class Session:
                                 f"Agent memory extraction failed: {agent_result}",
                                 exc_info=agent_result,
                             )
+                            if exact_memory_apply_enabled and agent_memory_extraction_enabled:
+                                raise agent_result
                             agent_extracted = []
                             session_skills = []
                         else:
                             agent_extracted = list(agent_result.get("contexts", []))
                             session_skills = list(agent_result.get("session_skills", []))
 
-                        if memory_extraction_enabled:
+                        if long_term_extraction_enabled:
                             logger.info(f"Extracted {len(extracted)} memories")
                             for ctx_item in extracted:
                                 cat = getattr(ctx_item, "category", "") or "unknown"
@@ -1396,8 +1412,14 @@ class Session:
                         if self._session_compressor:
                             logger.info(
                                 "Memory and session skill extraction are disabled by config "
-                                "(memory.extraction_enabled=false, "
-                                "memory.session_skill_extraction_enabled=false)"
+                                "(memory.extraction_enabled=%s, "
+                                "memory.long_term_extraction_enabled=%s, "
+                                "memory.agent_memory_enabled=%s, "
+                                "memory.session_skill_extraction_enabled=%s)",
+                                memory_extraction_enabled,
+                                long_term_extraction_enabled,
+                                agent_memory_extraction_enabled,
+                                session_skill_extraction_enabled,
                             )
                         await _run_archive_summary()
 

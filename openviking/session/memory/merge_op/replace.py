@@ -79,12 +79,15 @@ async def _rewrite_stale_replace(
 
     prompt = (
         "Reconcile a stale full-value memory replacement against the latest field value.\n"
-        "Return ONLY the JSON schema requested by the caller.\n\n"
+        "Return ONLY a JSON object with one string field named `final_value`.\n"
+        "Do not return a JSON schema, and do not include keys such as "
+        "`properties`, `required`, `title`, or `type`.\n\n"
         "Rules:\n"
         "- Preserve compatible intent from the proposed replacement.\n"
         "- Preserve latest current content unless the proposed replacement clearly updates it.\n"
         "- Do not invent unrelated facts.\n"
         "- If the proposed replacement is no longer applicable, return the latest field value.\n\n"
+        'Expected shape example:\n{"final_value": "the reconciled full field content"}\n\n'
         f"Replacement base value:\n{patch_value.base_value or ''}\n\n"
         f"Proposed full replacement:\n{patch_value.proposed_value or ''}\n\n"
         f"Latest field value:\n{current_value}\n\n"

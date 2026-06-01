@@ -11,6 +11,7 @@ from openviking.session.memory.merge_op.base import (
     FieldType,
     MergeOp,
     MergeOpBase,
+    ReplaceValueWithBase,
     SearchReplaceBlock,
     StrPatch,
     StrPatchWithBase,
@@ -114,6 +115,9 @@ class PatchOp(MergeOpBase):
         if self._field_type != FieldType.STRING:
             return patch_value
 
+        if isinstance(patch_value, ReplaceValueWithBase):
+            raise PatchParseError("ReplaceValueWithBase requires apply_async")
+
         # For string fields - check if current_value is None (no original)
         if current_value is None:
             # No original content - extract replace value from patch
@@ -164,6 +168,11 @@ class PatchOp(MergeOpBase):
     async def apply_async(self, current_value: Any, patch_value: Any) -> Any:
         if self._field_type != FieldType.STRING:
             return self.apply(current_value, patch_value)
+
+        if isinstance(patch_value, ReplaceValueWithBase):
+            from openviking.session.memory.merge_op.replace import ReplaceOp
+
+            return await ReplaceOp().apply_async(current_value, patch_value)
 
         try:
             return self.apply(current_value, patch_value)

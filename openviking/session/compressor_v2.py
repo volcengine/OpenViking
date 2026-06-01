@@ -50,8 +50,14 @@ _EXACT_FILE_LOCK_SAFE_MERGE_OPS = {
     MergeOp.SUM,
     MergeOp.IMMUTABLE,
 }
+_EXACT_FILE_LOCK_SUPPORTED_MEMORY_TYPES = {
+    "trajectories",
+    "experiences",
+}
 
-ExtractPostApply = Callable[[MemoryUpdateResult, Dict[str, List[str]], Any], Awaitable[None]]
+ExtractPostApply = Callable[
+    [MemoryUpdateResult, Dict[str, List[str]], Any, bool], Awaitable[None]
+]
 
 
 def _filename_has_variables(schema: Any) -> bool:
@@ -132,16 +138,26 @@ def _memory_apply_exact_file_lock_enabled_from_config(config: Any) -> bool:
     return bool(getattr(memory_config, "memory_apply_exact_file_lock_enabled", False))
 
 
-def _schemas_support_exact_file_apply(schemas: list[Any]) -> tuple[bool, list[str]]:
+def _schemas_support_exact_file_apply(
+    schemas: list[Any],
+    *,
+    string_patch_exact_safe: bool = False,
+) -> tuple[bool, list[str]]:
     """Return whether schemas can safely skip broad tree locks in exact apply mode.
 
     PR-1 supports base-aware stale rewrite for structured string patches and
-    base-aware synthesis for stale string replacements. Non-patch, non-replace
-    merge semantics remain conservative unless they are deterministic.
+    base-aware synthesis for stale string replacements. String PATCH fields are
+    exact-safe only when plain string outputs have an explicit base-aware full
+    replacement interpretation, or when the extraction schema excludes them.
     """
     unsupported: list[str] = []
+    if not schemas:
+        return False, ["<none>:missing_schema"]
     for schema in schemas:
         memory_type = getattr(schema, "memory_type", "unknown") or "unknown"
+        if memory_type not in _EXACT_FILE_LOCK_SUPPORTED_MEMORY_TYPES:
+            unsupported.append(f"{memory_type}:unsupported_memory_type")
+            continue
         for field in getattr(schema, "fields", []) or []:
             raw_merge_op = getattr(field, "merge_op", MergeOp.PATCH)
             try:
@@ -163,6 +179,19 @@ def _schemas_support_exact_file_apply(schemas: list[Any]) -> tuple[bool, list[st
                     f"{memory_type}.{field_name}:{merge_op_label}:{field_type_label}"
                 )
                 continue
+            if merge_op == MergeOp.PATCH:
+                raw_field_type = getattr(field, "field_type", None)
+                try:
+                    field_type = FieldType(raw_field_type)
+                except Exception:
+                    field_type = raw_field_type
+                if field_type == FieldType.STRING and not string_patch_exact_safe:
+                    merge_op_label = getattr(merge_op, "value", str(merge_op))
+                    field_type_label = getattr(field_type, "value", str(field_type))
+                    unsupported.append(
+                        f"{memory_type}.{field_name}:{merge_op_label}:{field_type_label}"
+                    )
+                    continue
             if merge_op not in _EXACT_FILE_LOCK_SAFE_MERGE_OPS:
                 unsupported.append(f"{memory_type}.{field_name}:{merge_op}")
     return not unsupported, unsupported
@@ -219,13 +248,22 @@ class SessionCompressorV2:
             isolation_handler=isolation_handler,
         )
 
-    def _get_or_create_updater(self, registry, transaction_handle=None) -> MemoryUpdater:
+    def _get_or_create_updater(
+        self,
+        registry,
+        transaction_handle=None,
+        *,
+        exact_file_lock_enabled: bool | None = None,
+    ) -> MemoryUpdater:
         """Create new MemoryUpdater instance for each request.
 
         Always create new instance to avoid cross-request state pollution.
         """
         return MemoryUpdater(
-            registry=registry, vikingdb=self.vikingdb, transaction_handle=transaction_handle
+            registry=registry,
+            vikingdb=self.vikingdb,
+            transaction_handle=transaction_handle,
+            exact_file_lock_enabled=exact_file_lock_enabled,
         )
 
     def _split_operations_by_memory_type(
@@ -325,6 +363,11 @@ class SessionCompressorV2:
         viking_fs = get_viking_fs()
         lock_manager = None
         transaction_handle = None
+        exact_file_apply_enabled = False
+        exact_config_requested = _memory_apply_exact_file_lock_enabled_from_config(config)
+        # PR-1 scopes exact file-lock apply to agent memories. Standard long-term
+        # extraction can update user memories, tools, and skills; keep its existing
+        # extraction-time serialization until user-memory quality is validated.
         if viking_fs and hasattr(viking_fs, "agfs") and viking_fs.agfs:
             init_lock_manager(viking_fs.agfs)
             lock_manager = get_lock_manager()
@@ -352,13 +395,9 @@ class SessionCompressorV2:
             read_scope = isolation_handler.get_read_scope()
             if lock_manager:
                 schemas = orchestrator.context_provider.get_memory_schemas(ctx)
-                exact_apply_supported, unsupported_exact_apply_fields = (
-                    _schemas_support_exact_file_apply(schemas)
-                )
             if (
                 lock_manager
-                and _memory_apply_exact_file_lock_enabled_from_config(config)
-                and exact_apply_supported
+                and exact_file_apply_enabled
             ):
                 get_current_telemetry().increment(
                     "memory.extract.schema_tree_lock_skipped_for_exact_apply"
@@ -368,14 +407,13 @@ class SessionCompressorV2:
                     "using per-file rewrite locks at apply time"
                 )
             elif lock_manager:
-                if _memory_apply_exact_file_lock_enabled_from_config(config):
+                if exact_config_requested:
                     get_current_telemetry().increment(
-                        "memory.extract.schema_tree_lock_kept_for_unsupported_merge_ops"
+                        "memory.extract.user_schema_tree_lock_kept_for_agent_only_exact_scope"
                     )
                     tracer.info(
-                        "[memory_lock] Keeping extraction schema locks because exact "
-                        "file apply does not yet support all merge ops: %s",
-                        unsupported_exact_apply_fields,
+                        "[memory_lock] Keeping extraction schema locks for standard "
+                        "long-term memory; exact file apply is scoped to agent memory"
                     )
                 exact_lock_paths, tree_lock_dirs = _render_memory_schema_locks(
                     schemas=schemas,
@@ -427,7 +465,11 @@ class SessionCompressorV2:
                 tracer.info("No memory operations generated")
                 return []
 
-            updater = self._get_or_create_updater(registry, transaction_handle)
+            updater = self._get_or_create_updater(
+                registry,
+                transaction_handle,
+                exact_file_lock_enabled=exact_file_apply_enabled,
+            )
 
             # Apply operations with isolation_handler
             result = await updater.apply_operations(
@@ -507,7 +549,7 @@ class SessionCompressorV2:
 
         except Exception as e:
             logger.error(f"Failed to extract memories with v2: {e}", exc_info=True)
-            if strict_extract_errors:
+            if strict_extract_errors or exact_file_apply_enabled:
                 raise
             return []
         finally:
@@ -607,6 +649,7 @@ class SessionCompressorV2:
                 result: MemoryUpdateResult,
                 inheritance_map: Dict[str, List[str]],
                 lock_handle: Any,
+                exact_file_lock_enabled: bool,
                 exp_provider=exp_provider,
                 exp_dir=exp_dir,
                 traj_uri=traj_uri,
@@ -627,6 +670,7 @@ class SessionCompressorV2:
                         ctx,
                         viking_fs,
                         lock_handle=lock_handle,
+                        exact_file_lock_enabled=exact_file_lock_enabled,
                     )
 
             exp_result = await self._run_extract_phase(
@@ -769,6 +813,10 @@ class SessionCompressorV2:
 
         lock_manager = None
         transaction_handle = None
+        exact_apply_supported = False
+        unsupported_exact_apply_fields: list[str] = []
+        exact_file_apply_enabled = False
+        exact_config_enabled = _memory_apply_exact_file_lock_enabled_from_config(config)
         if viking_fs and hasattr(viking_fs, "agfs") and viking_fs.agfs:
             init_lock_manager(viking_fs.agfs)
             lock_manager = get_lock_manager()
@@ -776,18 +824,20 @@ class SessionCompressorV2:
 
         try:
             if lock_manager:
-                schemas = [
-                    schema
-                    for schema in provider.get_memory_schemas(ctx)
-                    if getattr(schema, "memory_type", None) != SESSION_SKILL_MEMORY_TYPE
-                ]
+                schemas = provider.get_memory_schemas(ctx)
                 exact_apply_supported, unsupported_exact_apply_fields = (
-                    _schemas_support_exact_file_apply(schemas)
+                    _schemas_support_exact_file_apply(
+                        schemas,
+                        string_patch_exact_safe=exact_config_enabled,
+                    )
                 )
+                exact_file_apply_enabled = (
+                    exact_config_enabled and exact_apply_supported
+                )
+                orchestrator.structured_string_patches_only = exact_file_apply_enabled
             if (
                 lock_manager
-                and _memory_apply_exact_file_lock_enabled_from_config(config)
-                and exact_apply_supported
+                and exact_file_apply_enabled
             ):
                 get_current_telemetry().increment(
                     "memory.extract.schema_tree_lock_skipped_for_exact_apply"
@@ -797,7 +847,7 @@ class SessionCompressorV2:
                     "using per-file rewrite locks at apply time"
                 )
             elif lock_manager:
-                if _memory_apply_exact_file_lock_enabled_from_config(config):
+                if exact_config_enabled:
                     get_current_telemetry().increment(
                         "memory.extract.schema_tree_lock_kept_for_unsupported_merge_ops"
                     )
@@ -884,7 +934,11 @@ class SessionCompressorV2:
                 or memory_operations.errors
             ):
                 registry = provider._get_registry()
-                updater = self._get_or_create_updater(registry, transaction_handle)
+                updater = self._get_or_create_updater(
+                    registry,
+                    transaction_handle,
+                    exact_file_lock_enabled=exact_file_apply_enabled,
+                )
                 memory_result = await updater.apply_operations(
                     memory_operations,
                     ctx,
@@ -899,7 +953,12 @@ class SessionCompressorV2:
             )
 
             if post_apply:
-                await post_apply(memory_result, inheritance_map, transaction_handle)
+                await post_apply(
+                    memory_result,
+                    inheritance_map,
+                    transaction_handle,
+                    exact_file_apply_enabled,
+                )
 
             skill_results: List[Dict[str, Any]] = []
             if skill_operations.upsert_operations:
@@ -941,7 +1000,7 @@ class SessionCompressorV2:
             )
         except Exception as e:
             logger.error(f"[{phase_label}] Failed to extract: {e}", exc_info=True)
-            if strict_extract_errors:
+            if strict_extract_errors or exact_file_apply_enabled:
                 raise
             return None
         finally:
@@ -1027,6 +1086,7 @@ class SessionCompressorV2:
         ctx,
         viking_fs,
         lock_handle: Optional[Any] = None,
+        exact_file_lock_enabled: Optional[bool] = None,
     ) -> None:
         """Write bidirectional StoredLinks between traj_uris and each exp file.
 
@@ -1039,6 +1099,16 @@ class SessionCompressorV2:
 
         for exp_uri in exp_uris:
             try:
+                if exact_file_lock_enabled is False:
+                    await self._append_trajectory_metadata(
+                        exp_uri,
+                        normalized_traj_uris,
+                        ctx,
+                        viking_fs,
+                        lock_handle=lock_handle,
+                        exact_file_lock_enabled=False,
+                    )
+                    continue
                 try:
                     from openviking.storage.transaction import LockContext, get_lock_manager
 
@@ -1058,6 +1128,7 @@ class SessionCompressorV2:
                     [lock_path],
                     lock_mode="exact",
                     handle=lock_handle,
+                    timeout=None,
                 ) as exp_lock_handle:
                     await self._append_trajectory_metadata(
                         exp_uri,
@@ -1065,6 +1136,7 @@ class SessionCompressorV2:
                         ctx,
                         viking_fs,
                         lock_handle=exp_lock_handle,
+                        exact_file_lock_enabled=exact_file_lock_enabled,
                     )
             except Exception as e:
                 logger.warning(f"Failed to append source trajectories to {exp_uri}: {e}")
@@ -1076,6 +1148,8 @@ class SessionCompressorV2:
         ctx,
         viking_fs,
         lock_handle: Optional[Any] = None,
+        exact_file_lock_enabled: Optional[bool] = None,
+        lock_timeout: Any = None,
     ) -> None:
         from datetime import timezone
 
@@ -1108,7 +1182,13 @@ class SessionCompressorV2:
 
         # Write traj.backlinks — exp_uri already handled above
         await write_stored_links(
-            links, ctx, viking_fs, skip_uris={exp_uri}, lock_handle=lock_handle
+            links,
+            ctx,
+            viking_fs,
+            skip_uris={exp_uri},
+            lock_handle=lock_handle,
+            exact_file_lock_enabled=exact_file_lock_enabled,
+            lock_timeout=lock_timeout,
         )
 
     async def _build_memory_diff(
@@ -1217,6 +1297,7 @@ class SessionCompressorV2:
         return {
             "archive_uri": archive_uri,
             "extracted_at": datetime.utcnow().isoformat() + "Z",
+            "apply_trace": list(getattr(result, "apply_traces", []) or []),
             "operations": {
                 "adds": adds,
                 "updates": updates,
@@ -1226,6 +1307,7 @@ class SessionCompressorV2:
                 "total_adds": len(adds),
                 "total_updates": len(updates),
                 "total_deletes": len(deletes),
+                "total_apply_traces": len(getattr(result, "apply_traces", []) or []),
             },
         }
 

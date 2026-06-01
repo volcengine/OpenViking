@@ -4,7 +4,8 @@
 from __future__ import annotations
 
 from difflib import SequenceMatcher
-from typing import Any, Callable, Dict, Iterable, Tuple, Union
+from types import SimpleNamespace
+from typing import Any, Callable, Dict, Iterable, List, Tuple, Union
 
 Number = Union[int, float]
 
@@ -125,3 +126,114 @@ def collect_skill_stats(tool_parts: Iterable[Any]) -> Dict[str, Dict[str, Number
             stats_map[skill_name]["success_time"] += 1
 
     return stats_map
+
+
+def collect_tool_parts_from_messages(messages: Iterable[Any]) -> List[Any]:
+    """Collect tool-call records from structured ToolParts and text transcripts.
+
+    Structured integrations store tool results as ToolPart objects. Some benchmark
+    harnesses ingest a textual transcript using `tool-call:` / `tool-response:`
+    blocks; for those, count completed/error responses and use the paired call
+    name when the response omits it.
+    """
+    parts: List[Any] = []
+    text_calls: Dict[str, Dict[str, str]] = {}
+    text_call_order: List[Dict[str, str]] = []
+    text_responses_seen: set[str] = set()
+    text_consumed_call_indices: set[int] = set()
+
+    try:
+        message_iter = iter(messages or [])
+    except TypeError:
+        return []
+
+    for message in message_iter:
+        for part in getattr(message, "parts", []) or []:
+            if getattr(part, "tool_name", "") or getattr(part, "skill_uri", ""):
+                parts.append(part)
+                continue
+
+            text = getattr(part, "text", "") or ""
+            parsed = _parse_tool_marker_text(text)
+            if parsed is None:
+                continue
+            kind, fields = parsed
+            call_id = fields.get("call_id", "")
+            if kind == "tool-call":
+                if call_id:
+                    text_calls[call_id] = fields
+                text_call_order.append(fields)
+                continue
+
+            if kind == "tool-response":
+                call = text_calls.get(call_id, {}) if call_id else {}
+                matched_call_index: int | None = None
+                if not call_id:
+                    response_name_norm = normalize_name(fields.get("name", ""))
+                    for idx, candidate_call in enumerate(text_call_order):
+                        if idx in text_consumed_call_indices:
+                            continue
+                        candidate_name_norm = normalize_name(candidate_call.get("name", ""))
+                        if response_name_norm and candidate_name_norm != response_name_norm:
+                            continue
+                        call = candidate_call
+                        matched_call_index = idx
+                        break
+                name = fields.get("name") or call.get("name") or ""
+                if not name:
+                    continue
+                status = "error" if fields.get("error", "").lower() == "true" else "completed"
+                parts.append(
+                    SimpleNamespace(
+                        tool_name=name,
+                        skill_uri=fields.get("skill_uri", "") or call.get("skill_uri", ""),
+                        tool_status=status,
+                        duration_ms=None,
+                        prompt_tokens=None,
+                        completion_tokens=None,
+                    )
+                )
+                if call_id:
+                    text_responses_seen.add(call_id)
+                elif matched_call_index is not None:
+                    text_consumed_call_indices.add(matched_call_index)
+
+    for idx, call in enumerate(text_call_order):
+        if idx in text_consumed_call_indices:
+            continue
+        call_id = call.get("call_id", "")
+        if call_id and call_id in text_responses_seen:
+            continue
+        name = call.get("name", "")
+        if not name:
+            continue
+        parts.append(
+            SimpleNamespace(
+                tool_name=name,
+                skill_uri=call.get("skill_uri", ""),
+                tool_status="pending",
+                duration_ms=None,
+                prompt_tokens=None,
+                completion_tokens=None,
+            )
+        )
+
+    return parts
+
+
+def _parse_tool_marker_text(text: str) -> Tuple[str, Dict[str, str]] | None:
+    lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
+    if not lines:
+        return None
+    marker = lines[0].lower()
+    if marker not in {"tool-call:", "tool-response:"}:
+        return None
+
+    fields: Dict[str, str] = {}
+    for line in lines[1:]:
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        fields[key.strip().lower().replace("-", "_")] = value.strip()
+
+    return marker[:-1], fields
