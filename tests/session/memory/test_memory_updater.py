@@ -2036,6 +2036,49 @@ class TestConsecutivePatchesSameURI:
         mock_viking_fs.rm.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_apply_delete_skips_already_missing_file_under_exact_lock(self, monkeypatch):
+        uri = "viking://agent/demo/memories/experiences/old.md"
+        events: list[str] = []
+
+        class FakeExactLock:
+            async def __aenter__(self):
+                events.append("lock")
+
+            async def __aexit__(self, exc_type, exc, tb):
+                events.append("unlock")
+
+        expected = MemoryFile(
+            uri=uri,
+            content="old body",
+            extra_fields={"experience_name": "old", "memory_type": "experiences"},
+        )
+        mock_viking_fs = MagicMock()
+
+        async def mock_read_file(read_uri, **kwargs):
+            events.append("read")
+            raise NotFoundError(read_uri, "file")
+
+        mock_viking_fs.read_file = mock_read_file
+        mock_viking_fs.rm = AsyncMock()
+
+        updater = MemoryUpdater()
+        updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
+        monkeypatch.setattr(
+            "openviking.session.memory.memory_updater._exact_file_lock_context_for_uris",
+            lambda **kwargs: FakeExactLock(),
+        )
+        monkeypatch.setattr(
+            "openviking.session.memory.memory_updater._memory_apply_exact_file_lock_enabled",
+            lambda: True,
+        )
+
+        deleted = await updater._apply_delete(uri, MagicMock(), expected=expected)
+
+        assert deleted is False
+        assert events == ["lock", "read", "unlock"]
+        mock_viking_fs.rm.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_apply_delete_removes_matching_file_under_exact_lock(self, monkeypatch):
         uri = "viking://agent/demo/memories/experiences/old.md"
         events: list[str] = []

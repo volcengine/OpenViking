@@ -1450,11 +1450,19 @@ class MemoryUpdater:
                 try:
                     current_raw = await viking_fs.read_file(uri, ctx=ctx)
                 except NotFoundError:
-                    tracer.error(f"Memory not found for delete: {uri}")
-                    return True
+                    get_current_telemetry().increment("memory.apply.stale_delete.already_missing_skipped")
+                    tracer.info(
+                        f"[memory_updater] skipping stale delete: uri={uri}, "
+                        "file already missing after delete was planned"
+                    )
+                    return False
                 if not current_raw:
-                    tracer.error(f"Memory not found for delete: {uri}")
-                    return True
+                    get_current_telemetry().increment("memory.apply.stale_delete.already_missing_skipped")
+                    tracer.info(
+                        f"[memory_updater] skipping stale delete: uri={uri}, "
+                        "file already empty after delete was planned"
+                    )
+                    return False
                 current = MemoryFileUtils.read(current_raw, uri=uri)
                 if _memory_file_digest(current) != _memory_file_digest(expected):
                     get_current_telemetry().increment("memory.apply.stale_delete.skipped")
@@ -1478,6 +1486,15 @@ class MemoryUpdater:
                     lock_handle=lock_handle or self._transaction_handle,
                 )
             except NotFoundError:
+                if self._use_exact_file_lock():
+                    get_current_telemetry().increment(
+                        "memory.apply.stale_delete.already_missing_skipped"
+                    )
+                    tracer.info(
+                        f"[memory_updater] skipping stale delete: uri={uri}, "
+                        "file disappeared before rm"
+                    )
+                    return False
                 tracer.error(f"Memory not found for delete: {uri}")
                 # Idempotent - deleting non-existent file succeeds
             return True
