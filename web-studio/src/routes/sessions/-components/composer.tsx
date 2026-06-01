@@ -7,11 +7,18 @@ interface ComposerProps {
   onSend: (message: string) => void
   onCancel: () => void
   isStreaming: boolean
+  variant?: 'default' | 'compact'
 }
 
-export function Composer({ onSend, onCancel, isStreaming }: ComposerProps) {
+export function Composer({
+  onSend,
+  onCancel,
+  isStreaming,
+  variant = 'default',
+}: ComposerProps) {
   const [value, setValue] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const isCompact = variant === 'compact'
 
   const resize = useCallback(() => {
     const el = textareaRef.current
@@ -45,10 +52,11 @@ export function Composer({ onSend, onCancel, isStreaming }: ComposerProps) {
   )
 
   return (
-    <div className="px-4 pb-4 pt-2">
+    <div className={cn(isCompact ? 'px-3 pb-3 pt-2' : 'px-4 pb-4 pt-2')}>
       <div
         className={cn(
-          'mx-auto w-full max-w-3xl rounded-2xl border border-border/50 bg-background/95',
+          'mx-auto w-full max-w-3xl border border-border/50 bg-background/95',
+          isCompact ? 'rounded-xl' : 'rounded-2xl',
           'shadow-lg shadow-black/8 dark:shadow-black/25',
         )}
       >
@@ -65,12 +73,20 @@ export function Composer({ onSend, onCancel, isStreaming }: ComposerProps) {
           }}
           onKeyDown={handleKeyDown}
           className={cn(
-            'min-h-[44px] w-full resize-none bg-transparent px-4 pt-3 pb-1 text-sm',
+            'w-full resize-none bg-transparent text-sm',
+            isCompact
+              ? 'min-h-[38px] px-3 pb-0.5 pt-2.5'
+              : 'min-h-[44px] px-4 pb-1 pt-3',
             'placeholder:text-muted-foreground/60',
             'focus-visible:outline-none',
           )}
         />
-        <div className="flex items-center justify-end px-3 pb-2.5">
+        <div
+          className={cn(
+            'flex items-center justify-end',
+            isCompact ? 'px-2.5 pb-2' : 'px-3 pb-2.5',
+          )}
+        >
           {isStreaming ? (
             <button
               type="button"

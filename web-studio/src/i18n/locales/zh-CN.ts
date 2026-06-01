@@ -30,6 +30,9 @@ const zhCN = {
       sessions: {
         title: '会话',
       },
+      studio: {
+        title: '实验场',
+      },
     },
     sidebar: {
       loadingSessions: '加载中...',

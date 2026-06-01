@@ -30,6 +30,9 @@ const en = {
       sessions: {
         title: 'Sessions',
       },
+      studio: {
+        title: 'Playground',
+      },
     },
     sidebar: {
       loadingSessions: 'Loading...',

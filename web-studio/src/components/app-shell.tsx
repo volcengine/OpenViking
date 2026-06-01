@@ -90,6 +90,12 @@ const NAV_ITEMS: readonly NavItem[] = [
     to: '/home',
   },
   {
+    icon: PlugZapIcon,
+    id: 'studio',
+    titleKey: 'navigation.studio.title',
+    to: '/studio',
+  },
+  {
     icon: FolderTreeIcon,
     id: 'resources',
     titleKey: 'navigation.resources.title',
@@ -461,7 +467,9 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
                 className="text-base"
               >
                 <KeyRoundIcon className="size-5" />
-                <span>{t('navigation.oauthSetup.title', { ns: 'appShell' })}</span>
+                <span>
+                  {t('navigation.oauthSetup.title', { ns: 'appShell' })}
+                </span>
               </SidebarMenuButton>
             </SidebarMenuItem>
             <SidebarMenuItem>

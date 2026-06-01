@@ -32,12 +32,33 @@ type AppConnectionContextValue = {
 
 const CONNECTION_STORAGE_KEY = 'ov_console_connection'
 
+const ENV_BASE_URL =
+  typeof import.meta.env.VITE_OV_BASE_URL === 'string'
+    ? import.meta.env.VITE_OV_BASE_URL.trim()
+    : ''
+const ENV_API_KEY =
+  typeof import.meta.env.VITE_OV_API_KEY === 'string'
+    ? import.meta.env.VITE_OV_API_KEY.trim()
+    : ''
+const ENV_ACCOUNT =
+  typeof import.meta.env.VITE_OV_ACCOUNT === 'string'
+    ? import.meta.env.VITE_OV_ACCOUNT.trim()
+    : ''
+const ENV_AGENT =
+  typeof import.meta.env.VITE_OV_AGENT === 'string'
+    ? import.meta.env.VITE_OV_AGENT.trim()
+    : ''
+const ENV_USER =
+  typeof import.meta.env.VITE_OV_USER === 'string'
+    ? import.meta.env.VITE_OV_USER.trim()
+    : ''
+
 const DEFAULT_CONNECTION: ConnectionDraft = {
-  accountId: 'default',
-  agentId: 'web-studio',
-  apiKey: '',
+  accountId: ENV_ACCOUNT || 'default',
+  agentId: ENV_AGENT || 'web-studio',
+  apiKey: ENV_API_KEY,
   baseUrl: ovClient.getOptions().baseUrl,
-  userId: 'default',
+  userId: ENV_USER || 'default',
 }
 
 const AppConnectionContext =
@@ -81,7 +102,9 @@ function persistConnection(connection: ConnectionDraft): void {
   }
 }
 
-function normalizeConnectionDraft(connection: ConnectionDraft): ConnectionDraft {
+function normalizeConnectionDraft(
+  connection: ConnectionDraft,
+): ConnectionDraft {
   return {
     accountId: connection.accountId.trim(),
     agentId: connection.agentId.trim() || DEFAULT_CONNECTION.agentId,
@@ -108,10 +131,18 @@ function readInitialConnection(): ConnectionDraft {
   return normalizeConnectionDraft({
     ...DEFAULT_CONNECTION,
     ...storedConnection,
+    accountId:
+      ENV_ACCOUNT || storedConnection.accountId || DEFAULT_CONNECTION.accountId,
+    agentId:
+      ENV_AGENT || storedConnection.agentId || DEFAULT_CONNECTION.agentId,
     apiKey:
+      ENV_API_KEY ||
       ovClient.getConnection().apiKey ||
       storedConnection.apiKey ||
       DEFAULT_CONNECTION.apiKey,
+    baseUrl:
+      ENV_BASE_URL || storedConnection.baseUrl || DEFAULT_CONNECTION.baseUrl,
+    userId: ENV_USER || storedConnection.userId || DEFAULT_CONNECTION.userId,
   })
 }
 
@@ -215,8 +246,7 @@ export function AppConnectionProvider({
       connection,
       isConnectionDialogOpen,
       openConnectionDialog: () => setConnectionDialogOpen(true),
-      saveConnection: (next) =>
-        setConnection(normalizeConnectionDraft(next)),
+      saveConnection: (next) => setConnection(normalizeConnectionDraft(next)),
       serverMode,
       setConnectionDialogOpen,
     }),
