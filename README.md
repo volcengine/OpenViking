@@ -609,7 +609,7 @@ To ensure optimal storage performance and data security, we recommend deploying 
 
 ## Evaluation Highlights
 
-OpenViking 1.0 has been evaluated across three scenarios: long-conversation user memory, agent experience memory, and knowledge-base QA.
+OpenViking has been evaluated across three scenarios: long-conversation user memory, agent experience memory, and knowledge-base QA.
 
 ### 1. User Memory on LoCoMo
 
