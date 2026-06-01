@@ -1,0 +1,93 @@
+{
+  "version": 1,
+  "updatedAt": "2026-06-01",
+  "cdnBaseUrl": "https://docs.openviking.net/",
+  "accessMethods": [
+    {
+      "id": "mcp",
+      "name": "MCP Integration",
+      "icon": "link",
+      "summary": "Connect from any client that supports MCP.",
+      "detailPath": "https://docs.openviking.net/agents/en/mcp.md"
+    },
+    {
+      "id": "cli",
+      "name": "CLI Integration",
+      "icon": "terminal",
+      "summary": "Connect agents through the OpenViking command line.",
+      "detailPath": "https://docs.openviking.net/agents/en/cli.md"
+    },
+    {
+      "id": "api",
+      "name": "API Integration",
+      "icon": "code",
+      "summary": "Call OpenViking capabilities through the REST API.",
+      "detailPath": "https://docs.openviking.net/agents/en/api.md"
+    },
+    {
+      "id": "sdk",
+      "name": "SDK Integration",
+      "icon": "paperclip",
+      "summary": "Use SDK wrappers for faster and cleaner integration.",
+      "detailPath": "https://docs.openviking.net/agents/en/sdk.md"
+    }
+  ],
+  "agents": [
+    {
+      "id": "openclaw",
+      "name": "OpenClaw",
+      "tags": ["Plugin"],
+      "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/OpenClaw.png",
+      "summary": "Plugin integration for OpenClaw as a context engine, with cross-agent memory and one-command setup through the npm helper.",
+      "detailPath": "https://docs.openviking.net/agents/en/openclaw.md"
+    },
+    {
+      "id": "hermes",
+      "name": "Hermes",
+      "tags": ["Provider"],
+      "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/Hermes-Agent.png",
+      "summary": "Hermes includes OpenViking as a native memory provider. Point Hermes to your OpenViking service to enable storage, recall, and extraction.",
+      "detailPath": "https://docs.openviking.net/agents/en/hermes.md"
+    },
+    {
+      "id": "claude-code",
+      "name": "Claude Code",
+      "tags": ["Plugin"],
+      "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/Claude-Code.png",
+      "summary": "Adds long-term memory to Claude Code across projects and sessions. Install once; recall and capture run automatically.",
+      "detailPath": "https://docs.openviking.net/agents/en/claude-code.md"
+    },
+    {
+      "id": "codex",
+      "name": "Codex",
+      "tags": ["Plugin"],
+      "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/codex.png",
+      "summary": "Adds persistent cross-session memory to Codex through lifecycle hooks and the OpenViking MCP endpoint.",
+      "detailPath": "https://docs.openviking.net/agents/en/codex.md"
+    },
+    {
+      "id": "cursor",
+      "name": "Cursor",
+      "tags": ["MCP"],
+      "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/Cursor.png",
+      "summary": "Connect Cursor through MCP to provide coding and agent-development context management.",
+      "detailPath": "https://docs.openviking.net/agents/en/cursor.md"
+    },
+    {
+      "id": "trae",
+      "name": "TRAE",
+      "tags": ["MCP"],
+      "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/Trae.png",
+      "summary": "Connect TRAE through MCP and use OpenViking for coding context, memory, and resource management.",
+      "detailPath": "https://docs.openviking.net/agents/en/trae.md"
+    },
+    {
+      "id": "opencode",
+      "name": "Opencode",
+      "tags": ["Plugin"],
+      "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/OpenCode.png",
+      "summary": "Provides OpenCode plugins that can expose OpenViking either as model-selected tools or injected context.",
+      "detailPath": "https://docs.openviking.net/agents/en/opencode.md"
+    }
+  ]
+}
