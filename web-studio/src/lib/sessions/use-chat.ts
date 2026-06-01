@@ -129,9 +129,11 @@ export function useChat(options: UseChatOptions): UseChatReturn {
 
     const nextInitialMessages =
       pendingInitialMessagesRef.current ?? initialMessages
+    // Consume the deferred snapshot on every non-streaming run so it can never
+    // permanently shadow later initialMessages updates.
+    pendingInitialMessagesRef.current = undefined
     if (lastSyncedInitialMessagesRef.current === nextInitialMessages) return
 
-    pendingInitialMessagesRef.current = undefined
     lastSyncedInitialMessagesRef.current = nextInitialMessages
     setMessages(nextInitialMessages)
   }, [initialMessages, sessionId, status])

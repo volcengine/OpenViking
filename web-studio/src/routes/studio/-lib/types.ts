@@ -23,10 +23,24 @@ export type TerminalEntry = {
   refs?: ResourceRef[]
 }
 
+export type TerminalCommandKey =
+  | 'status'
+  | 'ls'
+  | 'search'
+  | 'find'
+  | 'read'
+  | 'addResource'
+
 export type TerminalCommandSuggestion = {
   command: string
-  description: string
+  /** i18n subkey under `studio.terminal.commands`. */
+  key: TerminalCommandKey
   insertText: string
+}
+
+/** A {@link TerminalCommandSuggestion} with its label/usage resolved via i18n. */
+export type TerminalCommandView = TerminalCommandSuggestion & {
+  description: string
   usage: string
 }
 

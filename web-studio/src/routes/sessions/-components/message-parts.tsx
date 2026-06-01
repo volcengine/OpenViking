@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 
 import { cn } from '#/lib/utils'
+import { cleanVikingUri, VIKING_URI_RE } from '#/lib/viking-uri'
 
 const plugins = { code, cjk }
 
@@ -196,8 +197,6 @@ function ToolStatusIcon({
   return <CheckCircle2Icon className="size-3 text-primary/70" />
 }
 
-const VIKING_URI_RE = /viking:\/\/[^\s,，。；;'"`<>()\]}\\]+/g
-
 function extractVikingUris(text: string | undefined): string[] {
   if (!text) return []
   const seen = new Set<string>()
@@ -205,9 +204,11 @@ function extractVikingUris(text: string | undefined): string[] {
   const parsed = parseJsonResult(text)
   if (parsed !== undefined) {
     collectStructuredUris(parsed, seen)
-    return [...seen]
   }
 
+  // Always scan the raw text too: URIs embedded in free-text fields or under
+  // keys other than `uri` are invisible to the structured pass. The Set keeps
+  // the two passes deduped.
   const matches = text.match(VIKING_URI_RE) ?? []
   for (const match of matches) {
     const uri = cleanVikingUri(match)
@@ -246,8 +247,4 @@ function collectStructuredUris(value: unknown, seen: Set<string>): void {
       collectStructuredUris(nested, seen)
     }
   }
-}
-
-function cleanVikingUri(value: string): string {
-  return value.trim().replace(/[\\，。；;,.]+$/u, '')
 }

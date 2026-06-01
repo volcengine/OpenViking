@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   CheckCircle2Icon,
   Loader2Icon,
@@ -15,22 +16,19 @@ import {
   fetchFsList,
   fetchSearch,
 } from '#/routes/resources/-lib/api'
-import {
-  fileNameFromUri,
-  normalizeDirUri,
-} from '#/routes/resources/-lib/normalize'
+import { normalizeDirUri } from '#/routes/resources/-lib/normalize'
 import type { VikingFsEntry } from '#/routes/resources/-types/viking-fm'
 
 import { ROOT_URI, TERMINAL_COMMANDS } from '../-lib/constants'
 import type {
   ResourceOpenHandler,
-  TerminalCommandSuggestion,
+  TerminalCommandView,
   TerminalEntry,
 } from '../-lib/types'
 import {
   cleanVikingUri,
   entryToRef,
-  formatScore,
+  searchResultToRefs,
   visibleContextEntries,
 } from '../-lib/utils'
 import { ResourceRefList } from './resource-ref-list'
@@ -48,6 +46,7 @@ export function TerminalPanel({
   onOpenResource: ResourceOpenHandler
   openingUri: string | null
 }) {
+  const { t } = useTranslation('studio')
   const [command, setCommand] = useState('')
   const [running, setRunning] = useState(false)
   const [suggestionsOpen, setSuggestionsOpen] = useState(false)
@@ -56,22 +55,41 @@ export function TerminalPanel({
     {
       id: 'welcome',
       kind: 'info',
-      title: 'Terminal 已连接上下文目录',
-      body: '可执行 /status、/ls、/search、/read、/add-resource。输出中的资源链接会定位左侧目录并打开中间预览。',
+      title: t('terminal.welcomeTitle'),
+      body: t('terminal.welcomeBody'),
     },
   ])
   const scrollRef = useRef<HTMLDivElement>(null)
 
+  const commands = useMemo<TerminalCommandView[]>(
+    () =>
+      TERMINAL_COMMANDS.map((item) => ({
+        ...item,
+        description: t(`terminal.commands.${item.key}.description`),
+        usage: t(`terminal.commands.${item.key}.usage`),
+      })),
+    [t],
+  )
+
+  const groupLabels = useMemo(
+    () => ({
+      memories: t('terminal.groupLabels.memories'),
+      resources: t('terminal.groupLabels.resources'),
+      skills: t('terminal.groupLabels.skills'),
+    }),
+    [t],
+  )
+
   const suggestions = useMemo(() => {
     const query = command.trimStart().toLowerCase()
-    if (!query || query === '/') return TERMINAL_COMMANDS
+    if (!query || query === '/') return commands
     if (!query.startsWith('/')) return []
-    return TERMINAL_COMMANDS.filter(
+    return commands.filter(
       (item) =>
         item.command.toLowerCase().startsWith(query) ||
         item.description.toLowerCase().includes(query.slice(1)),
     )
-  }, [command])
+  }, [command, commands])
 
   useEffect(() => {
     setActiveSuggestionIndex(0)
@@ -112,7 +130,7 @@ export function TerminalPanel({
           append({
             kind: 'success',
             refs: [{ uri: trimmed }],
-            title: '已打开资源',
+            title: t('terminal.opened'),
           })
           return
         }
@@ -121,10 +139,10 @@ export function TerminalPanel({
           case '/status': {
             const root = await fetchFsList(ROOT_URI, { nodeLimit: 12 })
             append({
-              body: `OpenViking API 正常响应，根目录下发现 ${root.entries.length} 个节点。`,
+              body: t('terminal.onlineBody', { count: root.entries.length }),
               kind: 'success',
               refs: root.entries.slice(0, 6).map(entryToRef),
-              title: '服务在线',
+              title: t('terminal.onlineTitle'),
             })
             return
           }
@@ -139,7 +157,10 @@ export function TerminalPanel({
               : { entries, uri: currentUri }
             const visibleEntries = visibleContextEntries(result.entries)
             append({
-              body: `${target} 下共展示 ${visibleEntries.length} 个节点。`,
+              body: t('terminal.lsBody', {
+                count: visibleEntries.length,
+                uri: target,
+              }),
               kind: 'success',
               refs: visibleEntries.map(entryToRef),
               title: `ls ${target}`,
@@ -147,18 +168,16 @@ export function TerminalPanel({
             return
           }
           case '/read': {
-            if (!body) throw new Error('用法：/read viking://resources/...')
+            if (!body) throw new Error(t('terminal.readUsage'))
             const uri = cleanVikingUri(body)
-            if (!uri) throw new Error('请输入 viking:// URI')
+            if (!uri) throw new Error(t('terminal.enterUri'))
             const content = await fetchFileContent(uri, {
               limit: 1200,
               raw: true,
             })
             await onOpenResource(uri)
             append({
-              body:
-                content.content.slice(0, 1200) ||
-                '文件为空，已在中间预览区打开。',
+              body: content.content.slice(0, 1200) || t('terminal.fileEmpty'),
               kind: 'success',
               refs: [{ uri }],
               title: `read ${uri}`,
@@ -167,7 +186,7 @@ export function TerminalPanel({
           }
           case '/find':
           case '/search': {
-            if (!body) throw new Error(`用法：${name} 查询词`)
+            if (!body) throw new Error(t('terminal.searchUsage', { name }))
             const result = await fetchSearch(body, {
               limit: 8,
               targetUri: currentUri,
@@ -175,13 +194,13 @@ export function TerminalPanel({
             append({
               body:
                 result.query_plan?.reasoning ||
-                `命中 resources ${result.resources.length} 条，memory ${result.memories.length} 条，skill ${result.skills.length} 条。`,
+                t('terminal.hits', {
+                  memories: result.memories.length,
+                  resources: result.resources.length,
+                  skills: result.skills.length,
+                }),
               kind: 'success',
-              refs: result.resources.map((item) => ({
-                label: fileNameFromUri(item.uri),
-                meta: `L${item.level} · ${formatScore(item.score)}`,
-                uri: item.uri,
-              })),
+              refs: searchResultToRefs(result, groupLabels),
               title: `${name} ${body}`,
             })
             return
@@ -189,39 +208,43 @@ export function TerminalPanel({
           case '/add-resource': {
             onOpenAddResource()
             append({
-              body: '已打开添加资源弹窗。提交后左侧目录会刷新，也可以用 /ls 或 /search 继续定位新内容。',
+              body: t('terminal.addResourceBody'),
               kind: 'info',
-              title: '添加资源',
+              title: t('terminal.addResourceTitle'),
             })
             return
           }
           default:
-            throw new Error(
-              '未知命令。可用命令：/status、/ls、/search、/find、/read、/add-resource。',
-            )
+            throw new Error(t('terminal.unknownCommand'))
         }
       } catch (error) {
         append({
           body: error instanceof Error ? error.message : String(error),
           kind: 'error',
-          title: '命令失败',
+          title: t('terminal.commandFailed'),
         })
       } finally {
         setRunning(false)
       }
     },
-    [append, currentUri, entries, onOpenAddResource, onOpenResource, running],
+    [
+      append,
+      currentUri,
+      entries,
+      groupLabels,
+      onOpenAddResource,
+      onOpenResource,
+      running,
+      t,
+    ],
   )
 
-  const acceptSuggestion = useCallback(
-    (suggestion: TerminalCommandSuggestion) => {
-      setCommand(suggestion.insertText)
-      setSuggestionsOpen(false)
-    },
-    [],
-  )
+  const acceptSuggestion = useCallback((suggestion: TerminalCommandView) => {
+    setCommand(suggestion.insertText)
+    setSuggestionsOpen(false)
+  }, [])
 
-  const quickCommands = TERMINAL_COMMANDS.filter((item) =>
+  const quickCommands = commands.filter((item) =>
     ['/status', '/ls', '/search', '/read', '/add-resource'].includes(
       item.command,
     ),
@@ -242,7 +265,7 @@ export function TerminalPanel({
           {running ? (
             <div className="flex items-center gap-2 rounded-lg border bg-background px-3 py-2 text-xs text-muted-foreground">
               <Loader2Icon className="size-3.5 animate-spin" />
-              正在执行命令...
+              {t('terminal.running')}
             </div>
           ) : null}
         </div>
@@ -305,13 +328,13 @@ export function TerminalPanel({
                 setSuggestionsOpen(false)
               }
             }}
-            placeholder="输入 CLI 命令，例如 /status"
+            placeholder={t('terminal.placeholder')}
             className="h-8 min-w-0 flex-1 bg-transparent font-mono text-sm outline-none placeholder:text-muted-foreground/60"
           />
           {suggestionsOpen && suggestions.length > 0 ? (
             <div className="absolute bottom-[calc(100%+0.5rem)] left-0 right-0 z-20 overflow-hidden rounded-lg border bg-popover shadow-xl">
               <div className="border-b px-3 py-2 text-[11px] font-medium text-muted-foreground">
-                命令建议
+                {t('terminal.suggestionsTitle')}
               </div>
               <div className="max-h-64 overflow-y-auto p-1">
                 {suggestions.map((suggestion, index) => (
@@ -343,7 +366,7 @@ export function TerminalPanel({
                 ))}
               </div>
               <div className="border-t px-3 py-1.5 text-[10px] text-muted-foreground">
-                ↑↓ 选择 · Tab 补全 · Enter 执行
+                {t('terminal.suggestionsHint')}
               </div>
             </div>
           ) : null}

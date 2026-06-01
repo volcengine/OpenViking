@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   BotIcon,
   CheckCircle2Icon,
@@ -49,6 +50,7 @@ export function AgentPanel({
   onOpenResource: ResourceOpenHandler
   onSessionChange: (sessionId: string) => void
 }) {
+  const { t } = useTranslation('studio')
   const [sessionId, setSessionId] = useState(initialSessionId ?? '')
   const [historyOpen, setHistoryOpen] = useState(false)
   const [sessionError, setSessionError] = useState<string | null>(null)
@@ -81,7 +83,7 @@ export function AgentPanel({
       const result = await withTimeout(
         createSession.mutateAsync(undefined),
         12_000,
-        '创建 Studio 会话超时，请检查连接设置后重试。',
+        t('agent.createTimeout'),
       )
       setStudioSessionIds(registerStudioAgentSessionId(result.session_id))
       setSessionId(result.session_id)
@@ -92,7 +94,7 @@ export function AgentPanel({
     } finally {
       setIsCreatingSession(false)
     }
-  }, [createSession, onSessionChange, sessionId])
+  }, [createSession, onSessionChange, sessionId, t])
 
   const handleNewSession = useCallback(async () => {
     if (isCreatingSession) return
@@ -107,10 +109,10 @@ export function AgentPanel({
       const result = await withTimeout(
         createSession.mutateAsync(undefined),
         12_000,
-        '创建 Studio 会话超时，请检查连接设置后重试。',
+        t('agent.createTimeout'),
       )
       setStudioSessionIds(registerStudioAgentSessionId(result.session_id))
-      setSessionTitle(result.session_id, '新建 Studio 会话')
+      setSessionTitle(result.session_id, t('agent.newSessionTitle'))
       setSessionId(result.session_id)
       onSessionChange(result.session_id)
       setHistoryOpen(false)
@@ -120,7 +122,7 @@ export function AgentPanel({
     } finally {
       setIsCreatingSession(false)
     }
-  }, [chat, createSession, isCreatingSession, onSessionChange])
+  }, [chat, createSession, isCreatingSession, onSessionChange, t])
 
   const handleSwitchSession = useCallback(
     (nextSessionId: string) => {
@@ -137,10 +139,13 @@ export function AgentPanel({
   )
 
   useEffect(() => {
-    if (!sessionId && !sessionError) {
+    // Only create a session once bot mode is confirmed available, otherwise we
+    // leave orphan sessions behind and flash "creating" before the bot-mode
+    // prompt.
+    if (!sessionId && !sessionError && botHealth.isSuccess) {
       void startSession()
     }
-  }, [sessionError, sessionId, startSession])
+  }, [botHealth.isSuccess, sessionError, sessionId, startSession])
 
   useEffect(() => {
     if (sessionId) {
@@ -186,14 +191,14 @@ export function AgentPanel({
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <BotIcon className="size-3.5 shrink-0" />
             <span className="min-w-0 flex-1 truncate">
-              Agent 会根据消息和工具自主检索
+              {t('agent.autoRetrieve')}
             </span>
             <Button
               type="button"
               variant="ghost"
               size="icon-sm"
               className="size-7 shrink-0"
-              title="历史会话"
+              title={t('agent.history')}
               onClick={() => setHistoryOpen(true)}
             >
               <HistoryIcon className="size-3.5" />
@@ -203,7 +208,7 @@ export function AgentPanel({
               variant="ghost"
               size="icon-sm"
               className="size-7 shrink-0"
-              title="新建会话"
+              title={t('agent.newSession')}
               disabled={isCreatingSession}
               onClick={() => void handleNewSession()}
             >
@@ -223,12 +228,12 @@ export function AgentPanel({
           {isCreating ? (
             <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
               <Loader2Icon className="size-4 animate-spin" />
-              正在创建 Studio 会话...
+              {t('agent.creating')}
             </div>
           ) : botHealth.isLoading ? (
             <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
               <Loader2Icon className="size-4 animate-spin" />
-              正在检测 bot 模式...
+              {t('agent.detectingBot')}
             </div>
           ) : botModeError ? (
             <BotModePrompt
@@ -237,7 +242,7 @@ export function AgentPanel({
             />
           ) : sessionError ? (
             <div className="grid gap-3 rounded-lg border border-destructive/25 bg-destructive/5 p-3 text-sm text-destructive">
-              <div>创建会话失败：{sessionError}</div>
+              <div>{t('agent.createFailed', { error: sessionError })}</div>
               <Button
                 type="button"
                 size="sm"
@@ -248,7 +253,7 @@ export function AgentPanel({
                   void startSession()
                 }}
               >
-                重试
+                {t('agent.retry')}
               </Button>
             </div>
           ) : chat.messages.length === 0 && !isStreaming ? (
@@ -274,7 +279,7 @@ export function AgentPanel({
 
         {botModeError ? (
           <div className="border-t bg-background/80 px-4 py-3 text-center text-sm text-muted-foreground">
-            开启 bot 模式后可使用 Agent 对话
+            {t('agent.botDisabledFooter')}
           </div>
         ) : (
           <div className="border-t bg-background/80">
@@ -291,21 +296,20 @@ export function AgentPanel({
       <Dialog open={historyOpen} onOpenChange={setHistoryOpen}>
         <DialogContent className="gap-4 sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>Agent 会话历史</DialogTitle>
+            <DialogTitle>{t('agent.historyTitle')}</DialogTitle>
             <DialogDescription>
-              这里只展示实验场右侧 Agent 使用过的会话；新建会话会开启一个空白
-              Agent 上下文。
+              {t('agent.historyDescription')}
             </DialogDescription>
           </DialogHeader>
           <div className="max-h-[420px] overflow-y-auto pr-1">
             {isLoadingSessions ? (
               <div className="flex items-center gap-2 rounded-lg border bg-muted/30 p-3 text-sm text-muted-foreground">
                 <Loader2Icon className="size-4 animate-spin" />
-                正在加载会话...
+                {t('agent.loadingSessions')}
               </div>
             ) : reversedSessions.length === 0 ? (
               <div className="rounded-lg border bg-muted/30 p-3 text-sm text-muted-foreground">
-                暂无历史会话
+                {t('agent.noSessions')}
               </div>
             ) : (
               <div className="grid gap-2">
@@ -354,7 +358,7 @@ export function AgentPanel({
             ) : (
               <SquarePenIcon className="size-4" />
             )}
-            新建会话
+            {t('agent.newSession')}
           </Button>
         </DialogContent>
       </Dialog>
@@ -369,6 +373,7 @@ export function BotModePrompt({
   detail: string
   onRetry: () => void
 }) {
+  const { t } = useTranslation('studio')
   return (
     <div className="flex h-full items-center justify-center">
       <div className="grid max-w-md gap-4 rounded-xl border border-primary/25 bg-primary/5 p-5 text-sm">
@@ -378,10 +383,10 @@ export function BotModePrompt({
           </div>
           <div className="min-w-0">
             <div className="text-base font-semibold text-foreground">
-              请开启 bot 模式
+              {t('agent.botPrompt.title')}
             </div>
             <p className="mt-1 leading-6 text-muted-foreground">
-              当前服务未启用 Agent 对话能力，请使用 bot 模式启动服务后重试。
+              {t('agent.botPrompt.description')}
             </p>
           </div>
         </div>
@@ -399,7 +404,7 @@ export function BotModePrompt({
           className="w-fit"
           onClick={onRetry}
         >
-          重新检测
+          {t('agent.botPrompt.retry')}
         </Button>
       </div>
     </div>
@@ -411,21 +416,19 @@ export function AgentEmptyState({
 }: {
   onSend: (message: string) => void
 }) {
-  const prompts = [
-    '总结当前目录',
-    '递归查找相关文档',
-    '解释这个资源和项目的关系',
-  ]
+  const { t } = useTranslation('studio')
+  const prompts = t('agent.empty.prompts', {
+    returnObjects: true,
+  }) as string[]
   return (
     <div className="flex h-full flex-col justify-end gap-4 pb-4">
       <div className="rounded-xl border bg-background p-4">
         <div className="mb-2 flex items-center gap-2 text-sm font-semibold">
           <SparklesIcon className="size-4 text-primary" />
-          Agent 动作会和左侧目录联动
+          {t('agent.empty.heading')}
         </div>
         <p className="text-sm leading-6 text-muted-foreground">
-          发送问题后，tool call 输出里的 `viking://`
-          文件会变成可点击链接，点击即可在左侧定位并在中间打开。
+          {t('agent.empty.body')}
         </p>
       </div>
       <div className="flex flex-wrap gap-2">

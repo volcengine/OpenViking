@@ -5,11 +5,14 @@ import {
   parentUri,
 } from '#/routes/resources/-lib/normalize'
 import type { VikingFsEntry } from '#/routes/resources/-types/viking-fm'
+import type { FindResultItem, GroupedFindResult } from '#/lib/retrieval'
+
+import { cleanVikingUri } from '#/lib/viking-uri'
 
 import { ROOT_URI, STUDIO_AGENT_SESSIONS_STORAGE_KEY } from './constants'
 import type { ResourceRef } from './types'
 
-const VIKING_URI_RE = /viking:\/\/[^\s,，。；;'"\x60<>()\]}]+/g
+export { cleanVikingUri }
 
 export function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -142,11 +145,6 @@ export function buildBreadcrumbs(
   return crumbs
 }
 
-export function cleanVikingUri(value: string): string {
-  const match = value.match(VIKING_URI_RE)
-  return (match?.[0] ?? value).trim().replace(/[，。；;,.]+$/, '')
-}
-
 export function isDirectoryLevelFile(uri: string): boolean {
   const name = fileNameFromUri(uri)
   return name === '_abstract.md' || name === '_overview.md'
@@ -211,4 +209,30 @@ export function withTimeout<T>(
 export function formatScore(score: number): string {
   if (!Number.isFinite(score)) return 'score -'
   return `score ${score.toFixed(2)}`
+}
+
+type FindGroup = 'memories' | 'resources' | 'skills'
+
+/**
+ * Flatten a grouped search result (resources + memories + skills) into a single
+ * ordered ref list, tagging each ref with its (localized) type, level and score
+ * so nothing is dropped from the terminal output.
+ */
+export function searchResultToRefs(
+  result: GroupedFindResult,
+  groupLabels: Record<FindGroup, string>,
+): ResourceRef[] {
+  const groups: Array<[FindGroup, FindResultItem[]]> = [
+    ['resources', result.resources],
+    ['memories', result.memories],
+    ['skills', result.skills],
+  ]
+
+  return groups.flatMap(([group, items]) =>
+    items.map((item) => ({
+      label: fileNameFromUri(item.uri) || item.uri,
+      meta: `${groupLabels[group]} · L${item.level} · ${formatScore(item.score)}`,
+      uri: item.uri,
+    })),
+  )
 }

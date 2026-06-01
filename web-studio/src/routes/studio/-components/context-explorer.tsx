@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   BotIcon,
   ChevronRightIcon,
@@ -37,6 +38,7 @@ export function ContextExplorerHeader({
   onAddResource: () => void
   onRefresh: () => void
 }) {
+  const { t } = useTranslation('studio')
   return (
     <div className="border-b px-3 py-3">
       <div className="flex items-center gap-2">
@@ -44,13 +46,13 @@ export function ContextExplorerHeader({
           <FolderTreeIcon className="size-4" />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="text-sm font-semibold">上下文目录</div>
+          <div className="text-sm font-semibold">{t('explorer.title')}</div>
         </div>
         <Button
           type="button"
           size="icon-sm"
           variant="ghost"
-          title="添加资源"
+          title={t('explorer.addResource')}
           onClick={onAddResource}
         >
           <PlusIcon className="size-4" />
@@ -59,7 +61,7 @@ export function ContextExplorerHeader({
           type="button"
           size="icon-sm"
           variant="ghost"
-          title="刷新目录"
+          title={t('explorer.refresh')}
           onClick={onRefresh}
         >
           <RefreshCcwIcon
@@ -72,31 +74,31 @@ export function ContextExplorerHeader({
 }
 
 const NAMESPACES: Array<{
-  description: string
+  descriptionKey: 'agent' | 'resources' | 'session' | 'user'
   icon: typeof FolderIcon
   label: string
   uri: string
 }> = [
   {
-    description: '用户个性化记忆',
+    descriptionKey: 'user',
     icon: FolderIcon,
     label: 'User',
     uri: 'viking://user/',
   },
   {
-    description: '用户与 Agent 的原始会话',
+    descriptionKey: 'session',
     icon: CommandIcon,
     label: 'Session',
     uri: 'viking://session/',
   },
   {
-    description: 'Agent 的能力、工具和经验',
+    descriptionKey: 'agent',
     icon: BotIcon,
     label: 'Agent',
     uri: 'viking://agent/',
   },
   {
-    description: 'Agent 可引用的外部资源',
+    descriptionKey: 'resources',
     icon: FolderTreeIcon,
     label: 'Resources',
     uri: 'viking://resources/',
@@ -118,6 +120,7 @@ export function ContextTree({
   onSelectFile: (entry: VikingFsEntry) => void
   selectedFileUri?: string | null
 }) {
+  const { t } = useTranslation('studio')
   return (
     <div className="h-full overflow-auto px-2 py-2 font-mono">
       {NAMESPACES.map((item) => {
@@ -129,7 +132,7 @@ export function ContextTree({
             entry={{
               ...entry,
               name: item.label,
-              abstract: item.description,
+              abstract: t(`explorer.namespaces.${item.descriptionKey}`),
             }}
             expandedKeys={expandedKeys}
             level={0}

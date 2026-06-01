@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
+import { useTranslation } from 'react-i18next'
 import { BotIcon, ClipboardIcon, TerminalIcon } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -81,15 +82,14 @@ function StudioRoute() {
 }
 
 function StudioWorkbench() {
+  const { t } = useTranslation('studio')
   const search = Route.useSearch()
   const navigate = useNavigate({ from: Route.fullPath })
   const initialCurrentUri = useMemo(
     () =>
-      search.file && !isDirectoryLevelFile(search.file)
+      search.file
         ? normalizeDirUri(parentUri(search.file))
-        : normalizeDirUri(
-            search.file ? parentUri(search.file) : search.uri || ROOT_URI,
-          ),
+        : normalizeDirUri(search.uri || ROOT_URI),
     [search.file, search.uri],
   )
 
@@ -97,9 +97,7 @@ function StudioWorkbench() {
   const [selectedFile, setSelectedFile] = useState<VikingFsEntry | null>(() =>
     search.file && !isDirectoryLevelFile(search.file)
       ? createEntryFromUri(search.file, false)
-      : search.file && isDirectoryLevelFile(search.file)
-        ? createEntryFromUri(initialCurrentUri, true)
-        : createEntryFromUri(initialCurrentUri, true),
+      : createEntryFromUri(initialCurrentUri, true),
   )
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(
     () => new Set(getAncestorUris(initialCurrentUri)),
@@ -130,6 +128,7 @@ function StudioWorkbench() {
     null,
   )
   const isDraggingPaneRef = useRef(false)
+  const activeResizeTeardownRef = useRef<(() => void) | null>(null)
   const leftWidthRef = useRef(leftWidth)
   const rightWidthRef = useRef(rightWidth)
   leftWidthRef.current = leftWidth
@@ -168,9 +167,7 @@ function StudioWorkbench() {
     setSelectedFile(
       search.file && !isDirectoryLevelFile(search.file)
         ? createEntryFromUri(search.file, false)
-        : search.file && isDirectoryLevelFile(search.file)
-          ? createEntryFromUri(normalized, true)
-          : createEntryFromUri(normalized, true),
+        : createEntryFromUri(normalized, true),
     )
     setExpandedKeys((prev) => mergeExpanded(prev, getAncestorUris(normalized)))
   }, [search.file, search.uri])
@@ -187,9 +184,9 @@ function StudioWorkbench() {
       if (!cleaned) return
 
       setOpeningUri(cleaned)
+      const targetUri = normalizeStudioResourceUri(cleaned)
       try {
-        const targetUri = normalizeStudioResourceUri(cleaned)
-        const stat = await fetchFsStat(targetUri)
+        const stat = await fetchFsStat(targetUri, { throwOnError: true })
         const isDir = stat.isDir || targetUri.endsWith('/')
         const normalized = isDir
           ? normalizeDirUri(targetUri)
@@ -213,7 +210,6 @@ function StudioWorkbench() {
           uri: nextCurrentUri,
         })
       } catch (error) {
-        const targetUri = normalizeStudioResourceUri(cleaned)
         const fallbackIsDir = targetUri.endsWith('/')
         const normalized = fallbackIsDir
           ? normalizeDirUri(targetUri)
@@ -232,13 +228,15 @@ function StudioWorkbench() {
           uri: nextCurrentUri,
         })
         toast.error(
-          error instanceof Error ? error.message : `无法读取 ${cleaned}`,
+          error instanceof Error
+            ? error.message
+            : t('readFailed', { uri: cleaned }),
         )
       } finally {
         setOpeningUri(null)
       }
     },
-    [syncSearch],
+    [syncSearch, t],
   )
 
   const handleSelectDirectory = useCallback(
@@ -364,6 +362,7 @@ function StudioWorkbench() {
 
       const onUp = () => {
         isDraggingPaneRef.current = false
+        activeResizeTeardownRef.current = null
         setResizingPane(null)
         document.removeEventListener('pointermove', onMove)
         document.removeEventListener('pointerup', onUp)
@@ -377,15 +376,16 @@ function StudioWorkbench() {
       document.addEventListener('pointermove', onMove)
       document.addEventListener('pointerup', onUp)
       document.addEventListener('pointercancel', onUp)
+      activeResizeTeardownRef.current = onUp
     },
     [],
   )
 
   useEffect(() => {
     return () => {
-      if (!isDraggingPaneRef.current) return
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
+      // Tear down any in-flight drag so the document listeners don't outlive
+      // the component when it unmounts mid-resize.
+      activeResizeTeardownRef.current?.()
     }
   }, [])
 
@@ -420,7 +420,7 @@ function StudioWorkbench() {
         </aside>
         <StudioResizeHandle
           active={resizingPane === 'context'}
-          label="调整上下文目录宽度"
+          label={t('resizeContext')}
           onPointerDown={(event) => handleResizeStart('context', event)}
         />
 
@@ -456,10 +456,10 @@ function StudioWorkbench() {
               type="button"
               size="icon-sm"
               variant="ghost"
-              title="复制当前 URI"
+              title={t('copyUri')}
               onClick={() => {
                 void navigator.clipboard.writeText(selectedUri)
-                toast.success('已复制 URI')
+                toast.success(t('copied'))
               }}
             >
               <ClipboardIcon className="size-4" />
@@ -475,7 +475,7 @@ function StudioWorkbench() {
         </main>
         <StudioResizeHandle
           active={resizingPane === 'action'}
-          label="调整 Terminal 和 Agent 宽度"
+          label={t('resizeAction')}
           onPointerDown={(event) => handleResizeStart('action', event)}
         />
 
@@ -485,13 +485,13 @@ function StudioWorkbench() {
               <PanelTab
                 active={activePanel === 'terminal'}
                 icon={TerminalIcon}
-                label="终端"
+                label={t('tabs.terminal')}
                 onClick={() => handlePanelChange('terminal')}
               />
               <PanelTab
                 active={activePanel === 'agent'}
                 icon={BotIcon}
-                label="Agent"
+                label={t('tabs.agent')}
                 onClick={() => handlePanelChange('agent')}
               />
             </div>
@@ -520,9 +520,11 @@ function StudioWorkbench() {
       <Dialog open={uploadDialogOpen} onOpenChange={setUploadDialogOpen}>
         <DialogContent className="max-h-[min(86vh,760px)] gap-0 overflow-hidden p-0 sm:max-w-4xl">
           <DialogHeader className="border-b px-6 py-5">
-            <DialogTitle className="text-xl">添加资源</DialogTitle>
+            <DialogTitle className="text-xl">
+              {t('addResource.title')}
+            </DialogTitle>
             <DialogDescription>
-              添加完成后左侧目录树会刷新，右侧 Terminal 可继续定位新资源。
+              {t('addResource.description')}
             </DialogDescription>
           </DialogHeader>
           <div className="max-h-[calc(min(86vh,760px)-6rem)] overflow-y-auto px-6 py-5">
@@ -530,7 +532,7 @@ function StudioWorkbench() {
               onSubmitted={() => {
                 setUploadDialogOpen(false)
                 void invalidateList()
-                toast.success('资源添加任务已提交')
+                toast.success(t('addResource.submitted'))
               }}
             />
           </div>
