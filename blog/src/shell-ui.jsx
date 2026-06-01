@@ -6,7 +6,8 @@ import {
 import {
   LANGS, THEME_LIGHT, THEME_DARK,
   useSiteRouter, useShellStrings, makeFormatDate, applyTheme, getInitialTheme, isDark,
-  buildPath, postPath, estimateReadingMinutes,
+  buildPath, postPath, estimateReadingMinutes, getInitialLang, readPersistedPreferences,
+  sharedThemeToBlogTheme, blogThemeToSharedTheme, writeCookiePreferences,
 } from './shell-core';
 import { ZoukInteractiveBlog } from './zouk-embed';
 
@@ -351,16 +352,42 @@ export function BlogShell({ router, lang, theme, onLang = () => {}, onToggleThem
 
 export default function App() {
   const router = useSiteRouter();
-  const initialLang = router.query.lang || localStorage.getItem('blog.lang') || 'en';
-  const [lang, setLang] = useState(LANGS.some(l => l.code === initialLang) ? initialLang : 'en');
+  const [lang, setLang] = useState(() => getInitialLang(router.query.lang));
   const [theme, setTheme] = useState(getInitialTheme);
 
-  useEffect(() => { applyTheme(theme); localStorage.setItem('blog.theme', theme); }, [theme]);
-  useEffect(() => { document.documentElement.lang = lang; localStorage.setItem('blog.lang', lang); }, [lang]);
+  useEffect(() => {
+    applyTheme(theme);
+    localStorage.setItem('blog.theme', theme);
+    writeCookiePreferences({ theme: blogThemeToSharedTheme(theme) });
+  }, [theme]);
 
   useEffect(() => {
-    if (router.query.lang && router.query.lang !== lang) setLang(router.query.lang);
+    document.documentElement.lang = lang;
+    localStorage.setItem('blog.lang', lang);
+    writeCookiePreferences({ lang });
+  }, [lang]);
+
+  useEffect(() => {
+    const queryLang = router.query.lang;
+    if (LANGS.some(l => l.code === queryLang) && queryLang !== lang) setLang(queryLang);
   }, [router.query.lang]);
+
+  useEffect(() => {
+    const syncFromSharedPreferences = () => {
+      const preference = readPersistedPreferences();
+      if (preference.lang && preference.lang !== lang) setLang(preference.lang);
+
+      const nextTheme = sharedThemeToBlogTheme(preference.theme);
+      if (nextTheme && nextTheme !== theme) setTheme(nextTheme);
+    };
+
+    window.addEventListener('pageshow', syncFromSharedPreferences);
+    window.addEventListener('focus', syncFromSharedPreferences);
+    return () => {
+      window.removeEventListener('pageshow', syncFromSharedPreferences);
+      window.removeEventListener('focus', syncFromSharedPreferences);
+    };
+  }, [lang, theme]);
 
   const onLang = (code) => { setLang(code); router.setQuery({ lang: code }); };
   const onToggleTheme = () => setTheme(t => t === THEME_LIGHT ? THEME_DARK : THEME_LIGHT);

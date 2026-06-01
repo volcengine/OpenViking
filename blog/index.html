@@ -18,6 +18,37 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/icons/favicon-32.png" media="(prefers-color-scheme: light)" />
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-dark.png" media="(prefers-color-scheme: dark)" />
   <script>
+    (() => {
+      const cookieKey = 'openviking-preferences';
+      const readCookiePreference = () => {
+        const cookie = document.cookie.split('; ').find((item) => item.startsWith(cookieKey + '='));
+        if (!cookie) return {};
+        return JSON.parse(decodeURIComponent(cookie.slice(cookieKey.length + 1)));
+      };
+      try {
+        const preference = readCookiePreference();
+        const queryLang = new URLSearchParams(location.search).get('lang');
+        const storedLang = localStorage.getItem('blog.lang');
+        const lang = ['en', 'zh'].includes(queryLang)
+          ? queryLang
+          : ['en', 'zh'].includes(preference.lang)
+            ? preference.lang
+            : ['en', 'zh'].includes(storedLang)
+              ? storedLang
+              : '';
+        const theme = preference.theme === 'dark'
+          ? 'washi'
+          : preference.theme === 'light'
+            ? 'kami'
+            : localStorage.getItem('blog.theme');
+        if (lang) document.documentElement.lang = lang;
+        if (theme === 'kami' || theme === 'washi') {
+          document.documentElement.setAttribute('data-theme', theme);
+          document.documentElement.style.colorScheme = theme === 'washi' ? 'dark' : 'light';
+        }
+      } catch {}
+    })();
+
     if (location.hash.startsWith('#/')) {
       const [legacyPath, legacyQuery = ''] = location.hash.slice(1).split('?');
       const cleanPath = legacyPath.replace(/\/$/, '') + '/';
