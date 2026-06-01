@@ -1080,14 +1080,47 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
         "password": "your-password",
         "db_name": "postgres",
         "schema": "public",
-        "mode": "standalone"
+        "mode": "standalone",
+        "shard_count": 32,
+        "connect_timeout": 10,
+        "dense_vector_name": "vector",
+        "sparse_vector_name": "sparse_vector"
       }
     }
   }
 }
 ```
 
-分布式 openGauss 部署可将 `mode` 设为 `"distributed"`；OpenViking 会尝试把元数据表标记为 reference table，并按 `id` 分布集合表。
+分布式 openGauss 部署可将 `mode` 设为 `"distributed"`；OpenViking 会尝试把元数据表标记为 reference table，并按 `id` 分布集合表（由 `shard_count` 控制分片数量）。
+</details>
+
+<details>
+<summary><b>Qdrant</b></summary>
+
+通过 REST API 连接运行中的 Qdrant 服务。
+
+```json
+{
+  "storage": {
+    "vectordb": {
+      "name": "context",
+      "backend": "qdrant",
+      "project": "default",
+      "distance_metric": "cosine",
+      "dimension": 1024,
+      "qdrant": {
+        "url": "http://localhost:6333",
+        "api_key": "your-api-key",
+        "timeout_seconds": 10,
+        "dense_vector_name": "vector",
+        "sparse_vector_name": "sparse_vector",
+        "meta_collection_name": "__openviking_meta",
+        "enable_text_index": true
+      }
+    }
+  }
+}
+```
 </details>
 
 
