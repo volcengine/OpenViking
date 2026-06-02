@@ -9,6 +9,7 @@ native vector engine, AGFS, embedding provider, VLM provider, and disk space.
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import json
 import os
@@ -16,7 +17,7 @@ import platform
 import shutil
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from openviking_cli.utils.config.config_loader import resolve_config_path
 from openviking_cli.utils.config.consts import OPENVIKING_CONFIG_ENV
@@ -143,6 +144,90 @@ def check_agfs() -> tuple[bool, str, Optional[str]]:
         )
 
 
+def _embedding_probe_label(provider: str, model: str, dense: dict[str, Any]) -> str:
+    api_base = dense.get("api_base")
+    dimension = dense.get("dimension")
+    parts = [f"{provider}/{model}"]
+    if api_base:
+        parts.append(f"api_base={api_base}")
+    if dimension:
+        parts.append(f"dimension={dimension}")
+    return " ".join(parts)
+
+
+def _probe_embedding_provider(
+    embedding: dict[str, Any],
+    dense: dict[str, Any],
+) -> tuple[bool, str, Optional[str]]:
+    """Create the configured embedder, make one request, and validate vector shape."""
+    from openviking.models.embedder.base import embed_compat
+    from openviking_cli.utils.config.embedding_config import EmbeddingConfig, EmbeddingModelConfig
+
+    provider = dense.get("provider", "local")
+    model = dense.get("model", "bge-small-zh-v1.5-f16")
+    label = _embedding_probe_label(provider, model, dense)
+
+    try:
+        model_config = EmbeddingModelConfig(**dense)
+        config_kwargs = {
+            key: embedding[key]
+            for key in ("max_concurrent", "max_retries", "text_source", "max_input_tokens")
+            if key in embedding
+        }
+        embedding_config = EmbeddingConfig(dense=model_config, **config_kwargs)
+        embedder = embedding_config.get_embedder()
+        expected_dimension = (
+            model_config.dimension
+            if model_config.dimension is not None
+            else embedder.get_dimension()
+        )
+    except Exception as exc:
+        return (
+            False,
+            f"{label} (invalid embedding config: {exc})",
+            "Fix embedding.dense provider/model/api_base/dimension in ov.conf",
+        )
+
+    async def _run_probe():
+        return await asyncio.wait_for(
+            embed_compat(embedder, "OpenViking doctor embedding probe", is_query=True),
+            timeout=10.0,
+        )
+
+    try:
+        result = asyncio.run(_run_probe())
+    except TimeoutError:
+        return (
+            False,
+            f"{label} (probe timed out)",
+            "Check embedding.dense.api_base and make sure the embedding provider is reachable",
+        )
+    except Exception as exc:
+        return (
+            False,
+            f"{label} (probe failed: {exc})",
+            "Check the embedding provider service, model name, API key, and api_base",
+        )
+
+    vector = getattr(result, "dense_vector", None)
+    if not vector:
+        return (
+            False,
+            f"{label} (probe returned no dense vector)",
+            "Use a dense embedding model or configure embedding.dense correctly",
+        )
+
+    actual_dimension = len(vector)
+    if actual_dimension != expected_dimension:
+        return (
+            False,
+            f"{label} (dimension mismatch: expected {expected_dimension}, got {actual_dimension})",
+            "Set embedding.dense.dimension to match the provider output, or use a matching model/index",
+        )
+
+    return True, f"{label} probe ok (dimension={actual_dimension})", None
+
+
 def check_embedding() -> tuple[bool, str, Optional[str]]:
     """Load embedding config and verify provider connectivity."""
     config_path = _find_config()
@@ -202,19 +287,16 @@ def check_embedding() -> tuple[bool, str, Optional[str]]:
             None,
         )
 
-    # Ollama doesn't need an API key
-    if provider == "ollama":
-        return True, f"{provider}/{model}", None
-
     api_key = dense.get("api_key", "")
-    if not api_key or api_key.startswith("{"):
+    api_base = dense.get("api_base", "")
+    if provider != "ollama" and not api_base and (not api_key or api_key.startswith("{")):
         return (
             False,
             f"{provider}/{model} (no API key)",
             "Set embedding.dense.api_key in ov.conf",
         )
 
-    return True, f"{provider}/{model}", None
+    return _probe_embedding_provider(embedding, dense)
 
 
 def check_vlm() -> tuple[bool, str, Optional[str]]:

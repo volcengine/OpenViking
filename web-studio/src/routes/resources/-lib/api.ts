@@ -158,7 +158,10 @@ export async function fetchDirectoryLevelContent(
   }
 }
 
-export async function fetchFsStat(uri: string): Promise<VikingFsEntry> {
+export async function fetchFsStat(
+  uri: string,
+  options: { throwOnError?: boolean } = {},
+): Promise<VikingFsEntry> {
   try {
     const result = await getOvResult<FSStatResult>(
       getFsStat({ query: { uri } }),
@@ -181,7 +184,10 @@ export async function fetchFsStat(uri: string): Promise<VikingFsEntry> {
       abstract: String(data.abstract ?? ''),
       overview: String(data.overview ?? ''),
     }
-  } catch {
+  } catch (error) {
+    // Callers that need to surface read failures (e.g. clicking a missing or
+    // unauthorized URI) opt in; the default keeps the lenient synthetic entry.
+    if (options.throwOnError) throw toVikingApiError(error)
     return {
       uri,
       name: fileNameFromUri(uri),

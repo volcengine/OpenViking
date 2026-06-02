@@ -6,7 +6,9 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Iterable
+from typing import Annotated, Any, Iterable, Literal
+
+from pydantic import BeforeValidator, Field
 
 try:
     from langchain_core.tools import StructuredTool
@@ -26,6 +28,17 @@ from openviking.integrations.langchain.client import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_read_mode_input(value: Any) -> str:
+    return str(value or "read").lower().strip()
+
+
+OpenVikingReadMode = Literal["abstract", "overview", "read"]
+OpenVikingReadModeInput = Annotated[
+    OpenVikingReadMode,
+    BeforeValidator(_normalize_read_mode_input),
+]
 
 
 def create_openviking_tools(
@@ -75,12 +88,18 @@ def create_openviking_tools(
         return cached_client
 
     def viking_find(
-        query: str,
-        target_uri: str = "",
-        limit: int = 8,
-        min_score: float | None = None,
+        query: Annotated[str, Field(description="Natural-language query to match semantically.")],
+        target_uri: Annotated[
+            str,
+            Field(description="Optional OpenViking URI scope to search within."),
+        ] = "",
+        limit: Annotated[int, Field(description="Maximum number of matches to return.")] = 8,
+        min_score: Annotated[
+            float | None,
+            Field(description="Optional backend relevance threshold."),
+        ] = None,
     ) -> str:
-        """Quick semantic recall from OpenViking without session context."""
+        """Run stateless semantic retrieval over OpenViking targets."""
 
         result = call_openviking(
             get_client(),
@@ -93,13 +112,22 @@ def create_openviking_tools(
         return _format_retrieval_result(result)
 
     def viking_search(
-        query: str,
-        target_uri: str = "",
-        session_id: str | None = None,
-        limit: int = 8,
-        min_score: float | None = None,
+        query: Annotated[str, Field(description="Natural-language query to match semantically.")],
+        target_uri: Annotated[
+            str,
+            Field(description="Optional OpenViking URI scope to search within."),
+        ] = "",
+        session_id: Annotated[
+            str | None,
+            Field(description="Optional OpenViking session id for session-aware retrieval."),
+        ] = None,
+        limit: Annotated[int, Field(description="Maximum number of matches to return.")] = 8,
+        min_score: Annotated[
+            float | None,
+            Field(description="Optional backend relevance threshold."),
+        ] = None,
     ) -> str:
-        """Session-aware OpenViking retrieval for memories, resources, and skills."""
+        """Run session-aware semantic retrieval over OpenViking targets."""
 
         result = call_openviking(
             get_client(),
@@ -113,11 +141,25 @@ def create_openviking_tools(
         return _format_retrieval_result(result)
 
     def viking_browse(
-        uri: str = "viking://",
-        recursive: bool = False,
-        pattern: str | None = None,
+        uri: Annotated[
+            str,
+            Field(description="OpenViking namespace or directory URI to list."),
+        ] = "viking://",
+        recursive: Annotated[
+            bool,
+            Field(description="Whether to include nested descendants in the listing."),
+        ] = False,
+        pattern: Annotated[
+            str | None,
+            Field(description="Optional glob pattern for discovering matching OpenViking URIs."),
+        ] = None,
     ) -> str:
-        """Browse OpenViking namespaces with ls, or glob when pattern is set."""
+        """List child entries under an OpenViking namespace or directory URI.
+
+        Use this to inspect structure and discover file/document URIs. When
+        pattern is set, the tool returns glob matches instead of a direct
+        directory listing.
+        """
 
         active_client = get_client()
         if pattern:
@@ -127,34 +169,75 @@ def create_openviking_tools(
         return stringify(result, max_chars=12_000)
 
     def viking_read(
-        uris: str | list[str],
-        max_chars: int = 12_000,
-        content_mode: str = "read",
+        uris: Annotated[
+            str | list[str],
+            Field(description="One or more file/document OpenViking URIs to read."),
+        ],
+        max_chars: Annotated[
+            int,
+            Field(description="Maximum characters to include per URI result."),
+        ] = 12_000,
+        content_mode: Annotated[
+            OpenVikingReadModeInput,
+            Field(
+                description="Content depth: abstract is shortest, overview is medium, read is full."
+            ),
+        ] = "read",
     ) -> str:
-        """Read one or more OpenViking URIs as L0 abstract, L1 overview, or L2 content."""
+        """Read file/document OpenViking URIs.
+
+        Directory URIs are not readable; call viking_browse on directories to
+        list children, then call viking_read on returned file/document URIs.
+        """
 
         active_client = get_client()
         uri_list = [uris] if isinstance(uris, str) else uris
         mode = str(content_mode or "read").lower().strip()
-        if mode not in {"abstract", "overview", "read"}:
-            raise ValueError("content_mode must be one of: abstract, overview, read")
         payload = []
         for uri in uri_list:
-            content = call_openviking(active_client, mode, uri=uri)
-            payload.append(
-                {
-                    "uri": uri,
-                    "content_mode": mode,
-                    "content": stringify(content, max_chars=max_chars),
-                }
-            )
+            try:
+                content = call_openviking(active_client, mode, uri=uri)
+            except Exception as exc:
+                if not _is_directory_read_error(exc):
+                    raise
+                payload.append(
+                    {
+                        "uri": uri,
+                        "content_mode": mode,
+                        "error": "directory_uri_not_readable",
+                        "message": (
+                            "This URI is a directory. Use viking_browse on this URI to list "
+                            "children, then call viking_read on file/document URIs."
+                        ),
+                    }
+                )
+            else:
+                payload.append(
+                    {
+                        "uri": uri,
+                        "content_mode": mode,
+                        "content": stringify(content, max_chars=max_chars),
+                    }
+                )
         return stringify(payload, max_chars=max_chars * max(1, len(uri_list)))
 
     def viking_grep(
-        uri: str,
-        pattern: str,
-        case_insensitive: bool = False,
-        node_limit: int = 20,
+        uri: Annotated[
+            str,
+            Field(description="File/document OpenViking URI whose content should be searched."),
+        ],
+        pattern: Annotated[
+            str,
+            Field(description="Grep-style text or regex pattern to search for."),
+        ],
+        case_insensitive: Annotated[
+            bool,
+            Field(description="Whether to match pattern without case sensitivity."),
+        ] = False,
+        node_limit: Annotated[
+            int,
+            Field(description="Maximum number of matching content nodes to return."),
+        ] = 20,
     ) -> str:
         """Search OpenViking file content with a grep-style pattern."""
 
@@ -169,11 +252,25 @@ def create_openviking_tools(
         return stringify(result, max_chars=12_000)
 
     def viking_store(
-        messages: str | list[dict[str, Any]],
-        session_id: str | None = None,
-        commit: bool = True,
+        messages: Annotated[
+            str | list[dict[str, Any]],
+            Field(description="Message text or role/content message objects to append."),
+        ],
+        session_id: Annotated[
+            str | None,
+            Field(description="OpenViking session id. A new session is created when omitted."),
+        ] = None,
+        commit: Annotated[
+            bool,
+            Field(description="Whether to commit the appended session messages immediately."),
+        ] = True,
     ) -> str:
-        """Store a conversation turn in an OpenViking session and optionally commit it."""
+        """Append explicit durable memories or conversation messages to an OpenViking session.
+
+        This is a write operation. User-facing hosts should expose it only for
+        confirmed "remember/save this" workflows because normal conversation
+        capture is usually handled by lifecycle hooks.
+        """
 
         active_client = get_client()
         if not session_id:
@@ -202,11 +299,26 @@ def create_openviking_tools(
         return compact_json(result)
 
     def viking_archive_search(
-        session_id: str,
-        query: str,
-        archive_id: str | None = None,
-        token_budget: int = 128_000,
-        max_matches: int = 8,
+        session_id: Annotated[
+            str,
+            Field(description="OpenViking session id whose committed archive context to search."),
+        ],
+        query: Annotated[
+            str,
+            Field(description="Natural-language query to match against committed session context."),
+        ],
+        archive_id: Annotated[
+            str | None,
+            Field(description="Optional specific archive id to search instead of all history."),
+        ] = None,
+        token_budget: Annotated[
+            int,
+            Field(description="Maximum session context token budget to inspect when needed."),
+        ] = 128_000,
+        max_matches: Annotated[
+            int,
+            Field(description="Maximum number of archive matches to return."),
+        ] = 8,
     ) -> str:
         """Search committed OpenViking session archive context."""
 
@@ -238,9 +350,18 @@ def create_openviking_tools(
         return stringify(matches or {"matches": [], "count": 0}, max_chars=12_000)
 
     def viking_archive_expand(
-        session_id: str,
-        archive_id: str,
-        max_chars: int = 20_000,
+        session_id: Annotated[
+            str,
+            Field(description="OpenViking session id that owns the archive."),
+        ],
+        archive_id: Annotated[
+            str,
+            Field(description="Committed archive id to expand."),
+        ],
+        max_chars: Annotated[
+            int,
+            Field(description="Maximum characters to include in the expanded archive result."),
+        ] = 20_000,
     ) -> str:
         """Expand one OpenViking session archive by archive ID."""
 
@@ -253,15 +374,46 @@ def create_openviking_tools(
         return stringify(archive, max_chars=max_chars)
 
     def viking_add_resource(
-        path: str,
-        to: str | None = None,
-        parent: str | None = None,
-        reason: str = "",
-        instruction: str = "",
-        wait: bool = False,
-        timeout: float | None = None,
+        path: Annotated[
+            str,
+            Field(
+                description=(
+                    "Resource source to import, such as a URL, repository, uploaded file, "
+                    "directory, or client-visible local path."
+                )
+            ),
+        ],
+        to: Annotated[
+            str | None,
+            Field(description="Optional destination OpenViking URI for the imported resource."),
+        ] = None,
+        parent: Annotated[
+            str | None,
+            Field(description="Optional parent OpenViking URI under which to place the resource."),
+        ] = None,
+        reason: Annotated[
+            str,
+            Field(description="Short reason for importing this resource."),
+        ] = "",
+        instruction: Annotated[
+            str,
+            Field(description="Optional indexing or extraction instruction for the resource."),
+        ] = "",
+        wait: Annotated[
+            bool,
+            Field(description="Whether to wait for resource ingestion to finish before returning."),
+        ] = False,
+        timeout: Annotated[
+            float | None,
+            Field(description="Optional wait timeout in seconds for resource ingestion."),
+        ] = None,
     ) -> str:
-        """Import a file, directory, URL, or repository into OpenViking resources."""
+        """Import an explicit resource into OpenViking.
+
+        This is a resource-management operation for user-approved URLs,
+        repositories, uploaded files, or local paths available to the client. It
+        is not for ordinary chat facts or ad hoc memory notes.
+        """
 
         result = call_openviking(
             get_client(),
@@ -277,11 +429,20 @@ def create_openviking_tools(
         return stringify(result, max_chars=8_000)
 
     def viking_add_skill(
-        data: dict[str, Any] | str,
-        wait: bool = False,
-        timeout: float | None = None,
+        data: Annotated[
+            dict[str, Any] | str,
+            Field(description="Skill definition as a mapping or serialized skill document."),
+        ],
+        wait: Annotated[
+            bool,
+            Field(description="Whether to wait for skill registration to finish before returning."),
+        ] = False,
+        timeout: Annotated[
+            float | None,
+            Field(description="Optional wait timeout in seconds for skill registration."),
+        ] = None,
     ) -> str:
-        """Register a reusable skill in OpenViking."""
+        """Register a reusable OpenViking skill for trusted admin workflows."""
 
         result = call_openviking(
             get_client(),
@@ -293,16 +454,28 @@ def create_openviking_tools(
         return stringify(result, max_chars=8_000)
 
     def viking_health() -> str:
-        """Check OpenViking health/status."""
+        """Check OpenViking health/status for diagnostics."""
 
         active_client = get_client()
         if hasattr(active_client, "get_status"):
-            return stringify(call_openviking(active_client, "get_status"), max_chars=8_000)
+            status = call_openviking(active_client, "get_status")
+            return stringify(_format_openviking_health(status), max_chars=8_000)
         if hasattr(active_client, "is_healthy"):
-            return compact_json({"healthy": call_openviking(active_client, "is_healthy")})
-        return compact_json({"healthy": True})
+            return compact_json(
+                _format_openviking_health({"healthy": call_openviking(active_client, "is_healthy")})
+            )
+        return compact_json(_format_openviking_health({"healthy": True}))
 
-    def viking_forget(uri: str, recursive: bool = False) -> str:
+    def viking_forget(
+        uri: Annotated[
+            str,
+            Field(description="OpenViking URI to remove."),
+        ],
+        recursive: Annotated[
+            bool,
+            Field(description="Whether to remove descendants recursively."),
+        ] = False,
+    ) -> str:
         """Remove a URI from OpenViking. Only expose this to trusted agents."""
 
         call_openviking(get_client(), "rm", uri=uri, recursive=recursive)
@@ -360,6 +533,71 @@ def _profile_tool_names(profile: str, *, allow_forget: bool) -> list[str]:
     if allow_forget and "viking_forget" not in names:
         names.append("viking_forget")
     return names
+
+
+def _is_directory_read_error(exc: Exception) -> bool:
+    details = getattr(exc, "details", {}) or {}
+    return (
+        getattr(exc, "code", None) == "INVALID_ARGUMENT"
+        and details.get("expected") == "file"
+        and details.get("actual") == "directory"
+    )
+
+
+def _format_openviking_health(status: Any) -> dict[str, Any]:
+    state = _infer_health_state(status)
+    return {
+        "backend": "OpenViking",
+        "healthy": state == "healthy",
+        "state": state,
+        "note": "OpenViking is the context memory backend; VikingDB is internal vector/index storage.",
+        "summary": _safe_status_summary(status),
+    }
+
+
+def _infer_health_state(status: Any) -> str:
+    if isinstance(status, dict):
+        for key in ("healthy", "ok"):
+            value = status.get(key)
+            if isinstance(value, bool):
+                return "healthy" if value else "unhealthy"
+        state = str(status.get("status") or status.get("state") or "").lower()
+        if state in {"ok", "healthy", "ready", "running"}:
+            return "healthy"
+        if state in {"error", "failed", "unhealthy"}:
+            return "unhealthy"
+        if state in {"degraded", "initializing", "starting", "pending"}:
+            return state
+    return "unknown"
+
+
+def _safe_status_summary(status: Any) -> dict[str, Any]:
+    if not isinstance(status, dict):
+        return {"type": type(status).__name__}
+
+    summary: dict[str, Any] = {}
+    for key in ("healthy", "ok", "status", "state", "state_detail"):
+        if key in status:
+            value = _safe_status_value(status[key])
+            if value is not None:
+                summary[key] = value
+
+    components = status.get("components") or status.get("services")
+    if isinstance(components, dict | list | tuple):
+        summary["component_count"] = len(components)
+
+    return summary or {"type": "dict"}
+
+
+def _safe_status_value(value: Any) -> Any:
+    if value is None or isinstance(value, bool | int | float):
+        return value
+    if isinstance(value, str):
+        lowered = value.lower()
+        if "://" in lowered or "@" in lowered:
+            return None
+        return value if len(value) <= 64 else f"{value[:61]}..."
+    return None
 
 
 def _normalize_messages(messages: str | list[dict[str, Any]]) -> list[dict[str, Any]]:

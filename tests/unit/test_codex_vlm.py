@@ -17,6 +17,7 @@ from openviking_cli.utils.config.vlm_config import VLMConfig
 class _MockResponsesStream:
     def __init__(self, final_response):
         self._final_response = final_response
+        self.closed = False
 
     def __enter__(self):
         return self
@@ -25,10 +26,30 @@ class _MockResponsesStream:
         return False
 
     def __iter__(self):
-        return iter(())
+        events = [
+            SimpleNamespace(type="response.output_item.done", item=item)
+            for item in self._final_response.output or []
+        ]
+        events.append(SimpleNamespace(type="response.completed", response=self._final_response))
+        return iter(events)
+
+    def close(self):
+        self.closed = True
 
     def get_final_response(self):
         return self._final_response
+
+
+class _MockResponsesEventStream:
+    def __init__(self, events):
+        self._events = events
+        self.closed = False
+
+    def __iter__(self):
+        return iter(self._events)
+
+    def close(self):
+        self.closed = True
 
 
 def _build_final_response(text: str):
@@ -45,7 +66,7 @@ def _build_final_response(text: str):
 
 def _build_fake_openai_client(text: str):
     client = MagicMock()
-    client.responses.stream.return_value = _MockResponsesStream(_build_final_response(text))
+    client.responses.create.return_value = _MockResponsesStream(_build_final_response(text))
     return client
 
 
@@ -57,7 +78,7 @@ def test_codex_text_completion_uses_responses_api(mock_resolve, mock_openai_clas
         "base_url": "https://chatgpt.com/backend-api/codex",
     }
     mock_real_client = MagicMock()
-    mock_real_client.responses.stream.return_value = _MockResponsesStream(
+    mock_real_client.responses.create.return_value = _MockResponsesStream(
         _build_final_response("hello from codex")
     )
     mock_openai_class.return_value = mock_real_client
@@ -66,10 +87,12 @@ def test_codex_text_completion_uses_responses_api(mock_resolve, mock_openai_clas
     result = vlm.get_completion("hello")
 
     assert result == "hello from codex"
-    call_kwargs = mock_real_client.responses.stream.call_args.kwargs
+    call_kwargs = mock_real_client.responses.create.call_args.kwargs
     assert call_kwargs["model"] == "gpt-5.3-codex"
     assert call_kwargs["input"] == [{"role": "user", "content": "hello"}]
+    assert call_kwargs["stream"] is True
     assert "messages" not in call_kwargs
+    mock_real_client.responses.stream.assert_not_called()
 
 
 @patch("openviking.models.vlm.backends.codex_vlm.openai.OpenAI")
@@ -80,7 +103,7 @@ def test_codex_vision_completion_converts_images(mock_resolve, mock_openai_class
         "base_url": "https://chatgpt.com/backend-api/codex",
     }
     mock_real_client = MagicMock()
-    mock_real_client.responses.stream.return_value = _MockResponsesStream(
+    mock_real_client.responses.create.return_value = _MockResponsesStream(
         _build_final_response("image result")
     )
     mock_openai_class.return_value = mock_real_client
@@ -89,7 +112,7 @@ def test_codex_vision_completion_converts_images(mock_resolve, mock_openai_class
     result = vlm.get_vision_completion("describe", [b"\x89PNG\r\n\x1a\n0000"])
 
     assert result == "image result"
-    call_kwargs = mock_real_client.responses.stream.call_args.kwargs
+    call_kwargs = mock_real_client.responses.create.call_args.kwargs
     content = call_kwargs["input"][0]["content"]
     assert content[0]["type"] == "input_image"
     assert content[0]["image_url"].startswith("data:image/png;base64,")
@@ -108,7 +131,7 @@ async def test_codex_async_client_defers_runtime_credential_resolution(
         "base_url": "https://chatgpt.com/backend-api/codex",
     }
     mock_real_client = MagicMock()
-    mock_real_client.responses.stream.return_value = _MockResponsesStream(
+    mock_real_client.responses.create.return_value = _MockResponsesStream(
         _build_final_response("async hello")
     )
     mock_openai_class.return_value = mock_real_client
@@ -124,6 +147,42 @@ async def test_codex_async_client_defers_runtime_credential_resolution(
 
     assert response.choices[0].message.content == "async hello"
     mock_resolve.assert_called_once()
+
+
+@pytest.mark.asyncio
+@patch("openviking.models.vlm.backends.codex_vlm.openai.OpenAI")
+@patch("openviking.models.vlm.backends.codex_vlm.resolve_codex_runtime_credentials")
+async def test_codex_async_stream_uses_text_deltas_when_completed_output_is_none(
+    mock_resolve,
+    mock_openai_class,
+):
+    mock_resolve.return_value = {
+        "api_key": "oauth-token",
+        "base_url": "https://chatgpt.com/backend-api/codex",
+    }
+    final_response = SimpleNamespace(
+        output=None,
+        usage=SimpleNamespace(input_tokens=11, output_tokens=7, total_tokens=18),
+    )
+    mock_stream = _MockResponsesEventStream(
+        [
+            SimpleNamespace(type="response.output_text.delta", delta="overview "),
+            SimpleNamespace(type="response.output_text.delta", delta="ready"),
+            SimpleNamespace(type="response.completed", response=final_response),
+        ]
+    )
+    mock_real_client = MagicMock()
+    mock_real_client.responses.create.return_value = mock_stream
+    mock_openai_class.return_value = mock_real_client
+
+    vlm = CodexVLM({"provider": "openai-codex", "model": "gpt-5.3-codex"})
+    response = await vlm.get_completion_async("summarize")
+
+    assert response == "overview ready"
+    assert mock_stream.closed is True
+    call_kwargs = mock_real_client.responses.create.call_args.kwargs
+    assert call_kwargs["stream"] is True
+    mock_real_client.responses.stream.assert_not_called()
 
 
 @patch("openviking.models.vlm.backends.codex_auth.has_codex_auth_available", return_value=True)
@@ -384,7 +443,7 @@ def test_codex_streaming_is_rejected(mock_resolve, mock_openai_class):
     with pytest.raises(NotImplementedError, match="Streaming is not supported"):
         vlm.get_completion("hello")
 
-    mock_real_client.responses.stream.assert_not_called()
+    mock_real_client.responses.create.assert_not_called()
 
 
 @patch("openviking.models.vlm.backends.codex_vlm.openai.OpenAI")
@@ -431,7 +490,7 @@ def test_codex_translates_tool_history_into_responses_input(mock_resolve, mock_o
         "base_url": "https://chatgpt.com/backend-api/codex",
     }
     mock_real_client = MagicMock()
-    mock_real_client.responses.stream.return_value = _MockResponsesStream(
+    mock_real_client.responses.create.return_value = _MockResponsesStream(
         _build_final_response("final answer")
     )
     mock_openai_class.return_value = mock_real_client
@@ -476,7 +535,7 @@ def test_codex_translates_tool_history_into_responses_input(mock_resolve, mock_o
     )
 
     assert response.content == "final answer"
-    input_items = mock_real_client.responses.stream.call_args.kwargs["input"]
+    input_items = mock_real_client.responses.create.call_args.kwargs["input"]
     assert input_items == [
         {"role": "user", "content": "What is the weather?"},
         {

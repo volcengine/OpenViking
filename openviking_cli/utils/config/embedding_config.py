@@ -462,6 +462,7 @@ class EmbeddingConfig(BaseModel):
         runtime_config = {
             "max_retries": self.max_retries,
             "max_concurrent": self.max_concurrent,
+            "max_input_tokens": self.max_input_tokens,
         }
 
         factory_registry = {

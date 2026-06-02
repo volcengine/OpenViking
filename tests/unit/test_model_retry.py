@@ -132,6 +132,11 @@ def test_quota_exceeded_case_insensitive():
     [
         "BadRequestError: 400 maximum context length is 8192 tokens",
         "Error code: 413 - Payload Too Large",
+        (
+            "Error code: 500 - {'error': {'code': 500, 'message': "
+            "'input (8525 tokens) is too large to process. increase the physical batch size "
+            "(current batch size: 2048)', 'type': 'server_error'}}"
+        ),
     ],
 )
 def test_classify_input_too_large_errors(message):

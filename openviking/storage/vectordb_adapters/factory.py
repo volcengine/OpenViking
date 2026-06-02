@@ -4,15 +4,19 @@
 
 from __future__ import annotations
 
+import importlib
+
 from .base import CollectionAdapter
 from .http_adapter import HttpCollectionAdapter
 from .local_adapter import LocalCollectionAdapter
+from .qdrant_adapter import QdrantCollectionAdapter
 from .vikingdb_private_adapter import VikingDBPrivateCollectionAdapter
 from .volcengine_adapter import VolcengineCollectionAdapter
 
 _ADAPTER_REGISTRY: dict[str, type[CollectionAdapter]] = {
     "local": LocalCollectionAdapter,
     "http": HttpCollectionAdapter,
+    "qdrant": QdrantCollectionAdapter,
     "volcengine": VolcengineCollectionAdapter,
     "vikingdb": VikingDBPrivateCollectionAdapter,
 }
@@ -26,8 +30,6 @@ def create_collection_adapter(config) -> CollectionAdapter:
     # If not in registry, try to load dynamically as a class path
     if adapter_cls is None and "." in backend:
         try:
-            import importlib
-
             module_name, class_name = backend.rsplit(".", 1)
             module = importlib.import_module(module_name)
             potential_cls = getattr(module, class_name)

@@ -1325,7 +1325,7 @@ owner_space: str = ""  # 所有者的 user_space_name() 或 agent_space_name()
 
 上游构造 Context 时需从 RequestContext 填入这两个字段：
 - `ResourceService` / `SkillProcessor` → `account_id=ctx.account_id`, `owner_space=ctx.user.user_space_name()` 或 `agent_space_name()`（取决于 scope）
-- `MemoryExtractor.create_memory()` → 同上
+- `SessionCompressorV2` memory writes → 同上
 - `DirectoryInitializer._ensure_directory()` → 同上
 
 ##### 8b. HierarchicalRetriever 注入多级过滤
@@ -1634,5 +1634,4 @@ Phase 2 涉及存储隔离，需新增隔离相关示例：
 #### Key 存储方案
 
 评审讨论了 key 存储结构的三种方案（user_id 做主键 / key 做主键 / 双索引），确定采用方案 A（user_id 做主键）。文件结构用于持久化和人工排查，运行时认证全走内存索引（`dict[key] → identity`），O(1) 查找。
-
 

@@ -173,7 +173,7 @@ Memory V2 is now the default memory pipeline, featuring a redesigned format, ref
 ### Upgrade Notes
 
 - If you frequently upload directories through the CLI, consider setting `upload.ignore_dirs` in `ovcli.conf` to reduce noisy uploads.
-- Legacy memory v1 can be restored via `"memory": { "version": "v1" }` in `ov.conf`.
+- Legacy memory v1 has been removed; memory extraction now uses v2 only.
 - `ov init` / `ov doctor` → `openviking-server init` / `openviking-server doctor`.
 - OpenRouter/compatible rerank/VLM providers can use `extra_headers` for required headers.
 - S3-compatible services with batch-delete quirks: enable `storage.agfs.s3.disable_batch_delete`.

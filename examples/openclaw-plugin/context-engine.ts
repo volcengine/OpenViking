@@ -18,6 +18,11 @@ import {
   toJsonLog,
 } from "./memory-ranking.js";
 import { sanitizeToolUseResultPairing } from "./session-transcript-repair.js";
+import {
+  estimateAgentMessageTokens,
+  estimateAgentMessagesTokens,
+  estimateTextTokens,
+} from "./token-estimator.js";
 
 type AgentMessage = {
   role?: string;
@@ -156,14 +161,11 @@ function allocateContextBudget(totalBudget: number, instructionTokens = 0): Cont
 }
 
 function roughEstimate(messages: AgentMessage[]): number {
-  return Math.ceil(JSON.stringify(messages).length / 4);
+  return estimateAgentMessagesTokens(messages);
 }
 
 function msgTokenEstimate(msg: AgentMessage): number {
-  const raw = (msg as Record<string, unknown>).content;
-  if (typeof raw === "string") return Math.ceil(raw.length / 4);
-  if (Array.isArray(raw)) return Math.ceil(JSON.stringify(raw).length / 4);
-  return 1;
+  return estimateAgentMessageTokens(msg);
 }
 
 function normalizeTimestamp(value: unknown): string | undefined {
@@ -671,7 +673,7 @@ function buildSystemPromptAddition(): string {
 
 function buildInstructionPrompt(): { text: string; tokens: number } {
   const text = buildSystemPromptAddition();
-  return { text, tokens: Math.ceil(text.length / 4) };
+  return { text, tokens: estimateTextTokens(text) };
 }
 
 function buildArchiveMemory(

@@ -864,7 +864,7 @@ Based on the implementation from ../memory project, the following tech stack is 
 | `openviking/session/memory_extractor.py`                          | Memory extraction main logic (~1200 lines) / 记忆提取主逻辑 (~1200行) |
 | `openviking/session/memory_deduplicator.py`                       | Deduplication decision (~395 lines) / 去重决策 (~395行)            |
 | `openviking/session/compressor.py`                                | Session compressor (~447 lines) / 会话压缩器 (~447行)               |
-| `openviking/prompts/templates/compression/memory_extraction.yaml` | Extraction prompt template (~400 lines) / 提取提示模板 (~400行)      |
+| `openviking/prompts/templates/memory/` | V2 memory schema templates / v2 记忆 schema 模板      |
 
 ---
 

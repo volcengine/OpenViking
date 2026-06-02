@@ -1,6 +1,5 @@
 import asyncio
 import hashlib
-import time
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
@@ -25,6 +24,7 @@ class VikingClient:
 
         self._apikey_manager = None
         self.admin_user_client = None
+        self._user_clients = {}
         self._namespace_policy = {
             "isolate_user_scope_by_agent": False,
             "isolate_agent_scope_by_user": False,
@@ -68,21 +68,6 @@ class VikingClient:
         """Initialize the client (must be called after construction)"""
         await self.client.initialize()
         await self._load_namespace_policy()
-
-        if self._is_root_key_mode() and self.admin_user_id:
-            user_exists = await self._check_user_exists(self.admin_user_id)
-            if not user_exists:
-                await self._initialize_user(self.admin_user_id, role="admin")
-            admin_user_api_key = await self._get_or_create_user_apikey(self.admin_user_id)
-            if admin_user_api_key:
-                self.admin_user_client = ov.AsyncHTTPClient(
-                    url=self.openviking_config.server_url,
-                    api_key=admin_user_api_key,
-                    agent_id=self.agent_id,
-                    account=self.account_id,
-                    user=self.admin_user_id,
-                )
-                await self.admin_user_client.initialize()
 
     @classmethod
     async def create(cls, agent_id: Optional[str] = None):
@@ -256,11 +241,22 @@ class VikingClient:
         return result
 
     async def search(
-        self, query: str, target_uri: str | list[str] | None = None, limit: int = 10
+        self,
+        query: str,
+        target_uri: str | list[str] | None = None,
+        limit: int = 10,
+        user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        # session = self.client.session()
+        client = self.client
+        should_close = False
+        if user_id:
+            client, should_close = await self._get_user_scoped_client(user_id)
 
-        result = await self.client.search(query, target_uri=target_uri, limit=limit)
+        try:
+            result = await client.search(query, target_uri=target_uri, limit=limit)
+        finally:
+            if should_close:
+                await client.close()
 
         # 将 FindResult 对象转换为 JSON map
         return {
@@ -330,28 +326,24 @@ class VikingClient:
             logger.warning(f"Failed to initialize user {user_id}: {e}")
             return False
 
-    async def _get_or_create_user_apikey(self, user_id: str) -> Optional[str]:
+    async def _get_or_create_user_apikey(self, user_id: str, role: str = "user") -> Optional[str]:
         """获取或创建用户的 API key。"""
         if self._is_user_key_mode() or not self._apikey_manager or not user_id:
             return None
 
-        # Step 1: Check local storage first
         api_key = self._apikey_manager.get_apikey(user_id)
         if api_key:
             return api_key
 
         try:
-            # 2a. Remove user if exists
             user_exists = await self._check_user_exists(user_id)
             if user_exists:
                 await self.client.admin_remove_user(self.account_id, user_id)
-            # 2b. Recreate user - this will save API key in _initialize_user
-            success = await self._initialize_user(user_id)
+            success = await self._initialize_user(user_id, role=role)
             if not success:
                 logger.warning(f"Failed to recreate user {user_id}")
                 return None
 
-            # 2c. Get API key from local storage (it was saved by _initialize_user)
             api_key = self._apikey_manager.get_apikey(user_id)
             if api_key:
                 return api_key
@@ -361,6 +353,41 @@ class VikingClient:
         except Exception as e:
             logger.error(f"Error getting or creating API key for user {user_id}: {e}")
             return None
+
+    async def _get_user_scoped_client(self, user_id: Optional[str]) -> tuple[Any, bool]:
+        effective_user_id = self._effective_user_id(user_id)
+        if not effective_user_id:
+            return self.client, False
+
+        if self._is_root_key_mode():
+            if not self._apikey_manager:
+                raise RuntimeError("User API key manager is unavailable for user-scoped client")
+
+            role = "admin" if effective_user_id == self.admin_user_id else "user"
+            user_exists = await self._check_user_exists(effective_user_id)
+            if not user_exists:
+                success = await self._initialize_user(effective_user_id, role=role)
+                if not success:
+                    raise RuntimeError(f"Failed to initialize user {effective_user_id}")
+
+            user_api_key = await self._get_or_create_user_apikey(effective_user_id, role=role)
+            if not user_api_key:
+                raise RuntimeError(f"Failed to get API key for user {effective_user_id}")
+
+            client_kwargs = {
+                "url": self.openviking_config.server_url,
+                "api_key": user_api_key,
+                "agent_id": self.agent_id,
+            }
+            if effective_user_id == self.admin_user_id:
+                client_kwargs["account"] = self.account_id
+                client_kwargs["user"] = self.admin_user_id
+
+            client = ov.AsyncHTTPClient(**client_kwargs)
+            await client.initialize()
+            return client, True
+
+        return self.client, False
 
     async def search_memory(
         self, query: str, user_ids: str | list[str], agent_user_id: str, limit: int = 10
@@ -423,125 +450,222 @@ class VikingClient:
         case_insensitive: bool = False,
         node_limit: Optional[int] = 10,
         exclude_uri: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """通过模式（正则表达式）搜索内容"""
-        return await self.client.grep(
-            uri,
-            pattern,
-            case_insensitive=case_insensitive,
-            node_limit=node_limit,
-            exclude_uri=exclude_uri,
-        )
-
-    async def glob(self, pattern: str, uri: Optional[str] = None) -> Dict[str, Any]:
-        """通过 glob 模式匹配文件"""
-        return await self.client.glob(pattern, uri=uri)
-
-    async def commit(self, session_id: str, messages: list[dict[str, Any]], user_id: str = None):
-        """提交会话"""
-        import re
-        import uuid
-
-        from openviking.message.part import TextPart, ToolPart
-
-        effective_user_id = self._effective_user_id(user_id)
-
         client = self.client
-        start = time.time()
-        if self._is_root_key_mode():
-            user_exists = await self._check_user_exists(effective_user_id)
-            if not user_exists:
-                success = await self._initialize_user(effective_user_id)
-                if not success:
-                    return {"error": "Failed to initialize user"}
+        should_close = False
+        if user_id:
+            client, should_close = await self._get_user_scoped_client(user_id)
 
-            if (
-                effective_user_id
-                and effective_user_id != self.admin_user_id
-                and self._apikey_manager
-            ):
-                user_api_key = await self._get_or_create_user_apikey(effective_user_id)
-                if user_api_key:
-                    client = ov.AsyncHTTPClient(
-                        url=self.openviking_config.server_url,
-                        api_key=user_api_key,
-                        agent_id=self.agent_id,
-                    )
-                    await client.initialize()
+        try:
+            return await client.grep(
+                uri,
+                pattern,
+                case_insensitive=case_insensitive,
+                node_limit=node_limit,
+                exclude_uri=exclude_uri,
+            )
+        finally:
+            if should_close:
+                await client.close()
 
-        create_res = await client.create_session()
-        session_id = create_res["session_id"]
-        session = client.session(session_id)
+    async def glob(
+        self, pattern: str, uri: Optional[str] = None, user_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """通过 glob 模式匹配文件"""
+        client = self.client
+        should_close = False
+        if user_id:
+            client, should_close = await self._get_user_scoped_client(user_id)
+
+        try:
+            return await client.glob(pattern, uri=uri)
+        finally:
+            if should_close:
+                await client.close()
+
+    def _session_client(self, user_id: Optional[str] = None):
+        if user_id and user_id == self.admin_user_id and self.admin_user_client:
+            return self.admin_user_client
+        return self.admin_user_client or self.client
+
+    async def _session_client_for_user(self, user_id: Optional[str] = None):
+        if not user_id or self.mode == "local" or self._is_user_key_mode():
+            return self._session_client(user_id)
+        if user_id == self.admin_user_id and self.admin_user_client:
+            return self.admin_user_client
+
+        user_exists = await self._check_user_exists(user_id)
+        if not user_exists:
+            await self._initialize_user(user_id)
+
+        api_key = await self._get_or_create_user_apikey(user_id)
+        if not api_key:
+            return self._session_client(user_id)
+
+        client = self._user_clients.get(user_id)
+        if client is None:
+            client = ov.AsyncHTTPClient(
+                url=self.openviking_config.server_url,
+                api_key=api_key,
+                agent_id=self.agent_id,
+                account=self.account_id,
+                user=user_id,
+            )
+            await client.initialize()
+            self._user_clients[user_id] = client
+        return client
+
+    def _assistant_role_id(self) -> Optional[str]:
+        if self.agent_id:
+            return self.agent_id
+        if self.admin_user_id:
+            return self.admin_user_id
+        return None
+
+    def _normalize_session_messages(
+        self,
+        messages: list[dict[str, Any]],
+        default_user_role_id: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        normalized: list[dict[str, Any]] = []
+        assistant_role_id = self._assistant_role_id()
 
         for message in messages:
-            role = message.get("role")
-            content = message.get("content")
-            tools_used = message.get("tools_used") or []
-
-            parts: list[Any] = []
-
-            if content:
-                parts.append(TextPart(text=content))
-
-            for tool_info in tools_used:
-                tool_name = tool_info.get("tool_name", "")
-                if not tool_name:
-                    continue
-
-                tool_id = f"{tool_name}_{uuid.uuid4().hex[:8]}"
-                tool_input = None
-                try:
-                    import json
-
-                    args_str = tool_info.get("args", "{}")
-                    tool_input = json.loads(args_str) if args_str else {}
-                except Exception:
-                    tool_input = {"raw_args": tool_info.get("args", "")}
-
-                result_str = str(tool_info.get("result", ""))
-
-                skill_uri = ""
-                if tool_name == "read_file" and result_str:
-                    match = re.search(r"^---\s*\nname:\s*(.+?)\s*\n", result_str, re.MULTILINE)
-                    if match:
-                        skill_name = match.group(1).strip()
-                        skill_uri = f"viking://agent/skills/{skill_name}"
-
-                execute_success = tool_info.get("execute_success", True)
-                tool_status = "completed" if execute_success else "error"
-                parts.append(
-                    ToolPart(
-                        tool_id=tool_id,
-                        tool_name=tool_name,
-                        tool_uri=f"viking://session/{session_id}/tools/{tool_id}",
-                        tool_input=tool_input,
-                        tool_output=result_str[:2000],
-                        tool_status=tool_status,
-                        skill_uri=skill_uri,
-                        duration_ms=float(tool_info.get("duration", 0.0)),
-                        prompt_tokens=tool_info.get("input_token"),
-                        completion_tokens=tool_info.get("output_token"),
-                    )
-                )
-
-            if not parts:
+            role = str(message.get("role") or "").strip().lower()
+            if role not in {"user", "assistant", "system", "tool"}:
                 continue
-            # 获取消息的时间戳，如果没有则使用当前时间
-            created_at = message.get("timestamp")
-            await session.add_message(role=role, parts=parts, created_at=created_at)
 
-        result = await session.commit_async()
-        if client is not self.client:
-            await client.close()
-        logger.info(f"time spent: {time.time() - start}")
-        logger.debug(
-            f"Message add ed to OpenViking session {session_id}, api_key_type={self.api_key_type}, user: {effective_user_id}"
+            content = self._session_message_content(message)
+            if not content:
+                continue
+
+            ov_role = "user" if role == "user" else "assistant"
+            payload = {
+                "role": ov_role,
+                "content": content,
+                "created_at": message.get("created_at") or message.get("timestamp"),
+            }
+
+            role_id = message.get("role_id")
+            if not role_id and ov_role == "user":
+                role_id = message.get("sender_id") or default_user_role_id
+            elif not role_id and ov_role == "assistant":
+                role_id = assistant_role_id
+
+            if role_id:
+                payload["role_id"] = role_id
+
+            normalized.append(payload)
+
+        return normalized
+
+    def _session_message_content(self, message: dict[str, Any]) -> str:
+        content = message.get("content")
+        if isinstance(content, str) and content.strip():
+            return content.strip()
+        return ""
+
+    async def ensure_session(
+        self, session_id: str, user_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        client = await self._session_client_for_user(user_id)
+        if await client.session_exists(session_id):
+            return await client.get_session(session_id)
+        return await client.create_session(session_id=session_id)
+
+    async def get_session(self, session_id: str, user_id: Optional[str] = None) -> Dict[str, Any]:
+        await self.ensure_session(session_id, user_id=user_id)
+        client = await self._session_client_for_user(user_id)
+        return await client.get_session(session_id)
+
+    async def get_session_context(
+        self, session_id: str, token_budget: int, user_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        await self.ensure_session(session_id, user_id=user_id)
+        client = await self._session_client_for_user(user_id)
+        return await client.get_session_context(
+            session_id,
+            token_budget=token_budget,
         )
-        return {"success": result["status"]}
+
+    async def append_messages(
+        self,
+        session_id: str,
+        messages: list[dict[str, Any]],
+        default_user_role_id: Optional[str] = None,
+        session_user_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        await self.ensure_session(session_id, user_id=session_user_id)
+        batch = self._normalize_session_messages(
+            messages,
+            default_user_role_id=default_user_role_id,
+        )
+        if not batch:
+            return {"session_id": session_id, "added": 0, "message_count": 0}
+        client = await self._session_client_for_user(session_user_id)
+        total_added = 0
+        message_count = 0
+        for start in range(0, len(batch), 100):
+            result = await client.batch_add_messages(
+                session_id=session_id,
+                messages=batch[start : start + 100],
+            )
+            total_added += int(result.get("added", 0) or 0)
+            message_count = int(result.get("message_count", message_count) or 0)
+        return {"session_id": session_id, "added": total_added, "message_count": message_count}
+
+    async def commit_session(
+        self,
+        session_id: str,
+        keep_recent_count: int = 0,
+        user_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        await self.ensure_session(session_id, user_id=user_id)
+        client = await self._session_client_for_user(user_id)
+        return await client.commit_session(
+            session_id,
+            keep_recent_count=keep_recent_count,
+        )
+
+    async def commit(
+        self,
+        session_id: str,
+        messages: list[dict[str, Any]],
+        user_id: str = None,
+        keep_recent_count: int = 0,
+    ):
+        """Append messages to a stable session and commit it."""
+        appended = await self.append_messages(
+            session_id,
+            messages,
+            default_user_role_id=user_id or self.admin_user_id,
+            session_user_id=user_id,
+        )
+        commit_result = await self.commit_session(
+            session_id,
+            keep_recent_count=keep_recent_count,
+            user_id=user_id,
+        )
+        logger.debug(
+            f"Committed OpenViking session {session_id}, "
+            f"api_key_type={self.api_key_type}, appended={appended.get('added', 0)}"
+        )
+        return {
+            "success": True,
+            "session_id": session_id,
+            "append": appended,
+            "commit": commit_result,
+        }
 
     async def close(self):
         """关闭客户端"""
         await self.client.close()
+        if self.admin_user_client:
+            await self.admin_user_client.close()
+        for client in self._user_clients.values():
+            await client.close()
 
 
 async def main_test():
