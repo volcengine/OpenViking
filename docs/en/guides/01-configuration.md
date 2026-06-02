@@ -522,6 +522,29 @@ Supported task types: `RETRIEVAL_QUERY`, `RETRIEVAL_DOCUMENT`, `SEMANTIC_SIMILAR
 }
 ```
 
+#### Local BM25 Sparse Embedding
+
+Install the optional tokenizer dependency for better Chinese tokenization:
+
+```bash
+pip install "openviking[local-bm25]"
+```
+
+```json
+{
+  "embedding": {
+    "sparse": {
+      "provider": "local_bm25",
+      "tokenizer": "jieba"
+    }
+  }
+}
+```
+
+If `jieba` is not installed, `tokenizer: "jieba"` falls back to regex tokenization. This keeps English text usable, but Chinese tokenization quality is lower.
+
+Local BM25 is a lightweight sparse option for cost-sensitive LLM workloads. It uses rebuild-only corpus statistics: document batches rebuild BM25 stats before sparse vectors are generated, and query vectors use the latest rebuilt stats. Incremental uploads without a full sparse-vector rebuild can skew scores, so use this provider when each corpus update can afford full reindexing. For large-scale full-text search or strict BM25 score accuracy under frequent updates, use VikingDB keyword search when available or another retrieval backend that computes BM25 at search time.
+
 #### Hybrid Embedding
 
 Two approaches are supported:

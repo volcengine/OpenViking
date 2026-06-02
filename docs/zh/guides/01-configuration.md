@@ -492,6 +492,29 @@ openviking-server doctor
 }
 ```
 
+#### Local BM25 Sparse Embedding
+
+为了获得更好的中文分词效果，可以安装可选分词依赖：
+
+```bash
+pip install "openviking[local-bm25]"
+```
+
+```json
+{
+  "embedding": {
+    "sparse": {
+      "provider": "local_bm25",
+      "tokenizer": "jieba"
+    }
+  }
+}
+```
+
+如果没有安装 `jieba`，`tokenizer: "jieba"` 会自动退回到 regex 分词。英文文本仍然可用，但中文分词效果会变差。
+
+Local BM25 是面向低成本 LLM 工作负载的轻量 sparse 方案。它使用 rebuild-only 的语料统计：文档批次会先重建 BM25 统计，再生成 sparse vector；查询向量使用最新重建后的统计。若增量上传后没有完整重建 sparse vector，分数可能出现偏差。因此只建议在每次语料更新都能接受完整重建索引时使用。对于大规模全文检索，或频繁更新下要求严格 BM25 分数准确性的场景，建议使用即将支持的 VikingDB keyword search，或使用在检索时计算 BM25 的其他后端。
+
 #### Hybrid Embedding
 
 支持两种方式：

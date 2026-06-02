@@ -2,8 +2,11 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for LocalBM25Embedder."""
 
+import importlib
+
 import pytest
 
+from openviking.models.embedder import local_bm25_embedder
 from openviking.models.embedder.local_bm25_embedder import (
     BM25Stats,
     BM25StatsError,
@@ -37,6 +40,20 @@ class TestTokenize:
         tokens = _tokenize("信息检索系统")
         assert "信息检索" in tokens
         assert "系统" in tokens
+
+    def test_jieba_missing_optional_dependency_falls_back_to_regex(self, monkeypatch):
+        real_import_module = importlib.import_module
+        monkeypatch.setattr(local_bm25_embedder, "_jieba_missing_warning_logged", False)
+
+        def fake_import_module(name, package=None):
+            if name == "jieba":
+                raise ImportError("missing jieba")
+            return real_import_module(name, package)
+
+        monkeypatch.setattr(importlib, "import_module", fake_import_module)
+
+        assert _tokenize("信息检索系统") == ["信息检索系统"]
+        assert local_bm25_embedder._jieba_missing_warning_logged is True
 
     def test_regex_fallback_keeps_legacy_word_extraction(self):
         tokens = _tokenize("信息检索系统", tokenizer="regex")
