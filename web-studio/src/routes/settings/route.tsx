@@ -533,7 +533,7 @@ function SettingsRoute() {
   const adminConnection = React.useMemo<AdminConnection>(
     () => ({
       accountId: draft.accountId || DEFAULT_ACCOUNT_ID,
-      agentId: draft.agentId || 'web-studio',
+      agentId: draft.agentId || 'web-playground',
       apiKey: draft.apiKey,
       baseUrl: draft.baseUrl,
       userId: draft.userId || DEFAULT_USER_ID,

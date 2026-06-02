@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import type { ChatStatus, StreamToolCall } from './types/chat'
+import {
+  isStreamToolCallError,
+  type ChatStatus,
+  type StreamToolCall,
+} from './types/chat'
 import type { Message, MessagePart, TextPart, ToolPart } from './types/message'
 import { addMessage, sendChatStream, serializeParts } from './api'
 import { generateTitle } from './generate-title'
@@ -15,6 +19,34 @@ function createUserMessage(content: string): Message {
     parts: [{ type: 'text', text: content }],
     created_at: new Date().toISOString(),
   }
+}
+
+function toolCallKey(toolCall: StreamToolCall): string {
+  return `${toolCall.iteration ?? 0}\u0000${toolCall.name}\u0000${toolCall.arguments}`
+}
+
+function dedupeToolCalls(toolCalls: StreamToolCall[]): StreamToolCall[] {
+  const result: StreamToolCall[] = []
+  const byKey = new Map<string, StreamToolCall>()
+
+  for (const toolCall of toolCalls) {
+    const key = toolCallKey(toolCall)
+    const existing = byKey.get(key)
+    if (!existing) {
+      const next = { ...toolCall }
+      byKey.set(key, next)
+      result.push(next)
+      continue
+    }
+    if (!existing.result && toolCall.result) {
+      existing.result = toolCall.result
+    }
+    if (typeof toolCall.success === 'boolean') {
+      existing.success = toolCall.success
+    }
+  }
+
+  return result
 }
 
 type SendOptions = {
@@ -35,7 +67,7 @@ function buildAssistantMessage(
       tool_name: tc.name,
       tool_uri: '',
       skill_uri: '',
-      tool_status: 'completed',
+      tool_status: isStreamToolCallError(tc) ? 'error' : 'completed',
       tool_output: tc.result,
     }
     try {
@@ -175,6 +207,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       let accReasoning = ''
       const accToolCalls: StreamToolCall[] = []
       let lastToolCall: StreamToolCall | null = null
+      let currentIteration = 0
 
       try {
         const response = await sendChatStream(
@@ -189,7 +222,10 @@ export function useChat(options: UseChatOptions): UseChatReturn {
             case 'iteration': {
               const data = streamEventDataToText(event.data)
               const match = data.match(/(\d+)/)
-              if (match) setIteration(Number(match[1]))
+              if (match) {
+                currentIteration = Number(match[1])
+                setIteration(currentIteration)
+              }
               break
             }
 
@@ -220,16 +256,42 @@ export function useChat(options: UseChatOptions): UseChatReturn {
               const parenIdx = raw.indexOf('(')
               const name = parenIdx > 0 ? raw.slice(0, parenIdx) : raw
               const args = parenIdx > 0 ? raw.slice(parenIdx + 1, -1) : ''
-              lastToolCall = { name, arguments: args }
+              const duplicate = accToolCalls.find(
+                (tc) =>
+                  tc.iteration === currentIteration &&
+                  tc.name === name &&
+                  tc.arguments === args &&
+                  !tc.result,
+              )
+              if (duplicate) {
+                lastToolCall = duplicate
+                setStreamingToolCalls(dedupeToolCalls(accToolCalls))
+                break
+              }
+              lastToolCall = {
+                name,
+                arguments: args,
+                iteration: currentIteration,
+              }
               accToolCalls.push(lastToolCall)
-              setStreamingToolCalls([...accToolCalls])
+              setStreamingToolCalls(dedupeToolCalls(accToolCalls))
               break
             }
 
             case 'tool_result': {
               if (lastToolCall) {
                 lastToolCall.result = streamEventDataToText(event.data)
-                setStreamingToolCalls([...accToolCalls])
+                if (
+                  event.data &&
+                  typeof event.data === 'object' &&
+                  'success' in event.data &&
+                  typeof (event.data as Record<string, unknown>).success ===
+                    'boolean'
+                ) {
+                  lastToolCall.success = (event.data as Record<string, boolean>)
+                    .success
+                }
+                setStreamingToolCalls(dedupeToolCalls(accToolCalls))
               }
               break
             }
@@ -244,12 +306,15 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         }
 
         // Build assistant message and finalize
-        const assistantMsg = buildAssistantMessage(accContent, accToolCalls)
-        setMessages((prev) => [...prev, assistantMsg])
-        setStatus('idle')
+        const assistantMsg = buildAssistantMessage(
+          accContent,
+          dedupeToolCalls(accToolCalls),
+        )
         setStreamingContent('')
         setStreamingToolCalls([])
         setStreamingReasoning('')
+        setStatus('idle')
+        setMessages((prev) => [...prev, assistantMsg])
 
         // Persist to openviking session (bot doesn't do this automatically)
         if (persistMessages) {
@@ -284,7 +349,13 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         if (controller.signal.aborted) {
           // Aborted intentionally — still finalize any partial content
           if (accContent) {
-            const partialMsg = buildAssistantMessage(accContent, accToolCalls)
+            const partialMsg = buildAssistantMessage(
+              accContent,
+              dedupeToolCalls(accToolCalls),
+            )
+            setStreamingContent('')
+            setStreamingToolCalls([])
+            setStreamingReasoning('')
             setMessages((prev) => [...prev, partialMsg])
           }
           setStatus('idle')

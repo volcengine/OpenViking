@@ -55,7 +55,7 @@ const ENV_USER =
 
 const DEFAULT_CONNECTION: ConnectionDraft = {
   accountId: ENV_ACCOUNT || 'default',
-  agentId: ENV_AGENT || 'web-studio',
+  agentId: ENV_AGENT || 'web-playground',
   apiKey: ENV_API_KEY,
   baseUrl: ovClient.getOptions().baseUrl,
   userId: ENV_USER || 'default',
@@ -114,6 +114,17 @@ function normalizeConnectionDraft(
   }
 }
 
+function resolveIdentityField(
+  envValue: string,
+  storedValue: string | undefined,
+  defaultValue: string,
+): string {
+  if (envValue) {
+    return envValue
+  }
+  return storedValue || defaultValue
+}
+
 function applyConnection(connection: ConnectionDraft): void {
   ovClient.setOptions({
     baseUrl: connection.baseUrl,
@@ -128,21 +139,29 @@ function applyConnection(connection: ConnectionDraft): void {
 
 function readInitialConnection(): ConnectionDraft {
   const storedConnection = readStoredConnection()
+  const apiKey =
+    ENV_API_KEY ||
+    ovClient.getConnection().apiKey ||
+    storedConnection.apiKey ||
+    DEFAULT_CONNECTION.apiKey
   return normalizeConnectionDraft({
     ...DEFAULT_CONNECTION,
     ...storedConnection,
-    accountId:
-      ENV_ACCOUNT || storedConnection.accountId || DEFAULT_CONNECTION.accountId,
+    accountId: resolveIdentityField(
+      ENV_ACCOUNT,
+      storedConnection.accountId,
+      DEFAULT_CONNECTION.accountId,
+    ),
     agentId:
       ENV_AGENT || storedConnection.agentId || DEFAULT_CONNECTION.agentId,
-    apiKey:
-      ENV_API_KEY ||
-      ovClient.getConnection().apiKey ||
-      storedConnection.apiKey ||
-      DEFAULT_CONNECTION.apiKey,
+    apiKey,
     baseUrl:
       ENV_BASE_URL || storedConnection.baseUrl || DEFAULT_CONNECTION.baseUrl,
-    userId: ENV_USER || storedConnection.userId || DEFAULT_CONNECTION.userId,
+    userId: resolveIdentityField(
+      ENV_USER,
+      storedConnection.userId,
+      DEFAULT_CONNECTION.userId,
+    ),
   })
 }
 

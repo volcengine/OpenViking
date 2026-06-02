@@ -9,12 +9,12 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as StudioRouteRouteImport } from './routes/studio/route'
 import { Route as SettingsRouteRouteImport } from './routes/settings/route'
 import { Route as SessionsRouteRouteImport } from './routes/sessions/route'
 import { Route as RetrievalRouteRouteImport } from './routes/retrieval/route'
 import { Route as ResourcesRouteRouteImport } from './routes/resources/route'
 import { Route as RequestLogsRouteRouteImport } from './routes/request-logs/route'
+import { Route as PlaygroundRouteRouteImport } from './routes/playground/route'
 import { Route as HomeRouteRouteImport } from './routes/home/route'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as SessionsIndexRouteImport } from './routes/sessions/index'
@@ -23,11 +23,6 @@ import { Route as OauthVerifyRouteImport } from './routes/oauth/verify'
 import { Route as OauthSetupRouteImport } from './routes/oauth/setup'
 import { Route as OauthConsentRouteImport } from './routes/oauth/consent'
 
-const StudioRouteRoute = StudioRouteRouteImport.update({
-  id: '/studio',
-  path: '/studio',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const SettingsRouteRoute = SettingsRouteRouteImport.update({
   id: '/settings',
   path: '/settings',
@@ -51,6 +46,11 @@ const ResourcesRouteRoute = ResourcesRouteRouteImport.update({
 const RequestLogsRouteRoute = RequestLogsRouteRouteImport.update({
   id: '/request-logs',
   path: '/request-logs',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PlaygroundRouteRoute = PlaygroundRouteRouteImport.update({
+  id: '/playground',
+  path: '/playground',
   getParentRoute: () => rootRouteImport,
 } as any)
 const HomeRouteRoute = HomeRouteRouteImport.update({
@@ -92,12 +92,12 @@ const OauthConsentRoute = OauthConsentRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/home': typeof HomeRouteRoute
+  '/playground': typeof PlaygroundRouteRoute
   '/request-logs': typeof RequestLogsRouteRoute
   '/resources': typeof ResourcesRouteRouteWithChildren
   '/retrieval': typeof RetrievalRouteRoute
   '/sessions': typeof SessionsRouteRouteWithChildren
   '/settings': typeof SettingsRouteRoute
-  '/studio': typeof StudioRouteRoute
   '/oauth/consent': typeof OauthConsentRoute
   '/oauth/setup': typeof OauthSetupRoute
   '/oauth/verify': typeof OauthVerifyRoute
@@ -107,10 +107,10 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/home': typeof HomeRouteRoute
+  '/playground': typeof PlaygroundRouteRoute
   '/request-logs': typeof RequestLogsRouteRoute
   '/retrieval': typeof RetrievalRouteRoute
   '/settings': typeof SettingsRouteRoute
-  '/studio': typeof StudioRouteRoute
   '/oauth/consent': typeof OauthConsentRoute
   '/oauth/setup': typeof OauthSetupRoute
   '/oauth/verify': typeof OauthVerifyRoute
@@ -121,12 +121,12 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/home': typeof HomeRouteRoute
+  '/playground': typeof PlaygroundRouteRoute
   '/request-logs': typeof RequestLogsRouteRoute
   '/resources': typeof ResourcesRouteRouteWithChildren
   '/retrieval': typeof RetrievalRouteRoute
   '/sessions': typeof SessionsRouteRouteWithChildren
   '/settings': typeof SettingsRouteRoute
-  '/studio': typeof StudioRouteRoute
   '/oauth/consent': typeof OauthConsentRoute
   '/oauth/setup': typeof OauthSetupRoute
   '/oauth/verify': typeof OauthVerifyRoute
@@ -138,12 +138,12 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/home'
+    | '/playground'
     | '/request-logs'
     | '/resources'
     | '/retrieval'
     | '/sessions'
     | '/settings'
-    | '/studio'
     | '/oauth/consent'
     | '/oauth/setup'
     | '/oauth/verify'
@@ -153,10 +153,10 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/home'
+    | '/playground'
     | '/request-logs'
     | '/retrieval'
     | '/settings'
-    | '/studio'
     | '/oauth/consent'
     | '/oauth/setup'
     | '/oauth/verify'
@@ -166,12 +166,12 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/home'
+    | '/playground'
     | '/request-logs'
     | '/resources'
     | '/retrieval'
     | '/sessions'
     | '/settings'
-    | '/studio'
     | '/oauth/consent'
     | '/oauth/setup'
     | '/oauth/verify'
@@ -182,12 +182,12 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   HomeRouteRoute: typeof HomeRouteRoute
+  PlaygroundRouteRoute: typeof PlaygroundRouteRoute
   RequestLogsRouteRoute: typeof RequestLogsRouteRoute
   ResourcesRouteRoute: typeof ResourcesRouteRouteWithChildren
   RetrievalRouteRoute: typeof RetrievalRouteRoute
   SessionsRouteRoute: typeof SessionsRouteRouteWithChildren
   SettingsRouteRoute: typeof SettingsRouteRoute
-  StudioRouteRoute: typeof StudioRouteRoute
   OauthConsentRoute: typeof OauthConsentRoute
   OauthSetupRoute: typeof OauthSetupRoute
   OauthVerifyRoute: typeof OauthVerifyRoute
@@ -195,13 +195,6 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/studio': {
-      id: '/studio'
-      path: '/studio'
-      fullPath: '/studio'
-      preLoaderRoute: typeof StudioRouteRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/settings': {
       id: '/settings'
       path: '/settings'
@@ -235,6 +228,13 @@ declare module '@tanstack/react-router' {
       path: '/request-logs'
       fullPath: '/request-logs'
       preLoaderRoute: typeof RequestLogsRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/playground': {
+      id: '/playground'
+      path: '/playground'
+      fullPath: '/playground'
+      preLoaderRoute: typeof PlaygroundRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/home': {
@@ -316,12 +316,12 @@ const SessionsRouteRouteWithChildren = SessionsRouteRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   HomeRouteRoute: HomeRouteRoute,
+  PlaygroundRouteRoute: PlaygroundRouteRoute,
   RequestLogsRouteRoute: RequestLogsRouteRoute,
   ResourcesRouteRoute: ResourcesRouteRouteWithChildren,
   RetrievalRouteRoute: RetrievalRouteRoute,
   SessionsRouteRoute: SessionsRouteRouteWithChildren,
   SettingsRouteRoute: SettingsRouteRoute,
-  StudioRouteRoute: StudioRouteRoute,
   OauthConsentRoute: OauthConsentRoute,
   OauthSetupRoute: OauthSetupRoute,
   OauthVerifyRoute: OauthVerifyRoute,

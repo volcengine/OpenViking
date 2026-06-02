@@ -13,7 +13,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '#/components/ui/dialog'
-import { cn } from '#/lib/utils'
 import { FilePreview } from '#/routes/resources/-components/file-preview'
 import { AddResourceForm } from '#/routes/resources/-components/add-resource-page'
 import { ResourceUploadProvider } from '#/routes/resources/-hooks/use-resource-upload'
@@ -35,33 +34,32 @@ import {
   ContextExplorerHeader,
   ContextTree,
   PanelTab,
-  StudioResizeHandle,
+  PlaygroundResizeHandle,
 } from './-components/context-explorer'
 import { TerminalPanel } from './-components/terminal-panel'
 import {
   ROOT_URI,
-  STUDIO_LEFT_WIDTH,
-  STUDIO_LEFT_WIDTH_STORAGE_KEY,
-  STUDIO_MAIN_MIN_WIDTH,
-  STUDIO_RIGHT_WIDTH,
-  STUDIO_RIGHT_WIDTH_STORAGE_KEY,
+  PLAYGROUND_LEFT_WIDTH,
+  PLAYGROUND_LEFT_WIDTH_STORAGE_KEY,
+  PLAYGROUND_MAIN_MIN_WIDTH,
+  PLAYGROUND_RIGHT_WIDTH,
+  PLAYGROUND_RIGHT_WIDTH_STORAGE_KEY,
 } from './-lib/constants'
-import type { StudioPanel, StudioSearch } from './-lib/types'
+import type { PlaygroundPanel, PlaygroundSearch } from './-lib/types'
 import {
-  buildBreadcrumbs,
   clampNumber,
   cleanVikingUri,
   createEntryFromUri,
   getAncestorUris,
   isDirectoryLevelFile,
   mergeExpanded,
-  normalizeStudioResourceUri,
+  normalizePlaygroundResourceUri,
   readStoredNumber,
   visibleContextEntries,
 } from './-lib/utils'
 
-export const Route = createFileRoute('/studio')({
-  validateSearch: (search: Record<string, unknown>): StudioSearch => ({
+export const Route = createFileRoute('/playground')({
+  validateSearch: (search: Record<string, unknown>): PlaygroundSearch => ({
     file: typeof search.file === 'string' ? search.file : undefined,
     panel:
       search.panel === 'agent' || search.panel === 'terminal'
@@ -70,19 +68,19 @@ export const Route = createFileRoute('/studio')({
     session: typeof search.session === 'string' ? search.session : undefined,
     uri: typeof search.uri === 'string' ? search.uri : undefined,
   }),
-  component: StudioRoute,
+  component: PlaygroundRoute,
 })
 
-function StudioRoute() {
+function PlaygroundRoute() {
   return (
     <ResourceUploadProvider>
-      <StudioWorkbench />
+      <PlaygroundWorkbench />
     </ResourceUploadProvider>
   )
 }
 
-function StudioWorkbench() {
-  const { t } = useTranslation('studio')
+function PlaygroundWorkbench() {
+  const { t } = useTranslation('playground')
   const search = Route.useSearch()
   const navigate = useNavigate({ from: Route.fullPath })
   const initialCurrentUri = useMemo(
@@ -102,7 +100,7 @@ function StudioWorkbench() {
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(
     () => new Set(getAncestorUris(initialCurrentUri)),
   )
-  const [activePanel, setActivePanel] = useState<StudioPanel>(
+  const [activePanel, setActivePanel] = useState<PlaygroundPanel>(
     search.panel ?? 'agent',
   )
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false)
@@ -110,18 +108,18 @@ function StudioWorkbench() {
   const layoutRef = useRef<HTMLDivElement>(null)
   const [leftWidth, setLeftWidth] = useState(() =>
     readStoredNumber(
-      STUDIO_LEFT_WIDTH_STORAGE_KEY,
-      STUDIO_LEFT_WIDTH.default,
-      STUDIO_LEFT_WIDTH.min,
-      STUDIO_LEFT_WIDTH.max,
+      PLAYGROUND_LEFT_WIDTH_STORAGE_KEY,
+      PLAYGROUND_LEFT_WIDTH.default,
+      PLAYGROUND_LEFT_WIDTH.min,
+      PLAYGROUND_LEFT_WIDTH.max,
     ),
   )
   const [rightWidth, setRightWidth] = useState(() =>
     readStoredNumber(
-      STUDIO_RIGHT_WIDTH_STORAGE_KEY,
-      STUDIO_RIGHT_WIDTH.default,
-      STUDIO_RIGHT_WIDTH.min,
-      STUDIO_RIGHT_WIDTH.max,
+      PLAYGROUND_RIGHT_WIDTH_STORAGE_KEY,
+      PLAYGROUND_RIGHT_WIDTH.default,
+      PLAYGROUND_RIGHT_WIDTH.min,
+      PLAYGROUND_RIGHT_WIDTH.max,
     ),
   )
   const [resizingPane, setResizingPane] = useState<'context' | 'action' | null>(
@@ -144,7 +142,7 @@ function StudioWorkbench() {
   const syncSearch = useCallback(
     (next: {
       file?: string
-      panel?: StudioPanel
+      panel?: PlaygroundPanel
       session?: string
       uri?: string
     }) => {
@@ -184,7 +182,7 @@ function StudioWorkbench() {
       if (!cleaned) return
 
       setOpeningUri(cleaned)
-      const targetUri = normalizeStudioResourceUri(cleaned)
+      const targetUri = normalizePlaygroundResourceUri(cleaned)
       try {
         const stat = await fetchFsStat(targetUri, { throwOnError: true })
         const isDir = stat.isDir || targetUri.endsWith('/')
@@ -276,26 +274,22 @@ function StudioWorkbench() {
   )
 
   const handlePanelChange = useCallback(
-    (panel: StudioPanel) => {
+    (panel: PlaygroundPanel) => {
       setActivePanel(panel)
       syncSearch({ panel })
     },
     [syncSearch],
   )
 
-  const breadcrumbs = useMemo(() => {
-    const targetUri = selectedFile?.uri ?? currentUri
-    const isFile = selectedFile ? !selectedFile.isDir : false
-    return buildBreadcrumbs(targetUri, isFile)
-  }, [currentUri, selectedFile])
-
   const selectedUri = selectedFile?.uri ?? currentUri
+  const displayUri =
+    selectedUri === ROOT_URI ? selectedUri : selectedUri.replace(/\/$/, '')
   const entries = visibleContextEntries(listQuery.data?.entries ?? [])
   const layoutStyle = useMemo(
     () =>
       ({
-        '--studio-left-width': `${leftWidth}px`,
-        '--studio-right-width': `${rightWidth}px`,
+        '--playground-left-width': `${leftWidth}px`,
+        '--playground-right-width': `${rightWidth}px`,
       }) as CSSProperties,
     [leftWidth, rightWidth],
   )
@@ -318,16 +312,20 @@ function StudioWorkbench() {
       ) => {
         if (!layoutRect) {
           return side === 'left'
-            ? STUDIO_LEFT_WIDTH.max
-            : STUDIO_RIGHT_WIDTH.max
+            ? PLAYGROUND_LEFT_WIDTH.max
+            : PLAYGROUND_RIGHT_WIDTH.max
         }
 
         const hardMax =
-          side === 'left' ? STUDIO_LEFT_WIDTH.max : STUDIO_RIGHT_WIDTH.max
+          side === 'left'
+            ? PLAYGROUND_LEFT_WIDTH.max
+            : PLAYGROUND_RIGHT_WIDTH.max
         const availableMax =
-          layoutRect.width - currentOppositeWidth - STUDIO_MAIN_MIN_WIDTH
+          layoutRect.width - currentOppositeWidth - PLAYGROUND_MAIN_MIN_WIDTH
         return Math.max(
-          side === 'left' ? STUDIO_LEFT_WIDTH.min : STUDIO_RIGHT_WIDTH.min,
+          side === 'left'
+            ? PLAYGROUND_LEFT_WIDTH.min
+            : PLAYGROUND_RIGHT_WIDTH.min,
           Math.min(hardMax, availableMax),
         )
       }
@@ -337,12 +335,12 @@ function StudioWorkbench() {
         if (pane === 'context') {
           const nextWidth = clampNumber(
             startLeftWidth + deltaX,
-            STUDIO_LEFT_WIDTH.min,
+            PLAYGROUND_LEFT_WIDTH.min,
             getMaxWidth('left', rightWidthRef.current),
           )
           setLeftWidth(nextWidth)
           window.localStorage.setItem(
-            STUDIO_LEFT_WIDTH_STORAGE_KEY,
+            PLAYGROUND_LEFT_WIDTH_STORAGE_KEY,
             String(nextWidth),
           )
           return
@@ -350,12 +348,12 @@ function StudioWorkbench() {
 
         const nextWidth = clampNumber(
           startRightWidth - deltaX,
-          STUDIO_RIGHT_WIDTH.min,
+          PLAYGROUND_RIGHT_WIDTH.min,
           getMaxWidth('right', leftWidthRef.current),
         )
         setRightWidth(nextWidth)
         window.localStorage.setItem(
-          STUDIO_RIGHT_WIDTH_STORAGE_KEY,
+          PLAYGROUND_RIGHT_WIDTH_STORAGE_KEY,
           String(nextWidth),
         )
       }
@@ -396,7 +394,7 @@ function StudioWorkbench() {
         className="flex min-h-0 flex-1 flex-col border-t bg-background lg:flex-row"
         style={layoutStyle}
       >
-        <aside className="flex min-h-[260px] min-w-0 flex-col border-b bg-muted/20 lg:min-h-0 lg:w-[var(--studio-left-width)] lg:min-w-[var(--studio-left-width)] lg:border-b-0">
+        <aside className="flex min-h-[260px] min-w-0 flex-col border-b bg-muted/20 lg:min-h-0 lg:w-[var(--playground-left-width)] lg:min-w-[var(--playground-left-width)] lg:border-b-0">
           <ContextExplorerHeader
             isRefreshing={listQuery.isFetching}
             onAddResource={() => setUploadDialogOpen(true)}
@@ -418,7 +416,7 @@ function StudioWorkbench() {
             />
           </div>
         </aside>
-        <StudioResizeHandle
+        <PlaygroundResizeHandle
           active={resizingPane === 'context'}
           label={t('resizeContext')}
           onPointerDown={(event) => handleResizeStart('context', event)}
@@ -426,32 +424,14 @@ function StudioWorkbench() {
 
         <main className="flex min-h-[420px] min-w-0 flex-1 flex-col border-b lg:min-h-0 lg:border-b-0">
           <div className="flex min-h-14 items-center gap-3 border-b px-4">
-            <nav className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto whitespace-nowrap text-sm">
-              {breadcrumbs.map((crumb, index) => (
-                <span
-                  key={crumb.uri}
-                  className="flex shrink-0 items-center gap-1.5"
-                >
-                  {index > 0 ? (
-                    <span className="font-mono text-xs text-muted-foreground/60">
-                      /
-                    </span>
-                  ) : null}
-                  <button
-                    type="button"
-                    className={cn(
-                      'rounded px-1.5 py-1 font-mono text-xs transition-colors hover:bg-muted',
-                      index === breadcrumbs.length - 1
-                        ? 'font-semibold text-foreground'
-                        : 'text-muted-foreground',
-                    )}
-                    onClick={() => void revealResource(crumb.uri)}
-                  >
-                    {crumb.label}
-                  </button>
-                </span>
-              ))}
-            </nav>
+            <button
+              type="button"
+              className="min-w-0 flex-1 truncate rounded px-1.5 py-1 text-left font-mono text-xs font-semibold text-foreground transition-colors hover:bg-muted"
+              title={selectedUri}
+              onClick={() => void revealResource(selectedUri)}
+            >
+              {displayUri}
+            </button>
             <Button
               type="button"
               size="icon-sm"
@@ -473,13 +453,13 @@ function StudioWorkbench() {
             />
           </div>
         </main>
-        <StudioResizeHandle
+        <PlaygroundResizeHandle
           active={resizingPane === 'action'}
           label={t('resizeAction')}
           onPointerDown={(event) => handleResizeStart('action', event)}
         />
 
-        <aside className="flex min-h-[460px] min-w-0 flex-col bg-muted/15 lg:min-h-0 lg:w-[var(--studio-right-width)] lg:min-w-[var(--studio-right-width)]">
+        <aside className="flex min-h-[460px] min-w-0 flex-col bg-muted/15 lg:min-h-0 lg:w-[var(--playground-right-width)] lg:min-w-[var(--playground-right-width)]">
           <div className="flex h-14 items-center border-b px-3">
             <div className="inline-flex rounded-lg border bg-background p-1">
               <PanelTab

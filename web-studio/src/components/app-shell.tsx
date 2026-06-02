@@ -91,9 +91,9 @@ const NAV_ITEMS: readonly NavItem[] = [
   },
   {
     icon: PlugZapIcon,
-    id: 'studio',
-    titleKey: 'navigation.studio.title',
-    to: '/studio',
+    id: 'playground',
+    titleKey: 'navigation.playground.title',
+    to: '/playground',
   },
   {
     icon: FolderTreeIcon,

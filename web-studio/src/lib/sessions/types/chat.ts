@@ -15,7 +15,16 @@ export type ChatStatus = 'idle' | 'streaming' | 'error'
 export interface StreamToolCall {
   name: string
   arguments: string
+  iteration?: number
   result?: string
+  success?: boolean
+}
+
+export function isStreamToolCallError(toolCall: StreamToolCall): boolean {
+  if (typeof toolCall.success === 'boolean') {
+    return !toolCall.success
+  }
+  return Boolean(toolCall.result?.trim().toLowerCase().startsWith('error'))
 }
 
 /** Full chat state exposed by useChat. */

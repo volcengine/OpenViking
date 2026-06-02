@@ -30,6 +30,8 @@ from openviking_cli.retrieve.types import (
     MatchedContext,
     QueryResult,
     RelatedContext,
+    ThinkingTrace,
+    TraceEventType,
     TypedQuery,
 )
 from openviking_cli.utils.config import RerankConfig, RetrievalConfig
@@ -113,6 +115,7 @@ class HierarchicalRetriever:
             scope_dsl: Additional scope constraints passed from public find/search filter
         """
         t0 = time.monotonic()
+        thinking_trace = ThinkingTrace()
         # Use custom threshold or default threshold
         effective_threshold = score_threshold if score_threshold is not None else self.threshold
 
@@ -120,16 +123,34 @@ class HierarchicalRetriever:
         vector_proxy = VikingDBManagerProxy(self.vector_store, ctx)
 
         target_dirs = [d for d in (query.target_directories or []) if d]
+        thinking_trace.add_event(
+            TraceEventType.SEARCH_DIRECTORY_START,
+            "Started hierarchical retrieval",
+            {
+                "query": query.query,
+                "context_type": query.context_type.value if query.context_type else None,
+                "target_directories": target_dirs,
+                "limit": limit,
+                "mode": mode,
+                "score_threshold": effective_threshold,
+            },
+        )
 
         if not await vector_proxy.collection_exists_bound():
             logger.warning(
                 "[RecursiveSearch] Collection %s does not exist",
                 vector_proxy.collection_name,
             )
+            thinking_trace.add_event(
+                TraceEventType.SEARCH_SUMMARY,
+                "Vector collection does not exist",
+                {"collection": vector_proxy.collection_name, "result_count": 0},
+            )
             return QueryResult(
                 query=query,
                 matched_contexts=[],
                 searched_directories=[],
+                thinking_trace=thinking_trace,
             )
 
         # Generate query vectors once to avoid duplicate embedding calls
@@ -156,6 +177,22 @@ class HierarchicalRetriever:
             scope_dsl=scope_dsl,
             limit=max(limit, self.GLOBAL_SEARCH_TOPK),
         )
+        thinking_trace.add_event(
+            TraceEventType.SEARCH_DIRECTORY_RESULT,
+            "Global vector search completed",
+            {
+                "scope": "global_roots",
+                "result_count": len(global_results),
+                "top_candidates": [
+                    {
+                        "uri": r.get("uri", ""),
+                        "level": r.get("level", 2),
+                        "score": r.get("_score", 0.0),
+                    }
+                    for r in global_results[: min(len(global_results), 10)]
+                ],
+            },
+        )
 
         # Debug: Print all URIs in global_results
         if logger.isEnabledFor(logging.DEBUG):
@@ -180,6 +217,16 @@ class HierarchicalRetriever:
             root_uris,
             global_results,
             mode=mode,
+        )
+        thinking_trace.add_event(
+            TraceEventType.DIRECTORY_QUEUED,
+            "Starting directories queued",
+            {
+                "root_directories": root_uris,
+                "starting_points": [
+                    {"uri": uri, "score": score} for uri, score in starting_points
+                ],
+            },
         )
 
         # Add global hits to the result pool only when they match the requested level.
@@ -210,6 +257,7 @@ class HierarchicalRetriever:
             scope_dsl=scope_dsl,
             initial_candidates=initial_candidates,
             level=level,
+            thinking_trace=thinking_trace,
         )
 
         # Step 6: Convert results
@@ -226,11 +274,21 @@ class HierarchicalRetriever:
             latency_ms=elapsed_ms,
             rerank_used=self._rerank_client is not None and mode == RetrieverMode.THINKING,
         )
+        thinking_trace.add_event(
+            TraceEventType.SEARCH_SUMMARY,
+            "Hierarchical retrieval completed",
+            {
+                "result_count": len(final),
+                "latency_ms": round(elapsed_ms, 2),
+                "rerank_used": self._rerank_client is not None and mode == RetrieverMode.THINKING,
+            },
+        )
 
         return QueryResult(
             query=query,
             matched_contexts=final,
             searched_directories=root_uris,
+            thinking_trace=thinking_trace,
         )
 
     async def _global_vector_search(
@@ -375,6 +433,7 @@ class HierarchicalRetriever:
         scope_dsl: Optional[Dict[str, Any]] = None,
         initial_candidates: Optional[List[Dict[str, Any]]] = None,
         level: Optional[List[int]] = None,
+        thinking_trace: Optional[ThinkingTrace] = None,
     ) -> List[Dict[str, Any]]:
         """
         Recursive search with directory priority return and score propagation.
@@ -416,9 +475,25 @@ class HierarchicalRetriever:
                         logger.debug(
                             f"[RecursiveSearch] Initial candidate URI {uri} score {score:.4f} did not pass threshold {effective_threshold}"
                         )
+                        if thinking_trace:
+                            thinking_trace.add_event(
+                                TraceEventType.CANDIDATE_EXCLUDED,
+                                "Initial candidate excluded by threshold",
+                                {
+                                    "uri": uri,
+                                    "score": score,
+                                    "threshold": effective_threshold,
+                                },
+                            )
                         continue
                     r["_final_score"] = score
                     collected_by_uri[uri] = r
+                    if thinking_trace:
+                        thinking_trace.add_event(
+                            TraceEventType.CANDIDATE_SELECTED,
+                            "Initial candidate selected",
+                            {"uri": uri, "score": score, "level": r.get("level", 2)},
+                        )
                     logger.debug(
                         f"[RecursiveSearch] Added initial candidate: {uri} (score: {score:.4f})"
                     )
@@ -451,6 +526,12 @@ class HierarchicalRetriever:
                     continue
                 visited.add(current_uri)
                 logger.info(f"[RecursiveSearch] Entering URI: {current_uri}")
+                if thinking_trace:
+                    thinking_trace.add_event(
+                        TraceEventType.SEARCH_DIRECTORY_START,
+                        "Searching child contexts",
+                        {"uri": current_uri, "parent_score": current_score},
+                    )
                 batch.append((current_uri, current_score))
 
             if not batch:
@@ -465,6 +546,24 @@ class HierarchicalRetriever:
                 telemetry.count("vector.searches", 1)
                 telemetry.count("vector.scored", len(results))
                 telemetry.count("vector.scanned", len(results))
+                if thinking_trace:
+                    thinking_trace.add_event(
+                        TraceEventType.SEARCH_DIRECTORY_RESULT,
+                        "Child search completed",
+                        {
+                            "uri": current_uri,
+                            "parent_score": current_score,
+                            "result_count": len(results),
+                            "top_candidates": [
+                                {
+                                    "uri": r.get("uri", ""),
+                                    "level": r.get("level", 2),
+                                    "score": r.get("_score", 0.0),
+                                }
+                                for r in results[: min(len(results), 10)]
+                            ],
+                        },
+                    )
 
                 if not results:
                     continue
@@ -486,6 +585,17 @@ class HierarchicalRetriever:
                         logger.debug(
                             f"[RecursiveSearch] URI {uri} score {final_score} did not pass threshold {effective_threshold}"
                         )
+                        if thinking_trace:
+                            thinking_trace.add_event(
+                                TraceEventType.CANDIDATE_EXCLUDED,
+                                "Candidate excluded by threshold",
+                                {
+                                    "uri": uri,
+                                    "score": final_score,
+                                    "threshold": effective_threshold,
+                                    "level": r.get("level", 2),
+                                },
+                            )
                         continue
 
                     telemetry.count("vector.passed", 1)
@@ -495,6 +605,16 @@ class HierarchicalRetriever:
                         if previous is None or final_score > previous.get("_final_score", 0):
                             r["_final_score"] = final_score
                             collected_by_uri[uri] = r
+                            if thinking_trace:
+                                thinking_trace.add_event(
+                                    TraceEventType.CANDIDATE_SELECTED,
+                                    "Candidate selected",
+                                    {
+                                        "uri": uri,
+                                        "score": final_score,
+                                        "level": r.get("level", 2),
+                                    },
+                                )
                             logger.debug(
                                 "[RecursiveSearch] Updated URI: %s candidate score to %.4f",
                                 uri,
@@ -504,6 +624,12 @@ class HierarchicalRetriever:
                     # Only recurse into directories (L0/L1). L2 files are terminal hits.
                     if uri not in visited and r.get("level", 2) != 2:
                         heapq.heappush(dir_queue, (-final_score, uri))
+                        if thinking_trace:
+                            thinking_trace.add_event(
+                                TraceEventType.DIRECTORY_QUEUED,
+                                "Directory queued for recursive search",
+                                {"uri": uri, "score": final_score, "level": r.get("level", 2)},
+                            )
 
             # Convergence check after each parallel expansion round.
             current_topk = sorted(
@@ -516,13 +642,45 @@ class HierarchicalRetriever:
 
             if current_topk_uris == prev_topk_uris and len(current_topk_uris) >= limit:
                 convergence_rounds += 1
+                if thinking_trace:
+                    thinking_trace.add_event(
+                        TraceEventType.CONVERGENCE_CHECK,
+                        "Top results unchanged",
+                        {
+                            "round": convergence_rounds,
+                            "pool_size": current_pool_size,
+                            "topk_count": len(current_topk_uris),
+                        },
+                    )
 
                 if convergence_rounds >= self.MAX_CONVERGENCE_ROUNDS:
+                    if thinking_trace:
+                        thinking_trace.add_event(
+                            TraceEventType.SEARCH_CONVERGED,
+                            "Search converged by stable top results",
+                            {"round": convergence_rounds},
+                        )
                     break
             elif current_pool_size == prev_pool_size:
                 stagnant_rounds += 1
+                if thinking_trace:
+                    thinking_trace.add_event(
+                        TraceEventType.CONVERGENCE_CHECK,
+                        "Candidate pool unchanged",
+                        {
+                            "round": stagnant_rounds,
+                            "pool_size": current_pool_size,
+                            "topk_count": len(current_topk_uris),
+                        },
+                    )
 
                 if stagnant_rounds >= self.MAX_CONVERGENCE_ROUNDS:
+                    if thinking_trace:
+                        thinking_trace.add_event(
+                            TraceEventType.SEARCH_CONVERGED,
+                            "Search stopped by stagnant candidate pool",
+                            {"round": stagnant_rounds},
+                        )
                     break
             else:
                 convergence_rounds = 0

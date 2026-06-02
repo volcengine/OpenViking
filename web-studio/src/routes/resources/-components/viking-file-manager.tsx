@@ -61,8 +61,8 @@ function isDirectoryUri(uri: string): boolean {
   return uri.endsWith('/')
 }
 
-const TREE_WIDTH_STORAGE_KEY = 'web-studio-resource-tree-width'
-const TREE_HEIGHT_STORAGE_KEY = 'web-studio-resource-tree-height'
+const TREE_WIDTH_STORAGE_KEY = 'openviking.playground.resourceTree.width'
+const TREE_HEIGHT_STORAGE_KEY = 'openviking.playground.resourceTree.height'
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max)
@@ -431,7 +431,7 @@ export function VikingFileManager({
   )
 
   return (
-    <div className="web-studio-resource-fs -mx-4 -my-6 flex h-[calc(100svh-3rem)] flex-col md:-mx-6">
+    <div className="web-playground-resource-fs -mx-4 -my-6 flex h-[calc(100svh-3rem)] flex-col md:-mx-6">
       <div ref={layoutRef} className="flex min-h-0 flex-1 flex-col md:flex-row">
         <section
           className="flex h-[var(--resource-tree-height)] min-h-[190px] min-w-0 flex-col bg-muted/30 md:h-auto md:min-h-0 md:w-[var(--resource-tree-width)] md:min-w-[var(--resource-tree-width)]"

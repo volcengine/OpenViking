@@ -56,6 +56,13 @@ def get_bot_url() -> str:
     return BOT_API_URL
 
 
+def _bind_effective_user(body: dict, ctx: RequestContext) -> dict:
+    """Bind proxied bot requests to the already-authenticated OpenViking user."""
+    body = dict(body)
+    body["user_id"] = ctx.user.user_id
+    return body
+
+
 @router.get("/health")
 async def health_check(request: Request):
     """Health check endpoint for Bot API.
@@ -107,6 +114,7 @@ async def chat(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid JSON in request body",
         )
+    body = _bind_effective_user(body, _ctx)
 
     try:
         async with _create_bot_proxy_client() as client:
@@ -159,6 +167,7 @@ async def feedback(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid JSON in request body",
         )
+    body = _bind_effective_user(body, _ctx)
 
     try:
         async with _create_bot_proxy_client() as client:
@@ -212,6 +221,7 @@ async def chat_stream(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid JSON in request body",
         )
+    body = _bind_effective_user(body, _ctx)
 
     async def event_stream() -> AsyncGenerator[str, None]:
         """Generate SSE events from bot response stream."""

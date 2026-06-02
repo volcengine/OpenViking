@@ -406,10 +406,41 @@ class VikingClient:
             memories = getattr(result, "memories", None)
             return memories if isinstance(memories, list) else []
 
+        async def _find_with_provenance(target_uri: str) -> dict[str, Any]:
+            if hasattr(self.client, "_http"):
+                normalized_target = self.client._normalize_target_uri(target_uri)
+                response = await self.client._http.post(
+                    "/api/v1/search/find",
+                    json={
+                        "query": query,
+                        "target_uri": normalized_target,
+                        "limit": limit,
+                        "include_provenance": True,
+                    },
+                )
+                response_data = self.client._handle_response_data(response)
+                return response_data.get("result") or {}
+
+            result = await self.client.find(
+                query=query,
+                target_uri=target_uri,
+                limit=limit,
+            )
+            if hasattr(result, "to_dict"):
+                return result.to_dict(include_provenance=True)
+            if isinstance(result, dict):
+                return result
+            return {"memories": _extract_memories(result)}
+
         if isinstance(user_ids, str):
             user_ids = [user_ids]
 
         all_user_memories = []
+        retrieval_trace: dict[str, Any] = {
+            "query": query,
+            "limit": limit,
+            "searches": [],
+        }
 
         for user_id in user_ids:
             effective_user_id = self._effective_user_id(user_id)
@@ -419,22 +450,48 @@ class VikingClient:
                 continue
 
             uri_user_memory = self._memory_target_uri(effective_user_id)
-            user_memory = await self.client.find(
-                query=query,
-                target_uri=uri_user_memory,
-                limit=limit,
-            )
+            user_memory = await _find_with_provenance(uri_user_memory)
             all_user_memories.extend(_extract_memories(user_memory))
+            retrieval_trace["searches"].append(
+                {
+                    "scope": "user_memory",
+                    "user_id": effective_user_id,
+                    "target_uri": uri_user_memory,
+                    "total": user_memory.get("total") if isinstance(user_memory, dict) else None,
+                    "query_plan": user_memory.get("query_plan")
+                    if isinstance(user_memory, dict)
+                    else None,
+                    "provenance": user_memory.get("provenance", [])
+                    if isinstance(user_memory, dict)
+                    else [],
+                }
+            )
 
         uri_agent_memory = self._agent_memory_target_uri(agent_user_id)
-        agent_memory_result = await self.client.find(
-            query=query,
-            target_uri=uri_agent_memory,
-            limit=limit,
+        agent_memory_result = await _find_with_provenance(uri_agent_memory)
+        retrieval_trace["searches"].append(
+            {
+                "scope": "agent_memory",
+                "agent_user_id": agent_user_id,
+                "target_uri": uri_agent_memory,
+                "total": agent_memory_result.get("total")
+                if isinstance(agent_memory_result, dict)
+                else None,
+                "query_plan": agent_memory_result.get("query_plan")
+                if isinstance(agent_memory_result, dict)
+                else None,
+                "provenance": agent_memory_result.get("provenance", [])
+                if isinstance(agent_memory_result, dict)
+                else [],
+            }
         )
         all_agent_memories = _extract_memories(agent_memory_result)
 
-        return {"user_memory": all_user_memories, "agent_memory": all_agent_memories}
+        return {
+            "user_memory": all_user_memories,
+            "agent_memory": all_agent_memories,
+            "retrieval_trace": retrieval_trace,
+        }
 
     async def search_experiences(self, query: str, limit: int = 5) -> list[Any]:
         """用 query 检索 agent experience 记忆。"""
@@ -628,6 +685,14 @@ class VikingClient:
             session_id,
             keep_recent_count=keep_recent_count,
         )
+
+    async def get_task(
+        self,
+        task_id: str,
+        user_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        client = await self._session_client_for_user(user_id)
+        return await client.get_task(task_id)
 
     async def commit(
         self,

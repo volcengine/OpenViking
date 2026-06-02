@@ -36,8 +36,8 @@ import { MessageList } from '#/routes/sessions/-components/message-list'
 import type { ResourceOpenHandler } from '../-lib/types'
 import {
   getErrorMessage,
-  readStudioAgentSessionIds,
-  registerStudioAgentSessionId,
+  readPlaygroundAgentSessionIds,
+  registerPlaygroundAgentSessionId,
   withTimeout,
 } from '../-lib/utils'
 
@@ -50,7 +50,7 @@ export function AgentPanel({
   onOpenResource: ResourceOpenHandler
   onSessionChange: (sessionId: string) => void
 }) {
-  const { t } = useTranslation('studio')
+  const { t } = useTranslation('playground')
   const [sessionId, setSessionId] = useState(initialSessionId ?? '')
   const [historyOpen, setHistoryOpen] = useState(false)
   const [sessionError, setSessionError] = useState<string | null>(null)
@@ -60,14 +60,14 @@ export function AgentPanel({
   const createSession = useCreateSession()
   const { data: sessions, isLoading: isLoadingSessions } = useSessionList()
   const { getTitle } = useSessionTitles()
-  const [studioSessionIds, setStudioSessionIds] = useState<string[]>(() =>
-    readStudioAgentSessionIds(),
+  const [playgroundSessionIds, setPlaygroundSessionIds] = useState<string[]>(
+    () => readPlaygroundAgentSessionIds(),
   )
   const { data: historyMessages } = useSessionMessages(sessionId || undefined)
   const chat = useChat({
     initialMessages: historyMessages,
     persistMessages: Boolean(sessionId),
-    sessionId: sessionId || 'studio-preview',
+    sessionId: sessionId || 'playground-preview',
   })
   const scrollRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -85,7 +85,9 @@ export function AgentPanel({
         12_000,
         t('agent.createTimeout'),
       )
-      setStudioSessionIds(registerStudioAgentSessionId(result.session_id))
+      setPlaygroundSessionIds(
+        registerPlaygroundAgentSessionId(result.session_id),
+      )
       setSessionId(result.session_id)
       onSessionChange(result.session_id)
     } catch (error) {
@@ -111,7 +113,9 @@ export function AgentPanel({
         12_000,
         t('agent.createTimeout'),
       )
-      setStudioSessionIds(registerStudioAgentSessionId(result.session_id))
+      setPlaygroundSessionIds(
+        registerPlaygroundAgentSessionId(result.session_id),
+      )
       setSessionTitle(result.session_id, t('agent.newSessionTitle'))
       setSessionId(result.session_id)
       onSessionChange(result.session_id)
@@ -130,7 +134,7 @@ export function AgentPanel({
       creationStartedRef.current = true
       setSessionError(null)
       setIsCreatingSession(false)
-      setStudioSessionIds(registerStudioAgentSessionId(nextSessionId))
+      setPlaygroundSessionIds(registerPlaygroundAgentSessionId(nextSessionId))
       setSessionId(nextSessionId)
       onSessionChange(nextSessionId)
       setHistoryOpen(false)
@@ -149,7 +153,7 @@ export function AgentPanel({
 
   useEffect(() => {
     if (sessionId) {
-      setStudioSessionIds(registerStudioAgentSessionId(sessionId))
+      setPlaygroundSessionIds(registerPlaygroundAgentSessionId(sessionId))
     }
   }, [sessionId])
 
@@ -177,12 +181,12 @@ export function AgentPanel({
       (sessions ?? []).map((session) => [session.session_id, session]),
     )
 
-    return studioSessionIds
+    return playgroundSessionIds
       .map((sessionId) => sessionById.get(sessionId))
       .filter((session): session is NonNullable<typeof session> =>
         Boolean(session),
       )
-  }, [sessions, studioSessionIds])
+  }, [sessions, playgroundSessionIds])
 
   return (
     <>
@@ -260,6 +264,7 @@ export function AgentPanel({
             <AgentEmptyState onSend={send} />
           ) : (
             <MessageList
+              layout="expanded"
               messages={chat.messages}
               onResourceClick={onOpenResource}
               streaming={
@@ -373,7 +378,7 @@ export function BotModePrompt({
   detail: string
   onRetry: () => void
 }) {
-  const { t } = useTranslation('studio')
+  const { t } = useTranslation('playground')
   return (
     <div className="flex h-full items-center justify-center">
       <div className="grid max-w-md gap-4 rounded-xl border border-primary/25 bg-primary/5 p-5 text-sm">
@@ -416,7 +421,7 @@ export function AgentEmptyState({
 }: {
   onSend: (message: string) => void
 }) {
-  const { t } = useTranslation('studio')
+  const { t } = useTranslation('playground')
   const prompts = t('agent.empty.prompts', {
     returnObjects: true,
   }) as string[]

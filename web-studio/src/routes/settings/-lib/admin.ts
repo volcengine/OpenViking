@@ -85,7 +85,7 @@ function setOptionalHeader(
 function createAdminClient(connection: AdminConnection) {
   const headers: Record<string, string> = {
     Accept: 'application/json',
-    'X-OpenViking-Agent': connection.agentId.trim() || 'web-studio',
+    'X-OpenViking-Agent': connection.agentId.trim() || 'web-playground',
   }
   setOptionalHeader(headers, 'X-API-Key', connection.apiKey)
   setOptionalHeader(headers, 'X-OpenViking-Account', connection.accountId)

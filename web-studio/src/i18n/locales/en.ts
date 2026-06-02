@@ -6,7 +6,7 @@ const en = {
       github: 'GitHub',
     },
     header: {
-      defaultTitle: 'OpenViking Studio',
+      defaultTitle: 'OpenViking Playground',
     },
     navigation: {
       home: {
@@ -30,14 +30,14 @@ const en = {
       sessions: {
         title: 'Sessions',
       },
-      studio: {
+      playground: {
         title: 'Playground',
       },
     },
     sidebar: {
       loadingSessions: 'Loading...',
       noSessions: 'No sessions',
-      workspaceGroupLabel: 'OpenViking Studio',
+      workspaceGroupLabel: 'OpenViking Playground',
     },
   },
   common: {
@@ -82,7 +82,7 @@ const en = {
       },
       agentId: {
         label: 'Agent',
-        placeholder: 'web-studio',
+        placeholder: 'web-playground',
       },
       apiKey: {
         label: 'API Key',
@@ -128,7 +128,7 @@ const en = {
     connection: {
       adminError: 'Could not load admin identities: {{message}}',
       description:
-        'Select the account and user that Studio should send with OpenViking requests.',
+        'Select the account and user that Playground should send with OpenViking requests.',
       noKey:
         'Enter an API key with admin access to load account and user choices.',
       title: 'Connection settings',
@@ -181,12 +181,12 @@ const en = {
     },
     page: {
       description:
-        'Configure the active OpenViking identity and manage accounts, users, and API keys from Studio.',
+        'Configure the active OpenViking identity and manage accounts, users, and API keys from Playground.',
       title: 'Connection & Identity',
     },
     placeholders: {
       account: 'team-account',
-      agent: 'web-studio',
+      agent: 'web-playground',
       apiKey: 'Enter X-API-Key or Bearer token',
       baseUrl: 'http://127.0.0.1:1933',
       user: 'default',
@@ -294,7 +294,7 @@ const en = {
           title: 'Playground',
         },
         requestLogs: {
-          description: 'Inspect Studio requests, status, and latency.',
+          description: 'Inspect Playground requests, status, and latency.',
           title: 'Request Logs',
         },
         resources: {
@@ -315,7 +315,7 @@ const en = {
     page: {
       description:
         'Aligned with the product overview: menu entries, context data volume, today tokens, today retrievals, agent access, token trend, and context commit stats.',
-      eyebrow: 'OpenViking Studio',
+      eyebrow: 'OpenViking Playground',
       settings: 'Connection & Settings',
       title: 'Overview',
     },
@@ -370,7 +370,7 @@ const en = {
       description: 'Failed to load audited request logs from the server.',
       title: 'Request failed',
     },
-    eyebrow: 'Studio telemetry',
+    eyebrow: 'Playground telemetry',
     filters: {
       all: 'All logs',
       apiTypePlaceholder: 'API type',
@@ -710,6 +710,7 @@ const en = {
       toolCall: 'Tool call',
       toolInput: 'Input',
       toolResult: 'Result',
+      loadMoreRefs: 'Load {{count}} more ({{remaining}} remaining)',
       toolStatus: {
         completed: 'Completed',
         failed: 'Failed',
@@ -745,7 +746,7 @@ const en = {
       scopesLabel: 'Scopes',
       scopesNone: '(none)',
       signInRequired:
-        'Sign in to OpenViking Studio (Connection & Identity) or paste an API key below to authorize this client.',
+        'Sign in to OpenViking Playground (Connection & Identity) or paste an API key below to authorize this client.',
       openConnectionDialog: 'Open Connection & Identity',
       authorize: 'Authorize',
       deny: 'Deny',
@@ -771,10 +772,10 @@ const en = {
       verifyError: 'Authorization failed: {{message}}',
       noApiKey: 'No API key available. Select an identity or paste a key.',
       signInRequired:
-        'Sign in to OpenViking Studio (Connection & Identity) or paste an API key below to verify.',
+        'Sign in to OpenViking Playground (Connection & Identity) or paste an API key below to verify.',
     },
   },
-  studio: {
+  playground: {
     copyUri: 'Copy current URI',
     copied: 'URI copied',
     resizeContext: 'Resize context tree width',
@@ -805,7 +806,7 @@ const en = {
       autoRetrieve: 'The Agent retrieves on its own from messages and tools',
       history: 'Session history',
       newSession: 'New session',
-      creating: 'Creating Studio session...',
+      creating: 'Creating Playground session...',
       detectingBot: 'Detecting bot mode...',
       createFailed: 'Failed to create session: {{error}}',
       retry: 'Retry',
@@ -816,8 +817,8 @@ const en = {
       loadingSessions: 'Loading sessions...',
       noSessions: 'No session history yet',
       createTimeout:
-        'Creating the Studio session timed out. Check your connection settings and try again.',
-      newSessionTitle: 'New Studio session',
+        'Creating the Playground session timed out. Check your connection settings and try again.',
+      newSessionTitle: 'New Playground session',
       botPrompt: {
         title: 'Please enable bot mode',
         description:

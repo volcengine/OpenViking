@@ -1,5 +1,6 @@
 """Tool registry for dynamic tool management."""
 
+from dataclasses import dataclass
 import time
 from typing import Any
 
@@ -12,6 +13,12 @@ from vikingbot.hooks.manager import hook_manager
 from vikingbot.integrations.langfuse import LangfuseClient
 from vikingbot.sandbox.manager import SandboxManager
 from vikingbot.utils.tracing import get_current_response_id
+
+
+@dataclass
+class ToolExecutionResult:
+    output: str
+    success: bool
 
 
 class ToolRegistry:
@@ -141,7 +148,7 @@ class ToolRegistry:
         sandbox_manager: SandboxManager | None = None,
         sender_id: str | None = None,
         memory_user_ids: list[str] | None = None,
-    ) -> str:
+    ) -> ToolExecutionResult:
         """
         Execute a tool by name with given parameters.
 
@@ -154,14 +161,14 @@ class ToolRegistry:
             memory_user_ids: List of user IDs for memory retrieval.
 
         Returns:
-            Tool execution result as string.
+            Tool execution result and runtime success status.
 
         Raises:
             KeyError: If tool not found.
         """
         tool = self._tools.get(name)
         if not tool:
-            return f"Error: Tool '{name}' not found"
+            return ToolExecutionResult(output=f"Error: Tool '{name}' not found", success=False)
 
         tool_context = ToolContext(
             session_key=session_key,
@@ -174,6 +181,7 @@ class ToolRegistry:
         tool_span = None
         start_time = time.time()
         result = None
+        success = False
         response_id = get_current_response_id()
         try:
             if self.langfuse.enabled:
@@ -190,22 +198,21 @@ class ToolRegistry:
                 result = f"Error: Invalid parameters for tool '{name}': " + "; ".join(errors)
             else:
                 result = await tool.execute(tool_context, **params)
+                success = True
         except Exception as e:
             result = e
+            success = False
             logger.exception("Tool call fail: ", e)
         finally:
             # End Langfuse tool call tracing
             duration_ms = (time.time() - start_time) * 1000
             if tool_span is not None:
                 try:
-                    execute_success = not isinstance(result, Exception) and not (
-                        isinstance(result, str) and result.startswith("Error")
-                    )
                     output_str = str(result) if result is not None else None
                     self.langfuse.end_tool_call(
                         span=tool_span,
                         output=output_str,
-                        success=execute_success,
+                        success=success,
                         metadata={
                             "duration_ms": duration_ms,
                             **({"response_id": response_id} if response_id else {}),
@@ -229,9 +236,15 @@ class ToolRegistry:
         )
         result = hook_result.get("result")
         if isinstance(result, Exception):
-            return f"Error executing {name}: {str(result)}"
-        else:
-            return result
+            return ToolExecutionResult(
+                output=f"Error executing {name}: {str(result)}",
+                success=False,
+            )
+
+        output = str(result) if result is not None else ""
+        if output.lstrip().lower().startswith("error"):
+            success = False
+        return ToolExecutionResult(output=output, success=success)
 
     @property
     def tool_names(self) -> list[str]:

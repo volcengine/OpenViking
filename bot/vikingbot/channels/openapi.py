@@ -122,6 +122,13 @@ class OpenAPIChannel(BaseChannel):
         # so that subscriptions are setup before ChannelManager starts
         self._load_bot_channels()
 
+    def _default_user_id(self) -> str:
+        ov_server = getattr(self._global_config, "ov_server", None)
+        return getattr(ov_server, "admin_user_id", None) or "default"
+
+    def _resolve_user_id(self, request: ChatRequest) -> str:
+        return request.user_id or self._default_user_id()
+
     async def start(self) -> None:
         """Start the channel - register routes to external FastAPI app if provided."""
         self._running = True
@@ -218,7 +225,13 @@ class OpenAPIChannel(BaseChannel):
             elif msg.event_type == OutboundEventType.TOOL_CALL:
                 await pending.add_event("tool_call", msg.content)
             elif msg.event_type == OutboundEventType.TOOL_RESULT:
-                await pending.add_event("tool_result", msg.content)
+                await pending.add_event(
+                    "tool_result",
+                    {
+                        "content": msg.content,
+                        "success": bool((msg.metadata or {}).get("success", True)),
+                    },
+                )
             return
 
         # Handle as normal OpenAPIChannel message
@@ -245,7 +258,13 @@ class OpenAPIChannel(BaseChannel):
         elif msg.event_type == OutboundEventType.TOOL_CALL:
             await pending.add_event("tool_call", msg.content)
         elif msg.event_type == OutboundEventType.TOOL_RESULT:
-            await pending.add_event("tool_result", msg.content)
+            await pending.add_event(
+                "tool_result",
+                {
+                    "content": msg.content,
+                    "success": bool((msg.metadata or {}).get("success", True)),
+                },
+            )
 
     def get_router(self) -> APIRouter:
         """Get or create the FastAPI router."""
@@ -446,7 +465,7 @@ class OpenAPIChannel(BaseChannel):
         """Handle a chat request."""
         # Generate or use provided session ID
         session_id = request.session_id or str(uuid.uuid4())
-        user_id = request.user_id or "anonymous"
+        user_id = self._resolve_user_id(request)
 
         # Create session if new
         if session_id not in self._sessions:
@@ -520,7 +539,7 @@ class OpenAPIChannel(BaseChannel):
     async def _handle_chat_stream(self, request: ChatRequest) -> StreamingResponse:
         """Handle a streaming chat request."""
         session_id = request.session_id or str(uuid.uuid4())
-        user_id = request.user_id or "anonymous"
+        user_id = self._resolve_user_id(request)
 
         # Create session if new
         if session_id not in self._sessions:
@@ -587,7 +606,7 @@ class OpenAPIChannel(BaseChannel):
         """Handle a BotChannel chat request."""
         # Generate or use provided session ID
         session_id = request.session_id or str(uuid.uuid4())
-        user_id = request.user_id or "anonymous"
+        user_id = self._resolve_user_id(request)
 
         # Ensure channel has session storage
         if channel_id not in self._bot_sessions:
@@ -669,7 +688,7 @@ class OpenAPIChannel(BaseChannel):
     ) -> StreamingResponse:
         """Handle a BotChannel streaming chat request."""
         session_id = request.session_id or str(uuid.uuid4())
-        user_id = request.user_id or "anonymous"
+        user_id = self._resolve_user_id(request)
 
         # Ensure channel has session storage
         if channel_id not in self._bot_sessions:
