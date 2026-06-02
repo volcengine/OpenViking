@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 import logging
 import math
@@ -12,7 +13,6 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Dict, List, Optional
 
-import jieba
 import xxhash
 
 from openviking.models.embedder.base import EmbedResult, SparseEmbedderBase
@@ -25,6 +25,12 @@ DEFAULT_TOKEN_PATTERN = r"\w+"
 DEFAULT_TOKENIZER = "jieba"
 _CJK_PATTERN = re.compile(r"[\u4e00-\u9fff]+")
 _MIXED_TOKEN_PATTERN = re.compile(r"[\u4e00-\u9fff]+|[^\u4e00-\u9fff\s]+")
+_JIEBA_INSTALL_MESSAGE = (
+    "local_bm25 tokenizer='jieba' requires the optional jieba dependency. "
+    "Falling back to regex tokenization. Install it with: "
+    "pip install 'openviking[local-bm25]'"
+)
+_jieba_missing_warning_logged = False
 
 
 class BM25StatsError(ValueError):
@@ -123,12 +129,25 @@ def _tokenize(
         for piece in _MIXED_TOKEN_PATTERN.findall(text):
             if _CJK_PATTERN.fullmatch(piece):
                 tokens.extend(
-                    token for token in (part.strip() for part in jieba.cut(piece)) if token
+                    token for token in (part.strip() for part in _jieba_cut(piece, pattern)) if token
                 )
             else:
                 tokens.extend(re.findall(pattern, piece))
         return tokens
     raise ValueError("tokenizer must be one of: 'jieba', 'regex'")
+
+
+def _jieba_cut(text: str, fallback_pattern: str) -> List[str]:
+    global _jieba_missing_warning_logged
+
+    try:
+        jieba = importlib.import_module("jieba")
+    except ImportError:
+        if not _jieba_missing_warning_logged:
+            logger.warning(_JIEBA_INSTALL_MESSAGE)
+            _jieba_missing_warning_logged = True
+        return re.findall(fallback_pattern, text)
+    return list(jieba.cut(text))
 
 
 def _hash_token(token: str) -> int:
