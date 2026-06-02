@@ -2,8 +2,6 @@
 
 面向 AI Agent 使用。把下面的指令发送给你的 Agent，让它完成 OpenViking CLI 安装、配置和用法学习。
 
-当前 Agent CLI 自动安装流程还在优化中，可先使用以下对话式安装方式：
-
 ```text
 请在 ~/.openviking/ovcli.conf 写入以下内容：
 {"url":"https://api.vikingdb.cn-beijing.volces.com/openviking","api_key":"Please ask user for Volcengine OpenViking API key."}
