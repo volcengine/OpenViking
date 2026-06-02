@@ -233,11 +233,7 @@ function extractVikingUris(text: string | undefined): string[] {
   }
 
   // Non-JSON tool results may contain XML/plain-text snippets with URI refs.
-  const matches = text.match(VIKING_URI_RE) ?? []
-  for (const match of matches) {
-    const uri = cleanVikingUri(match)
-    if (uri) seen.add(uri)
-  }
+  collectUrisFromText(text, seen)
   return [...seen]
 }
 
@@ -257,6 +253,11 @@ function collectStructuredUris(
   seen: Set<string>,
   path: string[] = [],
 ): void {
+  if (typeof value === 'string') {
+    collectUrisFromText(value, seen)
+    return
+  }
+
   if (Array.isArray(value)) {
     const parentKey = path[path.length - 1]
     if (isUriArrayKey(parentKey)) {
@@ -287,7 +288,20 @@ function collectStructuredUris(
 
     if (Array.isArray(nested) || (nested && typeof nested === 'object')) {
       collectStructuredUris(nested, seen, [...path, key])
+      continue
     }
+
+    if (typeof nested === 'string') {
+      collectUrisFromText(nested, seen)
+    }
+  }
+}
+
+function collectUrisFromText(text: string, seen: Set<string>): void {
+  const matches = text.match(VIKING_URI_RE) ?? []
+  for (const match of matches) {
+    const uri = cleanVikingUri(match)
+    if (uri) seen.add(uri)
   }
 }
 

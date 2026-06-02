@@ -542,7 +542,7 @@ class HierarchicalRetriever:
             )
 
             telemetry = get_current_telemetry()
-            for (_, current_score), results in zip(batch, batch_results, strict=True):
+            for (current_uri, current_score), results in zip(batch, batch_results, strict=True):
                 telemetry.count("vector.searches", 1)
                 telemetry.count("vector.scored", len(results))
                 telemetry.count("vector.scanned", len(results))
