@@ -153,7 +153,7 @@ class MemoryStore:
                 query=current_message,
                 user_ids=search_user_ids,
                 agent_user_id=admin_user_id,
-                limit=30,
+                limit=10,
             )
             if not result:
                 return ""
