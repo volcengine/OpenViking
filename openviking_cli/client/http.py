@@ -39,7 +39,7 @@ from openviking_cli.exceptions import (
 )
 from openviking_cli.retrieve.types import FindResult
 from openviking_cli.session.user_id import UserIdentifier
-from openviking_cli.utils import run_async
+from openviking_cli.utils import get_logger, run_async
 from openviking_cli.utils.config.ovcli_config import load_ovcli_config
 from openviking_cli.utils.uri import VikingURI
 
@@ -66,6 +66,8 @@ ERROR_CODE_TO_EXCEPTION = {
     "SESSION_EXPIRED": SessionExpiredError,
     "UNKNOWN": OpenVikingError,
 }
+
+logger = get_logger(__name__)
 
 
 class _HTTPObserver:
@@ -344,15 +346,26 @@ class AsyncHTTPClient(BaseClient):
         if not dir_path.is_dir():
             raise ValueError(f"Path {dir_path} is not a directory")
 
+        root = dir_path.resolve()
         temp_dir = tempfile.gettempdir()
         zip_path = Path(temp_dir) / f"temp_upload_{uuid.uuid4().hex}.zip"
 
+        entry_count = 0
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
             for file_path in dir_path.rglob("*"):
+                if file_path.is_symlink():
+                    continue
                 if file_path.is_file():
-                    arcname = file_path.relative_to(dir_path)
-                    arcname = str(arcname).replace("\\", "/")
+                    # Defense-in-depth: drop files whose real path escapes the selected root
+                    # if traversal behavior changes or this walk implementation is replaced.
+                    if not file_path.resolve().is_relative_to(root):
+                        continue
+                    arcname = str(file_path.relative_to(dir_path)).replace("\\", "/")
                     zipf.write(file_path, arcname=arcname)
+                    entry_count += 1
+
+        if entry_count == 0:
+            logger.warning("Created empty directory upload archive for %s", dir_path)
 
         return str(zip_path)
 
@@ -388,6 +401,7 @@ class AsyncHTTPClient(BaseClient):
         exclude: Optional[str] = None,
         directly_upload_media: bool = True,
         preserve_structure: Optional[bool] = None,
+        watch_interval: float = 0,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
@@ -407,6 +421,7 @@ class AsyncHTTPClient(BaseClient):
             "include": include,
             "exclude": exclude,
             "directly_upload_media": directly_upload_media,
+            "watch_interval": watch_interval,
             "telemetry": telemetry,
         }
         if preserve_structure is not None:

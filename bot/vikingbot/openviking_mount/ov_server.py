@@ -11,6 +11,16 @@ from vikingbot.openviking_mount.user_apikey_manager import UserApiKeyManager
 viking_resource_prefix = "viking://resources/"
 
 
+def _is_session_key(agent_id: Optional[str]) -> bool:
+    """Whether agent_id is a session key rather than a standalone agent workspace.
+
+    Session keys (e.g. "cli__default__<uuid>") contain "__"; a per-domain id such as
+    the tau2 domain "airline_v0" does not, and is treated as an isolated agent
+    namespace instead of the shared "default" one.
+    """
+    return agent_id is not None and "__" in agent_id
+
+
 class VikingClient:
     def __init__(self, agent_id: Optional[str] = None):
         config = load_config()
@@ -32,8 +42,18 @@ class VikingClient:
         self._namespace_policy_loaded = False
 
         if openviking_config.mode == "local":
-            self.client = ov.AsyncHTTPClient(url=openviking_config.server_url)
-            self.agent_id = "default"
+            # Session keys fall back to the shared "default" namespace; a standalone
+            # per-domain id (e.g. "airline_v0") is treated as an isolated agent workspace
+            # and threaded into the HTTP client so storage is scoped per id.
+            if agent_id is None or _is_session_key(agent_id):
+                self.client = ov.AsyncHTTPClient(url=openviking_config.server_url)
+                self.agent_id = "default"
+            else:
+                self.client = ov.AsyncHTTPClient(
+                    url=openviking_config.server_url,
+                    agent_id=agent_id,
+                )
+                self.agent_id = agent_id
             self.account_id = "default"
             self.user_id = "default"
             self.admin_user_id = "default"
@@ -439,6 +459,10 @@ class VikingClient:
     async def search_experiences(self, query: str, limit: int = 5) -> list[Any]:
         """用 query 检索 agent experience 记忆。"""
         effective_agent_id = self.openviking_config.agent_id or "default"
+        # A per-instance, non-session agent_id overrides the global config so each domain
+        # reads from its own experience namespace.
+        if self.agent_id and not _is_session_key(self.agent_id):
+            effective_agent_id = self.agent_id
         exp_uri = f"viking://agent/{effective_agent_id}/memories/experiences/"
         result = await self.search(query=query, target_uri=exp_uri, limit=limit)
         return result.get("memories", [])
