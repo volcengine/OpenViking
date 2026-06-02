@@ -225,6 +225,7 @@ class SyncHTTPClient:
         include: Optional[str] = None,
         exclude: Optional[str] = None,
         directly_upload_media: bool = True,
+        watch_interval: float = 0,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
@@ -232,18 +233,19 @@ class SyncHTTPClient:
             raise ValueError("Cannot specify both 'to' and 'parent' at the same time.")
         return run_async(
             self._async_client.add_resource(
-                path,
-                to,
-                parent,
-                reason,
-                instruction,
-                wait,
-                timeout,
-                strict,
-                ignore_dirs,
-                include,
-                exclude,
-                directly_upload_media,
+                path=path,
+                to=to,
+                parent=parent,
+                reason=reason,
+                instruction=instruction,
+                wait=wait,
+                timeout=timeout,
+                strict=strict,
+                ignore_dirs=ignore_dirs,
+                include=include,
+                exclude=exclude,
+                directly_upload_media=directly_upload_media,
+                watch_interval=watch_interval,
                 telemetry=telemetry,
             )
         )
