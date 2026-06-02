@@ -554,6 +554,7 @@ class HTTPAccessor(DataAccessor):
                     response_headers=response.headers,
                     content=response.content,
                 )
+                meta["final_url"] = str(response.url)
                 url_type = meta["resolved_url_type"]
                 ext = meta["extension"]
 

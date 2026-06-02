@@ -103,6 +103,11 @@ class LocalClient(BaseClient):
         summarize: bool = False,
         telemetry: TelemetryRequest = False,
         watch_interval: float = 0,
+        depth: int = 0,
+        max_pages: int = 100,
+        include_paths: Optional[str] = None,
+        exclude_paths: Optional[str] = None,
+        allow_external_links: bool = False,
         **kwargs,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
@@ -124,6 +129,11 @@ class LocalClient(BaseClient):
                 build_index=build_index,
                 summarize=summarize,
                 watch_interval=watch_interval,
+                depth=depth,
+                max_pages=max_pages,
+                include_paths=include_paths,
+                exclude_paths=exclude_paths,
+                allow_external_links=allow_external_links,
                 **kwargs,
             ),
         )

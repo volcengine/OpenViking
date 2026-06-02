@@ -482,6 +482,11 @@ impl HttpClient {
         exclude: Option<String>,
         directly_upload_media: bool,
         watch_interval: f64,
+        depth: u32,
+        max_pages: u32,
+        include_paths: Option<String>,
+        exclude_paths: Option<String>,
+        allow_external_links: bool,
         show_progress: bool,
         verbose: bool,
     ) -> Result<serde_json::Value> {
@@ -541,6 +546,11 @@ impl HttpClient {
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
                     "watch_interval": watch_interval,
+                    "depth": depth,
+                    "max_pages": max_pages,
+                    "include_paths": include_paths,
+                    "exclude_paths": exclude_paths,
+                    "allow_external_links": allow_external_links,
                 }));
 
                 let dynamic_timeout =
@@ -575,6 +585,11 @@ impl HttpClient {
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
                     "watch_interval": watch_interval,
+                    "depth": depth,
+                    "max_pages": max_pages,
+                    "include_paths": include_paths,
+                    "exclude_paths": exclude_paths,
+                    "allow_external_links": allow_external_links,
                 }));
 
                 let dynamic_timeout =
@@ -597,6 +612,11 @@ impl HttpClient {
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
                     "watch_interval": watch_interval,
+                    "depth": depth,
+                    "max_pages": max_pages,
+                    "include_paths": include_paths,
+                    "exclude_paths": exclude_paths,
+                    "allow_external_links": allow_external_links,
                 }));
 
                 self.post("/api/v1/resources", &body).await
@@ -616,6 +636,11 @@ impl HttpClient {
                 "exclude": exclude,
                 "directly_upload_media": directly_upload_media,
                 "watch_interval": watch_interval,
+                    "depth": depth,
+                    "max_pages": max_pages,
+                    "include_paths": include_paths,
+                    "exclude_paths": exclude_paths,
+                    "allow_external_links": allow_external_links,
             }));
 
             self.post("/api/v1/resources", &body).await

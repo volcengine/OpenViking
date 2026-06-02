@@ -24,6 +24,11 @@ pub async fn handle_add_resource(
     exclude: Option<String>,
     no_directly_upload_media: bool,
     watch_interval: f64,
+    depth: u32,
+    max_pages: u32,
+    include_paths: Option<String>,
+    exclude_paths: Option<String>,
+    allow_external_links: bool,
     ctx: CliContext,
 ) -> Result<()> {
     let is_url =
@@ -100,6 +105,11 @@ pub async fn handle_add_resource(
         effective_exclude,
         directly_upload_media,
         watch_interval,
+        depth,
+        max_pages,
+        include_paths,
+        exclude_paths,
+        allow_external_links,
         ctx.output_format,
         ctx.compact,
         ctx.should_show_progress(),

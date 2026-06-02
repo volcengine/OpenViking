@@ -422,6 +422,12 @@ class ResourceService:
         enforce_public_remote_targets: bool = False,
         resource_lock: Optional[LockLease] = None,
         stage_callback: Optional[Callable[[str], Any]] = None,
+        depth: int = 0,
+        max_pages: int = 100,
+        include_paths: Optional[str] = None,
+        exclude_paths: Optional[str] = None,
+        allow_external_links: bool = False,
+        use_playwright: bool = True,
         **kwargs,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking (only supports resources scope).
@@ -534,7 +540,37 @@ class ResourceService:
 
             if result.get("status") == "error":
                 return result
-            elif wait:
+
+            if depth > 0 and self._should_crawl(path, result):
+                html_content = result.get("_html_content", "")
+                crawl_root_url = result.get("_html_final_url") or path
+                try:
+                    crawl_result = await self._crawl_and_add_resources(
+                        root_url=crawl_root_url,
+                        html_content=html_content,
+                        depth=depth,
+                        max_pages=max_pages,
+                        include_paths=include_paths,
+                        exclude_paths=exclude_paths,
+                        allow_external_links=allow_external_links,
+                        use_playwright=use_playwright,
+                        ctx=ctx,
+                        parent_uri=result.get("root_uri"),
+                        instruction=instruction,
+                        reason=reason,
+                        build_index=build_index,
+                        summarize=summarize,
+                        **kwargs,
+                    )
+                    result["_crawl_result"] = {
+                        "total_crawled": crawl_result.total_crawled,
+                        "total_failed": crawl_result.total_failed,
+                        "total_skipped": crawl_result.total_skipped,
+                    }
+                except Exception as e:
+                    logger.warning(f"[Crawl] Crawl failed for {path}: {e}")
+
+            if wait:
                 if stage_callback is not None:
                     stage_result = stage_callback("processing_queue")
                     if inspect.isawaitable(stage_result):
@@ -675,6 +711,138 @@ class ResourceService:
             if wait or not telemetry_id or not monitor_started:
                 get_request_wait_tracker().cleanup(telemetry_id)
                 unregister_wait_telemetry(telemetry_id)
+
+    def _should_crawl(self, path: str, result: Dict[str, Any]) -> bool:
+        if not path or not path.startswith(("http://", "https://")):
+            return False
+        html_content = result.get("_html_content", "")
+        return bool(html_content)
+
+    async def _crawl_and_add_resources(
+        self,
+        root_url: str,
+        html_content: str,
+        depth: int,
+        max_pages: int,
+        include_paths: Optional[str],
+        exclude_paths: Optional[str],
+        allow_external_links: bool,
+        ctx: RequestContext,
+        parent_uri: Optional[str],
+        instruction: str,
+        reason: str,
+        build_index: bool,
+        summarize: bool,
+        use_playwright: bool = True,
+        **kwargs,
+    ) -> Any:
+        from openviking.utils.crawl_filter import CrawlConfig
+        from openviking.utils.web_crawler import CrawlResult, WebCrawler
+
+        include_list = [p.strip() for p in (include_paths or "").split(",") if p.strip()] or None
+        exclude_list = [p.strip() for p in (exclude_paths or "").split(",") if p.strip()] or None
+
+        config = CrawlConfig(
+            depth=depth - 1,
+            max_pages=max_pages,
+            include_paths=include_list,
+            exclude_paths=exclude_list,
+            allow_external_links=allow_external_links,
+            use_playwright=use_playwright,
+        )
+
+        # Remove keys that we will override to avoid "multiple values" error
+        kwargs.pop("source_name", None)
+        kwargs.pop("original_source", None)
+        kwargs.pop("depth", None)
+        kwargs.pop("temp_file_id", None)
+
+        crawler = WebCrawler(config)
+        try:
+            crawl_result: CrawlResult = await crawler.crawl(
+                root_url, seed_html=html_content or None
+            )
+
+            logger.info(
+                f"[Crawl] Adding {len(crawl_result.pages)} child resources "
+                f"(concurrency=3, parent={parent_uri})"
+            )
+            sem = asyncio.Semaphore(3)
+            added_count = 0
+            failed_count = 0
+
+            async def _add_child(page):
+                nonlocal added_count, failed_count
+                async with sem:
+                    try:
+                        import tempfile
+                        import os
+                        from openviking.parse.parsers.html import HTMLParser
+
+                        if page.content:
+                            # 1. 无论是 SSR 直接来的还是 HTML 退级，如果它有内容，都可以考虑清洗
+                            content_to_save = page.content
+                            if page.source == "ssr" and page.content_type == "text/markdown":
+                                content_to_save = HTMLParser._clean_inline_images(content_to_save)
+
+                            # 2. 将已经拿到的干净文本写入临时文件，跳过底层无脑 httpx 下载
+                            fd, temp_path = tempfile.mkstemp(suffix=".md" if page.content_type == "text/markdown" else ".html")
+                            try:
+                                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                                    f.write(content_to_save)
+
+                                await self.add_resource(
+                                    path=temp_path,
+                                    source_name=page.title or page.url,
+                                    original_source=page.url,
+                                    ctx=ctx,
+                                    parent=parent_uri,
+                                    instruction=instruction,
+                                    reason=reason,
+                                    build_index=build_index,
+                                    summarize=summarize,
+                                    depth=0,
+                                    **kwargs,
+                                )
+                            finally:
+                                if os.path.exists(temp_path):
+                                    os.remove(temp_path)
+                        else:
+                            # fallback (理论上不会发生)
+                            await self.add_resource(
+                                path=page.url,
+                                ctx=ctx,
+                                parent=parent_uri,
+                                instruction=instruction,
+                                reason=reason,
+                                build_index=build_index,
+                                summarize=summarize,
+                                depth=0,
+                                **kwargs,
+                            )
+
+                        added_count += 1
+                        if added_count % 10 == 0:
+                            logger.info(
+                                f"[Crawl] Progress: {added_count}/{len(crawl_result.pages)} added"
+                            )
+                    except Exception as e:
+                        failed_count += 1
+                        if failed_count <= 5:
+                            logger.warning(f"[Crawl] Failed to add {page.url}: {e}")
+
+            tasks = [_add_child(page) for page in crawl_result.pages if page.status == "success"]
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+
+            logger.info(
+                f"[Crawl] Child resources done: "
+                f"added={added_count} failed={failed_count} total={len(tasks)}"
+            )
+
+            return crawl_result
+        finally:
+            await crawler.close()
 
     async def _monitor_queue_processing(
         self,

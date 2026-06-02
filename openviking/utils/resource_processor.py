@@ -171,6 +171,8 @@ class ResourceProcessor:
                     )
                 result["source_path"] = parse_result.source_path or path
                 result["meta"] = parse_result.meta
+                result["_html_content"] = getattr(parse_result, "_html_content", "")
+                result["_html_final_url"] = getattr(parse_result, "_html_final_url", "")
 
                 # Only abort when no temp content was produced at all.
                 # For directory imports partial success (some files failed) is

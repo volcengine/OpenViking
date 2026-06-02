@@ -261,6 +261,21 @@ enum Commands {
         /// Watch interval in minutes for automatic resource monitoring (0 = no monitoring)
         #[arg(long, default_value = "0")]
         watch_interval: f64,
+        /// Recursion depth for web page URLs (0 = no recursion)
+        #[arg(long, default_value = "0")]
+        depth: u32,
+        /// Maximum total number of pages to crawl (0 = unlimited)
+        #[arg(long, default_value = "100")]
+        max_pages: u32,
+        /// Only follow URLs matching these path patterns (comma-separated)
+        #[arg(long)]
+        include_paths: Option<String>,
+        /// Exclude URLs matching these path patterns (comma-separated)
+        #[arg(long)]
+        exclude_paths: Option<String>,
+        /// Allow following links to external domains
+        #[arg(long)]
+        allow_external_links: bool,
         #[command(flatten)]
         upload_options: UploadCliOptions,
     },
@@ -2164,6 +2179,11 @@ async fn main() {
             exclude,
             no_directly_upload_media,
             watch_interval,
+            depth,
+            max_pages,
+            include_paths,
+            exclude_paths,
+            allow_external_links,
             upload_options,
         } => {
             let ctx =
@@ -2183,6 +2203,11 @@ async fn main() {
                 exclude,
                 no_directly_upload_media,
                 watch_interval,
+                depth,
+                max_pages,
+                include_paths,
+                exclude_paths,
+                allow_external_links,
                 ctx,
             )
             .await

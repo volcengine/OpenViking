@@ -404,6 +404,26 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Set automatic refresh cadence.",
             },
             HelpItem {
+                label: "--depth <n>",
+                description: "Recursion depth for web page URLs (0 = no recursion).",
+            },
+            HelpItem {
+                label: "--max-pages <n>",
+                description: "Maximum total number of pages to crawl.",
+            },
+            HelpItem {
+                label: "--include-paths <paths>",
+                description: "Only follow URLs matching these path patterns (comma-separated).",
+            },
+            HelpItem {
+                label: "--exclude-paths <paths>",
+                description: "Exclude URLs matching these path patterns (comma-separated).",
+            },
+            HelpItem {
+                label: "--allow-external-links",
+                description: "Allow following links to external domains.",
+            },
+            HelpItem {
                 label: "--progress / --no-progress",
                 description: "Override local upload progress display.",
             },

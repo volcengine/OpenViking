@@ -83,6 +83,12 @@ class AddResourceRequest(BaseModel):
     preserve_structure: Optional[bool] = None
     telemetry: TelemetryRequest = False
     watch_interval: float = 0
+    depth: int = 0
+    max_pages: int = 100
+    include_paths: Optional[str] = None
+    exclude_paths: Optional[str] = None
+    allow_external_links: bool = False
+    use_playwright: bool = True
 
     @model_validator(mode="after")
     def check_path_or_temp_file_id(self):
@@ -247,6 +253,12 @@ async def add_resource(
                 timeout=request.timeout,
                 allow_local_path_resolution=allow_local_path_resolution,
                 enforce_public_remote_targets=True,
+                depth=request.depth,
+                max_pages=request.max_pages,
+                include_paths=request.include_paths,
+                exclude_paths=request.exclude_paths,
+                allow_external_links=request.allow_external_links,
+                use_playwright=request.use_playwright,
                 **kwargs,
             )
         except Exception:
