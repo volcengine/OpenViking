@@ -20,6 +20,54 @@ class MemoryStore:
         self.memory_file = self.memory_dir / "MEMORY.md"
         self.history_file = self.memory_dir / "HISTORY.md"
 
+    @staticmethod
+    def _get_score(memory: Any) -> float:
+        raw_score = (
+            memory.get("score", 0)
+            if isinstance(memory, dict)
+            else getattr(memory, "score", 0.0)
+        )
+        try:
+            return float(raw_score)
+        except (TypeError, ValueError):
+            return 0.0
+
+    @classmethod
+    def _limit_memory_groups(
+        cls,
+        result: dict[str, list[Any]],
+        limit: int,
+    ) -> dict[str, list[Any]]:
+        user_memories = result.get("user_memory", [])
+        agent_memories = result.get("agent_memory", [])
+        ranked: list[tuple[float, str, int, Any]] = []
+
+        for group, memories in (
+            ("user_memory", user_memories),
+            ("agent_memory", agent_memories),
+        ):
+            for index, memory in enumerate(memories):
+                ranked.append((cls._get_score(memory), group, index, memory))
+
+        selected = {
+            (group, index)
+            for _, group, index, _ in sorted(ranked, key=lambda item: item[0], reverse=True)[
+                :limit
+            ]
+        }
+        return {
+            "user_memory": [
+                memory
+                for index, memory in enumerate(user_memories)
+                if ("user_memory", index) in selected
+            ],
+            "agent_memory": [
+                memory
+                for index, memory in enumerate(agent_memories)
+                if ("agent_memory", index) in selected
+            ],
+        }
+
     def read_long_term(self) -> str:
         if self.memory_file.exists():
             return self.memory_file.read_text(encoding="utf-8")
@@ -157,6 +205,7 @@ class MemoryStore:
             )
             if not result:
                 return ""
+            result = self._limit_memory_groups(result, limit=10)
 
             # Log raw search results for debugging
             memory_list = []
