@@ -87,7 +87,7 @@ class VLMProviderAdapter(LLMProvider):
             if langfuse_observation:
                 self._end_langfuse_observation_error(langfuse_observation, e)
             return LLMResponse(
-                content=f"Error calling LLM: {str(e)}",
+                content=f"Error calling LLM in VLM Adapter: {str(e)}",
                 finish_reason="error",
             )
 
