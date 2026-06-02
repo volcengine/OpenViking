@@ -225,6 +225,39 @@ class AgentLoop:
             )
         )
 
+    async def _publish_auto_memory_context(
+        self,
+        session_key: SessionKey,
+        query: str,
+        result: str,
+    ) -> dict[str, Any]:
+        """Expose automatic OpenViking memory lookup using the existing tool event stream."""
+        args_str = json.dumps({"query": query}, ensure_ascii=False)
+        await self.bus.publish_outbound(
+            OutboundMessage(
+                session_key=session_key,
+                content=f"openviking_search({args_str})",
+                event_type=OutboundEventType.TOOL_CALL,
+            )
+        )
+        await self.bus.publish_outbound(
+            OutboundMessage(
+                session_key=session_key,
+                content=result,
+                event_type=OutboundEventType.TOOL_RESULT,
+            )
+        )
+        return {
+            "tool_name": "openviking_search",
+            "args": args_str,
+            "result": result,
+            "duration": 0,
+            "execute_success": True,
+            "input_token": cal_str_tokens(query, text_type="mixed"),
+            "output_token": cal_str_tokens(result, text_type="mixed"),
+            "auto": True,
+        }
+
     def _register_builtin_hooks(self):
         """Register built-in hooks."""
         hook_manager.register_path(self.config.hooks)
@@ -951,6 +984,13 @@ class AgentLoop:
                 memory_users=memory_user,
             )
             relevant_memories = message_context.latest_relevant_memories
+            auto_memory_tool = None
+            if ov_tools_enable and relevant_memories:
+                auto_memory_tool = await self._publish_auto_memory_context(
+                    session_key=session_key,
+                    query=msg.content,
+                    result=relevant_memories,
+                )
             # logger.info(f"New messages: {json.dumps(messages, indent=4)}")
 
             # Run agent loop within a stable response identity for tracing/tool spans.
@@ -971,6 +1011,9 @@ class AgentLoop:
                     memory_user_ids=memory_user,
                     disabled_tools=disabled_tools,
                 )
+
+            if auto_memory_tool:
+                tools_used = [auto_memory_tool, *(tools_used or [])]
 
             # Log response preview
             preview = final_content[:300] + "..." if len(final_content) > 300 else final_content
