@@ -513,7 +513,7 @@ pip install "openviking[local-bm25]"
 
 如果没有安装 `jieba`，`tokenizer: "jieba"` 会自动退回到 regex 分词。英文文本仍然可用，但中文分词效果会变差。
 
-Local BM25 是面向低成本 LLM 工作负载的轻量 sparse 方案。它使用 rebuild-only 的语料统计：文档批次会先重建 BM25 统计，再生成 sparse vector；查询向量使用最新重建后的统计。若增量上传后没有完整重建 sparse vector，分数可能出现偏差。因此只建议在每次语料更新都能接受完整重建索引时使用。对于大规模全文检索，或频繁更新下要求严格 BM25 分数准确性的场景，建议使用即将支持的 VikingDB keyword search，或使用在检索时计算 BM25 的其他后端。
+Local BM25 是面向低成本 LLM 工作负载的轻量 sparse 方案。它使用 rebuild-only 的语料统计：文档向量基于全量语料 BM25 统计生成，查询向量使用最新重建后的统计。文档写入或删除后，OpenViking 会为对应账号调度一次完整的本地 BM25 sparse vector 重建，让语料统计和已存储 sparse vector 保持一致。这能保证本地 BM25 评分逻辑正确，但也意味着每次语料更新都有完整重建成本。建议只在语料规模较小、更新不频繁，或可以接受重建延迟时使用。对于大规模全文检索，或频繁更新下要求严格 BM25 分数准确性的场景，建议使用即将支持的 VikingDB keyword search，或使用在检索时计算 BM25 的其他后端。
 
 #### Hybrid Embedding
 
