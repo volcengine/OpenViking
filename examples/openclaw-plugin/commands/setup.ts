@@ -369,6 +369,7 @@ type SetupResult = {
     agent_prefix?: string;
     accountId?: string;
     userId?: string;
+    recallTargetTypes?: string[];
   };
   health?: HealthResult;
   keyProbe?: ApiKeyProbeResult;
@@ -396,6 +397,16 @@ type StatusResult = {
   keyProbe?: ApiKeyProbeResult;
   slotActive: boolean;
 };
+
+function normalizeSetupRecallTargetTypes(value: unknown): string[] | undefined {
+  const entries = Array.isArray(value)
+    ? value.flatMap((entry) => String(entry).split(/[,\n]/))
+    : typeof value === "string"
+      ? value.split(/[,\n]/)
+      : [];
+  const normalized = entries.map((entry) => entry.trim()).filter(Boolean);
+  return normalized.length > 0 ? [...new Set(normalized)] : undefined;
+}
 
 type SlotActivationResult = {
   activated: boolean;
@@ -452,6 +463,7 @@ export function registerSetupCli(api: any): void {
         .option("--agent-prefix <prefix>", "Agent routing prefix for namespace isolation")
         .option("--account-id <id>", "Account ID (required for root API keys)")
         .option("--user-id <id>", "User ID (required for root API keys)")
+        .option("--recall-target-types <types>", "Comma-separated recall target types (for resource-only recall use: resource)")
         .option("--allow-offline", "Allow config write even if server is unreachable")
         .option("--force-slot", "Replace existing contextEngine slot even if owned by another plugin")
         .option("--json", "Output result as JSON (machine-readable)")
@@ -459,11 +471,11 @@ export function registerSetupCli(api: any): void {
           const options = (args[0] ?? {}) as Record<string, unknown>;
           const {
             reconfigure, zh: zhOpt, baseUrl, apiKey, agentPrefix,
-            accountId, userId, allowOffline, forceSlot, json: jsonOpt,
+            accountId, userId, recallTargetTypes, allowOffline, forceSlot, json: jsonOpt,
           } = options as {
             reconfigure?: boolean; zh?: boolean; baseUrl?: string;
             apiKey?: string; agentPrefix?: string; accountId?: string;
-            userId?: string; allowOffline?: boolean; forceSlot?: boolean;
+            userId?: string; recallTargetTypes?: string; allowOffline?: boolean; forceSlot?: boolean;
             json?: boolean;
           };
           const zh = detectLangZh(options);
@@ -478,6 +490,7 @@ export function registerSetupCli(api: any): void {
               agentPrefix,
               accountId,
               userId,
+              recallTargetTypes: normalizeSetupRecallTargetTypes(recallTargetTypes),
               allowOffline: !!allowOffline,
               forceSlot: !!forceSlot,
             });
@@ -651,10 +664,19 @@ async function runRemoteCheck(
 
 async function setupNonInteractive(
   configPath: string,
-  params: { baseUrl: string; apiKey?: string; agentPrefix?: string; accountId?: string; userId?: string; allowOffline?: boolean; forceSlot?: boolean },
+  params: {
+    baseUrl: string;
+    apiKey?: string;
+    agentPrefix?: string;
+    accountId?: string;
+    userId?: string;
+    recallTargetTypes?: string[];
+    allowOffline?: boolean;
+    forceSlot?: boolean;
+  },
 ): Promise<SetupResult> {
   try {
-    const { baseUrl, apiKey, agentPrefix, accountId, userId, allowOffline, forceSlot } = params;
+    const { baseUrl, apiKey, agentPrefix, accountId, userId, recallTargetTypes, allowOffline, forceSlot } = params;
 
     // Phase 1: validate connectivity and key type BEFORE writing config
     const health = await checkServiceHealth(baseUrl, apiKey);
@@ -697,6 +719,7 @@ async function setupNonInteractive(
     if (agentPrefix) pluginCfg.agent_prefix = agentPrefix;
     if (accountId) pluginCfg.accountId = accountId;
     if (userId) pluginCfg.userId = userId;
+    if (recallTargetTypes && recallTargetTypes.length > 0) pluginCfg.recallTargetTypes = recallTargetTypes;
 
     writeConfig(configPath, pluginCfg);
     const slot = activateContextEngineSlot(configPath, !!forceSlot);
@@ -712,6 +735,7 @@ async function setupNonInteractive(
           ...(agentPrefix ? { agent_prefix: agentPrefix } : {}),
           ...(accountId ? { accountId } : {}),
           ...(userId ? { userId } : {}),
+          ...(recallTargetTypes && recallTargetTypes.length > 0 ? { recallTargetTypes } : {}),
         },
         health,
         keyProbe,
@@ -730,6 +754,7 @@ async function setupNonInteractive(
         ...(agentPrefix ? { agent_prefix: agentPrefix } : {}),
         ...(accountId ? { accountId } : {}),
         ...(userId ? { userId } : {}),
+        ...(recallTargetTypes && recallTargetTypes.length > 0 ? { recallTargetTypes } : {}),
       },
       health,
       keyProbe,
@@ -757,6 +782,7 @@ function printSetupResult(zh: boolean, result: SetupResult): void {
       if (result.config.agent_prefix) console.log(`  agent_prefix: ${result.config.agent_prefix}`);
       if (result.config.accountId) console.log(`  accountId: ${result.config.accountId}`);
       if (result.config.userId) console.log(`  userId:  ${result.config.userId}`);
+      if (result.config.recallTargetTypes) console.log(`  recallTargetTypes: ${result.config.recallTargetTypes.join(",")}`);
     }
     console.log("");
     if (result.health?.ok) {

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
+import { homedir } from "node:os";
 
 import { memoryOpenVikingConfigSchema } from "../../config.js";
 
@@ -27,6 +28,64 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.isolateUserScopeByAgent).toBe(false);
     expect(cfg.isolateAgentScopeByUser).toBe(false);
     expect(cfg.emitStandardDiagnostics).toBe(false);
+    expect(cfg.traceRecall).toBe(false);
+    expect(cfg.traceRecallPersist).toBe(false);
+    expect(cfg.traceRecallDir).toBe(`${homedir()}/.openclaw/openviking/recall-traces`);
+    expect(cfg.traceRecallRetentionDays).toBe(14);
+    expect(cfg.traceRecallLoadRecentDays).toBe(2);
+    expect(cfg.traceRecallMaxEntries).toBe(1000);
+    expect(cfg.traceRecallMaxResultsPerSearch).toBe(20);
+    expect(cfg.traceRecallPreviewChars).toBe(240);
+    expect(cfg.traceRecallQueryMaxChars).toBe(4000);
+    expect(cfg.traceRecallQueryMaxDays).toBe(14);
+    expect(cfg.traceRecallIncludeContentByDefault).toBe(false);
+    expect(cfg.traceRecallIncludeRawUserPreview).toBe(false);
+    expect(cfg.recallTargetTypes).toEqual(["user", "agent"]);
+    expect(cfg.enableAddResourceTool).toBe(false);
+    expect(cfg.enabledTools).toEqual([
+      "add_skill",
+      "ov_search",
+      "ov_read",
+      "memory_recall",
+      "ov_recall_trace",
+      "memory_store",
+      "memory_forget",
+      "ov_archive_search",
+      "ov_archive_expand",
+      "openviking_tool_result_read",
+      "openviking_tool_result_search",
+      "openviking_tool_result_list",
+    ]);
+    expect(cfg.disabledTools).toEqual(["add_resource"]);
+  });
+
+  it("keeps add_resource disabled by default and enables it only by explicit config", () => {
+    expect(memoryOpenVikingConfigSchema.parse({}).enableAddResourceTool).toBe(false);
+    expect(memoryOpenVikingConfigSchema.parse({ enableAddResourceTool: false }).enableAddResourceTool).toBe(false);
+    expect(memoryOpenVikingConfigSchema.parse({ enableAddResourceTool: true }).enableAddResourceTool).toBe(true);
+  });
+
+  it("supports resource-query-only tool configuration", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({
+      enabledTools: ["resource_query"],
+    });
+    expect(cfg.enabledTools).toEqual(["ov_search", "ov_read"]);
+    expect(cfg.disabledTools).toEqual(["add_resource"]);
+  });
+
+  it("supports disabling memory-related tool group while keeping resource query tools", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({
+      disabledTools: "memory",
+    });
+    expect(cfg.enabledTools).toEqual(expect.arrayContaining(["ov_search", "ov_read"]));
+    expect(cfg.enabledTools).not.toEqual(expect.arrayContaining(["memory_recall", "memory_store", "memory_forget"]));
+    expect(cfg.disabledTools).toEqual(["memory_recall", "memory_store", "memory_forget", "add_resource"]);
+  });
+
+  it("rejects unknown tool selectors", () => {
+    expect(() =>
+      memoryOpenVikingConfigSchema.parse({ enabledTools: ["ov_search", "not_a_tool"] }),
+    ).toThrow("unknown tool selectors");
   });
 
   it("defaults recallMaxInjectedChars to the 4000-character memory budget", () => {
@@ -290,5 +349,71 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg1.recallResources).toBe(false);
     const cfg2 = memoryOpenVikingConfigSchema.parse({ recallResources: 1 });
     expect(cfg2.recallResources).toBe(false);
+  });
+
+  it("accepts trace recall configuration keys and clamps numeric bounds", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({
+      traceRecall: true,
+      traceRecallPersist: true,
+      traceRecallDir: " /tmp/openviking-traces ",
+      traceRecallRetentionDays: -1,
+      traceRecallLoadRecentDays: -5,
+      traceRecallMaxEntries: 0,
+      traceRecallMaxResultsPerSearch: 0,
+      traceRecallPreviewChars: 10,
+      traceRecallQueryMaxChars: 100,
+      traceRecallQueryMaxDays: 0,
+      traceRecallIncludeContentByDefault: true,
+      traceRecallIncludeRawUserPreview: true,
+    });
+
+    expect(cfg.traceRecall).toBe(true);
+    expect(cfg.traceRecallPersist).toBe(true);
+    expect(cfg.traceRecallDir).toBe("/tmp/openviking-traces");
+    expect(cfg.traceRecallRetentionDays).toBe(1);
+    expect(cfg.traceRecallLoadRecentDays).toBe(0);
+    expect(cfg.traceRecallMaxEntries).toBe(1);
+    expect(cfg.traceRecallMaxResultsPerSearch).toBe(1);
+    expect(cfg.traceRecallPreviewChars).toBe(20);
+    expect(cfg.traceRecallQueryMaxChars).toBe(200);
+    expect(cfg.traceRecallQueryMaxDays).toBe(1);
+    expect(cfg.traceRecallIncludeContentByDefault).toBe(true);
+    expect(cfg.traceRecallIncludeRawUserPreview).toBe(true);
+  });
+
+  it("normalizes recallTargetTypes from arrays and comma-separated strings", () => {
+    const fromArray = memoryOpenVikingConfigSchema.parse({
+      recallTargetTypes: [" user ", "agent", "user", ""],
+    });
+    expect(fromArray.recallTargetTypes).toEqual(["user", "agent"]);
+
+    const fromString = memoryOpenVikingConfigSchema.parse({
+      recallTargetTypes: "resource, session\nagent",
+    });
+    expect(fromString.recallTargetTypes).toEqual(["resource", "session", "agent"]);
+  });
+
+  it("rejects unknown recallTargetTypes instead of falling back to defaults", () => {
+    expect(() =>
+      memoryOpenVikingConfigSchema.parse({ recallTargetTypes: ["user", "project"] }),
+    ).toThrow("recallTargetTypes contains unknown resource types: project");
+  });
+
+  it("treats empty recallTargetTypes as the backward-compatible memory recall set", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ recallTargetTypes: [] });
+    expect(cfg.recallTargetTypes).toEqual(["user", "agent"]);
+  });
+
+  it("keeps deprecated recallResources as an additive compatibility switch when recallTargetTypes is unset", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ recallResources: true });
+    expect(cfg.recallTargetTypes).toEqual(["user", "agent", "resource"]);
+  });
+
+  it("does not let deprecated recallResources override explicit resource-only recallTargetTypes", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({
+      recallResources: true,
+      recallTargetTypes: ["resource"],
+    });
+    expect(cfg.recallTargetTypes).toEqual(["resource"]);
   });
 });

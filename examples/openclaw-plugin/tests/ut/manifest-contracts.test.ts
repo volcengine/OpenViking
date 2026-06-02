@@ -11,6 +11,7 @@ const manifest = JSON.parse(
 ) as {
   activation?: { onStartup?: boolean; onCapabilities?: string[] };
   contracts?: { tools?: string[] };
+  configSchema?: { properties?: Record<string, unknown> };
 };
 const packageJson = JSON.parse(
   readFileSync(resolve(pluginRoot, "package.json"), "utf8"),
@@ -73,6 +74,24 @@ describe("OpenClaw 5.2 manifest contracts", () => {
     expect(manifest.activation?.onStartup).toBe(true);
     expect(manifest.activation?.onCapabilities?.toSorted()).toEqual(["hook", "tool"]);
   });
+
+  it("declares recall trace configuration schema keys", () => {
+    expect(Object.keys(manifest.configSchema?.properties ?? {})).toEqual(expect.arrayContaining([
+      "traceRecall",
+      "traceRecallPersist",
+      "traceRecallDir",
+      "traceRecallRetentionDays",
+      "traceRecallLoadRecentDays",
+      "traceRecallMaxEntries",
+      "traceRecallMaxResultsPerSearch",
+      "traceRecallPreviewChars",
+      "traceRecallQueryMaxChars",
+      "traceRecallQueryMaxDays",
+      "traceRecallIncludeContentByDefault",
+      "traceRecallIncludeRawUserPreview",
+      "recallTargetTypes",
+    ]));
+  });
 });
 
 describe("OpenClaw 5.5 package runtime contract", () => {
@@ -93,6 +112,7 @@ describe("OpenClaw 5.5 package runtime contract", () => {
     });
     expect(installManifest.files?.required).toEqual(expect.arrayContaining([
       "index.ts",
+      "recall-trace.ts",
       "commands/setup.ts",
       "tsconfig.json",
       "tsconfig.build.json",

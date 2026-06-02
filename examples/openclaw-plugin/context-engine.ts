@@ -17,12 +17,9 @@ import {
   trimForLog,
   toJsonLog,
 } from "./memory-ranking.js";
+import type { RecallTraceEntry } from "./recall-trace.js";
 import { sanitizeToolUseResultPairing } from "./session-transcript-repair.js";
-import {
-  estimateAgentMessageTokens,
-  estimateAgentMessagesTokens,
-  estimateTextTokens,
-} from "./token-estimator.js";
+import { estimateAgentMessageTokens, estimateAgentMessagesTokens, estimateTextTokens } from "./token-estimator.js";
 
 type AgentMessage = {
   role?: string;
@@ -888,6 +885,7 @@ export function createMemoryOpenVikingContextEngine(params: {
     sessionKey?: string;
     ovSessionId?: string;
   }) => void;
+  traceRecorder?: { record(entry: RecallTraceEntry): void; recordAndFlush?: (entry: RecallTraceEntry) => Promise<unknown> };
 }): ContextEngineWithCommit {
   const {
     id,
@@ -898,6 +896,7 @@ export function createMemoryOpenVikingContextEngine(params: {
     getClient,
     resolveAgentId,
     rememberSessionAgentId,
+    traceRecorder,
   } = params;
 
   const diagEnabled = cfg.emitStandardDiagnostics;
@@ -1159,6 +1158,12 @@ export function createMemoryOpenVikingContextEngine(params: {
             queryText: recallQuery.query,
             logger,
             verbose: (message) => logger.info(message),
+            traceRecorder,
+            sessionId: assembleParams.sessionId,
+            sessionKey,
+            ovSessionId: OVSessionId,
+            queryTruncated: recallQuery.truncated,
+            rawUserTextPreview: recallQuery.query,
           });
 
           if (!recall.block) {

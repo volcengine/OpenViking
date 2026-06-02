@@ -12,13 +12,14 @@
   },
   "contracts": {
     "tools": [
-      "add_resource",
       "add_skill",
       "ov_search",
+      "ov_read",
       "memory_recall",
       "memory_store",
       "memory_forget",
       "ov_archive_search",
+      "ov_recall_trace",
       "ov_archive_expand",
       "openviking_tool_result_read",
       "openviking_tool_result_search",
@@ -214,6 +215,34 @@
       "label": "Log find requests",
       "help": "Log tenant routing: /search/find + session messages/commit (X-OpenViking-*; not apiKey). Or set env OPENVIKING_LOG_ROUTING=1 or OPENVIKING_DEBUG=1.",
       "advanced": true
+    },
+    "traceRecall": {
+      "label": "Trace Recall",
+      "help": "Record OpenViking recall trace metadata for debugging. Query via ov_recall_trace, /ov-recall-trace, or Gateway routes when route adapter is available. Default false.",
+      "advanced": true
+    },
+    "traceRecallPersist": {
+      "label": "Persist Recall Trace",
+      "help": "Persist recall traces to local JSONL files. Default false.",
+      "advanced": true
+    },
+    "traceRecallDir": {
+      "label": "Recall Trace Directory",
+      "placeholder": "~/.openclaw/openviking/recall-traces",
+      "help": "Directory for per-day recall trace JSONL files. Leading ~/ is expanded to the current user's home directory.",
+      "advanced": true
+    },
+    "recallTargetTypes": {
+      "label": "Recall Target Types",
+      "placeholder": "user,agent",
+      "help": "Default recall resource types. Empty preserves the backward-compatible user+agent memory recall behavior. Set to resource for resource-only query recall.",
+      "advanced": true
+    },
+    "enableAddResourceTool": {
+      "label": "Enable Add Resource Tool",
+      "placeholder": "false",
+      "help": "Disabled by default so search flows cannot call add_resource. Set true only when agents must import resources; manual /add-resource remains available.",
+      "advanced": true
     }
   },
   "configSchema": {
@@ -277,6 +306,10 @@
       "recallResources": {
         "type": "boolean"
       },
+      "enableAddResourceTool": {
+        "type": "boolean",
+        "description": "Disabled by default. Set true only to expose agent-visible add_resource; search/retrieval flows should use ov_search and ov_read."
+      },
       "recallLimit": {
         "type": "number"
       },
@@ -329,6 +362,54 @@
       },
       "logFindRequests": {
         "type": "boolean"
+      },
+      "traceRecall": {
+        "type": "boolean"
+      },
+      "traceRecallPersist": {
+        "type": "boolean"
+      },
+      "traceRecallDir": {
+        "type": "string"
+      },
+      "traceRecallRetentionDays": {
+        "type": "number"
+      },
+      "traceRecallLoadRecentDays": {
+        "type": "number"
+      },
+      "traceRecallMaxEntries": {
+        "type": "number"
+      },
+      "traceRecallMaxResultsPerSearch": {
+        "type": "number"
+      },
+      "traceRecallPreviewChars": {
+        "type": "number"
+      },
+      "traceRecallQueryMaxChars": {
+        "type": "number"
+      },
+      "traceRecallQueryMaxDays": {
+        "type": "number"
+      },
+      "traceRecallIncludeContentByDefault": {
+        "type": "boolean"
+      },
+      "traceRecallIncludeRawUserPreview": {
+        "type": "boolean"
+      },
+      "recallTargetTypes": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": [
+            "resource",
+            "session",
+            "user",
+            "agent"
+          ]
+        }
       }
     }
   }

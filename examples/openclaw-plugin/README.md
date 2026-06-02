@@ -1,6 +1,13 @@
 # OpenViking for OpenClaw
 
-Use [OpenViking](https://github.com/volcengine/OpenViking) as OpenClaw's long-term context engine: automatic recall, session archive, memory extraction, semantic search, and RAG over a remote OpenViking server.
+Use [OpenViking](https://github.com/volcengine/OpenViking) as OpenClaw's remote context engine: session archiving, threshold or `/compact`-driven memory extraction, automatic recall, resource/skill retrieval, recall tracing, and large tool-result paging over a remote OpenViking server.
+
+Current implementation highlights:
+
+- **Remote-only context engine**: the plugin is an HTTP client for an existing OpenViking server; it does not start a local server process.
+- **Lifecycle integration**: `assemble` rebuilds compressed session history and injects relevant memories; `afterTurn` appends the new turn and may trigger async commit; `compact` runs a blocking commit/readback.
+- **Import and retrieval**: agents can import resources and Agent Skills, search them, and include `resource`, `session`, `user`, or `agent` targets in recall.
+- **Debuggability**: optional recall trace records can be queried with `ov_recall_trace` or `/ov-recall-trace`; oversized tool results can be listed, searched, and read by reference.
 
 ## Quick Start
 
@@ -13,6 +20,19 @@ openclaw openviking status --json
 
 That's it. The `setup` command activates the context-engine slot and validates the connection.
 
+Useful setup variants:
+
+```bash
+# Optional agent namespace prefix
+openclaw openviking setup --base-url http://my-server:1933 --api-key sk-xxx --agent-prefix openclaw-prod --json
+
+# Root/trusted key deployments that need explicit tenant identity headers
+openclaw openviking setup --base-url http://my-server:1933 --api-key root-xxx --account-id acc_123 --user-id user_456 --json
+
+# Resource-only default recall for account-level shared knowledge
+openclaw openviking setup --base-url http://my-server:1933 --api-key sk-xxx --recall-target-types resource --json
+```
+
 ### Or ask your agent
 
 > Install the OpenClaw plugin @openviking/openclaw-plugin for OpenViking remote memory. My server is at `http://my-server:1933` and my API key is `sk-xxx`.
@@ -23,36 +43,38 @@ The agent runs install → setup → restart → verify automatically. See [INST
 
 | Stage | What happens |
 |-------|-------------|
-| **Every turn** (`afterTurn`) | New messages are appended to an OpenViking session; commit/extraction is threshold-triggered |
-| **Explicit remember** (`memory_store`) | Important long-term facts can be written and committed immediately |
-| **On `/compact`** (`compact`) | Pending session messages are committed and extracted into long-term memories |
+| **Every turn** (`afterTurn`) | Your messages are archived into an OpenViking session |
+| **On `/compact`** (`compact`) | Archived messages are extracted into long-term memories |
 | **Before each reply** (`assemble`) | Relevant memories are auto-retrieved and injected into context |
 
 ## Tools
 
-Once installed, the plugin provides these agent tools:
+Once installed, the plugin provides these default agent tools:
 
 | Tool | Purpose |
 |------|---------|
-| `memory_recall` | Explicit long-term memory search |
-| `memory_store` | Persist explicit long-term facts immediately |
-| `memory_forget` | Delete memories by URI or query |
-| `ov_archive_search` | Search across archives by keyword |
-| `ov_archive_expand` | Expand an archive back to raw messages |
-| `add_resource` | Import documents, URLs, or Git repos |
-| `add_skill` | Import agent skills |
+| `memory_recall` | Explicit semantic recall across `user`, `agent`, `session`, and/or `resource` targets |
+| `memory_store` | Persist important text immediately by writing a session and running memory extraction |
+| `memory_forget` | Delete a memory by exact URI, or search and delete a single strong match |
+| `ov_archive_search` | Keyword-grep archived original conversation messages for the current session |
+| `ov_archive_expand` | Expand an archive ID back to raw messages |
+| `ov_recall_trace` | Inspect recall/search trace records captured by auto-recall and explicit tools |
+| `add_skill` | Import a `SKILL.md`, skill directory, raw skill content, or MCP tool dict into `viking://agent/skills/...` |
 | `ov_search` | Search imported resources and skills |
-| `openviking_tool_result_read` | Restore the full original content of an externalized tool result |
-| `openviking_tool_result_search` | Search inside an externalized tool result by keyword |
-| `openviking_tool_result_list` | List externalized tool results in the current session |
+| `ov_read` | Read full content for a `viking://...` OpenViking virtual URI returned by search/trace results |
+| `openviking_tool_result_list` | List externalized large tool outputs in the current session |
+| `openviking_tool_result_search` | Search within an externalized tool output by keyword |
+| `openviking_tool_result_read` | Read all or part of an externalized tool output by `viking://session/.../tool-results/...` ref |
+
+The plugin also registers slash commands for manual use: `/add-resource`, `/add-skill`, `/ov-search`, and `/ov-recall-trace`. The agent-visible `add_resource` tool is disabled by default (`enableAddResourceTool=false`) so search/retrieval flows cannot import new resources accidentally; use manual `/add-resource` or explicitly set `enableAddResourceTool=true` only when agents should be allowed to import resources.
 
 ## Data Flow & Privacy
 
 - **What is sent**: User/assistant message text from each turn (after stripping injected memory blocks and metadata noise).
 - **Where it goes**: Your configured OpenViking server (`baseUrl`). The plugin only sends data to that server; downstream model/provider data handling (embedding, VLM) depends on the server's configuration.
-- **Storage**: All data lives on your OpenViking server under `viking://user/*`, `viking://agent/*`, and `viking://session/*`.
-- **API Key**: Sent as `X-OpenViking-Key` header over your configured connection. Never logged or forwarded.
-- **Multi-tenant isolation**: Supports `accountId`, `userId`, and `agent_prefix` for per-tenant scoping.
+- **Storage**: All data lives on your OpenViking server under namespaces such as `viking://user/*`, `viking://agent/*`, `viking://session/*`, and `viking://resources/*`.
+- **API Key**: Sent as `X-API-Key` over your configured connection. Never logged or forwarded.
+- **Multi-tenant isolation**: Supports `accountId`, `userId`, `agent_prefix`, and canonical namespace policy toggles (`isolateUserScopeByAgent`, `isolateAgentScopeByUser`).
 
 ## Verify
 
@@ -68,6 +90,7 @@ openclaw config get plugins.slots.contextEngine  # should output: openviking
 | [INSTALL.md](./INSTALL.md) | Full install, upgrade, and uninstall guide |
 | [INSTALL-ZH.md](./INSTALL-ZH.md) | Chinese install guide |
 | [INSTALL-AGENT.md](./INSTALL-AGENT.md) | Agent-oriented operator guide |
+| [docs/openviking-openclaw-plugin-guide.md](./docs/openviking-openclaw-plugin-guide.md) | Comprehensive Chinese guide for usage, configuration, debugging, testing, build, release, deployment, and rollback |
 
 > **Plugin vs Skill**: This page is for `@openviking/openclaw-plugin` (the context-engine plugin). Do **not** use `clawhub install openviking` — that installs a different AgentSkill.
 
@@ -207,18 +230,6 @@ After that, the plugin checks `pending_tokens`. Once the session crosses `commit
 - the current turn is not blocked waiting for extraction
 - if `logFindRequests` is enabled, the logs include the task id and follow-up extraction detail
 
-This automatic path is best-effort and commit-dependent. Short but important facts can stay only in the live session until a threshold commit, `/compact`, or an explicit store happens.
-
-### Explicit long-term memory writes
-
-When the user explicitly asks the agent to remember, save, or store an important long-term fact, preference, project, or decision, prefer `memory_store` over waiting for normal auto-capture. `memory_store` writes the text to an OpenViking session and calls `commit(wait=true)`, so it is the reliable integration-side path for facts that should be available as long-term memory as soon as possible.
-
-Use it as a complement to auto-capture, not a replacement:
-
-- auto-capture still preserves ordinary conversation flow and batches extraction for cost and latency
-- `memory_store` is for explicit durable-memory intent such as "remember my main project is X" or "save this preference"
-- if `memory_store` commits but extracts 0 memories, check the OpenViking server extraction/model configuration; the explicit path triggered extraction, but the extractor did not produce a memory
-
 ### What `compact()` does
 
 `compact()` is the stricter synchronous boundary:
@@ -232,25 +243,45 @@ So `afterTurn()` is closer to "incremental append plus threshold-triggered async
 
 ## Tools and Expandability
 
-Beyond automatic behavior, the plugin exposes seven tools directly:
+Beyond automatic behavior, the plugin exposes twelve default tools directly, plus an opt-in `add_resource` import tool when `enableAddResourceTool=true`. Agent-visible tools can be narrowed with `enabledTools` and `disabledTools`:
 
-- `memory_recall`: explicit long-term memory search
-- `memory_store`: write explicit long-term facts into an OpenViking session and trigger commit
+- `memory_recall`: explicit semantic recall over memory/resource/session targets
+- `memory_store`: write text into an OpenViking session and trigger blocking commit/extraction
 - `memory_forget`: delete by URI, or search first and remove a single strong match
+- `ov_archive_search`: grep archived original conversation messages by keyword
 - `ov_archive_expand`: expand a concrete archive back into raw messages
-- `add_resource`: import a document, directory, URL, or Git repository as an OpenViking resource
+- `ov_recall_trace`: query recall trace records for auto-recall and explicit recall/search calls
 - `add_skill`: import or register an OpenViking agent skill
 - `ov_search`: search OpenViking resources and skills, especially after importing them
+- `ov_read`: read full content for a `viking://...` OpenViking virtual URI returned by `ov_search` or recall trace results
+- `openviking_tool_result_list`: list large tool outputs externalized for the current session
+- `openviking_tool_result_search`: keyword search within an externalized tool output
+- `openviking_tool_result_read`: read externalized tool output content by ref, with offset/limit paging
+
+Tool selectors accept exact tool names or groups: `default`, `all`, `memory`, `resource_query`, `import`, `recall_trace`, `archive`, and `tool_result`. For example, to hide all memory tools while keeping only resource query tools available:
+
+```json
+{
+  "autoCapture": false,
+  "autoRecall": false,
+  "enabledTools": ["resource_query"]
+}
+```
+
+To keep the default tool set but remove only memory operations, use `"disabledTools": ["memory"]`. `add_resource` always remains a second-level opt-in: it is registered only when selected by `enabledTools` and `enableAddResourceTool=true`.
 
 They serve different roles:
 
 - automatic recall covers the default case where the model does not know what to search yet
 - `memory_recall` gives the model an explicit follow-up search path
-- `memory_store` is for immediately persisting clearly important information when the user expresses durable-memory intent
-- `ov_archive_expand` is the "go back to archive detail" escape hatch when summaries are not enough
-- `add_resource` lets the agent save explicit document or repository import requests without asking the user to remember slash commands
-- `add_skill` imports skills into OpenViking, while `add_resource` imports resources
-- `ov_search` closes the loop after import by letting the user or agent confirm and consume resources and skills
+- `memory_store` is for immediately persisting clearly important information
+- `ov_archive_search` and `ov_archive_expand` are the "go back to archive detail" escape hatches when summaries are not enough
+- `ov_recall_trace` explains why a recall/search did or did not surface an item
+- manual `/add-resource` imports resources into OpenViking; the agent-visible `add_resource` tool is opt-in only and must not be used during search, retrieval, URI reading, or search-result optimization
+- `add_skill` imports skills into OpenViking
+- `ov_search` closes the loop after import by letting the user or agent confirm resources and skills; its `viking://...` results are virtual OpenViking URIs, not local file paths
+- `ov_read` consumes an exact `viking://...` result URI through OpenViking `/api/v1/content/read`, avoiding accidental filesystem reads of virtual URIs
+- `openviking_tool_result_*` tools prevent large external tool outputs from bloating context while keeping full content recoverable
 
 `ov_archive_expand` is especially important because `assemble()` normally returns archive summaries and indexes, not the full raw transcript.
 
@@ -268,11 +299,18 @@ The plugin also registers explicit slash commands for manual imports:
 /add-skill ./skills/install-openviking-memory --wait
 /ov-search "OpenViking install" --uri viking://resources/openviking-readme
 /ov-search "memory install skill" --uri viking://agent/skills
+/ov-recall-trace --turn latest --include-content
 ```
 
 Resource import supports remote URLs, Git URLs, local files, local directories, and uploaded zip files. OpenViking's built-in parsers cover common documents and media such as Markdown, text, PDF, HTML, Word, PowerPoint, Excel, EPUB, images, audio, and video. Directory imports also accept common code, documentation, and config file extensions such as `.py`, `.js`, `.ts`, `.go`, `.rs`, `.java`, `.cpp`, `.json`, `.yaml`, `.toml`, `.csv`, `.rst`, `.proto`, `.tf`, and `.vue`.
 
 For HTTP safety, the plugin never sends a direct local filesystem path to the OpenViking server. Local files and directories are first uploaded through `/api/v1/resources/temp_upload`; directories are zipped locally with a pure JavaScript zip implementation before upload.
+
+### Recall Trace and Tool Result References
+
+Recall tracing is off by default. Enable it with plugin config keys such as `traceRecall`, `traceRecallPersist`, and `traceRecallDir`, then query records with `ov_recall_trace` or `/ov-recall-trace`. Persisted traces default to `~/.openclaw/openviking/recall-traces` and can be bounded by retention and query limits.
+
+When OpenViking externalizes an oversized tool result, the visible preview contains a `viking://session/<session_id>/tool-results/<tool_result_id>` reference. Use `openviking_tool_result_list` to discover refs, `openviking_tool_result_search` to locate snippets, and `openviking_tool_result_read` with `offset`/`limit` to restore the original content.
 
 ## Runtime Mode
 

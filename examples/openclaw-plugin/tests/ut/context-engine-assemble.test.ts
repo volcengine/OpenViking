@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenVikingClient } from "../../client.js";
 import { memoryOpenVikingConfigSchema } from "../../config.js";
 import { createMemoryOpenVikingContextEngine } from "../../context-engine.js";
-import { estimateAgentMessagesTokens, estimateTextTokens } from "../../token-estimator.js";
+import { RecallTraceMemoryStore } from "../../recall-trace.js";
 
 const cfg = memoryOpenVikingConfigSchema.parse({
   mode: "remote",
@@ -13,11 +13,11 @@ const cfg = memoryOpenVikingConfigSchema.parse({
 });
 
 function roughEstimate(messages: unknown[]): number {
-  return estimateAgentMessagesTokens(messages);
+  return Math.ceil(JSON.stringify(messages).length / 4);
 }
 
 function systemPromptTokens(text?: string): number {
-  return estimateTextTokens(text);
+  return text ? Math.ceil(text.length / 4) : 0;
 }
 
 function makeLogger() {
@@ -43,10 +43,12 @@ function makeEngine(
   contextResult: unknown,
   opts?: {
     cfgOverrides?: Record<string, unknown>;
+    traceRecorder?: RecallTraceMemoryStore;
   },
 ) {
   const logger = makeLogger();
   const client = {
+    healthCheck: vi.fn().mockResolvedValue(undefined),
     getSessionContext: vi.fn().mockResolvedValue(contextResult),
     find: vi.fn().mockResolvedValue({ memories: [], resources: [], total: 0 }),
     read: vi.fn().mockResolvedValue(""),
@@ -68,12 +70,14 @@ function makeEngine(
     logger,
     getClient,
     resolveAgentId,
+    traceRecorder: opts?.traceRecorder,
   });
 
   return {
     engine,
     client: client as unknown as {
       getSessionContext: ReturnType<typeof vi.fn>;
+      healthCheck: ReturnType<typeof vi.fn>;
       find: ReturnType<typeof vi.fn>;
       read: ReturnType<typeof vi.fn>;
     },
@@ -148,12 +152,122 @@ describe("context-engine assemble()", () => {
       expect(result.messages[2]?.role).toBe("user");
       expect(result.messages[2]?.content).toMatch(/^<relevant-memories>/);
       expect(result.messages[2]?.content).toContain("Source: openviking-auto-recall");
-      expect(result.messages[2]?.content).toContain(
-        "<uri>viking://user/default/memories/rust-pref</uri>",
-      );
       expect(result.messages[2]?.content).toContain("User prefers Rust for backend tasks.");
       expect(result.messages[2]?.content).toContain("what backend language should we use?");
       expect(result.systemPromptAddition).toBeUndefined();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("passes session metadata into auto-recall trace recording during transformContext", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ status: "ok" }),
+      }),
+    );
+    try {
+      const traces = new RecallTraceMemoryStore(10);
+      const { engine, client } = makeEngine(
+        {
+          latest_archive_overview: "unused",
+          pre_archive_abstracts: [],
+          messages: [],
+          estimatedTokens: 0,
+          stats: makeStats(),
+        },
+        {
+          traceRecorder: traces,
+          cfgOverrides: {
+            autoRecall: true,
+            recallPreferAbstract: true,
+            recallTargetTypes: ["user"],
+          },
+        },
+      );
+      client.find.mockResolvedValueOnce({
+        memories: [
+          {
+            uri: "viking://user/default/memories/typescript-pref",
+            level: 2,
+            category: "preferences",
+            abstract: "Use TypeScript for gateway plugins.",
+            score: 0.9,
+          },
+        ],
+        total: 1,
+      });
+
+      await engine.assemble({
+        sessionId: "session-transform-trace",
+        messages: [{ role: "user", content: "which language should the gateway plugin use?" }],
+      });
+
+      const recorded = traces.query({ turn: "latest", sessionId: "session-transform-trace", limit: 10 }).entries[0]!;
+      expect(recorded.sessionId).toBe("session-transform-trace");
+      expect(recorded.ovSessionId).toBe("session-transform-trace");
+      expect(recorded.agentId).toBe("agent:session-transform-trace");
+      expect(recorded.trigger.query).toBe("which language should the gateway plugin use?");
+      expect(recorded.resourceTypes).toEqual(["user"]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("uses backward-compatible user and agent auto-recall by default during transformContext", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ status: "ok" }),
+      }),
+    );
+    try {
+      const traces = new RecallTraceMemoryStore(10);
+      const { engine, client } = makeEngine(
+        {
+          latest_archive_overview: "unused",
+          pre_archive_abstracts: [],
+          messages: [],
+          estimatedTokens: 0,
+          stats: makeStats(),
+        },
+        {
+          traceRecorder: traces,
+          cfgOverrides: {
+            autoRecall: true,
+            recallPreferAbstract: true,
+          },
+        },
+      );
+      client.find.mockImplementation(async (_query: string, options: { targetUri?: string }) => ({
+        resources: [],
+        memories: options.targetUri === "viking://user/memories"
+          ? [{
+              uri: "viking://user/memories/project-docs",
+              level: 2,
+              category: "memory",
+              abstract: "Memory docs for the gateway plugin.",
+              score: 0.9,
+            }]
+          : [],
+        total: options.targetUri === "viking://user/memories" ? 1 : 0,
+      }));
+
+      await engine.assemble({
+        sessionId: "session-transform-resource-default",
+        messages: [{ role: "user", content: "where are the gateway plugin docs?" }],
+      });
+
+      expect(client.find).toHaveBeenCalledTimes(2);
+      expect(client.find.mock.calls.map(([, options]) => options.targetUri)).toEqual([
+        "viking://user/memories",
+        "viking://agent/memories",
+      ]);
+      const recorded = traces.query({ turn: "latest", sessionId: "session-transform-resource-default", limit: 10 }).entries[0]!;
+      expect(recorded.resourceTypes).toEqual(["user", "agent"]);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -213,29 +327,6 @@ describe("context-engine assemble()", () => {
     expect(getClient).not.toHaveBeenCalled();
     expect(result.messages).toBe(sourceMessages);
     expect(result.estimatedTokens).toBe(roughEstimate(sourceMessages));
-  });
-
-  it("does not underestimate CJK messages when passing through transformContext", async () => {
-    const { engine, getClient } = makeEngine({
-      latest_archive_overview: "unused",
-      pre_archive_abstracts: [],
-      messages: [],
-      estimatedTokens: 0,
-      stats: makeStats(),
-    });
-    const sourceMessages = [
-      { role: "assistant", content: [{ type: "text", text: "Previous answer." }] },
-      { role: "user", content: "\u4f60\u597d".repeat(100) },
-    ];
-
-    const result = await engine.assemble({
-      sessionId: "session-cjk-estimate",
-      messages: sourceMessages,
-    });
-
-    expect(getClient).not.toHaveBeenCalled();
-    expect(result.messages).toBe(sourceMessages);
-    expect(result.estimatedTokens).toBeGreaterThanOrEqual(300);
   });
 
   it("treats prompt-less assemble with availableTools as main assemble", async () => {

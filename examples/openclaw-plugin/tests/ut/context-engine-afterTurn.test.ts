@@ -305,6 +305,31 @@ describe("context-engine afterTurn()", () => {
     expect(commitCall[1]).toMatchObject({ wait: false });
   });
 
+  it("keeps afterTurn write and commit enabled when recall target types default to resources only", async () => {
+    const { engine, client } = makeEngine({
+      commitTokenThreshold: 20000,
+      getSession: { pending_tokens: 25000 },
+      cfgOverrides: {
+        recallTargetTypes: [],
+      },
+    });
+
+    await engine.afterTurn!({
+      sessionId: "s1",
+      sessionFile: "",
+      messages: [
+        { role: "user", content: "persist this user turn even with resource-only recall" },
+        { role: "assistant", content: "persist this assistant turn too" },
+      ],
+      prePromptMessageCount: 0,
+    });
+
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(2);
+    expect(client.addSessionMessage.mock.calls[0][1]).toBe("user");
+    expect(client.addSessionMessage.mock.calls[1][1]).toBe("assistant");
+    expect(client.commitSession).toHaveBeenCalledTimes(1);
+  });
+
   it("catches errors without throwing", async () => {
     const { engine, logger } = makeEngine({
       addSessionMessageError: new Error("network timeout"),

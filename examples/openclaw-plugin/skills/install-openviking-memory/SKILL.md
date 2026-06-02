@@ -13,7 +13,7 @@ description: >
   The user does NOT need to know any CLI commands — the agent runs everything and only asks for a few values.
   This skill assumes the OpenViking server is already running. If the server is not ready, the skill
   tells the user to contact their admin or set it up via the OpenViking docs — it does NOT install the server.
-version: 2.0.1
+version: 2026.6.2
 metadata:
   openclaw:
     requires:
@@ -311,9 +311,9 @@ The wizard prints a single JSON object:
   "success": true | false,
   "action": "configured" | "existing" | "error" | "slot_blocked",
   "config": { "mode": "remote", "baseUrl": "...", "apiKey": "...", "agent_prefix": "...", "accountId": "...", "userId": "..." },
-  "health": { "ok": true, "status": 200 },
-  "keyProbe": { "keyType": "user_key" | "root_key" | "none", "ok": true },
-  "slot": { "ok": true, "owner": "openviking" },
+  "health": { "ok": true, "version": "...", "compatibility": "compatible" | "server_too_old" | "server_too_new" | "unknown" },
+  "keyProbe": { "keyType": "user_key" | "root_key" | "no_key" | "unknown", "needsAccountId": false, "needsUserId": false, "detail": "..." },
+  "slot": { "activated": true, "replaced": false, "previousOwner": "openviking" },
   "error": "..."
 }
 ```
@@ -326,7 +326,7 @@ The wizard prints a single JSON object:
 | `success: false` and `action: "slot_blocked"` | **Slot conflict — see below.** |
 | `success: false` and `error` contains `"Server unreachable"` | Connectivity broke between STEP 5 and STEP 7. Offer `--allow-offline`; if accepted, retry. Otherwise back to STEP 4a. |
 | `success: false` and `error` contains `"Root API key detected"` and `"Missing: --account-id, --user-id"` | **Root-key path — see below.** |
-| `success: false` and `error` contains `"Invalid API key"` / `keyProbe.keyType: "none"` with `ok: false` | API key wrong. Back to STEP 4b. |
+| `success: false` and `error` contains `"Invalid API key"` / `keyProbe.keyType: "unknown"` after auth failure detail | API key wrong. Back to STEP 4b. |
 | `success: false` and any other `action: "error"` | Show `error` to the user, stop. Do NOT pretend success. |
 
 ### Slot conflict (`slot_blocked`)
@@ -413,22 +413,20 @@ Expected output:
 > (CN) 🎉 全部搞定！OpenViking 长期记忆已经接好了。
 >
 > 工作方式：
-> - **每一轮**：你的对话会被自动追加到 OpenViking session 里；自动抽取依赖阈值 commit 或 `/compact`
-> - **明确要记住时**：如果你说“记住/保存/存一下”某个长期事实，我会用 `memory_store` 立即提交到记忆管线
-> - **`/compact` 时**：待提交的 session 消息会被抽取成长期记忆，写到 `~/.openviking/data/` 下
+> - **每一轮**：你的对话会被自动归档到 OpenViking session 里
+> - **`/compact` 时**：归档消息会在 OpenViking 服务端被抽取成长期记忆
 > - **后续会话**：每次回复前我都会自动搜一下相关记忆并带进上下文
 >
-> 想验证一下吗？可以直接说“记住我的邮箱是 test@example.com”，让我通过 `memory_store` 立即提交；或者先聊几句包含可记忆事实的话，再调一下 `/compact`。之后开新对话问“我的邮箱是？”，应该就能召回了。
+> 想验证一下吗？跟我聊几句包含可记忆事实的话（例如"我的邮箱是 test@example.com"），然后调一下 `/compact`，再开新对话问"我的邮箱是？"，应该就能召回了。
 
 > (EN) 🎉 All set! OpenViking long-term memory is connected.
 >
 > How it works:
-> - **Every turn**: our messages are appended to an OpenViking session; automatic extraction depends on a threshold commit or `/compact`
-> - **Explicit remember requests**: if you ask me to remember/save/store a long-term fact, I can use `memory_store` to commit it immediately
-> - **On `/compact`**: pending session messages are extracted into long-term memories under `~/.openviking/data/`
+> - **Every turn**: our messages are auto-archived into an OpenViking session
+> - **On `/compact`**: archived messages are extracted into long-term memories on the OpenViking server
 > - **Future sessions**: relevant memories are auto-retrieved and injected before my replies
 >
-> Want to verify? Say "remember my email is test@example.com" so I can commit it via `memory_store`, or tell me a few memory-worthy facts and run `/compact`. Then start a new chat and ask "what's my email?" — it should recall.
+> Want to verify? Tell me a few facts (e.g. "my email is test@example.com"), run `/compact`, then start a new chat and ask "what's my email?" — it should recall.
 
 ---
 
@@ -436,25 +434,15 @@ Expected output:
 
 ## How It Works
 
-The context-engine pipeline has three distinct stages plus one explicit write path — keep them apart, especially when telling users when memories actually appear in `~/.openviking/data/`:
+The context-engine pipeline has three distinct stages — keep them apart, especially when telling users when memories become searchable long-term memory on the OpenViking server:
 
-- **Archive / capture (context-engine `afterTurn`)**: at the end of a user turn, the plugin appends user/assistant messages to the OpenViking session via `POST /api/v1/sessions/.../messages`. This is **session capture only** unless `pending_tokens` crosses `commitTokenThreshold`; below the threshold, no memory extraction runs yet. You'll see session message counts grow on the server, but no new files under `viking://user/.../memories/`.
-- **Memory extraction (threshold commit or `/compact`)**: memory extraction runs after a session commit. The commit can be triggered asynchronously when `afterTurn` crosses `commitTokenThreshold`, synchronously when the user invokes OpenClaw's `/compact` command, or explicitly by `memory_store`. The server-side extraction pipeline reads the archived session and writes new memories.
+- **Archive / capture (context-engine `afterTurn`)**: at the end of a user turn, the plugin commits user/assistant messages to the OpenViking session via `POST /api/v1/sessions/.../messages`. This is **archive only** — no memory extraction yet. You'll see session message counts grow on the server, but no new files under `viking://user/.../memories/`.
+- **Memory extraction (on `/compact`)**: memory extraction runs when the user invokes OpenClaw's `/compact` command. The server-side extraction pipeline reads the archived session and writes new memories. The plugin's `after_compaction` hook is currently reserved; the extraction itself is driven by the server. **No `/compact`, no new memory files.**
   - `captureMode: "semantic"` (default): server extraction pipeline filters all qualifying text.
   - `captureMode: "keyword"`: only text matching trigger words (e.g. "remember", "preference") is considered.
 - **Auto-Recall (context-engine `assemble()`)**: before prompt context is assembled, the plugin queries OpenViking for relevant memories and injects them into context. Recall works even when there are no extracted memories yet — you just won't see anything come back.
 
-**Practical implication for testing**: if you write down a short fact and immediately try to recall it without a threshold commit, `/compact`, or `memory_store`, the plugin may only retrieve it as recent session context, not as a long-term memory. To verify long-term memory cross-session deterministically, run `/compact` or use `memory_store` for the fact being tested.
-
-### Explicit long-term memory writes
-
-Auto-capture is best-effort and commit-dependent. When the user explicitly says to remember, save, or store an important long-term fact, preference, project, or decision, the agent should call `memory_store` instead of waiting for ordinary auto-capture.
-
-Use `memory_store` as the integration-side reliable path for durable-memory intent:
-
-- It writes the supplied text into an OpenViking session and calls `commit(wait=true)`.
-- It complements auto-capture; it does not replace normal session capture.
-- If it commits but extracts 0 memories, the explicit path has done its job. Treat that as a server-side extraction/model/configuration issue and check OpenViking logs.
+**Practical implication for testing**: if you write down a fact and immediately try to recall it without `/compact`, the plugin will only retrieve it as recent session context (archived messages), not as a long-term memory. To verify long-term memory cross-session, you must run `/compact` first.
 
 ## Available Tools
 
@@ -467,7 +455,8 @@ These are the plugin tools the agent can call once installed.
 | `query` | Yes | Search query text |
 | `limit` | No | Maximum number of results (defaults to plugin config) |
 | `scoreThreshold` | No | Minimum relevance score 0–1 (defaults to plugin config) |
-| `targetUri` | No | Search scope URI (defaults to plugin config) |
+| `targetUri` | No | Exact search scope URI. If provided, only that URI is searched. |
+| `resourceTypes` | No | Array of target types used when `targetUri` is omitted: `resource`, `session`, `user`, `agent`. Defaults to plugin `recallTargetTypes`. |
 
 Example: user asks "What programming language did I say I like?"
 
@@ -478,8 +467,6 @@ Example: user asks "What programming language did I say I like?"
 | `text` | Yes | Information text to store |
 | `role` | No | Session role (default `user`) |
 | `sessionId` | No | Existing OpenViking session ID |
-
-Use this when the user explicitly asks to remember/save/store a long-term fact, preference, project, or decision.
 
 Example: user says "Remember my email is xxx@example.com".
 
@@ -495,6 +482,87 @@ Example: user says "Remember my email is xxx@example.com".
 
 Example: user says "Forget my phone number".
 
+### `ov_archive_search` — Search Archived Original Messages
+
+| Parameter | Required | Description |
+|---|---|---|
+| `query` | Yes | A single keyword or short phrase. Prefer concrete names, dates, commands, paths, or distinctive nouns. |
+| `archiveId` | No | Optional archive ID such as `archive_002`. |
+
+Use when `[Session History Summary]` is too coarse. Try at least two keyword variants before concluding the detail is unavailable.
+
+### `ov_archive_expand` — Expand An Archive
+
+| Parameter | Required | Description |
+|---|---|---|
+| `archiveId` | Yes | Archive ID from `[Archive Index]`, e.g. `archive_002`. |
+
+### `add_resource` — Import Resource
+
+The agent-visible `add_resource` tool is disabled by default (`enableAddResourceTool=false`). Use manual `/add-resource` for resource ingestion unless you explicitly opt in. Even when enabled, never use `add_resource` during search, retrieval, URI reading, or search-result optimization; use `ov_search` and `ov_read` for those flows.
+
+| Parameter | Required | Description |
+|---|---|---|
+| `source` | Yes | Local path, OpenClaw media attachment path, directory path, public URL, or Git URL. |
+| `to` | No | Exact target URI under `viking://resources`; mutually exclusive with `parent`. |
+| `parent` | No | Parent URI under `viking://resources`; mutually exclusive with `to`. |
+| `reason` | No | Reason or note for import. |
+| `instruction` | No | Processing instruction for semantic extraction. |
+| `wait` | No | Wait for processing completion. |
+| `timeout` | No | Timeout in seconds when `wait=true`. |
+
+### `add_skill` — Import Agent Skill
+
+| Parameter | Required | Description |
+|---|---|---|
+| `source` | No | Local `SKILL.md` path or skill directory. Exactly one of `source` or `data` is required. |
+| `data` | No | Raw `SKILL.md` content or MCP tool dict. Exactly one of `source` or `data` is required. |
+| `wait` | No | Wait for processing completion. |
+| `timeout` | No | Timeout in seconds when `wait=true`. |
+
+Agent Skill best practice: verify frontmatter has a precise `name`, a trigger-oriented `description`, useful `tags`, explicit scope boundaries, and concrete execution steps. Do not include secrets in skill content.
+
+### `ov_search` — Search Resources and Skills
+
+| Parameter | Required | Description |
+|---|---|---|
+| `query` | Yes | Search query. |
+| `uri` | No | Optional search URI. Defaults to resources plus agent skills. |
+| `limit` | No | Max results per search scope. Default: 10. |
+
+Important: `ov_search` result URIs are OpenViking virtual URIs, not local file paths. If full content is needed, call `ov_read` with the exact `viking://...` URI returned by search or trace results; do not use filesystem read tools.
+
+### `ov_read` — Read OpenViking Content
+
+| Parameter | Required | Description |
+|---|---|---|
+| `uri` | Yes | Exact `viking://...` URI returned by `ov_search` or recall trace results. Local file paths and `openviking://...` display aliases are refused. |
+
+### `ov_recall_trace` — Query Recall Trace
+
+| Parameter | Required | Description |
+|---|---|---|
+| `turn` | No | `latest` or `all`; default `latest`. |
+| `traceId` | No | Exact trace ID. |
+| `sessionId` / `sessionKey` / `ovSessionId` | No | Session filters. |
+| `source` | No | `auto_recall`, `memory_recall`, `ov_search`, or `ov_archive_search`. |
+| `resourceTypes` | No | Target type filters: `resource`, `session`, `user`, `agent`. |
+| `since` / `until` | No | Unix timestamp bounds in milliseconds. |
+| `includeContent` | No | Read selected/displayed URI content previews on demand. |
+| `limit` | No | Maximum traces to return. Default: 20. |
+
+Requires `traceRecall=true`; persisted lookup also requires `traceRecallPersist=true`.
+
+### Externalized Tool Result Tools
+
+Use these when a preview contains a `viking://session/<session_id>/tool-results/<tool_result_id>` ref.
+
+| Tool | Parameters |
+|---|---|
+| `openviking_tool_result_list` | `tool_name?`, `limit?` (default 50) |
+| `openviking_tool_result_search` | `tool_output_ref`, `query`, `limit?` (default 20), `context_chars?` (default 300) |
+| `openviking_tool_result_read` | `tool_output_ref`, `offset?` (default 0), `limit?` (default 20000) |
+
 ## Configuration Schema
 
 These are the keys under `plugins.entries.openviking.config` in `openclaw.json`. The setup wizard / `ov-install` sets the first few; the rest are tunables.
@@ -509,22 +577,29 @@ These are the keys under `plugins.entries.openviking.config` in `openclaw.json`.
 | `userId` | — | Required when `apiKey` is a root key. |
 | `targetUri` | `viking://user/memories` | Default search scope URI. |
 | `timeoutMs` | (plugin default) | HTTP timeout for OpenViking calls. |
-| `autoCapture` | `true` | Auto-append turn messages to the OpenViking session at `afterTurn`; extraction runs only after a threshold commit, `/compact`, or explicit `memory_store`. |
+| `autoCapture` | `true` | Auto-archive turn messages to OpenViking session at `afterTurn` (extraction itself runs on `/compact`, not here). |
 | `captureMode` | `"semantic"` | Filter mode used by the server-side extraction pipeline: `semantic` or `keyword`. |
 | `captureMaxLength` | `24000` | Max text length per archived turn. |
 | `autoRecall` | `true` | Auto-recall and inject memories before reply. |
+| `recallTargetTypes` | `user,agent` | Default target types when `targetUri` is omitted. Allowed: `resource`, `session`, `user`, `agent`. |
+| `recallResources` | `false` | Compatibility shortcut that appends `resource` to default recall targets when `recallTargetTypes` is unset. |
 | `recallLimit` | `6` | Max memories injected per recall. |
 | `recallScoreThreshold` | `0.15` | Min relevance score to inject. |
-| `recallMaxInjectedChars` | (plugin default) | Hard cap on injected character count. |
+| `recallMaxInjectedChars` | `4000` | Hard cap on injected character count. Complete memories that do not fit are skipped, not truncated. |
 | `recallPreferAbstract` | (plugin default) | Prefer abstract memories over raw. |
-| `recallTokenBudget` | (plugin default) | Token budget for injected memories. |
-| `isolateUserScopeByAgent` | (plugin default) | Multi-tenant scoping toggle. |
-| `isolateAgentScopeByUser` | (plugin default) | Multi-tenant scoping toggle. |
-| `agentScopeMode` | (plugin default) | Agent scope strategy. |
+| `recallTokenBudget` | deprecated | Compatibility alias for `recallMaxInjectedChars`. |
+| `isolateUserScopeByAgent` | `false` | Canonical namespace policy for `viking://user/...`; must match server policy. |
+| `isolateAgentScopeByUser` | `false` | Canonical namespace policy for `viking://agent/...`; must match server policy. |
+| `agentScopeMode` | deprecated | Compatibility alias for older routing behavior. Prefer the two isolate toggles. |
+| `commitTokenThreshold` | `20000` | Pending-token threshold for async commit after turns; `0` commits every turn. |
+| `commitKeepRecentCount` | `10` | Recent messages kept live after afterTurn commit. Compact always uses `0`. |
 | `bypassSessionPatterns` | — | Glob patterns for sessions skipped by capture. |
 | `ingestReplyAssist` | (plugin default) | Reply-assist ingestion toggle. |
-| `emitStandardDiagnostics` | (plugin default) | Verbose diagnostic logs. |
-| `logFindRequests` | (plugin default) | Log retrieval requests. |
+| `emitStandardDiagnostics` | `false` | Emit structured `openviking: diag {...}` lines. |
+| `logFindRequests` | `false` | Log routing for find/session writes. Also enabled by `OPENVIKING_LOG_ROUTING=1` or `OPENVIKING_DEBUG=1`. |
+| `traceRecall` | `false` | Record recall traces in memory. |
+| `traceRecallPersist` | `false` | Persist recall traces to JSONL files. |
+| `traceRecallDir` | `~/.openclaw/openviking/recall-traces` | Recall trace directory. |
 
 To change a value:
 
