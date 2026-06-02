@@ -432,9 +432,9 @@ class VikingClient:
     async def search_experiences(self, query: str, limit: int = 5) -> list[Any]:
         """用 query 检索 agent experience 记忆。"""
         effective_agent_id = self.openviking_config.agent_id or "default"
-        # A per-instance, non-session agent_id (e.g. "airline_v0") overrides the global
-        # config so each domain reads from its own experience namespace.
-        if self.agent_id and "_" in self.agent_id and not _is_session_key(self.agent_id):
+        # A per-instance, non-session agent_id overrides the global config so each domain
+        # reads from its own experience namespace.
+        if self.agent_id and not _is_session_key(self.agent_id):
             effective_agent_id = self.agent_id
         exp_uri = f"viking://agent/{effective_agent_id}/memories/experiences/"
         result = await self.search(query=query, target_uri=exp_uri, limit=limit)
