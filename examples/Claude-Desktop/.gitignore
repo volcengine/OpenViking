@@ -1,0 +1,50 @@
+# OpenViking for Claude Desktop — .gitignore
+
+# Config with real API keys — NEVER commit these
+config/ov.conf
+config/ovcli.conf
+
+# Local data store — can be huge, contains personal data
+.claude-memory/
+*.claude-memory/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+*.whl
+
+# Logs
+*.log
+logs/
+
+# Session state
+.session_state.json
+
+# Environment
+.env
+.env.*
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Windows
+$RECYCLE.BIN/
+
+# Node
+node_modules/

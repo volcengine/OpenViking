@@ -1,0 +1,38 @@
+{
+    "storage": {
+        "workspace": "C:/Users/YOUR_USERNAME/.claude-memory",
+        "vectordb": {
+            "name": "context",
+            "backend": "local"
+        }
+    },
+    "log": {
+        "level": "INFO",
+        "output": "C:/Users/YOUR_USERNAME/.claude-memory/logs/openviking.log",
+        "rotation": false
+    },
+    "embedding": {
+        "dense": {
+            "provider": "jina",
+            "api_key": "YOUR_JINA_API_KEY",
+            "api_base": "https://api.jina.ai/v1",
+            "model": "jina-embeddings-v3",
+            "dimension": 768,
+            "query_param": "retrieval.query",
+            "document_param": "retrieval.passage"
+        },
+        "max_concurrent": 1
+    },
+    "vlm": {
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-20250514",
+        "api_key": "YOUR_ANTHROPIC_API_KEY",
+        "api_base": "https://api.anthropic.com/v1",
+        "max_concurrent": 10
+    },
+    "server": {
+        "host": "127.0.0.1",
+        "port": 1933,
+        "root_api_key": "YOUR_LOCAL_API_KEY"
+    }
+}

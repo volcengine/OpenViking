@@ -1,0 +1,40 @@
+name: Verify
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check no API keys in repo
+        run: |
+          if grep -rE "jina_[a-zA-Z0-9]{20,}|sk-ant-api03-[a-zA-Z0-9_-]+" .; then
+            echo "FAIL: API keys found"; exit 1
+          fi
+          echo "PASS: No API keys found"
+
+      - name: Python syntax check
+        run: |
+          python3 -m py_compile server/openviking-bridge.py
+          python3 -m py_compile server/openviking-mcp.py
+          python3 -m py_compile server/openviking-watchdog.py
+          python3 -m py_compile hooks/ov_session.py
+          echo "PASS: Python syntax OK"
+
+      - name: Node.js syntax check
+        run: |
+          node --check hooks/ov-recall.js
+          node --check hooks/ov-capture.js
+          echo "PASS: JS syntax OK"
+
+      - name: JSON config examples valid
+        run: |
+          python3 -c "import json; json.load(open('config/ov.conf.example'))"
+          python3 -c "import json; json.load(open('config/ovcli.conf.example'))"
+          echo "PASS: Config JSON valid"

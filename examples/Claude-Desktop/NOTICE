@@ -1,0 +1,13 @@
+openviking-claude-desktop
+Copyright (c) 2026 Sameh Khalifa
+
+This software includes components derived from or built upon:
+
+  OpenViking
+  https://github.com/volcengine/OpenViking
+  Copyright (c) Volcengine Ltd.
+  Licensed under the Apache License, Version 2.0
+  http://www.apache.org/licenses/LICENSE-2.0
+
+This project is an independent integration and is not affiliated with,
+endorsed by, or officially connected to Volcengine or ByteDance in any way.
