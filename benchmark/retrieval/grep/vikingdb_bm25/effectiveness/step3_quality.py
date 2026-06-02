@@ -296,6 +296,7 @@ def main():
     print()
 
     # Save results to local file
+    os.makedirs(RESULT_DIR, exist_ok=True)
     output_file = os.path.join(RESULT_DIR, "step3_result.json")
     with open(output_file, "w", encoding="utf-8") as f:
         json.dump(

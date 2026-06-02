@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Step 1 (Effectiveness): Import real code repos into OpenViking (no indexing).
 
-Recursively scans a local directory, imports each subdirectory (at all depths)
-via SyncOpenViking.add_resource (wait=True, build_index=False, summarize=False),
-and saves progress after each directory for resumability.
+Scans first-level subdirectories under the source directory and imports each
+as a whole repo via SyncOpenViking.add_resource (wait=True, build_index=False,
+summarize=False).  add_resource itself handles recursive traversal of files
+within each repo, so we only need to enumerate top-level directories.
+
+Progress is saved after each directory for resumability.
 
 After all imports are done, run step2_reindex.py to build vector indexes,
 then step3_quality.py to evaluate retrieval quality.
@@ -42,27 +45,13 @@ def save_progress(rel_dir: str) -> None:
         f.write(rel_dir + "\n")
 
 
-def scan_subdirs_recursive(root: str) -> list[str]:
-    """Return sorted list of all subdirectory relative paths (deterministic order)."""
-    result: list[str] = []
-
-    def _walk(dir_path: str, rel_prefix: str) -> None:
-        try:
-            entries = sorted(os.listdir(dir_path))
-        except OSError:
-            return
-        for name in entries:
-            if name.startswith("."):
-                continue
-            full = os.path.join(dir_path, name)
-            if not os.path.isdir(full):
-                continue
-            rel = f"{rel_prefix}/{name}" if rel_prefix else name
-            result.append(rel)
-            _walk(full, rel)
-
-    _walk(root, "")
-    return result
+def scan_first_level_dirs(root: str) -> list[str]:
+    """Return sorted list of first-level subdirectory names."""
+    try:
+        entries = sorted(os.listdir(root))
+    except OSError:
+        return []
+    return [e for e in entries if not e.startswith(".") and os.path.isdir(os.path.join(root, e))]
 
 
 def main():
@@ -95,9 +84,9 @@ def main():
     print("  Indexing: DISABLED (build_index=False, summarize=False)")
     print()
 
-    subdirs = scan_subdirs_recursive(source)
-    total = len(subdirs)
-    print(f"  Total directories to import: {total}")
+    first_level = scan_first_level_dirs(source)
+    total = len(first_level)
+    print(f"  First-level directories to import: {total}")
     print()
 
     if total == 0:
@@ -106,7 +95,7 @@ def main():
 
     completed = load_progress()
     if completed:
-        already_done = [d for d in subdirs if d in completed]
+        already_done = [d for d in first_level if d in completed]
         print(f"  Resuming: {len(already_done)} directories already imported")
         print()
 
@@ -114,22 +103,21 @@ def main():
     client.initialize()
 
     results = []
-    for i, rel_dir in enumerate(subdirs, 1):
-        if rel_dir in completed:
-            print(f"  [{i}/{total}] SKIP (already done): {rel_dir}")
+    for i, name in enumerate(first_level, 1):
+        if name in completed:
+            print(f"  [{i}/{total}] SKIP (already done): {name}")
             continue
 
-        dir_path = os.path.join(source, rel_dir)
-        parent_rel = os.path.dirname(rel_dir)
-        parent_uri = f"{args.parent}/{parent_rel}" if parent_rel else args.parent
-        print(f"  [{i}/{total}] Importing: {rel_dir} ...", end="", flush=True)
+        dir_path = os.path.join(source, name)
+        parent_uri = args.parent
+        print(f"  [{i}/{total}] Importing: {name} ...", end="", flush=True)
 
         t0 = time.monotonic()
         try:
             result = client.add_resource(
                 path=dir_path,
                 parent=parent_uri,
-                reason=f"benchmark effectiveness: {rel_dir}",
+                reason=f"benchmark effectiveness: {name}",
                 wait=True,
                 create_parent=True,
                 build_index=False,
@@ -138,14 +126,14 @@ def main():
             elapsed = time.monotonic() - t0
             root_uri = result.get("root_uri", "?")
             print(f" OK ({elapsed:.1f}s) -> {root_uri}")
-            save_progress(rel_dir)
-            results.append({"dir": rel_dir, "status": "ok", "elapsed_s": round(elapsed, 1)})
+            save_progress(name)
+            results.append({"dir": name, "status": "ok", "elapsed_s": round(elapsed, 1)})
         except Exception as e:
             elapsed = time.monotonic() - t0
             print(f" FAILED ({elapsed:.1f}s): {e}")
             results.append(
                 {
-                    "dir": rel_dir,
+                    "dir": name,
                     "status": "failed",
                     "elapsed_s": round(elapsed, 1),
                     "error": str(e)[:500],
@@ -167,7 +155,7 @@ def main():
 
     ok_count = sum(1 for r in results if r["status"] == "ok")
     failed_count = sum(1 for r in results if r["status"] == "failed")
-    skipped_count = sum(1 for d in subdirs if d in completed)
+    skipped_count = sum(1 for d in first_level if d in completed)
     total_done = skipped_count + ok_count
 
     print()
