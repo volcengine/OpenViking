@@ -3,10 +3,9 @@
 
 import pytest
 
-from openviking.storage.viking_fs import VikingFS
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.viking_fs import VikingFS
 from openviking_cli.session.user_id import UserIdentifier
-from openviking_cli.utils.uri import VikingURI
 
 
 class _DummyAgfs:
@@ -253,7 +252,7 @@ async def test_iter_visible_tree_entries_node_limit_after_acl(monkeypatch):
     )
 
     results = []
-    async for entry, entry_uri in fs._iter_visible_tree_entries(
+    async for entry, _entry_uri in fs._iter_visible_tree_entries(
         "viking://resources", node_limit=3, ctx=_default_ctx()
     ):
         results.append(entry)
