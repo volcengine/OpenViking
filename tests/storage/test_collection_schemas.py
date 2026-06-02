@@ -22,6 +22,7 @@ from openviking.server.identity import RequestContext, Role, UserIdentifier
 from openviking.storage.collection_schemas import (
     CollectionSchemas,
     TextEmbeddingHandler,
+    _LocalBM25RebuildState,
     _build_embedding_metadata,
     init_context_collection,
 )
@@ -580,6 +581,51 @@ async def test_embedding_handler_local_bm25_rebuilds_are_coalesced(monkeypatch):
 
     assert vikingdb.calls == 2
     assert vikingdb.max_active == 1
+
+
+@pytest.mark.asyncio
+async def test_embedding_handler_local_bm25_restarts_after_late_pending(monkeypatch):
+    class _CountingVikingDB:
+        is_closing = False
+        mode = "local"
+
+        def __init__(self):
+            self.calls = 0
+
+        async def rebuild_local_bm25_sparse_vectors(self, sparse_embedder, *, ctx):
+            del sparse_embedder, ctx
+            self.calls += 1
+            return 1
+
+    dense = _FakeDenseEmbedder()
+    sparse = LocalBM25Embedder()
+    embedder = CompositeHybridEmbedder(dense, sparse)
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: _DummyConfig(embedder),
+    )
+
+    vikingdb = _CountingVikingDB()
+    handler = TextEmbeddingHandler(vikingdb)
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="default", user_id="default", agent_id="default"),
+        role=Role.ROOT,
+    )
+    state = handler._local_bm25_rebuilds_by_account.setdefault(
+        "default", _LocalBM25RebuildState()
+    )
+    completed_task = asyncio.create_task(asyncio.sleep(0))
+    await completed_task
+    state.task = completed_task
+    state.pending = True
+
+    handler._finish_local_bm25_sparse_rebuild(completed_task, ctx, sparse, state)
+
+    assert state.task is not completed_task
+    assert state.task is not None
+    await state.task
+    assert vikingdb.calls == 1
+    assert state.task is None
 
 
 @pytest.mark.asyncio

@@ -432,9 +432,39 @@ class TextEmbeddingHandler(DequeueHandlerBase):
         if state.task is not None and not state.task.done():
             return
 
-        state.task = asyncio.create_task(
+        self._start_local_bm25_sparse_rebuild(ctx, local_bm25, state)
+
+    def _start_local_bm25_sparse_rebuild(
+        self,
+        ctx: RequestContext,
+        local_bm25: Any,
+        state: _LocalBM25RebuildState,
+    ) -> None:
+        task = asyncio.create_task(
             self._drain_local_bm25_sparse_rebuilds(ctx, local_bm25, state)
         )
+        state.task = task
+        task.add_done_callback(
+            lambda done_task: self._finish_local_bm25_sparse_rebuild(
+                done_task, ctx, local_bm25, state
+            )
+        )
+
+    def _finish_local_bm25_sparse_rebuild(
+        self,
+        task: asyncio.Task,
+        ctx: RequestContext,
+        local_bm25: Any,
+        state: _LocalBM25RebuildState,
+    ) -> None:
+        if state.task is not task:
+            return
+
+        if state.pending:
+            self._start_local_bm25_sparse_rebuild(ctx, local_bm25, state)
+            return
+
+        state.task = None
 
     async def _drain_local_bm25_sparse_rebuilds(
         self,
