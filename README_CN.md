@@ -288,7 +288,7 @@ openviking-server doctor
     "provider" : "<provider-type>",    // 提供商类型 (volcengine, openai, azure, openai-codex 等)
     "api_version": "2025-01-01-preview", // （仅 azure）API 版本，可选，默认 "2025-01-01-preview"
     "model"    : "<model-name>",       // VLM 模型名称或 Azure 部署名
-    "max_concurrent": 100              // 语义处理的最大并发 LLM 调用（默认：100）
+    "max_concurrent": 64              // 语义处理的最大并发 LLM 调用（默认：64）
   }
 }
 ```
@@ -326,7 +326,7 @@ openviking-server doctor
     "api_key"  : "your-volcengine-api-key",
     "provider" : "volcengine",
     "model"    : "doubao-seed-2-0-pro-260215",
-    "max_concurrent": 100
+    "max_concurrent": 64
   }
 }
 ```
@@ -360,7 +360,7 @@ openviking-server doctor
     "api_key"  : "your-openai-api-key",
     "provider" : "openai",
     "model"    : "gpt-4-vision-preview",
-    "max_concurrent": 100
+    "max_concurrent": 64
   }
 }
 ```
@@ -396,7 +396,7 @@ openviking-server doctor
     "provider" : "azure",
     "api_version": "2025-01-01-preview",
     "model"    : "gpt-4o",
-    "max_concurrent": 100
+    "max_concurrent": 64
   }
 }
 ```

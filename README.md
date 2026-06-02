@@ -332,7 +332,7 @@ If you prefer manual configuration, create `~/.openviking/ov.conf`, remove the c
     "api_key"  : "<your-api-key>",     // Model service API Key (optional for openai-codex)
     "provider" : "<provider-type>",    // Provider type (volcengine, openai, openai-codex, kimi, glm, etc.)
     "model"    : "<model-name>",       // VLM model name (e.g., doubao-seed-2-0-pro-260215 or gpt-4-vision-preview)
-    "max_concurrent": 100              // Max concurrent LLM calls for semantic processing (default: 100)
+    "max_concurrent": 64              // Max concurrent LLM calls for semantic processing (default: 64)
   }
 }
 ```
@@ -370,7 +370,7 @@ If you prefer manual configuration, create `~/.openviking/ov.conf`, remove the c
     "api_key"  : "your-volcengine-api-key",
     "provider" : "volcengine",
     "model"    : "doubao-seed-2-0-pro-260215",
-    "max_concurrent": 100
+    "max_concurrent": 64
   }
 }
 ```
@@ -404,7 +404,7 @@ If you prefer manual configuration, create `~/.openviking/ov.conf`, remove the c
     "api_key"  : "your-openai-api-key",
     "provider" : "openai",
     "model"    : "gpt-4-vision-preview",
-    "max_concurrent": 100
+    "max_concurrent": 64
   }
 }
 ```
@@ -439,7 +439,7 @@ pip install "google-genai>=1.0.0"
     "api_key"  : "your-openai-api-key",
     "provider" : "openai",
     "model"    : "gpt-4o",
-    "max_concurrent": 100
+    "max_concurrent": 64
   }
 }
 ```
@@ -471,7 +471,7 @@ Use `openviking-server init` and choose `OpenAI Codex`, then run `openviking-ser
     "api_base" : "https://chatgpt.com/backend-api/codex",
     "provider" : "openai-codex",
     "model"    : "gpt-5.3-codex",
-    "max_concurrent": 100
+    "max_concurrent": 64
   }
 }
 ```

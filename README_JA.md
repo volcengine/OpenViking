@@ -198,7 +198,7 @@ OpenAIの公式APIを使用：
     "api_key"  : "<your-api-key>",     // モデルサービスAPIキー
     "provider" : "<provider-type>",    // プロバイダータイプ（volcengine、openai、deepseek、anthropicなど）
     "model"    : "<model-name>",       // VLMモデル名（例：doubao-seed-2-0-pro-260215 または gpt-4-vision-preview）
-    "max_concurrent": 100              // セマンティック処理の最大同時LLM呼び出し数（デフォルト: 100）
+    "max_concurrent": 64              // セマンティック処理の最大同時LLM呼び出し数（デフォルト: 64）
   }
 }
 ```
@@ -236,7 +236,7 @@ OpenAIの公式APIを使用：
     "api_key"  : "your-volcengine-api-key",
     "provider" : "volcengine",
     "model"    : "doubao-seed-2-0-pro-260215",
-    "max_concurrent": 100
+    "max_concurrent": 64
   }
 }
 ```
@@ -270,7 +270,7 @@ OpenAIの公式APIを使用：
     "api_key"  : "your-openai-api-key",
     "provider" : "openai",
     "model"    : "gpt-4-vision-preview",
-    "max_concurrent": 100
+    "max_concurrent": 64
   }
 }
 ```
