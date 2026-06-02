@@ -813,10 +813,16 @@ mod tests {
 
         assert_eq!(entries.len(), 3);
         assert_eq!(tree_names(&entries), vec!["a.txt", "sub", "b.txt"]);
+        assert_eq!(tree_rel_paths(&entries), vec!["a.txt", "sub", "sub/b.txt"]);
         assert_eq!(
             tree_paths(&entries),
             vec!["/root/a.txt", "/root/sub", "/root/sub/b.txt"]
         );
+        assert_eq!(entries[0].info.mode, 0o644);
+        assert!(!entries[0].info.is_dir);
+        assert_eq!(entries[1].info.mode, 0o755);
+        assert!(entries[1].info.is_dir);
+        assert!(entries.iter().all(|entry| entry.extra.is_empty()));
     }
 
     #[tokio::test]
@@ -938,52 +944,6 @@ mod tests {
         assert!(names.contains(&"a.txt".to_string()));
         assert!(names.contains(&".hidden".to_string()));
         assert!(names.contains(&".hidden_dir".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_tree_rel_path_correctness() {
-        let fs = TreeFS::default()
-            .with_dir_entries("/root", vec![("a.txt", false), ("sub", true)])
-            .with_dir_entries("/root/sub", vec![("b.txt", false)]);
-
-        let entries = fs.tree_directory("/root", false, None, None).await.unwrap();
-
-        assert_eq!(tree_rel_paths(&entries), vec!["a.txt", "sub", "sub/b.txt"]);
-    }
-
-    #[tokio::test]
-    async fn test_tree_path_field() {
-        let fs = TreeFS::default()
-            .with_dir_entries("/root", vec![("a.txt", false), ("sub", true)])
-            .with_dir_entries("/root/sub", vec![("b.txt", false)]);
-
-        let entries = fs.tree_directory("/root", false, None, None).await.unwrap();
-
-        assert_eq!(entries[0].path, "/root/a.txt");
-        assert_eq!(entries[1].path, "/root/sub");
-        assert_eq!(entries[2].path, "/root/sub/b.txt");
-    }
-
-    #[tokio::test]
-    async fn test_tree_info_fields() {
-        let fs = TreeFS::default().with_dir_entries("/root", vec![("a.txt", false)]);
-
-        let entries = fs.tree_directory("/root", false, None, None).await.unwrap();
-
-        assert_eq!(entries.len(), 1);
-        let info = &entries[0].info;
-        assert_eq!(info.name, "a.txt");
-        assert_eq!(info.mode, 0o644);
-        assert!(!info.is_dir);
-    }
-
-    #[tokio::test]
-    async fn test_tree_extra_empty() {
-        let fs = TreeFS::default().with_dir_entries("/root", vec![("a.txt", false)]);
-
-        let entries = fs.tree_directory("/root", false, None, None).await.unwrap();
-
-        assert!(entries[0].extra.is_empty());
     }
 
     #[tokio::test]

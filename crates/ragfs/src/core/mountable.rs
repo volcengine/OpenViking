@@ -854,22 +854,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_tree_directory_routes_to_correct_plugin() {
-        let mfs = MountableFS::new();
-        mfs.register_plugin(MockPlugin::new("mock")).await;
-
-        let config = PluginConfig {
-            name: "mock".to_string(),
-            mount_path: "/mock".to_string(),
-            params: HashMap::new(),
-        };
-        mfs.mount(config).await.unwrap();
-
-        let result = mfs.tree_directory("/mock/subdir", false, None, None).await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
     async fn test_tree_directory_no_mount_returns_error() {
         let mfs = MountableFS::new();
         let result = mfs

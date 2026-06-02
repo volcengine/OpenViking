@@ -27,11 +27,11 @@ use futures::stream::{self, StreamExt};
 use regex::Regex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::core::filesystem::{relative_depth, relative_match_file};
 use crate::core::{
     ConfigParameter, Error, FileInfo, FileSystem, GrepMatch, GrepResult, PluginConfig, Result,
     ServicePlugin, TreeEntry, WriteFlag,
 };
-use crate::core::filesystem::{relative_depth, relative_match_file};
 
 /// Check whether `path` is under `exclude_path` (including itself).
 fn s3_is_excluded_path(path: &str, exclude_path: &str) -> bool {
@@ -1679,9 +1679,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result.len(), 1);
-        assert!(result[0].info.is_dir);
-        assert_eq!(result[0].path, "/mydir");
-        assert_eq!(result[0].rel_path, "mydir");
+        let dir = &result[0];
+        assert!(dir.info.is_dir);
+        assert_eq!(dir.path, "/mydir");
+        assert_eq!(dir.rel_path, "mydir");
+        assert_eq!(dir.info.size, 0);
+        assert_eq!(dir.info.mode, 0o755);
     }
 
     #[test]
@@ -1773,42 +1776,6 @@ mod tests {
         let names: Vec<&str> = result.iter().map(|e| e.info.name.as_str()).collect();
         assert!(names.contains(&"a.txt"));
         assert!(names.contains(&".hidden"));
-    }
-
-    #[test]
-    fn test_build_tree_entries_dir_metadata() {
-        let objects = vec![make_meta("mydir/", 0, true)];
-        let result = build_tree_entries_from_flat_listing(
-            "/root",
-            &objects,
-            false,
-            None,
-            identity_key_to_path,
-        )
-        .unwrap();
-        let dir = &result[0];
-        assert!(dir.info.is_dir);
-        assert_eq!(dir.info.size, 0);
-        assert_eq!(dir.info.mode, 0o755);
-    }
-
-    #[test]
-    fn test_build_tree_entries_rel_path() {
-        let objects = vec![
-            make_meta("a.txt", 100, false),
-            make_meta("sub/b.txt", 200, false),
-        ];
-        let result = build_tree_entries_from_flat_listing(
-            "/root",
-            &objects,
-            false,
-            None,
-            identity_key_to_path,
-        )
-        .unwrap();
-        let rels: Vec<&str> = result.iter().map(|e| e.rel_path.as_str()).collect();
-        assert!(rels.contains(&"a.txt"));
-        assert!(rels.contains(&"sub/b.txt"));
     }
 
     #[test]

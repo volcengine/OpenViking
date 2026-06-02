@@ -114,9 +114,11 @@ def _make_tree_entry(path, name, is_dir=True):
 def test_is_tree_entry_visible_visible(monkeypatch):
     """PY-FLT-005, PY-FLT-009: Normal visible entry."""
     fs = VikingFS(agfs=_DummyAgfs())
-    monkeypatch.setattr(fs, "_is_accessible", lambda uri, ctx: True)
+    monkeypatch.setattr(fs, "_is_accessible", lambda _uri, _ctx: True)
     monkeypatch.setattr(
-        fs, "_path_to_uri", lambda path, ctx=None: path.replace("/local/test_account/", "viking://")
+        fs,
+        "_path_to_uri",
+        lambda path, **_kwargs: path.replace("/local/test_account/", "viking://"),
     )
     entry = _make_tree_entry("/local/test_account/resources/a", "a")
     ctx = _default_ctx()
@@ -126,9 +128,11 @@ def test_is_tree_entry_visible_visible(monkeypatch):
 def test_is_tree_entry_visible_acl_filtered(monkeypatch):
     """PY-FLT-008: ACL filtering."""
     fs = VikingFS(agfs=_DummyAgfs())
-    monkeypatch.setattr(fs, "_is_accessible", lambda uri, ctx: False)
+    monkeypatch.setattr(fs, "_is_accessible", lambda _uri, _ctx: False)
     monkeypatch.setattr(
-        fs, "_path_to_uri", lambda path, ctx=None: path.replace("/local/test_account/", "viking://")
+        fs,
+        "_path_to_uri",
+        lambda path, **_kwargs: path.replace("/local/test_account/", "viking://"),
     )
     entry = _make_tree_entry("/local/test_account/resources/secret", "secret")
     ctx = _default_ctx()
@@ -138,9 +142,11 @@ def test_is_tree_entry_visible_acl_filtered(monkeypatch):
 def test_is_tree_entry_visible_hidden_scope_filtered(monkeypatch):
     """PY-FLT-007: tasks scope filtered at account root."""
     fs = VikingFS(agfs=_DummyAgfs())
-    monkeypatch.setattr(fs, "_is_accessible", lambda uri, ctx: True)
+    monkeypatch.setattr(fs, "_is_accessible", lambda _uri, _ctx: True)
     monkeypatch.setattr(
-        fs, "_path_to_uri", lambda path, ctx=None: path.replace("/local/test_account/", "viking://")
+        fs,
+        "_path_to_uri",
+        lambda path, **_kwargs: path.replace("/local/test_account/", "viking://"),
     )
     entry = _make_tree_entry("/local/test_account/tasks/foo", "foo")
     ctx = _default_ctx()
@@ -150,9 +156,11 @@ def test_is_tree_entry_visible_hidden_scope_filtered(monkeypatch):
 def test_is_tree_entry_visible_path_ovlock_filtered(monkeypatch):
     """PY-FLT-011: .path.ovlock is filtered."""
     fs = VikingFS(agfs=_DummyAgfs())
-    monkeypatch.setattr(fs, "_is_accessible", lambda uri, ctx: True)
+    monkeypatch.setattr(fs, "_is_accessible", lambda _uri, _ctx: True)
     monkeypatch.setattr(
-        fs, "_path_to_uri", lambda path, ctx=None: path.replace("/local/test_account/", "viking://")
+        fs,
+        "_path_to_uri",
+        lambda path, **_kwargs: path.replace("/local/test_account/", "viking://"),
     )
     entry = _make_tree_entry(
         "/local/test_account/resources/.path.ovlock", ".path.ovlock", is_dir=False
@@ -164,9 +172,11 @@ def test_is_tree_entry_visible_path_ovlock_filtered(monkeypatch):
 def test_is_tree_entry_visible_default_ctx(monkeypatch):
     """PY-FLT-010: ctx=None uses default context."""
     fs = VikingFS(agfs=_DummyAgfs())
-    monkeypatch.setattr(fs, "_is_accessible", lambda uri, ctx: True)
+    monkeypatch.setattr(fs, "_is_accessible", lambda _uri, _ctx: True)
     monkeypatch.setattr(
-        fs, "_path_to_uri", lambda path, ctx=None: path.replace("/local/test_account/", "viking://")
+        fs,
+        "_path_to_uri",
+        lambda path, **_kwargs: path.replace("/local/test_account/", "viking://"),
     )
     entry = _make_tree_entry("/local/test_account/resources/a", "a")
     assert fs._is_tree_entry_visible(entry, "/local/test_account", _default_ctx()) is True
@@ -181,14 +191,14 @@ async def test_iter_visible_tree_entries_node_limit_not_passed_to_rust(monkeypat
     fs = VikingFS(agfs=_DummyAgfs())
     captured_node_limit = None
 
-    async def fake_tree_directory(path, show_hidden=False, node_limit=None, level_limit=None):
+    async def fake_tree_directory(_path, **kwargs):
         nonlocal captured_node_limit
-        captured_node_limit = node_limit
+        captured_node_limit = kwargs.get("node_limit")
         return []
 
     monkeypatch.setattr(fs._async_agfs, "tree_directory", fake_tree_directory)
-    monkeypatch.setattr(fs, "_uri_to_path", lambda uri, ctx=None: "/local/test_account/resources")
-    monkeypatch.setattr(fs, "_ctx_or_default", lambda ctx=None: _default_ctx())
+    monkeypatch.setattr(fs, "_uri_to_path", lambda _uri, **_kwargs: "/local/test_account/resources")
+    monkeypatch.setattr(fs, "_ctx_or_default", lambda _ctx=None: _default_ctx())
 
     async for _ in fs._iter_visible_tree_entries(
         "viking://resources", node_limit=10, ctx=_default_ctx()
@@ -204,14 +214,14 @@ async def test_iter_visible_tree_entries_level_limit_passed_to_rust(monkeypatch)
     fs = VikingFS(agfs=_DummyAgfs())
     captured_level_limit = None
 
-    async def fake_tree_directory(path, show_hidden=False, node_limit=None, level_limit=None):
+    async def fake_tree_directory(_path, **kwargs):
         nonlocal captured_level_limit
-        captured_level_limit = level_limit
+        captured_level_limit = kwargs.get("level_limit")
         return []
 
     monkeypatch.setattr(fs._async_agfs, "tree_directory", fake_tree_directory)
-    monkeypatch.setattr(fs, "_uri_to_path", lambda uri, ctx=None: "/local/test_account/resources")
-    monkeypatch.setattr(fs, "_ctx_or_default", lambda ctx=None: _default_ctx())
+    monkeypatch.setattr(fs, "_uri_to_path", lambda _uri, **_kwargs: "/local/test_account/resources")
+    monkeypatch.setattr(fs, "_ctx_or_default", lambda _ctx=None: _default_ctx())
 
     async for _ in fs._iter_visible_tree_entries(
         "viking://resources", level_limit=3, ctx=_default_ctx()
@@ -235,20 +245,22 @@ async def test_iter_visible_tree_entries_node_limit_after_acl(monkeypatch):
         _make_tree_entry("/local/test_account/resources/e", "e", is_dir=False),
     ]
 
-    async def fake_tree_directory(path, show_hidden=False, node_limit=None, level_limit=None):
+    async def fake_tree_directory(_path, **_kwargs):
         return entries
 
-    def fake_is_accessible(uri, ctx):
+    def fake_is_accessible(_uri, _ctx):
         nonlocal visible_count
         visible_count += 1
         return True
 
     monkeypatch.setattr(fs._async_agfs, "tree_directory", fake_tree_directory)
-    monkeypatch.setattr(fs, "_uri_to_path", lambda uri, ctx=None: "/local/test_account/resources")
-    monkeypatch.setattr(fs, "_ctx_or_default", lambda ctx=None: _default_ctx())
+    monkeypatch.setattr(fs, "_uri_to_path", lambda _uri, **_kwargs: "/local/test_account/resources")
+    monkeypatch.setattr(fs, "_ctx_or_default", lambda _ctx=None: _default_ctx())
     monkeypatch.setattr(fs, "_is_accessible", fake_is_accessible)
     monkeypatch.setattr(
-        fs, "_path_to_uri", lambda path, ctx=None: path.replace("/local/test_account/", "viking://")
+        fs,
+        "_path_to_uri",
+        lambda path, **_kwargs: path.replace("/local/test_account/", "viking://"),
     )
 
     results = []
@@ -267,14 +279,14 @@ async def test_iter_visible_tree_entries_show_hidden_passthrough(monkeypatch):
     fs = VikingFS(agfs=_DummyAgfs())
     captured_show_hidden = None
 
-    async def fake_tree_directory(path, show_hidden=False, node_limit=None, level_limit=None):
+    async def fake_tree_directory(_path, **kwargs):
         nonlocal captured_show_hidden
-        captured_show_hidden = show_hidden
+        captured_show_hidden = kwargs.get("show_hidden")
         return []
 
     monkeypatch.setattr(fs._async_agfs, "tree_directory", fake_tree_directory)
-    monkeypatch.setattr(fs, "_uri_to_path", lambda uri, ctx=None: "/local/test_account/resources")
-    monkeypatch.setattr(fs, "_ctx_or_default", lambda ctx=None: _default_ctx())
+    monkeypatch.setattr(fs, "_uri_to_path", lambda _uri, **_kwargs: "/local/test_account/resources")
+    monkeypatch.setattr(fs, "_ctx_or_default", lambda _ctx=None: _default_ctx())
 
     async for _ in fs._iter_visible_tree_entries(
         "viking://resources", show_all_hidden=True, ctx=_default_ctx()
@@ -307,15 +319,17 @@ async def test_tree_original_structure(monkeypatch):
         }
     ]
 
-    async def fake_tree_directory(path, show_hidden=False, node_limit=None, level_limit=None):
+    async def fake_tree_directory(_path, **_kwargs):
         return entries
 
     monkeypatch.setattr(fs._async_agfs, "tree_directory", fake_tree_directory)
-    monkeypatch.setattr(fs, "_uri_to_path", lambda uri, ctx=None: "/local/test_account/resources")
-    monkeypatch.setattr(fs, "_ctx_or_default", lambda ctx=None: _default_ctx())
-    monkeypatch.setattr(fs, "_is_accessible", lambda uri, ctx: True)
+    monkeypatch.setattr(fs, "_uri_to_path", lambda _uri, **_kwargs: "/local/test_account/resources")
+    monkeypatch.setattr(fs, "_ctx_or_default", lambda _ctx=None: _default_ctx())
+    monkeypatch.setattr(fs, "_is_accessible", lambda _uri, _ctx: True)
     monkeypatch.setattr(
-        fs, "_path_to_uri", lambda path, ctx=None: path.replace("/local/test_account/", "viking://")
+        fs,
+        "_path_to_uri",
+        lambda path, **_kwargs: path.replace("/local/test_account/", "viking://"),
     )
 
     result = await fs._tree_original("viking://resources", ctx=_default_ctx())
@@ -351,136 +365,21 @@ async def test_tree_original_extra_fields_preserved(monkeypatch):
         }
     ]
 
-    async def fake_tree_directory(path, show_hidden=False, node_limit=None, level_limit=None):
+    async def fake_tree_directory(_path, **_kwargs):
         return entries
 
     monkeypatch.setattr(fs._async_agfs, "tree_directory", fake_tree_directory)
-    monkeypatch.setattr(fs, "_uri_to_path", lambda uri, ctx=None: "/local/test_account/resources")
-    monkeypatch.setattr(fs, "_ctx_or_default", lambda ctx=None: _default_ctx())
-    monkeypatch.setattr(fs, "_is_accessible", lambda uri, ctx: True)
+    monkeypatch.setattr(fs, "_uri_to_path", lambda _uri, **_kwargs: "/local/test_account/resources")
+    monkeypatch.setattr(fs, "_ctx_or_default", lambda _ctx=None: _default_ctx())
+    monkeypatch.setattr(fs, "_is_accessible", lambda _uri, _ctx: True)
     monkeypatch.setattr(
-        fs, "_path_to_uri", lambda path, ctx=None: path.replace("/local/test_account/", "viking://")
+        fs,
+        "_path_to_uri",
+        lambda path, **_kwargs: path.replace("/local/test_account/", "viking://"),
     )
 
     result = await fs._tree_original("viking://resources", ctx=_default_ctx())
     assert result[0]["meta"] == {"Name": "s3fs", "Type": "s3"}
-
-
-@pytest.mark.asyncio
-async def test_tree_original_node_limit(monkeypatch):
-    """PY-ORIG-007: node_limit applied after ACL."""
-    fs = VikingFS(agfs=_DummyAgfs())
-
-    entries = [
-        _make_tree_entry(f"/local/test_account/resources/{name}", name, is_dir=False)
-        for name in ["a", "b", "c", "d", "e"]
-    ]
-
-    async def fake_tree_directory(path, show_hidden=False, node_limit=None, level_limit=None):
-        return entries
-
-    monkeypatch.setattr(fs._async_agfs, "tree_directory", fake_tree_directory)
-    monkeypatch.setattr(fs, "_uri_to_path", lambda uri, ctx=None: "/local/test_account/resources")
-    monkeypatch.setattr(fs, "_ctx_or_default", lambda ctx=None: _default_ctx())
-    monkeypatch.setattr(fs, "_is_accessible", lambda uri, ctx: True)
-    monkeypatch.setattr(
-        fs, "_path_to_uri", lambda path, ctx=None: path.replace("/local/test_account/", "viking://")
-    )
-
-    result = await fs._tree_original("viking://resources", node_limit=3, ctx=_default_ctx())
-    assert len(result) == 3
-
-
-@pytest.mark.asyncio
-async def test_tree_original_uri_correct(monkeypatch):
-    """PY-ORIG-003: URI generated correctly via _path_to_uri."""
-    fs = VikingFS(agfs=_DummyAgfs())
-
-    entries = [
-        {
-            "path": "/local/test_account/resources/sub/file.txt",
-            "rel_path": "resources/sub/file.txt",
-            "info": {
-                "name": "file.txt",
-                "size": 50,
-                "mode": 0o644,
-                "modTime": "2026-01-01T00:00:00Z",
-                "isDir": False,
-            },
-            "extra": {},
-        }
-    ]
-
-    async def fake_tree_directory(path, show_hidden=False, node_limit=None, level_limit=None):
-        return entries
-
-    monkeypatch.setattr(fs._async_agfs, "tree_directory", fake_tree_directory)
-    monkeypatch.setattr(fs, "_uri_to_path", lambda uri, ctx=None: "/local/test_account/resources")
-    monkeypatch.setattr(fs, "_ctx_or_default", lambda ctx=None: _default_ctx())
-    monkeypatch.setattr(fs, "_is_accessible", lambda uri, ctx: True)
-    monkeypatch.setattr(
-        fs, "_path_to_uri", lambda path, ctx=None: path.replace("/local/test_account/", "viking://")
-    )
-
-    result = await fs._tree_original("viking://resources", ctx=_default_ctx())
-    assert result[0]["uri"] == "viking://resources/sub/file.txt"
-
-
-@pytest.mark.asyncio
-async def test_tree_original_rel_path_correct(monkeypatch):
-    """PY-ORIG-004: rel_path correctly computed."""
-    fs = VikingFS(agfs=_DummyAgfs())
-
-    entries = [
-        {
-            "path": "/local/test_account/resources/sub/file.txt",
-            "rel_path": "resources/sub/file.txt",
-            "info": {
-                "name": "file.txt",
-                "size": 50,
-                "mode": 0o644,
-                "modTime": "2026-01-01T00:00:00Z",
-                "isDir": False,
-            },
-            "extra": {},
-        }
-    ]
-
-    async def fake_tree_directory(path, show_hidden=False, node_limit=None, level_limit=None):
-        return entries
-
-    monkeypatch.setattr(fs._async_agfs, "tree_directory", fake_tree_directory)
-    monkeypatch.setattr(fs, "_uri_to_path", lambda uri, ctx=None: "/local/test_account/resources")
-    monkeypatch.setattr(fs, "_ctx_or_default", lambda ctx=None: _default_ctx())
-    monkeypatch.setattr(fs, "_is_accessible", lambda uri, ctx: True)
-    monkeypatch.setattr(
-        fs, "_path_to_uri", lambda path, ctx=None: path.replace("/local/test_account/", "viking://")
-    )
-
-    result = await fs._tree_original("viking://resources", ctx=_default_ctx())
-    assert result[0]["rel_path"] == "resources/sub/file.txt"
-
-
-@pytest.mark.asyncio
-async def test_tree_original_show_hidden_passthrough(monkeypatch):
-    """PY-ORIG-005: show_all_hidden is passed through to Rust layer."""
-    fs = VikingFS(agfs=_DummyAgfs())
-    captured_show_hidden = None
-
-    async def fake_tree_directory(path, show_hidden=False, node_limit=None, level_limit=None):
-        nonlocal captured_show_hidden
-        captured_show_hidden = show_hidden
-        return []
-
-    monkeypatch.setattr(fs._async_agfs, "tree_directory", fake_tree_directory)
-    monkeypatch.setattr(fs, "_uri_to_path", lambda uri, ctx=None: "/local/test_account/resources")
-    monkeypatch.setattr(fs, "_ctx_or_default", lambda ctx=None: _default_ctx())
-
-    await fs._tree_original("viking://resources", show_all_hidden=False, ctx=_default_ctx())
-    assert captured_show_hidden is False
-
-    await fs._tree_original("viking://resources", show_all_hidden=True, ctx=_default_ctx())
-    assert captured_show_hidden is True
 
 
 @pytest.mark.asyncio
@@ -515,43 +414,23 @@ async def test_tree_original_dfs_order(monkeypatch):
         },
     ]
 
-    async def fake_tree_directory(path, show_hidden=False, node_limit=None, level_limit=None):
+    async def fake_tree_directory(_path, **_kwargs):
         return entries
 
     monkeypatch.setattr(fs._async_agfs, "tree_directory", fake_tree_directory)
-    monkeypatch.setattr(fs, "_uri_to_path", lambda uri, ctx=None: "/local/test_account/resources")
-    monkeypatch.setattr(fs, "_ctx_or_default", lambda ctx=None: _default_ctx())
-    monkeypatch.setattr(fs, "_is_accessible", lambda uri, ctx: True)
+    monkeypatch.setattr(fs, "_uri_to_path", lambda _uri, **_kwargs: "/local/test_account/resources")
+    monkeypatch.setattr(fs, "_ctx_or_default", lambda _ctx=None: _default_ctx())
+    monkeypatch.setattr(fs, "_is_accessible", lambda _uri, _ctx: True)
     monkeypatch.setattr(
-        fs, "_path_to_uri", lambda path, ctx=None: path.replace("/local/test_account/", "viking://")
+        fs,
+        "_path_to_uri",
+        lambda path, **_kwargs: path.replace("/local/test_account/", "viking://"),
     )
 
     result = await fs._tree_original("viking://resources", ctx=_default_ctx())
     assert result[0]["name"] == "sub"
     assert result[0]["isDir"] is True
     assert result[1]["name"] == "file.txt"
-
-
-@pytest.mark.asyncio
-async def test_tree_original_level_limit(monkeypatch):
-    """PY-ORIG-008: level_limit passed through to Rust layer."""
-    fs = VikingFS(agfs=_DummyAgfs())
-    captured_level_limit = None
-
-    async def fake_tree_directory(path, show_hidden=False, node_limit=None, level_limit=None):
-        nonlocal captured_level_limit
-        captured_level_limit = level_limit
-        return []
-
-    monkeypatch.setattr(fs._async_agfs, "tree_directory", fake_tree_directory)
-    monkeypatch.setattr(fs, "_uri_to_path", lambda uri, ctx=None: "/local/test_account/resources")
-    monkeypatch.setattr(fs, "_ctx_or_default", lambda ctx=None: _default_ctx())
-
-    await fs._tree_original("viking://resources", level_limit=2, ctx=_default_ctx())
-    assert captured_level_limit == 2
-
-    await fs._tree_original("viking://resources", level_limit=None, ctx=_default_ctx())
-    assert captured_level_limit is None
 
 
 # ── _tree_agent tests ──
@@ -589,18 +468,20 @@ async def test_tree_agent_structure(monkeypatch):
         },
     ]
 
-    async def fake_tree_directory(path, show_hidden=False, node_limit=None, level_limit=None):
+    async def fake_tree_directory(_path, **_kwargs):
         return entries
 
     monkeypatch.setattr(fs._async_agfs, "tree_directory", fake_tree_directory)
-    monkeypatch.setattr(fs, "_uri_to_path", lambda uri, ctx=None: "/local/test_account/resources")
-    monkeypatch.setattr(fs, "_ctx_or_default", lambda ctx=None: _default_ctx())
-    monkeypatch.setattr(fs, "_is_accessible", lambda uri, ctx: True)
+    monkeypatch.setattr(fs, "_uri_to_path", lambda _uri, **_kwargs: "/local/test_account/resources")
+    monkeypatch.setattr(fs, "_ctx_or_default", lambda _ctx=None: _default_ctx())
+    monkeypatch.setattr(fs, "_is_accessible", lambda _uri, _ctx: True)
     monkeypatch.setattr(
-        fs, "_path_to_uri", lambda path, ctx=None: path.replace("/local/test_account/", "viking://")
+        fs,
+        "_path_to_uri",
+        lambda path, **_kwargs: path.replace("/local/test_account/", "viking://"),
     )
 
-    async def fake_batch_fetch(entries, abs_limit, ctx=None):
+    async def fake_batch_fetch(entries, _abs_limit, **_kwargs):
         for entry in entries:
             entry["abstract"] = "" if not entry.get("isDir") else "mock abstract"
 
@@ -609,12 +490,8 @@ async def test_tree_agent_structure(monkeypatch):
     result = await fs._tree_agent("viking://resources", abs_limit=256, ctx=_default_ctx())
 
     assert len(result) == 2
-    assert "uri" in result[0]
-    assert "size" in result[0]
-    assert "isDir" in result[0]
-    assert "modTime" in result[0]
-    assert "rel_path" in result[0]
-    assert "abstract" in result[0]
+    assert set(result[0].keys()) == {"uri", "size", "isDir", "modTime", "rel_path", "abstract"}
+    assert "name" not in result[0]
 
 
 @pytest.mark.asyncio
@@ -637,18 +514,20 @@ async def test_tree_agent_dir_size_zero(monkeypatch):
         }
     ]
 
-    async def fake_tree_directory(path, show_hidden=False, node_limit=None, level_limit=None):
+    async def fake_tree_directory(_path, **_kwargs):
         return entries
 
     monkeypatch.setattr(fs._async_agfs, "tree_directory", fake_tree_directory)
-    monkeypatch.setattr(fs, "_uri_to_path", lambda uri, ctx=None: "/local/test_account/resources")
-    monkeypatch.setattr(fs, "_ctx_or_default", lambda ctx=None: _default_ctx())
-    monkeypatch.setattr(fs, "_is_accessible", lambda uri, ctx: True)
+    monkeypatch.setattr(fs, "_uri_to_path", lambda _uri, **_kwargs: "/local/test_account/resources")
+    monkeypatch.setattr(fs, "_ctx_or_default", lambda _ctx=None: _default_ctx())
+    monkeypatch.setattr(fs, "_is_accessible", lambda _uri, _ctx: True)
     monkeypatch.setattr(
-        fs, "_path_to_uri", lambda path, ctx=None: path.replace("/local/test_account/", "viking://")
+        fs,
+        "_path_to_uri",
+        lambda path, **_kwargs: path.replace("/local/test_account/", "viking://"),
     )
 
-    async def fake_batch_fetch(entries, abs_limit, ctx=None):
+    async def fake_batch_fetch(entries, _abs_limit, **_kwargs):
         for entry in entries:
             entry["abstract"] = "" if not entry.get("isDir") else "mock abstract"
 
@@ -678,18 +557,20 @@ async def test_tree_agent_non_dir_abstract_empty(monkeypatch):
         }
     ]
 
-    async def fake_tree_directory(path, show_hidden=False, node_limit=None, level_limit=None):
+    async def fake_tree_directory(_path, **_kwargs):
         return entries
 
     monkeypatch.setattr(fs._async_agfs, "tree_directory", fake_tree_directory)
-    monkeypatch.setattr(fs, "_uri_to_path", lambda uri, ctx=None: "/local/test_account/resources")
-    monkeypatch.setattr(fs, "_ctx_or_default", lambda ctx=None: _default_ctx())
-    monkeypatch.setattr(fs, "_is_accessible", lambda uri, ctx: True)
+    monkeypatch.setattr(fs, "_uri_to_path", lambda _uri, **_kwargs: "/local/test_account/resources")
+    monkeypatch.setattr(fs, "_ctx_or_default", lambda _ctx=None: _default_ctx())
+    monkeypatch.setattr(fs, "_is_accessible", lambda _uri, _ctx: True)
     monkeypatch.setattr(
-        fs, "_path_to_uri", lambda path, ctx=None: path.replace("/local/test_account/", "viking://")
+        fs,
+        "_path_to_uri",
+        lambda path, **_kwargs: path.replace("/local/test_account/", "viking://"),
     )
 
-    async def fake_batch_fetch(entries, abs_limit, ctx=None):
+    async def fake_batch_fetch(entries, _abs_limit, **_kwargs):
         for entry in entries:
             entry["abstract"] = "" if not entry.get("isDir") else "mock abstract"
 
@@ -719,19 +600,21 @@ async def test_tree_agent_modtime_formatted(monkeypatch):
         }
     ]
 
-    async def fake_tree_directory(path, show_hidden=False, node_limit=None, level_limit=None):
+    async def fake_tree_directory(_path, **_kwargs):
         return entries
 
-    async def fake_batch_fetch(entries, abs_limit, ctx=None):
+    async def fake_batch_fetch(entries, _abs_limit, **_kwargs):
         for entry in entries:
             entry["abstract"] = "" if not entry.get("isDir") else "mock abstract"
 
     monkeypatch.setattr(fs._async_agfs, "tree_directory", fake_tree_directory)
-    monkeypatch.setattr(fs, "_uri_to_path", lambda uri, ctx=None: "/local/test_account/resources")
-    monkeypatch.setattr(fs, "_ctx_or_default", lambda ctx=None: _default_ctx())
-    monkeypatch.setattr(fs, "_is_accessible", lambda uri, ctx: True)
+    monkeypatch.setattr(fs, "_uri_to_path", lambda _uri, **_kwargs: "/local/test_account/resources")
+    monkeypatch.setattr(fs, "_ctx_or_default", lambda _ctx=None: _default_ctx())
+    monkeypatch.setattr(fs, "_is_accessible", lambda _uri, _ctx: True)
     monkeypatch.setattr(
-        fs, "_path_to_uri", lambda path, ctx=None: path.replace("/local/test_account/", "viking://")
+        fs,
+        "_path_to_uri",
+        lambda path, **_kwargs: path.replace("/local/test_account/", "viking://"),
     )
     monkeypatch.setattr(fs, "_batch_fetch_abstracts", fake_batch_fetch)
 
@@ -759,10 +642,10 @@ async def test_tree_agent_abs_limit_truncation(monkeypatch):
         }
     ]
 
-    async def fake_tree_directory(path, show_hidden=False, node_limit=None, level_limit=None):
+    async def fake_tree_directory(_path, **_kwargs):
         return entries
 
-    async def fake_batch_fetch(entries, abs_limit, ctx=None):
+    async def fake_batch_fetch(entries, abs_limit, **_kwargs):
         for entry in entries:
             abstract = "x" * (abs_limit + 10) if entry.get("isDir") else ""
             if len(abstract) > abs_limit:
@@ -770,11 +653,13 @@ async def test_tree_agent_abs_limit_truncation(monkeypatch):
             entry["abstract"] = abstract
 
     monkeypatch.setattr(fs._async_agfs, "tree_directory", fake_tree_directory)
-    monkeypatch.setattr(fs, "_uri_to_path", lambda uri, ctx=None: "/local/test_account/resources")
-    monkeypatch.setattr(fs, "_ctx_or_default", lambda ctx=None: _default_ctx())
-    monkeypatch.setattr(fs, "_is_accessible", lambda uri, ctx: True)
+    monkeypatch.setattr(fs, "_uri_to_path", lambda _uri, **_kwargs: "/local/test_account/resources")
+    monkeypatch.setattr(fs, "_ctx_or_default", lambda _ctx=None: _default_ctx())
+    monkeypatch.setattr(fs, "_is_accessible", lambda _uri, _ctx: True)
     monkeypatch.setattr(
-        fs, "_path_to_uri", lambda path, ctx=None: path.replace("/local/test_account/", "viking://")
+        fs,
+        "_path_to_uri",
+        lambda path, **_kwargs: path.replace("/local/test_account/", "viking://"),
     )
     monkeypatch.setattr(fs, "_batch_fetch_abstracts", fake_batch_fetch)
 
@@ -816,21 +701,23 @@ async def test_tree_agent_batch_fetch_input_order(monkeypatch):
         },
     ]
 
-    async def fake_tree_directory(path, show_hidden=False, node_limit=None, level_limit=None):
+    async def fake_tree_directory(_path, **_kwargs):
         return entries
 
-    async def fake_batch_fetch(entries_arg, abs_limit, ctx=None):
+    async def fake_batch_fetch(entries_arg, _abs_limit, **_kwargs):
         nonlocal captured_entries
         captured_entries = list(entries_arg)
         for entry in entries_arg:
             entry["abstract"] = ""
 
     monkeypatch.setattr(fs._async_agfs, "tree_directory", fake_tree_directory)
-    monkeypatch.setattr(fs, "_uri_to_path", lambda uri, ctx=None: "/local/test_account/resources")
-    monkeypatch.setattr(fs, "_ctx_or_default", lambda ctx=None: _default_ctx())
-    monkeypatch.setattr(fs, "_is_accessible", lambda uri, ctx: True)
+    monkeypatch.setattr(fs, "_uri_to_path", lambda _uri, **_kwargs: "/local/test_account/resources")
+    monkeypatch.setattr(fs, "_ctx_or_default", lambda _ctx=None: _default_ctx())
+    monkeypatch.setattr(fs, "_is_accessible", lambda _uri, _ctx: True)
     monkeypatch.setattr(
-        fs, "_path_to_uri", lambda path, ctx=None: path.replace("/local/test_account/", "viking://")
+        fs,
+        "_path_to_uri",
+        lambda path, **_kwargs: path.replace("/local/test_account/", "viking://"),
     )
     monkeypatch.setattr(fs, "_batch_fetch_abstracts", fake_batch_fetch)
 
@@ -851,21 +738,23 @@ async def test_tree_agent_node_limit_before_enrichment(monkeypatch):
         for name in ["a", "b", "c", "d", "e"]
     ]
 
-    async def fake_tree_directory(path, show_hidden=False, node_limit=None, level_limit=None):
+    async def fake_tree_directory(_path, **_kwargs):
         return entries
 
-    async def fake_batch_fetch(entries_arg, abs_limit, ctx=None):
+    async def fake_batch_fetch(entries_arg, _abs_limit, **_kwargs):
         nonlocal enriched_count
         enriched_count = len(entries_arg)
         for entry in entries_arg:
             entry["abstract"] = ""
 
     monkeypatch.setattr(fs._async_agfs, "tree_directory", fake_tree_directory)
-    monkeypatch.setattr(fs, "_uri_to_path", lambda uri, ctx=None: "/local/test_account/resources")
-    monkeypatch.setattr(fs, "_ctx_or_default", lambda ctx=None: _default_ctx())
-    monkeypatch.setattr(fs, "_is_accessible", lambda uri, ctx: True)
+    monkeypatch.setattr(fs, "_uri_to_path", lambda _uri, **_kwargs: "/local/test_account/resources")
+    monkeypatch.setattr(fs, "_ctx_or_default", lambda _ctx=None: _default_ctx())
+    monkeypatch.setattr(fs, "_is_accessible", lambda _uri, _ctx: True)
     monkeypatch.setattr(
-        fs, "_path_to_uri", lambda path, ctx=None: path.replace("/local/test_account/", "viking://")
+        fs,
+        "_path_to_uri",
+        lambda path, **_kwargs: path.replace("/local/test_account/", "viking://"),
     )
     monkeypatch.setattr(fs, "_batch_fetch_abstracts", fake_batch_fetch)
 
