@@ -4,7 +4,7 @@
 
 源码：[examples/claude-code-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/claude-code-memory-plugin) | [博客：动机与效果展示](https://blog.openviking.ai/post/openviking-coding-agent/)
 
-## 安装
+## 步骤 1 安装插件
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/claude-code-memory-plugin/setup-helper/install.sh)
@@ -32,13 +32,12 @@ bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/e
 
 > 还没有 `ovcli.conf`？先按 [部署指南 → CLI](../guides/03-deployment.md#cli) 创建。
 >
-> 纯本地模式（`http://127.0.0.1:1933`，无鉴权）？跳过第 1 步——插件会静默使用本地默认值。
 >
 > Claude Code < 2.0？见 [插件 README 的兼容模式章节](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README_CN.md#兼容模式claude-code--20)。
 
 </details>
 
-## 验证
+## 步骤 2 验证
 
 ```bash
 type claude        # 期望输出：claude is a shell function
@@ -72,7 +71,6 @@ type claude        # 期望输出：claude is a shell function
 | `OPENVIKING_MEMORY_ENABLED` | (auto) | 强制开启/关闭 |
 | `OPENVIKING_DEBUG` | `false` | 写日志到 `~/.openviking/logs/cc-hooks.log` |
 
-多租户场景设置 `OPENVIKING_ACCOUNT`、`OPENVIKING_USER`、`OPENVIKING_AGENT_ID`。完整环境变量列表见 [插件 README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#configuration)。
 
 </details>
 

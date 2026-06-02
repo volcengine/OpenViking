@@ -4,7 +4,7 @@
 
 源码：[examples/codex-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/codex-memory-plugin) | [博客：动机与效果展示](https://blog.openviking.ai/post/openviking-coding-agent/)
 
-## 安装
+## 步骤 1 安装
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/codex-memory-plugin/setup-helper/install.sh)
@@ -32,7 +32,7 @@ codex              # 首次启动进 /hooks 审批一次
 
 </details>
 
-## 验证
+## 步骤 2 验证
 
 ```bash
 type codex         # 期望输出：codex is a shell function

@@ -6,7 +6,7 @@
 请在 ~/.openviking/ovcli.conf 写入以下内容：
 {"url":"https://api.vikingdb.cn-beijing.volces.com/openviking","api_key":"Please ask user for Volcengine OpenViking API key."}
 
-请向用户询问 API Key。如发现 ~/.openviking/ovcli.conf 已存在且内容冲突，请先询问用户是否备份原文件，并在得到确认后再覆盖。
+请向用户询问 API Key，可从 [Volcengine OpenViking 控制台](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing) 获取。如发现 ~/.openviking/ovcli.conf 已存在且内容冲突，请先询问用户是否备份原文件，并在得到确认后再覆盖。
 
 请安装 OpenViking CLI：
 npm i -g @openviking/cli

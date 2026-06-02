@@ -121,4 +121,4 @@
 |连接失败 / 401 Unauthorized|检查 `Authorization` 是否带 `Bearer` 前缀；确认 API Key 未过期或被重置|
 |连接失败 / 网络超时<br>|确认网络可访问 `api\.vikingdb\.cn\-beijing\.volces\.com`；企业网络请配置代理白名单|
 |Agent 无法识别工具|检查 MCP Server 是否已\&\#34;启用\&\#34;；部分客户端需重启进程后加载新配置|
-|mcp工具因 argument schema 与当前模型不兼容，请切换/修复 mcp server 或切换模型 \(4027\)|![Trae MCP schema 兼容性报错](https://docs.openviking.net/agents/image/trae/10-schema-error.png)<br>![Trae MCP schema 兼容性详情](https://docs.openviking.net/agents/image/trae/11-schema-error-detail.png)<br>尝试切换模型或升级到最新版 Trae|
+|mcp工具因 argument schema 与当前模型不兼容，请切换/修复 mcp server 或切换模型 \(4027\)|![Trae MCP schema 兼容性报错](https://docs.openviking.net/agents/image/trae/10-schema-error.png)<br>![Trae MCP schema 兼容性详情](https://docs.openviking.net/agents/image/trae/11-schema-error-detail.png)<br>|

@@ -8,11 +8,9 @@
 npm i -g @openviking/cli && ov config
 ```
 
-按提示填写 OpenViking 服务地址和 API Key。服务地址可使用：
+按提示依次选择或配置：添加配置 > 火山引擎云 > 自定义配置名称如:test > 填写 API Key
 
-```text
-https://api.vikingdb.cn-beijing.volces.com/openviking
-```
+可复制页面中展示的 API Key 到你的终端
 
 配置完成后，可运行以下命令查看 CLI 用法：
 
