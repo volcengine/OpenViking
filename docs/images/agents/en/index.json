@@ -50,7 +50,7 @@
     },
     {
       "id": "hermes",
-      "name": "Hermes",
+      "name": "Hermes Agent",
       "tags": ["Provider"],
       "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/Hermes-Agent.png",
       "summary": "Hermes includes OpenViking as a native memory provider. Point Hermes to your OpenViking service to enable storage, recall, and extraction.",

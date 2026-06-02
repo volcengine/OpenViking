@@ -50,7 +50,7 @@
     },
     {
       "id": "hermes",
-      "name": "Hermes",
+      "name": "Hermes Agent",
       "tags": ["Provider"],
       "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/Hermes-Agent.png",
       "summary": "Hermes 官方内置 OpenViking 作为记忆提供方。无需安装插件——直接把 Hermes 指向你的 OpenViking 服务即可，记忆存储、召回和抽取均原生支持",
