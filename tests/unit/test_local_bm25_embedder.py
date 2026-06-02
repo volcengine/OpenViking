@@ -13,6 +13,7 @@ from openviking.models.embedder.local_bm25_embedder import (
     LocalBM25Embedder,
     _hash_token,
     _tokenize,
+    extract_local_bm25_embedder,
 )
 
 
@@ -185,6 +186,18 @@ class TestLocalBM25Embedder:
         assert result.sparse_vector is not None
         assert result.sparse_vector[h_rare] > result.sparse_vector[h_common]
 
+    def test_query_term_frequency_scales_weight(self):
+        embedder = LocalBM25Embedder()
+        embedder.embed_batch(["foo bar", "foo baz"], is_query=False)
+
+        single = embedder.embed("foo", is_query=True)
+        repeated = embedder.embed("foo foo", is_query=True)
+        h_foo = str(_hash_token("foo"))
+
+        assert repeated.sparse_vector[h_foo] == pytest.approx(
+            single.sparse_vector[h_foo] * 2
+        )
+
     def test_dot_product_ranking(self):
         """Verify that dot product of query x doc vectors produces correct BM25 ranking."""
         embedder = LocalBM25Embedder()
@@ -226,6 +239,26 @@ class TestLocalBM25Embedder:
     def test_is_sparse_property(self):
         embedder = LocalBM25Embedder()
         assert embedder.is_sparse is True
+
+    def test_extract_local_bm25_embedder_from_composite(self):
+        from openviking.models.embedder.base import (
+            CompositeHybridEmbedder,
+            DenseEmbedderBase,
+            EmbedResult,
+        )
+
+        class FakeDenseEmbedder(DenseEmbedderBase):
+            def embed(self, text, is_query=False):
+                return EmbedResult(dense_vector=[1.0])
+
+            def get_dimension(self):
+                return 1
+
+        sparse = LocalBM25Embedder()
+        composite = CompositeHybridEmbedder(FakeDenseEmbedder("fake"), sparse)
+
+        assert extract_local_bm25_embedder(sparse) is sparse
+        assert extract_local_bm25_embedder(composite) is sparse
 
     def test_custom_k1_b(self):
         embedder = LocalBM25Embedder(k1=2.0, b=0.5)
@@ -277,6 +310,15 @@ class TestLocalBM25Embedder:
         )
 
         assert first.sparse_vector == third.sparse_vector
+
+    def test_embed_documents_with_current_stats_does_not_rebuild(self):
+        embedder = LocalBM25Embedder()
+        embedder.rebuild(["foo bar", "foo baz"])
+
+        results = embedder.embed_documents_with_current_stats(["foo foo"])
+
+        assert embedder.stats.doc_count == 2
+        assert results[0].sparse_vector[str(_hash_token("foo"))] > 0
 
     def test_embed_batch_replaces_previous_stats(self):
         embedder = LocalBM25Embedder()

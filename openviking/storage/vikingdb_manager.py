@@ -6,6 +6,7 @@ VikingDB Manager class that extends VikingVectorIndexBackend with queue manageme
 
 from typing import Any, Dict, List, Optional, Tuple
 
+from openviking.models.embedder.local_bm25_embedder import LocalBM25Embedder
 from openviking.server.identity import RequestContext
 from openviking.storage.expr import FilterExpr
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
@@ -300,6 +301,14 @@ class VikingDBManagerProxy:
 
     async def delete(self, ids: List[str]) -> int:
         return await self._manager.delete(ids, ctx=self._ctx)
+
+    async def rebuild_local_bm25_sparse_vectors(
+        self,
+        sparse_embedder: LocalBM25Embedder,
+    ) -> int:
+        return await self._manager.rebuild_local_bm25_sparse_vectors(
+            sparse_embedder, ctx=self._ctx
+        )
 
     async def exists(self, id: str) -> bool:
         return await self._manager.exists(id, ctx=self._ctx)

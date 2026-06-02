@@ -6,11 +6,18 @@ import hashlib
 import inspect
 import json
 import logging
+import math
+import os
 from types import SimpleNamespace
 
 import pytest
 
-from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
+from openviking.models.embedder.base import (
+    CompositeHybridEmbedder,
+    DenseEmbedderBase,
+    EmbedResult,
+)
+from openviking.models.embedder.local_bm25_embedder import LocalBM25Embedder
 from openviking.server.identity import RequestContext, Role, UserIdentifier
 from openviking.storage.collection_schemas import (
     CollectionSchemas,
@@ -25,6 +32,7 @@ from openviking.storage.vectordb import engine as vectordb_engine
 from openviking.storage.vectordb.collection.result import UpsertDataResult
 from openviking.storage.vectordb_adapters.local_adapter import LocalCollectionAdapter
 from openviking.storage.viking_vector_index_backend import (
+    LOCAL_BM25_REBUILD_BATCH_SIZE,
     VikingVectorIndexBackend,
     _SingleAccountBackend,
 )
@@ -32,6 +40,10 @@ from openviking_cli.utils.config.vectordb_config import (
     QdrantConfig,
     VectorDBBackendConfig,
     VolcengineConfig,
+)
+
+skip_if_not_manual = pytest.mark.skipif(
+    os.environ.get("RUN_MANUAL") != "1", reason="manual 10k local BM25 rebuild test"
 )
 
 
@@ -49,6 +61,19 @@ class _DummyEmbedder:
 
     async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
         return self.embed(text, is_query=is_query)
+
+
+class _FakeDenseEmbedder(DenseEmbedderBase):
+    def __init__(self):
+        super().__init__("fake-dense")
+        self.calls: list[tuple[str, bool]] = []
+
+    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
+        self.calls.append((text, is_query))
+        return EmbedResult(dense_vector=[0.1, 0.2])
+
+    def get_dimension(self) -> int:
+        return 2
 
 
 class _DummyConfig:
@@ -465,6 +490,96 @@ async def test_embedding_handler_truncates_queue_input_before_embed(monkeypatch)
     assert embedder.text is not None
     assert embedder.text.endswith("...(truncated for embedding)")
     assert "token-199" not in embedder.text
+
+
+@pytest.mark.asyncio
+async def test_embedding_handler_local_bm25_write_embeds_dense_then_rebuilds(monkeypatch):
+    class _CapturingVikingDB:
+        is_closing = False
+        mode = "local"
+
+        def __init__(self):
+            self.rebuilt_with = None
+
+        async def upsert(self, _data, *, ctx):
+            return "rec-1"
+
+        async def rebuild_local_bm25_sparse_vectors(self, sparse_embedder, *, ctx):
+            self.rebuilt_with = sparse_embedder
+            return 1
+
+    dense = _FakeDenseEmbedder()
+    sparse = LocalBM25Embedder()
+    embedder = CompositeHybridEmbedder(dense, sparse)
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: _DummyConfig(embedder),
+    )
+
+    vikingdb = _CapturingVikingDB()
+    handler = TextEmbeddingHandler(vikingdb)
+
+    await handler.on_dequeue(_build_queue_payload())
+    rebuild_task = handler._local_bm25_rebuilds_by_account["default"].task
+    assert rebuild_task is not None
+    await rebuild_task
+
+    assert dense.calls == [("hello", False)]
+    assert sparse.stats.doc_count == 0
+    assert vikingdb.rebuilt_with is sparse
+
+
+@pytest.mark.asyncio
+async def test_embedding_handler_local_bm25_rebuilds_are_coalesced(monkeypatch):
+    class _SlowVikingDB:
+        is_closing = False
+        mode = "local"
+
+        def __init__(self):
+            self.calls = 0
+            self.active = 0
+            self.max_active = 0
+            self.started = asyncio.Event()
+            self.release_first = asyncio.Event()
+
+        async def rebuild_local_bm25_sparse_vectors(self, sparse_embedder, *, ctx):
+            del sparse_embedder, ctx
+            self.calls += 1
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            try:
+                if self.calls == 1:
+                    self.started.set()
+                    await self.release_first.wait()
+                return 1
+            finally:
+                self.active -= 1
+
+    dense = _FakeDenseEmbedder()
+    sparse = LocalBM25Embedder()
+    embedder = CompositeHybridEmbedder(dense, sparse)
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: _DummyConfig(embedder),
+    )
+
+    vikingdb = _SlowVikingDB()
+    handler = TextEmbeddingHandler(vikingdb)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    handler._schedule_local_bm25_sparse_rebuild(ctx)
+    await vikingdb.started.wait()
+    handler._schedule_local_bm25_sparse_rebuild(ctx)
+
+    state = handler._local_bm25_rebuilds_by_account["default"]
+    assert state.task is not None
+    assert vikingdb.calls == 1
+
+    vikingdb.release_first.set()
+    await state.task
+
+    assert vikingdb.calls == 2
+    assert vikingdb.max_active == 1
 
 
 @pytest.mark.asyncio
@@ -885,6 +1000,135 @@ async def test_single_account_backend_upsert_runs_adapter_in_threadpool(monkeypa
             "account_id": "acc1",
         },
     )
+
+
+@pytest.mark.asyncio
+async def test_single_account_backend_rebuilds_local_bm25_from_scanned_tenant_corpus():
+    captured = {"batches": []}
+
+    class _Collection:
+        def get_meta_data(self):
+            return {
+                "Fields": [
+                    {"FieldName": "id"},
+                    {"FieldName": "uri"},
+                    {"FieldName": "abstract"},
+                    {"FieldName": "vector"},
+                    {"FieldName": "sparse_vector"},
+                    {"FieldName": "account_id"},
+                ]
+            }
+
+    class _Adapter:
+        mode = "local"
+
+        def get_collection(self):
+            return _Collection()
+
+        def scan_all(self):
+            return [
+                {
+                    "id": "rec-1",
+                    "uri": "viking://resources/a",
+                    "abstract": "foo bar",
+                    "vector": [0.1, 0.2],
+                    "account_id": "acc1",
+                    "_score": 1.0,
+                },
+                {
+                    "id": "rec-2",
+                    "uri": "viking://resources/b",
+                    "abstract": "foo foo",
+                    "vector": [0.3, 0.4],
+                    "account_id": "acc1",
+                },
+                {
+                    "id": "rec-other",
+                    "uri": "viking://resources/other",
+                    "abstract": "other tenant",
+                    "vector": [0.5, 0.6],
+                    "account_id": "acc2",
+                },
+            ]
+
+        def upsert(self, data):
+            captured["batches"].append(data)
+            return [item["id"] for item in data]
+
+    backend = _SingleAccountBackend(
+        config=VectorDBBackendConfig(backend="local", name="context", dimension=2),
+        bound_account_id="acc1",
+        shared_adapter=_Adapter(),
+    )
+    sparse = LocalBM25Embedder()
+
+    rebuilt = await backend.rebuild_local_bm25_sparse_vectors(sparse)
+
+    assert rebuilt == 2
+    assert sparse.stats.doc_count == 2
+    data = [item for batch in captured["batches"] for item in batch]
+    assert [item["id"] for item in data] == ["rec-1", "rec-2"]
+    assert all("_score" not in item for item in data)
+    assert all(item["sparse_vector"] for item in data)
+
+
+@skip_if_not_manual
+@pytest.mark.asyncio
+async def test_manual_local_bm25_rebuild_10k_documents_batches_sparse_upserts():
+    document_count = 10_000
+    captured_batches = []
+
+    class _Collection:
+        def get_meta_data(self):
+            return {
+                "Fields": [
+                    {"FieldName": "id"},
+                    {"FieldName": "uri"},
+                    {"FieldName": "abstract"},
+                    {"FieldName": "vector"},
+                    {"FieldName": "sparse_vector"},
+                    {"FieldName": "account_id"},
+                ]
+            }
+
+    class _Adapter:
+        mode = "local"
+
+        def get_collection(self):
+            return _Collection()
+
+        def scan_all(self):
+            return [
+                {
+                    "id": f"rec-{idx}",
+                    "uri": f"viking://resources/doc-{idx}",
+                    "abstract": f"common term-{idx % 100} shard-{idx % 7}",
+                    "vector": [float(idx % 3), float(idx % 5)],
+                    "account_id": "acc1",
+                }
+                for idx in range(document_count)
+            ]
+
+        def upsert(self, data):
+            captured_batches.append(data)
+            return [item["id"] for item in data]
+
+    backend = _SingleAccountBackend(
+        config=VectorDBBackendConfig(backend="local", name="context", dimension=2),
+        bound_account_id="acc1",
+        shared_adapter=_Adapter(),
+    )
+    sparse = LocalBM25Embedder()
+
+    rebuilt = await backend.rebuild_local_bm25_sparse_vectors(sparse)
+
+    assert rebuilt == document_count
+    assert sparse.stats.doc_count == document_count
+    assert len(captured_batches) == math.ceil(document_count / LOCAL_BM25_REBUILD_BATCH_SIZE)
+    assert all(len(batch) <= LOCAL_BM25_REBUILD_BATCH_SIZE for batch in captured_batches)
+    assert len(captured_batches[0]) == LOCAL_BM25_REBUILD_BATCH_SIZE
+    assert len(captured_batches[-1]) == document_count % LOCAL_BM25_REBUILD_BATCH_SIZE
+    assert all(item["sparse_vector"] for batch in captured_batches for item in batch)
 
 
 @pytest.mark.asyncio

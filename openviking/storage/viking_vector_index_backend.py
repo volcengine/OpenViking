@@ -9,6 +9,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from openviking.core.namespace import canonicalize_uri, visible_roots
+from openviking.models.embedder.local_bm25_embedder import LocalBM25Embedder
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.expr import And, Eq, FilterExpr, In, Or, PathScope, RawDSL
 from openviking.storage.vectordb.collection.collection import Collection
@@ -72,6 +73,8 @@ URI_REWRITE_OUTPUT_FIELDS = [
     "level",
     "account_id",
 ]
+
+LOCAL_BM25_REBUILD_BATCH_SIZE = 512
 
 
 class _AsyncVectorAdapter:
@@ -371,6 +374,46 @@ class _SingleAccountBackend:
         except Exception as e:
             logger.error("Error deleting by filter: %s", e)
             return 0
+
+    async def rebuild_local_bm25_sparse_vectors(
+        self,
+        sparse_embedder: LocalBM25Embedder,
+        *,
+        text_field: str = "abstract",
+    ) -> int:
+        """Recompute local BM25 sparse vectors for the full visible corpus."""
+        records = await self._async_adapter.call("scan_all")
+        if self._bound_account_id:
+            records = [
+                record for record in records if record.get("account_id") == self._bound_account_id
+            ]
+        if not records:
+            await self._async_adapter.run(sparse_embedder.rebuild, [])
+            return 0
+
+        texts = [str(record.get(text_field) or "") for record in records]
+        await self._async_adapter.run(sparse_embedder.rebuild, texts)
+
+        rebuilt = 0
+        for start in range(0, len(records), LOCAL_BM25_REBUILD_BATCH_SIZE):
+            record_batch = records[start : start + LOCAL_BM25_REBUILD_BATCH_SIZE]
+            text_batch = texts[start : start + LOCAL_BM25_REBUILD_BATCH_SIZE]
+            sparse_results = await self._async_adapter.run(
+                sparse_embedder.embed_documents_with_current_stats, text_batch
+            )
+
+            payloads: List[Dict[str, Any]] = []
+            for record, sparse_result in zip(record_batch, sparse_results, strict=True):
+                payload = dict(record)
+                payload["sparse_vector"] = sparse_result.sparse_vector or {}
+                payloads.append(
+                    await self._async_adapter.run(self._prepare_upsert_payload, payload)
+                )
+
+            if payloads:
+                await self._async_adapter.call("upsert", payloads)
+                rebuilt += len(payloads)
+        return rebuilt
 
     async def exists(self, id: str) -> bool:
         try:
@@ -747,6 +790,15 @@ class VikingVectorIndexBackend:
     async def delete(self, ids: List[str], *, ctx: RequestContext) -> int:
         backend = self._get_backend_for_context(ctx)
         return await backend.delete(ids)
+
+    async def rebuild_local_bm25_sparse_vectors(
+        self,
+        sparse_embedder: LocalBM25Embedder,
+        *,
+        ctx: RequestContext,
+    ) -> int:
+        backend = self._get_backend_for_context(ctx)
+        return await backend.rebuild_local_bm25_sparse_vectors(sparse_embedder)
 
     async def exists(self, id: str, *, ctx: RequestContext) -> bool:
         backend = self._get_backend_for_context(ctx)

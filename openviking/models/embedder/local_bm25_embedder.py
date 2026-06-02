@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional
 
 import xxhash
 
-from openviking.models.embedder.base import EmbedResult, SparseEmbedderBase
+from openviking.models.embedder.base import EmbedResult, EmbedderBase, SparseEmbedderBase
 
 logger = logging.getLogger(__name__)
 
@@ -214,6 +214,17 @@ class LocalBM25Embedder(SparseEmbedderBase):
 
         tokenized_documents = self._tokenize_batch(texts)
         self.rebuild_token_hashes(tokenized_documents)
+        return self.embed_tokenized_documents(tokenized_documents)
+
+    def embed_documents_with_current_stats(self, texts: List[str]) -> List[EmbedResult]:
+        """Embed documents using already-built corpus statistics."""
+        if self.stats.doc_count == 0 and texts:
+            raise RuntimeError("local_bm25 requires rebuild() before embedding documents")
+        return self.embed_tokenized_documents(self._tokenize_batch(texts))
+
+    def embed_tokenized_documents(
+        self, tokenized_documents: List[List[int]]
+    ) -> List[EmbedResult]:
         return [
             EmbedResult(sparse_vector=self._document_sparse_vector(token_hashes))
             if token_hashes
@@ -264,13 +275,23 @@ class LocalBM25Embedder(SparseEmbedderBase):
             seen[h] = seen.get(h, 0) + 1
 
         sparse: Dict[str, float] = {}
-        for h in seen:
+        for h, query_tf in seen.items():
             df = self.stats.term_doc_freq.get(h, 0)
             idf = math.log(1 + (doc_count - df + 0.5) / (df + 0.5))
-            sparse[str(h)] = idf * (self.k1 + 1)
+            sparse[str(h)] = query_tf * idf * (self.k1 + 1)
 
         return EmbedResult(sparse_vector=sparse)
 
     def close(self) -> None:
         if self._stats_path:
             self.stats.save(self._stats_path)
+
+
+def extract_local_bm25_embedder(embedder: Optional[EmbedderBase]) -> Optional[LocalBM25Embedder]:
+    """Return the local BM25 component from a sparse or composite embedder."""
+    if isinstance(embedder, LocalBM25Embedder):
+        return embedder
+    sparse_embedder = getattr(embedder, "sparse_embedder", None)
+    if isinstance(sparse_embedder, LocalBM25Embedder):
+        return sparse_embedder
+    return None
