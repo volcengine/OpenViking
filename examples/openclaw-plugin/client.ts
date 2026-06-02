@@ -42,14 +42,13 @@ export type CommitSessionResult = {
   trace_id?: string;
 };
 
-export type OVMemoryTargetPolicy = {
+export type OVMemoryPolicySwitch = {
   enabled?: boolean;
-  types?: string[] | null;
 };
 
 export type OVMemoryPolicy = {
-  self?: OVMemoryTargetPolicy;
-  peer?: OVMemoryTargetPolicy;
+  self?: OVMemoryPolicySwitch;
+  peer?: OVMemoryPolicySwitch;
 };
 
 export type TaskResult = {

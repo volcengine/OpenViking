@@ -14,12 +14,16 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from uuid import uuid4
 
 from openviking.core.namespace import canonical_session_uri
-from openviking.core.peer_id import normalize_peer_id
+from openviking.core.peer_id import normalize_peer_id, safe_peer_id
 from openviking.message import Message, Part
 from openviking.message.part import ContextPart, TextPart, ToolPart
 from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.server.identity import RequestContext, Role
-from openviking.session.memory_policy import DEFAULT_SELF_MEMORY_TYPES, MemoryPolicy
+from openviking.session.memory_policy import (
+    DEFAULT_AGENT_MEMORY_TYPES,
+    DEFAULT_LONG_TERM_MEMORY_TYPES,
+    MemoryPolicy,
+)
 from openviking.session.tool_result_store import (
     ToolResultStore,
     build_tool_result_id,
@@ -49,7 +53,6 @@ logger = get_logger(__name__)
 
 _ARCHIVE_WAIT_POLL_SECONDS = 0.1
 _PHASE2_QUEUE_WAIT_TIMEOUT_SECONDS = 1800.0
-_SELF_IDENTITY_MEMORY_TYPES = {"profile", "preferences", "entities", "events"}
 
 
 def _wm_debug(msg: str) -> None:
@@ -59,7 +62,7 @@ def _wm_debug(msg: str) -> None:
 
 def _known_memory_types() -> set[str]:
     """Return memory types accepted by commit memory_policy."""
-    names = set(DEFAULT_SELF_MEMORY_TYPES)
+    names = set(DEFAULT_LONG_TERM_MEMORY_TYPES) | set(DEFAULT_AGENT_MEMORY_TYPES)
     try:
         from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 
@@ -70,24 +73,17 @@ def _known_memory_types() -> set[str]:
 
 
 def _default_memory_counts() -> Dict[str, int]:
-    counts = dict.fromkeys(sorted(DEFAULT_SELF_MEMORY_TYPES), 0)
+    counts = dict.fromkeys(sorted(DEFAULT_LONG_TERM_MEMORY_TYPES), 0)
     counts["total"] = 0
     return counts
 
 
-def _messages_without_peer(messages: List[Message]) -> List[Message]:
-    return [message for message in messages if not getattr(message, "peer_id", None)]
-
-
-def _has_peer_messages(messages: List[Message]) -> bool:
-    return any(getattr(message, "peer_id", None) for message in messages)
-
-
-def _messages_with_self_user_input(messages: List[Message]) -> List[Message]:
-    self_messages = _messages_without_peer(messages)
-    if any(message.role == "user" for message in self_messages):
-        return self_messages
-    return []
+def _message_peer_ids(messages: List[Message]) -> set[str]:
+    return {
+        peer_id
+        for message in messages
+        if (peer_id := safe_peer_id(getattr(message, "peer_id", None)))
+    }
 
 
 # =====================================================================
@@ -1094,7 +1090,6 @@ class Session:
             session_policy=self._meta.memory_policy,
             commit_policy=memory_policy,
         )
-        effective_policy.validate_types(_known_memory_types())
         effective_memory_policy = effective_policy.to_dict()
         logger.info(
             f"[TRACER] session_commit started, trace_id={trace_id}, "
@@ -1362,32 +1357,37 @@ class Session:
                     # Summary generation, user memory and agent memory all run concurrently.
                     ov_config = get_openviking_config()
                     memory_extraction_enabled = ov_config.memory.extraction_enabled
-                    session_skill_extraction_enabled = (
+                    agent_memory_enabled = bool(
+                        getattr(ov_config.memory, "agent_memory_enabled", False)
+                    )
+                    config_session_skill_extraction_enabled = (
                         ov_config.memory.session_skill_extraction_enabled
                     )
                     effective_policy = MemoryPolicy.from_dict(memory_policy)
+                    self_memory_enabled = effective_policy.self_enabled
+                    peer_memory_enabled = effective_policy.peer_enabled
+                    allowed_peer_ids = (
+                        _message_peer_ids(extraction_messages) if peer_memory_enabled else set()
+                    )
+                    session_skill_extraction_enabled = (
+                        config_session_skill_extraction_enabled and self_memory_enabled
+                    )
                     registered_memory_types = _known_memory_types()
-                    self_allowed_types = (
-                        effective_policy.self_allowed_types(registered_memory_types)
-                        if effective_policy.self_memory.enabled and memory_extraction_enabled
+                    agent_allowed_types = (
+                        registered_memory_types & DEFAULT_AGENT_MEMORY_TYPES
+                        if agent_memory_enabled and memory_extraction_enabled
                         else set()
                     )
-                    has_peer_messages = _has_peer_messages(extraction_messages)
-                    if has_peer_messages:
-                        self_identity_types = self_allowed_types & _SELF_IDENTITY_MEMORY_TYPES
-                        self_experience_types = self_allowed_types - _SELF_IDENTITY_MEMORY_TYPES
-                        self_identity_messages = _messages_with_self_user_input(extraction_messages)
-                    else:
-                        self_identity_types = set()
-                        self_experience_types = self_allowed_types
-                        self_identity_messages = []
-                    peer_allowed_types = (
-                        effective_policy.peer_allowed_types(registered_memory_types)
-                        if effective_policy.peer_memory.enabled and memory_extraction_enabled
+                    self_agent_types = agent_allowed_types if self_memory_enabled else set()
+                    long_term_allowed_types = (
+                        registered_memory_types & DEFAULT_LONG_TERM_MEMORY_TYPES
+                        if memory_extraction_enabled and (self_memory_enabled or allowed_peer_ids)
                         else set()
                     )
                     has_policy_work = bool(
-                        self_allowed_types or peer_allowed_types or session_skill_extraction_enabled
+                        long_term_allowed_types
+                        or self_agent_types
+                        or session_skill_extraction_enabled
                     )
                     if self._session_compressor and has_policy_work:
                         logger.info(
@@ -1398,93 +1398,47 @@ class Session:
                         has_agent_memory = hasattr(
                             self._session_compressor, "extract_agent_memories"
                         )
-                        agent_phase_types = {"trajectories", "experiences"}
-
-                        async def _extract_target(
-                            target_messages: List[Message],
-                            allowed_types: set[str],
-                            target_peer_id: Optional[str] = None,
-                        ) -> Dict[str, List[Any]]:
-                            extracted_contexts: List[Any] = []
-                            extracted_skills: List[Dict[str, Any]] = []
-                            long_term_types = allowed_types - agent_phase_types
-                            agent_types = allowed_types & agent_phase_types
-
-                            if long_term_types:
-                                extracted_contexts.extend(
-                                    await self._session_compressor.extract_long_term_memories(
-                                        messages=target_messages,
-                                        user=self.user,
-                                        session_id=self.session_id,
-                                        ctx=self.ctx,
-                                        latest_archive_overview=latest_archive_overview,
-                                        archive_uri=archive_uri,
-                                        allowed_memory_types=long_term_types,
-                                        target_peer_id=target_peer_id,
-                                    )
-                                )
-
-                            if (
-                                target_peer_id is None
-                                and has_agent_memory
-                                and (agent_types or session_skill_extraction_enabled)
-                            ):
-                                try:
-                                    agent_result = (
-                                        await self._session_compressor.extract_agent_memories(
-                                            messages=target_messages,
-                                            ctx=self.ctx,
-                                            latest_archive_overview=latest_archive_overview,
-                                            archive_uri=archive_uri,
-                                            allowed_memory_types=agent_types,
-                                        )
-                                    )
-                                except Exception as exc:
-                                    logger.error(
-                                        "Agent memory extraction failed: %s",
-                                        exc,
-                                        exc_info=exc,
-                                    )
-                                else:
-                                    extracted_contexts.extend(agent_result.get("contexts", []))
-                                    extracted_skills.extend(agent_result.get("session_skills", []))
-
-                            return {
-                                "contexts": extracted_contexts,
-                                "session_skills": extracted_skills,
-                            }
 
                         extraction_tasks: List[Any] = [_run_archive_summary()]
                         extraction_labels = ["archive_summary"]
 
-                        if self_identity_types and self_identity_messages:
+                        if long_term_allowed_types:
                             extraction_tasks.append(
-                                _extract_target(self_identity_messages, self_identity_types)
+                                self._session_compressor.extract_long_term_memories(
+                                    messages=extraction_messages,
+                                    user=self.user,
+                                    session_id=self.session_id,
+                                    ctx=self.ctx,
+                                    latest_archive_overview=latest_archive_overview,
+                                    archive_uri=archive_uri,
+                                    allowed_memory_types=long_term_allowed_types,
+                                    allow_self_memory=self_memory_enabled,
+                                    allowed_peer_ids=allowed_peer_ids,
+                                )
                             )
-                            extraction_labels.append("self_identity")
+                            extraction_labels.append("long_term")
 
-                        if self_experience_types or session_skill_extraction_enabled:
-                            extraction_tasks.append(
-                                _extract_target(extraction_messages, self_experience_types)
-                            )
-                            extraction_labels.append("self_experience")
-
-                        if peer_allowed_types:
-                            peer_message_groups: Dict[str, List[Message]] = {}
-                            for msg in extraction_messages:
-                                peer_id = getattr(msg, "peer_id", None)
-                                if not peer_id or "/" in peer_id or "\\" in peer_id:
-                                    continue
-                                peer_message_groups.setdefault(peer_id, []).append(msg)
-                            for peer_id, peer_messages in peer_message_groups.items():
+                        if has_agent_memory and (
+                            self_agent_types or session_skill_extraction_enabled
+                        ):
+                            try:
                                 extraction_tasks.append(
-                                    _extract_target(
-                                        peer_messages,
-                                        peer_allowed_types,
-                                        target_peer_id=peer_id,
+                                    self._session_compressor.extract_agent_memories(
+                                        messages=extraction_messages,
+                                        ctx=self.ctx,
+                                        latest_archive_overview=latest_archive_overview,
+                                        archive_uri=archive_uri,
+                                        allowed_memory_types=self_agent_types,
+                                        include_session_skills=session_skill_extraction_enabled,
                                     )
                                 )
-                                extraction_labels.append(f"peer:{peer_id}")
+                                extraction_labels.append("agent")
+                            except Exception as exc:
+                                logger.error(
+                                    "Agent memory extraction failed: %s",
+                                    exc,
+                                    exc_info=exc,
+                                )
 
                         _results = await asyncio.gather(
                             *extraction_tasks,
@@ -1511,8 +1465,12 @@ class Session:
                                 extraction_errors.append(result)
                                 continue
 
-                            target_contexts = list(result.get("contexts", []))
-                            target_skills = list(result.get("session_skills", []))
+                            if isinstance(result, dict):
+                                target_contexts = list(result.get("contexts", []))
+                                target_skills = list(result.get("session_skills", []))
+                            else:
+                                target_contexts = list(result or [])
+                                target_skills = []
                             logger.info(
                                 "Extracted %s memories for %s",
                                 len(target_contexts),

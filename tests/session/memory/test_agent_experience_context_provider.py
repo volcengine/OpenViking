@@ -7,8 +7,9 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from openviking.server.identity import AccountNamespacePolicy, RequestContext, Role
-from openviking.session.memory.agent_experience_context_provider import AgentExperienceContextProvider
-from openviking.session.memory.memory_updater import ExtractContext
+from openviking.session.memory.agent_experience_context_provider import (
+    AgentExperienceContextProvider,
+)
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -37,7 +38,7 @@ async def test_agent_experience_prefetch_starts_with_conversation_and_new_trajec
         trajectory_uri="viking://agent/agent_sample_9/memories/trajectories/album_release_party_discussion.md",
     )
     provider._ctx = RequestContext(
-        user=UserIdentifier(account_id="acc", user_id="user_1", agent_id="agent_sample_9"),
+        user=UserIdentifier(account_id="acc", user_id="user_1"),
         role=Role.USER,
         namespace_policy=AccountNamespacePolicy(),
     )
@@ -69,7 +70,7 @@ async def test_agent_experience_prefetch_includes_structured_read_results():
         trajectory_uri="viking://agent/agent_sample_9/memories/trajectories/album_release_party_discussion.md",
     )
     provider._ctx = RequestContext(
-        user=UserIdentifier(account_id="acc", user_id="user_1", agent_id="agent_sample_9"),
+        user=UserIdentifier(account_id="acc", user_id="user_1"),
         role=Role.USER,
         namespace_policy=AccountNamespacePolicy(),
     )
@@ -77,7 +78,9 @@ async def test_agent_experience_prefetch_includes_structured_read_results():
     provider._transaction_handle = None
 
     provider.search_files = AsyncMock(
-        return_value=["viking://agent/agent_sample_9/memories/experiences/personal_experience_sharing_conversation_flow.md"]
+        return_value=[
+            "viking://agent/agent_sample_9/memories/experiences/personal_experience_sharing_conversation_flow.md"
+        ]
     )
 
     read_result = {
@@ -102,5 +105,8 @@ async def test_agent_experience_prefetch_includes_structured_read_results():
 
     assert any(msg.get("role") == "user" for msg in messages)
     assert add_tool_call_pair.call_count == 2
-    assert add_tool_call_pair.call_args_list[1].kwargs["result"]["context_role"] == "candidate_experience"
+    assert (
+        add_tool_call_pair.call_args_list[1].kwargs["result"]["context_role"]
+        == "candidate_experience"
+    )
     assert add_tool_call_pair.call_args_list[1].kwargs["result"]["page_id"] == 1

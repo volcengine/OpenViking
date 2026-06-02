@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
 from openviking.core.namespace import to_user_space
+from openviking.core.peer_id import safe_peer_id
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import MemoryTypeSchema, ResolvedOperation
 from openviking.session.memory.memory_updater import ExtractContext
@@ -23,24 +24,9 @@ class RoleScope:
     peer_ids: List[str] = field(default_factory=list)
 
 
-PEER_MEMORY_TYPES = {"profile", "preferences", "entities", "events"}
-
-
 def peer_user_space(user_space: str, peer_id: str) -> str:
     """Return the user-space fragment for memory about a stable peer."""
     return f"{user_space}/peers/{peer_id}"
-
-
-def is_peer_memory_type(memory_type: str) -> bool:
-    return memory_type in PEER_MEMORY_TYPES
-
-
-def safe_peer_id(peer_id: Optional[str]) -> Optional[str]:
-    if not peer_id:
-        return None
-    if "/" in peer_id or "\\" in peer_id:
-        return None
-    return peer_id
 
 
 class MemoryIsolationHandler:
@@ -50,17 +36,22 @@ class MemoryIsolationHandler:
         self,
         ctx: RequestContext,
         extract_context: Any,
-        target_peer_id: Optional[str] = None,
         allowed_memory_types: Optional[Set[str]] = None,
+        allow_self: bool = True,
+        allowed_peer_ids: Optional[Set[str]] = None,
     ):
         self.ctx = ctx
         self._extract_context = extract_context
-        self.target_peer_id = safe_peer_id(target_peer_id)
         self.allowed_memory_types = (
             {str(item) for item in allowed_memory_types}
             if allowed_memory_types is not None
             else None
         )
+        peer_ids = {safe_peer_id(item) for item in allowed_peer_ids or set()}
+        peer_ids = {item for item in peer_ids if item}
+        self.allow_self = bool(allow_self)
+        self.allowed_peer_ids = peer_ids
+        self.allow_peer = bool(peer_ids)
 
     def prepare_messages(self) -> None:
         """Keep legacy message metadata exactly as supplied."""
@@ -75,84 +66,82 @@ class MemoryIsolationHandler:
             if user_id:
                 user_ids.add(user_id)
 
-        if self.target_peer_id:
-            peer_ids.add(self.target_peer_id)
+        if self.allow_peer:
+            peer_ids.update(self.allowed_peer_ids)
 
         return RoleScope(
-            user_ids=list(user_ids),
-            peer_ids=list(peer_ids),
+            user_ids=sorted(user_ids),
+            peer_ids=sorted(peer_ids),
         )
 
     def fill_role_ids(self, item_dict: Dict[str, Any], role_scope: RoleScope) -> None:
-        user_ids = set()
-        peer_ids = set()
-        if not self.target_peer_id:
-            item_dict.pop("peer_id", None)
+        del role_scope
+        if self.ctx and self.ctx.user and self.ctx.user.user_id:
+            item_dict["user_id"] = self.ctx.user.user_id
+        item_dict.pop("agent_id", None)
+        item_dict.pop("agent_ids", None)
+        item_dict.pop("user_ids", None)
 
-        def add_role_id(role_ids, role_id, scope_ids):
-            if role_id is None:
-                return
-            if role_id not in scope_ids:
-                return
-            role_ids.add(role_id)
-
-        def add_user_id(user_id):
-            add_role_id(user_ids, user_id, role_scope.user_ids)
-
-        def check_set_default():
-            if not user_ids and role_scope.user_ids:
-                user_ids.add(role_scope.user_ids[0])
-
-        if item_dict.get("ranges") is None:
-            add_user_id(item_dict.get("user_id"))
-            if self.target_peer_id:
-                peer_ids.add(self.target_peer_id)
-            check_set_default()
-            if user_ids:
-                item_dict["user_id"] = list(user_ids)[0]
-            item_dict.pop("agent_id", None)
-            if len(peer_ids) == 1:
-                item_dict["peer_id"] = list(peer_ids)[0]
-
+        peer_id = safe_peer_id(item_dict.get("peer_id"))
+        if peer_id:
+            item_dict["peer_id"] = peer_id
         else:
-            # 使用 ExtractContext 的方法解析 ranges
-            self._extract_context.read_message_ranges(item_dict.get("ranges"))
-            if self.target_peer_id:
-                peer_ids.add(self.target_peer_id)
-            check_set_default()
-            item_dict["user_ids"] = list(user_ids)
-            item_dict.pop("agent_ids", None)
-            if len(peer_ids) == 1:
-                item_dict["peer_id"] = list(peer_ids)[0]
+            item_dict.pop("peer_id", None)
 
     def allows_schema(self, memory_type_schema: MemoryTypeSchema) -> bool:
         memory_type = getattr(memory_type_schema, "memory_type", "")
         if self.allowed_memory_types is not None and memory_type not in self.allowed_memory_types:
             return False
-        if self.target_peer_id and not is_peer_memory_type(memory_type):
-            return False
         return True
 
-    def _template_vars(self, user_id: str, memory_type: str) -> Dict[str, str]:
-        policy = self.ctx.namespace_policy
-        user_space = to_user_space(policy, user_id)
-        if self.target_peer_id and is_peer_memory_type(memory_type):
-            user_space = peer_user_space(user_space, self.target_peer_id)
-        return {
-            "user_space": user_space,
-            "agent_space": user_space,
-        }
+    def _can_write_peer(self, peer_id: str) -> bool:
+        return self.allow_peer and peer_id in self.allowed_peer_ids
 
-    def render_schema_directory(self, memory_type_schema: MemoryTypeSchema) -> str:
+    def render_schema_directories(self, memory_type_schema: MemoryTypeSchema) -> List[str]:
         user_id = self.ctx.user.user_id if self.ctx and self.ctx.user else "default"
-        return render_template(
-            memory_type_schema.directory,
-            self._template_vars(
-                user_id,
-                getattr(memory_type_schema, "memory_type", ""),
-            ),
-            self._extract_context,
-        )
+        user_space = to_user_space(self.ctx.namespace_policy, user_id)
+        user_spaces: List[str] = []
+        if self.allow_self:
+            user_spaces.append(user_space)
+        if self.allow_peer:
+            for peer_id in sorted(self.allowed_peer_ids):
+                user_spaces.append(peer_user_space(user_space, peer_id))
+
+        directories = []
+        for target_user_space in dict.fromkeys(user_spaces):
+            directories.append(
+                render_template(
+                    memory_type_schema.directory,
+                    {
+                        "user_space": target_user_space,
+                        "agent_space": target_user_space,
+                    },
+                    self._extract_context,
+                )
+            )
+        return directories
+
+    def _range_targets(self, ranges: Any) -> tuple[bool, List[str]]:
+        if not ranges or not self._extract_context:
+            return False, []
+        try:
+            msg_range = self._extract_context.read_message_ranges(str(ranges))
+        except Exception:
+            logger.warning("Failed to parse memory ranges for peer routing: %s", ranges)
+            return False, []
+
+        include_self = False
+        peer_ids = set()
+        for msg_group in getattr(msg_range, "elements", []) or []:
+            for msg in msg_group:
+                raw_peer_id = getattr(msg, "peer_id", None)
+                peer_id = safe_peer_id(raw_peer_id)
+                if peer_id:
+                    if self._can_write_peer(peer_id):
+                        peer_ids.add(peer_id)
+                elif self.allow_self:
+                    include_self = True
+        return include_self, sorted(peer_ids)
 
     def calculate_memory_uris(
         self,
@@ -171,22 +160,55 @@ class MemoryIsolationHandler:
         operation.memory_fields["user_id"] = user_id
         operation.memory_fields.pop("agent_id", None)
         operation.memory_fields.pop("agent_ids", None)
-        if not self.target_peer_id:
+
+        peer_ids_to_write: List[str] = []
+        include_self = False
+
+        if operation.memory_fields.get("ranges") is not None:
+            include_self, peer_ids_to_write = self._range_targets(
+                operation.memory_fields.get("ranges"),
+            )
             operation.memory_fields.pop("peer_id", None)
+        else:
+            raw_peer_id = operation.memory_fields.get("peer_id")
+            peer_id = safe_peer_id(raw_peer_id)
+            if raw_peer_id and not peer_id:
+                return []
+            if peer_id:
+                if not self._can_write_peer(peer_id):
+                    return []
+                peer_ids_to_write = [peer_id]
+                operation.memory_fields["peer_id"] = peer_id
+            elif self.allow_self:
+                include_self = True
+                operation.memory_fields.pop("peer_id", None)
+
+        if not include_self and not peer_ids_to_write:
+            return []
 
         # 文件
         uris = set()
         user_space = to_user_space(policy, user_id)
-        if self.target_peer_id and is_peer_memory_type(memory_type_schema.memory_type):
-            operation.memory_fields["peer_id"] = self.target_peer_id
-            user_space = peer_user_space(user_space, self.target_peer_id)
-        uri = generate_uri(
-            memory_type=memory_type_schema,
-            fields=operation.memory_fields,
-            user_space=user_space,
-            agent_space=user_space,
-            extract_context=extract_context,
-        )
-        uris.add(uri)
+        if include_self:
+            uris.add(
+                generate_uri(
+                    memory_type=memory_type_schema,
+                    fields=operation.memory_fields,
+                    user_space=user_space,
+                    agent_space=user_space,
+                    extract_context=extract_context,
+                )
+            )
+        for peer_id in peer_ids_to_write:
+            target_user_space = peer_user_space(user_space, peer_id)
+            uris.add(
+                generate_uri(
+                    memory_type=memory_type_schema,
+                    fields=operation.memory_fields,
+                    user_space=target_user_space,
+                    agent_space=target_user_space,
+                    extract_context=extract_context,
+                )
+            )
 
         return list(uris)

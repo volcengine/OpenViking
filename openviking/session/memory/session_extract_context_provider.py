@@ -19,7 +19,6 @@ from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.memory_isolation_handler import (
     MemoryIsolationHandler,
     RoleScope,
-    is_peer_memory_type,
     peer_user_space,
 )
 from openviking.session.memory.memory_type_registry import (
@@ -144,11 +143,14 @@ All memory content MUST be written in {output_language}.
 ## URI Handling
 The system automatically generates URIs based on memory_type and fields. Just provide correct memory_type and fields.
 
-## Peer Memory
-When peer memory extraction is enabled, the system writes peer profile/preferences/entities/events
-under the target peer automatically. Do not invent peer_id values in extracted memory fields.
-cases/patterns/tools/skills describe the current User's own learning or execution experience,
-not peer memory.
+## Self and Peer Memory
+When a memory item describes the current user, omit peer_id.
+When a memory item describes a peer, set peer_id to one of the peer_id values allowed by
+the output schema. Do not invent peer_id values.
+For events with ranges, the system derives self/peer targets from the message range.
+Message role is authoritative: user-role content is the source for profile/preferences/entities/events,
+and assistant-role content is the source for cases/patterns/tools/skills. Do not infer ownership
+from neighboring messages.
 """
 
         return goal
@@ -434,7 +436,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
 
             schema_dirs = set()
             if self._isolation_handler:
-                schema_dirs.add(self._isolation_handler.render_schema_directory(schema))
+                schema_dirs.update(self._isolation_handler.render_schema_directories(schema))
             else:
                 for user_id in rolescope.user_ids:
                     user_space = to_user_space(policy, user_id)
@@ -443,16 +445,15 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                         {"user_space": user_space, "agent_space": user_space},
                     )
                     schema_dirs.add(dir_path)
-                    if is_peer_memory_type(schema.memory_type):
-                        for peer_id in rolescope.peer_ids:
-                            dir_path = render_template(
-                                schema.directory,
-                                {
-                                    "user_space": peer_user_space(user_space, peer_id),
-                                    "agent_space": user_space,
-                                },
-                            )
-                            schema_dirs.add(dir_path)
+                    for peer_id in rolescope.peer_ids:
+                        dir_path = render_template(
+                            schema.directory,
+                            {
+                                "user_space": peer_user_space(user_space, peer_id),
+                                "agent_space": user_space,
+                            },
+                        )
+                        schema_dirs.add(dir_path)
             if schema.filename_has_variables():
                 for dir_path in schema_dirs:
                     ls_dirs.add(dir_path)

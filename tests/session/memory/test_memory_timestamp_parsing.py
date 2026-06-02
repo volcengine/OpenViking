@@ -93,7 +93,7 @@ def test_message_range_uses_peer_id_when_present():
     assert "[default]: invoice follow-up" not in msg_range.pretty_print()
 
 
-def test_peer_id_routes_peer_memory_but_not_self_learning_memory(stub_provider_config):
+def test_peer_id_routes_peer_memory_for_all_role_selected_types(stub_provider_config):
     messages = [
         Message(
             id="msg-peer",
@@ -111,7 +111,7 @@ def test_peer_id_routes_peer_memory_but_not_self_learning_memory(stub_provider_c
     handler = MemoryIsolationHandler(
         ctx,
         extract_context,
-        target_peer_id="web:visitor:alice",
+        allowed_peer_ids={"web:visitor:alice"},
     )
     role_scope = handler.get_read_scope()
     fields = {"ranges": "0"}
@@ -142,10 +142,12 @@ def test_peer_id_routes_peer_memory_but_not_self_learning_memory(stub_provider_c
         ResolvedOperation(memory_fields=tool_fields, memory_type="tools", uris=[]),
         extract_context,
     )
-    assert tool_uris == []
+    assert tool_uris == [
+        "viking://user/support_bot/peers/web:visitor:alice/memories/tools/email.md"
+    ]
 
 
-def test_peer_id_does_not_route_without_target_peer(stub_provider_config):
+def test_peer_id_range_does_not_route_without_allowed_peer_ids(stub_provider_config):
     messages = [
         Message(
             id="msg-peer",
@@ -177,7 +179,7 @@ def test_peer_id_does_not_route_without_target_peer(stub_provider_config):
         extract_context,
     )
 
-    assert profile_uris == ["viking://user/support_bot/memories/profile.md"]
+    assert profile_uris == []
 
 
 def test_deserialize_full_parses_memory_metadata_timestamps_with_z_suffix():

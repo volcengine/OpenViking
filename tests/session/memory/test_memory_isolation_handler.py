@@ -225,8 +225,8 @@ class TestFillRoleIds:
         assert item_dict["user_id"] == "user_a"  # fallback to default
         assert "agent_id" not in item_dict
 
-    def test_fill_role_ids_with_ranges(self):
-        """Test fill_role_ids with ranges extracts from messages."""
+    def test_fill_role_ids_with_ranges_keeps_ctx_user_only(self):
+        """ranges do not create multi-user write scopes."""
         ctx = create_ctx()
         messages = [
             create_message("user", "user_a"),
@@ -247,22 +247,18 @@ class TestFillRoleIds:
         item_dict = {"ranges": "0-3"}
         handler.fill_role_ids(item_dict, role_scope)
 
-        assert "user_ids" in item_dict
-        assert item_dict["user_ids"] == ["user_a"]
+        assert item_dict["user_id"] == "user_a"
+        assert "user_ids" not in item_dict
         assert "agent_ids" not in item_dict
 
-    def test_fill_role_ids_adds_target_peer_only_when_explicit(self):
+    def test_fill_role_ids_normalizes_explicit_peer_id(self):
         ctx = create_ctx()
         messages = [create_message("user", "user_a", peer_id="web:visitor:alice")]
         extract_ctx = create_mock_extract_context(messages)
-        handler = MemoryIsolationHandler(
-            ctx,
-            extract_ctx,
-            target_peer_id="web:visitor:alice",
-        )
+        handler = MemoryIsolationHandler(ctx, extract_ctx)
         role_scope = handler.get_read_scope()
 
-        item_dict = {}
+        item_dict = {"peer_id": "web:visitor:alice"}
         handler.fill_role_ids(item_dict, role_scope)
 
         assert item_dict["user_id"] == "user_a"
@@ -315,6 +311,23 @@ class TestPrepareMessages:
 
         assert scope.user_ids == ["login_user"]
         assert scope.peer_ids == []
+
+    def test_get_read_scope_includes_allowed_peer_ids_when_enabled(self):
+        ctx = create_ctx(user_id="login_user")
+        messages = [
+            create_message("user", "user_a", "Hello", peer_id="web:visitor:alice"),
+        ]
+        extract_ctx = create_mock_extract_context(messages)
+        handler = MemoryIsolationHandler(
+            ctx,
+            extract_ctx,
+            allowed_peer_ids={"web:visitor:alice"},
+        )
+        handler.prepare_messages()
+        scope = handler.get_read_scope()
+
+        assert scope.user_ids == ["login_user"]
+        assert scope.peer_ids == ["web:visitor:alice"]
 
 
 class TestCalculateMemoryUris:
@@ -385,7 +398,7 @@ class TestCalculateMemoryUris:
         assert "agent_ids" not in operation.memory_fields
 
     @patch("openviking.session.memory.memory_isolation_handler.generate_uri")
-    def test_calculate_memory_uris_routes_peer_memory_to_target_peer(self, mock_generate_uri):
+    def test_calculate_memory_uris_routes_explicit_peer_memory(self, mock_generate_uri):
         mock_generate_uri.side_effect = lambda **kwargs: (
             f"viking://user/{kwargs.get('user_space')}/memories/preferences"
         )
@@ -398,7 +411,7 @@ class TestCalculateMemoryUris:
         handler = MemoryIsolationHandler(
             ctx,
             extract_ctx,
-            target_peer_id="web:visitor:alice",
+            allowed_peer_ids={"web:visitor:alice"},
         )
 
         from openviking.session.memory.dataclass import MemoryTypeSchema, ResolvedOperation
@@ -410,7 +423,11 @@ class TestCalculateMemoryUris:
         )
         operation = ResolvedOperation(
             old_memory_file_content=None,
-            memory_fields={"user_id": "alice", "agent_id": "other_agent"},
+            memory_fields={
+                "user_id": "alice",
+                "agent_id": "other_agent",
+                "peer_id": "web:visitor:alice",
+            },
             memory_type="preferences",
             uris=[],
         )
@@ -421,3 +438,78 @@ class TestCalculateMemoryUris:
         assert operation.memory_fields["user_id"] == "support_bot"
         assert "agent_id" not in operation.memory_fields
         assert operation.memory_fields["peer_id"] == "web:visitor:alice"
+
+    @patch("openviking.session.memory.memory_isolation_handler.generate_uri")
+    def test_calculate_memory_uris_routes_ranges_to_self_and_peer(self, mock_generate_uri):
+        mock_generate_uri.side_effect = lambda **kwargs: (
+            f"viking://user/{kwargs.get('user_space')}/memories/events/demo"
+        )
+
+        ctx = create_ctx(user_id="support_bot")
+        messages = [
+            create_message("user", "support_bot", "self event"),
+            create_message("user", "visitor_a", "peer event", peer_id="web:visitor:alice"),
+        ]
+        extract_ctx = create_mock_extract_context(messages)
+        mock_range = MagicMock()
+        mock_range.elements = [messages]
+        extract_ctx.read_message_ranges.return_value = mock_range
+        handler = MemoryIsolationHandler(
+            ctx,
+            extract_ctx,
+            allow_self=True,
+            allowed_peer_ids={"web:visitor:alice"},
+        )
+
+        from openviking.session.memory.dataclass import MemoryTypeSchema, ResolvedOperation
+
+        schema = MemoryTypeSchema(
+            memory_type="events",
+            filename_template="demo.md",
+            directory="viking://user/{user_space}/memories/events",
+        )
+        operation = ResolvedOperation(
+            old_memory_file_content=None,
+            memory_fields={"event_name": "demo", "ranges": "0-1"},
+            memory_type="events",
+            uris=[],
+        )
+
+        uris = handler.calculate_memory_uris(schema, operation, extract_ctx)
+
+        assert set(uris) == {
+            "viking://user/support_bot/memories/events/demo",
+            "viking://user/support_bot/peers/web:visitor:alice/memories/events/demo",
+        }
+        assert operation.memory_fields["user_id"] == "support_bot"
+        assert "peer_id" not in operation.memory_fields
+
+    @patch("openviking.session.memory.memory_isolation_handler.generate_uri")
+    def test_calculate_memory_uris_rejects_unallowed_peer_id(self, mock_generate_uri):
+        ctx = create_ctx(user_id="support_bot")
+        messages = [create_message("user", "visitor_a", peer_id="web:visitor:alice")]
+        extract_ctx = create_mock_extract_context(messages)
+        handler = MemoryIsolationHandler(
+            ctx,
+            extract_ctx,
+            allowed_peer_ids={"web:visitor:bob"},
+        )
+
+        from openviking.session.memory.dataclass import MemoryTypeSchema, ResolvedOperation
+
+        schema = MemoryTypeSchema(
+            memory_type="preferences",
+            filename_template="preferences.md",
+            directory="viking://user/{user_space}/memories",
+        )
+        operation = ResolvedOperation(
+            old_memory_file_content=None,
+            memory_fields={"peer_id": "web:visitor:alice"},
+            memory_type="preferences",
+            uris=[],
+        )
+
+        uris = handler.calculate_memory_uris(schema, operation, extract_ctx)
+
+        assert uris == []
+        mock_generate_uri.assert_not_called()

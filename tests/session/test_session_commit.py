@@ -11,8 +11,6 @@ import pytest
 
 from openviking import AsyncOpenViking
 from openviking.client.session import Session as ClientSession
-from openviking.core.context import Context
-from openviking.core.namespace import canonical_user_root
 from openviking.message import TextPart
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
@@ -66,6 +64,7 @@ class TestCommit:
     ):
         config = MagicMock()
         config.memory.extraction_enabled = False
+        config.memory.agent_memory_enabled = False
         config.memory.session_skill_extraction_enabled = True
         monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
 
@@ -97,6 +96,7 @@ class TestCommit:
     ):
         config = MagicMock()
         config.memory.extraction_enabled = True
+        config.memory.agent_memory_enabled = False
         config.memory.session_skill_extraction_enabled = False
         monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
 
@@ -115,24 +115,23 @@ class TestCommit:
         assert task_result["result"]["session_skills_extracted"] == 0
         assert task_result["result"]["session_skill_uris"] == []
         session_with_messages._session_compressor.extract_long_term_memories.assert_awaited_once()
-        session_with_messages._session_compressor.extract_agent_memories.assert_awaited_once()
+        session_with_messages._session_compressor.extract_agent_memories.assert_not_awaited()
 
-    async def test_commit_routes_self_and_peer_memory_by_policy(
+    async def test_commit_routes_peer_memory_with_single_full_context_pass(
         self,
         client: AsyncOpenViking,
         monkeypatch,
     ):
-        """Commit routes self memory and peer memory as separate extraction targets."""
+        """Peer memory uses one full-context extraction and operation-level routing."""
         config = MagicMock()
         config.memory.extraction_enabled = True
-        config.memory.session_skill_extraction_enabled = False
+        config.memory.agent_memory_enabled = True
+        config.memory.session_skill_extraction_enabled = True
         monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
 
-        session = client.session(session_id="peer_memory_commit_routing_test")
-        user_root = canonical_user_root(session.ctx)
-        self_uri = f"{user_root}/memories/patterns/invoice-follow-up.md"
-        peer_uri = f"{user_root}/peers/web:visitor:alice/memories/preferences/invoice-contact.md"
-        calls: list[dict] = []
+        session = client.session(session_id="peer_memory_role_routing_test")
+        long_term_calls: list[dict] = []
+        agent_calls: list[dict] = []
 
         async def fake_summary(messages, latest_archive_overview=""):
             del messages, latest_archive_overview
@@ -143,42 +142,45 @@ class TestCommit:
             messages,
             ctx,
             allowed_memory_types,
-            target_peer_id=None,
+            allow_self_memory=True,
+            allowed_peer_ids=None,
+            **kwargs,
+        ):
+            del ctx, kwargs
+            long_term_calls.append(
+                {
+                    "allowed_memory_types": set(allowed_memory_types or set()),
+                    "allow_self_memory": allow_self_memory,
+                    "allowed_peer_ids": set(allowed_peer_ids or set()),
+                    "roles": [message.role for message in messages],
+                    "peer_ids": [message.peer_id for message in messages],
+                }
+            )
+            return []
+
+        async def fake_agent_extract(
+            *,
+            messages,
+            allowed_memory_types,
+            include_session_skills=None,
             **kwargs,
         ):
             del kwargs
-            calls.append(
+            agent_calls.append(
                 {
-                    "target_peer_id": target_peer_id,
                     "allowed_memory_types": set(allowed_memory_types or set()),
-                    "message_peer_ids": [message.peer_id for message in messages],
+                    "include_session_skills": include_session_skills,
+                    "roles": [message.role for message in messages],
                 }
             )
-
-            if target_peer_id:
-                assert allowed_memory_types == {"preferences"}
-                await session._viking_fs.write_file(
-                    peer_uri,
-                    "Alice prefers email for invoice follow-up.",
-                    ctx=ctx,
-                )
-                return [Context(uri=peer_uri, category="preferences", context_type="memory")]
-
-            assert allowed_memory_types == {"patterns"}
-            await session._viking_fs.write_file(
-                self_uri,
-                "For invoice issues, check tax number and delivery logs first.",
-                ctx=ctx,
-            )
-            return [Context(uri=self_uri, category="patterns", context_type="memory")]
+            return {"contexts": [], "session_skills": []}
 
         monkeypatch.setattr(session, "_generate_archive_summary_async", fake_summary)
         monkeypatch.setattr(session._session_compressor, "extract_long_term_memories", fake_extract)
-
-        session.add_message(
-            "user",
-            [TextPart("发票未收到时，先检查税号和发送日志。")],
+        monkeypatch.setattr(
+            session._session_compressor, "extract_agent_memories", fake_agent_extract
         )
+
         session.add_message(
             "user",
             [TextPart("我是 Alice，后续发票问题请优先邮件联系我，邮箱是 alice@example.com。")],
@@ -192,41 +194,35 @@ class TestCommit:
 
         result = await session.commit_async(
             memory_policy={
-                "self": {"enabled": True, "types": ["patterns"]},
-                "peer": {"enabled": True, "types": ["preferences"]},
+                "self": {"enabled": False},
+                "peer": {"enabled": True, "types": ["profile"]},
             }
         )
         task_result = await _wait_for_task(result["task_id"])
 
         assert task_result["status"] == "completed"
-        assert task_result["result"]["memories_extracted"] == {
-            "patterns": 1,
-            "preferences": 1,
-        }
-        assert calls == [
+        assert task_result["result"]["memories_extracted"] == {}
+        assert long_term_calls == [
             {
-                "target_peer_id": None,
-                "allowed_memory_types": {"patterns"},
-                "message_peer_ids": [None, "web:visitor:alice", "web:visitor:alice"],
-            },
-            {
-                "target_peer_id": "web:visitor:alice",
-                "allowed_memory_types": {"preferences"},
-                "message_peer_ids": ["web:visitor:alice", "web:visitor:alice"],
+                "allowed_memory_types": {
+                    "cases",
+                    "entities",
+                    "events",
+                    "identity",
+                    "patterns",
+                    "preferences",
+                    "profile",
+                    "skills",
+                    "soul",
+                    "tools",
+                },
+                "allow_self_memory": False,
+                "allowed_peer_ids": {"web:visitor:alice"},
+                "roles": ["user", "assistant"],
+                "peer_ids": ["web:visitor:alice", "web:visitor:alice"],
             },
         ]
-        assert (
-            await session._viking_fs.read_file(self_uri, ctx=session.ctx)
-            == "For invoice issues, check tax number and delivery logs first."
-        )
-        assert (
-            await session._viking_fs.read_file(peer_uri, ctx=session.ctx)
-            == "Alice prefers email for invoice follow-up."
-        )
-        assert not await session._viking_fs.exists(
-            "viking://user/alice/memories/preferences/invoice-contact.md",
-            ctx=session.ctx,
-        )
+        assert agent_calls == []
 
     async def test_commit_archives_messages(self, session_with_messages: Session):
         """Test commit archives messages"""

@@ -101,13 +101,13 @@ def _render_memory_schema_locks(
 
         filename_template = getattr(schema, "filename_template", "") or ""
         if isolation_handler:
-            directory_uri = isolation_handler.render_schema_directory(schema)
-            if _filename_has_variables(schema) or not filename_template:
-                _append_unique(tree_paths, viking_fs._uri_to_path(directory_uri, ctx))
-                continue
-            filename = render_template(filename_template, {}, None)
-            file_uri = f"{directory_uri.rstrip('/')}/{filename.lstrip('/')}"
-            _append_unique(exact_paths, viking_fs._uri_to_path(file_uri, ctx))
+            for directory_uri in isolation_handler.render_schema_directories(schema):
+                if _filename_has_variables(schema) or not filename_template:
+                    _append_unique(tree_paths, viking_fs._uri_to_path(directory_uri, ctx))
+                    continue
+                filename = render_template(filename_template, {}, None)
+                file_uri = f"{directory_uri.rstrip('/')}/{filename.lstrip('/')}"
+                _append_unique(exact_paths, viking_fs._uri_to_path(file_uri, ctx))
             continue
 
         for user_id in user_ids:
@@ -236,7 +236,8 @@ class SessionCompressorV2:
         latest_archive_overview: str = "",
         archive_uri: Optional[str] = None,
         allowed_memory_types: Optional[set[str]] = None,
-        target_peer_id: Optional[str] = None,
+        allow_self_memory: bool = True,
+        allowed_peer_ids: Optional[set[str]] = None,
     ) -> List[Context]:
         """Extract long-term memories from messages using v2 templating system.
 
@@ -252,7 +253,8 @@ class SessionCompressorV2:
             latest_archive_overview: Overview of latest archive for context.
             archive_uri: Archive URI for writing memory_diff.json.
             allowed_memory_types: Optional set of memory types this phase may update.
-            target_peer_id: Optional peer target for peer memory extraction.
+            allow_self_memory: Whether operations without peer_id may write self memory.
+            allowed_peer_ids: Peer IDs that may be written by this extraction.
         """
 
         if not messages:
@@ -270,7 +272,8 @@ class SessionCompressorV2:
         from openviking.session.memory.memory_type_registry import create_default_registry
 
         registry = create_default_registry()
-        await registry.initialize_memory_files(ctx)
+        if allow_self_memory:
+            await registry.initialize_memory_files(ctx)
 
         # Initialize telemetry counters before extraction.
         telemetry = get_current_telemetry()
@@ -306,8 +309,9 @@ class SessionCompressorV2:
             isolation_handler = MemoryIsolationHandler(
                 ctx,
                 extract_context,
-                target_peer_id=target_peer_id,
                 allowed_memory_types=allowed_memory_types,
+                allow_self=allow_self_memory,
+                allowed_peer_ids=allowed_peer_ids,
             )
             isolation_handler.prepare_messages()
             # 获取所有记忆 schema 目录并加锁（仅在有锁管理器时）
@@ -471,7 +475,7 @@ class SessionCompressorV2:
         latest_archive_overview: str = "",
         archive_uri: str = "",
         allowed_memory_types: Optional[set[str]] = None,
-        target_peer_id: Optional[str] = None,
+        include_session_skills: Optional[bool] = None,
     ) -> Dict[str, List[Any]]:
         """Two-phase agent-scope extraction for trajectories, experiences, and session skills."""
         config = get_openviking_config()
@@ -483,9 +487,10 @@ class SessionCompressorV2:
         agent_memory_enabled = bool(getattr(config.memory, "agent_memory_enabled", False))
         include_trajectories = agent_memory_enabled and "trajectories" in allowed_agent_types
         include_experiences = agent_memory_enabled and "experiences" in allowed_agent_types
-        include_session_skills = bool(
-            getattr(config.memory, "session_skill_extraction_enabled", False)
-        )
+        if include_session_skills is None:
+            include_session_skills = bool(
+                getattr(config.memory, "session_skill_extraction_enabled", False)
+            )
         empty_result: Dict[str, List[Any]] = {"contexts": [], "session_skills": []}
         if not (include_trajectories or include_session_skills):
             return empty_result
@@ -516,7 +521,6 @@ class SessionCompressorV2:
             strict_extract_errors=strict_extract_errors,
             phase_label="trajectory",
             allowed_memory_types=allowed_agent_types,
-            target_peer_id=target_peer_id,
         )
         if traj_result is None:
             return empty_result
@@ -592,7 +596,6 @@ class SessionCompressorV2:
                 phase_label=f"experience({traj_uri})",
                 post_apply=_append_sources_before_unlock,
                 allowed_memory_types=allowed_agent_types,
-                target_peer_id=target_peer_id,
             )
             if exp_result is None:
                 fallback_uris = await self._single_existing_experience_uris(
@@ -690,7 +693,6 @@ class SessionCompressorV2:
         phase_label: str,
         post_apply: Optional[ExtractPostApply] = None,
         allowed_memory_types: Optional[set[str]] = None,
-        target_peer_id: Optional[str] = None,
     ):
         """Run one ExtractLoop phase with its own lock scope, then apply operations.
 
@@ -713,7 +715,6 @@ class SessionCompressorV2:
         isolation_handler = MemoryIsolationHandler(
             ctx,
             extract_context,
-            target_peer_id=target_peer_id,
             allowed_memory_types=allowed_memory_types,
         )
         isolation_handler.prepare_messages()

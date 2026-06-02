@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field, WithJsonSchema, create_model
 from pydantic.config import ConfigDict
 
 from openviking.session.memory.dataclass import FaultTolerantBaseModel, MemoryTypeSchema, WikiLink
-from openviking.session.memory.memory_isolation_handler import RoleScope, is_peer_memory_type
+from openviking.session.memory.memory_isolation_handler import RoleScope
 from openviking.session.memory.merge_op import MergeOp, MergeOpFactory
 from openviking.session.memory.merge_op.base import FieldType, get_python_type_for_field
 from openviking.session.memory.utils.template_utils import TemplateUtils
@@ -84,9 +84,7 @@ class SchemaModelGenerator:
             Dynamically created flat Pydantic model class
         """
         # Determine cache key based on role_scope
-        has_peer_scope = bool(role_scope and role_scope.peer_ids) and is_peer_memory_type(
-            memory_type.memory_type
-        )
+        has_peer_scope = bool(role_scope and role_scope.peer_ids)
         if role_scope and len(role_scope.user_ids) > 1:
             cache_key = f"{memory_type.memory_type}_multi_user"
             model_name = f"{to_pascal_case(memory_type.memory_type)}DataMultiUser"
