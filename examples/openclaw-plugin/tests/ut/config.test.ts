@@ -1,6 +1,9 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
+import { homedir } from "node:os";
 
 import { memoryOpenVikingConfigSchema } from "../../config.js";
+
+const RESOURCE_QUERY_TOOLS = ["ov_search", "ov_read", "ov_multi_read", "ov_list"];
 
 describe("memoryOpenVikingConfigSchema.parse()", () => {
   const originalEnv = { ...process.env };
@@ -22,14 +25,14 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.commitTokenThreshold).toBe(20000);
     expect(cfg.captureMode).toBe("semantic");
     expect(cfg.captureMaxLength).toBe(24000);
-    expect(cfg.autoRecallTimeoutMs).toBe(5000);
     expect(cfg.recallMaxContentChars).toBe(5000);
-    expect(cfg.peer_role).toBe("none");
-    expect(cfg.peer_prefix).toBe("");
+    expect(cfg.agent_prefix).toBe("");
+    expect(cfg.isolateUserScopeByAgent).toBe(false);
+    expect(cfg.isolateAgentScopeByUser).toBe(false);
     expect(cfg.emitStandardDiagnostics).toBe(false);
     expect(cfg.traceRecall).toBe(false);
     expect(cfg.traceRecallPersist).toBe(false);
-    expect(cfg.traceRecallDir).toContain(".openclaw/openviking/recall-traces");
+    expect(cfg.traceRecallDir).toBe(`${homedir()}/.openclaw/openviking/recall-traces`);
     expect(cfg.traceRecallRetentionDays).toBe(14);
     expect(cfg.traceRecallLoadRecentDays).toBe(2);
     expect(cfg.traceRecallMaxEntries).toBe(1000);
@@ -41,83 +44,73 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.traceRecallIncludeRawUserPreview).toBe(false);
     expect(cfg.recallTargetTypes).toEqual(["user", "agent"]);
     expect(cfg.enableAddResourceTool).toBe(false);
-    expect(cfg.enabledTools).toContain("ov_search");
-    expect(cfg.enabledTools).toContain("ov_read");
-    expect(cfg.enabledTools).not.toContain("add_resource");
-    expect(cfg.disabledTools).toContain("add_resource");
-    expect(cfg.agentExperience.enabled).toBe(false);
-  });
-
-  it("enables add_resource only when explicitly allowed", () => {
-    const disabled = memoryOpenVikingConfigSchema.parse({});
-    expect(disabled.enableAddResourceTool).toBe(false);
-    expect(disabled.enabledTools).not.toContain("add_resource");
-
-    const enabled = memoryOpenVikingConfigSchema.parse({ enableAddResourceTool: true });
-    expect(enabled.enableAddResourceTool).toBe(true);
-    expect(enabled.enabledTools).toContain("add_resource");
-    expect(enabled.disabledTools).not.toContain("add_resource");
-  });
-
-  it("expands enabled and disabled tool groups", () => {
-    const cfg = memoryOpenVikingConfigSchema.parse({
-      enabledTools: ["resource_query", "memory"],
-      disabledTools: "memory_forget",
-    });
     expect(cfg.enabledTools).toEqual([
+      "add_skill",
       "ov_search",
       "ov_read",
       "ov_multi_read",
       "ov_list",
       "memory_recall",
+      "ov_recall_trace",
       "memory_store",
+      "memory_forget",
+      "ov_archive_search",
+      "ov_archive_expand",
+      "openviking_tool_result_read",
+      "openviking_tool_result_search",
+      "openviking_tool_result_list",
     ]);
-    expect(cfg.disabledTools).toEqual(["memory_forget", "add_resource"]);
+    expect(cfg.disabledTools).toEqual(["add_resource"]);
   });
 
-  it("does not expose add_resource through enabledTools without enableAddResourceTool", () => {
-    const cfg = memoryOpenVikingConfigSchema.parse({ enabledTools: "all" });
-    expect(cfg.enabledTools).not.toContain("add_resource");
-    expect(cfg.disabledTools).toContain("add_resource");
+  it("keeps add_resource disabled by default and enables it only by explicit config", () => {
+    expect(memoryOpenVikingConfigSchema.parse({}).enableAddResourceTool).toBe(false);
+    expect(memoryOpenVikingConfigSchema.parse({ enableAddResourceTool: false }).enableAddResourceTool).toBe(false);
+    expect(memoryOpenVikingConfigSchema.parse({ enableAddResourceTool: true }).enableAddResourceTool).toBe(true);
   });
 
-  it("throws on unknown tool selectors", () => {
-    expect(() =>
-      memoryOpenVikingConfigSchema.parse({ enabledTools: ["resource_query", "nope"] }),
-    ).toThrow("unknown tool selectors");
-    expect(() =>
-      memoryOpenVikingConfigSchema.parse({ disabledTools: "nope" }),
-    ).toThrow("unknown tool selectors");
+  it("supports resource-query-only tool configuration", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({
+      enabledTools: ["resource_query"],
+    });
+    expect(cfg.enabledTools).toEqual(RESOURCE_QUERY_TOOLS);
+    expect(cfg.disabledTools).toEqual(["add_resource"]);
   });
 
-  it("parses and clamps recall trace settings", () => {
+  it("keeps recall trace query tool enabled when trace recording is enabled with a narrow legacy allowlist", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({
       traceRecall: true,
-      traceRecallPersist: true,
-      traceRecallDir: "~/custom-traces",
-      traceRecallRetentionDays: 0,
-      traceRecallLoadRecentDays: -1,
-      traceRecallMaxEntries: 2_000_000,
-      traceRecallMaxResultsPerSearch: 0,
-      traceRecallPreviewChars: 5,
-      traceRecallQueryMaxChars: 100,
-      traceRecallQueryMaxDays: 9999,
-      traceRecallIncludeContentByDefault: true,
-      traceRecallIncludeRawUserPreview: true,
+      enabledTools: ["resource_query"],
     });
 
-    expect(cfg.traceRecall).toBe(true);
-    expect(cfg.traceRecallPersist).toBe(true);
-    expect(cfg.traceRecallDir).toContain("custom-traces");
-    expect(cfg.traceRecallRetentionDays).toBe(1);
-    expect(cfg.traceRecallLoadRecentDays).toBe(0);
-    expect(cfg.traceRecallMaxEntries).toBe(1_000_000);
-    expect(cfg.traceRecallMaxResultsPerSearch).toBe(1);
-    expect(cfg.traceRecallPreviewChars).toBe(20);
-    expect(cfg.traceRecallQueryMaxChars).toBe(200);
-    expect(cfg.traceRecallQueryMaxDays).toBe(3650);
-    expect(cfg.traceRecallIncludeContentByDefault).toBe(true);
-    expect(cfg.traceRecallIncludeRawUserPreview).toBe(true);
+    expect(cfg.enabledTools).toEqual([...RESOURCE_QUERY_TOOLS, "ov_recall_trace"]);
+    expect(cfg.disabledTools).toEqual(["add_resource"]);
+  });
+
+  it("allows disabledTools to explicitly hide recall trace even when trace recording is enabled", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({
+      traceRecall: true,
+      enabledTools: ["resource_query"],
+      disabledTools: ["recall_trace"],
+    });
+
+    expect(cfg.enabledTools).toEqual(RESOURCE_QUERY_TOOLS);
+    expect(cfg.disabledTools).toEqual(["ov_recall_trace", "add_resource"]);
+  });
+
+  it("supports disabling memory-related tool group while keeping resource query tools", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({
+      disabledTools: "memory",
+    });
+    expect(cfg.enabledTools).toEqual(expect.arrayContaining(["ov_search", "ov_read"]));
+    expect(cfg.enabledTools).not.toEqual(expect.arrayContaining(["memory_recall", "memory_store", "memory_forget"]));
+    expect(cfg.disabledTools).toEqual(["memory_recall", "memory_store", "memory_forget", "add_resource"]);
+  });
+
+  it("rejects unknown tool selectors", () => {
+    expect(() =>
+      memoryOpenVikingConfigSchema.parse({ enabledTools: ["ov_search", "not_a_tool"] }),
+    ).toThrow("unknown tool selectors");
   });
 
   it("defaults recallMaxInjectedChars to the 4000-character memory budget", () => {
@@ -173,14 +166,6 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(() =>
       memoryOpenVikingConfigSchema.parse({ foo: 1 }),
     ).toThrow("unknown keys");
-  });
-
-  it("throws on unknown agentExperience keys", () => {
-    expect(() =>
-      memoryOpenVikingConfigSchema.parse({
-        agentExperience: { autoRecall: true },
-      }),
-    ).toThrow("agentExperience has unknown keys");
   });
 
   it("resolves environment variables in apiKey", () => {
@@ -239,18 +224,6 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.timeoutMs).toBe(1000);
   });
 
-  it("uses autoRecallTimeoutMs as the outer auto-recall budget", () => {
-    const cfg = memoryOpenVikingConfigSchema.parse({ autoRecallTimeoutMs: 30000 });
-    expect(cfg.autoRecallTimeoutMs).toBe(30000);
-  });
-
-  it("clamps autoRecallTimeoutMs within bounds", () => {
-    const cfgLow = memoryOpenVikingConfigSchema.parse({ autoRecallTimeoutMs: 100 });
-    expect(cfgLow.autoRecallTimeoutMs).toBe(1000);
-    const cfgHigh = memoryOpenVikingConfigSchema.parse({ autoRecallTimeoutMs: 999999 });
-    expect(cfgHigh.autoRecallTimeoutMs).toBe(300000);
-  });
-
   it("treats undefined/null as empty config", () => {
     const cfg1 = memoryOpenVikingConfigSchema.parse(undefined);
     const cfg2 = memoryOpenVikingConfigSchema.parse(null);
@@ -279,32 +252,29 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfgHigh.recallMaxContentChars).toBe(10000);
   });
 
-  it("accepts explicit peer_role values", () => {
-    expect(memoryOpenVikingConfigSchema.parse({ peer_role: "none" }).peer_role).toBe("none");
-    expect(memoryOpenVikingConfigSchema.parse({ peer_role: "assistant" }).peer_role).toBe("assistant");
-    expect(memoryOpenVikingConfigSchema.parse({ peer_role: "person" }).peer_role).toBe("person");
+  it("resolves agent_prefix from configured value", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ agent_prefix: "  my-agent  " });
+    expect(cfg.agent_prefix).toBe("my-agent");
   });
 
-  it("throws on invalid peer_role", () => {
-    expect(() =>
-      memoryOpenVikingConfigSchema.parse({ peer_role: "agent" }),
-    ).toThrow('peer_role must be "none", "assistant", or "person"');
+  it("falls back to an empty prefix for empty agent_prefix", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ agent_prefix: "  " });
+    expect(cfg.agent_prefix).toBe("");
   });
 
-  it("resolves peer_prefix from configured value", () => {
-    const cfg = memoryOpenVikingConfigSchema.parse({ peer_prefix: "  my-agent  " });
-    expect(cfg.peer_role).toBe("none");
-    expect(cfg.peer_prefix).toBe("my-agent");
+  it("normalizes legacy 'default' agent_prefix to an empty prefix", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ agent_prefix: "default" });
+    expect(cfg.agent_prefix).toBe("");
   });
 
-  it("falls back to an empty prefix for empty peer_prefix", () => {
-    const cfg = memoryOpenVikingConfigSchema.parse({ peer_prefix: "  " });
-    expect(cfg.peer_prefix).toBe("");
+  it("migrates legacy agentId to agent_prefix", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ agentId: "legacy-agent" });
+    expect(cfg.agent_prefix).toBe("legacy-agent");
   });
 
-  it("normalizes legacy 'default' peer_prefix to an empty prefix", () => {
-    const cfg = memoryOpenVikingConfigSchema.parse({ peer_prefix: "default" });
-    expect(cfg.peer_prefix).toBe("");
+  it("agent_prefix takes precedence over legacy agentId", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ agentId: "old", agent_prefix: "new" });
+    expect(cfg.agent_prefix).toBe("new");
   });
 
   it("parses accountId and trims whitespace", () => {
@@ -332,15 +302,56 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.userId).toBe("");
   });
 
-  it("default user-key flow does not require accountId or userId", () => {
+  it("default user-key flow does not require accountId, userId, or agentScopeMode", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({
       baseUrl: "http://127.0.0.1:1933",
       apiKey: "sk-user",
-      peer_role: "assistant",
-      peer_prefix: "coding-agent",
+      agent_prefix: "coding-agent",
     });
     expect(cfg.accountId).toBe("");
     expect(cfg.userId).toBe("");
+    expect(cfg.agentScopeMode).toBe("agent");
+    expect(cfg.isolateUserScopeByAgent).toBe(false);
+    expect(cfg.isolateAgentScopeByUser).toBe(false);
+  });
+
+  it("defaults namespace policy to the current server-side false/false policy", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({});
+    expect(cfg.agentScopeMode).toBe("agent");
+    expect(cfg.isolateUserScopeByAgent).toBe(false);
+    expect(cfg.isolateAgentScopeByUser).toBe(false);
+  });
+
+  it("maps deprecated agentScopeMode 'agent' to false/false namespace policy", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ agentScopeMode: "agent" });
+    expect(cfg.agentScopeMode).toBe("agent");
+    expect(cfg.isolateUserScopeByAgent).toBe(false);
+    expect(cfg.isolateAgentScopeByUser).toBe(false);
+  });
+
+  it("falls back to user_agent for invalid agentScopeMode", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ agentScopeMode: "invalid" });
+    expect(cfg.agentScopeMode).toBe("agent");
+    expect(cfg.isolateUserScopeByAgent).toBe(false);
+    expect(cfg.isolateAgentScopeByUser).toBe(false);
+  });
+
+  it("maps explicit deprecated agentScopeMode 'user_agent' to false/true namespace policy", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ agentScopeMode: "user_agent" });
+    expect(cfg.agentScopeMode).toBe("user_agent");
+    expect(cfg.isolateUserScopeByAgent).toBe(false);
+    expect(cfg.isolateAgentScopeByUser).toBe(true);
+  });
+
+  it("explicit namespace policy overrides deprecated agentScopeMode", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({
+      agentScopeMode: "agent",
+      isolateUserScopeByAgent: true,
+      isolateAgentScopeByUser: true,
+    });
+    expect(cfg.agentScopeMode).toBe("agent");
+    expect(cfg.isolateUserScopeByAgent).toBe(true);
+    expect(cfg.isolateAgentScopeByUser).toBe(true);
   });
 
   it("accepts deprecated serverAuthMode without exposing it in parsed config", () => {
@@ -365,6 +376,36 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg2.recallResources).toBe(false);
   });
 
+  it("accepts trace recall configuration keys and clamps numeric bounds", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({
+      traceRecall: true,
+      traceRecallPersist: true,
+      traceRecallDir: " /tmp/openviking-traces ",
+      traceRecallRetentionDays: -1,
+      traceRecallLoadRecentDays: -5,
+      traceRecallMaxEntries: 0,
+      traceRecallMaxResultsPerSearch: 0,
+      traceRecallPreviewChars: 10,
+      traceRecallQueryMaxChars: 100,
+      traceRecallQueryMaxDays: 0,
+      traceRecallIncludeContentByDefault: true,
+      traceRecallIncludeRawUserPreview: true,
+    });
+
+    expect(cfg.traceRecall).toBe(true);
+    expect(cfg.traceRecallPersist).toBe(true);
+    expect(cfg.traceRecallDir).toBe("/tmp/openviking-traces");
+    expect(cfg.traceRecallRetentionDays).toBe(1);
+    expect(cfg.traceRecallLoadRecentDays).toBe(0);
+    expect(cfg.traceRecallMaxEntries).toBe(1);
+    expect(cfg.traceRecallMaxResultsPerSearch).toBe(1);
+    expect(cfg.traceRecallPreviewChars).toBe(20);
+    expect(cfg.traceRecallQueryMaxChars).toBe(200);
+    expect(cfg.traceRecallQueryMaxDays).toBe(1);
+    expect(cfg.traceRecallIncludeContentByDefault).toBe(true);
+    expect(cfg.traceRecallIncludeRawUserPreview).toBe(true);
+  });
+
   it("normalizes recallTargetTypes from arrays and comma-separated strings", () => {
     const fromArray = memoryOpenVikingConfigSchema.parse({
       recallTargetTypes: [" user ", "agent", "user", ""],
@@ -372,9 +413,9 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(fromArray.recallTargetTypes).toEqual(["user", "agent"]);
 
     const fromString = memoryOpenVikingConfigSchema.parse({
-      recallTargetTypes: "resource, user\nagent",
+      recallTargetTypes: "resource, session\nagent",
     });
-    expect(fromString.recallTargetTypes).toEqual(["resource", "user", "agent"]);
+    expect(fromString.recallTargetTypes).toEqual(["resource", "session", "agent"]);
   });
 
   it("rejects unknown recallTargetTypes instead of falling back to defaults", () => {
@@ -383,10 +424,9 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     ).toThrow("recallTargetTypes contains unknown resource types: project");
   });
 
-  it("rejects session recallTargetTypes because session history is not a semantic recall target", () => {
-    expect(() =>
-      memoryOpenVikingConfigSchema.parse({ recallTargetTypes: ["session"] }),
-    ).toThrow("recallTargetTypes contains unknown resource types: session");
+  it("treats empty recallTargetTypes as the backward-compatible memory recall set", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ recallTargetTypes: [] });
+    expect(cfg.recallTargetTypes).toEqual(["user", "agent"]);
   });
 
   it("keeps deprecated recallResources as an additive compatibility switch when recallTargetTypes is unset", () => {

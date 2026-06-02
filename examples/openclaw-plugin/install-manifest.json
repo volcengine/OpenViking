@@ -1,6 +1,6 @@
 {
   "manifestVersion": "1.0",
-  "pluginVersion": "2026.5.8",
+  "pluginVersion": "2026.6.11",
   "plugin": {
     "id": "openviking",
     "kind": "context-engine",
@@ -12,15 +12,21 @@
       "config.ts",
       "context-engine.ts",
       "auto-recall.ts",
+      "token-estimator.ts",
       "client.ts",
       "process-manager.ts",
       "memory-ranking.ts",
-      "token-estimator.ts",
       "text-utils.ts",
       "tool-call-id.ts",
       "session-transcript-repair.ts",
       "runtime-utils.ts",
       "recall-trace.ts",
+      "config/feature-gates.json",
+      "registries/",
+      "routing/",
+      "plugin/",
+      "services/",
+      "adapters/",
       "commands/setup.ts",
       "tsconfig.json",
       "tsconfig.build.json",
@@ -31,7 +37,6 @@
       "package-lock.json",
       ".gitignore",
       "skills/install-openviking-memory/SKILL.md",
-      "skills/openviking-context-database/SKILL.md",
       "INSTALL-AGENT.md"
     ]
   },

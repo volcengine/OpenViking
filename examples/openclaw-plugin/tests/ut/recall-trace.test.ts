@@ -7,8 +7,6 @@ import {
   RecallTraceJsonlStore,
   RecallTraceMemoryStore,
   RecallTraceRecorder,
-  normalizeResourceTypes,
-  resolveRecallSearchPlan,
   type RecallTraceEntry,
 } from "../../recall-trace.js";
 
@@ -52,58 +50,6 @@ function makeTrace(overrides: Partial<RecallTraceEntry> = {}): RecallTraceEntry 
     ...overrides,
   };
 }
-
-describe("normalizeResourceTypes()", () => {
-  it("defaults missing, empty array, and empty string to the backward-compatible memory recall set", () => {
-    expect(normalizeResourceTypes(undefined)).toEqual(["user", "agent"]);
-    expect(normalizeResourceTypes([])).toEqual(["user", "agent"]);
-    expect(normalizeResourceTypes("  ")).toEqual(["user", "agent"]);
-  });
-
-  it("normalizes comma-separated strings, trims entries, and deduplicates", () => {
-    expect(normalizeResourceTypes(" user,agent\nuser ")).toEqual(["user", "agent"]);
-  });
-
-  it("rejects unknown resource types instead of falling back to defaults", () => {
-    expect(() => normalizeResourceTypes(["user", "project"])).toThrow(
-      "invalid resourceTypes: project",
-    );
-  });
-});
-
-describe("resolveRecallSearchPlan()", () => {
-  it("builds the default backward-compatible memory recall search plan", () => {
-    const plan = resolveRecallSearchPlan(undefined, {
-      ovSessionId: "ov-session-1",
-      agentId: "agent-1",
-    });
-
-    expect(plan.searches).toEqual([
-      { resourceType: "user", contextType: "memory" },
-    ]);
-    expect(plan.skipped).toEqual([]);
-    expect(plan.resourceTypes).toEqual(["user", "agent"]);
-  });
-
-  it("builds resource/user/agent searches only when explicitly requested", () => {
-    const plan = resolveRecallSearchPlan(["resource", "user", "agent"], {
-      ovSessionId: "ov-session-1",
-      agentId: "agent-1",
-    });
-
-    expect(plan.searches).toEqual([
-      { resourceType: "resource", contextType: "resource" },
-      { resourceType: "user", contextType: "memory" },
-    ]);
-    expect(plan.skipped).toEqual([]);
-  });
-
-  it("rejects session as a semantic recall target", () => {
-    expect(() => resolveRecallSearchPlan(["session", "user"], { agentId: "agent-1" })).toThrow(
-      "invalid resourceTypes: session",
-    );
-  });
-});
 
 describe("RecallTraceMemoryStore", () => {
   it("keeps a bounded ring buffer and returns matching traces by timestamp descending", () => {
