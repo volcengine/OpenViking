@@ -23,9 +23,7 @@ class MemoryStore:
     @staticmethod
     def _get_score(memory: Any) -> float:
         raw_score = (
-            memory.get("score", 0)
-            if isinstance(memory, dict)
-            else getattr(memory, "score", 0.0)
+            memory.get("score", 0) if isinstance(memory, dict) else getattr(memory, "score", 0.0)
         )
         try:
             return float(raw_score)
@@ -51,9 +49,7 @@ class MemoryStore:
 
         selected = {
             (group, index)
-            for _, group, index, _ in sorted(ranked, key=lambda item: item[0], reverse=True)[
-                :limit
-            ]
+            for _, group, index, _ in sorted(ranked, key=lambda item: item[0], reverse=True)[:limit]
         }
         return {
             "user_memory": [
