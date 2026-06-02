@@ -155,7 +155,9 @@ def test_is_tree_entry_visible_path_ovlock_filtered(monkeypatch):
     monkeypatch.setattr(
         fs, "_path_to_uri", lambda path, ctx=None: path.replace("/local/test_account/", "viking://")
     )
-    entry = _make_tree_entry("/local/test_account/resources/.path.ovlock", ".path.ovlock", is_dir=False)
+    entry = _make_tree_entry(
+        "/local/test_account/resources/.path.ovlock", ".path.ovlock", is_dir=False
+    )
     ctx = _default_ctx()
     assert fs._is_tree_entry_visible(entry, "/local/test_account", ctx) is False
 
@@ -598,15 +600,14 @@ async def test_tree_agent_structure(monkeypatch):
     monkeypatch.setattr(
         fs, "_path_to_uri", lambda path, ctx=None: path.replace("/local/test_account/", "viking://")
     )
+
     async def fake_batch_fetch(entries, abs_limit, ctx=None):
         for entry in entries:
             entry["abstract"] = "" if not entry.get("isDir") else "mock abstract"
 
     monkeypatch.setattr(fs, "_batch_fetch_abstracts", fake_batch_fetch)
 
-    result = await fs._tree_agent(
-        "viking://resources", abs_limit=256, ctx=_default_ctx()
-    )
+    result = await fs._tree_agent("viking://resources", abs_limit=256, ctx=_default_ctx())
 
     assert len(result) == 2
     assert "uri" in result[0]
@@ -647,15 +648,14 @@ async def test_tree_agent_dir_size_zero(monkeypatch):
     monkeypatch.setattr(
         fs, "_path_to_uri", lambda path, ctx=None: path.replace("/local/test_account/", "viking://")
     )
+
     async def fake_batch_fetch(entries, abs_limit, ctx=None):
         for entry in entries:
             entry["abstract"] = "" if not entry.get("isDir") else "mock abstract"
 
     monkeypatch.setattr(fs, "_batch_fetch_abstracts", fake_batch_fetch)
 
-    result = await fs._tree_agent(
-        "viking://resources", abs_limit=256, ctx=_default_ctx()
-    )
+    result = await fs._tree_agent("viking://resources", abs_limit=256, ctx=_default_ctx())
     assert result[0]["size"] == 0
 
 
@@ -689,15 +689,14 @@ async def test_tree_agent_non_dir_abstract_empty(monkeypatch):
     monkeypatch.setattr(
         fs, "_path_to_uri", lambda path, ctx=None: path.replace("/local/test_account/", "viking://")
     )
+
     async def fake_batch_fetch(entries, abs_limit, ctx=None):
         for entry in entries:
             entry["abstract"] = "" if not entry.get("isDir") else "mock abstract"
 
     monkeypatch.setattr(fs, "_batch_fetch_abstracts", fake_batch_fetch)
 
-    result = await fs._tree_agent(
-        "viking://resources", abs_limit=256, ctx=_default_ctx()
-    )
+    result = await fs._tree_agent("viking://resources", abs_limit=256, ctx=_default_ctx())
     assert result[0]["abstract"] == ""
 
 
@@ -737,9 +736,7 @@ async def test_tree_agent_modtime_formatted(monkeypatch):
     )
     monkeypatch.setattr(fs, "_batch_fetch_abstracts", fake_batch_fetch)
 
-    result = await fs._tree_agent(
-        "viking://resources", abs_limit=256, ctx=_default_ctx()
-    )
+    result = await fs._tree_agent("viking://resources", abs_limit=256, ctx=_default_ctx())
     assert result[0]["modTime"] == "2026-01-01"
 
 
@@ -782,9 +779,7 @@ async def test_tree_agent_abs_limit_truncation(monkeypatch):
     )
     monkeypatch.setattr(fs, "_batch_fetch_abstracts", fake_batch_fetch)
 
-    result = await fs._tree_agent(
-        "viking://resources", abs_limit=10, ctx=_default_ctx()
-    )
+    result = await fs._tree_agent("viking://resources", abs_limit=10, ctx=_default_ctx())
     assert len(result[0]["abstract"]) <= 10
     assert result[0]["abstract"].endswith("...")
 
