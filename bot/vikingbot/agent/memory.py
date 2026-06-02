@@ -19,7 +19,6 @@ class MemoryStore:
         self.memory_dir = ensure_dir(workspace / "memory")
         self.memory_file = self.memory_dir / "MEMORY.md"
         self.history_file = self.memory_dir / "HISTORY.md"
-        self.latest_viking_retrieval_trace: dict[str, Any] | None = None
 
     def read_long_term(self) -> str:
         if self.memory_file.exists():
@@ -140,7 +139,6 @@ class MemoryStore:
         user_ids: list[str] | None = None,
     ) -> str:
         client = None
-        self.latest_viking_retrieval_trace = None
         try:
             config = load_config().ov_server
             admin_user_id = config.admin_user_id
@@ -155,12 +153,10 @@ class MemoryStore:
                 query=current_message,
                 user_ids=search_user_ids,
                 agent_user_id=admin_user_id,
-                limit=10,
+                limit=30,
             )
             if not result:
                 return ""
-            trace = result.get("retrieval_trace") if isinstance(result, dict) else None
-            self.latest_viking_retrieval_trace = trace if isinstance(trace, dict) else None
 
             # Log raw search results for debugging
             memory_list = []

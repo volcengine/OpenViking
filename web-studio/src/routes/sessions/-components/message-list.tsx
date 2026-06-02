@@ -4,7 +4,6 @@ import { useTranslation } from 'react-i18next'
 
 import { resolvePublicAsset } from '#/lib/public-path'
 import type { StreamToolCall } from '#/lib/sessions/types/chat'
-import { isStreamToolCallError } from '#/lib/sessions/types/chat'
 import type { Message } from '#/lib/sessions/types/message'
 import { MarkdownContent, ReasoningBlock, ToolCallBlock } from './message-parts'
 
@@ -299,7 +298,6 @@ function StreamingAssistantMessage({
               toolName={tc.name}
               args={args}
               result={tc.result}
-              isError={isStreamToolCallError(tc)}
               isRunning={!tc.result}
               onResourceClick={onResourceClick}
             />

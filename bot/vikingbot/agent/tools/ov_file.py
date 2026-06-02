@@ -538,56 +538,6 @@ class VikingMemoryCommitTool(OVFileTool):
             "required": ["messages"],
         }
 
-    @staticmethod
-    def _extract_memory_diff_uris(memory_diff: dict[str, Any]) -> dict[str, list[str]]:
-        operations = memory_diff.get("operations", {})
-        if not isinstance(operations, dict):
-            operations = {}
-
-        def _uris(key: str) -> list[str]:
-            values = operations.get(key, [])
-            if not isinstance(values, list):
-                return []
-            uris = []
-            for item in values:
-                if isinstance(item, dict) and item.get("uri"):
-                    uris.append(str(item["uri"]))
-            return uris
-
-        added_uris = _uris("adds")
-        updated_uris = _uris("updates")
-        deleted_uris = _uris("deletes")
-        modified_uris = []
-        for uri in [*added_uris, *updated_uris, *deleted_uris]:
-            if uri not in modified_uris:
-                modified_uris.append(uri)
-        return {
-            "added_uris": added_uris,
-            "updated_uris": updated_uris,
-            "deleted_uris": deleted_uris,
-            "modified_uris": modified_uris,
-        }
-
-    async def _wait_for_commit_task(
-        self,
-        client: VikingClient,
-        task_id: str | None,
-        user_id: str,
-        timeout_seconds: float = 8.0,
-    ) -> dict[str, Any] | None:
-        if not task_id:
-            return None
-        deadline = asyncio.get_running_loop().time() + timeout_seconds
-        latest = None
-        while True:
-            latest = await client.get_task(task_id, user_id=user_id)
-            status = latest.get("status") if isinstance(latest, dict) else None
-            if status in {"completed", "failed"}:
-                return latest
-            if asyncio.get_running_loop().time() >= deadline:
-                return latest
-            await asyncio.sleep(0.5)
-
     async def execute(
         self,
         tool_context: ToolContext,
@@ -596,67 +546,14 @@ class VikingMemoryCommitTool(OVFileTool):
     ) -> str:
         try:
             if not tool_context.sender_id:
-                raise RuntimeError("sender_id is required for OpenViking memory commit.")
+                return "Error committed, sender_id is required."
             client = await self._get_client(tool_context)
             session_id = tool_context.session_key.safe_name()
-            result = await client.commit(session_id, messages, tool_context.sender_id)
-            commit_result = result.get("commit", {}) if isinstance(result, dict) else {}
-            archive_uri = (
-                commit_result.get("archive_uri") if isinstance(commit_result, dict) else None
-            )
-            task_id = (
-                commit_result.get("task_id") if isinstance(commit_result, dict) else None
-            )
-            memory_diff_uri = f"{archive_uri}/memory_diff.json" if archive_uri else None
-            task = await self._wait_for_commit_task(
-                client,
-                task_id,
-                user_id=tool_context.sender_id,
-            )
-            task_status = task.get("status") if isinstance(task, dict) else None
-            phase_2 = {
-                "phase": "extract_memories",
-                "status": task_status or "pending",
-                "task_id": task_id,
-                "memory_diff_uri": memory_diff_uri,
-            }
-            output = {
-                "status": "committed",
-                "session_id": session_id,
-                "messages_uri": f"{archive_uri}/messages.jsonl" if archive_uri else None,
-                "archive_uri": archive_uri,
-                "memory_diff_uri": memory_diff_uri,
-                "task_id": task_id,
-                "task_status": task_status,
-                "commit": commit_result,
-                "phases": [
-                    {
-                        "phase": "archive_messages",
-                        "status": "completed",
-                        "messages_uri": f"{archive_uri}/messages.jsonl" if archive_uri else None,
-                        "archive_uri": archive_uri,
-                    },
-                    phase_2,
-                ],
-            }
-            if isinstance(task, dict) and task.get("result"):
-                output["task_result"] = task["result"]
-                phase_2["result"] = task["result"]
-            if memory_diff_uri:
-                try:
-                    memory_diff_content = await client.read_content(memory_diff_uri, level="read")
-                    if memory_diff_content:
-                        memory_diff = json.loads(memory_diff_content)
-                        output["memory_diff"] = memory_diff
-                        changed_uris = self._extract_memory_diff_uris(memory_diff)
-                        output.update(changed_uris)
-                        phase_2.update(changed_uris)
-                except Exception as e:
-                    logger.warning(f"Failed to read memory diff {memory_diff_uri}: {e}")
-            return json.dumps(output, ensure_ascii=False, indent=2)
+            await client.commit(session_id, messages, tool_context.sender_id)
+            return f"Successfully committed to session {session_id}"
         except Exception as e:
             logger.exception(f"Error processing message: {e}")
-            raise RuntimeError(f"committing to Viking failed: {str(e)}") from e
+            return f"Error committing to Viking: {str(e)}"
 
 
 class VikingMultiReadTool(OVFileTool):

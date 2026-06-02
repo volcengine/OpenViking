@@ -1526,7 +1526,6 @@ class VikingFS:
             memories=memories,
             resources=resources,
             skills=skills,
-            query_results=[result],
         )
         telemetry.set("vector.returned", find_result.total)
         return find_result

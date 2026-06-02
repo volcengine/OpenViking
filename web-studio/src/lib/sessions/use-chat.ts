@@ -1,10 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import {
-  isStreamToolCallError,
-  type ChatStatus,
-  type StreamToolCall,
-} from './types/chat'
+import type { ChatStatus, StreamToolCall } from './types/chat'
 import type { Message, MessagePart, TextPart, ToolPart } from './types/message'
 import { addMessage, sendChatStream, serializeParts } from './api'
 import { generateTitle } from './generate-title'
@@ -41,9 +37,6 @@ function dedupeToolCalls(toolCalls: StreamToolCall[]): StreamToolCall[] {
     if (!existing.result && toolCall.result) {
       existing.result = toolCall.result
     }
-    if (typeof toolCall.success === 'boolean') {
-      existing.success = toolCall.success
-    }
   }
 
   return result
@@ -67,7 +60,7 @@ function buildAssistantMessage(
       tool_name: tc.name,
       tool_uri: '',
       skill_uri: '',
-      tool_status: isStreamToolCallError(tc) ? 'error' : 'completed',
+      tool_status: 'completed',
       tool_output: tc.result,
     }
     try {
@@ -281,16 +274,6 @@ export function useChat(options: UseChatOptions): UseChatReturn {
             case 'tool_result': {
               if (lastToolCall) {
                 lastToolCall.result = streamEventDataToText(event.data)
-                if (
-                  event.data &&
-                  typeof event.data === 'object' &&
-                  'success' in event.data &&
-                  typeof (event.data as Record<string, unknown>).success ===
-                    'boolean'
-                ) {
-                  lastToolCall.success = (event.data as Record<string, boolean>)
-                    .success
-                }
                 setStreamingToolCalls(dedupeToolCalls(accToolCalls))
               }
               break

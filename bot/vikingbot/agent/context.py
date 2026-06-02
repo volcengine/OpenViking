@@ -47,7 +47,6 @@ class ContextBuilder:
         self._is_group_chat = is_group_chat
         self._eval = eval
         self.latest_relevant_memories: str | None = None
-        self.latest_retrieval_trace: dict[str, Any] | None = None
 
     @property
     def memory(self):
@@ -215,11 +214,9 @@ Skills with available="false" need dependencies installed first - you can try in
             )
             if viking_memory:
                 self.latest_relevant_memories = viking_memory
-                self.latest_retrieval_trace = self.memory.latest_viking_retrieval_trace
                 parts.append(f"## openviking_search(query=[user_query])\n{viking_memory}")
             else:
                 self.latest_relevant_memories = None
-                self.latest_retrieval_trace = None
 
         parts.append(
             "Reply in the same language as the user's query, ignoring the language of the reference materials. User's query:"

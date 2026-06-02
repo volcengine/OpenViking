@@ -225,52 +225,6 @@ class AgentLoop:
             )
         )
 
-    async def _publish_auto_memory_context(
-        self,
-        session_key: SessionKey,
-        query: str,
-        result: str,
-        retrieval_trace: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """Expose automatic OpenViking memory context injection as a visible event."""
-        args_str = json.dumps(
-            {"query": query},
-            ensure_ascii=False,
-        )
-        result_payload = json.dumps(
-            {
-                "content": result,
-                "retrieval_trace": retrieval_trace,
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
-        await self.bus.publish_outbound(
-            OutboundMessage(
-                session_key=session_key,
-                content=f"openviking_search({args_str})",
-                event_type=OutboundEventType.TOOL_CALL,
-            )
-        )
-        await self.bus.publish_outbound(
-            OutboundMessage(
-                session_key=session_key,
-                content=result_payload,
-                event_type=OutboundEventType.TOOL_RESULT,
-                metadata={"success": True},
-            )
-        )
-        return {
-            "tool_name": "openviking_search",
-            "args": args_str,
-            "result": result_payload,
-            "duration": 0,
-            "execute_success": True,
-            "input_token": cal_str_tokens(query, text_type="mixed"),
-            "output_token": cal_str_tokens(result_payload, text_type="mixed"),
-            "auto": True,
-        }
-
     def _register_builtin_hooks(self):
         """Register built-in hooks."""
         hook_manager.register_path(self.config.hooks)
@@ -692,7 +646,7 @@ class AgentLoop:
                 async def execute_single_tool(idx: int, tool_call):
                     """Execute a single tool and track execution time."""
                     tool_execute_start_time = time.time()
-                    execution = await self.tools.execute(
+                    result = await self.tools.execute(
                         tool_call.name,
                         tool_call.arguments,
                         session_key=session_key,
@@ -701,7 +655,7 @@ class AgentLoop:
                         memory_user_ids=memory_user_ids,
                     )
                     tool_execute_duration = (time.time() - tool_execute_start_time) * 1000
-                    return idx, tool_call, execution, tool_execute_duration
+                    return idx, tool_call, result, tool_execute_duration
 
                 # Run all tool executions in parallel
                 tool_tasks = [
@@ -711,9 +665,7 @@ class AgentLoop:
                 results = await asyncio.gather(*tool_tasks)
 
                 # Stage 3: Process results sequentially in original order
-                iteration_tool_failed = False
-                for _idx, tool_call, execution, tool_execute_duration in results:
-                    result = execution.output
+                for _idx, tool_call, result, tool_execute_duration in results:
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
                     logger.info(f"[TOOL_CALL]: {tool_call.name}({args_str[:200]})")
                     logger.info(f"[RESULT]: {str(result)[:600]}")
@@ -731,7 +683,6 @@ class AgentLoop:
                                 session_key=session_key,
                                 content=str(result),
                                 event_type=OutboundEventType.TOOL_RESULT,
-                                metadata={"success": execution.success},
                             )
                         )
                     messages = self.context.add_tool_result(
@@ -743,25 +694,16 @@ class AgentLoop:
                         "args": args_str,
                         "result": result,
                         "duration": tool_execute_duration,
-                        "execute_success": execution.success,
+                        "execute_success": True
+                        if result and "Error executing" not in result
+                        else False,
                         "input_token": tool_call.tokens,
                         "output_token": cal_str_tokens(result, text_type="mixed"),
                     }
-                    if not execution.success:
-                        iteration_tool_failed = True
                     tools_used.append(tool_used_dict)
 
-                reflect_prompt = "Reflect on the results and decide next steps."
-                if iteration_tool_failed:
-                    reflect_prompt = (
-                        "One or more tool calls failed. Analyze the failed tool result. "
-                        "If the issue can be resolved by changing arguments, using another "
-                        "available tool, or retrying with corrected context, do that now. "
-                        "If it cannot be resolved with the available tools, explain the "
-                        "failed action and the reason to the user."
-                    )
                 messages.append(
-                    {"role": "user", "content": reflect_prompt}
+                    {"role": "user", "content": "Reflect on the results and decide next steps."}
                 )
             else:
                 final_content = response.content
@@ -1009,15 +951,6 @@ class AgentLoop:
                 memory_users=memory_user,
             )
             relevant_memories = message_context.latest_relevant_memories
-            retrieval_trace = message_context.latest_retrieval_trace
-            auto_memory_tool = None
-            if ov_tools_enable and relevant_memories:
-                auto_memory_tool = await self._publish_auto_memory_context(
-                    session_key=session_key,
-                    query=msg.content,
-                    result=relevant_memories,
-                    retrieval_trace=retrieval_trace,
-                )
             # logger.info(f"New messages: {json.dumps(messages, indent=4)}")
 
             # Run agent loop within a stable response identity for tracing/tool spans.
@@ -1038,9 +971,6 @@ class AgentLoop:
                     memory_user_ids=memory_user,
                     disabled_tools=disabled_tools,
                 )
-
-            if auto_memory_tool:
-                tools_used = [auto_memory_tool, *(tools_used or [])]
 
             # Log response preview
             preview = final_content[:300] + "..." if len(final_content) > 300 else final_content

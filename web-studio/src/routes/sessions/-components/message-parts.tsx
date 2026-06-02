@@ -276,10 +276,6 @@ function collectStructuredUris(
   if (!value || typeof value !== 'object') return
 
   for (const [key, nested] of Object.entries(value)) {
-    // Retrieval traces can contain many intermediate candidates. Keep those in
-    // the raw JSON result, but exclude them from the final clickable ref list.
-    if (key === 'thinking_trace') continue
-
     if (isUriScalarKey(key) && typeof nested === 'string') {
       const uri = cleanVikingUri(nested)
       if (uri) seen.add(uri)
