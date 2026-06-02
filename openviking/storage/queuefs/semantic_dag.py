@@ -236,6 +236,22 @@ class SemanticDagExecutor:
                 finally:
                     await self._lock.close()
 
+            async def wrapped_on_timeout(reason: str) -> None:
+                try:
+                    if self._telemetry_id and self._semantic_msg_id:
+                        get_request_wait_tracker().mark_semantic_failed(
+                            self._telemetry_id,
+                            self._semantic_msg_id,
+                            reason,
+                        )
+                        merge_request_stats = getattr(
+                            type(self._processor), "_merge_request_stats", None
+                        )
+                        if callable(merge_request_stats):
+                            merge_request_stats(self._telemetry_id, error_count=1)
+                finally:
+                    await self._lock.close()
+
             async with self._vectorize_lock:
                 task_count = self._vectorize_task_count
                 tasks = list(self._pending_vectorize_tasks)
@@ -248,6 +264,7 @@ class SemanticDagExecutor:
                     semantic_msg_id=self._semantic_msg_id,
                     total_count=task_count,
                     on_complete=wrapped_on_complete,
+                    on_timeout=wrapped_on_timeout,
                     metadata={"uri": root_uri},
                 )
 

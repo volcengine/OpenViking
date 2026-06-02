@@ -221,10 +221,11 @@ class ResourceService:
                 try:
                     with telemetry.measure("resource.wait"):
                         if telemetry_id:
-                            await request_wait_tracker.wait_for_request(
+                            status = await request_wait_tracker.wait_for_request(
                                 telemetry_id, timeout=timeout
                             )
-                            status = request_wait_tracker.build_queue_status(telemetry_id)
+                            if status is None:
+                                status = request_wait_tracker.build_queue_status(telemetry_id)
                         else:
                             qm = get_queue_manager()
                             status = build_queue_status_payload(
@@ -349,8 +350,9 @@ class ResourceService:
         request_wait_tracker = get_request_wait_tracker()
         await task_tracker.start(task_id, account_id=account_id, user_id=user_id)
         try:
-            await request_wait_tracker.wait_for_request(telemetry_id)
-            status = request_wait_tracker.build_queue_status(telemetry_id)
+            status = await request_wait_tracker.wait_for_request(telemetry_id)
+            if status is None:
+                status = request_wait_tracker.build_queue_status(telemetry_id)
             errors = sum(int(group.get("error_count", 0) or 0) for group in status.values())
             if errors:
                 await task_tracker.fail(
@@ -525,8 +527,11 @@ class ResourceService:
                 wait_start = time.perf_counter()
                 try:
                     if telemetry_id:
-                        await request_wait_tracker.wait_for_request(telemetry_id, timeout=timeout)
-                        status = request_wait_tracker.build_queue_status(telemetry_id)
+                        status = await request_wait_tracker.wait_for_request(
+                            telemetry_id, timeout=timeout
+                        )
+                        if status is None:
+                            status = request_wait_tracker.build_queue_status(telemetry_id)
                     else:
                         qm = get_queue_manager()
                         status = build_queue_status_payload(await qm.wait_complete(timeout=timeout))

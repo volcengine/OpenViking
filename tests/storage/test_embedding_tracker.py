@@ -217,6 +217,35 @@ class _SharedDistributedCoordinator(InProcessCoordinator):
     is_distributed = True
 
 
+class _FailOnceDistributedCoordinator(_SharedDistributedCoordinator):
+    def __init__(
+        self,
+        *,
+        fail_get_int_once: bool = False,
+        fail_cleanup_delete_once: bool = False,
+    ) -> None:
+        super().__init__()
+        self._fail_get_int_once = fail_get_int_once
+        self._fail_cleanup_delete_once = fail_cleanup_delete_once
+        self._fail_lock = threading.Lock()
+
+    def get_int(self, key: str) -> int:
+        if self._fail_get_int_once and key.endswith(":remaining"):
+            with self._fail_lock:
+                if self._fail_get_int_once:
+                    self._fail_get_int_once = False
+                    raise RuntimeError("transient get_int failure")
+        return super().get_int(key)
+
+    def delete(self, *keys: str) -> None:
+        if self._fail_cleanup_delete_once and any(key.endswith(":reg") for key in keys):
+            with self._fail_lock:
+                if self._fail_cleanup_delete_once:
+                    self._fail_cleanup_delete_once = False
+                    raise RuntimeError("transient cleanup delete failure")
+        return super().delete(*keys)
+
+
 class TestDistributedCompletion:
     def test_owner_fires_callback_on_remote_decrement(self):
         # A shared store stands in for two instances on one backend. The owner
@@ -243,6 +272,105 @@ class TestDistributedCompletion:
             assert not callback_info.done()
             assert worker.submit(decrement()).result(timeout=2) == 1
             assert not callback_info.done()
+            assert worker.submit(decrement()).result(timeout=2) == 0
+            callback_thread_id, callback_loop = callback_info.result(timeout=3)
+        finally:
+            owner.stop()
+            worker.stop()
+
+        assert callback_thread_id == owner.thread.ident
+        assert callback_loop is owner.loop
+        coord = get_coordinator()
+        assert coord.scard("emb:semantic-msg:reg") == 0
+        assert coord.get_int("emb:semantic-msg:remaining") == 0
+
+    def test_owner_fires_timeout_callback_on_distributed_stall(self, monkeypatch):
+        monkeypatch.setattr(
+            "openviking.storage.queuefs.embedding_tracker._POLL_INTERVAL_SEC",
+            0.01,
+        )
+        set_coordinator(_SharedDistributedCoordinator())
+        tracker = EmbeddingTaskTracker.get_instance()
+        owner = _LoopThread()
+        callback_info = concurrent.futures.Future()
+
+        async def on_timeout(reason):
+            callback_info.set_result((threading.get_ident(), asyncio.get_running_loop(), reason))
+
+        async def register():
+            await tracker.register(
+                "semantic-msg",
+                1,
+                on_timeout=on_timeout,
+                timeout_sec=0.05,
+            )
+
+        try:
+            owner.submit(register()).result(timeout=2)
+            callback_thread_id, callback_loop, reason = callback_info.result(timeout=2)
+        finally:
+            owner.stop()
+
+        assert callback_thread_id == owner.thread.ident
+        assert callback_loop is owner.loop
+        assert "embedding completion timeout" in reason
+        coord = get_coordinator()
+        assert coord.scard("emb:semantic-msg:reg") == 0
+        assert coord.get_int("emb:semantic-msg:remaining") == 0
+
+    def test_owner_retries_after_transient_coordinator_read_error(self, monkeypatch):
+        monkeypatch.setattr(
+            "openviking.storage.queuefs.embedding_tracker._POLL_INTERVAL_SEC",
+            0.01,
+        )
+        set_coordinator(_FailOnceDistributedCoordinator(fail_get_int_once=True))
+        tracker = EmbeddingTaskTracker.get_instance()
+        owner = _LoopThread()
+        worker = _LoopThread()
+        callback_info = concurrent.futures.Future()
+
+        async def on_complete():
+            callback_info.set_result((threading.get_ident(), asyncio.get_running_loop()))
+
+        async def register():
+            await tracker.register("semantic-msg", 1, on_complete=on_complete)
+
+        async def decrement():
+            return await tracker.decrement("semantic-msg")
+
+        try:
+            owner.submit(register()).result(timeout=2)
+            assert worker.submit(decrement()).result(timeout=2) == 0
+            callback_thread_id, callback_loop = callback_info.result(timeout=3)
+        finally:
+            owner.stop()
+            worker.stop()
+
+        assert callback_thread_id == owner.thread.ident
+        assert callback_loop is owner.loop
+
+    def test_owner_retries_after_transient_cleanup_delete_error(self, monkeypatch):
+        monkeypatch.setattr(
+            "openviking.storage.queuefs.embedding_tracker._POLL_INTERVAL_SEC",
+            0.01,
+        )
+        set_coordinator(_FailOnceDistributedCoordinator(fail_cleanup_delete_once=True))
+        tracker = EmbeddingTaskTracker.get_instance()
+        owner = _LoopThread()
+        worker = _LoopThread()
+        callback_info = concurrent.futures.Future()
+
+        async def on_complete():
+            callback_info.set_result((threading.get_ident(), asyncio.get_running_loop()))
+
+        async def register():
+            await tracker.register("semantic-msg", 1, on_complete=on_complete)
+
+        async def decrement():
+            return await tracker.decrement("semantic-msg")
+
+        try:
+            owner.submit(register()).result(timeout=2)
             assert worker.submit(decrement()).result(timeout=2) == 0
             callback_thread_id, callback_loop = callback_info.result(timeout=3)
         finally:
@@ -286,3 +414,27 @@ class TestDistributedCompletion:
             worker.stop()
 
         assert fires == [1]
+
+
+@pytest.mark.asyncio
+async def test_tracker_does_not_auto_timeout_in_process(monkeypatch):
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.embedding_tracker._POLL_INTERVAL_SEC",
+        0.01,
+    )
+    tracker = EmbeddingTaskTracker.get_instance()
+    timeout_calls = []
+
+    await tracker.register(
+        "semantic-msg",
+        1,
+        on_timeout=lambda reason: timeout_calls.append(reason),
+        timeout_sec=0.05,
+    )
+    await asyncio.sleep(0.12)
+
+    assert timeout_calls == []
+    coord = get_coordinator()
+    assert coord.scard("emb:semantic-msg:reg") == 1
+    assert coord.get_int("emb:semantic-msg:remaining") == 1
+    assert await tracker.decrement("semantic-msg") == 0

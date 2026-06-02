@@ -88,12 +88,28 @@ class CoordinationConfig(BaseModel):
         description="Redis backend configuration. Used when backend='redis'.",
     )
 
+    embedding_completion_timeout_sec: int = Field(
+        default=1800,
+        description=(
+            "Distributed-only timeout (seconds) for one semantic root's embedding "
+            "completion barrier. When > 0, a distributed coordinator watchdog marks "
+            "the semantic root failed and runs timeout cleanup if remaining embedding "
+            "tasks never drain. Ignored when coordination backend is local/in-process."
+        ),
+    )
+
     custom_params: Dict[str, Any] = Field(
         default_factory=dict,
         description="Custom parameters passed to from_config() for third-party coordinator backends.",
     )
 
     model_config = {"extra": "forbid"}
+
+    @model_validator(mode="after")
+    def validate_config(self):
+        if self.embedding_completion_timeout_sec < 0:
+            raise ValueError("coordination embedding_completion_timeout_sec must be >= 0")
+        return self
 
 
 class StorageConfig(BaseModel):

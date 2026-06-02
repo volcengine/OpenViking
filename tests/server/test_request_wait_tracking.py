@@ -264,7 +264,7 @@ async def test_content_write_wait_uses_request_tracker(monkeypatch):
     )
     lock_manager = SimpleNamespace(
         create_handle=lambda: SimpleNamespace(id="lock-1"),
-        acquire_tree=lambda handle, path: _return_true(handle, path),
+        acquire_exact_path=lambda handle, path: _return_true(handle, path),
         release=lambda handle: _return_none(handle),
     )
 
@@ -276,6 +276,18 @@ async def test_content_write_wait_uses_request_tracker(monkeypatch):
         "openviking.storage.content_write.get_request_wait_tracker",
         lambda: tracker,
         raising=False,
+    )
+    recorded = {}
+
+    def _fake_record_resource_wait_metrics(*, telemetry_id, queue_status, root_uri, telemetry=None):
+        del telemetry
+        recorded["telemetry_id"] = telemetry_id
+        recorded["queue_status"] = queue_status
+        recorded["root_uri"] = root_uri
+
+    monkeypatch.setattr(
+        "openviking.storage.content_write.record_resource_wait_metrics",
+        _fake_record_resource_wait_metrics,
     )
 
     async def _fake_enqueue_semantic_refresh(**kwargs):
@@ -305,6 +317,13 @@ async def test_content_write_wait_uses_request_tracker(monkeypatch):
     assert tracker.cleaned == [telemetry.telemetry_id]
     assert result["semantic_status"] == "complete"
     assert result["vector_status"] == "complete"
+    assert recorded == {
+        "telemetry_id": telemetry.telemetry_id,
+        "queue_status": tracker.queue_status,
+        "root_uri": root_uri,
+    }
+    summary = telemetry.finish().summary
+    assert summary["resource"]["wait"]["duration_ms"] >= 0
 
 
 @pytest.mark.asyncio
@@ -324,7 +343,7 @@ async def test_content_write_wait_uses_request_tracker_when_telemetry_disabled(m
     )
     lock_manager = SimpleNamespace(
         create_handle=lambda: SimpleNamespace(id="lock-1"),
-        acquire_tree=lambda handle, path: _return_true(handle, path),
+        acquire_exact_path=lambda handle, path: _return_true(handle, path),
         release=lambda handle: _return_none(handle),
     )
 
@@ -336,6 +355,18 @@ async def test_content_write_wait_uses_request_tracker_when_telemetry_disabled(m
         "openviking.storage.content_write.get_request_wait_tracker",
         lambda: tracker,
         raising=False,
+    )
+    recorded = {}
+
+    def _fake_record_resource_wait_metrics(*, telemetry_id, queue_status, root_uri, telemetry=None):
+        del telemetry
+        recorded["telemetry_id"] = telemetry_id
+        recorded["queue_status"] = queue_status
+        recorded["root_uri"] = root_uri
+
+    monkeypatch.setattr(
+        "openviking.storage.content_write.record_resource_wait_metrics",
+        _fake_record_resource_wait_metrics,
     )
 
     async def _fake_enqueue_semantic_refresh(**kwargs):
@@ -365,6 +396,11 @@ async def test_content_write_wait_uses_request_tracker_when_telemetry_disabled(m
     assert tracker.cleaned == [telemetry.telemetry_id]
     assert result["semantic_status"] == "complete"
     assert result["vector_status"] == "complete"
+    assert recorded == {
+        "telemetry_id": telemetry.telemetry_id,
+        "queue_status": tracker.queue_status,
+        "root_uri": root_uri,
+    }
 
 
 async def _return_true(handle, path):

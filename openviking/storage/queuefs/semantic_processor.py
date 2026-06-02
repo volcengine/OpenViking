@@ -669,11 +669,20 @@ class SemanticProcessor(DequeueHandlerBase):
                 async def _on_complete() -> None:
                     get_request_wait_tracker().mark_semantic_done(msg.telemetry_id, msg.id)
 
+                async def _on_timeout(reason: str) -> None:
+                    get_request_wait_tracker().mark_semantic_failed(
+                        msg.telemetry_id,
+                        msg.id,
+                        reason,
+                    )
+                    type(self)._merge_request_stats(msg.telemetry_id, error_count=1)
+
                 tracker = EmbeddingTaskTracker.get_instance()
                 await tracker.register(
                     semantic_msg_id=msg.id,
                     total_count=2 + len(file_vectorize_items),
                     on_complete=_on_complete,
+                    on_timeout=_on_timeout,
                     metadata={"uri": dir_uri},
                 )
             for file_path, summary_dict in file_vectorize_items:
