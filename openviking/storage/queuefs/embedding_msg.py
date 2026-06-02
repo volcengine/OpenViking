@@ -13,10 +13,6 @@ class EmbeddingMsg:
     id: str = field(default_factory=lambda: str(uuid4()))
     telemetry_id: str = ""
     semantic_msg_id: Optional[str] = None
-    image_b64: Optional[str] = None
-    original_url: Optional[str] = None
-    add_reason: Optional[str] = None
-    image_metadata: Optional[Dict[str, Any]] = None
 
     def __init__(
         self,
@@ -24,24 +20,12 @@ class EmbeddingMsg:
         context_data: Dict[str, Any],
         telemetry_id: str = "",
         semantic_msg_id: Optional[str] = None,
-        image_b64: Optional[str] = None,
-        original_url: Optional[str] = None,
-        add_reason: Optional[str] = None,
-        image_metadata: Optional[Dict[str, Any]] = None,
     ):
         self.id = str(uuid4())
         self.message = message
         self.context_data = context_data
         self.telemetry_id = telemetry_id
         self.semantic_msg_id = semantic_msg_id
-        self.image_b64 = image_b64
-        self.original_url = original_url
-        self.add_reason = add_reason
-        self.image_metadata = image_metadata
-
-    def has_image_data(self) -> bool:
-        """Check if message has image data for vectorization."""
-        return self.image_b64 is not None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert embedding message to dictionary format."""

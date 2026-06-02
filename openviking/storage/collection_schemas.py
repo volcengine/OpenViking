@@ -16,7 +16,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from openviking.models.embedder.base import EmbedResult
+from openviking.models.embedder.base import EmbedResult, embed_compat
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.errors import (
     CollectionNotFoundError,
@@ -446,12 +446,9 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     report_success = True
                     return None
 
-                # Check if we have image data for multimodal embedding
-                has_image_data = embedding_msg.has_image_data()
-                has_text = isinstance(embedding_msg.message, str) and embedding_msg.message
-
-                if not has_text and not has_image_data:
-                    logger.debug(f"Skipping message with no text or image data")
+                # Only process string messages
+                if not isinstance(embedding_msg.message, str):
+                    logger.debug(f"Skipping non-string message type: {type(embedding_msg.message)}")
                     self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
                     self._record_request_success(embedding_msg)
                     report_success = True
@@ -501,55 +498,9 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                         import time as _time
 
                         _embed_t0 = _time.monotonic()
-
-                        # Check if we should use multimodal embedding
-                        has_image_data = embedding_msg.has_image_data()
-                        supports_multimodal = (
-                            hasattr(self._embedder, 'supports_multimodal_embedding') and
-                            self._embedder.supports_multimodal_embedding
+                        result: EmbedResult = await embed_compat(
+                            self._embedder, embedding_msg.message, is_query=False
                         )
-                        supports_image = (
-                            hasattr(self._embedder, 'supports_image_embedding') and
-                            self._embedder.supports_image_embedding
-                        )
-
-                        text_for_embedding = embedding_msg.message if has_text else None
-
-                        # Build hybrid text for embedding when we have image but no multimodal support
-                        if has_image_data and not supports_multimodal and has_text:
-                            # Build enhanced text with metadata for fallback
-                            enhanced_text_parts = [text_for_embedding]
-                            if embedding_msg.original_url:
-                                enhanced_text_parts.append(f"\nSource: {embedding_msg.original_url}")
-                            if embedding_msg.add_reason:
-                                enhanced_text_parts.append(f"\nReason: {embedding_msg.add_reason}")
-                            if embedding_msg.image_metadata:
-                                for key, value in embedding_msg.image_metadata.items():
-                                    enhanced_text_parts.append(f"\n{key}: {value}")
-                            text_for_embedding = "".join(enhanced_text_parts)
-
-                        if has_image_data and supports_multimodal:
-                            # Use multimodal embedding
-                            embed_multimodal_async = getattr(self._embedder, 'embed_multimodal_async', None)
-                            if callable(embed_multimodal_async):
-                                result: EmbedResult = await embed_multimodal_async(
-                                    text=text_for_embedding,
-                                    image_b64=embedding_msg.image_b64,
-                                    is_query=False
-                                )
-                            else:
-                                # Fallback to text-only if async method not available
-                                from openviking.models.embedder.base import embed_compat
-                                result: EmbedResult = await embed_compat(
-                                    self._embedder, text_for_embedding or "", is_query=False
-                                )
-                        else:
-                            # Use text-only embedding
-                            from openviking.models.embedder.base import embed_compat
-                            result: EmbedResult = await embed_compat(
-                                self._embedder, text_for_embedding or "", is_query=False
-                            )
-
                         _embed_elapsed = _time.monotonic() - _embed_t0
                         try:
                             from openviking.metrics.datasources import EmbeddingEventDataSource
