@@ -1196,10 +1196,10 @@ class VikingFS:
             level_limit: int | None = 3 (maximum depth level to traverse, None means unlimited)
 
         output="original"
-        [{'name': '.abstract.md', 'size': 100, 'mode': 420, 'modTime': '2026-02-11T16:52:16.256334192+08:00', 'isDir': False, 'meta': {...}, 'rel_path': '.abstract.md', 'uri': 'viking://resources...'}]
+        [{'name': '.abstract.md', 'size': 100, 'mode': 420, 'modTime': '2026-02-11T16:52:16.256334192+08:00', 'isDir': False, 'rel_path': '.abstract.md', 'uri': 'viking://resources...'}]
 
         output="agent"
-        [{'name': '.abstract.md', 'size': 100, 'modTime': '2026-02-11 16:52:16', 'isDir': False, 'rel_path': '.abstract.md', 'uri': 'viking://resources...', 'abstract': "..."}]
+        [{'uri': 'viking://resources...', 'size': 100, 'isDir': False, 'modTime': '2026-02-11 16:52:16', 'rel_path': '.abstract.md', 'abstract': "..."}]
         """
         self._ensure_access(uri, ctx)
         if output == "original":
@@ -1268,7 +1268,6 @@ class VikingFS:
             is_dir = info["isDir"]
             result.append(
                 {
-                    "name": info["name"],
                     "uri": entry_uri,
                     "size": 0 if is_dir else info["size"],
                     "isDir": is_dir,

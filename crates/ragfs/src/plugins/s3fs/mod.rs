@@ -198,16 +198,15 @@ where
             let file_path = raw_path;
             entries.push((file_path.clone(), false, obj.size as u64, obj.last_modified));
 
-            let parts: Vec<&str> = file_path
-                .trim_start_matches('/')
-                .split('/')
-                .filter(|p| !p.is_empty())
-                .collect();
-            for i in 1..parts.len() {
-                let dir_path = format!("/{}", parts[..i].join("/"));
-                if dir_path == query_root {
-                    continue;
-                }
+            // Recover intermediate directories *below the query root* from the
+            // file's query-root-relative path. Using the relative path (instead
+            // of the absolute filesystem path) guarantees that ancestors of the
+            // query root are never emitted as tree entries.
+            let rel = relative_match_file(query_root, &file_path);
+            let rel_parts: Vec<&str> = rel.split('/').filter(|p| !p.is_empty()).collect();
+            let base = if query_root == "/" { "" } else { query_root };
+            for i in 1..rel_parts.len() {
+                let dir_path = format!("{}/{}", base, rel_parts[..i].join("/"));
                 if seen_dirs.insert(dir_path.clone()) {
                     entries.push((dir_path, true, 0, SystemTime::now()));
                 }
@@ -1691,14 +1690,9 @@ mod tests {
             make_meta("mydir/", 0, true),
             make_meta("mydir/file.txt", 100, false),
         ];
-        let result = build_tree_entries_from_flat_listing(
-            "/root",
-            &objects,
-            false,
-            None,
-            identity_key_to_path,
-        )
-        .unwrap();
+        let result =
+            build_tree_entries_from_flat_listing("/", &objects, false, None, identity_key_to_path)
+                .unwrap();
         assert_eq!(result.len(), 2);
         assert!(result[0].info.is_dir);
         assert!(result[1].info.is_dir == false);
@@ -1711,14 +1705,9 @@ mod tests {
             make_meta("a/b/c.txt", 200, false),
             make_meta("a/b.txt", 150, false),
         ];
-        let result = build_tree_entries_from_flat_listing(
-            "/root",
-            &objects,
-            false,
-            None,
-            identity_key_to_path,
-        )
-        .unwrap();
+        let result =
+            build_tree_entries_from_flat_listing("/", &objects, false, None, identity_key_to_path)
+                .unwrap();
         let paths: Vec<&str> = result.iter().map(|e| e.path.as_str()).collect();
         assert_eq!(
             paths,
@@ -1734,7 +1723,7 @@ mod tests {
             make_meta("sub/deep/c.txt", 300, false),
         ];
         let result = build_tree_entries_from_flat_listing(
-            "/root",
+            "/",
             &objects,
             false,
             Some(1),
@@ -1836,8 +1825,26 @@ mod tests {
     #[test]
     fn test_build_tree_entries_nested_dir_recovery() {
         let objects = vec![make_meta("a/b/c/d/file.txt", 100, false)];
+        let result =
+            build_tree_entries_from_flat_listing("/", &objects, false, None, identity_key_to_path)
+                .unwrap();
+        let paths: Vec<&str> = result.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            vec!["/a", "/a/b", "/a/b/c", "/a/b/c/d", "/a/b/c/d/file.txt"]
+        );
+    }
+
+    /// Regression test: when the query root has ancestor directories, those
+    /// ancestors must NOT leak into the tree result. Reproduces the bug where
+    /// `ov tree viking://resources/resource_xxx` showed parent entries such as
+    /// `tenant_xxx` and `tenant_xxx/resources`.
+    #[test]
+    fn test_build_tree_entries_no_ancestor_leak() {
+        // query_root is several levels deep; listed objects live under it.
+        let objects = vec![make_meta("tenant_x/resources/res_1/res_1.md", 171, false)];
         let result = build_tree_entries_from_flat_listing(
-            "/root",
+            "/tenant_x/resources/res_1",
             &objects,
             false,
             None,
@@ -1845,9 +1852,8 @@ mod tests {
         )
         .unwrap();
         let paths: Vec<&str> = result.iter().map(|e| e.path.as_str()).collect();
-        assert_eq!(
-            paths,
-            vec!["/a", "/a/b", "/a/b/c", "/a/b/c/d", "/a/b/c/d/file.txt"]
-        );
+        // Only the single file under the query root should appear; no ancestors
+        // (`/tenant_x`, `/tenant_x/resources`) and not the query root itself.
+        assert_eq!(paths, vec!["/tenant_x/resources/res_1/res_1.md"]);
     }
 }
