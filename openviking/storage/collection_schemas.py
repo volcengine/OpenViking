@@ -13,10 +13,11 @@ import json
 import threading
 import time
 from contextlib import nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from openviking.models.embedder.base import EmbedResult, embed_compat
+from openviking.models.embedder.local_bm25_embedder import extract_local_bm25_embedder
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.errors import (
     CollectionNotFoundError,
@@ -47,6 +48,13 @@ class RequestQueueStats:
     processed: int = 0
     requeue_count: int = 0
     error_count: int = 0
+
+
+@dataclass
+class _LocalBM25RebuildState:
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    pending: bool = False
+    task: Optional[asyncio.Task] = None
 
 
 class CollectionSchemas:
@@ -330,10 +338,62 @@ class TextEmbeddingHandler(DequeueHandlerBase):
         self._breaker_open_last_log_at = 0.0
         self._breaker_open_suppressed_count = 0
         self._breaker_open_log_interval = 30.0
+        self._local_bm25_rebuilds_by_account: Dict[str, _LocalBM25RebuildState] = {}
 
     def _initialize_embedder(self, config: "OpenVikingConfig"):
         """Initialize the embedder instance from config."""
         self._embedder = config.embedding.get_embedder()
+
+    async def _embed_document_for_write(self, text: str) -> EmbedResult:
+        local_bm25 = extract_local_bm25_embedder(self._embedder)
+        if local_bm25 is None:
+            return await embed_compat(self._embedder, text, is_query=False)
+
+        dense_embedder = getattr(self._embedder, "dense_embedder", None)
+        if dense_embedder is None:
+            raise EmbeddingRebuildRequiredError(
+                "local_bm25 document embedding requires full-corpus rebuild"
+            )
+
+        dense_result = await embed_compat(dense_embedder, text, is_query=False)
+        return EmbedResult(dense_vector=dense_result.dense_vector)
+
+    def _schedule_local_bm25_sparse_rebuild(self, ctx: RequestContext) -> None:
+        local_bm25 = extract_local_bm25_embedder(self._embedder)
+        if local_bm25 is None:
+            return
+
+        account_id = ctx.account_id
+        state = self._local_bm25_rebuilds_by_account.setdefault(
+            account_id, _LocalBM25RebuildState()
+        )
+        state.pending = True
+        if state.task is not None and not state.task.done():
+            return
+
+        state.task = asyncio.create_task(
+            self._drain_local_bm25_sparse_rebuilds(ctx, local_bm25, state)
+        )
+
+    async def _drain_local_bm25_sparse_rebuilds(
+        self,
+        ctx: RequestContext,
+        local_bm25: Any,
+        state: _LocalBM25RebuildState,
+    ) -> None:
+        while state.pending:
+            async with state.lock:
+                state.pending = False
+                try:
+                    rebuilt = await self._vikingdb.rebuild_local_bm25_sparse_vectors(
+                        local_bm25, ctx=ctx
+                    )
+                    logger.debug(
+                        "Rebuilt local BM25 sparse vectors for %d corpus records", rebuilt
+                    )
+                except Exception as exc:
+                    logger.warning("Failed to rebuild local BM25 sparse vectors: %s", exc)
+                    return
 
     def _log_breaker_open_reenqueue_summary(self) -> None:
         """Log a throttled warning when embeddings are re-enqueued due to an open circuit breaker."""
@@ -496,9 +556,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                         import time as _time
 
                         _embed_t0 = _time.monotonic()
-                        result: EmbedResult = await embed_compat(
-                            self._embedder, embedding_msg.message, is_query=False
-                        )
+                        result = await self._embed_document_for_write(embedding_msg.message)
                         _embed_elapsed = _time.monotonic() - _embed_t0
                         try:
                             from openviking.metrics.datasources import EmbeddingEventDataSource
@@ -628,6 +686,8 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     )
                     ctx = RequestContext(user=user, role=Role.ROOT)
                     record_id = await self._vikingdb.upsert(inserted_data, ctx=ctx)
+                    if record_id:
+                        self._schedule_local_bm25_sparse_rebuild(ctx)
                     if record_id:
                         logger.debug(
                             f"Successfully wrote embedding to database: {record_id} abstract {inserted_data['abstract']} vector {inserted_data['vector'][:5]}"

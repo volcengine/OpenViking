@@ -5,11 +5,13 @@
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
 from typing import Any, Dict
 
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.local_collection import get_or_create_local_collection
+from openviking.storage.vectordb.utils import validation
 
 from .base import CollectionAdapter
 
@@ -55,3 +57,28 @@ class LocalCollectionAdapter(CollectionAdapter):
         if collection_path:
             os.makedirs(collection_path, exist_ok=True)
         return get_or_create_local_collection(meta_data=meta, path=collection_path)
+
+    def scan_all(self) -> list[Dict[str, Any]]:
+        coll = self.get_collection()
+        local_collection = getattr(coll, "_Collection__collection", None)
+        store_mgr = getattr(local_collection, "store_mgr", None)
+        meta = getattr(local_collection, "meta", None)
+        if store_mgr is None or meta is None:
+            return super().scan_all()
+
+        records: list[Dict[str, Any]] = []
+        vector_key = meta.vector_key
+        sparse_vector_key = meta.sparse_vector_key
+        for candidate in store_mgr.get_all_cands_data():
+            record = json.loads(candidate.fields)
+            if vector_key:
+                record[vector_key] = list(candidate.vector)
+            if sparse_vector_key and candidate.sparse_raw_terms and candidate.sparse_values:
+                record[sparse_vector_key] = dict(
+                    zip(candidate.sparse_raw_terms, candidate.sparse_values, strict=False)
+                )
+            record = validation.fix_fields_data(record, meta.fields_dict)
+            if meta.primary_key:
+                record["id"] = record.get(meta.primary_key)
+            records.append(self._normalize_record_for_read(record))
+        return records

@@ -1836,10 +1836,22 @@ class VikingFS:
 
         try:
             await vector_store.delete_uris(real_ctx, uris)
+            await self._rebuild_local_bm25_sparse_vectors(real_ctx)
             for uri in uris:
                 logger.debug(f"[VikingFS] Deleted from vector store: {uri}")
         except Exception as e:
             logger.warning(f"[VikingFS] Failed to delete from vector store: {e}")
+
+    async def _rebuild_local_bm25_sparse_vectors(self, ctx: RequestContext) -> None:
+        from openviking.models.embedder.local_bm25_embedder import extract_local_bm25_embedder
+
+        vector_store = self._get_vector_store()
+        if not vector_store:
+            return
+        local_bm25 = extract_local_bm25_embedder(self._get_embedder())
+        if local_bm25 is None:
+            return
+        await vector_store.rebuild_local_bm25_sparse_vectors(local_bm25, ctx=ctx)
 
     async def _update_vector_store_uris(
         self,
