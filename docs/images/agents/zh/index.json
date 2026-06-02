@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-06-01",
+  "updatedAt": "2026-06-02",
   "cdnBaseUrl": "https://docs.openviking.net/",
   "accessMethods": [
     {
@@ -12,10 +12,17 @@
     },
     {
       "id": "cli",
-      "name": "CLI 接入",
+      "name": "命令行接入",
       "icon": "terminal",
-      "summary": "命令行接入 Agent，使用灵活性更高",
+      "summary": "面向开发者在终端直接安装、配置和使用 OpenViking CLI",
       "detailPath": "https://docs.openviking.net/agents/zh/cli.md"
+    },
+    {
+      "id": "agent-cli",
+      "name": "Agent CLI 接入",
+      "icon": "paperclip",
+      "summary": "把安装配置指令交给 AI Agent，让它像 skill 一样学会并记住 CLI 用法",
+      "detailPath": "https://docs.openviking.net/agents/zh/agent-cli.md"
     },
     {
       "id": "api",

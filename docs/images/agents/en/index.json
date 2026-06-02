@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-06-01",
+  "updatedAt": "2026-06-02",
   "cdnBaseUrl": "https://docs.openviking.net/",
   "accessMethods": [
     {
@@ -12,10 +12,17 @@
     },
     {
       "id": "cli",
-      "name": "CLI Integration",
+      "name": "Command Line Integration",
       "icon": "terminal",
-      "summary": "Connect agents through the OpenViking command line.",
+      "summary": "Install, configure, and use OpenViking CLI directly from a terminal.",
       "detailPath": "https://docs.openviking.net/agents/en/cli.md"
+    },
+    {
+      "id": "agent-cli",
+      "name": "Agent CLI Integration",
+      "icon": "paperclip",
+      "summary": "Send setup instructions to an AI agent so it can learn and remember the CLI workflow.",
+      "detailPath": "https://docs.openviking.net/agents/en/agent-cli.md"
     },
     {
       "id": "api",
