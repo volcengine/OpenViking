@@ -76,7 +76,7 @@ _NUMERIC_PATTERN_RE: dict[str, re.Pattern] = {}
 
 def _get_numeric_pattern_re(pattern: str) -> re.Pattern:
     if pattern not in _NUMERIC_PATTERN_RE:
-        _NUMERIC_PATTERN_RE[pattern] = re.compile(r'\b' + re.escape(pattern) + r'\b')
+        _NUMERIC_PATTERN_RE[pattern] = re.compile(r"\b" + re.escape(pattern) + r"\b")
     return _NUMERIC_PATTERN_RE[pattern]
 
 
