@@ -54,16 +54,6 @@ impl ImagePreviewer {
         }
     }
 
-    /// Check if viuer is available (it always is, since it's a library)
-    pub fn is_available() -> bool {
-        true
-    }
-
-    /// Get installation instructions (not needed for viuer)
-    pub fn installation_instructions() -> &'static str {
-        "Image preview is available (using viuer)"
-    }
-
     /// Initialize the image previewer (nothing to do for viuer)
     pub fn init(&mut self) -> Result<(), String> {
         self.log("Initialized viuer image previewer");
@@ -74,16 +64,6 @@ impl ImagePreviewer {
     pub fn set_preview_area(&mut self, area: PreviewArea) {
         self.log(&format!("Set preview area: {:?}", area));
         *self.preview_area.lock().unwrap() = Some(area);
-    }
-
-    /// Get the preview area
-    pub fn preview_area(&self) -> Option<PreviewArea> {
-        *self.preview_area.lock().unwrap()
-    }
-
-    /// Check if an image is currently displayed
-    pub fn has_image_displayed(&self) -> bool {
-        self.current_image.lock().unwrap().is_some()
     }
 
     /// Display an image at the last known preview area

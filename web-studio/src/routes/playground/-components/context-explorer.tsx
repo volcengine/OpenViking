@@ -38,7 +38,7 @@ export function ContextExplorerHeader({
   onAddResource: () => void
   onRefresh: () => void
 }) {
-  const { t } = useTranslation('studio')
+  const { t } = useTranslation('playground')
   return (
     <div className="border-b px-3 py-3">
       <div className="flex items-center gap-2">
@@ -120,7 +120,7 @@ export function ContextTree({
   onSelectFile: (entry: VikingFsEntry) => void
   selectedFileUri?: string | null
 }) {
-  const { t } = useTranslation('studio')
+  const { t } = useTranslation('playground')
   return (
     <div className="h-full overflow-auto px-2 py-2 font-mono">
       {NAMESPACES.map((item) => {
@@ -147,7 +147,7 @@ export function ContextTree({
   )
 }
 
-export function StudioResizeHandle({
+export function PlaygroundResizeHandle({
   active,
   label,
   onPointerDown,

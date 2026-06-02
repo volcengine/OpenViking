@@ -415,8 +415,9 @@ async def test_wait_processed_after_add(
     assert resp.json()["status"] == "ok"
 
 
-async def test_add_resource_with_watch_interval_requires_to(
+async def test_add_resource_with_watch_interval_auto_binds_root_uri(
     client: httpx.AsyncClient,
+    service,
     sample_markdown_file,
     upload_temp_dir,
 ):
@@ -428,10 +429,20 @@ async def test_add_resource_with_watch_interval_requires_to(
             "watch_interval": 5.0,
         },
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 200
     body = resp.json()
-    assert body["status"] == "error"
-    assert "watch_interval > 0 requires 'to' to be specified" in body["error"]["message"]
+    assert body["status"] == "ok"
+    root_uri = body["result"]["root_uri"]
+    task = await service.watch_scheduler.watch_manager.get_task_by_uri(
+        to_uri=root_uri,
+        account_id="default",
+        user_id="test_user",
+        role="ROOT",
+        agent_id="default",
+    )
+    assert task is not None
+    assert task.to_uri == root_uri
+    assert task.watch_interval == 5.0
 
 
 async def test_add_resource_with_default_watch_interval(

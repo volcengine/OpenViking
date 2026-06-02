@@ -20,7 +20,7 @@ class OVCLIUploadConfig(BaseModel):
     include: Optional[str] = None
     exclude: Optional[str] = None
 
-    model_config = {"extra": "forbid"}
+    model_config = {"extra": "ignore"}
 
 
 class OVCLIConfig(BaseModel):
@@ -36,7 +36,7 @@ class OVCLIConfig(BaseModel):
     upload: Optional[OVCLIUploadConfig] = None
     extra_headers: Optional[Dict[str, str]] = None
 
-    model_config = {"extra": "forbid"}
+    model_config = {"extra": "ignore"}
 
     @model_validator(mode="before")
     @classmethod
@@ -44,13 +44,7 @@ class OVCLIConfig(BaseModel):
         if isinstance(data, dict):
             # 支持 extra_header 作为 extra_headers 的别名
             if "extra_header" in data and "extra_headers" not in data:
-                # 复制字典并移除 extra_header，避免 extra: "forbid" 报错
-                new_data = {k: v for k, v in data.items() if k != "extra_header"}
-                new_data["extra_headers"] = data["extra_header"]
-                data = new_data
-            elif "extra_headers" in data and "extra_header" in data:
-                # 优先使用 extra_headers，移除 extra_header
-                data = {k: v for k, v in data.items() if k != "extra_header"}
+                data["extra_headers"] = data["extra_header"]
         return data
 
 

@@ -6,7 +6,7 @@ const zhCN = {
       github: 'GitHub',
     },
     header: {
-      defaultTitle: 'OpenViking Studio',
+      defaultTitle: 'OpenViking Playground',
     },
     navigation: {
       home: {
@@ -30,14 +30,14 @@ const zhCN = {
       sessions: {
         title: '会话',
       },
-      studio: {
+      playground: {
         title: '实验场',
       },
     },
     sidebar: {
       loadingSessions: '加载中...',
       noSessions: '暂无会话',
-      workspaceGroupLabel: 'OpenViking Studio',
+      workspaceGroupLabel: 'OpenViking Playground',
     },
   },
   common: {
@@ -82,7 +82,7 @@ const zhCN = {
       },
       agentId: {
         label: 'Agent',
-        placeholder: 'web-studio',
+        placeholder: 'web-playground',
       },
       apiKey: {
         label: 'API Key',
@@ -128,7 +128,7 @@ const zhCN = {
     connection: {
       adminError: '加载 admin 身份失败：{{message}}',
       description:
-        '选择 Studio 调用 OpenViking API 时要携带的 account 和 user。',
+        '选择 Playground 调用 OpenViking API 时要携带的 account 和 user。',
       noKey:
         '输入具备 admin 权限的 API key 后，可以加载 account 和 user 可选项。',
       title: '连接设置',
@@ -181,12 +181,12 @@ const zhCN = {
     },
     page: {
       description:
-        '在 Studio 中配置当前 OpenViking 身份，并管理 accounts、users 和 API keys。',
+        '在 Playground 中配置当前 OpenViking 身份，并管理 accounts、users 和 API keys。',
       title: '连接与身份',
     },
     placeholders: {
       account: 'team-account',
-      agent: 'web-studio',
+      agent: 'web-playground',
       apiKey: '输入 X-API-Key 或 Bearer token',
       baseUrl: 'http://127.0.0.1:1933',
       user: 'default',
@@ -294,7 +294,7 @@ const zhCN = {
           title: 'Playground',
         },
         requestLogs: {
-          description: '查看 Studio 发出的请求、状态与耗时。',
+          description: '查看 Playground 发出的请求、状态与耗时。',
           title: '请求日志',
         },
         resources: {
@@ -315,7 +315,7 @@ const zhCN = {
     page: {
       description:
         '按产品需求对齐首页内容：菜单入口、上下文数据量、今日 tokens、今日检索、Agent 访问、tokens 趋势和上下文提交统计。',
-      eyebrow: 'OpenViking Studio',
+      eyebrow: 'OpenViking Playground',
       settings: '连接与设置',
       title: 'Overview',
     },
@@ -365,7 +365,7 @@ const zhCN = {
       description: '无法从服务端加载审计请求日志。',
       title: '请求失败',
     },
-    eyebrow: 'Studio 遥测',
+    eyebrow: 'Playground 遥测',
     filters: {
       all: '所有日志',
       apiTypePlaceholder: 'API 类型',
@@ -464,6 +464,8 @@ const zhCN = {
     directlyUploadMedia: '直接上传媒体文件',
     'directlyUploadMedia.hint':
       '开启时，媒体文件（图片、音频、视频）原样存储。关闭后，媒体文件会先通过 AI 视觉/音频管道提取内容再存储。',
+    createParent: '自动创建父文件夹',
+    'createParent.hint': '开启时，若目标父目录不存在则自动创建。',
     reason: '添加原因',
     'reason.placeholder': '为什么要添加这个资源？',
     instruction: '处理指令',
@@ -524,6 +526,7 @@ const zhCN = {
       scope: {
         global: '搜索范围: 全局',
         current: '搜索范围: {{name}}',
+        resetToGlobal: '点击重置为全局搜索',
       },
       scopeState: {
         validatingTitle: '正在校验搜索范围',
@@ -571,6 +574,7 @@ const zhCN = {
       back: '返回上一级',
       loading: '正在加载目录',
       filesSection: '文件',
+      error: '加载目录失败',
       empty: {
         title: '空目录',
         subtitle: '这一层目前没有可继续展开的子目录',
@@ -694,6 +698,7 @@ const zhCN = {
       toolCall: '工具调用',
       toolInput: '输入',
       toolResult: '结果',
+      loadMoreRefs: '加载更多 {{count}} 条（剩余 {{remaining}} 条）',
       toolStatus: {
         completed: '完成',
         failed: '失败',
@@ -726,7 +731,7 @@ const zhCN = {
       scopesLabel: '权限范围',
       scopesNone: '（无）',
       signInRequired:
-        '请先在“连接与身份”中登录 OpenViking Studio，或在下方临时粘贴 API key 完成授权。',
+        '请先在“连接与身份”中登录 OpenViking Playground，或在下方临时粘贴 API key 完成授权。',
       openConnectionDialog: '打开连接与身份',
       authorize: '授权',
       deny: '拒绝',
@@ -749,10 +754,10 @@ const zhCN = {
       verifyError: '授权失败：{{message}}',
       noApiKey: '没有可用的 API key。请选择一个身份或粘贴 key。',
       signInRequired:
-        '请先在“连接与身份”中登录 OpenViking Studio，或在下方临时粘贴 API key 完成授权。',
+        '请先在“连接与身份”中登录 OpenViking Playground，或在下方临时粘贴 API key 完成授权。',
     },
   },
-  studio: {
+  playground: {
     copyUri: '复制当前 URI',
     copied: '已复制 URI',
     resizeContext: '调整上下文目录宽度',
@@ -783,7 +788,7 @@ const zhCN = {
       autoRetrieve: 'Agent 会根据消息和工具自主检索',
       history: '历史会话',
       newSession: '新建会话',
-      creating: '正在创建 Studio 会话...',
+      creating: '正在创建 Playground 会话...',
       detectingBot: '正在检测 bot 模式...',
       createFailed: '创建会话失败：{{error}}',
       retry: '重试',
@@ -793,8 +798,8 @@ const zhCN = {
         '这里只展示实验场右侧 Agent 使用过的会话；新建会话会开启一个空白 Agent 上下文。',
       loadingSessions: '正在加载会话...',
       noSessions: '暂无历史会话',
-      createTimeout: '创建 Studio 会话超时，请检查连接设置后重试。',
-      newSessionTitle: '新建 Studio 会话',
+      createTimeout: '创建 Playground 会话超时，请检查连接设置后重试。',
+      newSessionTitle: '新建 Playground 会话',
       botPrompt: {
         title: '请开启 bot 模式',
         description:

@@ -99,6 +99,9 @@ test = [
     "diff-match-patch>=20200713",
     "hvac>=2.0.0",
 ]
+opengauss = [
+    "psycopg2-binary>=2.9",
+]
 dev = [
     "mypy>=1.0.0",
     "ruff>=0.1.0",

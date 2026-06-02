@@ -6,3 +6,6 @@ resolver = "2"
 opt-level = 3
 lto = true
 strip = true
+
+[profile.release.package.ragfs]
+codegen-units = 1

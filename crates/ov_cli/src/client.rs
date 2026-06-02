@@ -128,7 +128,7 @@ impl HttpClient {
 
     // ============ File Helper Methods ============
 
-    fn create_uploader(&self) -> FileUploader {
+    fn create_uploader(&self) -> FileUploader<'_> {
         FileUploader::new(&self.base).with_upload_mode(self.upload_mode())
     }
 

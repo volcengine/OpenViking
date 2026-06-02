@@ -160,6 +160,11 @@ The bot will connect to the remote OpenViking server. Please start the OpenVikin
 ### Bot Configuration
 All configurations are under the `bot` field in `ov.conf`, with default values for configuration items. The optional manual configuration items are described as follows:
 - `agents`: Agent configuration
+  - `model`: LLM model name used by the bot. When `provider` is set, use the provider-native model name (for example `doubao-seed-2-0-pro-260215`).
+  - `provider`: Optional model provider name. When set, vikingbot uses OpenViking's `VLMFactory` + adapter path to create the backend directly (for example `volcengine`, `openai`, `deepseek`).
+  - `api_key`: Optional API key for the agent model provider. Can be configured here directly when you want bot-specific credentials.
+  - `api_base`: Optional API base for the agent model provider. Useful for provider gateways or custom endpoints such as VolcEngine Ark.
+  - `extra_headers`: Optional extra HTTP headers passed to the model provider.
   - `max_tool_iterations`: Maximum number of cycles for a single round of conversation tasks, returns results directly if exceeded
   - `memory_window`: Upper limit of conversation rounds for automatically submitting sessions to OpenViking
   - `gen_image_model`: Model for generating images
@@ -170,10 +175,11 @@ All configurations are under the `bot` field in `ov.conf`, with default values f
   - `mode`: Sandbox mode, optional values are `shared` (all sessions share workspace) or `private` (private, workspace isolated by Channel and session). Default value is `shared`.
 - `ov_server`: OpenViking Server configuration.
   - If not configured, the OpenViking server information configured in `ov.conf` is used by default
-  - If you don't use the locally started OpenViking Server, you can configure the url and the corresponding root user's API Key here
-    - root_api_key: In a multi-tenant scenario, the API KEY must have root privileges; otherwise, the bot cannot automatically register multiple OpenViking users, which is used to implement memory isolation.
-    - account_id: Defaults to default, which is the account ID of OpenViking. All users under an OpenViking account share resources.
-    - api_key_type: Optional `root` or `user`, default `root`. `root` keeps the original root-key fanout behavior; `user` switches the bot to the user-key flow for OpenViking client calls. See #1994 for the full client flow.
+  - If you use a remote OpenViking Server, configure the target service URL and API key here
+    - `server_url`: OpenViking server base URL, for example `https://api.vikingdb.cn-beijing.volces.com/openviking` or `http://localhost:1933`.
+    - `root_api_key`: API key used by the bot when calling the OpenViking server. Despite the historical field name, this field is also used in the `user` key flow.
+    - `account_id`: Defaults to `default`, which is the OpenViking account ID. All users under the same OpenViking account share resources.
+    - `api_key_type`: Optional `root` or `user`, default `root`. `root` keeps the original root-key fanout behavior; `user` switches the bot to the user-key flow for OpenViking client calls. For a hosted remote OpenViking service, `user` is usually the recommended choice.
     - exp_write_tools: Optional list of tool names that trigger experience-memory injection before the call (self-evolving agent memory loop, see #2007). Defaults to `["write_file", "edit_file"]`. Injection only fires when the OpenViking server has `memory.agent_memory_enabled` set; otherwise this list is harmless.
 - `channels`: Message platform configuration, see [Message Platform Configuration](bot/docs/CHANNEL.md) for details
 
@@ -181,33 +187,52 @@ All configurations are under the `bot` field in `ov.conf`, with default values f
 {
   "bot": {
     "agents": {
+      "model": "doubao-seed-2-0-pro-260215",
+      "api_key": "<your-ark-api-key>",
+      "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+      "provider": "volcengine",
       "max_tool_iterations": 50,
-      "memory_window": 50,
-      "gen_image_model": "openai/doubao-seedream-4-5-251128"
+      "memory_window": 50
     },
     "gateway": {
       "host": "0.0.0.0",
-      "port": 18790
+      "port": 18790,
+      "token": "<set-a-random-gateway-token>"
     },
     "sandbox": {
       "mode": "shared"
     },
     "ov_server": {
-      "server_url": "http://127.0.0.1:1933",
-      "root_api_key": "test"
+      "server_url": "https://api.vikingdb.cn-beijing.volces.com/openviking",
+      "root_api_key": "<your-openviking-user-api-key>",
+      "account_id": "default",
+      "api_key_type": "user"
     },
     "channels": [
       {
         "type": "feishu",
         "enabled": true,
         "ov_tools_enable": true,
-        "appId": "",
-        "appSecret": "",
+        "appId": "<your-feishu-app-id>",
+        "appSecret": "<your-feishu-app-secret>",
         "allowFrom": []
       }
     ]
   }
 }
+```
+
+If you only want to try the bot through `vikingbot gateway` or `vikingbot chat`, you can set `channels` to an empty list (`[]`).
+
+With the configuration above, you can try the bot directly, or configure Feishu at the same time:
+
+```bash
+# Start the HTTP gateway
+vikingbot gateway
+
+# Or chat with the bot directly in CLI
+vikingbot chat
+vikingbot chat -m "Hello"
 ```
 
 ### OpenViking Agent Tools

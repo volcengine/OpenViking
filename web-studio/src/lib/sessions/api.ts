@@ -149,7 +149,7 @@ function buildFetchHeaders(): Record<string, string> {
   if (conn.apiKey) headers['X-API-Key'] = conn.apiKey
   if (conn.accountId) headers['X-OpenViking-Account'] = conn.accountId
   if (conn.userId) headers['X-OpenViking-User'] = conn.userId
-  headers['X-OpenViking-Agent'] = conn.agentId || 'web-studio'
+  headers['X-OpenViking-Agent'] = conn.agentId || 'web-playground'
   return headers
 }
 
@@ -185,10 +185,15 @@ export async function sendChatStream(
   signal?: AbortSignal,
 ): Promise<Response> {
   const baseUrl = ovClient.getOptions().baseUrl
+  const conn = ovClient.getConnection()
   const response = await fetch(`${baseUrl}/bot/v1/chat/stream`, {
     method: 'POST',
     headers: buildFetchHeaders(),
-    body: JSON.stringify({ ...request, stream: true }),
+    body: JSON.stringify({
+      ...request,
+      user_id: request.user_id || conn.userId || undefined,
+      stream: true,
+    }),
     signal,
   })
 
@@ -206,8 +211,12 @@ export async function sendChatStream(
 export async function sendChat(
   request: BotChatRequest,
 ): Promise<BotChatResponse> {
+  const conn = ovClient.getConnection()
   const response = await postBotV1Chat({
-    body: request,
+    body: {
+      ...request,
+      user_id: request.user_id || conn.userId || undefined,
+    },
     throwOnError: true,
   } as unknown as NonNullable<Parameters<typeof postBotV1Chat<true>>[0]>)
 

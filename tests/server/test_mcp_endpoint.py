@@ -442,22 +442,32 @@ async def test_add_resource_temp_file_id_branch_resolves_and_ingests(
     upload_token_store.clear()
 
 
-async def test_add_resource_watch_requires_to(service):
-    """watch_interval > 0 without `to` returns hint about deterministic URI."""
+async def test_add_resource_watch_without_to_is_forwarded(service, monkeypatch):
+    """watch_interval > 0 may omit `to`; the service binds to the created root_uri."""
+    captured = {}
+
+    async def fake_add_resource(*, path, ctx, **kwargs):
+        captured["path"] = path
+        captured.update(kwargs)
+        return {"root_uri": "viking://resources/foo"}
+
+    monkeypatch.setattr(service.resources, "add_resource", fake_add_resource)
+
     result = await add_resource(
         path="https://example.com/foo",
         watch_interval=1440,
     )
-    assert "error" in result.lower()
-    assert "watch_interval > 0 requires `to`" in result
+    assert "Resource added" in result
+    assert captured["path"] == "https://example.com/foo"
+    assert captured["to"] is None
+    assert captured["watch_interval"] == 1440
 
 
 async def test_add_resource_rejects_negative_watch_interval(service):
     """watch_interval < 0 is rejected at the MCP boundary, even when `to` is given.
 
-    Without this guard, a negative value would bypass the `> 0 requires to`
-    check (passing the `> 0` comparison as false) and be forwarded into
-    the service layer with undefined semantics.
+    Without this guard, a negative value would bypass watch creation and be
+    forwarded into the service layer with cancellation-like semantics.
     """
     result = await add_resource(
         path="https://example.com/foo",

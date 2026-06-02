@@ -199,7 +199,7 @@ export async function buildAutoRecallContext(params: {
     return { memoryCount: 0, estimatedTokens: 0 };
   }
 
-  const precheck = await quickRecallPrecheck(cfg.baseUrl);
+  const precheck = await quickRecallPrecheck(client, agentId);
   if (!precheck.ok) {
     verbose?.(`openviking: skipping auto-recall because precheck failed (${precheck.reason})`);
     return { memoryCount: 0, estimatedTokens: 0 };
