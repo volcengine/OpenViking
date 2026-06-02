@@ -4,6 +4,7 @@
 Patch merge operation - SEARCH/REPLACE for strings, direct replace for others.
 """
 
+import time
 from typing import Any, Optional, Type
 
 from openviking.session.memory.merge_op.base import (
@@ -190,11 +191,21 @@ class PatchOp(MergeOpBase):
                 raise
 
             telemetry.increment("memory.apply.patch_rewrite.attempted")
-            rewritten = await _rewrite_stale_patch(
-                current_value=current_value,
-                patch_value=patch_value,
-                error=exc,
-            )
+            rewrite_start = time.perf_counter()
+            try:
+                rewritten = await _rewrite_stale_patch(
+                    current_value=current_value,
+                    patch_value=patch_value,
+                    error=exc,
+                )
+            except Exception:
+                telemetry.increment("memory.apply.patch_rewrite.failed")
+                raise
+            finally:
+                telemetry.add_duration(
+                    "memory.apply.patch_rewrite",
+                    (time.perf_counter() - rewrite_start) * 1000,
+                )
             if rewritten is None:
                 telemetry.increment("memory.apply.patch_rewrite.failed")
                 raise

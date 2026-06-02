@@ -10,6 +10,7 @@ cannot accidentally output StrPatch blocks.
 """
 
 import difflib
+import time
 from typing import Any, Optional, Type
 
 from pydantic import BaseModel
@@ -154,12 +155,22 @@ class ReplaceOp(MergeOpBase):
             raise PatchParseError("stale replacement requires LLM synthesis")
 
         telemetry.increment("memory.apply.replace_rewrite.attempted")
-        rewritten = await _rewrite_stale_replace(
-            current_value=current_value,
-            patch_value=patch_value,
-            intent_diff=_format_unified_diff(patch_value.base_value, proposed_value),
-            reason="base_digest_mismatch",
-        )
+        rewrite_start = time.perf_counter()
+        try:
+            rewritten = await _rewrite_stale_replace(
+                current_value=current_value,
+                patch_value=patch_value,
+                intent_diff=_format_unified_diff(patch_value.base_value, proposed_value),
+                reason="base_digest_mismatch",
+            )
+        except Exception:
+            telemetry.increment("memory.apply.replace_rewrite.failed")
+            raise
+        finally:
+            telemetry.add_duration(
+                "memory.apply.replace_rewrite",
+                (time.perf_counter() - rewrite_start) * 1000,
+            )
         if rewritten is None:
             telemetry.increment("memory.apply.replace_rewrite.failed")
             raise PatchParseError("stale replacement synthesis failed")

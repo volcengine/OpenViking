@@ -39,6 +39,18 @@ from openviking.session.memory.merge_op.patch_handler import PatchParseError
 # ============================================================================
 
 
+class _TelemetryRecorder:
+    def __init__(self):
+        self.counters = {}
+        self.durations = []
+
+    def increment(self, key, delta=1):
+        self.counters[key] = self.counters.get(key, 0) + delta
+
+    def add_duration(self, key, duration_ms):
+        self.durations.append((key, duration_ms))
+
+
 class TestPatchOp:
     """Tests for PatchOp."""
 
@@ -204,6 +216,41 @@ class TestPatchOp:
         assert result == "new"
         assert len(rewrite_calls) == 1
 
+    def test_apply_async_records_stale_rewrite_failure_telemetry(self, monkeypatch):
+        op = PatchOp(FieldType.STRING)
+        patch = StrPatchWithBase(
+            blocks=[SearchReplaceBlock(search="missing", replace="new")],
+            base_value="older policy",
+            source_operation_id="notes.md:content",
+        )
+        telemetry = _TelemetryRecorder()
+
+        async def fake_rewrite(*, current_value, patch_value, error):
+            raise RuntimeError("provider timeout")
+
+        monkeypatch.setattr(
+            "openviking.session.memory.merge_op.patch._stale_patch_rewrite_config",
+            lambda: (True, 1),
+        )
+        monkeypatch.setattr(
+            "openviking.session.memory.merge_op.patch._rewrite_stale_patch",
+            fake_rewrite,
+        )
+        monkeypatch.setattr(
+            "openviking.session.memory.merge_op.patch.get_current_telemetry",
+            lambda: telemetry,
+        )
+
+        with pytest.raises(RuntimeError, match="provider timeout"):
+            asyncio.run(op.apply_async("latest policy", patch))
+
+        assert telemetry.counters["memory.apply.patch_stale.detected"] == 1
+        assert telemetry.counters["memory.apply.patch_rewrite.attempted"] == 1
+        assert telemetry.counters["memory.apply.patch_rewrite.failed"] == 1
+        assert len(telemetry.durations) == 1
+        assert telemetry.durations[0][0] == "memory.apply.patch_rewrite"
+        assert telemetry.durations[0][1] >= 0
+
     def test_apply_async_does_not_rewrite_when_base_digest_matches(self, monkeypatch):
         """Matching base_digest means the patch is malformed, not stale."""
         op = PatchOp(FieldType.STRING)
@@ -320,6 +367,7 @@ class TestReplaceOp:
             source_operation_id="memory://example:content",
         )
         calls = []
+        telemetry = _TelemetryRecorder()
 
         async def fake_rewrite(*, current_value, patch_value, intent_diff, reason):
             calls.append((current_value, patch_value, intent_diff, reason))
@@ -333,6 +381,10 @@ class TestReplaceOp:
             "openviking.session.memory.merge_op.replace._rewrite_stale_replace",
             fake_rewrite,
         )
+        monkeypatch.setattr(
+            "openviking.session.memory.merge_op.replace.get_current_telemetry",
+            lambda: telemetry,
+        )
 
         result = asyncio.run(op.apply_async("alpha\ncurrent\n", value))
 
@@ -342,6 +394,12 @@ class TestReplaceOp:
         assert calls[0][1].source_operation_id == "memory://example:content"
         assert "--- base" in calls[0][2]
         assert calls[0][3] == "base_digest_mismatch"
+        assert telemetry.counters["memory.apply.replace_stale.detected"] == 1
+        assert telemetry.counters["memory.apply.replace_rewrite.attempted"] == 1
+        assert telemetry.counters["memory.apply.replace_rewrite.succeeded"] == 1
+        assert len(telemetry.durations) == 1
+        assert telemetry.durations[0][0] == "memory.apply.replace_rewrite"
+        assert telemetry.durations[0][1] >= 0
 
     def test_apply_async_stale_replace_requires_enabled_synthesis(self, monkeypatch):
         op = ReplaceOp()
