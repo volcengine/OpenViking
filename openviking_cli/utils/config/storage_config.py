@@ -1,6 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-import os
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional
 
@@ -24,25 +23,8 @@ class TaskTrackerConfig(BaseModel):
     )
 
 
-class CoordinationConfig(BaseModel):
-    """Configuration for cross-instance coordination backend.
-
-    Coordination unifies the process-local trackers (semantic coalesce
-    version, request-wait tracker, embedding task tracker, request stats)
-    behind a shared backend so multiple load-balanced server instances stay
-    consistent.
-
-    This is an explicit deployment-topology switch and is intentionally NOT
-    derived from `queuefs.backend`: sqlite on a non-shared local disk (single
-    machine, no coordination needed) and sqlite on a shared mount (multi
-    instance, coordination needed) are indistinguishable from config. Default
-    'memory' keeps single-machine deployments unchanged with no new dependency.
-    """
-
-    backend: Literal["memory", "redis"] = Field(
-        default="memory",
-        description="Coordination backend. 'redis' enables multi-instance consistency.",
-    )
+class RedisCoordinationConfig(BaseModel):
+    """Backend-specific configuration for Redis coordination."""
 
     dsn: Optional[str] = Field(
         default=None,
@@ -69,6 +51,49 @@ class CoordinationConfig(BaseModel):
         if self.ttl_sec < 0:
             raise ValueError("coordination ttl_sec must be >= 0")
         return self
+
+
+class CoordinationConfig(BaseModel):
+    """Configuration for cross-instance coordination backend.
+
+    Coordination unifies the process-local trackers (semantic coalesce
+    version, request-wait tracker, embedding task tracker, request stats)
+    behind a shared backend so multiple load-balanced server instances stay
+    consistent.
+
+    This is an explicit deployment-topology switch and is intentionally NOT
+    derived from `queuefs.backend`: sqlite on a non-shared local disk (single
+    machine, no coordination needed) and sqlite on a shared mount (multi
+    instance, coordination needed) are indistinguishable from config. Default
+    'memory' keeps single-machine deployments unchanged with no new dependency.
+
+    Backend-specific settings are nested under the corresponding key (mirrors
+    the vectordb config pattern for consistency):
+
+        {"backend": "redis", "redis": {"dsn": "redis://...", ...}}
+    """
+
+    backend: str = Field(
+        default="memory",
+        description=(
+            "Coordination backend. Built-in values: 'memory' (default, single-instance) "
+            "or 'redis' (multi-instance). For custom backends, set to a full dotted class path "
+            "(e.g. 'mycompany.module.CredisCoordinator'). The class must "
+            "implement a 'from_config(cfg: CoordinationConfig)' classmethod."
+        ),
+    )
+
+    redis: RedisCoordinationConfig = Field(
+        default_factory=RedisCoordinationConfig,
+        description="Redis backend configuration. Used when backend='redis'.",
+    )
+
+    custom_params: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Custom parameters passed to from_config() for third-party coordinator backends.",
+    )
+
+    model_config = {"extra": "forbid"}
 
 
 class StorageConfig(BaseModel):
@@ -153,26 +178,7 @@ class StorageConfig(BaseModel):
         return TaskTracker(store=PersistentTaskStore(agfs))
 
     def build_coordinator(self):
-        """Build a Coordinator from storage config.
+        """Build a Coordinator from storage config."""
+        from openviking.service.coordinator_factory import create_coordinator
 
-        Returns an in-process coordinator for the default 'memory' backend
-        (single-machine, zero new dependency) or a Redis-backed coordinator
-        for multi-instance consistency. The Redis DSN comes from the config
-        or, when absent, the OPENVIKING_COORD_DSN environment variable.
-        """
-        from openviking.service.coordinator import InProcessCoordinator, RedisCoordinator
-
-        if self.coordination.backend == "memory":
-            return InProcessCoordinator()
-
-        dsn = self.coordination.dsn or os.environ.get("OPENVIKING_COORD_DSN")
-        if not dsn:
-            raise ValueError(
-                "storage.coordination.backend='redis' requires a DSN. "
-                "Set storage.coordination.dsn or the OPENVIKING_COORD_DSN environment variable."
-            )
-        return RedisCoordinator(
-            dsn,
-            key_prefix=self.coordination.key_prefix,
-            default_ttl_sec=self.coordination.ttl_sec,
-        )
+        return create_coordinator(self.coordination)

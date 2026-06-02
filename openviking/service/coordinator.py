@@ -53,7 +53,7 @@ class Coordinator(Protocol):
 
     # The configured default TTL (seconds) for mutated keys. Components that
     # need to refresh TTL on associated keys should read this rather than
-    # hardcoding a value, so deployments with non-default coordination.ttl_sec
+    # hardcoding a value, so deployments with non-default coordination.redis.ttl_sec
     # stay consistent.
     default_ttl_sec: int
 
@@ -200,8 +200,15 @@ class RedisCoordinator:
     """Redis-backed coordinator for multi-instance consistency.
 
     Each primitive maps onto an atomic Redis command, so concurrent updates
-    from different instances are serialized by Redis. Requires the optional
-    ``redis`` dependency (``pip install 'openviking[coordination]'``).
+    from different instances are serialized by Redis.
+
+    ``dsn_or_client`` accepts either a Redis DSN string (``redis://host:port/db``)
+    or a pre-built client object.  Passing a client object lets callers use any
+    Redis-compatible client (e.g. a custom cluster client or a proprietary SDK)
+    without subclassing — the object only needs to expose the redis-py command
+    API used here: ``incrby``, ``expire``, ``get``, ``set``, ``sadd``, ``srem``,
+    ``scard``, ``rpush``, ``lrange``, ``delete``.  When a DSN string is supplied
+    the standard ``redis`` package is required (``pip install 'openviking[coordination]'``).
 
     A ``key_prefix`` namespaces all keys (multi-tenant / multi-cluster
     isolation). ``default_ttl_sec`` is applied to mutated keys so abandoned
@@ -212,20 +219,23 @@ class RedisCoordinator:
 
     def __init__(
         self,
-        dsn: str,
+        dsn_or_client: "str | object",
         *,
         key_prefix: str = "ov:coord:",
         default_ttl_sec: int = 3600,
     ) -> None:
-        try:
-            import redis  # noqa: PLC0415  (lazy: optional dependency)
-        except ImportError as exc:  # pragma: no cover - import guard
-            raise RuntimeError(
-                "storage.coordination.backend='redis' requires the 'redis' package. "
-                "Install with: pip install 'openviking[coordination]'"
-            ) from exc
-
-        self._client = redis.Redis.from_url(dsn, decode_responses=True)
+        if isinstance(dsn_or_client, str):
+            try:
+                import redis  # noqa: PLC0415  (lazy: optional dependency)
+            except ImportError as exc:  # pragma: no cover - import guard
+                raise RuntimeError(
+                    "storage.coordination.backend='redis' requires the 'redis' package. "
+                    "Install with: pip install 'openviking[coordination]'"
+                ) from exc
+            self._client = redis.Redis.from_url(dsn_or_client, decode_responses=True)
+        else:
+            # Accept any duck-typed client that exposes the redis-py command API.
+            self._client = dsn_or_client
         self._prefix = key_prefix
         self.default_ttl_sec = default_ttl_sec
 

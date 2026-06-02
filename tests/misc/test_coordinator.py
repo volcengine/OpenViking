@@ -236,3 +236,48 @@ class TestRedisCoordinatorParity:
         assert redis_coord.set_if_absent("c", 60) is True
         redis_coord.delete("c")
         assert redis_coord.set_if_absent("c", 60) is True
+
+
+class TestRedisCoordinatorClientInjection:
+    """RedisCoordinator accepts a pre-built client object instead of a DSN string.
+
+    This lets callers use any Redis-compatible client (e.g. a proprietary SDK
+    such as credis.python) without subclassing RedisCoordinator.
+    """
+
+    def test_injected_client_is_used_directly(self):
+        import fakeredis
+
+        from openviking.service.coordinator import RedisCoordinator
+
+        client = fakeredis.FakeStrictRedis(decode_responses=True)
+        coord = RedisCoordinator(client, key_prefix="inj:", default_ttl_sec=0)
+        assert coord._client is client
+
+    def test_injected_client_ops_work(self):
+        import fakeredis
+
+        from openviking.service.coordinator import RedisCoordinator
+
+        client = fakeredis.FakeStrictRedis(decode_responses=True)
+        coord = RedisCoordinator(client, key_prefix="inj:", default_ttl_sec=0)
+
+        assert coord.incr("x") == 1
+        coord.sadd("s", "a")
+        assert coord.scard("s") == 1
+        assert coord.set_if_absent("c", 60) is True
+        assert coord.set_if_absent("c", 60) is False
+
+    def test_dsn_string_still_builds_client(self, monkeypatch):
+        import fakeredis
+
+        from openviking.service.coordinator import RedisCoordinator
+
+        server = fakeredis.FakeServer()
+
+        def _from_url(*_args, **_kwargs):
+            return fakeredis.FakeStrictRedis(server=server, decode_responses=True)
+
+        monkeypatch.setattr("redis.Redis.from_url", staticmethod(_from_url), raising=False)
+        coord = RedisCoordinator("redis://fake", key_prefix="dsn:", default_ttl_sec=0)
+        assert coord.incr("k") == 1
