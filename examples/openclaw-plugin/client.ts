@@ -362,8 +362,8 @@ export class OpenVikingClient {
     }
   }
 
-  async healthCheck(): Promise<void> {
-    await this.request<{ status: string }>("/health");
+  async healthCheck(agentId?: string, requestTimeoutMs?: number): Promise<void> {
+    await this.request<{ status: string }>("/health", {}, agentId, requestTimeoutMs);
   }
 
   private async getRuntimeIdentity(agentId?: string): Promise<RuntimeIdentity> {

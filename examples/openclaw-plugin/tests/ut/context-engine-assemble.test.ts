@@ -47,6 +47,7 @@ function makeEngine(
 ) {
   const logger = makeLogger();
   const client = {
+    healthCheck: vi.fn().mockResolvedValue(undefined),
     getSessionContext: vi.fn().mockResolvedValue(contextResult),
     find: vi.fn().mockResolvedValue({ memories: [], resources: [], total: 0 }),
     read: vi.fn().mockResolvedValue(""),
@@ -73,6 +74,7 @@ function makeEngine(
   return {
     engine,
     client: client as unknown as {
+      healthCheck: ReturnType<typeof vi.fn>;
       getSessionContext: ReturnType<typeof vi.fn>;
       find: ReturnType<typeof vi.fn>;
       read: ReturnType<typeof vi.fn>;
@@ -85,78 +87,68 @@ function makeEngine(
 
 describe("context-engine assemble()", () => {
   it("prepends auto-recall to the latest user message during transformContext", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({ status: "ok" }),
-      }),
-    );
-    try {
-      const { engine, client } = makeEngine(
-        {
-          latest_archive_overview: "This OV context must not be rebuilt during transformContext.",
-          pre_archive_abstracts: [],
-          messages: [
-            {
-              id: "stored-current-user",
-              role: "user",
-              created_at: "2026-04-30T00:00:00Z",
-              parts: [{ type: "text", text: "stale stored prompt" }],
-            },
-          ],
-          estimatedTokens: 12,
-          stats: makeStats(),
-        },
-        {
-          cfgOverrides: {
-            autoRecall: true,
-            recallPreferAbstract: true,
+    const { engine, client } = makeEngine(
+      {
+        latest_archive_overview: "This OV context must not be rebuilt during transformContext.",
+        pre_archive_abstracts: [],
+        messages: [
+          {
+            id: "stored-current-user",
+            role: "user",
+            created_at: "2026-04-30T00:00:00Z",
+            parts: [{ type: "text", text: "stale stored prompt" }],
           },
+        ],
+        estimatedTokens: 12,
+        stats: makeStats(),
+      },
+      {
+        cfgOverrides: {
+          autoRecall: true,
+          recallPreferAbstract: true,
         },
-      );
-      client.find
-        .mockResolvedValueOnce({
-          memories: [
-            {
-              uri: "viking://user/default/memories/rust-pref",
-              level: 2,
-              category: "preferences",
-              abstract: "User prefers Rust for backend tasks.",
-              score: 0.93,
-            },
-          ],
-          total: 1,
-        })
-        .mockResolvedValueOnce({ memories: [], total: 0 });
+      },
+    );
+    client.find
+      .mockResolvedValueOnce({
+        memories: [
+          {
+            uri: "viking://user/default/memories/rust-pref",
+            level: 2,
+            category: "preferences",
+            abstract: "User prefers Rust for backend tasks.",
+            score: 0.93,
+          },
+        ],
+        total: 1,
+      })
+      .mockResolvedValueOnce({ memories: [], total: 0 });
 
-      const sourceMessages = [
-        { role: "user", content: "[Session History Summary]\nOlder archive summary." },
-        { role: "assistant", content: [{ type: "text", text: "Previous answer." }] },
-        { role: "user", content: "what backend language should we use?" },
-      ];
+    const sourceMessages = [
+      { role: "user", content: "[Session History Summary]\nOlder archive summary." },
+      { role: "assistant", content: [{ type: "text", text: "Previous answer." }] },
+      { role: "user", content: "what backend language should we use?" },
+    ];
 
-      const result = await engine.assemble({
-        sessionId: "session-transform",
-        messages: sourceMessages,
-      });
+    const result = await engine.assemble({
+      sessionId: "session-transform",
+      messages: sourceMessages,
+    });
 
-      expect(client.getSessionContext).not.toHaveBeenCalled();
-      expect(result.messages).toHaveLength(sourceMessages.length);
-      expect(result.messages[0]).toBe(sourceMessages[0]);
-      expect(result.messages[1]).toBe(sourceMessages[1]);
-      expect(result.messages[2]?.role).toBe("user");
-      expect(result.messages[2]?.content).toMatch(/^<relevant-memories>/);
-      expect(result.messages[2]?.content).toContain("Source: openviking-auto-recall");
-      expect(result.messages[2]?.content).toContain(
-        "<uri>viking://user/default/memories/rust-pref</uri>",
-      );
-      expect(result.messages[2]?.content).toContain("User prefers Rust for backend tasks.");
-      expect(result.messages[2]?.content).toContain("what backend language should we use?");
-      expect(result.systemPromptAddition).toBeUndefined();
-    } finally {
-      vi.unstubAllGlobals();
-    }
+    expect(client.healthCheck).toHaveBeenCalledWith("agent:session-transform", 500);
+    expect(client.getSessionContext).not.toHaveBeenCalled();
+    expect(result.messages).toHaveLength(sourceMessages.length);
+    expect(result.messages[0]).toBe(sourceMessages[0]);
+    expect(result.messages[1]).toBe(sourceMessages[1]);
+    expect(result.messages[2]?.role).toBe("user");
+    expect(result.messages[2]?.content).toMatch(/^<relevant-memories>/);
+    expect(result.messages[2]?.content).toContain("Source: openviking-auto-recall");
+    expect(result.messages[2]?.content).toContain(
+      "<uri>viking://user/default/memories/rust-pref</uri>",
+    );
+    expect(result.messages[2]?.content).toContain("User prefers Rust for backend tasks.");
+    expect(result.messages[2]?.content).toContain("what backend language should we use?");
+    expect(result.systemPromptAddition).toBeUndefined();
   });
 
   it("passes through transformContext messages when the latest message is not user", async () => {
