@@ -233,6 +233,11 @@ function extractVikingUris(text: string | undefined): string[] {
   }
 
   // Non-JSON tool results may contain XML/plain-text snippets with URI refs.
+  if (text.includes('<memory')) {
+    collectMemoryBlockUrisFromText(text, seen)
+    if (seen.size > 0) return [...seen]
+  }
+
   collectUrisFromText(text, seen)
   return [...seen]
 }
@@ -297,6 +302,16 @@ function collectUrisFromText(text: string, seen: Set<string>): void {
   const matches = text.match(VIKING_URI_RE) ?? []
   for (const match of matches) {
     const uri = cleanVikingUri(match)
+    if (uri) seen.add(uri)
+  }
+}
+
+function collectMemoryBlockUrisFromText(text: string, seen: Set<string>): void {
+  const memoryBlocks = text.match(/<memory\b[\s\S]*?<\/memory>/g) ?? []
+  for (const block of memoryBlocks) {
+    const uriMatch = block.match(/<uri>([\s\S]*?)<\/uri>/)
+    if (!uriMatch) continue
+    const uri = cleanVikingUri(uriMatch[1])
     if (uri) seen.add(uri)
   }
 }
