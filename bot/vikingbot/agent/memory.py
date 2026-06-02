@@ -194,8 +194,9 @@ class MemoryStore:
         """用当前任务 query 检索 experience 记忆，注入到 system prompt。"""
         client = None
         try:
+            ov_cfg = load_config().ov_server
             client = await VikingClient.create(agent_id=workspace_id)
-            experiences = await client.search_experiences(query, limit=5)
+            experiences = await client.search_experiences(query, limit=ov_cfg.exp_recall_limit)
             logger.info(
                 f"[READ_EXPERIENCE_MEMORY]: found {len(experiences)} experiences, query={query[:50]}"
             )
@@ -206,7 +207,7 @@ class MemoryStore:
             if not experiences:
                 return ""
             return await self._parse_viking_memory(
-                experiences, client, min_score=0.3, max_chars=2000
+                experiences, client, min_score=0.3, max_chars=ov_cfg.exp_recall_max_chars
             )
         except Exception as e:
             logger.error(f"[READ_EXPERIENCE_MEMORY]: error. {e}")

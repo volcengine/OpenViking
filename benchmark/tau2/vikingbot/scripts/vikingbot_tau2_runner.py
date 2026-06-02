@@ -149,7 +149,7 @@ async def _run_agent(
         ov_tools_enable=keep_default_tools,
         media=None,
         profile_user_list=[],
-        memory_users=agent_id,
+        agent_id=agent_id,
     )
     if system_prompt:
         messages.insert(1, {"role": "system", "content": system_prompt})
