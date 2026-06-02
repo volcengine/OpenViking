@@ -12,7 +12,7 @@
     },
     {
       "id": "cli",
-      "name": "Command Line Integration",
+      "name": "CLI Integration",
       "icon": "terminal",
       "summary": "Install, configure, and use OpenViking CLI directly from a terminal.",
       "detailPath": "https://docs.openviking.net/agents/en/cli.md"

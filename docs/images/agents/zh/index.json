@@ -12,7 +12,7 @@
     },
     {
       "id": "cli",
-      "name": "命令行接入",
+      "name": "CLI 接入",
       "icon": "terminal",
       "summary": "面向开发者在终端直接安装、配置和使用 OpenViking CLI",
       "detailPath": "https://docs.openviking.net/agents/zh/cli.md"
