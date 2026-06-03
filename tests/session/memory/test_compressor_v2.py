@@ -316,7 +316,7 @@ class TestCompressorV2:
         compressor = SessionCompressorV2(vikingdb=None)
         user = UserIdentifier.the_default_user()
         ctx = RequestContext(user=user, role=Role.ROOT)
-        messages = [Message.create_user("Current task")]
+        messages = [Message(id="msg-current-task", role="user", parts=[TextPart("Current task")])]
 
         class DummyOrchestrator:
             registry = object()
@@ -459,7 +459,7 @@ class TestCompressorV2:
         compressor = SessionCompressorV2(vikingdb=None)
         user = UserIdentifier.the_default_user()
         ctx = RequestContext(user=user, role=Role.ROOT)
-        messages = [Message.create_user("test")]
+        messages = [Message(id="msg-test", role="user", parts=[TextPart("test")])]
 
         dummy_registry = SimpleNamespace(initialize_memory_files=AsyncMock())
         dummy_orchestrator = SimpleNamespace(
@@ -495,7 +495,7 @@ class TestCompressorV2:
         compressor = SessionCompressorV2(vikingdb=None)
         user = UserIdentifier.the_default_user()
         ctx = RequestContext(user=user, role=Role.ROOT)
-        messages = [Message.create_user("test")]
+        messages = [Message(id="msg-test", role="user", parts=[TextPart("test")])]
 
         dummy_registry = SimpleNamespace(initialize_memory_files=AsyncMock())
         dummy_orchestrator = SimpleNamespace(
@@ -532,7 +532,7 @@ class TestCompressorV2:
         compressor = SessionCompressorV2(vikingdb=None)
         user = UserIdentifier.the_default_user()
         ctx = RequestContext(user=user, role=Role.ROOT)
-        messages = [Message.create_user("test")]
+        messages = [Message(id="msg-test", role="user", parts=[TextPart("test")])]
 
         class FixedSchema:
             directory = "viking://user/{{ user_space }}/memories"
@@ -606,7 +606,7 @@ class TestCompressorV2:
         compressor = SessionCompressorV2(vikingdb=None)
         user = UserIdentifier.the_default_user()
         ctx = RequestContext(user=user, role=Role.ROOT)
-        messages = [Message.create_user("test")]
+        messages = [Message(id="msg-test", role="user", parts=[TextPart("test")])]
         events: List[str] = []
 
         class FakeVikingFS:

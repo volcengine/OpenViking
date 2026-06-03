@@ -12,7 +12,7 @@ import pytest
 from fastapi import FastAPI
 from starlette.requests import Request
 
-from openviking.message import Message
+from openviking.message import Message, TextPart
 from openviking.server.api_keys import APIKeyManager
 from openviking.server.app import create_app
 from openviking.server.config import ServerConfig, ToolOutputExternalizationConfig
@@ -299,10 +299,17 @@ async def test_get_session_context_includes_incomplete_archive_messages(
     session = service.sessions.session(ctx, session_id)
     await session.load()
     pending_messages = [
-        Message.create_user("Pending user message", role_id=DEFAULT_USER.user_id),
-        Message.create_assistant(
-            "Pending assistant response",
-            role_id="assistant-default",
+        Message(
+            id="pending-user",
+            role="user",
+            parts=[TextPart("Pending user message")],
+            peer_id=DEFAULT_USER.user_id,
+        ),
+        Message(
+            id="pending-assistant",
+            role="assistant",
+            parts=[TextPart("Pending assistant response")],
+            peer_id="assistant-default",
         ),
     ]
     await session._viking_fs.write_file(
