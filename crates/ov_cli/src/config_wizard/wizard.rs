@@ -4265,10 +4265,8 @@ mod tests {
 
     #[test]
     fn wordmark_uses_stable_teal_ansi256_fallback_when_truecolor_is_unavailable() {
-        colored::control::set_override(true);
         let rendered =
             styled_wordmark_line_for_color_level(wordmark_lines()[0], theme::ColorLevel::Ansi256);
-        colored::control::unset_override();
 
         assert!(rendered.contains("\u{1b}[1;38;5;"));
         assert!(!rendered.contains("38;2;"));
@@ -4277,14 +4275,12 @@ mod tests {
 
     #[test]
     fn logo_uses_stable_teal_ansi256_fallback_when_truecolor_is_unavailable() {
-        colored::control::set_override(true);
         let rendered = styled_logo_to_width_for_color_level(
             OV_LOGO_LINES[8],
             ov_logo_width(),
             8,
             theme::ColorLevel::Ansi256,
         );
-        colored::control::unset_override();
 
         assert!(rendered.contains("\u{1b}[1;38;5;"));
         assert!(!rendered.contains("38;2;"));
