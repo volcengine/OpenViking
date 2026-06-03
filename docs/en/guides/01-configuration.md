@@ -886,6 +886,9 @@ Storage configuration for context data, including file storage (RAGFS) and vecto
 
 RAGFS uses Rust binding mode by default, directly accessing the file system through the Rust implementation.
 
+> [!WARNING]
+> `storage.agfs` no longer supports the AGFS HTTP client mode, and the old HTTP client entry should not be configured anymore. AGFS / RAGFS filesystem access now happens only through the in-process Rust binding (`RAGFSBindingClient`). This does not affect the OpenViking server HTTP API, the `ov` CLI, or `AsyncHTTPClient` / `SyncHTTPClient` when they connect to an OpenViking server.
+
 ##### QueueFS Configuration
 
 | Parameter | Type | Description | Default |

@@ -3,7 +3,7 @@
 """
 VikingFS: OpenViking file system abstraction layer
 
-Encapsulates AGFSClient, providing file operation interface based on Viking URI.
+Encapsulates the AGFS binding client, providing file operation interface based on Viking URI.
 Responsibilities:
 - URI conversion (viking:// <-> /local/)
 - L0/L1 reading (.abstract.md, .overview.md)
@@ -862,13 +862,11 @@ class VikingFS:
 
             files_scanned_set.add(file_uri)
 
-            results.append(
-                {
-                    "line": match.get("line", match.get("line_number", 0)),
-                    "uri": file_uri,
-                    "content": match.get("content", ""),
-                }
-            )
+            results.append({
+                "line": match.get("line", match.get("line_number", 0)),
+                "uri": file_uri,
+                "content": match.get("content", ""),
+            })
 
             if node_limit and len(results) >= node_limit:
                 break
@@ -1036,13 +1034,11 @@ class VikingFS:
             lines = content.split("\n")
             for line_num, line in enumerate(lines, 1):
                 if compiled_pattern.search(line):
-                    matches.append(
-                        {
-                            "line": line_num,
-                            "uri": entry_uri,
-                            "content": line,
-                        }
-                    )
+                    matches.append({
+                        "line": line_num,
+                        "uri": entry_uri,
+                        "content": line,
+                    })
             return matches, 1
         except Exception as e:
             logger.debug(f"Failed to grep {entry_uri}: {e}")
@@ -1251,17 +1247,15 @@ class VikingFS:
         ):
             info = entry["info"]
             new_entry = dict(entry.get("extra", {}))
-            new_entry.update(
-                {
-                    "name": info["name"],
-                    "size": info["size"],
-                    "mode": info["mode"],
-                    "modTime": info["modTime"],
-                    "isDir": info["isDir"],
-                    "rel_path": entry["rel_path"],
-                    "uri": entry_uri,
-                }
-            )
+            new_entry.update({
+                "name": info["name"],
+                "size": info["size"],
+                "mode": info["mode"],
+                "modTime": info["modTime"],
+                "isDir": info["isDir"],
+                "rel_path": entry["rel_path"],
+                "uri": entry_uri,
+            })
             result.append(new_entry)
         return result
 
@@ -1287,15 +1281,13 @@ class VikingFS:
         ):
             info = entry["info"]
             is_dir = info["isDir"]
-            result.append(
-                {
-                    "uri": entry_uri,
-                    "size": 0 if is_dir else info["size"],
-                    "isDir": is_dir,
-                    "modTime": format_simplified(parse_iso_datetime(info["modTime"]), now),
-                    "rel_path": entry["rel_path"],
-                }
-            )
+            result.append({
+                "uri": entry_uri,
+                "size": 0 if is_dir else info["size"],
+                "isDir": is_dir,
+                "modTime": format_simplified(parse_iso_datetime(info["modTime"]), now),
+                "rel_path": entry["rel_path"],
+            })
 
         await self._batch_fetch_abstracts(result, abs_limit, ctx=ctx)
 

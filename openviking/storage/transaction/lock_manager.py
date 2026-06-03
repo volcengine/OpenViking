@@ -7,7 +7,7 @@ import json
 import time
 from typing import Any, Dict, List, Optional, Protocol
 
-from openviking.pyagfs import AGFSClient, AsyncAGFSClient
+from openviking.pyagfs import AGFSSyncClientProtocol, AsyncAGFSClient
 from openviking.storage.transaction.lock_handle import LockHandle
 from openviking.storage.transaction.path_lock import PathLockEngine
 from openviking.storage.transaction.redo_log import RedoLog
@@ -37,7 +37,7 @@ class LockManager:
 
     def __init__(
         self,
-        agfs: AGFSClient,
+        agfs: AGFSSyncClientProtocol,
         lock_timeout: float = 0.0,
         lock_expire: float = 300.0,
         redo_recovery_enabled: bool = True,
@@ -561,7 +561,7 @@ _lock_manager: Optional[LockManager] = None
 
 
 def init_lock_manager(
-    agfs: AGFSClient,
+    agfs: AGFSSyncClientProtocol,
     lock_timeout: float = 0.0,
     lock_expire: float = 300.0,
     redo_recovery_enabled: bool = True,

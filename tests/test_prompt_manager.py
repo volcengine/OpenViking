@@ -23,44 +23,40 @@ def _write_template(templates_dir: Path, content: str) -> None:
     template_path = templates_dir / "memory" / "profile.yaml"
     template_path.parent.mkdir(parents=True, exist_ok=True)
     template_path.write_text(
-        json.dumps(
-            {
-                "metadata": {
-                    "id": "memory.profile",
-                    "name": "Profile",
-                    "description": "Test template",
-                    "version": "1.0.0",
-                    "language": "en",
-                    "category": "memory",
-                },
-                "template": content,
-            }
-        ),
+        json.dumps({
+            "metadata": {
+                "id": "memory.profile",
+                "name": "Profile",
+                "description": "Test template",
+                "version": "1.0.0",
+                "language": "en",
+                "category": "memory",
+            },
+            "template": content,
+        }),
         encoding="utf-8",
     )
 
 
 def _write_config(config_path: Path, templates_dir: Path) -> None:
     config_path.write_text(
-        json.dumps(
-            {
-                "storage": {
-                    "workspace": str(config_path.parent / "workspace"),
-                    "agfs": {"backend": "local", "mode": "binding-client"},
-                    "vectordb": {"backend": "local"},
-                },
-                "embedding": {
-                    "dense": {
-                        "provider": "openai",
-                        "model": "text-embedding-3-small",
-                        "api_key": "test-key",
-                    }
-                },
-                "prompts": {
-                    "templates_dir": str(templates_dir),
-                },
-            }
-        ),
+        json.dumps({
+            "storage": {
+                "workspace": str(config_path.parent / "workspace"),
+                "agfs": {"backend": "local"},
+                "vectordb": {"backend": "local"},
+            },
+            "embedding": {
+                "dense": {
+                    "provider": "openai",
+                    "model": "text-embedding-3-small",
+                    "api_key": "test-key",
+                }
+            },
+            "prompts": {
+                "templates_dir": str(templates_dir),
+            },
+        }),
         encoding="utf-8",
     )
 
@@ -72,12 +68,10 @@ def teardown_function() -> None:
 def test_profile_memory_template_keeps_profile_minimal_and_migrates_preferences():
     template_path = PromptManager._get_bundled_templates_dir() / "memory" / "profile.yaml"
     schema = yaml.safe_load(template_path.read_text(encoding="utf-8"))
-    text = "\n".join(
-        [
-            schema["description"],
-            schema["fields"][0]["description"],
-        ]
-    )
+    text = "\n".join([
+        schema["description"],
+        schema["fields"][0]["description"],
+    ])
 
     assert "identity summary" in text
     assert "5-8" in text
@@ -94,13 +88,11 @@ def test_profile_memory_template_keeps_profile_minimal_and_migrates_preferences(
 def test_preferences_memory_template_limits_topics_and_splits_when_too_large():
     template_path = PromptManager._get_bundled_templates_dir() / "memory" / "preferences.yaml"
     schema = yaml.safe_load(template_path.read_text(encoding="utf-8"))
-    text = "\n".join(
-        [
-            schema["description"],
-            schema["fields"][1]["description"],
-            schema["fields"][2]["description"],
-        ]
-    )
+    text = "\n".join([
+        schema["description"],
+        schema["fields"][1]["description"],
+        schema["fields"][2]["description"],
+    ])
 
     assert "Complete but minimal" in text
     assert "3-8" in text
@@ -185,15 +177,13 @@ def test_memory_type_registry_loads_schemas_from_prompt_manager_resolved_templat
     memory_dir = resolved_templates_dir / "memory"
     memory_dir.mkdir(parents=True)
     (memory_dir / "custom.yaml").write_text(
-        json.dumps(
-            {
-                "memory_type": "custom_memory",
-                "description": "custom schema from resolved prompt root",
-                "directory": "viking://user/{{ user_space }}/memories/custom",
-                "filename_template": "custom.md",
-                "fields": [],
-            }
-        ),
+        json.dumps({
+            "memory_type": "custom_memory",
+            "description": "custom schema from resolved prompt root",
+            "directory": "viking://user/{{ user_space }}/memories/custom",
+            "filename_template": "custom.md",
+            "fields": [],
+        }),
         encoding="utf-8",
     )
 
@@ -223,27 +213,23 @@ def test_memory_type_registry_prefers_custom_memory_dir_over_prompt_manager_temp
     resolved_memory_dir.mkdir(parents=True)
     custom_memory_dir.mkdir(parents=True)
     (resolved_memory_dir / "prompt_root.yaml").write_text(
-        json.dumps(
-            {
-                "memory_type": "prompt_root_memory",
-                "description": "schema from prompt manager root",
-                "directory": "viking://user/{{ user_space }}/memories/prompt-root",
-                "filename_template": "prompt-root.md",
-                "fields": [],
-            }
-        ),
+        json.dumps({
+            "memory_type": "prompt_root_memory",
+            "description": "schema from prompt manager root",
+            "directory": "viking://user/{{ user_space }}/memories/prompt-root",
+            "filename_template": "prompt-root.md",
+            "fields": [],
+        }),
         encoding="utf-8",
     )
     (custom_memory_dir / "custom.yaml").write_text(
-        json.dumps(
-            {
-                "memory_type": "custom_memory",
-                "description": "schema from custom memory dir",
-                "directory": "viking://user/{{ user_space }}/memories/custom",
-                "filename_template": "custom.md",
-                "fields": [],
-            }
-        ),
+        json.dumps({
+            "memory_type": "custom_memory",
+            "description": "schema from custom memory dir",
+            "directory": "viking://user/{{ user_space }}/memories/custom",
+            "filename_template": "custom.md",
+            "fields": [],
+        }),
         encoding="utf-8",
     )
 
@@ -326,8 +312,10 @@ def test_context_provider_schema_directories_prefer_custom_memory_dir_over_promp
     )
     monkeypatch.setattr(
         "os.path.exists",
-        lambda path: path == str(custom_memory_dir)
-        or path == str(PromptManager._get_bundled_templates_dir() / "memory"),
+        lambda path: (
+            path == str(custom_memory_dir)
+            or path == str(PromptManager._get_bundled_templates_dir() / "memory")
+        ),
     )
 
     provider = SessionExtractContextProvider(messages=[])
