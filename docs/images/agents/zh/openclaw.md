@@ -5,10 +5,13 @@
 openclaw plugins install clawhub:@openviking/openclaw-plugin && openclaw openviking setup
 ```
 
-## 步骤 2：输入以下信息
-执行安装命令后会依次提示输入以下信息，可复制后粘贴到你的 Agent 终端
+## 步骤 2：复制 Base URL 和 API Key
+执行安装命令后会依次提示输入 Base URL 和 API Key，可复制后粘贴到你的 Agent 终端
 
-- Base URL: `https://api.vikingdb.cn-beijing.volces.com/openviking`
+- Base URL: 复制以下 Base URL 到你的 Agent 终端
+```text
+https://api.vikingdb.cn-beijing.volces.com/openviking
+```
 - API Key: 复制页面中展示的 API Key 到你的 Agent 终端
 
 ## 步骤 3：重启 OpenClaw
