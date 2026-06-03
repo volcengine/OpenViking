@@ -1,6 +1,5 @@
-# Trae MCP 接入
 
-# 一、适用场景
+## 一、适用场景
 
 使用 OpenViking 实现：
 
@@ -16,11 +15,9 @@
 
 ---
 
-# 二、前置准备：获取 API Key
+## 二、前置准备：获取 API Key
 
-所有 MCP 客户端的接入都依赖同一个 **Authorization Token**，即 OpenViking 控制台中的 API Key。请先按以下步骤获取并妥善保存。
-
-## 2\.1 操作路径
+所有 MCP 客户端的接入都依赖同一个 **Authorization Token**，即 OpenViking 控制台中的 API Key。请先按以下步骤获取并妥善保存：
 
 1. 在左侧菜单选择 **用户管理**
 
@@ -34,25 +31,25 @@
 
 ---
 
-# 三、Trae 接入指南
+## 三、Trae 接入指南
 
 **Trae** 是字节跳动推出的 AI IDE，原生支持通过 MCP 协议加载外部工具与上下文服务。以下为 OpenViking 的标准接入流程。
 
-## 3\.1 接入步骤
+### 3\.1 接入步骤
 
-### 步骤 1 · 打开设置
+#### 步骤 1：打开设置
 
 在 Trae 主界面右上角点击 **设置（齿轮图标）**，进入设置面板。
 
 ![打开 Trae 设置](https://docs.openviking.net/agents/image/trae/02-open-settings.jpg)
 
-### 步骤 2 · 进入 MCP 配置页
+#### 步骤 2：进入 MCP 配置页
 
 在左侧菜单中选择 **MCP**，进入 MCP Servers 管理页。
 
 ![进入 MCP 配置页](https://docs.openviking.net/agents/image/trae/03-mcp-settings.jpg)
 
-### 步骤 3 · 新增 MCP Server
+#### 步骤 3：新增 MCP Server
 
 点击右侧的 **\+ 添加** 按钮，在下拉菜单中选择 **手动配置**。
 
@@ -60,7 +57,7 @@
 
 ![选择手动配置](https://docs.openviking.net/agents/image/trae/05-manual-config.png)
 
-### 步骤 4 · 粘贴配置 JSON
+#### 步骤 4：粘贴配置 JSON
 
 在弹出的配置框中粘贴以下 JSON，并将 `Authorization` 替换为第二章中复制的 API Key：
 
@@ -81,13 +78,13 @@
 
 ![粘贴 MCP JSON 配置](https://docs.openviking.net/agents/image/trae/06-paste-mcp-json.jpg)
 
-### 步骤 5 · 确认并启用
+#### 步骤 5：确认并启用
 
 点击 **确认** 按钮，Trae 会自动建立 MCP 连接并加载工具列表。连接成功后，`ov\-mcp\-server` 将出现在已配置的 MCP Servers 列表中。配置完成后，可在 MCP 管理页看到 `ov\-mcp\-server` 已加载并启用，右侧开关呈绿色：
 
 ![确认并启用 MCP Server](https://docs.openviking.net/agents/image/trae/07-enable-server.jpg)
 
-### 步骤 6 · MCP 连通性检查
+#### 步骤 6：MCP 连通性检查
 
 接入后建议通过两个简单 query 快速验证 MCP 是否正常工作。在 Trae 对话框中依次输入：
 
@@ -103,7 +100,7 @@
 
 
 
-## 3\.2 配置参数说明
+### 3\.2 配置参数说明
 
 |字段|必填|说明|
 |---|---|---|
@@ -114,7 +111,7 @@
 
 ---
 
-# 四、常见问题（FAQ）
+## 四、常见问题（FAQ）
 
 |问题|解决建议|
 |---|---|
