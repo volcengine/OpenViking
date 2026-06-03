@@ -1797,6 +1797,11 @@ class VikingFS:
 
         return True
 
+    # Over-fetch multiplier for bounded tree traversal. When a node_limit is
+    # set, we push down node_limit * this factor as the raw-node limit to Rust,
+    # leaving headroom for ACL/internal-name filtering before re-fetching.
+    _TREE_OVERFETCH_FACTOR = 4
+
     async def _iter_visible_tree_entries(
         self,
         uri: str,
@@ -1807,30 +1812,62 @@ class VikingFS:
     ):
         """Shared generator: fetch raw TreeEntry list from Rust, yield (entry, uri) tuples.
 
-        node_limit is NOT passed to Rust — applied after Python-side filtering.
-        level_limit IS passed to Rust.
+        node_limit counts ACL-visible entries (see design §6.5), so the user's
+        node_limit cannot be pushed directly to Rust — doing so would truncate
+        before filtering and drop entries that should be visible.
+
+        To keep memory bounded without changing that semantic, we push down an
+        *amplified* raw-node limit (node_limit * _TREE_OVERFETCH_FACTOR). If ACL
+        filtering leaves fewer than node_limit visible entries while Rust still
+        returned a full page (i.e. more raw nodes may exist), we double the raw
+        limit and re-fetch. Because Rust truncates a deterministic sorted prefix,
+        this yields exactly the same result as an unbounded fetch, while avoiding
+        materializing the entire prefix in the common case.
+
+        When node_limit is None (full-tree callers), no limit is pushed down.
+        level_limit IS always passed to Rust.
         """
         path = self._uri_to_path(uri, ctx=ctx)
         real_ctx = self._ctx_or_default(ctx)
 
-        raw_entries = await self._async_agfs.tree_directory(
-            path,
-            show_hidden=show_all_hidden,
-            node_limit=None,
-            level_limit=level_limit,
-        )
+        if node_limit is None:
+            raw_limit: Optional[int] = None
+        else:
+            raw_limit = max(node_limit * self._TREE_OVERFETCH_FACTOR, node_limit)
 
-        visible_count = 0
-        for entry in raw_entries:
-            if node_limit is not None and visible_count >= node_limit:
-                break
+        while True:
+            raw_entries = await self._async_agfs.tree_directory(
+                path,
+                show_hidden=show_all_hidden,
+                node_limit=raw_limit,
+                level_limit=level_limit,
+            )
 
-            if not self._is_tree_entry_visible(entry, path, real_ctx):
+            visible: List[tuple] = []
+            for entry in raw_entries:
+                if node_limit is not None and len(visible) >= node_limit:
+                    break
+                if not self._is_tree_entry_visible(entry, path, real_ctx):
+                    continue
+                entry_uri = self._path_to_uri(entry["path"], ctx=ctx)
+                visible.append((entry, entry_uri))
+
+            # If we still lack enough visible entries but Rust returned a full
+            # page (raw_limit reached), more raw nodes may exist — re-fetch with
+            # a doubled limit. Otherwise Rust is exhausted and we yield as-is.
+            need_more = (
+                node_limit is not None
+                and len(visible) < node_limit
+                and raw_limit is not None
+                and len(raw_entries) >= raw_limit
+            )
+            if need_more:
+                raw_limit *= 2
                 continue
 
-            visible_count += 1
-            entry_uri = self._path_to_uri(entry["path"], ctx=ctx)
-            yield entry, entry_uri
+            for item in visible:
+                yield item
+            return
 
     # ========== URI Conversion ==========
 
