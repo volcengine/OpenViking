@@ -1,7 +1,5 @@
-## 步骤 1 选择 API Key
-复制页面中展示的 API Key 到你的 Agent 终端
 
-## 步骤 2 写入资源
+## 步骤 1： 写入资源
 参考 GitHub 提供的资源写入示例，自动填入 API Key 和域名
 
 ```python
@@ -60,7 +58,7 @@ result = post_json(
 print(json.dumps(result, ensure_ascii=False, indent=2))
 ```
 
-## 步骤 3 写入记忆
+## 步骤 2： 写入记忆
 参考 GitHub 提供的记忆写入示例，自动填入 API Key 和域名
 
 ```python

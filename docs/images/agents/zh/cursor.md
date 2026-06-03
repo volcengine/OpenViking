@@ -1,10 +1,9 @@
-# Cursor MCP 接入
 
-# 一、前置准备：获取 API Key
+## 一、前置准备：获取 API Key
 
 所有 MCP 客户端的接入都依赖同一个 **Authorization Token**，即 OpenViking 控制台中的 API Key。请先按以下步骤获取并妥善保存。
 
-## 1\.1 操作路径
+### 1\.1 操作路径
 
 1. 在左侧菜单选择 **用户管理**
 
@@ -18,19 +17,19 @@
 
 
 
-# 二、Cursor 接入指南
+## 二、接入 Cursor 指南
 
 以下为 OpenViking 标准接入 Cursor 的流程。
 
-## 2\.1 接入步骤
+### 2\.1 接入步骤
 
-### 步骤 1 · 打开设置
+#### 步骤 1：打开设置
 
 在 Cursor 主界面右上角点击 **设置（齿轮图标）**，进入设置面板
 
 ![打开 Cursor 设置](https://docs.openviking.net/agents/image/cursor/02-open-settings.png)
 
-### 步骤 2 · 新增 MCP Server
+#### 步骤 2：新增 MCP Server
 
 在左侧菜单中选择 **Tools \&amp; MCPs**，进入 MCP Servers 管理页。
 
@@ -44,7 +43,7 @@
 
 
 
-### 步骤 3 · 粘贴配置 JSON
+#### 步骤 3：粘贴配置 JSON
 
 在弹出的 **mcp\.json** 文件中粘贴以下 JSON，并将 `Authorization` 替换为第一章中复制的 API Key：
 
@@ -65,13 +64,13 @@
 
 ![粘贴 MCP JSON 配置](https://docs.openviking.net/agents/image/cursor/05-paste-mcp-json.jpg)
 
-### 步骤 4 · 确认并启用
+#### 步骤 4：确认并启用
 
 保存 mcp\.json 配置文件并关闭后，Cursor 会自动建立 MCP 连接并加载工具列表。连接成功后，**`ov\-mcp\-server`** 会出现在 **Installed MCP Servers** 列表中，同时会显示已启用的工具数量（图中的 “10 tools enabled”）。配置完成后，可直接看到 `ov\-mcp\-server` 条目旁的开关呈绿色开启状态，代表服务已正常加载并就绪：
 
 ![确认并启用 MCP Server](https://docs.openviking.net/agents/image/cursor/06-enable-server.png)
 
-### 步骤 5 · MCP 连通性检查
+#### 步骤 5：MCP 连通性检查
 
 接入后建议通过两个简单 query 快速验证 MCP 是否正常工作。在 Cursor 对话框中依次输入：
 
@@ -87,7 +86,7 @@
 
 
 
-## 2\.2 配置参数说明
+### 2\.2 配置参数说明
 
 |字段|必填|说明|
 |---|---|---|
@@ -98,7 +97,7 @@
 
 ---
 
-# 三、常见问题（FAQ）
+## 三、常见问题（FAQ）
 
 |问题|解决建议|
 |---|---|
