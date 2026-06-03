@@ -5,7 +5,8 @@ use unicode_width::UnicodeWidthStr;
 use crate::{
     config::{Config, display_config_home},
     config_wizard::{ConfigKind, ConfigStore},
-    error::Result,
+    error::{Error, Result},
+    error_classifier::looks_like_auth_error,
     i18n::{Language, copy},
     theme,
 };
@@ -154,8 +155,10 @@ pub(crate) fn render_unreachable_status(
     config: &Config,
     active_name: Option<&str>,
     saved_count: usize,
+    error: Option<&Error>,
 ) -> String {
     let language = Language::current();
+    let failure = StatusFailureKind::from_error(error);
     let kind = kind_label(ConfigKind::from_config(config), language);
     let active = active_name.unwrap_or_else(|| unknown(language));
     let mut lines = Vec::new();
@@ -179,7 +182,11 @@ pub(crate) fn render_unreachable_status(
     lines.push(section_title(copy(language, "System", "系统")));
     lines.push(detail_line_styled(
         copy(language, "Status", "状态"),
-        error_value(copy(language, "Unreachable", "无法连接")),
+        error_value(failure.status_label(language)),
+    ));
+    lines.push(detail_line_styled(
+        copy(language, "Issue", "问题"),
+        plain_value(failure.issue_label(language)),
     ));
     lines.push(detail_line_styled(
         copy(language, "Saved configs", "已保存配置"),
@@ -187,24 +194,99 @@ pub(crate) fn render_unreachable_status(
     ));
     lines.push(String::new());
     lines.push(section_title(copy(language, "What to try", "可以尝试")));
-    lines.push(action_line(
-        "ov config validate",
-        copy(
-            language,
-            "Check config, auth, and server reachability",
-            "检查配置、认证和服务器连接",
-        ),
-    ));
-    lines.push(action_line(
-        "ov config",
-        copy(language, "Edit or switch config", "编辑或切换配置"),
-    ));
-    lines.push(action_line(
-        "ov health",
-        copy(language, "Run a quick health check", "快速健康检查"),
-    ));
+    for (command, description) in failure.actions(language) {
+        lines.push(action_line(command, description));
+    }
 
     format!("{}\n", lines.join("\n"))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StatusFailureKind {
+    Authentication,
+    Api,
+    Connection,
+}
+
+impl StatusFailureKind {
+    fn from_error(error: Option<&Error>) -> Self {
+        match error {
+            Some(Error::Api(message)) if looks_like_auth_error(message) => Self::Authentication,
+            Some(Error::Api(_)) => Self::Api,
+            _ => Self::Connection,
+        }
+    }
+
+    fn status_label(self, language: Language) -> &'static str {
+        match self {
+            Self::Authentication => copy(language, "Authentication failed", "认证失败"),
+            Self::Api => copy(language, "Server error", "服务器错误"),
+            Self::Connection => copy(language, "Unreachable", "无法连接"),
+        }
+    }
+
+    fn issue_label(self, language: Language) -> &'static str {
+        match self {
+            Self::Authentication => copy(language, "API key rejected", "API Key 被拒绝"),
+            Self::Api => copy(
+                language,
+                "OpenViking returned an API error",
+                "OpenViking 返回 API 错误",
+            ),
+            Self::Connection => copy(language, "Cannot reach server", "无法连接服务器"),
+        }
+    }
+
+    fn actions(self, language: Language) -> Vec<(&'static str, &'static str)> {
+        match self {
+            Self::Authentication => vec![
+                (
+                    "ov config",
+                    copy(language, "Edit the active API key", "编辑当前 API Key"),
+                ),
+                (
+                    "ov config switch",
+                    copy(language, "Use another config", "切换到其他配置"),
+                ),
+                (
+                    "ov config validate",
+                    copy(language, "Validate after updating", "更新后验证"),
+                ),
+            ],
+            Self::Api => vec![
+                (
+                    "ov config validate",
+                    copy(language, "Check config and auth", "检查配置和认证"),
+                ),
+                (
+                    "ov status --verbose",
+                    copy(language, "Show backend error details", "显示后端错误详情"),
+                ),
+                (
+                    "ov health",
+                    copy(language, "Run a quick health check", "快速健康检查"),
+                ),
+            ],
+            Self::Connection => vec![
+                (
+                    "ov config validate",
+                    copy(
+                        language,
+                        "Check config, auth, and server reachability",
+                        "检查配置、认证和服务器连接",
+                    ),
+                ),
+                (
+                    "ov config",
+                    copy(language, "Edit or switch config", "编辑或切换配置"),
+                ),
+                (
+                    "ov health",
+                    copy(language, "Run a quick health check", "快速健康检查"),
+                ),
+            ],
+        }
+    }
 }
 
 fn status_title(language: Language) -> String {
@@ -798,6 +880,36 @@ mod tests {
         assert!(plain.contains("Active        local (Self-Managed)"));
         assert!(plain.contains("queue          healthy    64 pending, 9 running, 0 errors"));
         assert!(plain.contains("ov status --verbose       Show full component tables"));
+    }
+
+    #[test]
+    fn unreachable_status_distinguishes_auth_failures() {
+        let error = crate::error::Error::Api(
+            "[AuthenticationError] API key invalid. Request ID: abc".to_string(),
+        );
+        let rendered =
+            super::render_unreachable_status(&sample_config(), Some("local"), 2, Some(&error));
+        let rendered = strip_ansi(&rendered);
+
+        assert!(rendered.contains("Status        Authentication failed"));
+        assert!(rendered.contains("Issue         API key rejected"));
+        assert!(rendered.contains("ov config                 Edit the active API key"));
+        assert!(!rendered.contains("Request ID"));
+    }
+
+    #[test]
+    fn unreachable_status_keeps_connection_guidance_for_network_errors() {
+        let error = crate::error::Error::Network("connection refused".to_string());
+        let rendered =
+            super::render_unreachable_status(&sample_config(), Some("local"), 2, Some(&error));
+        let rendered = strip_ansi(&rendered);
+
+        assert!(rendered.contains("Status        Unreachable"));
+        assert!(rendered.contains("Issue         Cannot reach server"));
+        assert!(
+            rendered
+                .contains("ov config validate        Check config, auth, and server reachability")
+        );
     }
 
     fn strip_ansi(input: &str) -> String {

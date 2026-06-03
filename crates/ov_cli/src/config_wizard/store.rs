@@ -24,7 +24,7 @@ pub enum ConfigKind {
 impl ConfigKind {
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Self::VolcengineCloud => "Volcengine Cloud",
+            Self::VolcengineCloud => "VolcEngine Cloud",
             Self::SelfManaged => "Self-Managed",
         }
     }
@@ -50,6 +50,7 @@ pub struct ConfigDraft {
     pub kind: ConfigKind,
     pub url: String,
     pub api_key: Option<String>,
+    pub root_api_key: Option<String>,
     pub account: Option<String>,
     pub user: Option<String>,
 }
@@ -346,10 +347,11 @@ pub fn build_config(draft: &ConfigDraft) -> Result<Config> {
     match draft.kind {
         ConfigKind::VolcengineCloud => {
             let api_key = non_empty_option(draft.api_key.as_deref()).ok_or_else(|| {
-                Error::Config("Volcengine Cloud configs require an API key".to_string())
+                Error::Config("VolcEngine Cloud configs require an API key".to_string())
             })?;
             config.url = VOLCENGINE_CLOUD_URL.to_string();
             config.api_key = Some(api_key);
+            config.root_api_key = None;
             config.account = account;
             config.user = user;
         }
@@ -360,7 +362,9 @@ pub fn build_config(draft: &ConfigDraft) -> Result<Config> {
                     "Self-managed configs require a server URL".to_string(),
                 ));
             }
-            let api_key = non_empty_option(draft.api_key.as_deref());
+            let root_api_key = non_empty_option(draft.root_api_key.as_deref());
+            let api_key =
+                non_empty_option(draft.api_key.as_deref()).or_else(|| root_api_key.clone());
             if api_key.is_none() && self_managed_requires_api_key(&url) {
                 return Err(Error::Config(
                     "Remote self-managed configs require an API key".to_string(),
@@ -368,6 +372,7 @@ pub fn build_config(draft: &ConfigDraft) -> Result<Config> {
             }
             config.url = url.trim_end_matches('/').to_string();
             config.api_key = api_key;
+            config.root_api_key = root_api_key;
             config.account = account;
             config.user = user;
         }
@@ -507,12 +512,15 @@ fn should_run_authenticated_probe(
     require_api_key: bool,
     has_api_key: bool,
 ) -> bool {
-    require_api_key
-        || has_api_key
-        || matches!(
-            health.get("auth_mode").and_then(Value::as_str),
-            Some("api_key" | "trusted")
-        )
+    if require_api_key || has_api_key {
+        return true;
+    }
+
+    match health.get("auth_mode").and_then(Value::as_str) {
+        Some("dev") => false,
+        Some("api_key" | "trusted") | None => true,
+        Some(_) => false,
+    }
 }
 
 pub(crate) fn validation_error_copy(kind: ConfigKind, _error: &Error) -> String {
@@ -598,6 +606,11 @@ mod tests {
         config.url = url.to_string();
         config.api_key = api_key.map(ToString::to_string);
         config
+    }
+
+    #[test]
+    fn cloud_provider_label_uses_product_casing() {
+        assert_eq!(ConfigKind::VolcengineCloud.label(), "VolcEngine Cloud");
     }
 
     fn write_config(path: &Path, config: &Config) {
@@ -734,6 +747,7 @@ mod tests {
             kind: ConfigKind::VolcengineCloud,
             url: String::new(),
             api_key: None,
+            root_api_key: None,
             account: None,
             user: None,
         };
@@ -756,6 +770,7 @@ mod tests {
             kind: ConfigKind::SelfManaged,
             url: "http://127.0.0.1:1933".to_string(),
             api_key: None,
+            root_api_key: None,
             account: Some("default".to_string()),
             user: Some("default".to_string()),
         };
@@ -767,6 +782,7 @@ mod tests {
 
         let with_key = build_config(&ConfigDraft {
             api_key: Some("local-key".to_string()),
+            root_api_key: None,
             account: None,
             user: None,
             ..draft
@@ -784,6 +800,7 @@ mod tests {
             kind: ConfigKind::SelfManaged,
             url: "https://openviking.example.com".to_string(),
             api_key: None,
+            root_api_key: None,
             account: Some("default".to_string()),
             user: Some("default".to_string()),
         };
@@ -808,6 +825,7 @@ mod tests {
                 kind: ConfigKind::SelfManaged,
                 url: input.to_string(),
                 api_key: None,
+                root_api_key: None,
                 account: Some("default".to_string()),
                 user: Some("default".to_string()),
             };
@@ -844,6 +862,18 @@ mod tests {
         let error = validate_candidate_config(&config, false)
             .await
             .expect_err("bad self-managed API key should fail validation");
+
+        assert!(matches!(error, crate::error::Error::Api(_)));
+    }
+
+    #[tokio::test]
+    async fn local_empty_key_without_health_auth_mode_probes_status() {
+        let url = spawn_status_auth_probe_server().await;
+        let config = sample_config(&url, None);
+
+        let error = validate_candidate_config(&config, false)
+            .await
+            .expect_err("auth-required local server should reject empty API key");
 
         assert!(matches!(error, crate::error::Error::Api(_)));
     }
@@ -1013,6 +1043,37 @@ mod tests {
                             r#"{"error":{"code":"AuthenticationError","message":"invalid key"}}"#,
                         )
                     }
+                } else {
+                    http_response(404, r#"{"error":{"message":"not found"}}"#)
+                };
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    async fn spawn_status_auth_probe_server() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test server should bind");
+        let addr = listener.local_addr().expect("test server should have addr");
+        tokio::spawn(async move {
+            for _ in 0..2 {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let mut buffer = vec![0; 4096];
+                let Ok(read) = stream.read(&mut buffer).await else {
+                    return;
+                };
+                let request = String::from_utf8_lossy(&buffer[..read]);
+                let response = if request.starts_with("GET /health ") {
+                    http_response(200, r#"{"healthy":true}"#)
+                } else if request.starts_with("GET /api/v1/system/status ") {
+                    http_response(
+                        401,
+                        r#"{"error":{"code":"AuthenticationError","message":"missing key"}}"#,
+                    )
                 } else {
                     http_response(404, r#"{"error":{"message":"not found"}}"#)
                 };
