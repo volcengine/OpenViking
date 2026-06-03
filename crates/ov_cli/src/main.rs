@@ -2,6 +2,7 @@ mod base_client;
 mod client;
 mod commands;
 mod config;
+mod config_agent;
 mod config_command_ui;
 mod config_wizard;
 mod error;
@@ -682,10 +683,7 @@ enum Commands {
 impl Commands {
     /// Returns true if this is an admin command that supports --sudo
     fn is_admin_command(&self) -> bool {
-        match self {
-            Self::Admin { .. } | Self::System { .. } | Self::Reindex { .. } => true,
-            _ => false,
-        }
+        matches!(self, Self::Admin { .. } | Self::System { .. } | Self::Reindex { .. })
     }
 
     fn supports_upload_options(&self) -> bool {
@@ -1021,7 +1019,14 @@ impl Commands {
         !matches!(
             self,
             Commands::Config {
-                action: None | Some(ConfigCommands::Switch),
+                action: None
+                    | Some(
+                        ConfigCommands::Switch { .. }
+                            | ConfigCommands::Add { .. }
+                            | ConfigCommands::Edit(_)
+                            | ConfigCommands::Delete(_)
+                            | ConfigCommands::List,
+                    ),
             } | Commands::Version
         )
     }
@@ -1034,7 +1039,145 @@ enum ConfigCommands {
     /// Validate configuration file
     Validate,
     /// Switch between saved configs
-    Switch,
+    Switch {
+        /// Saved config name to activate. Omit to open the interactive selector.
+        name: Option<String>,
+    },
+    /// List saved configs
+    List,
+    /// Delete a saved config
+    Delete(ConfigDeleteArgs),
+    /// Add a saved config without opening the interactive wizard
+    Add {
+        #[command(subcommand)]
+        target: ConfigAddTarget,
+    },
+    /// Edit a saved config without opening the interactive wizard
+    Edit(ConfigEditArgs),
+}
+
+#[derive(Subcommand)]
+enum ConfigAddTarget {
+    /// Add a Volcengine Cloud config
+    Cloud(ConfigAddCloudArgs),
+    /// Add a self-managed config
+    SelfManaged(ConfigAddSelfManagedArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+struct ConfigAddCloudArgs {
+    /// Saved config name. Generated when omitted.
+    #[arg(long)]
+    name: Option<String>,
+    /// Read API key from stdin
+    #[arg(long, conflicts_with = "api_key_env")]
+    api_key_stdin: bool,
+    /// Read API key from an environment variable
+    #[arg(long, conflicts_with = "api_key_stdin")]
+    api_key_env: Option<String>,
+    /// Account identifier to send as X-OpenViking-Account
+    #[arg(long)]
+    account: Option<String>,
+    /// User identifier to send as X-OpenViking-User
+    #[arg(long)]
+    user: Option<String>,
+    /// Make the saved config active after validation
+    #[arg(long)]
+    activate: bool,
+    /// Replace an existing saved config
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+struct ConfigAddSelfManagedArgs {
+    /// Saved config name. Generated when omitted.
+    #[arg(long)]
+    name: Option<String>,
+    /// OpenViking server URL
+    #[arg(long)]
+    url: Option<String>,
+    /// Read API key from stdin
+    #[arg(long, conflicts_with_all = ["api_key_env", "root_api_key_stdin"])]
+    api_key_stdin: bool,
+    /// Read API key from an environment variable
+    #[arg(long, conflicts_with = "api_key_stdin")]
+    api_key_env: Option<String>,
+    /// Read root API key from stdin
+    #[arg(long, conflicts_with_all = ["root_api_key_env", "api_key_stdin"])]
+    root_api_key_stdin: bool,
+    /// Read root API key from an environment variable
+    #[arg(long, conflicts_with = "root_api_key_stdin")]
+    root_api_key_env: Option<String>,
+    /// Also use the root key for normal commands. Requires --account and --user.
+    #[arg(long)]
+    use_root_key_for_normal_commands: bool,
+    /// Account identifier to send as X-OpenViking-Account
+    #[arg(long)]
+    account: Option<String>,
+    /// User identifier to send as X-OpenViking-User
+    #[arg(long)]
+    user: Option<String>,
+    /// Make the saved config active after validation
+    #[arg(long)]
+    activate: bool,
+    /// Replace an existing saved config
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+struct ConfigEditArgs {
+    /// Saved config name to edit
+    name: String,
+    /// Rename the saved config
+    #[arg(long)]
+    new_name: Option<String>,
+    /// New server URL. Volcengine Cloud configs use a fixed URL.
+    #[arg(long)]
+    url: Option<String>,
+    /// Read replacement API key from stdin
+    #[arg(long, conflicts_with_all = ["api_key_env", "clear_api_key", "root_api_key_stdin"])]
+    api_key_stdin: bool,
+    /// Read replacement API key from an environment variable
+    #[arg(long, conflicts_with_all = ["api_key_stdin", "clear_api_key"])]
+    api_key_env: Option<String>,
+    /// Remove the API key
+    #[arg(long, conflicts_with_all = ["api_key_stdin", "api_key_env"])]
+    clear_api_key: bool,
+    /// Read replacement root API key from stdin
+    #[arg(long, conflicts_with_all = ["root_api_key_env", "clear_root_api_key", "api_key_stdin"])]
+    root_api_key_stdin: bool,
+    /// Read replacement root API key from an environment variable
+    #[arg(long, conflicts_with_all = ["root_api_key_stdin", "clear_root_api_key"])]
+    root_api_key_env: Option<String>,
+    /// Remove the root API key
+    #[arg(long, conflicts_with_all = ["root_api_key_stdin", "root_api_key_env"])]
+    clear_root_api_key: bool,
+    /// Also use the root key for normal commands. Requires --account and --user.
+    #[arg(long)]
+    use_root_key_for_normal_commands: bool,
+    /// Account identifier to send as X-OpenViking-Account
+    #[arg(long)]
+    account: Option<String>,
+    /// User identifier to send as X-OpenViking-User
+    #[arg(long)]
+    user: Option<String>,
+    /// Make the saved config active after validation
+    #[arg(long)]
+    activate: bool,
+    /// Replace an existing saved config when renaming
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+struct ConfigDeleteArgs {
+    /// Saved config name to delete
+    name: String,
+    /// Delete even when the saved file cannot be parsed
+    #[arg(long)]
+    force: bool,
 }
 
 fn find_command_index(args: &[OsString]) -> Option<usize> {
@@ -1088,14 +1231,13 @@ fn plain_help_misuse(args: &[OsString]) -> Option<PlainHelpMisuse> {
         if let Some(subcommand) = tokens.get(1).map(|token| canonical_plain_help_token(token)) {
             path.push(subcommand.to_string());
         }
-        if command == "task" && path.get(1).is_some_and(|token| token == "watch") {
-            if let Some(watch_subcommand) =
+        if command == "task"
+            && path.get(1).is_some_and(|token| token == "watch")
+            && let Some(watch_subcommand) =
                 tokens.get(2).map(|token| canonical_plain_help_token(token))
-            {
-                if watch_subcommand != "help" {
-                    path.push(watch_subcommand.to_string());
-                }
-            }
+            && watch_subcommand != "help"
+        {
+            path.push(watch_subcommand.to_string());
         }
         return Some(PlainHelpMisuse {
             help_command: prefixed_help_command(&path),
@@ -1246,7 +1388,7 @@ fn pre_parse_requires_cli_config_file(args: &[OsString]) -> bool {
     };
 
     match command {
-        "config" => matches!(tokens.get(1).map(String::as_str), Some("show" | "validate")),
+        "config" => config_command_requires_cli_config_file(&tokens),
         "language" | "version" => false,
         "task" => known_task_command_requires_config(&tokens),
         "admin" => tokens
@@ -1267,6 +1409,23 @@ fn pre_parse_requires_cli_config_file(args: &[OsString]) -> bool {
             .map(|token| is_observer_subcommand(token))
             .unwrap_or(false),
         _ => is_top_level_server_command(command),
+    }
+}
+
+fn config_command_requires_cli_config_file(tokens: &[String]) -> bool {
+    matches!(tokens.get(1).map(String::as_str), Some("show" | "validate"))
+}
+
+fn is_config_agent_command_request(args: &[OsString]) -> bool {
+    let tokens = command_tokens_for_config_gate(args);
+    if tokens.first().map(String::as_str) != Some("config") {
+        return false;
+    }
+
+    match tokens.get(1).map(String::as_str) {
+        Some("add" | "edit" | "delete" | "list") => true,
+        Some("switch") => tokens.get(2).is_some(),
+        _ => false,
     }
 }
 
@@ -1362,11 +1521,7 @@ fn known_task_command_requires_config(tokens: &[String]) -> bool {
 fn known_system_command_requires_config(tokens: &[String]) -> bool {
     match tokens.get(1).map(String::as_str) {
         Some("wait" | "status" | "health" | "consistency") => true,
-        Some("crypto") => match tokens.get(2).map(String::as_str) {
-            None => true,
-            Some("init-key") => true,
-            _ => false,
-        },
+        Some("crypto") => matches!(tokens.get(2).map(String::as_str), None | Some("init-key")),
         _ => false,
     }
 }
@@ -1559,7 +1714,7 @@ fn language_gate_action(
     has_saved_language: bool,
     is_interactive: bool,
 ) -> LanguageGateAction {
-    if has_saved_language || is_language_command_request(args) {
+    if has_saved_language || is_language_command_request(args) || is_config_agent_command_request(args) {
         LanguageGateAction::Continue
     } else if is_interactive {
         LanguageGateAction::Prompt
@@ -2174,9 +2329,10 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        Cli, CliContext, Commands, LanguageGateAction, PrivacyCommands, UploadCliOptions,
-        first_command_token, is_language_command_request, language_command_can_run_picker,
-        language_gate_action, language_required_message, legacy_upload_option_error,
+        Cli, CliContext, Commands, ConfigAddTarget, ConfigCommands, LanguageGateAction,
+        PrivacyCommands, UploadCliOptions, first_command_token, is_language_command_request,
+        language_command_can_run_picker, language_gate_action, language_required_message,
+        legacy_upload_option_error,
         plain_help_misuse, pre_parse_requires_cli_config_file, preprocess_privacy_args,
     };
     use crate::config::{Config, DEFAULT_SELF_MANAGED_URL};
@@ -2222,11 +2378,89 @@ mod tests {
         let setup = Cli::try_parse_from(["ov", "config"]).expect("bare config should parse");
         let switch =
             Cli::try_parse_from(["ov", "config", "switch"]).expect("config switch should parse");
+        let switch_named = Cli::try_parse_from(["ov", "config", "switch", "prod"])
+            .expect("named config switch should parse");
         let version = Cli::try_parse_from(["ov", "version"]).expect("version should parse");
 
         assert!(!setup.command.requires_cli_config_file());
         assert!(!switch.command.requires_cli_config_file());
+        assert!(!switch_named.command.requires_cli_config_file());
         assert!(!version.command.requires_cli_config_file());
+    }
+
+    #[test]
+    fn config_agent_commands_parse_without_secret_value_flags() {
+        let add_cloud = Cli::try_parse_from([
+            "ov",
+            "config",
+            "add",
+            "cloud",
+            "--name",
+            "prod",
+            "--api-key-stdin",
+            "--activate",
+        ])
+        .expect("cloud add should parse");
+        let Commands::Config {
+            action:
+                Some(ConfigCommands::Add {
+                    target: ConfigAddTarget::Cloud(cloud),
+                }),
+        } = add_cloud.command
+        else {
+            panic!("expected cloud add command");
+        };
+        assert_eq!(cloud.name.as_deref(), Some("prod"));
+        assert!(cloud.api_key_stdin);
+        assert!(cloud.activate);
+
+        let add_self_managed = Cli::try_parse_from([
+            "ov",
+            "config",
+            "add",
+            "self-managed",
+            "--url",
+            "https://ov.example.com",
+            "--api-key-env",
+            "OV_KEY",
+        ])
+        .expect("self-managed add should parse");
+        let Commands::Config {
+            action:
+                Some(ConfigCommands::Add {
+                    target: ConfigAddTarget::SelfManaged(self_managed),
+                }),
+        } = add_self_managed.command
+        else {
+            panic!("expected self-managed add command");
+        };
+        assert_eq!(self_managed.url.as_deref(), Some("https://ov.example.com"));
+        assert_eq!(self_managed.api_key_env.as_deref(), Some("OV_KEY"));
+
+        let edit = Cli::try_parse_from([
+            "ov",
+            "config",
+            "edit",
+            "prod",
+            "--clear-api-key",
+            "--activate",
+        ])
+        .expect("config edit should parse");
+        let Commands::Config {
+            action: Some(ConfigCommands::Edit(edit)),
+        } = edit.command
+        else {
+            panic!("expected edit command");
+        };
+        assert_eq!(edit.name, "prod");
+        assert!(edit.clear_api_key);
+        assert!(edit.activate);
+
+        assert!(
+            Cli::try_parse_from(["ov", "config", "add", "cloud", "--api-key", "secret"])
+                .is_err(),
+            "plain API key flag must stay rejected"
+        );
     }
 
     #[test]
@@ -2383,6 +2617,11 @@ mod tests {
             &["ov", "task", "nope"],
             &["ov", "config"],
             &["ov", "config", "switch"],
+            &["ov", "config", "switch", "prod"],
+            &["ov", "config", "list"],
+            &["ov", "config", "delete", "prod"],
+            &["ov", "config", "add", "cloud", "--api-key-stdin"],
+            &["ov", "config", "edit", "prod", "--activate"],
             &["ov", "config", "setup-cli"],
             &["ov", "version"],
             &["ov", "language", "en"],
@@ -2603,6 +2842,29 @@ mod tests {
         );
         assert_eq!(
             language_gate_action(&os_args(&["ov", "status"]), false, false),
+            LanguageGateAction::ExitNonInteractive
+        );
+    }
+
+    #[test]
+    fn language_gate_allows_config_agent_commands_without_saved_language() {
+        for args in [
+            &["ov", "config", "add", "cloud", "--api-key-stdin"][..],
+            &["ov", "config", "add", "self-managed"],
+            &["ov", "config", "edit", "prod", "--activate"],
+            &["ov", "config", "delete", "prod"],
+            &["ov", "config", "list"],
+            &["ov", "config", "switch", "prod"],
+        ] {
+            assert_eq!(
+                language_gate_action(&os_args(args), false, false),
+                LanguageGateAction::Continue,
+                "{args:?} should bypass first-run language selection"
+            );
+        }
+
+        assert_eq!(
+            language_gate_action(&os_args(&["ov", "config"]), false, false),
             LanguageGateAction::ExitNonInteractive
         );
     }

@@ -44,6 +44,12 @@ pub(crate) enum ApiKeyRole {
     Regular,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IdentityField {
+    Account,
+    User,
+}
+
 #[derive(Debug, Clone)]
 pub struct ConfigDraft {
     pub name: String,
@@ -110,6 +116,15 @@ impl ConfigStore {
         Ok(Some(Config::from_file(
             &self.active_path.to_string_lossy(),
         )?))
+    }
+
+    pub(crate) fn load_saved_config(&self, name: &str) -> Result<Config> {
+        let path = self.saved_config_path(name)?;
+        if !path.exists() {
+            return Err(Error::Config(format!("Config '{name}' does not exist")));
+        }
+        Config::from_file(&path.to_string_lossy())
+            .map_err(|e| Error::Config(format!("Failed to read config '{name}': {e}")))
     }
 
     pub fn list_configs(&self) -> Result<Vec<ConfigEntry>> {
@@ -338,6 +353,53 @@ pub fn validate_config_name(name: &str) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn validate_account_id_value(value: &str) -> Result<()> {
+    validate_identity_value(value, IdentityField::Account)
+}
+
+pub(crate) fn validate_user_id_value(value: &str) -> Result<()> {
+    validate_identity_value(value, IdentityField::User)
+}
+
+pub(crate) fn validate_identity_value(value: &str, field: IdentityField) -> Result<()> {
+    let field_name = match field {
+        IdentityField::Account => "Account ID",
+        IdentityField::User => "User ID",
+    };
+    let identifier_name = match field {
+        IdentityField::Account => "account_id",
+        IdentityField::User => "user_id",
+    };
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(Error::Config(format!("{field_name} cannot be empty")));
+    }
+    if trimmed != value {
+        return Err(Error::Config(format!(
+            "{field_name} cannot start or end with whitespace"
+        )));
+    }
+    if matches!(field, IdentityField::Account) && trimmed.starts_with('_') {
+        return Err(Error::Config(
+            "Account ID cannot start with '_'".to_string(),
+        ));
+    }
+    if !trimmed
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | '@'))
+    {
+        return Err(Error::Config(format!(
+            "{field_name} can only contain letters, numbers, '_', '-', '.', and '@'"
+        )));
+    }
+    if trimmed.matches('@').count() > 1 {
+        return Err(Error::Config(format!(
+            "{identifier_name} must have at most one '@'"
+        )));
+    }
+    Ok(())
+}
+
 pub fn build_config(draft: &ConfigDraft) -> Result<Config> {
     validate_config_name(&draft.name)?;
 
@@ -401,15 +463,15 @@ pub(crate) fn normalize_self_managed_url(url: &str) -> String {
     if trimmed.eq_ignore_ascii_case("::1") || trimmed.eq_ignore_ascii_case("[::1]") {
         return format!("http://[::1]:{DEFAULT_SELF_MANAGED_PORT}");
     }
-    if let Some(port) = trimmed.strip_prefix("[::1]:") {
-        if !port.trim().is_empty() {
-            return format!("http://[::1]:{port}");
-        }
+    if let Some(port) = trimmed.strip_prefix("[::1]:")
+        && !port.trim().is_empty()
+    {
+        return format!("http://[::1]:{port}");
     }
-    if let Some(port) = trimmed.strip_prefix("::1:") {
-        if !port.trim().is_empty() {
-            return format!("http://[::1]:{port}");
-        }
+    if let Some(port) = trimmed.strip_prefix("::1:")
+        && !port.trim().is_empty()
+    {
+        return format!("http://[::1]:{port}");
     }
 
     if Url::parse(trimmed).is_ok() {
@@ -502,9 +564,30 @@ pub(crate) async fn validate_candidate_config_with_role(
 async fn detect_api_key_role(client: &BaseClient) -> Result<ApiKeyRole> {
     match client.get::<Value>("/api/v1/admin/accounts", &[]).await {
         Ok(_) => Ok(ApiKeyRole::Root),
+        Err(Error::Api(message)) if looks_like_server_side_role_probe_error(&message) => {
+            Err(Error::Api(message))
+        }
         Err(Error::Api(_)) => Ok(ApiKeyRole::Regular),
         Err(error) => Err(error),
     }
+}
+
+fn looks_like_server_side_role_probe_error(message: &str) -> bool {
+    matches!(
+        message.get(0..3),
+        Some("500" | "501" | "502" | "503" | "504" | "505" | "506" | "507" | "508" | "510" | "511")
+    ) || message.contains("[500")
+        || message.contains("[501")
+        || message.contains("[502")
+        || message.contains("[503")
+        || message.contains("[504")
+        || message.contains("[505")
+        || message.contains("[506")
+        || message.contains("[507")
+        || message.contains("[508")
+        || message.contains("[510")
+        || message.contains("[511")
+        || message.contains("HTTP error 5")
 }
 
 fn should_run_authenticated_probe(
@@ -568,7 +651,7 @@ fn write_file_atomically(path: &Path, content: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn configs_equivalent(left: &Config, right: &Config) -> Result<bool> {
+pub(crate) fn configs_equivalent(left: &Config, right: &Config) -> Result<bool> {
     Ok(serde_json::to_value(left)? == serde_json::to_value(right)?)
 }
 
@@ -855,6 +938,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn api_key_role_detection_fails_on_ambiguous_admin_probe_errors() {
+        let url = spawn_admin_probe_500_server("maybe-root").await;
+        let config = sample_config(&url, Some("maybe-root"));
+
+        let error = validate_candidate_config_with_role(&config, true)
+            .await
+            .expect_err("admin probe 500 should not be classified as regular");
+
+        assert!(matches!(error, crate::error::Error::Api(_)));
+    }
+
+    #[tokio::test]
     async fn self_managed_config_with_api_key_validates_authenticated_probe() {
         let url = spawn_auth_probe_server("good-key").await;
         let config = sample_config(&url, Some("bad-key"));
@@ -1135,10 +1230,50 @@ mod tests {
         format!("http://{addr}")
     }
 
+    async fn spawn_admin_probe_500_server(api_key: &'static str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test server should bind");
+        let addr = listener.local_addr().expect("test server should have addr");
+        tokio::spawn(async move {
+            for _ in 0..3 {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let mut buffer = vec![0; 4096];
+                let Ok(read) = stream.read(&mut buffer).await else {
+                    return;
+                };
+                let request = String::from_utf8_lossy(&buffer[..read]);
+                let lower_request = request.to_ascii_lowercase();
+                let api_header = format!("x-api-key: {api_key}");
+                let response = if request.starts_with("GET /health ") {
+                    http_response(200, r#"{"healthy":true,"auth_mode":"api_key"}"#)
+                } else if request.starts_with("GET /api/v1/system/status ") {
+                    if lower_request.contains(&api_header) {
+                        http_response(200, r#"{"status":"ok","result":{"initialized":true}}"#)
+                    } else {
+                        http_response(
+                            401,
+                            r#"{"error":{"code":"AuthenticationError","message":"invalid key"}}"#,
+                        )
+                    }
+                } else if request.starts_with("GET /api/v1/admin/accounts ") {
+                    http_response(500, r#"{}"#)
+                } else {
+                    http_response(404, r#"{"error":{"message":"not found"}}"#)
+                };
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+        format!("http://{addr}")
+    }
+
     fn http_response(status: u16, body: &str) -> String {
         let reason = match status {
             200 => "OK",
             401 => "Unauthorized",
+            500 => "Internal Server Error",
             404 => "Not Found",
             _ => "OK",
         };

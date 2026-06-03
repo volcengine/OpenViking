@@ -2,6 +2,7 @@ use crate::CliContext;
 use crate::PrivacyCommands;
 use crate::client;
 use crate::commands;
+use crate::config_agent;
 use crate::config::merge_csv_options;
 use crate::error::{Error, Result};
 use crate::theme;
@@ -570,7 +571,7 @@ use crate::output;
 
 // Config commands intentionally edit the persisted ovcli.conf files. Runtime
 // overrides carried in CliContext should not change what gets shown or saved.
-pub async fn handle_config(cmd: Option<ConfigCommands>, _ctx: CliContext) -> Result<()> {
+pub async fn handle_config(cmd: Option<ConfigCommands>, ctx: CliContext) -> Result<()> {
     match cmd {
         Some(ConfigCommands::Show) => {
             let config = Config::load()?;
@@ -606,8 +607,40 @@ pub async fn handle_config(cmd: Option<ConfigCommands>, _ctx: CliContext) -> Res
                 }
             }
         }
-        Some(ConfigCommands::Switch) => handle_config_switch().await,
+        Some(ConfigCommands::Switch { name: None }) => handle_config_switch().await,
+        Some(ConfigCommands::Switch { name: Some(name) }) => {
+            handle_config_agent_result(config_agent::switch(name, &ctx), &ctx)
+        }
+        Some(ConfigCommands::List) => handle_config_agent_result(config_agent::list(&ctx), &ctx),
+        Some(ConfigCommands::Delete(args)) => {
+            handle_config_agent_result(config_agent::delete(args, &ctx), &ctx)
+        }
+        Some(ConfigCommands::Add { target }) => {
+            let result = config_agent::add(target, &ctx).await;
+            handle_config_agent_result(result, &ctx)
+        }
+        Some(ConfigCommands::Edit(args)) => {
+            let result = config_agent::edit(args, &ctx).await;
+            handle_config_agent_result(result, &ctx)
+        }
         None => config_wizard::run_config_wizard().await,
+    }
+}
+
+fn handle_config_agent_result(
+    result: std::result::Result<config_agent::AgentOutput, config_agent::AgentError>,
+    ctx: &CliContext,
+) -> Result<()> {
+    match result {
+        Ok(output) => {
+            config_agent::print_success(output, ctx);
+            Ok(())
+        }
+        Err(error) => {
+            let exit_code = error.exit_code();
+            config_agent::print_error(&error, ctx);
+            std::process::exit(exit_code);
+        }
     }
 }
 
@@ -1321,7 +1354,7 @@ pub async fn handle_glob(
     node_limit: i32,
     ctx: CliContext,
 ) -> Result<()> {
-    let params = vec![
+    let params = [
         format!("--uri={}", uri),
         format!("-n {}", node_limit),
         format!("\"{}\"", pattern),
