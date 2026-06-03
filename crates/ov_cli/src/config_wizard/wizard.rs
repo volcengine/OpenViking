@@ -591,12 +591,7 @@ fn styled_wordmark_line_for_color_level(line: &str, color_level: theme::ColorLev
         if ch.is_whitespace() {
             rendered.push(ch);
         } else {
-            let rgb = header_display_rgb(
-                wordmark_gradient_color(column, width),
-                color_level,
-                column,
-                width,
-            );
+            let rgb = header_display_rgb(wordmark_gradient_color(column, width), color_level);
             rendered.push_str(&theme::style_rgb_for_level(
                 ch.to_string(),
                 rgb,
@@ -693,12 +688,7 @@ fn styled_tagline_for_color_level(text: &str, color_level: theme::ColorLevel) ->
         if ch.is_whitespace() {
             rendered.push(ch);
         } else {
-            let rgb = header_display_rgb(
-                tagline_texture_color(column, width),
-                color_level,
-                column,
-                width,
-            );
+            let rgb = header_display_rgb(tagline_texture_color(column, width), color_level);
             rendered.push_str(&theme::style_rgb_for_level(
                 ch.to_string(),
                 rgb,
@@ -1352,62 +1342,30 @@ fn styled_logo_to_width_for_color_level(
 ) -> String {
     let mut rendered = String::new();
     let visible = truncate_to_width(line, width);
-    let glyph_width = visible
-        .chars()
-        .filter(|ch| !ch.is_whitespace())
-        .count()
-        .max(1);
-    let mut glyph_column = 0usize;
 
     for (column, ch) in visible.chars().enumerate() {
         if ch.is_whitespace() {
             rendered.push(ch);
         } else {
-            let rgb = header_display_rgb(
-                logo_glass_color(ch, column, row, width.max(1)),
-                color_level,
-                glyph_column,
-                glyph_width,
-            );
+            let rgb =
+                header_display_rgb(logo_glass_color(ch, column, row, width.max(1)), color_level);
             rendered.push_str(&theme::style_rgb_for_level(
                 ch.to_string(),
                 rgb,
                 true,
                 color_level,
             ));
-            glyph_column += 1;
         }
     }
     rendered.push_str(&" ".repeat(width.saturating_sub(display_width(&visible))));
     rendered
 }
 
-fn header_display_rgb(
-    rgb: Rgb,
-    color_level: theme::ColorLevel,
-    column: usize,
-    width: usize,
-) -> Rgb {
-    match color_level {
-        theme::ColorLevel::TrueColor => rgb,
-        theme::ColorLevel::Ansi256 => stepped_teal_gradient_rgb(column, width),
-        _ => theme::active_theme().border.rgb_fallback(),
-    }
-}
-
-fn stepped_teal_gradient_rgb(column: usize, width: usize) -> Rgb {
-    let ratio = if width <= 1 {
-        0.0
+fn header_display_rgb(rgb: Rgb, color_level: theme::ColorLevel) -> Rgb {
+    if matches!(color_level, theme::ColorLevel::TrueColor) {
+        rgb
     } else {
-        column as f32 / (width - 1) as f32
-    };
-
-    if ratio < 0.34 {
-        Rgb(0, 175, 175)
-    } else if ratio < 0.68 {
-        Rgb(0, 135, 135)
-    } else {
-        Rgb(0, 95, 95)
+        theme::active_theme().border.rgb_fallback()
     }
 }
 
@@ -4306,7 +4264,7 @@ mod tests {
     }
 
     #[test]
-    fn wordmark_uses_stepped_teal_ansi256_gradient_when_truecolor_is_unavailable() {
+    fn wordmark_uses_stable_teal_ansi256_fallback_when_truecolor_is_unavailable() {
         colored::control::set_override(true);
         let rendered =
             styled_wordmark_line_for_color_level(wordmark_lines()[0], theme::ColorLevel::Ansi256);
@@ -4314,11 +4272,11 @@ mod tests {
 
         assert!(rendered.contains("\u{1b}[1;38;5;"));
         assert!(!rendered.contains("38;2;"));
-        assert_eq!(ansi256_indexes(&rendered), vec![37, 30, 23]);
+        assert_eq!(ansi256_indexes(&rendered), vec![30]);
     }
 
     #[test]
-    fn logo_uses_stepped_teal_ansi256_gradient_when_truecolor_is_unavailable() {
+    fn logo_uses_stable_teal_ansi256_fallback_when_truecolor_is_unavailable() {
         colored::control::set_override(true);
         let rendered = styled_logo_to_width_for_color_level(
             OV_LOGO_LINES[8],
@@ -4330,7 +4288,7 @@ mod tests {
 
         assert!(rendered.contains("\u{1b}[1;38;5;"));
         assert!(!rendered.contains("38;2;"));
-        assert_eq!(ansi256_indexes(&rendered), vec![37, 30, 23]);
+        assert_eq!(ansi256_indexes(&rendered), vec![30]);
     }
 
     #[test]
