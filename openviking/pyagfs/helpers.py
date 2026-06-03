@@ -6,9 +6,10 @@ This module provides high-level helper functions for common operations:
 - download: Download files/directories from AGFS to local filesystem
 """
 
+from collections.abc import Iterator
 from pathlib import Path
 
-from .protocols import AGFSSyncClientProtocol
+from .protocols import AGFSByteStream, AGFSSyncClientProtocol
 
 
 def cp(
@@ -127,15 +128,9 @@ def _copy_file(client: AGFSSyncClientProtocol, src: str, dst: str, stream: bool)
     _ensure_remote_parent_dir(client, dst)
 
     if stream:
-        # Stream the file content for memory efficiency
-        response = client.cat(src, stream=True)
-        # Read and write in chunks
-        chunk_size = 8192
-        chunks = []
-        for chunk in response.iter_content(chunk_size=chunk_size):
-            chunks.append(chunk)
-        data = b"".join(chunks)
-        client.write(dst, data)
+        # The binding client returns bytes or an iterator of bytes, not an
+        # HTTP response object with iter_content().
+        client.write(dst, _iter_file_bytes(client.cat(src, stream=True)))
     else:
         # Read entire file and write
         data = client.cat(src)
@@ -178,17 +173,7 @@ def _upload_file(
     _ensure_remote_parent_dir(client, remote_path)
 
     if stream:
-        # Read file in chunks for memory efficiency
-        chunk_size = 8192
-        chunks = []
-        with open(local_file, "rb") as f:
-            while True:
-                chunk = f.read(chunk_size)
-                if not chunk:
-                    break
-                chunks.append(chunk)
-        data = b"".join(chunks)
-        client.write(remote_path, data)
+        client.write(remote_path, _iter_local_file_bytes(local_file))
     else:
         # Read entire file
         with open(local_file, "rb") as f:
@@ -233,10 +218,8 @@ def _download_file(
     local_file.parent.mkdir(parents=True, exist_ok=True)
 
     if stream:
-        # Stream the file content
-        response = client.cat(remote_path, stream=True)
         with open(local_file, "wb") as f:
-            for chunk in response.iter_content(chunk_size=8192):
+            for chunk in _iter_file_bytes(client.cat(remote_path, stream=True)):
                 f.write(chunk)
     else:
         # Read entire file
@@ -304,3 +287,22 @@ def _ensure_remote_dir_recursive(client: AGFSSyncClientProtocol, path: str) -> N
     except Exception:
         # Might already exist due to race condition, ignore
         pass
+
+
+def _iter_file_bytes(data: bytes | AGFSByteStream) -> AGFSByteStream:
+    """Normalize AGFS read results to a byte iterator."""
+    if isinstance(data, bytes):
+        return iter((data,))
+    if isinstance(data, Iterator):
+        return data
+    return iter(data)
+
+
+def _iter_local_file_bytes(local_file: Path, chunk_size: int = 8192) -> AGFSByteStream:
+    """Yield local file content in chunks for streaming uploads."""
+    with open(local_file, "rb") as file_obj:
+        while True:
+            chunk = file_obj.read(chunk_size)
+            if not chunk:
+                break
+            yield chunk

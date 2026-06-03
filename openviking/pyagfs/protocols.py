@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import Any, BinaryIO, Dict, Protocol, runtime_checkable
+from typing import Any, BinaryIO, Dict, Literal, Protocol, overload, runtime_checkable
+
+AGFSByteStream = Iterator[bytes]
 
 
 @runtime_checkable
@@ -13,23 +15,45 @@ class AGFSSyncClientProtocol(Protocol):
     def ls(self, path: str = "/") -> list[Dict[str, Any]]:
         """List directory entries under the given AGFS path."""
 
+    @overload
     def read(
         self,
         path: str,
         offset: int = 0,
         size: int = -1,
-        stream: bool = False,
-    ) -> Any:
+        stream: Literal[False] = False,
+    ) -> bytes:
         """Read file content from AGFS."""
 
+    @overload
+    def read(
+        self,
+        path: str,
+        offset: int = 0,
+        size: int = -1,
+        stream: Literal[True] = True,
+    ) -> AGFSByteStream:
+        """Read file content from AGFS."""
+
+    @overload
     def cat(
         self,
         path: str,
         offset: int = 0,
         size: int = -1,
-        stream: bool = False,
-    ) -> Any:
-        """Read file content or a streaming response from AGFS."""
+        stream: Literal[False] = False,
+    ) -> bytes:
+        """Read file content from AGFS."""
+
+    @overload
+    def cat(
+        self,
+        path: str,
+        offset: int = 0,
+        size: int = -1,
+        stream: Literal[True] = True,
+    ) -> AGFSByteStream:
+        """Read file content or a byte stream from AGFS."""
 
     def write(
         self,
