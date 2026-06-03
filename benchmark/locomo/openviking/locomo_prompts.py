@@ -189,6 +189,52 @@ def _build_judge_prompt(evidence_context: str | None = None) -> str:
 JUDGE_PROMPT = _build_judge_prompt(evidence_context=None)
 
 
+_STRICT_JUDGE_TEMPLATE = """Label the generated answer as CORRECT or WRONG.
+{evidence_section}
+## Strict Rules
+
+1. **MATCH THE GOLD ANSWER**: Judge the generated answer against the gold answer. The generated answer must contain the key fact(s) requested by the question. Do not mark CORRECT merely because it discusses the same topic.
+
+2. **LISTS REQUIRE SUBSTANTIAL COVERAGE**: If the gold answer contains multiple items, the generated answer must include all or nearly all essential items. Missing a major item is WRONG. A single correct item from a multi-item answer is not enough.
+
+3. **QUESTION-SPECIFIC FACTS REQUIRED**: The answer must match the exact attribute, action, object, person, place, count, or time asked by the question. Mentioning the same person/entity is insufficient if the stated fact is different.
+
+4. **DATES AND TEMPORAL RELATIONS ARE STRICT**: For questions asking when, before/after, most recent, duration, or count over time, the generated answer must preserve the correct temporal relation. Exact dates should match unless the gold answer itself is vague. Do not allow broad date windows for specific-date answers.
+
+5. **COUNTS MUST MATCH**: For counting questions, the generated answer must give the correct count and must not include extra unsupported instances.
+
+6. **PARAPHRASES COUNT, BUT ONLY IF MEANING MATCHES**: Different wording is acceptable only when it preserves the same core meaning. Broader, narrower, or merely related statements are WRONG.
+
+7. **EXTRA DETAILS ARE ALLOWED ONLY IF THE CORE ANSWER IS CORRECT**: Additional details do not hurt if the requested answer is correct, but extra details cannot compensate for a missing or wrong core answer. If extra details contradict the gold answer, mark WRONG.
+
+8. **NO GOLD OVERRIDE**: Treat the gold answer as the grading target. Evidence may clarify wording or context, but do not replace the gold answer with a different answer unless the generated answer also matches the gold answer's key fact(s).
+
+## Mark CORRECT only if:
+- The generated answer directly answers the question, AND
+- It contains the essential gold answer fact(s), AND
+- Any dates, counts, entities, and temporal relations required by the question are correct.
+
+## Mark WRONG if:
+- The answer is missing a key gold fact.
+- The answer gives a different date, count, person, place, action, object, or temporal relation.
+- The answer is only topically related.
+- The answer is too vague to verify against the gold answer.
+
+## Question
+Question: {{question}}
+Gold answer: {{answer}}
+Generated answer: {{response}}
+
+Return JSON with "reasoning" (one sentence) and "label" (CORRECT or WRONG). Do NOT include both labels."""
+
+
+def _build_strict_judge_prompt(evidence_context: str | None = None) -> str:
+    evidence_section = (
+        _EVIDENCE_CHUNK.format(evidence_context=evidence_context) if evidence_context else ""
+    )
+    return _STRICT_JUDGE_TEMPLATE.format(evidence_section=evidence_section)
+
+
 def get_judge_prompt(
     category: int,
     question: str,
@@ -208,6 +254,29 @@ def get_judge_prompt_with_evidence(
 ) -> str:
     del category
     prompt = _build_judge_prompt(evidence_context=evidence_context)
+    return prompt.format(question=question, answer=answer, response=response)
+
+
+def get_strict_judge_prompt(
+    category: int,
+    question: str,
+    answer: str,
+    response: str,
+) -> str:
+    del category
+    prompt = _build_strict_judge_prompt(evidence_context=None)
+    return prompt.format(question=question, answer=answer, response=response)
+
+
+def get_strict_judge_prompt_with_evidence(
+    category: int,
+    question: str,
+    answer: str,
+    response: str,
+    evidence_context: str,
+) -> str:
+    del category
+    prompt = _build_strict_judge_prompt(evidence_context=evidence_context)
     return prompt.format(question=question, answer=answer, response=response)
 
 

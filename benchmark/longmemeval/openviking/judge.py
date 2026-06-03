@@ -10,10 +10,13 @@ from dotenv import load_dotenv
 from openai import AsyncAzureOpenAI, AsyncOpenAI
 
 try:
-    from benchmark.longmemeval.openviking.longmemeval_prompts import get_judge_prompt
+    from benchmark.longmemeval.openviking.longmemeval_prompts import (
+        get_judge_prompt,
+        get_strict_judge_prompt,
+    )
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from longmemeval_prompts import get_judge_prompt
+    from longmemeval_prompts import get_judge_prompt, get_strict_judge_prompt
 
 env_file = Path.home() / ".openviking_benchmark_env"
 load_dotenv(env_file)
@@ -59,8 +62,11 @@ async def grade_answer(
     question_type: str = "",
     question_id: str = "",
     question_date: str = "",
+    temperature: float | None = None,
+    strict_prompt: bool = False,
 ) -> tuple[bool, str]:
-    accuracy_prompt = get_judge_prompt(
+    prompt_builder = get_strict_judge_prompt if strict_prompt else get_judge_prompt
+    accuracy_prompt = prompt_builder(
         question_type=question_type,
         question_id=question_id,
         question=question,
@@ -70,12 +76,15 @@ async def grade_answer(
     )
 
     try:
-        resp = await llm_client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": accuracy_prompt}],
-            temperature=0,
-            timeout=60,
-        )
+        request_kwargs = {
+            "model": model,
+            "messages": [{"role": "user", "content": accuracy_prompt}],
+            "timeout": 60,
+        }
+        if temperature is not None:
+            request_kwargs["temperature"] = temperature
+
+        resp = await llm_client.chat.completions.create(**request_kwargs)
         content = resp.choices[0].message.content.strip()
         verdict = parse_judge_verdict(content)
         if verdict is not None:
@@ -157,12 +166,23 @@ async def main():
         help="Judge model name",
     )
     parser.add_argument(
+        "--temperature",
+        type=float,
+        default=None,
+        help="Optional judge temperature. Omitted by default for models that only support their default value.",
+    )
+    parser.add_argument(
         "--parallel", type=int, default=8, help="Parallel request count, default: 8"
     )
     parser.add_argument(
         "--force",
         action="store_true",
         help="Force re-grade all rows even if result already exists",
+    )
+    parser.add_argument(
+        "--strict-prompt",
+        action="store_true",
+        help="Use the strict LongMemEval judge prompt instead of the default lenient prompt",
     )
     args = parser.parse_args()
 
@@ -209,6 +229,8 @@ async def main():
                 question_type=row.get("question_type", ""),
                 question_id=row.get("sample_id", ""),
                 question_date=row.get("question_time", ""),
+                temperature=args.temperature,
+                strict_prompt=args.strict_prompt,
             )
             row["result"] = "CORRECT" if is_correct else "WRONG"
             row["reasoning"] = reasoning

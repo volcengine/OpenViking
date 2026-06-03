@@ -215,6 +215,47 @@ Model Response: {response}
 Think step-by-step in <judge_thinking> tags, then give your final verdict as exactly "yes" or "no" on a new line after the closing tag."""
 
 
+STRICT_JUDGE_PROMPT = """I will give you a LongMemEval question, the gold answer or rubric, and a model response. Decide whether the model response is correct.
+
+Use a strict benchmark grading standard. Judge the response against the gold answer, not against what might be plausible from memory.
+
+Rules:
+
+1. **Gold answer is the target**: The response must include the key fact(s), constraint(s), and intent in the gold answer. Do not mark a response correct just because it is related to the same topic.
+
+2. **Question type matters**:
+- For temporal-reasoning questions, dates, order, recency, durations, and relative-time calculations must be correct.
+- For multi-session and knowledge-update questions, the response must combine the relevant facts and use the latest/current fact when the gold answer depends on an update.
+- For single-session-user and single-session-assistant questions, the response must identify the exact requested user/assistant-provided fact.
+- For preference questions, the response must preserve positive and negative preferences; suggesting or including an anti-preference is wrong.
+
+3. **Lists and compound answers**: If the gold answer contains multiple required items, the response must include all or nearly all essential items. A single correct item from a multi-item answer is not enough.
+
+4. **Numbers and counts**: Counts, quantities, prices, scores, ages, and computed values must match the gold answer. Ranges or approximations are acceptable only when they clearly contain the gold value and do not change the conclusion.
+
+5. **Dates and durations**: Exact dates must match when the gold answer is specific. Do not allow broad date windows, off-by-one errors, or swapped event ordering if the question asks for a specific time or temporal relation.
+
+6. **Abstention**: If the gold answer is an abstention or says the information is unavailable, the response is correct only if it clearly abstains. If the gold answer contains a concrete fact, an abstention is wrong.
+
+7. **Paraphrases count only when meaning is preserved**: Different wording is fine, but broader, narrower, merely related, or partially contradictory statements are wrong.
+
+8. **Extra detail is allowed only after the core answer is correct**: Extra detail cannot compensate for missing the requested fact. If extra detail contradicts the gold answer, mark wrong.
+
+Mark "yes" only when the response directly answers the question and matches the essential gold answer. Mark "no" when a key fact is missing, wrong, too vague, or only topically related.
+
+Question Type: {question_type}
+Question ID: {question_id}
+Question Date: {question_date}
+
+Question: {question}
+
+Correct Answer: {answer}
+
+Model Response: {response}
+
+Think step-by-step in <judge_thinking> tags, then give your final verdict as exactly "yes" or "no" on a new line after the closing tag."""
+
+
 def _to_human_date(iso_str: str) -> str:
     try:
         from datetime import timezone as _tz
@@ -318,6 +359,24 @@ def get_judge_prompt(
     question_date: str = "",
 ) -> str:
     return JUDGE_PROMPT.format(
+        question_type=question_type or "",
+        question_id=question_id or "",
+        question=question,
+        answer=str(answer),
+        response=response,
+        question_date=question_date or "",
+    )
+
+
+def get_strict_judge_prompt(
+    question_type: str,
+    question_id: str,
+    question: str,
+    answer: str,
+    response: str,
+    question_date: str = "",
+) -> str:
+    return STRICT_JUDGE_PROMPT.format(
         question_type=question_type or "",
         question_id=question_id or "",
         question=question,

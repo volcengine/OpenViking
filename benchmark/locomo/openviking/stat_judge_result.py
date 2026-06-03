@@ -44,6 +44,7 @@ def main():
     total_time = 0.0
     total_prompt_tokens = 0
     total_memory_prompt_tokens = 0
+    total_memory_chars = 0
     total_completion_tokens = 0
     total_tokens = 0
     valid_rows = 0
@@ -58,6 +59,7 @@ def main():
     valid_only_total_time = 0.0
     valid_only_total_prompt_tokens = 0
     valid_only_total_memory_prompt_tokens = 0
+    valid_only_total_memory_chars = 0
     valid_only_total_completion_tokens = 0
     valid_only_total_tokens = 0
     valid_only_rows = 0
@@ -115,6 +117,7 @@ def main():
                     token_data = json.loads(token_usage)
                     total_prompt_tokens += token_data.get("prompt_tokens", 0)
                     total_memory_prompt_tokens += token_data.get("memory_prompt_tokens", 0)
+                    total_memory_chars += token_data.get("memory_chars", 0)
                     total_completion_tokens += token_data.get("completion_tokens", 0)
                     total_tokens += token_data.get("total_tokens", 0)
 
@@ -123,6 +126,7 @@ def main():
                         valid_only_total_memory_prompt_tokens += token_data.get(
                             "memory_prompt_tokens", 0
                         )
+                        valid_only_total_memory_chars += token_data.get("memory_chars", 0)
                         valid_only_total_completion_tokens += token_data.get("completion_tokens", 0)
                         valid_only_total_tokens += token_data.get("total_tokens", 0)
                 except json.JSONDecodeError:
@@ -145,6 +149,7 @@ def main():
     # 平均 token 消耗
     avg_prompt_tokens = total_prompt_tokens / valid_rows if valid_rows > 0 else 0.0
     avg_memory_prompt_tokens = total_memory_prompt_tokens / valid_rows if valid_rows > 0 else 0.0
+    avg_memory_chars = total_memory_chars / valid_rows if valid_rows > 0 else 0.0
     avg_completion_tokens = total_completion_tokens / valid_rows if valid_rows > 0 else 0.0
     avg_total_tokens = total_tokens / valid_rows if valid_rows > 0 else 0.0
 
@@ -153,6 +158,9 @@ def main():
     )
     valid_only_avg_memory_prompt_tokens = (
         valid_only_total_memory_prompt_tokens / valid_only_rows if valid_only_rows > 0 else 0.0
+    )
+    valid_only_avg_memory_chars = (
+        valid_only_total_memory_chars / valid_only_rows if valid_only_rows > 0 else 0.0
     )
     valid_only_avg_completion_tokens = (
         valid_only_total_completion_tokens / valid_only_rows if valid_only_rows > 0 else 0.0
@@ -173,10 +181,12 @@ def main():
         f"\nToken usage:",
         f"  Total prompt tokens: {total_prompt_tokens}",
         f"  Total memory prompt tokens: {total_memory_prompt_tokens}",
+        f"  Total memory chars: {total_memory_chars}",
         f"  Total completion tokens: {total_completion_tokens}",
         f"  Total tokens: {total_tokens}",
         f"  Avg prompt tokens: {avg_prompt_tokens:.2f}",
         f"  Avg memory prompt tokens: {avg_memory_prompt_tokens:.2f}",
+        f"  Avg memory chars: {avg_memory_chars:.2f}",
         f"  Avg completion tokens: {avg_completion_tokens:.2f}",
         f"  Avg total tokens: {avg_total_tokens:.2f}",
         "",
@@ -205,6 +215,7 @@ def main():
         and valid_only_total_iteration == total_iteration
         and valid_only_total_prompt_tokens == total_prompt_tokens
         and valid_only_total_memory_prompt_tokens == total_memory_prompt_tokens
+        and valid_only_total_memory_chars == total_memory_chars
         and valid_only_total_completion_tokens == total_completion_tokens
         and valid_only_total_tokens == total_tokens
     )
@@ -223,10 +234,12 @@ def main():
                 f"\nToken usage:",
                 f"  Total prompt tokens: {valid_only_total_prompt_tokens}",
                 f"  Total memory prompt tokens: {valid_only_total_memory_prompt_tokens}",
+                f"  Total memory chars: {valid_only_total_memory_chars}",
                 f"  Total completion tokens: {valid_only_total_completion_tokens}",
                 f"  Total tokens: {valid_only_total_tokens}",
                 f"  Avg prompt tokens: {valid_only_avg_prompt_tokens:.2f}",
                 f"  Avg memory prompt tokens: {valid_only_avg_memory_prompt_tokens:.2f}",
+                f"  Avg memory chars: {valid_only_avg_memory_chars:.2f}",
                 f"  Avg completion tokens: {valid_only_avg_completion_tokens:.2f}",
                 f"  Avg total tokens: {valid_only_avg_total_tokens:.2f}",
             ]

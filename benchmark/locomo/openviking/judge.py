@@ -1,35 +1,60 @@
 import argparse
+import asyncio
 import csv
 import json
 import os
-import asyncio
-from openai import AsyncOpenAI
-from dotenv import load_dotenv
-from pathlib import Path
 import sys
+from pathlib import Path
+
+from dotenv import load_dotenv
+from openai import AsyncAzureOpenAI, AsyncOpenAI
 
 try:
     from benchmark.locomo.openviking.locomo_prompts import (
         JUDGE_SYSTEM_PROMPT,
         get_judge_prompt,
         get_judge_prompt_with_evidence,
+        get_strict_judge_prompt,
+        get_strict_judge_prompt_with_evidence,
         preprocess_answer,
     )
 except ModuleNotFoundError:
-    import sys
-
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from locomo_prompts import (  # type: ignore
         JUDGE_SYSTEM_PROMPT,
         get_judge_prompt,
         get_judge_prompt_with_evidence,
+        get_strict_judge_prompt,
+        get_strict_judge_prompt_with_evidence,
         preprocess_answer,
     )
 
-# 加载本地环境变量文件
 env_file = Path.home() / ".openviking_benchmark_env"
 load_dotenv(env_file)
 csv.field_size_limit(sys.maxsize)
+
+DEFAULT_AZURE_API_VERSION = "2025-01-01-preview"
+
+
+def parse_judge_result(content: str) -> tuple[bool | None, str]:
+    stripped = content.strip()
+    if not stripped:
+        return None, "[PARSE ERROR] Empty response"
+
+    start_idx = stripped.find("{")
+    end_idx = stripped.rfind("}")
+    if start_idx != -1 and end_idx != -1:
+        try:
+            result = json.loads(stripped[start_idx : end_idx + 1].strip())
+            label = str(result.get("label", "")).strip().upper()
+            reasoning = str(result.get("reasoning", "")).strip()
+            if label == "CORRECT":
+                return True, reasoning or stripped
+            if label == "WRONG":
+                return False, reasoning or stripped
+        except json.JSONDecodeError:
+            pass
+    return None, f"[PARSE ERROR] Invalid response: {stripped}"
 
 
 def _parse_evidence_text(raw: str) -> str:
@@ -58,9 +83,26 @@ async def grade_answer(
     gold_answer: str,
     response: str,
     evidence_text: str = "",
+    temperature: float | None = None,
+    strict_prompt: bool = False,
 ) -> tuple[bool, str]:
     processed_answer = preprocess_answer(category, gold_answer)
-    if evidence_text:
+    if strict_prompt and evidence_text:
+        accuracy_prompt = get_strict_judge_prompt_with_evidence(
+            category,
+            question,
+            processed_answer,
+            response,
+            evidence_text,
+        )
+    elif strict_prompt:
+        accuracy_prompt = get_strict_judge_prompt(
+            category,
+            question,
+            processed_answer,
+            response,
+        )
+    elif evidence_text:
         accuracy_prompt = get_judge_prompt_with_evidence(
             category,
             question,
@@ -74,42 +116,37 @@ async def grade_answer(
             question,
             processed_answer,
             response,
-        )
+    )
 
     try:
-        resp = await llm_client.chat.completions.create(
-            model=model,
-            messages=[
+        request_kwargs = {
+            "model": model,
+            "messages": [
                 {"role": "system", "content": JUDGE_SYSTEM_PROMPT},
                 {"role": "user", "content": accuracy_prompt},
             ],
-            temperature=0,
-            timeout=60,
-        )
+            "timeout": 60,
+        }
+        if temperature is not None:
+            request_kwargs["temperature"] = temperature
+
+        resp = await llm_client.chat.completions.create(**request_kwargs)
         content = resp.choices[0].message.content.strip()
-        # 提取JSON内容
-        start_idx = content.find("{")
-        end_idx = content.rfind("}")
-        if start_idx != -1 and end_idx != -1:
-            json_str = content[start_idx : end_idx + 1].strip()
-            result = json.loads(json_str)
-            is_correct = result.get("label", "WRONG").strip().upper() == "CORRECT"
-            reasoning = result.get("reasoning", "")
-            return is_correct, reasoning
-        return False, f"[PARSE ERROR] Invalid response: {content}"
+        verdict, reasoning = parse_judge_result(content)
+        if verdict is not None:
+            return verdict, reasoning
+        return False, reasoning
     except Exception as e:
         return False, f"[API ERROR] {str(e)}"
 
 
 def load_answers(input_path: str) -> tuple[list[dict], list[str]]:
-    """加载待评分的回答，返回所有行和表头"""
     if not os.path.exists(input_path):
         raise FileNotFoundError(f"Input file not found: {input_path}")
 
     with open(input_path, "r", encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f)
         fieldnames = reader.fieldnames.copy()
-        # 新增reasoning列如果不存在
         if "reasoning" not in fieldnames:
             fieldnames.append("reasoning")
         rows = list(reader)
@@ -131,6 +168,22 @@ def get_ungraded_rows(rows: list[dict], force: bool = False) -> list[int]:
     return indexes
 
 
+def create_llm_client(
+    provider: str,
+    *,
+    base_url: str,
+    token: str,
+    api_version: str | None = None,
+):
+    if provider == "azure":
+        return AsyncAzureOpenAI(
+            api_key=token,
+            azure_endpoint=base_url,
+            api_version=api_version or DEFAULT_AZURE_API_VERSION,
+        )
+    return AsyncOpenAI(base_url=base_url, api_key=token)
+
+
 async def main():
     parser = argparse.ArgumentParser(
         description="VikingBot QA judge script, same logic as openclaw evaluation"
@@ -143,17 +196,34 @@ async def main():
     parser.add_argument(
         "--base-url",
         default="https://ark.cn-beijing.volces.com/api/v3",
-        help="Volcengine API base URL, default: https://ark.cn-beijing.volces.com/api/v3",
+        help="Judge model base URL",
+    )
+    parser.add_argument(
+        "--provider",
+        default=os.getenv("LOCOMO_JUDGE_PROVIDER", "openai"),
+        choices=("openai", "azure"),
+        help="Judge provider type, default: openai",
     )
     parser.add_argument(
         "--token",
         default=os.getenv("ARK_API_KEY", os.getenv("OPENAI_API_KEY", "")),
-        help="Volcengine API token, default from ARK_API_KEY or OPENAI_API_KEY env var",
+        help="Judge API token",
+    )
+    parser.add_argument(
+        "--api-version",
+        default=os.getenv("LOCOMO_JUDGE_API_VERSION"),
+        help=f"Azure API version, default: {DEFAULT_AZURE_API_VERSION} for provider=azure",
     )
     parser.add_argument(
         "--model",
         default="doubao-seed-2-0-pro-260215",
-        help="Judge model name, default: doubao-seed-2-0-pro-260215",
+        help="Judge model name",
+    )
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=None,
+        help="Optional judge temperature. Omitted by default for models that only support their default value.",
     )
     parser.add_argument(
         "--parallel", type=int, default=5, help="Parallel request count, default: 5"
@@ -163,21 +233,19 @@ async def main():
         action="store_true",
         help="Force re-grade all non-adversarial rows even if result already exists",
     )
+    parser.add_argument(
+        "--strict-prompt",
+        action="store_true",
+        help="Use the strict LoCoMo judge prompt instead of the default lenient prompt",
+    )
     args = parser.parse_args()
 
     if not args.token:
         print("Error: API token is required")
-        print("\n请通过以下方式设置 API key:")
-        print("  1. 创建 ~/.openviking_benchmark_env 文件，内容如下:")
-        print("     ARK_API_KEY=你的key")
-        print("  2. 或者通过 --token 参数传入")
-        print("  3. 或者设置环境变量: export ARK_API_KEY=你的key")
-        exit(1)
+        raise SystemExit(1)
 
-    # 加载数据
     rows, fieldnames = load_answers(args.input)
     total = len(rows)
-    # 筛选未评分的行
     ungraded = get_ungraded_rows(rows, force=args.force)
     print(f"Total answers: {total}, ungraded: {len(ungraded)}")
 
@@ -185,15 +253,16 @@ async def main():
         print("All answers already graded, exit")
         return
 
-    # 初始化OpenAI客户端
-    client = AsyncOpenAI(base_url=args.base_url, api_key=args.token)
-
-    # 并发处理
+    client = create_llm_client(
+        args.provider,
+        base_url=args.base_url,
+        token=args.token,
+        api_version=args.api_version,
+    )
     semaphore = asyncio.Semaphore(args.parallel)
-    file_lock = asyncio.Lock()  # 用于同步文件写入
+    file_lock = asyncio.Lock()
 
     async def save_results():
-        """保存当前所有结果到CSV文件，使用临时文件+原子替换避免文件损坏"""
         async with file_lock:
             temp_file = f"{args.input}.tmp"
             with open(temp_file, "w", encoding="utf-8", newline="") as f:
@@ -219,11 +288,12 @@ async def main():
                 gold,
                 response,
                 evidence_text,
+                temperature=args.temperature,
+                strict_prompt=args.strict_prompt,
             )
             row["result"] = "CORRECT" if is_correct else "WRONG"
             row["reasoning"] = reasoning
 
-            # 处理完一条就立即保存结果
             await save_results()
             print(f"Saved result for {idx + 1}/{total}: {row['result']}")
 
@@ -232,7 +302,6 @@ async def main():
     tasks = [process_row(idx) for idx in ungraded]
     await asyncio.gather(*tasks)
 
-    # 统计结果
     correct = sum(1 for row in rows if row.get("result") == "CORRECT")
     total_graded = sum(1 for row in rows if row.get("result"))
     accuracy = correct / total_graded if total_graded > 0 else 0.0

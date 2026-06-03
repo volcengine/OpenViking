@@ -238,6 +238,7 @@ def load_locomo_qa(
 
 DEFAULT_SINGLE_SEARCH_CONTEXT_LIMIT = 10
 DEFAULT_SINGLE_SEARCH_RERANK_LIMIT = 10
+DEFAULT_SINGLE_SEARCH_MAX_CONTEXT_CHARS = 4000
 SINGLE_SEARCH_EXCLUDED_BASENAMES = {".abstract.md", ".overview.md"}
 
 
@@ -361,6 +362,27 @@ def count_retrieved_memory_content_tokens(
         sum(len(memory_text) for memory_text in memory_texts),
         tokenizer,
     )
+
+
+def filter_contexts_by_char_budget(
+    contexts: list[dict[str, Any]],
+    max_chars: int = DEFAULT_SINGLE_SEARCH_MAX_CONTEXT_CHARS,
+) -> tuple[list[dict[str, Any]], list[str], int]:
+    if max_chars <= 0:
+        return contexts, [], sum(len(str(context.get("content", ""))) for context in contexts)
+
+    selected = []
+    skipped_uris = []
+    total_chars = 0
+    for context in contexts:
+        content = str(context.get("content", "") or "")
+        content_chars = len(content)
+        if total_chars + content_chars > max_chars:
+            skipped_uris.append(str(context.get("uri", "")))
+            continue
+        selected.append(context)
+        total_chars += content_chars
+    return selected, skipped_uris, total_chars
 
 
 def build_single_search_reranker() -> Any | None:
@@ -488,6 +510,7 @@ def run_vikingbot_chat(
     single_search_context_limit: int = DEFAULT_SINGLE_SEARCH_CONTEXT_LIMIT,
     single_search_rerank_limit: int = DEFAULT_SINGLE_SEARCH_RERANK_LIMIT,
     timeout: int = 300,
+    single_search_max_context_chars: int = DEFAULT_SINGLE_SEARCH_MAX_CONTEXT_CHARS,
 ) -> tuple[str, dict, float, int, list, list, str]:
     """执行单轮 search + rerank + answer，返回回答、token、耗时、迭代次数、工具和检索轨迹"""
     start_time = time.time()
@@ -527,6 +550,10 @@ def run_vikingbot_chat(
             reranker=reranker,
             limit=rerank_limit,
         )
+        contexts, skipped_context_uris, context_chars = filter_contexts_by_char_budget(
+            contexts,
+            max_chars=single_search_max_context_chars,
+        )
         context_uris = [context["uri"] for context in contexts]
 
         prompt = build_single_search_context_prompt(question, question_time, contexts)
@@ -559,6 +586,9 @@ def run_vikingbot_chat(
                     "rerank_limit": rerank_limit if rerank_enabled else 0,
                     "rerank_scores": rerank_scores,
                     "rerank_error": rerank_error,
+                    "max_context_chars": single_search_max_context_chars,
+                    "context_chars": context_chars,
+                    "skipped_context_uris_by_char_limit": skipped_context_uris,
                 }
             ],
             prompt,
@@ -717,6 +747,16 @@ def main():
         ),
     )
     parser.add_argument(
+        "--single-search-max-context-chars",
+        type=int,
+        default=DEFAULT_SINGLE_SEARCH_MAX_CONTEXT_CHARS,
+        help=(
+            "Maximum total memory content characters to concatenate into the answer prompt. "
+            "Files that would exceed the budget are skipped whole; <=0 disables the budget. "
+            f"default: {DEFAULT_SINGLE_SEARCH_MAX_CONTEXT_CHARS}"
+        ),
+    )
+    parser.add_argument(
         "--debug-print-model-input",
         action="store_true",
         help="Write full model input prompt and retrieved URI trace into the CSV.",
@@ -854,13 +894,14 @@ def main():
             retrieved_uris_by_iteration,
             model_input_prompt,
         ) = run_vikingbot_chat(
-            question,
-            question_time,
-            sample_id,
-            question_id,
-            args.openviking_url,
-            args.single_search_context_limit,
-            args.single_search_rerank_limit,
+            question=question,
+            question_time=question_time,
+            sample_id=sample_id,
+            question_id=question_id,
+            openviking_url=args.openviking_url,
+            single_search_context_limit=args.single_search_context_limit,
+            single_search_rerank_limit=args.single_search_rerank_limit,
+            single_search_max_context_chars=args.single_search_max_context_chars,
         )
 
         row = {

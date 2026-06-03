@@ -24,6 +24,7 @@ except ModuleNotFoundError:
 LONGMEMEVAL_TIME_FORMAT = "%Y/%m/%d (%a) %H:%M"
 DEFAULT_SINGLE_SEARCH_CONTEXT_LIMIT = 10
 DEFAULT_SINGLE_SEARCH_RERANK_LIMIT = 10
+DEFAULT_SINGLE_SEARCH_MAX_CONTEXT_CHARS = 4000
 SINGLE_SEARCH_EXCLUDED_BASENAMES = {".abstract.md", ".overview.md"}
 
 
@@ -227,6 +228,27 @@ def count_retrieved_memory_content_tokens(
     )
 
 
+def filter_contexts_by_char_budget(
+    contexts: list[dict[str, Any]],
+    max_chars: int = DEFAULT_SINGLE_SEARCH_MAX_CONTEXT_CHARS,
+) -> tuple[list[dict[str, Any]], list[str], int]:
+    if max_chars <= 0:
+        return contexts, [], sum(len(str(context.get("content", ""))) for context in contexts)
+
+    selected = []
+    skipped_uris = []
+    total_chars = 0
+    for context in contexts:
+        content = str(context.get("content", "") or "")
+        content_chars = len(content)
+        if total_chars + content_chars > max_chars:
+            skipped_uris.append(str(context.get("uri", "")))
+            continue
+        selected.append(context)
+        total_chars += content_chars
+    return selected, skipped_uris, total_chars
+
+
 def build_single_search_reranker() -> Any | None:
     from openviking.models.rerank import RerankClient
     from openviking_cli.utils.config import get_openviking_config
@@ -351,6 +373,7 @@ def run_single_search_context_answer(
     timeout: int = 300,
     single_search_context_limit: int = DEFAULT_SINGLE_SEARCH_CONTEXT_LIMIT,
     single_search_rerank_limit: int = DEFAULT_SINGLE_SEARCH_RERANK_LIMIT,
+    single_search_max_context_chars: int = DEFAULT_SINGLE_SEARCH_MAX_CONTEXT_CHARS,
     debug_print_model_input: bool = False,
 ) -> tuple[str, dict, float, int, list, list, str]:
     start_time = time.time()
@@ -395,6 +418,10 @@ def run_single_search_context_answer(
             reranker=reranker,
             limit=rerank_limit,
         )
+        contexts, skipped_context_uris, context_chars = filter_contexts_by_char_budget(
+            contexts,
+            max_chars=single_search_max_context_chars,
+        )
         context_uris = [context["uri"] for context in contexts]
 
         prompt = build_single_search_context_prompt(
@@ -419,6 +446,8 @@ def run_single_search_context_answer(
             print(f"memory_content_tokens: {memory_prompt_tokens}", flush=True)
             print(f"memory_content_chars: {memory_chars}", flush=True)
             print(f"memory_tokenizer: {memory_tokenizer}", flush=True)
+            print(f"max_context_chars: {single_search_max_context_chars}", flush=True)
+            print(f"context_chars: {context_chars}", flush=True)
             print(f"rerank_enabled: {rerank_enabled}", flush=True)
             if rerank_enabled:
                 print(f"rerank_limit: {rerank_limit}", flush=True)
@@ -428,6 +457,10 @@ def run_single_search_context_answer(
             print("context_uris:", flush=True)
             for uri in context_uris:
                 print(f"  {uri}", flush=True)
+            if skipped_context_uris:
+                print("skipped_context_uris_by_char_limit:", flush=True)
+                for uri in skipped_context_uris:
+                    print(f"  {uri}", flush=True)
             if rerank_scores:
                 print("rerank_scores:", flush=True)
                 for item in rerank_scores:
@@ -461,6 +494,9 @@ def run_single_search_context_answer(
                     "rerank_enabled": rerank_enabled,
                     "rerank_limit": rerank_limit if rerank_enabled else 0,
                     "rerank_scores": rerank_scores,
+                    "max_context_chars": single_search_max_context_chars,
+                    "context_chars": context_chars,
+                    "skipped_context_uris_by_char_limit": skipped_context_uris,
                 }
             ],
             prompt if debug_print_model_input else "",
@@ -557,6 +593,16 @@ def main():
             f"default: {DEFAULT_SINGLE_SEARCH_RERANK_LIMIT}"
         ),
     )
+    parser.add_argument(
+        "--single-search-max-context-chars",
+        type=int,
+        default=DEFAULT_SINGLE_SEARCH_MAX_CONTEXT_CHARS,
+        help=(
+            "Maximum total memory content characters to concatenate into the answer prompt. "
+            "Files that would exceed the budget are skipped whole; <=0 disables the budget. "
+            f"default: {DEFAULT_SINGLE_SEARCH_MAX_CONTEXT_CHARS}"
+        ),
+    )
     args = parser.parse_args()
 
     output_path = Path(args.output)
@@ -621,6 +667,7 @@ def main():
                 timeout=args.timeout,
                 single_search_context_limit=args.single_search_context_limit,
                 single_search_rerank_limit=args.single_search_rerank_limit,
+                single_search_max_context_chars=args.single_search_max_context_chars,
                 debug_print_model_input=args.debug_print_model_input,
             )
             row = {
