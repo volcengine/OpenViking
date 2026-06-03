@@ -1,5 +1,3 @@
-# MCP Integration
-
 ### Step 1: MCP configuration
 
 ```json

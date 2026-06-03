@@ -1,5 +1,3 @@
-# Claude Code Integration
-
 Add cross-project, cross-session long-term memory to [Claude Code](https://docs.claude.com/en/docs/claude-code/overview). Install once; every conversation automatically recalls and captures memory, and the model does not need to call any tools manually.
 
 Source: [examples/claude-code-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/claude-code-memory-plugin) | [Blog: motivation and demo](https://blog.openviking.ai/post/openviking-coding-agent/)
