@@ -222,7 +222,11 @@ fn redact_plaintext_api_keys(value: &mut Value) {
     match value {
         Value::Object(object) => {
             for (key, child) in object {
-                if key == "api_key" && !child.is_null() {
+                if key == "api_key"
+                    && child
+                        .as_str()
+                        .is_some_and(|api_key| !api_key.trim().is_empty())
+                {
                     *child = Value::String(SECRET_PLACEHOLDER.to_string());
                 } else {
                     redact_plaintext_api_keys(child);
@@ -317,6 +321,18 @@ mod tests {
                 {"user_id": "bob", "role": "user", "key_prefix": "prefix123"}
             ])
         );
+    }
+
+    #[test]
+    fn list_users_table_output_preserves_empty_api_keys() {
+        let response = json!([
+            {"user_id": "alice", "role": "admin", "api_key": ""},
+            {"user_id": "bob", "role": "user", "api_key": "   "}
+        ]);
+
+        let sanitized = list_users_response_for_output(response.clone(), OutputFormat::Table);
+
+        assert_eq!(sanitized, response);
     }
 
     #[test]
