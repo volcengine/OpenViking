@@ -242,6 +242,9 @@ class MarkdownParser(BaseParser):
                 doc_name=self._sanitize_for_path(doc_title),
             )
 
+            # Ingest local image files into VikingFS ./.images/ directory
+            await self._ingest_local_images(content, root_dir, base_dir)
+
             parse_time = time.time() - start_time
             logger.info(f"[MarkdownParser] Parse completed in {parse_time:.2f}s")
 
@@ -406,6 +409,160 @@ class MarkdownParser(BaseParser):
                 parts.append(current.strip())
 
         return parts if parts else [content]
+
+    async def _ingest_local_images(self, content: str, root_dir: str, base_dir: Optional[Path] = None) -> None:
+        """
+        Scan markdown content for local image references and copy them into VikingFS.
+
+        Args:
+            content: Markdown content to scan for image references
+            root_dir: Root directory URI in VikingFS where images will be stored
+            base_dir: Base directory for resolving relative paths
+        """
+        # Collect all image references
+        images = list(self._image_pattern.finditer(content))
+        if not images:
+            return
+
+        # Filter to local paths and resolve them
+        local_images = []
+        origin_images_links = []
+        seen_paths = set()
+
+        for match in images:
+            path_str = match.group(2)
+
+            # Skip remote URIs
+            if self._is_remote_uri(path_str):
+                continue
+
+            # Resolve relative path against base_dir
+            try:
+                path = Path(path_str)
+                resolved_path = None
+                
+                if path.is_absolute():
+                    # Already absolute path
+                    if path.exists():
+                        resolved_path = path
+                elif base_dir:
+                    # Try with base_dir first
+                    path_with_base = base_dir / path
+                    if path_with_base.exists():
+                        resolved_path = path_with_base.resolve()
+                    else:
+                        # Try with storage base_path as fallback
+                        from openviking_cli.utils.storage import get_storage
+                        storage = get_storage()
+                        path_with_cwd = storage.base_path / path
+                        if path_with_cwd.exists():
+                            resolved_path = path_with_cwd.resolve()
+                else:
+                    # No base_dir, try storage base_path
+                    from openviking_cli.utils.storage import get_storage
+                    storage = get_storage()
+                    path_with_cwd = storage.base_path / path
+                    if path_with_cwd.exists():
+                        resolved_path = path_with_cwd.resolve()
+                
+                if resolved_path is None:
+                    # Still not found, log warning but continue
+                    logger.warning(f"[MarkdownParser] Image file not found: {path_str}")
+                    continue
+            except Exception:
+                logger.warning(f"[MarkdownParser] Cannot resolve image path: {path_str}")
+                continue
+
+            # Skip duplicates
+            if resolved_path in seen_paths:
+                continue
+            seen_paths.add(resolved_path)
+            origin_images_links.append(path_str)
+            local_images.append(resolved_path)
+
+        if not local_images:
+            return
+
+        # Create images directory in VikingFS
+        viking_fs = self._get_viking_fs()
+        images_dir = f"{root_dir}/.images"
+        await viking_fs.mkdir(images_dir, exist_ok=True)
+
+        # Copy each local image to VikingFS with deduplicated filenames
+        used_names = set()
+        mappings: Dict[str, str] = {}  # original_path_str -> unique_filename
+        for origin_link, resolved_path in zip(origin_images_links, local_images):
+            try:
+                if not resolved_path.exists():
+                    logger.warning(f"[MarkdownParser] Image file not found: {resolved_path}")
+                    continue
+
+                # Read image bytes
+                image_bytes = resolved_path.read_bytes()
+
+                # Get filename and deduplicate
+                filename = resolved_path.name
+                unique_filename = self._deduplicate_filename(filename, used_names)
+                used_names.add(unique_filename)
+
+                # Write to VikingFS
+                viking_path = f"{images_dir}/{unique_filename}"
+                await viking_fs.write_file_bytes(viking_path, image_bytes)
+                logger.debug(f"[MarkdownParser] Copied image to VikingFS: {viking_path}")
+
+                # Record mapping for post-commit rewrite
+                mappings[origin_link] = unique_filename
+
+            except Exception as e:
+                logger.warning(f"[MarkdownParser] Failed to ingest image {resolved_path}: {e}")
+
+        # Write mapping file for rewrite_image_uris to use
+        if mappings:
+            import json
+            await viking_fs.write_file(
+                f"{images_dir}/.image_mappings.json",
+                json.dumps(mappings, ensure_ascii=False),
+            )
+
+    @staticmethod
+    def _is_remote_uri(path: str) -> bool:
+        """
+        Check if a path is a remote URI.
+
+        Args:
+            path: Path to check
+
+        Returns:
+            True if path starts with http://, https://, viking://, data:, or ftp://
+        """
+        remote_prefixes = ("http://", "https://", "viking://", "data:", "ftp://")
+        return path.startswith(remote_prefixes)
+
+    @staticmethod
+    def _deduplicate_filename(filename: str, used_names: set[str]) -> str:
+        """
+        Generate a unique filename by appending _1, _2, etc. when collision occurs.
+
+        Args:
+            filename: Original filename
+            used_names: Set of already used filenames
+
+        Returns:
+            Unique filename
+        """
+        if filename not in used_names:
+            return filename
+
+        path_obj = Path(filename)
+        stem = path_obj.stem
+        suffix = path_obj.suffix
+        counter = 1
+
+        while True:
+            new_filename = f"{stem}_{counter}{suffix}"
+            if new_filename not in used_names:
+                return new_filename
+            counter += 1
 
     def _sanitize_for_path(self, text: str, max_length: int = 50) -> str:
         safe = re.sub(

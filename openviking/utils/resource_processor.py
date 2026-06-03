@@ -10,6 +10,7 @@ as described in the OpenViking design document.
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+from openviking.parse.image_rewrite import rewrite_image_uris
 from openviking.parse.tree_builder import TreeBuilder
 from openviking.server.identity import RequestContext
 from openviking.storage import VikingDBManager
@@ -284,6 +285,7 @@ class ResourceProcessor:
                         )
                     if not target_preexisting:
                         await viking_fs.persist_temp_tree(temp_uri, root_uri, ctx=ctx)
+                        await rewrite_image_uris(root_uri, ctx=ctx, lock_handle=resource_lock.handle)
                         await viking_fs.delete_temp(parse_result.temp_dir_path, ctx=ctx)
                         temp_uri = root_uri
                         source_committed = True
@@ -348,6 +350,7 @@ class ResourceProcessor:
                 if not should_summarize and temp_uri and not source_committed:
                     viking_fs = get_viking_fs()
                     await viking_fs.persist_temp_tree(temp_uri, root_uri, ctx=ctx)
+                    await rewrite_image_uris(root_uri, ctx=ctx, lock_handle=resource_lock.handle)
                     await viking_fs.delete_temp(parse_result.temp_dir_path, ctx=ctx)
                 await resource_lock.close()
 
