@@ -580,6 +580,10 @@ fn print_header() {
 }
 
 fn styled_wordmark_line(_index: usize, line: &str) -> String {
+    styled_wordmark_line_for_color_level(line, theme::terminal_color_level())
+}
+
+fn styled_wordmark_line_for_color_level(line: &str, color_level: theme::ColorLevel) -> String {
     let width = wordmark_width().max(1);
     let mut rendered = String::new();
 
@@ -587,13 +591,13 @@ fn styled_wordmark_line(_index: usize, line: &str) -> String {
         if ch.is_whitespace() {
             rendered.push(ch);
         } else {
-            let Rgb(red, green, blue) = wordmark_gradient_color(column, width);
-            rendered.push_str(
-                &ch.to_string()
-                    .truecolor(red, green, blue)
-                    .bold()
-                    .to_string(),
-            );
+            let rgb = wordmark_gradient_color(column, width);
+            rendered.push_str(&theme::style_rgb_for_level(
+                ch.to_string(),
+                rgb,
+                true,
+                color_level,
+            ));
         }
     }
 
@@ -672,6 +676,10 @@ fn mix_rgb(base: Rgb, overlay: Rgb, amount: f32) -> Rgb {
 }
 
 fn styled_tagline(text: &str) -> String {
+    styled_tagline_for_color_level(text, theme::terminal_color_level())
+}
+
+fn styled_tagline_for_color_level(text: &str, color_level: theme::ColorLevel) -> String {
     let width = display_width(text).max(1);
     let mut rendered = String::new();
     let mut column = 0usize;
@@ -680,13 +688,13 @@ fn styled_tagline(text: &str) -> String {
         if ch.is_whitespace() {
             rendered.push(ch);
         } else {
-            let Rgb(red, green, blue) = tagline_texture_color(column, width);
-            rendered.push_str(
-                &ch.to_string()
-                    .truecolor(red, green, blue)
-                    .bold()
-                    .to_string(),
-            );
+            let rgb = tagline_texture_color(column, width);
+            rendered.push_str(&theme::style_rgb_for_level(
+                ch.to_string(),
+                rgb,
+                true,
+                color_level,
+            ));
         }
         column += UnicodeWidthChar::width(ch).unwrap_or(0);
     }
@@ -1270,22 +1278,21 @@ fn styled_box_title_line(title: &str, width: usize) -> String {
     let title_width = display_width(&visible_title);
     let left = inner_width.saturating_sub(title_width) / 2;
     let right = inner_width.saturating_sub(title_width + left);
-    let Rgb(red, green, blue) = theme::active_theme().border.rgb_fallback();
+    let border = theme::active_theme().border.rgb_fallback();
 
     format!(
         "{}{}{}{}{}",
-        "╭".truecolor(red, green, blue),
-        "─".repeat(left).truecolor(red, green, blue),
+        theme::style_rgb("╭", border, false),
+        theme::style_rgb("─".repeat(left), border, false),
         styled_tagline(&visible_title),
-        "─".repeat(right).truecolor(red, green, blue),
-        "╮".truecolor(red, green, blue)
+        theme::style_rgb("─".repeat(right), border, false),
+        theme::style_rgb("╮", border, false)
     )
 }
 
 fn styled_box_footer_line(title: &str, width: usize) -> String {
-    let Rgb(red, green, blue) = theme::active_theme().border.rgb_fallback();
-    let Rgb(version_red, version_green, version_blue) =
-        theme::active_theme().version.rgb_fallback();
+    let border = theme::active_theme().border.rgb_fallback();
+    let version = theme::active_theme().version.rgb_fallback();
     let inner_width = width.saturating_sub(2);
     let title = format!(" {title} ");
     let visible_title = truncate_to_width(&title, inner_width);
@@ -1295,13 +1302,11 @@ fn styled_box_footer_line(title: &str, width: usize) -> String {
 
     format!(
         "{}{}{}{}{}",
-        "╰".truecolor(red, green, blue),
-        "─".repeat(left).truecolor(red, green, blue),
-        visible_title
-            .truecolor(version_red, version_green, version_blue)
-            .bold(),
-        "─".repeat(right).truecolor(red, green, blue),
-        "╯".truecolor(red, green, blue)
+        theme::style_rgb("╰", border, false),
+        theme::style_rgb("─".repeat(left), border, false),
+        theme::style_rgb(&visible_title, version, true),
+        theme::style_rgb("─".repeat(right), border, false),
+        theme::style_rgb("╯", border, false)
     )
 }
 
@@ -1314,18 +1319,27 @@ fn styled_box_content_line(
     let logo_width = ov_logo_width();
     let gutter = 3usize;
     let right_width = width.saturating_sub(4 + logo_width + gutter);
-    let Rgb(red, green, blue) = theme::active_theme().border.rgb_fallback();
+    let border = theme::active_theme().border.rgb_fallback();
     format!(
         "{} {}{}{} {}",
-        "│".truecolor(red, green, blue),
+        theme::style_rgb("│", border, false),
         styled_logo_to_width(left, logo_width, logo_row),
         " ".repeat(gutter),
         styled_detail_to_width(detail, right_width),
-        "│".truecolor(red, green, blue)
+        theme::style_rgb("│", border, false)
     )
 }
 
 fn styled_logo_to_width(line: &str, width: usize, row: usize) -> String {
+    styled_logo_to_width_for_color_level(line, width, row, theme::terminal_color_level())
+}
+
+fn styled_logo_to_width_for_color_level(
+    line: &str,
+    width: usize,
+    row: usize,
+    color_level: theme::ColorLevel,
+) -> String {
     let mut rendered = String::new();
     let visible = truncate_to_width(line, width);
 
@@ -1333,13 +1347,13 @@ fn styled_logo_to_width(line: &str, width: usize, row: usize) -> String {
         if ch.is_whitespace() {
             rendered.push(ch);
         } else {
-            let Rgb(red, green, blue) = logo_glass_color(ch, column, row, width.max(1));
-            rendered.push_str(
-                &ch.to_string()
-                    .truecolor(red, green, blue)
-                    .bold()
-                    .to_string(),
-            );
+            let rgb = logo_glass_color(ch, column, row, width.max(1));
+            rendered.push_str(&theme::style_rgb_for_level(
+                ch.to_string(),
+                rgb,
+                true,
+                color_level,
+            ));
         }
     }
     rendered.push_str(&" ".repeat(width.saturating_sub(display_width(&visible))));
@@ -3808,10 +3822,11 @@ mod tests {
         self_managed_api_key_input_helper_lines, self_managed_key_mode_labels,
         self_managed_validation_failure_choices, should_confirm_detected_user_key,
         should_prompt_root_identity, status_box_lines, status_box_lines_with_runtime,
-        status_box_width, status_payload_is_healthy, tagline_ice_color_for_theme,
-        user_key_redirect_labels, validate_account_id_value, validate_config_name, validate_draft,
-        validate_user_id_value, volcengine_api_key_helper_lines, wizard_header_lines,
-        wordmark_gradient_color_for_theme, wordmark_lines, wordmark_width,
+        status_box_width, status_payload_is_healthy, styled_wordmark_line_for_color_level,
+        tagline_ice_color_for_theme, user_key_redirect_labels, validate_account_id_value,
+        validate_config_name, validate_draft, validate_user_id_value,
+        volcengine_api_key_helper_lines, wizard_header_lines, wordmark_gradient_color_for_theme,
+        wordmark_lines, wordmark_width,
     };
     use crate::config::Config;
     use crate::config_wizard::store::{
@@ -4237,6 +4252,20 @@ mod tests {
             middle.0 < palette.wordmark_start.0 && middle.1 < palette.wordmark_start.1,
             "wordmark should visibly darken across the line"
         );
+    }
+
+    #[test]
+    fn wordmark_uses_ansi256_fallback_without_black_or_gray_when_truecolor_is_unavailable() {
+        colored::control::set_override(true);
+        let rendered =
+            styled_wordmark_line_for_color_level(wordmark_lines()[0], theme::ColorLevel::Ansi256);
+        colored::control::unset_override();
+
+        assert!(rendered.contains("\u{1b}[1;38;5;"));
+        assert!(!rendered.contains("38;2;"));
+        assert!(!rendered.contains("38;5;0m"));
+        assert!(!rendered.contains("38;5;8m"));
+        assert!(!rendered.contains("38;5;232"));
     }
 
     #[test]
