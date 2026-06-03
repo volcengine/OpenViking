@@ -1066,7 +1066,7 @@ enum ConfigAddTarget {
 
 #[derive(Args, Debug, Clone)]
 struct ConfigAddCloudArgs {
-    /// Saved config name. Generated when omitted.
+    /// Saved config name. Agents should pass this for idempotent retries; generated when omitted.
     #[arg(long)]
     name: Option<String>,
     /// Read API key from stdin
@@ -1091,7 +1091,7 @@ struct ConfigAddCloudArgs {
 
 #[derive(Args, Debug, Clone)]
 struct ConfigAddSelfManagedArgs {
-    /// Saved config name. Generated when omitted.
+    /// Saved config name. Agents should pass this for idempotent retries; generated when omitted.
     #[arg(long)]
     name: Option<String>,
     /// OpenViking server URL

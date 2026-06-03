@@ -564,30 +564,30 @@ pub(crate) async fn validate_candidate_config_with_role(
 async fn detect_api_key_role(client: &BaseClient) -> Result<ApiKeyRole> {
     match client.get::<Value>("/api/v1/admin/accounts", &[]).await {
         Ok(_) => Ok(ApiKeyRole::Root),
-        Err(Error::Api(message)) if looks_like_server_side_role_probe_error(&message) => {
-            Err(Error::Api(message))
-        }
-        Err(Error::Api(_)) => Ok(ApiKeyRole::Regular),
+        Err(Error::Api {
+            status: Some(status),
+            ..
+        }) if admin_probe_regular_key_status(status) => Ok(ApiKeyRole::Regular),
+        Err(Error::Api { message, status }) => Err(Error::Api { message, status }),
         Err(error) => Err(error),
     }
 }
 
-fn looks_like_server_side_role_probe_error(message: &str) -> bool {
+fn admin_probe_regular_key_status(status: u16) -> bool {
     matches!(
-        message.get(0..3),
-        Some("500" | "501" | "502" | "503" | "504" | "505" | "506" | "507" | "508" | "510" | "511")
-    ) || message.contains("[500")
-        || message.contains("[501")
-        || message.contains("[502")
-        || message.contains("[503")
-        || message.contains("[504")
-        || message.contains("[505")
-        || message.contains("[506")
-        || message.contains("[507")
-        || message.contains("[508")
-        || message.contains("[510")
-        || message.contains("[511")
-        || message.contains("HTTP error 5")
+        status,
+        // 401/403 means the key works but does not have admin access.
+        401 | 403
+            // Some self-managed deployments may not expose the admin endpoint.
+            // Treat explicit absence as regular access rather than blocking a
+            // valid non-admin setup.
+            | 404
+    )
+}
+
+#[cfg(test)]
+fn admin_probe_ambiguous_status(status: u16) -> bool {
+    matches!(status, 408 | 429 | 500..=599)
 }
 
 fn should_run_authenticated_probe(
@@ -666,8 +666,9 @@ fn non_empty_option(value: Option<&str>) -> Option<String> {
 mod tests {
     use super::{
         ApiKeyRole, ConfigDraft, ConfigKind, ConfigStore, VOLCENGINE_CLOUD_URL, build_config,
-        should_run_authenticated_probe, validate_candidate_config,
-        validate_candidate_config_with_role, validate_config_name, validation_error_copy,
+        admin_probe_ambiguous_status, admin_probe_regular_key_status,
+        should_run_authenticated_probe, validate_candidate_config, validate_candidate_config_with_role,
+        validate_config_name, validation_error_copy,
     };
     use crate::config::Config;
     use std::fs;
@@ -946,7 +947,13 @@ mod tests {
             .await
             .expect_err("admin probe 500 should not be classified as regular");
 
-        assert!(matches!(error, crate::error::Error::Api(_)));
+        assert!(matches!(
+            error,
+            crate::error::Error::Api {
+                status: Some(500),
+                ..
+            }
+        ));
     }
 
     #[tokio::test]
@@ -958,7 +965,7 @@ mod tests {
             .await
             .expect_err("bad self-managed API key should fail validation");
 
-        assert!(matches!(error, crate::error::Error::Api(_)));
+        assert!(matches!(error, crate::error::Error::Api { .. }));
     }
 
     #[tokio::test]
@@ -970,7 +977,7 @@ mod tests {
             .await
             .expect_err("auth-required local server should reject empty API key");
 
-        assert!(matches!(error, crate::error::Error::Api(_)));
+        assert!(matches!(error, crate::error::Error::Api { .. }));
     }
 
     #[test]
@@ -995,8 +1002,20 @@ mod tests {
     }
 
     #[test]
+    fn admin_probe_status_classification_is_explicit() {
+        assert!(admin_probe_regular_key_status(401));
+        assert!(admin_probe_regular_key_status(403));
+        assert!(admin_probe_regular_key_status(404));
+        assert!(admin_probe_ambiguous_status(408));
+        assert!(admin_probe_ambiguous_status(429));
+        assert!(admin_probe_ambiguous_status(500));
+        assert!(admin_probe_ambiguous_status(503));
+        assert!(!admin_probe_regular_key_status(500));
+    }
+
+    #[test]
     fn validation_error_copy_hides_raw_backend_details() {
-        let error = crate::error::Error::Api(
+        let error = crate::error::Error::api(
             "[AuthenticationError] invalid key. Request ID: 02177930089909800000000000000000ffff"
                 .to_string(),
         );
@@ -1259,7 +1278,10 @@ mod tests {
                         )
                     }
                 } else if request.starts_with("GET /api/v1/admin/accounts ") {
-                    http_response(500, r#"{}"#)
+                    http_response(
+                        500,
+                        r#"{"error":{"code":"INTERNAL","message":"admin probe failed"}}"#,
+                    )
                 } else {
                     http_response(404, r#"{"error":{"message":"not found"}}"#)
                 };

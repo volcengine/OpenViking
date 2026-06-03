@@ -379,7 +379,7 @@ impl ValidationFailureKind {
         match error {
             Error::Network(message) if message.contains("unhealthy") => Self::Unhealthy,
             Error::Network(_) => Self::Network,
-            Error::Api(message) if looks_like_auth_error(message) => Self::Auth,
+            Error::Api { message, .. } if looks_like_auth_error(message) => Self::Auth,
             _ => Self::Other,
         }
     }

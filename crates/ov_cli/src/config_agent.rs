@@ -107,6 +107,8 @@ pub(crate) struct AddEditResult {
     active_path: Option<String>,
     activated: bool,
     validation: ValidationSummary,
+    #[serde(skip)]
+    root_key_only: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -323,6 +325,17 @@ async fn add_cloud(store: &ConfigStore, args: ConfigAddCloudArgs) -> AgentResult
         ..Config::default()
     };
 
+    if let Some(result) = existing_add_preflight(
+        store,
+        &name,
+        ConfigKind::VolcengineCloud,
+        &config,
+        args.activate,
+        args.force,
+    )? {
+        return Ok(result);
+    }
+
     validate_config_for_write(&config, ConfigKind::VolcengineCloud, true, None).await?;
     save_new_config(
         store,
@@ -358,6 +371,28 @@ async fn add_self_managed(
         args.account,
         args.user,
         args.use_root_key_for_normal_commands,
+    )?;
+
+    if let Some(result) = existing_add_preflight(
+        store,
+        &name,
+        ConfigKind::SelfManaged,
+        &config,
+        args.activate,
+        args.force,
+    )? {
+        return Ok(result);
+    }
+
+    validate_config_for_write(
+        &config,
+        ConfigKind::SelfManaged,
+        false,
+        if args.use_root_key_for_normal_commands {
+            Some(ApiKeyRole::Root)
+        } else {
+            None
+        },
     )
     .await?;
 
@@ -378,6 +413,16 @@ async fn edit_saved_config(store: &ConfigStore, args: ConfigEditArgs) -> AgentRe
         AgentError::bad_input(format!("Could not load saved config '{}': {error}", args.name))
     })?;
     let old_kind = ConfigKind::from_config(&existing);
+    let preserves_root_key_for_normal_commands = existing
+        .root_api_key
+        .as_ref()
+        .is_some_and(|root_key| existing.api_key.as_deref() == Some(root_key.as_str()))
+        && !args.api_key_stdin
+        && args.api_key_env.is_none()
+        && !args.clear_api_key
+        && !args.root_api_key_stdin
+        && args.root_api_key_env.is_none()
+        && !args.clear_root_api_key;
     let new_name = args.new_name.clone().unwrap_or_else(|| args.name.clone());
     validate_config_name(&new_name).map_err(config_error)?;
     validate_optional_identity(args.account.as_deref(), args.user.as_deref())?;
@@ -438,7 +483,7 @@ async fn edit_saved_config(store: &ConfigStore, args: ConfigEditArgs) -> AgentRe
         &edited,
         new_kind,
         new_kind == ConfigKind::VolcengineCloud,
-        if args.use_root_key_for_normal_commands {
+        if args.use_root_key_for_normal_commands || preserves_root_key_for_normal_commands {
             Some(ApiKeyRole::Root)
         } else {
             None
@@ -449,7 +494,7 @@ async fn edit_saved_config(store: &ConfigStore, args: ConfigEditArgs) -> AgentRe
     save_edited_config(store, &args.name, &new_name, &edited, args.activate, args.force)
 }
 
-async fn build_self_managed_config(
+fn build_self_managed_config(
     url: String,
     api_key: Option<String>,
     root_api_key: Option<String>,
@@ -497,17 +542,6 @@ async fn build_self_managed_config(
         config.api_key = Some(root_api_key);
     }
 
-    validate_config_for_write(
-        &config,
-        ConfigKind::SelfManaged,
-        false,
-        if use_root_key_for_normal_commands {
-            Some(ApiKeyRole::Root)
-        } else {
-            None
-        },
-    )
-    .await?;
     Ok(config)
 }
 
@@ -598,6 +632,40 @@ fn save_new_config(
     Ok(add_edit_result(store, action, name, kind, config, activate))
 }
 
+fn existing_add_preflight(
+    store: &ConfigStore,
+    name: &str,
+    kind: ConfigKind,
+    config: &Config,
+    activate: bool,
+    force: bool,
+) -> AgentResult<Option<AddEditResult>> {
+    let saved_path = store.saved_config_path(name).map_err(config_error)?;
+    if !saved_path.exists() {
+        return Ok(None);
+    }
+
+    let existing = store.load_saved_config(name).map_err(config_error)?;
+    if configs_equivalent(&existing, config).map_err(config_error)? {
+        if activate {
+            store.activate_config(name).map_err(config_error)?;
+        }
+        return Ok(Some(add_edit_result(store, "add", name, kind, config, activate)));
+    }
+    if !force {
+        return Err(AgentError::exists_different(format!(
+            "Config '{name}' already exists with different values. Pass --force to replace it."
+        )));
+    }
+    if store.is_config_name_active(name).map_err(config_error)? && !activate {
+        return Err(AgentError::refused(
+            "Replacing the active saved config requires --activate.",
+        ));
+    }
+
+    Ok(None)
+}
+
 fn save_edited_config(
     store: &ConfigStore,
     old_name: &str,
@@ -672,6 +740,7 @@ fn add_edit_result(
         active_path: activated.then(|| path_string(store.active_path())),
         activated,
         validation: ValidationSummary { status: "passed" },
+        root_key_only: config.api_key.is_none() && config.root_api_key.is_some(),
     }
 }
 
@@ -705,6 +774,13 @@ fn print_add_edit_result(result: &AddEditResult) {
             theme::muted("No active config is set. Run 'ov config switch <name>' or add with --activate.")
         );
     }
+    if result.root_key_only {
+        eprintln!(
+            "{} {}",
+            theme::warning("Note:"),
+            theme::muted("This config has only a root API key. Normal commands require --sudo or a regular API key.")
+        );
+    }
 }
 
 fn print_list_result(entries: &[ListEntry]) {
@@ -713,9 +789,10 @@ fn print_list_result(entries: &[ListEntry]) {
         return;
     }
     println!(
-        "{:<24} {:<18} {}",
+        "{:<24} {:<18} {:<42} {}",
         theme::heading("Name").bold(),
         theme::heading("Type").bold(),
+        theme::heading("URL").bold(),
         theme::heading("Active").bold()
     );
     for entry in entries {
@@ -725,9 +802,10 @@ fn print_list_result(entries: &[ListEntry]) {
             String::new()
         };
         println!(
-            "{:<24} {:<18} {}",
+            "{:<24} {:<18} {:<42} {}",
             theme::command(&entry.name).bold(),
             theme::muted(entry.kind),
+            theme::sky_value(&entry.url),
             active
         );
     }
@@ -812,7 +890,7 @@ fn validate_optional_identity(account: Option<&str>, user: Option<&str>) -> Agen
 
 fn validation_error(kind: ConfigKind, error: Error) -> AgentError {
     match error {
-        Error::Api(message) => AgentError::auth(format!(
+        Error::Api { message, .. } => AgentError::auth(format!(
             "{} {message}",
             match kind {
                 ConfigKind::VolcengineCloud => "Check the API key.",

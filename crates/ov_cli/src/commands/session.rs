@@ -374,7 +374,7 @@ pub async fn add_memory(
     let session_response: serde_json::Value = client.post("/api/v1/sessions", &json!({})).await?;
     let mut profile_lines: Vec<serde_json::Value> = extract_profile_lines(&session_response);
     let session_id = session_response["session_id"].as_str().ok_or_else(|| {
-        crate::error::Error::Api("Failed to get session_id from new session response".to_string())
+        crate::error::Error::api("Failed to get session_id from new session response".to_string())
     })?;
 
     // 2. Add messages (batch)

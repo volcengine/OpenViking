@@ -230,7 +230,7 @@ pub(crate) fn report_for_runtime_error(command: impl Into<String>, error: &Error
             ErrorAction::new("ov health", copy(language, "Run a quick server health check", "快速检查服务器健康状态")),
             ErrorAction::new("ov config switch", copy(language, "Switch to another config", "切换到其他配置")),
         ]),
-        Error::Api(message) if looks_like_auth_error(message) => ErrorReport::new(
+        Error::Api { message, .. } if looks_like_auth_error(message) => ErrorReport::new(
             copy(language, "Authentication Error", "认证错误"),
             copy(language, "OpenViking rejected the API key for the active config.", "OpenViking 拒绝了当前配置的 API Key。"),
         )
@@ -240,7 +240,7 @@ pub(crate) fn report_for_runtime_error(command: impl Into<String>, error: &Error
             ErrorAction::new("ov config", copy(language, "Edit this config", "编辑这个配置")),
             ErrorAction::new("ov config switch", copy(language, "Use another config", "使用其他配置")),
         ]),
-        Error::Api(message) => ErrorReport::new(
+        Error::Api { message, .. } => ErrorReport::new(
             copy(language, "OpenViking API Error", "OpenViking API 错误"),
             api_error_message(language, message),
         )
@@ -1031,7 +1031,7 @@ Usage: ov config [OPTIONS] [COMMAND]
 
     #[test]
     fn runtime_api_error_hides_raw_detail_by_default() {
-        let error = Error::Api(
+        let error = Error::api(
             "[AuthenticationError] API key invalid. Request ID: 02177930089909800000000000000000"
                 .to_string(),
         );
@@ -1051,7 +1051,7 @@ Usage: ov config [OPTIONS] [COMMAND]
 
     #[test]
     fn runtime_api_error_shows_sanitized_detail_by_default() {
-        let error = Error::Api(
+        let error = Error::api(
             "[InvalidRequest] resource not found. Request ID: 02177930089909800000000000000000"
                 .to_string(),
         );
@@ -1070,7 +1070,7 @@ Usage: ov config [OPTIONS] [COMMAND]
 
     #[test]
     fn runtime_api_error_summarizes_json_error_envelope() {
-        let error = Error::Api(
+        let error = Error::api(
             r#"{"error":{"code":"PermissionDenied","message":"root key required","request_id":"abc"}}"#
                 .to_string(),
         );
