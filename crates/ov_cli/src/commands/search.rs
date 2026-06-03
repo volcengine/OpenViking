@@ -16,6 +16,34 @@ const SEARCH_INDENT: &str = "   ";
 const SEARCH_RESULT_COLLECTION_KEYS: &[&str] =
     &["memories", "resources", "skills", "results", "items"];
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SearchRenderMode {
+    Find,
+    Search,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SearchRenderContext {
+    mode: SearchRenderMode,
+    node_limit: i32,
+}
+
+impl SearchRenderContext {
+    fn find(node_limit: i32) -> Self {
+        Self {
+            mode: SearchRenderMode::Find,
+            node_limit,
+        }
+    }
+
+    fn search(node_limit: i32) -> Self {
+        Self {
+            mode: SearchRenderMode::Search,
+            node_limit,
+        }
+    }
+}
+
 pub async fn find(
     client: &HttpClient,
     query: &str,
@@ -41,7 +69,12 @@ pub async fn find(
             level,
         )
         .await?;
-    output_search_results(&result, output_format, compact);
+    output_search_results(
+        &result,
+        output_format,
+        compact,
+        SearchRenderContext::find(node_limit),
+    );
     Ok(())
 }
 
@@ -72,26 +105,55 @@ pub async fn search(
             level,
         )
         .await?;
-    output_search_results(&result, output_format, compact);
+    output_search_results(
+        &result,
+        output_format,
+        compact,
+        SearchRenderContext::search(node_limit),
+    );
     Ok(())
 }
 
-fn output_search_results(result: &Value, output_format: OutputFormat, compact: bool) {
-    if let Some(rendered) = render_search_output_for_table(result, output_format) {
+fn output_search_results(
+    result: &Value,
+    output_format: OutputFormat,
+    compact: bool,
+    context: SearchRenderContext,
+) {
+    if let Some(rendered) =
+        render_search_output_for_table_with_context(result, output_format, Some(context))
+    {
         println!("{rendered}");
     } else {
         output_success(result, output_format, compact);
     }
 }
 
+#[cfg(test)]
 fn render_search_output_for_table(value: &Value, output_format: OutputFormat) -> Option<String> {
+    render_search_output_for_table_with_context(value, output_format, None)
+}
+
+fn render_search_output_for_table_with_context(
+    value: &Value,
+    output_format: OutputFormat,
+    context: Option<SearchRenderContext>,
+) -> Option<String> {
     if matches!(output_format, OutputFormat::Json) {
         return None;
     }
-    render_search_results_for_table(value)
+    render_search_results_for_table_with_context(value, context)
 }
 
+#[cfg(test)]
 fn render_search_results_for_table(value: &Value) -> Option<String> {
+    render_search_results_for_table_with_context(value, None)
+}
+
+fn render_search_results_for_table_with_context(
+    value: &Value,
+    context: Option<SearchRenderContext>,
+) -> Option<String> {
     let (items, profile) = search_result_items(value)?;
     let mut lines = Vec::new();
     let text_width = search_card_text_width();
@@ -105,16 +167,13 @@ fn render_search_results_for_table(value: &Value) -> Option<String> {
         return Some(lines.join("\n"));
     }
 
+    let pass_count = search_pass_count(value);
     lines.push(
-        theme::heading(format!(
-            "{} {}",
-            items.len(),
-            pluralize(items.len() as u64, "result", "results")
-        ))
-        .bold()
-        .to_string(),
+        theme::heading(search_result_summary(items.len(), context, pass_count))
+            .bold()
+            .to_string(),
     );
-    lines.push(theme::body("Ranked by relevance").to_string());
+    lines.push(theme::body(search_ranking_line(context, pass_count)).to_string());
     lines.push(String::new());
 
     for (index, item) in items.iter().enumerate() {
@@ -126,6 +185,69 @@ fn render_search_results_for_table(value: &Value) -> Option<String> {
 
     append_profile_lines(profile, &mut lines);
     Some(lines.join("\n"))
+}
+
+fn search_result_summary(
+    item_count: usize,
+    context: Option<SearchRenderContext>,
+    pass_count: Option<usize>,
+) -> String {
+    let mut summary = format!(
+        "{} {}",
+        item_count,
+        pluralize(item_count as u64, "result", "results")
+    );
+
+    if matches!(
+        context.map(|context| context.mode),
+        Some(SearchRenderMode::Search)
+    ) && let Some(pass_count) = pass_count.filter(|count| *count > 1)
+    {
+        summary.push_str(&format!(
+            " from {pass_count} {}",
+            pluralize(pass_count as u64, "search pass", "search passes")
+        ));
+    }
+
+    summary
+}
+
+fn search_ranking_line(context: Option<SearchRenderContext>, pass_count: Option<usize>) -> String {
+    let Some(context) = context.filter(|context| context.node_limit > 0) else {
+        return "Ranked by relevance".to_string();
+    };
+
+    let suffix = match context.mode {
+        SearchRenderMode::Find => format!(
+            "limit {} final {}",
+            context.node_limit,
+            pluralize(context.node_limit as u64, "result", "results")
+        ),
+        SearchRenderMode::Search if pass_count.is_some_and(|count| count > 1) => {
+            format!("limit {} per pass", context.node_limit)
+        }
+        SearchRenderMode::Search => format!("limit {} per search pass", context.node_limit),
+    };
+
+    format!("Ranked by relevance · {suffix}")
+}
+
+fn search_pass_count(value: &Value) -> Option<usize> {
+    fn count_from_object(object: &serde_json::Map<String, Value>) -> Option<usize> {
+        object
+            .get("query_plan")?
+            .get("queries")?
+            .as_array()
+            .map(Vec::len)
+    }
+
+    let object = value.as_object()?;
+    count_from_object(object).or_else(|| {
+        object
+            .get("result")
+            .and_then(Value::as_object)
+            .and_then(count_from_object)
+    })
 }
 
 fn search_result_items(value: &Value) -> Option<(Vec<&Value>, Option<&Value>)> {
@@ -535,6 +657,96 @@ mod tests {
         assert!(rendered.contains("2. memory · Level 1 · score 0.410"));
         assert!(!rendered.contains(" L0 "));
         assert!(!rendered.contains(" L1 "));
+    }
+
+    #[test]
+    fn search_result_cards_explain_multi_pass_search_limits() {
+        let results = json!({
+            "query_plan": {
+                "queries": [
+                    {"query": "codename", "context_type": "memory"},
+                    {"query": "codename", "context_type": "resource"}
+                ]
+            },
+            "memories": [
+                {
+                    "context_type": "memory",
+                    "uri": "viking://user/default/memories/entities/.overview.md",
+                    "level": 1,
+                    "score": 0.452,
+                    "abstract": "Entity memories from user's world."
+                }
+            ],
+            "resources": [
+                {
+                    "context_type": "resource",
+                    "uri": "viking://resources/reference.md",
+                    "level": 0,
+                    "score": 0.401,
+                    "abstract": "Reference resource."
+                }
+            ]
+        });
+
+        let rendered = strip_ansi(
+            &render_search_results_for_table_with_context(
+                &results,
+                Some(SearchRenderContext::search(10)),
+            )
+            .expect("cards"),
+        );
+
+        assert!(rendered.starts_with(
+            "2 results from 2 search passes\nRanked by relevance · limit 10 per pass\n\n"
+        ));
+    }
+
+    #[test]
+    fn search_result_cards_explain_search_limit_without_query_plan() {
+        let results = json!([
+            {
+                "context_type": "memory",
+                "uri": "viking://user/default/memories/entities/.overview.md",
+                "level": 1,
+                "score": 0.452,
+                "abstract": "Entity memories from user's world."
+            }
+        ]);
+
+        let rendered = strip_ansi(
+            &render_search_results_for_table_with_context(
+                &results,
+                Some(SearchRenderContext::search(10)),
+            )
+            .expect("cards"),
+        );
+
+        assert!(
+            rendered.starts_with("1 result\nRanked by relevance · limit 10 per search pass\n\n")
+        );
+    }
+
+    #[test]
+    fn find_result_cards_explain_final_result_limit() {
+        let results = json!([
+            {
+                "context_type": "memory",
+                "uri": "viking://user/default/memories/entities/.overview.md",
+                "level": 1,
+                "score": 0.452,
+                "abstract": "Entity memories from user's world."
+            }
+        ]);
+
+        let rendered = strip_ansi(
+            &render_search_results_for_table_with_context(
+                &results,
+                Some(SearchRenderContext::find(10)),
+            )
+            .expect("cards"),
+        );
+
+        assert!(rendered.starts_with("1 result\nRanked by relevance · limit 10 final results\n\n"));
     }
 
     #[test]

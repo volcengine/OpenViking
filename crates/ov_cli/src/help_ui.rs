@@ -846,7 +846,7 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             },
             HelpItem {
                 label: "-n, --node-limit <n>",
-                description: "Maximum number of results.",
+                description: "Maximum final results returned.",
             },
             HelpItem {
                 label: "-t, --threshold <score>",
@@ -902,7 +902,7 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             },
             HelpItem {
                 label: "-n, --node-limit <n>",
-                description: "Maximum number of results.",
+                description: "Maximum results per search pass. Search may merge multiple passes.",
             },
         ],
         advanced_options: &[
@@ -2532,6 +2532,22 @@ mod tests {
         assert!(rendered.contains("Common options"));
         assert!(rendered.contains("Next"));
         assert!(rendered.contains("ov read <uri>"));
+    }
+
+    #[test]
+    fn find_and_search_help_explain_node_limit_semantics() {
+        let find_help = strip_ansi(
+            &render_command_help_request(&os_args(&["ov", "find", "--help"]))
+                .expect("find help should render"),
+        );
+        let search_help = strip_ansi(
+            &render_command_help_request(&os_args(&["ov", "search", "--help"]))
+                .expect("search help should render"),
+        );
+
+        assert!(find_help.contains("Maximum final results returned."));
+        assert!(search_help.contains("Maximum results per search pass."));
+        assert!(search_help.contains("Search may merge multiple passes."));
     }
 
     #[test]
