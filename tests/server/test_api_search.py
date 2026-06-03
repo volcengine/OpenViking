@@ -20,8 +20,14 @@ from openviking_cli.session.user_id import UserIdentifier
 @pytest.fixture(autouse=True)
 def fake_query_embedder(service):
     class FakeEmbedder:
+        def prepare_embedding_input(self, text: str) -> str:
+            return text
+
         def embed(self, text: str, is_query: bool = False) -> EmbedResult:
             return EmbedResult(dense_vector=[0.1, 0.2, 0.3])
+
+        async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
+            return self.embed(text, is_query=is_query)
 
     service.viking_fs.query_embedder = FakeEmbedder()
 
@@ -320,7 +326,7 @@ async def test_find_with_inaccessible_target_uri_returns_permission_denied(
     try:
         resp = await client.post(
             "/api/v1/search/find",
-            json={"query": "sample", "target_uri": "viking://agent/foreign-agent", "limit": 5},
+            json={"query": "sample", "target_uri": "viking://user/foreign/memories", "limit": 5},
         )
     finally:
         app.dependency_overrides.pop(get_request_context, None)

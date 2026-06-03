@@ -8,14 +8,11 @@ Provides semantic search operations: search, find.
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
-from openviking.core.namespace import canonical_user_root
-from openviking.core.peer_id import normalize_peer_id
 from openviking.core.uri_validation import validate_optional_viking_uris
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import InvalidArgumentError, NotInitializedError
 from openviking_cli.utils import get_logger
-from openviking_cli.utils.uri import VikingURI
 
 if TYPE_CHECKING:
     from openviking.session import Session
@@ -26,66 +23,6 @@ logger = get_logger(__name__)
 def _ensure_non_empty_query(query: str) -> None:
     if not query.strip():
         raise InvalidArgumentError("Search query must not be empty.")
-
-
-def _is_default_user_memory_target(target_uri: str, ctx: RequestContext) -> bool:
-    if not target_uri:
-        return True
-    try:
-        normalized = VikingURI.normalize(target_uri).rstrip("/")
-    except Exception:
-        return False
-
-    user_root = canonical_user_root(ctx).rstrip("/")
-    return normalized in {
-        "viking://user/memories",
-        f"{user_root}/memories",
-    }
-
-
-def _peer_memory_targets(ctx: RequestContext, peer_id: str) -> List[str]:
-    user_root = canonical_user_root(ctx)
-    return [
-        f"{user_root}/memories",
-        f"{user_root}/peers/{peer_id}/memories",
-    ]
-
-
-def _append_unique(targets: List[str], target_uri: str) -> None:
-    if target_uri not in targets:
-        targets.append(target_uri)
-
-
-def _target_uri_for_peer(
-    target_uri: Union[str, List[str]],
-    ctx: RequestContext,
-    peer_id: Optional[str],
-) -> Union[str, List[str]]:
-    try:
-        normalized_peer_id = normalize_peer_id(peer_id)
-    except ValueError as exc:
-        raise InvalidArgumentError(str(exc)) from exc
-
-    if not normalized_peer_id:
-        return target_uri
-
-    peer_targets = _peer_memory_targets(ctx, normalized_peer_id)
-    if isinstance(target_uri, list):
-        if not any(target_uri):
-            return peer_targets
-
-        expanded_targets: List[str] = []
-        for item in target_uri:
-            if _is_default_user_memory_target(item, ctx):
-                for peer_target in peer_targets:
-                    _append_unique(expanded_targets, peer_target)
-            elif item:
-                _append_unique(expanded_targets, item)
-        return expanded_targets
-
-    if _is_default_user_memory_target(target_uri, ctx):
-        return peer_targets
-    return target_uri
 
 
 class SearchService:
@@ -132,7 +69,6 @@ class SearchService:
         """
         _ensure_non_empty_query(query)
         target_uri = validate_optional_viking_uris(target_uri, field_name="target_uri")
-        target_uri = _target_uri_for_peer(target_uri, ctx, peer_id)
         viking_fs = self._ensure_initialized()
 
         session_info = None
@@ -143,6 +79,7 @@ class SearchService:
             query=query,
             ctx=ctx,
             target_uri=target_uri,
+            peer_id=peer_id,
             session_info=session_info,
             limit=limit,
             score_threshold=score_threshold,
@@ -177,12 +114,12 @@ class SearchService:
         """
         _ensure_non_empty_query(query)
         target_uri = validate_optional_viking_uris(target_uri, field_name="target_uri")
-        target_uri = _target_uri_for_peer(target_uri, ctx, peer_id)
         viking_fs = self._ensure_initialized()
         result = await viking_fs.find(
             query=query,
             ctx=ctx,
             target_uri=target_uri,
+            peer_id=peer_id,
             limit=limit,
             score_threshold=score_threshold,
             filter=filter,
