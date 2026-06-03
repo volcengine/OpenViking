@@ -933,9 +933,10 @@ class VikingFS:
         """VikingDB bm25 recall + local fs precise matching."""
         vector_store = self._get_vector_store()
 
-        # Split regex alternation (e.g. "error|warning|fail") into individual keywords
-        # for bm25 search. Limit to 10 keywords per VikingDB API constraint.
-        keywords = [kw.strip() for kw in pattern.split("|") if kw.strip()][:10]
+        # Split regex alternation (e.g. "error|warning|fail") and join as a
+        # single query string for bm25 search. VikingDB's standard tokenizer
+        # will handle the tokenization of the query string.
+        query = " ".join(kw.strip() for kw in pattern.split("|") if kw.strip())
         filter_expr = PathScope("uri", uri, depth=level_limit)
 
         # Auto-adapt remote_return_limit: when 0 (default), use the maximum
@@ -948,7 +949,7 @@ class VikingFS:
         # Step 1: vikingdb recall candidate files
         try:
             result = await vector_store.search_by_keywords(
-                keywords=keywords,
+                query=query,
                 limit=remote_return_limit,
                 filter=filter_expr,
                 output_fields=["uri"],
