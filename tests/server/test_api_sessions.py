@@ -54,22 +54,24 @@ def _message_request(
 def _configure_test_env(monkeypatch, tmp_path):
     config_path = tmp_path / "ov.conf"
     config_path.write_text(
-        json.dumps({
-            "storage": {
-                "workspace": str(tmp_path / "workspace"),
-                "agfs": {"backend": "local"},
-                "vectordb": {"backend": "local"},
-            },
-            "embedding": {
-                "dense": {
-                    "provider": "openai",
-                    "model": "test-embedder",
-                    "api_base": "http://127.0.0.1:11434/v1",
-                    "dimension": 1024,
-                }
-            },
-            "encryption": {"enabled": False},
-        }),
+        json.dumps(
+            {
+                "storage": {
+                    "workspace": str(tmp_path / "workspace"),
+                    "agfs": {"backend": "local"},
+                    "vectordb": {"backend": "local"},
+                },
+                "embedding": {
+                    "dense": {
+                        "provider": "openai",
+                        "model": "test-embedder",
+                        "api_base": "http://127.0.0.1:11434/v1",
+                        "dimension": 1024,
+                    }
+                },
+                "encryption": {"enabled": False},
+            }
+        ),
         encoding="utf-8",
     )
 

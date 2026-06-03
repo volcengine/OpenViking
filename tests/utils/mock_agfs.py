@@ -34,14 +34,16 @@ class MockLocalAGFS:
             return []
         res = []
         for item in p.iterdir():
-            res.append({
-                "name": item.name,
-                "isDir": item.is_dir(),  # Note: JS style camelCase for some APIs
-                "type": "directory" if item.is_dir() else "file",
-                "size": item.stat().st_size if item.is_file() else 0,
-                "mtime": item.stat().st_mtime,
-                "uri": f"viking://{path}/{item.name}".replace("//", "/"),
-            })
+            res.append(
+                {
+                    "name": item.name,
+                    "isDir": item.is_dir(),  # Note: JS style camelCase for some APIs
+                    "type": "directory" if item.is_dir() else "file",
+                    "size": item.stat().st_size if item.is_file() else 0,
+                    "mtime": item.stat().st_mtime,
+                    "uri": f"viking://{path}/{item.name}".replace("//", "/"),
+                }
+            )
         return res
 
     def writeto(self, path, content, ctx=None, **kwargs):
