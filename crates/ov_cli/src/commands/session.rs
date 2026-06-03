@@ -1,3 +1,4 @@
+use super::render_utils::append_profile_lines;
 use crate::client::HttpClient;
 use crate::error::{Error, Result};
 use crate::output::{OutputFormat, output_success};
@@ -207,32 +208,6 @@ fn format_json_value(value: &Value) -> String {
         Value::Bool(value) => value.to_string(),
         Value::Null => "null".to_string(),
         other => other.to_string(),
-    }
-}
-
-fn append_profile_lines(profile: Option<&Value>, lines: &mut Vec<String>) {
-    let Some(profile) = profile else {
-        return;
-    };
-
-    lines.push(String::new());
-    lines.push(theme::heading("profile").to_string());
-
-    if let Some(items) = profile.as_array() {
-        for item in items {
-            if let Some(text) = item.as_str() {
-                lines.push(theme::body(text).to_string());
-            } else {
-                lines.push(theme::body(item.to_string()).to_string());
-            }
-        }
-        return;
-    }
-
-    if let Some(text) = profile.as_str() {
-        lines.push(theme::body(text).to_string());
-    } else {
-        lines.push(theme::body(profile.to_string()).to_string());
     }
 }
 
