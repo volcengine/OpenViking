@@ -384,7 +384,10 @@ pub fn render_profiled_scalar_result(value: &serde_json::Value) -> Option<String
     Some(append_profile_section(result.to_string(), obj))
 }
 
-pub fn append_profile_to_rendered(rendered: String, value: &serde_json::Value) -> String {
+pub fn append_profile_to_rendered(
+    rendered: String,
+    value: &serde_json::Value,
+) -> String {
     let Some(obj) = value.as_object() else {
         return rendered;
     };
@@ -1200,7 +1203,17 @@ mod tests {
 
         assert_eq!(
             rendered,
-            Some(["content", "", "profile", "line one", "line two", "",].join("\n"))
+            Some(
+                [
+                    "content",
+                    "",
+                    "profile",
+                    "line one",
+                    "line two",
+                    "",
+                ]
+                .join("\n")
+            )
         );
     }
 }

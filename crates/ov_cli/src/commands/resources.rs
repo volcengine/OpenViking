@@ -46,9 +46,7 @@ pub async fn add_resource(
 
     if !wait && matches!(format, OutputFormat::Table) {
         eprintln!("Note: Resource is being processed in the background.");
-        eprintln!(
-            "Use 'ov task status <task_id>' to check progress, or 'ov task list' to see all tasks."
-        );
+        eprintln!("Use 'ov task status <task_id>' to check progress, or 'ov task list' to see all tasks.");
     }
 
     output_success(&result, format, compact);
@@ -71,9 +69,7 @@ pub async fn add_skill(
 
     if !wait && matches!(format, OutputFormat::Table) {
         eprintln!("Note: Skill is being processed in the background.");
-        eprintln!(
-            "Use 'ov task status <task_id>' to check progress, or 'ov task list' to see all tasks."
-        );
+        eprintln!("Use 'ov task status <task_id>' to check progress, or 'ov task list' to see all tasks.");
     }
 
     output_success(&result, format, compact);

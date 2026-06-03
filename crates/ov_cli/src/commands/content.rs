@@ -46,7 +46,15 @@ pub async fn write(
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let result = client.write(uri, content, mode, wait, timeout).await?;
+    let result = client
+        .write(
+            uri,
+            content,
+            mode,
+            wait,
+            timeout,
+        )
+        .await?;
     crate::output::output_success(result, output_format, compact);
     Ok(())
 }
@@ -125,7 +133,17 @@ mod tests {
 
         assert_eq!(
             rendered,
-            Some(["content", "", "profile", "line one", "line two", "",].join("\n"))
+            Some(
+                [
+                    "content",
+                    "",
+                    "profile",
+                    "line one",
+                    "line two",
+                    "",
+                ]
+                .join("\n")
+            )
         );
     }
 }

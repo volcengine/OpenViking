@@ -383,17 +383,9 @@ mod tests {
         )
         .expect("config should deserialize with extra_headers");
 
-        let headers = config
-            .extra_headers
-            .expect("extra_headers should be present");
-        assert_eq!(
-            headers.get("X-Custom-Header"),
-            Some(&"custom-value".to_string())
-        );
-        assert_eq!(
-            headers.get("Authorization"),
-            Some(&"Bearer token".to_string())
-        );
+        let headers = config.extra_headers.expect("extra_headers should be present");
+        assert_eq!(headers.get("X-Custom-Header"), Some(&"custom-value".to_string()));
+        assert_eq!(headers.get("Authorization"), Some(&"Bearer token".to_string()));
     }
 
     #[test]
@@ -434,16 +426,8 @@ mod tests {
         )
         .expect("config should deserialize with alias");
 
-        let headers = config
-            .extra_headers
-            .expect("extra_headers should be present");
-        assert_eq!(
-            headers.get("X-Custom-Header"),
-            Some(&"custom-value".to_string())
-        );
-        assert_eq!(
-            headers.get("Authorization"),
-            Some(&"Bearer token".to_string())
-        );
+        let headers = config.extra_headers.expect("extra_headers should be present");
+        assert_eq!(headers.get("X-Custom-Header"), Some(&"custom-value".to_string()));
+        assert_eq!(headers.get("Authorization"), Some(&"Bearer token".to_string()));
     }
 }

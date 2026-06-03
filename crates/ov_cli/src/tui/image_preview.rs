@@ -1,6 +1,9 @@
-use crossterm::{ExecutableCommand, cursor::MoveTo};
-use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::path::Path;
+use crossterm::{
+    ExecutableCommand,
+    cursor::MoveTo,
+};
 
 /// Preview area coordinates (in terminal cells)
 #[derive(Debug, Clone, Copy)]
@@ -14,14 +17,8 @@ pub struct PreviewArea {
 /// Check if a file is an image based on extension
 pub fn is_image_file(filename: &str) -> bool {
     let path = Path::new(filename);
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase());
-    matches!(
-        ext.as_deref(),
-        Some("png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "tiff" | "tif")
-    )
+    let ext = path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase());
+    matches!(ext.as_deref(), Some("png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "tiff" | "tif"))
 }
 
 /// Image previewer using viuer (simpler, more reliable)
@@ -101,7 +98,11 @@ impl ImagePreviewer {
     }
 
     /// Display an image at the specified area
-    pub fn display_image_at(&mut self, image_path: &str, area: PreviewArea) -> Result<(), String> {
+    pub fn display_image_at(
+        &mut self,
+        image_path: &str,
+        area: PreviewArea,
+    ) -> Result<(), String> {
         // Check if file exists first
         let path = std::path::Path::new(image_path);
         if !path.exists() {
@@ -112,19 +113,13 @@ impl ImagePreviewer {
         }
 
         self.log(&format!("Displaying image: {}", image_path));
-        self.log(&format!(
-            "Preview area: x={}, y={}, width={}, height={}",
-            area.x, area.y, area.width, area.height
-        ));
+        self.log(&format!("Preview area: x={}, y={}, width={}, height={}", area.x, area.y, area.width, area.height));
 
         // Calculate dimensions - viuer uses half-blocks, so height is in characters
         // Each character cell can display 2x1 pixels (approximate)
         let max_width = Some(area.width.saturating_sub(2) as u32);
         let max_height = Some(area.height.saturating_sub(2) as u32);
-        self.log(&format!(
-            "Target dimensions: width={:?}, height={:?}",
-            max_width, max_height
-        ));
+        self.log(&format!("Target dimensions: width={:?}, height={:?}", max_width, max_height));
 
         // Try with multiple terminal protocols to find what works
         let configs = [
@@ -196,25 +191,25 @@ impl ImagePreviewer {
         self.log("Trying viuer::print_from_file");
         for (i, config) in configs.iter().enumerate() {
             self.log(&format!("Trying viuer config {} (print_from_file)", i + 1));
-            self.log(&format!(
-                "Config details: width={:?}, height={:?}, use_kitty={}, use_iterm={}",
-                config.width, config.height, config.use_kitty, config.use_iterm
-            ));
+            self.log(&format!("Config details: width={:?}, height={:?}, use_kitty={}, use_iterm={}",
+                config.width, config.height, config.use_kitty, config.use_iterm));
 
             // Move cursor to the preview area position
             self.log(&format!("Moving cursor to x={}, y={}", area.x, area.y));
             match std::io::stdout().execute(MoveTo(area.x, area.y)) {
-                Ok(_) => match viuer::print_from_file(image_path, config) {
-                    Ok(_) => {
-                        displayed = true;
-                        self.log(&format!("Success with config {} (print_from_file)", i + 1));
-                        break;
+                Ok(_) => {
+                    match viuer::print_from_file(image_path, config) {
+                        Ok(_) => {
+                            displayed = true;
+                            self.log(&format!("Success with config {} (print_from_file)", i + 1));
+                            break;
+                        }
+                        Err(e) => {
+                            self.log(&format!("Config {} failed (print_from_file): {}", i + 1, e));
+                            last_error_str = Some(format!("{}", e));
+                        }
                     }
-                    Err(e) => {
-                        self.log(&format!("Config {} failed (print_from_file): {}", i + 1, e));
-                        last_error_str = Some(format!("{}", e));
-                    }
-                },
+                }
                 Err(e) => {
                     self.log(&format!("Failed to move cursor: {}", e));
                     last_error_str = Some(format!("Cursor move failed: {}", e));
@@ -234,24 +229,19 @@ impl ImagePreviewer {
 
                         // Move cursor to the preview area position
                         match std::io::stdout().execute(MoveTo(area.x, area.y)) {
-                            Ok(_) => match viuer::print(&img, config) {
-                                Ok(_) => {
-                                    displayed = true;
-                                    self.log(&format!(
-                                        "Success with config {} (image crate)",
-                                        i + 1
-                                    ));
-                                    break;
+                            Ok(_) => {
+                                match viuer::print(&img, config) {
+                                    Ok(_) => {
+                                        displayed = true;
+                                        self.log(&format!("Success with config {} (image crate)", i + 1));
+                                        break;
+                                    }
+                                    Err(e) => {
+                                        self.log(&format!("Config {} failed (image crate): {}", i + 1, e));
+                                        last_error_str = Some(format!("{}", e));
+                                    }
                                 }
-                                Err(e) => {
-                                    self.log(&format!(
-                                        "Config {} failed (image crate): {}",
-                                        i + 1,
-                                        e
-                                    ));
-                                    last_error_str = Some(format!("{}", e));
-                                }
-                            },
+                            }
                             Err(e) => {
                                 self.log(&format!("Failed to move cursor: {}", e));
                                 last_error_str = Some(format!("Cursor move failed: {}", e));
@@ -267,10 +257,7 @@ impl ImagePreviewer {
         }
 
         if !displayed {
-            return Err(format!(
-                "Failed to display image with all configs. Last error: {:?}",
-                last_error_str
-            ));
+            return Err(format!("Failed to display image with all configs. Last error: {:?}", last_error_str));
         }
 
         *self.current_image.lock().unwrap() = Some(image_path.to_string());

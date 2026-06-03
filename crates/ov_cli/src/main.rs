@@ -1700,10 +1700,8 @@ async fn main() {
             level,
             peer_id,
         } => {
-            handlers::handle_find(
-                query, uri, node_limit, threshold, after, before, level, peer_id, ctx,
-            )
-            .await
+            handlers::handle_find(query, uri, node_limit, threshold, after, before, level, peer_id, ctx)
+                .await
         }
         Commands::Search {
             query,
@@ -1777,8 +1775,15 @@ mod tests {
 
     #[test]
     fn cli_parses_global_identity_override_flags() {
-        let cli = Cli::try_parse_from(["ov", "--account", "acme", "--user", "alice", "ls"])
-            .expect("cli should parse");
+        let cli = Cli::try_parse_from([
+            "ov",
+            "--account",
+            "acme",
+            "--user",
+            "alice",
+            "ls",
+        ])
+        .expect("cli should parse");
 
         assert_eq!(cli.account.as_deref(), Some("acme"));
         assert_eq!(cli.user.as_deref(), Some("alice"));

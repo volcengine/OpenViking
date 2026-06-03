@@ -1,15 +1,14 @@
 use crate::client::HttpClient;
 
-use super::image_preview;
 use super::tree::TreeState;
+use super::image_preview;
 
-use std::io::Write;
 use std::{pin::Pin, time::Instant};
 use tempfile::NamedTempFile;
+use std::io::Write;
 
 // Type alias for confirmation callback
-type ConfirmationCallback =
-    Box<dyn for<'a> FnOnce(&'a mut App) -> Pin<Box<dyn Future<Output = ()> + 'a>>>;
+type ConfirmationCallback = Box<dyn for<'a> FnOnce(&'a mut App) -> Pin<Box<dyn Future<Output = ()> + 'a>>>;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Panel {
@@ -250,15 +249,11 @@ impl App {
                                             self.current_preview_image = Some(path);
                                             // Keep temp file alive
                                             self.temp_image_file = Some(temp_file);
-                                            info_text
-                                                .push_str(&format!("Size: {} bytes", bytes.len()));
+                                            info_text.push_str(&format!("Size: {} bytes", bytes.len()));
                                         }
                                     }
                                     Err(e) => {
-                                        info_text.push_str(&format!(
-                                            "(Could not write temp file: {})",
-                                            e
-                                        ));
+                                        info_text.push_str(&format!("(Could not write temp file: {})", e));
                                     }
                                 }
                             }
@@ -268,8 +263,7 @@ impl App {
                         }
                     }
                     Err(e) => {
-                        info_text
-                            .push_str(&format!("(Could not create temp file for preview: {})", e));
+                        info_text.push_str(&format!("(Could not create temp file for preview: {})", e));
                     }
                 }
             }
@@ -377,7 +371,10 @@ impl App {
         F: for<'a> FnOnce(&'a mut App) -> Pin<Box<dyn Future<Output = ()> + 'a>> + 'static,
     {
         self.status_message_locked = true;
-        self.confirmation = Some((message, Box::new(on_confirmed)));
+        self.confirmation = Some((
+            message,
+            Box::new(on_confirmed),
+        ));
     }
 
     pub async fn load_vector_records(&mut self, uri_prefix: Option<String>) {
@@ -484,8 +481,7 @@ impl App {
 
     /// Collect all currently expanded nodes
     fn collect_expanded_nodes(&self) -> Vec<String> {
-        self.tree
-            .visible
+        self.tree.visible
             .iter()
             .filter(|r| r.expanded)
             .map(|r| r.uri.clone())
@@ -507,18 +503,14 @@ impl App {
 
     /// Find cursor position for a given URI, fallback to parent if not found
     fn find_cursor_for_uri(&self, uri: &str) -> usize {
-        self.tree
-            .visible
-            .iter()
+        self.tree.visible.iter()
             .position(|r| r.uri == uri)
             .unwrap_or_else(|| {
                 let mut parent_path = uri.to_string();
                 while parent_path != "viking://" && parent_path != "/" {
                     if let Some(last_slash) = parent_path.rfind('/') {
                         parent_path = parent_path[..last_slash].to_string();
-                        if let Some(pos) =
-                            self.tree.visible.iter().position(|r| r.uri == parent_path)
-                        {
+                        if let Some(pos) = self.tree.visible.iter().position(|r| r.uri == parent_path) {
                             return pos;
                         }
                     } else {
@@ -530,12 +522,7 @@ impl App {
     }
 
     /// Reload the entire tree and restore state
-    async fn reload_tree_and_restore_state(
-        &mut self,
-        client: &HttpClient,
-        expanded_nodes: &[String],
-        target_uri: &str,
-    ) {
+    async fn reload_tree_and_restore_state(&mut self, client: &HttpClient, expanded_nodes: &[String], target_uri: &str) {
         self.tree.load_root(client, "viking://").await;
 
         // Restore expanded state for previously expanded nodes
@@ -544,8 +531,7 @@ impl App {
         }
 
         // Ensure parent directories of target URI are expanded
-        self.ensure_parent_directories_expanded(client, target_uri)
-            .await;
+        self.ensure_parent_directories_expanded(client, target_uri).await;
 
         // Find and set cursor to target URI
         let cursor = self.find_cursor_for_uri(target_uri);
@@ -557,9 +543,7 @@ impl App {
 
     pub async fn reload_entire_tree(&mut self) {
         let client = self.client.clone();
-        let selected_node = self
-            .tree
-            .selected_uri()
+        let selected_node = self.tree.selected_uri()
             .map(|uri| uri.to_string())
             .unwrap_or_else(|| "viking://".to_string());
 
@@ -567,8 +551,7 @@ impl App {
         let expanded_nodes = self.collect_expanded_nodes();
 
         // Reload tree and restore state
-        self.reload_tree_and_restore_state(&client, &expanded_nodes, &selected_node)
-            .await;
+        self.reload_tree_and_restore_state(&client, &expanded_nodes, &selected_node).await;
 
         self.set_status_message("Tree refreshed".to_string());
     }
@@ -601,16 +584,10 @@ impl App {
         let current_cursor = self.tree.cursor;
         let target_uri = if current_cursor + 1 < self.tree.visible.len() {
             // Use next node if it exists
-            self.tree
-                .visible
-                .get(current_cursor + 1)
-                .map(|r| r.uri.clone())
+            self.tree.visible.get(current_cursor + 1).map(|r| r.uri.clone())
         } else if current_cursor > 0 {
             // Use previous node if next doesn't exist
-            self.tree
-                .visible
-                .get(current_cursor - 1)
-                .map(|r| r.uri.clone())
+            self.tree.visible.get(current_cursor - 1).map(|r| r.uri.clone())
         } else {
             // Fallback to parent if no siblings
             if let Some(last_slash) = selected_uri.rfind('/') {
@@ -634,8 +611,7 @@ impl App {
 
                 // Reload tree and restore state
                 if let Some(uri) = &target_uri {
-                    self.reload_tree_and_restore_state(&client, &expanded_nodes, uri)
-                        .await;
+                    self.reload_tree_and_restore_state(&client, &expanded_nodes, uri).await;
                 }
             }
             Err(e) => {

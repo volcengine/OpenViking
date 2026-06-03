@@ -68,9 +68,7 @@ pub async fn list_users(
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let response = client
-        .admin_list_users(account_id, limit, name, role)
-        .await?;
+    let response = client.admin_list_users(account_id, limit, name, role).await?;
     output_success(&response, output_format, compact);
     Ok(())
 }

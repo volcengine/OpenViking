@@ -260,6 +260,7 @@ fn render_vector_records(frame: &mut Frame, app: &App, area: ratatui::layout::Re
 }
 
 fn render_status_bar(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+
     // Show error message only if present
     if !app.error_message.is_empty() {
         let bar = Paragraph::new(app.error_message.clone())
@@ -362,6 +363,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) 
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(":top/bottom  "),
+
         ]);
     }
 
@@ -370,15 +372,14 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) 
             "d",
             Style::default()
                 .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        ),
+                .add_modifier(Modifier::BOLD)),
         Span::raw(":delete  "),
+
         Span::styled(
             "r",
             Style::default()
                 .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        ),
+                .add_modifier(Modifier::BOLD)),
         Span::raw(":refresh"),
     ]);
 
