@@ -1,3 +1,4 @@
+# Claude Code 接入
 
 为 [Claude Code](https://docs.claude.com/zh-CN/docs/claude-code/overview) 提供跨项目、跨 session 的长期记忆，越用越聪明。安装一次，每次对话自动召回和捕获，模型不需要主动调用任何工具。
 
