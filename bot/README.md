@@ -171,6 +171,7 @@ All configurations are under the `bot` field in `ov.conf`, with default values f
 - `gateway`: Gateway configuration
   - `host`: Gateway listening address, default value is `0.0.0.0`
   - `port`: Gateway listening port, default value is `18790`
+  - `token`: Gateway authentication token. Required when `host` is non-localhost (such as the default `0.0.0.0`) — the gateway refuses to start without it (`SECURITY: bot.gateway.token is required when gateway.host is non-localhost`). Set a random secret; clients then send it in the `X-Gateway-Token` header.
 - `sandbox`: Sandbox configuration
   - `mode`: Sandbox mode, optional values are `shared` (all sessions share workspace) or `private` (private, workspace isolated by Channel and session). Default value is `shared`.
 - `ov_server`: OpenViking Server configuration.

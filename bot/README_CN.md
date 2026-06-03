@@ -174,6 +174,7 @@ bot 将连接到远程 OpenViking Server，使用前请先启动 OpenViking Serv
 - `gateway`：Gateway 配置
   - host：Gateway 监听地址，默认值为 `0.0.0.0`
   - port：Gateway 监听端口，默认值为 `18790`
+  - token：Gateway 鉴权 token。当 `host` 为非 localhost 地址（例如默认的 `0.0.0.0`）时必须设置——否则网关会拒绝启动（`SECURITY: bot.gateway.token is required when gateway.host is non-localhost`）。请设置为随机密钥；客户端通过 `X-Gateway-Token` 请求头携带。
 - `sandbox`：沙箱配置
   - `mode`：沙箱模式，可选值为 `shared`（所有 session 共享工作空间）或 `private`（私有，按 Channel、session 隔离工作空间）。默认值为 `shared`。
 - `ov_server`：OpenViking Server 配置
