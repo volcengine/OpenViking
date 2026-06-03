@@ -591,7 +591,7 @@ fn styled_wordmark_line_for_color_level(line: &str, color_level: theme::ColorLev
         if ch.is_whitespace() {
             rendered.push(ch);
         } else {
-            let rgb = wordmark_gradient_color(column, width);
+            let rgb = header_display_rgb(wordmark_gradient_color(column, width), color_level);
             rendered.push_str(&theme::style_rgb_for_level(
                 ch.to_string(),
                 rgb,
@@ -688,7 +688,7 @@ fn styled_tagline_for_color_level(text: &str, color_level: theme::ColorLevel) ->
         if ch.is_whitespace() {
             rendered.push(ch);
         } else {
-            let rgb = tagline_texture_color(column, width);
+            let rgb = header_display_rgb(tagline_texture_color(column, width), color_level);
             rendered.push_str(&theme::style_rgb_for_level(
                 ch.to_string(),
                 rgb,
@@ -1347,7 +1347,8 @@ fn styled_logo_to_width_for_color_level(
         if ch.is_whitespace() {
             rendered.push(ch);
         } else {
-            let rgb = logo_glass_color(ch, column, row, width.max(1));
+            let rgb =
+                header_display_rgb(logo_glass_color(ch, column, row, width.max(1)), color_level);
             rendered.push_str(&theme::style_rgb_for_level(
                 ch.to_string(),
                 rgb,
@@ -1358,6 +1359,14 @@ fn styled_logo_to_width_for_color_level(
     }
     rendered.push_str(&" ".repeat(width.saturating_sub(display_width(&visible))));
     rendered
+}
+
+fn header_display_rgb(rgb: Rgb, color_level: theme::ColorLevel) -> Rgb {
+    if matches!(color_level, theme::ColorLevel::TrueColor) {
+        rgb
+    } else {
+        theme::active_theme().border.rgb_fallback()
+    }
 }
 
 fn logo_glass_color(_ch: char, column: usize, row: usize, width: usize) -> Rgb {
@@ -3822,11 +3831,11 @@ mod tests {
         self_managed_api_key_input_helper_lines, self_managed_key_mode_labels,
         self_managed_validation_failure_choices, should_confirm_detected_user_key,
         should_prompt_root_identity, status_box_lines, status_box_lines_with_runtime,
-        status_box_width, status_payload_is_healthy, styled_wordmark_line_for_color_level,
-        tagline_ice_color_for_theme, user_key_redirect_labels, validate_account_id_value,
-        validate_config_name, validate_draft, validate_user_id_value,
-        volcengine_api_key_helper_lines, wizard_header_lines, wordmark_gradient_color_for_theme,
-        wordmark_lines, wordmark_width,
+        status_box_width, status_payload_is_healthy, styled_logo_to_width_for_color_level,
+        styled_wordmark_line_for_color_level, tagline_ice_color_for_theme,
+        user_key_redirect_labels, validate_account_id_value, validate_config_name, validate_draft,
+        validate_user_id_value, volcengine_api_key_helper_lines, wizard_header_lines,
+        wordmark_gradient_color_for_theme, wordmark_lines, wordmark_width,
     };
     use crate::config::Config;
     use crate::config_wizard::store::{
@@ -4255,7 +4264,7 @@ mod tests {
     }
 
     #[test]
-    fn wordmark_uses_ansi256_fallback_without_black_or_gray_when_truecolor_is_unavailable() {
+    fn wordmark_uses_flat_ansi256_fallback_when_truecolor_is_unavailable() {
         colored::control::set_override(true);
         let rendered =
             styled_wordmark_line_for_color_level(wordmark_lines()[0], theme::ColorLevel::Ansi256);
@@ -4263,9 +4272,23 @@ mod tests {
 
         assert!(rendered.contains("\u{1b}[1;38;5;"));
         assert!(!rendered.contains("38;2;"));
-        assert!(!rendered.contains("38;5;0m"));
-        assert!(!rendered.contains("38;5;8m"));
-        assert!(!rendered.contains("38;5;232"));
+        assert_eq!(ansi256_indexes(&rendered), vec![30]);
+    }
+
+    #[test]
+    fn logo_uses_flat_ansi256_fallback_when_truecolor_is_unavailable() {
+        colored::control::set_override(true);
+        let rendered = styled_logo_to_width_for_color_level(
+            OV_LOGO_LINES[8],
+            ov_logo_width(),
+            8,
+            theme::ColorLevel::Ansi256,
+        );
+        colored::control::unset_override();
+
+        assert!(rendered.contains("\u{1b}[1;38;5;"));
+        assert!(!rendered.contains("38;2;"));
+        assert_eq!(ansi256_indexes(&rendered), vec![30]);
     }
 
     #[test]
@@ -4285,6 +4308,25 @@ mod tests {
             tagline_ice_color_for_theme(palette, width - 1, width),
             palette.tagline_end
         );
+    }
+
+    fn ansi256_indexes(rendered: &str) -> Vec<u8> {
+        let mut indexes = Vec::new();
+        let mut rest = rendered;
+        while let Some(start) = rest.find("38;5;") {
+            let value_start = start + "38;5;".len();
+            let digits: String = rest[value_start..]
+                .chars()
+                .take_while(|ch| ch.is_ascii_digit())
+                .collect();
+            if let Ok(index) = digits.parse::<u8>()
+                && !indexes.contains(&index)
+            {
+                indexes.push(index);
+            }
+            rest = &rest[value_start..];
+        }
+        indexes
     }
 
     #[test]
