@@ -159,6 +159,7 @@ This endpoint is the core entry point for resource management, supporting adding
 - When `to` is specified and the target already exists, triggers incremental update
 - When `watch_interval > 0`, the watch task binds to `to` if provided; otherwise it binds to the `root_uri` returned by this import. If no stable `root_uri` is available, the request fails and asks for an explicit `to`.
 - For local directory inputs, scanning respects `.gitignore` files (root and nested) with standard Git semantics; `ignore_dirs`, `include`, and `exclude` further refine what is ingested.
+- Local directory inputs skip symlink entries (both file and directory symlinks); files reached through their real (non-symlink) path are still ingested. A directory whose entries are all symlinks yields an empty archive (logged as a warning).
 - To create or update plain text directly, use [content/write](03-filesystem.md#write) instead of `add_resource`. Semantic processing and embeddings are refreshed automatically after resource ingestion and content writes.
 
 #### 3. Usage Examples
