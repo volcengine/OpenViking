@@ -78,8 +78,6 @@ ov health
 |`url`|是|OpenViking MCP 服务端点；CN 区固定为 `https://api\.vikingdb\.cn\-beijing\.volces\.com/openviking/mcp`|
 |`headers\.Authorization`|是|格式 `Bearer \&lt;API Key\&gt;`，来源见第一章|
 
----
-
 ## 三、常见问题（FAQ）
 
 |问题|解决建议|
@@ -87,4 +85,3 @@ ov health
 |连接失败 / 401 Unauthorized|检查 `Authorization` 是否带 `Bearer` 前缀；确认 API Key 未过期或被重置|
 |连接失败 / 网络超时<br>|确认网络可访问 `api\.vikingdb\.cn\-beijing\.volces\.com`；企业网络请配置代理白名单|
 |Agent 无法识别工具|检查 MCP Server 是否已\&\#34;启用\&\#34;；部分客户端需重启进程后加载新配置|
-

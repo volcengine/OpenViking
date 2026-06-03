@@ -74,8 +74,6 @@ ov health
 | `url` | Yes | OpenViking MCP endpoint. For CN, use `https://api.vikingdb.cn-beijing.volces.com/openviking/mcp` |
 | `headers.Authorization` | Yes | Format: `Bearer <API Key>`. Filled in during the steps above |
 
----
-
 ## 3. FAQ
 
 | Problem | Suggested fix |
