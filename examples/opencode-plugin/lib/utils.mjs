@@ -1,6 +1,7 @@
 import fs from "fs"
 import path from "path"
 import { homedir } from "os"
+import { createHash } from "crypto"
 
 export const DEFAULT_CONFIG = {
   endpoint: "http://localhost:1933",
@@ -8,6 +9,7 @@ export const DEFAULT_CONFIG = {
   account: "",
   user: "",
   agentId: "",
+  projectIsolation: true,
   enabled: true,
   timeoutMs: 30000,
   runtime: {
@@ -35,7 +37,7 @@ function cloneDefaultConfig() {
 
 function mergeConfig(fileConfig = {}) {
   const config = cloneDefaultConfig()
-  for (const key of ["endpoint", "apiKey", "account", "user", "agentId", "enabled", "timeoutMs"]) {
+  for (const key of ["endpoint", "apiKey", "account", "user", "agentId", "projectIsolation", "enabled", "timeoutMs"]) {
     if (fileConfig[key] !== undefined) config[key] = fileConfig[key]
   }
   config.runtime = {
@@ -69,6 +71,25 @@ function mergeConfig(fileConfig = {}) {
   return config
 }
 
+function resolveProjectAgentId(config, projectDirectory) {
+  if (config.projectIsolation === false) return config
+  if (process.env.OPENVIKING_AGENT_ID_OVERRIDE !== undefined) {
+    config.agentId = process.env.OPENVIKING_AGENT_ID_OVERRIDE
+    return config
+  }
+  if (!projectDirectory) return config
+
+  const projectPath = String(projectDirectory)
+  const projectName = sanitizeProjectName(path.basename(projectPath)) || "project"
+  const projectHash = createHash("sha1").update(projectPath).digest("hex").slice(0, 8)
+  config.agentId = `${config.agentId}-${projectName}-${projectHash}`
+  return config
+}
+
+function sanitizeProjectName(value) {
+  return String(value || "").replace(/[^A-Za-z0-9._-]/g, "")
+}
+
 function normalizeNumber(value, fallback, min, max) {
   const next = Number(value)
   if (!Number.isFinite(next)) return fallback
@@ -87,13 +108,13 @@ export function loadConfig(pluginRoot, projectDirectory) {
     try {
       if (fs.existsSync(configPath)) {
         const fileConfig = JSON.parse(fs.readFileSync(configPath, "utf8"))
-        return mergeConfig(fileConfig)
+        return resolveProjectAgentId(mergeConfig(fileConfig), projectDirectory)
       }
     } catch (error) {
       console.warn(`Failed to load OpenViking config from ${configPath}:`, error)
     }
   }
-  return mergeConfig()
+  return resolveProjectAgentId(mergeConfig(), projectDirectory)
 }
 
 function getConfigPaths(pluginRoot, projectDirectory) {
