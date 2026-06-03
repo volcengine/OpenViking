@@ -635,15 +635,17 @@ class VikingFS:
             # Check if it's temp directory (files already encrypted)
             is_temp = old_uri.startswith("viking://temp/")
 
-            # Copy source to destination (source still intact)
+            # Copy source to destination. Source must stay intact until vector updates succeed.
             try:
-                if is_temp or not self._encryptor:
-                    await self._async_agfs.cp(old_path, new_path, recursive=is_dir)
-                else:
-                    if is_dir:
-                        await self._recursive_copy_dir_with_encryption(old_uri, new_uri, ctx=ctx)
-                    else:
-                        await self.move_file(old_uri, new_uri, ctx=ctx)
+                await self._copy_for_mv(
+                    old_uri=old_uri,
+                    new_uri=new_uri,
+                    old_path=old_path,
+                    new_path=new_path,
+                    is_dir=is_dir,
+                    is_temp=is_temp,
+                    ctx=ctx,
+                )
             except Exception as e:
                 if "not found" in str(e).lower():
                     await self._delete_from_vector_store(uris_to_move, ctx=ctx)
@@ -675,37 +677,56 @@ class VikingFS:
             await self._async_agfs.rm(old_path, recursive=is_dir)
             return {}
 
-    async def _recursive_copy_dir_with_encryption(
+    async def _copy_for_mv(
+        self,
+        old_uri: str,
+        new_uri: str,
+        old_path: str,
+        new_path: str,
+        is_dir: bool,
+        is_temp: bool,
+        ctx: Optional[RequestContext] = None,
+    ) -> None:
+        """Copy source to destination for mv without deleting source."""
+        if is_temp or not self._encryptor:
+            await self._async_agfs.cp(old_path, new_path, recursive=is_dir)
+            return
+
+        if is_dir:
+            await self._copy_dir_through_vikingfs(old_uri, new_uri, ctx=ctx)
+        else:
+            await self._copy_file_through_vikingfs(old_uri, new_uri, ctx=ctx)
+
+    async def _copy_dir_through_vikingfs(
         self,
         old_uri: str,
         new_uri: str,
         ctx: Optional[RequestContext] = None,
     ) -> None:
-        """Recursively copy a directory, ensuring files are encrypted."""
+        """Recursively copy a directory through VikingFS read/write hooks."""
         await self.mkdir(new_uri, exist_ok=True, ctx=ctx)
 
-        max_iterations = 10
-        iteration = 0
+        entries = await self.ls(old_uri, show_all_hidden=True, ctx=ctx)
+        for entry in entries:
+            name = entry.get("name", "")
+            if not name or name in (".", ".."):
+                continue
+            old_child_uri = f"{old_uri.rstrip('/')}/{name}"
+            new_child_uri = f"{new_uri.rstrip('/')}/{name}"
+            if entry.get("isDir"):
+                await self._copy_dir_through_vikingfs(old_child_uri, new_child_uri, ctx=ctx)
+            else:
+                await self._copy_file_through_vikingfs(old_child_uri, new_child_uri, ctx=ctx)
 
-        while iteration < max_iterations:
-            entries = await self.ls(old_uri, ctx=ctx)
-            if not entries:
-                break
-
-            for entry in entries:
-                name = entry.get("name", "")
-                if not name or name in (".", ".."):
-                    continue
-                old_child_uri = f"{old_uri.rstrip('/')}/{name}"
-                new_child_uri = f"{new_uri.rstrip('/')}/{name}"
-                if entry.get("isDir"):
-                    await self._recursive_copy_dir_with_encryption(
-                        old_child_uri, new_child_uri, ctx=ctx
-                    )
-                else:
-                    await self.move_file(old_child_uri, new_child_uri, ctx=ctx)
-
-            iteration += 1
+    async def _copy_file_through_vikingfs(
+        self,
+        from_uri: str,
+        to_uri: str,
+        ctx: Optional[RequestContext] = None,
+    ) -> None:
+        """Copy one file through VikingFS read/write hooks without deleting source."""
+        content_bytes = await self.read_file_bytes(from_uri, ctx=ctx)
+        await self.write_file_bytes(to_uri, content_bytes, ctx=ctx)
 
     async def grep(
         self,
@@ -2465,8 +2486,7 @@ class VikingFS:
         self._ensure_mutable_access(to_uri, ctx)
         from_path = self._uri_to_path(from_uri, ctx=ctx)
 
-        content_bytes = await self.read_file_bytes(from_uri, ctx=ctx)
-        await self.write_file(to_uri, content_bytes, ctx=ctx)
+        await self._copy_file_through_vikingfs(from_uri, to_uri, ctx=ctx)
         await self._async_agfs.rm(from_path)
 
     # ========== Temp File Operations (backward compatible) ==========
