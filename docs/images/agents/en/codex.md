@@ -1,10 +1,8 @@
-# Codex Memory Plugin
-
 Add persistent cross-session memory to [Codex](https://developers.openai.com/codex). Install once: the plugin automatically recalls memory before every user prompt, captures updates after each turn, and commits before compaction. It also connects Codex to OpenViking's `/mcp` endpoint so the model can directly call tools such as search and store.
 
 Source: [examples/codex-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/codex-memory-plugin) | [Blog: motivation and demo](https://blog.openviking.ai/post/openviking-coding-agent/)
 
-## Install
+## Step 1: Install
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/codex-memory-plugin/setup-helper/install.sh)
@@ -32,7 +30,7 @@ Prerequisites: Node.js >= 22, Codex >= 0.130.0, and the `codex_hooks` feature en
 
 </details>
 
-## Verify
+## Step 2: Verify
 
 ```bash
 type codex         # Expected: codex is a shell function
@@ -73,7 +71,7 @@ For tuning options such as `OPENVIKING_RECALL_LIMIT` and `OPENVIKING_CAPTURE_ASS
 | Recall is empty | Server is unreachable or URL is wrong | `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` |
 | Hooks get 401 while MCP works, or vice versa | Environment and `ovcli.conf` differ | Hooks reread `ovcli.conf` each time; MCP reads env at startup. Restart Codex after changes. |
 
-## See also
+## Reference docs
 
 - [Blog: OpenViking for Claude Code / Codex](https://blog.openviking.ai/post/openviking-coding-agent/) - Why and how to add long-term memory to your coding agent
 - [Plugin README](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md) - Full environment variables and architecture diagram

@@ -1,6 +1,4 @@
-# Trae MCP Integration
-
-# 1. Use cases
+## 1. Use cases
 
 Use OpenViking to:
 
@@ -16,11 +14,9 @@ Use OpenViking to:
 
 ---
 
-# 2. Prerequisite: Get an API Key
+## 2. Prerequisite: Get an API Key
 
 All MCP clients use the same **Authorization Token**, which is the API Key from the OpenViking console. Get it first and keep it secure.
-
-## 2.1 Where to find it
 
 1. In the left menu, choose **User Management**.
 
@@ -30,27 +26,37 @@ All MCP clients use the same **Authorization Token**, which is the API Key from 
 
 **Security note**: The API Key is equivalent to an account secret. Do not commit it to Git or publish it anywhere. Prefer environment variables or encrypted configuration.
 
+![Copy OpenViking API Key](https://docs.openviking.net/agents/image/trae/01-api-key.jpg)
+
 ---
 
-# 3. Trae Integration Guide
+## 3. Trae Integration Guide
 
 **Trae** is an AI IDE from ByteDance. It natively supports loading external tools and context services through MCP. This is the standard OpenViking integration flow.
 
-## 3.1 Integration steps
+### 3.1 Integration steps
 
-### Step 1 - Open settings
+#### Step 1: Open settings
 
 In the Trae main window, click **Settings** in the upper-right corner to open the settings panel.
 
-### Step 2 - Open the MCP configuration page
+![Open Trae settings](https://docs.openviking.net/agents/image/trae/02-open-settings.jpg)
+
+#### Step 2: Open the MCP configuration page
 
 In the left menu, select **MCP** to open the MCP Servers page.
 
-### Step 3 - Add an MCP Server
+![Open the MCP configuration page](https://docs.openviking.net/agents/image/trae/03-mcp-settings.jpg)
+
+#### Step 3: Add an MCP Server
 
 Click the **+ Add** button on the right, then choose **Manual configuration** from the dropdown.
 
-### Step 4 - Paste the JSON configuration
+![Add MCP Server](https://docs.openviking.net/agents/image/trae/04-add-mcp-server.jpg)
+
+![Choose manual configuration](https://docs.openviking.net/agents/image/trae/05-manual-config.png)
+
+#### Step 4: Paste the JSON configuration
 
 In the configuration dialog, paste the following JSON and replace `Authorization` with the API Key copied in section 2:
 
@@ -69,21 +75,29 @@ In the configuration dialog, paste the following JSON and replace `Authorization
 
 **Important**: The `Authorization` value must include the `Bearer` prefix and a space. The full format is `Bearer <API Key>`.
 
-### Step 5 - Confirm and enable
+![Paste MCP JSON configuration](https://docs.openviking.net/agents/image/trae/06-paste-mcp-json.jpg)
+
+#### Step 5: Confirm and enable
 
 Click **Confirm**. Trae automatically connects to the MCP server and loads the tools. When the connection succeeds, `ov-mcp-server` appears in the configured MCP Servers list. The switch on the right should be green, which means the server is loaded and enabled.
 
-### Step 6 - Check MCP connectivity
+![Confirm and enable MCP Server](https://docs.openviking.net/agents/image/trae/07-enable-server.jpg)
+
+#### Step 6: Check MCP connectivity
 
 After connecting, run two simple queries in Trae to verify the MCP server:
 
-**1.** **`ov ls`** - List OpenViking root directories and confirm the connection returns the expected structure.
+**1.** **`ov ls`** - List the OpenViking root directories to confirm the connection is available and the directory structure is returned correctly.
 
-**2.** **`ov health`** - Call the health tool to confirm server status and current identity.
+![Run ov ls](https://docs.openviking.net/agents/image/trae/08-ov-ls.jpg)
+
+**2.** **`ov health`** - Call the health tool to confirm the OpenViking service status and current identity.
+
+![Run ov health](https://docs.openviking.net/agents/image/trae/09-ov-health.jpg)
 
 **Acceptance criteria**: `ov ls` returns directories such as `agent / resources / session / user`; `ov health` returns `service initialized` and the current username.
 
-## 3.2 Configuration fields
+### 3.2 Configuration fields
 
 | Field | Required | Description |
 |---|---|---|
@@ -94,7 +108,7 @@ After connecting, run two simple queries in Trae to verify the MCP server:
 
 ---
 
-# 4. FAQ
+## 4. FAQ
 
 | Problem | Suggested fix |
 |---|---|
