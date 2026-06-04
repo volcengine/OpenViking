@@ -10,11 +10,13 @@ import asyncio
 import contextlib
 import inspect
 import json
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_optional_viking_uri
@@ -522,6 +524,15 @@ class ResourceService:
                 kwargs.setdefault("request_validator", ensure_public_remote_target)
             if resource_lock is not None:
                 kwargs["resource_lock"] = resource_lock
+            if not to and not parent:
+                default_parent = self._default_parent_uri_for_url(path)
+                if default_parent:
+                    parent = validate_optional_viking_uri(
+                        default_parent,
+                        field_name="parent",
+                        allowed_scopes={"resources"},
+                    )
+                    kwargs["create_parent"] = True
 
             result = await self._resource_processor.process_resource(
                 path=path,
@@ -717,6 +728,30 @@ class ResourceService:
             return False
         html_content = result.get("_html_content", "")
         return bool(html_content)
+
+    def _get_parent_resource_uri(self, uri: Optional[str]) -> Optional[str]:
+        if not uri:
+            return None
+        normalized = uri.rstrip("/")
+        if normalized == "viking://resources":
+            return "viking://resources"
+        if "/" not in normalized.replace("viking://", "", 1):
+            return None
+        parent = normalized.rsplit("/", 1)[0]
+        if parent == "viking:":
+            return None
+        return parent
+
+    @staticmethod
+    def _default_parent_uri_for_url(source: str) -> Optional[str]:
+        parsed = urlparse(source)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            return None
+        host = parsed.hostname.rstrip(".").lower()
+        safe_host = re.sub(r"[^a-z0-9._-]+", "_", host).strip("._-")
+        if not safe_host:
+            return None
+        return f"viking://resources/{safe_host}"
 
     async def _crawl_and_add_resources(
         self,
