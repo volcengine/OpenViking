@@ -11,10 +11,19 @@ import {
 
 import { Button } from '#/components/ui/button'
 import { useAppConnection } from '#/hooks/use-app-connection'
+import {
+  getHealth,
+  getOvResult,
+  getSystemStatus,
+  postSystemWait,
+} from '#/lib/ov-client'
 import { cn } from '#/lib/utils'
 import {
+  fetchDirectoryLevelContent,
   fetchFileContent,
   fetchFsList,
+  fetchFsStat,
+  fetchFsTree,
   fetchSearch,
 } from '#/routes/resources/-lib/api'
 import { normalizeDirUri } from '#/routes/resources/-lib/normalize'
@@ -39,14 +48,11 @@ const TERMINAL_COMMAND_HISTORY_STORAGE_KEY =
 const TERMINAL_COMMAND_HISTORY_LIMIT = 50
 const URI_ARGUMENT_COMMANDS = new Set([
   '/abstract',
-  '/export',
-  '/glob',
-  '/grep',
   '/ls',
   '/overview',
   '/read',
-  '/relations',
   '/stat',
+  '/tree',
 ])
 
 type TerminalSuggestion = TerminalCommandView & {
@@ -56,7 +62,9 @@ type TerminalSuggestion = TerminalCommandView & {
 function loadCommandHistory(): string[] {
   if (typeof window === 'undefined') return []
   try {
-    const raw = window.localStorage.getItem(TERMINAL_COMMAND_HISTORY_STORAGE_KEY)
+    const raw = window.localStorage.getItem(
+      TERMINAL_COMMAND_HISTORY_STORAGE_KEY,
+    )
     const parsed: unknown = raw ? JSON.parse(raw) : []
     if (!Array.isArray(parsed)) return []
     return parsed
@@ -83,6 +91,20 @@ function persistCommandHistory(history: string[]): void {
 
 function extractVikingUris(text: string): string[] {
   return text.match(/viking:\/\/[^\s,，)）\]}】'"`]+/g) ?? []
+}
+
+function formatJson(value: unknown): string {
+  return JSON.stringify(value, null, 2)
+}
+
+function parseWaitTimeout(body: string): number | undefined {
+  const trimmed = body.trim()
+  if (!trimmed) return undefined
+  const match = trimmed.match(/^(?:--timeout\s+)?(\d+(?:\.\d+)?)$/)
+  if (!match) {
+    throw new Error('Usage: /wait [--timeout seconds]')
+  }
+  return Number(match[1])
 }
 
 export function TerminalPanel({
@@ -306,11 +328,49 @@ export function TerminalPanel({
         switch (name) {
           case '/status': {
             const root = await fetchFsList(ROOT_URI, { nodeLimit: 12 })
+            const status =
+              await getOvResult<Record<string, unknown>>(getSystemStatus())
             append({
-              body: t('terminal.onlineBody', { count: root.entries.length }),
+              body: `${t('terminal.onlineBody', { count: root.entries.length })}\n\n${formatJson(status)}`,
               kind: 'success',
               refs: root.entries.slice(0, 6).map(entryToRef),
               title: t('terminal.onlineTitle'),
+            })
+            return
+          }
+          case '/health': {
+            const health =
+              await getOvResult<Record<string, unknown>>(getHealth())
+            append({
+              body: formatJson(health),
+              kind: 'success',
+              title: 'health',
+            })
+            return
+          }
+          case '/version': {
+            const health =
+              await getOvResult<Record<string, unknown>>(getHealth())
+            append({
+              body: String(health.version ?? 'unknown'),
+              kind: 'success',
+              title: 'version',
+            })
+            return
+          }
+          case '/wait': {
+            const timeout = parseWaitTimeout(body)
+            const result = await getOvResult<unknown>(
+              postSystemWait({
+                body: {
+                  timeout,
+                },
+              }),
+            )
+            append({
+              body: formatJson(result),
+              kind: 'success',
+              title: 'wait',
             })
             return
           }
@@ -335,6 +395,38 @@ export function TerminalPanel({
             })
             return
           }
+          case '/tree': {
+            const target = body ? normalizeDirUri(body) : currentUri
+            const result = await fetchFsTree(target, {
+              nodeLimit: 80,
+              output: 'agent',
+              showAllHidden: true,
+            })
+            const visibleEntries = visibleContextEntries(result.nodes)
+            append({
+              body: t('terminal.lsBody', {
+                count: visibleEntries.length,
+                uri: target,
+              }),
+              kind: 'success',
+              refs: visibleEntries.map(entryToRef),
+              title: `tree ${target}`,
+            })
+            return
+          }
+          case '/stat': {
+            if (!body) throw new Error(t('terminal.enterUri'))
+            const uri = cleanVikingUri(body)
+            if (!uri) throw new Error(t('terminal.enterUri'))
+            const entry = await fetchFsStat(uri, { throwOnError: true })
+            append({
+              body: formatJson(entry),
+              kind: 'success',
+              refs: [entryToRef(entry)],
+              title: `stat ${uri}`,
+            })
+            return
+          }
           case '/read': {
             if (!body) throw new Error(t('terminal.readUsage'))
             const uri = cleanVikingUri(body)
@@ -349,6 +441,22 @@ export function TerminalPanel({
               kind: 'success',
               refs: [{ uri }],
               title: `read ${uri}`,
+            })
+            return
+          }
+          case '/abstract':
+          case '/overview': {
+            if (!body) throw new Error(t('terminal.enterUri'))
+            const uri = cleanVikingUri(body)
+            if (!uri) throw new Error(t('terminal.enterUri'))
+            const level = name === '/abstract' ? 'abstract' : 'overview'
+            const content = await fetchDirectoryLevelContent(uri, level)
+            await onOpenResource(uri)
+            append({
+              body: content || t('terminal.fileEmpty'),
+              kind: 'success',
+              refs: [{ uri }],
+              title: `${name.slice(1)} ${uri}`,
             })
             return
           }
@@ -383,16 +491,6 @@ export function TerminalPanel({
             return
           }
           default:
-            if (
-              commands.some(
-                (item) =>
-                  trimmed === item.command ||
-                  trimmed.startsWith(`${item.command} `) ||
-                  item.command.startsWith(`${trimmed} `),
-              )
-            ) {
-              throw new Error(t('terminal.unsupportedCommand'))
-            }
             throw new Error(t('terminal.unknownCommand'))
         }
       } catch (error) {
@@ -413,7 +511,6 @@ export function TerminalPanel({
       onOpenAddResource,
       onOpenResource,
       running,
-      commands,
       rememberCommand,
       t,
     ],
@@ -425,7 +522,10 @@ export function TerminalPanel({
     window.requestAnimationFrame(() => {
       const input = inputRef.current
       input?.focus()
-      input?.setSelectionRange(suggestion.insertText.length, suggestion.insertText.length)
+      input?.setSelectionRange(
+        suggestion.insertText.length,
+        suggestion.insertText.length,
+      )
     })
   }, [])
 
