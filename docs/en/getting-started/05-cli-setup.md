@@ -199,6 +199,8 @@ When you use `-o json` with the non-interactive config commands, successful resu
 {"status":"ok","result":{"action":"add","name":"prod"}}
 ```
 
+The result object depends on the subcommand. `add` and `edit` also include fields such as `kind`, `url`, `saved_path`, `active_path`, `activated`, and `validation`, so agents should not assume that only `action` and `name` are present.
+
 Errors are printed to stderr:
 
 ```json
@@ -221,6 +223,14 @@ Agents should branch on the process exit code and the JSON `error.code`, not on 
 ```bash
 ov config list -o json
 ```
+
+The list output shape is:
+
+```json
+{"status":"ok","result":[{"name":"prod","kind":"VolcEngine Cloud","url":"https://...","active":true}]}
+```
+
+For an existence check, inspect `result[].name`. To decide whether a config already needs switching, inspect the matching entry's `active` flag.
 
 If a suitable saved config already exists, activate it by name:
 

@@ -199,6 +199,8 @@ Agent 创建配置时始终传 `--name`。如果省略名称，`ov` 会随机生
 {"status":"ok","result":{"action":"add","name":"prod"}}
 ```
 
+`result` 对象会随子命令变化。`add` 和 `edit` 还会包含 `kind`、`url`、`saved_path`、`active_path`、`activated` 和 `validation` 等字段，因此 Agent 不应该假设结果里只有 `action` 和 `name`。
+
 错误结果会输出到 stderr：
 
 ```json
@@ -221,6 +223,14 @@ Agent 应该根据进程退出码和 JSON 中的 `error.code` 分支处理，不
 ```bash
 ov config list -o json
 ```
+
+列表输出形状如下：
+
+```json
+{"status":"ok","result":[{"name":"prod","kind":"VolcEngine Cloud","url":"https://...","active":true}]}
+```
+
+做存在性检查时，读取 `result[].name`。判断是否还需要切换 active config 时，读取匹配项的 `active` 标记。
 
 如果已经存在合适的 saved config，可以按名称激活：
 
