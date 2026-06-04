@@ -27,5 +27,3 @@ hermes memory status
 ## 参考文档
 
 - [Hermes — OpenViking memory provider 文档](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory-providers#openviking) — 完整配置指南
-- [部署指南](../guides/03-deployment.md) — 搭建 OpenViking 服务
-- [鉴权](../guides/04-authentication.md) — 远程访问的 API Key 设置

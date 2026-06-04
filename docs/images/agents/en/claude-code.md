@@ -28,7 +28,7 @@ If you prefer to install manually:
 
 3. **Start Claude Code** and run `/mcp` to confirm the OpenViking entry shows your server URL.
 
-> No `ovcli.conf` yet? Create it first via [Deployment Guide -> CLI](../guides/03-deployment.md#cli).
+> No `ovcli.conf` yet? Create it first via Deployment Guide -> CLI.
 >
 > Pure local mode (`http://127.0.0.1:1933`, no auth)? Skip step 1. The plugin silently uses the local defaults.
 >
@@ -92,5 +92,3 @@ The plugin renders OpenViking status below the Claude Code input box: connection
 - [Blog: OpenViking for Claude Code / Codex](https://blog.openviking.ai/post/openviking-coding-agent/) - Why and how to add long-term memory to your coding agent
 - [Plugin README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md) - Full environment variable table, hook details, and architecture diagram
 - [Migration guide](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/MIGRATION.md) - Upgrade from the old plugin
-- [MCP Clients](./06-mcp-clients.md) - MCP tool parameters and other clients
-- [Deployment Guide -> CLI](../guides/03-deployment.md#cli) - `ovcli.conf` configuration

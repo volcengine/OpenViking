@@ -76,5 +76,3 @@ For tuning options such as `OPENVIKING_RECALL_LIMIT` and `OPENVIKING_CAPTURE_ASS
 - [Blog: OpenViking for Claude Code / Codex](https://blog.openviking.ai/post/openviking-coding-agent/) - Why and how to add long-term memory to your coding agent
 - [Plugin README](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md) - Full environment variables and architecture diagram
 - [DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/DESIGN.md) - Commit decision tree
-- [MCP Clients](./06-mcp-clients.md) - MCP protocol, tool list, and other clients
-- [Deployment Guide -> CLI](../guides/03-deployment.md#cli) - `ovcli.conf` configuration

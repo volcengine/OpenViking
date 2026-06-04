@@ -25,5 +25,3 @@ After configuration, Hermes automatically uses OpenViking as long-term memory. M
 ## Reference docs
 
 - [Hermes - OpenViking memory provider documentation](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory-providers#openviking) - Full configuration guide
-- [Deployment Guide](../guides/03-deployment.md) - Set up the OpenViking service
-- [Authentication](../guides/04-authentication.md) - API Key settings for remote access

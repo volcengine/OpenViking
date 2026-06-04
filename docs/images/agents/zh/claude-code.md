@@ -28,7 +28,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/e
 
 3. **启动 Claude Code**，执行 `/mcp` 确认 OpenViking 这一项显示的是你的服务器 URL。
 
-> 还没有 `ovcli.conf`？先按 [部署指南 → CLI](../guides/03-deployment.md#cli) 创建。
+> 还没有 `ovcli.conf`？先按部署指南 → CLI 创建。
 >
 > 纯本地模式（`http://127.0.0.1:1933`，无鉴权）？跳过第 1 步——插件会静默使用本地默认值。
 >
@@ -97,5 +97,3 @@ type claude        # 期望输出：claude is a shell function
 - [博客：在 Claude Code / Codex 中接入 OpenViking](https://blog.openviking.ai/post/openviking-coding-agent/) — 为什么以及如何给你的 Coding Agent 加上长期记忆
 - [插件 README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md) — 完整环境变量表、hook 细节、架构图
 - [迁移说明](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/MIGRATION.md) — 从旧版插件升级
-- [MCP 客户端](./06-mcp-clients.md) — MCP 工具参数与其他客户端
-- [部署指南 → CLI](../guides/03-deployment.md#cli) — `ovcli.conf` 配置
