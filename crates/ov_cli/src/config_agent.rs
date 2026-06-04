@@ -462,6 +462,9 @@ async fn edit_saved_config(
     }
 
     let new_kind = ConfigKind::from_config(&edited);
+    if new_kind == ConfigKind::SelfManaged {
+        finalize_self_managed_identity(&mut edited)?;
+    }
     validate_config_for_write(&edited, new_kind, new_kind == ConfigKind::VolcengineCloud).await?;
 
     save_edited_config(
@@ -501,20 +504,23 @@ fn build_self_managed_config(
         ..Config::default()
     };
 
-    if config.api_key.is_none() && config.root_api_key.is_some() {
-        let root_api_key = config
-            .root_api_key
-            .clone()
-            .ok_or_else(|| AgentError::bad_input("A root API key is required."))?;
-        if config.account.is_none() || config.user.is_none() {
-            return Err(AgentError::auth(
-                "Root API keys require explicit --account and --user.",
-            ));
-        }
-        config.api_key = Some(root_api_key);
-    }
+    finalize_self_managed_identity(&mut config)?;
 
     Ok(config)
+}
+
+fn finalize_self_managed_identity(config: &mut Config) -> AgentResult<()> {
+    if config.api_key.is_none() {
+        config.api_key = config.root_api_key.clone();
+    }
+
+    if root_as_normal(config) && (config.account.is_none() || config.user.is_none()) {
+        return Err(AgentError::auth(
+            "Root API keys require explicit --account and --user.",
+        ));
+    }
+
+    Ok(())
 }
 
 async fn validate_config_for_write(
@@ -534,10 +540,6 @@ async fn validate_config_for_write(
             }
             Err(error) => return Err(validation_error(kind, error)),
         }
-    }
-
-    if config.api_key.is_none() && config.root_api_key.is_some() {
-        return Ok(());
     }
 
     let api_key_role = match validate_candidate_config_with_role(config, require_api_key).await {
@@ -928,6 +930,10 @@ mod tests {
     use super::*;
     use crate::config_wizard::ConfigStore;
     use std::time::{SystemTime, UNIX_EPOCH};
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
 
     fn unique_dir(name: &str) -> PathBuf {
         let suffix = SystemTime::now()
@@ -942,6 +948,83 @@ mod tests {
         config.url = url.to_string();
         config.api_key = api_key.map(ToString::to_string);
         config
+    }
+
+    fn edit_args(name: &str) -> ConfigEditArgs {
+        ConfigEditArgs {
+            name: name.to_string(),
+            new_name: None,
+            url: None,
+            api_key_stdin: false,
+            api_key_env: None,
+            clear_api_key: false,
+            root_api_key_stdin: false,
+            root_api_key_env: None,
+            clear_root_api_key: false,
+            account: None,
+            user: None,
+            activate: false,
+            force: false,
+        }
+    }
+
+    fn http_response(status: u16, body: &str) -> String {
+        let reason = match status {
+            200 => "OK",
+            401 => "Unauthorized",
+            403 => "Forbidden",
+            404 => "Not Found",
+            500 => "Internal Server Error",
+            _ => "OK",
+        };
+        format!(
+            "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    async fn spawn_root_validation_server(
+        root_api_key: &'static str,
+        account: &'static str,
+        user: &'static str,
+    ) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test server should bind");
+        let addr = listener.local_addr().expect("test server should have addr");
+        tokio::spawn(async move {
+            for _ in 0..6 {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let mut buffer = vec![0; 4096];
+                let Ok(read) = stream.read(&mut buffer).await else {
+                    return;
+                };
+                let request = String::from_utf8_lossy(&buffer[..read]);
+                let lower_request = request.to_ascii_lowercase();
+                let root_header = format!("x-api-key: {root_api_key}");
+                let account_header = format!("x-openviking-account: {account}");
+                let user_header = format!("x-openviking-user: {user}");
+                let has_root_identity = lower_request.contains(&root_header)
+                    && lower_request.contains(&account_header)
+                    && lower_request.contains(&user_header);
+                let response = if request.starts_with("GET /health ") {
+                    http_response(200, r#"{"healthy":true,"auth_mode":"api_key"}"#)
+                } else if request.starts_with("GET /api/v1/system/status ") && has_root_identity {
+                    http_response(200, r#"{"status":"ok","result":{"initialized":true}}"#)
+                } else if request.starts_with("GET /api/v1/admin/accounts ") && has_root_identity {
+                    http_response(200, r#"{"accounts":[]}"#)
+                } else {
+                    http_response(
+                        401,
+                        r#"{"error":{"code":"AuthenticationError","message":"invalid auth"}}"#,
+                    )
+                };
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+        format!("http://{addr}")
     }
 
     #[test]
@@ -1050,6 +1133,105 @@ mod tests {
         .expect_err("root key without account should fail");
 
         assert_eq!(error.exit_code(), EXIT_AUTH);
+    }
+
+    #[test]
+    fn self_managed_finalization_promotes_root_only_to_root_as_normal() {
+        let mut config = sample_config("http://127.0.0.1:1933", None);
+        config.root_api_key = Some("root-key".to_string());
+        config.account = Some("acme".to_string());
+        config.user = Some("alice".to_string());
+
+        finalize_self_managed_identity(&mut config).expect("root-only config should finalize");
+
+        assert_eq!(config.api_key.as_deref(), Some("root-key"));
+        assert_eq!(config.root_api_key.as_deref(), Some("root-key"));
+    }
+
+    #[test]
+    fn self_managed_finalization_rejects_root_as_normal_without_identity() {
+        let mut config = sample_config("http://127.0.0.1:1933", None);
+        config.root_api_key = Some("root-key".to_string());
+        config.user = Some("alice".to_string());
+
+        let error = finalize_self_managed_identity(&mut config)
+            .expect_err("root-as-normal requires explicit account and user");
+
+        assert_eq!(error.exit_code(), EXIT_AUTH);
+    }
+
+    #[test]
+    fn add_and_edit_finalization_converge_on_root_as_normal_shape() {
+        let add_config = build_self_managed_config(
+            "http://127.0.0.1:1933".to_string(),
+            None,
+            Some("root-key".to_string()),
+            Some("acme".to_string()),
+            Some("alice".to_string()),
+        )
+        .expect("add path should build root-as-normal config");
+
+        let mut edit_config = sample_config("http://127.0.0.1:1933", None);
+        edit_config.root_api_key = Some("root-key".to_string());
+        edit_config.account = Some("acme".to_string());
+        edit_config.user = Some("alice".to_string());
+        finalize_self_managed_identity(&mut edit_config)
+            .expect("edit path should finalize to root-as-normal config");
+
+        assert_eq!(edit_config.api_key, add_config.api_key);
+        assert_eq!(edit_config.root_api_key, add_config.root_api_key);
+        assert_eq!(edit_config.account, add_config.account);
+        assert_eq!(edit_config.user, add_config.user);
+    }
+
+    #[tokio::test]
+    async fn edit_clear_api_key_with_root_identity_becomes_root_as_normal() {
+        let dir = unique_dir("edit-clear-api-root-normal");
+        fs::create_dir_all(&dir).expect("dir should exist");
+        let store = ConfigStore::for_config_dir(dir);
+        let url = spawn_root_validation_server("root-key", "acme", "alice").await;
+        let mut config = sample_config(&url, Some("user-key"));
+        config.root_api_key = Some("root-key".to_string());
+        config.account = Some("acme".to_string());
+        config.user = Some("alice".to_string());
+        store
+            .save_named_config("local", &config)
+            .expect("config should be saved");
+
+        let mut args = edit_args("local");
+        args.clear_api_key = true;
+        edit_saved_config(&store, args)
+            .await
+            .expect("clear API key should promote root key for normal commands");
+
+        let saved = store
+            .load_saved_config("local")
+            .expect("saved config should load");
+        assert_eq!(saved.api_key.as_deref(), Some("root-key"));
+        assert_eq!(saved.root_api_key.as_deref(), Some("root-key"));
+        assert_eq!(saved.account.as_deref(), Some("acme"));
+        assert_eq!(saved.user.as_deref(), Some("alice"));
+    }
+
+    #[tokio::test]
+    async fn edit_clear_api_key_with_root_without_identity_is_refused() {
+        let dir = unique_dir("edit-clear-api-root-no-identity");
+        fs::create_dir_all(&dir).expect("dir should exist");
+        let store = ConfigStore::for_config_dir(dir);
+        let mut config = sample_config("http://127.0.0.1:1933", Some("user-key"));
+        config.root_api_key = Some("root-key".to_string());
+        store
+            .save_named_config("local", &config)
+            .expect("config should be saved");
+
+        let mut args = edit_args("local");
+        args.clear_api_key = true;
+        let error = edit_saved_config(&store, args)
+            .await
+            .expect_err("root-as-normal edit without identity should fail");
+
+        assert_eq!(error.exit_code(), EXIT_AUTH);
+        assert!(error.message.contains("--account and --user"));
     }
 
     #[test]
