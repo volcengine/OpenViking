@@ -23,6 +23,13 @@ class StorageConfig(BaseModel):
     """
 
     workspace: str = Field(default="./data", description="Local data storage path (primary)")
+    skip_process_lock: bool = Field(
+        default=False,
+        description=(
+            "Skip the startup PID lock for the workspace directory. Use only when you "
+            "explicitly accept the risk of multi-process storage contention."
+        ),
+    )
 
     agfs: AGFSConfig = Field(default_factory=AGFSConfig, description="AGFS configuration")
 

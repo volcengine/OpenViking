@@ -242,9 +242,15 @@ class OpenVikingService:
 
         # Acquire advisory lock on data directory to prevent multi-process
         # contention (see https://github.com/volcengine/OpenViking/issues/473).
-        from openviking.utils.process_lock import acquire_data_dir_lock
+        if not self._config.storage.skip_process_lock:
+            from openviking.utils.process_lock import acquire_data_dir_lock
 
-        acquire_data_dir_lock(self._config.storage.workspace)
+            acquire_data_dir_lock(self._config.storage.workspace)
+        else:
+            logger.warning(
+                "Skipping workspace process lock for '%s'; multi-process access may corrupt data",
+                self._config.storage.workspace,
+            )
 
         if self._vikingdb_manager is None:
             self._init_storage(

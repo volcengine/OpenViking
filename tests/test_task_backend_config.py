@@ -40,6 +40,16 @@ def test_storage_config_ignores_deprecated_task_tracker_config(monkeypatch):
     assert any("deprecated and ignored" in message for message in warnings)
 
 
+def test_storage_config_defaults_skip_process_lock_to_false():
+    config = StorageConfig()
+    assert config.skip_process_lock is False
+
+
+def test_storage_config_accepts_skip_process_lock():
+    config = StorageConfig(skip_process_lock=True)
+    assert config.skip_process_lock is True
+
+
 def test_storage_config_builds_persistent_task_tracker():
     tracker = StorageConfig().build_task_tracker(_FakeAgfs())
     assert isinstance(tracker, TaskTracker)
