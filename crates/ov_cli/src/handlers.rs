@@ -35,26 +35,9 @@ pub async fn handle_add_resource(
         let unescaped_path = path.replace("\\ ", " ");
         let path_obj = Path::new(&unescaped_path);
         if !path_obj.exists() {
-            eprintln!("Error: Path '{}' does not exist.", path);
-
-            // Check if there might be unquoted spaces
-            use std::env;
-            let args: Vec<String> = env::args().collect();
-
-            if let Some(add_resource_pos) =
-                args.iter().position(|s| s == "add-resource" || s == "add")
-            {
-                if args.len() > add_resource_pos + 2 {
-                    let extra_args = &args[add_resource_pos + 2..];
-                    let suggested_path = format!("{} {}", path, extra_args.join(" "));
-                    eprintln!(
-                        "\nIt looks like you may have forgotten to quote a path with spaces."
-                    );
-                    eprintln!("Suggested command: ov add-resource \"{}\"", suggested_path);
-                }
-            }
-
-            std::process::exit(1);
+            return Err(Error::Client(format!(
+                "Local path does not exist: {path}. If the path contains spaces, wrap it in quotes."
+            )));
         }
         path = unescaped_path;
     }
@@ -72,10 +55,9 @@ pub async fn handle_add_resource(
     }
 
     if exclusive_count > 1 {
-        eprintln!(
-            "Error: Cannot specify more than one of --to, --parent, or --parent-auto-create at the same time."
-        );
-        std::process::exit(1);
+        return Err(Error::Client(
+            "Specify only one of --to, --parent, or --parent-auto-create.".to_string(),
+        ));
     }
 
     let strict = strict_mode;
@@ -632,7 +614,7 @@ pub async fn handle_config(cmd: Option<ConfigCommands>, _ctx: CliContext) -> Res
 pub async fn handle_language(value: Option<String>) -> Result<()> {
     let language = match value {
         Some(value) => Language::from_code(&value).ok_or_else(|| {
-            Error::Config(format!(
+            Error::Language(format!(
                 "Unsupported language '{value}'. Use 'en' or 'zh-CN'."
             ))
         })?,
@@ -1300,16 +1282,9 @@ pub async fn handle_grep(
 ) -> Result<()> {
     // Prevent grep from root directory to avoid excessive server load and timeouts
     if uri == "viking://" || uri == "viking:///" {
-        eprintln!(
-            "Error: Cannot grep from root directory 'viking://'.\n\
-             Grep from root would search across all scopes (resources, user, agent, session, queue, temp),\n\
-             which may cause server timeout or excessive load.\n\
-             Please specify a more specific scope, e.g.:\n\
-               ov grep --uri=viking://resources '{}'\n\
-               ov grep --uri=viking://user '{}'",
-            pattern, pattern
-        );
-        std::process::exit(1);
+        return Err(Error::Client(format!(
+            "Cannot grep from root directory 'viking://'. Use a more specific scope, for example `ov grep --uri=viking://resources {pattern}`."
+        )));
     }
 
     let mut params = vec![
@@ -1389,16 +1364,7 @@ pub async fn handle_tui(uri: String, ctx: CliContext) -> Result<()> {
                 println!("Warning: Server reports unhealthy status");
             }
         }
-        Err(e) => {
-            println!("Error: Failed to connect to server at {}", ctx.config.url);
-            println!("{}", e);
-            println!("\nPlease check:");
-            println!("  1. The server is running");
-            println!("  2. The URL is correct");
-            println!("  3. Your API key is valid (if required)");
-            println!("\nRun `ov config` to reconfigure if needed.");
-            std::process::exit(1);
-        }
+        Err(e) => return Err(e),
     }
 
     tui::run_tui(client, &uri).await

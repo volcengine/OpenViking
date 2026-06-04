@@ -2,8 +2,14 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum Error {
+    #[error("No ovcli.conf detected. Run ov config to create one before using server commands.")]
+    MissingConfig,
+
     #[error("Configuration error: {0}")]
     Config(String),
+
+    #[error("Language error: {0}")]
+    Language(String),
 
     #[error("Network error: {0}")]
     Network(String),

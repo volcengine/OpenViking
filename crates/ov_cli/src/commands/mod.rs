@@ -7,6 +7,7 @@ pub mod observer;
 pub mod pack;
 pub mod privacy;
 pub mod relations;
+pub(crate) mod render_utils;
 pub mod resources;
 pub mod search;
 pub mod session;

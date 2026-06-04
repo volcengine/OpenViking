@@ -52,6 +52,11 @@ const CORE_WORKFLOW: &[HelpCommand] = &[
         badge: None,
     },
     HelpCommand {
+        name: "add-skill",
+        description: "Add a skill into OpenViking",
+        badge: None,
+    },
+    HelpCommand {
         name: "find",
         description: "Retrieve relevant context semantically",
         badge: None,
@@ -134,17 +139,17 @@ const SEARCH_CONTEXT: &[HelpCommand] = &[
     },
     HelpCommand {
         name: "abstract",
-        description: "Read L0 abstract",
+        description: "Read Level 0 abstract",
         badge: None,
     },
     HelpCommand {
         name: "overview",
-        description: "Read L1 overview",
+        description: "Read Level 1 overview",
         badge: None,
     },
     HelpCommand {
         name: "read",
-        description: "Read L2 content",
+        description: "Read Level 2 content",
         badge: None,
     },
 ];
@@ -172,7 +177,7 @@ const CONFIG_STATUS: &[HelpCommand] = &[
     },
     HelpCommand {
         name: "language",
-        description: "Choose CLI display language",
+        description: "Choose CLI display language (alias: lang)",
         badge: None,
     },
     HelpCommand {
@@ -186,6 +191,11 @@ const CONFIG_STATUS: &[HelpCommand] = &[
         badge: None,
     },
     HelpCommand {
+        name: "observer",
+        description: "Inspect server subsystems",
+        badge: None,
+    },
+    HelpCommand {
         name: "wait",
         description: "Wait for async work",
         badge: None,
@@ -193,6 +203,11 @@ const CONFIG_STATUS: &[HelpCommand] = &[
     HelpCommand {
         name: "task",
         description: "Track async tasks",
+        badge: None,
+    },
+    HelpCommand {
+        name: "version",
+        description: "Show CLI version",
         badge: None,
     },
 ];
@@ -664,7 +679,7 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     },
     CommandHelpSpec {
         path: &["read"],
-        purpose: "Read exact L2 file content from a Viking URI.",
+        purpose: "Read exact Level 2 file content from a Viking URI.",
         usage: "ov read <uri>",
         examples: &[HelpItem {
             label: "ov read viking://projects/acme/spec.md",
@@ -690,7 +705,7 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     },
     CommandHelpSpec {
         path: &["abstract"],
-        purpose: "Read L0 abstract content for a directory.",
+        purpose: "Read Level 0 abstract content for a directory.",
         usage: "ov abstract <directory-uri>",
         examples: &[HelpItem {
             label: "ov abstract viking://projects/acme",
@@ -705,12 +720,12 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         subcommands: &[],
         next_steps: &[HelpItem {
             label: "ov overview <directory-uri>",
-            description: "Read a richer L1 overview.",
+            description: "Read a richer Level 1 overview.",
         }],
     },
     CommandHelpSpec {
         path: &["overview"],
-        purpose: "Read L1 overview content for a directory.",
+        purpose: "Read Level 1 overview content for a directory.",
         usage: "ov overview <directory-uri>",
         examples: &[HelpItem {
             label: "ov overview viking://projects/acme",
@@ -725,7 +740,7 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         subcommands: &[],
         next_steps: &[HelpItem {
             label: "ov read <file-uri>",
-            description: "Open exact L2 content.",
+            description: "Open exact Level 2 content.",
         }],
     },
     CommandHelpSpec {
@@ -831,7 +846,7 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             },
             HelpItem {
                 label: "-n, --node-limit <n>",
-                description: "Maximum number of results.",
+                description: "Maximum final results returned.",
             },
             HelpItem {
                 label: "-t, --threshold <score>",
@@ -887,7 +902,7 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             },
             HelpItem {
                 label: "-n, --node-limit <n>",
-                description: "Maximum number of results.",
+                description: "Maximum results per search pass. Search may merge multiple passes.",
             },
         ],
         advanced_options: &[
@@ -1658,6 +1673,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 label: "ov language zh-CN",
                 description: "Switch display text to Simplified Chinese.",
             },
+            HelpItem {
+                label: "ov lang en",
+                description: "Use the short alias to switch display text to English.",
+            },
         ],
         arguments: &[HelpItem {
             label: "language",
@@ -1821,7 +1840,7 @@ pub(crate) fn is_top_level_help_request(args: &[OsString]) -> bool {
 
     matches!(
         args[1].to_string_lossy().as_ref(),
-        "--help" | "-h" | "-help" | "help"
+        "--help" | "-h" | "-help"
     )
 }
 
@@ -2075,6 +2094,7 @@ fn localized_help_item_description<'a>(
         "ov config switch" => "选择一个已保存配置并设为当前配置。",
         "ov language" => "打开语言选择器。",
         "ov language zh-CN" => "将显示语言切换为简体中文。",
+        "ov lang en" => "使用短别名切换为英文显示。",
         "language" => "可选语言代码：en 或 zh-CN。",
         "-o, --output <table|json>" => "选择表格输出或机器可读 JSON。",
         "-c, --compact <bool>" => "使用紧凑的表格或 JSON 输出。",
@@ -2205,6 +2225,7 @@ fn localized_command_description<'a>(
     }
     match name {
         "add-resource" => "添加文件、文件夹、URL 或仓库",
+        "add-skill" => "添加技能到 OpenViking",
         "find" => "语义检索相关上下文",
         "read" => "读取精确资源内容",
         "write" => "更新已有资源",
@@ -2245,7 +2266,7 @@ fn localized_command_description<'a>(
         "privacy" => "管理隐私策略",
         "reindex" => "重建语义和向量索引",
         "version" => "显示版本信息",
-        "language" => "选择 CLI 显示语言",
+        "language" => "选择 CLI 显示语言（别名：lang）",
         _ => description,
     }
 }
@@ -2257,15 +2278,6 @@ fn command_help_path(args: &[OsString]) -> Option<Vec<String>> {
         .collect();
     if tokens.len() < 2 {
         return None;
-    }
-
-    if tokens.get(1).is_some_and(|token| token == "help") {
-        let path: Vec<String> = tokens[2..]
-            .iter()
-            .filter(|token| !token.starts_with('-'))
-            .map(|token| canonical_command_token(token))
-            .collect();
-        return if path.is_empty() { None } else { Some(path) };
     }
 
     let has_help_flag = tokens.iter().skip(1).any(|token| is_help_flag(token));
@@ -2297,9 +2309,8 @@ fn command_help_path(args: &[OsString]) -> Option<Vec<String>> {
             } else if !next.starts_with('-') {
                 if has_help_flag && path.len() == 1 && allows_curated_nested(&path[0]) {
                     path.push(canonical_command_token(next));
-                } else {
-                    return None;
                 }
+                return if has_help_flag { Some(path) } else { None };
             } else {
                 return None;
             }
@@ -2377,8 +2388,8 @@ fn consumes_value(token: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        HELP_SECTIONS, command_help_path, display_width, render_command_help_request,
-        render_top_level_help,
+        COMMAND_HELP_SPECS, HELP_SECTIONS, command_help_path, display_width,
+        render_command_help_request, render_top_level_help,
     };
     use super::{command_spec, is_top_level_help_request};
     use std::ffi::OsString;
@@ -2412,7 +2423,7 @@ mod tests {
         assert!(is_top_level_help_request(&os_args(&["ov", "--help"])));
         assert!(is_top_level_help_request(&os_args(&["ov", "-h"])));
         assert!(is_top_level_help_request(&os_args(&["ov", "-help"])));
-        assert!(is_top_level_help_request(&os_args(&["ov", "help"])));
+        assert!(!is_top_level_help_request(&os_args(&["ov", "help"])));
 
         assert!(!is_top_level_help_request(&os_args(&[
             "ov", "config", "--help"
@@ -2485,6 +2496,30 @@ mod tests {
     }
 
     #[test]
+    fn top_level_help_exposes_all_curated_top_level_commands() {
+        let top_level_names: Vec<&str> = HELP_SECTIONS
+            .iter()
+            .flat_map(|section| section.commands.iter().map(|command| command.name))
+            .collect();
+
+        for spec in COMMAND_HELP_SPECS
+            .iter()
+            .filter(|spec| spec.path.len() == 1)
+        {
+            let command = spec.path[0];
+            assert!(
+                top_level_names.contains(&command),
+                "top-level help is missing curated command {command}"
+            );
+        }
+
+        let rendered = strip_ansi(&render_top_level_help());
+        for expected in ["add-skill", "observer", "version", "alias: lang"] {
+            assert!(rendered.contains(expected), "missing {expected}");
+        }
+    }
+
+    #[test]
     fn renders_curated_find_help() {
         let rendered = strip_ansi(
             &render_command_help_request(&os_args(&["ov", "find", "--help"]))
@@ -2497,6 +2532,22 @@ mod tests {
         assert!(rendered.contains("Common options"));
         assert!(rendered.contains("Next"));
         assert!(rendered.contains("ov read <uri>"));
+    }
+
+    #[test]
+    fn find_and_search_help_explain_node_limit_semantics() {
+        let find_help = strip_ansi(
+            &render_command_help_request(&os_args(&["ov", "find", "--help"]))
+                .expect("find help should render"),
+        );
+        let search_help = strip_ansi(
+            &render_command_help_request(&os_args(&["ov", "search", "--help"]))
+                .expect("search help should render"),
+        );
+
+        assert!(find_help.contains("Maximum final results returned."));
+        assert!(search_help.contains("Maximum results per search pass."));
+        assert!(search_help.contains("Search may merge multiple passes."));
     }
 
     #[test]
@@ -2527,7 +2578,8 @@ mod tests {
     fn renders_curated_config_switch_help_from_both_help_forms() {
         for args in [
             os_args(&["ov", "config", "switch", "--help"]),
-            os_args(&["ov", "help", "config", "switch"]),
+            os_args(&["ov", "config", "switch", "-h"]),
+            os_args(&["ov", "config", "switch", "-help"]),
         ] {
             let rendered = strip_ansi(
                 &render_command_help_request(&args).expect("config switch help should render"),
@@ -2628,7 +2680,25 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_nested_help_falls_back_to_clap() {
-        assert!(render_command_help_request(&os_args(&["ov", "task", "list", "--help"])).is_none());
+    fn unsupported_nested_prefixed_help_renders_parent_group_help() {
+        let rendered = strip_ansi(
+            &render_command_help_request(&os_args(&["ov", "task", "list", "--help"]))
+                .expect("task list help should render parent task help"),
+        );
+
+        assert!(rendered.contains("ov task <subcommand>"));
+        assert!(rendered.contains("Inspect and manage async processing tasks."));
+        assert!(rendered.contains("Subcommands"));
+    }
+
+    #[test]
+    fn prefixed_help_with_positional_value_renders_curated_command_help() {
+        let rendered = strip_ansi(
+            &render_command_help_request(&os_args(&["ov", "ls", "viking://projects", "--help"]))
+                .expect("ls help with positional value should render curated ls help"),
+        );
+
+        assert!(rendered.contains("ov ls [uri]"));
+        assert!(rendered.contains("List resources under a Viking URI."));
     }
 }

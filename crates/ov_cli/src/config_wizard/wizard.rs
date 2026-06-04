@@ -41,6 +41,29 @@ enum IdentityMode {
     RootKey,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SelfManagedKeyMode {
+    NoKey,
+    UserKey,
+    RootKey,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SelfManagedEditKeyAction {
+    Keep,
+    SetUserKey,
+    SetRootKey,
+    UseRootForNormal,
+    ClearRootKey,
+    ClearAllKeys,
+}
+
+#[derive(Clone, Copy)]
+enum IdentityField {
+    Account,
+    User,
+}
+
 const OV_LOGO_LINES: [&str; 14] = [
     "",
     "             ⢻⣶⣄",
@@ -228,7 +251,7 @@ fn kind_label(kind: ConfigKind) -> &'static str {
 
 fn provider_labels(language: Language) -> [&'static str; 2] {
     match language {
-        Language::En => ["Volcengine Cloud", "Self-Managed"],
+        Language::En => ["VolcEngine Cloud", "Self-Managed"],
         Language::ZhCn => ["火山引擎云", "自托管"],
     }
 }
@@ -240,6 +263,185 @@ fn api_key_label(optional: bool) -> &'static str {
         (Language::ZhCn, true) => "API Key（可选）",
         (Language::ZhCn, false) => "API Key",
     }
+}
+
+fn self_managed_api_key_input_label(mode: SelfManagedKeyMode) -> &'static str {
+    match (Language::current(), mode) {
+        (Language::En, SelfManagedKeyMode::RootKey) => "Root API key",
+        (Language::En, SelfManagedKeyMode::UserKey) => "User API key",
+        (Language::En, SelfManagedKeyMode::NoKey) => "API key",
+        (Language::ZhCn, SelfManagedKeyMode::RootKey) => "Root API Key",
+        (Language::ZhCn, SelfManagedKeyMode::UserKey) => "User API Key",
+        (Language::ZhCn, SelfManagedKeyMode::NoKey) => "API Key",
+    }
+}
+
+fn self_managed_api_key_input_helper_lines(mode: SelfManagedKeyMode) -> Vec<String> {
+    let copy = match (Language::current(), mode) {
+        (Language::En, SelfManagedKeyMode::RootKey) => {
+            "For self-hosted admin setup and --sudo commands."
+        }
+        (Language::En, SelfManagedKeyMode::UserKey) => "For normal OpenViking commands.",
+        (Language::En, SelfManagedKeyMode::NoKey) => {
+            "Optional for local servers. Add one if auth is enabled."
+        }
+        (Language::ZhCn, SelfManagedKeyMode::RootKey) => "用于自托管管理初始化和 --sudo 命令。",
+        (Language::ZhCn, SelfManagedKeyMode::UserKey) => "用于常规 OpenViking 命令。",
+        (Language::ZhCn, SelfManagedKeyMode::NoKey) => "本地服务可不填；如果启用了认证，请填写。",
+    };
+    vec![theme::muted(copy).to_string()]
+}
+
+#[cfg(test)]
+fn self_managed_key_mode_labels(allow_empty: bool) -> Vec<&'static str> {
+    self_managed_key_mode_labels_for_language(allow_empty, Language::En)
+}
+
+fn self_managed_key_mode_labels_for_language(
+    allow_empty: bool,
+    language: Language,
+) -> Vec<&'static str> {
+    match (allow_empty, language) {
+        (true, Language::En) => vec!["No key / local dev", "User API key", "Root API key"],
+        (false, Language::En) => vec!["User API key", "Root API key"],
+        (true, Language::ZhCn) => vec!["无密钥 / 本地开发", "User API Key", "Root API Key"],
+        (false, Language::ZhCn) => vec!["User API Key", "Root API Key"],
+    }
+}
+
+fn self_managed_key_mode_for_selection(allow_empty: bool, index: usize) -> SelfManagedKeyMode {
+    match (allow_empty, index) {
+        (true, 0) => SelfManagedKeyMode::NoKey,
+        (true, 1) | (false, 0) => SelfManagedKeyMode::UserKey,
+        _ => SelfManagedKeyMode::RootKey,
+    }
+}
+
+fn edit_self_managed_key_actions(
+    has_normal_user_key: bool,
+    has_root_key: bool,
+) -> Vec<SelfManagedEditKeyAction> {
+    if !has_normal_user_key && !has_root_key {
+        return vec![
+            SelfManagedEditKeyAction::SetUserKey,
+            SelfManagedEditKeyAction::SetRootKey,
+        ];
+    }
+
+    let mut actions = vec![
+        SelfManagedEditKeyAction::Keep,
+        SelfManagedEditKeyAction::SetUserKey,
+        SelfManagedEditKeyAction::SetRootKey,
+    ];
+    if has_normal_user_key && has_root_key {
+        actions.push(SelfManagedEditKeyAction::UseRootForNormal);
+    }
+    if has_root_key {
+        actions.push(SelfManagedEditKeyAction::ClearRootKey);
+    }
+    actions.push(SelfManagedEditKeyAction::ClearAllKeys);
+    actions
+}
+
+#[cfg(test)]
+fn edit_self_managed_key_action_labels(
+    has_normal_user_key: bool,
+    has_root_key: bool,
+) -> Vec<&'static str> {
+    edit_self_managed_key_actions(has_normal_user_key, has_root_key)
+        .into_iter()
+        .map(self_managed_edit_key_action_label)
+        .collect()
+}
+
+fn self_managed_edit_key_action_label(action: SelfManagedEditKeyAction) -> &'static str {
+    match (Language::current(), action) {
+        (Language::En, SelfManagedEditKeyAction::Keep) => "Keep existing API keys",
+        (Language::En, SelfManagedEditKeyAction::SetUserKey) => "Set normal user API key",
+        (Language::En, SelfManagedEditKeyAction::SetRootKey) => "Set root API key",
+        (Language::En, SelfManagedEditKeyAction::UseRootForNormal) => {
+            "Use root key for normal commands"
+        }
+        (Language::En, SelfManagedEditKeyAction::ClearRootKey) => "Clear root API key",
+        (Language::En, SelfManagedEditKeyAction::ClearAllKeys) => "Clear all API keys",
+        (Language::ZhCn, SelfManagedEditKeyAction::Keep) => "保留现有 API Key",
+        (Language::ZhCn, SelfManagedEditKeyAction::SetUserKey) => "设置普通用户 API Key",
+        (Language::ZhCn, SelfManagedEditKeyAction::SetRootKey) => "设置 Root API Key",
+        (Language::ZhCn, SelfManagedEditKeyAction::UseRootForNormal) => {
+            "使用 Root Key 执行常规命令"
+        }
+        (Language::ZhCn, SelfManagedEditKeyAction::ClearRootKey) => "清除 Root API Key",
+        (Language::ZhCn, SelfManagedEditKeyAction::ClearAllKeys) => "清除所有 API Key",
+    }
+}
+
+fn root_key_redirect_labels() -> [&'static str; 3] {
+    match Language::current() {
+        Language::En => ["Continue as root key", "Re-enter user key", "Cancel"],
+        Language::ZhCn => ["作为 Root Key 继续", "重新输入用户 Key", "取消"],
+    }
+}
+
+fn root_key_redirect_helper_lines() -> Vec<String> {
+    vec![
+        theme::warning(copy(
+            Language::current(),
+            "This key has root access. Root keys are for admin and --sudo commands.",
+            "此 Key 拥有 Root 权限。Root Key 用于管理和 --sudo 命令。",
+        ))
+        .to_string(),
+    ]
+}
+
+fn user_key_redirect_labels() -> [&'static str; 3] {
+    match Language::current() {
+        Language::En => ["Continue as user key", "Re-enter root key", "Cancel"],
+        Language::ZhCn => ["作为用户 Key 继续", "重新输入 Root Key", "取消"],
+    }
+}
+
+fn user_key_redirect_helper_lines() -> Vec<String> {
+    vec![
+        theme::warning(copy(
+            Language::current(),
+            "This key does not have root access. User keys are for normal commands.",
+            "此 Key 没有 Root 权限。用户 Key 用于常规命令。",
+        ))
+        .to_string(),
+    ]
+}
+
+fn should_confirm_detected_root_key(
+    kind: ConfigKind,
+    key_mode: Option<SelfManagedKeyMode>,
+    api_key_role: Option<ApiKeyRole>,
+) -> bool {
+    kind == ConfigKind::SelfManaged
+        && key_mode == Some(SelfManagedKeyMode::UserKey)
+        && api_key_role == Some(ApiKeyRole::Root)
+}
+
+fn should_confirm_detected_user_key(
+    kind: ConfigKind,
+    key_mode: Option<SelfManagedKeyMode>,
+    api_key_role: Option<ApiKeyRole>,
+) -> bool {
+    kind == ConfigKind::SelfManaged
+        && key_mode == Some(SelfManagedKeyMode::RootKey)
+        && api_key_role == Some(ApiKeyRole::Regular)
+}
+
+fn has_non_empty(value: Option<&str>) -> bool {
+    value.is_some_and(|value| !value.trim().is_empty())
+}
+
+fn has_normal_user_key(api_key: Option<&str>, root_api_key: Option<&str>) -> bool {
+    let Some(api_key) = api_key.filter(|value| !value.trim().is_empty()) else {
+        return false;
+    };
+    root_api_key
+        .filter(|value| !value.trim().is_empty())
+        .is_none_or(|root_api_key| root_api_key != api_key)
 }
 
 pub(crate) fn main_action_labels() -> [&'static str; 3] {
@@ -320,6 +522,55 @@ pub(crate) fn should_prompt_root_identity(
         && (api_key_was_entered || is_blank(account) || is_blank(user))
 }
 
+#[cfg(test)]
+fn validate_account_id_value(value: &str) -> Result<()> {
+    validate_identity_value(value, IdentityField::Account)
+}
+
+#[cfg(test)]
+fn validate_user_id_value(value: &str) -> Result<()> {
+    validate_identity_value(value, IdentityField::User)
+}
+
+fn validate_identity_value(value: &str, field: IdentityField) -> Result<()> {
+    let field_name = match field {
+        IdentityField::Account => "Account ID",
+        IdentityField::User => "User ID",
+    };
+    let identifier_name = match field {
+        IdentityField::Account => "account_id",
+        IdentityField::User => "user_id",
+    };
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(Error::Config(format!("{field_name} cannot be empty")));
+    }
+    if trimmed != value {
+        return Err(Error::Config(format!(
+            "{field_name} cannot start or end with whitespace"
+        )));
+    }
+    if matches!(field, IdentityField::Account) && trimmed.starts_with('_') {
+        return Err(Error::Config(
+            "Account ID cannot start with '_'".to_string(),
+        ));
+    }
+    if !trimmed
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | '@'))
+    {
+        return Err(Error::Config(format!(
+            "{field_name} can only contain letters, numbers, '_', '-', '.', and '@'"
+        )));
+    }
+    if trimmed.matches('@').count() > 1 {
+        return Err(Error::Config(format!(
+            "{identifier_name} must have at most one '@'"
+        )));
+    }
+    Ok(())
+}
+
 fn print_header() {
     let lines = wizard_header_lines();
     println!();
@@ -329,6 +580,10 @@ fn print_header() {
 }
 
 fn styled_wordmark_line(_index: usize, line: &str) -> String {
+    styled_wordmark_line_for_color_level(line, theme::terminal_color_level())
+}
+
+fn styled_wordmark_line_for_color_level(line: &str, color_level: theme::ColorLevel) -> String {
     let width = wordmark_width().max(1);
     let mut rendered = String::new();
 
@@ -336,13 +591,13 @@ fn styled_wordmark_line(_index: usize, line: &str) -> String {
         if ch.is_whitespace() {
             rendered.push(ch);
         } else {
-            let Rgb(red, green, blue) = wordmark_gradient_color(column, width);
-            rendered.push_str(
-                &ch.to_string()
-                    .truecolor(red, green, blue)
-                    .bold()
-                    .to_string(),
-            );
+            let rgb = header_display_rgb(wordmark_gradient_color(column, width), color_level);
+            rendered.push_str(&theme::style_rgb_for_level(
+                ch.to_string(),
+                rgb,
+                true,
+                color_level,
+            ));
         }
     }
 
@@ -421,6 +676,10 @@ fn mix_rgb(base: Rgb, overlay: Rgb, amount: f32) -> Rgb {
 }
 
 fn styled_tagline(text: &str) -> String {
+    styled_tagline_for_color_level(text, theme::terminal_color_level())
+}
+
+fn styled_tagline_for_color_level(text: &str, color_level: theme::ColorLevel) -> String {
     let width = display_width(text).max(1);
     let mut rendered = String::new();
     let mut column = 0usize;
@@ -429,13 +688,13 @@ fn styled_tagline(text: &str) -> String {
         if ch.is_whitespace() {
             rendered.push(ch);
         } else {
-            let Rgb(red, green, blue) = tagline_texture_color(column, width);
-            rendered.push_str(
-                &ch.to_string()
-                    .truecolor(red, green, blue)
-                    .bold()
-                    .to_string(),
-            );
+            let rgb = header_display_rgb(tagline_texture_color(column, width), color_level);
+            rendered.push_str(&theme::style_rgb_for_level(
+                ch.to_string(),
+                rgb,
+                true,
+                color_level,
+            ));
         }
         column += UnicodeWidthChar::width(ch).unwrap_or(0);
     }
@@ -1019,22 +1278,21 @@ fn styled_box_title_line(title: &str, width: usize) -> String {
     let title_width = display_width(&visible_title);
     let left = inner_width.saturating_sub(title_width) / 2;
     let right = inner_width.saturating_sub(title_width + left);
-    let Rgb(red, green, blue) = theme::active_theme().border.rgb_fallback();
+    let border = theme::active_theme().border.rgb_fallback();
 
     format!(
         "{}{}{}{}{}",
-        "╭".truecolor(red, green, blue),
-        "─".repeat(left).truecolor(red, green, blue),
+        theme::style_rgb("╭", border, false),
+        theme::style_rgb("─".repeat(left), border, false),
         styled_tagline(&visible_title),
-        "─".repeat(right).truecolor(red, green, blue),
-        "╮".truecolor(red, green, blue)
+        theme::style_rgb("─".repeat(right), border, false),
+        theme::style_rgb("╮", border, false)
     )
 }
 
 fn styled_box_footer_line(title: &str, width: usize) -> String {
-    let Rgb(red, green, blue) = theme::active_theme().border.rgb_fallback();
-    let Rgb(version_red, version_green, version_blue) =
-        theme::active_theme().version.rgb_fallback();
+    let border = theme::active_theme().border.rgb_fallback();
+    let version = theme::active_theme().version.rgb_fallback();
     let inner_width = width.saturating_sub(2);
     let title = format!(" {title} ");
     let visible_title = truncate_to_width(&title, inner_width);
@@ -1044,13 +1302,11 @@ fn styled_box_footer_line(title: &str, width: usize) -> String {
 
     format!(
         "{}{}{}{}{}",
-        "╰".truecolor(red, green, blue),
-        "─".repeat(left).truecolor(red, green, blue),
-        visible_title
-            .truecolor(version_red, version_green, version_blue)
-            .bold(),
-        "─".repeat(right).truecolor(red, green, blue),
-        "╯".truecolor(red, green, blue)
+        theme::style_rgb("╰", border, false),
+        theme::style_rgb("─".repeat(left), border, false),
+        theme::style_rgb(&visible_title, version, true),
+        theme::style_rgb("─".repeat(right), border, false),
+        theme::style_rgb("╯", border, false)
     )
 }
 
@@ -1063,18 +1319,27 @@ fn styled_box_content_line(
     let logo_width = ov_logo_width();
     let gutter = 3usize;
     let right_width = width.saturating_sub(4 + logo_width + gutter);
-    let Rgb(red, green, blue) = theme::active_theme().border.rgb_fallback();
+    let border = theme::active_theme().border.rgb_fallback();
     format!(
         "{} {}{}{} {}",
-        "│".truecolor(red, green, blue),
+        theme::style_rgb("│", border, false),
         styled_logo_to_width(left, logo_width, logo_row),
         " ".repeat(gutter),
         styled_detail_to_width(detail, right_width),
-        "│".truecolor(red, green, blue)
+        theme::style_rgb("│", border, false)
     )
 }
 
 fn styled_logo_to_width(line: &str, width: usize, row: usize) -> String {
+    styled_logo_to_width_for_color_level(line, width, row, theme::terminal_color_level())
+}
+
+fn styled_logo_to_width_for_color_level(
+    line: &str,
+    width: usize,
+    row: usize,
+    color_level: theme::ColorLevel,
+) -> String {
     let mut rendered = String::new();
     let visible = truncate_to_width(line, width);
 
@@ -1082,17 +1347,26 @@ fn styled_logo_to_width(line: &str, width: usize, row: usize) -> String {
         if ch.is_whitespace() {
             rendered.push(ch);
         } else {
-            let Rgb(red, green, blue) = logo_glass_color(ch, column, row, width.max(1));
-            rendered.push_str(
-                &ch.to_string()
-                    .truecolor(red, green, blue)
-                    .bold()
-                    .to_string(),
-            );
+            let rgb =
+                header_display_rgb(logo_glass_color(ch, column, row, width.max(1)), color_level);
+            rendered.push_str(&theme::style_rgb_for_level(
+                ch.to_string(),
+                rgb,
+                true,
+                color_level,
+            ));
         }
     }
     rendered.push_str(&" ".repeat(width.saturating_sub(display_width(&visible))));
     rendered
+}
+
+fn header_display_rgb(rgb: Rgb, color_level: theme::ColorLevel) -> Rgb {
+    if matches!(color_level, theme::ColorLevel::TrueColor) {
+        rgb
+    } else {
+        theme::active_theme().border.rgb_fallback()
+    }
 }
 
 fn logo_glass_color(_ch: char, column: usize, row: usize, width: usize) -> Rgb {
@@ -1248,6 +1522,7 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
         Kind,
         Name,
         Url,
+        KeyMode,
         ApiKey,
         Account,
         User,
@@ -1259,9 +1534,11 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
     let mut name: Option<String> = None;
     let mut url = DEFAULT_SELF_MANAGED_URL.to_string();
     let mut api_key: Option<String> = None;
+    let mut root_api_key: Option<String> = None;
     let mut account: Option<String> = None;
     let mut user: Option<String> = None;
     let mut identity_mode: Option<IdentityMode> = None;
+    let mut key_mode: Option<SelfManagedKeyMode> = None;
 
     loop {
         match stage {
@@ -1282,9 +1559,11 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
                     url = VOLCENGINE_CLOUD_URL.to_string();
                     name = None;
                     api_key = None;
+                    root_api_key = None;
                     account = None;
                     user = None;
                     identity_mode = None;
+                    key_mode = None;
                     stage = Stage::Name;
                 }
                 PromptResult::Value(1) => {
@@ -1292,9 +1571,11 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
                     url = DEFAULT_SELF_MANAGED_URL.to_string();
                     name = None;
                     api_key = None;
+                    root_api_key = None;
                     account = None;
                     user = None;
                     identity_mode = None;
+                    key_mode = None;
                     stage = Stage::Name;
                 }
                 PromptResult::Back => return Ok(false),
@@ -1317,9 +1598,11 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
                     PromptResult::Back => {
                         name = None;
                         api_key = None;
+                        root_api_key = None;
                         account = None;
                         user = None;
                         identity_mode = None;
+                        key_mode = None;
                         url = DEFAULT_SELF_MANAGED_URL.to_string();
                         stage = Stage::Kind;
                     }
@@ -1341,7 +1624,7 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
             )? {
                 PromptResult::Value(value) => {
                     url = value;
-                    stage = Stage::ApiKey;
+                    stage = Stage::KeyMode;
                 }
                 PromptResult::Back => stage = Stage::Name,
                 PromptResult::Quit => {
@@ -1349,50 +1632,91 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
                     return Ok(true);
                 }
             },
+            Stage::KeyMode => {
+                let allow_empty_api_key = self_managed_allows_empty_api_key(&url);
+                let labels = self_managed_key_mode_labels_for_language(
+                    allow_empty_api_key,
+                    Language::current(),
+                );
+                match prompt_select(
+                    ui,
+                    section_add(),
+                    copy(Language::current(), "API key type", "API Key 类型"),
+                    &labels,
+                    0,
+                    &self_managed_api_key_helper_lines(allow_empty_api_key),
+                )? {
+                    PromptResult::Value(index) => {
+                        let selected =
+                            self_managed_key_mode_for_selection(allow_empty_api_key, index);
+                        key_mode = Some(selected);
+                        api_key = None;
+                        root_api_key = None;
+                        account = None;
+                        user = None;
+                        match selected {
+                            SelfManagedKeyMode::NoKey => {
+                                identity_mode = Some(IdentityMode::LocalNoKey);
+                                stage = Stage::Account;
+                            }
+                            SelfManagedKeyMode::UserKey | SelfManagedKeyMode::RootKey => {
+                                identity_mode = None;
+                                stage = Stage::ApiKey;
+                            }
+                        }
+                    }
+                    PromptResult::Back => stage = Stage::Url,
+                    PromptResult::Quit => {
+                        print_cancelled(ui)?;
+                        return Ok(true);
+                    }
+                }
+            }
             Stage::ApiKey => {
                 let helper_lines = if kind == ConfigKind::VolcengineCloud {
                     volcengine_api_key_helper_lines()
                 } else {
-                    self_managed_api_key_helper_lines(self_managed_allows_empty_api_key(&url))
+                    self_managed_api_key_input_helper_lines(
+                        key_mode.unwrap_or(SelfManagedKeyMode::UserKey),
+                    )
                 };
 
                 let label = if kind == ConfigKind::SelfManaged {
-                    api_key_label(self_managed_allows_empty_api_key(&url))
+                    self_managed_api_key_input_label(
+                        key_mode.unwrap_or(SelfManagedKeyMode::UserKey),
+                    )
                 } else {
                     api_key_label(false)
                 };
-                let allow_empty_api_key =
-                    kind == ConfigKind::SelfManaged && self_managed_allows_empty_api_key(&url);
                 match prompt_text(
                     ui,
                     section_add(),
                     label,
                     None,
                     None,
-                    allow_empty_api_key,
+                    false,
                     true,
                     &helper_lines,
                 )? {
                     PromptResult::Value(value) => {
                         api_key = empty_to_none(value);
+                        root_api_key = if kind == ConfigKind::SelfManaged
+                            && key_mode == Some(SelfManagedKeyMode::RootKey)
+                        {
+                            api_key.clone()
+                        } else {
+                            None
+                        };
                         account = None;
                         user = None;
-                        if kind == ConfigKind::SelfManaged
-                            && api_key.is_none()
-                            && self_managed_allows_empty_api_key(&url)
-                        {
-                            identity_mode = Some(IdentityMode::LocalNoKey);
-                            stage = Stage::Account;
-                        } else {
-                            identity_mode = None;
-                            stage = Stage::Validate;
-                        }
+                        identity_mode = None;
+                        stage = Stage::Validate;
                     }
                     PromptResult::Back => {
                         stage = if kind == ConfigKind::VolcengineCloud {
                             Stage::Name
                         } else {
-                            Stage::Url
+                            Stage::KeyMode
                         };
                     }
                     PromptResult::Quit => {
@@ -1407,6 +1731,7 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
                     ui,
                     section_add(),
                     copy(Language::current(), "Account ID", "账户 ID"),
+                    IdentityField::Account,
                     mode,
                 )? {
                     PromptResult::Value(value) => {
@@ -1416,7 +1741,10 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
                     PromptResult::Back => {
                         account = None;
                         user = None;
-                        stage = Stage::ApiKey;
+                        stage = match identity_mode {
+                            Some(IdentityMode::LocalNoKey) => Stage::KeyMode,
+                            Some(IdentityMode::RootKey) | None => Stage::ApiKey,
+                        };
                     }
                     PromptResult::Quit => {
                         print_cancelled(ui)?;
@@ -1430,6 +1758,7 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
                     ui,
                     section_add(),
                     copy(Language::current(), "User ID", "用户 ID"),
+                    IdentityField::User,
                     mode,
                 )? {
                     PromptResult::Value(value) => {
@@ -1456,6 +1785,7 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
                     kind,
                     url: url.clone(),
                     api_key: api_key.clone(),
+                    root_api_key: root_api_key.clone(),
                     account: account.clone(),
                     user: user.clone(),
                 };
@@ -1463,7 +1793,83 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
                     Ok(ValidatedConfig {
                         config,
                         api_key_role,
+                        root_api_key_role,
                     }) => {
+                        if should_confirm_detected_root_key(kind, key_mode, api_key_role) {
+                            match prompt_select(
+                                ui,
+                                section_add(),
+                                copy(
+                                    Language::current(),
+                                    "This key has root access. Configure as root key?",
+                                    "此 Key 拥有 Root 权限。配置为 Root Key？",
+                                ),
+                                &root_key_redirect_labels(),
+                                0,
+                                &root_key_redirect_helper_lines(),
+                            )? {
+                                PromptResult::Value(0) => {
+                                    key_mode = Some(SelfManagedKeyMode::RootKey);
+                                    root_api_key = api_key.clone();
+                                    identity_mode = Some(IdentityMode::RootKey);
+                                    account = None;
+                                    user = None;
+                                    stage = Stage::Account;
+                                    continue;
+                                }
+                                PromptResult::Value(1) | PromptResult::Back => {
+                                    key_mode = Some(SelfManagedKeyMode::UserKey);
+                                    root_api_key = None;
+                                    identity_mode = None;
+                                    stage = Stage::ApiKey;
+                                    continue;
+                                }
+                                PromptResult::Value(_) | PromptResult::Quit => {
+                                    print_cancelled(ui)?;
+                                    return Ok(true);
+                                }
+                            }
+                        }
+                        let root_key_candidate_role = root_api_key_role.or(api_key_role);
+                        if should_confirm_detected_user_key(kind, key_mode, root_key_candidate_role)
+                        {
+                            match prompt_select(
+                                ui,
+                                section_add(),
+                                copy(
+                                    Language::current(),
+                                    "This key is a user API key. Configure as user key?",
+                                    "此 Key 是用户 API Key。配置为用户 Key？",
+                                ),
+                                &user_key_redirect_labels(),
+                                0,
+                                &user_key_redirect_helper_lines(),
+                            )? {
+                                PromptResult::Value(0) => {
+                                    key_mode = Some(SelfManagedKeyMode::UserKey);
+                                    root_api_key = None;
+                                    identity_mode = None;
+                                    account = None;
+                                    user = None;
+                                    stage = Stage::Validate;
+                                    continue;
+                                }
+                                PromptResult::Value(1) | PromptResult::Back => {
+                                    key_mode = Some(SelfManagedKeyMode::RootKey);
+                                    api_key = None;
+                                    root_api_key = None;
+                                    identity_mode = None;
+                                    account = None;
+                                    user = None;
+                                    stage = Stage::ApiKey;
+                                    continue;
+                                }
+                                PromptResult::Value(_) | PromptResult::Quit => {
+                                    print_cancelled(ui)?;
+                                    return Ok(true);
+                                }
+                            }
+                        }
                         if should_prompt_root_identity(
                             api_key_role,
                             false,
@@ -1501,6 +1907,8 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
                             PromptResult::Back => {
                                 stage = if identity_mode.is_some() {
                                     Stage::User
+                                } else if kind == ConfigKind::SelfManaged {
+                                    Stage::KeyMode
                                 } else {
                                     Stage::ApiKey
                                 };
@@ -1545,14 +1953,20 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
                                     print_cancelled(ui)?;
                                     return Ok(true);
                                 } else {
-                                    Stage::ApiKey
+                                    Stage::KeyMode
                                 };
                             }
                             PromptResult::Value(2) if kind == ConfigKind::SelfManaged => {
                                 print_cancelled(ui)?;
                                 return Ok(true);
                             }
-                            PromptResult::Back => stage = Stage::ApiKey,
+                            PromptResult::Back => {
+                                stage = if kind == ConfigKind::SelfManaged {
+                                    Stage::KeyMode
+                                } else {
+                                    Stage::ApiKey
+                                };
+                            }
                             PromptResult::Value(_) => {
                                 print_cancelled(ui)?;
                                 return Ok(true);
@@ -1575,6 +1989,7 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
         Name,
         Url,
         ApiKeyChoice,
+        KeyMode,
         ApiKeyInput,
         Account,
         User,
@@ -1608,9 +2023,12 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
     let mut kind = ConfigKind::SelfManaged;
     let mut url = String::new();
     let mut api_key: Option<String> = None;
+    let mut root_api_key: Option<String> = None;
     let mut account: Option<String> = None;
     let mut user: Option<String> = None;
     let mut identity_mode: Option<IdentityMode> = None;
+    let mut key_mode: Option<SelfManagedKeyMode> = None;
+    let mut key_edit_action: Option<SelfManagedEditKeyAction> = None;
     let mut api_key_was_entered = false;
 
     loop {
@@ -1628,9 +2046,21 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
                     kind = config.kind;
                     url = config.config.url.clone();
                     api_key = config.config.api_key.clone();
+                    root_api_key = config.config.root_api_key.clone();
+                    if api_key.is_none() && root_api_key.is_some() {
+                        api_key = root_api_key.clone();
+                    }
                     account = config.config.account.clone();
                     user = config.config.user.clone();
                     identity_mode = None;
+                    key_mode = if root_api_key.is_some() {
+                        Some(SelfManagedKeyMode::RootKey)
+                    } else if api_key.is_some() {
+                        Some(SelfManagedKeyMode::UserKey)
+                    } else {
+                        None
+                    };
+                    key_edit_action = None;
                     api_key_was_entered = false;
                     stage = Stage::Name;
                 }
@@ -1683,15 +2113,106 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
                 }
             },
             Stage::ApiKeyChoice => {
+                if kind == ConfigKind::SelfManaged {
+                    let has_root_key = has_non_empty(root_api_key.as_deref());
+                    let has_normal_user_key =
+                        has_normal_user_key(api_key.as_deref(), root_api_key.as_deref());
+                    let has_existing = has_root_key || has_normal_user_key;
+                    if !has_existing {
+                        stage = Stage::KeyMode;
+                        continue;
+                    }
+
+                    let actions = edit_self_managed_key_actions(has_normal_user_key, has_root_key);
+                    let labels: Vec<&str> = actions
+                        .iter()
+                        .copied()
+                        .map(self_managed_edit_key_action_label)
+                        .collect();
+                    match prompt_select(
+                        ui,
+                        section_edit(),
+                        copy(Language::current(), "API keys", "API Key"),
+                        &labels,
+                        0,
+                        &self_managed_api_key_helper_lines(self_managed_allows_empty_api_key(&url)),
+                    )? {
+                        PromptResult::Value(index) => {
+                            let action = actions[index];
+                            key_edit_action = Some(action);
+                            api_key_was_entered = false;
+                            match action {
+                                SelfManagedEditKeyAction::Keep => {
+                                    stage = Stage::Validate;
+                                }
+                                SelfManagedEditKeyAction::SetUserKey => {
+                                    key_mode = Some(SelfManagedKeyMode::UserKey);
+                                    identity_mode = None;
+                                    stage = Stage::ApiKeyInput;
+                                }
+                                SelfManagedEditKeyAction::SetRootKey => {
+                                    key_mode = Some(SelfManagedKeyMode::RootKey);
+                                    identity_mode = None;
+                                    stage = Stage::ApiKeyInput;
+                                }
+                                SelfManagedEditKeyAction::UseRootForNormal => {
+                                    api_key = root_api_key.clone();
+                                    key_mode = Some(SelfManagedKeyMode::RootKey);
+                                    identity_mode = None;
+                                    stage = Stage::Validate;
+                                }
+                                SelfManagedEditKeyAction::ClearRootKey => {
+                                    if api_key.as_deref() == root_api_key.as_deref() {
+                                        api_key = None;
+                                    }
+                                    root_api_key = None;
+                                    key_mode = if api_key.is_some() {
+                                        Some(SelfManagedKeyMode::UserKey)
+                                    } else {
+                                        None
+                                    };
+                                    identity_mode = None;
+                                    stage = Stage::Validate;
+                                }
+                                SelfManagedEditKeyAction::ClearAllKeys => {
+                                    api_key = None;
+                                    root_api_key = None;
+                                    key_mode = None;
+                                    if self_managed_allows_empty_api_key(&url) {
+                                        identity_mode = Some(IdentityMode::LocalNoKey);
+                                        stage = Stage::Account;
+                                    } else {
+                                        identity_mode = None;
+                                        stage = Stage::Validate;
+                                    }
+                                }
+                            }
+                        }
+                        PromptResult::Back => stage = Stage::Url,
+                        PromptResult::Quit => {
+                            print_cancelled(ui)?;
+                            return Ok(true);
+                        }
+                    }
+                    continue;
+                }
+
                 let helper_lines = if kind == ConfigKind::VolcengineCloud {
                     volcengine_api_key_helper_lines()
                 } else {
                     self_managed_api_key_helper_lines(self_managed_allows_empty_api_key(&url))
                 };
 
-                let has_existing = api_key.as_deref().is_some_and(|value| !value.is_empty());
+                let has_existing = api_key.as_deref().is_some_and(|value| !value.is_empty())
+                    || root_api_key
+                        .as_deref()
+                        .is_some_and(|value| !value.is_empty());
                 if !has_existing {
-                    stage = Stage::ApiKeyInput;
+                    stage = if kind == ConfigKind::SelfManaged {
+                        Stage::KeyMode
+                    } else {
+                        Stage::ApiKeyInput
+                    };
                     continue;
                 }
 
@@ -1711,9 +2232,18 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
                         api_key_was_entered = false;
                         stage = Stage::Validate;
                     }
-                    PromptResult::Value(1) => stage = Stage::ApiKeyInput,
+                    PromptResult::Value(1) => {
+                        stage = if kind == ConfigKind::SelfManaged {
+                            Stage::KeyMode
+                        } else {
+                            Stage::ApiKeyInput
+                        };
+                    }
                     PromptResult::Value(_) => {
                         api_key = None;
+                        root_api_key = None;
+                        key_mode = None;
+                        key_edit_action = None;
                         api_key_was_entered = false;
                         if kind == ConfigKind::SelfManaged
                             && self_managed_allows_empty_api_key(&url)
@@ -1738,19 +2268,64 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
                     }
                 }
             }
+            Stage::KeyMode => {
+                let allow_empty_api_key = self_managed_allows_empty_api_key(&url);
+                let labels = self_managed_key_mode_labels_for_language(
+                    allow_empty_api_key,
+                    Language::current(),
+                );
+                match prompt_select(
+                    ui,
+                    section_edit(),
+                    copy(Language::current(), "API key type", "API Key 类型"),
+                    &labels,
+                    0,
+                    &self_managed_api_key_helper_lines(allow_empty_api_key),
+                )? {
+                    PromptResult::Value(index) => {
+                        let selected =
+                            self_managed_key_mode_for_selection(allow_empty_api_key, index);
+                        key_mode = Some(selected);
+                        api_key = None;
+                        root_api_key = None;
+                        key_edit_action = None;
+                        api_key_was_entered = false;
+                        match selected {
+                            SelfManagedKeyMode::NoKey => {
+                                identity_mode = Some(IdentityMode::LocalNoKey);
+                                stage = Stage::Account;
+                            }
+                            SelfManagedKeyMode::UserKey | SelfManagedKeyMode::RootKey => {
+                                identity_mode = None;
+                                stage = Stage::ApiKeyInput;
+                            }
+                        }
+                    }
+                    PromptResult::Back => stage = Stage::ApiKeyChoice,
+                    PromptResult::Quit => {
+                        print_cancelled(ui)?;
+                        return Ok(true);
+                    }
+                }
+            }
             Stage::ApiKeyInput => {
-                let has_existing = api_key.as_deref().is_some_and(|value| !value.is_empty());
-                let allow_empty =
-                    kind == ConfigKind::SelfManaged && self_managed_allows_empty_api_key(&url);
-                let label = if allow_empty {
-                    api_key_label(true)
+                let has_existing = api_key.as_deref().is_some_and(|value| !value.is_empty())
+                    || root_api_key
+                        .as_deref()
+                        .is_some_and(|value| !value.is_empty());
+                let label = if kind == ConfigKind::SelfManaged {
+                    self_managed_api_key_input_label(
+                        key_mode.unwrap_or(SelfManagedKeyMode::UserKey),
+                    )
                 } else {
                     api_key_label(false)
                 };
                 let helper_lines = if kind == ConfigKind::VolcengineCloud {
                     volcengine_api_key_helper_lines()
                 } else {
-                    self_managed_api_key_helper_lines(allow_empty)
+                    self_managed_api_key_input_helper_lines(
+                        key_mode.unwrap_or(SelfManagedKeyMode::UserKey),
+                    )
                 };
                 match prompt_text(
                     ui,
@@ -1758,23 +2333,42 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
                     label,
                     api_key.as_deref(),
                     api_key.as_deref().map(|_| InputValueLabel::Current),
-                    allow_empty,
+                    false,
                     true,
                     &helper_lines,
                 )? {
                     PromptResult::Value(value) => {
-                        api_key = empty_to_none(value);
-                        api_key_was_entered = api_key.is_some();
-                        if kind == ConfigKind::SelfManaged
-                            && api_key.is_none()
-                            && self_managed_allows_empty_api_key(&url)
-                        {
-                            identity_mode = Some(IdentityMode::LocalNoKey);
-                            stage = Stage::Account;
-                        } else {
-                            identity_mode = None;
-                            stage = Stage::Validate;
+                        let entered_key = empty_to_none(value);
+                        match key_edit_action {
+                            Some(SelfManagedEditKeyAction::SetUserKey) => {
+                                api_key = entered_key;
+                                api_key_was_entered = api_key.is_some();
+                            }
+                            Some(SelfManagedEditKeyAction::SetRootKey) => {
+                                let keep_normal_user_key = has_normal_user_key(
+                                    api_key.as_deref(),
+                                    root_api_key.as_deref(),
+                                );
+                                root_api_key = entered_key.clone();
+                                if !keep_normal_user_key {
+                                    api_key = entered_key;
+                                }
+                                api_key_was_entered = root_api_key.is_some();
+                            }
+                            _ => {
+                                api_key = entered_key;
+                                root_api_key = if kind == ConfigKind::SelfManaged
+                                    && key_mode == Some(SelfManagedKeyMode::RootKey)
+                                {
+                                    api_key.clone()
+                                } else {
+                                    None
+                                };
+                                api_key_was_entered = api_key.is_some();
+                            }
                         }
+                        identity_mode = None;
+                        stage = Stage::Validate;
                     }
                     PromptResult::Back => {
                         stage = if has_existing {
@@ -1782,7 +2376,7 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
                         } else if kind == ConfigKind::VolcengineCloud {
                             Stage::Name
                         } else {
-                            Stage::Url
+                            Stage::KeyMode
                         };
                     }
                     PromptResult::Quit => {
@@ -1797,6 +2391,7 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
                     ui,
                     section_edit(),
                     copy(Language::current(), "Account ID", "账户 ID"),
+                    IdentityField::Account,
                     mode,
                 )? {
                     PromptResult::Value(value) => {
@@ -1804,13 +2399,12 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
                         stage = Stage::User;
                     }
                     PromptResult::Back => {
-                        if identity_mode == Some(IdentityMode::RootKey) {
-                            account = None;
-                            user = None;
-                            stage = Stage::ApiKeyInput;
-                        } else {
-                            stage = Stage::ApiKeyInput;
-                        }
+                        account = None;
+                        user = None;
+                        stage = match identity_mode {
+                            Some(IdentityMode::LocalNoKey) => Stage::KeyMode,
+                            Some(IdentityMode::RootKey) | None => Stage::ApiKeyInput,
+                        };
                     }
                     PromptResult::Quit => {
                         print_cancelled(ui)?;
@@ -1824,6 +2418,7 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
                     ui,
                     section_edit(),
                     copy(Language::current(), "User ID", "用户 ID"),
+                    IdentityField::User,
                     mode,
                 )? {
                     PromptResult::Value(value) => {
@@ -1849,6 +2444,7 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
                     kind,
                     url: url.clone(),
                     api_key: api_key.clone(),
+                    root_api_key: root_api_key.clone(),
                     account: account.clone(),
                     user: user.clone(),
                 };
@@ -1856,7 +2452,99 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
                     Ok(ValidatedConfig {
                         config,
                         api_key_role,
+                        root_api_key_role,
                     }) => {
+                        if should_confirm_detected_root_key(kind, key_mode, api_key_role) {
+                            match prompt_select(
+                                ui,
+                                section_edit(),
+                                copy(
+                                    Language::current(),
+                                    "This key has root access. Configure as root key?",
+                                    "此 Key 拥有 Root 权限。配置为 Root Key？",
+                                ),
+                                &root_key_redirect_labels(),
+                                0,
+                                &root_key_redirect_helper_lines(),
+                            )? {
+                                PromptResult::Value(0) => {
+                                    key_mode = Some(SelfManagedKeyMode::RootKey);
+                                    key_edit_action = Some(SelfManagedEditKeyAction::SetRootKey);
+                                    root_api_key = api_key.clone();
+                                    identity_mode = Some(IdentityMode::RootKey);
+                                    account = None;
+                                    user = None;
+                                    stage = Stage::Account;
+                                    continue;
+                                }
+                                PromptResult::Value(1) | PromptResult::Back => {
+                                    key_mode = Some(SelfManagedKeyMode::UserKey);
+                                    api_key = None;
+                                    identity_mode = None;
+                                    stage = Stage::ApiKeyInput;
+                                    continue;
+                                }
+                                PromptResult::Value(_) | PromptResult::Quit => {
+                                    print_cancelled(ui)?;
+                                    return Ok(true);
+                                }
+                            }
+                        }
+                        let root_key_candidate_role = root_api_key_role.or(api_key_role);
+                        if should_confirm_detected_user_key(kind, key_mode, root_key_candidate_role)
+                        {
+                            match prompt_select(
+                                ui,
+                                section_edit(),
+                                copy(
+                                    Language::current(),
+                                    "This key is a user API key. Configure as user key?",
+                                    "此 Key 是用户 API Key。配置为用户 Key？",
+                                ),
+                                &user_key_redirect_labels(),
+                                0,
+                                &user_key_redirect_helper_lines(),
+                            )? {
+                                PromptResult::Value(0) => {
+                                    let entered_user_key = root_api_key.clone().or(api_key.clone());
+                                    api_key = entered_user_key;
+                                    root_api_key = configs[selected]
+                                        .config
+                                        .root_api_key
+                                        .clone()
+                                        .filter(|existing_root_key| {
+                                            api_key.as_deref() != Some(existing_root_key.as_str())
+                                                && !existing_root_key.trim().is_empty()
+                                        });
+                                    key_mode = Some(SelfManagedKeyMode::UserKey);
+                                    key_edit_action = Some(SelfManagedEditKeyAction::SetUserKey);
+                                    api_key_was_entered = api_key.is_some();
+                                    identity_mode = None;
+                                    account = None;
+                                    user = None;
+                                    stage = Stage::Validate;
+                                    continue;
+                                }
+                                PromptResult::Value(1) | PromptResult::Back => {
+                                    key_mode = Some(SelfManagedKeyMode::RootKey);
+                                    key_edit_action = Some(SelfManagedEditKeyAction::SetRootKey);
+                                    if api_key.as_deref() == root_api_key.as_deref() {
+                                        api_key = None;
+                                    }
+                                    root_api_key = None;
+                                    api_key_was_entered = false;
+                                    identity_mode = None;
+                                    account = None;
+                                    user = None;
+                                    stage = Stage::ApiKeyInput;
+                                    continue;
+                                }
+                                PromptResult::Value(_) | PromptResult::Quit => {
+                                    print_cancelled(ui)?;
+                                    return Ok(true);
+                                }
+                            }
+                        }
                         if should_prompt_root_identity(
                             api_key_role,
                             api_key_was_entered,
@@ -1890,14 +2578,14 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
                                 ui.clear()?;
                                 let original = configs[selected].name.clone();
                                 store.save_edited_config(&original, &name, &config)?;
-                                print_saved(store, &name, SaveOutcome::UpdatedActive)?;
+                                print_saved(store, &name, SaveOutcome::UpdatedActive, &config)?;
                                 return Ok(true);
                             }
                             PromptResult::Value(SaveAction::SaveOnly) => {
                                 ui.clear()?;
                                 let original = configs[selected].name.clone();
                                 store.save_edited_config(&original, &name, &config)?;
-                                print_saved(store, &name, SaveOutcome::SavedOnly)?;
+                                print_saved(store, &name, SaveOutcome::SavedOnly, &config)?;
                                 return Ok(true);
                             }
                             PromptResult::Value(SaveAction::SaveAndActivate) => {
@@ -1905,7 +2593,7 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
                                 let original = configs[selected].name.clone();
                                 store.save_edited_config(&original, &name, &config)?;
                                 store.activate_config(&name)?;
-                                print_saved(store, &name, SaveOutcome::Activated)?;
+                                print_saved(store, &name, SaveOutcome::Activated, &config)?;
                                 return Ok(true);
                             }
                             PromptResult::Value(SaveAction::Cancel) => {
@@ -2093,6 +2781,7 @@ fn run_delete_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool> {
 struct ValidatedConfig {
     config: Config,
     api_key_role: Option<ApiKeyRole>,
+    root_api_key_role: Option<ApiKeyRole>,
 }
 
 async fn validate_draft(
@@ -2112,16 +2801,29 @@ async fn validate_draft(
             "正在验证连接...",
         ),
     ))?;
+    let mut root_api_key_role = None;
     let api_key_role = if config
         .api_key
         .as_deref()
         .is_some_and(|key| !key.trim().is_empty())
     {
+        let configured_root_api_key = config
+            .root_api_key
+            .as_deref()
+            .filter(|key| !key.trim().is_empty())
+            .map(str::to_string);
         let mut detection_config = config.clone();
         detection_config.account = None;
         detection_config.user = None;
         let role = validate_candidate_config_with_role(&detection_config, require_api_key).await?;
+        if config.root_api_key.as_deref() == config.api_key.as_deref() {
+            root_api_key_role = role;
+        }
         if role == Some(ApiKeyRole::Root) {
+            if configured_root_api_key.is_none() {
+                config.root_api_key = config.api_key.clone();
+                root_api_key_role = role;
+            }
             let has_identity = config
                 .account
                 .as_deref()
@@ -2134,6 +2836,19 @@ async fn validate_draft(
                 validate_candidate_config(&config, require_api_key).await?;
             }
         } else {
+            if let Some(root_api_key) = configured_root_api_key.as_deref() {
+                if config.api_key.as_deref() == Some(root_api_key) {
+                    config.root_api_key = None;
+                    root_api_key_role = role;
+                } else {
+                    root_api_key_role = Some(
+                        validate_root_api_key_role(&config, root_api_key, require_api_key).await?,
+                    );
+                    if root_api_key_role != Some(ApiKeyRole::Root) {
+                        config.root_api_key = None;
+                    }
+                }
+            }
             config.account = None;
             config.user = None;
         }
@@ -2145,20 +2860,45 @@ async fn validate_draft(
     Ok(ValidatedConfig {
         config,
         api_key_role,
+        root_api_key_role,
     })
+}
+
+async fn validate_root_api_key_role(
+    config: &Config,
+    root_api_key: &str,
+    require_api_key: bool,
+) -> Result<ApiKeyRole> {
+    let mut root_config = config.clone();
+    root_config.api_key = Some(root_api_key.to_string());
+    root_config.root_api_key = Some(root_api_key.to_string());
+    root_config.account = None;
+    root_config.user = None;
+
+    match validate_candidate_config_with_role(&root_config, require_api_key).await? {
+        Some(role) => Ok(role),
+        None => Err(Error::Config(
+            "Expected a root API key, but the server rejected root access.".to_string(),
+        )),
+    }
 }
 
 fn save_config(store: &ConfigStore, name: &str, config: &Config, activate: bool) -> Result<()> {
     if activate {
         store.save_and_activate(name, config)?;
-        print_saved(store, name, SaveOutcome::Activated)
+        print_saved(store, name, SaveOutcome::Activated, config)
     } else {
         store.save_named_config(name, config)?;
-        print_saved(store, name, SaveOutcome::SavedOnly)
+        print_saved(store, name, SaveOutcome::SavedOnly, config)
     }
 }
 
-fn print_saved(store: &ConfigStore, name: &str, outcome: SaveOutcome) -> Result<()> {
+fn print_saved(
+    store: &ConfigStore,
+    name: &str,
+    outcome: SaveOutcome,
+    config: &Config,
+) -> Result<()> {
     println!();
     let message = match outcome {
         SaveOutcome::Activated => saved_message_activated(name),
@@ -2191,6 +2931,9 @@ fn print_saved(store: &ConfigStore, name: &str, outcome: SaveOutcome) -> Result<
             );
         }
     }
+    for line in root_key_normal_command_notice_lines(config) {
+        println!("{line}");
+    }
     println!(
         "{} {}",
         theme::muted(copy(Language::current(), "Next:", "下一步：")),
@@ -2199,10 +2942,109 @@ fn print_saved(store: &ConfigStore, name: &str, outcome: SaveOutcome) -> Result<
     Ok(())
 }
 
+fn root_key_normal_command_notice_lines(config: &Config) -> Vec<String> {
+    if !root_key_used_for_normal_commands(config) {
+        return Vec::new();
+    }
+
+    vec![
+        root_key_configured_notice(),
+        normal_commands_root_key_notice(),
+        least_privilege_user_key_notice(),
+    ]
+}
+
+fn root_key_configured_notice() -> String {
+    match Language::current() {
+        Language::En => format!(
+            "{}{}",
+            theme::warning("Root key").bold(),
+            theme::body(" configured.")
+        ),
+        Language::ZhCn => format!(
+            "{}{}",
+            theme::warning("Root Key").bold(),
+            theme::body(" 已配置。")
+        ),
+    }
+}
+
+fn normal_commands_root_key_notice() -> String {
+    match Language::current() {
+        Language::En => format!(
+            "{}{}{}{}",
+            theme::strong("Normal commands"),
+            theme::body(" will use this key until you set a "),
+            theme::warning("separate user API key").bold(),
+            theme::body("."),
+        ),
+        Language::ZhCn => format!(
+            "{}{}{}{}{}",
+            theme::body("在设置"),
+            theme::warning("单独的用户 API Key").bold(),
+            theme::body("前，"),
+            theme::strong("常规命令"),
+            theme::body("会使用此 Key。"),
+        ),
+    }
+}
+
+fn least_privilege_user_key_notice() -> String {
+    match Language::current() {
+        Language::En => format!(
+            "{}{}{}{}{}{}{}{}{}",
+            theme::body("For "),
+            theme::warning("least privilege").bold(),
+            theme::body(", run "),
+            theme::command("ov config").bold(),
+            theme::body(" -> "),
+            theme::strong("Edit config"),
+            theme::body(" -> "),
+            theme::strong("Set normal user API key"),
+            theme::body("."),
+        ),
+        Language::ZhCn => format!(
+            "{}{}{}{}{}{}{}",
+            theme::body("为遵循最小权限原则，请运行 "),
+            theme::command("ov config").bold(),
+            theme::body(" -> "),
+            theme::strong("Edit config"),
+            theme::body(" -> "),
+            theme::strong("Set normal user API key"),
+            theme::body("。"),
+        ),
+    }
+}
+
+fn root_key_used_for_normal_commands(config: &Config) -> bool {
+    if ConfigKind::from_config(config) != ConfigKind::SelfManaged {
+        return false;
+    }
+
+    let Some(api_key) = config.api_key.as_deref().map(str::trim) else {
+        return false;
+    };
+    let Some(root_api_key) = config.root_api_key.as_deref().map(str::trim) else {
+        return false;
+    };
+
+    !api_key.is_empty() && api_key == root_api_key
+}
+
 fn next_step_copy() -> String {
     match Language::current() {
-        Language::En => format!("Run {} to get started.", theme::command("ov --help").bold()),
-        Language::ZhCn => format!("运行 {} 查看可用命令。", theme::command("ov --help").bold()),
+        Language::En => format!(
+            "{}{}{}",
+            theme::body("Run "),
+            theme::command("ov --help").bold(),
+            theme::body(" to get started.")
+        ),
+        Language::ZhCn => format!(
+            "{}{}{}",
+            theme::body("运行 "),
+            theme::command("ov --help").bold(),
+            theme::body(" 查看可用命令。")
+        ),
     }
 }
 
@@ -2364,19 +3206,34 @@ fn prompt_identity_value(
     ui: &mut LiveRegion,
     section: &str,
     prompt: &str,
+    field: IdentityField,
     mode: IdentityMode,
 ) -> Result<PromptResult<String>> {
     let (default, value_label, helper_lines) = identity_prompt_parts(mode);
-    prompt_text(
-        ui,
-        section,
-        prompt,
-        default,
-        value_label,
-        false,
-        false,
-        &helper_lines,
-    )
+    let mut error: Option<String> = None;
+    loop {
+        let mut lines = helper_lines.clone();
+        if let Some(value) = error.as_ref() {
+            lines.push(theme::error(value).to_string());
+        }
+        match prompt_text(
+            ui,
+            section,
+            prompt,
+            default,
+            value_label,
+            false,
+            false,
+            &lines,
+        )? {
+            PromptResult::Value(value) => match validate_identity_value(&value, field) {
+                Ok(()) => return Ok(PromptResult::Value(value)),
+                Err(next_error) => error = Some(next_error.to_string()),
+            },
+            PromptResult::Back => return Ok(PromptResult::Back),
+            PromptResult::Quit => return Ok(PromptResult::Quit),
+        }
+    }
 }
 
 fn identity_prompt_parts(
@@ -2961,27 +3818,37 @@ impl Drop for RawPrompt {
 #[cfg(test)]
 mod tests {
     use super::{
-        IdentityMode, InputValueLabel, OV_LOGO_LINES, Rgb, StatusBoxRuntime,
+        IdentityMode, InputValueLabel, OV_LOGO_LINES, Rgb, SelfManagedKeyMode, StatusBoxRuntime,
         active_delete_block_helper_lines, active_summary_lines, active_summary_render_parts,
         add_config_name_label, add_save_action_labels, allocate_config_name, box_content_line,
         box_footer_line, box_title_line, cloud_validation_failure_choices, config_select_label,
         display_config_home, display_width, edit_api_key_choice_labels, edit_save_action_labels,
-        erase_sequence_for_char, extract_models_from_status_payload, identity_prompt_parts,
-        input_live_lines, logo_glass_color_for_theme, main_action_labels, next_step_copy,
-        ov_logo_width, saved_summary_render_parts, select_live_lines,
-        self_managed_api_key_helper_lines, self_managed_validation_failure_choices,
+        edit_self_managed_key_action_labels, erase_sequence_for_char,
+        extract_models_from_status_payload, identity_prompt_parts, input_live_lines,
+        logo_glass_color_for_theme, main_action_labels, next_step_copy, ov_logo_width,
+        root_key_normal_command_notice_lines, root_key_redirect_labels, saved_summary_render_parts,
+        select_live_lines, self_managed_api_key_helper_lines,
+        self_managed_api_key_input_helper_lines, self_managed_key_mode_labels,
+        self_managed_validation_failure_choices, should_confirm_detected_user_key,
         should_prompt_root_identity, status_box_lines, status_box_lines_with_runtime,
-        status_box_width, status_payload_is_healthy, tagline_ice_color_for_theme,
-        validate_config_name, volcengine_api_key_helper_lines, wizard_header_lines,
+        status_box_width, status_payload_is_healthy, styled_logo_to_width_for_color_level,
+        styled_wordmark_line_for_color_level, tagline_ice_color_for_theme,
+        user_key_redirect_labels, validate_account_id_value, validate_config_name, validate_draft,
+        validate_user_id_value, volcengine_api_key_helper_lines, wizard_header_lines,
         wordmark_gradient_color_for_theme, wordmark_lines, wordmark_width,
     };
     use crate::config::Config;
-    use crate::config_wizard::store::{ApiKeyRole, ConfigEntry, ConfigKind, ConfigStore};
+    use crate::config_wizard::store::{
+        ApiKeyRole, ConfigDraft, ConfigEntry, ConfigKind, ConfigStore,
+    };
     use crate::theme::{self, ThemeColor};
+    use colored::Colorize;
     use serde_json::json;
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     fn unique_dir(name: &str) -> PathBuf {
         let suffix = SystemTime::now()
@@ -2989,6 +3856,26 @@ mod tests {
             .expect("clock should be valid")
             .as_nanos();
         std::env::temp_dir().join(format!("openviking-wizard-{name}-{suffix}"))
+    }
+
+    fn strip_ansi(input: &str) -> String {
+        let mut output = String::new();
+        let mut chars = input.chars().peekable();
+
+        while let Some(ch) = chars.next() {
+            if ch == '\u{1b}' && chars.peek() == Some(&'[') {
+                chars.next();
+                for next in chars.by_ref() {
+                    if next.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            } else {
+                output.push(ch);
+            }
+        }
+
+        output
     }
 
     #[test]
@@ -3377,6 +4264,30 @@ mod tests {
     }
 
     #[test]
+    fn wordmark_uses_stable_teal_ansi256_fallback_when_truecolor_is_unavailable() {
+        let rendered =
+            styled_wordmark_line_for_color_level(wordmark_lines()[0], theme::ColorLevel::Ansi256);
+
+        assert!(rendered.contains("\u{1b}[1;38;5;"));
+        assert!(!rendered.contains("38;2;"));
+        assert_eq!(ansi256_indexes(&rendered), vec![30]);
+    }
+
+    #[test]
+    fn logo_uses_stable_teal_ansi256_fallback_when_truecolor_is_unavailable() {
+        let rendered = styled_logo_to_width_for_color_level(
+            OV_LOGO_LINES[8],
+            ov_logo_width(),
+            8,
+            theme::ColorLevel::Ansi256,
+        );
+
+        assert!(rendered.contains("\u{1b}[1;38;5;"));
+        assert!(!rendered.contains("38;2;"));
+        assert_eq!(ansi256_indexes(&rendered), vec![30]);
+    }
+
+    #[test]
     fn tagline_ice_color_runs_pearl_jade() {
         let width = display_width("Context Database for AI Agents");
         let palette = theme::active_theme();
@@ -3393,6 +4304,25 @@ mod tests {
             tagline_ice_color_for_theme(palette, width - 1, width),
             palette.tagline_end
         );
+    }
+
+    fn ansi256_indexes(rendered: &str) -> Vec<u8> {
+        let mut indexes = Vec::new();
+        let mut rest = rendered;
+        while let Some(start) = rest.find("38;5;") {
+            let value_start = start + "38;5;".len();
+            let digits: String = rest[value_start..]
+                .chars()
+                .take_while(|ch| ch.is_ascii_digit())
+                .collect();
+            if let Ok(index) = digits.parse::<u8>()
+                && !indexes.contains(&index)
+            {
+                indexes.push(index);
+            }
+            rest = &rest[value_start..];
+        }
+        indexes
     }
 
     #[test]
@@ -3564,6 +4494,31 @@ mod tests {
     }
 
     #[test]
+    fn self_managed_key_mode_choices_distinguish_no_key_user_key_and_root_key() {
+        assert_eq!(
+            self_managed_key_mode_labels(true),
+            ["No key / local dev", "User API key", "Root API key"]
+        );
+        assert_eq!(
+            self_managed_key_mode_labels(false),
+            ["User API key", "Root API key"]
+        );
+    }
+
+    #[test]
+    fn self_managed_key_input_copy_explains_storage_target() {
+        let user_key = self_managed_api_key_input_helper_lines(SelfManagedKeyMode::UserKey);
+        let root_key = self_managed_api_key_input_helper_lines(SelfManagedKeyMode::RootKey);
+
+        assert!(user_key.iter().any(|line| line.contains("normal")));
+        assert!(!user_key.iter().any(|line| line.contains("api_key")));
+        assert!(!root_key.iter().any(|line| line.contains("root_api_key")));
+        assert!(!root_key.iter().any(|line| line.contains("api_key")));
+        assert!(root_key.iter().any(|line| line.contains("--sudo")));
+        assert!(!root_key.iter().any(|line| line.contains("remote")));
+    }
+
+    #[test]
     fn add_self_managed_api_key_rendering_has_no_existing_value_placeholder() {
         let lines = input_live_lines(
             "Create a new OpenViking config.",
@@ -3691,6 +4646,87 @@ mod tests {
     }
 
     #[test]
+    fn root_key_notice_points_to_edit_flow_when_root_key_is_reused() {
+        let config = Config {
+            api_key: Some("root-key".to_string()),
+            root_api_key: Some("root-key".to_string()),
+            ..Config::default()
+        };
+
+        let text = strip_ansi(&root_key_normal_command_notice_lines(&config).join("\n"));
+
+        assert!(text.contains("Root key configured."));
+        assert!(text.contains("Normal commands will use this key"));
+        assert!(text.contains("ov config -> Edit config -> Set normal user API key"));
+    }
+
+    #[test]
+    fn root_key_notice_styles_sentence_text_with_body_color() {
+        colored::control::set_override(true);
+        let config = Config {
+            api_key: Some("root-key".to_string()),
+            root_api_key: Some("root-key".to_string()),
+            ..Config::default()
+        };
+        let expected = vec![
+            format!(
+                "{}{}",
+                theme::warning("Root key").bold(),
+                theme::body(" configured.")
+            ),
+            format!(
+                "{}{}{}{}",
+                theme::strong("Normal commands"),
+                theme::body(" will use this key until you set a "),
+                theme::warning("separate user API key").bold(),
+                theme::body(".")
+            ),
+            format!(
+                "{}{}{}{}{}{}{}{}{}",
+                theme::body("For "),
+                theme::warning("least privilege").bold(),
+                theme::body(", run "),
+                theme::command("ov config").bold(),
+                theme::body(" -> "),
+                theme::strong("Edit config"),
+                theme::body(" -> "),
+                theme::strong("Set normal user API key"),
+                theme::body(".")
+            ),
+        ];
+        let lines = root_key_normal_command_notice_lines(&config);
+        colored::control::unset_override();
+
+        assert_eq!(lines, expected);
+    }
+
+    #[test]
+    fn next_step_copy_styles_sentence_text_with_body_color() {
+        colored::control::set_override(true);
+        let expected = format!(
+            "{}{}{}",
+            theme::body("Run "),
+            theme::command("ov --help").bold(),
+            theme::body(" to get started.")
+        );
+        let rendered = next_step_copy();
+        colored::control::unset_override();
+
+        assert_eq!(rendered, expected);
+    }
+
+    #[test]
+    fn root_key_notice_is_hidden_for_separate_user_key() {
+        let config = Config {
+            api_key: Some("user-key".to_string()),
+            root_api_key: Some("root-key".to_string()),
+            ..Config::default()
+        };
+
+        assert!(root_key_normal_command_notice_lines(&config).is_empty());
+    }
+
+    #[test]
     fn edit_api_key_choices_match_kind_and_existing_key_state() {
         assert!(edit_api_key_choice_labels(ConfigKind::SelfManaged, false).is_empty());
         assert!(edit_api_key_choice_labels(ConfigKind::VolcengineCloud, false).is_empty());
@@ -3702,6 +4738,86 @@ mod tests {
             edit_api_key_choice_labels(ConfigKind::VolcengineCloud, true),
             ["Keep existing API key", "Replace API key"]
         );
+    }
+
+    #[test]
+    fn edit_self_managed_key_actions_preserve_separate_credential_roles() {
+        assert_eq!(
+            edit_self_managed_key_action_labels(false, false),
+            ["Set normal user API key", "Set root API key"]
+        );
+        assert_eq!(
+            edit_self_managed_key_action_labels(true, true),
+            [
+                "Keep existing API keys",
+                "Set normal user API key",
+                "Set root API key",
+                "Use root key for normal commands",
+                "Clear root API key",
+                "Clear all API keys"
+            ]
+        );
+        assert_eq!(
+            edit_self_managed_key_action_labels(true, false),
+            [
+                "Keep existing API keys",
+                "Set normal user API key",
+                "Set root API key",
+                "Clear all API keys"
+            ]
+        );
+    }
+
+    #[test]
+    fn root_key_redirect_copy_is_outcome_based() {
+        assert_eq!(
+            root_key_redirect_labels(),
+            ["Continue as root key", "Re-enter user key", "Cancel"]
+        );
+    }
+
+    #[test]
+    fn user_key_redirect_copy_is_outcome_based() {
+        assert_eq!(
+            user_key_redirect_labels(),
+            ["Continue as user key", "Re-enter root key", "Cancel"]
+        );
+    }
+
+    #[test]
+    fn root_key_route_detects_regular_user_key() {
+        assert!(should_confirm_detected_user_key(
+            ConfigKind::SelfManaged,
+            Some(SelfManagedKeyMode::RootKey),
+            Some(ApiKeyRole::Regular),
+        ));
+        assert!(!should_confirm_detected_user_key(
+            ConfigKind::SelfManaged,
+            Some(SelfManagedKeyMode::UserKey),
+            Some(ApiKeyRole::Regular),
+        ));
+        assert!(!should_confirm_detected_user_key(
+            ConfigKind::SelfManaged,
+            Some(SelfManagedKeyMode::RootKey),
+            Some(ApiKeyRole::Root),
+        ));
+        assert!(!should_confirm_detected_user_key(
+            ConfigKind::VolcengineCloud,
+            Some(SelfManagedKeyMode::RootKey),
+            Some(ApiKeyRole::Regular),
+        ));
+    }
+
+    #[test]
+    fn identity_validation_rejects_spaces_before_server_validation() {
+        assert!(validate_user_id_value("alice").is_ok());
+        assert!(validate_user_id_value("alice@example.com").is_ok());
+        let error = validate_user_id_value("alice smith").expect_err("spaces should be rejected");
+        assert_eq!(
+            error.to_string(),
+            "Configuration error: User ID can only contain letters, numbers, '_', '-', '.', and '@'"
+        );
+        assert!(validate_account_id_value("_system").is_err());
     }
 
     #[test]
@@ -3730,6 +4846,275 @@ mod tests {
             Some("old-account"),
             Some("old-user"),
         ));
+    }
+
+    #[tokio::test]
+    async fn validated_root_key_config_populates_root_api_key_for_sudo() {
+        let url = spawn_root_probe_server("root-key").await;
+        let draft = ConfigDraft {
+            name: "local".to_string(),
+            kind: ConfigKind::SelfManaged,
+            url,
+            api_key: Some("root-key".to_string()),
+            root_api_key: None,
+            account: Some("admin".to_string()),
+            user: Some("default".to_string()),
+        };
+        let mut ui = super::LiveRegion::default();
+
+        let validated = validate_draft(&mut ui, "test", &draft)
+            .await
+            .expect("root key should validate");
+
+        assert_eq!(validated.api_key_role, Some(ApiKeyRole::Root));
+        assert_eq!(validated.config.api_key.as_deref(), Some("root-key"));
+        assert_eq!(validated.config.root_api_key.as_deref(), Some("root-key"));
+    }
+
+    #[tokio::test]
+    async fn validated_user_key_config_preserves_separate_root_api_key_for_sudo() {
+        let url = spawn_dual_key_probe_server("user-key", "root-key").await;
+        let draft = ConfigDraft {
+            name: "local".to_string(),
+            kind: ConfigKind::SelfManaged,
+            url,
+            api_key: Some("user-key".to_string()),
+            root_api_key: Some("root-key".to_string()),
+            account: Some("admin".to_string()),
+            user: Some("default".to_string()),
+        };
+        let mut ui = super::LiveRegion::default();
+
+        let validated = validate_draft(&mut ui, "test", &draft)
+            .await
+            .expect("separate user and root keys should validate");
+
+        assert_eq!(validated.api_key_role, Some(ApiKeyRole::Regular));
+        assert_eq!(validated.config.api_key.as_deref(), Some("user-key"));
+        assert_eq!(validated.config.root_api_key.as_deref(), Some("root-key"));
+        assert_eq!(validated.config.account, None);
+        assert_eq!(validated.config.user, None);
+    }
+
+    #[tokio::test]
+    async fn selected_root_key_regular_user_key_returns_regular_role_without_root_key() {
+        let url = spawn_dual_key_probe_server("user-key", "root-key").await;
+        let draft = ConfigDraft {
+            name: "local".to_string(),
+            kind: ConfigKind::SelfManaged,
+            url,
+            api_key: Some("user-key".to_string()),
+            root_api_key: Some("user-key".to_string()),
+            account: None,
+            user: None,
+        };
+        let mut ui = super::LiveRegion::default();
+
+        let validated = validate_draft(&mut ui, "test", &draft)
+            .await
+            .expect("regular key should validate so the wizard can redirect");
+
+        assert_eq!(validated.api_key_role, Some(ApiKeyRole::Regular));
+        assert_eq!(validated.config.api_key.as_deref(), Some("user-key"));
+        assert_eq!(validated.config.root_api_key, None);
+        assert_eq!(validated.config.account, None);
+        assert_eq!(validated.config.user, None);
+    }
+
+    #[tokio::test]
+    async fn separate_root_key_candidate_regular_user_key_returns_regular_root_candidate_role() {
+        let url =
+            spawn_two_user_key_probe_server("existing-user-key", "entered-user-key", "root-key")
+                .await;
+        let draft = ConfigDraft {
+            name: "local".to_string(),
+            kind: ConfigKind::SelfManaged,
+            url,
+            api_key: Some("existing-user-key".to_string()),
+            root_api_key: Some("entered-user-key".to_string()),
+            account: None,
+            user: None,
+        };
+        let mut ui = super::LiveRegion::default();
+
+        let validated = validate_draft(&mut ui, "test", &draft)
+            .await
+            .expect("regular root-key candidate should validate so the wizard can redirect");
+
+        assert_eq!(validated.api_key_role, Some(ApiKeyRole::Regular));
+        assert_eq!(validated.root_api_key_role, Some(ApiKeyRole::Regular));
+        assert_eq!(
+            validated.config.api_key.as_deref(),
+            Some("existing-user-key")
+        );
+        assert_eq!(validated.config.root_api_key, None);
+    }
+
+    async fn spawn_root_probe_server(root_api_key: &'static str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test server should bind");
+        let addr = listener.local_addr().expect("test server should have addr");
+        tokio::spawn(async move {
+            for _ in 0..6 {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let mut buffer = vec![0; 4096];
+                let Ok(read) = stream.read(&mut buffer).await else {
+                    return;
+                };
+                let request = String::from_utf8_lossy(&buffer[..read]);
+                let lower_request = request.to_ascii_lowercase();
+                let root_header = format!("x-api-key: {root_api_key}");
+                let response = if request.starts_with("GET /health ") {
+                    http_response(200, r#"{"healthy":true,"auth_mode":"api_key"}"#)
+                } else if request.starts_with("GET /api/v1/system/status ") {
+                    if lower_request.contains(&root_header) {
+                        http_response(200, r#"{"status":"ok","result":{"initialized":true}}"#)
+                    } else {
+                        http_response(
+                            401,
+                            r#"{"error":{"code":"AuthenticationError","message":"invalid key"}}"#,
+                        )
+                    }
+                } else if request.starts_with("GET /api/v1/admin/accounts ") {
+                    if lower_request.contains(&root_header) {
+                        http_response(200, r#"{"accounts":[]}"#)
+                    } else {
+                        http_response(
+                            403,
+                            r#"{"error":{"code":"PermissionDenied","message":"root required"}}"#,
+                        )
+                    }
+                } else {
+                    http_response(404, r#"{"error":{"message":"not found"}}"#)
+                };
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    async fn spawn_dual_key_probe_server(
+        user_api_key: &'static str,
+        root_api_key: &'static str,
+    ) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test server should bind");
+        let addr = listener.local_addr().expect("test server should have addr");
+        tokio::spawn(async move {
+            for _ in 0..12 {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let mut buffer = vec![0; 4096];
+                let Ok(read) = stream.read(&mut buffer).await else {
+                    return;
+                };
+                let request = String::from_utf8_lossy(&buffer[..read]);
+                let lower_request = request.to_ascii_lowercase();
+                let user_header = format!("x-api-key: {user_api_key}");
+                let root_header = format!("x-api-key: {root_api_key}");
+                let has_user_key = lower_request.contains(&user_header);
+                let has_root_key = lower_request.contains(&root_header);
+                let response = if request.starts_with("GET /health ") {
+                    http_response(200, r#"{"healthy":true,"auth_mode":"api_key"}"#)
+                } else if request.starts_with("GET /api/v1/system/status ") {
+                    if has_user_key || has_root_key {
+                        http_response(200, r#"{"status":"ok","result":{"initialized":true}}"#)
+                    } else {
+                        http_response(
+                            401,
+                            r#"{"error":{"code":"AuthenticationError","message":"invalid key"}}"#,
+                        )
+                    }
+                } else if request.starts_with("GET /api/v1/admin/accounts ") {
+                    if has_root_key {
+                        http_response(200, r#"{"accounts":[]}"#)
+                    } else {
+                        http_response(
+                            403,
+                            r#"{"error":{"code":"PermissionDenied","message":"root required"}}"#,
+                        )
+                    }
+                } else {
+                    http_response(404, r#"{"error":{"message":"not found"}}"#)
+                };
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    async fn spawn_two_user_key_probe_server(
+        first_user_api_key: &'static str,
+        second_user_api_key: &'static str,
+        root_api_key: &'static str,
+    ) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test server should bind");
+        let addr = listener.local_addr().expect("test server should have addr");
+        tokio::spawn(async move {
+            for _ in 0..12 {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let mut buffer = vec![0; 4096];
+                let Ok(read) = stream.read(&mut buffer).await else {
+                    return;
+                };
+                let request = String::from_utf8_lossy(&buffer[..read]);
+                let lower_request = request.to_ascii_lowercase();
+                let first_user_header = format!("x-api-key: {first_user_api_key}");
+                let second_user_header = format!("x-api-key: {second_user_api_key}");
+                let root_header = format!("x-api-key: {root_api_key}");
+                let has_regular_key = lower_request.contains(&first_user_header)
+                    || lower_request.contains(&second_user_header);
+                let has_root_key = lower_request.contains(&root_header);
+                let response = if request.starts_with("GET /health ") {
+                    http_response(200, r#"{"healthy":true,"auth_mode":"api_key"}"#)
+                } else if request.starts_with("GET /api/v1/system/status ") {
+                    if has_regular_key || has_root_key {
+                        http_response(200, r#"{"status":"ok","result":{"initialized":true}}"#)
+                    } else {
+                        http_response(
+                            401,
+                            r#"{"error":{"code":"AuthenticationError","message":"invalid key"}}"#,
+                        )
+                    }
+                } else if request.starts_with("GET /api/v1/admin/accounts ") {
+                    if has_root_key {
+                        http_response(200, r#"{"accounts":[]}"#)
+                    } else {
+                        http_response(
+                            403,
+                            r#"{"error":{"code":"PermissionDenied","message":"root required"}}"#,
+                        )
+                    }
+                } else {
+                    http_response(404, r#"{"error":{"message":"not found"}}"#)
+                };
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    fn http_response(status: u16, body: &str) -> String {
+        let reason = match status {
+            200 => "OK",
+            401 => "Unauthorized",
+            403 => "Forbidden",
+            404 => "Not Found",
+            _ => "Error",
+        };
+        format!(
+            "HTTP/1.1 {status} {reason}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
     }
 
     #[test]

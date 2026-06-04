@@ -1,10 +1,8 @@
-# Claude Code Memory Plugin
-
 Add cross-project, cross-session long-term memory to [Claude Code](https://docs.claude.com/en/docs/claude-code/overview). Install once; every conversation automatically recalls and captures memory, and the model does not need to call any tools manually.
 
 Source: [examples/claude-code-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/claude-code-memory-plugin) | [Blog: motivation and demo](https://blog.openviking.ai/post/openviking-coding-agent/)
 
-## Install
+## Step 1: Install
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/claude-code-memory-plugin/setup-helper/install.sh)
@@ -38,7 +36,7 @@ If you prefer to install manually:
 
 </details>
 
-## Verify
+## Step 2: Verify
 
 ```bash
 type claude        # Expected: claude is a shell function
@@ -89,7 +87,7 @@ The plugin renders OpenViking status below the Claude Code input box: connection
 | MCP tools connect to `127.0.0.1` instead of remote | Missing shell function wrapper | Confirm `type claude` returns "shell function"; see [Manual installation](#install) |
 | Remote auth returns 401 / 403 | API key is wrong or tenant headers are missing | Check `OPENVIKING_API_KEY`; for multi-tenant deployments also verify `OPENVIKING_ACCOUNT` / `OPENVIKING_USER` |
 
-## See also
+## Reference docs
 
 - [Blog: OpenViking for Claude Code / Codex](https://blog.openviking.ai/post/openviking-coding-agent/) - Why and how to add long-term memory to your coding agent
 - [Plugin README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md) - Full environment variable table, hook details, and architecture diagram

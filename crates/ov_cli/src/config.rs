@@ -195,10 +195,7 @@ impl Config {
         if path.exists() {
             Self::from_file(&path.to_string_lossy())
         } else {
-            Err(Error::Config(
-                "No CLI config file detected, please use `ov config` to initialize ovcli.conf"
-                    .to_string(),
-            ))
+            Err(Error::MissingConfig)
         }
     }
 
@@ -266,6 +263,8 @@ pub fn get_or_create_machine_id() -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    use crate::error::Error;
+
     use super::{Config, merge_csv_options};
 
     #[test]
@@ -274,13 +273,13 @@ mod tests {
         let path = dir.path().join("missing-ovcli.conf");
 
         let error = Config::load_required_from_path(&path)
-            .expect_err("missing required config should fail")
-            .to_string();
+            .expect_err("missing required config should fail");
 
-        assert!(error.contains("No CLI config file detected"));
-        assert!(error.contains("ov config"));
-        assert!(!error.contains("setup-cli"));
-        assert!(error.contains("ovcli.conf"));
+        assert!(matches!(error, Error::MissingConfig));
+        let message = error.to_string();
+        assert!(message.contains("No ovcli.conf detected"));
+        assert!(message.contains("ov config"));
+        assert!(!message.contains("setup-cli"));
     }
 
     #[test]
@@ -427,9 +426,17 @@ mod tests {
         )
         .expect("config should deserialize with extra_headers");
 
-        let headers = config.extra_headers.expect("extra_headers should be present");
-        assert_eq!(headers.get("X-Custom-Header"), Some(&"custom-value".to_string()));
-        assert_eq!(headers.get("Authorization"), Some(&"Bearer token".to_string()));
+        let headers = config
+            .extra_headers
+            .expect("extra_headers should be present");
+        assert_eq!(
+            headers.get("X-Custom-Header"),
+            Some(&"custom-value".to_string())
+        );
+        assert_eq!(
+            headers.get("Authorization"),
+            Some(&"Bearer token".to_string())
+        );
     }
 
     #[test]
@@ -470,8 +477,16 @@ mod tests {
         )
         .expect("config should deserialize with alias");
 
-        let headers = config.extra_headers.expect("extra_headers should be present");
-        assert_eq!(headers.get("X-Custom-Header"), Some(&"custom-value".to_string()));
-        assert_eq!(headers.get("Authorization"), Some(&"Bearer token".to_string()));
+        let headers = config
+            .extra_headers
+            .expect("extra_headers should be present");
+        assert_eq!(
+            headers.get("X-Custom-Header"),
+            Some(&"custom-value".to_string())
+        );
+        assert_eq!(
+            headers.get("Authorization"),
+            Some(&"Bearer token".to_string())
+        );
     }
 }

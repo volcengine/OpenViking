@@ -8,13 +8,13 @@ use async_trait::async_trait;
 use regex::Regex;
 
 use super::errors::{Error, Result};
-use super::types::{FileInfo, GrepResult, WriteFlag};
+use super::types::{FileInfo, GrepResult, TreeEntry, WriteFlag};
 
 /// Normalize a path for prefix comparisons.
 ///
 /// - Keeps "/" as-is.
 /// - Strips trailing slashes for non-root paths (so "/a" and "/a/" behave the same).
-fn normalize_prefix_path(path: &str) -> String {
+pub(crate) fn normalize_prefix_path(path: &str) -> String {
     if path == "/" {
         "/".to_string()
     } else {
@@ -39,7 +39,7 @@ fn is_excluded_path(path: &str, exclude_path: &str) -> bool {
 /// Contract:
 /// - "." means query root itself.
 /// - otherwise returns a relative path without leading "/".
-fn relative_match_file(query_root: &str, path: &str) -> String {
+pub(crate) fn relative_match_file(query_root: &str, path: &str) -> String {
     let base = normalize_prefix_path(query_root);
     if path == base {
         return ".".to_string();
@@ -66,7 +66,7 @@ fn relative_match_file(query_root: &str, path: &str) -> String {
 ///
 /// - "." and "" => 0
 /// - "a/b" => 2
-fn relative_depth(rel: &str) -> usize {
+pub(crate) fn relative_depth(rel: &str) -> usize {
     if rel.is_empty() || rel == "." {
         0
     } else {
@@ -397,6 +397,119 @@ pub trait FileSystem: Send + Sync {
         Ok(())
     }
 
+    /// Recursively traverse a directory tree, returning a flat list of TreeEntry nodes.
+    ///
+    /// This is the public entry point. The default implementation uses recursive
+    /// `read_dir()` calls. Plugins (e.g. s3fs) may override this for better performance.
+    ///
+    /// # Arguments
+    /// * `path` - The root path of the traversal
+    /// * `show_hidden` - Whether to include hidden files (names starting with `.`)
+    /// * `node_limit` - Maximum number of nodes to return (None means no limit)
+    /// * `level_limit` - Maximum depth relative to query root (None means no limit)
+    ///
+    /// # Returns
+    /// A flat `Vec<TreeEntry>` in DFS order (directories before their children).
+    async fn tree_directory(
+        &self,
+        path: &str,
+        show_hidden: bool,
+        node_limit: Option<usize>,
+        level_limit: Option<usize>,
+    ) -> Result<Vec<TreeEntry>> {
+        let normalized_path = normalize_prefix_path(path);
+        let mut result = Vec::new();
+
+        self.tree_directory_internal(
+            normalized_path.as_str(),
+            normalized_path.as_str(),
+            show_hidden,
+            node_limit,
+            level_limit,
+            &mut result,
+        )
+        .await?;
+
+        Ok(result)
+    }
+
+    /// Internal recursive helper for tree_directory.
+    ///
+    /// # Arguments
+    /// * `base_path` - The original query root (used for rel_path computation)
+    /// * `current_path` - The current directory being traversed
+    /// * `show_hidden` - Whether to include hidden files
+    /// * `node_limit` - Maximum number of nodes to return
+    /// * `level_limit` - Maximum depth relative to base_path
+    /// * `result` - Accumulator for the flat result list
+    async fn tree_directory_internal(
+        &self,
+        base_path: &str,
+        current_path: &str,
+        show_hidden: bool,
+        node_limit: Option<usize>,
+        level_limit: Option<usize>,
+        result: &mut Vec<TreeEntry>,
+    ) -> Result<()> {
+        if node_limit.is_some_and(|limit| result.len() >= limit) {
+            return Ok(());
+        }
+
+        if let Some(limit) = level_limit {
+            let current_rel = relative_match_file(base_path, current_path);
+            let current_depth = relative_depth(&current_rel);
+            // `current_depth >= limit` is a pre-expansion guard: stop before
+            // reading the directory.  Equivalent to S3FS's post-generation
+            // `depth > limit` filter — both ensure entries at depth > limit
+            // are excluded.
+            if current_depth >= limit {
+                return Ok(());
+            }
+        }
+
+        let entries = self.read_dir(current_path).await?;
+
+        for entry in entries {
+            if node_limit.is_some_and(|limit| result.len() >= limit) {
+                break;
+            }
+
+            let is_hidden_file = !entry.is_dir && entry.name.starts_with('.');
+            if is_hidden_file && !show_hidden {
+                continue;
+            }
+
+            let entry_path = if current_path == "/" {
+                format!("/{}", entry.name)
+            } else {
+                format!("{}/{}", current_path, entry.name)
+            };
+
+            let rel_path = relative_match_file(base_path, &entry_path);
+
+            result.push(TreeEntry {
+                path: entry_path.clone(),
+                rel_path,
+                info: entry.clone(),
+                extra: std::collections::HashMap::new(),
+            });
+
+            if entry.is_dir {
+                self.tree_directory_internal(
+                    base_path,
+                    &entry_path,
+                    show_hidden,
+                    node_limit,
+                    level_limit,
+                    result,
+                )
+                .await?;
+            }
+        }
+
+        Ok(())
+    }
+
     /// Ensure all parent directories exist for the given path
     ///
     /// # Arguments
@@ -651,5 +764,247 @@ mod tests {
 
         assert_eq!(out.count, 1);
         assert_eq!(out.matches[0].file, "a.txt");
+    }
+
+    // ── tree_directory default implementation tests ──
+
+    fn tree_names(entries: &[TreeEntry]) -> Vec<String> {
+        entries.iter().map(|e| e.info.name.clone()).collect()
+    }
+
+    fn tree_paths(entries: &[TreeEntry]) -> Vec<String> {
+        entries.iter().map(|e| e.path.clone()).collect()
+    }
+
+    fn tree_rel_paths(entries: &[TreeEntry]) -> Vec<String> {
+        entries.iter().map(|e| e.rel_path.clone()).collect()
+    }
+
+    #[tokio::test]
+    async fn test_tree_empty_dir() {
+        let fs = TreeFS::default().with_dir_entries("/root", vec![]);
+
+        let entries = fs.tree_directory("/root", false, None, None).await.unwrap();
+
+        assert!(entries.is_empty(), "empty dir returns empty vec");
+    }
+
+    #[tokio::test]
+    async fn test_tree_single_layer_files() {
+        let fs = TreeFS::default().with_dir_entries(
+            "/root",
+            vec![("a.txt", false), ("b.txt", false), ("c.txt", false)],
+        );
+
+        let entries = fs.tree_directory("/root", false, None, None).await.unwrap();
+
+        assert_eq!(entries.len(), 3);
+        assert_eq!(tree_names(&entries), vec!["a.txt", "b.txt", "c.txt"]);
+        assert_eq!(tree_rel_paths(&entries), vec!["a.txt", "b.txt", "c.txt"]);
+    }
+
+    #[tokio::test]
+    async fn test_tree_nested_dfs_order() {
+        let fs = TreeFS::default()
+            .with_dir_entries("/root", vec![("a.txt", false), ("sub", true)])
+            .with_dir_entries("/root/sub", vec![("b.txt", false)]);
+
+        let entries = fs.tree_directory("/root", false, None, None).await.unwrap();
+
+        assert_eq!(entries.len(), 3);
+        assert_eq!(tree_names(&entries), vec!["a.txt", "sub", "b.txt"]);
+        assert_eq!(tree_rel_paths(&entries), vec!["a.txt", "sub", "sub/b.txt"]);
+        assert_eq!(
+            tree_paths(&entries),
+            vec!["/root/a.txt", "/root/sub", "/root/sub/b.txt"]
+        );
+        assert_eq!(entries[0].info.mode, 0o644);
+        assert!(!entries[0].info.is_dir);
+        assert_eq!(entries[1].info.mode, 0o755);
+        assert!(entries[1].info.is_dir);
+        assert!(entries.iter().all(|entry| entry.extra.is_empty()));
+    }
+
+    #[tokio::test]
+    async fn test_tree_node_limit() {
+        let fs = TreeFS::default().with_dir_entries(
+            "/root",
+            vec![
+                ("a.txt", false),
+                ("b.txt", false),
+                ("c.txt", false),
+                ("d.txt", false),
+                ("e.txt", false),
+            ],
+        );
+
+        let entries = fs
+            .tree_directory("/root", false, Some(3), None)
+            .await
+            .unwrap();
+
+        assert_eq!(entries.len(), 3);
+        assert_eq!(tree_names(&entries), vec!["a.txt", "b.txt", "c.txt"]);
+    }
+
+    #[tokio::test]
+    async fn test_tree_node_limit_zero() {
+        let fs = TreeFS::default().with_dir_entries("/root", vec![("a.txt", false)]);
+
+        let entries = fs
+            .tree_directory("/root", false, Some(0), None)
+            .await
+            .unwrap();
+
+        assert!(entries.is_empty(), "node_limit=0 returns empty");
+    }
+
+    #[tokio::test]
+    async fn test_tree_level_limit_zero() {
+        let fs = TreeFS::default()
+            .with_dir_entries("/root", vec![("a.txt", false), ("sub", true)])
+            .with_dir_entries("/root/sub", vec![("b.txt", false)]);
+
+        let entries = fs
+            .tree_directory("/root", false, None, Some(0))
+            .await
+            .unwrap();
+
+        assert!(
+            entries.is_empty(),
+            "level_limit=0 returns empty (root not expanded)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_tree_level_limit_one() {
+        let fs = TreeFS::default()
+            .with_dir_entries("/root", vec![("a.txt", false), ("sub", true)])
+            .with_dir_entries("/root/sub", vec![("b.txt", false)]);
+
+        let entries = fs
+            .tree_directory("/root", false, None, Some(1))
+            .await
+            .unwrap();
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(tree_names(&entries), vec!["a.txt", "sub"]);
+    }
+
+    #[tokio::test]
+    async fn test_tree_level_limit_none() {
+        let fs = TreeFS::default()
+            .with_dir_entries("/root", vec![("a.txt", false), ("sub", true)])
+            .with_dir_entries("/root/sub", vec![("b.txt", false), ("deep", true)])
+            .with_dir_entries("/root/sub/deep", vec![("c.txt", false)]);
+
+        let entries = fs.tree_directory("/root", false, None, None).await.unwrap();
+
+        assert_eq!(entries.len(), 5);
+        assert!(tree_paths(&entries).contains(&"/root/sub/deep/c.txt".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_tree_show_hidden_false() {
+        let fs = TreeFS::default().with_dir_entries(
+            "/root",
+            vec![("a.txt", false), (".hidden", false), ("visible", true)],
+        );
+
+        let entries = fs.tree_directory("/root", false, None, None).await.unwrap();
+
+        let names = tree_names(&entries);
+        assert!(names.contains(&"a.txt".to_string()));
+        assert!(names.contains(&"visible".to_string()));
+        assert!(!names.contains(&".hidden".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_tree_show_hidden_false_dir_preserved() {
+        let fs = TreeFS::default()
+            .with_dir_entries("/root", vec![(".hidden_dir", true)])
+            .with_dir_entries("/root/.hidden_dir", vec![("secret.txt", false)]);
+
+        let entries = fs.tree_directory("/root", false, None, None).await.unwrap();
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(tree_names(&entries), vec![".hidden_dir", "secret.txt"]);
+    }
+
+    #[tokio::test]
+    async fn test_tree_show_hidden_true() {
+        let fs = TreeFS::default().with_dir_entries(
+            "/root",
+            vec![("a.txt", false), (".hidden", false), (".hidden_dir", true)],
+        );
+
+        let entries = fs.tree_directory("/root", true, None, None).await.unwrap();
+
+        let names = tree_names(&entries);
+        assert!(names.contains(&"a.txt".to_string()));
+        assert!(names.contains(&".hidden".to_string()));
+        assert!(names.contains(&".hidden_dir".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_tree_root_path() {
+        let fs = TreeFS::default().with_dir_entries("/", vec![("a.txt", false), ("sub", true)]);
+
+        let entries = fs.tree_directory("/", false, None, None).await.unwrap();
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].path, "/a.txt");
+        assert_eq!(entries[0].rel_path, "a.txt");
+    }
+
+    #[tokio::test]
+    async fn test_tree_deep_nesting() {
+        let fs = TreeFS::default()
+            .with_dir_entries("/a", vec![("b", true)])
+            .with_dir_entries("/a/b", vec![("c", true)])
+            .with_dir_entries("/a/b/c", vec![("d", true)])
+            .with_dir_entries("/a/b/c/d", vec![("e", true)])
+            .with_dir_entries("/a/b/c/d/e", vec![("f.txt", false)]);
+
+        let entries = fs.tree_directory("/a", false, None, None).await.unwrap();
+
+        assert_eq!(entries.len(), 5);
+        assert_eq!(
+            tree_paths(&entries),
+            vec![
+                "/a/b",
+                "/a/b/c",
+                "/a/b/c/d",
+                "/a/b/c/d/e",
+                "/a/b/c/d/e/f.txt"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_tree_mixed_scenario() {
+        let fs = TreeFS::default()
+            .with_dir_entries(
+                "/root",
+                vec![
+                    ("a.txt", false),
+                    (".hidden_file", false),
+                    ("sub", true),
+                    (".hidden_dir", true),
+                ],
+            )
+            .with_dir_entries("/root/sub", vec![("b.txt", false)])
+            .with_dir_entries("/root/.hidden_dir", vec![("secret.txt", false)]);
+
+        let entries = fs.tree_directory("/root", false, None, None).await.unwrap();
+
+        assert_eq!(entries.len(), 5);
+        let names = tree_names(&entries);
+        assert!(names.contains(&"a.txt".to_string()));
+        assert!(names.contains(&"sub".to_string()));
+        assert!(names.contains(&"b.txt".to_string()));
+        assert!(names.contains(&".hidden_dir".to_string()));
+        assert!(names.contains(&"secret.txt".to_string()));
+        assert!(!names.contains(&".hidden_file".to_string()));
     }
 }
