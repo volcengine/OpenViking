@@ -1,15 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
+  ArrowRightIcon,
   CheckCircle2Icon,
+  HistoryIcon,
   Loader2Icon,
   SendIcon,
   SparklesIcon,
   TerminalIcon,
+  TrashIcon,
   XCircleIcon,
 } from 'lucide-react'
 
 import { Button } from '#/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '#/components/ui/dialog'
 import { useAppConnection } from '#/hooks/use-app-connection'
 import {
   getHealth,
@@ -31,8 +41,9 @@ import type { VikingFsEntry } from '#/routes/resources/-types/viking-fm'
 
 import { ROOT_URI, TERMINAL_COMMANDS } from '../-lib/constants'
 import type {
-  TerminalCommandGroup,
+  ResourceRef,
   ResourceOpenHandler,
+  TerminalCommandGroup,
   TerminalCommandView,
   TerminalEntry,
 } from '../-lib/types'
@@ -46,7 +57,10 @@ import { ResourceRefList } from './resource-ref-list'
 
 const TERMINAL_COMMAND_HISTORY_STORAGE_KEY =
   'openviking.playground.terminalCommandHistory'
+const TERMINAL_ENTRY_HISTORY_STORAGE_KEY =
+  'openviking.playground.terminalEntryHistory'
 const TERMINAL_COMMAND_HISTORY_LIMIT = 50
+const TERMINAL_ENTRY_HISTORY_LIMIT = 100
 const URI_ARGUMENT_COMMANDS = new Set([
   '/abstract',
   '/ls',
@@ -61,6 +75,14 @@ type TerminalSuggestionGroup = TerminalCommandGroup | 'history' | 'resource'
 type TerminalSuggestion = Omit<TerminalCommandView, 'group'> & {
   group: TerminalSuggestionGroup
   id: string
+}
+
+type TerminalQuickStartExample = {
+  action?: () => void
+  command: string
+  code: string
+  key: string
+  title: string
 }
 
 function loadCommandHistory(): string[] {
@@ -88,6 +110,75 @@ function persistCommandHistory(history: string[]): void {
       TERMINAL_COMMAND_HISTORY_STORAGE_KEY,
       JSON.stringify(history.slice(0, TERMINAL_COMMAND_HISTORY_LIMIT)),
     )
+  } catch {
+    // localStorage can be unavailable in private windows.
+  }
+}
+
+function normalizeRefs(value: unknown): ResourceRef[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const refs = value
+    .filter(
+      (item): item is ResourceRef =>
+        typeof item === 'object' &&
+        item !== null &&
+        typeof (item as ResourceRef).uri === 'string',
+    )
+    .map((item) => ({
+      label: typeof item.label === 'string' ? item.label : undefined,
+      meta: typeof item.meta === 'string' ? item.meta : undefined,
+      uri: item.uri,
+    }))
+  return refs.length > 0 ? refs : undefined
+}
+
+function loadTerminalHistory(): TerminalEntry[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = window.localStorage.getItem(TERMINAL_ENTRY_HISTORY_STORAGE_KEY)
+    const parsed: unknown = raw ? JSON.parse(raw) : []
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .filter((item): item is Record<string, unknown> => {
+        if (typeof item !== 'object' || item === null) return false
+        return (
+          typeof item.id === 'string' &&
+          typeof item.title === 'string' &&
+          ['command', 'error', 'info', 'success'].includes(String(item.kind)) &&
+          (item.body === undefined || typeof item.body === 'string')
+        )
+      })
+      .map(
+        (item): TerminalEntry => ({
+          body: typeof item.body === 'string' ? item.body : undefined,
+          id: String(item.id),
+          kind: item.kind as TerminalEntry['kind'],
+          refs: normalizeRefs(item.refs),
+          title: String(item.title),
+        }),
+      )
+      .slice(-TERMINAL_ENTRY_HISTORY_LIMIT)
+  } catch {
+    return []
+  }
+}
+
+function persistTerminalHistory(history: TerminalEntry[]): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(
+      TERMINAL_ENTRY_HISTORY_STORAGE_KEY,
+      JSON.stringify(history.slice(-TERMINAL_ENTRY_HISTORY_LIMIT)),
+    )
+  } catch {
+    // localStorage can be unavailable or full.
+  }
+}
+
+function clearPersistedTerminalHistory(): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.removeItem(TERMINAL_ENTRY_HISTORY_STORAGE_KEY)
   } catch {
     // localStorage can be unavailable in private windows.
   }
@@ -131,14 +222,8 @@ export function TerminalPanel({
   const [suggestionsOpen, setSuggestionsOpen] = useState(false)
   const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(0)
   const [commandHistory, setCommandHistory] = useState(loadCommandHistory)
-  const [history, setHistory] = useState<TerminalEntry[]>(() => [
-    {
-      id: 'welcome',
-      kind: 'info',
-      title: t('terminal.welcomeTitle'),
-      body: t('terminal.welcomeBody'),
-    },
-  ])
+  const [history, setHistory] = useState(loadTerminalHistory)
+  const [historyOpen, setHistoryOpen] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -303,13 +388,22 @@ export function TerminalPanel({
   }, [history.length, running])
 
   const append = useCallback((entry: Omit<TerminalEntry, 'id'>) => {
-    setHistory((prev) => [
-      ...prev,
-      {
-        ...entry,
-        id: `${Date.now()}-${prev.length}`,
-      },
-    ])
+    setHistory((prev) => {
+      const next = [
+        ...prev,
+        {
+          ...entry,
+          id: `${Date.now()}-${prev.length}`,
+        },
+      ].slice(-TERMINAL_ENTRY_HISTORY_LIMIT)
+      persistTerminalHistory(next)
+      return next
+    })
+  }, [])
+
+  const clearHistory = useCallback(() => {
+    setHistory([])
+    clearPersistedTerminalHistory()
   }, [])
 
   const rememberCommand = useCallback((raw: string) => {
@@ -556,169 +650,330 @@ export function TerminalPanel({
   )
 
   const quickCommands = commands.filter((item) =>
-    ['/status', '/ls', '/search', '/read', '/add-resource'].includes(
-      item.command,
-    ),
+    ['/status', '/find', '/search', '/add-resource'].includes(item.command),
+  )
+
+  const quickStartExamples = useMemo<TerminalQuickStartExample[]>(
+    () => [
+      {
+        action: () => void runCommand('/add-resource'),
+        code: t('terminal.quickStart.addResource.code'),
+        command: t('terminal.quickStart.addResource.command'),
+        key: 'add-resource',
+        title: t('terminal.quickStart.addResource.title'),
+      },
+      {
+        code: t('terminal.quickStart.addMemory.code'),
+        command: t('terminal.quickStart.addMemory.command'),
+        key: 'add-memory',
+        title: t('terminal.quickStart.addMemory.title'),
+      },
+      {
+        action: () => void runCommand('/find openviking 有什么价值？'),
+        code: t('terminal.quickStart.find.code'),
+        command: t('terminal.quickStart.find.command'),
+        key: 'find',
+        title: t('terminal.quickStart.find.title'),
+      },
+    ],
+    [runCommand, t],
   )
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-        <div className="space-y-3">
-          {history.map((entry) => (
-            <TerminalHistoryItem
-              key={entry.id}
-              entry={entry}
-              onOpenResource={onOpenResource}
-              openingUri={openingUri}
-            />
-          ))}
-          {running ? (
-            <div className="flex items-center gap-2 rounded-lg border bg-background px-3 py-2 text-xs text-muted-foreground">
-              <Loader2Icon className="size-3.5 animate-spin" />
-              {t('terminal.running')}
-            </div>
-          ) : null}
-        </div>
-      </div>
-      <div className="border-t bg-background/80 p-3">
-        <div className="mb-2 flex flex-wrap gap-1.5">
-          {quickCommands.map((item) => (
-            <button
-              key={item.command}
+    <>
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div className="border-b bg-background/70 px-4 py-3">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <TerminalIcon className="size-3.5 shrink-0" />
+            <span className="min-w-0 flex-1 truncate">
+              {t('terminal.header')}
+            </span>
+            <Button
               type="button"
-              className="rounded-md border bg-muted/40 px-2 py-1 font-mono text-[11px] text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
-              onClick={() => acceptSuggestion(item)}
+              variant="ghost"
+              size="icon-sm"
+              className="size-7 shrink-0"
+              title={t('terminal.history')}
+              onClick={() => setHistoryOpen(true)}
             >
-              {item.command}
-            </button>
-          ))}
+              <HistoryIcon className="size-3.5" />
+            </Button>
+          </div>
         </div>
-        <form
-          className="relative flex items-center gap-2 rounded-lg border bg-muted/30 px-2 py-2"
-          onSubmit={(event) => {
-            event.preventDefault()
-            void runCommand(command)
-          }}
+        <div
+          ref={scrollRef}
+          className="min-h-0 flex-1 overflow-y-auto px-4 py-4"
         >
-          <input
-            ref={inputRef}
-            value={command}
-            onBlur={() => {
-              window.setTimeout(() => setSuggestionsOpen(false), 120)
+          <div className="space-y-3">
+            {history.length === 0 && !running ? (
+              <TerminalQuickStart
+                examples={quickStartExamples}
+                title={t('terminal.quickStart.title')}
+              />
+            ) : null}
+            {history.map((entry) => (
+              <TerminalHistoryItem
+                key={entry.id}
+                entry={entry}
+                onOpenResource={onOpenResource}
+                openingUri={openingUri}
+              />
+            ))}
+            {running ? (
+              <div className="flex items-center gap-2 rounded-lg border bg-background px-3 py-2 text-xs text-muted-foreground">
+                <Loader2Icon className="size-3.5 animate-spin" />
+                {t('terminal.running')}
+              </div>
+            ) : null}
+          </div>
+        </div>
+        <div className="border-t bg-background/80 p-3">
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {quickCommands.map((item) => (
+              <button
+                key={item.command}
+                type="button"
+                className="rounded-md border bg-muted/40 px-2 py-1 font-mono text-[11px] text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+                onClick={() => acceptSuggestion(item)}
+              >
+                {item.command}
+              </button>
+            ))}
+          </div>
+          <form
+            className="relative flex items-center gap-2 rounded-lg border bg-muted/30 px-2 py-2"
+            onSubmit={(event) => {
+              event.preventDefault()
+              void runCommand(command)
             }}
-            onChange={(event) => {
-              setCommand(event.target.value)
-              setSuggestionsOpen(true)
-            }}
-            onFocus={() => setSuggestionsOpen(true)}
-            onKeyDown={(event) => {
-              if (!suggestionsOpen || suggestions.length === 0) return
-              if (event.key === 'ArrowDown') {
-                event.preventDefault()
-                setActiveSuggestionIndex((current) =>
-                  Math.min(current + 1, suggestions.length - 1),
-                )
-                return
-              }
-              if (event.key === 'ArrowUp') {
-                event.preventDefault()
-                setActiveSuggestionIndex((current) => Math.max(current - 1, 0))
-                return
-              }
-              if (event.key === 'Tab') {
-                event.preventDefault()
-                acceptSuggestion(suggestions[activeSuggestionIndex])
-                return
-              }
-              if (
-                event.key === 'ArrowRight' &&
-                event.currentTarget.selectionStart === command.length &&
-                event.currentTarget.selectionEnd === command.length
-              ) {
-                event.preventDefault()
-                acceptSuggestion(suggestions[activeSuggestionIndex])
-                return
-              }
-              if (event.key === 'Enter') {
-                event.preventDefault()
-                if (command.trim() === '/') {
+          >
+            <input
+              ref={inputRef}
+              value={command}
+              onBlur={() => {
+                window.setTimeout(() => setSuggestionsOpen(false), 120)
+              }}
+              onChange={(event) => {
+                setCommand(event.target.value)
+                setSuggestionsOpen(true)
+              }}
+              onFocus={() => setSuggestionsOpen(true)}
+              onKeyDown={(event) => {
+                if (!suggestionsOpen || suggestions.length === 0) return
+                if (event.key === 'ArrowDown') {
+                  event.preventDefault()
+                  setActiveSuggestionIndex((current) =>
+                    Math.min(current + 1, suggestions.length - 1),
+                  )
+                  return
+                }
+                if (event.key === 'ArrowUp') {
+                  event.preventDefault()
+                  setActiveSuggestionIndex((current) =>
+                    Math.max(current - 1, 0),
+                  )
+                  return
+                }
+                if (event.key === 'Tab') {
+                  event.preventDefault()
                   acceptSuggestion(suggestions[activeSuggestionIndex])
                   return
                 }
-                runSuggestion(suggestions[activeSuggestionIndex])
-                return
-              }
-              if (event.key === 'Escape') {
-                setSuggestionsOpen(false)
-              }
-            }}
-            placeholder={t('terminal.placeholder')}
-            className="h-8 min-w-0 flex-1 bg-transparent font-mono text-sm outline-none placeholder:text-muted-foreground/60"
-          />
-          {suggestionsOpen && suggestions.length > 0 ? (
-            <div className="absolute bottom-[calc(100%+0.5rem)] left-0 right-0 z-20 overflow-hidden rounded-lg border bg-popover shadow-xl">
-              <div className="border-b px-3 py-2 text-[11px] font-medium text-muted-foreground">
-                {t('terminal.suggestionsTitle')}
-              </div>
-              <div className="max-h-64 overflow-y-auto p-1">
-                {(() => {
-                  let suggestionIndex = 0
-                  return groupedSuggestions.map((group) => (
-                    <div key={group.group} className="py-1 first:pt-0">
-                      <div className="px-2 pb-1 pt-1 text-[10px] font-semibold text-muted-foreground">
-                        {group.label}
+                if (
+                  event.key === 'ArrowRight' &&
+                  event.currentTarget.selectionStart === command.length &&
+                  event.currentTarget.selectionEnd === command.length
+                ) {
+                  event.preventDefault()
+                  acceptSuggestion(suggestions[activeSuggestionIndex])
+                  return
+                }
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  if (command.trim() === '/') {
+                    acceptSuggestion(suggestions[activeSuggestionIndex])
+                    return
+                  }
+                  runSuggestion(suggestions[activeSuggestionIndex])
+                  return
+                }
+                if (event.key === 'Escape') {
+                  setSuggestionsOpen(false)
+                }
+              }}
+              placeholder={t('terminal.placeholder')}
+              className="h-8 min-w-0 flex-1 bg-transparent font-mono text-sm outline-none placeholder:text-muted-foreground/60"
+            />
+            {suggestionsOpen && suggestions.length > 0 ? (
+              <div className="absolute bottom-[calc(100%+0.5rem)] left-0 right-0 z-20 overflow-hidden rounded-lg border bg-popover shadow-xl">
+                <div className="border-b px-3 py-2 text-[11px] font-medium text-muted-foreground">
+                  {t('terminal.suggestionsTitle')}
+                </div>
+                <div className="max-h-64 overflow-y-auto p-1">
+                  {(() => {
+                    let suggestionIndex = 0
+                    return groupedSuggestions.map((group) => (
+                      <div key={group.group} className="py-1 first:pt-0">
+                        <div className="px-2 pb-1 pt-1 text-[10px] font-semibold text-muted-foreground">
+                          {group.label}
+                        </div>
+                        {group.items.map((suggestion) => {
+                          const index = suggestionIndex
+                          suggestionIndex += 1
+                          return (
+                            <button
+                              key={suggestion.id}
+                              type="button"
+                              className={cn(
+                                'flex w-full min-w-0 items-start gap-3 rounded-md px-2 py-2 text-left transition-colors',
+                                index === activeSuggestionIndex
+                                  ? 'bg-primary/10 text-foreground'
+                                  : 'hover:bg-muted/60',
+                              )}
+                              onClick={() => acceptSuggestion(suggestion)}
+                              onMouseDown={(event) => event.preventDefault()}
+                              onMouseEnter={() =>
+                                setActiveSuggestionIndex(index)
+                              }
+                            >
+                              <span className="w-24 shrink-0 font-mono text-xs font-semibold text-primary">
+                                {suggestion.command}
+                              </span>
+                              <span className="min-w-0 flex-1">
+                                <span className="block text-xs text-foreground">
+                                  {suggestion.description}
+                                </span>
+                                <span className="mt-0.5 block truncate font-mono text-[11px] text-muted-foreground">
+                                  {suggestion.usage}
+                                </span>
+                              </span>
+                            </button>
+                          )
+                        })}
                       </div>
-                      {group.items.map((suggestion) => {
-                        const index = suggestionIndex
-                        suggestionIndex += 1
-                        return (
-                          <button
-                            key={suggestion.id}
-                            type="button"
-                            className={cn(
-                              'flex w-full min-w-0 items-start gap-3 rounded-md px-2 py-2 text-left transition-colors',
-                              index === activeSuggestionIndex
-                                ? 'bg-primary/10 text-foreground'
-                                : 'hover:bg-muted/60',
-                            )}
-                            onClick={() => acceptSuggestion(suggestion)}
-                            onMouseDown={(event) => event.preventDefault()}
-                            onMouseEnter={() => setActiveSuggestionIndex(index)}
-                          >
-                            <span className="w-24 shrink-0 font-mono text-xs font-semibold text-primary">
-                              {suggestion.command}
-                            </span>
-                            <span className="min-w-0 flex-1">
-                              <span className="block text-xs text-foreground">
-                                {suggestion.description}
-                              </span>
-                              <span className="mt-0.5 block truncate font-mono text-[11px] text-muted-foreground">
-                                {suggestion.usage}
-                              </span>
-                            </span>
-                          </button>
-                        )
-                      })}
-                    </div>
-                  ))
-                })()}
+                    ))
+                  })()}
+                </div>
+                <div className="border-t px-3 py-1.5 text-[10px] text-muted-foreground">
+                  {t('terminal.suggestionsHint')}
+                </div>
               </div>
-              <div className="border-t px-3 py-1.5 text-[10px] text-muted-foreground">
-                {t('terminal.suggestionsHint')}
-              </div>
-            </div>
-          ) : null}
-          <Button
-            type="submit"
-            size="icon-sm"
-            disabled={running || !command.trim()}
-          >
-            <SendIcon className="size-4" />
-          </Button>
-        </form>
+            ) : null}
+            <Button
+              type="submit"
+              size="icon-sm"
+              disabled={running || !command.trim()}
+            >
+              <SendIcon className="size-4" />
+            </Button>
+          </form>
+        </div>
       </div>
-    </div>
+      <Dialog open={historyOpen} onOpenChange={setHistoryOpen}>
+        <DialogContent className="gap-4 sm:max-w-2xl">
+          <DialogHeader>
+            <div className="flex items-start gap-3">
+              <div className="min-w-0 flex-1">
+                <DialogTitle>{t('terminal.historyTitle')}</DialogTitle>
+                <DialogDescription>
+                  {t('terminal.historyDescription')}
+                </DialogDescription>
+              </div>
+              {history.length > 0 ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  className="size-7 shrink-0"
+                  title={t('terminal.clearHistory')}
+                  onClick={clearHistory}
+                >
+                  <TrashIcon className="size-3.5" />
+                </Button>
+              ) : null}
+            </div>
+          </DialogHeader>
+          <div className="max-h-[460px] overflow-y-auto pr-1">
+            {history.length === 0 ? (
+              <div className="rounded-lg border bg-muted/30 p-3 text-sm text-muted-foreground">
+                {t('terminal.noHistory')}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {history.map((entry) => (
+                  <TerminalHistoryItem
+                    key={`dialog-${entry.id}`}
+                    entry={entry}
+                    onOpenResource={onOpenResource}
+                    openingUri={openingUri}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
+  )
+}
+
+function TerminalQuickStart({
+  examples,
+  title,
+}: {
+  examples: TerminalQuickStartExample[]
+  title: string
+}) {
+  return (
+    <section className="space-y-3 py-3">
+      <div className="text-xs font-semibold text-muted-foreground">{title}</div>
+      <div className="space-y-2">
+        {examples.map((example) => {
+          const content = (
+            <>
+              <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-background text-muted-foreground">
+                <ArrowRightIcon className="size-4" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-medium text-foreground">
+                    {example.title}
+                  </span>
+                  <span className="rounded-md border bg-background px-2 py-0.5 font-mono text-xs font-semibold">
+                    {example.command}
+                  </span>
+                </span>
+                <span className="mt-1 block truncate font-mono text-xs text-muted-foreground">
+                  {example.code}
+                </span>
+              </span>
+            </>
+          )
+
+          if (!example.action) {
+            return (
+              <div
+                key={example.key}
+                className="flex min-w-0 items-center gap-3 rounded-lg bg-muted/40 px-3 py-3"
+              >
+                {content}
+              </div>
+            )
+          }
+
+          return (
+            <button
+              key={example.key}
+              type="button"
+              className="flex w-full min-w-0 items-center gap-3 rounded-lg bg-muted/40 px-3 py-3 text-left transition-colors hover:bg-muted/70"
+              onClick={example.action}
+            >
+              {content}
+            </button>
+          )
+        })}
+      </div>
+    </section>
   )
 }
 

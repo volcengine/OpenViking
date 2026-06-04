@@ -842,9 +842,13 @@ const en = {
       },
     },
     terminal: {
-      welcomeTitle: 'Terminal connected to the context tree',
-      welcomeBody:
-        'Run /add-resource, /find, /read, /ls, /tree, /stat, /search, /abstract, /overview, /health, /status, or /wait. Resource links in the output locate the left tree and open the middle preview.',
+      header: 'Operate context from the CLI',
+      history: 'History',
+      historyTitle: 'Terminal history',
+      historyDescription:
+        'Recent Terminal execution records saved in this browser.',
+      clearHistory: 'Clear history',
+      noHistory: 'No Terminal history yet.',
       opened: 'Resource opened',
       onlineTitle: 'Service online',
       onlineBody:
@@ -867,6 +871,24 @@ const en = {
       suggestionsHint: '↑↓ select · Tab/→ complete · Enter run',
       resourceSuggestion: 'Resource path',
       historySuggestion: 'Command history',
+      quickStart: {
+        title: 'Quick start',
+        addResource: {
+          title: 'Add files to the database',
+          command: 'add-resource',
+          code: 'add-resource https://github.com/volcengine/OpenViking',
+        },
+        addMemory: {
+          title: 'Upload memory to the database',
+          command: 'add-memory',
+          code: 'add-memory "Use Problem → Current state → Options → Recommendation → Risks as the default review format; prefer tables over prose"',
+        },
+        find: {
+          title: 'Semantic context retrieval',
+          command: 'find',
+          code: 'find "what is openviking valuable for?"',
+        },
+      },
       groupLabels: {
         resources: 'resource',
         memories: 'memory',

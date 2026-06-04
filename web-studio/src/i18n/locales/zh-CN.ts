@@ -823,9 +823,12 @@ const zhCN = {
       },
     },
     terminal: {
-      welcomeTitle: 'Terminal 已连接上下文目录',
-      welcomeBody:
-        '可执行 /add-resource、/find、/read、/ls、/tree、/stat、/search、/abstract、/overview、/health、/status、/wait。输出中的资源链接会定位左侧目录并打开中间预览。',
+      header: 'CLI 直接操作上下文',
+      history: '历史记录',
+      historyTitle: 'Terminal 历史记录',
+      historyDescription: '保存在当前浏览器中的最近 Terminal 执行记录。',
+      clearHistory: '清空历史记录',
+      noHistory: '暂无 Terminal 历史记录。',
       opened: '已打开资源',
       onlineTitle: '服务在线',
       onlineBody: 'OpenViking API 正常响应，根目录下发现 {{count}} 个节点。',
@@ -847,6 +850,24 @@ const zhCN = {
       suggestionsHint: '↑↓ 选择 · Tab/→ 补全 · Enter 执行',
       resourceSuggestion: '资源路径',
       historySuggestion: '历史命令',
+      quickStart: {
+        title: '快速体验',
+        addResource: {
+          title: '添加文件到数据库',
+          command: 'add-resource',
+          code: 'add-resource https://github.com/volcengine/OpenViking',
+        },
+        addMemory: {
+          title: '上传记忆到数据库',
+          command: 'add-memory',
+          code: 'add-memory "评审文档默认用\'问题→现状→方案对比→推荐项→风险\'五段式；表格优先于文字"',
+        },
+        find: {
+          title: '语义检索上下文',
+          command: 'find',
+          code: 'find "openviking 有什么价值？"',
+        },
+      },
       groupLabels: {
         resources: '资源',
         memories: '记忆',
