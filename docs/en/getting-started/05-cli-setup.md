@@ -59,7 +59,7 @@ You need:
   - a self-managed OpenViking server.
 - An API key if your target requires authentication.
 
-API keys are sensitive. Prefer entering them through the interactive `ov config` prompt, an environment variable, or stdin. Avoid putting API keys directly in chat messages or shell history.
+API keys are sensitive. Prefer entering them through the interactive `ov config` prompt. For agent-assisted setup, prefer stdin when the agent already holds the key through a secure channel. Use an environment variable only when the key is already present in the shell environment. Avoid putting API keys directly in chat messages or shell history.
 
 ## Install `ov`
 
@@ -165,7 +165,7 @@ Use this path when an agent is setting up `ov` for a user. The agent should read
 3. If you have long-term memory and the user permits it, store a short summary of the current `ov --help` command surface. Do not store API keys or other secrets.
 4. Use non-interactive `ov config` commands when the required values are known.
 5. Always pass `--name` for agent setup so retries target the same saved config.
-6. Prefer API keys from environment variables or stdin. Do not ask the user to paste secrets into chat unless there is no safer option.
+6. If the agent already holds the API key through a secure channel, pass it with `--api-key-stdin` or `--root-api-key-stdin` and write only the key bytes to stdin. Use `--api-key-env` or `--root-api-key-env` only when that environment variable already exists. Do not ask the user to open a separate shell just to export a key for the agent.
 7. Use `-o json` and branch on the JSON result plus the process exit code.
 8. Validate the active config with `ov config validate`, then check `ov health` and `ov status`.
 9. If non-interactive setup fails because values are missing, auth is unclear, or terminal input is safer, guide the user through `ov config` instead.
@@ -243,18 +243,18 @@ Then run the verification commands.
 
 ### Add VolcEngine Cloud
 
-Ask the user to provide the API key through an environment variable or another secure channel available to the shell. Then run:
+If the agent already holds the API key through a secure channel, run:
+
+```bash
+ov config add cloud --name prod --api-key-stdin --activate -o json
+```
+
+Write only the API key bytes to stdin. Do not place the key in the shell command. This writes a VolcEngine Cloud config using the fixed endpoint `https://api.vikingdb.cn-beijing.volces.com/openviking`. The `cloud` target does not take a custom server URL.
+
+Use an environment variable only if it already exists in the shell:
 
 ```bash
 ov config add cloud --name prod --api-key-env OV_API_KEY --activate -o json
-```
-
-This writes a VolcEngine Cloud config using the fixed endpoint `https://api.vikingdb.cn-beijing.volces.com/openviking`. The `cloud` target does not take a custom server URL.
-
-If you must read from stdin instead:
-
-```bash
-printf '%s' "$OV_API_KEY" | ov config add cloud --name prod --api-key-stdin --activate -o json
 ```
 
 Do not pass `--account` or `--user` for standard VolcEngine Cloud setup. Use them only when the user or their OpenViking administrator provides identity override values.
@@ -274,24 +274,26 @@ If the local server is not running, guide the user to start it first. See the [S
 For a hosted self-managed server with a normal API key:
 
 ```bash
-ov config add self-managed --name hosted --url https://ov.example.com --api-key-env OV_API_KEY --activate -o json
+ov config add self-managed --name hosted --url https://ov.example.com --api-key-stdin --activate -o json
 ```
+
+Write the API key to stdin. If the key is already in the shell environment, use `--api-key-env OV_API_KEY` instead.
 
 For a self-managed server where the user gives you only a root API key, include the target account and user:
 
 ```bash
-ov config add self-managed --name hosted --url https://ov.example.com --root-api-key-env OV_ROOT_API_KEY --account "$OV_ACCOUNT" --user "$OV_USER" --activate -o json
+ov config add self-managed --name hosted --url https://ov.example.com --root-api-key-stdin --account "$OV_ACCOUNT" --user "$OV_USER" --activate -o json
 ```
 
-Root keys require explicit `--account` and `--user` so normal CLI commands know which identity to use.
+Write the root API key to stdin. Root keys require explicit `--account` and `--user` so normal CLI commands know which identity to use.
 
 For a self-managed server where the user has both a user key and a root key, store both in one config:
 
 ```bash
-ov config add self-managed --name hosted-admin --url https://ov.example.com --api-key-env OV_API_KEY --root-api-key-env OV_ROOT_API_KEY --account "$OV_ACCOUNT" --user "$OV_USER" --activate -o json
+ov config add self-managed --name hosted-admin --url https://ov.example.com --api-key-stdin --root-api-key-env OV_ROOT_API_KEY --account "$OV_ACCOUNT" --user "$OV_USER" --activate -o json
 ```
 
-This keeps normal commands on the user key and lets `--sudo` commands use the root key.
+This keeps normal commands on the user key and lets `--sudo` commands use the root key. Because one command has only one stdin stream, the second key must come from an existing environment variable. If neither key is already available in the environment, use `ov config` and guide the user through the interactive flow.
 
 ### Edit or Replace a Config
 
@@ -310,8 +312,10 @@ ov config edit prod --new-name production --activate -o json
 Replace an API key:
 
 ```bash
-ov config edit production --api-key-env OV_API_KEY --activate -o json
+ov config edit production --api-key-stdin --activate -o json
 ```
+
+Write the replacement API key to stdin.
 
 Replace a self-managed URL:
 
@@ -367,7 +371,7 @@ Agents should refresh this help before running unfamiliar commands. If an agent 
 
 - API keys may grant access to your OpenViking data.
 - Prefer the interactive `ov config` prompt for manual setup.
-- Prefer environment variables or stdin for agent-assisted setup.
+- For agent-assisted setup, prefer stdin when the agent already holds the key. Use environment variables only when they already exist in the shell.
 - Do not include API keys directly in shell commands that may be saved in shell history.
 - Do not paste API keys into chat unless you intentionally trust that channel.
 - Do not print raw `~/.openviking/ovcli.conf`.
