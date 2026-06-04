@@ -140,7 +140,8 @@ impl HttpClient {
         verbose: bool,
         ignore_dirs: Option<&str>,
     ) -> Result<tempfile::NamedTempFile> {
-        self.create_uploader().zip_directory_with_progress(dir_path, verbose, ignore_dirs)
+        self.create_uploader()
+            .zip_directory_with_progress(dir_path, verbose, ignore_dirs)
     }
 
     async fn upload_temp_file(&self, file_path: &Path) -> Result<String> {
@@ -276,7 +277,7 @@ impl HttpClient {
                 }
             };
 
-            return Err(Error::Api(error_msg));
+            return Err(Error::api(error_msg));
         }
 
         response
@@ -774,7 +775,7 @@ impl HttpClient {
                 }
             };
 
-            return Err(Error::Api(error_msg));
+            return Err(Error::api(error_msg));
         }
 
         let bytes = response
@@ -1147,7 +1148,8 @@ impl HttpClient {
     pub async fn trigger_watch_by_uri(&self, to_uri: &str) -> Result<serde_json::Value> {
         let params = vec![("to_uri".to_string(), to_uri.to_string())];
         let empty = serde_json::json!({});
-        self.post_with_query("/api/v1/watches/trigger", &empty, &params).await
+        self.post_with_query("/api/v1/watches/trigger", &empty, &params)
+            .await
     }
 }
 

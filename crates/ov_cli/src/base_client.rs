@@ -252,7 +252,10 @@ impl BaseClient {
         };
 
         if !status.is_success() {
-            return Err(Error::Api(api_error_from_envelope(&json, status)));
+            return Err(Error::api_with_status(
+                api_error_from_envelope(&json, status),
+                status.as_u16(),
+            ));
         }
 
         if let Some(error) = json.get("error") {
@@ -265,7 +268,10 @@ impl BaseClient {
                     .get("message")
                     .and_then(|m| m.as_str())
                     .unwrap_or("Unknown error");
-                return Err(Error::Api(format!("[{}] {}", code, message)));
+                return Err(Error::api_with_status(
+                    format!("[{}] {}", code, message),
+                    status.as_u16(),
+                ));
             }
         }
 
@@ -280,7 +286,10 @@ impl BaseClient {
         })
     }
 
-    pub(crate) fn create_client_with_timeout(&self, timeout: std::time::Duration) -> Result<ReqwestClient> {
+    pub(crate) fn create_client_with_timeout(
+        &self,
+        timeout: std::time::Duration,
+    ) -> Result<ReqwestClient> {
         ReqwestClient::builder()
             .timeout(timeout)
             .build()
@@ -351,10 +360,7 @@ impl BaseClient {
         let url = format!("{}{}", self.base_url, path);
         let client = self.create_client_with_timeout(timeout)?;
 
-        let request = client
-            .post(&url)
-            .headers(self.build_headers())
-            .json(body);
+        let request = client.post(&url).headers(self.build_headers()).json(body);
         let request = if self.profile_enabled {
             request.query(&[("profile", "1")])
         } else {
@@ -374,11 +380,7 @@ impl BaseClient {
         body: &B,
     ) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
-        let request = self
-            .http
-            .put(&url)
-            .headers(self.build_headers())
-            .json(body);
+        let request = self.http.put(&url).headers(self.build_headers()).json(body);
         let request = if self.profile_enabled {
             request.query(&[("profile", "1")])
         } else {
@@ -582,7 +584,8 @@ mod tests {
             None,
         );
 
-        let params = client.append_profile_query(&[("to_uri".to_string(), "viking://x".to_string())]);
+        let params =
+            client.append_profile_query(&[("to_uri".to_string(), "viking://x".to_string())]);
 
         assert_eq!(
             params,
@@ -632,7 +635,11 @@ impl<'a> FileUploader<'a> {
         self
     }
 
-    pub fn zip_directory(&self, dir_path: &Path, ignore_dirs: Option<&str>) -> Result<NamedTempFile> {
+    pub fn zip_directory(
+        &self,
+        dir_path: &Path,
+        ignore_dirs: Option<&str>,
+    ) -> Result<NamedTempFile> {
         if !dir_path.is_dir() {
             return Err(Error::Network(format!(
                 "Path {} is not a directory",
@@ -761,7 +768,10 @@ impl<'a> FileUploader<'a> {
 
         if let Some(pb) = pb {
             if total_size > 0 {
-                pb.finish_with_message(format!("Compression complete: {:.2} MiB → {:.2} MiB", original_size_mb, zip_size_mb));
+                pb.finish_with_message(format!(
+                    "Compression complete: {:.2} MiB → {:.2} MiB",
+                    original_size_mb, zip_size_mb
+                ));
             } else {
                 pb.finish_with_message(format!("Compression complete: {:.2} MiB", zip_size_mb));
             }
@@ -832,15 +842,22 @@ impl<'a> FileUploader<'a> {
         let file_size = file_content.len() as u64;
 
         if verbose {
-            eprintln!("Uploading: {} ({:.2} MB)", file_name, file_size as f64 / 1024.0 / 1024.0);
+            eprintln!(
+                "Uploading: {} ({:.2} MB)",
+                file_name,
+                file_size as f64 / 1024.0 / 1024.0
+            );
         }
 
         let pb = ProgressBar::new_spinner();
-        pb.set_message(format!("Uploading {} ({:.2} MB)...", file_name, file_size as f64 / 1024.0 / 1024.0));
+        pb.set_message(format!(
+            "Uploading {} ({:.2} MB)...",
+            file_name,
+            file_size as f64 / 1024.0 / 1024.0
+        ));
         pb.enable_steady_tick(std::time::Duration::from_millis(100));
 
-        let part = reqwest::multipart::Part::bytes(file_content)
-            .file_name(file_name.to_string());
+        let part = reqwest::multipart::Part::bytes(file_content).file_name(file_name.to_string());
 
         let part = part
             .mime_str("application/octet-stream")

@@ -53,7 +53,7 @@ def _configure_test_env(monkeypatch, tmp_path):
             {
                 "storage": {
                     "workspace": str(tmp_path / "workspace"),
-                    "agfs": {"backend": "local", "mode": "binding-client"},
+                    "agfs": {"backend": "local"},
                     "vectordb": {"backend": "local"},
                 },
                 "embedding": {

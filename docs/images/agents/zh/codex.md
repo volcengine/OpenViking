@@ -81,5 +81,3 @@ type codex         # 期望输出：codex is a shell function
 - [博客：在 Claude Code / Codex 中接入 OpenViking](https://blog.openviking.ai/post/openviking-coding-agent/) — 为什么以及如何给你的 Coding Agent 加上长期记忆
 - [插件 README](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md) — 完整环境变量、架构图
 - [DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/DESIGN.md) — commit 决策树
-- [MCP 客户端](./06-mcp-clients.md) — MCP 协议、工具列表、其他客户端
-- [部署指南 → CLI](../guides/03-deployment.md#cli) — `ovcli.conf` 配置

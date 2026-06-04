@@ -853,6 +853,7 @@ Storage configuration for context data, including file storage (RAGFS) and vecto
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `workspace` | str | Local data storage path (main configuration) | "./data" |
+| `skip_process_lock` | bool | Whether to skip the startup process-lock check for `storage.workspace`. When enabled, OpenViking will not check or create the `.openviking.pid` lock file. | `false` |
 | `agfs` | object | RAGFS (Rust-based AGFS) configuration | {} |
 | `vectordb` | object | Vector database storage configuration | {} |
 
@@ -885,6 +886,9 @@ Storage configuration for context data, including file storage (RAGFS) and vecto
 **Configuration Examples**
 
 RAGFS uses Rust binding mode by default, directly accessing the file system through the Rust implementation.
+
+> [!WARNING]
+> `storage.agfs` no longer supports the AGFS HTTP client mode, and the old HTTP client entry should not be configured anymore. AGFS / RAGFS filesystem access now happens only through the in-process Rust binding (`RAGFSBindingClient`). This does not affect the OpenViking server HTTP API, the `ov` CLI, or `AsyncHTTPClient` / `SyncHTTPClient` when they connect to an OpenViking server.
 
 ##### QueueFS Configuration
 
@@ -1166,6 +1170,8 @@ For memory-related settings, add a `memory` section in `ov.conf`:
 
 You can edit this file by hand, or generate it interactively with `ov config`. If you maintain configurations for multiple servers, switch between them with `ov config switch`.
 
+For the guided CLI setup flow, see [OpenViking CLI Setup](../getting-started/05-cli-setup.md).
+
 Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI to connect to a remote server:
 
 ```json
@@ -1278,25 +1284,17 @@ Path locks are enabled by default and usually require no configuration. **The de
 
 For details on the lock mechanism, see [Path Locks and Crash Recovery](../concepts/09-transaction.md).
 
-## storage.task_tracker Section
+## Task Tracker Persistence
 
-The task tracker records async task state for endpoints that return a `task_id` (task types include `session_commit`, `add_resource`, `add_skill`, and `admin_reindex`). The `persistent` backend stores task state on the workspace volume so that **a `task_id` returned by one instance can be looked up from another instance**, and task history survives a restart. The default `memory` backend keeps task state per process — sufficient for single-instance deployments.
+The task tracker records async task state for endpoints that return a `task_id` (task types include `session_commit`, `add_resource`, `add_skill`, and `admin_reindex`). Task records are always persisted in AGFS, so a `task_id` returned by one instance can be looked up from another instance and task history survives a restart.
 
-```json
-{
-  "storage": {
-    "task_tracker": {
-      "backend": "memory"
-    }
-  }
-}
+No `storage.task_tracker` configuration is required. If an older configuration still includes `storage.task_tracker`, OpenViking logs a warning and ignores it.
+
+Task record files are stored under the owning account's system directory:
+
+```text
+/local/{account_id}/_system/tasks/{user_id}/{task_id}.json
 ```
-
-| Parameter | Type | Description | Default |
-|-----------|------|-------------|---------|
-| `backend` | str | Task tracker backend. `"memory"` keeps task state in process memory (single-instance). `"persistent"` enables cross-instance task lookup and survives restarts. | `"memory"` |
-
-Set `backend` to `"persistent"` for multi-instance deployments where callers may poll `GET /api/v1/tasks/{task_id}` from any instance, or when task history needs to outlive the process.
 
 ## encryption Section
 

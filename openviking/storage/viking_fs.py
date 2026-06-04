@@ -3,7 +3,7 @@
 """
 VikingFS: OpenViking file system abstraction layer
 
-Encapsulates AGFSClient, providing file operation interface based on Viking URI.
+Encapsulates the AGFS binding client, providing file operation interface based on Viking URI.
 Responsibilities:
 - URI conversion (viking:// <-> /local/)
 - L0/L1 reading (.abstract.md, .overview.md)

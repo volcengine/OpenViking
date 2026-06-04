@@ -24,9 +24,10 @@ use crate::{
 use serde_json::Value;
 
 use super::store::{
-    ApiKeyRole, ConfigDraft, ConfigEntry, ConfigKind, ConfigStore, VOLCENGINE_CLOUD_URL,
-    build_config, self_managed_allows_empty_api_key, validate_candidate_config,
-    validate_candidate_config_with_role, validate_config_name, validation_error_copy,
+    ApiKeyRole, ConfigDraft, ConfigEntry, ConfigKind, ConfigStore, IdentityField,
+    VOLCENGINE_CLOUD_URL, build_config, self_managed_allows_empty_api_key,
+    validate_candidate_config, validate_candidate_config_with_role, validate_config_name,
+    validate_identity_value, validation_error_copy,
 };
 
 const VOLCENGINE_API_KEY_URL: &str =
@@ -56,12 +57,6 @@ enum SelfManagedEditKeyAction {
     UseRootForNormal,
     ClearRootKey,
     ClearAllKeys,
-}
-
-#[derive(Clone, Copy)]
-enum IdentityField {
-    Account,
-    User,
 }
 
 const OV_LOGO_LINES: [&str; 14] = [
@@ -522,55 +517,6 @@ pub(crate) fn should_prompt_root_identity(
         && (api_key_was_entered || is_blank(account) || is_blank(user))
 }
 
-#[cfg(test)]
-fn validate_account_id_value(value: &str) -> Result<()> {
-    validate_identity_value(value, IdentityField::Account)
-}
-
-#[cfg(test)]
-fn validate_user_id_value(value: &str) -> Result<()> {
-    validate_identity_value(value, IdentityField::User)
-}
-
-fn validate_identity_value(value: &str, field: IdentityField) -> Result<()> {
-    let field_name = match field {
-        IdentityField::Account => "Account ID",
-        IdentityField::User => "User ID",
-    };
-    let identifier_name = match field {
-        IdentityField::Account => "account_id",
-        IdentityField::User => "user_id",
-    };
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Err(Error::Config(format!("{field_name} cannot be empty")));
-    }
-    if trimmed != value {
-        return Err(Error::Config(format!(
-            "{field_name} cannot start or end with whitespace"
-        )));
-    }
-    if matches!(field, IdentityField::Account) && trimmed.starts_with('_') {
-        return Err(Error::Config(
-            "Account ID cannot start with '_'".to_string(),
-        ));
-    }
-    if !trimmed
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | '@'))
-    {
-        return Err(Error::Config(format!(
-            "{field_name} can only contain letters, numbers, '_', '-', '.', and '@'"
-        )));
-    }
-    if trimmed.matches('@').count() > 1 {
-        return Err(Error::Config(format!(
-            "{identifier_name} must have at most one '@'"
-        )));
-    }
-    Ok(())
-}
-
 fn print_header() {
     let lines = wizard_header_lines();
     println!();
@@ -802,11 +748,12 @@ async fn status_box_runtime(active: Option<&Config>) -> StatusBoxRuntime {
         return StatusBoxRuntime::not_configured();
     };
 
+    let auth = config.effective_auth(false);
     let client = BaseClient::new(
         config.url.clone(),
-        config.api_key.clone(),
-        config.account.clone(),
-        config.user.clone(),
+        auth.api_key,
+        auth.account,
+        auth.user,
         STATUS_BOX_PROBE_TIMEOUT_SECS,
         config.profile,
         config.extra_headers.clone(),
@@ -3832,13 +3779,14 @@ mod tests {
         should_prompt_root_identity, status_box_lines, status_box_lines_with_runtime,
         status_box_width, status_payload_is_healthy, styled_logo_to_width_for_color_level,
         styled_wordmark_line_for_color_level, tagline_ice_color_for_theme,
-        user_key_redirect_labels, validate_account_id_value, validate_config_name, validate_draft,
-        validate_user_id_value, volcengine_api_key_helper_lines, wizard_header_lines,
-        wordmark_gradient_color_for_theme, wordmark_lines, wordmark_width,
+        user_key_redirect_labels, validate_config_name, validate_draft,
+        volcengine_api_key_helper_lines, wizard_header_lines, wordmark_gradient_color_for_theme,
+        wordmark_lines, wordmark_width,
     };
     use crate::config::Config;
     use crate::config_wizard::store::{
-        ApiKeyRole, ConfigDraft, ConfigEntry, ConfigKind, ConfigStore,
+        ApiKeyRole, ConfigDraft, ConfigEntry, ConfigKind, ConfigStore, validate_account_id_value,
+        validate_user_id_value,
     };
     use crate::theme::{self, ThemeColor};
     use colored::Colorize;

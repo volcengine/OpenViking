@@ -112,4 +112,4 @@ We welcome suggestions and feedback in issues.
 
 ## Contributing
 
-We welcome contributions to help achieve these goals. See [Contributing](contributing.md) for guidelines.
+We welcome contributions to help achieve these goals. See [Contributing](https://github.com/volcengine/OpenViking/blob/main/CONTRIBUTING.md) for guidelines.

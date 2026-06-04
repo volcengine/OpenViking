@@ -703,6 +703,7 @@ async def test_grep_level_limit_filters_by_relative_match_path(
             "temp_file_id": root_file.name,
             "to": "viking://resources/level-limit/root_level.md",
             "reason": "test",
+            "wait": True,
         },
     )
     await client.post(
@@ -711,6 +712,7 @@ async def test_grep_level_limit_filters_by_relative_match_path(
             "temp_file_id": deep_file.name,
             "to": "viking://resources/level-limit/nested/deeper/deep_level.md",
             "reason": "test",
+            "wait": True,
         },
     )
 
@@ -742,11 +744,11 @@ async def test_grep_exclude_uri_excludes_specific_uri_range(
 
     await client.post(
         "/api/v1/resources",
-        json={"temp_file_id": include_file.name, "reason": "include"},
+        json={"temp_file_id": include_file.name, "reason": "include", "wait": True},
     )
     await client.post(
         "/api/v1/resources",
-        json={"temp_file_id": exclude_file.name, "reason": "exclude"},
+        json={"temp_file_id": exclude_file.name, "reason": "exclude", "wait": True},
     )
 
     root_uri = "viking://resources"
@@ -783,6 +785,7 @@ async def test_grep_exclude_uri_does_not_exclude_same_named_sibling_dirs(
             "temp_file_id": group_a_file.name,
             "to": "viking://resources/group_a/cache/a.md",
             "reason": "test",
+            "wait": True,
         },
     )
     await client.post(
@@ -791,6 +794,7 @@ async def test_grep_exclude_uri_does_not_exclude_same_named_sibling_dirs(
             "temp_file_id": group_b_file.name,
             "to": "viking://resources/group_b/cache/b.md",
             "reason": "test",
+            "wait": True,
         },
     )
 

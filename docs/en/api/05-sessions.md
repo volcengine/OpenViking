@@ -257,7 +257,9 @@ ov session get a1b2c3d4
     "llm_token_usage": {
       "prompt_tokens": 5200,
       "completion_tokens": 1800,
-      "total_tokens": 7000
+      "total_tokens": 7000,
+      "cached_tokens": 1200,
+      "reasoning_tokens": 800
     },
     "user": {
       "account_id": "default",
@@ -882,7 +884,7 @@ await client.session_used(
 
 #### 1. API Implementation Introduction
 
-Commit a session. Message archiving (Phase 1) completes immediately. Summary generation and memory extraction (Phase 2) run asynchronously in the background. Returns a `task_id` for polling progress.
+Commit a session. Message archiving (Phase 1) completes immediately. Summary generation and memory extraction (Phase 2) run asynchronously in the background. Returns a `task_id` for polling status.
 
 **Two-Phase Commit Flow:**
 - **Phase 1 (Synchronous)**: Snapshot current messages, clear live session, create archive directory, write original messages
@@ -906,6 +908,7 @@ Commit a session. Message archiving (Phase 1) completes immediately. Summary gen
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | session_id | str | Yes | - | Session ID to commit |
+| keep_recent_count | int | No | 0 | Number of recent live messages to retain (kept live, not archived) after commit. `0` (default) archives all messages. |
 
 #### 3. Usage Examples
 
@@ -938,7 +941,7 @@ result = await client.commit_session("a1b2c3d4")
 print(f"Status: {result['status']}")
 print(f"Task ID: {result['task_id']}")
 
-# Poll background task progress
+# Poll background task status
 task = await client.get_task(result["task_id"])
 if task["status"] == "completed":
     memories = task["result"]["memories_extracted"]
@@ -1010,7 +1013,7 @@ The endpoint returns the extracted memory write results as a JSON list. The exac
 
 #### 1. API Implementation Introduction
 
-Query background task status (e.g., commit summary generation and memory extraction progress).
+Query background task status for APIs that return `task_id`, such as session commit, `add_resource`, and admin reindex.
 
 **Task Statuses:**
 - `pending`: Task waiting to execute
@@ -1021,13 +1024,15 @@ Query background task status (e.g., commit summary generation and memory extract
 **Code Entries:**
 - `openviking/server/routers/tasks.py:get_task()` - HTTP route
 
+Task records are persisted in AGFS and can be queried after server restart, subject to task retention cleanup.
+
 #### 2. Interface and Parameter Description
 
 **Parameters**
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| task_id | str | Yes | - | Task ID (returned by commit) |
+| task_id | str | Yes | - | Task ID returned by a background API |
 
 #### 3. Usage Examples
 
@@ -1053,18 +1058,22 @@ task = await client.get_task(task_id="uuid-xxx")
 print(f"Status: {task['status']}")
 ```
 
-**Response Example (in progress)**
+**Response Example (resource import in progress)**
 
 ```json
 {
   "status": "ok",
   "result": {
     "task_id": "uuid-xxx",
-    "task_type": "session_commit",
-    "status": "running"
+    "task_type": "add_resource",
+    "status": "running",
+    "resource_id": "viking://resources/guide",
+    "stage": "processing_queue"
   }
 }
 ```
+
+`stage` is nullable. Resource import tasks may report `queued`, `fetching`, `parsing`, `finalizing`, or `processing_queue`; other task types may leave it as `null`. Live queue counters are intentionally not part of task status; use observer queue APIs for live counts, or read `result.queue_status` after completion.
 
 **Response Example (completed)**
 
@@ -1154,7 +1163,8 @@ curl -X GET "http://localhost:1933/api/v1/tasks?task_type=session_commit&status=
       "created_at": 1770000000.0,
       "updated_at": 1770000005.0,
       "result": null,
-      "error": null
+      "error": null,
+      "stage": null
     }
   ]
 }
@@ -1366,7 +1376,7 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/commit \
   -H "X-API-Key: your-key"
 # Returns: {"status": "ok", "result": {"status": "accepted", "task_id": "uuid-xxx", ...}}
 
-# Step 7: Poll background task progress (optional)
+# Step 7: Poll background task status (optional)
 curl -X GET http://localhost:1933/api/v1/tasks/uuid-xxx \
   -H "X-API-Key: your-key"
 ```

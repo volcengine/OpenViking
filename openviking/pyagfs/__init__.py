@@ -11,7 +11,6 @@ import sysconfig
 from pathlib import Path
 
 from .async_client import AsyncAGFSClient
-from .client import AGFSClient, FileHandle
 from .exceptions import (
     AGFSAlreadyExistsError,
     AGFSClientError,
@@ -37,6 +36,7 @@ from .exceptions import (
     AGFSTimeoutError,
 )
 from .helpers import cp, download, upload
+from .protocols import AGFSSyncClientProtocol
 
 _logger = logging.getLogger(__name__)
 
@@ -146,11 +146,10 @@ except Exception:
     BindingFileHandle = None
 
 __all__ = [
-    "AGFSClient",
     "AsyncAGFSClient",
+    "AGFSSyncClientProtocol",
     "AGFSBindingClient",
     "RAGFSBindingClient",
-    "FileHandle",
     "BindingFileHandle",
     "get_binding_client",
     "AGFSClientError",

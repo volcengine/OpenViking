@@ -2,15 +2,12 @@
 //!
 //! RAGFS provides a unified filesystem abstraction that allows multiple
 //! filesystem implementations (plugins) to be mounted at different paths.
-//! It exposes these filesystems through a REST API, making them accessible
-//! to AI agents and other clients.
+//! It is consumed in-process through the Rust binding (`ragfs-python`).
 //!
 //! # Architecture
 //!
 //! - **Core**: Fundamental traits and types (FileSystem, ServicePlugin, etc.)
 //! - **Plugins**: Filesystem implementations (MemFS, KVFS, QueueFS, etc.)
-//! - **Server**: HTTP API server for remote access
-//! - **Shell**: Interactive command-line interface
 //!
 //! # Example
 //!
@@ -34,7 +31,6 @@
 
 pub mod core;
 pub mod plugins;
-pub mod server;
 
 // Re-export core types for convenience
 pub use core::{

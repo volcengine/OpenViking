@@ -176,6 +176,21 @@ const CONFIG_STATUS: &[HelpCommand] = &[
         badge: None,
     },
     HelpCommand {
+        name: "config add",
+        description: "Add a config non-interactively",
+        badge: None,
+    },
+    HelpCommand {
+        name: "config list",
+        description: "List saved configs",
+        badge: None,
+    },
+    HelpCommand {
+        name: "config delete",
+        description: "Delete a saved config",
+        badge: None,
+    },
+    HelpCommand {
         name: "language",
         description: "Choose CLI display language (alias: lang)",
         badge: None,
@@ -1548,11 +1563,19 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["config"],
         purpose: "Add, edit, delete, show, validate, or switch OpenViking CLI configs.",
-        usage: "ov config [show|validate|switch]",
+        usage: "ov config [show|validate|switch|list|add|edit|delete]",
         examples: &[
             HelpItem {
                 label: "ov config",
                 description: "Open the interactive config manager.",
+            },
+            HelpItem {
+                label: "ov config add cloud --api-key-stdin --activate",
+                description: "Create and activate a cloud config from stdin.",
+            },
+            HelpItem {
+                label: "ov config list -o json",
+                description: "List saved configs for automation.",
             },
             HelpItem {
                 label: "ov config validate",
@@ -1573,7 +1596,23 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             },
             HelpItem {
                 label: "switch",
-                description: "Switch the active saved config.",
+                description: "Switch the active saved config interactively or by name.",
+            },
+            HelpItem {
+                label: "list",
+                description: "List saved configs.",
+            },
+            HelpItem {
+                label: "add",
+                description: "Add a cloud or self-managed config without prompts.",
+            },
+            HelpItem {
+                label: "edit",
+                description: "Edit a saved config without prompts.",
+            },
+            HelpItem {
+                label: "delete",
+                description: "Delete a saved config without prompts.",
             },
         ],
         next_steps: &[
@@ -1636,12 +1675,21 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["config", "switch"],
         purpose: "Switch the active CLI config to a saved config.",
-        usage: "ov config switch",
-        examples: &[HelpItem {
-            label: "ov config switch",
-            description: "Choose a saved config and make it active.",
+        usage: "ov config switch [name]",
+        examples: &[
+            HelpItem {
+                label: "ov config switch",
+                description: "Choose a saved config interactively.",
+            },
+            HelpItem {
+                label: "ov config switch prod",
+                description: "Activate a saved config without prompts.",
+            },
+        ],
+        arguments: &[HelpItem {
+            label: "name",
+            description: "Optional saved config name. Omit it for the interactive picker.",
         }],
-        arguments: &[],
         common_options: &[],
         advanced_options: &[],
         subcommands: &[],
@@ -1653,6 +1701,300 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             HelpItem {
                 label: "ov config validate",
                 description: "Probe the switched config.",
+            },
+        ],
+    },
+    CommandHelpSpec {
+        path: &["config", "list"],
+        purpose: "List saved CLI configs and mark which one is active.",
+        usage: "ov config list",
+        examples: &[
+            HelpItem {
+                label: "ov config list",
+                description: "Show saved configs in a readable table.",
+            },
+            HelpItem {
+                label: "ov config list -o json",
+                description: "Return saved configs as JSON for automation.",
+            },
+        ],
+        arguments: &[],
+        common_options: &[],
+        advanced_options: &[],
+        subcommands: &[],
+        next_steps: &[
+            HelpItem {
+                label: "ov config switch <name>",
+                description: "Activate a saved config.",
+            },
+            HelpItem {
+                label: "ov config add --help",
+                description: "Create a new saved config.",
+            },
+        ],
+    },
+    CommandHelpSpec {
+        path: &["config", "add"],
+        purpose: "Create a saved CLI config without opening the interactive wizard.",
+        usage: "ov config add <cloud|self-managed> [options]",
+        examples: &[
+            HelpItem {
+                label: "printf '%s' \"$OV_KEY\" | ov config add cloud --api-key-stdin --activate",
+                description: "Create and activate a Volcengine Cloud config.",
+            },
+            HelpItem {
+                label: "ov config add self-managed --name local --url http://127.0.0.1:1933 --activate",
+                description: "Create and activate a local self-managed config.",
+            },
+        ],
+        arguments: &[],
+        common_options: &[],
+        advanced_options: &[],
+        subcommands: &[
+            HelpItem {
+                label: "cloud",
+                description: "Use the fixed Volcengine Cloud endpoint.",
+            },
+            HelpItem {
+                label: "self-managed",
+                description: "Use a local or hosted self-managed endpoint.",
+            },
+        ],
+        next_steps: &[
+            HelpItem {
+                label: "ov config add cloud --help",
+                description: "See cloud-specific flags.",
+            },
+            HelpItem {
+                label: "ov config add self-managed --help",
+                description: "See self-managed flags.",
+            },
+        ],
+    },
+    CommandHelpSpec {
+        path: &["config", "add", "cloud"],
+        purpose: "Create a Volcengine Cloud config without prompts.",
+        usage: "ov config add cloud [--name <name>] (--api-key-stdin|--api-key-env <env>) [--account <account> --user <user>] [--activate] [--force]",
+        examples: &[
+            HelpItem {
+                label: "printf '%s' \"$OV_KEY\" | ov config add cloud --name prod --api-key-stdin --activate",
+                description: "Read the API key from stdin and make the config active.",
+            },
+            HelpItem {
+                label: "ov config add cloud --api-key-env OV_KEY -o json",
+                description: "Read the API key from an environment variable and print JSON.",
+            },
+        ],
+        arguments: &[],
+        common_options: &[
+            HelpItem {
+                label: "--name <name>",
+                description: "Saved config name. Generated if omitted.",
+            },
+            HelpItem {
+                label: "--api-key-stdin",
+                description: "Read the API key from stdin.",
+            },
+            HelpItem {
+                label: "--api-key-env <env>",
+                description: "Read the API key from an environment variable.",
+            },
+            HelpItem {
+                label: "--activate",
+                description: "Also write the active ovcli.conf.",
+            },
+            HelpItem {
+                label: "--force",
+                description: "Replace an existing saved config.",
+            },
+        ],
+        advanced_options: &[
+            HelpItem {
+                label: "--account <account>",
+                description: "Optional account identity override.",
+            },
+            HelpItem {
+                label: "--user <user>",
+                description: "Optional user identity override.",
+            },
+        ],
+        subcommands: &[],
+        next_steps: &[
+            HelpItem {
+                label: "ov config validate",
+                description: "Validate the active config.",
+            },
+            HelpItem {
+                label: "ov config list",
+                description: "Inspect saved configs.",
+            },
+        ],
+    },
+    CommandHelpSpec {
+        path: &["config", "add", "self-managed"],
+        purpose: "Create a self-managed config without prompts.",
+        usage: "ov config add self-managed [--name <name>] [--url <url>] [--api-key-stdin|--api-key-env <env>] [--root-api-key-stdin|--root-api-key-env <env>] [--account <account>] [--user <user>] [--activate] [--force]",
+        examples: &[
+            HelpItem {
+                label: "ov config add self-managed --name local --url http://127.0.0.1:1933 --activate",
+                description: "Create a local no-key config.",
+            },
+            HelpItem {
+                label: "ov config add self-managed --url https://ov.example.com --api-key-env OV_KEY --activate",
+                description: "Create a hosted self-managed config with an API key.",
+            },
+        ],
+        arguments: &[],
+        common_options: &[
+            HelpItem {
+                label: "--name <name>",
+                description: "Saved config name. Generated if omitted.",
+            },
+            HelpItem {
+                label: "--url <url>",
+                description: "Server URL. Defaults to http://127.0.0.1:1933.",
+            },
+            HelpItem {
+                label: "--api-key-stdin / --api-key-env <env>",
+                description: "Read a normal API key from stdin or an environment variable.",
+            },
+            HelpItem {
+                label: "--root-api-key-stdin / --root-api-key-env <env>",
+                description: "Read a root API key from stdin or an environment variable.",
+            },
+            HelpItem {
+                label: "--activate",
+                description: "Also write the active ovcli.conf.",
+            },
+            HelpItem {
+                label: "--force",
+                description: "Replace an existing saved config.",
+            },
+        ],
+        advanced_options: &[
+            HelpItem {
+                label: "--account <account>",
+                description: "Account identity. Required when only a root key is supplied.",
+            },
+            HelpItem {
+                label: "--user <user>",
+                description: "User identity. Required when only a root key is supplied.",
+            },
+        ],
+        subcommands: &[],
+        next_steps: &[
+            HelpItem {
+                label: "ov config validate",
+                description: "Validate the active config.",
+            },
+            HelpItem {
+                label: "ov config list",
+                description: "Inspect saved configs.",
+            },
+        ],
+    },
+    CommandHelpSpec {
+        path: &["config", "edit"],
+        purpose: "Edit a saved CLI config without prompts.",
+        usage: "ov config edit <name> [--new-name <name>] [--url <url>] [key options] [identity options] [--activate] [--force]",
+        examples: &[
+            HelpItem {
+                label: "ov config edit prod --new-name production --activate",
+                description: "Rename a saved config and make it active.",
+            },
+            HelpItem {
+                label: "printf '%s' \"$OV_KEY\" | ov config edit prod --api-key-stdin --activate",
+                description: "Replace the API key, validate, then activate.",
+            },
+            HelpItem {
+                label: "ov config edit local --clear-api-key --activate",
+                description: "Remove a normal API key from a saved config.",
+            },
+        ],
+        arguments: &[HelpItem {
+            label: "name",
+            description: "Existing saved config name.",
+        }],
+        common_options: &[
+            HelpItem {
+                label: "--new-name <name>",
+                description: "Rename the saved config.",
+            },
+            HelpItem {
+                label: "--url <url>",
+                description: "Replace the self-managed server URL.",
+            },
+            HelpItem {
+                label: "--api-key-stdin / --api-key-env <env> / --clear-api-key",
+                description: "Replace or clear the normal API key.",
+            },
+            HelpItem {
+                label: "--root-api-key-stdin / --root-api-key-env <env> / --clear-root-api-key",
+                description: "Replace or clear the root API key.",
+            },
+            HelpItem {
+                label: "--activate",
+                description: "Also make the edited config active.",
+            },
+            HelpItem {
+                label: "--force",
+                description: "Replace an existing target name when renaming.",
+            },
+        ],
+        advanced_options: &[
+            HelpItem {
+                label: "--account <account>",
+                description: "Replace account identity.",
+            },
+            HelpItem {
+                label: "--user <user>",
+                description: "Replace user identity.",
+            },
+        ],
+        subcommands: &[],
+        next_steps: &[
+            HelpItem {
+                label: "ov config validate",
+                description: "Validate the active config.",
+            },
+            HelpItem {
+                label: "ov config list",
+                description: "Inspect saved configs.",
+            },
+        ],
+    },
+    CommandHelpSpec {
+        path: &["config", "delete"],
+        purpose: "Delete a saved CLI config without prompts.",
+        usage: "ov config delete <name> [--force]",
+        examples: &[
+            HelpItem {
+                label: "ov config delete old-local",
+                description: "Delete a non-active saved config.",
+            },
+            HelpItem {
+                label: "ov config delete missing -o json",
+                description: "Return a JSON no-op if the config is already absent.",
+            },
+        ],
+        arguments: &[HelpItem {
+            label: "name",
+            description: "Saved config name to delete.",
+        }],
+        common_options: &[HelpItem {
+            label: "--force",
+            description: "Reserved for future destructive delete behavior.",
+        }],
+        advanced_options: &[],
+        subcommands: &[],
+        next_steps: &[
+            HelpItem {
+                label: "ov config list",
+                description: "Inspect remaining configs.",
+            },
+            HelpItem {
+                label: "ov config switch <name>",
+                description: "Switch away from an active config before deleting it.",
             },
         ],
     },
@@ -2049,7 +2391,7 @@ fn help_item_line(item: &HelpItem) -> String {
     )
 }
 
-fn localized_command_purpose<'a>(spec: &'a CommandHelpSpec, language: Language) -> &'a str {
+fn localized_command_purpose(spec: &CommandHelpSpec, language: Language) -> &str {
     if language == Language::En {
         return spec.purpose;
     }
@@ -2058,6 +2400,12 @@ fn localized_command_purpose<'a>(spec: &'a CommandHelpSpec, language: Language) 
         ["config", "show"] => "显示当前 CLI 配置，并隐藏敏感信息。",
         ["config", "validate"] => "解析当前配置，并探测 OpenViking 服务器。",
         ["config", "switch"] => "切换到已保存的 CLI 配置。",
+        ["config", "list"] => "列出已保存的 CLI 配置，并标记当前配置。",
+        ["config", "add"] => "不打开交互式向导，创建已保存的 CLI 配置。",
+        ["config", "add", "cloud"] => "不打开交互式向导，创建火山引擎云配置。",
+        ["config", "add", "self-managed"] => "不打开交互式向导，创建自托管配置。",
+        ["config", "edit"] => "不打开交互式向导，编辑已保存的 CLI 配置。",
+        ["config", "delete"] => "不打开交互式向导，删除已保存的 CLI 配置。",
         ["health"] => "快速检查服务器是否可连接。",
         ["status"] => "查看 OpenViking 服务器诊断状态。",
         ["language"] => "选择 OpenViking CLI 显示语言。",
@@ -2079,15 +2427,43 @@ fn localized_help_item_description<'a>(
         "show" => "显示当前配置，并隐藏敏感信息。",
         "validate" => "探测当前服务器和认证配置。",
         "switch" => "切换当前已保存配置。",
+        "list" => "列出已保存的配置。",
+        "add" => "不打开提示，添加云端或自托管配置。",
+        "edit" => "不打开提示，编辑已保存配置。",
+        "delete" => "不打开提示，删除已保存配置。",
+        "cloud" => "使用固定的火山引擎云端地址。",
+        "self-managed" => "使用本地或远程自托管地址。",
         "ov --help" => "查看所有命令。",
         "ov health" => "快速健康检查。",
         "ov status" => "查看详细后端状态。",
         "ov config show" => "确认新的当前配置。",
         "ov config switch" => "选择一个已保存配置并设为当前配置。",
+        "ov config list" => "查看已保存配置。",
+        "ov config list -o json" => "以 JSON 返回已保存配置，便于自动化。",
+        "ov config add --help" => "创建新的已保存配置。",
+        "ov config add cloud --help" => "查看云端配置专用参数。",
+        "ov config add self-managed --help" => "查看自托管配置专用参数。",
+        "ov config switch <name>" => "激活已保存的配置。",
         "ov language" => "打开语言选择器。",
         "ov language zh-CN" => "将显示语言切换为简体中文。",
         "ov lang en" => "使用短别名切换为英文显示。",
         "language" => "可选语言代码：en 或 zh-CN。",
+        "name" => "已保存的配置名称。",
+        "--name <name>" => "已保存配置名称。不提供则自动生成。",
+        "--new-name <name>" => "重命名已保存配置。",
+        "--url <url>" => "服务器地址。默认是 http://127.0.0.1:1933。",
+        "--api-key-stdin" => "从 stdin 读取 API Key。",
+        "--api-key-env <env>" => "从环境变量读取 API Key。",
+        "--api-key-stdin / --api-key-env <env>" => "从 stdin 或环境变量读取普通 API Key。",
+        "--api-key-stdin / --api-key-env <env> / --clear-api-key" => "替换或清除普通 API Key。",
+        "--root-api-key-stdin / --root-api-key-env <env>" => {
+            "从 stdin 或环境变量读取 root API Key。"
+        }
+        "--root-api-key-stdin / --root-api-key-env <env> / --clear-root-api-key" => {
+            "替换或清除 root API Key。"
+        }
+        "--activate" => "同时写入当前 ovcli.conf。",
+        "--force" => "替换已有的已保存配置。",
         "-o, --output <table|json>" => "选择表格输出或机器可读 JSON。",
         "-c, --compact <bool>" => "使用紧凑的表格或 JSON 输出。",
         "--account <account>" => "覆盖本次命令的 X-OpenViking-Account。",
@@ -2199,7 +2575,7 @@ fn localized_section_title(title: &str, language: Language) -> &str {
     }
 }
 
-fn localized_badge<'a>(badge: &'a str, language: Language) -> &'a str {
+fn localized_badge(badge: &str, language: Language) -> &str {
     match (language, badge) {
         (Language::ZhCn, "experimental") => "实验性",
         _ => badge,
@@ -2240,6 +2616,9 @@ fn localized_command_description<'a>(
         "config show" => "显示当前配置",
         "config validate" => "验证当前配置",
         "config switch" => "切换当前配置",
+        "config add" => "非交互式添加配置",
+        "config list" => "列出已保存配置",
+        "config delete" => "删除已保存配置",
         "health" => "快速检查服务器连接",
         "status" => "查看系统状态",
         "wait" => "等待异步任务完成",
@@ -2272,6 +2651,9 @@ fn command_help_path(args: &[OsString]) -> Option<Vec<String>> {
     }
 
     let has_help_flag = tokens.iter().skip(1).any(|token| is_help_flag(token));
+    if has_help_flag && let Some(path) = config_help_path(&tokens) {
+        return Some(path);
+    }
 
     let mut path = Vec::new();
     let mut i = 1;
@@ -2318,6 +2700,78 @@ fn command_help_path(args: &[OsString]) -> Option<Vec<String>> {
     } else {
         None
     }
+}
+
+fn config_help_path(tokens: &[String]) -> Option<Vec<String>> {
+    let mut i = 1;
+    while i < tokens.len() {
+        let token = &tokens[i];
+        if is_help_flag(token) {
+            return None;
+        }
+        if token == "--sudo" || token == "--progress" || token == "--no-progress" || token == "-v" {
+            i += 1;
+            continue;
+        }
+        if consumes_value(token) {
+            i += if token.contains('=') { 1 } else { 2 };
+            continue;
+        }
+        if token.starts_with('-') {
+            i += 1;
+            continue;
+        }
+
+        if canonical_command_token(token) != "config" {
+            return None;
+        }
+
+        let mut path = vec!["config".to_string()];
+        i += 1;
+        while i < tokens.len() {
+            let token = &tokens[i];
+            if is_help_flag(token) {
+                return Some(path);
+            }
+            if consumes_value(token)
+                || matches!(
+                    token.as_str(),
+                    "--name"
+                        | "--new-name"
+                        | "--url"
+                        | "--api-key-env"
+                        | "--root-api-key-env"
+                        | "--account"
+                        | "--user"
+                )
+            {
+                i += if token.contains('=') { 1 } else { 2 };
+                continue;
+            }
+            if token.starts_with('-') {
+                i += 1;
+                continue;
+            }
+
+            match path.as_slice() {
+                [base] if base == "config" => match token.as_str() {
+                    "show" | "validate" | "switch" | "list" | "delete" | "edit" | "add" => {
+                        path.push(token.clone());
+                    }
+                    _ => return Some(path),
+                },
+                [base, add] if base == "config" && add == "add" => match token.as_str() {
+                    "cloud" | "self-managed" => path.push(token.clone()),
+                    _ => return Some(path),
+                },
+                _ => return Some(path),
+            }
+            i += 1;
+        }
+        return Some(path);
+    }
+
+    None
 }
 
 fn command_spec(path: &[String]) -> Option<&'static CommandHelpSpec> {
@@ -2570,14 +3024,62 @@ mod tests {
             os_args(&["ov", "config", "switch", "--help"]),
             os_args(&["ov", "config", "switch", "-h"]),
             os_args(&["ov", "config", "switch", "-help"]),
+            os_args(&["ov", "config", "switch", "prod", "--help"]),
         ] {
             let rendered = strip_ansi(
                 &render_command_help_request(&args).expect("config switch help should render"),
             );
-            assert!(rendered.contains("ov config switch"));
+            assert!(rendered.contains("ov config switch [name]"));
             assert!(rendered.contains("Switch the active CLI config"));
             assert!(!rendered.contains("profile"));
         }
+    }
+
+    #[test]
+    fn renders_curated_config_agent_command_help() {
+        let config = strip_ansi(
+            &render_command_help_request(&os_args(&["ov", "config", "add", "--help"]))
+                .expect("config add help should render"),
+        );
+        assert!(config.contains("ov config add <cloud|self-managed>"));
+        assert!(config.contains("cloud"));
+        assert!(config.contains("self-managed"));
+
+        let cloud = strip_ansi(
+            &render_command_help_request(&os_args(&["ov", "config", "add", "cloud", "--help"]))
+                .expect("config add cloud help should render"),
+        );
+        assert!(cloud.contains("ov config add cloud"));
+        assert!(cloud.contains("--api-key-stdin"));
+        assert!(cloud.contains("--api-key-env <env>"));
+
+        let self_managed = strip_ansi(
+            &render_command_help_request(&os_args(&[
+                "ov",
+                "config",
+                "add",
+                "self-managed",
+                "--help",
+            ]))
+            .expect("config add self-managed help should render"),
+        );
+        assert!(self_managed.contains("ov config add self-managed"));
+        assert!(self_managed.contains("--root-api-key-stdin"));
+        assert!(!self_managed.contains("--use-root-key-for-normal-commands"));
+
+        let edit = strip_ansi(
+            &render_command_help_request(&os_args(&["ov", "config", "edit", "prod", "--help"]))
+                .expect("config edit help should render"),
+        );
+        assert!(edit.contains("ov config edit <name>"));
+        assert!(edit.contains("--clear-api-key"));
+        assert!(!edit.contains("--use-root-key-for-normal-commands"));
+
+        let delete = strip_ansi(
+            &render_command_help_request(&os_args(&["ov", "config", "delete", "prod", "--help"]))
+                .expect("config delete help should render"),
+        );
+        assert!(delete.contains("ov config delete <name>"));
     }
 
     #[test]
@@ -2590,6 +3092,9 @@ mod tests {
         assert!(config.contains("show"));
         assert!(config.contains("validate"));
         assert!(config.contains("switch"));
+        assert!(config.contains("add"));
+        assert!(config.contains("list"));
+        assert!(config.contains("delete"));
 
         let task = strip_ansi(
             &render_command_help_request(&os_args(&["ov", "task", "--help"]))

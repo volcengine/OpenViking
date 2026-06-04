@@ -93,6 +93,5 @@ type claude        # 期望输出：claude is a shell function
 
 - [博客：在 Claude Code / Codex 中接入 OpenViking](https://blog.openviking.ai/post/openviking-coding-agent/) — 为什么以及如何给你的 Coding Agent 加上长期记忆
 - [插件 README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md) — 完整环境变量表、hook 细节、架构图
-- [迁移说明](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/MIGRATION.md) — 从旧版插件升级
 - [MCP 客户端](./06-mcp-clients.md) — MCP 工具参数与其他客户端
 - [部署指南 → CLI](../guides/03-deployment.md#cli) — `ovcli.conf` 配置
