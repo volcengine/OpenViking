@@ -69,23 +69,26 @@ TRANSIENT_API_ERROR_PATTERNS = (
     "connection reset",
 )
 
-# Pre-compile regex for purely numeric patterns to avoid substring false positives
-# (e.g. "413" matching inside a hex request ID like "d7c9130f344...").
+# Pre-compile regex for numeric status-code patterns to avoid substring false positives
+# (e.g. "413" matching inside request IDs like "d7c9130f344..." or "req-413-abcd").
 _NUMERIC_PATTERN_RE: dict[str, re.Pattern] = {}
 
 
 def _get_numeric_pattern_re(pattern: str) -> re.Pattern:
     if pattern not in _NUMERIC_PATTERN_RE:
-        _NUMERIC_PATTERN_RE[pattern] = re.compile(r"\b" + re.escape(pattern) + r"\b")
+        escaped = re.escape(pattern)
+        _NUMERIC_PATTERN_RE[pattern] = re.compile(
+            rf"(?:\b(?:error\s*code|status(?:\s*code)?|http(?:\s*status)?|code)"
+            rf"\s*[:=]?\s*{escaped}(?!\w)|(?<![\w-]){escaped}(?![\w-]))"
+        )
     return _NUMERIC_PATTERN_RE[pattern]
 
 
 def _pattern_matches(text_lower: str, text_compact: str, pattern: str) -> bool:
-    """Check if pattern matches in text, using word-boundary for numeric-only patterns.
+    """Check if pattern matches in text, using token-aware matching for numeric patterns.
 
-    Numeric-only patterns (e.g. ``"413"``) are matched with ``\\b`` word boundaries
-    to prevent false positives inside request IDs or hex strings.  Non-numeric
-    patterns use plain substring matching as before.
+    Numeric-only patterns (e.g. ``"413"``) must look like HTTP status codes, not
+    request ID fragments. Non-numeric patterns use plain substring matching as before.
     """
     if pattern.isdigit():
         return bool(_get_numeric_pattern_re(pattern).search(text_lower)) or bool(
