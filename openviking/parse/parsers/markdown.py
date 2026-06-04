@@ -17,6 +17,7 @@ The parser handles scenarios:
 5. Oversized sections without subsections → split by paragraphs
 """
 
+import asyncio
 import hashlib
 import re
 import time
@@ -493,12 +494,12 @@ class MarkdownParser(BaseParser):
         mappings: Dict[str, str] = {}  # original_path_str -> unique_filename
         for origin_link, resolved_path in zip(origin_images_links, local_images):
             try:
-                if not resolved_path.exists():
+                if not await asyncio.to_thread(resolved_path.exists):
                     logger.warning(f"[MarkdownParser] Image file not found: {resolved_path}")
                     continue
 
                 # Read image bytes
-                image_bytes = resolved_path.read_bytes()
+                image_bytes = await asyncio.to_thread(resolved_path.read_bytes)
 
                 # Get filename and deduplicate
                 filename = resolved_path.name
