@@ -23,9 +23,12 @@ export type TerminalEntry = {
   refs?: ResourceRef[]
 }
 
+export type TerminalCommandGroup = 'core' | 'filesystem' | 'search' | 'status'
+
 export type TerminalCommandSuggestion = {
   adminOnly?: boolean
   command: string
+  group: TerminalCommandGroup
   /** i18n subkey under `playground.terminal.commands`. */
   key: string
   insertText: string

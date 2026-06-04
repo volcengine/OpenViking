@@ -825,7 +825,7 @@ const zhCN = {
     terminal: {
       welcomeTitle: 'Terminal 已连接上下文目录',
       welcomeBody:
-        '可执行 /status、/ls、/search、/find、/read、/add-resource；也可按当前身份查看并补全 ov CLI 命令。输出中的资源链接会定位左侧目录并打开中间预览。',
+        '可执行 /add-resource、/find、/read、/ls、/tree、/stat、/search、/abstract、/overview、/health、/status、/wait。输出中的资源链接会定位左侧目录并打开中间预览。',
       opened: '已打开资源',
       onlineTitle: '服务在线',
       onlineBody: 'OpenViking API 正常响应，根目录下发现 {{count}} 个节点。',
@@ -838,9 +838,8 @@ const zhCN = {
       addResourceBody:
         '已打开添加资源弹窗。提交后左侧目录会刷新，也可以用 /ls 或 /search 继续定位新内容。',
       addResourceTitle: '添加资源',
-      unknownCommand: '未知命令。输入 / 可查看当前身份可用的 ov CLI 命令。',
-      unsupportedCommand:
-        '该 ov CLI 命令已支持补全展示，但 Studio Terminal 暂未接入执行。',
+      unknownCommand:
+        '未知命令。输入 / 可查看当前支持的 Studio Terminal 命令。',
       commandFailed: '命令失败',
       running: '正在执行命令...',
       placeholder: '输入 CLI 命令，例如 /status',
@@ -853,6 +852,14 @@ const zhCN = {
         memories: '记忆',
         skills: '技能',
       },
+      commandGroups: {
+        core: '核心流程',
+        filesystem: '文件系统',
+        history: '历史命令',
+        resource: '资源路径',
+        search: '搜索与上下文',
+        status: '配置与状态',
+      },
       commands: {
         status: {
           description: '检查 OpenViking API 和根目录',
@@ -861,10 +868,6 @@ const zhCN = {
         health: {
           description: '快速健康检查',
           usage: '/health',
-        },
-        version: {
-          description: '显示 CLI 版本',
-          usage: '/version',
         },
         wait: {
           description: '等待异步处理队列完成',

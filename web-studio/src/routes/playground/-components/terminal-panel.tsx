@@ -31,6 +31,7 @@ import type { VikingFsEntry } from '#/routes/resources/-types/viking-fm'
 
 import { ROOT_URI, TERMINAL_COMMANDS } from '../-lib/constants'
 import type {
+  TerminalCommandGroup,
   ResourceOpenHandler,
   TerminalCommandView,
   TerminalEntry,
@@ -55,7 +56,10 @@ const URI_ARGUMENT_COMMANDS = new Set([
   '/tree',
 ])
 
-type TerminalSuggestion = TerminalCommandView & {
+type TerminalSuggestionGroup = TerminalCommandGroup | 'history' | 'resource'
+
+type TerminalSuggestion = Omit<TerminalCommandView, 'group'> & {
+  group: TerminalSuggestionGroup
   id: string
 }
 
@@ -234,6 +238,7 @@ export function TerminalPanel({
               ...activeCommand,
               command: uri,
               description: t('terminal.resourceSuggestion'),
+              group: 'resource' as const,
               id: `resource:${activeCommand.command}:${uri}`,
               insertText: `${activeCommand.command} ${uri}`,
               usage: `${activeCommand.command} ${uri}`,
@@ -251,6 +256,7 @@ export function TerminalPanel({
         command: item,
         description: t('terminal.historySuggestion'),
         executable: false,
+        group: 'history' as const,
         id: `history:${item}`,
         insertText: item,
         key: 'history',
@@ -266,6 +272,24 @@ export function TerminalPanel({
       },
     )
   }, [command, commandHistory, commands, resourceCandidates, t])
+
+  const groupedSuggestions = useMemo(() => {
+    const order: TerminalSuggestionGroup[] = [
+      'core',
+      'filesystem',
+      'search',
+      'status',
+      'resource',
+      'history',
+    ]
+    return order
+      .map((group) => ({
+        group,
+        items: suggestions.filter((item) => item.group === group),
+        label: t(`terminal.commandGroups.${group}`),
+      }))
+      .filter((group) => group.items.length > 0)
+  }, [suggestions, t])
 
   useEffect(() => {
     setActiveSuggestionIndex(0)
@@ -345,16 +369,6 @@ export function TerminalPanel({
               body: formatJson(health),
               kind: 'success',
               title: 'health',
-            })
-            return
-          }
-          case '/version': {
-            const health =
-              await getOvResult<Record<string, unknown>>(getHealth())
-            append({
-              body: String(health.version ?? 'unknown'),
-              kind: 'success',
-              title: 'version',
             })
             return
           }
@@ -516,7 +530,7 @@ export function TerminalPanel({
     ],
   )
 
-  const acceptSuggestion = useCallback((suggestion: TerminalCommandView) => {
+  const acceptSuggestion = useCallback((suggestion: { insertText: string }) => {
     setCommand(suggestion.insertText)
     setSuggestionsOpen(false)
     window.requestAnimationFrame(() => {
@@ -648,33 +662,47 @@ export function TerminalPanel({
                 {t('terminal.suggestionsTitle')}
               </div>
               <div className="max-h-64 overflow-y-auto p-1">
-                {suggestions.map((suggestion, index) => (
-                  <button
-                    key={suggestion.id}
-                    type="button"
-                    className={cn(
-                      'flex w-full min-w-0 items-start gap-3 rounded-md px-2 py-2 text-left transition-colors',
-                      index === activeSuggestionIndex
-                        ? 'bg-primary/10 text-foreground'
-                        : 'hover:bg-muted/60',
-                    )}
-                    onClick={() => acceptSuggestion(suggestion)}
-                    onMouseDown={(event) => event.preventDefault()}
-                    onMouseEnter={() => setActiveSuggestionIndex(index)}
-                  >
-                    <span className="w-24 shrink-0 font-mono text-xs font-semibold text-primary">
-                      {suggestion.command}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-xs text-foreground">
-                        {suggestion.description}
-                      </span>
-                      <span className="mt-0.5 block truncate font-mono text-[11px] text-muted-foreground">
-                        {suggestion.usage}
-                      </span>
-                    </span>
-                  </button>
-                ))}
+                {(() => {
+                  let suggestionIndex = 0
+                  return groupedSuggestions.map((group) => (
+                    <div key={group.group} className="py-1 first:pt-0">
+                      <div className="px-2 pb-1 pt-1 text-[10px] font-semibold text-muted-foreground">
+                        {group.label}
+                      </div>
+                      {group.items.map((suggestion) => {
+                        const index = suggestionIndex
+                        suggestionIndex += 1
+                        return (
+                          <button
+                            key={suggestion.id}
+                            type="button"
+                            className={cn(
+                              'flex w-full min-w-0 items-start gap-3 rounded-md px-2 py-2 text-left transition-colors',
+                              index === activeSuggestionIndex
+                                ? 'bg-primary/10 text-foreground'
+                                : 'hover:bg-muted/60',
+                            )}
+                            onClick={() => acceptSuggestion(suggestion)}
+                            onMouseDown={(event) => event.preventDefault()}
+                            onMouseEnter={() => setActiveSuggestionIndex(index)}
+                          >
+                            <span className="w-24 shrink-0 font-mono text-xs font-semibold text-primary">
+                              {suggestion.command}
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block text-xs text-foreground">
+                                {suggestion.description}
+                              </span>
+                              <span className="mt-0.5 block truncate font-mono text-[11px] text-muted-foreground">
+                                {suggestion.usage}
+                              </span>
+                            </span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  ))
+                })()}
               </div>
               <div className="border-t px-3 py-1.5 text-[10px] text-muted-foreground">
                 {t('terminal.suggestionsHint')}

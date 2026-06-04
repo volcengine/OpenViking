@@ -844,7 +844,7 @@ const en = {
     terminal: {
       welcomeTitle: 'Terminal connected to the context tree',
       welcomeBody:
-        'Run /status, /ls, /search, /find, /read, /add-resource, or browse ov CLI commands available to the current role. Resource links in the output locate the left tree and open the middle preview.',
+        'Run /add-resource, /find, /read, /ls, /tree, /stat, /search, /abstract, /overview, /health, /status, or /wait. Resource links in the output locate the left tree and open the middle preview.',
       opened: 'Resource opened',
       onlineTitle: 'Service online',
       onlineBody:
@@ -859,9 +859,7 @@ const en = {
         'Opened the add-resource dialog. After submitting, the left tree refreshes; use /ls or /search to keep locating new content.',
       addResourceTitle: 'Add resource',
       unknownCommand:
-        'Unknown command. Enter / to see ov CLI commands available to the current role.',
-      unsupportedCommand:
-        'This ov CLI command is available for completion, but Studio Terminal cannot run it yet.',
+        'Unknown command. Enter / to see currently supported Studio Terminal commands.',
       commandFailed: 'Command failed',
       running: 'Running command...',
       placeholder: 'Enter a CLI command, e.g. /status',
@@ -874,6 +872,14 @@ const en = {
         memories: 'memory',
         skills: 'skill',
       },
+      commandGroups: {
+        core: 'Core Flow',
+        filesystem: 'File System',
+        history: 'Command History',
+        resource: 'Resource Paths',
+        search: 'Search & Context',
+        status: 'Config & Status',
+      },
       commands: {
         status: {
           description: 'Check the OpenViking API and root directory',
@@ -882,10 +888,6 @@ const en = {
         health: {
           description: 'Run a quick health check',
           usage: '/health',
-        },
-        version: {
-          description: 'Show the CLI version',
-          usage: '/version',
         },
         wait: {
           description: 'Wait for async processing to complete',
