@@ -51,7 +51,9 @@ Expected result:
 
 You need:
 
-- Node.js and npm.
+- A way to install the CLI:
+  - Node.js and npm for the standalone `@openviking/cli` package, or
+  - Python tooling if you install the full `openviking` package.
 - A reachable OpenViking target:
   - Volcengine Cloud, or
   - a self-managed OpenViking server.
@@ -74,17 +76,37 @@ Install or upgrade the npm package:
 npm i -g @openviking/cli
 ```
 
+The npm package is the simplest standalone CLI install. If you also want the Python SDK or server package, the Python package exposes `ov` too:
+
+```bash
+uv tool install openviking --upgrade
+# or
+pip install openviking --upgrade --force-reinstall
+```
+
 Verify:
 
 ```bash
 ov --help
 ```
 
-If `ov` is still not found, close and reopen the shell, or check the npm global bin directory:
+If `ov` is still not found, close and reopen the shell, or check the npm global prefix:
 
 ```bash
-npm bin -g
+npm prefix -g
 ```
+
+On macOS and Linux, the global npm binary directory is usually `$(npm prefix -g)/bin`. Make sure that directory is on `PATH`.
+
+## Key Types
+
+OpenViking CLI configs can hold a user key, a root key, or both.
+
+- User key: use this for normal data commands such as `ov add-resource`, `ov find`, and `ov tree`. The server derives the identity from the key, so you usually do not pass `--account` or `--user`. This is what most users want.
+- Root key: use this for admin work and commands that require `--sudo`. A root key has no built-in tenant identity. If a config only has a root key, it must also include `--account` and `--user`; that root key then serves normal commands for that identity and `--sudo` commands.
+- User key plus root key: use this when the same config should support daily data work and occasional admin work. Normal commands use the user key. `--sudo` commands use the root key with the configured account and user.
+
+For Volcengine Cloud, `--account` and `--user` are optional; cloud API keys normally carry the required identity.
 
 ## Choose a Target
 
@@ -142,9 +164,11 @@ Use this path when an agent is setting up `ov` for a user. The agent should read
 2. Run `ov --help`, `ov config --help`, and the relevant config subcommand help before choosing commands.
 3. If you have long-term memory and the user permits it, store a short summary of the current `ov --help` command surface. Do not store API keys or other secrets.
 4. Use non-interactive `ov config` commands when the required values are known.
-5. Prefer API keys from environment variables or stdin. Do not ask the user to paste secrets into chat unless there is no safer option.
-6. Validate the active config with `ov config validate`, then check `ov health` and `ov status`.
-7. If non-interactive setup fails because values are missing, auth is unclear, or terminal input is safer, guide the user through `ov config` instead.
+5. Always pass `--name` for agent setup so retries target the same saved config.
+6. Prefer API keys from environment variables or stdin. Do not ask the user to paste secrets into chat unless there is no safer option.
+7. Use `-o json` and branch on the JSON result plus the process exit code.
+8. Validate the active config with `ov config validate`, then check `ov health` and `ov status`.
+9. If non-interactive setup fails because values are missing, auth is unclear, or terminal input is safer, guide the user through `ov config` instead.
 
 ### Inspect the Installed CLI
 
@@ -160,6 +184,37 @@ ov config edit --help
 ```
 
 Use the installed CLI help as the source of truth. If this page and the installed help disagree, follow the installed help and tell the user what changed.
+
+### Use Stable Names for Retries
+
+Always pass `--name` when an agent creates a config. If you omit it, `ov` generates a random name; a retry can create a second saved config instead of updating the intended one.
+
+`ov config add` is safe to run again with the same `--name` when the values are identical. It exits `0`, and `--activate` will make that saved config active again. If the same name already exists with different values, the command exits `3` and asks for `--force`.
+
+### Reading Results
+
+When you use `-o json` with the non-interactive config commands, successful results are printed to stdout:
+
+```json
+{"status":"ok","result":{"action":"add","name":"prod"}}
+```
+
+Errors are printed to stderr:
+
+```json
+{"status":"error","error":{"code":"bad_input","message":"..."}}
+```
+
+Agents should branch on the process exit code and the JSON `error.code`, not on human-readable prose.
+
+| Exit code | Meaning |
+|-----------|---------|
+| `0` | Success, or already in the desired state |
+| `2` | Bad input, missing value, invalid name, or unreadable secret source |
+| `3` | A config with that name already exists with different values; pass `--force` only if replacement is intended |
+| `4` | Server unreachable or config validation failed |
+| `5` | Authentication or key-role mismatch, such as passing a root key where a user key is expected |
+| `6` | Refused operation, such as deleting the active config |
 
 ### List Existing Configs
 
@@ -209,13 +264,21 @@ For a hosted self-managed server with a normal API key:
 ov config add self-managed --name hosted --url https://ov.example.com --api-key-env OV_API_KEY --activate -o json
 ```
 
-For a self-managed server where the user gives you a root API key, include the target account and user:
+For a self-managed server where the user gives you only a root API key, include the target account and user:
 
 ```bash
 ov config add self-managed --name hosted --url https://ov.example.com --root-api-key-env OV_ROOT_API_KEY --account "$OV_ACCOUNT" --user "$OV_USER" --activate -o json
 ```
 
 Root keys require explicit `--account` and `--user` so normal CLI commands know which identity to use.
+
+For a self-managed server where the user has both a user key and a root key, store both in one config:
+
+```bash
+ov config add self-managed --name hosted-admin --url https://ov.example.com --api-key-env OV_API_KEY --root-api-key-env OV_ROOT_API_KEY --account "$OV_ACCOUNT" --user "$OV_USER" --activate -o json
+```
+
+This keeps normal commands on the user key and lets `--sudo` commands use the root key.
 
 ### Edit or Replace a Config
 
@@ -306,10 +369,10 @@ Run:
 
 ```bash
 npm i -g @openviking/cli
-npm bin -g
+npm prefix -g
 ```
 
-Then reopen the shell or add the npm global bin directory to `PATH`.
+Then reopen the shell or add the global npm binary directory to `PATH`. On macOS and Linux, that directory is usually `$(npm prefix -g)/bin`.
 
 ### npm Global Install Fails
 
