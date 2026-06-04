@@ -84,9 +84,7 @@ class AddMessageRequest(BaseModel):
     """
 
     role: str
-    role_id: Optional[str] = None
     peer_id: Optional[str] = None
-    agent_id: Optional[str] = None
     content: Optional[str] = None
     parts: Optional[List[Dict[str, Any]]] = None
     created_at: Optional[str] = None
@@ -96,9 +94,7 @@ class AddMessageRequest(BaseModel):
     def validate_content_or_parts(self) -> "AddMessageRequest":
         if self.content is None and self.parts is None:
             raise ValueError("Either 'content' or 'parts' must be provided")
-        self.peer_id = normalize_peer_id(self.peer_id, self.agent_id, self.role_id)
-        self.agent_id = None
-        self.role_id = None
+        self.peer_id = normalize_peer_id(self.peer_id)
         return self
 
 

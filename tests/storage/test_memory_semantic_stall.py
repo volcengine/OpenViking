@@ -25,7 +25,7 @@ def _make_msg(uri="viking://user/memories", context_type="memory", **kwargs):
         "role": "root",
         "account_id": "acc1",
         "user_id": "usr1",
-        "agent_id": "test-agent",
+        "peer_id": "test-peer",
         "telemetry_id": "",
         "target_uri": "",
         "changes": None,

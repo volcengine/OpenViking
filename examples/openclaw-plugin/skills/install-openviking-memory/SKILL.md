@@ -109,7 +109,7 @@ Send this message:
 > 我需要 3 条信息，不知道的可以问你的管理员：
 > 1. **OpenViking 服务地址** —— 例如 `https://ov.example.com` 或 `http://192.168.1.100:1933`，本机服务可以直接说"本机"
 > 2. **API Key** —— 用来鉴权；服务没开认证可以说"没有"
-> 3. **Agent 标识前缀**（可选） —— 用于区分多个 agent 的记忆命名空间，留空就用默认
+> 3. **Agent 标识前缀**（可选） —— 用于生成 OpenClaw 运行时 peer 标识，留空就用默认
 >
 > 先告诉我服务地址吧？
 
@@ -118,7 +118,7 @@ Send this message:
 > I need 3 things (ask your admin if unsure):
 > 1. **OpenViking server URL** — e.g. `https://ov.example.com` or `http://192.168.1.100:1933`. For a local server, just say "local".
 > 2. **API Key** — for auth. Say "none" if the server has no auth.
-> 3. **Agent prefix** (optional) — used to namespace memories across agents. Leave blank for default.
+> 3. **Agent prefix** (optional) — used to build the OpenClaw runtime peer identity. Leave blank for default.
 >
 > What's the server URL?
 
@@ -297,7 +297,7 @@ Rules:
 
 - `--base-url BASE_URL` is **required** under `--json`. Without it, the wizard prints `--json requires --base-url for non-interactive mode`.
 - `--api-key` only if `API_KEY` is non-empty.
-- `--peer-role` / `--peer-prefix` only if the user explicitly wants peer IDs. Default is `--peer-role none`. Use `--peer-role assistant --peer-prefix <prefix>` for the old agent-prefix behavior.
+- `--peer-role` / `--peer-prefix` only if the user explicitly wants peer IDs. Default is `--peer-role none`.
 - `--account-id` / `--user-id` only after STEP 7 root-key detection (see below).
 - `--allow-offline` only if the user explicitly approved it in STEP 5.
 - `--force-slot` **never** in the first attempt. Add only after the user confirms (see slot_blocked handling below).
@@ -519,8 +519,6 @@ These are the keys under `plugins.entries.openviking.config` in `openclaw.json`.
 | `recallMaxInjectedChars` | (plugin default) | Hard cap on injected character count. |
 | `recallPreferAbstract` | (plugin default) | Prefer abstract memories over raw. |
 | `recallTokenBudget` | (plugin default) | Token budget for injected memories. |
-| `isolateUserScopeByAgent` | (plugin default) | Multi-tenant scoping toggle. |
-| `isolateAgentScopeByUser` | (plugin default) | Multi-tenant scoping toggle. |
 | `bypassSessionPatterns` | — | Glob patterns for sessions skipped by capture. |
 | `ingestReplyAssist` | (plugin default) | Reply-assist ingestion toggle. |
 | `emitStandardDiagnostics` | (plugin default) | Verbose diagnostic logs. |
@@ -671,7 +669,7 @@ Match against actual stderr / JSON `error` strings.
 3. **Never silently use `--force-slot`.** Slot replacement disables another plugin — always confirm with the user first.
 4. **Never invent values.** If the user can't provide a required value, stop and tell them what to ask their admin.
 5. **Never claim success without STEP 10.** Only after `openclaw openviking status --json` shows `configured: true && slotActive: true && health.ok: true` may you tell the user it's done.
-6. **Use `--peer-role` / `--peer-prefix`, not `--agent-id`.** The latter is deprecated and removed from the schema.
+6. **Use `--peer-role` / `--peer-prefix` only for explicit peer routing.**
 7. **For Windows, use PowerShell equivalents.** Don't rely on `nohup`, `&`, `mkdir -p`, `source`, etc.
 8. **Switch to Path B (ov-install) only for ClawHub/rate-limit/registry availability failures.** Don't use it to hide version conflicts or package validation errors.
 9. **Do NOT install or operate the OpenViking server.** This skill assumes the server is already running. If it isn't, tell the user to contact their admin or follow the OpenViking docs.

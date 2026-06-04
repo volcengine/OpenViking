@@ -82,7 +82,6 @@ def test_message_range_uses_peer_id_when_present():
                     id="msg-peer",
                     role="user",
                     parts=[TextPart(text="invoice follow-up")],
-                    role_id="default",
                     peer_id="web:visitor:alice",
                 )
             ]
@@ -99,7 +98,6 @@ def test_peer_id_routes_peer_memory_for_all_role_selected_types(stub_provider_co
             id="msg-peer",
             role="user",
             parts=[TextPart(text="I am Alice. Please contact me by email for invoices.")],
-            role_id="support_bot",
             peer_id="web:visitor:alice",
         )
     ]
@@ -115,7 +113,7 @@ def test_peer_id_routes_peer_memory_for_all_role_selected_types(stub_provider_co
     )
     role_scope = handler.get_read_scope()
     fields = {"ranges": "0"}
-    handler.fill_role_ids(fields, role_scope)
+    handler.fill_identity_fields(fields, role_scope)
 
     profile_schema = MemoryTypeSchema(
         memory_type="profile",
@@ -153,7 +151,6 @@ def test_peer_id_range_does_not_route_without_allowed_peer_ids(stub_provider_con
             id="msg-peer",
             role="user",
             parts=[TextPart(text="I am Alice. Please contact me by email for invoices.")],
-            role_id="support_bot",
             peer_id="web:visitor:alice",
         )
     ]
@@ -165,7 +162,7 @@ def test_peer_id_range_does_not_route_without_allowed_peer_ids(stub_provider_con
     handler = MemoryIsolationHandler(ctx, extract_context)
     role_scope = handler.get_read_scope()
     fields = {"ranges": "0"}
-    handler.fill_role_ids(fields, role_scope)
+    handler.fill_identity_fields(fields, role_scope)
 
     profile_schema = MemoryTypeSchema(
         memory_type="profile",

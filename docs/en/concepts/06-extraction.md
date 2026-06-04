@@ -73,7 +73,7 @@ TreeBuilder moves temp directory to AGFS and queues semantic processing.
 ```python
 building_tree = tree_builder.finalize_from_temp(
     temp_dir_path="viking://temp/abc123",
-    scope="resources",  # resources/user/agent
+    scope="resources",  # resources/user
 )
 ```
 

@@ -8,7 +8,6 @@ from typing import Optional
 from fastapi import Depends, Header, Request
 
 from openviking.server.identity import (
-    AccountNamespacePolicy,
     AuthMode,
     RequestContext,
     ResolvedIdentity,
@@ -190,18 +189,10 @@ async def _try_resolve_oauth_token(
     effective_account = account_id
     effective_user = user_id
 
-    namespace_policy = AccountNamespacePolicy()
-    if api_key_manager is not None and hasattr(api_key_manager, "get_account_policy"):
-        try:
-            namespace_policy = api_key_manager.get_account_policy(effective_account)
-        except Exception:  # noqa: BLE001
-            pass
-
     return ResolvedIdentity(
         role=role,
         account_id=effective_account,
         user_id=effective_user,
-        namespace_policy=namespace_policy,
         from_oauth=True,
     )
 
@@ -372,11 +363,6 @@ async def get_request_context(
             identity.user_id or "default",
         ),
         role=identity.role,
-        namespace_policy=(
-            api_key_manager.get_account_policy(identity.account_id)
-            if api_key_manager is not None and hasattr(api_key_manager, "get_account_policy")
-            else identity.namespace_policy
-        ),
         from_oauth=identity.from_oauth,
     )
     # Update the unified root observability context after authentication succeeds.
@@ -384,7 +370,6 @@ async def get_request_context(
         request_state=request.state,
         account_id=identity.account_id,
         user_id=identity.user_id,
-        agent_id=None,
     )
 
     return ctx

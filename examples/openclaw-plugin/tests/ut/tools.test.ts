@@ -1232,31 +1232,6 @@ describe("Plugin registration", () => {
     expect(search.text).toContain("Usage: /ov-search");
   });
 
-  it("search command does not propagate OpenClaw agent identity as a tenant header", async () => {
-    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-      if (url.endsWith("/api/v1/search/find")) {
-        return okResponse({ memories: [], resources: [], skills: [], total: 0 });
-      }
-      return okResponse({});
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    const { commands, api } = setupPlugin();
-    contextEnginePlugin.register(api as any);
-
-    await commands.get("ov-search")!.handler({
-      args: "test query --uri viking://resources",
-      commandBody: "/ov-search",
-      agentId: "worker",
-      sessionId: "session-1",
-      sessionKey: "agent:worker:session-1",
-    });
-
-    const [, init] = fetchMock.mock.calls.find((call) => String(call[0]).endsWith("/api/v1/search/find")) as [string, RequestInit];
-    const headers = new Headers(init.headers);
-    expect(headers.has("X-OpenViking-Agent")).toBe(false);
-  });
-
   it("search command propagates configured tenant headers", async () => {
     const fetchMock = vi.fn(async (url: string) => {
       if (url.endsWith("/api/v1/search/find")) {
@@ -1286,7 +1261,6 @@ describe("Plugin registration", () => {
     const headers = new Headers(init.headers);
     expect(headers.get("X-OpenViking-Account")).toBe("acct-shared");
     expect(headers.get("X-OpenViking-User")).toBe("alice");
-    expect(headers.has("X-OpenViking-Agent")).toBe(false);
   });
 
   it("add_resource propagates configured tenant headers", async () => {

@@ -37,7 +37,6 @@ def test_async_http_client_loads_missing_fields_from_ovcli_config(tmp_path, monk
             {
                 "url": "http://config-host:1933",
                 "api_key": "config-key",
-                "agent_id": "config-agent",
                 "account": "config-account",
                 "user": "config-user",
                 "timeout": 12.5,
@@ -51,7 +50,6 @@ def test_async_http_client_loads_missing_fields_from_ovcli_config(tmp_path, monk
 
     assert client._url == "http://explicit-host:1933"
     assert client._api_key == "config-key"
-    assert not hasattr(client, "_agent_id")
     assert client._account == "config-account"
     assert client._user_id == "config-user"
     assert client._timeout == 12.5

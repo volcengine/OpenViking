@@ -532,7 +532,7 @@ class ReindexExecutor:
             recursive=True,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
-            agent_id=ctx.user.user_id,
+            peer_id=ctx.user.user_id,
             role=ctx.role.value,
             skip_vectorization=True,
         )

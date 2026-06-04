@@ -283,7 +283,7 @@ class SemanticProcessor(DequeueHandlerBase):
             recursive=False,
             account_id=msg.account_id,
             user_id=msg.user_id,
-            agent_id=msg.agent_id,
+            peer_id=msg.peer_id,
             role=msg.role,
             skip_vectorization=msg.skip_vectorization,
             changes={"modified": [uri]},
@@ -292,7 +292,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 uri=parent_uri,
                 account_id=msg.account_id,
                 user_id=msg.user_id,
-                agent_id=msg.agent_id,
+                peer_id=msg.peer_id,
             ),
         )
         await semantic_queue.enqueue(parent_msg)
@@ -351,7 +351,6 @@ class SemanticProcessor(DequeueHandlerBase):
                 )
                 root_attrs.account_id = msg.account_id
                 root_attrs.user_id = msg.user_id
-                root_attrs.agent_id = msg.agent_id
                 root_context_token = bind_root_observability_context(root_attrs)
                 try:
                     current_ctx = self._ctx_from_semantic_msg(msg)

@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 from openviking.core.path_variables import resolve_path_variables
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
-from openviking.server.identity import AccountNamespacePolicy, RequestContext, Role
+from openviking.server.identity import RequestContext, Role
 from openviking.server.local_input_guard import require_remote_resource_source
 from openviking.server.responses import response_from_result
 from openviking.server.telemetry import run_operation
@@ -166,7 +166,6 @@ async def temp_upload_signed(
         ctx = RequestContext(
             user=UserIdentifier(account_id, user_id),
             role=Role.USER,
-            namespace_policy=AccountNamespacePolicy(),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=f"invalid identity in token: {exc}") from exc

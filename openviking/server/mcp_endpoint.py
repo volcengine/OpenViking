@@ -176,7 +176,6 @@ class _IdentityASGIMiddleware:
                 identity.user_id or "default",
             ),
             role=identity.role,
-            namespace_policy=identity.namespace_policy,
         )
         url_info = {
             "x_forwarded_proto": request.headers.get("x-forwarded-proto"),

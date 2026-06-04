@@ -96,7 +96,6 @@ def _make_config(api_key_type: str, mode: str = "remote", **ov_overrides):
         root_api_key="root-key",
         account_id="acct",
         admin_user_id="admin",
-        agent_id="",
         **ov_overrides,
     )
     return SimpleNamespace(
@@ -119,7 +118,6 @@ def test_viking_client_init_root_mode_sets_account_and_user(monkeypatch):
     assert client.api_key_type == "root"
     assert first.kwargs["account"] == "acct"
     assert first.kwargs["user"] == "admin"
-    assert "agent_id" not in first.kwargs
 
 
 def test_viking_client_init_user_mode_does_not_set_user_or_account(monkeypatch):
@@ -252,14 +250,14 @@ async def test_compact_hook_session_context_commits_admin_and_sender_sessions(mo
             self,
             session_id,
             messages,
-            default_user_role_id=None,
+            default_user_peer_id=None,
             session_user_id=None,
         ):
             self.append_calls.append(
                 (
                     session_id,
                     [message["content"] for message in messages],
-                    default_user_role_id,
+                    default_user_peer_id,
                     session_user_id,
                 )
             )
@@ -386,7 +384,7 @@ async def test_compact_hook_force_commit_does_not_resync_already_synced_messages
             self,
             session_id,
             messages,
-            default_user_role_id=None,
+            default_user_peer_id=None,
             session_user_id=None,
         ):
             self.append_calls.append((session_id, [message["content"] for message in messages]))
@@ -465,7 +463,7 @@ async def test_compact_hook_force_commit_commits_sender_sessions_without_unsynce
             self,
             session_id,
             messages,
-            default_user_role_id=None,
+            default_user_peer_id=None,
             session_user_id=None,
         ):
             self.append_calls.append((session_id, [message["content"] for message in messages]))
@@ -541,7 +539,7 @@ async def test_compact_hook_session_context_sender_failure_does_not_advance_sync
             self,
             session_id,
             messages,
-            default_user_role_id=None,
+            default_user_peer_id=None,
             session_user_id=None,
         ):
             self.append_calls.append((session_id, [message["content"] for message in messages]))
@@ -618,7 +616,7 @@ async def test_compact_hook_session_context_commits_when_message_threshold_reach
             self,
             session_id,
             messages,
-            default_user_role_id=None,
+            default_user_peer_id=None,
             session_user_id=None,
         ):
             self.append_calls.append((session_id, [message["content"] for message in messages]))
@@ -700,7 +698,7 @@ async def test_compact_hook_sender_commit_failure_does_not_commit_admin_and_retr
             self,
             session_id,
             messages,
-            default_user_role_id=None,
+            default_user_peer_id=None,
             session_user_id=None,
         ):
             self.append_calls.append((session_id, [message["content"] for message in messages]))
@@ -792,7 +790,7 @@ async def test_compact_hook_session_context_skips_message_threshold_after_recent
             self,
             session_id,
             messages,
-            default_user_role_id=None,
+            default_user_peer_id=None,
             session_user_id=None,
         ):
             self.append_calls.append((session_id, [message["content"] for message in messages]))
@@ -848,7 +846,7 @@ async def test_compact_hook_session_context_skips_message_threshold_after_recent
 @pytest.mark.asyncio
 async def test_viking_client_normalizes_system_tool_and_tool_result_messages(monkeypatch):
     monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("root"))
-    client = VikingClient(agent_id="workspace")
+    client = VikingClient(workspace_id="workspace")
 
     normalized = client._normalize_session_messages(
         [
@@ -875,7 +873,7 @@ async def test_viking_client_normalizes_system_tool_and_tool_result_messages(mon
                 "timestamp": "2026-05-01T12:00:02Z",
             },
         ],
-        default_user_role_id="admin",
+        default_user_peer_id="admin",
     )
 
     assert [message["role"] for message in normalized] == [
@@ -883,7 +881,7 @@ async def test_viking_client_normalizes_system_tool_and_tool_result_messages(mon
         "assistant",
         "assistant",
     ]
-    assert [message["role_id"] for message in normalized] == [
+    assert [message["peer_id"] for message in normalized] == [
         "admin",
         "admin",
         "admin",
@@ -898,7 +896,7 @@ async def test_viking_client_normalizes_system_tool_and_tool_result_messages(mon
 @pytest.mark.asyncio
 async def test_viking_client_append_messages_chunks_batches_at_server_limit(monkeypatch):
     monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("root"))
-    client = VikingClient(agent_id="workspace")
+    client = VikingClient(workspace_id="workspace")
 
     async def _exists(_session_id):
         return True
@@ -919,7 +917,7 @@ async def test_viking_client_append_messages_chunks_batches_at_server_limit(monk
     result = await client.append_messages(
         "session-1",
         [{"role": "user", "content": f"message {index}"} for index in range(101)],
-        default_user_role_id="admin",
+        default_user_peer_id="admin",
     )
 
     assert [len(messages) for _, messages in calls] == [100, 1]
@@ -952,7 +950,7 @@ async def test_search_memory_uses_user_namespace(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_search_memory_ignores_account_agent_namespace_policy(monkeypatch):
+async def test_search_memory_uses_user_namespace_without_agent_scope(monkeypatch):
     monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("root"))
     client = VikingClient()
 

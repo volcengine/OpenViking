@@ -53,7 +53,7 @@ async def test_reindex_single_file_uri_acquires_tree_lock_without_not_a_director
     executor._fetch_existing_record = AsyncMock(return_value=None)
     executor._upsert_context = AsyncMock()
     ctx = RequestContext(
-        user=UserIdentifier("acc1", "test_user", "test_agent"),
+        user=UserIdentifier("acc1", "test_user"),
         role=Role.ROOT,
     )
 

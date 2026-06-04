@@ -5,8 +5,7 @@ Memory V2 全面端到端测试套件
 - entities (实体信息) - User scope
 - events (事件记录) - User scope
 - profile (用户画像) - User scope, 单文件
-- skills (技能) - Agent scope
-- tools (工具) - Agent scope
+- skills (技能) - User scope
 
 测试方式：通过 OpenClaw agent 进行对话，然后通过 OV API commit session 触发记忆提取。
 OpenClaw Gateway 会自动分配 OV session ID，需要通过对比 sessions 列表来定位。
@@ -263,7 +262,10 @@ class OpenVikingAPIClient:
 
     def list_memory_files(self, memory_type: str) -> List[str]:
         try:
-            uri = f"viking://user/default/memories/{memory_type}"
+            if memory_type == "skills":
+                uri = "viking://user/default/skills"
+            else:
+                uri = f"viking://user/default/memories/{memory_type}"
             resp = requests.get(
                 f"{self.server_url}/api/v1/fs/ls",
                 headers=self.headers,
@@ -386,31 +388,9 @@ class MemoryV2TestSuite:
         """记录所有记忆目录的文件快照（路径 → mtime）"""
         files: Dict[str, float] = {}
 
-        # user scope: preferences, entities, events, profile
-        for md_file in self.viking_data_dir.rglob("*.md"):
+        user_root = self.viking_data_dir.parent
+        for md_file in user_root.rglob("*.md"):
             files[str(md_file)] = md_file.stat().st_mtime
-
-        # agent scope: skills, tools, cases, patterns, experiences
-        # Search multiple possible agent directory locations to handle
-        # different namespace policies (flat: agent/{agent_id}/,
-        # isolated: agent/{agent_id}/user/{user_id}/)
-        viking_root = self.viking_data_dir.parent.parent.parent
-        agent_base_dir = viking_root / "agent"
-        if agent_base_dir.exists():
-            for md_file in agent_base_dir.rglob("*.md"):
-                files[str(md_file)] = md_file.stat().st_mtime
-
-        # Also scan the local storage root which may contain account-scoped paths
-        # e.g., /local/{account_id}/agent/... when using agfs backend
-        local_agent_dir = viking_root.parent / "local"
-        if local_agent_dir.exists():
-            for account_dir in local_agent_dir.iterdir():
-                if not account_dir.is_dir():
-                    continue
-                agent_dir = account_dir / "agent"
-                if agent_dir.exists():
-                    for md_file in agent_dir.rglob("*.md"):
-                        files[str(md_file)] = md_file.stat().st_mtime
 
         return files
 
@@ -634,90 +614,28 @@ class MemoryV2TestSuite:
                 print(f"  ✗ profile 文件不存在: {profile_file}")
             return result
 
-        if memory_type in ["skills", "tools"]:
-            viking_root = self.viking_data_dir.parent.parent.parent
-            agent_base_dir = viking_root / "agent"
-
-            # Collect all agent directories from multiple possible locations:
-            # 1. viking/agent/ (standard flat layout)
-            # 2. viking/agent/{agent_id}/user/{user_id}/ (isolated layout)
-            # 3. local/{account_id}/agent/ (agfs backend layout)
-            agent_dirs = []
-            if agent_base_dir.exists():
-                agent_dirs.append(agent_base_dir)
-            local_dir = viking_root.parent / "local"
-            if local_dir.exists():
-                for account_dir in local_dir.iterdir():
-                    if not account_dir.is_dir():
-                        continue
-                    ad = account_dir / "agent"
-                    if ad.exists():
-                        agent_dirs.append(ad)
-
-            if not agent_dirs:
-                print(f"  ✗ agent 目录不存在: {agent_base_dir}")
+        if memory_type == "skills":
+            skills_dir = self.viking_data_dir.parent / "skills"
+            if not skills_dir.exists():
+                print(f"  ✗ skills 目录不存在: {skills_dir}")
                 return result
 
-            search_types = [memory_type]
-            if memory_type == "tools":
-                search_types = ["tools", "skills"]
-            elif memory_type == "skills":
-                search_types = ["skills", "patterns"]
-
-            for agent_dir in agent_dirs:
-                for agent_space_dir in sorted(agent_dir.rglob("memories")):
-                    if not agent_space_dir.is_dir():
-                        continue
-                    for search_type in search_types:
-                        memory_dir = agent_space_dir / search_type
-                        if not memory_dir.exists():
-                            continue
-
-                        for md_file in sorted(memory_dir.glob("*.md")):
-                            file_str = str(md_file)
-                            if file_str in list(result["all_files"]):
-                                continue
-                            result["all_files"].append(file_str)
-                            if file_str not in before_files:
-                                result["found"] = True
-                                result["new_files"].append(file_str)
-                                print(
-                                    f"  ✓ 新增记忆文件: {md_file.name} (在 {search_type}/ 目录下)"
-                                )
-                            else:
-                                old_mtime = before_files[file_str]
-                                new_mtime = md_file.stat().st_mtime
-                                if new_mtime > old_mtime:
-                                    result["found"] = True
-                                    result["modified_files"].append(file_str)
-                                    print(
-                                        f"  ✓ 记忆文件已更新: {md_file.name} (在 {search_type}/ 目录下)"
-                                    )
-
-                # Also check skills at agent root level (not under memories/)
-                # e.g., viking/agent/{agent_id}/skills/
-                for skills_dir in sorted(agent_dir.rglob("skills")):
-                    if not skills_dir.is_dir():
-                        continue
-                    parent_name = skills_dir.parent.name
-                    if parent_name == "memories":
-                        continue
-                    for md_file in sorted(skills_dir.glob("*.md")):
-                        file_str = str(md_file)
-                        if file_str in list(result["all_files"]):
-                            continue
-                        result["all_files"].append(file_str)
-                        if file_str not in before_files:
-                            result["found"] = True
-                            result["new_files"].append(file_str)
-                            print(f"  ✓ 新增技能文件: {md_file.name} (在 skills/ 目录下)")
-                        else:
-                            old_mtime = before_files[file_str]
-                            new_mtime = md_file.stat().st_mtime
-                            if new_mtime > old_mtime:
-                                result["found"] = True
-                                result["modified_files"].append(file_str)
-                                print(f"  ✓ 技能文件已更新: {md_file.name} (在 skills/ 目录下)")
+            for md_file in sorted(skills_dir.rglob("*.md")):
+                file_str = str(md_file)
+                if file_str in result["all_files"]:
+                    continue
+                result["all_files"].append(file_str)
+                if file_str not in before_files:
+                    result["found"] = True
+                    result["new_files"].append(file_str)
+                    print(f"  ✓ 新增技能文件: {md_file.name} (在 user/skills 目录下)")
+                else:
+                    old_mtime = before_files[file_str]
+                    new_mtime = md_file.stat().st_mtime
+                    if new_mtime > old_mtime:
+                        result["found"] = True
+                        result["modified_files"].append(file_str)
+                        print(f"  ✓ 技能文件已更新: {md_file.name} (在 user/skills 目录下)")
 
             if not result["found"]:
                 if result["all_files"]:

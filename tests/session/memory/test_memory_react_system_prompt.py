@@ -111,7 +111,6 @@ class TestSkillToolCallExposure:
                 id="m1",
                 role="user",
                 parts=[TextPart("My invoice is still missing.")],
-                role_id="default",
                 peer_id="web:visitor:alice",
             )
         ]

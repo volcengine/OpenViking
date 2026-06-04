@@ -132,12 +132,11 @@ class MemoryTypeRegistry:
             return list(self._types.keys())
         return [mt.memory_type for mt in self._types.values() if mt.enabled]
 
-    def list_search_uris(self, user_space: str, agent_space: str = "") -> List[str]:
+    def list_search_uris(self, user_space: str) -> List[str]:
         """List all directory URIs for search scope.
 
         Args:
             user_space: User space name
-            agent_space: Deprecated compatibility value. User space is authoritative.
 
         Returns:
             List of directory URIs from enabled schemas
@@ -147,10 +146,7 @@ class MemoryTypeRegistry:
             if schema.directory:
                 dir_path = TemplateUtils.render(
                     schema.directory,
-                    {
-                        "user_space": user_space,
-                        "agent_space": user_space,
-                    },
+                    {"user_space": user_space},
                 )
                 uris.append(dir_path)
         return uris
@@ -277,17 +273,11 @@ class MemoryTypeRegistry:
             try:
                 directory = TemplateUtils.render(
                     schema.directory,
-                    {
-                        "user_space": user_space,
-                        "agent_space": user_space,
-                    },
+                    {"user_space": user_space},
                 )
                 filename = TemplateUtils.render(
                     schema.filename_template,
-                    {
-                        "user_space": user_space,
-                        "agent_space": user_space,
-                    },
+                    {"user_space": user_space},
                 )
             except Exception:
                 continue

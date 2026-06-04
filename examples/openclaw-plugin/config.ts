@@ -5,19 +5,11 @@ export type MemoryOpenVikingConfig = {
   baseUrl?: string;
   peer_role?: "none" | "assistant" | "person";
   peer_prefix?: string;
-  /** @deprecated Use peer_prefix. Legacy presence defaults peer_role to assistant. */
-  agent_prefix?: string;
   apiKey?: string;
   /** Advanced option. Only needed when explicitly sending tenant identity headers. With a user key the server derives identity from the key. */
   accountId?: string;
   /** Advanced option. Only needed when explicitly sending tenant identity headers. */
   userId?: string;
-  /**
-   * Canonical namespace policy. Must match the server-side account namespace
-   * policy because current /system/status does not expose it.
-   */
-  isolateUserScopeByAgent?: boolean;
-  isolateAgentScopeByUser?: boolean;
   targetUri?: string;
   timeoutMs?: number;
   autoCapture?: boolean;
@@ -78,7 +70,7 @@ function resolvePeerPrefix(configured: unknown): string {
   return DEFAULT_PEER_PREFIX;
 }
 
-function resolvePeerRole(configured: unknown, hasLegacyAgentConfig: boolean) {
+function resolvePeerRole(configured: unknown) {
   if (typeof configured === "string") {
     const role = configured.trim().toLowerCase();
     if (role === "none" || role === "assistant" || role === "person") {
@@ -89,7 +81,7 @@ function resolvePeerRole(configured: unknown, hasLegacyAgentConfig: boolean) {
   if (configured !== undefined) {
     throw new Error(`openviking peer_role must be "none", "assistant", or "person"`);
   }
-  return hasLegacyAgentConfig ? "assistant" : DEFAULT_PEER_ROLE;
+  return DEFAULT_PEER_ROLE;
 }
 
 function resolveEnvVars(value: string): string {
@@ -163,7 +155,6 @@ export const memoryOpenVikingConfigSchema = {
       value = {};
     }
     const cfg = value as Record<string, unknown>;
-    const hasLegacyAgentConfig = "agent_prefix" in cfg || "agentId" in cfg;
     assertAllowedKeys(
       cfg,
       [
@@ -171,14 +162,10 @@ export const memoryOpenVikingConfigSchema = {
         "baseUrl",
         "peer_role",
         "peer_prefix",
-        "agent_prefix",
-        "agentId",
         "serverAuthMode",
         "apiKey",
         "accountId",
         "userId",
-        "isolateUserScopeByAgent",
-        "isolateAgentScopeByUser",
         "targetUri",
         "timeoutMs",
         "autoCapture",
@@ -206,10 +193,8 @@ export const memoryOpenVikingConfigSchema = {
     );
 
     const mode = "remote" as const;
-    const peerRole = resolvePeerRole(cfg.peer_role, hasLegacyAgentConfig);
-    const peerPrefix = resolvePeerPrefix(
-      cfg.peer_prefix ?? cfg.agent_prefix ?? cfg.agentId,
-    );
+    const peerRole = resolvePeerRole(cfg.peer_role);
+    const peerPrefix = resolvePeerPrefix(cfg.peer_prefix);
     const rawBaseUrl = typeof cfg.baseUrl === "string" ? cfg.baseUrl : resolveDefaultBaseUrl();
     const resolvedBaseUrl = resolveEnvVars(rawBaseUrl).replace(/\/+$/, "");
     const rawApiKey = typeof cfg.apiKey === "string" ? cfg.apiKey : getEnv("OPENVIKING_API_KEY");
@@ -231,32 +216,6 @@ export const memoryOpenVikingConfigSchema = {
         ? cfg.userId.trim()
         : (getEnv("OPENVIKING_USER_ID")?.trim() || "");
 
-    const explicitIsolateUserScopeByAgent =
-      typeof cfg.isolateUserScopeByAgent === "boolean"
-        ? cfg.isolateUserScopeByAgent
-        : undefined;
-    const explicitIsolateAgentScopeByUser =
-      typeof cfg.isolateAgentScopeByUser === "boolean"
-        ? cfg.isolateAgentScopeByUser
-        : undefined;
-    const envIsolateUserScopeByAgent =
-      explicitIsolateUserScopeByAgent === undefined &&
-      getEnv("OPENVIKING_ISOLATE_USER_SCOPE_BY_AGENT") !== undefined
-        ? envFlag("OPENVIKING_ISOLATE_USER_SCOPE_BY_AGENT")
-        : undefined;
-    const envIsolateAgentScopeByUser =
-      explicitIsolateAgentScopeByUser === undefined &&
-      getEnv("OPENVIKING_ISOLATE_AGENT_SCOPE_BY_USER") !== undefined
-        ? envFlag("OPENVIKING_ISOLATE_AGENT_SCOPE_BY_USER")
-        : undefined;
-    const isolateUserScopeByAgent =
-      explicitIsolateUserScopeByAgent ??
-      envIsolateUserScopeByAgent ??
-      false;
-    const isolateAgentScopeByUser =
-      explicitIsolateAgentScopeByUser ??
-      envIsolateAgentScopeByUser ??
-      false;
     const recallMaxInjectedChars = Math.max(
       100,
       Math.min(
@@ -275,12 +234,9 @@ export const memoryOpenVikingConfigSchema = {
       baseUrl: resolvedBaseUrl,
       peer_role: peerRole,
       peer_prefix: peerPrefix,
-      agent_prefix: peerPrefix,
       apiKey: rawApiKey ? resolveEnvVars(rawApiKey) : "",
       accountId,
       userId,
-      isolateUserScopeByAgent,
-      isolateAgentScopeByUser,
       targetUri: typeof cfg.targetUri === "string" ? cfg.targetUri : DEFAULT_TARGET_URI,
       timeoutMs: Math.max(1000, Math.floor(toNumber(cfg.timeoutMs, DEFAULT_TIMEOUT_MS))),
       autoCapture: cfg.autoCapture !== false,
@@ -340,12 +296,6 @@ export const memoryOpenVikingConfigSchema = {
       placeholder: DEFAULT_BASE_URL,
       help: "HTTP URL when mode is remote (or use ${OPENVIKING_BASE_URL})",
     },
-    agent_prefix: {
-      label: "Agent Prefix (Deprecated)",
-      placeholder: "optional-prefix",
-      help: "Deprecated alias for peer_prefix. Presence without peer_role enables assistant peer compatibility for old installs.",
-      advanced: true,
-    },
     peer_role: {
       label: "Peer Role",
       placeholder: DEFAULT_PEER_ROLE,
@@ -372,18 +322,6 @@ export const memoryOpenVikingConfigSchema = {
       label: "User ID",
       placeholder: "(derived from API key)",
       help: "Advanced option. Tenant user ID. Only needed when explicitly sending identity headers.",
-      advanced: true,
-    },
-    isolateUserScopeByAgent: {
-      label: "Isolate User Scope By Agent",
-      placeholder: "false",
-      help: "Deprecated and ignored. OpenViking now uses user-scoped namespaces and peer_id for message speakers.",
-      advanced: true,
-    },
-    isolateAgentScopeByUser: {
-      label: "Isolate Agent Scope By User",
-      placeholder: "false",
-      help: "Deprecated and ignored. viking://agent/... is no longer a supported namespace.",
       advanced: true,
     },
     targetUri: {

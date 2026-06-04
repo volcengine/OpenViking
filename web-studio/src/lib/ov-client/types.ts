@@ -7,7 +7,6 @@ export const DEFAULT_API_KEY_STORAGE_KEY = 'ov_console_api_key'
 export interface OvConnectionState {
   apiKey: string
   accountId: string
-  agentId: string
   userId: string
 }
 

@@ -24,7 +24,7 @@ async def test_memory_semantic_enqueue_deduped_within_window():
             context_type="memory",
             account_id="acc",
             user_id="u1",
-            agent_id="a1",
+            peer_id="p1",
         )
         r1 = await q.enqueue(msg)
         r2 = await q.enqueue(
@@ -33,7 +33,7 @@ async def test_memory_semantic_enqueue_deduped_within_window():
                 context_type="memory",
                 account_id="acc",
                 user_id="u1",
-                agent_id="a1",
+                peer_id="p1",
             )
         )
         assert r1 == "queued-id"
@@ -80,7 +80,7 @@ async def test_coalesced_semantic_messages_mark_old_version_stale():
     with patch.object(NamedQueue, "enqueue", new_callable=AsyncMock) as named_enqueue:
         named_enqueue.return_value = "queued-id"
         q = SemanticQueue(mock_agfs, "/queue", "semantic")
-        coalesce_key = f"resource|acc|u|a|viking://resources/docs/{uuid4().hex}"
+        coalesce_key = f"resource|acc|u|p|viking://resources/docs/{uuid4().hex}"
         first = SemanticMsg(
             uri="viking://resources/docs",
             context_type="resource",
@@ -158,7 +158,7 @@ async def test_stale_memory_semantic_write_is_skipped(monkeypatch):
     lock_manager = _FakeLockManager()
     viking_fs = _FakeVikingFS()
     processor = SemanticProcessor()
-    coalesce_key = f"memory|acc|u|a|viking://user/default/memories/preferences/{uuid4().hex}"
+    coalesce_key = f"memory|acc|u|p|viking://user/default/memories/preferences/{uuid4().hex}"
 
     with patch.object(NamedQueue, "enqueue", new_callable=AsyncMock):
         q = SemanticQueue(MagicMock(), "/queue", "semantic")

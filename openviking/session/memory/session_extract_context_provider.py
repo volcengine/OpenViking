@@ -10,7 +10,6 @@ import json
 import os
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from openviking.core.namespace import to_user_space
 from openviking.message.part import ToolPart
 from openviking.prompts.manager import PromptManager
 from openviking.server.identity import RequestContext, ToolContext
@@ -233,7 +232,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
 
         def format_message_header(msg: Message, idx: int) -> str:
             """Format message header with role and stable interaction peer when present."""
-            speaker = msg.peer_id or msg.role_id or msg.role
+            speaker = msg.peer_id or msg.role
             return f"[{idx}][{msg.role}][{speaker}]: {format_message_with_parts(msg)}"
 
         conversation_sections.append(
@@ -290,7 +289,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
 
         for msg in self.messages:
             role = getattr(msg, "role", "")
-            speaker = getattr(msg, "peer_id", "") or getattr(msg, "role_id", "") or role
+            speaker = getattr(msg, "peer_id", "") or role
             parts = getattr(msg, "parts", [])
 
             text_parts: List[str] = []
@@ -424,7 +423,6 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         read_files = set()  # files to read directly (for single-file schemas)
 
         rolescope: RoleScope = self._isolation_handler.get_read_scope()
-        policy = self._ctx.namespace_policy
 
         for schema in schemas:
             if not schema.directory:
@@ -439,19 +437,15 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                 schema_dirs.update(self._isolation_handler.render_schema_directories(schema))
             else:
                 for user_id in rolescope.user_ids:
-                    user_space = to_user_space(policy, user_id)
                     dir_path = render_template(
                         schema.directory,
-                        {"user_space": user_space, "agent_space": user_space},
+                        {"user_space": user_id},
                     )
                     schema_dirs.add(dir_path)
                     for peer_id in rolescope.peer_ids:
                         dir_path = render_template(
                             schema.directory,
-                            {
-                                "user_space": peer_user_space(user_space, peer_id),
-                                "agent_space": user_space,
-                            },
+                            {"user_space": peer_user_space(user_id, peer_id)},
                         )
                         schema_dirs.add(dir_path)
             if schema.filename_has_variables():

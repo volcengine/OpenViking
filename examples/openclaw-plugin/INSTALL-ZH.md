@@ -210,8 +210,6 @@ plugins.entries.openviking.config
 | `accountId` | 空 | 使用 root API key 时需要 |
 | `userId` | 空 | 使用 root API key 时需要 |
 
-旧配置里的 `agent_prefix` / `agentId` 仍会读取。如果存在这些旧字段且没有显式 `peer_role`，插件会按 `peer_role=assistant` 解释。
-
 普通修改优先使用 setup：
 
 ```bash
@@ -234,8 +232,6 @@ openclaw config get plugins.entries.openviking.config
 | `apiKey` | 空 | 远端 OpenViking API Key；服务端未开启认证时可不填 |
 | `peer_role` | `none` | 控制 session message 和 recall/search 请求是否写 `peer_id`：`none`、`assistant` 或 `person` |
 | `peer_prefix` | 空 | `peer_role=assistant` 时 assistant `peer_id` 的可选前缀 |
-
-旧配置里的 `agent_prefix` / `agentId` 仍会读取。如果存在这些旧字段且没有显式 `peer_role`，插件会按 `peer_role=assistant` 解释。
 
 常见设置：
 
@@ -298,7 +294,6 @@ ov-install
 | `--api-key KEY` | OpenViking API key |
 | `--peer-role ROLE` | Peer role：`none`、`assistant` 或 `person` |
 | `--peer-prefix PREFIX` | assistant `peer_id` 的前缀 |
-| `--agent-prefix PREFIX` | 废弃别名，等价于 `--peer-prefix`；未设置 `--peer-role` 时会启用 `assistant` |
 | `--update` | 更新 helper 管理的安装 |
 
 面向用户的安装，请先使用 `openclaw plugins install clawhub:@openviking/openclaw-plugin`。只有作为备用路径时才选择 `ov-install`。
@@ -324,7 +319,7 @@ openclaw gateway restart
 openclaw openviking status --json
 ```
 
-已有的配置字段（`baseUrl`、`apiKey`、旧 peer 字段等）会保留。新版本在运行时兼容读取旧的 `agentId` / `agent_prefix` 字段名，无需手动修改配置。
+已有的配置字段（`baseUrl`、`apiKey`、`peer_role`、`peer_prefix` 等）会保留。
 
 ### 旧插件 ID（memory-openviking，版本 < 0.3.x）
 

@@ -598,7 +598,6 @@ const contextEnginePlugin = {
 
     const bypassSessionPatterns = compileSessionPatterns(cfg.bypassSessionPatterns);
     const rawPeerPrefix = rawCfg.peer_prefix;
-    const rawLegacyAgentPrefix = rawCfg.agent_prefix ?? rawCfg.agentId;
     if (cfg.logFindRequests) {
       api.logger.info(
         "openviking: routing debug logging enabled (config logFindRequests, or env OPENVIKING_LOG_ROUTING=1 / OPENVIKING_DEBUG=1)",
@@ -612,19 +611,11 @@ const contextEnginePlugin = {
     verboseRoutingInfo(
       `openviking: loaded plugin config peer_role="${cfg.peer_role}" peer_prefix="${cfg.peer_prefix}" ` +
         `(raw peer_prefix=${JSON.stringify(rawPeerPrefix ?? "(missing)")}; ` +
-        `legacy agent_prefix/agentId=${JSON.stringify(rawLegacyAgentPrefix ?? "(missing)")}; ` +
         `${
           cfg.peer_prefix
             ? 'non-empty → assistant peer_id is <peer_prefix>_<ctx.agentId> when peer_role="assistant", or <peer_prefix>_main when ctx.agentId is unknown'
             : 'empty → assistant peer_id follows OpenClaw ctx.agentId when peer_role="assistant", or "main" when ctx.agentId is unknown'
         })`,
-    );
-    verboseRoutingInfo(
-      `openviking: auth/namespace config ` +
-        JSON.stringify({
-          isolateUserScopeByAgent: cfg.isolateUserScopeByAgent,
-          isolateAgentScopeByUser: cfg.isolateAgentScopeByUser,
-        }),
     );
     const routingDebugLog = cfg.logFindRequests
       ? (msg: string) => {
@@ -644,8 +635,6 @@ const contextEnginePlugin = {
         tenantAccount,
         tenantUser,
         routingDebugLog,
-        cfg.isolateUserScopeByAgent,
-        cfg.isolateAgentScopeByUser,
       ),
     );
 

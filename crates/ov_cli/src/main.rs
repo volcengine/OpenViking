@@ -986,11 +986,6 @@ enum AdminCommands {
         #[arg(long)]
         role: Option<String>,
     },
-    /// List all agent namespaces in an account
-    ListAgents {
-        /// Account ID
-        account_id: String,
-    },
     /// Remove a user from an account
     RemoveUser {
         /// Account ID
@@ -1242,7 +1237,7 @@ fn first_command_token(args: &[OsString]) -> Option<String> {
 }
 
 fn global_option_takes_value(option: &str) -> bool {
-    matches!(option, "--output" | "--account" | "--user" | "--agent-id")
+    matches!(option, "--output" | "--account" | "--user")
 }
 
 fn global_short_option_takes_value(option: &str) -> bool {

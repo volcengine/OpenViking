@@ -50,7 +50,7 @@ Memories are divided into user memories and Agent memories, representing learned
 
 - **Agent-driven**: Memory information actively extracted and recorded by Agent
 - **Dynamic updates**: Continuously updated from interactions by Agent
-- **Personalized**: Learned for specific users or specific Agents
+- **Personalized**: Learned for specific users and stable peers
 
 ### 8 Categories
 
@@ -60,10 +60,10 @@ Memories are divided into user memories and Agent memories, representing learned
 | **preferences** | `user/memories/preferences/` | User preferences by topic | ✅ Appendable |
 | **entities** | `user/memories/entities/` | Entity memories (people, projects) | ✅ Appendable |
 | **events** | `user/memories/events/` | Event records (decisions, milestones) | ❌ No update |
-| **cases** | `agent/memories/cases/` | Learned cases | ❌ No update |
-| **patterns** | `agent/memories/patterns/` | Learned patterns | ✅ Mergeable |
-| **tools** | `agent/memories/tools/` | Tool usage knowledge and best practices | ✅ Mergeable |
-| **skills** | `agent/memories/skills/` | Skill execution knowledge and workflow strategies | ✅ Mergeable |
+| **trajectories** | `user/memories/trajectories/` | Reusable operation contracts | ❌ No update |
+| **experiences** | `user/memories/experiences/` | Reusable execution insights | ✅ Mergeable |
+| **tools** | `user/memories/tools/` | Tool usage knowledge and best practices | ✅ Mergeable |
+| **skills** | `user/memories/skills/` | Skill execution knowledge and workflow strategies | ✅ Mergeable |
 
 ### Usage
 

@@ -6,7 +6,7 @@ import pytest
 from openviking.core.namespace import canonical_user_root
 from openviking.privacy.skill_extractor import extract_skill_privacy_values
 from openviking.privacy.skill_placeholder import placeholderize_skill_content_with_blocks
-from openviking.server.identity import AccountNamespacePolicy, RequestContext, Role
+from openviking.server.identity import RequestContext, Role
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -191,11 +191,10 @@ async def test_skill_read_appends_notice_for_extra_configured_keys(service):
 
 
 @pytest.mark.asyncio
-async def test_privacy_config_service_uses_policy_aware_user_root(service):
+async def test_privacy_config_service_uses_user_root(service):
     ctx = RequestContext(
-        user=UserIdentifier("acme", "privacy_user_policy", "demo-agent"),
+        user=UserIdentifier("acme", "privacy_user_policy"),
         role=Role.USER,
-        namespace_policy=AccountNamespacePolicy(isolate_user_scope_by_agent=True),
     )
     await service.initialize_user_directories(ctx)
 

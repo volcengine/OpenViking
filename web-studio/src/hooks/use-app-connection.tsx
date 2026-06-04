@@ -8,7 +8,6 @@ import type { ServerMode } from './use-server-mode'
 
 export type ConnectionDraft = {
   accountId: string
-  agentId: string
   apiKey: string
   baseUrl: string
   userId: string
@@ -44,10 +43,6 @@ const ENV_ACCOUNT =
   typeof import.meta.env.VITE_OV_ACCOUNT === 'string'
     ? import.meta.env.VITE_OV_ACCOUNT.trim()
     : ''
-const ENV_AGENT =
-  typeof import.meta.env.VITE_OV_AGENT === 'string'
-    ? import.meta.env.VITE_OV_AGENT.trim()
-    : ''
 const ENV_USER =
   typeof import.meta.env.VITE_OV_USER === 'string'
     ? import.meta.env.VITE_OV_USER.trim()
@@ -55,7 +50,6 @@ const ENV_USER =
 
 const DEFAULT_CONNECTION: ConnectionDraft = {
   accountId: ENV_ACCOUNT || 'default',
-  agentId: ENV_AGENT || 'web-studio',
   apiKey: ENV_API_KEY,
   baseUrl: ovClient.getOptions().baseUrl,
   userId: ENV_USER || 'default',
@@ -107,7 +101,6 @@ function normalizeConnectionDraft(
 ): ConnectionDraft {
   return {
     accountId: connection.accountId.trim(),
-    agentId: connection.agentId.trim() || DEFAULT_CONNECTION.agentId,
     apiKey: connection.apiKey.trim(),
     baseUrl: normalizeBaseUrl(connection.baseUrl),
     userId: connection.userId.trim(),
@@ -120,7 +113,6 @@ function applyConnection(connection: ConnectionDraft): void {
   })
   ovClient.setConnection({
     accountId: connection.accountId,
-    agentId: connection.agentId,
     apiKey: connection.apiKey,
     userId: connection.userId,
   })
@@ -133,8 +125,6 @@ function readInitialConnection(): ConnectionDraft {
     ...storedConnection,
     accountId:
       ENV_ACCOUNT || storedConnection.accountId || DEFAULT_CONNECTION.accountId,
-    agentId:
-      ENV_AGENT || storedConnection.agentId || DEFAULT_CONNECTION.agentId,
     apiKey:
       ENV_API_KEY ||
       ovClient.getConnection().apiKey ||
@@ -157,7 +147,6 @@ export function summarizeConnectionIdentity(
   const segments = [
     connection.accountId,
     connection.userId,
-    connection.agentId,
   ].filter(Boolean)
   if (!segments.length) {
     return { labelKey: 'identitySummary.unset' }

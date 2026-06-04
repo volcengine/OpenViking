@@ -133,11 +133,9 @@ In this setup:
 
 - `apiKey` should usually be a user key
 - new installs default to `peer_role=none`
-- old configs that still contain `agent_prefix` or `agentId` are interpreted as `peer_role=assistant` unless `peer_role` is explicitly set
 - `accountId` / `userId` are advanced options only when the deployment needs explicit identity headers, such as root-key or trusted-server flows
-- `isolateUserScopeByAgent` / `isolateAgentScopeByUser` must match the server-side account namespace policy when using the PR #1356 canonical namespace model
 
-### Canonical namespace policy
+### Canonical user namespace
 
 The plugin writes and searches user-scoped memory. `viking://user/memories` is expanded to `viking://user/<user_id>/memories` using the identity resolved from the configured user key. `viking://agent/...` is deprecated by OpenViking and is not used by the plugin.
 

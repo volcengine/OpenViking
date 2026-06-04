@@ -111,7 +111,6 @@ class TempUploadStore:
         return RequestContext(
             user=ctx.user,
             role=Role.ROOT,
-            namespace_policy=ctx.namespace_policy,
         )
 
     async def save_upload(

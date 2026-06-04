@@ -88,12 +88,6 @@
       "placeholder": "optional-prefix",
       "help": "Optional prefix for assistant peer_id values derived from OpenClaw runtime agent IDs."
     },
-    "agent_prefix": {
-      "label": "Agent Prefix (Deprecated)",
-      "placeholder": "optional-prefix",
-      "help": "Deprecated alias for peer_prefix. If present without peer_role, old installs default to peer_role=assistant.",
-      "advanced": true
-    },
     "apiKey": {
       "label": "OpenViking API Key",
       "sensitive": true,
@@ -110,18 +104,6 @@
       "label": "User ID",
       "placeholder": "(derived from API key)",
       "help": "Advanced option. Tenant user ID. Only needed when explicitly sending identity headers.",
-      "advanced": true
-    },
-    "isolateUserScopeByAgent": {
-      "label": "Isolate User Scope By Agent",
-      "placeholder": "false",
-      "help": "Deprecated and ignored. OpenViking now uses user-scoped namespaces and peer_id for message speakers.",
-      "advanced": true
-    },
-    "isolateAgentScopeByUser": {
-      "label": "Isolate Agent Scope By User",
-      "placeholder": "false",
-      "help": "Deprecated and ignored. viking://agent/... is no longer a supported namespace.",
       "advanced": true
     },
     "targetUri": {
@@ -246,14 +228,6 @@
         "type": "string",
         "description": "Optional prefix for assistant peer_id values."
       },
-      "agent_prefix": {
-        "type": "string",
-        "description": "Deprecated: use peer_prefix instead. Presence without peer_role enables assistant peer compatibility for old installs."
-      },
-      "agentId": {
-        "type": "string",
-        "description": "Deprecated: use peer_prefix instead"
-      },
       "serverAuthMode": {
         "type": "string",
         "description": "Deprecated and ignored. Tenant identity headers are controlled by explicit accountId/userId."
@@ -266,12 +240,6 @@
       },
       "userId": {
         "type": "string"
-      },
-      "isolateUserScopeByAgent": {
-        "type": "boolean"
-      },
-      "isolateAgentScopeByUser": {
-        "type": "boolean"
       },
       "targetUri": {
         "type": "string"

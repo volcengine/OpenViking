@@ -95,7 +95,7 @@ class TestAddMessage:
 
         assert len(session.messages) == initial_count + 2
 
-    async def test_batch_add_messages_preserves_role_id_created_at_and_parts(
+    async def test_batch_add_messages_preserves_peer_id_created_at_and_parts(
         self, client: AsyncOpenViking
     ):
         session_id = "batch_message_preservation_test"
@@ -106,7 +106,7 @@ class TestAddMessage:
             [
                 {
                     "role": "user",
-                    "role_id": "user-123",
+                    "peer_id": "user-123",
                     "created_at": "2026-05-01T12:00:00Z",
                     "parts": [
                         {"type": "text", "text": "Hello batch"},
@@ -120,7 +120,7 @@ class TestAddMessage:
                 },
                 {
                     "role": "assistant",
-                    "role_id": "assistant-123",
+                    "peer_id": "assistant-123",
                     "created_at": "2026-05-01T12:00:05Z",
                     "parts": [
                         {"type": "text", "text": "Executing tool"},
@@ -129,7 +129,7 @@ class TestAddMessage:
                             "tool_id": "tool_123",
                             "tool_name": "search_tool",
                             "tool_uri": f"viking://session/test/{session_id}/tools/tool_123",
-                            "skill_uri": "viking://agent/skills/search",
+                            "skill_uri": "viking://user/skills/search",
                             "tool_status": "completed",
                             "tool_output": "Found a result",
                         },

@@ -167,7 +167,7 @@ class TestAllowedDirectoriesList:
         schema2 = MemoryTypeSchema(
             memory_type="tools",
             description="Tools",
-            directory="viking://agent/{{ agent_space }}/memories/tools",
+            directory="viking://user/{{ user_space }}/memories/tools",
             filename_template="{{ tool_name }}.md",
             fields=[],
         )
@@ -175,10 +175,10 @@ class TestAllowedDirectoriesList:
         registry.register(schema1)
         registry.register(schema2)
 
-        result = registry.list_search_uris(user_space="default", agent_space="default")
+        result = registry.list_search_uris(user_space="default")
 
         assert "viking://user/default/memories/preferences" in result
-        assert "viking://agent/default/memories/tools" in result
+        assert "viking://user/default/memories/tools" in result
 
 
 class TestExtractLoopFinalJsonRetry:

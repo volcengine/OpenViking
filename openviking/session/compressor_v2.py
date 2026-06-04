@@ -13,9 +13,6 @@ from datetime import datetime
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from openviking.core.context import Context
-from openviking.core.namespace import (
-    to_user_space,
-)
 from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory import ExtractLoop, MemoryUpdater
@@ -91,7 +88,6 @@ def _render_memory_schema_locks(
 ) -> tuple[list[str], list[str]]:
     exact_paths: list[str] = []
     tree_paths: list[str] = []
-    policy = ctx.namespace_policy
     user_ids = user_ids or ["default"]
 
     for schema in schemas:
@@ -111,11 +107,7 @@ def _render_memory_schema_locks(
             continue
 
         for user_id in user_ids:
-            user_space = to_user_space(policy, user_id)
-            template_vars = {
-                "user_space": user_space,
-                "agent_space": user_space,
-            }
+            template_vars = {"user_space": user_id}
             directory_uri = render_template(directory_template, template_vars)
             if _filename_has_variables(schema) or not filename_template:
                 _append_unique(tree_paths, viking_fs._uri_to_path(directory_uri, ctx))
@@ -710,7 +702,7 @@ class SessionCompressorV2:
         viking_fs = get_viking_fs()
 
         # Build isolation_handler BEFORE creating the orchestrator so that
-        # ExtractLoop.resolve_operations() can call fill_role_ids() correctly.
+        # ExtractLoop.resolve_operations() can fill identity fields correctly.
         extract_context = ExtractContext(messages)
         isolation_handler = MemoryIsolationHandler(
             ctx,

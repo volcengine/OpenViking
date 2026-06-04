@@ -5,7 +5,6 @@
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
-from openviking.core.namespace import to_user_space
 from openviking.core.peer_id import safe_peer_id
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import MemoryTypeSchema, ResolvedOperation
@@ -54,7 +53,7 @@ class MemoryIsolationHandler:
         self.allow_peer = bool(peer_ids)
 
     def prepare_messages(self) -> None:
-        """Keep legacy message metadata exactly as supplied."""
+        """No-op hook kept for the extraction pipeline."""
         return
 
     def get_read_scope(self) -> RoleScope:
@@ -74,12 +73,10 @@ class MemoryIsolationHandler:
             peer_ids=sorted(peer_ids),
         )
 
-    def fill_role_ids(self, item_dict: Dict[str, Any], role_scope: RoleScope) -> None:
+    def fill_identity_fields(self, item_dict: Dict[str, Any], role_scope: RoleScope) -> None:
         del role_scope
         if self.ctx and self.ctx.user and self.ctx.user.user_id:
             item_dict["user_id"] = self.ctx.user.user_id
-        item_dict.pop("agent_id", None)
-        item_dict.pop("agent_ids", None)
         item_dict.pop("user_ids", None)
 
         peer_id = safe_peer_id(item_dict.get("peer_id"))
@@ -99,7 +96,7 @@ class MemoryIsolationHandler:
 
     def render_schema_directories(self, memory_type_schema: MemoryTypeSchema) -> List[str]:
         user_id = self.ctx.user.user_id if self.ctx and self.ctx.user else "default"
-        user_space = to_user_space(self.ctx.namespace_policy, user_id)
+        user_space = user_id
         user_spaces: List[str] = []
         if self.allow_self:
             user_spaces.append(user_space)
@@ -112,10 +109,7 @@ class MemoryIsolationHandler:
             directories.append(
                 render_template(
                     memory_type_schema.directory,
-                    {
-                        "user_space": target_user_space,
-                        "agent_space": target_user_space,
-                    },
+                    {"user_space": target_user_space},
                     self._extract_context,
                 )
             )
@@ -151,15 +145,12 @@ class MemoryIsolationHandler:
     ):
         if not self.allows_schema(memory_type_schema):
             return []
-        policy = self.ctx.namespace_policy
 
         if not self.ctx or not self.ctx.user:
             return []
 
         user_id = self.ctx.user.user_id
         operation.memory_fields["user_id"] = user_id
-        operation.memory_fields.pop("agent_id", None)
-        operation.memory_fields.pop("agent_ids", None)
 
         peer_ids_to_write: List[str] = []
         include_self = False
@@ -188,14 +179,13 @@ class MemoryIsolationHandler:
 
         # 文件
         uris = set()
-        user_space = to_user_space(policy, user_id)
+        user_space = user_id
         if include_self:
             uris.add(
                 generate_uri(
                     memory_type=memory_type_schema,
                     fields=operation.memory_fields,
                     user_space=user_space,
-                    agent_space=user_space,
                     extract_context=extract_context,
                 )
             )
@@ -206,7 +196,6 @@ class MemoryIsolationHandler:
                     memory_type=memory_type_schema,
                     fields=operation.memory_fields,
                     user_space=target_user_space,
-                    agent_space=target_user_space,
                     extract_context=extract_context,
                 )
             )

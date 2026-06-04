@@ -133,7 +133,7 @@ class OpenVikingCompactHook(Hook):
                         append_result = await client.append_messages(
                             session_id=sender_session_id,
                             messages=user_messages,
-                            default_user_role_id=user_id,
+                            default_user_peer_id=user_id,
                             session_user_id=user_id,
                         )
                     return {
@@ -180,7 +180,7 @@ class OpenVikingCompactHook(Hook):
             admin_append_result = await client.append_messages(
                 session_id=session_id,
                 messages=messages_to_sync,
-                default_user_role_id=admin_user_id,
+                default_user_peer_id=admin_user_id,
                 session_user_id=admin_user_id,
             )
             state["last_synced_local_index"] = len(session.messages) - 1

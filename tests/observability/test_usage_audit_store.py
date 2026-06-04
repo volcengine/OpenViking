@@ -19,7 +19,6 @@ def _event(
     event_name: str,
     payload: dict,
     *,
-    agent_id: str | None = None,
     ts: datetime | None = None,
 ) -> ObservabilityEvent:
     return ObservabilityEvent(
@@ -29,7 +28,6 @@ def _event(
         request_id=payload.get("request_id"),
         account_id="acct-1",
         user_id="user-1",
-        agent_id=agent_id,
     )
 
 
@@ -41,7 +39,6 @@ def _create_legacy_usage_audit_db(db_path) -> None:
             CREATE TABLE usage_token_daily (
                 account_id TEXT NOT NULL,
                 user_id TEXT NOT NULL,
-                agent_id TEXT NOT NULL,
                 date TEXT NOT NULL,
                 source TEXT NOT NULL,
                 token_type TEXT NOT NULL,
@@ -50,47 +47,35 @@ def _create_legacy_usage_audit_db(db_path) -> None:
                 token_count INTEGER NOT NULL DEFAULT 0,
                 updated_at TEXT NOT NULL,
                 PRIMARY KEY (
-                    account_id, user_id, agent_id, date, source, token_type, provider, model_name
+                    account_id, user_id, date, source, token_type, provider, model_name
                 )
             );
             CREATE TABLE usage_retrieval_daily (
                 account_id TEXT NOT NULL,
                 user_id TEXT NOT NULL,
-                agent_id TEXT NOT NULL,
                 date TEXT NOT NULL,
                 operation TEXT NOT NULL,
                 status TEXT NOT NULL,
                 request_count INTEGER NOT NULL DEFAULT 0,
                 result_count INTEGER NOT NULL DEFAULT 0,
                 updated_at TEXT NOT NULL,
-                PRIMARY KEY (account_id, user_id, agent_id, date, operation, status)
+                PRIMARY KEY (account_id, user_id, date, operation, status)
             );
             CREATE TABLE usage_context_write_bucket (
                 account_id TEXT NOT NULL,
                 user_id TEXT NOT NULL,
-                agent_id TEXT NOT NULL,
                 date TEXT NOT NULL,
                 hour_bucket INTEGER NOT NULL,
                 operation TEXT NOT NULL,
                 count INTEGER NOT NULL DEFAULT 0,
                 updated_at TEXT NOT NULL,
-                PRIMARY KEY (account_id, user_id, agent_id, date, hour_bucket, operation)
-            );
-            CREATE TABLE usage_agent_activity_daily (
-                account_id TEXT NOT NULL,
-                agent_id TEXT NOT NULL,
-                date TEXT NOT NULL,
-                request_count INTEGER NOT NULL DEFAULT 0,
-                last_seen_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                PRIMARY KEY (account_id, agent_id, date)
+                PRIMARY KEY (account_id, user_id, date, hour_bucket, operation)
             );
             CREATE TABLE request_audit (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 request_id TEXT,
                 account_id TEXT NOT NULL,
                 user_id TEXT,
-                agent_id TEXT,
                 method TEXT NOT NULL,
                 route TEXT NOT NULL,
                 api_type TEXT NOT NULL,
@@ -99,11 +84,11 @@ def _create_legacy_usage_audit_db(db_path) -> None:
                 created_at TEXT NOT NULL
             );
             INSERT INTO request_audit (
-                request_id, account_id, user_id, agent_id, method, route,
+                request_id, account_id, user_id, method, route,
                 api_type, status_code, duration_ms, created_at
             )
             VALUES (
-                'legacy-req', 'acct-1', 'user-1', 'agent-1', 'GET',
+                'legacy-req', 'acct-1', 'user-1', 'GET',
                 '/api/v1/system/status', 'system', 200, 1.0,
                 '2026-05-11T00:00:00+08:00'
             );
@@ -158,7 +143,6 @@ async def test_sqlite_usage_audit_store_aggregates_dashboard_data(tmp_path):
                         "status": "200",
                         "duration_seconds": 0.1,
                     },
-                    agent_id="agent-1",
                 ),
                 _event(
                     "http.request",
@@ -169,7 +153,6 @@ async def test_sqlite_usage_audit_store_aggregates_dashboard_data(tmp_path):
                         "status": "200",
                         "duration_seconds": 0.01,
                     },
-                    agent_id="agent-1",
                 ),
                 _event(
                     "http.request",
@@ -180,7 +163,6 @@ async def test_sqlite_usage_audit_store_aggregates_dashboard_data(tmp_path):
                         "status": "200",
                         "duration_seconds": 0.01,
                     },
-                    agent_id="agent-1",
                 ),
                 _event(
                     "http.request",
@@ -191,7 +173,6 @@ async def test_sqlite_usage_audit_store_aggregates_dashboard_data(tmp_path):
                         "status": "200",
                         "duration_seconds": 0.01,
                     },
-                    agent_id="agent-1",
                 ),
             ]
         )
@@ -219,13 +200,6 @@ async def test_sqlite_usage_audit_store_aggregates_dashboard_data(tmp_path):
             tz=UTC,
         )
         assert any(row["hour"] == 1 and row["session_add_message"] == 1 for row in commits)
-        agents = await store.get_agent_overview(
-            account_id="acct-1",
-            user_date="2026-05-12",
-            tz=UTC,
-        )
-        assert agents["total"] == 1
-        assert agents["items"][0]["agent_id"] == "agent-1"
         audit = await store.query_audit_logs(account_id="acct-1")
         assert audit["total"] == 2
         assert audit["success_rate"] == 1.0
@@ -262,7 +236,6 @@ async def test_sqlite_usage_audit_store_resets_incompatible_legacy_schema(tmp_pa
                         "status": "200",
                         "duration_seconds": 0.1,
                     },
-                    agent_id="agent-1",
                 ),
             ]
         )
@@ -283,12 +256,6 @@ async def test_sqlite_usage_audit_store_resets_incompatible_legacy_schema(tmp_pa
             tz=UTC,
         )
         assert any(row["hour"] == 1 and row["session_add_message"] == 1 for row in commits)
-        agents = await store.get_agent_overview(
-            account_id="acct-1",
-            user_date="2026-05-12",
-            tz=UTC,
-        )
-        assert agents["total"] == 1
         audit = await store.query_audit_logs(account_id="acct-1", page_size=10)
         assert audit["total"] == 1
         assert audit["items"][0]["request_id"] == "req-message"
@@ -302,17 +269,16 @@ async def test_sqlite_usage_audit_store_resets_incompatible_legacy_schema(tmp_pa
         }
         assert "usage_token_daily" not in tables
         assert "usage_retrieval_daily" not in tables
-        for table in ("usage_context_write_bucket", "usage_agent_activity_daily"):
-            columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
-            assert "date_utc" in columns
-            assert "date" not in columns
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(usage_context_write_bucket)")}
+        assert "date_utc" in columns
+        assert "date" not in columns
         context_columns = {
             row[1] for row in conn.execute("PRAGMA table_info(usage_context_write_bucket)")
         }
         assert "hour_utc" in context_columns
         assert "hour_bucket" not in context_columns
         version = conn.execute("SELECT value FROM _schema_meta WHERE key = 'version'").fetchone()
-        assert version == ("3",)
+        assert version == ("4",)
     finally:
         conn.close()
 
@@ -528,7 +494,6 @@ async def test_context_heatmap_rebuckets_hour_for_shanghai(tmp_path):
                         "duration_seconds": 0.01,
                     },
                     ts=datetime(2026, 5, 12, 23, 30, tzinfo=timezone.utc),
-                    agent_id="agent-1",
                 ),
             ]
         )

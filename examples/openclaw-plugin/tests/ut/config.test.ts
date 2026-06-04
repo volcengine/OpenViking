@@ -25,9 +25,6 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.recallMaxContentChars).toBe(5000);
     expect(cfg.peer_role).toBe("none");
     expect(cfg.peer_prefix).toBe("");
-    expect(cfg.agent_prefix).toBe("");
-    expect(cfg.isolateUserScopeByAgent).toBe(false);
-    expect(cfg.isolateAgentScopeByUser).toBe(false);
     expect(cfg.emitStandardDiagnostics).toBe(false);
   });
 
@@ -186,54 +183,16 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({ peer_prefix: "  my-agent  " });
     expect(cfg.peer_role).toBe("none");
     expect(cfg.peer_prefix).toBe("my-agent");
-    expect(cfg.agent_prefix).toBe("my-agent");
   });
 
   it("falls back to an empty prefix for empty peer_prefix", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({ peer_prefix: "  " });
     expect(cfg.peer_prefix).toBe("");
-    expect(cfg.agent_prefix).toBe("");
   });
 
   it("normalizes legacy 'default' peer_prefix to an empty prefix", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({ peer_prefix: "default" });
     expect(cfg.peer_prefix).toBe("");
-    expect(cfg.agent_prefix).toBe("");
-  });
-
-  it("maps legacy agent_prefix to peer_prefix and defaults peer_role to assistant", () => {
-    const cfg = memoryOpenVikingConfigSchema.parse({ agent_prefix: "legacy-agent" });
-    expect(cfg.peer_role).toBe("assistant");
-    expect(cfg.peer_prefix).toBe("legacy-agent");
-    expect(cfg.agent_prefix).toBe("legacy-agent");
-  });
-
-  it("migrates legacy agentId to peer_prefix and defaults peer_role to assistant", () => {
-    const cfg = memoryOpenVikingConfigSchema.parse({ agentId: "legacy-agent" });
-    expect(cfg.peer_role).toBe("assistant");
-    expect(cfg.peer_prefix).toBe("legacy-agent");
-    expect(cfg.agent_prefix).toBe("legacy-agent");
-  });
-
-  it("peer_prefix takes precedence over legacy agent_prefix and agentId", () => {
-    const cfg = memoryOpenVikingConfigSchema.parse({
-      agentId: "old",
-      agent_prefix: "legacy",
-      peer_prefix: "new",
-    });
-    expect(cfg.peer_role).toBe("assistant");
-    expect(cfg.peer_prefix).toBe("new");
-    expect(cfg.agent_prefix).toBe("new");
-  });
-
-  it("explicit peer_role wins over legacy assistant default", () => {
-    const cfg = memoryOpenVikingConfigSchema.parse({
-      agent_prefix: "legacy-agent",
-      peer_role: "none",
-    });
-    expect(cfg.peer_role).toBe("none");
-    expect(cfg.peer_prefix).toBe("legacy-agent");
-    expect(cfg.agent_prefix).toBe("legacy-agent");
   });
 
   it("parses accountId and trims whitespace", () => {
@@ -270,14 +229,6 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     });
     expect(cfg.accountId).toBe("");
     expect(cfg.userId).toBe("");
-    expect(cfg.isolateUserScopeByAgent).toBe(false);
-    expect(cfg.isolateAgentScopeByUser).toBe(false);
-  });
-
-  it("defaults namespace policy to the current server-side false/false policy", () => {
-    const cfg = memoryOpenVikingConfigSchema.parse({});
-    expect(cfg.isolateUserScopeByAgent).toBe(false);
-    expect(cfg.isolateAgentScopeByUser).toBe(false);
   });
 
   it("accepts deprecated serverAuthMode without exposing it in parsed config", () => {

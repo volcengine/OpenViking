@@ -245,16 +245,16 @@ async def test_store_batch_messages(service):
     assert "2 message" in result
 
 
-async def test_store_does_not_autofill_role_id_from_ctx(service, monkeypatch):
-    """MCP store should not create synthetic role_id values."""
+async def test_store_does_not_autofill_peer_id_from_ctx(service, monkeypatch):
+    """MCP store should not create synthetic peer_id values."""
     from openviking.session.session import Session
 
     captured: list[tuple[str, str | None]] = []
     original = Session.add_message
 
-    def _spy(self, role, parts, role_id=None, created_at=None):
-        captured.append((role, role_id))
-        return original(self, role, parts, role_id=role_id, created_at=created_at)
+    def _spy(self, role, parts, peer_id=None, created_at=None):
+        captured.append((role, peer_id))
+        return original(self, role, parts, peer_id=peer_id, created_at=created_at)
 
     monkeypatch.setattr(Session, "add_message", _spy)
 
@@ -276,8 +276,8 @@ async def test_store_skips_empty_message_content(service, monkeypatch):
         def __init__(self):
             self.messages = []
 
-        def add_message(self, role, parts, role_id=None, created_at=None):
-            self.messages.append((role, parts, role_id, created_at))
+        def add_message(self, role, parts, peer_id=None, created_at=None):
+            self.messages.append((role, parts, peer_id, created_at))
 
     fake_session = FakeSession()
     monkeypatch.setattr(service.sessions, "get", AsyncMock(return_value=fake_session))
@@ -292,10 +292,10 @@ async def test_store_skips_empty_message_content(service, monkeypatch):
 
     assert "2 message" in result
     assert len(fake_session.messages) == 1
-    role, parts, role_id, created_at = fake_session.messages[0]
+    role, parts, peer_id, created_at = fake_session.messages[0]
     assert role == "assistant"
     assert parts[0].text == "Noted."
-    assert role_id is None
+    assert peer_id is None
     assert created_at is None
     service.sessions.commit_async.assert_awaited_once()
 

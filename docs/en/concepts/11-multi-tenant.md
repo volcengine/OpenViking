@@ -42,7 +42,7 @@ With multi-tenancy enabled, you can:
 |------|-------|----------------------|
 | ROOT | Global | Create/delete accounts, cross-tenant access, user management |
 | ADMIN | Single account | Manage users in the same account, regenerate user keys |
-| USER | Single account | Access its own user/agent/session data and shared resources in the same account |
+| USER | Single account | Access its own user/peer/session data and shared resources in the same account |
 
 ## Authentication Modes
 
@@ -178,7 +178,7 @@ identity assertion.
 
 The current OpenClaw plugin follows a "plugin holds one user identity" model:
 
-- Remote mode config is `baseUrl + apiKey + agent_prefix`
+- Remote mode config is `baseUrl + apiKey`, with optional `peer_role` / `peer_prefix`
 - `apiKey` should normally be a user key
 - The server resolves `account_id` and `user_id` from that user key
 - The plugin keeps OpenClaw agent identity in peer/session metadata, not tenant headers
@@ -189,14 +189,15 @@ Typical config:
 openclaw config set plugins.entries.openviking.config.mode remote
 openclaw config set plugins.entries.openviking.config.baseUrl "http://your-server:1933"
 openclaw config set plugins.entries.openviking.config.apiKey "<user-api-key>"
-openclaw config set plugins.entries.openviking.config.agent_prefix "<agent-prefix>"
+openclaw config set plugins.entries.openviking.config.peer_role assistant
+openclaw config set plugins.entries.openviking.config.peer_prefix "<peer-prefix>"
 ```
 
 Characteristics of this model:
 
 - Simple integration, because the plugin does not manage account/user lifecycle
 - Best for "one OpenClaw instance maps to one OpenViking user identity"
-- `agent_prefix` distinguishes OpenClaw runtime identities when building peer/session metadata
+- `peer_prefix` distinguishes OpenClaw runtime identities when building peer/session metadata
 - `resources` can be shared inside the same account, while user memory stays user-scoped
 
 ### Why the OpenClaw plugin usually does not set `account` / `user`
@@ -204,7 +205,7 @@ Characteristics of this model:
 In `api_key` mode, a user key is already enough to express identity:
 
 - `account` and `user` are resolved server-side from the key
-- The plugin can provide `agent_prefix` for runtime identity labeling
+- The plugin can provide `peer_prefix` for runtime identity labeling
 - Internally, the plugin writes user-scoped memory and uses `peer_id` for per-message speaker identity
 
 If you give the plugin a root key directly, normal tenant-scoped data APIs will

@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
-  BotIcon,
   ChevronRightIcon,
   CommandIcon,
   FileTextIcon,
@@ -74,7 +73,7 @@ export function ContextExplorerHeader({
 }
 
 const NAMESPACES: Array<{
-  descriptionKey: 'agent' | 'resources' | 'session' | 'user'
+  descriptionKey: 'resources' | 'session' | 'user'
   icon: typeof FolderIcon
   label: string
   uri: string
@@ -90,12 +89,6 @@ const NAMESPACES: Array<{
     icon: CommandIcon,
     label: 'Session',
     uri: 'viking://session/',
-  },
-  {
-    descriptionKey: 'agent',
-    icon: BotIcon,
-    label: 'Agent',
-    uri: 'viking://agent/',
   },
   {
     descriptionKey: 'resources',

@@ -154,7 +154,6 @@ vector filter，也不从历史写入事件累计当前库存。
 - `request_id`
 - `account_id`
 - `user_id`
-- `agent_id`
 - `method`
 - `route`
 - `api_type`
@@ -232,15 +231,6 @@ GET /api/v1/console/dashboard/summary
       "find": 10,
       "search": 4,
       "total": 14
-    },
-    "agent_overview": {
-      "total": 2,
-      "items": [
-        {
-          "agent_id": "agent-1",
-          "last_seen_at": "2026-05-12T10:00:00+08:00"
-        }
-      ]
     }
   }
 }

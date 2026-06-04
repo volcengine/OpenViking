@@ -105,7 +105,6 @@ class CollectionSchemas:
                 {"FieldName": "abstract", "FieldType": "string"},
                 {"FieldName": "account_id", "FieldType": "string"},
                 {"FieldName": "owner_user_id", "FieldType": "string"},
-                {"FieldName": "owner_agent_id", "FieldType": "string"},
             ]
         )
         scalar_index = [
@@ -123,7 +122,6 @@ class CollectionSchemas:
                 "tags",
                 "account_id",
                 "owner_user_id",
-                "owner_agent_id",
             ]
         )
         return {

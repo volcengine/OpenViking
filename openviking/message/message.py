@@ -22,7 +22,6 @@ class Message:
     id: str
     role: Literal["user", "assistant"]
     parts: List[Part]
-    role_id: Optional[str] = None
     peer_id: Optional[str] = None
     created_at: str = None
 
@@ -80,8 +79,6 @@ class Message:
             "parts": [self._part_to_dict(p) for p in self.parts],
             "created_at": created_at_val,
         }
-        if self.role_id is not None:
-            data["role_id"] = self.role_id
         if self.peer_id is not None:
             data["peer_id"] = self.peer_id
         return data
@@ -205,17 +202,15 @@ class Message:
                         tool_output_group_budget_chars=p.get("tool_output_group_budget_chars"),
                     )
                 )
-        role_id = data.get("role_id")
         try:
-            peer_id = normalize_peer_id(data.get("peer_id"), data.get("agent_id"), role_id)
+            peer_id = normalize_peer_id(data.get("peer_id"))
         except ValueError:
-            peer_id = data.get("peer_id") or data.get("agent_id")
+            peer_id = data.get("peer_id")
 
         return cls(
             id=data["id"],
             role=data["role"],
             parts=parts,
-            role_id=role_id,
             peer_id=peer_id,
             created_at=data.get("created_at"),
         )

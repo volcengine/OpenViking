@@ -573,8 +573,6 @@ ov session delete a1b2c3d4
 > 2. **Parts 模式**：使用 `parts` 数组（完整 Part 支持）
 >
 > 如果同时提供 `content` 和 `parts`，`parts` 优先。
->
-> 旧版 HTTP 字段 `role_id` 和消息级 `agent_id` 会作为 `peer_id` 的别名兼容处理；新客户端应只发送 `peer_id`。
 
 **Part 类型（Python SDK）**
 
@@ -1261,10 +1259,10 @@ viking://session/{user_id}/{session_id}/
 | preferences | `user/memories/preferences/` | 按主题分类的用户偏好 |
 | entities | `user/memories/entities/` | 重要实体（人物、项目等） |
 | events | `user/memories/events/` | 重要事件 |
-| cases | `agent/memories/cases/` | 问题-解决方案案例 |
-| patterns | `agent/memories/patterns/` | 交互模式 |
-| tools | `agent/memories/tools/` | 工具使用经验与最佳实践 |
-| skills | `agent/memories/skills/` | 技能执行经验与工作流策略 |
+| trajectories | `user/memories/trajectories/` | 可复用的操作契约 |
+| experiences | `user/memories/experiences/` | 可复用的执行经验 |
+| tools | `user/memories/tools/` | 工具使用经验与最佳实践 |
+| skills | `user/memories/skills/` | 技能执行经验与工作流策略 |
 
 ---
 

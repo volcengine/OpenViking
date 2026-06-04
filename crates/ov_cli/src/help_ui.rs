@@ -317,10 +317,6 @@ const GLOBAL_OPTIONS: &[HelpItem] = &[
         label: "--user <user>",
         description: "Override X-OpenViking-User for this command.",
     },
-    HelpItem {
-        label: "--agent-id <agent>",
-        description: "Override X-OpenViking-Agent for this command.",
-    },
 ];
 
 const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
@@ -1915,10 +1911,6 @@ pub(crate) fn render_top_level_help_with_language(language: Language) -> String 
         copy(language, "Override user", "覆盖用户"),
     ));
     lines.push(option_line(
-        "--agent-id <agent>",
-        copy(language, "Override agent", "覆盖 Agent"),
-    ));
-    lines.push(option_line(
         "--sudo",
         copy(
             language,
@@ -2080,7 +2072,6 @@ fn localized_help_item_description<'a>(
         "-c, --compact <bool>" => "使用紧凑的表格或 JSON 输出。",
         "--account <account>" => "覆盖本次命令的 X-OpenViking-Account。",
         "--user <user>" => "覆盖本次命令的 X-OpenViking-User。",
-        "--agent-id <agent>" => "覆盖本次命令的 X-OpenViking-Agent。",
         "--sudo" => "使用 root API Key 执行管理命令。",
         _ => description,
     }
@@ -2366,12 +2357,11 @@ fn is_help_flag(token: &str) -> bool {
 fn consumes_value(token: &str) -> bool {
     matches!(
         token,
-        "-o" | "--output" | "-c" | "--compact" | "--account" | "--user" | "--agent-id"
+        "-o" | "--output" | "-c" | "--compact" | "--account" | "--user"
     ) || token.starts_with("--output=")
         || token.starts_with("--compact=")
         || token.starts_with("--account=")
         || token.starts_with("--user=")
-        || token.starts_with("--agent-id=")
 }
 
 #[cfg(test)]

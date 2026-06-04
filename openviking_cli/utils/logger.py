@@ -85,7 +85,6 @@ def _get_log_context() -> dict[str, Any]:
         "operation": "",
         "account_id": "",
         "user_id": "",
-        "agent_id": "",
     }
 
     # 1. Get trace_id and span_id from OTel span if available
@@ -422,7 +421,6 @@ class TraceContextFilter(logging.Filter):
         record.operation = context.get("operation", "")
         record.account_id = context.get("account_id", "")
         record.user_id = context.get("user_id", "")
-        record.agent_id = context.get("agent_id", "")
 
         return True
 
@@ -525,7 +523,6 @@ class LogToSpanEventFilter(logging.Filter):
             "operation",
             "account_id",
             "user_id",
-            "agent_id",
         }
 
         for key, value in record.__dict__.items():

@@ -136,26 +136,6 @@ export function ConnectionDialog() {
                           />
                         </FieldContent>
                       </Field>
-                      <Field>
-                        <FieldLabel htmlFor="ov-agent-id">
-                          {t('fields.agentId.label', { ns: 'connection' })}
-                        </FieldLabel>
-                        <FieldContent>
-                          <Input
-                            id="ov-agent-id"
-                            placeholder={t('fields.agentId.placeholder', {
-                              ns: 'connection',
-                            })}
-                            value={draft.agentId}
-                            onChange={(event) =>
-                              setDraft((current) => ({
-                                ...current,
-                                agentId: event.target.value,
-                              }))
-                            }
-                          />
-                        </FieldContent>
-                      </Field>
                     </div>
 
                     <Field>

@@ -9,7 +9,9 @@ from openviking.session.memory.graph_view import _render_graph_html
 
 
 def test_graph_view_module_compiles_without_escape_warnings():
-    path = Path(__file__).resolve().parents[3] / "openviking" / "session" / "memory" / "graph_view.py"
+    path = (
+        Path(__file__).resolve().parents[3] / "openviking" / "session" / "memory" / "graph_view.py"
+    )
     with warnings.catch_warnings():
         warnings.simplefilter("error", SyntaxWarning)
         py_compile.compile(str(path), doraise=True)
@@ -33,7 +35,7 @@ def test_render_graph_html_supports_relative_markdown_links():
 
     assert "function resolveRelativeUri(baseUri, relativeUri)" in html
     assert "const resolvedUri = resolveRelativeUri(baseUri, href);" in html
-    assert "data-target-uri=\"${resolvedUri}\"" in html
+    assert 'data-target-uri="${resolvedUri}"' in html
 
 
 def test_render_graph_html_renders_tooltip_content_as_markdown():
@@ -68,25 +70,37 @@ def test_render_graph_html_embeds_full_markdown_content_and_link_targets():
 
     html = _render_graph_html(nodes, edges)
 
-    assert '"content_full": "# Caroline\\n\\nSee [music](viking://user/Caroline/memories/preferences/music.md)"' in html
+    assert (
+        '"content_full": "# Caroline\\n\\nSee [music](viking://user/Caroline/memories/preferences/music.md)"'
+        in html
+    )
     assert "function renderMarkdown" in html
-    assert "detailContent.innerHTML = renderMarkdown(node.content_full || node.content_preview || '', node.uri || '');" in html
+    assert (
+        "detailContent.innerHTML = renderMarkdown(node.content_full || node.content_preview || '', node.uri || '');"
+        in html
+    )
     assert "detailContent.addEventListener('click'" in html
     assert "const targetNodeId = link.dataset.targetUri;" in html
-    assert "network.focus(targetNodeId, { animation: { duration: 350, easingFunction: 'easeInOutQuad' }, scale: network.getScale() });" in html
+    assert (
+        "network.focus(targetNodeId, { animation: { duration: 350, easingFunction: 'easeInOutQuad' }, scale: network.getScale() });"
+        in html
+    )
 
 
 def test_render_graph_html_clicking_detail_link_centers_target_node():
     html = _render_graph_html([], [])
 
-    assert "network.focus(targetNodeId, { animation: { duration: 350, easingFunction: 'easeInOutQuad' }, scale: network.getScale() });" in html
+    assert (
+        "network.focus(targetNodeId, { animation: { duration: 350, easingFunction: 'easeInOutQuad' }, scale: network.getScale() });"
+        in html
+    )
 
 
 def test_render_graph_html_uses_dark_node_background_with_light_text():
     nodes = [
         {
-            "id": "viking://agent/demo/memories/experiences/a.md",
-            "uri": "viking://agent/demo/memories/experiences/a.md",
+            "id": "viking://user/demo/memories/experiences/a.md",
+            "uri": "viking://user/demo/memories/experiences/a.md",
             "label": "a",
             "memory_type": "experiences",
             "category": "",
@@ -106,8 +120,8 @@ def test_render_graph_html_uses_dark_node_background_with_light_text():
 def test_render_graph_html_embeds_vis_network_viewer_metadata():
     nodes = [
         {
-            "id": "viking://agent/demo/memories/experiences/a.md",
-            "uri": "viking://agent/demo/memories/experiences/a.md",
+            "id": "viking://user/demo/memories/experiences/a.md",
+            "uri": "viking://user/demo/memories/experiences/a.md",
             "label": "a",
             "memory_type": "experiences",
             "category": "",
@@ -117,8 +131,8 @@ def test_render_graph_html_embeds_vis_network_viewer_metadata():
     ]
     edges = [
         {
-            "source": "viking://agent/demo/memories/experiences/a.md",
-            "target": "viking://agent/demo/memories/experiences/b.md",
+            "source": "viking://user/demo/memories/experiences/a.md",
+            "target": "viking://user/demo/memories/experiences/b.md",
             "link_type": "related_to",
             "weight": 0.8,
             "description": "same topic",
@@ -143,7 +157,10 @@ def test_render_graph_html_embeds_vis_network_load_guard():
     html = _render_graph_html([], [])
 
     assert 'window.__OPENVIKING_VIS_NETWORK_SOURCE__ = "external";' in html
-    assert '<script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>' in html
+    assert (
+        '<script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>'
+        in html
+    )
     assert "if (!window.vis || !window.vis.DataSet || !window.vis.Network)" in html
     assert "Graph library failed to load. If you opened this file locally" in html
 
@@ -192,13 +209,11 @@ def test_render_graph_html_restores_visibility_without_rebuilding_dataset():
     assert "hidden: false" in html
 
 
-
-
 def test_render_graph_html_inverts_selected_node_colors():
     nodes = [
         {
-            "id": "viking://agent/demo/memories/experiences/a.md",
-            "uri": "viking://agent/demo/memories/experiences/a.md",
+            "id": "viking://user/demo/memories/experiences/a.md",
+            "uri": "viking://user/demo/memories/experiences/a.md",
             "label": "a",
             "memory_type": "experiences",
             "category": "",
@@ -226,14 +241,13 @@ def test_render_graph_html_edge_details_include_source_and_target_uris():
     assert "detailMeta.textContent = `${edge.link_type} · weight=${edge.weight}`;" in html
     assert "const sourceUri = edge.from || edge.source || '';" in html
     assert "const targetUri = edge.to || edge.target || '';" in html
-    assert """detailContent.innerHTML = renderMarkdown(`- from_uri: ${escapeHtml(sourceUri)}
+    assert (
+        """detailContent.innerHTML = renderMarkdown(`- from_uri: ${escapeHtml(sourceUri)}
 - to_uri: ${escapeHtml(targetUri)}
 
-${escapeHtml(edge.description || '(no description)')}`);""" in html
-
-
-
-
+${escapeHtml(edge.description || '(no description)')}`);"""
+        in html
+    )
 
 
 def test_render_graph_html_renders_dynamic_relationship_legend_from_edges():
@@ -264,14 +278,15 @@ def test_render_graph_html_renders_dynamic_relationship_legend_from_edges():
     html = _render_graph_html([], edges)
 
     assert "const activeLinkTypes = new Set();" in html
-    assert "const linkTypes = [...new Set(originalEdges.map((edge) => edge.link_type).filter(Boolean))].sort();" in html
+    assert (
+        "const linkTypes = [...new Set(originalEdges.map((edge) => edge.link_type).filter(Boolean))].sort();"
+        in html
+    )
     assert "activeLinkTypes.has(linkType)" in html
     assert "activeLinkTypes.add(linkType)" in html
     assert "activeLinkTypes.delete(linkType)" in html
     assert "inspired_by" in html
     assert "works_with" in html
-
-
 
 
 def test_render_graph_html_keeps_node_label_plain_text_while_rendering_body_links():
@@ -291,5 +306,11 @@ def test_render_graph_html_keeps_node_label_plain_text_while_rendering_body_link
     html = _render_graph_html(nodes, [])
 
     assert '"label": "Caroline profile"' in html
-    assert '"content_full": "她喜欢[角色扮演游戏](entities/games/rpg.md)，也喜欢开放世界游戏。"' in html
-    assert '"content_preview": "她喜欢[角色扮演游戏](entities/games/rpg.md)，也喜欢开放世界游戏。"' in html
+    assert (
+        '"content_full": "她喜欢[角色扮演游戏](entities/games/rpg.md)，也喜欢开放世界游戏。"'
+        in html
+    )
+    assert (
+        '"content_preview": "她喜欢[角色扮演游戏](entities/games/rpg.md)，也喜欢开放世界游戏。"'
+        in html
+    )

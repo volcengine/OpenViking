@@ -8,56 +8,13 @@ import pytest
 from openviking.core.peer_id import normalize_peer_id
 from openviking.core.retrieval_targets import default_target_directories, resolve_retrieval_targets
 from openviking.server.identity import RequestContext, Role
-from openviking.server.routers.search import FindRequest, SearchRequest
-from openviking.server.routers.sessions import AddMessageRequest
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.retrieve import ContextType
 from openviking_cli.session.user_id import UserIdentifier
 
 
-def test_normalize_peer_id_accepts_legacy_agent_id():
-    assert normalize_peer_id(None, "web:visitor:alice") == "web:visitor:alice"
-    assert normalize_peer_id("web:visitor:alice", "web:visitor:alice") == "web:visitor:alice"
-    assert normalize_peer_id(None, None, "web:visitor:alice") == "web:visitor:alice"
-
-
-def test_normalize_peer_id_rejects_conflicting_values():
-    with pytest.raises(ValueError, match="peer_id and agent_id must match"):
-        normalize_peer_id("web:visitor:alice", "web:visitor:bob")
-    with pytest.raises(ValueError, match="peer_id and role_id must match"):
-        normalize_peer_id("web:visitor:alice", role_id="web:visitor:bob")
-
-
-def test_add_message_request_maps_agent_id_to_peer_id():
-    request = AddMessageRequest(
-        role="user",
-        agent_id="web:visitor:alice",
-        content="hello",
-    )
-
-    assert request.peer_id == "web:visitor:alice"
-    assert request.agent_id is None
-    assert request.role_id is None
-
-
-def test_add_message_request_maps_role_id_to_peer_id():
-    request = AddMessageRequest(
-        role="user",
-        role_id="web:visitor:alice",
-        content="hello",
-    )
-
-    assert request.peer_id == "web:visitor:alice"
-    assert request.role_id is None
-
-
-def test_search_requests_map_agent_id_to_peer_id():
-    assert FindRequest(query="invoice", agent_id="web:visitor:alice").peer_id == (
-        "web:visitor:alice"
-    )
-    assert SearchRequest(query="invoice", agent_id="web:visitor:alice").peer_id == (
-        "web:visitor:alice"
-    )
+def test_normalize_peer_id_accepts_peer_id():
+    assert normalize_peer_id("web:visitor:alice") == "web:visitor:alice"
 
 
 def _target_dirs(target_uri="", peer_id=None):

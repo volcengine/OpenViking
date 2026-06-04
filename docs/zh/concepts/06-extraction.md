@@ -72,7 +72,7 @@ TreeBuilder 负责将临时目录移动到 AGFS，并入队语义处理。
 ```python
 building_tree = tree_builder.finalize_from_temp(
     temp_dir_path="viking://temp/abc123",
-    scope="resources",  # resources/user/agent
+    scope="resources",  # resources/user
 )
 ```
 

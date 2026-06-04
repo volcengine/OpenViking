@@ -56,6 +56,26 @@ function readCompatRangeFromManifest(): { min: string; max: string } {
 
 const PLUGIN_VERSION = readPluginVersion();
 const { min: COMPATIBLE_SERVER_MIN, max: COMPATIBLE_SERVER_MAX } = readCompatRangeFromManifest();
+const CONFIG_KEYS_TO_PRESERVE = [
+  "targetUri",
+  "timeoutMs",
+  "autoCapture",
+  "captureMode",
+  "captureMaxLength",
+  "autoRecall",
+  "recallResources",
+  "recallLimit",
+  "recallScoreThreshold",
+  "recallMaxInjectedChars",
+  "recallMaxContentChars",
+  "recallPreferAbstract",
+  "recallTokenBudget",
+  "commitTokenThreshold",
+  "commitKeepRecentCount",
+  "bypassSessionPatterns",
+  "emitStandardDiagnostics",
+  "logFindRequests",
+] as const;
 
 type PeerRole = "none" | "assistant" | "person";
 
@@ -83,7 +103,7 @@ function maskKey(key: string): string {
   return `${key.slice(0, 4)}...${key.slice(-4)}`;
 }
 
-function isValidAgentPrefixInput(value: string): boolean {
+function isValidPeerPrefixInput(value: string): boolean {
   const trimmed = value.trim();
   return !trimmed || /^[a-zA-Z0-9_-]+$/.test(trimmed);
 }
@@ -98,21 +118,34 @@ function normalizePeerRole(value: unknown): PeerRole | undefined {
 function resolveExistingPeerRole(existing: Record<string, unknown> | null | undefined): PeerRole {
   const explicit = normalizePeerRole(existing?.peer_role);
   if (explicit) return explicit;
-  return existing?.agent_prefix || existing?.agentId ? "assistant" : "none";
+  return "none";
 }
 
 function resolveExistingPeerPrefix(existing: Record<string, unknown> | null | undefined): string {
-  const value = existing?.peer_prefix ?? existing?.agent_prefix ?? existing?.agentId;
+  const value = existing?.peer_prefix;
   if (typeof value !== "string" || !value.trim()) return "";
   const trimmed = value.trim();
   return trimmed === "default" ? "" : trimmed;
 }
 
-function resolveSetupPeerRole(value: unknown, hasLegacyAgentPrefix: boolean): PeerRole {
-  if (value === undefined) return hasLegacyAgentPrefix ? "assistant" : "none";
+function resolveSetupPeerRole(value: unknown): PeerRole {
+  if (value === undefined) return "none";
   const role = normalizePeerRole(value);
   if (role) return role;
   throw new Error('peer_role must be "none", "assistant", or "person"');
+}
+
+function preserveCurrentConfig(existing: Record<string, unknown> | null | undefined) {
+  const config: Record<string, unknown> = {};
+  if (!existing) {
+    return config;
+  }
+  for (const key of CONFIG_KEYS_TO_PRESERVE) {
+    if (key in existing) {
+      config[key] = existing[key];
+    }
+  }
+  return config;
 }
 
 async function askPeerRole(
@@ -147,7 +180,7 @@ async function askPeerPrefix(
       tr(zh, "Peer Prefix (optional)", "Peer Prefix（可选）"),
       defaultValue,
     )).trim();
-    if (isValidAgentPrefixInput(value)) {
+    if (isValidPeerPrefixInput(value)) {
       return value;
     }
     console.log(
@@ -504,7 +537,6 @@ export function registerSetupCli(api: any): void {
         .option("--api-key <key>", "API key for authentication")
         .option("--peer-role <role>", "Peer ID role: none, assistant, or person")
         .option("--peer-prefix <prefix>", "Prefix for assistant peer_id values")
-        .option("--agent-prefix <prefix>", "Deprecated alias for --peer-prefix; implies --peer-role assistant when --peer-role is omitted")
         .option("--account-id <id>", "Account ID (required for root API keys)")
         .option("--user-id <id>", "User ID (required for root API keys)")
         .option("--allow-offline", "Allow config write even if server is unreachable")
@@ -513,11 +545,11 @@ export function registerSetupCli(api: any): void {
         .action(async (...args: unknown[]) => {
           const options = (args[0] ?? {}) as Record<string, unknown>;
           const {
-            reconfigure, zh: zhOpt, baseUrl, apiKey, peerRole, peerPrefix, agentPrefix,
+            reconfigure, zh: zhOpt, baseUrl, apiKey, peerRole, peerPrefix,
             accountId, userId, allowOffline, forceSlot, json: jsonOpt,
           } = options as {
             reconfigure?: boolean; zh?: boolean; baseUrl?: string;
-            apiKey?: string; peerRole?: string; peerPrefix?: string; agentPrefix?: string; accountId?: string;
+            apiKey?: string; peerRole?: string; peerPrefix?: string; accountId?: string;
             userId?: string; allowOffline?: boolean; forceSlot?: boolean;
             json?: boolean;
           };
@@ -532,7 +564,6 @@ export function registerSetupCli(api: any): void {
               apiKey,
               peerRole,
               peerPrefix,
-              agentPrefix,
               accountId,
               userId,
               allowOffline: !!allowOffline,
@@ -710,13 +741,13 @@ async function runRemoteCheck(
 
 async function setupNonInteractive(
   configPath: string,
-  params: { baseUrl: string; apiKey?: string; peerRole?: string; peerPrefix?: string; agentPrefix?: string; accountId?: string; userId?: string; allowOffline?: boolean; forceSlot?: boolean },
+  params: { baseUrl: string; apiKey?: string; peerRole?: string; peerPrefix?: string; accountId?: string; userId?: string; allowOffline?: boolean; forceSlot?: boolean },
 ): Promise<SetupResult> {
   try {
-    const { baseUrl, apiKey, peerPrefix, agentPrefix, accountId, userId, allowOffline, forceSlot } = params;
-    const resolvedPeerRole = resolveSetupPeerRole(params.peerRole, !!agentPrefix);
-    const resolvedPeerPrefix = (peerPrefix ?? agentPrefix ?? "").trim();
-    if (!isValidAgentPrefixInput(resolvedPeerPrefix)) {
+    const { baseUrl, apiKey, peerPrefix, accountId, userId, allowOffline, forceSlot } = params;
+    const resolvedPeerRole = resolveSetupPeerRole(params.peerRole);
+    const resolvedPeerPrefix = (peerPrefix ?? "").trim();
+    if (!isValidPeerPrefixInput(resolvedPeerPrefix)) {
       throw new Error("peer_prefix may only contain letters, digits, underscores, and hyphens, or be empty");
     }
 
@@ -1022,7 +1053,7 @@ async function setupRemote(
   console.log("");
 
   const pluginCfg: Record<string, unknown> = {
-    ...(existing ?? {}),
+    ...preserveCurrentConfig(existing),
     mode: "remote",
     baseUrl,
   };
@@ -1031,14 +1062,10 @@ async function setupRemote(
   pluginCfg.peer_role = peerRole;
   if (peerPrefix) pluginCfg.peer_prefix = peerPrefix;
   else delete pluginCfg.peer_prefix;
-  delete pluginCfg.agent_prefix;
-  delete pluginCfg.agentId;
   if (accountId) pluginCfg.accountId = accountId;
   else delete pluginCfg.accountId;
   if (userId) pluginCfg.userId = userId;
   else delete pluginCfg.userId;
-  delete pluginCfg.configPath;
-  delete pluginCfg.port;
 
   writeConfig(configPath, pluginCfg);
 
@@ -1063,7 +1090,7 @@ async function setupRemote(
 
 export const __test__ = {
   isLegacyLocalMode,
-  isValidAgentPrefixInput,
+  isValidPeerPrefixInput,
   activateContextEngineSlot,
   isContextEngineSlotActive,
   getStatus,

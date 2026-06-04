@@ -622,8 +622,6 @@ class LocalClient(BaseClient):
                     "parts": message_parts,
                     "peer_id": normalize_peer_id(
                         message.get("peer_id"),
-                        message.get("agent_id"),
-                        message.get("role_id"),
                     ),
                     "created_at": message.get("created_at"),
                 }

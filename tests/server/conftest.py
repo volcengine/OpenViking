@@ -244,7 +244,6 @@ async def running_server(temp_dir: Path, monkeypatch):
     sdk_ctx = RequestContext(
         user=UserIdentifier(sdk_account_id, "sdk_test_user"),
         role=Role.ADMIN,
-        namespace_policy=manager.get_account_policy(sdk_account_id),
     )
     await svc.initialize_account_directories(sdk_ctx)
     await svc.initialize_user_directories(sdk_ctx)

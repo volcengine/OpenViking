@@ -133,11 +133,9 @@ openclaw config get plugins.slots.contextEngine  # 应输出：openviking
 
 - `apiKey` 推荐使用某个 user 的 user key
 - 新安装默认 `peer_role=none`
-- 旧配置里如果仍有 `agent_prefix` 或 `agentId`，且没有显式 `peer_role`，会按 `peer_role=assistant` 解释
 - `accountId` / `userId` 仅在部署需要显式身份 header 时作为高级选项使用，例如 root key 或 trusted server 流程
-- 使用 PR #1356 canonical namespace 模型时，`isolateUserScopeByAgent` / `isolateAgentScopeByUser` 必须与服务端 account namespace policy 保持一致
 
-### Canonical namespace policy
+### Canonical user namespace
 
 插件写入和检索 user-scoped memory。`viking://user/memories` 会根据 user key 解析出的身份展开为 `viking://user/<user_id>/memories`。`viking://agent/...` 已由 OpenViking 废弃，插件不再使用。
 

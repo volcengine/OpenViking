@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 from openviking.message.message import Message
 from openviking.message.part import TextPart
-from openviking.server.identity import AccountNamespacePolicy, RequestContext, Role
+from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.memory_isolation_handler import (
     MemoryIsolationHandler,
 )
@@ -17,16 +17,14 @@ from openviking_cli.session.user_id import UserIdentifier
 
 def create_message(
     role: str,
-    role_id: str | None,
     content: str = "test",
     peer_id: str | None = None,
 ) -> Message:
     """Helper to create a test message."""
     return Message(
-        id=f"msg_{role}_{role_id}",
+        id=f"msg_{role}_{peer_id or 'self'}",
         role=role,
         parts=[TextPart(text=content)],
-        role_id=role_id,
         peer_id=peer_id,
     )
 
@@ -34,19 +32,13 @@ def create_message(
 def create_ctx(
     account_id: str = "test_account",
     user_id: str = "user_a",
-    isolate_user_by_agent: bool = False,
-    isolate_agent_by_user: bool = False,
 ) -> RequestContext:
     """Helper to create a test RequestContext."""
     user = UserIdentifier(
         account_id=account_id,
         user_id=user_id,
     )
-    policy = AccountNamespacePolicy(
-        isolate_user_scope_by_agent=isolate_user_by_agent,
-        isolate_agent_scope_by_user=isolate_agent_by_user,
-    )
-    return RequestContext(user=user, role=Role.USER, namespace_policy=policy)
+    return RequestContext(user=user, role=Role.USER)
 
 
 def create_mock_extract_context(messages):
@@ -63,38 +55,8 @@ class TestGetReadScope:
         """Test extracting the authenticated user scope."""
         ctx = create_ctx()
         messages = [
-            create_message("user", "user_a", "Hello"),
-            create_message("assistant", "agent_a", "Hi there"),
-        ]
-        extract_ctx = create_mock_extract_context(messages)
-        handler = MemoryIsolationHandler(ctx, extract_ctx)
-
-        scope = handler.get_read_scope()
-
-        assert scope.user_ids == ["user_a"]
-
-    def test_message_role_ids_do_not_expand_user_scope(self):
-        """Message role_id does not change the authenticated user scope."""
-        ctx = create_ctx()
-        messages = [
-            create_message("user", "user_a", "Hello from A"),
-            create_message("user", "user_b", "Hello from B"),
-            create_message("assistant", "agent_a", "Hi"),
-        ]
-        extract_ctx = create_mock_extract_context(messages)
-        handler = MemoryIsolationHandler(ctx, extract_ctx)
-
-        scope = handler.get_read_scope()
-
-        assert scope.user_ids == ["user_a"]
-
-    def test_assistant_role_ids_do_not_create_agent_scope(self):
-        """Assistant role_id does not create a separate write scope."""
-        ctx = create_ctx()
-        messages = [
-            create_message("user", "user_a", "Hello"),
-            create_message("assistant", "agent_a", "Response from A"),
-            create_message("assistant", "agent_b", "Response from B"),
+            create_message("user", "Hello"),
+            create_message("assistant", "Hi there"),
         ]
         extract_ctx = create_mock_extract_context(messages)
         handler = MemoryIsolationHandler(ctx, extract_ctx)
@@ -107,8 +69,8 @@ class TestGetReadScope:
         """Message peer_id should not make self extraction read or write peer memory."""
         ctx = create_ctx()
         messages = [
-            create_message("user", "visitor_a", peer_id="web:visitor:alice"),
-            create_message("user", "visitor_b", peer_id="web:visitor:bob"),
+            create_message("user", peer_id="web:visitor:alice"),
+            create_message("user", peer_id="web:visitor:bob"),
         ]
         extract_ctx = create_mock_extract_context(messages)
         handler = MemoryIsolationHandler(ctx, extract_ctx)
@@ -122,9 +84,9 @@ class TestGetReadScope:
         """Test that duplicate users are deduplicated."""
         ctx = create_ctx()
         messages = [
-            create_message("user", "user_a", "First message"),
-            create_message("user", "user_a", "Second message"),
-            create_message("user", "user_a", "Third message"),
+            create_message("user", "First message"),
+            create_message("user", "Second message"),
+            create_message("user", "Third message"),
         ]
         extract_ctx = create_mock_extract_context(messages)
         handler = MemoryIsolationHandler(ctx, extract_ctx)
@@ -146,93 +108,68 @@ class TestGetReadScope:
 
         assert scope.user_ids == ["default_user"]
 
-    def test_messages_without_role_id_uses_ctx_defaults(self):
-        """Test that messages without role_id fall back to ctx defaults."""
-        ctx = create_ctx(
-            user_id="default_user",
-        )
 
-        # Message without role_id
-        msg = Message(
-            id="msg_no_role_id",
-            role="user",
-            parts=[TextPart(text="Hello")],
-            role_id=None,
-        )
-        messages = [msg]
-        extract_ctx = create_mock_extract_context(messages)
-        handler = MemoryIsolationHandler(ctx, extract_ctx)
+class TestFillIdentityFields:
+    """Tests for fill_identity_fields."""
 
-        scope = handler.get_read_scope()
-
-        # Should use ctx defaults because no valid role_id found in messages
-        assert scope.user_ids == ["default_user"]
-
-
-class TestFillRoleIds:
-    """Tests for fill_role_ids."""
-
-    def test_fill_role_ids_with_specified_values(self):
-        """Test fill_role_ids ignores deprecated agent_id."""
+    def test_fill_identity_fields_with_specified_values(self):
+        """Test fill_identity_fields keeps writes scoped to the ctx user."""
         ctx = create_ctx()
         messages = [
-            create_message("user", "user_a"),
-            create_message("assistant", "agent_a"),
+            create_message("user"),
+            create_message("assistant"),
         ]
         extract_ctx = create_mock_extract_context(messages)
         handler = MemoryIsolationHandler(ctx, extract_ctx)
         role_scope = handler.get_read_scope()
 
-        item_dict = {"user_id": "user_a", "agent_id": "agent_a"}
-        handler.fill_role_ids(item_dict, role_scope)
+        item_dict = {"user_id": "user_a"}
+        handler.fill_identity_fields(item_dict, role_scope)
 
         assert item_dict["user_id"] == "user_a"
-        assert "agent_id" not in item_dict
 
-    def test_fill_role_ids_without_values_uses_default(self):
-        """Test fill_role_ids without values uses first in scope."""
+    def test_fill_identity_fields_without_values_uses_default(self):
+        """Test fill_identity_fields without values uses ctx user."""
         ctx = create_ctx()
         messages = [
-            create_message("user", "user_a"),
-            create_message("user", "user_b"),
-            create_message("assistant", "agent_a"),
-            create_message("assistant", "agent_b"),
+            create_message("user"),
+            create_message("user"),
+            create_message("assistant"),
+            create_message("assistant"),
         ]
         extract_ctx = create_mock_extract_context(messages)
         handler = MemoryIsolationHandler(ctx, extract_ctx)
         role_scope = handler.get_read_scope()
 
         item_dict = {}
-        handler.fill_role_ids(item_dict, role_scope)
+        handler.fill_identity_fields(item_dict, role_scope)
 
         assert item_dict["user_id"] == "user_a"
-        assert "agent_id" not in item_dict
 
-    def test_fill_role_ids_invalid_user_id_ignored(self):
+    def test_fill_identity_fields_invalid_user_id_ignored(self):
         """Test invalid user_id is ignored, uses default."""
         ctx = create_ctx()
         messages = [
-            create_message("user", "user_a"),
-            create_message("assistant", "agent_a"),
+            create_message("user"),
+            create_message("assistant"),
         ]
         extract_ctx = create_mock_extract_context(messages)
         handler = MemoryIsolationHandler(ctx, extract_ctx)
         role_scope = handler.get_read_scope()
 
-        item_dict = {"user_id": "invalid_user", "agent_id": "agent_a"}
-        handler.fill_role_ids(item_dict, role_scope)
+        item_dict = {"user_id": "invalid_user"}
+        handler.fill_identity_fields(item_dict, role_scope)
 
         assert item_dict["user_id"] == "user_a"  # fallback to default
-        assert "agent_id" not in item_dict
 
-    def test_fill_role_ids_with_ranges_keeps_ctx_user_only(self):
+    def test_fill_identity_fields_with_ranges_keeps_ctx_user_only(self):
         """ranges do not create multi-user write scopes."""
         ctx = create_ctx()
         messages = [
-            create_message("user", "user_a"),
-            create_message("assistant", "agent_a"),
-            create_message("user", "user_b"),
-            create_message("assistant", "agent_b"),
+            create_message("user"),
+            create_message("assistant"),
+            create_message("user"),
+            create_message("assistant"),
         ]
         extract_ctx = create_mock_extract_context(messages)
 
@@ -245,51 +182,46 @@ class TestFillRoleIds:
         role_scope = handler.get_read_scope()
 
         item_dict = {"ranges": "0-3"}
-        handler.fill_role_ids(item_dict, role_scope)
+        handler.fill_identity_fields(item_dict, role_scope)
 
         assert item_dict["user_id"] == "user_a"
         assert "user_ids" not in item_dict
-        assert "agent_ids" not in item_dict
 
-    def test_fill_role_ids_normalizes_explicit_peer_id(self):
+    def test_fill_identity_fields_normalizes_explicit_peer_id(self):
         ctx = create_ctx()
-        messages = [create_message("user", "user_a", peer_id="web:visitor:alice")]
+        messages = [create_message("user", peer_id="web:visitor:alice")]
         extract_ctx = create_mock_extract_context(messages)
         handler = MemoryIsolationHandler(ctx, extract_ctx)
         role_scope = handler.get_read_scope()
 
         item_dict = {"peer_id": "web:visitor:alice"}
-        handler.fill_role_ids(item_dict, role_scope)
+        handler.fill_identity_fields(item_dict, role_scope)
 
         assert item_dict["user_id"] == "user_a"
-        assert "agent_id" not in item_dict
         assert item_dict["peer_id"] == "web:visitor:alice"
 
 
 class TestPrepareMessages:
     """Tests for prepare_messages under the user/peer model."""
 
-    def test_prepare_messages_keeps_legacy_metadata(self):
+    def test_prepare_messages_keeps_peer_metadata(self):
         ctx = create_ctx(user_id="login_user")
         messages = [
-            create_message("user", None, "Hello"),
-            create_message("assistant", None, "Hi"),
-            create_message("user", "user_b", "Hey", peer_id="web:visitor:alice"),
+            create_message("user", "Hello"),
+            create_message("assistant", "Hi"),
+            create_message("user", "Hey", peer_id="web:visitor:alice"),
         ]
         extract_ctx = create_mock_extract_context(messages)
         handler = MemoryIsolationHandler(ctx, extract_ctx)
         handler.prepare_messages()
 
-        assert messages[0].role_id is None
-        assert messages[1].role_id is None
-        assert messages[2].role_id == "user_b"
         assert messages[2].peer_id == "web:visitor:alice"
 
     def test_get_read_scope_uses_ctx_user(self):
         ctx = create_ctx(user_id="login_user")
         messages = [
-            create_message("user", None, "Hello"),
-            create_message("assistant", None, "Hi"),
+            create_message("user", "Hello"),
+            create_message("assistant", "Hi"),
         ]
         extract_ctx = create_mock_extract_context(messages)
         handler = MemoryIsolationHandler(ctx, extract_ctx)
@@ -301,8 +233,8 @@ class TestPrepareMessages:
     def test_get_read_scope_ignores_message_peer_id_without_target(self):
         ctx = create_ctx(user_id="login_user")
         messages = [
-            create_message("user", "user_a", "Hello", peer_id="web:visitor:alice"),
-            create_message("assistant", "agent_a", "Hi"),
+            create_message("user", "Hello", peer_id="web:visitor:alice"),
+            create_message("assistant", "Hi"),
         ]
         extract_ctx = create_mock_extract_context(messages)
         handler = MemoryIsolationHandler(ctx, extract_ctx)
@@ -315,7 +247,7 @@ class TestPrepareMessages:
     def test_get_read_scope_includes_allowed_peer_ids_when_enabled(self):
         ctx = create_ctx(user_id="login_user")
         messages = [
-            create_message("user", "user_a", "Hello", peer_id="web:visitor:alice"),
+            create_message("user", "Hello", peer_id="web:visitor:alice"),
         ]
         extract_ctx = create_mock_extract_context(messages)
         handler = MemoryIsolationHandler(
@@ -339,7 +271,7 @@ class TestCalculateMemoryUris:
         mock_generate_uri.return_value = "viking://user/user_a/memories/preferences"
 
         ctx = create_ctx()
-        messages = [create_message("user", "user_a")]
+        messages = [create_message("user")]
         extract_ctx = create_mock_extract_context(messages)
         handler = MemoryIsolationHandler(ctx, extract_ctx)
 
@@ -353,7 +285,7 @@ class TestCalculateMemoryUris:
 
         operation = ResolvedOperation(
             old_memory_file_content=None,
-            memory_fields={"user_id": "user_a", "agent_id": "agent_a"},
+            memory_fields={"user_id": "user_a"},
             memory_type="preferences",
             uris=[],
         )
@@ -371,7 +303,7 @@ class TestCalculateMemoryUris:
         )
 
         ctx = create_ctx()
-        messages = [create_message("user", "user_a")]
+        messages = [create_message("user")]
         extract_ctx = create_mock_extract_context(messages)
         handler = MemoryIsolationHandler(ctx, extract_ctx)
 
@@ -385,7 +317,7 @@ class TestCalculateMemoryUris:
 
         operation = ResolvedOperation(
             old_memory_file_content=None,
-            memory_fields={"user_ids": ["user_a", "user_b"], "agent_ids": ["agent_a", "agent_b"]},
+            memory_fields={"user_ids": ["user_a", "user_b"]},
             memory_type="test",
             uris=[],
         )
@@ -394,8 +326,6 @@ class TestCalculateMemoryUris:
 
         assert uris == ["viking://user/user_a/memories/test"]
         assert operation.memory_fields["user_id"] == "user_a"
-        assert "agent_id" not in operation.memory_fields
-        assert "agent_ids" not in operation.memory_fields
 
     @patch("openviking.session.memory.memory_isolation_handler.generate_uri")
     def test_calculate_memory_uris_routes_explicit_peer_memory(self, mock_generate_uri):
@@ -406,7 +336,7 @@ class TestCalculateMemoryUris:
         ctx = create_ctx(
             user_id="support_bot",
         )
-        messages = [create_message("user", "visitor_a", peer_id="web:visitor:alice")]
+        messages = [create_message("user", peer_id="web:visitor:alice")]
         extract_ctx = create_mock_extract_context(messages)
         handler = MemoryIsolationHandler(
             ctx,
@@ -425,7 +355,6 @@ class TestCalculateMemoryUris:
             old_memory_file_content=None,
             memory_fields={
                 "user_id": "alice",
-                "agent_id": "other_agent",
                 "peer_id": "web:visitor:alice",
             },
             memory_type="preferences",
@@ -436,7 +365,6 @@ class TestCalculateMemoryUris:
 
         assert uris == ["viking://user/support_bot/peers/web:visitor:alice/memories/preferences"]
         assert operation.memory_fields["user_id"] == "support_bot"
-        assert "agent_id" not in operation.memory_fields
         assert operation.memory_fields["peer_id"] == "web:visitor:alice"
 
     @patch("openviking.session.memory.memory_isolation_handler.generate_uri")
@@ -447,8 +375,8 @@ class TestCalculateMemoryUris:
 
         ctx = create_ctx(user_id="support_bot")
         messages = [
-            create_message("user", "support_bot", "self event"),
-            create_message("user", "visitor_a", "peer event", peer_id="web:visitor:alice"),
+            create_message("user", "self event"),
+            create_message("user", "peer event", peer_id="web:visitor:alice"),
         ]
         extract_ctx = create_mock_extract_context(messages)
         mock_range = MagicMock()
@@ -487,7 +415,7 @@ class TestCalculateMemoryUris:
     @patch("openviking.session.memory.memory_isolation_handler.generate_uri")
     def test_calculate_memory_uris_rejects_unallowed_peer_id(self, mock_generate_uri):
         ctx = create_ctx(user_id="support_bot")
-        messages = [create_message("user", "visitor_a", peer_id="web:visitor:alice")]
+        messages = [create_message("user", peer_id="web:visitor:alice")]
         extract_ctx = create_mock_extract_context(messages)
         handler = MemoryIsolationHandler(
             ctx,

@@ -890,11 +890,7 @@ class Session:
             created_at = spec.get("created_at") or datetime.now(timezone.utc).isoformat()
 
             try:
-                peer_id = normalize_peer_id(
-                    spec.get("peer_id"),
-                    spec.get("agent_id"),
-                    spec.get("role_id"),
-                )
+                peer_id = normalize_peer_id(spec.get("peer_id"))
             except ValueError as exc:
                 from openviking_cli.exceptions import InvalidArgumentError
 
@@ -931,9 +927,7 @@ class Session:
         self,
         role: str,
         parts: List[Part],
-        role_id: Optional[str] = None,
         peer_id: Optional[str] = None,
-        agent_id: Optional[str] = None,
         created_at: str = None,
     ) -> Message:
         """Add a message.
@@ -946,9 +940,7 @@ class Session:
                 {
                     "role": role,
                     "parts": parts,
-                    "role_id": role_id,
                     "peer_id": peer_id,
-                    "agent_id": agent_id,
                     "created_at": created_at,
                 }
             ]

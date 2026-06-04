@@ -73,7 +73,6 @@ class FindRequest(BaseModel):
     query: str
     target_uri: Union[str, List[str]] = ""
     peer_id: Optional[str] = None
-    agent_id: Optional[str] = None
     limit: int = 10
     node_limit: Optional[int] = None
     score_threshold: Optional[float] = None
@@ -86,8 +85,8 @@ class FindRequest(BaseModel):
     telemetry: TelemetryRequest = False
 
     @model_validator(mode="after")
-    def normalize_legacy_agent_id(self) -> "FindRequest":
-        self.peer_id = normalize_peer_id(self.peer_id, self.agent_id)
+    def normalize_request_peer_id(self) -> "FindRequest":
+        self.peer_id = normalize_peer_id(self.peer_id)
         return self
 
 
@@ -97,7 +96,6 @@ class SearchRequest(BaseModel):
     query: str
     target_uri: Union[str, List[str]] = ""
     peer_id: Optional[str] = None
-    agent_id: Optional[str] = None
     session_id: Optional[str] = None
     limit: int = 10
     node_limit: Optional[int] = None
@@ -112,8 +110,8 @@ class SearchRequest(BaseModel):
     telemetry: TelemetryRequest = False
 
     @model_validator(mode="after")
-    def normalize_legacy_agent_id(self) -> "SearchRequest":
-        self.peer_id = normalize_peer_id(self.peer_id, self.agent_id)
+    def normalize_request_peer_id(self) -> "SearchRequest":
+        self.peer_id = normalize_peer_id(self.peer_id)
         return self
 
 

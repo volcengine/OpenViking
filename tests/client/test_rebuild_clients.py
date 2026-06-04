@@ -97,7 +97,7 @@ async def test_local_client_batch_add_messages_forwards_to_session():
 
     client = LocalClient.__new__(LocalClient)
     client._service = SimpleNamespace(sessions=FakeSessions())
-    client._ctx = SimpleNamespace(user=SimpleNamespace(user_id="user-1", agent_id="agent-1"))
+    client._ctx = SimpleNamespace(user=SimpleNamespace(user_id="user-1"))
 
     result = await LocalClient.batch_add_messages(
         client,
@@ -106,7 +106,7 @@ async def test_local_client_batch_add_messages_forwards_to_session():
             {
                 "role": "user",
                 "content": "hello",
-                "role_id": "explicit-user",
+                "peer_id": "explicit-user",
                 "created_at": "2026-05-28T00:00:00+00:00",
             },
             {"role": "assistant", "parts": [{"type": "text", "text": "hi"}]},
@@ -116,12 +116,10 @@ async def test_local_client_batch_add_messages_forwards_to_session():
     assert result == {"session_id": "batch-session", "message_count": 2, "added": 2}
     assert fake_session.messages[0]["role"] == "user"
     assert fake_session.messages[0]["peer_id"] == "explicit-user"
-    assert "role_id" not in fake_session.messages[0]
     assert fake_session.messages[0]["created_at"] == "2026-05-28T00:00:00+00:00"
     assert fake_session.messages[0]["parts"][0].text == "hello"
     assert fake_session.messages[1]["role"] == "assistant"
     assert fake_session.messages[1]["peer_id"] is None
-    assert "role_id" not in fake_session.messages[1]
     assert fake_session.messages[1]["parts"][0].text == "hi"
 
 
@@ -137,7 +135,7 @@ async def test_async_http_client_batch_add_messages_posts_batch_payload():
         {
             "role": "user",
             "content": "hello",
-            "role_id": "explicit-user",
+            "peer_id": "explicit-user",
             "created_at": "2026-05-28T00:00:00+00:00",
         },
         {"role": "assistant", "parts": [{"type": "text", "text": "hi"}]},
@@ -205,7 +203,7 @@ def test_sync_http_client_batch_add_messages_forwards_to_async_client():
         {
             "role": "user",
             "content": "hello",
-            "role_id": "explicit-user",
+            "peer_id": "explicit-user",
             "created_at": "2026-05-28T00:00:00+00:00",
         },
         {"role": "assistant", "parts": [{"type": "text", "text": "hi"}]},

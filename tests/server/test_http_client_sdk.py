@@ -216,13 +216,13 @@ async def test_sdk_batch_add_messages_and_commit_keep_recent_count(http_client):
         [
             {
                 "role": "user",
-                "role_id": "sdk-user-1",
+                "peer_id": "sdk-user-1",
                 "created_at": "2026-05-01T12:00:00Z",
                 "parts": [{"type": "text", "text": "Batch hello"}],
             },
             {
                 "role": "assistant",
-                "role_id": "sdk-bot-1",
+                "peer_id": "sdk-bot-1",
                 "created_at": "2026-05-01T12:00:05Z",
                 "parts": [
                     {"type": "text", "text": "Batch answer"},

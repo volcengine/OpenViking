@@ -210,8 +210,6 @@ Core fields:
 | `accountId` | empty | Required when using a root API key |
 | `userId` | empty | Required when using a root API key |
 
-Legacy `agent_prefix` / `agentId` configs are still read. If either exists and `peer_role` is missing, the plugin treats the config as `peer_role=assistant`.
-
 Use setup for normal changes when possible:
 
 ```bash
@@ -276,7 +274,6 @@ Useful backup/source flags:
 | `--api-key KEY` | OpenViking API key |
 | `--peer-role ROLE` | Peer role: `none`, `assistant`, or `person` |
 | `--peer-prefix PREFIX` | Prefix for assistant `peer_id` values |
-| `--agent-prefix PREFIX` | Deprecated alias for `--peer-prefix`; implies `--peer-role assistant` when `--peer-role` is omitted |
 | `--update` | Update an existing helper-managed install |
 
 For user-facing installs, use `openclaw plugins install clawhub:@openviking/openclaw-plugin` first. Choose `ov-install` only as the backup path.
@@ -302,7 +299,7 @@ openclaw gateway restart
 openclaw openviking status --json
 ```
 
-Your existing config fields (`baseUrl`, `apiKey`, legacy peer fields, etc.) are preserved. The new plugin version reads old `agentId` / `agent_prefix` names at runtime — no manual config edits needed.
+Your existing config fields such as `baseUrl`, `apiKey`, `peer_role`, and `peer_prefix` are preserved.
 
 The plugin configuration lives under `plugins.entries.openviking.config`.
 
@@ -322,8 +319,6 @@ The plugin connects to an existing remote OpenViking server.
 | `apiKey` | empty | Optional OpenViking API key |
 | `peer_role` | `none` | Controls session `peer_id` writes and recall/search `peer_id`: `none`, `assistant`, or `person` |
 | `peer_prefix` | empty | Optional prefix for assistant `peer_id` values when `peer_role=assistant` |
-
-Legacy `agent_prefix` / `agentId` configs are still read. If either exists and `peer_role` is missing, the plugin treats the config as `peer_role=assistant`.
 
 Common settings:
 

@@ -123,9 +123,9 @@ const baseUrlFromEnv = !!process.env.OPENVIKING_BASE_URL;
 let remoteBaseUrl = (process.env.OPENVIKING_BASE_URL || "http://127.0.0.1:1933").trim();
 let remoteApiKey = (process.env.OPENVIKING_API_KEY || "").trim();
 let remotePeerRole = (process.env.OPENVIKING_PEER_ROLE || "").trim().toLowerCase();
-let remotePeerPrefix = (process.env.OPENVIKING_PEER_PREFIX || process.env.OPENVIKING_AGENT_PREFIX || "").trim();
+let remotePeerPrefix = (process.env.OPENVIKING_PEER_PREFIX || "").trim();
 let peerRoleExplicit = !!process.env.OPENVIKING_PEER_ROLE;
-if (!remotePeerRole) remotePeerRole = process.env.OPENVIKING_AGENT_PREFIX ? "assistant" : "none";
+if (!remotePeerRole) remotePeerRole = "none";
 let remoteAccountId = (process.env.OPENVIKING_ACCOUNT_ID || "").trim();
 let remoteUserId = (process.env.OPENVIKING_USER_ID || "").trim();
 let baseUrlExplicit = baseUrlFromEnv;
@@ -315,19 +315,6 @@ for (let i = 0; i < argv.length; i++) {
     remotePeerPrefix = arg.slice("--peer-prefix=".length).trim();
     continue;
   }
-  if (arg === "--agent-prefix") {
-    const val = argv[i + 1]?.trim();
-    if (!val) { console.error("--agent-prefix requires a value"); process.exit(1); }
-    remotePeerPrefix = val;
-    if (!peerRoleExplicit) remotePeerRole = "assistant";
-    i += 1;
-    continue;
-  }
-  if (arg.startsWith("--agent-prefix=")) {
-    remotePeerPrefix = arg.slice("--agent-prefix=".length).trim();
-    if (!peerRoleExplicit) remotePeerRole = "assistant";
-    continue;
-  }
   if (arg === "--account-id") {
     const val = argv[i + 1]?.trim();
     if (!val) { console.error("--account-id requires a value"); process.exit(1); }
@@ -357,7 +344,7 @@ for (let i = 0; i < argv.length; i++) {
 }
 
 remotePeerRole = normalizePeerRole(remotePeerRole) || "none";
-if (!isValidAgentPrefixInput(remotePeerPrefix)) {
+if (!isValidPeerPrefixInput(remotePeerPrefix)) {
   console.error("--peer-prefix may only contain letters, digits, underscores, and hyphens");
   process.exit(1);
 }
@@ -388,7 +375,6 @@ function printHelp() {
   console.log("  --api-key=KEY            OpenViking API key (default: $OPENVIKING_API_KEY)");
   console.log("  --peer-role=ROLE         Peer role: none, assistant, or person (default: $OPENVIKING_PEER_ROLE or none)");
   console.log("  --peer-prefix=PREFIX     Prefix for assistant peer_id values (default: $OPENVIKING_PEER_PREFIX)");
-  console.log("  --agent-prefix=PREFIX    Deprecated alias for --peer-prefix; implies --peer-role assistant when omitted");
   console.log("  --account-id=ID          Account ID for root API key (default: $OPENVIKING_ACCOUNT_ID)");
   console.log("  --user-id=ID             User ID for root API key (default: $OPENVIKING_USER_ID)");
   console.log("  --force-slot             Explicitly replace an existing contextEngine slot owner");
@@ -528,7 +514,7 @@ function isYes(answer) {
   return normalized === "y" || normalized === "yes";
 }
 
-function isValidAgentPrefixInput(value) {
+function isValidPeerPrefixInput(value) {
   const trimmed = String(value || "").trim();
   return !trimmed || /^[a-zA-Z0-9_-]+$/.test(trimmed);
 }
@@ -580,7 +566,7 @@ async function questionPeerPrefix(defaultValue = "") {
       tr("Peer Prefix (optional)", "Peer Prefix（可选）"),
       defaultValue,
     )).trim();
-    if (isValidAgentPrefixInput(answer)) {
+    if (isValidPeerPrefixInput(answer)) {
       return answer;
     }
     warn(tr(
@@ -1468,12 +1454,9 @@ function extractRuntimeConfigFromPluginEntry(entryConfig) {
   if (role) {
     runtime.peer_role = role;
   }
-  const prefix = entryConfig.peer_prefix || entryConfig.agent_prefix || entryConfig.agentId;
+  const prefix = entryConfig.peer_prefix;
   if (typeof prefix === "string" && prefix.trim()) {
     runtime.peer_prefix = prefix.trim();
-    if (!runtime.peer_role && (entryConfig.agent_prefix || entryConfig.agentId)) {
-      runtime.peer_role = "assistant";
-    }
   }
   if (typeof entryConfig.accountId === "string" && entryConfig.accountId.trim()) {
     runtime.accountId = entryConfig.accountId.trim();
@@ -2369,7 +2352,7 @@ async function configureOpenClawPlugin({
       autoRecall: true,
       autoCapture: true,
       apiKey: effectiveRuntimeConfig.apiKey || undefined,
-      agentId: peerVal || undefined,
+      peer_prefix: peerVal || undefined,
     };
 
     const pluginConfig = {};
@@ -2552,7 +2535,6 @@ async function configureOpenClawPlugin({
     const peerRole = normalizePeerRole(effectiveRuntimeConfig.peer_role) || "none";
     const peerVal = effectiveRuntimeConfig.peer_prefix || "";
     const usePeerFields = !allowedProps || allowedProps.has("peer_role") || allowedProps.has("peer_prefix");
-    const useAgentPrefix = !allowedProps || allowedProps.has("agent_prefix");
     const candidates = {
       mode: "remote",
       baseUrl: effectiveRuntimeConfig.baseUrl || remoteBaseUrl,
@@ -2563,10 +2545,6 @@ async function configureOpenClawPlugin({
     if (usePeerFields) {
       candidates.peer_role = peerRole;
       if (peerVal) candidates.peer_prefix = peerVal;
-    } else if (useAgentPrefix) {
-      candidates.agent_prefix = peerVal;
-    } else {
-      candidates.agentId = peerVal;
     }
 
     const pluginConfig = {};

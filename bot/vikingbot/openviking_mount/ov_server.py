@@ -14,11 +14,11 @@ viking_resource_prefix = "viking://resources/"
 
 
 class VikingClient:
-    def __init__(self, workspace_id: Optional[str] = None, agent_id: Optional[str] = None):
+    def __init__(self, workspace_id: Optional[str] = None):
         config = load_config()
         openviking_config = config.ov_server
         self.openviking_config = openviking_config
-        self.workspace_id = workspace_id or agent_id
+        self.workspace_id = workspace_id
         self.ov_path = config.ov_data_path
         self.mode = openviking_config.mode
         self.api_key_type = (openviking_config.api_key_type or "root").strip().lower()
@@ -61,9 +61,9 @@ class VikingClient:
         await self.client.initialize()
 
     @classmethod
-    async def create(cls, workspace_id: Optional[str] = None, agent_id: Optional[str] = None):
+    async def create(cls, workspace_id: Optional[str] = None):
         """Factory method to create and initialize a VikingClient instance."""
-        instance = cls(workspace_id=workspace_id, agent_id=agent_id)
+        instance = cls(workspace_id=workspace_id)
         await instance._initialize()
         return instance
 
@@ -438,7 +438,7 @@ class VikingClient:
             self._user_clients[user_id] = client
         return client
 
-    def _assistant_role_id(self) -> Optional[str]:
+    def _assistant_peer_id(self) -> Optional[str]:
         if self.admin_user_id:
             return self.admin_user_id
         return None
@@ -446,11 +446,11 @@ class VikingClient:
     def _normalize_session_messages(
         self,
         messages: list[dict[str, Any]],
-        default_user_role_id: Optional[str] = None,
+        default_user_peer_id: Optional[str] = None,
         session_id: Optional[str] = None,
     ) -> list[dict[str, Any]]:
         normalized: list[dict[str, Any]] = []
-        assistant_role_id = self._assistant_role_id()
+        assistant_peer_id = self._assistant_peer_id()
 
         for message in messages:
             role = str(message.get("role") or "").strip().lower()
@@ -491,7 +491,7 @@ class VikingClient:
                         )
                         if match:
                             skill_name = match.group(1).strip()
-                            skill_uri = self._skill_memory_uri(skill_name, default_user_role_id)
+                            skill_uri = self._skill_memory_uri(skill_name, default_user_peer_id)
 
                     tool_id = f"{tool_name}_{uuid.uuid4().hex[:8]}"
                     parts.append(
@@ -525,14 +525,14 @@ class VikingClient:
                 "created_at": message.get("created_at") or message.get("timestamp"),
             }
 
-            role_id = message.get("role_id")
-            if not role_id and ov_role == "user":
-                role_id = message.get("sender_id") or default_user_role_id
-            elif not role_id and ov_role == "assistant":
-                role_id = assistant_role_id
+            peer_id = message.get("peer_id")
+            if not peer_id and ov_role == "user":
+                peer_id = message.get("sender_id") or default_user_peer_id
+            elif not peer_id and ov_role == "assistant":
+                peer_id = assistant_peer_id
 
-            if role_id:
-                payload["role_id"] = role_id
+            if peer_id:
+                payload["peer_id"] = peer_id
 
             normalized.append(payload)
 
@@ -571,13 +571,13 @@ class VikingClient:
         self,
         session_id: str,
         messages: list[dict[str, Any]],
-        default_user_role_id: Optional[str] = None,
+        default_user_peer_id: Optional[str] = None,
         session_user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         await self.ensure_session(session_id, user_id=session_user_id)
         batch = self._normalize_session_messages(
             messages,
-            default_user_role_id=default_user_role_id,
+            default_user_peer_id=default_user_peer_id,
             session_id=session_id,
         )
         if not batch:
@@ -618,7 +618,7 @@ class VikingClient:
         appended = await self.append_messages(
             session_id,
             messages,
-            default_user_role_id=user_id or self.admin_user_id,
+            default_user_peer_id=user_id or self.admin_user_id,
             session_user_id=user_id,
         )
         commit_result = await self.commit_session(

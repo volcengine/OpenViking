@@ -85,7 +85,7 @@ Admin API 用于多租户环境下的账户和用户管理。包括工作区（a
 
 **说明：**
 - 在 `trusted` 模式下，响应中不会包含 `user_key` 字段
-- 旧的 `isolate_user_scope_by_agent` 和 `isolate_agent_scope_by_user` 字段仍会被兼容接收，但会被忽略。当前不再支持 agent namespace。
+- 不再支持 account 级 namespace 隔离配置。用户记忆使用 user-scoped namespace，一对多外部参与者通过 `peer_id` 表达。
 
 #### 3. 使用示例
 
@@ -498,71 +498,6 @@ ov --sudo admin list-users acme
     {"user_id": "alice", "role": "admin"},
     {"user_id": "bob", "role": "user"}
   ],
-  "time": 0.1
-}
-```
-
----
-
-### list_agents
-
-#### 1. API 实现介绍
-
-已废弃的兼容端点。Agent namespace 不再属于公开文件系统模型；请使用 user-scoped namespace。该端点仍会校验 account 访问权限，但返回空列表。
-
-**处理流程：**
-1. 验证请求者具有 ROOT 权限，或为本账户的 ADMIN
-2. 验证 account 存在
-3. 返回空列表
-
-**代码入口：**
-- `openviking/server/routers/admin.py:list_agents` - HTTP 路由
-- `crates/ov_cli/src/client.rs:HttpClient.admin_list_agents` - CLI HTTP 客户端
-- `crates/ov_cli/src/commands/admin.rs:list_agents` - CLI 命令
-
-#### 2. 接口和参数说明
-
-**参数**
-
-| 参数 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| account_id | str | 是 | - | 工作区 ID |
-
-**说明：**
-- ROOT 可以列出任意 account 的 agents
-- ADMIN 只能列出自己所属 account 的 agents
-- USER 不能调用该接口
-- 该端点仅为兼容保留，不再返回文件系统 namespace
-
-#### 3. 使用示例
-
-**HTTP API**
-
-```
-GET /api/v1/admin/accounts/{account_id}/agents
-```
-
-```bash
-curl -X GET http://localhost:1933/api/v1/admin/accounts/acme/agents \
-  -H "X-API-Key: <root-or-admin-key>"
-```
-
-**CLI**
-
-```bash
-# ROOT 或本账户的 ADMIN 都可以执行
-# 如果使用普通用户的 api_key 但该用户是 acme 的 ADMIN：
-ov admin list-agents acme
-# 如果使用 root_api_key（--sudo）：
-ov --sudo admin list-agents acme
-```
-
-**响应示例**
-
-```json
-{
-  "status": "ok",
-  "result": [],
   "time": 0.1
 }
 ```

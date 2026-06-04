@@ -333,7 +333,6 @@ Existing config fields are preserved during migration. The new plugin reads old 
 - `apiKey`
 - `peer_role`: optional; default `none`; controls session writes and recall/search `peer_id`
 - `peer_prefix`: optional when `peer_role=assistant`
-- legacy `agent_prefix` / `agentId`: still read; if present without `peer_role`, the plugin treats the config as `peer_role=assistant`
 
 ## Backup Path: ov-install
 

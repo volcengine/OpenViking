@@ -13,7 +13,6 @@ from fastapi import FastAPI
 from starlette.requests import Request
 
 from openviking.message import Message, TextPart
-from openviking.server.api_keys import APIKeyManager
 from openviking.server.app import create_app
 from openviking.server.config import ServerConfig, ToolOutputExternalizationConfig
 from openviking.server.dependencies import set_service
@@ -34,15 +33,15 @@ def _message_request(
     *,
     content: str | None = None,
     parts: list[dict] | None = None,
-    role_id: object = _UNSET,
+    peer_id: object = _UNSET,
 ) -> dict:
     payload = {"role": role}
     if content is not None:
         payload["content"] = content
     if parts is not None:
         payload["parts"] = parts
-    if role_id is not _UNSET and role_id is not None:
-        payload["role_id"] = role_id
+    if peer_id is not _UNSET and peer_id is not None:
+        payload["peer_id"] = peer_id
     return payload
 
 
@@ -380,27 +379,8 @@ async def test_add_message_splits_tool_result_aggregate(client: httpx.AsyncClien
     assert body["result"]["message_count"] == 2
 
 
-async def test_add_message_root_request_does_not_autofill_role_id(service, monkeypatch):
-    session_id = "root-no-role-id-fill"
-    ctx = RequestContext(user=DEFAULT_USER, role=Role.ROOT)
-
-    response = await _call_add_message_route(
-        service,
-        monkeypatch,
-        ctx=ctx,
-        payload=_message_request("user", content="hello root", role_id=None),
-        session_id=session_id,
-    )
-
-    assert response.result["message_count"] == 1
-    session = await service.sessions.get(session_id, ctx, auto_create=False)
-    await session.load()
-    assert session.messages[-1].role_id is None
-    assert "role_id" not in session.messages[-1].to_dict()
-
-
-async def test_add_message_trusted_request_maps_role_id_to_peer_id(service, monkeypatch):
-    session_id = "trusted-role-id-to-peer-id"
+async def test_add_message_request_persists_peer_id(service, monkeypatch):
+    session_id = "trusted-peer-id"
     ctx = RequestContext(
         user=UserIdentifier("acct_trusted", "caller"),
         role=Role.USER,
@@ -410,114 +390,14 @@ async def test_add_message_trusted_request_maps_role_id_to_peer_id(service, monk
         service,
         monkeypatch,
         ctx=ctx,
-        payload=_message_request("assistant", content="hello trusted", role_id="assistant-b"),
+        payload=_message_request("assistant", content="hello trusted", peer_id="assistant-b"),
         session_id=session_id,
     )
 
     assert response.result["message_count"] == 1
     session = await service.sessions.get(session_id, ctx, auto_create=False)
     await session.load()
-    assert session.messages[-1].role_id is None
     assert session.messages[-1].peer_id == "assistant-b"
-    assert "role_id" not in session.messages[-1].to_dict()
-
-
-async def test_add_message_admin_request_maps_registered_role_id_to_peer_id(service, monkeypatch):
-    manager = APIKeyManager(root_key=TEST_ROOT_KEY, viking_fs=service.viking_fs)
-    await manager.load()
-    account_id = "acct_session_admin"
-    await manager.create_account(account_id, "admin_user")
-    await manager.register_user(account_id, "alice")
-
-    ctx = RequestContext(
-        user=UserIdentifier(account_id, "admin_user"),
-        role=Role.ADMIN,
-    )
-    session_id = "admin-explicit-role-id"
-
-    response = await _call_add_message_route(
-        service,
-        monkeypatch,
-        ctx=ctx,
-        payload=_message_request("user", content="hello admin", role_id="alice"),
-        session_id=session_id,
-    )
-
-    assert response.result["message_count"] == 1
-    session = await service.sessions.get(session_id, ctx, auto_create=False)
-    await session.load()
-    assert session.messages[-1].role_id is None
-    assert session.messages[-1].peer_id == "alice"
-
-
-async def test_add_message_user_request_maps_explicit_role_id_to_peer_id(service, monkeypatch):
-    session_id = "user-role-id-to-peer-id"
-    ctx = RequestContext(
-        user=UserIdentifier("acct_session_user", "alice"),
-        role=Role.USER,
-    )
-
-    response = await _call_add_message_route(
-        service,
-        monkeypatch,
-        ctx=ctx,
-        payload=_message_request("user", content="hello user", role_id="wx:user-01@abc"),
-        session_id=session_id,
-    )
-
-    assert response.result["message_count"] == 1
-    session = await service.sessions.get(session_id, ctx, auto_create=False)
-    await session.load()
-    assert session.messages[-1].role_id is None
-    assert session.messages[-1].peer_id == "wx:user-01@abc"
-
-
-async def test_add_message_user_request_does_not_autofill_role_id(service, monkeypatch):
-    session_id = "user-no-role-id-fill"
-    ctx = RequestContext(
-        user=UserIdentifier("acct_session_user", "alice"),
-        role=Role.USER,
-    )
-
-    response = await _call_add_message_route(
-        service,
-        monkeypatch,
-        ctx=ctx,
-        payload=_message_request("assistant", content="hello user", role_id=None),
-        session_id=session_id,
-    )
-
-    assert response.result["message_count"] == 1
-    session = await service.sessions.get(session_id, ctx, auto_create=False)
-    await session.load()
-    assert session.messages[-1].role_id is None
-    assert "role_id" not in session.messages[-1].to_dict()
-
-
-async def test_add_message_admin_request_maps_unregistered_role_id_to_peer_id(service, monkeypatch):
-    manager = APIKeyManager(root_key=TEST_ROOT_KEY, viking_fs=service.viking_fs)
-    await manager.load()
-    account_id = "acct_session_invalid"
-    await manager.create_account(account_id, "admin_user")
-
-    ctx = RequestContext(
-        user=UserIdentifier(account_id, "admin_user"),
-        role=Role.ADMIN,
-    )
-
-    response = await _call_add_message_route(
-        service,
-        monkeypatch,
-        ctx=ctx,
-        payload=_message_request("user", content="hello invalid", role_id="ghost"),
-        session_id="invalid-user-role-id",
-    )
-
-    assert response.result["message_count"] == 1
-    session = await service.sessions.get("invalid-user-role-id", ctx, auto_create=False)
-    await session.load()
-    assert session.messages[-1].role_id is None
-    assert session.messages[-1].peer_id == "ghost"
 
 
 async def test_add_multiple_messages(client: httpx.AsyncClient):

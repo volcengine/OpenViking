@@ -522,7 +522,7 @@ class LockManager:
             context_type="memory",
             account_id=account_id,
             user_id=user_id,
-            agent_id=user_id,
+            peer_id=user_id,
             role=role_str,
         )
 
@@ -545,7 +545,7 @@ class LockManager:
             context_type=params.get("context_type", "resource"),
             account_id=params.get("account_id", "default"),
             user_id=params.get("user_id", "default"),
-            agent_id=params.get("agent_id", "default"),
+            peer_id=params.get("peer_id", "default"),
             role=params.get("role", "root"),
         )
         semantic_queue: SemanticQueue = queue_manager.get_queue(queue_manager.SEMANTIC)  # type: ignore[assignment]

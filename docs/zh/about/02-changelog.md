@@ -72,14 +72,14 @@ OpenViking 的所有重要变更都将记录在此文件中。
 - **可观测性**：OTLP 导出支持自定义 `headers`，覆盖 traces、logs、metrics 三条链路，便于直连需要额外鉴权头或 gRPC metadata 的观测后端。
 - **上传**：本地目录扫描和上传现在遵循根目录及子目录中的 `.gitignore` 规则，减少构建产物和临时文件被误导入。
 - **检索**：`search` / `find` 支持一次传入多个 target URI，适合跨目录、跨仓库范围检索。
-- **多租户**：OpenClaw 插件明确 `agent_prefix` 仅作为前缀使用；OpenCode memory plugin 补上 tenant headers 透传。
+- **多租户**：OpenClaw 插件明确 `peer_prefix` 仅作为 peer metadata 使用；OpenCode memory plugin 补上 tenant headers 透传。
 - **管理**：废弃的 agent namespace 发现入口现在仅返回空兼容结果。
 
 ### 升级说明
 
 - OTLP 后端接入可通过 `headers` 统一配置鉴权信息（gRPC 模式为 metadata，HTTP 模式为请求头）。
 - 本地目录上传默认遵循 `.gitignore` 规则，此前被导入的临时/生成文件升级后可能被自动过滤。
-- OpenClaw 插件 `agent_prefix` 仅表示前缀，文档中 `agentId` 已统一迁移为 `agent_prefix`。
+- OpenClaw 插件运行时身份通过 `peer_prefix` peer metadata 表达，不再对应 OpenViking agent namespace。
 
 [完整变更记录](https://github.com/volcengine/OpenViking/compare/v0.3.13...v0.3.14)
 
@@ -98,7 +98,7 @@ OpenViking 的所有重要变更都将记录在此文件中。
 ### 升级说明
 
 - `encryption.api_key_hashing.enabled` 需要显式配置（默认 `false`）。如依赖旧的隐式哈希行为，需手动开启。
-- OpenClaw 插件仅保留远程模式，不再启动本地子进程；`agentId` → `agent_prefix`，`recallTokenBudget` → `recallMaxInjectedChars`。
+- OpenClaw 插件仅保留远程模式，不再启动本地子进程；运行时 agent 身份迁移为 peer metadata，`recallTokenBudget` → `recallMaxInjectedChars`。
 
 [完整变更记录](https://github.com/volcengine/OpenViking/compare/v0.3.12...v0.3.13)
 
@@ -338,7 +338,7 @@ LiteLLM 相关能力会暂时不可用，直到上游给出可信的修复版本
 
 ### 重点更新
 
-- OpenClaw 插件升级到 2.0（context engine），新增 OpenCode memory plugin，多智能体 memory isolation 基于 `agentId`。
+- OpenClaw 插件升级到 2.0（context engine），新增 OpenCode memory plugin，多智能体 memory isolation 基于 peer metadata。
 - Memory 冷热分层 archival 和 hotness scoring、长记忆 chunked vectorization、`used()` 使用追踪接口。
 - 分层检索集成 rerank、RetrievalObserver 检索质量观测。
 - 资源 watch scheduling、reindex endpoint、legacy `.doc`/`.xls` 解析支持、path locking 和 crash recovery。

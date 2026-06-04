@@ -13,7 +13,7 @@ from openviking.server.auth import (
 )
 from openviking.server.config import ServerConfig
 from openviking.server.dependencies import get_service
-from openviking.server.identity import AccountNamespacePolicy, RequestContext, Role
+from openviking.server.identity import RequestContext, Role
 from openviking.server.models import Response
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
@@ -28,9 +28,6 @@ router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 class CreateAccountRequest(BaseModel):
     account_id: str
     admin_user_id: str
-    # Deprecated compatibility fields. Agent-scoped namespace isolation is ignored.
-    isolate_user_scope_by_agent: bool = False
-    isolate_agent_scope_by_user: bool = False
 
 
 class RegisterUserRequest(BaseModel):
@@ -92,24 +89,20 @@ async def create_account(
 ):
     """Create a new account (workspace) with its first admin user."""
     manager = _get_api_key_manager(request)
-    policy = AccountNamespacePolicy()
     user_key = await manager.create_account(
         body.account_id,
         body.admin_user_id,
-        namespace_policy=policy,
     )
     service = get_service()
     account_ctx = RequestContext(
         user=UserIdentifier(body.account_id, body.admin_user_id),
         role=Role.ADMIN,
-        namespace_policy=policy,
     )
     await service.initialize_account_directories(account_ctx)
     await service.initialize_user_directories(account_ctx)
     result = {
         "account_id": body.account_id,
         "admin_user_id": body.admin_user_id,
-        **policy.to_dict(),
     }
     if _should_expose_user_key(request):
         result["user_key"] = user_key
@@ -191,7 +184,6 @@ async def register_user(
     user_ctx = RequestContext(
         user=UserIdentifier(account_id, body.user_id),
         role=Role.USER,
-        namespace_policy=manager.get_account_policy(account_id),
     )
     await service.initialize_user_directories(user_ctx)
     result = {
@@ -221,20 +213,6 @@ async def list_users(
         account_id, limit=limit, name_filter=name, role_filter=role, expose_key=expose_key
     )
     return Response(status="ok", result=users)
-
-
-@router.get("/accounts/{account_id}/agents")
-@require_auth_root_or_admin
-async def list_agents(
-    request: Request,
-    account_id: str = Path(..., description="Account ID"),
-    ctx: RequestContext = Depends(get_request_context),
-):
-    """Deprecated compatibility endpoint. Agent namespaces no longer exist."""
-    _check_account_access(ctx, account_id)
-    manager = _get_api_key_manager(request)
-    manager.get_users(account_id, limit=1, expose_key=False)
-    return Response(status="ok", result=[])
 
 
 @router.delete("/accounts/{account_id}/users/{user_id}")

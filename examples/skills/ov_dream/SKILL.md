@@ -82,4 +82,4 @@ Rules:
 - It does not auto-inject recall into prompts.
 - It does not replace the OpenViking context-engine plugin.
 - Disk-based sync is for recently recorded chat transcripts. It is not a precise "currently running sessions" detector.
-- For OpenViking serverless, configure `OPENVIKING_BASE_URL`, `OPENVIKING_API_KEY`, `OPENVIKING_AGENT_ID`, and optionally `OPENVIKING_AUTH_MODE=serverless`. The CLI will use Bearer auth and the serverless session message format automatically.
+- For OpenViking serverless, configure `OPENVIKING_BASE_URL`, `OPENVIKING_API_KEY`, and optionally `OPENVIKING_AUTH_MODE=serverless`. The CLI will use Bearer auth and the serverless session message format automatically.

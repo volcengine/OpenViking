@@ -496,7 +496,7 @@ def test_in_memory_openviking_client_batch_add_messages_records_messages():
             {
                 "role": "assistant",
                 "parts": [{"type": "text", "text": "hi"}],
-                "role_id": "agent-1",
+                "peer_id": "agent-1",
                 "created_at": "2026-05-26T00:00:00+00:00",
             },
         ],
@@ -510,7 +510,6 @@ def test_in_memory_openviking_client_batch_add_messages_records_messages():
     assert client.sessions["batch-session"][0]["parts"][0]["text"] == "hello"
     assert client.sessions["batch-session"][1]["parts"][0]["text"] == "hi"
     assert client.sessions["batch-session"][1]["peer_id"] == "agent-1"
-    assert "role_id" not in client.sessions["batch-session"][1]
     assert client.sessions["batch-session"][1]["created_at"] == "2026-05-26T00:00:00+00:00"
 
 
@@ -1001,9 +1000,7 @@ def test_langgraph_store_ignores_unrelated_canonical_result_uris():
         is None
     )
     assert (
-        store._parse_index_uri(
-            "viking://agent/support/user/default/memories/langgraph_store/index/users/ada.md"
-        )
+        store._parse_index_uri("viking://user/support/memories/other_store/index/users/ada.md")
         is None
     )
 

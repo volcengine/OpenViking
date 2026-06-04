@@ -85,7 +85,7 @@ Create a new workspace with its first admin user.
 
 **Notes:**
 - In `trusted` mode, `user_key` is omitted from the response
-- Legacy `isolate_user_scope_by_agent` and `isolate_agent_scope_by_user` fields are accepted for compatibility but ignored. Agent namespaces are no longer supported.
+- Account-level namespace isolation settings are no longer supported. User memory uses user-scoped namespaces, and one-to-many external participants are represented with `peer_id`.
 
 #### 3. Usage Examples
 
@@ -504,70 +504,6 @@ ov --sudo admin list-users acme
 }
 ```
 
----
-
-### list_agents
-
-#### 1. API Implementation Overview
-
-Deprecated compatibility endpoint. Agent namespaces are no longer part of the public filesystem model; use user-scoped namespaces instead. The endpoint still verifies access to the account and returns an empty list.
-
-**Processing Flow:**
-1. Verify requester has ROOT privileges or is an ADMIN of the account
-2. Verify the account exists
-3. Return an empty list
-
-**Code Entry Points:**
-- `openviking/server/routers/admin.py:list_agents` - HTTP route
-- `crates/ov_cli/src/client.rs:HttpClient.admin_list_agents` - CLI HTTP client
-- `crates/ov_cli/src/commands/admin.rs:list_agents` - CLI command
-
-#### 2. Interface and Parameters
-
-**Parameters**
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| account_id | str | Yes | - | Workspace ID |
-
-**Notes:**
-- ROOT can list agents in any account
-- ADMIN can only list agents in their own account
-- USER cannot call this API
-- This endpoint is retained for compatibility and does not report filesystem namespaces.
-
-#### 3. Usage Examples
-
-**HTTP API**
-
-```
-GET /api/v1/admin/accounts/{account_id}/agents
-```
-
-```bash
-curl -X GET http://localhost:1933/api/v1/admin/accounts/acme/agents \
-  -H "X-API-Key: <root-or-admin-key>"
-```
-
-**CLI**
-
-```bash
-# Either ROOT or account ADMIN can execute
-# If using regular user's api_key who is an ADMIN of acme:
-ov admin list-agents acme
-# If using root_api_key (--sudo):
-ov --sudo admin list-agents acme
-```
-
-**Response Example**
-
-```json
-{
-  "status": "ok",
-  "result": [],
-  "time": 0.1
-}
-```
 
 ---
 

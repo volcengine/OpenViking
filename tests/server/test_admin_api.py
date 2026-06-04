@@ -442,95 +442,6 @@ async def test_list_users(admin_client: httpx.AsyncClient):
     assert user_ids == {"alice", "bob"}
 
 
-async def test_list_agents(admin_client: httpx.AsyncClient):
-    """Deprecated list_agents endpoint returns an empty compatibility result."""
-    acct = _uid()
-    await admin_client.post(
-        "/api/v1/admin/accounts",
-        json={"account_id": acct, "admin_user_id": "alice"},
-        headers=root_headers(),
-    )
-
-    resp = await admin_client.get(f"/api/v1/admin/accounts/{acct}/agents", headers=root_headers())
-
-    assert resp.status_code == 200
-    assert resp.json()["result"] == []
-
-
-async def test_list_agents_returns_default_for_new_account(
-    admin_client: httpx.AsyncClient,
-):
-    """New accounts should not expose agent namespaces."""
-    acct = _uid()
-    await admin_client.post(
-        "/api/v1/admin/accounts",
-        json={"account_id": acct, "admin_user_id": "alice"},
-        headers=root_headers(),
-    )
-
-    resp = await admin_client.get(f"/api/v1/admin/accounts/{acct}/agents", headers=root_headers())
-
-    assert resp.status_code == 200
-    assert resp.json()["result"] == []
-
-
-async def test_admin_can_list_agents_in_own_account(
-    admin_client: httpx.AsyncClient,
-):
-    """ADMIN gets the same empty compatibility result in their own account."""
-    acct = _uid()
-    resp = await admin_client.post(
-        "/api/v1/admin/accounts",
-        json={"account_id": acct, "admin_user_id": "alice"},
-        headers=root_headers(),
-    )
-    alice_key = resp.json()["result"]["user_key"]
-
-    resp = await admin_client.get(
-        f"/api/v1/admin/accounts/{acct}/agents",
-        headers={"X-API-Key": alice_key},
-    )
-
-    assert resp.status_code == 200
-    assert resp.json()["result"] == []
-
-
-async def test_admin_cannot_list_agents_in_other_account(
-    admin_client: httpx.AsyncClient,
-):
-    """ADMIN still cannot access another account through the deprecated endpoint."""
-    acct = _uid()
-    other = _uid()
-    resp = await admin_client.post(
-        "/api/v1/admin/accounts",
-        json={"account_id": acct, "admin_user_id": "alice"},
-        headers=root_headers(),
-    )
-    alice_key = resp.json()["result"]["user_key"]
-    await admin_client.post(
-        "/api/v1/admin/accounts",
-        json={"account_id": other, "admin_user_id": "eve"},
-        headers=root_headers(),
-    )
-
-    resp = await admin_client.get(
-        f"/api/v1/admin/accounts/{other}/agents",
-        headers={"X-API-Key": alice_key},
-    )
-
-    assert resp.status_code == 403
-
-
-async def test_list_agents_unknown_account_returns_404(admin_client: httpx.AsyncClient):
-    """Unknown accounts should use the same 404 behavior as other admin account APIs."""
-    resp = await admin_client.get(
-        f"/api/v1/admin/accounts/{_uid()}/agents",
-        headers=root_headers(),
-    )
-
-    assert resp.status_code == 404
-
-
 async def test_remove_user(admin_client: httpx.AsyncClient):
     """ROOT can remove a user."""
     acct = _uid()
@@ -691,8 +602,6 @@ async def test_trusted_mode_root_can_create_account(
         json={
             "account_id": acct,
             "admin_user_id": "alice",
-            "isolate_user_scope_by_agent": True,
-            "isolate_agent_scope_by_user": True,
         },
         headers=trusted_headers(
             account="platform",
@@ -704,8 +613,6 @@ async def test_trusted_mode_root_can_create_account(
     body = resp.json()
     assert body["result"]["account_id"] == acct
     assert body["result"]["admin_user_id"] == "alice"
-    assert body["result"]["isolate_user_scope_by_agent"] is True
-    assert body["result"]["isolate_agent_scope_by_user"] is True
     assert "user_key" not in body["result"]
 
 
@@ -904,11 +811,11 @@ async def test_trusted_mode_requires_matching_api_key_for_admin_api(
     assert resp.status_code == 401
 
 
-async def test_trusted_mode_create_account_persists_namespace_policy(
+async def test_trusted_mode_create_account_lists_current_account_metadata(
     trusted_admin_client: httpx.AsyncClient,
     trusted_admin_app,
 ):
-    """Trusted account creation should persist namespace policy for later requests."""
+    """Trusted account creation should list the current account metadata shape."""
     # Set gateway-admin to ROOT role first
     manager = trusted_admin_app.state.api_key_manager
     await manager.set_role("platform", "gateway-admin", "root")
@@ -919,8 +826,6 @@ async def test_trusted_mode_create_account_persists_namespace_policy(
         json={
             "account_id": acct,
             "admin_user_id": "alice",
-            "isolate_user_scope_by_agent": True,
-            "isolate_agent_scope_by_user": False,
         },
         headers=trusted_headers(
             account="platform",
@@ -931,5 +836,5 @@ async def test_trusted_mode_create_account_persists_namespace_policy(
     assert resp.status_code == 200
 
     manager = trusted_admin_app.state.api_key_manager
-    assert manager.get_account_policy(acct).isolate_user_scope_by_agent is True
-    assert manager.get_account_policy(acct).isolate_agent_scope_by_user is False
+    account = next(item for item in manager.get_accounts() if item["account_id"] == acct)
+    assert set(account) == {"account_id", "created_at", "user_count"}

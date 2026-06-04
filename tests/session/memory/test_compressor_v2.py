@@ -56,7 +56,7 @@ class MockVikingFS:
 
     def _get_parent_uri(self, uri: str) -> str:
         """Get parent directory URI."""
-        # Handle URIs like "viking://agent/default/memories/cards/file.md"
+        # Handle URIs like "viking://user/default/memories/cards/file.md"
         parts = uri.split("/")
         if len(parts) <= 3:
             return uri  # Root or protocol level
@@ -275,7 +275,7 @@ def create_test_conversation() -> List[Message]:
         role="user",
         parts=[
             TextPart(
-                "Cards are stored in viking://agent/{agent_space}/memories/cards, each card has name and content fields. "
+                "Cards are stored in viking://user/{user_space}/memories/cards, each card has name and content fields. "
                 "Events are stored in viking://user/{user_space}/memories/events, each event has event_name, event_time, and content fields."
             )
         ],
@@ -647,7 +647,7 @@ class TestCompressorV2:
             async def apply_operations(self, operations, ctx, **kwargs):
                 events.append("apply")
                 result = MemoryUpdateResult()
-                result.written_uris = ["viking://agent/default/memories/experiences/debug.md"]
+                result.written_uris = ["viking://user/default/memories/experiences/debug.md"]
                 return result
 
         config = SimpleNamespace(
@@ -673,7 +673,7 @@ class TestCompressorV2:
         )
 
         async def post_apply(result, inheritance_map, lock_handle):
-            assert result.written_uris == ["viking://agent/default/memories/experiences/debug.md"]
+            assert result.written_uris == ["viking://user/default/memories/experiences/debug.md"]
             assert inheritance_map == {}
             assert lock_handle is handle
             events.append("post_apply")
@@ -695,7 +695,7 @@ class TestCompressorV2:
                 post_apply=post_apply,
             )
 
-        assert result[0] == ["viking://agent/default/memories/experiences/debug.md"]
+        assert result[0] == ["viking://user/default/memories/experiences/debug.md"]
         assert events == ["acquire", "apply", "post_apply", "release"]
 
     @pytest.mark.asyncio
@@ -704,10 +704,10 @@ class TestCompressorV2:
         compressor = SessionCompressorV2(vikingdb=None)
         user = UserIdentifier.the_default_user()
         ctx = RequestContext(user=user, role=Role.ROOT)
-        exp_uri = "viking://agent/default/memories/experiences/debug.md"
+        exp_uri = "viking://user/default/memories/experiences/debug.md"
         events: List[str] = []
 
-        traj_uri = "viking://agent/default/memories/trajectories/traj-1.md"
+        traj_uri = "viking://user/default/memories/trajectories/traj-1.md"
 
         class FakeVikingFS:
             def __init__(self):
@@ -721,7 +721,7 @@ class TestCompressorV2:
                 }
 
             def _uri_to_path(self, uri: str, ctx=None) -> str:
-                return f"/local/default/agent/default/memories/experiences/{uri.rsplit('/', 1)[-1]}"
+                return f"/local/default/user/default/memories/experiences/{uri.rsplit('/', 1)[-1]}"
 
             async def read_file(self, uri: str, ctx=None):
                 events.append("read")
@@ -772,7 +772,7 @@ class TestCompressorV2:
 
         # event order: lock → read exp → write exp → read traj → write traj → release
         assert events == [
-            "exact:/local/default/agent/default/memories/experiences/debug.md",
+            "exact:/local/default/user/default/memories/experiences/debug.md",
             "read",  # exp read
             "write",  # exp write (exp.links)
             "read",  # traj read  (write_stored_links)
@@ -844,9 +844,8 @@ class TestExtractLoopPatchRepair:
             def get_read_scope(self):
                 return RoleScope(user_ids=["default"])
 
-            def fill_role_ids(self, item_dict, role_scope):
+            def fill_identity_fields(self, item_dict, role_scope):
                 item_dict.setdefault("user_id", "default")
-                item_dict.setdefault("agent_id", "default")
 
             def calculate_memory_uris(self, memory_type_schema, operation, extract_context):
                 return [target_uri]
@@ -942,9 +941,8 @@ class TestExtractLoopPatchRepair:
             def get_read_scope(self):
                 return RoleScope(user_ids=["default"])
 
-            def fill_role_ids(self, item_dict, role_scope):
+            def fill_identity_fields(self, item_dict, role_scope):
                 item_dict.setdefault("user_id", "default")
-                item_dict.setdefault("agent_id", "default")
 
             def calculate_memory_uris(self, memory_type_schema, operation, extract_context):
                 return [target_uri]
@@ -1039,9 +1037,8 @@ class TestExtractLoopPatchRepair:
             def get_read_scope(self):
                 return RoleScope(user_ids=["default"])
 
-            def fill_role_ids(self, item_dict, role_scope):
+            def fill_identity_fields(self, item_dict, role_scope):
                 item_dict.setdefault("user_id", "default")
-                item_dict.setdefault("agent_id", "default")
 
             def calculate_memory_uris(self, memory_type_schema, operation, extract_context):
                 return [target_uri]

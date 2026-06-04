@@ -136,7 +136,7 @@ class TestToolPart:
             tool_id="call-123",
             tool_name="search",
             tool_uri="viking://session/test/tools/call-123",
-            skill_uri="viking://agent/test/skills/search",
+            skill_uri="viking://user/test/skills/search",
             tool_input={"query": "test"},
             tool_output="Result",
             tool_status="completed",
@@ -155,7 +155,7 @@ class TestToolPart:
         assert part.tool_id == "call-123"
         assert part.tool_name == "search"
         assert part.tool_uri == "viking://session/test/tools/call-123"
-        assert part.skill_uri == "viking://agent/test/skills/search"
+        assert part.skill_uri == "viking://user/test/skills/search"
         assert part.tool_input == {"query": "test"}
         assert part.tool_output == "Result"
         assert part.tool_status == "completed"
@@ -232,7 +232,7 @@ class TestPartFromDict:
             "tool_id": "call-123",
             "tool_name": "search",
             "tool_uri": "viking://session/test/tools/call-123",
-            "skill_uri": "viking://agent/test/skills/search",
+            "skill_uri": "viking://user/test/skills/search",
             "tool_input": {"query": "test"},
             "tool_output": "Result",
             "tool_status": "completed",
@@ -578,20 +578,6 @@ class TestMessageFromDict:
         assert msg.parts[0].text == "Hello from legacy storage"
         assert msg.content == "Hello from legacy storage"
         assert msg.created_at is None
-
-    def test_from_dict_maps_legacy_role_id_to_peer_id(self):
-        """Legacy role_id values are read through the peer_id field."""
-        d = {
-            "id": "msg-legacy-peer",
-            "role": "user",
-            "role_id": "web:visitor:alice",
-            "parts": [{"type": "text", "text": "Hello"}],
-        }
-
-        msg = Message.from_dict(d)
-
-        assert msg.role_id == "web:visitor:alice"
-        assert msg.peer_id == "web:visitor:alice"
 
     def test_roundtrip(self):
         """Test to_dict -> from_dict roundtrip."""

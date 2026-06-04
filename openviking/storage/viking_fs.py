@@ -1806,7 +1806,7 @@ class VikingFS:
         """Extract space segment from URI if present.
 
         URIs are WYSIWYG: viking://{scope}/{space}/...
-        For user/agent, the second segment is space unless it's a known structure dir.
+        For user, the second segment is space unless it's a known structure dir.
         For session, the second segment is always space (when 3+ parts).
         Legacy temp URIs keep the historical shape viking://temp/<temp-id> and therefore
         intentionally have no space segment.

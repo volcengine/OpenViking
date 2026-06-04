@@ -248,8 +248,6 @@ export class OpenVikingClient {
     private readonly userId: string = "",
     /** When set, logs routing for find + session writes (tenant headers + paths; never apiKey). */
     private readonly routingDebugLog?: (message: string) => void,
-    private readonly isolateUserScopeByAgent = false,
-    private readonly isolateAgentScopeByUser = true,
   ) {}
 
   getDefaultAgentId(): string {

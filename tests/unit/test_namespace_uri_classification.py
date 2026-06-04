@@ -7,7 +7,7 @@ from openviking.core.namespace import (
     context_type_for_uri,
     owner_space_for_uri,
 )
-from openviking.server.identity import AccountNamespacePolicy, RequestContext, Role
+from openviking.server.identity import RequestContext, Role
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -41,9 +41,8 @@ def test_exact_memory_and_skill_root_detection():
 
 def test_owner_space_for_uri_uses_user_only():
     ctx = RequestContext(
-        user=UserIdentifier(account_id="acct", user_id="alice", agent_id="planner"),
+        user=UserIdentifier(account_id="acct", user_id="alice"),
         role=Role.ROOT,
-        namespace_policy=AccountNamespacePolicy(),
     )
 
     assert owner_space_for_uri("viking://user/alice/memories", ctx) == "alice"

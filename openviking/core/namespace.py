@@ -1,11 +1,11 @@
-"""Namespace policy helpers for account/user/session URIs."""
+"""Namespace helpers for account/user/session URIs."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Optional
 
-from openviking.server.identity import AccountNamespacePolicy, RequestContext
+from openviking.server.identity import RequestContext
 from openviking_cli.utils.uri import VikingURI
 
 _USER_SHORTHAND_SEGMENTS = {
@@ -21,7 +21,7 @@ _CONTENT_TYPES_BY_SCOPE = {
 
 
 class NamespaceShapeError(ValueError):
-    """Raised when a URI does not match the active namespace policy shape."""
+    """Raised when a URI does not match the supported namespace shape."""
 
 
 @dataclass(frozen=True)
@@ -31,7 +31,6 @@ class ResolvedNamespace:
     uri: str
     scope: str
     owner_user_id: Optional[str] = None
-    owner_agent_id: Optional[str] = None
     is_container: bool = False
 
 
@@ -157,11 +156,7 @@ def canonical_user_root(ctx: RequestContext) -> str:
 
 
 def user_space_fragment(ctx: RequestContext) -> str:
-    return to_user_space(ctx.namespace_policy, ctx.user.user_id)
-
-
-def to_user_space(namespace_policy, user_id) -> str:
-    return user_id
+    return ctx.user.user_id
 
 
 def canonical_session_uri(session_id: Optional[str] = None) -> str:
@@ -232,7 +227,6 @@ def owner_fields_for_uri(
     *,
     user=None,
     account_id: Optional[str] = None,
-    policy: Optional[AccountNamespacePolicy] = None,
 ) -> dict:
     resolved_ctx = ctx
     if resolved_ctx is None and user is not None:
@@ -241,7 +235,6 @@ def owner_fields_for_uri(
         resolved_ctx = RequestContext(
             user=user,
             role=Role.ROOT,
-            namespace_policy=policy or AccountNamespacePolicy(),
         )
     if resolved_ctx is None and account_id:
         from openviking.server.identity import Role
@@ -250,7 +243,6 @@ def owner_fields_for_uri(
         resolved_ctx = RequestContext(
             user=UserIdentifier(account_id, "default"),
             role=Role.ROOT,
-            namespace_policy=policy or AccountNamespacePolicy(),
         )
 
     try:
@@ -259,12 +251,10 @@ def owner_fields_for_uri(
         return {
             "uri": VikingURI.normalize(uri).rstrip("/"),
             "owner_user_id": None,
-            "owner_agent_id": None,
         }
     return {
         "uri": resolved.uri,
         "owner_user_id": resolved.owner_user_id,
-        "owner_agent_id": resolved.owner_agent_id,
     }
 
 
@@ -324,9 +314,3 @@ def _resolve_session_uri(parts: list[str]) -> ResolvedNamespace:
     if len(parts) > 2:
         canonical = f"{canonical}/{'/'.join(parts[2:])}"
     return ResolvedNamespace(uri=canonical, scope="session")
-
-
-def _require_policy(ctx: Optional[RequestContext]) -> AccountNamespacePolicy:
-    if ctx is None:
-        return AccountNamespacePolicy()
-    return ctx.namespace_policy

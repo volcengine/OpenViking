@@ -230,13 +230,11 @@ class InMemoryOpenVikingClient:
         content: str | None = None,
         parts: list[dict] | None = None,
         created_at: str | None = None,
-        role_id: str | None = None,
         peer_id: str | None = None,
-        agent_id: str | None = None,
         **_: Any,
     ) -> dict[str, Any]:
         message_parts = list(parts or [{"type": "text", "text": content or ""}])
-        normalized_peer_id = normalize_peer_id(peer_id, agent_id, role_id)
+        normalized_peer_id = normalize_peer_id(peer_id)
         message = {
             "id": f"msg_{uuid.uuid4().hex}",
             "role": role,
@@ -267,9 +265,7 @@ class InMemoryOpenVikingClient:
                 content=message.get("content"),
                 parts=message.get("parts"),
                 created_at=message.get("created_at"),
-                role_id=message.get("role_id"),
                 peer_id=message.get("peer_id"),
-                agent_id=message.get("agent_id"),
             )
             added += 1
         return {

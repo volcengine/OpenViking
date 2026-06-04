@@ -573,8 +573,6 @@ Add a message to the session. Supports two modes: simple text mode and Parts mod
 > 2. **Parts mode**: Use `parts` array (full Part support)
 >
 > If both `content` and `parts` are provided, `parts` takes precedence.
->
-> Legacy HTTP fields `role_id` and message-level `agent_id` are accepted as aliases for `peer_id`, but new clients should send only `peer_id`.
 
 **Part Types (Python SDK)**
 
@@ -1263,10 +1261,10 @@ An empty `memory_diff.json` (all counts zero) is written even when no memory ope
 | preferences | `user/memories/preferences/` | User preferences by topic |
 | entities | `user/memories/entities/` | Important entities (people, projects) |
 | events | `user/memories/events/` | Significant events |
-| cases | `agent/memories/cases/` | Problem-solution cases |
-| patterns | `agent/memories/patterns/` | Interaction patterns |
-| tools | `agent/memories/tools/` | Tool usage knowledge and best practices |
-| skills | `agent/memories/skills/` | Skill execution knowledge and workflow strategies |
+| trajectories | `user/memories/trajectories/` | Reusable operation contracts |
+| experiences | `user/memories/experiences/` | Reusable execution insights |
+| tools | `user/memories/tools/` | Tool usage knowledge and best practices |
+| skills | `user/memories/skills/` | Skill execution knowledge and workflow strategies |
 
 ---
 

@@ -379,15 +379,6 @@ async def test_user_key_cannot_access_admin_api(auth_client: httpx.AsyncClient, 
     assert resp.status_code == 403
 
 
-async def test_legacy_agent_header_is_ignored(auth_client: httpx.AsyncClient):
-    """Legacy X-OpenViking-Agent should not affect request identity."""
-    resp = await auth_client.get(
-        "/api/v1/system/status",
-        headers={"X-API-Key": ROOT_KEY, "X-OpenViking-Agent": "my-agent"},
-    )
-    assert resp.status_code == 200
-
-
 async def test_admin_key_cannot_switch_effective_user_within_account(auth_app):
     """ADMIN API keys cannot assert a different data-plane user in api_key mode."""
     manager = auth_app.state.api_key_manager
@@ -1073,22 +1064,6 @@ async def test_trusted_mode_admin_api_without_identity_defaults_to_root():
     request = _make_request(
         "/api/v1/admin/accounts",
         headers={},
-        auth_enabled=False,
-        auth_mode="trusted",
-    )
-
-    identity = await resolve_identity(request)
-
-    assert identity.role == Role.ROOT
-    assert identity.account_id == "trusted"
-    assert identity.user_id == "trusted"
-
-
-async def test_trusted_mode_admin_api_without_identity_ignores_agent_header():
-    """Trusted mode admin APIs without identity should ignore legacy agent headers."""
-    request = _make_request(
-        "/api/v1/admin/accounts",
-        headers={"X-OpenViking-Agent": "my-admin-agent"},
         auth_enabled=False,
         auth_mode="trusted",
     )
