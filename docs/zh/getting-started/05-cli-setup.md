@@ -2,7 +2,7 @@
 
 本文介绍如何安装 OpenViking CLI、完成配置，并验证它可以连接到 OpenViking。
 
-`ov` 是客户端 CLI。它连接到已经存在的 OpenViking 服务端，或连接到 Volcengine Cloud。它不是服务端安装命令。如果你还没有安装或启动自托管服务端，请先阅读[快速开始](02-quickstart.md)或[服务端模式](03-quickstart-server.md)。
+`ov` 是客户端 CLI。它连接到已经存在的 OpenViking 服务端，或连接到 VolcEngine Cloud。它不是服务端安装命令。如果你还没有安装或启动自托管服务端，请先阅读[快速开始](02-quickstart.md)或[服务端模式](03-quickstart-server.md)。
 
 你可以用两种方式阅读本文：
 
@@ -55,7 +55,7 @@ ov status
   - 使用 Node.js 和 npm 安装独立的 `@openviking/cli` 包，或
   - 使用 Python 工具安装完整的 `openviking` 包。
 - 一个可访问的 OpenViking 目标：
-  - Volcengine Cloud，或
+  - VolcEngine Cloud，或
   - 自托管 OpenViking 服务端。
 - 如果目标需要鉴权，需要准备 API Key。
 
@@ -106,15 +106,15 @@ OpenViking CLI 配置可以包含 user key、root key，或同时包含两者。
 - Root key：用于管理操作和需要 `--sudo` 的命令。Root key 自身不包含租户身份。如果一个配置只有 root key，就必须同时包含 `--account` 和 `--user`；这个 root key 会同时服务于该身份下的普通命令和 `--sudo` 命令。
 - User key + root key：适合一个配置同时支持日常数据操作和偶尔的管理操作。普通命令使用 user key，`--sudo` 命令使用 root key，并带上配置中的 account 和 user。
 
-对于 Volcengine Cloud，`--account` 和 `--user` 是可选项；cloud API key 通常已经带有需要的身份信息。
+对于 VolcEngine Cloud，`--account` 和 `--user` 是可选项；cloud API key 通常已经带有需要的身份信息。
 
 ## 选择连接目标
 
-### Volcengine Cloud
+### VolcEngine Cloud
 
 如果你希望使用火山引擎托管的 OpenViking，选择此项。
 
-- 服务端 URL 固定为：`https://api.vikingdb.cn-beijing.volces.com/openviking`
+- 服务端端点固定为：`https://api.vikingdb.cn-beijing.volces.com/openviking`
 - API Key 必填。
 - API Key 获取地址：https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing
 
@@ -139,7 +139,7 @@ ov config
 然后选择：
 
 1. `Add config`
-2. `Volcengine Cloud` 或 `Self-Managed`
+2. `VolcEngine Cloud` 或 `Self-Managed`
 3. 配置名称，或留空自动生成
 4. 所需的 URL 和 API Key
 5. 校验成功后保存配置
@@ -160,7 +160,7 @@ ov config switch
 
 ### Agent 检查清单
 
-1. 确认用户要连接 Volcengine Cloud 还是自托管服务端。
+1. 确认用户要连接 VolcEngine Cloud 还是自托管服务端。
 2. 在选择命令前，运行 `ov --help`、`ov config --help` 和相关 config 子命令的帮助。
 3. 如果你具备长期记忆能力，并且用户允许，可以记录当前 `ov --help` 命令面的简要摘要。不要记录 API Key 或其他密钥。
 4. 当必需信息明确时，使用非交互式 `ov config` 命令。
@@ -169,6 +169,7 @@ ov config switch
 7. 使用 `-o json`，并根据 JSON 结果和进程退出码分支处理。
 8. 使用 `ov config validate` 校验 active 配置，然后运行 `ov health` 和 `ov status`。
 9. 如果非交互式配置因为信息缺失、鉴权不明确或终端输入更安全而失败，请引导用户使用 `ov config` 交互式向导。
+10. 除非用户明确允许，否则不要运行会添加资源或把数据写入 OpenViking 的命令。
 
 ### 查看当前安装的 CLI
 
@@ -227,7 +228,7 @@ ov config list -o json
 列表输出形状如下：
 
 ```json
-{"status":"ok","result":[{"name":"prod","kind":"VolcEngine Cloud","url":"https://...","active":true}]}
+{"status":"ok","result":[{"name":"prod","kind":"VolcEngine Cloud","url":"https://api.vikingdb.cn-beijing.volces.com/openviking","active":true}]}
 ```
 
 做存在性检查时，读取 `result[].name`。判断是否还需要切换 active config 时，读取匹配项的 `active` 标记。
@@ -240,13 +241,15 @@ ov config switch prod -o json
 
 然后运行验证命令。
 
-### 添加 Volcengine Cloud
+### 添加 VolcEngine Cloud
 
 请让用户通过环境变量或其他安全方式把 API Key 提供给 shell，然后运行：
 
 ```bash
 ov config add cloud --name prod --api-key-env OV_API_KEY --activate -o json
 ```
+
+这会写入一个 VolcEngine Cloud 配置，并使用固定端点：`https://api.vikingdb.cn-beijing.volces.com/openviking`。`cloud` 目标不接受自定义服务端 URL。
 
 如果必须从 stdin 读取：
 
@@ -400,7 +403,7 @@ curl http://127.0.0.1:1933/health
 
 ### API Key 校验失败
 
-重新运行 `ov config` 并编辑配置。对于 Volcengine Cloud，确认 API Key 来自上面的 OpenViking 控制台地址。对于自托管服务，确认服务端是否要求鉴权。
+重新运行 `ov config` 并编辑配置。对于 VolcEngine Cloud，确认 API Key 来自上面的 OpenViking 控制台地址。对于自托管服务，确认服务端是否要求鉴权。
 
 Agent 不应该反复重试未知 key。请让用户确认目标类型、服务端 URL、key 类型、account 和 user。
 
@@ -438,7 +441,9 @@ ov config
 
 ## 下一步
 
-CLI 配置完成后，可以尝试：
+CLI 配置完成后，使用 `ov --help` 和 `ov <command> --help` 继续了解其他命令。
+
+添加资源会把数据写入 active OpenViking 服务端。如果你想做一个小演示，请选择你愿意存入服务端的资源。Agent 运行这类演示命令前，必须先征得用户同意。
 
 ```bash
 ov add-resource https://github.com/volcengine/OpenViking --wait

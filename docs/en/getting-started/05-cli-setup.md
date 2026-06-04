@@ -2,7 +2,7 @@
 
 This guide helps you install the OpenViking CLI, configure it, and verify that it can connect to OpenViking.
 
-`ov` is the client CLI. It connects to an existing OpenViking server or to Volcengine Cloud. It does not replace server setup. If you still need to install or start a self-managed server, follow the [Quick Start](02-quickstart.md) or the [Server Mode guide](03-quickstart-server.md) first.
+`ov` is the client CLI. It connects to an existing OpenViking server or to VolcEngine Cloud. It does not replace server setup. If you still need to install or start a self-managed server, follow the [Quick Start](02-quickstart.md) or the [Server Mode guide](03-quickstart-server.md) first.
 
 Use this page in either of two ways:
 
@@ -55,7 +55,7 @@ You need:
   - Node.js and npm for the standalone `@openviking/cli` package, or
   - Python tooling if you install the full `openviking` package.
 - A reachable OpenViking target:
-  - Volcengine Cloud, or
+  - VolcEngine Cloud, or
   - a self-managed OpenViking server.
 - An API key if your target requires authentication.
 
@@ -106,15 +106,15 @@ OpenViking CLI configs can hold a user key, a root key, or both.
 - Root key: use this for admin work and commands that require `--sudo`. A root key has no built-in tenant identity. If a config only has a root key, it must also include `--account` and `--user`; that root key then serves normal commands for that identity and `--sudo` commands.
 - User key plus root key: use this when the same config should support daily data work and occasional admin work. Normal commands use the user key. `--sudo` commands use the root key with the configured account and user.
 
-For Volcengine Cloud, `--account` and `--user` are optional; cloud API keys normally carry the required identity.
+For VolcEngine Cloud, `--account` and `--user` are optional; cloud API keys normally carry the required identity.
 
 ## Choose a Target
 
-### Volcengine Cloud
+### VolcEngine Cloud
 
-Choose this when you want OpenViking hosted by Volcengine.
+Choose this when you want OpenViking hosted on VolcEngine Cloud.
 
-- Server URL is fixed: `https://api.vikingdb.cn-beijing.volces.com/openviking`
+- Server endpoint is fixed: `https://api.vikingdb.cn-beijing.volces.com/openviking`
 - API key is required.
 - Get the API key from: https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing
 
@@ -139,7 +139,7 @@ ov config
 Then choose:
 
 1. `Add config`
-2. `Volcengine Cloud` or `Self-Managed`
+2. `VolcEngine Cloud` or `Self-Managed`
 3. A config name, or leave it empty to generate one
 4. The required URL and API key values
 5. Save the config after validation
@@ -160,7 +160,7 @@ Use this path when an agent is setting up `ov` for a user. The agent should read
 
 ### Agent Checklist
 
-1. Confirm whether the user wants Volcengine Cloud or a self-managed server.
+1. Confirm whether the user wants VolcEngine Cloud or a self-managed server.
 2. Run `ov --help`, `ov config --help`, and the relevant config subcommand help before choosing commands.
 3. If you have long-term memory and the user permits it, store a short summary of the current `ov --help` command surface. Do not store API keys or other secrets.
 4. Use non-interactive `ov config` commands when the required values are known.
@@ -169,6 +169,7 @@ Use this path when an agent is setting up `ov` for a user. The agent should read
 7. Use `-o json` and branch on the JSON result plus the process exit code.
 8. Validate the active config with `ov config validate`, then check `ov health` and `ov status`.
 9. If non-interactive setup fails because values are missing, auth is unclear, or terminal input is safer, guide the user through `ov config` instead.
+10. Do not run commands that add resources or otherwise store data in OpenViking unless the user explicitly permits that action.
 
 ### Inspect the Installed CLI
 
@@ -227,7 +228,7 @@ ov config list -o json
 The list output shape is:
 
 ```json
-{"status":"ok","result":[{"name":"prod","kind":"VolcEngine Cloud","url":"https://...","active":true}]}
+{"status":"ok","result":[{"name":"prod","kind":"VolcEngine Cloud","url":"https://api.vikingdb.cn-beijing.volces.com/openviking","active":true}]}
 ```
 
 For an existence check, inspect `result[].name`. To decide whether a config already needs switching, inspect the matching entry's `active` flag.
@@ -240,13 +241,15 @@ ov config switch prod -o json
 
 Then run the verification commands.
 
-### Add Volcengine Cloud
+### Add VolcEngine Cloud
 
 Ask the user to provide the API key through an environment variable or another secure channel available to the shell. Then run:
 
 ```bash
 ov config add cloud --name prod --api-key-env OV_API_KEY --activate -o json
 ```
+
+This writes a VolcEngine Cloud config using the fixed endpoint `https://api.vikingdb.cn-beijing.volces.com/openviking`. The `cloud` target does not take a custom server URL.
 
 If you must read from stdin instead:
 
@@ -400,7 +403,7 @@ If it fails, start the server before configuring `ov`. See the [Server Mode guid
 
 ### API Key Validation Fails
 
-Run `ov config` again and edit the config. For Volcengine Cloud, confirm the key came from the OpenViking console URL above. For self-managed servers, confirm whether the server requires authentication.
+Run `ov config` again and edit the config. For VolcEngine Cloud, confirm the key came from the OpenViking console URL above. For self-managed servers, confirm whether the server requires authentication.
 
 Agents should not keep retrying unknown keys. Ask the user to confirm the target type, server URL, key type, account, and user.
 
@@ -438,7 +441,9 @@ Use `ov config`. Do not use old or removed setup commands such as `ov config set
 
 ## Next Steps
 
-Once the CLI is configured:
+Once the CLI is configured, use `ov --help` and `ov <command> --help` to learn the rest of the CLI.
+
+Adding a resource writes data into the active OpenViking server. If you want a small demo, use a resource you are comfortable storing. Agents must ask the user for permission before running this kind of demo command.
 
 ```bash
 ov add-resource https://github.com/volcengine/OpenViking --wait
