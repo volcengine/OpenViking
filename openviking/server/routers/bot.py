@@ -56,6 +56,39 @@ def get_bot_url() -> str:
     return BOT_API_URL
 
 
+def _extract_forward_api_key(request: Request) -> str:
+    api_key = request.headers.get("X-API-Key") or request.headers.get("x-api-key")
+    if api_key:
+        return api_key
+    authorization = request.headers.get("Authorization") or request.headers.get("authorization")
+    if authorization and authorization.lower().startswith("bearer "):
+        return authorization[7:].strip()
+    return ""
+
+
+def _attach_openviking_connection(
+    body: dict,
+    request: Request,
+    ctx: RequestContext,
+) -> dict:
+    """Attach the authenticated Studio connection to the bot request body.
+
+    The OpenViking proxy authenticates the browser request before forwarding it to
+    vikingbot. Bot tools must keep using that same identity instead of falling back
+    to vikingbot's static root/user-key configuration.
+    """
+    enriched = dict(body)
+    enriched["openviking_connection"] = {
+        "api_key": _extract_forward_api_key(request),
+        "account_id": ctx.user.account_id,
+        "user_id": ctx.user.user_id,
+        "agent_id": ctx.user.agent_id,
+        "role": getattr(ctx.role, "value", str(ctx.role)),
+        "namespace_policy": ctx.namespace_policy.to_dict(),
+    }
+    return enriched
+
+
 @router.get("/health")
 async def health_check(request: Request):
     """Health check endpoint for Bot API.
@@ -118,7 +151,7 @@ async def chat(
             # Forward to Vikingbot OpenAPIChannel chat endpoint
             response = await client.post(
                 f"{bot_url}/bot/v1/chat",
-                json=body,
+                json=_attach_openviking_connection(body, request, _ctx),
                 headers=headers,
                 timeout=300.0,  # 5 minute timeout for chat
             )
@@ -226,7 +259,7 @@ async def chat_stream(
                 async with client.stream(
                     "POST",
                     f"{bot_url}/bot/v1/chat/stream",
-                    json=body,
+                    json=_attach_openviking_connection(body, request, _ctx),
                     headers=headers,
                     timeout=300.0,
                 ) as response:

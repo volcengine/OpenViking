@@ -23,19 +23,13 @@ export type TerminalEntry = {
   refs?: ResourceRef[]
 }
 
-export type TerminalCommandKey =
-  | 'status'
-  | 'ls'
-  | 'search'
-  | 'find'
-  | 'read'
-  | 'addResource'
-
 export type TerminalCommandSuggestion = {
+  adminOnly?: boolean
   command: string
   /** i18n subkey under `playground.terminal.commands`. */
-  key: TerminalCommandKey
+  key: string
   insertText: string
+  executable?: boolean
 }
 
 /** A {@link TerminalCommandSuggestion} with its label/usage resolved via i18n. */

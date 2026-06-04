@@ -25,6 +25,8 @@ class _DummyHTTPClient:
 
     def __init__(self, **kwargs):
         self.kwargs = kwargs
+        self.find_calls = []
+        self.ls_calls = []
         _DummyHTTPClient.instances.append(self)
 
     async def initialize(self):
@@ -65,6 +67,11 @@ class _DummyHTTPClient:
         return None
 
     async def find(self, *_args, **_kwargs):
+        self.find_calls.append((_args, _kwargs))
+        return []
+
+    async def ls(self, path, recursive=False):
+        self.ls_calls.append((path, recursive))
         return []
 
     async def search(self, *_args, **_kwargs):
@@ -133,6 +140,68 @@ def test_viking_client_init_user_mode_does_not_set_user_or_account(monkeypatch):
     assert "account" not in first.kwargs
 
 
+def test_viking_client_request_connection_uses_active_identity(monkeypatch):
+    monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("root"))
+
+    client = VikingClient(
+        agent_id="workspace#channel",
+        connection={
+            "server_url": "http://studio.local",
+            "api_key": "anonymous-key",
+            "account_id": "acct",
+            "user_id": "anonymous",
+            "agent_id": "web-playground",
+            "role": "user",
+            "namespace_policy": {
+                "isolate_user_scope_by_agent": True,
+                "isolate_agent_scope_by_user": True,
+            },
+        },
+    )
+
+    first = _DummyHTTPClient.instances[0]
+    assert client.api_key_type == "user"
+    assert client.account_id == "acct"
+    assert client.admin_user_id == "anonymous"
+    assert client.agent_id == "web-playground"
+    assert client._apikey_manager is None
+    assert client._namespace_policy_loaded is True
+    assert client.should_sender_fanout() is False
+    assert client._memory_target_uri(None) == "viking://user/anonymous/agent/web-playground/memories/"
+    assert first.kwargs == {
+        "url": "http://studio.local",
+        "api_key": "anonymous-key",
+        "agent_id": "web-playground",
+        "profile_enabled": False,
+    }
+
+
+def test_viking_client_request_connection_preserves_admin_scope(monkeypatch):
+    monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("root"))
+
+    VikingClient(
+        agent_id="workspace#channel",
+        connection={
+            "server_url": "http://studio.local",
+            "api_key": "admin-key",
+            "account_id": "acct",
+            "user_id": "default",
+            "agent_id": "web-playground",
+            "role": "admin",
+        },
+    )
+
+    first = _DummyHTTPClient.instances[0]
+    assert first.kwargs == {
+        "url": "http://studio.local",
+        "api_key": "admin-key",
+        "agent_id": "web-playground",
+        "profile_enabled": False,
+        "account": "acct",
+        "user": "default",
+    }
+
+
 @pytest.mark.asyncio
 async def test_commit_user_mode_ignores_user_specific_key_flow(monkeypatch):
     monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("user"))
@@ -152,6 +221,76 @@ async def test_commit_user_mode_ignores_user_specific_key_flow(monkeypatch):
     )
 
     assert result["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_commit_request_connection_bypasses_cached_user_key_flow(monkeypatch):
+    monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("root"))
+    client = VikingClient(
+        agent_id="workspace",
+        connection={
+            "server_url": "http://studio.local",
+            "api_key": "anonymous-key",
+            "account_id": "acct",
+            "user_id": "anonymous",
+            "agent_id": "web-playground",
+        },
+    )
+
+    async def _must_not_call(*_args, **_kwargs):
+        raise AssertionError("request connection should not call user key management path")
+
+    monkeypatch.setattr(client, "_check_user_exists", _must_not_call)
+    monkeypatch.setattr(client, "_initialize_user", _must_not_call)
+    monkeypatch.setattr(client, "_get_or_create_user_apikey", _must_not_call)
+
+    result = await client.commit(
+        session_id="sess",
+        messages=[{"role": "user", "content": "hello", "tools_used": []}],
+        user_id="anonymous",
+    )
+
+    assert result["success"] is True
+    assert [inst.kwargs["api_key"] for inst in _DummyHTTPClient.instances] == ["anonymous-key"]
+
+
+@pytest.mark.asyncio
+async def test_request_connection_search_memory_uses_request_client_only(monkeypatch):
+    monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("root"))
+    client = VikingClient(
+        agent_id="workspace",
+        connection={
+            "server_url": "http://studio.local",
+            "api_key": "anonymous-key",
+            "account_id": "acct",
+            "user_id": "anonymous",
+            "agent_id": "web-playground",
+            "role": "user",
+            "namespace_policy": {
+                "isolate_user_scope_by_agent": False,
+                "isolate_agent_scope_by_user": False,
+            },
+        },
+    )
+
+    async def _must_not_call(*_args, **_kwargs):
+        raise AssertionError("request connection should not call user management path")
+
+    monkeypatch.setattr(client, "_initialize_user", _must_not_call)
+    monkeypatch.setattr(client, "_get_or_create_user_apikey", _must_not_call)
+
+    result = await client.search_memory(
+        query="php",
+        user_ids=["anonymous"],
+        agent_user_id="anonymous",
+        limit=10,
+    )
+
+    assert result == {"user_memory": [], "agent_memory": []}
+    first = _DummyHTTPClient.instances[0]
+    assert len(first.find_calls) == 2
+    assert first.find_calls[0][1]["target_uri"] == "viking://user/anonymous/memories/"
+    assert first.find_calls[1][1]["target_uri"] == "viking://agent/web-playground/memories/"
 
 
 @pytest.mark.asyncio

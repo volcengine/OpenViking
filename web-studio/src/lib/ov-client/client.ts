@@ -158,6 +158,7 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
       readSessionStorage(runtimeOptions.apiKeyStorageKey),
     accountId: options.connection?.accountId ?? '',
     agentId: options.connection?.agentId ?? WEB_PLAYGROUND_AGENT_ID,
+    role: options.connection?.role ?? 'unknown',
     userId: options.connection?.userId ?? '',
   }
 
@@ -178,8 +179,13 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
     }
 
     setOptionalHeader(headers, 'X-API-Key', connection.apiKey)
-    setOptionalHeader(headers, 'X-OpenViking-Account', connection.accountId)
-    setOptionalHeader(headers, 'X-OpenViking-User', connection.userId)
+    if (connection.role === 'user') {
+      headers.delete('X-OpenViking-Account')
+      headers.delete('X-OpenViking-User')
+    } else {
+      setOptionalHeader(headers, 'X-OpenViking-Account', connection.accountId)
+      setOptionalHeader(headers, 'X-OpenViking-User', connection.userId)
+    }
     headers.set(
       'X-OpenViking-Agent',
       connection.agentId || WEB_PLAYGROUND_AGENT_ID,
@@ -257,6 +263,7 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
       apiKey: '',
       accountId: '',
       agentId: WEB_PLAYGROUND_AGENT_ID,
+      role: 'unknown',
       userId: '',
     }
     persistApiKey()

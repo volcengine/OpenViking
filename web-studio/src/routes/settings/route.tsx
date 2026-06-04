@@ -60,6 +60,7 @@ import {
   AlertDialogTitle,
 } from '#/components/ui/alert-dialog'
 import { useAppConnection } from '#/hooks/use-app-connection'
+import { normalizeBaseUrl } from '#/hooks/use-server-mode'
 import { cn } from '#/lib/utils'
 import type { ConnectionDraft } from '#/hooks/use-app-connection'
 
@@ -125,6 +126,70 @@ function maskApiKey(value: string | undefined): string {
   return `${value.slice(0, 10)}...${value.slice(-6)}`
 }
 
+function normalizeSettingsConnectionDraft(
+  connection: ConnectionDraft,
+): ConnectionDraft {
+  return {
+    accountId: connection.accountId.trim(),
+    agentId: connection.agentId.trim() || 'web-playground',
+    apiKey: connection.apiKey.trim(),
+    baseUrl: normalizeBaseUrl(connection.baseUrl),
+    userId: connection.userId.trim(),
+  }
+}
+
+function isSameConnectionDraft(
+  left: ConnectionDraft,
+  right: ConnectionDraft,
+): boolean {
+  const normalizedLeft = normalizeSettingsConnectionDraft(left)
+  const normalizedRight = normalizeSettingsConnectionDraft(right)
+
+  return (
+    normalizedLeft.accountId === normalizedRight.accountId &&
+    normalizedLeft.agentId === normalizedRight.agentId &&
+    normalizedLeft.apiKey === normalizedRight.apiKey &&
+    normalizedLeft.baseUrl === normalizedRight.baseUrl &&
+    normalizedLeft.userId === normalizedRight.userId
+  )
+}
+
+async function copyText(value: string): Promise<void> {
+  const clipboard =
+    'clipboard' in navigator
+      ? (navigator.clipboard as Clipboard | undefined)
+      : undefined
+
+  if (clipboard) {
+    try {
+      await clipboard.writeText(value)
+      return
+    } catch {
+      // Fall back to a hidden textarea for non-secure contexts or denied clipboard permission.
+    }
+  }
+
+  const textarea = document.createElement('textarea')
+  textarea.value = value
+  textarea.readOnly = true
+  textarea.style.position = 'fixed'
+  textarea.style.left = '-9999px'
+  textarea.style.top = '0'
+  textarea.style.opacity = '0'
+
+  document.body.appendChild(textarea)
+  textarea.focus()
+  textarea.select()
+
+  try {
+    if (!document.execCommand('copy')) {
+      throw new Error('Copy command failed')
+    }
+  } finally {
+    document.body.removeChild(textarea)
+  }
+}
+
 function resolveKeyLabel(user: AdminUser): string {
   return user.apiKey ? maskApiKey(user.apiKey) : user.keyPrefix || '-'
 }
@@ -167,8 +232,12 @@ function KeyResultCard({
   }
 
   async function copyKey(): Promise<void> {
-    await navigator.clipboard.writeText(result.apiKey)
-    toast.success(t('toast.copied'))
+    try {
+      await copyText(result.apiKey)
+      toast.success(t('toast.copied'))
+    } catch {
+      toast.error(t('toast.copyFailed'))
+    }
   }
 
   return (
@@ -514,7 +583,13 @@ function AddUserDialog({
 function SettingsRoute() {
   const { t } = useTranslation('settings')
   const queryClient = useQueryClient()
-  const { connection, saveConnection, serverMode } = useAppConnection()
+  const {
+    connection,
+    connectionRole,
+    isConnectionRoleLoading,
+    saveConnection,
+    serverMode,
+  } = useAppConnection()
   const [draft, setDraft] = React.useState<ConnectionDraft>(connection)
   const [managedAccountId, setManagedAccountId] = React.useState(
     connection.accountId || DEFAULT_ACCOUNT_ID,
@@ -529,7 +604,14 @@ function SettingsRoute() {
     setDraft(connection)
   }, [connection])
 
-  const canQueryAdmin = Boolean(draft.apiKey.trim())
+  const isDraftDirty = React.useMemo(
+    () => !isSameConnectionDraft(draft, connection),
+    [connection, draft],
+  )
+
+  const isRegularUser = connectionRole === 'user'
+  const canQueryAdmin =
+    Boolean(draft.apiKey.trim()) && !isRegularUser && !isConnectionRoleLoading
   const adminConnection = React.useMemo<AdminConnection>(
     () => ({
       accountId: draft.accountId || DEFAULT_ACCOUNT_ID,
@@ -589,6 +671,10 @@ function SettingsRoute() {
   })
 
   React.useEffect(() => {
+    if (isDraftDirty) {
+      return
+    }
+
     if (!accountOptions.length) {
       return
     }
@@ -606,9 +692,13 @@ function SettingsRoute() {
     setManagedAccountId((current) =>
       current && accountIds.includes(current) ? current : preferred,
     )
-  }, [accountOptions])
+  }, [accountOptions, isDraftDirty])
 
   React.useEffect(() => {
+    if (isDraftDirty) {
+      return
+    }
+
     const users = usersQuery.data
     if (!users?.length) {
       return
@@ -623,7 +713,7 @@ function SettingsRoute() {
         ? current
         : { ...current, userId: preferred },
     )
-  }, [usersQuery.data])
+  }, [isDraftDirty, usersQuery.data])
 
   const createAccountMutation = useMutation({
     mutationFn: (input: CreateAccountInput) =>
@@ -678,9 +768,7 @@ function SettingsRoute() {
   const users = usersQuery.data ?? []
   const managedUsers = managedUsersQuery.data ?? []
   const totalAccounts = accountOptions.length
-  const totalUsers =
-    accountOptions.reduce((sum, account) => sum + account.userCount, 0) ||
-    managedUsers.length
+  const visibleUsers = managedUsers.length
   const visibleKeys = managedUsers.filter(
     (user) => user.apiKey || user.keyPrefix,
   ).length
@@ -692,7 +780,9 @@ function SettingsRoute() {
   }
 
   function handleSave(): void {
-    saveConnection(draft)
+    const next = normalizeSettingsConnectionDraft(draft)
+    setDraft(next)
+    saveConnection(next)
     toast.success(t('toast.connectionSaved'))
   }
 
@@ -708,8 +798,12 @@ function SettingsRoute() {
     if (!value) {
       return
     }
-    await navigator.clipboard.writeText(value)
-    toast.success(t('toast.copied'))
+    try {
+      await copyText(value)
+      toast.success(t('toast.copied'))
+    } catch {
+      toast.error(t('toast.copyFailed'))
+    }
   }
 
   return (
@@ -857,223 +951,236 @@ function SettingsRoute() {
         </CardContent>
       </Card>
 
-      <div className="grid gap-3 md:grid-cols-3">
-        <StatCard
-          label={t('stats.accounts')}
-          value={totalAccounts || '-'}
-          icon={<ServerIcon className="size-4" />}
-        />
-        <StatCard
-          label={t('stats.users')}
-          value={totalUsers || '-'}
-          icon={<UsersRoundIcon className="size-4" />}
-        />
-        <StatCard
-          label={t('stats.apiKeys')}
-          value={visibleKeys || '-'}
-          icon={<KeyRoundIcon className="size-4" />}
-        />
-      </div>
-
-      {keyResult ? (
-        <KeyResultCard result={keyResult} onClear={() => setKeyResult(null)} />
-      ) : null}
-
-      <Card className="overflow-hidden">
-        <CardHeader className="gap-4 border-b bg-muted/20">
-          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
-            <div className="min-w-0">
-              <CardTitle>{t('management.title')}</CardTitle>
-              <CardDescription>{t('management.description')}</CardDescription>
-            </div>
-            <div className="flex flex-wrap items-center gap-2 lg:flex-nowrap lg:justify-end">
-              <div className="min-w-40">
-                <AccountSelect
-                  accounts={accountOptions}
-                  disabled={!canQueryAdmin || accountsQuery.isLoading}
-                  label={t('management.accountFilter')}
-                  value={managedAccountId}
-                  onChange={setManagedAccountId}
-                />
-              </div>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => void refreshAdmin()}
-                disabled={!canQueryAdmin || managedUsersQuery.isFetching}
-              >
-                <RefreshCwIcon
-                  className={cn(managedUsersQuery.isFetching && 'animate-spin')}
-                />
-                {t('actions.refresh')}
-              </Button>
-              <Button
-                type="button"
-                onClick={() => setAddAccountOpen(true)}
-                disabled={!canQueryAdmin}
-              >
-                <PlusIcon />
-                {t('actions.addAccount')}
-              </Button>
-              <Button
-                type="button"
-                onClick={() => setAddUserOpen(true)}
-                disabled={!canQueryAdmin}
-              >
-                <PlusIcon />
-                {t('actions.addUser')}
-              </Button>
-            </div>
+      {!isRegularUser ? (
+        <>
+          <div className="grid gap-3 md:grid-cols-3">
+            <StatCard
+              label={t('stats.accounts')}
+              value={totalAccounts || '-'}
+              icon={<ServerIcon className="size-4" />}
+            />
+            <StatCard
+              label={t('stats.users')}
+              value={visibleUsers || '-'}
+              icon={<UsersRoundIcon className="size-4" />}
+            />
+            <StatCard
+              label={t('stats.apiKeys')}
+              value={visibleKeys || '-'}
+              icon={<KeyRoundIcon className="size-4" />}
+            />
           </div>
-        </CardHeader>
-        <CardContent className="p-0">
-          {adminUnavailable ? (
-            <div className="flex min-h-56 flex-col items-center justify-center gap-2 px-6 text-center">
-              <div className="flex size-11 items-center justify-center rounded-lg border bg-muted/30 text-muted-foreground">
-                <KeyRoundIcon className="size-5" />
-              </div>
-              <p className="font-medium">{t('empty.adminTitle')}</p>
-              <p className="max-w-lg text-sm text-muted-foreground">
-                {t('empty.adminDescription')}
-              </p>
-            </div>
-          ) : managedUsersQuery.isLoading ? (
-            <div className="flex min-h-56 items-center justify-center text-sm text-muted-foreground">
-              {t('loading')}
-            </div>
-          ) : managedUsers.length === 0 ? (
-            <div className="flex min-h-56 flex-col items-center justify-center gap-2 px-6 text-center">
-              <div className="flex size-11 items-center justify-center rounded-lg border bg-muted/30 text-muted-foreground">
-                <UserRoundIcon className="size-5" />
-              </div>
-              <p className="font-medium">{t('empty.usersTitle')}</p>
-              <p className="text-sm text-muted-foreground">
-                {t('empty.usersDescription')}
-              </p>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow className="bg-muted/20 hover:bg-muted/20">
-                    <TableHead>{t('table.account')}</TableHead>
-                    <TableHead>{t('table.user')}</TableHead>
-                    <TableHead>{t('table.role')}</TableHead>
-                    <TableHead>{t('table.apiKey')}</TableHead>
-                    <TableHead className="text-right">
-                      {t('table.actions')}
-                    </TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {managedUsers.map((user) => (
-                    <TableRow key={`${user.accountId}:${user.userId}`}>
-                      <TableCell className="font-mono text-xs text-muted-foreground">
-                        {user.accountId}
-                      </TableCell>
-                      <TableCell className="font-medium">
-                        {user.userId}
-                      </TableCell>
-                      <TableCell>
-                        <Badge
-                          variant={
-                            user.role === 'admin' ? 'secondary' : 'outline'
-                          }
-                        >
-                          {t(`roles.${user.role}`, {
-                            defaultValue: user.role,
-                          })}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex min-w-0 items-center gap-2">
-                          <code className="max-w-[20rem] truncate rounded-md border bg-muted/40 px-2 py-1 font-mono text-xs">
-                            {resolveKeyLabel(user)}
-                          </code>
-                          {user.apiKey ? (
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon-xs"
-                              aria-label={t('actions.copy')}
-                              onClick={() => void copyKey(user.apiKey)}
-                            >
-                              <CopyIcon />
-                            </Button>
-                          ) : null}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex justify-end gap-2">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setPendingRegenerateUser(user)}
-                            disabled={regenerateMutation.isPending}
-                          >
-                            <RotateCwIcon />
-                            {t('actions.regenerate')}
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
 
-      <AddAccountDialog
-        open={addAccountOpen}
-        onOpenChange={setAddAccountOpen}
-        isPending={createAccountMutation.isPending}
-        onCreate={(next) => createAccountMutation.mutate(next)}
-      />
-      <AddUserDialog
-        open={addUserOpen}
-        onOpenChange={setAddUserOpen}
-        accounts={accountOptions}
-        defaultAccountId={managedAccountId}
-        isPending={createUserMutation.isPending}
-        onCreate={(next) => createUserMutation.mutate(next)}
-      />
-      <AlertDialog
-        open={Boolean(pendingRegenerateUser)}
-        onOpenChange={(open) => {
-          if (!open) {
-            setPendingRegenerateUser(null)
-          }
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t('dialogs.regenerate.title')}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {t('dialogs.regenerate.description', {
-                account: pendingRegenerateUser?.accountId,
-                user: pendingRegenerateUser?.userId,
-              })}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t('actions.cancel')}</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                if (pendingRegenerateUser) {
-                  regenerateMutation.mutate(pendingRegenerateUser)
-                }
-              }}
-              disabled={regenerateMutation.isPending}
-            >
-              <RotateCwIcon />
-              {t('actions.regenerate')}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+          {keyResult ? (
+            <KeyResultCard
+              result={keyResult}
+              onClear={() => setKeyResult(null)}
+            />
+          ) : null}
+
+          <Card className="overflow-hidden">
+            <CardHeader className="gap-4 border-b bg-muted/20">
+              <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+                <div className="min-w-0">
+                  <CardTitle>{t('management.title')}</CardTitle>
+                  <CardDescription>
+                    {t('management.description')}
+                  </CardDescription>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 lg:flex-nowrap lg:justify-end">
+                  <div className="min-w-40">
+                    <AccountSelect
+                      accounts={accountOptions}
+                      disabled={!canQueryAdmin || accountsQuery.isLoading}
+                      label={t('management.accountFilter')}
+                      value={managedAccountId}
+                      onChange={setManagedAccountId}
+                    />
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => void refreshAdmin()}
+                    disabled={!canQueryAdmin || managedUsersQuery.isFetching}
+                  >
+                    <RefreshCwIcon
+                      className={cn(
+                        managedUsersQuery.isFetching && 'animate-spin',
+                      )}
+                    />
+                    {t('actions.refresh')}
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={() => setAddAccountOpen(true)}
+                    disabled={!canQueryAdmin}
+                  >
+                    <PlusIcon />
+                    {t('actions.addAccount')}
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={() => setAddUserOpen(true)}
+                    disabled={!canQueryAdmin}
+                  >
+                    <PlusIcon />
+                    {t('actions.addUser')}
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="p-0">
+              {adminUnavailable ? (
+                <div className="flex min-h-56 flex-col items-center justify-center gap-2 px-6 text-center">
+                  <div className="flex size-11 items-center justify-center rounded-lg border bg-muted/30 text-muted-foreground">
+                    <KeyRoundIcon className="size-5" />
+                  </div>
+                  <p className="font-medium">{t('empty.adminTitle')}</p>
+                  <p className="max-w-lg text-sm text-muted-foreground">
+                    {t('empty.adminDescription')}
+                  </p>
+                </div>
+              ) : managedUsersQuery.isLoading ? (
+                <div className="flex min-h-56 items-center justify-center text-sm text-muted-foreground">
+                  {t('loading')}
+                </div>
+              ) : managedUsers.length === 0 ? (
+                <div className="flex min-h-56 flex-col items-center justify-center gap-2 px-6 text-center">
+                  <div className="flex size-11 items-center justify-center rounded-lg border bg-muted/30 text-muted-foreground">
+                    <UserRoundIcon className="size-5" />
+                  </div>
+                  <p className="font-medium">{t('empty.usersTitle')}</p>
+                  <p className="text-sm text-muted-foreground">
+                    {t('empty.usersDescription')}
+                  </p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="bg-muted/20 hover:bg-muted/20">
+                        <TableHead>{t('table.account')}</TableHead>
+                        <TableHead>{t('table.user')}</TableHead>
+                        <TableHead>{t('table.role')}</TableHead>
+                        <TableHead>{t('table.apiKey')}</TableHead>
+                        <TableHead className="text-right">
+                          {t('table.actions')}
+                        </TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {managedUsers.map((user) => (
+                        <TableRow key={`${user.accountId}:${user.userId}`}>
+                          <TableCell className="font-mono text-xs text-muted-foreground">
+                            {user.accountId}
+                          </TableCell>
+                          <TableCell className="font-medium">
+                            {user.userId}
+                          </TableCell>
+                          <TableCell>
+                            <Badge
+                              variant={
+                                user.role === 'admin' ? 'secondary' : 'outline'
+                              }
+                            >
+                              {t(`roles.${user.role}`, {
+                                defaultValue: user.role,
+                              })}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex min-w-0 items-center gap-2">
+                              <code className="max-w-[20rem] truncate rounded-md border bg-muted/40 px-2 py-1 font-mono text-xs">
+                                {resolveKeyLabel(user)}
+                              </code>
+                              {user.apiKey ? (
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon-xs"
+                                  aria-label={t('actions.copy')}
+                                  onClick={() => void copyKey(user.apiKey)}
+                                >
+                                  <CopyIcon />
+                                </Button>
+                              ) : null}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex justify-end gap-2">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setPendingRegenerateUser(user)}
+                                disabled={regenerateMutation.isPending}
+                              >
+                                <RotateCwIcon />
+                                {t('actions.regenerate')}
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <AddAccountDialog
+            open={addAccountOpen}
+            onOpenChange={setAddAccountOpen}
+            isPending={createAccountMutation.isPending}
+            onCreate={(next) => createAccountMutation.mutate(next)}
+          />
+          <AddUserDialog
+            open={addUserOpen}
+            onOpenChange={setAddUserOpen}
+            accounts={accountOptions}
+            defaultAccountId={managedAccountId}
+            isPending={createUserMutation.isPending}
+            onCreate={(next) => createUserMutation.mutate(next)}
+          />
+          <AlertDialog
+            open={Boolean(pendingRegenerateUser)}
+            onOpenChange={(open) => {
+              if (!open) {
+                setPendingRegenerateUser(null)
+              }
+            }}
+          >
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>
+                  {t('dialogs.regenerate.title')}
+                </AlertDialogTitle>
+                <AlertDialogDescription>
+                  {t('dialogs.regenerate.description', {
+                    account: pendingRegenerateUser?.accountId,
+                    user: pendingRegenerateUser?.userId,
+                  })}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>{t('actions.cancel')}</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() => {
+                    if (pendingRegenerateUser) {
+                      regenerateMutation.mutate(pendingRegenerateUser)
+                    }
+                  }}
+                  disabled={regenerateMutation.isPending}
+                >
+                  <RotateCwIcon />
+                  {t('actions.regenerate')}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </>
+      ) : null}
     </div>
   )
 }

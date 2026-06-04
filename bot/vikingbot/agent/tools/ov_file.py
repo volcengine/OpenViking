@@ -1,6 +1,7 @@
 """OpenViking file system tools: read, write, list, search resources."""
 
 import asyncio
+import hashlib
 import json
 from abc import ABC
 from pathlib import Path
@@ -16,12 +17,35 @@ from vikingbot.openviking_mount.ov_server import VikingClient
 class OVFileTool(Tool, ABC):
     def __init__(self):
         super().__init__()
-        self._client = None
+        self._clients = {}
+
+    def _client_cache_key(self, tool_context: ToolContext) -> str:
+        connection = tool_context.openviking_connection or {}
+        if not connection:
+            return "__default__"
+        api_key = str(connection.get("api_key") or "")
+        api_key_hash = hashlib.sha256(api_key.encode()).hexdigest()[:16] if api_key else ""
+        parts = [
+            str(connection.get("server_url") or ""),
+            str(connection.get("account_id") or ""),
+            str(connection.get("user_id") or ""),
+            str(connection.get("agent_id") or ""),
+            str(connection.get("role") or ""),
+            json.dumps(connection.get("namespace_policy") or {}, sort_keys=True),
+            api_key_hash,
+        ]
+        return "|".join(parts)
 
     async def _get_client(self, tool_context: ToolContext):
-        if self._client is None:
-            self._client = await VikingClient.create(tool_context.workspace_id)
-        return self._client
+        cache_key = self._client_cache_key(tool_context)
+        client = self._clients.get(cache_key)
+        if client is None:
+            client = await VikingClient.create(
+                tool_context.workspace_id,
+                connection=tool_context.openviking_connection,
+            )
+            self._clients[cache_key] = client
+        return client
 
 
 class VikingListTool(OVFileTool):
@@ -335,7 +359,7 @@ class VikingAddResourceTool(OVFileTool):
                 if not local_path.is_file():
                     return f"Error: Not a file: {path}"
 
-            client = await VikingClient.create(tool_context.workspace_id)
+            client = await self._get_client(tool_context)
             result = await client.add_resource(path, description)
 
             if result:
@@ -348,9 +372,6 @@ class VikingAddResourceTool(OVFileTool):
         except Exception as e:
             logger.warning(f"Error adding resource: {e}")
             return f"Error adding resource to Viking: {str(e)}"
-        finally:
-            if client:
-                await client.close()
 
 
 class VikingGrepTool(OVFileTool):
@@ -551,6 +572,13 @@ class VikingMemoryCommitTool(OVFileTool):
             ],
         }
 
+    @staticmethod
+    def _format_commit_error(error: Exception) -> str:
+        message = str(error)
+        if "<title>403 Forbidden</title>" in message or "<h1>403 Forbidden</h1>" in message:
+            return "HTTP 403 Forbidden"
+        return message
+
     @property
     def name(self) -> str:
         return "openviking_memory_commit"
@@ -587,11 +615,12 @@ class VikingMemoryCommitTool(OVFileTool):
         **kwargs: Any,
     ) -> str:
         try:
-            if not tool_context.sender_id:
-                return "Error committed, sender_id is required."
             client = await self._get_client(tool_context)
+            commit_user_id = client.admin_user_id or tool_context.sender_id
+            if not commit_user_id:
+                return "Error: user id is required for OpenViking memory commit."
             session_id = tool_context.session_key.safe_name()
-            result = await client.commit(session_id, messages, tool_context.sender_id)
+            result = await client.commit(session_id, messages, commit_user_id)
             commit_result = result.get("commit", {}) if isinstance(result, dict) else {}
             archive_uri = commit_result.get("archive_uri")
             memory_diff_uri = f"{archive_uri}/memory_diff.json" if archive_uri else None
@@ -624,7 +653,7 @@ class VikingMemoryCommitTool(OVFileTool):
             )
         except Exception as e:
             logger.exception(f"Error processing message: {e}")
-            return f"Error committing to Viking: {str(e)}"
+            return f"Error: committing to Viking failed: {self._format_commit_error(e)}"
 
 
 class VikingMultiReadTool(OVFileTool):

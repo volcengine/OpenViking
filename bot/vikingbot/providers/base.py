@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, AsyncIterator, Literal
 
 
 @dataclass
@@ -29,6 +29,15 @@ class LLMResponse:
     def has_tool_calls(self) -> bool:
         """Check if response contains tool calls."""
         return len(self.tool_calls) > 0
+
+
+@dataclass
+class LLMStreamEvent:
+    """Streaming event emitted by an LLM provider."""
+
+    type: Literal["content_delta", "reasoning_delta", "response"]
+    content: str | None = None
+    response: LLMResponse | None = None
 
 
 class LLMProvider(ABC):
@@ -68,6 +77,29 @@ class LLMProvider(ABC):
             LLMResponse with content and/or tool calls.
         """
         pass
+
+    async def chat_stream(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        model: str | None = None,
+        max_tokens: int = 4096,
+        temperature: float = 0.7,
+        session_id: str | None = None,
+    ) -> AsyncIterator[LLMStreamEvent]:
+        """Stream a chat completion request.
+
+        Providers without native streaming fall back to a single final response event.
+        """
+        response = await self.chat(
+            messages=messages,
+            tools=tools,
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            session_id=session_id,
+        )
+        yield LLMStreamEvent(type="response", response=response)
 
     @abstractmethod
     def get_default_model(self) -> str:

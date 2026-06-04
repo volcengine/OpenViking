@@ -10,6 +10,7 @@ import {
 } from 'lucide-react'
 
 import { Button } from '#/components/ui/button'
+import { useAppConnection } from '#/hooks/use-app-connection'
 import { cn } from '#/lib/utils'
 import {
   fetchFileContent,
@@ -33,6 +34,57 @@ import {
 } from '../-lib/utils'
 import { ResourceRefList } from './resource-ref-list'
 
+const TERMINAL_COMMAND_HISTORY_STORAGE_KEY =
+  'openviking.playground.terminalCommandHistory'
+const TERMINAL_COMMAND_HISTORY_LIMIT = 50
+const URI_ARGUMENT_COMMANDS = new Set([
+  '/abstract',
+  '/export',
+  '/glob',
+  '/grep',
+  '/ls',
+  '/overview',
+  '/read',
+  '/relations',
+  '/stat',
+])
+
+type TerminalSuggestion = TerminalCommandView & {
+  id: string
+}
+
+function loadCommandHistory(): string[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = window.localStorage.getItem(TERMINAL_COMMAND_HISTORY_STORAGE_KEY)
+    const parsed: unknown = raw ? JSON.parse(raw) : []
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .filter((item): item is string => typeof item === 'string')
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .slice(0, TERMINAL_COMMAND_HISTORY_LIMIT)
+  } catch {
+    return []
+  }
+}
+
+function persistCommandHistory(history: string[]): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(
+      TERMINAL_COMMAND_HISTORY_STORAGE_KEY,
+      JSON.stringify(history.slice(0, TERMINAL_COMMAND_HISTORY_LIMIT)),
+    )
+  } catch {
+    // localStorage can be unavailable in private windows.
+  }
+}
+
+function extractVikingUris(text: string): string[] {
+  return text.match(/viking:\/\/[^\s,，)）\]}】'"`]+/g) ?? []
+}
+
 export function TerminalPanel({
   currentUri,
   entries,
@@ -47,10 +99,12 @@ export function TerminalPanel({
   openingUri: string | null
 }) {
   const { t } = useTranslation('playground')
+  const { connectionRole } = useAppConnection()
   const [command, setCommand] = useState('')
   const [running, setRunning] = useState(false)
   const [suggestionsOpen, setSuggestionsOpen] = useState(false)
   const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(0)
+  const [commandHistory, setCommandHistory] = useState(loadCommandHistory)
   const [history, setHistory] = useState<TerminalEntry[]>(() => [
     {
       id: 'welcome',
@@ -59,16 +113,26 @@ export function TerminalPanel({
       body: t('terminal.welcomeBody'),
     },
   ])
+  const inputRef = useRef<HTMLInputElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
 
   const commands = useMemo<TerminalCommandView[]>(
     () =>
-      TERMINAL_COMMANDS.map((item) => ({
+      TERMINAL_COMMANDS.filter(
+        (item) =>
+          !item.adminOnly ||
+          connectionRole === 'admin' ||
+          connectionRole === 'root',
+      ).map((item) => ({
         ...item,
-        description: t(`terminal.commands.${item.key}.description`),
-        usage: t(`terminal.commands.${item.key}.usage`),
+        description: t(`terminal.commands.${item.key}.description`, {
+          defaultValue: item.command,
+        }),
+        usage: t(`terminal.commands.${item.key}.usage`, {
+          defaultValue: item.insertText.trim(),
+        }),
       })),
-    [t],
+    [connectionRole, t],
   )
 
   const groupLabels = useMemo(
@@ -80,16 +144,106 @@ export function TerminalPanel({
     [t],
   )
 
-  const suggestions = useMemo(() => {
-    const query = command.trimStart().toLowerCase()
-    if (!query || query === '/') return commands
-    if (!query.startsWith('/')) return []
-    return commands.filter(
-      (item) =>
-        item.command.toLowerCase().startsWith(query) ||
-        item.description.toLowerCase().includes(query.slice(1)),
+  const resourceCandidates = useMemo(() => {
+    const candidates = new Set<string>([currentUri, ROOT_URI])
+    for (const entry of visibleContextEntries(entries)) {
+      const ref = entryToRef(entry)
+      candidates.add(ref.uri)
+    }
+    for (const item of history) {
+      for (const ref of item.refs ?? []) {
+        candidates.add(ref.uri)
+      }
+      if (item.body) {
+        for (const uri of extractVikingUris(item.body)) candidates.add(uri)
+      }
+      for (const uri of extractVikingUris(item.title)) candidates.add(uri)
+    }
+    for (const item of commandHistory) {
+      for (const uri of extractVikingUris(item)) candidates.add(uri)
+    }
+    return Array.from(candidates).filter(Boolean).sort()
+  }, [commandHistory, currentUri, entries, history])
+
+  const suggestions = useMemo<TerminalSuggestion[]>(() => {
+    const rawQuery = command.trimStart()
+    const query = rawQuery.toLowerCase()
+    const commandMatches =
+      !query || query === '/'
+        ? commands.map((item) => ({
+            ...item,
+            id: `command:${item.command}`,
+          }))
+        : query.startsWith('/')
+          ? commands
+              .filter(
+                (item) =>
+                  item.command.toLowerCase().startsWith(query) ||
+                  item.description.toLowerCase().includes(query.slice(1)),
+              )
+              .map((item) => ({
+                ...item,
+                id: `command:${item.command}`,
+              }))
+          : []
+
+    const activeCommand = [...commands]
+      .sort((a, b) => b.command.length - a.command.length)
+      .find(
+        (item) =>
+          rawQuery === item.command || rawQuery.startsWith(`${item.command} `),
+      )
+    const resourceMatches =
+      activeCommand && URI_ARGUMENT_COMMANDS.has(activeCommand.command)
+        ? resourceCandidates
+            .filter((uri) => {
+              const argQuery = rawQuery
+                .slice(activeCommand.command.length)
+                .trimStart()
+                .toLowerCase()
+              if (!argQuery) return true
+              return (
+                uri.toLowerCase().startsWith(argQuery) ||
+                uri.toLowerCase().includes(argQuery)
+              )
+            })
+            .slice(0, 12)
+            .map((uri) => ({
+              ...activeCommand,
+              command: uri,
+              description: t('terminal.resourceSuggestion'),
+              id: `resource:${activeCommand.command}:${uri}`,
+              insertText: `${activeCommand.command} ${uri}`,
+              usage: `${activeCommand.command} ${uri}`,
+            }))
+        : []
+
+    const historyMatches = commandHistory
+      .filter((item) => {
+        const lower = item.toLowerCase()
+        return lower !== query && lower.startsWith(query)
+      })
+      .slice(0, 8)
+      .map((item) => ({
+        adminOnly: false,
+        command: item,
+        description: t('terminal.historySuggestion'),
+        executable: false,
+        id: `history:${item}`,
+        insertText: item,
+        key: 'history',
+        usage: item,
+      }))
+
+    const seen = new Set<string>()
+    return [...commandMatches, ...resourceMatches, ...historyMatches].filter(
+      (item) => {
+        if (seen.has(item.insertText)) return false
+        seen.add(item.insertText)
+        return true
+      },
     )
-  }, [command, commands])
+  }, [command, commandHistory, commands, resourceCandidates, t])
 
   useEffect(() => {
     setActiveSuggestionIndex(0)
@@ -112,12 +266,26 @@ export function TerminalPanel({
     ])
   }, [])
 
+  const rememberCommand = useCallback((raw: string) => {
+    const trimmed = raw.trim()
+    if (!trimmed) return
+    setCommandHistory((prev) => {
+      const next = [
+        trimmed,
+        ...prev.filter((item) => item.toLowerCase() !== trimmed.toLowerCase()),
+      ].slice(0, TERMINAL_COMMAND_HISTORY_LIMIT)
+      persistCommandHistory(next)
+      return next
+    })
+  }, [])
+
   const runCommand = useCallback(
     async (raw: string) => {
       const trimmed = raw.trim()
       if (!trimmed || running) return
 
       append({ kind: 'command', title: trimmed })
+      rememberCommand(trimmed)
       setCommand('')
       setRunning(true)
 
@@ -215,6 +383,16 @@ export function TerminalPanel({
             return
           }
           default:
+            if (
+              commands.some(
+                (item) =>
+                  trimmed === item.command ||
+                  trimmed.startsWith(`${item.command} `) ||
+                  item.command.startsWith(`${trimmed} `),
+              )
+            ) {
+              throw new Error(t('terminal.unsupportedCommand'))
+            }
             throw new Error(t('terminal.unknownCommand'))
         }
       } catch (error) {
@@ -235,6 +413,8 @@ export function TerminalPanel({
       onOpenAddResource,
       onOpenResource,
       running,
+      commands,
+      rememberCommand,
       t,
     ],
   )
@@ -242,7 +422,24 @@ export function TerminalPanel({
   const acceptSuggestion = useCallback((suggestion: TerminalCommandView) => {
     setCommand(suggestion.insertText)
     setSuggestionsOpen(false)
+    window.requestAnimationFrame(() => {
+      const input = inputRef.current
+      input?.focus()
+      input?.setSelectionRange(suggestion.insertText.length, suggestion.insertText.length)
+    })
   }, [])
+
+  const runSuggestion = useCallback(
+    (suggestion: TerminalSuggestion) => {
+      setSuggestionsOpen(false)
+      if (suggestion.executable) {
+        void runCommand(suggestion.command)
+        return
+      }
+      setCommand(suggestion.insertText)
+    },
+    [runCommand],
+  )
 
   const quickCommands = commands.filter((item) =>
     ['/status', '/ls', '/search', '/read', '/add-resource'].includes(
@@ -291,6 +488,7 @@ export function TerminalPanel({
           }}
         >
           <input
+            ref={inputRef}
             value={command}
             onBlur={() => {
               window.setTimeout(() => setSuggestionsOpen(false), 120)
@@ -319,6 +517,20 @@ export function TerminalPanel({
                 acceptSuggestion(suggestions[activeSuggestionIndex])
                 return
               }
+              if (
+                event.key === 'ArrowRight' &&
+                event.currentTarget.selectionStart === command.length &&
+                event.currentTarget.selectionEnd === command.length
+              ) {
+                event.preventDefault()
+                acceptSuggestion(suggestions[activeSuggestionIndex])
+                return
+              }
+              if (event.key === 'Enter' && !command.trim()) {
+                event.preventDefault()
+                runSuggestion(suggestions[activeSuggestionIndex])
+                return
+              }
               if (event.key === 'Enter' && command.trim() === '/') {
                 event.preventDefault()
                 acceptSuggestion(suggestions[activeSuggestionIndex])
@@ -339,7 +551,7 @@ export function TerminalPanel({
               <div className="max-h-64 overflow-y-auto p-1">
                 {suggestions.map((suggestion, index) => (
                   <button
-                    key={suggestion.command}
+                    key={suggestion.id}
                     type="button"
                     className={cn(
                       'flex w-full min-w-0 items-start gap-3 rounded-md px-2 py-2 text-left transition-colors',

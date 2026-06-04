@@ -270,10 +270,8 @@ export function AgentPanel({
               streaming={
                 isStreaming
                   ? {
-                      content: chat.streamingContent,
                       iteration: chat.iteration,
-                      reasoning: chat.streamingReasoning,
-                      toolCalls: chat.streamingToolCalls,
+                      parts: chat.streamingParts,
                     }
                   : undefined
               }

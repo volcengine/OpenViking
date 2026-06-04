@@ -8,6 +8,7 @@ export interface OvConnectionState {
   apiKey: string
   accountId: string
   agentId: string
+  role: 'admin' | 'root' | 'unknown' | 'user'
   userId: string
 }
 
