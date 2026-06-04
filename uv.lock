@@ -3755,7 +3755,7 @@ requires-dist = [
     { name = "langgraph", marker = "extra == 'langgraph'", specifier = ">=1.0.0,<2.0.0" },
     { name = "lark-oapi", specifier = ">=1.5.3" },
     { name = "lark-oapi", marker = "extra == 'bot-feishu'", specifier = ">=1.0.0" },
-    { name = "litellm", specifier = ">=1.83.7,<1.85.2" },
+    { name = "litellm", specifier = ">=1.83.7,<1.86.3" },
     { name = "llama-cpp-python", marker = "extra == 'local-embed'", specifier = ">=0.3.0" },
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "markdownify", specifier = ">=0.11.0" },

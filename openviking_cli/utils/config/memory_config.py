@@ -4,6 +4,8 @@ from typing import Any, Dict
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+DEFAULT_MEMORY_INPUT_WINDOW_TOKENS = 65536
+
 
 class MemoryConfig(BaseModel):
     """Memory configuration for OpenViking."""
@@ -105,6 +107,16 @@ class MemoryConfig(BaseModel):
             "When enabled, memory extraction supports link extraction between "
             "memory items (page_id, links field, and link resolution). When disabled (default), "
             "no page_id or link fields are generated, and link resolution is skipped."
+        ),
+    )
+    input_window_tokens: int = Field(
+        default=DEFAULT_MEMORY_INPUT_WINDOW_TOKENS,
+        ge=1,
+        description=(
+            "Unified model input window budget for memory-related extraction flows. "
+            "Context providers reserve part of this budget for prompts, schemas, prefetched "
+            "context, and tool transcripts, and the remaining budget is used to segment "
+            "conversation messages before extraction."
         ),
     )
 

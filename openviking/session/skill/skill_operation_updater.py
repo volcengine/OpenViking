@@ -42,6 +42,71 @@ class SkillOperationUpdateResult:
     def add_result(self, result: Dict[str, Any]) -> None:
         self.operation_results.append(result)
 
+    @classmethod
+    def merge(cls, results: List["SkillOperationUpdateResult"]) -> "SkillOperationUpdateResult":
+        merged = cls()
+        if not results:
+            return merged
+
+        final_states: Dict[str, str] = {}
+        uri_order: List[str] = []
+        final_payloads: Dict[str, Dict[str, Any]] = {}
+
+        def register_uri(uri: str) -> None:
+            if uri not in final_states:
+                uri_order.append(uri)
+
+        def apply_action(uri: str, action: str) -> None:
+            register_uri(uri)
+            previous = final_states.get(uri)
+            if action == "written":
+                if previous in {None, "none"}:
+                    final_states[uri] = "written"
+                elif previous == "deleted":
+                    final_states[uri] = "edited"
+                elif previous in {"written", "edited"}:
+                    final_states[uri] = previous
+            elif action == "edited":
+                if previous in {None, "none", "edited", "deleted"}:
+                    final_states[uri] = "edited"
+                elif previous == "written":
+                    final_states[uri] = "written"
+
+        for result in results:
+            merged.errors.extend(list(getattr(result, "errors", [])))
+            for uri in getattr(result, "written_uris", []):
+                apply_action(uri, "written")
+            for uri in getattr(result, "edited_uris", []):
+                apply_action(uri, "edited")
+            for payload in getattr(result, "operation_results", []):
+                skill_md_uri = str(payload.get("skill_md_uri", "") or "")
+                if skill_md_uri:
+                    final_payloads[skill_md_uri] = payload
+
+        for uri in uri_order:
+            state = final_states.get(uri)
+            if state == "written":
+                merged.add_written(uri)
+            elif state == "edited":
+                merged.add_edited(uri)
+
+        for uri in uri_order:
+            payload = final_payloads.get(uri)
+            if payload is not None:
+                normalized = dict(payload)
+                state = final_states.get(uri)
+                if state == "written":
+                    normalized["action"] = "create"
+                elif state == "edited":
+                    normalized["action"] = "update"
+                merged.add_result(normalized)
+
+        for uri, payload in final_payloads.items():
+            if uri not in uri_order:
+                merged.add_result(payload)
+
+        return merged
+
 
 class SkillOperationUpdater:
     """Create or update agent skills from resolved ReAct operations."""
@@ -55,6 +120,10 @@ class SkillOperationUpdater:
         self._registry = registry
         self._skill_processor = skill_processor
         self._viking_fs = viking_fs or get_viking_fs()
+
+    @classmethod
+    def merge(cls, results: List[SkillOperationUpdateResult]) -> SkillOperationUpdateResult:
+        return SkillOperationUpdateResult.merge(results)
 
     async def apply_operations(
         self,

@@ -297,6 +297,60 @@ class MemoryUpdateResult:
     def add_error(self, uri: str, error: Exception) -> None:
         self.errors.append((uri, error))
 
+    @classmethod
+    def merge(cls, results: List["MemoryUpdateResult"]) -> "MemoryUpdateResult":
+        merged = cls()
+        if not results:
+            return merged
+
+        final_states: Dict[str, str] = {}
+        uri_order: List[str] = []
+
+        def register_uri(uri: str) -> None:
+            if uri not in final_states:
+                uri_order.append(uri)
+
+        def apply_action(uri: str, action: str) -> None:
+            register_uri(uri)
+            previous = final_states.get(uri)
+            if action == "written":
+                if previous in {None, "none"}:
+                    final_states[uri] = "written"
+                elif previous == "deleted":
+                    final_states[uri] = "edited"
+                elif previous in {"written", "edited"}:
+                    final_states[uri] = previous
+            elif action == "edited":
+                if previous in {None, "none", "edited", "deleted"}:
+                    final_states[uri] = "edited"
+                elif previous == "written":
+                    final_states[uri] = "written"
+            elif action == "deleted":
+                if previous == "written":
+                    final_states[uri] = "none"
+                else:
+                    final_states[uri] = "deleted"
+
+        for result in results:
+            merged.errors.extend(list(getattr(result, "errors", [])))
+            for uri in getattr(result, "written_uris", []):
+                apply_action(uri, "written")
+            for uri in getattr(result, "edited_uris", []):
+                apply_action(uri, "edited")
+            for uri in getattr(result, "deleted_uris", []):
+                apply_action(uri, "deleted")
+
+        for uri in uri_order:
+            state = final_states.get(uri)
+            if state == "written":
+                merged.add_written(uri)
+            elif state == "edited":
+                merged.add_edited(uri)
+            elif state == "deleted":
+                merged.add_deleted(uri)
+
+        return merged
+
     def has_changes(self) -> bool:
         return len(self.written_uris) > 0 or len(self.edited_uris) > 0 or len(self.deleted_uris) > 0
 
@@ -328,6 +382,10 @@ class MemoryUpdater:
     def set_registry(self, registry: MemoryTypeRegistry) -> None:
         """Set the memory type registry for URI resolution."""
         self._registry = registry
+
+    @classmethod
+    def merge(cls, results: List[MemoryUpdateResult]) -> MemoryUpdateResult:
+        return MemoryUpdateResult.merge(results)
 
     def _get_viking_fs(self):
         """Get or create VikingFS instance."""

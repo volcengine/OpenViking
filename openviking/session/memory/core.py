@@ -14,9 +14,23 @@ from typing import Any, Dict, List
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import VikingFS
 
+DEFAULT_CONTEXT_PROVIDER_RESERVE_TOKENS = 32768
+
 
 class ExtractContextProvider(ABC):
     """Extract Context Provider 接口"""
+
+    @staticmethod
+    @abstractmethod
+    def get_reserve_tokens() -> int:
+        """
+        Return prompt/schema/prefetch/tool-call reserve budget for this provider.
+
+        The segmented extraction runner subtracts this reserve from the configured
+        model input window to decide how many conversation-message tokens may be
+        included in each segment.
+        """
+        pass
 
     @abstractmethod
     def instruction(self) -> str:

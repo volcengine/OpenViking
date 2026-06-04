@@ -148,6 +148,9 @@ AGENTS.md
 *.log
 logs/
 
+# Beads local issue database
+.beads/
+
 # Temporary files
 *.tmp
 *.temp

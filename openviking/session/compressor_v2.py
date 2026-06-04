@@ -9,6 +9,7 @@ Maintains the service-facing compressor interface.
 
 import asyncio
 import json
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
@@ -23,10 +24,20 @@ from openviking.session.memory import ExtractLoop, MemoryUpdater
 from openviking.session.memory.dataclass import ResolvedOperations, StoredLink
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.memory_updater import ExtractContext, MemoryUpdateResult, write_stored_links
+from openviking.session.memory.segmented_extract_runner import (
+    CallableProviderFactory,
+    CallableUpdaterFactory,
+    SegmentedExtractRunner,
+    SegmentedExtractSharedContext,
+)
 from openviking.session.memory.utils.json_parser import JsonUtils
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.uri import render_template
-from openviking.session.skill import SkillOperationUpdater, dedup_session_skill_operations
+from openviking.session.skill import (
+    SkillOperationUpdateResult,
+    SkillOperationUpdater,
+    dedup_session_skill_operations,
+)
 from openviking.session.skill.session_skill_context_provider import SESSION_SKILL_MEMORY_TYPE
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import VikingFS, get_viking_fs
@@ -35,6 +46,7 @@ from openviking.utils.skill_processor import SkillProcessor
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
+from openviking_cli.utils.config.memory_config import DEFAULT_MEMORY_INPUT_WINDOW_TOKENS
 
 logger = get_logger(__name__)
 
@@ -54,6 +66,10 @@ def _filename_has_variables(schema: Any) -> bool:
 def _append_unique(paths: list[str], path: str) -> None:
     if path and path not in paths:
         paths.append(path)
+
+
+def _raise_unsupported_segmented_provider(provider_cls: type[Any]) -> Any:
+    raise TypeError(f"Unsupported segmented provider factory for {provider_cls.__name__}")
 
 
 def _log_memory_lock_retry(
@@ -116,6 +132,201 @@ def _render_memory_schema_locks(
     return exact_paths, tree_paths
 
 
+@dataclass(slots=True)
+class PhaseExtractionResult:
+    """Merged per-provider result across segmented runs."""
+
+    memory_result: MemoryUpdateResult = field(default_factory=MemoryUpdateResult)
+    skill_result: SkillOperationUpdateResult = field(default_factory=SkillOperationUpdateResult)
+
+    @classmethod
+    def merge(cls, results: List["PhaseExtractionResult"]) -> "PhaseExtractionResult":
+        if not results:
+            return cls()
+        return cls(
+            memory_result=MemoryUpdateResult.merge([result.memory_result for result in results]),
+            skill_result=SkillOperationUpdateResult.merge([result.skill_result for result in results]),
+        )
+
+
+class _GenericMemoryPhaseUpdater:
+    """Apply plain memory operations for one segmented provider phase."""
+
+    def __init__(
+        self,
+        *,
+        memory_updater: MemoryUpdater,
+        post_apply: Optional[ExtractPostApply] = None,
+    ):
+        self._memory_updater = memory_updater
+        self._post_apply = post_apply
+
+    @classmethod
+    def merge(cls, results: List[PhaseExtractionResult]) -> PhaseExtractionResult:
+        return PhaseExtractionResult.merge(results)
+
+    async def apply_operations(
+        self,
+        operations: ResolvedOperations,
+        ctx: RequestContext,
+        *,
+        extract_context: ExtractContext | None = None,
+        isolation_handler: MemoryIsolationHandler | None = None,
+        provider: Any = None,
+        shared_context: SegmentedExtractSharedContext | None = None,
+    ) -> PhaseExtractionResult:
+        del provider
+        memory_result = await self._memory_updater.apply_operations(
+            operations,
+            ctx,
+            extract_context=extract_context,
+            isolation_handler=isolation_handler,
+        )
+        if self._post_apply and shared_context is not None:
+            await self._post_apply(memory_result, {}, shared_context.transaction_handle)
+        return PhaseExtractionResult(memory_result=memory_result)
+
+
+class _TrajectoryPhaseUpdater:
+    """Apply trajectory memory ops and optional session skill ops per segment."""
+
+    def __init__(
+        self,
+        *,
+        compressor: "SessionCompressorV2",
+        registry: Any,
+        transaction_handle: Any,
+        viking_fs: Any,
+    ):
+        self._compressor = compressor
+        self._memory_updater = compressor._create_updater(registry, transaction_handle)
+        self._skill_registry = registry
+        self._viking_fs = viking_fs
+
+    @classmethod
+    def merge(cls, results: List[PhaseExtractionResult]) -> PhaseExtractionResult:
+        return PhaseExtractionResult.merge(results)
+
+    async def apply_operations(
+        self,
+        operations: ResolvedOperations,
+        ctx: RequestContext,
+        *,
+        extract_context: ExtractContext | None = None,
+        isolation_handler: MemoryIsolationHandler | None = None,
+        provider: Any = None,
+        shared_context: SegmentedExtractSharedContext | None = None,
+    ) -> PhaseExtractionResult:
+        del provider
+        memory_operations, skill_operations, unsupported_skill_deletes = (
+            self._compressor._split_operations_by_memory_type(operations)
+        )
+        phase_label = ""
+        if shared_context is not None:
+            phase_label = shared_context.phase_label
+        if unsupported_skill_deletes:
+            logger.warning(
+                "[%s] Ignoring unsupported session skill deletes: %s",
+                phase_label,
+                unsupported_skill_deletes,
+            )
+
+        memory_result = MemoryUpdateResult()
+        if (
+            memory_operations.upsert_operations
+            or memory_operations.delete_file_contents
+            or memory_operations.errors
+        ):
+            memory_result = await self._memory_updater.apply_operations(
+                memory_operations,
+                ctx,
+                extract_context=extract_context,
+                isolation_handler=isolation_handler,
+            )
+
+        skill_result = SkillOperationUpdateResult()
+        if skill_operations.upsert_operations:
+            if not self._compressor.skill_processor:
+                raise RuntimeError("SkillProcessor is required for session skill extraction")
+            skill_operations = dedup_session_skill_operations(skill_operations)
+            skill_updater = SkillOperationUpdater(
+                registry=self._skill_registry,
+                skill_processor=self._compressor.skill_processor,
+                viking_fs=self._viking_fs,
+            )
+            skill_result = await skill_updater.apply_operations(skill_operations, ctx)
+
+        return PhaseExtractionResult(
+            memory_result=memory_result,
+            skill_result=skill_result,
+        )
+
+
+class _ExperiencePhaseUpdater:
+    """Apply experience operations and append source-trajectory metadata per segment."""
+
+    def __init__(
+        self,
+        *,
+        compressor: "SessionCompressorV2",
+        registry: Any,
+        transaction_handle: Any,
+    ):
+        self._compressor = compressor
+        self._memory_updater = compressor._create_updater(registry, transaction_handle)
+
+    @classmethod
+    def merge(cls, results: List[PhaseExtractionResult]) -> PhaseExtractionResult:
+        return PhaseExtractionResult.merge(results)
+
+    async def apply_operations(
+        self,
+        operations: ResolvedOperations,
+        ctx: RequestContext,
+        *,
+        extract_context: ExtractContext | None = None,
+        isolation_handler: MemoryIsolationHandler | None = None,
+        provider: Any = None,
+        shared_context: SegmentedExtractSharedContext | None = None,
+    ) -> PhaseExtractionResult:
+        if provider is None or shared_context is None:
+            raise ValueError("provider and shared_context are required for experience updates")
+
+        inheritance_map = await self._compressor._resolve_supersedes(
+            operations,
+            ctx,
+            shared_context.viking_fs,
+            provider,
+        )
+        memory_result = await self._memory_updater.apply_operations(
+            operations,
+            ctx,
+            extract_context=extract_context,
+            isolation_handler=isolation_handler,
+        )
+
+        exp_dir = provider._render_experience_dir(ctx)
+        all_exp_uris = await self._compressor._resolve_source_target_experience_uris(
+            result=memory_result,
+            provider=provider,
+            exp_dir=exp_dir,
+            ctx=ctx,
+            viking_fs=shared_context.viking_fs,
+        )
+        for exp_uri in all_exp_uris:
+            inherited = inheritance_map.get(exp_uri, [])
+            source_uris = list(dict.fromkeys([provider.trajectory_uri] + inherited))
+            await self._compressor._append_trajectories_to_experiences(
+                [exp_uri],
+                source_uris,
+                ctx,
+                shared_context.viking_fs,
+                lock_handle=shared_context.transaction_handle,
+            )
+
+        return PhaseExtractionResult(memory_result=memory_result)
+
+
 class SessionCompressorV2:
     """Session memory extractor with v2 templating system."""
 
@@ -176,6 +387,16 @@ class SessionCompressorV2:
             registry=registry, vikingdb=self.vikingdb, transaction_handle=transaction_handle
         )
 
+    def _create_updater(self, registry, transaction_handle=None) -> MemoryUpdater:
+        """Compatibility wrapper around _get_or_create_updater for tests/patches."""
+        try:
+            return self._get_or_create_updater(registry, transaction_handle)
+        except TypeError:
+            try:
+                return self._get_or_create_updater(transaction_handle=transaction_handle)
+            except TypeError:
+                return self._get_or_create_updater()
+
     def _split_operations_by_memory_type(
         self,
         operations: ResolvedOperations,
@@ -213,6 +434,268 @@ class SessionCompressorV2:
             unsupported_skill_deletes,
         )
 
+    async def _acquire_phase_locks(
+        self,
+        *,
+        lock_manager: Any,
+        transaction_handle: Any,
+        exact_lock_paths: list[str],
+        tree_lock_dirs: list[str],
+        phase_label: str,
+    ) -> None:
+        config = get_openviking_config()
+        retry_interval = config.memory.v2_lock_retry_interval_seconds
+        max_retries = config.memory.v2_lock_max_retries
+        retry_count = 0
+        last_lock_retry_warning_at = 0.0
+
+        while True:
+            lock_acquired = await lock_manager.acquire_exact_tree_batch(
+                transaction_handle,
+                exact_paths=exact_lock_paths,
+                tree_paths=tree_lock_dirs,
+                timeout=None,
+            )
+            if lock_acquired:
+                return
+
+            retry_count += 1
+            if max_retries > 0 and retry_count >= max_retries:
+                raise TimeoutError(
+                    f"[{phase_label}] Failed to acquire memory locks after "
+                    f"{retry_count} retries (max={max_retries})"
+                )
+
+            last_lock_retry_warning_at = _log_memory_lock_retry(
+                retry_count=retry_count,
+                max_retries=max_retries,
+                last_warning_at=last_lock_retry_warning_at,
+                phase_label=phase_label,
+            )
+            if retry_interval > 0:
+                await asyncio.sleep(retry_interval)
+
+    @staticmethod
+    def _contexts_from_memory_result(result: MemoryUpdateResult) -> List[Context]:
+        contexts: List[Context] = []
+        for uri in result.written_uris:
+            contexts.append(Context(uri=uri, category="memory_write", context_type="memory"))
+        for uri in result.edited_uris:
+            contexts.append(Context(uri=uri, category="memory_edit", context_type="memory"))
+        for uri in result.deleted_uris:
+            contexts.append(Context(uri=uri, category="memory_delete", context_type="memory"))
+        return contexts
+
+    @staticmethod
+    def _merge_resolved_operations(results: List[ResolvedOperations]) -> ResolvedOperations:
+        if not results:
+            return ResolvedOperations(
+                upsert_operations=[],
+                delete_file_contents=[],
+                errors=[],
+                resolved_links=[],
+            )
+
+        upserts = []
+        deletes = []
+        errors = []
+        links = []
+        for result in results:
+            upserts.extend(list(getattr(result, "upsert_operations", [])))
+            deletes.extend(list(getattr(result, "delete_file_contents", [])))
+            errors.extend(list(getattr(result, "errors", [])))
+            links.extend(list(getattr(result, "resolved_links", [])))
+        return ResolvedOperations(
+            upsert_operations=upserts,
+            delete_file_contents=deletes,
+            errors=errors,
+            resolved_links=links,
+        )
+
+    def _build_phase_provider_factory(
+        self,
+        *,
+        provider: Any,
+        latest_archive_overview: str,
+        allow_fallback_single_provider: bool = False,
+    ) -> CallableProviderFactory:
+        from openviking.session.memory.agent_experience_context_provider import (
+            AgentExperienceContextProvider,
+        )
+        from openviking.session.memory.agent_trajectory_context_provider import (
+            AgentTrajectoryContextProvider,
+        )
+        from openviking.session.memory.session_extract_context_provider import (
+            SessionExtractContextProvider,
+        )
+        from openviking.session.skill.session_skill_context_provider import SessionSkillContextProvider
+
+        provider_cls = provider.__class__
+
+        if isinstance(provider, AgentTrajectoryContextProvider):
+            return CallableProviderFactory(
+                provider_cls=provider_cls,
+                factory=lambda segment, shared_context: provider_cls(
+                    messages=segment.messages,
+                    latest_archive_overview=shared_context.latest_archive_overview,
+                    include_trajectories=provider._include_trajectories,
+                    include_session_skills=provider._include_session_skills,
+                ),
+            )
+
+        if isinstance(provider, AgentExperienceContextProvider):
+            return CallableProviderFactory(
+                provider_cls=provider_cls,
+                factory=lambda segment, shared_context: provider_cls(
+                    messages=segment.messages,
+                    trajectory_summary=provider.trajectory_summary,
+                    trajectory_uri=provider.trajectory_uri,
+                    latest_archive_overview=shared_context.latest_archive_overview,
+                ),
+            )
+
+        if isinstance(provider, SessionSkillContextProvider):
+            return CallableProviderFactory(
+                provider_cls=provider_cls,
+                factory=lambda segment, shared_context: provider_cls(
+                    messages=segment.messages,
+                    latest_archive_overview=shared_context.latest_archive_overview,
+                ),
+            )
+
+        if isinstance(provider, SessionExtractContextProvider):
+            return CallableProviderFactory(
+                provider_cls=provider_cls,
+                factory=lambda segment, shared_context: provider_cls(
+                    messages=segment.messages,
+                    latest_archive_overview=shared_context.latest_archive_overview,
+                ),
+            )
+
+        return CallableProviderFactory(
+            provider_cls=provider_cls,
+            factory=lambda segment, shared_context: (
+                provider
+                if allow_fallback_single_provider
+                and segment.start_index == 0
+                and segment.end_index == len(shared_context.metadata.get("all_messages", [])) - 1
+                else (_raise_unsupported_segmented_provider(provider_cls))
+            ),
+        )
+
+    def _build_phase_updater_factory(
+        self,
+        *,
+        provider: Any,
+        registry: Any,
+        transaction_handle: Any,
+        viking_fs: Any,
+        post_apply: Optional[ExtractPostApply] = None,
+    ) -> CallableUpdaterFactory:
+        from openviking.session.memory.agent_experience_context_provider import (
+            AgentExperienceContextProvider,
+        )
+        from openviking.session.memory.agent_trajectory_context_provider import (
+            AgentTrajectoryContextProvider,
+        )
+
+        if isinstance(provider, AgentTrajectoryContextProvider):
+            return CallableUpdaterFactory(
+                updater_cls=_TrajectoryPhaseUpdater,
+                factory=lambda shared_context: _TrajectoryPhaseUpdater(
+                    compressor=self,
+                    registry=registry,
+                    transaction_handle=transaction_handle,
+                    viking_fs=viking_fs,
+                ),
+            )
+
+        if isinstance(provider, AgentExperienceContextProvider):
+            return CallableUpdaterFactory(
+                updater_cls=_ExperiencePhaseUpdater,
+                factory=lambda shared_context: _ExperiencePhaseUpdater(
+                    compressor=self,
+                    registry=registry,
+                    transaction_handle=transaction_handle,
+                ),
+            )
+
+        if not hasattr(provider, "_get_registry"):
+            return CallableUpdaterFactory(
+                updater_cls=_GenericMemoryPhaseUpdater,
+                factory=lambda shared_context: _GenericMemoryPhaseUpdater(
+                    memory_updater=self._create_updater(registry, transaction_handle),
+                    post_apply=post_apply,
+                ),
+            )
+
+        return CallableUpdaterFactory(
+            updater_cls=_GenericMemoryPhaseUpdater,
+            factory=lambda shared_context: _GenericMemoryPhaseUpdater(
+                memory_updater=self._create_updater(registry, transaction_handle),
+                post_apply=post_apply,
+            ),
+        )
+
+    async def _run_segmented_phase(
+        self,
+        *,
+        provider: Any,
+        messages: List[Message],
+        ctx: RequestContext,
+        phase_label: str,
+        transaction_handle: Any,
+        viking_fs: Any,
+        latest_archive_overview: str = "",
+        registry: Any = None,
+        post_apply: Optional[ExtractPostApply] = None,
+        extract_loop_cls: Any = None,
+    ) -> tuple[PhaseExtractionResult, ResolvedOperations]:
+        config = get_openviking_config()
+        extract_loop_cls = extract_loop_cls or ExtractLoop
+        input_window_tokens = getattr(
+            config.memory,
+            "input_window_tokens",
+            DEFAULT_MEMORY_INPUT_WINDOW_TOKENS,
+        )
+        shared_context = SegmentedExtractSharedContext(
+            ctx=ctx,
+            vlm=config.vlm.get_vlm_instance(),
+            viking_fs=viking_fs,
+            latest_archive_overview=latest_archive_overview,
+            transaction_handle=transaction_handle,
+            phase_label=phase_label,
+            metadata={
+                "all_messages": list(messages or []),
+                "extract_loop_cls": extract_loop_cls,
+            },
+        )
+        provider_factory = self._build_phase_provider_factory(
+            provider=provider,
+            latest_archive_overview=latest_archive_overview,
+            allow_fallback_single_provider=True,
+        )
+        effective_registry = registry
+        if effective_registry is None and hasattr(provider, "_get_registry"):
+            effective_registry = provider._get_registry()
+        updater_factory = self._build_phase_updater_factory(
+            provider=provider,
+            registry=effective_registry,
+            transaction_handle=transaction_handle,
+            viking_fs=viking_fs,
+            post_apply=post_apply,
+        )
+        runner = SegmentedExtractRunner(
+            messages=messages,
+            shared_context=shared_context,
+            provider_factory=provider_factory,
+            updater_factory=updater_factory,
+            input_window_tokens=input_window_tokens,
+        )
+        phase_result = await runner.run()
+        merged_operations = self._merge_resolved_operations(runner.successful_operations)
+        return phase_result, merged_operations
+
     @tracer()
     async def extract_long_term_memories(
         self,
@@ -248,10 +731,12 @@ class SessionCompressorV2:
 
         tracer.info("Starting v2 memory extraction from conversation")
         tracer.info(f"origin_messages={JsonUtils.dumps(messages)}")
-        config = get_openviking_config()
 
         # Initialize default memory files (soul.md, identity.md) if not exist
         from openviking.session.memory.memory_type_registry import create_default_registry
+        from openviking.session.memory.session_extract_context_provider import (
+            SessionExtractContextProvider,
+        )
 
         registry = create_default_registry()
         await registry.initialize_memory_files(ctx)
@@ -269,7 +754,6 @@ class SessionCompressorV2:
         from openviking.storage.transaction import get_lock_manager, init_lock_manager
         from openviking.storage.viking_fs import get_viking_fs
 
-        # 初始化锁管理器（仅在有 AGFS 时使用锁机制）
         viking_fs = get_viking_fs()
         lock_manager = None
         transaction_handle = None
@@ -281,15 +765,17 @@ class SessionCompressorV2:
             logger.debug("AGFS unavailable, running memory extraction without locks")
 
         try:
-            # Create extract context from messages
-            from openviking.session.memory.memory_updater import ExtractContext
-
             extract_context = ExtractContext(messages)
-
-            # Create MemoryIsolationHandler
             isolation_handler = MemoryIsolationHandler(ctx, extract_context)
             isolation_handler.prepare_messages()
-            # 获取所有记忆 schema 目录并加锁（仅在有锁管理器时）
+            provider = SessionExtractContextProvider(
+                messages=messages,
+                latest_archive_overview=latest_archive_overview,
+                isolation_handler=isolation_handler,
+                ctx=ctx,
+                viking_fs=viking_fs,
+                transaction_handle=transaction_handle,
+            )
             orchestrator = self._get_or_create_react(
                 ctx=ctx,
                 messages=messages,
@@ -297,9 +783,11 @@ class SessionCompressorV2:
                 isolation_handler=isolation_handler,
                 transaction_handle=transaction_handle,
             )
+            lock_provider = getattr(orchestrator, "context_provider", provider)
+
             read_scope = isolation_handler.get_read_scope()
             if lock_manager:
-                schemas = orchestrator.context_provider.get_memory_schemas(ctx)
+                schemas = lock_provider.get_memory_schemas(ctx)
                 exact_lock_paths, tree_lock_dirs = _render_memory_schema_locks(
                     schemas=schemas,
                     ctx=ctx,
@@ -310,55 +798,25 @@ class SessionCompressorV2:
                 logger.debug(
                     f"Memory schema locks: exact={exact_lock_paths}, tree={tree_lock_dirs}"
                 )
+                await self._acquire_phase_locks(
+                    lock_manager=lock_manager,
+                    transaction_handle=transaction_handle,
+                    exact_lock_paths=exact_lock_paths,
+                    tree_lock_dirs=tree_lock_dirs,
+                    phase_label="long_term",
+                )
 
-                retry_interval = config.memory.v2_lock_retry_interval_seconds
-                max_retries = config.memory.v2_lock_max_retries
-                retry_count = 0
-                last_lock_retry_warning_at = 0.0
-
-                # 循环重试获取锁（机制确保不会死锁）
-                while True:
-                    lock_acquired = await lock_manager.acquire_exact_tree_batch(
-                        transaction_handle,
-                        exact_paths=exact_lock_paths,
-                        tree_paths=tree_lock_dirs,
-                        timeout=None,
-                    )
-                    if lock_acquired:
-                        break
-                    retry_count += 1
-                    if max_retries > 0 and retry_count >= max_retries:
-                        raise TimeoutError(
-                            "Failed to acquire memory locks after "
-                            f"{retry_count} retries (max={max_retries})"
-                        )
-
-                    last_lock_retry_warning_at = _log_memory_lock_retry(
-                        retry_count=retry_count,
-                        max_retries=max_retries,
-                        last_warning_at=last_lock_retry_warning_at,
-                    )
-                    if retry_interval > 0:
-                        await asyncio.sleep(retry_interval)
-
-            orchestrator._transaction_handle = transaction_handle  # 传递给 ExtractLoop
-
-            # Run ReAct orchestrator
-            operations, tools_used = await orchestrator.run()
-
-            if operations is None:
-                tracer.info("No memory operations generated")
-                return []
-
-            updater = self._get_or_create_updater(registry, transaction_handle)
-
-            # Apply operations with isolation_handler
-            result = await updater.apply_operations(
-                operations,
-                ctx,
-                extract_context=extract_context,
-                isolation_handler=isolation_handler,
+            phase_result, merged_operations = await self._run_segmented_phase(
+                provider=provider,
+                messages=messages,
+                ctx=ctx,
+                phase_label="long_term",
+                transaction_handle=transaction_handle,
+                viking_fs=viking_fs,
+                latest_archive_overview=latest_archive_overview,
+                registry=registry,
             )
+            result = phase_result.memory_result
 
             tracer.info(
                 f"Applied memory operations: written={len(result.written_uris)}, "
@@ -366,11 +824,10 @@ class SessionCompressorV2:
                 f"errors={len(result.errors)}"
             )
 
-            # Write memory_diff.json to archive directory
             if archive_uri and viking_fs:
                 memory_diff = await self._build_memory_diff(
                     result=result,
-                    operations=operations,
+                    operations=merged_operations,
                     viking_fs=viking_fs,
                     ctx=ctx,
                     archive_uri=archive_uri,
@@ -382,7 +839,6 @@ class SessionCompressorV2:
                 )
                 logger.info(f"Wrote memory_diff.json to {archive_uri}")
 
-            # Report telemetry stats.
             telemetry = get_current_telemetry()
             telemetry.set(
                 "memory.extract.candidates.total",
@@ -392,41 +848,7 @@ class SessionCompressorV2:
             telemetry.set("memory.extract.merged", len(result.edited_uris))
             telemetry.set("memory.extract.deleted", len(result.deleted_uris))
             telemetry.set("memory.extract.skipped", len(result.errors))
-
-            # Build Context objects for stats in session.py
-            contexts: List[Context] = []
-
-            # Written memories
-            for uri in result.written_uris:
-                contexts.append(
-                    Context(
-                        uri=uri,
-                        category="memory_write",
-                        context_type="memory",
-                    )
-                )
-
-            # Edited memories
-            for uri in result.edited_uris:
-                contexts.append(
-                    Context(
-                        uri=uri,
-                        category="memory_edit",
-                        context_type="memory",
-                    )
-                )
-
-            # Deleted memories
-            for uri in result.deleted_uris:
-                contexts.append(
-                    Context(
-                        uri=uri,
-                        category="memory_delete",
-                        context_type="memory",
-                    )
-                )
-
-            return contexts
+            return self._contexts_from_memory_result(result)
 
         except Exception as e:
             logger.error(f"Failed to extract memories with v2: {e}", exc_info=True)
@@ -486,9 +908,6 @@ class SessionCompressorV2:
             strict_extract_errors=strict_extract_errors,
             phase_label="trajectory",
         )
-        if traj_result is None:
-            return empty_result
-
         written_trajectory_uris, _, traj_contexts, _, traj_skill_results = traj_result
         contexts.extend(traj_contexts)
         if archive_uri:
@@ -523,34 +942,8 @@ class SessionCompressorV2:
                 messages=messages,
                 trajectory_summary=traj_content,
                 trajectory_uri=traj_uri,
+                latest_archive_overview=latest_archive_overview,
             )
-            exp_dir = exp_provider._render_experience_dir(ctx)
-
-            async def _append_sources_before_unlock(
-                result: MemoryUpdateResult,
-                inheritance_map: Dict[str, List[str]],
-                lock_handle: Any,
-                exp_provider=exp_provider,
-                exp_dir=exp_dir,
-                traj_uri=traj_uri,
-            ) -> None:
-                all_exp_uris = await self._resolve_source_target_experience_uris(
-                    result=result,
-                    provider=exp_provider,
-                    exp_dir=exp_dir,
-                    ctx=ctx,
-                    viking_fs=viking_fs,
-                )
-                for exp_uri in all_exp_uris:
-                    inherited = inheritance_map.get(exp_uri, [])
-                    source_uris = list(dict.fromkeys([traj_uri] + inherited))
-                    await self._append_trajectories_to_experiences(
-                        [exp_uri],
-                        source_uris,
-                        ctx,
-                        viking_fs,
-                        lock_handle=lock_handle,
-                    )
 
             exp_result = await self._run_extract_phase(
                 provider=exp_provider,
@@ -558,23 +951,7 @@ class SessionCompressorV2:
                 ctx=ctx,
                 strict_extract_errors=strict_extract_errors,
                 phase_label=f"experience({traj_uri})",
-                post_apply=_append_sources_before_unlock,
             )
-            if exp_result is None:
-                fallback_uris = await self._single_existing_experience_uris(
-                    exp_dir=exp_dir,
-                    ctx=ctx,
-                    viking_fs=viking_fs,
-                )
-                if fallback_uris:
-                    tracer.info(
-                        f"[source_traj] phase2 failed; fallback append to sole experience: {fallback_uris[0]}"
-                    )
-                    await self._append_trajectories_to_experiences(
-                        fallback_uris, [traj_uri], ctx, viking_fs
-                    )
-                continue
-
             _, _, exp_contexts, _, _ = exp_result
             contexts.extend(exp_contexts)
         return {
@@ -667,28 +1044,7 @@ class SessionCompressorV2:
         """
         from openviking.storage.transaction import get_lock_manager, init_lock_manager
 
-        config = get_openviking_config()
-        vlm = config.vlm.get_vlm_instance()
         viking_fs = get_viking_fs()
-
-        # Build isolation_handler BEFORE creating the orchestrator so that
-        # ExtractLoop.resolve_operations() can call fill_role_ids() correctly.
-        extract_context = ExtractContext(messages)
-        isolation_handler = MemoryIsolationHandler(ctx, extract_context)
-        isolation_handler.prepare_messages()
-
-        # Inject context into provider (mirrors extract_long_term_memories pattern)
-        provider._isolation_handler = isolation_handler
-        provider._ctx = ctx
-        provider._viking_fs = viking_fs
-
-        orchestrator = ExtractLoop(
-            vlm=vlm,
-            viking_fs=viking_fs,
-            ctx=ctx,
-            context_provider=provider,
-            isolation_handler=isolation_handler,
-        )
 
         lock_manager = None
         transaction_handle = None
@@ -713,82 +1069,28 @@ class SessionCompressorV2:
                     user_ids=user_ids,
                     agent_ids=agent_ids,
                 )
-
-                retry_interval = config.memory.v2_lock_retry_interval_seconds
-                max_retries = config.memory.v2_lock_max_retries
-                retry_count = 0
-                last_lock_retry_warning_at = 0.0
-                while True:
-                    lock_acquired = await lock_manager.acquire_exact_tree_batch(
-                        transaction_handle,
-                        exact_paths=exact_lock_paths,
-                        tree_paths=tree_lock_dirs,
-                        timeout=None,
-                    )
-                    if lock_acquired:
-                        break
-                    retry_count += 1
-                    if max_retries > 0 and retry_count >= max_retries:
-                        raise TimeoutError(
-                            f"[{phase_label}] Failed to acquire memory locks after "
-                            f"{retry_count} retries (max={max_retries})"
-                        )
-                    last_lock_retry_warning_at = _log_memory_lock_retry(
-                        retry_count=retry_count,
-                        max_retries=max_retries,
-                        last_warning_at=last_lock_retry_warning_at,
-                        phase_label=phase_label,
-                    )
-                    if retry_interval > 0:
-                        await asyncio.sleep(retry_interval)
-
-            provider._transaction_handle = transaction_handle
-            orchestrator._transaction_handle = transaction_handle
-            operations, _ = await orchestrator.run()
-
-            if operations is None:
-                tracer.info(f"[{phase_label}] No memory operations generated")
-                return [], [], [], {}, []
-
-            # Log raw LLM operations before applying.
-            _op_items = [
-                f"{op.memory_type}(uris={op.uris!r})"
-                for op in getattr(operations, "upsert_operations", [])
-            ]
-            _delete_uris_raw = [dc.uri for dc in getattr(operations, "delete_file_contents", [])]
-            tracer.info(
-                f"[{phase_label}] LLM operations: ops={_op_items}, delete_uris={_delete_uris_raw}"
-            )
-
-            # Resolve supersedes fields (name-based Replace): find old experience URI,
-            # queue for deletion, and return per-URI inheritance map so only the
-            # superseding experience inherits the old source_trajectories.
-            inheritance_map = await self._resolve_supersedes(operations, ctx, viking_fs, provider)
-
-            memory_operations, skill_operations, unsupported_skill_deletes = (
-                self._split_operations_by_memory_type(operations)
-            )
-            if unsupported_skill_deletes:
-                logger.warning(
-                    "[%s] Ignoring unsupported session skill deletes: %s",
-                    phase_label,
-                    unsupported_skill_deletes,
+                await self._acquire_phase_locks(
+                    lock_manager=lock_manager,
+                    transaction_handle=transaction_handle,
+                    exact_lock_paths=exact_lock_paths,
+                    tree_lock_dirs=tree_lock_dirs,
+                    phase_label=phase_label,
                 )
 
-            memory_result = MemoryUpdateResult()
-            if (
-                memory_operations.upsert_operations
-                or memory_operations.delete_file_contents
-                or memory_operations.errors
-            ):
-                registry = provider._get_registry()
-                updater = self._get_or_create_updater(registry, transaction_handle)
-                memory_result = await updater.apply_operations(
-                    memory_operations,
-                    ctx,
-                    extract_context=extract_context,
-                    isolation_handler=isolation_handler,
-                )
+            registry = provider._get_registry() if hasattr(provider, "_get_registry") else None
+            phase_result, _ = await self._run_segmented_phase(
+                provider=provider,
+                messages=messages,
+                ctx=ctx,
+                phase_label=phase_label,
+                transaction_handle=transaction_handle,
+                viking_fs=viking_fs,
+                latest_archive_overview=getattr(provider, "latest_archive_overview", "") or "",
+                registry=registry,
+                post_apply=post_apply,
+            )
+            memory_result = phase_result.memory_result
+            skill_result = phase_result.skill_result
 
             tracer.info(
                 f"[{phase_label}] Applied memory ops: written={len(memory_result.written_uris)}, "
@@ -796,20 +1098,7 @@ class SessionCompressorV2:
                 f"errors={len(memory_result.errors)}"
             )
 
-            if post_apply:
-                await post_apply(memory_result, inheritance_map, transaction_handle)
-
-            skill_results: List[Dict[str, Any]] = []
-            if skill_operations.upsert_operations:
-                if not self.skill_processor:
-                    raise RuntimeError("SkillProcessor is required for session skill extraction")
-                skill_operations = dedup_session_skill_operations(skill_operations)
-                skill_updater = SkillOperationUpdater(
-                    registry=provider._get_registry(),
-                    skill_processor=self.skill_processor,
-                    viking_fs=viking_fs,
-                )
-                skill_result = await skill_updater.apply_operations(skill_operations, ctx)
+            if skill_result.written_uris or skill_result.edited_uris or skill_result.errors:
                 tracer.info(
                     f"[{phase_label}] Applied session skill ops: written={len(skill_result.written_uris)}, "
                     f"edited={len(skill_result.edited_uris)}, errors={len(skill_result.errors)}"
@@ -820,28 +1109,18 @@ class SessionCompressorV2:
                         phase_label,
                         len(skill_result.errors),
                     )
-                skill_results = list(skill_result.operation_results)
-
-            contexts: List[Context] = []
-            for uri in memory_result.written_uris:
-                contexts.append(Context(uri=uri, category="memory_write", context_type="memory"))
-            for uri in memory_result.edited_uris:
-                contexts.append(Context(uri=uri, category="memory_edit", context_type="memory"))
-            for uri in memory_result.deleted_uris:
-                contexts.append(Context(uri=uri, category="memory_delete", context_type="memory"))
-
             return (
                 list(memory_result.written_uris),
                 list(memory_result.edited_uris),
-                contexts,
-                inheritance_map,
-                skill_results,
+                self._contexts_from_memory_result(memory_result),
+                {},
+                list(skill_result.operation_results),
             )
         except Exception as e:
             logger.error(f"[{phase_label}] Failed to extract: {e}", exc_info=True)
             if strict_extract_errors:
                 raise
-            return None
+            return ([], [], [], {}, [])
         finally:
             if lock_manager and transaction_handle:
                 try:

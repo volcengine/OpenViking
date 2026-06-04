@@ -14,7 +14,10 @@ from openviking.core.namespace import to_agent_space, to_user_space
 from openviking.message.part import ToolPart
 from openviking.prompts.manager import PromptManager
 from openviking.server.identity import RequestContext, ToolContext
-from openviking.session.memory.core import ExtractContextProvider
+from openviking.session.memory.core import (
+    DEFAULT_CONTEXT_PROVIDER_RESERVE_TOKENS,
+    ExtractContextProvider,
+)
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler, RoleScope
 from openviking.session.memory.memory_type_registry import (
@@ -45,6 +48,10 @@ _PREFETCH_SEARCH_TOOL_FIELD_MAX_CHARS = 500
 
 class SessionExtractContextProvider(ExtractContextProvider):
     """会话提取 Provider - 从会话消息中提取记忆"""
+
+    @staticmethod
+    def get_reserve_tokens() -> int:
+        return DEFAULT_CONTEXT_PROVIDER_RESERVE_TOKENS
 
     def __init__(
         self,

@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Tuple
 from openviking.core.namespace import canonical_agent_root
 from openviking.core.skill_loader import SkillLoader
 from openviking.prompts.manager import PromptManager
+from openviking.session.memory.core import DEFAULT_CONTEXT_PROVIDER_RESERVE_TOKENS
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.session_extract_context_provider import SessionExtractContextProvider
@@ -85,6 +86,10 @@ def build_skill_read_result(
 
 class SessionSkillContextProvider(SessionExtractContextProvider):
     """Provider that reuses session ReAct extraction for real skill assets."""
+
+    @staticmethod
+    def get_reserve_tokens() -> int:
+        return DEFAULT_CONTEXT_PROVIDER_RESERVE_TOKENS
 
     def instruction(self) -> str:
         return (

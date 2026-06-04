@@ -160,6 +160,7 @@
         "extraction_enabled": true,
         "session_skill_extraction_enabled": false,
         "role_id_memory_isolation_enabled": false,
+        "input_window_tokens": 65536,
     },
     "log": {
         "level": "INFO",
