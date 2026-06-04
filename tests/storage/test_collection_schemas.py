@@ -618,6 +618,198 @@ async def test_embedding_handler_local_bm25_restarts_after_late_pending(monkeypa
     assert state.task is None
 
 
+class _RebuildCountingVikingDB:
+    """Counts rebuild calls; returns a configurable corpus size per rebuild."""
+
+    is_closing = False
+    mode = "local"
+
+    def __init__(self, sizes: list[int] | None = None):
+        self.calls = 0
+        self._sizes = sizes or []
+
+    async def rebuild_local_bm25_sparse_vectors(self, sparse_embedder, *, ctx):
+        del sparse_embedder, ctx
+        idx = self.calls
+        self.calls += 1
+        return self._sizes[idx] if idx < len(self._sizes) else 0
+
+
+def _build_rebuild_handler(monkeypatch, sparse, vikingdb):
+    dense = _FakeDenseEmbedder()
+    embedder = CompositeHybridEmbedder(dense, sparse)
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: _DummyConfig(embedder),
+    )
+    handler = TextEmbeddingHandler(vikingdb)
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="default", user_id="default", agent_id="default"),
+        role=Role.ROOT,
+    )
+    return handler, ctx
+
+
+@pytest.mark.asyncio
+async def test_rebuild_fires_below_min_docs(monkeypatch):
+    """Below min_docs, every insert triggers a rebuild (warm-up behavior)."""
+    sparse = LocalBM25Embedder(rebuild_min_docs=10, rebuild_growth_factor=1.5)
+    vikingdb = _RebuildCountingVikingDB(sizes=[1, 2, 3])
+    handler, ctx = _build_rebuild_handler(monkeypatch, sparse, vikingdb)
+
+    for _ in range(3):
+        handler._schedule_local_bm25_sparse_rebuild(ctx)
+        task = handler._local_bm25_rebuilds_by_account["default"].task
+        if task is not None:
+            await task
+
+    assert vikingdb.calls == 3
+
+
+@pytest.mark.asyncio
+async def test_rebuild_skips_when_growth_threshold_not_met(monkeypatch):
+    """After warm-up, inserts below the 1.5x threshold don't trigger rebuild."""
+    sparse = LocalBM25Embedder(rebuild_min_docs=10, rebuild_growth_factor=1.5)
+    vikingdb = _RebuildCountingVikingDB(sizes=[10])
+    handler, ctx = _build_rebuild_handler(monkeypatch, sparse, vikingdb)
+
+    state = handler._local_bm25_rebuilds_by_account.setdefault(
+        "default", _LocalBM25RebuildState()
+    )
+    state.last_rebuild_size = 10
+    # last_rebuild_at uses time.monotonic(); set to "just now" so the
+    # max_interval staleness check does NOT fire on its own. This isolates
+    # the growth-threshold branch as the only thing being tested.
+    import time as _time
+    state.last_rebuild_at = _time.monotonic()
+
+    # 4 inserts: approx_size grows 11, 12, 13, 14. Threshold is 10 * 1.5 = 15.
+    # None should fire (above min_docs, below growth threshold, time bound not exceeded).
+    for _ in range(4):
+        handler._schedule_local_bm25_sparse_rebuild(ctx)
+
+    assert vikingdb.calls == 0
+    assert state.pending_inserts == 4
+
+
+@pytest.mark.asyncio
+async def test_rebuild_fires_at_growth_threshold(monkeypatch):
+    """Insert that pushes approx_size to last_rebuild_size * 1.5 fires rebuild."""
+    sparse = LocalBM25Embedder(rebuild_min_docs=10, rebuild_growth_factor=1.5)
+    vikingdb = _RebuildCountingVikingDB(sizes=[15])
+    handler, ctx = _build_rebuild_handler(monkeypatch, sparse, vikingdb)
+
+    state = handler._local_bm25_rebuilds_by_account.setdefault(
+        "default", _LocalBM25RebuildState()
+    )
+    state.last_rebuild_size = 10
+    state.last_rebuild_at = 1.0
+
+    # 5 inserts: approx_size = 11, 12, 13, 14, 15. 15 >= 10 * 1.5 → fire on the 5th.
+    for _ in range(5):
+        handler._schedule_local_bm25_sparse_rebuild(ctx)
+
+    task = handler._local_bm25_rebuilds_by_account["default"].task
+    assert task is not None
+    await task
+
+    assert vikingdb.calls == 1
+    assert state.last_rebuild_size == 15
+
+
+@pytest.mark.asyncio
+async def test_rebuild_fires_at_max_interval(monkeypatch):
+    """When growth threshold not met, time staleness still triggers rebuild."""
+    import time as _time
+
+    sparse = LocalBM25Embedder(
+        rebuild_min_docs=10,
+        rebuild_growth_factor=1000.0,  # effectively disable growth trigger
+        rebuild_max_interval_seconds=60,
+    )
+    vikingdb = _RebuildCountingVikingDB(sizes=[11])
+    handler, ctx = _build_rebuild_handler(monkeypatch, sparse, vikingdb)
+
+    state = handler._local_bm25_rebuilds_by_account.setdefault(
+        "default", _LocalBM25RebuildState()
+    )
+    state.last_rebuild_size = 10
+    # last_rebuild_at well in the past — 120s ago should exceed the 60s bound.
+    state.last_rebuild_at = _time.monotonic() - 120.0
+
+    handler._schedule_local_bm25_sparse_rebuild(ctx)
+    task = handler._local_bm25_rebuilds_by_account["default"].task
+    assert task is not None
+    await task
+
+    assert vikingdb.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_rebuild_coalescing_still_works_with_triggers(monkeypatch):
+    """In-flight rebuild + new inserts past the threshold still coalesce to 2 calls, not N."""
+
+    class _SlowCountingVikingDB:
+        is_closing = False
+        mode = "local"
+
+        def __init__(self):
+            self.calls = 0
+            self.started = asyncio.Event()
+            self.release_first = asyncio.Event()
+
+        async def rebuild_local_bm25_sparse_vectors(self, sparse_embedder, *, ctx):
+            del sparse_embedder, ctx
+            self.calls += 1
+            if self.calls == 1:
+                self.started.set()
+                await self.release_first.wait()
+            return 15 if self.calls == 1 else 30
+
+    sparse = LocalBM25Embedder(rebuild_min_docs=10, rebuild_growth_factor=1.5)
+    vikingdb = _SlowCountingVikingDB()
+    handler, ctx = _build_rebuild_handler(monkeypatch, sparse, vikingdb)
+
+    state = handler._local_bm25_rebuilds_by_account.setdefault(
+        "default", _LocalBM25RebuildState()
+    )
+    state.last_rebuild_size = 10
+    # Recent rebuild — pin time so only the growth trigger drives this test.
+    import time as _time
+    state.last_rebuild_at = _time.monotonic()
+
+    # Fire enough inserts to trigger the first rebuild.
+    for _ in range(5):
+        handler._schedule_local_bm25_sparse_rebuild(ctx)
+    await vikingdb.started.wait()
+
+    # While rebuild is in flight, fire 10 more inserts. They all set pending,
+    # but only one second rebuild should run after the first completes.
+    for _ in range(10):
+        handler._schedule_local_bm25_sparse_rebuild(ctx)
+    assert vikingdb.calls == 1  # second hasn't started yet
+
+    vikingdb.release_first.set()
+    await state.task
+
+    assert vikingdb.calls == 2  # not 11 — coalescing held
+    assert state.last_rebuild_size == 30
+
+
+@pytest.mark.asyncio
+async def test_invalid_growth_factor_rejected_at_config():
+    from openviking_cli.utils.config.embedding_config import EmbeddingModelConfig
+
+    with pytest.raises(ValueError, match="rebuild_growth_factor"):
+        EmbeddingModelConfig(provider="local_bm25", rebuild_growth_factor=1.0)
+    with pytest.raises(ValueError, match="rebuild_growth_factor"):
+        EmbeddingModelConfig(provider="local_bm25", rebuild_growth_factor=0.5)
+    with pytest.raises(ValueError, match="rebuild_max_interval_seconds"):
+        EmbeddingModelConfig(provider="local_bm25", rebuild_max_interval_seconds=0)
+    with pytest.raises(ValueError, match="rebuild_min_docs"):
+        EmbeddingModelConfig(provider="local_bm25", rebuild_min_docs=-1)
+
+
 @pytest.mark.asyncio
 async def test_embedding_handler_drops_input_too_large_without_requeue(monkeypatch):
     class _QueueingVikingDB:
