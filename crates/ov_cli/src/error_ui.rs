@@ -198,10 +198,9 @@ pub(crate) fn report_for_runtime_error(command: impl Into<String>, error: &Error
         ]),
         Error::Api(message) => ErrorReport::new(
             copy(language, "OpenViking API Error", "OpenViking API 错误"),
-            copy(language, "OpenViking returned an error for this request.", "OpenViking 返回了请求错误。"),
+            message,
         )
         .with_command(command)
-        .with_detail(message)
         .with_actions(vec![
             ErrorAction::new("ov config validate", copy(language, "Check the active config", "检查当前配置")),
             ErrorAction::new("ov status", copy(language, "Check OpenViking status", "查看 OpenViking 状态")),
@@ -558,6 +557,24 @@ Usage: ov config [OPTIONS] [COMMAND]
 
         assert!(verbose.contains("Detail:"));
         assert!(verbose.contains("Request ID"));
+    }
+
+    #[test]
+    fn generic_api_error_shows_server_message_by_default() {
+        let error = Error::Api(
+            "[INVALID_ARGUMENT] Cannot access Git repository: https://github.com/openclaw/openclaws. remote: Repository not found.".to_string(),
+        );
+        let report = report_for_runtime_error(
+            "ov add-resource https://github.com/openclaw/openclaws",
+            &error,
+        );
+        let normal = strip_ansi(&render_report(&report, false));
+
+        assert!(normal.contains("OpenViking API Error"));
+        assert!(normal.contains("[INVALID_ARGUMENT]"));
+        assert!(normal.contains("Cannot access Git repository"));
+        assert!(normal.contains("Repository not found"));
+        assert!(!normal.contains("OpenViking returned an error for this request"));
     }
 
     #[test]

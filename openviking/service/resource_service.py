@@ -434,9 +434,7 @@ class ResourceService:
         except OpenVikingError:
             raise
         except Exception as exc:
-            raise InvalidArgumentError(
-                f"Remote resource preflight failed for {url}: {exc}"
-            ) from exc
+            raise InvalidArgumentError(f"Cannot access remote URL: {url}. {exc}") from exc
 
         source_name = HTTPAccessor._extract_filename_from_url(url)
         return _ResourceSourceInfo(
@@ -469,17 +467,17 @@ class ResourceService:
                 proc.kill()  # type: ignore[possibly-undefined]
                 await proc.communicate()  # type: ignore[possibly-undefined]
             raise InvalidArgumentError(
-                f"Git repository preflight timed out for {source}"
+                f"Cannot access Git repository: {source}. The check timed out after 10s."
             ) from exc
         except Exception as exc:
             raise InvalidArgumentError(
-                f"Git repository preflight failed for {source}: {exc}"
+                f"Cannot access Git repository: {source}. {exc}"
             ) from exc
 
         if proc.returncode != 0:
             detail = (stderr or stdout).decode("utf-8", errors="replace").strip()
             raise InvalidArgumentError(
-                f"Git repository preflight failed for {source}: {detail or 'git ls-remote failed'}"
+                f"Cannot access Git repository: {source}. {detail or 'git ls-remote failed'}"
             )
         repo_name = parse_code_hosting_url(source)
         return _ResourceSourceInfo(
