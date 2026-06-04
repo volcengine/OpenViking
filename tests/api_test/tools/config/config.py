@@ -11,6 +11,7 @@ class Config:
     CONSOLE_URL = f"http://{CONSOLE_HOST}:{CONSOLE_PORT}"
 
     OPENVIKING_API_KEY = os.getenv("OPENVIKING_API_KEY", "test-root-api-key")
+    OPENVIKING_ROOT_API_KEY = os.getenv("OPENVIKING_ROOT_API_KEY", OPENVIKING_API_KEY)
     OPENVIKING_ACCOUNT = os.getenv("OPENVIKING_ACCOUNT", "default")
     OPENVIKING_USER = os.getenv("OPENVIKING_USER", "default")
 
