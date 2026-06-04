@@ -1,15 +1,11 @@
 #!/usr/bin/env python3
-"""Step 1 (Effectiveness): Import real code repos into OpenViking (no indexing).
+"""Step 1 (Effectiveness): Import real code repos into OpenViking (with indexing).
 
-Scans first-level subdirectories under the source directory and imports each
-as a whole repo via SyncOpenViking.add_resource (wait=True, build_index=False,
-summarize=False).  add_resource itself handles recursive traversal of files
-within each repo, so we only need to enumerate top-level directories.
+Imports the entire source directory as a single resource via
+SyncOpenViking.add_resource (wait=True, build_index=True, summarize=True).
+add_resource handles recursive traversal internally.
 
-Progress is saved after each directory for resumability.
-
-After all imports are done, run step2_reindex.py to build vector indexes,
-then step3_quality.py to evaluate retrieval quality.
+After import, run step2_quality.py to evaluate retrieval quality.
 
 Prerequisites:
   - Download code repos and place them under the source directory manually.
@@ -28,35 +24,12 @@ import time
 from openviking.sync_client import SyncOpenViking
 
 DEFAULT_SOURCE = os.path.expanduser("~/.openviking/data/benchmark/OpenViking-main")
-PROGRESS_FILE = os.path.expanduser("~/.openviking/data/benchmark/.effectiveness-import-progress")
 BENCHMARK_PARENT = "viking://resources/benchmark/effectiveness"
-
-
-def load_progress() -> set[str]:
-    if not os.path.exists(PROGRESS_FILE):
-        return set()
-    with open(PROGRESS_FILE) as f:
-        return {line.strip() for line in f if line.strip()}
-
-
-def save_progress(rel_dir: str) -> None:
-    os.makedirs(os.path.dirname(PROGRESS_FILE), exist_ok=True)
-    with open(PROGRESS_FILE, "a") as f:
-        f.write(rel_dir + "\n")
-
-
-def scan_first_level_dirs(root: str) -> list[str]:
-    """Return sorted list of first-level subdirectory names."""
-    try:
-        entries = sorted(os.listdir(root))
-    except OSError:
-        return []
-    return [e for e in entries if not e.startswith(".") and os.path.isdir(os.path.join(root, e))]
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Step 1 (Effectiveness): Import real code repos (no indexing)"
+        description="Step 1 (Effectiveness): Import real code repos (with indexing)"
     )
     parser.add_argument(
         "--source",
@@ -76,99 +49,38 @@ def main():
         return
 
     print("=" * 80)
-    print("Step 1 (Effectiveness): Import Code Repos (no VLM/embedding)")
+    print("Step 1 (Effectiveness): Import Code Repos (with VLM/embedding)")
     print("=" * 80)
     print(f"  Source:   {source}")
     print(f"  Parent:   {args.parent}")
-    print(f"  Progress: {PROGRESS_FILE}")
-    print("  Indexing: DISABLED (build_index=False, summarize=False)")
+    print("  Indexing: ENABLED (build_index=True, summarize=True)")
     print()
-
-    first_level = scan_first_level_dirs(source)
-    total = len(first_level)
-    print(f"  First-level directories to import: {total}")
-    print()
-
-    if total == 0:
-        print("No subdirectories found. Nothing to import.")
-        return
-
-    completed = load_progress()
-    if completed:
-        already_done = [d for d in first_level if d in completed]
-        print(f"  Resuming: {len(already_done)} directories already imported")
-        print()
 
     client = SyncOpenViking()
     client.initialize()
 
-    results = []
-    for i, name in enumerate(first_level, 1):
-        if name in completed:
-            print(f"  [{i}/{total}] SKIP (already done): {name}")
-            continue
-
-        dir_path = os.path.join(source, name)
-        parent_uri = args.parent
-        print(f"  [{i}/{total}] Importing: {name} ...", end="", flush=True)
-
-        t0 = time.monotonic()
-        try:
-            result = client.add_resource(
-                path=dir_path,
-                parent=parent_uri,
-                reason=f"benchmark effectiveness: {name}",
-                wait=True,
-                create_parent=True,
-                build_index=False,
-                summarize=False,
-            )
-            elapsed = time.monotonic() - t0
-            root_uri = result.get("root_uri", "?")
-            print(f" OK ({elapsed:.1f}s) -> {root_uri}")
-            save_progress(name)
-            results.append({"dir": name, "status": "ok", "elapsed_s": round(elapsed, 1)})
-        except Exception as e:
-            elapsed = time.monotonic() - t0
-            print(f" FAILED ({elapsed:.1f}s): {e}")
-            results.append(
-                {
-                    "dir": name,
-                    "status": "failed",
-                    "elapsed_s": round(elapsed, 1),
-                    "error": str(e)[:500],
-                }
-            )
+    t0 = time.monotonic()
+    try:
+        result = client.add_resource(
+            path=source,
+            parent=args.parent,
+            reason="benchmark effectiveness",
+            wait=True,
+            create_parent=True,
+            build_index=True,
+            summarize=True,
+        )
+        elapsed = time.monotonic() - t0
+        root_uri = result.get("root_uri", "?")
+        print(f"OK ({elapsed:.1f}s) -> {root_uri}")
+        print()
+        print("Import completed successfully.")
+        print("Next step: run step2_quality.py to evaluate retrieval quality")
+    except Exception as e:
+        elapsed = time.monotonic() - t0
+        print(f"FAILED ({elapsed:.1f}s): {e}")
 
     client.close()
-
-    print()
-    print("Summary:")
-    for r in results:
-        status = r["status"]
-        dir_name = r["dir"]
-        elapsed = r["elapsed_s"]
-        line = f"  {status.upper():>7s}  {dir_name}  ({elapsed}s)"
-        if status == "failed":
-            line += f"  -- {r.get('error', '')}"
-        print(line)
-
-    ok_count = sum(1 for r in results if r["status"] == "ok")
-    failed_count = sum(1 for r in results if r["status"] == "failed")
-    skipped_count = sum(1 for d in first_level if d in completed)
-    total_done = skipped_count + ok_count
-
-    print()
-    if total_done >= total and failed_count == 0:
-        print(f"All {total} directories imported successfully (no indexing).")
-        print("Next step: run step2_reindex.py to build vector indexes")
-    else:
-        print(
-            f"  Imported: {ok_count}  Failed: {failed_count}  "
-            f"Skipped: {skipped_count}  Remaining: {total - total_done}"
-        )
-        if failed_count > 0:
-            print("Re-run this script to resume from where it left off.")
 
 
 if __name__ == "__main__":

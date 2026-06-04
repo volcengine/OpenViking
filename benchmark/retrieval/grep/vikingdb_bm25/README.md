@@ -9,8 +9,7 @@ vikingdb_bm25/
 ├── ai_wiki.txt              # Source text for synthetic data generation
 ├── effectiveness/            # Retrieval effectiveness (recall/precision/F1)
 │   ├── step1_add_resource.py
-│   ├── step2_reindex.py
-│   └── step3_quality.py
+│   └── step2_quality.py
 └── performance/              # Retrieval performance (latency + recall at scale)
     ├── step0_prepare_data.py
     ├── step1_add_resource.py
@@ -26,31 +25,26 @@ Tests whether grep can find **all** matching files in real code repositories.
 
 | Step | Script | Description |
 |------|--------|-------------|
-| 1 | `step1_add_resource.py` | Import code repos (no indexing, fast) |
-| 2 | `step2_reindex.py` | Async reindex via openviking-server (concurrency=16, polling) |
-| 3 | `step3_quality.py` | Compare grep results vs ground truth (fs engine, cached) |
+| 1 | `step1_add_resource.py` | Import code repos (with indexing, single import) |
+| 2 | `step2_quality.py` | Compare grep results vs ground truth (fs engine, cached) |
 
 ### Usage
 
 ```bash
-# Step 1: Import repos (no VLM/embedding)
+# Step 1: Import repos (with VLM/embedding, single import)
 cd effectiveness/
 python3 step1_add_resource.py --source ~/.openviking/data/benchmark/OpenViking-main
 
-# Step 2: Build vector indexes (requires openviking-server running)
-python3 step2_reindex.py
-# Optional: --concurrency N  (default: 16)
-
-# Step 3: Evaluate retrieval quality
+# Step 2: Evaluate retrieval quality
 #   First run MUST use engine=fs in ov.conf to generate ground truth cache:
 #     1. Set ov.conf: "grep": {"engine": "fs"}
 #     2. Restart server
-python3 step3_quality.py --keywords grep reindex SyncHTTPClient
+python3 step2_quality.py --keywords grep reindex SyncHTTPClient
 
 #   Subsequent runs can use any engine (ground truth is read from cache):
 #     1. Set ov.conf: "grep": {"engine": "auto", "switch_to_remote_threshold": 0}
 #     2. Restart server
-python3 step3_quality.py --keywords grep reindex SyncHTTPClient
+python3 step2_quality.py --keywords grep reindex SyncHTTPClient
 
 # Optional: --regenerate-ground-truth  (force recompute, requires engine=fs)
 ```
@@ -112,6 +106,6 @@ python3 step3_benchmark.py --engine-label auto --compare step3_result_fs.json
 - **Performance** tests compare grep latency and match counts between engine configs (ground truth from fs-engine grep, cached)
 - Both ground truth caches are stored in `~/.openviking/data/benchmark/.ground_truth/`
 - First run of each step3 MUST use `engine=fs` in ov.conf to generate ground truth; subsequent runs can use any engine
-- Both follow the same workflow: import (no indexing) → reindex → benchmark/evaluate
+- Both follow the same workflow: import (with indexing) → benchmark/evaluate
 - Both support **resumable** execution via progress files (separate for import and reindex)
 - Change grep engine via `ov.conf` and restart the server between benchmark runs

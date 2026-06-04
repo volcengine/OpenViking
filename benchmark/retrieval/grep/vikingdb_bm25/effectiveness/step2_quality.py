@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Step 3 (Effectiveness): Evaluate retrieval quality for real code repos.
+"""Step 2 (Effectiveness): Evaluate retrieval quality for real code repos.
 
 Compares grep results (current engine) against ground truth from fs-engine grep.
 Computes Recall, Precision, F1 per query pattern.
@@ -10,12 +10,11 @@ can use a different engine config while still comparing against the same
 ground truth.
 
 Prerequisites:
-  1. Run step1_add_resource.py to import repos (no indexing)
-  2. Run step2_reindex.py to build vector indexes
-  3. First run: set ov.conf grep engine to "fs" and restart server
+  1. Run step1_add_resource.py to import repos (with indexing)
+  2. First run: set ov.conf grep engine to "fs" and restart server
 
 Usage:
-  python3 step3_quality.py --keywords grep reindex SyncHTTPClient
+  python3 step2_quality.py --keywords grep reindex SyncHTTPClient
 """
 
 from __future__ import annotations
@@ -176,7 +175,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Step 3 (Effectiveness): Evaluate retrieval quality"
+        description="Step 2 (Effectiveness): Evaluate retrieval quality"
     )
     parser.add_argument(
         "--keywords",
@@ -195,7 +194,7 @@ def main():
     keywords = args.keywords if args.keywords else KEYWORDS
     if not keywords:
         print("WARNING: KEYWORDS list is empty. Fill it with real terms before running.")
-        print("         Use --keywords kw1 kw2 ... or edit step3_quality.py.\n")
+        print("         Use --keywords kw1 kw2 ... or edit step2_quality.py.\n")
 
     test_patterns = build_test_patterns(keywords)
 
@@ -297,7 +296,7 @@ def main():
 
     # Save results to local file
     os.makedirs(RESULT_DIR, exist_ok=True)
-    output_file = os.path.join(RESULT_DIR, "step3_result.json")
+    output_file = os.path.join(RESULT_DIR, "step2_result.json")
     with open(output_file, "w", encoding="utf-8") as f:
         json.dump(
             {"uri": uri, "patterns": len(test_patterns), "results": results},
