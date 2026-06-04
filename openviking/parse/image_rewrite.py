@@ -53,6 +53,8 @@ async def rewrite_image_uris(
     """
     viking_fs = get_viking_fs()
 
+    root_prefix = root_uri.rstrip("/")
+
     # Find all .md files recursively
     glob_result = await viking_fs.glob("*.md", uri=root_uri, ctx=ctx)
     md_uris = glob_result.get("matches", [])
@@ -60,23 +62,14 @@ async def rewrite_image_uris(
     if not md_uris:
         return {"files_processed": 0, "references_rewritten": 0}
 
-    # Pre-build set of available images in the .images/ directory
-    images_dir = f"{root_uri.rstrip('/')}/.images"
-    available_images: Set[str] = set()
+    # Load mapping file from _ingest_local_images:
+    #   {rel_md_path -> {original_path_str -> image_filename}}
+    # The mapping file lives at the root directory and images are stored next to
+    # their referencing markdown file.
+    file_mappings: Dict[str, Dict[str, str]] = {}
     try:
-        entries = await viking_fs.ls(images_dir, ctx=ctx)
-        available_images = {
-            e["name"] for e in entries
-            if not e.get("isDir") and not e["name"].startswith(".")
-        }
-    except Exception:
-        logger.debug(f"[image_rewrite] No .images/ directory found at {images_dir}")
-
-    # Load mapping file from _ingest_local_images (path -> viking_filename)
-    path_to_viking_name: Dict[str, str] = {}
-    try:
-        mapping_content = await viking_fs.read_file(f"{images_dir}/.image_mappings.json", ctx=ctx)
-        path_to_viking_name = json.loads(mapping_content)
+        mapping_content = await viking_fs.read_file(f"{root_prefix}/.image_mappings.json", ctx=ctx)
+        file_mappings = json.loads(mapping_content)
     except Exception:
         pass
 
@@ -84,13 +77,32 @@ async def rewrite_image_uris(
     references_rewritten = 0
 
     for md_uri in md_uris:
+        # Resolve this markdown file's mapping and its containing directory
+        rel_md_path = md_uri[len(root_prefix) + 1 :] if md_uri.startswith(root_prefix) else md_uri
+        path_to_image_name = file_mappings.get(rel_md_path, {})
+        if not path_to_image_name:
+            continue
+
+        md_dir = md_uri.rsplit("/", 1)[0]
+
+        # Build the set of available images that sit beside this markdown file
+        available_images: Set[str] = set()
+        try:
+            entries = await viking_fs.ls(md_dir, ctx=ctx)
+            available_images = {
+                e["name"] for e in entries
+                if not e.get("isDir") and not e["name"].startswith(".")
+            }
+        except Exception:
+            logger.debug(f"[image_rewrite] Failed to list directory {md_dir}")
+
         try:
             content = await viking_fs.read_file(md_uri, ctx=ctx)
         except Exception:
             logger.warning(f"[image_rewrite] Failed to read {md_uri}, skipping")
             continue
 
-        new_content, rewrite_count = _rewrite_content(content, images_dir, available_images, path_to_viking_name)
+        new_content, rewrite_count = _rewrite_content(content, md_dir, available_images, path_to_image_name)
 
         if rewrite_count > 0:
             try:
@@ -104,9 +116,9 @@ async def rewrite_image_uris(
                 logger.warning(f"[image_rewrite] Failed to write {md_uri}")
 
     # Clean up mapping file — no longer needed after rewrite
-    if path_to_viking_name:
+    if file_mappings:
         try:
-            await viking_fs.rm(f"{images_dir}/.image_mappings.json", ctx=ctx, lock_handle=lock_handle)
+            await viking_fs.rm(f"{root_prefix}/.image_mappings.json", ctx=ctx, lock_handle=lock_handle)
         except Exception as e:
             logger.warning(f"[image_rewrite] Failed to delete .image_mappings.json: {e}")
 
@@ -120,16 +132,16 @@ async def rewrite_image_uris(
 
 def _rewrite_content(
     content: str,
-    images_dir: str,
+    image_dir: str,
     available_images: Set[str],
-    path_to_viking_name: Optional[Dict[str, str]] = None,
+    path_to_image_name: Optional[Dict[str, str]] = None,
 ) -> tuple[str, int]:
     """Rewrite local image references in markdown content.
 
     Returns (new_content, rewrite_count).
     """
     rewrite_count = 0
-    mappings = path_to_viking_name or {}
+    mappings = path_to_image_name or {}
 
     def replacer(match: re.Match) -> str:
         nonlocal rewrite_count
@@ -141,14 +153,14 @@ def _rewrite_content(
 
         # Prefer exact path mapping from .image_mappings.json
         if path in mappings:
-            viking_name = mappings[path]
-            if viking_name in available_images:
+            image_name = mappings[path]
+            if image_name in available_images:
                 rewrite_count += 1
-                return f"![{alt_text}]({images_dir}/{viking_name})"
+                return f"![{alt_text}]({image_dir}/{image_name})"
 
         logger.warning(
             f"[image_rewrite] Image not found in VikingFS: path = {path}, "
-            f"images_dir = {images_dir}, leaving reference unchanged"
+            f"image_dir = {image_dir}, leaving reference unchanged"
         )
         return match.group(0)
 
