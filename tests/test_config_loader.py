@@ -246,6 +246,22 @@ def test_openviking_config_memory_experimental_switch_defaults_agent_memory(monk
     OpenVikingConfigSingleton.reset_instance()
 
 
+def test_openviking_config_memory_input_window_tokens_default(monkeypatch):
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
+
+    from openviking_cli.utils.config.memory_config import DEFAULT_MEMORY_INPUT_WINDOW_TOKENS
+    from openviking_cli.utils.config.open_viking_config import (
+        OpenVikingConfig,
+        OpenVikingConfigSingleton,
+    )
+
+    config = OpenVikingConfig.from_dict({})
+
+    assert config.memory.input_window_tokens == DEFAULT_MEMORY_INPUT_WINDOW_TOKENS
+
+    OpenVikingConfigSingleton.reset_instance()
+
+
 def test_openviking_config_retrieval_hotness_alpha_defaults_to_zero(monkeypatch):
     monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
 

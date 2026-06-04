@@ -4,6 +4,8 @@ from typing import Any, Dict
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+DEFAULT_MEMORY_INPUT_WINDOW_TOKENS = 65536
+
 
 class MemoryConfig(BaseModel):
     """Memory configuration for OpenViking."""
@@ -108,7 +110,7 @@ class MemoryConfig(BaseModel):
         ),
     )
     input_window_tokens: int = Field(
-        default=128000,
+        default=DEFAULT_MEMORY_INPUT_WINDOW_TOKENS,
         ge=1,
         description=(
             "Unified model input window budget for memory-related extraction flows. "

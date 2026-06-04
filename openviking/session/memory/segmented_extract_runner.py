@@ -17,12 +17,16 @@ from typing import Any, Callable, List, Optional
 from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory import ExtractLoop
-from openviking.session.memory.core import ExtractContextProvider
+from openviking.session.memory.core import (
+    DEFAULT_CONTEXT_PROVIDER_RESERVE_TOKENS,
+    ExtractContextProvider,
+)
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.memory_updater import ExtractContext
 from openviking.telemetry import tracer
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
+from openviking_cli.utils.config.memory_config import DEFAULT_MEMORY_INPUT_WINDOW_TOKENS
 
 logger = get_logger(__name__)
 
@@ -117,8 +121,8 @@ class SegmentedExtractRunner:
     def _get_input_window_tokens(self) -> int:
         config = get_openviking_config()
         return self._coerce_positive_int(
-            getattr(config.memory, "input_window_tokens", 128000),
-            default=128000,
+            getattr(config.memory, "input_window_tokens", DEFAULT_MEMORY_INPUT_WINDOW_TOKENS),
+            default=DEFAULT_MEMORY_INPUT_WINDOW_TOKENS,
         )
 
     @staticmethod
@@ -141,8 +145,11 @@ class SegmentedExtractRunner:
     def _get_reserve_tokens(cls, provider_cls: type[Any]) -> int:
         getter = getattr(provider_cls, "get_reserve_tokens", None)
         if not callable(getter):
-            return 0
-        return cls._coerce_positive_int(getter(), default=0)
+            return DEFAULT_CONTEXT_PROVIDER_RESERVE_TOKENS
+        return cls._coerce_positive_int(
+            getter(),
+            default=DEFAULT_CONTEXT_PROVIDER_RESERVE_TOKENS,
+        )
 
     @staticmethod
     def _message_tokens(message: Message) -> int:

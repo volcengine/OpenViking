@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from openviking.core.namespace import to_agent_space, to_user_space
 from openviking.server.identity import RequestContext
+from openviking.session.memory.core import DEFAULT_CONTEXT_PROVIDER_RESERVE_TOKENS
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.session_extract_context_provider import (
     SessionExtractContextProvider,
@@ -39,7 +40,7 @@ class AgentExperienceContextProvider(SessionExtractContextProvider):
 
     @staticmethod
     def get_reserve_tokens() -> int:
-        return 24576
+        return DEFAULT_CONTEXT_PROVIDER_RESERVE_TOKENS
 
     def __init__(
         self,

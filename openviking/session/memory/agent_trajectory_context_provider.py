@@ -13,6 +13,7 @@ from typing import Any, Dict, List
 
 from openviking.server.identity import RequestContext
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
+from openviking.session.memory.core import DEFAULT_CONTEXT_PROVIDER_RESERVE_TOKENS
 from openviking.session.memory.session_extract_context_provider import SessionExtractContextProvider
 from openviking.session.skill.session_skill_context_provider import (
     SESSION_SKILL_MEMORY_TYPE,
@@ -43,7 +44,7 @@ class AgentTrajectoryContextProvider(SessionExtractContextProvider):
 
     @staticmethod
     def get_reserve_tokens() -> int:
-        return 40960
+        return DEFAULT_CONTEXT_PROVIDER_RESERVE_TOKENS
 
     def __init__(
         self,

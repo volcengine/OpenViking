@@ -14,6 +14,8 @@ from typing import Any, Dict, List
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import VikingFS
 
+DEFAULT_CONTEXT_PROVIDER_RESERVE_TOKENS = 32768
+
 
 class ExtractContextProvider(ABC):
     """Extract Context Provider 接口"""

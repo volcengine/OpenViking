@@ -46,6 +46,7 @@ from openviking.utils.skill_processor import SkillProcessor
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
+from openviking_cli.utils.config.memory_config import DEFAULT_MEMORY_INPUT_WINDOW_TOKENS
 
 logger = get_logger(__name__)
 
@@ -652,7 +653,11 @@ class SessionCompressorV2:
     ) -> tuple[PhaseExtractionResult, ResolvedOperations]:
         config = get_openviking_config()
         extract_loop_cls = extract_loop_cls or ExtractLoop
-        input_window_tokens = getattr(config.memory, "input_window_tokens", 128000)
+        input_window_tokens = getattr(
+            config.memory,
+            "input_window_tokens",
+            DEFAULT_MEMORY_INPUT_WINDOW_TOKENS,
+        )
         shared_context = SegmentedExtractSharedContext(
             ctx=ctx,
             vlm=config.vlm.get_vlm_instance(),
