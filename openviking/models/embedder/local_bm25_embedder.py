@@ -23,6 +23,9 @@ DEFAULT_K1 = 1.2
 DEFAULT_B = 0.75
 DEFAULT_TOKEN_PATTERN = r"\w+"
 DEFAULT_TOKENIZER = "jieba"
+DEFAULT_REBUILD_GROWTH_FACTOR = 1.5
+DEFAULT_REBUILD_MIN_DOCS = 100
+DEFAULT_REBUILD_MAX_INTERVAL_SECONDS = 600
 _CJK_PATTERN = re.compile(r"[\u4e00-\u9fff]+")
 _MIXED_TOKEN_PATTERN = re.compile(r"[\u4e00-\u9fff]+|[^\u4e00-\u9fff\s]+")
 _JIEBA_INSTALL_MESSAGE = (
@@ -183,6 +186,9 @@ class LocalBM25Embedder(SparseEmbedderBase):
         token_pattern: str = DEFAULT_TOKEN_PATTERN,
         tokenizer: str = DEFAULT_TOKENIZER,
         stats_path: Optional[str] = None,
+        rebuild_growth_factor: float = DEFAULT_REBUILD_GROWTH_FACTOR,
+        rebuild_min_docs: int = DEFAULT_REBUILD_MIN_DOCS,
+        rebuild_max_interval_seconds: int = DEFAULT_REBUILD_MAX_INTERVAL_SECONDS,
         config: Optional[Dict[str, Any]] = None,
     ):
         super().__init__(model_name=model_name, config=config)
@@ -194,6 +200,9 @@ class LocalBM25Embedder(SparseEmbedderBase):
         self._stats_path: Optional[Path] = Path(stats_path) if stats_path else None
         if self._stats_path:
             self.stats.load(self._stats_path)
+        self.rebuild_growth_factor = rebuild_growth_factor
+        self.rebuild_min_docs = rebuild_min_docs
+        self.rebuild_max_interval_seconds = rebuild_max_interval_seconds
 
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         tokens = _tokenize(text, self.token_pattern, self.tokenizer)

@@ -126,6 +126,30 @@ class EmbeddingModelConfig(BaseModel):
         default=None,
         description="Path for persisted BM25 corpus statistics for provider='local_bm25'.",
     )
+    rebuild_growth_factor: Optional[float] = Field(
+        default=None,
+        description=(
+            "Corpus growth multiplier that triggers a local_bm25 rebuild "
+            "(default 1.5). Lower = fresher stats, more writes. "
+            "Higher = fewer writes, longer staleness window."
+        ),
+    )
+    rebuild_min_docs: Optional[int] = Field(
+        default=None,
+        description=(
+            "Below this corpus size, local_bm25 rebuilds on every insert "
+            "(default 100). Avoids thrashing on tiny corpora where "
+            "the growth factor would fire too often."
+        ),
+    )
+    rebuild_max_interval_seconds: Optional[int] = Field(
+        default=None,
+        description=(
+            "Maximum seconds between local_bm25 rebuilds when writes are "
+            "happening (default 600). Bounds staleness in time, not just "
+            "in corpus growth — useful when write rate is slow."
+        ),
+    )
     enable_fusion: Optional[bool] = Field(
         default=None,
         description="Enable multimodal fusion for DashScope provider (multimodal models only).",
@@ -366,6 +390,20 @@ class EmbeddingModelConfig(BaseModel):
             if self.tokenizer and self.tokenizer not in {"jieba", "regex"}:
                 raise ValueError(
                     f"{label}: local_bm25 tokenizer must be one of: 'jieba', 'regex'"
+                )
+            if self.rebuild_growth_factor is not None and self.rebuild_growth_factor <= 1.0:
+                raise ValueError(
+                    f"{label}: local_bm25 rebuild_growth_factor must be > 1.0 "
+                    "(values <= 1.0 would rebuild on every insert)"
+                )
+            if self.rebuild_min_docs is not None and self.rebuild_min_docs < 0:
+                raise ValueError(f"{label}: local_bm25 rebuild_min_docs must be >= 0")
+            if (
+                self.rebuild_max_interval_seconds is not None
+                and self.rebuild_max_interval_seconds <= 0
+            ):
+                raise ValueError(
+                    f"{label}: local_bm25 rebuild_max_interval_seconds must be > 0"
                 )
 
     def _validate_credentials(self) -> None:
@@ -1005,6 +1043,21 @@ class EmbeddingConfig(BaseModel):
                     **({"tokenizer": cfg.tokenizer} if cfg.tokenizer else {}),
                     **({"token_pattern": cfg.token_pattern} if cfg.token_pattern else {}),
                     **({"stats_path": cfg.stats_path} if cfg.stats_path else {}),
+                    **(
+                        {"rebuild_growth_factor": cfg.rebuild_growth_factor}
+                        if cfg.rebuild_growth_factor is not None
+                        else {}
+                    ),
+                    **(
+                        {"rebuild_min_docs": cfg.rebuild_min_docs}
+                        if cfg.rebuild_min_docs is not None
+                        else {}
+                    ),
+                    **(
+                        {"rebuild_max_interval_seconds": cfg.rebuild_max_interval_seconds}
+                        if cfg.rebuild_max_interval_seconds is not None
+                        else {}
+                    ),
                     "config": dict(runtime_config),
                 },
             ),
