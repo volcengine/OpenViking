@@ -16,7 +16,7 @@
  * Env vars covered (full list):
  *   Connection / identity:
  *     OPENVIKING_URL / OPENVIKING_BASE_URL, OPENVIKING_API_KEY / OPENVIKING_BEARER_TOKEN,
- *     OPENVIKING_ACCOUNT, OPENVIKING_USER
+ *     OPENVIKING_ACCOUNT, OPENVIKING_USER, OPENVIKING_PEER_ID
  *   Recall tuning:
  *     OPENVIKING_AUTO_RECALL, OPENVIKING_RECALL_LIMIT, OPENVIKING_RECALL_TOKEN_BUDGET,
  *     OPENVIKING_RECALL_MAX_CONTENT_CHARS, OPENVIKING_RECALL_PREFER_ABSTRACT,
@@ -165,6 +165,10 @@ export function loadConfig() {
     || str(cliFile.user, null)
     || str(cc.userId, "");
 
+  const peerId = str(process.env.OPENVIKING_PEER_ID, null)
+    || str(cc.peerId, null)
+    || str(cc.peer_id, "");
+
   // Each tuning field follows env > ovcli.conf is N/A (CLI doesn't carry tuning) >
   // ov.conf cc.* > built-in default. Env var names are flat OPENVIKING_* (no CC
   // namespace) to match the existing connection-field convention; they are only
@@ -201,6 +205,7 @@ export function loadConfig() {
     apiKey,
     accountId,
     userId,
+    peerId,
     timeoutMs,
 
     // Recall

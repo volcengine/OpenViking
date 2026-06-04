@@ -163,6 +163,9 @@ All plugin behavior can be set via env vars. Connection / identity vars affect b
 | `OPENVIKING_API_KEY` / `OPENVIKING_BEARER_TOKEN` | API key; sent as `Authorization: Bearer <key>`                           |
 | `OPENVIKING_ACCOUNT`                             | Multi-tenant account (`X-OpenViking-Account` header)                     |
 | `OPENVIKING_USER`                                | Multi-tenant user (`X-OpenViking-User` header)                           |
+| `OPENVIKING_PEER_ID`                             | Optional stable peer for recall and captured session messages            |
+
+When `OPENVIKING_PEER_ID` is set, hooks pass it as request-level `peer_id`. Subagent capture falls back to Claude's `agent_id` when no explicit peer is configured, so different subagents can keep separate peer memory by default.
 
 #### Recall tuning
 

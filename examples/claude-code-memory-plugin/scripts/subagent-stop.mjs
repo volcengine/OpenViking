@@ -49,6 +49,11 @@ function stateFile(subagentId) {
   return join(STATE_DIR, `${safe}.json`);
 }
 
+function peerIdFromSubagent(subagentId) {
+  if (cfg.peerId) return cfg.peerId;
+  return String(subagentId || "").replace(/[^A-Za-z0-9._-]/g, "-") || null;
+}
+
 async function loadState(subagentId) {
   try {
     const data = await readFile(stateFile(subagentId), "utf-8");
@@ -222,7 +227,7 @@ function extractTurns(messages) {
   return turns;
 }
 
-async function pushTurns(ovSessionId, turns) {
+async function pushTurns(ovSessionId, turns, peerId = null) {
   const fetchJSON = makeFetchJSON(cfg);
   let ok = 0;
   let failed = 0;
@@ -233,7 +238,9 @@ async function pushTurns(ovSessionId, turns) {
       (p) => p.type !== "text" || (p.text && p.text.trim()),
     );
     if (parts.length === 0) continue;
-    const res = await addMessage(fetchJSON, ovSessionId, { role: turn.role, parts });
+    const payload = { role: turn.role, parts };
+    if (peerId) payload.peer_id = peerId;
+    const res = await addMessage(fetchJSON, ovSessionId, payload);
     if (res.ok) ok++;
     else failed++;
   }
@@ -316,7 +323,8 @@ async function main() {
     return;
   }
 
-  const result = await pushTurns(ovSessionId, turns);
+  const peerId = peerIdFromSubagent(subagentId);
+  const result = await pushTurns(ovSessionId, turns, peerId);
   log("push_turns", { ovSessionId, ...result });
 
   await unlink(stateFile(subagentId)).catch(() => {});

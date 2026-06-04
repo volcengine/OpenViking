@@ -46,6 +46,7 @@ class OpenVikingRetriever(BaseRetriever):
     target_uri: str | list[str] = ""
     search_mode: Literal["find", "search"] = "find"
     session_id: str | None = None
+    peer_id: str | None = None
     limit: int = 10
     score_threshold: float | None = None
     filter: dict[str, Any] | None = None
@@ -84,6 +85,7 @@ class OpenVikingRetriever(BaseRetriever):
             query=query,
             target_uri=self.target_uri,
             session_id=self.session_id,
+            peer_id=self.peer_id,
             limit=self.limit,
             score_threshold=self.score_threshold,
             filter=self.filter,

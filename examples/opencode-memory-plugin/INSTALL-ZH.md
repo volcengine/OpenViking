@@ -94,6 +94,9 @@ cp examples/opencode-memory-plugin/.gitignore ~/.config/opencode/plugins/.gitign
 {
   "endpoint": "http://localhost:1933",
   "apiKey": "",
+  "account": "",
+  "user": "",
+  "peerId": "",
   "enabled": true,
   "timeoutMs": 30000,
   "autoCommit": {
@@ -107,6 +110,8 @@ cp examples/opencode-memory-plugin/.gitignore ~/.config/opencode/plugins/.gitign
 
 - `endpoint`: OpenViking 服务地址
 - `apiKey`: 可留空，推荐用环境变量提供
+- `account` / `user`: 多租户身份头
+- `peerId`: 可选；作为请求级 `peer_id` 用于 recall/search 和 session message 写入
 - `enabled`: 是否启用插件
 - `timeoutMs`: 普通请求超时时间
 - `autoCommit.intervalMinutes`: 自动提交 session 的周期

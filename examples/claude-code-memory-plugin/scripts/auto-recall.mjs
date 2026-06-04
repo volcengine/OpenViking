@@ -169,9 +169,11 @@ const SOURCES = [
 
 async function searchOneSource(query, source, limit) {
   const resolvedUri = await resolveTargetUri(source.uri);
+  const body = { query, target_uri: resolvedUri, limit, score_threshold: 0 };
+  if (cfg.peerId) body.peer_id = cfg.peerId;
   const res = await fetchJSON("/api/v1/search/find", {
     method: "POST",
-    body: JSON.stringify({ query, target_uri: resolvedUri, limit, score_threshold: 0 }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) return [];
   const items = res.result?.[source.bucket] || [];

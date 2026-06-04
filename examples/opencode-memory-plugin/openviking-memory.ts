@@ -279,6 +279,7 @@ interface OpenVikingConfig {
   apiKey: string
   account: string
   user: string
+  peerId: string
   enabled: boolean
   timeoutMs: number
   autoCommit?: {
@@ -362,6 +363,7 @@ const DEFAULT_CONFIG: OpenVikingConfig = {
   apiKey: "",
   account: "",
   user: "",
+  peerId: "",
   enabled: true,
   timeoutMs: 30000,
   autoCommit: {
@@ -451,6 +453,9 @@ function loadConfig(): OpenVikingConfig {
       if (process.env.OPENVIKING_USER) {
         config.user = process.env.OPENVIKING_USER
       }
+      if (process.env.OPENVIKING_PEER_ID) {
+        config.peerId = process.env.OPENVIKING_PEER_ID
+      }
 
       return config
     }
@@ -476,6 +481,9 @@ function loadConfig(): OpenVikingConfig {
   }
   if (process.env.OPENVIKING_USER) {
     config.user = process.env.OPENVIKING_USER
+  }
+  if (process.env.OPENVIKING_PEER_ID) {
+    config.peerId = process.env.OPENVIKING_PEER_ID
   }
   if (config.autoCommit) {
     config.autoCommit.intervalMinutes = getAutoCommitIntervalMinutes(config)
@@ -1345,10 +1353,18 @@ async function addMessageToSession(
   config: OpenVikingConfig,
 ): Promise<boolean> {
   try {
+    const body: { role: "user" | "assistant"; content: string; peer_id?: string } = {
+      role,
+      content,
+    }
+    const peerId = config.peerId.trim()
+    if (peerId) {
+      body.peer_id = peerId
+    }
     const response = await makeRequest<OpenVikingResponse<void>>(config, {
       method: "POST",
       endpoint: `/api/v1/sessions/${ovSessionId}/messages`,
-      body: { role, content },
+      body,
       timeoutMs: 5000,
     })
     unwrapResponse(response)
@@ -1639,12 +1655,21 @@ function extractMessageText(parts: { type: string; text?: string }[]): string | 
 /** Perform search against OpenViking with a timeout guard. Returns empty on any failure. */
 async function performRecallSearch(config: OpenVikingConfig, query: string): Promise<RecallSearchItem[]> {
   try {
+    const body: { query: string; limit: number; mode: string; peer_id?: string } = {
+      query: query.slice(0, 4000),
+      limit: 20,
+      mode: "auto",
+    }
+    const peerId = config.peerId.trim()
+    if (peerId) {
+      body.peer_id = peerId
+    }
     const response = await makeRequest<OpenVikingResponse<{ memories?: RecallSearchItem[]; results?: RecallSearchItem[] }>>(
       config,
       {
         method: "POST",
         endpoint: "/api/v1/search/find",
-        body: { query: query.slice(0, 4000), limit: 20, mode: "auto" },
+        body,
         timeoutMs: AUTO_RECALL_TIMEOUT_MS,
       },
     )
@@ -2306,6 +2331,7 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
               target_uri?: string
               session_id?: string
               score_threshold?: number
+              peer_id?: string
             } = {
               query: args.query,
               limit: args.limit ?? 10,
@@ -2313,6 +2339,8 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
             if (args.target_uri) requestBody.target_uri = args.target_uri
             if (args.score_threshold !== undefined) requestBody.score_threshold = args.score_threshold
             if (mode === "deep" && sessionId) requestBody.session_id = sessionId
+            const peerId = config.peerId.trim()
+            if (peerId) requestBody.peer_id = peerId
 
             try {
               const response = await makeRequest<OpenVikingResponse<SearchResult>>(config, {

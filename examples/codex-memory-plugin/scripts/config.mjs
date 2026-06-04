@@ -24,7 +24,7 @@
  * Connection / identity env vars:
  *   OPENVIKING_URL / OPENVIKING_BASE_URL
  *   OPENVIKING_API_KEY / OPENVIKING_BEARER_TOKEN
- *   OPENVIKING_ACCOUNT, OPENVIKING_USER
+ *   OPENVIKING_ACCOUNT, OPENVIKING_USER, OPENVIKING_PEER_ID
  *
  * Misc env vars:
  *   OPENVIKING_TIMEOUT_MS, OPENVIKING_CAPTURE_TIMEOUT_MS
@@ -173,6 +173,11 @@ export function loadConfig() {
     str(cliFile.user, null) ||
     str(cx.userId, "");
 
+  const peerId =
+    str(process.env.OPENVIKING_PEER_ID, null) ||
+    str(cx.peerId, null) ||
+    str(cx.peer_id, "");
+
   const debug = envBool("OPENVIKING_DEBUG") ?? (cx.debug === true);
   const defaultLogPath = join(homedir(), ".openviking", "logs", "codex-hooks.log");
   const debugLogPath = str(process.env.OPENVIKING_DEBUG_LOG, defaultLogPath);
@@ -194,6 +199,7 @@ export function loadConfig() {
     apiKey,
     account,
     user,
+    peerId,
     timeoutMs,
 
     autoRecall: envBool("OPENVIKING_AUTO_RECALL") ?? (cx.autoRecall !== false),

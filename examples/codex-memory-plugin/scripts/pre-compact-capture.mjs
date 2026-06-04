@@ -131,9 +131,11 @@ async function readTranscriptTurns(transcriptPath) {
 async function appendTurns(ovSessionId, turns) {
   let appended = 0;
   for (const turn of turns) {
+    const body = { role: turn.role, content: turn.text };
+    if (cfg.peerId) body.peer_id = cfg.peerId;
     const result = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(ovSessionId)}/messages`, {
       method: "POST",
-      body: JSON.stringify({ role: turn.role, content: turn.text }),
+      body: JSON.stringify(body),
     });
     if (!result) break;
     appended += 1;

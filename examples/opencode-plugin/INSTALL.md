@@ -97,6 +97,8 @@ Example configuration:
   "apiKey": "",
   "account": "",
   "user": "",
+  "agentId": "",
+  "peerId": "",
   "enabled": true,
   "timeoutMs": 30000,
   "repoContext": { "enabled": true, "cacheTtlMs": 60000 },
@@ -117,9 +119,9 @@ It is recommended to provide the API key through an environment variable instead
 export OPENVIKING_API_KEY="your-api-key-here"
 ```
 
-`apiKey` is sent as `X-API-Key`. `account` and `user` are sent as `X-OpenViking-Account` and `X-OpenViking-User`, respectively. If multi-tenant authentication is enabled on the OpenViking server, tenant-scoped APIs usually require `account` and `user` to be configured.
+`apiKey` is sent as `X-API-Key`. `account`, `user`, and `agentId` are sent as `X-OpenViking-Account`, `X-OpenViking-User`, and `X-OpenViking-Agent`, respectively. If multi-tenant authentication is enabled on the OpenViking server, tenant-scoped APIs usually require `account` and `user` to be configured. `peerId` is sent as request-level `peer_id` for memory recall/search and captured session messages; when it is empty, the plugin falls back to `agentId`.
 
-`OPENVIKING_API_KEY`, `OPENVIKING_ACCOUNT`, and `OPENVIKING_USER` take precedence over the corresponding values in `openviking-config.json`.
+`OPENVIKING_API_KEY`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, `OPENVIKING_AGENT_ID`, and `OPENVIKING_PEER_ID` take precedence over the corresponding values in `openviking-config.json`.
 
 For advanced setups, use `OPENVIKING_PLUGIN_CONFIG` to point to another configuration file path.
 

@@ -8,6 +8,7 @@ export const DEFAULT_CONFIG = {
   account: "",
   user: "",
   agentId: "",
+  peerId: "",
   enabled: true,
   timeoutMs: 30000,
   runtime: {
@@ -35,7 +36,7 @@ function cloneDefaultConfig() {
 
 function mergeConfig(fileConfig = {}) {
   const config = cloneDefaultConfig()
-  for (const key of ["endpoint", "apiKey", "account", "user", "agentId", "enabled", "timeoutMs"]) {
+  for (const key of ["endpoint", "apiKey", "account", "user", "agentId", "peerId", "enabled", "timeoutMs"]) {
     if (fileConfig[key] !== undefined) config[key] = fileConfig[key]
   }
   config.runtime = {
@@ -56,6 +57,9 @@ function mergeConfig(fileConfig = {}) {
   }
   if (process.env.OPENVIKING_AGENT_ID) {
     config.agentId = process.env.OPENVIKING_AGENT_ID
+  }
+  if (process.env.OPENVIKING_PEER_ID) {
+    config.peerId = process.env.OPENVIKING_PEER_ID
   }
 
   config.timeoutMs = normalizeNumber(config.timeoutMs, DEFAULT_CONFIG.timeoutMs, 1000, 300000)
@@ -177,6 +181,10 @@ export function makeToast(client) {
 
 export function normalizeEndpoint(endpoint) {
   return endpoint.replace(/\/+$/, "")
+}
+
+export function effectivePeerId(config) {
+  return String(config.peerId || config.agentId || "").trim() || null
 }
 
 export async function makeRequest(config, options) {

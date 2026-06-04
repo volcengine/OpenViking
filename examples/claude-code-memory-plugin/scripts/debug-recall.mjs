@@ -247,9 +247,11 @@ async function resolveTargetUri(targetUri) {
 async function searchScope(queryText, targetUri, limit) {
   const resolvedUri = await resolveTargetUri(targetUri);
   dim(`  target: ${targetUri} -> ${resolvedUri}`);
+  const body = { query: queryText, target_uri: resolvedUri, limit, score_threshold: 0 };
+  if (cfg.peerId) body.peer_id = cfg.peerId;
   const result = await fetchJSON("/api/v1/search/find", {
     method: "POST",
-    body: JSON.stringify({ query: queryText, target_uri: resolvedUri, limit, score_threshold: 0 }),
+    body: JSON.stringify(body),
   });
   return result?.memories || [];
 }

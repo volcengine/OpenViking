@@ -163,6 +163,9 @@ claude() {
 | `OPENVIKING_API_KEY` / `OPENVIKING_BEARER_TOKEN` | API key；以 `Authorization: Bearer <key>` 发送                     |
 | `OPENVIKING_ACCOUNT`                             | 多租户 account（`X-OpenViking-Account` 头）                        |
 | `OPENVIKING_USER`                                | 多租户 user（`X-OpenViking-User` 头）                              |
+| `OPENVIKING_PEER_ID`                             | 可选的稳定 peer，用于自动召回和 session message 写入               |
+
+设置 `OPENVIKING_PEER_ID` 后，hook 会把它作为请求级 `peer_id` 发送。未显式配置 peer 时，subagent 捕获会回退到 Claude 的 `agent_id`，让不同 subagent 默认落到不同 peer memory。
 
 #### 召回调优
 

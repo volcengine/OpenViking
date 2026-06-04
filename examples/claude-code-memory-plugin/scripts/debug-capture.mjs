@@ -238,9 +238,11 @@ async function captureToOpenViking(text) {
   try {
     // Step 2: Add message
     console.log("\nStep 2: Adding message...");
+    const body = { role: "user", content: text };
+    if (cfg.peerId) body.peer_id = cfg.peerId;
     const addResult = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`, {
       method: "POST",
-      body: JSON.stringify({ role: "user", content: text }),
+      body: JSON.stringify(body),
     });
     if (addResult) {
       ok("Message added to session");

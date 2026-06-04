@@ -217,9 +217,11 @@ async function resolveTargetUri(targetUri) {
 
 async function searchScope(query, targetUri, limit, bucket = "memories") {
   const resolvedUri = await resolveTargetUri(targetUri);
+  const body = { query, target_uri: resolvedUri, limit, score_threshold: 0 };
+  if (cfg.peerId) body.peer_id = cfg.peerId;
   const result = await fetchJSON("/api/v1/search/find", {
     method: "POST",
-    body: JSON.stringify({ query, target_uri: resolvedUri, limit, score_threshold: 0 }),
+    body: JSON.stringify(body),
   });
   return result?.[bucket] || [];
 }

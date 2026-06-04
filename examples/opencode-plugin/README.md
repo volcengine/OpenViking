@@ -110,6 +110,8 @@ Create `~/.config/opencode/openviking-config.json`:
   "apiKey": "",
   "account": "",
   "user": "",
+  "agentId": "",
+  "peerId": "",
   "enabled": true,
   "timeoutMs": 30000,
   "repoContext": { "enabled": true, "cacheTtlMs": 60000 },
@@ -124,11 +126,15 @@ Create `~/.config/opencode/openviking-config.json`:
 }
 ```
 
-`apiKey` is sent as `X-API-Key`. `account` and `user` are sent as
-`X-OpenViking-Account` and `X-OpenViking-User`. They are required by
-multi-tenant OpenViking servers for tenant-scoped APIs.
+`apiKey` is sent as `X-API-Key`. `account`, `user`, and `agentId` are sent as
+`X-OpenViking-Account`, `X-OpenViking-User`, and `X-OpenViking-Agent`.
+They are required by multi-tenant OpenViking servers for tenant-scoped APIs.
+`peerId` is sent as request-level `peer_id` for memory recall/search and
+captured session messages. When `peerId` is empty, the plugin falls back to
+`agentId` for `peer_id`.
 
-`OPENVIKING_API_KEY`, `OPENVIKING_ACCOUNT`, and `OPENVIKING_USER` take
+`OPENVIKING_API_KEY`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`,
+`OPENVIKING_AGENT_ID`, and `OPENVIKING_PEER_ID` take
 precedence over values in this file.
 
 For advanced setups, `OPENVIKING_PLUGIN_CONFIG` can point to another config file path.
