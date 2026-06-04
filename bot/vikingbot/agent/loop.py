@@ -50,7 +50,7 @@ def _is_tool_result_success(result: Any) -> bool:
     if result is None or isinstance(result, Exception):
         return False
     text = str(result).lstrip()
-    return bool(text) and not text.lower().startswith("error")
+    return bool(text) and not text.startswith("Error:")
 
 
 class AgentLoop:

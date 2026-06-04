@@ -1,8 +1,10 @@
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from vikingbot.agent.tools.ov_file import VikingGrepTool, VikingSearchTool
+from vikingbot.agent.tools.ov_file import VikingGrepTool, VikingMemoryCommitTool, VikingSearchTool
+from vikingbot.agent.loop import _is_tool_result_success
 from vikingbot.config.schema import SessionKey
 from vikingbot.hooks.base import HookContext
 from vikingbot.hooks.builtins.openviking_hooks import OpenVikingCompactHook
@@ -27,6 +29,7 @@ class _DummyHTTPClient:
         self.kwargs = kwargs
         self.find_calls = []
         self.ls_calls = []
+        self.closed = False
         _DummyHTTPClient.instances.append(self)
 
     async def initialize(self):
@@ -81,6 +84,7 @@ class _DummyHTTPClient:
         return {"matches": []}
 
     async def close(self):
+        self.closed = True
         return None
 
 
@@ -127,6 +131,12 @@ def test_viking_client_init_root_mode_sets_account_and_user(monkeypatch):
     assert first.kwargs["account"] == "acct"
     assert first.kwargs["user"] == "admin"
     assert first.kwargs["agent_id"] == "workspace"
+
+
+def test_tool_result_success_only_treats_standard_error_prefix_as_failure():
+    assert _is_tool_result_success("errorCode = 0") is True
+    assert _is_tool_result_success("Error budget: 5%") is True
+    assert _is_tool_result_success("Error: failed") is False
 
 
 def test_viking_client_init_user_mode_does_not_set_user_or_account(monkeypatch):
@@ -1256,3 +1266,66 @@ async def test_openviking_search_user_key_mode_uses_current_user_namespace(monke
 
     assert "viking://user/memories/" in result
     assert calls == ["viking://user/memories/"]
+
+
+@pytest.mark.asyncio
+async def test_openviking_memory_commit_prefers_sender_in_static_multi_user_bot(monkeypatch):
+    tool = VikingMemoryCommitTool()
+    calls = []
+
+    class _FakeClient:
+        admin_user_id = "default"
+
+        async def commit(self, session_id, messages, user_id):
+            calls.append((session_id, messages, user_id))
+            return {"commit": {"archived": False}}
+
+    async def _fake_get_client(_tool_context):
+        return _FakeClient()
+
+    monkeypatch.setattr(tool, "_get_client", _fake_get_client)
+
+    result = await tool.execute(
+        SimpleNamespace(
+            workspace_id="workspace",
+            sender_id="alice",
+            session_key=SimpleNamespace(safe_name=lambda: "session-1"),
+            openviking_connection=None,
+        ),
+        messages=[{"role": "user", "content": "remember this"}],
+    )
+
+    assert json.loads(result)["status"] == "success"
+    assert calls == [
+        (
+            "session-1",
+            [{"role": "user", "content": "remember this"}],
+            "alice",
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_openviking_request_connection_client_is_closed_after_tool_call(monkeypatch):
+    monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("root"))
+    tool = VikingSearchTool()
+
+    result = await tool.execute(
+        SimpleNamespace(
+            workspace_id="workspace",
+            memory_user_ids=None,
+            openviking_connection={
+                "server_url": "http://studio.local",
+                "api_key": "user-key",
+                "account_id": "acct",
+                "user_id": "alice",
+                "agent_id": "web-playground",
+                "role": "user",
+            },
+        ),
+        query="hello",
+    )
+
+    assert result == "No results found for query: hello"
+    assert len(_DummyHTTPClient.instances) == 1
+    assert _DummyHTTPClient.instances[0].closed is True

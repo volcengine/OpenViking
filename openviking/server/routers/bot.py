@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
 from openviking.server.auth import get_request_context
-from openviking.server.identity import RequestContext
+from openviking.server.identity import AuthMode, RequestContext
 from openviking_cli.utils.logger import get_logger
 
 router = APIRouter(prefix="", tags=["bot"])
@@ -78,8 +78,21 @@ def _attach_openviking_connection(
     to vikingbot's static root/user-key configuration.
     """
     enriched = dict(body)
+    api_key = _extract_forward_api_key(request)
+    auth_mode = AuthMode.API_KEY
+    config = getattr(request.app.state, "config", None)
+    if config is not None and hasattr(config, "get_effective_auth_mode"):
+        auth_mode = config.get_effective_auth_mode()
+    if not api_key:
+        if auth_mode == AuthMode.DEV:
+            enriched.setdefault("user_id", ctx.user.user_id)
+            return enriched
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Bot proxy requires a forwardable OpenViking API key.",
+        )
     enriched["openviking_connection"] = {
-        "api_key": _extract_forward_api_key(request),
+        "api_key": api_key,
         "account_id": ctx.user.account_id,
         "user_id": ctx.user.user_id,
         "agent_id": ctx.user.agent_id,

@@ -202,7 +202,7 @@ class ToolRegistry:
             if tool_span is not None:
                 try:
                     execute_success = not isinstance(result, Exception) and not (
-                        isinstance(result, str) and result.startswith("Error")
+                        isinstance(result, str) and result.lstrip().startswith("Error:")
                     )
                     output_str = str(result) if result is not None else None
                     self.langfuse.end_tool_call(

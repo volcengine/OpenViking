@@ -1,7 +1,6 @@
 """OpenViking file system tools: read, write, list, search resources."""
 
 import asyncio
-import hashlib
 import json
 from abc import ABC
 from pathlib import Path
@@ -19,33 +18,26 @@ class OVFileTool(Tool, ABC):
         super().__init__()
         self._clients = {}
 
-    def _client_cache_key(self, tool_context: ToolContext) -> str:
-        connection = tool_context.openviking_connection or {}
-        if not connection:
-            return "__default__"
-        api_key = str(connection.get("api_key") or "")
-        api_key_hash = hashlib.sha256(api_key.encode()).hexdigest()[:16] if api_key else ""
-        parts = [
-            str(connection.get("server_url") or ""),
-            str(connection.get("account_id") or ""),
-            str(connection.get("user_id") or ""),
-            str(connection.get("agent_id") or ""),
-            str(connection.get("role") or ""),
-            json.dumps(connection.get("namespace_policy") or {}, sort_keys=True),
-            api_key_hash,
-        ]
-        return "|".join(parts)
+    @staticmethod
+    def _has_request_connection(tool_context: ToolContext) -> bool:
+        return bool(getattr(tool_context, "openviking_connection", None))
 
     async def _get_client(self, tool_context: ToolContext):
-        cache_key = self._client_cache_key(tool_context)
-        client = self._clients.get(cache_key)
-        if client is None:
-            client = await VikingClient.create(
+        if self._has_request_connection(tool_context):
+            return await VikingClient.create(
                 tool_context.workspace_id,
                 connection=tool_context.openviking_connection,
             )
+        cache_key = "__default__"
+        client = self._clients.get(cache_key)
+        if client is None:
+            client = await VikingClient.create(tool_context.workspace_id)
             self._clients[cache_key] = client
         return client
+
+    async def _release_client(self, tool_context: ToolContext, client: VikingClient | None) -> None:
+        if client is not None and self._has_request_connection(tool_context):
+            await client.close()
 
 
 class VikingListTool(OVFileTool):
@@ -80,6 +72,7 @@ class VikingListTool(OVFileTool):
     async def execute(
         self, tool_context: "ToolContext", uri: str, recursive: bool = False, **kwargs: Any
     ) -> str:
+        client = None
         try:
             client = await self._get_client(tool_context)
             entries = await client.list_resources(path=uri, recursive=recursive)
@@ -100,6 +93,8 @@ class VikingListTool(OVFileTool):
         except Exception as e:
             logger.exception(f"Error processing message: {e}")
             return f"Error listing Viking resources: {str(e)}"
+        finally:
+            await self._release_client(tool_context, client)
 
 
 class VikingSearchTool(OVFileTool):
@@ -272,6 +267,7 @@ class VikingSearchTool(OVFileTool):
         min_score: float = 0.35,
         **kwargs: Any,
     ) -> str:
+        client = None
         try:
             client = await self._get_client(tool_context)
             admin_user_id = client.admin_user_id
@@ -319,6 +315,8 @@ class VikingSearchTool(OVFileTool):
             return content
         except Exception as e:
             return f"Error searching Viking: {str(e)}"
+        finally:
+            await self._release_client(tool_context, client)
 
 
 class VikingAddResourceTool(OVFileTool):
@@ -372,6 +370,8 @@ class VikingAddResourceTool(OVFileTool):
         except Exception as e:
             logger.warning(f"Error adding resource: {e}")
             return f"Error adding resource to Viking: {str(e)}"
+        finally:
+            await self._release_client(tool_context, client)
 
 
 class VikingGrepTool(OVFileTool):
@@ -419,6 +419,7 @@ class VikingGrepTool(OVFileTool):
         case_insensitive: bool = False,
         **kwargs: Any,
     ) -> str:
+        client = None
         try:
             client = await self._get_client(tool_context)
             result = await client.grep(
@@ -465,6 +466,8 @@ class VikingGrepTool(OVFileTool):
             return "\n".join(result_lines)
         except Exception as e:
             return f"Error searching Viking with grep: {str(e)}"
+        finally:
+            await self._release_client(tool_context, client)
 
 
 class VikingGlobTool(OVFileTool):
@@ -502,6 +505,7 @@ class VikingGlobTool(OVFileTool):
     async def execute(
         self, tool_context: "ToolContext", pattern: str, uri: str = "", **kwargs: Any
     ) -> str:
+        client = None
         try:
             client = await self._get_client(tool_context)
             result = await client.glob(pattern, uri=uri or None, user_id=client.admin_user_id)
@@ -525,6 +529,8 @@ class VikingGlobTool(OVFileTool):
             return "\n".join(result_lines)
         except Exception as e:
             return f"Error searching Viking with glob: {str(e)}"
+        finally:
+            await self._release_client(tool_context, client)
 
 
 class VikingMemoryCommitTool(OVFileTool):
@@ -614,9 +620,13 @@ class VikingMemoryCommitTool(OVFileTool):
         messages: list[dict[str, Any]],
         **kwargs: Any,
     ) -> str:
+        client = None
         try:
             client = await self._get_client(tool_context)
-            commit_user_id = client.admin_user_id or tool_context.sender_id
+            if self._has_request_connection(tool_context):
+                commit_user_id = client.admin_user_id or tool_context.sender_id
+            else:
+                commit_user_id = tool_context.sender_id or client.admin_user_id
             if not commit_user_id:
                 return "Error: user id is required for OpenViking memory commit."
             session_id = tool_context.session_key.safe_name()
@@ -654,6 +664,8 @@ class VikingMemoryCommitTool(OVFileTool):
         except Exception as e:
             logger.exception(f"Error processing message: {e}")
             return f"Error: committing to Viking failed: {self._format_commit_error(e)}"
+        finally:
+            await self._release_client(tool_context, client)
 
 
 class VikingMultiReadTool(OVFileTool):
@@ -688,6 +700,7 @@ class VikingMultiReadTool(OVFileTool):
         **kwargs: Any,
     ) -> str:
         level = "read"  # 默认获取完整内容
+        client = None
         try:
             if not uris:
                 return "Error: No URIs provided."
@@ -737,3 +750,5 @@ class VikingMultiReadTool(OVFileTool):
         except Exception as e:
             logger.exception(f"Error in VikingMultiReadTool: {e}")
             return f"Error multi-reading Viking resources: {str(e)}"
+        finally:
+            await self._release_client(tool_context, client)

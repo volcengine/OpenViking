@@ -7,12 +7,19 @@ configuration semantics are consistent with openviking server's vlm section.
 
 from typing import Any
 from collections.abc import AsyncIterator
-import json
 
 from loguru import logger
 
 from vikingbot.integrations.langfuse import LangfuseClient
-from vikingbot.providers.base import LLMProvider, LLMResponse, LLMStreamEvent, ToolCallRequest
+from vikingbot.providers.base import (
+    LLMProvider,
+    LLMResponse,
+    LLMStreamEvent,
+    ToolCallRequest,
+    build_stream_response,
+    merge_stream_tool_call_delta,
+    stream_delta_value,
+)
 from vikingbot.utils.tracing import get_current_response_id
 
 
@@ -164,39 +171,22 @@ class VLMProviderAdapter(LLMProvider):
                 if delta is None:
                     continue
 
-                reasoning_delta = self._delta_value(delta, "reasoning_content")
+                reasoning_delta = stream_delta_value(delta, "reasoning_content")
                 if reasoning_delta:
                     reasoning_parts.append(reasoning_delta)
                     yield LLMStreamEvent(type="reasoning_delta", content=reasoning_delta)
 
-                content_delta = self._delta_value(delta, "content")
+                content_delta = stream_delta_value(delta, "content")
                 if content_delta:
                     content_parts.append(content_delta)
                     yield LLMStreamEvent(type="content_delta", content=content_delta)
 
                 for delta_tool_call in getattr(delta, "tool_calls", None) or []:
-                    index = getattr(delta_tool_call, "index", None)
-                    if index is None:
-                        index = len(tool_calls)
-                    entry = tool_calls.setdefault(
-                        int(index),
-                        {"id": "", "name": "", "arguments": ""},
-                    )
-                    tool_call_id = getattr(delta_tool_call, "id", None)
-                    if tool_call_id:
-                        entry["id"] = tool_call_id
-                    function = getattr(delta_tool_call, "function", None)
-                    if function is not None:
-                        name = getattr(function, "name", None)
-                        if name:
-                            entry["name"] += name
-                        arguments = getattr(function, "arguments", None)
-                        if arguments:
-                            entry["arguments"] += arguments
+                    merge_stream_tool_call_delta(tool_calls, delta_tool_call)
 
             yield LLMStreamEvent(
                 type="response",
-                response=self._build_stream_response(
+                response=build_stream_response(
                     content="".join(content_parts),
                     reasoning_content="".join(reasoning_parts),
                     raw_tool_calls=tool_calls,
@@ -211,50 +201,6 @@ class VLMProviderAdapter(LLMProvider):
                     finish_reason="error",
                 ),
             )
-
-    @staticmethod
-    def _delta_value(delta: Any, name: str) -> str:
-        value = getattr(delta, name, None)
-        return value if isinstance(value, str) else ""
-
-    @staticmethod
-    def _build_stream_response(
-        content: str,
-        reasoning_content: str,
-        raw_tool_calls: dict[int, dict[str, Any]],
-        finish_reason: str,
-    ) -> LLMResponse:
-        tool_calls: list[ToolCallRequest] = []
-        for index in sorted(raw_tool_calls):
-            raw_tool_call = raw_tool_calls[index]
-            name = str(raw_tool_call.get("name") or "")
-            if not name:
-                continue
-            raw_arguments = str(raw_tool_call.get("arguments") or "")
-            arguments: dict[str, Any]
-            if raw_arguments:
-                try:
-                    parsed_arguments = json.loads(raw_arguments)
-                    arguments = parsed_arguments if isinstance(parsed_arguments, dict) else {}
-                except json.JSONDecodeError:
-                    arguments = {"raw": raw_arguments}
-            else:
-                arguments = {}
-            tool_calls.append(
-                ToolCallRequest(
-                    id=str(raw_tool_call.get("id") or f"tool_call_{index}"),
-                    name=name,
-                    arguments=arguments,
-                    tokens=0,
-                )
-            )
-
-        return LLMResponse(
-            content=content or None,
-            tool_calls=tool_calls,
-            finish_reason=finish_reason,
-            reasoning_content=reasoning_content or None,
-        )
 
     def _convert_response(self, result) -> LLMResponse:
         """Convert VLMResponse (or str) to LLMResponse."""

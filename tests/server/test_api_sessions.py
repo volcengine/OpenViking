@@ -12,7 +12,8 @@ import pytest
 from fastapi import FastAPI
 from starlette.requests import Request
 
-from openviking.message import Message
+from openviking.message import Message, TextPart
+from openviking.session import SessionMeta
 from openviking.server.api_keys import APIKeyManager
 from openviking.server.app import create_app
 from openviking.server.config import ServerConfig, ToolOutputExternalizationConfig
@@ -157,6 +158,37 @@ async def test_get_session(client: httpx.AsyncClient):
     body = resp.json()
     assert body["status"] == "ok"
     assert body["result"]["session_id"] == session_id
+
+
+@pytest.mark.asyncio
+async def test_legacy_session_without_meta_remains_visible_to_owner(service):
+    session_id = "legacy-no-meta"
+    owner_ctx = RequestContext(
+        user=UserIdentifier("acct-legacy", "owner", "agent"),
+        role=Role.USER,
+    )
+    session = service.sessions.session(owner_ctx, session_id)
+    await session.ensure_exists()
+    session.add_message("user", [TextPart("legacy message")], role_id="owner")
+    await service.viking_fs.rm(f"viking://session/{session_id}/.meta.json", ctx=owner_ctx)
+
+    loaded = await service.sessions.get(session_id, owner_ctx, auto_create=False)
+    listed = await service.sessions.sessions(owner_ctx)
+
+    assert [part.text for part in loaded.messages[0].parts] == ["legacy message"]
+    assert loaded.meta.account_id == "acct-legacy"
+    assert loaded.meta.created_by_user_id == "owner"
+    assert any(item["session_id"] == session_id for item in listed)
+
+
+def test_session_visibility_requires_account_id_for_non_root(service):
+    ctx = RequestContext(
+        user=UserIdentifier("acct-current", "owner", "agent"),
+        role=Role.USER,
+    )
+    meta = SessionMeta(created_by_user_id="owner", participant_user_ids=["owner"])
+
+    assert service.sessions._session_is_visible_to_user(ctx, meta) is False
 
 
 async def test_get_session_context(client: httpx.AsyncClient):

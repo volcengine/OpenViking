@@ -256,9 +256,26 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       let currentTextPart: TextPart | null = null
       let currentIteration = 0
       let lastPaintAt = 0
+      let publishScheduled = false
+      let publishFrameId: number | null = null
+
+      const publishStreamingPartsNow = () => {
+        if (publishFrameId !== null && typeof window !== 'undefined') {
+          window.cancelAnimationFrame(publishFrameId)
+        }
+        publishFrameId = null
+        publishScheduled = false
+        setStreamingParts(accParts.map(clonePart))
+      }
 
       const publishStreamingParts = () => {
-        setStreamingParts(accParts.map(clonePart))
+        if (publishScheduled) return
+        publishScheduled = true
+        if (typeof window === 'undefined') {
+          queueMicrotask(publishStreamingPartsNow)
+          return
+        }
+        publishFrameId = window.requestAnimationFrame(publishStreamingPartsNow)
       }
 
       const yieldToRenderer = async () => {
@@ -306,7 +323,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
           accParts.push(currentTextPart)
         }
         currentReasoningPart = null
-        publishStreamingParts()
+        publishStreamingPartsNow()
       }
 
       try {

@@ -1151,6 +1151,11 @@ class Session:
         # WM v2: live session is now the retained tail; pending_tokens resets
         # because anything that was pending has been archived.
         self._meta.message_count = len(self._messages)
+        self._meta.commit_count = max(
+            self._meta.commit_count,
+            self._compression.compression_index,
+        )
+        self._meta.last_commit_at = get_current_timestamp()
         self._meta.pending_tokens = 0
         self._meta.keep_recent_count = keep_recent_count
         await self._save_meta()
@@ -1898,13 +1903,13 @@ class Session:
         return summary["overview"] if summary else ""
 
     async def _get_pending_archive_messages(self) -> List[Message]:
-        """Return messages from incomplete archives newer than the latest completed archive."""
-        latest_completed_index = 0
+        """Return messages from not-yet-committed archives newer than known archive state."""
+        latest_completed_index = max(0, int(self._meta.commit_count or 0))
         incomplete_archives: List[Dict[str, Any]] = []
         for archive in sorted(await self._list_archive_refs(), key=lambda item: item["index"]):
             try:
                 await self._viking_fs.read_file(f"{archive['archive_uri']}/.done", ctx=self.ctx)
-                latest_completed_index = archive["index"]
+                latest_completed_index = max(latest_completed_index, archive["index"])
             except Exception:
                 incomplete_archives.append(archive)
 

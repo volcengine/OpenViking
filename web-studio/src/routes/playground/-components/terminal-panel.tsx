@@ -50,8 +50,11 @@ import type {
 import {
   cleanVikingUri,
   entryToRef,
+  readStoredJsonArray,
+  removeStoredValue,
   searchResultToRefs,
   visibleContextEntries,
+  writeStoredJson,
 } from '../-lib/utils'
 import { ResourceRefList } from './resource-ref-list'
 
@@ -86,33 +89,22 @@ type TerminalQuickStartExample = {
 }
 
 function loadCommandHistory(): string[] {
-  if (typeof window === 'undefined') return []
-  try {
-    const raw = window.localStorage.getItem(
-      TERMINAL_COMMAND_HISTORY_STORAGE_KEY,
-    )
-    const parsed: unknown = raw ? JSON.parse(raw) : []
-    if (!Array.isArray(parsed)) return []
-    return parsed
-      .filter((item): item is string => typeof item === 'string')
-      .map((item) => item.trim())
-      .filter(Boolean)
-      .slice(0, TERMINAL_COMMAND_HISTORY_LIMIT)
-  } catch {
-    return []
-  }
+  return readStoredJsonArray(
+    TERMINAL_COMMAND_HISTORY_STORAGE_KEY,
+    (item) => {
+      if (typeof item !== 'string') return undefined
+      const trimmed = item.trim()
+      return trimmed || undefined
+    },
+    TERMINAL_COMMAND_HISTORY_LIMIT,
+  )
 }
 
 function persistCommandHistory(history: string[]): void {
-  if (typeof window === 'undefined') return
-  try {
-    window.localStorage.setItem(
-      TERMINAL_COMMAND_HISTORY_STORAGE_KEY,
-      JSON.stringify(history.slice(0, TERMINAL_COMMAND_HISTORY_LIMIT)),
-    )
-  } catch {
-    // localStorage can be unavailable in private windows.
-  }
+  writeStoredJson(
+    TERMINAL_COMMAND_HISTORY_STORAGE_KEY,
+    history.slice(0, TERMINAL_COMMAND_HISTORY_LIMIT),
+  )
 }
 
 function normalizeRefs(value: unknown): ResourceRef[] | undefined {
@@ -133,55 +125,41 @@ function normalizeRefs(value: unknown): ResourceRef[] | undefined {
 }
 
 function loadTerminalHistory(): TerminalEntry[] {
-  if (typeof window === 'undefined') return []
-  try {
-    const raw = window.localStorage.getItem(TERMINAL_ENTRY_HISTORY_STORAGE_KEY)
-    const parsed: unknown = raw ? JSON.parse(raw) : []
-    if (!Array.isArray(parsed)) return []
-    return parsed
-      .filter((item): item is Record<string, unknown> => {
-        if (typeof item !== 'object' || item === null) return false
-        return (
-          typeof item.id === 'string' &&
-          typeof item.title === 'string' &&
-          ['command', 'error', 'info', 'success'].includes(String(item.kind)) &&
-          (item.body === undefined || typeof item.body === 'string')
-        )
-      })
-      .map(
-        (item): TerminalEntry => ({
-          body: typeof item.body === 'string' ? item.body : undefined,
-          id: String(item.id),
-          kind: item.kind as TerminalEntry['kind'],
-          refs: normalizeRefs(item.refs),
-          title: String(item.title),
-        }),
-      )
-      .slice(-TERMINAL_ENTRY_HISTORY_LIMIT)
-  } catch {
-    return []
-  }
+  return readStoredJsonArray(
+    TERMINAL_ENTRY_HISTORY_STORAGE_KEY,
+    (item): TerminalEntry | undefined => {
+      if (typeof item !== 'object' || item === null) return undefined
+      const record = item as Record<string, unknown>
+      if (
+        typeof record.id !== 'string' ||
+        typeof record.title !== 'string' ||
+        !['command', 'error', 'info', 'success'].includes(String(record.kind)) ||
+        (record.body !== undefined && typeof record.body !== 'string')
+      ) {
+        return undefined
+      }
+      return {
+        body: typeof record.body === 'string' ? record.body : undefined,
+        id: record.id,
+        kind: record.kind as TerminalEntry['kind'],
+        refs: normalizeRefs(record.refs),
+        title: record.title,
+      }
+    },
+    TERMINAL_ENTRY_HISTORY_LIMIT,
+    true,
+  )
 }
 
 function persistTerminalHistory(history: TerminalEntry[]): void {
-  if (typeof window === 'undefined') return
-  try {
-    window.localStorage.setItem(
-      TERMINAL_ENTRY_HISTORY_STORAGE_KEY,
-      JSON.stringify(history.slice(-TERMINAL_ENTRY_HISTORY_LIMIT)),
-    )
-  } catch {
-    // localStorage can be unavailable or full.
-  }
+  writeStoredJson(
+    TERMINAL_ENTRY_HISTORY_STORAGE_KEY,
+    history.slice(-TERMINAL_ENTRY_HISTORY_LIMIT),
+  )
 }
 
 function clearPersistedTerminalHistory(): void {
-  if (typeof window === 'undefined') return
-  try {
-    window.localStorage.removeItem(TERMINAL_ENTRY_HISTORY_STORAGE_KEY)
-  } catch {
-    // localStorage can be unavailable in private windows.
-  }
+  removeStoredValue(TERMINAL_ENTRY_HISTORY_STORAGE_KEY)
 }
 
 function extractVikingUris(text: string): string[] {

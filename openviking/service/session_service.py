@@ -113,7 +113,7 @@ class SessionService:
     def _session_is_visible_to_user(self, ctx: RequestContext, meta: SessionMeta) -> bool:
         if ctx.role == Role.ROOT:
             return True
-        if meta.account_id and meta.account_id != ctx.account_id:
+        if not meta.account_id or meta.account_id != ctx.account_id:
             return False
         if ctx.role == Role.ADMIN:
             return True
@@ -128,11 +128,33 @@ class SessionService:
         )
         return SessionMeta.from_dict(json.loads(raw))
 
+    async def _load_session_meta_for_visibility(
+        self, session_id: str, ctx: RequestContext
+    ) -> SessionMeta:
+        """Read persisted metadata, deriving legacy fields without writing side effects."""
+        try:
+            meta = await self._read_session_meta(session_id, ctx)
+        except Exception:
+            session = self.session(ctx, session_id)
+            await session.load()
+            meta = session.meta
+            if not meta.session_id:
+                meta.session_id = session_id
+            return meta
+
+        if not meta.account_id:
+            session = self.session(ctx, session_id)
+            await session.load()
+            meta = session.meta
+            if not meta.session_id:
+                meta.session_id = session_id
+        return meta
+
     async def _assert_session_visible(self, session_id: str, ctx: RequestContext) -> None:
         if ctx.role == Role.ROOT:
             return
         try:
-            meta = await self._read_session_meta(session_id, ctx)
+            meta = await self._load_session_meta_for_visibility(session_id, ctx)
         except Exception as exc:
             raise NotFoundError(session_id, "session") from exc
         if not self._session_is_visible_to_user(ctx, meta):
@@ -207,7 +229,7 @@ class SessionService:
                     continue
                 if ctx.role != Role.ROOT:
                     try:
-                        meta = await self._read_session_meta(name, ctx)
+                        meta = await self._load_session_meta_for_visibility(name, ctx)
                     except Exception:
                         continue
                     if not self._session_is_visible_to_user(ctx, meta):
