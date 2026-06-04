@@ -533,7 +533,7 @@ export function TerminalPanel({
     (suggestion: TerminalSuggestion) => {
       setSuggestionsOpen(false)
       if (suggestion.executable) {
-        void runCommand(suggestion.command)
+        void runCommand(suggestion.insertText)
         return
       }
       setCommand(suggestion.insertText)
@@ -626,14 +626,13 @@ export function TerminalPanel({
                 acceptSuggestion(suggestions[activeSuggestionIndex])
                 return
               }
-              if (event.key === 'Enter' && !command.trim()) {
+              if (event.key === 'Enter') {
                 event.preventDefault()
+                if (command.trim() === '/') {
+                  acceptSuggestion(suggestions[activeSuggestionIndex])
+                  return
+                }
                 runSuggestion(suggestions[activeSuggestionIndex])
-                return
-              }
-              if (event.key === 'Enter' && command.trim() === '/') {
-                event.preventDefault()
-                acceptSuggestion(suggestions[activeSuggestionIndex])
                 return
               }
               if (event.key === 'Escape') {
