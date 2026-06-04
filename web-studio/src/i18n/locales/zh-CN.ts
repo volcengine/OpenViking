@@ -858,26 +858,6 @@ const zhCN = {
           description: '检查 OpenViking API 和根目录',
           usage: '/status',
         },
-        ls: {
-          description: '列出当前目录或指定目录',
-          usage: '/ls [viking://resources/...]',
-        },
-        search: {
-          description: '在当前上下文范围内语义搜索',
-          usage: '/search 查询词',
-        },
-        find: {
-          description: '查找相关上下文资源',
-          usage: '/find 查询词',
-        },
-        read: {
-          description: '读取并打开一个资源文件',
-          usage: '/read viking://resources/.../file.md',
-        },
-        addResource: {
-          description: '打开添加资源表单',
-          usage: '/add-resource',
-        },
         health: {
           description: '快速健康检查',
           usage: '/health',
@@ -890,25 +870,21 @@ const zhCN = {
           description: '等待异步处理队列完成',
           usage: '/wait [--timeout 秒数]',
         },
+        ls: {
+          description: '列出当前目录或指定目录',
+          usage: '/ls [viking://resources/...]',
+        },
         tree: {
           description: '获取目录树',
           usage: '/tree viking://resources/...',
         },
-        mkdir: {
-          description: '创建目录',
-          usage: '/mkdir viking://resources/.../dir',
-        },
-        rm: {
-          description: '删除资源',
-          usage: '/rm viking://resources/...',
-        },
-        mv: {
-          description: '移动或重命名资源',
-          usage: '/mv from_uri to_uri',
-        },
         stat: {
           description: '查看资源元数据',
           usage: '/stat viking://resources/...',
+        },
+        read: {
+          description: '读取并打开一个资源文件',
+          usage: '/read viking://resources/.../file.md',
         },
         abstract: {
           description: '读取 Level 0 摘要',
@@ -918,273 +894,17 @@ const zhCN = {
           description: '读取 Level 1 概览',
           usage: '/overview viking://resources/...',
         },
-        write: {
-          description: '写入文本内容到已有文件',
-          usage: '/write viking://resources/... --content 文本',
-        },
-        get: {
-          description: '下载文件到本地路径',
-          usage: '/get viking://resources/... local_path',
-        },
-        grep: {
-          description: '按内容模式搜索',
-          usage: '/grep pattern [-u viking://resources/...]',
-        },
-        glob: {
-          description: '按文件 glob 模式搜索',
-          usage: '/glob "*.md" [-u viking://resources/...]',
-        },
-        relations: {
-          description: '列出资源关系',
-          usage: '/relations viking://resources/...',
-        },
-        link: {
-          description: '创建资源关系链接',
-          usage: '/link from_uri to_uri [--reason 原因]',
-        },
-        unlink: {
-          description: '移除资源关系链接',
-          usage: '/unlink from_uri to_uri',
-        },
-        export: {
-          description: '导出上下文为 .ovpack',
-          usage: '/export viking://resources/... file.ovpack',
-        },
-        backup: {
-          description: '备份公共 OpenViking scope',
-          usage: '/backup file.ovpack',
-        },
-        import: {
-          description: '导入 .ovpack 到目标 URI',
-          usage: '/import file.ovpack viking://resources/...',
-        },
-        restore: {
-          description: '恢复备份 .ovpack 到原公共 scope',
-          usage: '/restore file.ovpack',
-        },
-        addSkill: {
-          description: '添加一个 skill',
-          usage: '/add-skill path_or_content',
-        },
-        addMemory: {
-          description: '一次性添加并提交 memory',
-          usage: '/add-memory 内容',
-        },
-        sessionNew: {
-          description: '创建新 session',
-          usage: '/session new',
-        },
-        sessionList: {
-          description: '列出 sessions',
-          usage: '/session list',
-        },
-        sessionGet: {
-          description: '查看 session 详情',
-          usage: '/session get session_id',
-        },
-        sessionGetSessionContext: {
-          description: '获取完整合并 session context',
-          usage: '/session get-session-context session_id',
-        },
-        sessionGetSessionArchive: {
-          description: '获取一个已完成的 session archive',
-          usage: '/session get-session-archive session_id archive_id',
-        },
-        sessionDelete: {
-          description: '删除 session',
-          usage: '/session delete session_id',
-        },
-        sessionAddMessage: {
-          description: '向 session 添加一条消息',
-          usage: '/session add-message session_id --role user --content 内容',
-        },
-        sessionAddMessages: {
-          description: '向 session 批量添加消息',
-          usage: '/session add-messages session_id JSON数组',
-        },
-        sessionCommit: {
-          description: '提交 session 并提取 memory',
-          usage: '/session commit session_id',
-        },
-        privacyCategories: {
-          description: '列出隐私配置分类',
-          usage: '/privacy categories',
-        },
-        privacyList: {
-          description: '按分类列出隐私配置目标',
-          usage: '/privacy list category',
-        },
-        privacyGet: {
-          description: '获取目标当前隐私配置',
-          usage: '/privacy get category target_key',
-        },
-        privacyUpsert: {
-          description: '更新隐私配置值',
-          usage: '/privacy upsert category target_key --key k=v',
-        },
-        privacyVersions: {
-          description: '列出隐私配置版本',
-          usage: '/privacy versions category target_key',
-        },
-        privacyVersion: {
-          description: '查看隐私配置指定版本',
-          usage: '/privacy version category target_key version',
-        },
-        privacyActivate: {
-          description: '激活隐私配置版本',
-          usage: '/privacy activate category target_key version',
-        },
-        taskStatus: {
-          description: '查看异步任务状态',
-          usage: '/task status task_id',
-        },
-        taskList: {
-          description: '列出异步任务',
-          usage: '/task list [--status running]',
-        },
-        taskWatchLs: {
-          description: '列出 watch 任务',
-          usage: '/task watch ls',
-        },
-        taskWatchShow: {
-          description: '查看 watch 任务详情',
-          usage: '/task watch show key',
-        },
-        taskWatchRm: {
-          description: '删除 watch 任务',
-          usage: '/task watch rm key',
-        },
-        taskWatchPause: {
-          description: '暂停 watch 任务',
-          usage: '/task watch pause key',
-        },
-        taskWatchResume: {
-          description: '恢复 watch 任务',
-          usage: '/task watch resume key',
-        },
-        taskWatchUpdate: {
-          description: '更新 watch 任务字段',
-          usage: '/task watch update key --interval 分钟',
-        },
-        taskWatchTrigger: {
-          description: '立即触发 watch 刷新',
-          usage: '/task watch trigger key',
-        },
-        observerQueue: {
-          description: '查看队列状态',
-          usage: '/observer queue',
-        },
-        observerVikingdb: {
-          description: '查看 VikingDB 状态',
-          usage: '/observer vikingdb',
-        },
-        observerModels: {
-          description: '查看模型状态',
-          usage: '/observer models',
-        },
-        observerTransaction: {
-          description: '查看事务系统状态',
-          usage: '/observer transaction',
-        },
-        observerRetrieval: {
-          description: '查看检索质量指标',
-          usage: '/observer retrieval',
-        },
-        observerFilesystem: {
-          description: '查看文件系统操作指标',
-          usage: '/observer filesystem',
-        },
-        observerSystem: {
-          description: '查看系统整体状态',
-          usage: '/observer system',
-        },
-        config: {
-          description: '打开 CLI 配置管理',
-          usage: '/config',
-        },
-        configShow: {
-          description: '显示当前 CLI 配置',
-          usage: '/config show',
-        },
-        configValidate: {
-          description: '校验 CLI 配置文件',
-          usage: '/config validate',
-        },
-        configSwitch: {
-          description: '切换已保存配置',
-          usage: '/config switch',
-        },
-        language: {
-          description: '选择 CLI 显示语言',
-          usage: '/language en|zh-CN',
-        },
-        adminCreateAccount: {
-          description: '创建 account 及首个管理员用户',
-          usage: '/admin create-account account_id --admin user_id',
-        },
-        adminListAccounts: {
-          description: '列出全部 accounts',
-          usage: '/admin list-accounts',
-        },
-        adminDeleteAccount: {
-          description: '删除 account 及其用户',
-          usage: '/admin delete-account account_id',
-        },
-        adminRegisterUser: {
-          description: '注册 account 下的新用户',
-          usage: '/admin register-user account_id user_id --role user',
-        },
-        adminListUsers: {
-          description: '列出 account 下的用户',
-          usage: '/admin list-users account_id',
-        },
-        adminListAgents: {
-          description: '列出 account 下的 agent namespaces',
-          usage: '/admin list-agents account_id',
-        },
-        adminRemoveUser: {
-          description: '移除 account 下的用户',
-          usage: '/admin remove-user account_id user_id',
-        },
-        adminSetRole: {
-          description: '修改用户角色',
-          usage: '/admin set-role account_id user_id admin|user',
-        },
-        adminRegenerateKey: {
-          description: '重新生成用户 API key',
-          usage: '/admin regenerate-key account_id user_id',
-        },
-        systemWait: {
-          description: '等待系统异步处理完成',
-          usage: '/system wait [--timeout 秒数]',
-        },
-        systemStatus: {
-          description: '查看系统组件状态',
-          usage: '/system status',
-        },
-        systemHealth: {
-          description: '系统健康检查',
-          usage: '/system health',
-        },
-        systemConsistency: {
-          description: '检查文件系统和向量索引一致性',
-          usage: '/system consistency viking://resources/...',
-        },
-        systemCryptoInitKey: {
-          description: '初始化 root key',
-          usage: '/system crypto init-key [--output-file path]',
-        },
-        reindex: {
-          description: '重建 URI 的语义/向量产物',
-          usage: '/reindex viking://resources/...',
-        },
-        tui: {
-          description: '打开交互式 TUI 文件浏览器',
-          usage: '/tui [viking://]',
-        },
-        chat: {
-          description: '与 vikingbot agent 对话',
-          usage: '/chat --message 内容',
+        find: {
+          description: '查找相关上下文资源',
+          usage: '/find 查询词',
+        },
+        search: {
+          description: '在当前上下文范围内语义搜索',
+          usage: '/search 查询词',
+        },
+        addResource: {
+          description: '打开添加资源表单',
+          usage: '/add-resource',
         },
       },
     },

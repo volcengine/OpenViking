@@ -879,26 +879,6 @@ const en = {
           description: 'Check the OpenViking API and root directory',
           usage: '/status',
         },
-        ls: {
-          description: 'List the current or a given directory',
-          usage: '/ls [viking://resources/...]',
-        },
-        search: {
-          description: 'Semantic search within the current context scope',
-          usage: '/search <query>',
-        },
-        find: {
-          description: 'Find related context resources',
-          usage: '/find <query>',
-        },
-        read: {
-          description: 'Read and open a resource file',
-          usage: '/read viking://resources/.../file.md',
-        },
-        addResource: {
-          description: 'Open the add-resource form',
-          usage: '/add-resource',
-        },
         health: {
           description: 'Run a quick health check',
           usage: '/health',
@@ -911,25 +891,21 @@ const en = {
           description: 'Wait for async processing to complete',
           usage: '/wait [--timeout seconds]',
         },
+        ls: {
+          description: 'List the current or a given directory',
+          usage: '/ls [viking://resources/...]',
+        },
         tree: {
           description: 'Get a directory tree',
           usage: '/tree viking://resources/...',
         },
-        mkdir: {
-          description: 'Create a directory',
-          usage: '/mkdir viking://resources/.../dir',
-        },
-        rm: {
-          description: 'Remove a resource',
-          usage: '/rm viking://resources/...',
-        },
-        mv: {
-          description: 'Move or rename a resource',
-          usage: '/mv from_uri to_uri',
-        },
         stat: {
           description: 'Get resource metadata',
           usage: '/stat viking://resources/...',
+        },
+        read: {
+          description: 'Read and open a resource file',
+          usage: '/read viking://resources/.../file.md',
         },
         abstract: {
           description: 'Read Level 0 abstract content',
@@ -939,273 +915,17 @@ const en = {
           description: 'Read Level 1 overview content',
           usage: '/overview viking://resources/...',
         },
-        write: {
-          description: 'Write text content to an existing file',
-          usage: '/write viking://resources/... --content text',
-        },
-        get: {
-          description: 'Download a file to a local path',
-          usage: '/get viking://resources/... local_path',
-        },
-        grep: {
-          description: 'Search by content pattern',
-          usage: '/grep pattern [-u viking://resources/...]',
-        },
-        glob: {
-          description: 'Search by file glob pattern',
-          usage: '/glob "*.md" [-u viking://resources/...]',
-        },
-        relations: {
-          description: 'List resource relations',
-          usage: '/relations viking://resources/...',
-        },
-        link: {
-          description: 'Create relation links',
-          usage: '/link from_uri to_uri [--reason reason]',
-        },
-        unlink: {
-          description: 'Remove a relation link',
-          usage: '/unlink from_uri to_uri',
-        },
-        export: {
-          description: 'Export context as .ovpack',
-          usage: '/export viking://resources/... file.ovpack',
-        },
-        backup: {
-          description: 'Back up public OpenViking scopes',
-          usage: '/backup file.ovpack',
-        },
-        import: {
-          description: 'Import .ovpack into a target URI',
-          usage: '/import file.ovpack viking://resources/...',
-        },
-        restore: {
-          description: 'Restore a backup .ovpack to public scopes',
-          usage: '/restore file.ovpack',
-        },
-        addSkill: {
-          description: 'Add a skill',
-          usage: '/add-skill path_or_content',
-        },
-        addMemory: {
-          description: 'Add and commit memory in one shot',
-          usage: '/add-memory content',
-        },
-        sessionNew: {
-          description: 'Create a new session',
-          usage: '/session new',
-        },
-        sessionList: {
-          description: 'List sessions',
-          usage: '/session list',
-        },
-        sessionGet: {
-          description: 'Get session details',
-          usage: '/session get session_id',
-        },
-        sessionGetSessionContext: {
-          description: 'Get merged session context',
-          usage: '/session get-session-context session_id',
-        },
-        sessionGetSessionArchive: {
-          description: 'Get one completed session archive',
-          usage: '/session get-session-archive session_id archive_id',
-        },
-        sessionDelete: {
-          description: 'Delete a session',
-          usage: '/session delete session_id',
-        },
-        sessionAddMessage: {
-          description: 'Add one message to a session',
-          usage: '/session add-message session_id --role user --content text',
-        },
-        sessionAddMessages: {
-          description: 'Add multiple messages to a session',
-          usage: '/session add-messages session_id JSON_ARRAY',
-        },
-        sessionCommit: {
-          description: 'Commit a session and extract memories',
-          usage: '/session commit session_id',
-        },
-        privacyCategories: {
-          description: 'List privacy config categories',
-          usage: '/privacy categories',
-        },
-        privacyList: {
-          description: 'List privacy targets by category',
-          usage: '/privacy list category',
-        },
-        privacyGet: {
-          description: 'Get current privacy config',
-          usage: '/privacy get category target_key',
-        },
-        privacyUpsert: {
-          description: 'Upsert privacy config values',
-          usage: '/privacy upsert category target_key --key k=v',
-        },
-        privacyVersions: {
-          description: 'List privacy config versions',
-          usage: '/privacy versions category target_key',
-        },
-        privacyVersion: {
-          description: 'Get one privacy config version',
-          usage: '/privacy version category target_key version',
-        },
-        privacyActivate: {
-          description: 'Activate a privacy config version',
-          usage: '/privacy activate category target_key version',
-        },
-        taskStatus: {
-          description: 'Show async task status',
-          usage: '/task status task_id',
-        },
-        taskList: {
-          description: 'List async tasks',
-          usage: '/task list [--status running]',
-        },
-        taskWatchLs: {
-          description: 'List watch tasks',
-          usage: '/task watch ls',
-        },
-        taskWatchShow: {
-          description: 'Show watch task details',
-          usage: '/task watch show key',
-        },
-        taskWatchRm: {
-          description: 'Delete a watch task',
-          usage: '/task watch rm key',
-        },
-        taskWatchPause: {
-          description: 'Pause a watch task',
-          usage: '/task watch pause key',
-        },
-        taskWatchResume: {
-          description: 'Resume a watch task',
-          usage: '/task watch resume key',
-        },
-        taskWatchUpdate: {
-          description: 'Update watch task fields',
-          usage: '/task watch update key --interval minutes',
-        },
-        taskWatchTrigger: {
-          description: 'Trigger an immediate watch refresh',
-          usage: '/task watch trigger key',
-        },
-        observerQueue: {
-          description: 'Get queue status',
-          usage: '/observer queue',
-        },
-        observerVikingdb: {
-          description: 'Get VikingDB status',
-          usage: '/observer vikingdb',
-        },
-        observerModels: {
-          description: 'Get model status',
-          usage: '/observer models',
-        },
-        observerTransaction: {
-          description: 'Get transaction system status',
-          usage: '/observer transaction',
-        },
-        observerRetrieval: {
-          description: 'Get retrieval quality metrics',
-          usage: '/observer retrieval',
-        },
-        observerFilesystem: {
-          description: 'Get filesystem operation metrics',
-          usage: '/observer filesystem',
-        },
-        observerSystem: {
-          description: 'Get overall system status',
-          usage: '/observer system',
-        },
-        config: {
-          description: 'Open CLI configuration management',
-          usage: '/config',
-        },
-        configShow: {
-          description: 'Show current CLI configuration',
-          usage: '/config show',
-        },
-        configValidate: {
-          description: 'Validate the CLI configuration file',
-          usage: '/config validate',
-        },
-        configSwitch: {
-          description: 'Switch between saved configs',
-          usage: '/config switch',
-        },
-        language: {
-          description: 'Choose CLI display language',
-          usage: '/language en|zh-CN',
-        },
-        adminCreateAccount: {
-          description: 'Create an account and first admin user',
-          usage: '/admin create-account account_id --admin user_id',
-        },
-        adminListAccounts: {
-          description: 'List all accounts',
-          usage: '/admin list-accounts',
-        },
-        adminDeleteAccount: {
-          description: 'Delete an account and its users',
-          usage: '/admin delete-account account_id',
-        },
-        adminRegisterUser: {
-          description: 'Register a new account user',
-          usage: '/admin register-user account_id user_id --role user',
-        },
-        adminListUsers: {
-          description: 'List users in an account',
-          usage: '/admin list-users account_id',
-        },
-        adminListAgents: {
-          description: 'List account agent namespaces',
-          usage: '/admin list-agents account_id',
-        },
-        adminRemoveUser: {
-          description: 'Remove a user from an account',
-          usage: '/admin remove-user account_id user_id',
-        },
-        adminSetRole: {
-          description: 'Change a user role',
-          usage: '/admin set-role account_id user_id admin|user',
-        },
-        adminRegenerateKey: {
-          description: 'Regenerate a user API key',
-          usage: '/admin regenerate-key account_id user_id',
-        },
-        systemWait: {
-          description: 'Wait for system async processing',
-          usage: '/system wait [--timeout seconds]',
-        },
-        systemStatus: {
-          description: 'Show system component status',
-          usage: '/system status',
-        },
-        systemHealth: {
-          description: 'Run a system health check',
-          usage: '/system health',
-        },
-        systemConsistency: {
-          description: 'Check filesystem and vector-index consistency',
-          usage: '/system consistency viking://resources/...',
-        },
-        systemCryptoInitKey: {
-          description: 'Initialize a root key',
-          usage: '/system crypto init-key [--output-file path]',
-        },
-        reindex: {
-          description: 'Reindex semantic/vector artifacts for a URI',
-          usage: '/reindex viking://resources/...',
-        },
-        tui: {
-          description: 'Open the interactive TUI file explorer',
-          usage: '/tui [viking://]',
-        },
-        chat: {
-          description: 'Chat with the vikingbot agent',
-          usage: '/chat --message text',
+        find: {
+          description: 'Find related context resources',
+          usage: '/find <query>',
+        },
+        search: {
+          description: 'Semantic search within the current context scope',
+          usage: '/search <query>',
+        },
+        addResource: {
+          description: 'Open the add-resource form',
+          usage: '/add-resource',
         },
       },
     },
