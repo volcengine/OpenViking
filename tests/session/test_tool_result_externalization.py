@@ -7,7 +7,7 @@ import pytest
 
 import openviking.session.session as session_module
 import openviking.session.tool_result_store as tool_result_store
-from openviking.message import Message, ToolPart
+from openviking.message import ToolPart
 from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.session import Session
 from openviking.session.tool_result_store import ToolResultStore

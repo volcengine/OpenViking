@@ -720,9 +720,22 @@ async def test_add_resource_async_failure_cleans_up_tracker(
     registry must not leak state."""
 
     from openviking.server.identity import RequestContext, Role
+    from openviking.service.coordinator import get_coordinator
     from openviking.telemetry.registry import _REGISTERED_TELEMETRY
     from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
     from openviking_cli.session.user_id import UserIdentifier
+
+    def _registered_rwt_ids() -> set[str]:
+        # RequestWaitTracker state lives in the Coordinator; a request is
+        # registered iff its `rwt:{telemetry_id}:reg` marker set exists. Probe
+        # the in-process coordinator's store instead of removed `._states`.
+        coord = get_coordinator()
+        sets = getattr(coord, "_sets", {})
+        return {
+            key[len("rwt:") : -len(":reg")]
+            for key in sets
+            if key.startswith("rwt:") and key.endswith(":reg")
+        }
 
     async def _failing_process_resource(**kwargs):
         raise RuntimeError("processor exploded")
@@ -733,7 +746,7 @@ async def test_add_resource_async_failure_cleans_up_tracker(
 
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
 
-    rwt_before = set(get_request_wait_tracker()._states.keys())
+    rwt_before = _registered_rwt_ids()
     tel_before = set(_REGISTERED_TELEMETRY.keys())
 
     try:
@@ -746,7 +759,7 @@ async def test_add_resource_async_failure_cleans_up_tracker(
     except RuntimeError:
         pass
 
-    rwt_after = set(get_request_wait_tracker()._states.keys())
+    rwt_after = _registered_rwt_ids()
     tel_after = set(_REGISTERED_TELEMETRY.keys())
 
     leaked_rwt = rwt_after - rwt_before
@@ -812,13 +825,11 @@ async def test_monitor_marks_failed_on_queue_error(
 
     async def _mock_wait_then_error(telemetry_id, timeout=None, poll_interval=0.05):
         rwt = get_request_wait_tracker()
-        with rwt._lock:
-            state = rwt._states.get(telemetry_id)
-            if state:
-                state.semantic_error_count = 1
-                state.semantic_errors.append("semantic processing failed")
-                state.pending_semantic_roots.clear()
-                state.pending_embedding_roots.clear()
+        # Record a semantic failure via the public API. This increments the
+        # semantic error_count (so the monitor sees errors > 0) and clears the
+        # given pending root; with no other pending roots the request is
+        # complete, so wait_for_request returns promptly.
+        rwt.mark_semantic_failed(telemetry_id, "mock-root", "semantic processing failed")
         await original_wait_for_request(telemetry_id, timeout=timeout, poll_interval=0.01)
 
     monkeypatch.setattr(get_request_wait_tracker(), "wait_for_request", _mock_wait_then_error)

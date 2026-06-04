@@ -14,6 +14,7 @@ from openviking.crypto.config import bootstrap_encryption
 from openviking.privacy import UserPrivacyConfigService
 from openviking.resource.watch_scheduler import WatchScheduler
 from openviking.server.identity import RequestContext, Role
+from openviking.service.coordinator import set_coordinator
 from openviking.service.debug_service import DebugService
 from openviking.service.fs_service import FSService
 from openviking.service.pack_service import PackService
@@ -158,6 +159,7 @@ class OpenVikingService:
             redo_recovery_enabled=tx_cfg.redo_recovery_enabled,
         )
         set_task_tracker(config.build_task_tracker(self._agfs_client))
+        set_coordinator(config.build_coordinator())
 
     @property
     def _agfs(self) -> Any:

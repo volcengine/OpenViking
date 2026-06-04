@@ -415,10 +415,10 @@ class ReindexExecutor:
                     )
 
                 if telemetry_id:
-                    await wait_tracker.wait_for_request(telemetry_id)
+                    status = await wait_tracker.wait_for_request(telemetry_id)
                     self._apply_embedding_wait_status(
                         counters,
-                        wait_tracker.build_queue_status(telemetry_id),
+                        status if status is not None else wait_tracker.build_queue_status(telemetry_id),
                     )
         finally:
             if telemetry_id:

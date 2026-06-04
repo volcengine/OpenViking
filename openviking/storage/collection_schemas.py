@@ -10,11 +10,9 @@ similar to how init_viking_fs encapsulates VikingFS initialization.
 import asyncio
 import hashlib
 import json
-import threading
 import time
 from contextlib import nullcontext
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from openviking.models.embedder.base import EmbedResult, embed_compat
 from openviking.server.identity import RequestContext, Role
@@ -27,6 +25,10 @@ from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
 from openviking.telemetry import bind_telemetry, resolve_telemetry
+from openviking.telemetry.request_queue_stats import (
+    RequestQueueStats,
+    RequestStatsAccumulator,
+)
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.circuit_breaker import (
     CircuitBreaker,
@@ -40,13 +42,6 @@ from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 
 logger = get_logger(__name__)
 EMBEDDING_META_MARKER = "\n\n[openviking.embedding]\n"
-
-
-@dataclass
-class RequestQueueStats:
-    processed: int = 0
-    requeue_count: int = 0
-    error_count: int = 0
 
 
 class CollectionSchemas:
@@ -304,10 +299,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
     Supports both dense and sparse embeddings based on configuration.
     """
 
-    _request_stats_lock = threading.Lock()
-    _request_stats_by_telemetry_id: Dict[str, RequestQueueStats] = {}
-    _request_stats_order: List[str] = []
-    _max_cached_stats = 1024
+    _request_stats = RequestStatsAccumulator("embedding", max_tracked=1024)
 
     def __init__(self, vikingdb: VikingVectorIndexBackend):
         """Initialize the text embedding handler.
@@ -360,28 +352,16 @@ class TextEmbeddingHandler(DequeueHandlerBase):
         requeue_count: int = 0,
         error_count: int = 0,
     ) -> None:
-        if not telemetry_id:
-            return
-        with cls._request_stats_lock:
-            stats = cls._request_stats_by_telemetry_id.setdefault(telemetry_id, RequestQueueStats())
-            stats.processed += processed
-            stats.requeue_count += requeue_count
-            stats.error_count += error_count
-            cls._request_stats_order.append(telemetry_id)
-            if len(cls._request_stats_order) > cls._max_cached_stats:
-                old_telemetry_id = cls._request_stats_order.pop(0)
-                if (
-                    old_telemetry_id != telemetry_id
-                    and old_telemetry_id in cls._request_stats_by_telemetry_id
-                ):
-                    cls._request_stats_by_telemetry_id.pop(old_telemetry_id, None)
+        cls._request_stats.merge(
+            telemetry_id,
+            processed=processed,
+            requeue_count=requeue_count,
+            error_count=error_count,
+        )
 
     @classmethod
     def consume_request_stats(cls, telemetry_id: str) -> Optional[RequestQueueStats]:
-        if not telemetry_id:
-            return None
-        with cls._request_stats_lock:
-            return cls._request_stats_by_telemetry_id.pop(telemetry_id, None)
+        return cls._request_stats.consume(telemetry_id)
 
     @staticmethod
     def _seed_uri_for_id(uri: str, level: Any) -> str:

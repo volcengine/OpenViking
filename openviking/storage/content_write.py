@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import os
+import time
 from typing import Any, Dict, Optional
 
 from openviking.core.namespace import NamespaceShapeError, canonicalize_uri, context_type_for_uri
@@ -17,7 +18,10 @@ from openviking.storage.transaction import get_lock_manager
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
-from openviking.telemetry.resource_summary import build_queue_status_payload
+from openviking.telemetry.resource_summary import (
+    build_queue_status_payload,
+    record_resource_wait_metrics,
+)
 from openviking_cli.exceptions import (
     AlreadyExistsError,
     DeadlineExceededError,
@@ -129,6 +133,25 @@ class ContentWriteCoordinator:
             "queue_status": queue_status,
         }
 
+    def _record_wait_telemetry(
+        self,
+        *,
+        telemetry_id: str,
+        queue_status: Optional[Dict[str, Any]],
+        root_uri: str,
+        wait_duration_ms: float,
+    ) -> None:
+        if not telemetry_id or not queue_status:
+            return
+        record_resource_wait_metrics(
+            telemetry_id=telemetry_id,
+            queue_status=queue_status,
+            root_uri=root_uri,
+        )
+        telemetry = get_current_telemetry()
+        telemetry.set("queue.wait.duration_ms", wait_duration_ms)
+        telemetry.set("resource.wait.duration_ms", wait_duration_ms)
+
     def _refresh_statuses(
         self,
         *,
@@ -196,11 +219,19 @@ class ContentWriteCoordinator:
             semantic_enqueued = True
             await lock_manager.release(handle)
             lock_released = True
-            queue_status = (
-                await self._wait_for_request(telemetry_id=telemetry_id, timeout=timeout)
-                if wait
-                else None
-            )
+            queue_status = None
+            if wait:
+                wait_start = time.perf_counter()
+                queue_status = await self._wait_for_request(
+                    telemetry_id=telemetry_id,
+                    timeout=timeout,
+                )
+                self._record_wait_telemetry(
+                    telemetry_id=telemetry_id,
+                    queue_status=queue_status,
+                    root_uri=root_uri,
+                    wait_duration_ms=round((time.perf_counter() - wait_start) * 1000, 3),
+                )
             return self._build_write_result(
                 uri=uri,
                 root_uri=root_uri,
@@ -461,10 +492,10 @@ class ContentWriteCoordinator:
             return await self._wait_for_queues(timeout=timeout)
         tracker = get_request_wait_tracker()
         try:
-            await tracker.wait_for_request(telemetry_id, timeout=timeout)
+            status = await tracker.wait_for_request(telemetry_id, timeout=timeout)
         except TimeoutError as exc:
             raise DeadlineExceededError("queue processing", timeout) from exc
-        return tracker.build_queue_status(telemetry_id)
+        return status if status is not None else tracker.build_queue_status(telemetry_id)
 
     async def _write_memory_with_refresh(
         self,
@@ -499,11 +530,19 @@ class ContentWriteCoordinator:
             )
             await lock_manager.release(handle)
             released = True
-            queue_status = (
-                await self._wait_for_request(telemetry_id=telemetry_id, timeout=timeout)
-                if wait
-                else None
-            )
+            queue_status = None
+            if wait:
+                wait_start = time.perf_counter()
+                queue_status = await self._wait_for_request(
+                    telemetry_id=telemetry_id,
+                    timeout=timeout,
+                )
+                self._record_wait_telemetry(
+                    telemetry_id=telemetry_id,
+                    queue_status=queue_status,
+                    root_uri=root_uri,
+                    wait_duration_ms=round((time.perf_counter() - wait_start) * 1000, 3),
+                )
             return self._build_write_result(
                 uri=uri,
                 root_uri=root_uri,
