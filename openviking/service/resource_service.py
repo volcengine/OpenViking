@@ -749,6 +749,7 @@ class ResourceService:
             exclude_paths=exclude_list,
             allow_external_links=allow_external_links,
             use_playwright=use_playwright,
+            request_validator=kwargs.get("request_validator"),
         )
 
         # Remove keys that we will override to avoid "multiple values" error

@@ -3,6 +3,7 @@
 """URL filter pipeline for web crawling."""
 
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from typing import List, Optional, Set
@@ -42,6 +43,7 @@ class CrawlConfig:
     timeout: float = 10.0
     user_agent: Optional[str] = None
     use_playwright: bool = True
+    request_validator: Optional[Callable[[str], None]] = None
 
 
 class CrawlFilter:
@@ -192,12 +194,12 @@ class CrawlFilter:
             if normalized in self._visited:
                 stats.rejected_by_dedup += 1
                 continue
-            self._visited.add(normalized)
 
             if len(accepted) >= self.config.max_links_per_page:
                 stats.rejected_by_limit += 1
                 continue
 
+            self._visited.add(normalized)
             accepted.append(url)
 
         return FilterResult(accepted=accepted, stats=stats)
@@ -266,6 +268,9 @@ class CrawlFilter:
 
     def add_visited(self, url: str) -> None:
         self._visited.add(self.normalize_url(url))
+
+    def is_visited(self, url: str) -> bool:
+        return self.normalize_url(url) in self._visited
 
     def filter_by_content_type(
         self, url: str, content_type: Optional[str] = None

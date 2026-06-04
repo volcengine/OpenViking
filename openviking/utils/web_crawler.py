@@ -55,10 +55,10 @@ class WebCrawler:
         if fetcher:
             self._fetcher = fetcher
         elif getattr(self.config, 'use_playwright', False):
-            self._fetcher = PlaywrightFetcher()
+            self._fetcher = PlaywrightFetcher(self.config.request_validator)
             logger.info("WebCrawler using PlaywrightFetcher")
         else:
-            self._fetcher = SimpleFetcher()
+            self._fetcher = SimpleFetcher(self.config.request_validator)
             logger.info("WebCrawler using SimpleFetcher")
 
         self._filter = CrawlFilter(config)
@@ -188,14 +188,37 @@ class WebCrawler:
                         [],
                     )
 
-                if not self._filter.filter_by_content_type(url, fetch_result.content_type):
+                canonical_url = fetch_result.final_url or url
+                if (
+                    self._filter.normalize_url(canonical_url)
+                    != self._filter.normalize_url(url)
+                ):
+                    if self._filter.is_visited(canonical_url):
+                        logger.info(
+                            f"[Crawl][RedirectDedup] skipped duplicate final URL: "
+                            f"{url} -> {canonical_url}"
+                        )
+                        return (
+                            CrawledPage(
+                                url=canonical_url,
+                                depth=depth,
+                                status="skipped",
+                                content="Duplicate final URL after redirect",
+                            ),
+                            [],
+                        )
+                    self._filter.add_visited(canonical_url)
+                else:
+                    self._filter.add_visited(canonical_url)
+
+                if not self._filter.filter_by_content_type(canonical_url, fetch_result.content_type):
                     logger.info(
-                        f"[Crawl][ContentTypeFilter] skipped non-HTML: {url} "
+                        f"[Crawl][ContentTypeFilter] skipped non-HTML: {canonical_url} "
                         f"(content-type: {fetch_result.content_type})"
                     )
                     return (
                         CrawledPage(
-                            url=url,
+                            url=canonical_url,
                             depth=depth,
                             status="skipped",
                             content_type=fetch_result.content_type,
@@ -203,14 +226,14 @@ class WebCrawler:
                         [],
                     )
 
-                ssr_result = self._ssr_extractor.extract(fetch_result.html, url)
+                ssr_result = self._ssr_extractor.extract(fetch_result.html, canonical_url)
                 if ssr_result:
                     markdown_content = None
                     if ssr_result.docs and ssr_result.docs[0].content:
                         markdown_content = ssr_result.docs[0].content
                     
                     page = CrawledPage(
-                        url=url,
+                        url=canonical_url,
                         depth=depth,
                         status="success",
                         title=ssr_result.docs[0].title if ssr_result.docs else None,
@@ -220,18 +243,18 @@ class WebCrawler:
                     )
                     child_urls = ssr_result.child_urls
                     logger.info(
-                        f"[Crawl][SSR] depth={depth} url={url} "
+                        f"[Crawl][SSR] depth={depth} url={canonical_url} "
                         f"children={len(child_urls)} docs={len(ssr_result.docs)}"
                     )
                     return (page, child_urls)
 
                 if self._is_empty_spa_page(fetch_result.html):
                     logger.info(
-                        f"[Crawl][EmptySPA] skipped empty SPA page: {url}"
+                        f"[Crawl][EmptySPA] skipped empty SPA page: {canonical_url}"
                     )
                     return (
                         CrawledPage(
-                            url=url,
+                            url=canonical_url,
                             depth=depth,
                             status="skipped",
                             content="Empty SPA page - JavaScript required",
@@ -239,9 +262,9 @@ class WebCrawler:
                         [],
                     )
 
-                child_urls = self._extract_urls_from_html(fetch_result.html, url)
+                child_urls = self._extract_urls_from_html(fetch_result.html, canonical_url)
                 page = CrawledPage(
-                    url=url,
+                    url=canonical_url,
                     depth=depth,
                     status="success",
                     content=fetch_result.html,
@@ -249,7 +272,7 @@ class WebCrawler:
                     source="html"
                 )
                 logger.info(
-                    f"[Crawl][HTML] depth={depth} url={url} children={len(child_urls)}"
+                    f"[Crawl][HTML] depth={depth} url={canonical_url} children={len(child_urls)}"
                 )
                 return (page, child_urls)
 
