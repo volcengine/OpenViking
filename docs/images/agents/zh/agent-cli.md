@@ -1,6 +1,5 @@
-# Agent CLI 接入
 
-面向 AI Agent 使用。把下面的指令发送给你的 Agent，让它完成 OpenViking CLI 安装、配置和用法学习。
+将下方提示词复制给你的 AI 助手（Claude Code、Codex、Cursor、Trae 等），它会自动完成 OpenViking CLI 安装、配置和用法学习：
 
 ```text
 请在 ~/.openviking/ovcli.conf 写入以下内容：
