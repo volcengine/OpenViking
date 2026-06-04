@@ -17,6 +17,31 @@ function createUserMessage(content: string): Message {
   }
 }
 
+function toolCallKey(toolCall: StreamToolCall): string {
+  return `${toolCall.iteration ?? 0}\u0000${toolCall.name}\u0000${toolCall.arguments}`
+}
+
+function dedupeToolCalls(toolCalls: StreamToolCall[]): StreamToolCall[] {
+  const result: StreamToolCall[] = []
+  const byKey = new Map<string, StreamToolCall>()
+
+  for (const toolCall of toolCalls) {
+    const key = toolCallKey(toolCall)
+    const existing = byKey.get(key)
+    if (!existing) {
+      const next = { ...toolCall }
+      byKey.set(key, next)
+      result.push(next)
+      continue
+    }
+    if (!existing.result && toolCall.result) {
+      existing.result = toolCall.result
+    }
+  }
+
+  return result
+}
+
 type SendOptions = {
   displayMessage?: string
 }
@@ -175,6 +200,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       let accReasoning = ''
       const accToolCalls: StreamToolCall[] = []
       let lastToolCall: StreamToolCall | null = null
+      let currentIteration = 0
 
       try {
         const response = await sendChatStream(
@@ -189,7 +215,10 @@ export function useChat(options: UseChatOptions): UseChatReturn {
             case 'iteration': {
               const data = streamEventDataToText(event.data)
               const match = data.match(/(\d+)/)
-              if (match) setIteration(Number(match[1]))
+              if (match) {
+                currentIteration = Number(match[1])
+                setIteration(currentIteration)
+              }
               break
             }
 
@@ -220,16 +249,32 @@ export function useChat(options: UseChatOptions): UseChatReturn {
               const parenIdx = raw.indexOf('(')
               const name = parenIdx > 0 ? raw.slice(0, parenIdx) : raw
               const args = parenIdx > 0 ? raw.slice(parenIdx + 1, -1) : ''
-              lastToolCall = { name, arguments: args }
+              const duplicate = accToolCalls.find(
+                (tc) =>
+                  tc.iteration === currentIteration &&
+                  tc.name === name &&
+                  tc.arguments === args &&
+                  !tc.result,
+              )
+              if (duplicate) {
+                lastToolCall = duplicate
+                setStreamingToolCalls(dedupeToolCalls(accToolCalls))
+                break
+              }
+              lastToolCall = {
+                name,
+                arguments: args,
+                iteration: currentIteration,
+              }
               accToolCalls.push(lastToolCall)
-              setStreamingToolCalls([...accToolCalls])
+              setStreamingToolCalls(dedupeToolCalls(accToolCalls))
               break
             }
 
             case 'tool_result': {
               if (lastToolCall) {
                 lastToolCall.result = streamEventDataToText(event.data)
-                setStreamingToolCalls([...accToolCalls])
+                setStreamingToolCalls(dedupeToolCalls(accToolCalls))
               }
               break
             }
@@ -244,12 +289,15 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         }
 
         // Build assistant message and finalize
-        const assistantMsg = buildAssistantMessage(accContent, accToolCalls)
-        setMessages((prev) => [...prev, assistantMsg])
-        setStatus('idle')
+        const assistantMsg = buildAssistantMessage(
+          accContent,
+          dedupeToolCalls(accToolCalls),
+        )
         setStreamingContent('')
         setStreamingToolCalls([])
         setStreamingReasoning('')
+        setStatus('idle')
+        setMessages((prev) => [...prev, assistantMsg])
 
         // Persist to openviking session (bot doesn't do this automatically)
         if (persistMessages) {
@@ -284,7 +332,13 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         if (controller.signal.aborted) {
           // Aborted intentionally — still finalize any partial content
           if (accContent) {
-            const partialMsg = buildAssistantMessage(accContent, accToolCalls)
+            const partialMsg = buildAssistantMessage(
+              accContent,
+              dedupeToolCalls(accToolCalls),
+            )
+            setStreamingContent('')
+            setStreamingToolCalls([])
+            setStreamingReasoning('')
             setMessages((prev) => [...prev, partialMsg])
           }
           setStatus('idle')

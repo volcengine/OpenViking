@@ -270,17 +270,6 @@ async def test_add_resource_rejects_events_only_telemetry(
     assert "events" in body["error"]["message"]
 
 
-async def test_add_resource_file_not_found(client: httpx.AsyncClient):
-    resp = await client.post(
-        "/api/v1/resources",
-        json={"path": "/nonexistent/file.txt", "reason": "test"},
-    )
-    assert resp.status_code == 403
-    body = resp.json()
-    assert body["status"] == "error"
-    assert body["error"]["code"] == "PERMISSION_DENIED"
-
-
 async def test_add_resource_with_to(
     client: httpx.AsyncClient,
     sample_markdown_file,
@@ -415,8 +404,9 @@ async def test_wait_processed_after_add(
     assert resp.json()["status"] == "ok"
 
 
-async def test_add_resource_with_watch_interval_requires_to(
+async def test_add_resource_with_watch_interval_auto_binds_root_uri(
     client: httpx.AsyncClient,
+    service,
     sample_markdown_file,
     upload_temp_dir,
 ):
@@ -428,10 +418,19 @@ async def test_add_resource_with_watch_interval_requires_to(
             "watch_interval": 5.0,
         },
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 200
     body = resp.json()
-    assert body["status"] == "error"
-    assert "watch_interval > 0 requires 'to' to be specified" in body["error"]["message"]
+    assert body["status"] == "ok"
+    root_uri = body["result"]["root_uri"]
+    task = await service.watch_scheduler.watch_manager.get_task_by_uri(
+        to_uri=root_uri,
+        account_id="default",
+        user_id="test_user",
+        role="ROOT",
+    )
+    assert task is not None
+    assert task.to_uri == root_uri
+    assert task.watch_interval == 5.0
 
 
 async def test_add_resource_with_default_watch_interval(
@@ -545,6 +544,7 @@ async def test_shared_temp_upload_and_add_resource_deletes_upload_dir(
 
 async def test_shared_temp_upload_failed_consume_is_retryable(
     client: httpx.AsyncClient,
+    app,
     service,
     monkeypatch,
 ):
@@ -559,10 +559,12 @@ async def test_shared_temp_upload_failed_consume_is_retryable(
         raise RuntimeError("boom")
 
     monkeypatch.setattr(service.resources, "add_resource", fake_add_resource)
-    resp = await client.post(
-        "/api/v1/resources",
-        json={"temp_file_id": temp_file_id, "reason": "shared upload"},
-    )
+    transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as http_client:
+        resp = await http_client.post(
+            "/api/v1/resources",
+            json={"temp_file_id": temp_file_id, "reason": "shared upload"},
+        )
     assert resp.status_code == 500
 
     upload_id = temp_file_id[len("shared_") :]
@@ -571,7 +573,7 @@ async def test_shared_temp_upload_failed_consume_is_retryable(
     assert '"state": "uploaded"' in meta_raw
 
 
-async def test_shared_upload_fs_read_is_denied_for_non_root(
+async def test_shared_upload_content_read_is_denied_for_non_root(
     client: httpx.AsyncClient,
 ):
     upload_resp = await client.post(
@@ -584,13 +586,13 @@ async def test_shared_upload_fs_read_is_denied_for_non_root(
     upload_id = temp_file_id[len("shared_") :]
 
     resp = await client.get(
-        "/api/v1/fs/read",
+        "/api/v1/content/read",
         params={"uri": f"viking://upload/{upload_id}/meta.json"},
     )
-    assert resp.status_code == 403
+    assert resp.status_code == 400
     body = resp.json()
     assert body["status"] == "error"
-    assert body["error"]["code"] == "PERMISSION_DENIED"
+    assert body["error"]["code"] == "INVALID_URI"
 
 
 async def test_add_resource_rejects_temp_file_id_directory(

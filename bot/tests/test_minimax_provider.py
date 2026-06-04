@@ -88,7 +88,7 @@ class TestMiniMaxModelPrefixResolution:
 
 
 class TestMiniMaxSystemMessageHandling:
-    """Tests for MiniMax system message merging in both LLM providers."""
+    """Tests for MiniMax system message merging in LiteLLMProvider."""
 
     # ------------------------------------------------------------------ #
     # Helpers
@@ -101,13 +101,6 @@ class TestMiniMaxSystemMessageHandling:
         # Instantiate without a real API key — we only call the static-ish helper.
         provider = LiteLLMProvider.__new__(LiteLLMProvider)
         provider._gateway = None
-        return provider._handle_system_message(model, messages)
-
-    def _handle_system_openai_compat(self, model: str, messages: list[dict]) -> list[dict]:
-        """Call the OpenAICompatibleProvider._handle_system_message."""
-        from vikingbot.providers.openai_compatible_provider import OpenAICompatibleProvider
-
-        provider = OpenAICompatibleProvider.__new__(OpenAICompatibleProvider)
         return provider._handle_system_message(model, messages)
 
     # ------------------------------------------------------------------ #
@@ -167,35 +160,3 @@ class TestMiniMaxSystemMessageHandling:
         ]
         result = self._handle_system_litellm("anthropic/claude-opus-4-5", messages)
         assert result == messages
-
-    # ------------------------------------------------------------------ #
-    # OpenAICompatibleProvider tests (raw model name, no prefix)
-    # ------------------------------------------------------------------ #
-
-    def test_openai_compat_system_message_merged_for_m2_7(self):
-        """System message is merged for MiniMax-M2.7 in OpenAICompatibleProvider."""
-        messages = [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": "Hello!"},
-        ]
-        result = self._handle_system_openai_compat("MiniMax-M2.7", messages)
-        assert all(m["role"] != "system" for m in result)
-        user_content = next(m["content"] for m in result if m["role"] == "user")
-        assert "You are a helpful assistant." in user_content
-
-    def test_openai_compat_no_system_message_passthrough(self):
-        """Messages without a system role pass through unchanged."""
-        messages = [
-            {"role": "user", "content": "Hello!"},
-        ]
-        result = self._handle_system_openai_compat("MiniMax-M2.7", messages)
-        assert result == messages
-
-    def test_openai_compat_system_only_creates_user_message(self):
-        """System-only messages create a synthetic user message."""
-        messages = [
-            {"role": "system", "content": "You are a bot."},
-        ]
-        result = self._handle_system_openai_compat("MiniMax-M2.7", messages)
-        assert any(m["role"] == "user" for m in result)
-        assert all(m["role"] != "system" for m in result)

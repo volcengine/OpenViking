@@ -1,3 +1,5 @@
+import type { OpenVikingClient } from "./client.js";
+
 export function withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutMessage: string): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);
@@ -14,30 +16,24 @@ export function withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutMe
   });
 }
 
-export async function quickHealthCheck(baseUrl: string, timeoutMs: number): Promise<boolean> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+export async function quickHealthCheck(
+  client: OpenVikingClient,
+  agentId: string | undefined,
+  timeoutMs: number,
+): Promise<boolean> {
   try {
-    const response = await fetch(`${baseUrl}/health`, {
-      method: "GET",
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      return false;
-    }
-    const body = (await response.json().catch(() => ({}))) as { status?: string };
-    return body.status === "ok";
+    await client.healthCheck(agentId, timeoutMs);
+    return true;
   } catch {
     return false;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
 export async function quickRecallPrecheck(
-  baseUrl: string,
+  client: OpenVikingClient,
+  agentId?: string,
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
-  const healthOk = await quickHealthCheck(baseUrl, 500);
+  const healthOk = await quickHealthCheck(client, agentId, 500);
   if (healthOk) {
     return { ok: true };
   }

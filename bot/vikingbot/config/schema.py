@@ -435,7 +435,7 @@ class AgentsConfig(BaseModel):
     memory_window: int = 50
     session_context_enabled: bool = False
     session_context_token_budget: int = 3000
-    commit_token_threshold: int = 20000
+    commit_token_threshold: int = 200000
     commit_keep_recent_count: int = 5
     gen_image_model: str = "openai/doubao-seedream-4-5-251128"
     provider: str = ""
@@ -520,6 +520,18 @@ class OpenVikingConfig(BaseModel):
     account_id: str = "default"
     admin_user_id: str = "default"
     exp_write_tools: list[str] = Field(default_factory=lambda: ["write_file", "edit_file"])
+    # When True, switch auto-recall mode: skip the per-turn user+agent memory retrieval
+    # entirely, and instead retrieve experience memory once per session (on the first
+    # user-turn build of _build_user_memory) and inject it into that user message.
+    # When False, keep the default behavior (user+agent memory retrieved every turn).
+    # NOTE: in True mode no memory is injected on later turns of a multi-turn session, so
+    # it suits single-turn / per-task runners (e.g. tau2) rather than long conversations.
+    recall_exp_first_round_only: bool = False
+    # How many experience memories to fetch per call to get_viking_experience_context.
+    exp_recall_limit: int = 5
+    # Total character budget for the injected experience block. Memories beyond this
+    # budget are degraded to link-only (uri + score) instead of being dropped.
+    exp_recall_max_chars: int = 2000
 
     @field_validator("api_key_type", mode="before")
     @classmethod

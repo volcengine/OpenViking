@@ -265,7 +265,7 @@ class VikingSearchTool(OVFileTool):
                     results = await client.search(
                         query,
                         target_uri=client._memory_target_uri(memory_user_id),
-                        limit=20,
+                        limit=10,
                         user_id=admin_user_id,
                     )
                     filtered_items = self._filter_search_items(results, min_score=min_score)
@@ -280,7 +280,7 @@ class VikingSearchTool(OVFileTool):
             results = await client.search(
                 query,
                 target_uri=target_uri,
-                limit=20,
+                limit=10,
                 user_id=admin_user_id,
             )
 
@@ -510,6 +510,48 @@ class VikingGlobTool(OVFileTool):
 class VikingMemoryCommitTool(OVFileTool):
     """Tool to commit messages to OpenViking session."""
 
+    async def _get_commit_task_result(
+        self,
+        client: VikingClient,
+        task_id: str | None,
+        attempts: int = 20,
+        interval: float = 0.5,
+    ) -> dict[str, Any] | None:
+        if not task_id:
+            return None
+        get_task = getattr(client.client, "get_task", None)
+        if not callable(get_task):
+            return None
+
+        task = None
+        for _ in range(attempts):
+            task = await get_task(task_id)
+            if isinstance(task, dict) and task.get("status") in {"completed", "failed"}:
+                return task
+            await asyncio.sleep(interval)
+        return task if isinstance(task, dict) else None
+
+    @staticmethod
+    def _extract_memory_diff_uris(diff: Any) -> dict[str, list[str]]:
+        operations = diff.get("operations", {}) if isinstance(diff, dict) else {}
+        return {
+            "added_uris": [
+                item["uri"]
+                for item in operations.get("adds", [])
+                if isinstance(item, dict) and item.get("uri")
+            ],
+            "updated_uris": [
+                item["uri"]
+                for item in operations.get("updates", [])
+                if isinstance(item, dict) and item.get("uri")
+            ],
+            "deleted_uris": [
+                item["uri"]
+                for item in operations.get("deletes", [])
+                if isinstance(item, dict) and item.get("uri")
+            ],
+        }
+
     @property
     def name(self) -> str:
         return "openviking_memory_commit"
@@ -550,8 +592,37 @@ class VikingMemoryCommitTool(OVFileTool):
                 return "Error committed, sender_id is required."
             client = await self._get_client(tool_context)
             session_id = tool_context.session_key.safe_name()
-            await client.commit(session_id, messages, tool_context.sender_id)
-            return f"Successfully committed to session {session_id}"
+            result = await client.commit(session_id, messages, tool_context.sender_id)
+            commit_result = result.get("commit", {}) if isinstance(result, dict) else {}
+            archive_uri = commit_result.get("archive_uri")
+            memory_diff_uri = f"{archive_uri}/memory_diff.json" if archive_uri else None
+            task_id = commit_result.get("task_id")
+            task = await self._get_commit_task_result(client, task_id)
+            changed_uris = {"added_uris": [], "updated_uris": [], "deleted_uris": []}
+
+            if task and task.get("status") == "completed" and memory_diff_uri:
+                raw_diff = await client.read_content(memory_diff_uri, level="read")
+                if raw_diff:
+                    try:
+                        changed_uris = self._extract_memory_diff_uris(json.loads(raw_diff))
+                    except json.JSONDecodeError:
+                        logger.warning(f"Failed to parse memory diff from {memory_diff_uri}")
+
+            return json.dumps(
+                {
+                    "status": "success",
+                    "session_id": session_id,
+                    "message_count": len(messages),
+                    "archived": commit_result.get("archived"),
+                    **changed_uris,
+                    "archive_uri": archive_uri,
+                    "memory_diff_uri": memory_diff_uri,
+                    "task_id": task_id,
+                    "task_status": task.get("status") if isinstance(task, dict) else None,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
         except Exception as e:
             logger.exception(f"Error processing message: {e}")
             return f"Error committing to Viking: {str(e)}"

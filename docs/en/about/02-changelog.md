@@ -73,7 +73,7 @@ This changelog is automatically generated from [GitHub Releases](https://github.
 - **Upload**: Local directory scans and uploads now respect root and nested `.gitignore` rules, reducing noise from build artifacts and temp files.
 - **Search**: `search` and `find` now accept multiple target URIs for cross-directory and cross-repo retrieval.
 - **Multi-tenant**: OpenClaw plugin clarifies `peer_prefix` as peer metadata only; OpenCode memory plugin adds tenant header forwarding.
-- **Admin**: Deprecated agent namespace discovery surfaces now return an empty compatibility result.
+- **Admin**: Deprecated agent namespace discovery surfaces are removed.
 
 ### Upgrade Notes
 

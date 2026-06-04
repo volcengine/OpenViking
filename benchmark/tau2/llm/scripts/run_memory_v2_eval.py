@@ -427,7 +427,7 @@ def _client(args: argparse.Namespace):
 
     client = ov.SyncHTTPClient(
         url=args.openviking_url,
-        api_key="",
+        api_key=None,
         user=args.openviking_user,
         account=args.openviking_account,
         timeout=args.openviking_timeout,

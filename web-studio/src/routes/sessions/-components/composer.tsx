@@ -55,7 +55,8 @@ export function Composer({
     <div className={cn(isCompact ? 'px-3 pb-3 pt-2' : 'px-4 pb-4 pt-2')}>
       <div
         className={cn(
-          'mx-auto w-full max-w-3xl border border-border/50 bg-background/95',
+          'mx-auto w-full border border-border/50 bg-background/95',
+          isCompact ? 'max-w-none' : 'max-w-3xl',
           isCompact ? 'rounded-xl' : 'rounded-2xl',
           'shadow-lg shadow-black/8 dark:shadow-black/25',
         )}

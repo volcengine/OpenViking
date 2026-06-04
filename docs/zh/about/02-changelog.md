@@ -73,7 +73,7 @@ OpenViking 的所有重要变更都将记录在此文件中。
 - **上传**：本地目录扫描和上传现在遵循根目录及子目录中的 `.gitignore` 规则，减少构建产物和临时文件被误导入。
 - **检索**：`search` / `find` 支持一次传入多个 target URI，适合跨目录、跨仓库范围检索。
 - **多租户**：OpenClaw 插件明确 `peer_prefix` 仅作为 peer metadata 使用；OpenCode memory plugin 补上 tenant headers 透传。
-- **管理**：废弃的 agent namespace 发现入口现在仅返回空兼容结果。
+- **管理**：废弃的 agent namespace 发现入口已删除。
 
 ### 升级说明
 

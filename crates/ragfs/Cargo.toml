@@ -98,12 +98,3 @@ criterion = "0.5"
 default = []
 s3 = ["aws-sdk-s3", "aws-config", "aws-types"]
 full = ["s3"]
-
-[profile.release]
-opt-level = 3
-lto = true
-strip = true
-codegen-units = 1
-
-[profile.dev]
-opt-level = 0

@@ -9,7 +9,7 @@ export const DEFAULT_RETRIEVAL_SCOPE = 'all'
 
 export const DEFAULT_CUSTOM_PATH_INPUT = 'resources/'
 export const LAST_RETRIEVAL_SEARCH_KEY =
-  'openviking.web-studio.retrieval.lastSearch'
+  'openviking.playground.retrieval.lastSearch'
 
 export const KNOWN_VIKING_SCOPES = new Set([
   'agent',

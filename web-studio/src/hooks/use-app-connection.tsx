@@ -107,6 +107,17 @@ function normalizeConnectionDraft(
   }
 }
 
+function resolveIdentityField(
+  envValue: string,
+  storedValue: string | undefined,
+  defaultValue: string,
+): string {
+  if (envValue) {
+    return envValue
+  }
+  return storedValue || defaultValue
+}
+
 function applyConnection(connection: ConnectionDraft): void {
   ovClient.setOptions({
     baseUrl: connection.baseUrl,
@@ -120,19 +131,27 @@ function applyConnection(connection: ConnectionDraft): void {
 
 function readInitialConnection(): ConnectionDraft {
   const storedConnection = readStoredConnection()
+  const apiKey =
+    ENV_API_KEY ||
+    ovClient.getConnection().apiKey ||
+    storedConnection.apiKey ||
+    DEFAULT_CONNECTION.apiKey
   return normalizeConnectionDraft({
     ...DEFAULT_CONNECTION,
     ...storedConnection,
-    accountId:
-      ENV_ACCOUNT || storedConnection.accountId || DEFAULT_CONNECTION.accountId,
-    apiKey:
-      ENV_API_KEY ||
-      ovClient.getConnection().apiKey ||
-      storedConnection.apiKey ||
-      DEFAULT_CONNECTION.apiKey,
+    accountId: resolveIdentityField(
+      ENV_ACCOUNT,
+      storedConnection.accountId,
+      DEFAULT_CONNECTION.accountId,
+    ),
+    apiKey,
     baseUrl:
       ENV_BASE_URL || storedConnection.baseUrl || DEFAULT_CONNECTION.baseUrl,
-    userId: ENV_USER || storedConnection.userId || DEFAULT_CONNECTION.userId,
+    userId: resolveIdentityField(
+      ENV_USER,
+      storedConnection.userId,
+      DEFAULT_CONNECTION.userId,
+    ),
   })
 }
 

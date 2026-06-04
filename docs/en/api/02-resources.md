@@ -88,7 +88,7 @@ Resource incremental updates are implemented via the **Watch Task** mechanism:
 
 #### Watch Task Creation
 - Set `watch_interval > 0` (in minutes) when calling `add_resource` to create a watch task
-- Must specify the `to` parameter to define the target URI
+- You may specify `to` to define the target URI; if omitted, the task binds to the `root_uri` returned by this import
 - `WatchManager` handles task persistence
 - Supports multi-tenant permission control (ROOT/ADMIN/USER permission levels)
 
@@ -149,7 +149,7 @@ This endpoint is the core entry point for resource management, supporting adding
 | exclude | string | No | None | File patterns to exclude (glob) |
 | directly_upload_media | bool | No | True | Whether to directly upload media files |
 | preserve_structure | bool | No | None | Whether to preserve directory structure |
-| watch_interval | float | No | 0 | Scheduled update interval (minutes). >0 creates task; <=0 cancels task |
+| watch_interval | float | No | 0 | Scheduled update interval (minutes). >0 creates task; <=0 cancels task; explicit `to` wins, otherwise binds to the imported `root_uri` |
 | telemetry | TelemetryRequest | No | False | Whether to return telemetry data |
 
 **Additional Notes**:
@@ -157,7 +157,7 @@ This endpoint is the core entry point for resource management, supporting adding
 - `path` and `temp_file_id` cannot be specified together
 - Raw HTTP calls for local files require first uploading via [temp_upload](#temp_upload) to obtain `temp_file_id`
 - When `to` is specified and the target already exists, triggers incremental update
-- `watch_interval` only takes effect when `to` is provided
+- When `watch_interval > 0`, the watch task binds to `to` if provided; otherwise it binds to the `root_uri` returned by this import. If no stable `root_uri` is available, the request fails and asks for an explicit `to`.
 - For local directory inputs, scanning respects `.gitignore` files (root and nested) with standard Git semantics; `ignore_dirs`, `include`, and `exclude` further refine what is ingested.
 - To create or update plain text directly, use [content/write](03-filesystem.md#write) instead of `add_resource`. Semantic processing and embeddings are refreshed automatically after resource ingestion and content writes.
 
@@ -251,6 +251,9 @@ ov add-resource ./documents/guide.md --wait
 
 # Enable scheduled updates (check every 60 minutes)
 ov add-resource https://github.com/example/repo.git --to viking://resources/guide.md --watch-interval 60
+
+# Enable scheduled updates and bind to the URI created by this import
+ov add-resource https://github.com/example/repo.git --watch-interval 60
 
 # Cancel scheduled updates
 ov add-resource https://github.com/example/repo.git --to viking://resources/guide.md --watch-interval 0
@@ -423,7 +426,7 @@ list_watches()                                            # one line per task; U
 cancel_watch(to_uri="viking://resources/guide.md")        # idempotent removal by URI
 ```
 
-Pause / resume / trigger / update are intentionally not exposed via MCP — those power-user operations live on the CLI/REST surface to keep the agent system prompt compact. Creating a watch or changing its cadence from the agent side still goes through [`add_resource`](#add_resource) with `watch_interval` and `to`.
+Pause / resume / trigger / update are intentionally not exposed via MCP — those power-user operations live on the CLI/REST surface to keep the agent system prompt compact. Creating a watch or changing its cadence from the agent side still goes through [`add_resource`](#add_resource) with `watch_interval`; pass `to` explicitly or let the system bind to the `root_uri` returned by this import.
 
 ---
 

@@ -16,6 +16,8 @@ from .base import CollectionAdapter
 class VikingDBPrivateCollectionAdapter(CollectionAdapter):
     """Adapter for private VikingDB deployment."""
 
+    _DATA_BATCH_SIZE = 100
+
     def __init__(
         self,
         *,

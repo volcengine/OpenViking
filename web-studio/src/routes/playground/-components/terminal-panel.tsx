@@ -46,7 +46,7 @@ export function TerminalPanel({
   onOpenResource: ResourceOpenHandler
   openingUri: string | null
 }) {
-  const { t } = useTranslation('studio')
+  const { t } = useTranslation('playground')
   const [command, setCommand] = useState('')
   const [running, setRunning] = useState(false)
   const [suggestionsOpen, setSuggestionsOpen] = useState(false)

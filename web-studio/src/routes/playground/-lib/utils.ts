@@ -9,7 +9,7 @@ import type { FindResultItem, GroupedFindResult } from '#/lib/retrieval'
 
 import { cleanVikingUri } from '#/lib/viking-uri'
 
-import { ROOT_URI, STUDIO_AGENT_SESSIONS_STORAGE_KEY } from './constants'
+import { ROOT_URI, PLAYGROUND_AGENT_SESSIONS_STORAGE_KEY } from './constants'
 import type { ResourceRef } from './types'
 
 export { cleanVikingUri }
@@ -37,11 +37,13 @@ export function readStoredNumber(
   return Number.isFinite(value) ? clampNumber(value, min, max) : fallback
 }
 
-export function readStudioAgentSessionIds(): string[] {
+export function readPlaygroundAgentSessionIds(): string[] {
   if (typeof window === 'undefined') return []
 
   try {
-    const raw = window.localStorage.getItem(STUDIO_AGENT_SESSIONS_STORAGE_KEY)
+    const raw = window.localStorage.getItem(
+      PLAYGROUND_AGENT_SESSIONS_STORAGE_KEY,
+    )
     const parsed = raw ? (JSON.parse(raw) as unknown) : []
     if (!Array.isArray(parsed)) return []
 
@@ -54,19 +56,19 @@ export function readStudioAgentSessionIds(): string[] {
   }
 }
 
-export function registerStudioAgentSessionId(sessionId: string): string[] {
+export function registerPlaygroundAgentSessionId(sessionId: string): string[] {
   const trimmed = sessionId.trim()
   if (typeof window === 'undefined') return trimmed ? [trimmed] : []
-  if (!trimmed) return readStudioAgentSessionIds()
+  if (!trimmed) return readPlaygroundAgentSessionIds()
 
   const next = [
     trimmed,
-    ...readStudioAgentSessionIds().filter((item) => item !== trimmed),
+    ...readPlaygroundAgentSessionIds().filter((item) => item !== trimmed),
   ].slice(0, 50)
 
   try {
     window.localStorage.setItem(
-      STUDIO_AGENT_SESSIONS_STORAGE_KEY,
+      PLAYGROUND_AGENT_SESSIONS_STORAGE_KEY,
       JSON.stringify(next),
     )
   } catch {
@@ -150,7 +152,7 @@ export function isDirectoryLevelFile(uri: string): boolean {
   return name === '_abstract.md' || name === '_overview.md'
 }
 
-export function normalizeStudioResourceUri(uri: string): string {
+export function normalizePlaygroundResourceUri(uri: string): string {
   const normalized = uri.endsWith('/')
     ? normalizeDirUri(uri)
     : normalizeFileUri(uri)

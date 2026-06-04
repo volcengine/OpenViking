@@ -9,9 +9,18 @@ pub const DEFAULT_SELF_MANAGED_URL: &str = "http://127.0.0.1:1933";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UploadConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ignore_dirs: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub include: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub exclude: Option<String>,
+}
+
+impl UploadConfig {
+    fn is_default(&self) -> bool {
+        self.ignore_dirs.is_none() && self.include.is_none() && self.exclude.is_none()
+    }
 }
 
 impl Default for UploadConfig {
@@ -26,29 +35,31 @@ impl Default for UploadConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    #[serde(default = "default_url")]
+    #[serde(default = "default_url", skip_serializing_if = "is_default_url")]
     pub url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub root_api_key: Option<String>,
-    #[serde(alias = "account_id")]
+    #[serde(skip_serializing_if = "Option::is_none", alias = "account_id")]
     pub account: Option<String>,
-    #[serde(alias = "user_id")]
+    #[serde(skip_serializing_if = "Option::is_none", alias = "user_id")]
     pub user: Option<String>,
-    #[serde(default = "default_timeout")]
+    #[serde(default = "default_timeout", skip_serializing_if = "is_default_timeout")]
     pub timeout: f64,
-    #[serde(default = "default_output_format")]
+    #[serde(default = "default_output_format", skip_serializing_if = "is_default_output")]
     pub output: String,
-    #[serde(default = "default_echo_command")]
+    #[serde(default = "default_echo_command", skip_serializing_if = "is_default_echo_command")]
     pub echo_command: bool,
-    #[serde(default = "default_show_progress")]
+    #[serde(default = "default_show_progress", skip_serializing_if = "is_default_show_progress")]
     pub show_progress: bool,
-    #[serde(default = "default_verbose")]
+    #[serde(default = "default_verbose", skip_serializing_if = "is_default_verbose")]
     pub verbose: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_default_profile")]
     pub profile: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "UploadConfig::is_default")]
     pub upload: UploadConfig,
-    #[serde(default, alias = "extra_header")]
+    #[serde(default, alias = "extra_header", skip_serializing_if = "Option::is_none")]
     pub extra_headers: Option<std::collections::HashMap<String, String>>,
 }
 
@@ -74,6 +85,34 @@ fn default_show_progress() -> bool {
 
 fn default_verbose() -> bool {
     false
+}
+
+fn is_default_url(value: &str) -> bool {
+    value == default_url()
+}
+
+fn is_default_timeout(value: &f64) -> bool {
+    (*value - default_timeout()).abs() < f64::EPSILON
+}
+
+fn is_default_output(value: &str) -> bool {
+    value == default_output_format()
+}
+
+fn is_default_echo_command(value: &bool) -> bool {
+    *value == default_echo_command()
+}
+
+fn is_default_show_progress(value: &bool) -> bool {
+    *value == default_show_progress()
+}
+
+fn is_default_verbose(value: &bool) -> bool {
+    *value == default_verbose()
+}
+
+fn is_default_profile(value: &bool) -> bool {
+    !*value
 }
 
 impl Default for Config {
@@ -153,10 +192,7 @@ impl Config {
         if path.exists() {
             Self::from_file(&path.to_string_lossy())
         } else {
-            Err(Error::Config(
-                "No CLI config file detected, please use `ov config` to initialize ovcli.conf"
-                    .to_string(),
-            ))
+            Err(Error::MissingConfig)
         }
     }
 
@@ -224,6 +260,8 @@ pub fn get_or_create_machine_id() -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    use crate::error::Error;
+
     use super::{Config, merge_csv_options};
 
     #[test]
@@ -232,13 +270,13 @@ mod tests {
         let path = dir.path().join("missing-ovcli.conf");
 
         let error = Config::load_required_from_path(&path)
-            .expect_err("missing required config should fail")
-            .to_string();
+            .expect_err("missing required config should fail");
 
-        assert!(error.contains("No CLI config file detected"));
-        assert!(error.contains("ov config"));
-        assert!(!error.contains("setup-cli"));
-        assert!(error.contains("ovcli.conf"));
+        assert!(matches!(error, Error::MissingConfig));
+        let message = error.to_string();
+        assert!(message.contains("No ovcli.conf detected"));
+        assert!(message.contains("ov config"));
+        assert!(!message.contains("setup-cli"));
     }
 
     #[test]
@@ -383,9 +421,17 @@ mod tests {
         )
         .expect("config should deserialize with extra_headers");
 
-        let headers = config.extra_headers.expect("extra_headers should be present");
-        assert_eq!(headers.get("X-Custom-Header"), Some(&"custom-value".to_string()));
-        assert_eq!(headers.get("Authorization"), Some(&"Bearer token".to_string()));
+        let headers = config
+            .extra_headers
+            .expect("extra_headers should be present");
+        assert_eq!(
+            headers.get("X-Custom-Header"),
+            Some(&"custom-value".to_string())
+        );
+        assert_eq!(
+            headers.get("Authorization"),
+            Some(&"Bearer token".to_string())
+        );
     }
 
     #[test]
@@ -426,8 +472,16 @@ mod tests {
         )
         .expect("config should deserialize with alias");
 
-        let headers = config.extra_headers.expect("extra_headers should be present");
-        assert_eq!(headers.get("X-Custom-Header"), Some(&"custom-value".to_string()));
-        assert_eq!(headers.get("Authorization"), Some(&"Bearer token".to_string()));
+        let headers = config
+            .extra_headers
+            .expect("extra_headers should be present");
+        assert_eq!(
+            headers.get("X-Custom-Header"),
+            Some(&"custom-value".to_string())
+        );
+        assert_eq!(
+            headers.get("Authorization"),
+            Some(&"Bearer token".to_string())
+        );
     }
 }

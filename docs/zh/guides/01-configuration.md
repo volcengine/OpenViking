@@ -556,7 +556,7 @@ openviking-server doctor
 | `model` | str | 模型名称 |
 | `api_base` | str | API 端点（可选） |
 | `thinking` | bool | 启用思考模式（仅对部分火山模型生效，默认：`false`） |
-| `max_concurrent` | int | 语义处理阶段 LLM 最大并发调用数（默认：`100`） |
+| `max_concurrent` | int | 语义处理阶段 LLM 最大并发调用数（默认：`64`） |
 | `max_retries` | int | VLM provider 瞬时错误的最大重试次数（默认：`3`；`0` 表示禁用重试） |
 | `backup` | object | 可选的备用 VLM 配置（结构与 `vlm` 相同），当主 VLM 遇到限流、`5xx`、超时或连接失败等可重试错误时自动切换。仅支持 1 层备用 &mdash; 备用 VLM 本身不能再嵌套 `backup` |
 | `timeout` | float | 单次 VLM API 请求的 HTTP 超时时间（秒），传递给底层 OpenAI/LiteLLM 客户端。慢端点（如 DashScope、本地推理）可调大。必须 `> 0`（默认：`60.0`） |
@@ -1013,7 +1013,7 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
-| `backend` | str | VectorDB 后端类型: 'local'（基于文件）, 'http'（远程服务）, 'volcengine'（云上VikingDB）或 'vikingdb'（私有部署） | "local" |
+| `backend` | str | VectorDB 后端类型: 'local'（基于文件）, 'http'（远程服务）, 'volcengine'（云上 VikingDB）, 'vikingdb'（私有部署）, 'qdrant' 或 'opengauss' | "local" |
 | `name` | str | VectorDB 的集合名称 | "context" |
 | `url` | str | 'http' 类型的远程服务 URL（例如 'http://localhost:5000'） | null |
 | `project_name` | str | 项目名称（别名 project） | "default" |
@@ -1022,6 +1022,8 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 | `sparse_weight` | float | 混合向量搜索的稀疏权重，仅在使用混合索引时生效 | 0.0 |
 | `volcengine` | object | 'volcengine' 类型的 VikingDB 配置 | - |
 | `vikingdb` | object | 'vikingdb' 类型的私有部署配置 | - |
+| `qdrant` | object | 'qdrant' 类型的 Qdrant 配置 | - |
+| `opengauss` | object | 'opengauss' 原生向量后端配置 | - |
 
 默认使用本地模式
 ```
@@ -1053,6 +1055,39 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
   }
 }
 ```
+</details>
+
+<details>
+<summary><b>openGauss</b></summary>
+
+需要 openGauss 服务端支持原生 `vector` 类型，并使用允许远程连接的数据库用户。
+可通过 `pip install "openviking[opengauss]"` 安装可选驱动。
+官方容器中的初始 `omm` 用户可能限制远程登录，必要时请为 OpenViking 创建普通数据库用户。
+
+```json
+{
+  "storage": {
+    "vectordb": {
+      "name": "context",
+      "backend": "opengauss",
+      "project": "default",
+      "distance_metric": "cosine",
+      "dimension": 1024,
+      "opengauss": {
+        "host": "127.0.0.1",
+        "port": 5432,
+        "user": "openviking",
+        "password": "your-password",
+        "db_name": "postgres",
+        "schema": "public",
+        "mode": "standalone"
+      }
+    }
+  }
+}
+```
+
+分布式 openGauss 部署可将 `mode` 设为 `"distributed"`；OpenViking 会尝试把元数据表标记为 reference table，并按 `id` 分布集合表。
 </details>
 
 
@@ -1352,7 +1387,7 @@ openviking add-resource ./docs --exclude "*.tmp"
     "model": "string",
     "api_base": "string",
     "thinking": false,
-    "max_concurrent": 100,
+    "max_concurrent": 64,
     "max_retries": 3,
     "extra_headers": {},
     "extra_request_body": {},

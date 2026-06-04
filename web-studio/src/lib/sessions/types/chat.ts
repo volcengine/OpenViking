@@ -15,6 +15,7 @@ export type ChatStatus = 'idle' | 'streaming' | 'error'
 export interface StreamToolCall {
   name: string
   arguments: string
+  iteration?: number
   result?: string
 }
 

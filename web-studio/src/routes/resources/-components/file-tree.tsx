@@ -115,18 +115,26 @@ function TreeNode({
 
   const handleToggle = useCallback(() => {
     const next = new Set(expandedKeys)
-    isOpen ? next.delete(entry.uri) : next.add(entry.uri)
+    if (isOpen) {
+      next.delete(entry.uri)
+    } else {
+      for (const key of next) {
+        if (key !== entry.uri && key.startsWith(entry.uri)) {
+          next.delete(key)
+        }
+      }
+      next.add(entry.uri)
+    }
     onExpandedKeysChange(next)
   }, [expandedKeys, isOpen, entry.uri, onExpandedKeysChange])
 
   const handleSelect = useCallback(() => {
     if (entryRef.current.isDir) {
       onSelectDirectory(entryRef.current)
-      handleToggle()
     } else {
       onSelectFile?.(entryRef.current)
     }
-  }, [onSelectDirectory, onSelectFile, handleToggle])
+  }, [onSelectDirectory, onSelectFile])
 
   const handleMouseEnter = useCallback(() => {
     if (entry.isDir && !isOpen && prefetch) prefetch(entry.uri)

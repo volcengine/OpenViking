@@ -96,6 +96,7 @@ FROM python:3.13-slim-trixie
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
+    git \
     libstdc++6 \
  && rm -rf /var/lib/apt/lists/*
 

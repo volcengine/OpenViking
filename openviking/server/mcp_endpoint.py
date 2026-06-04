@@ -432,16 +432,6 @@ def _resolve_public_base_url() -> tuple[str, str]:
     return "http://127.0.0.1:1933", "listen"
 
 
-_WATCH_REQUIRES_TO_HINT = (
-    "watch_interval > 0 requires `to` to be specified (the stable target URI to refresh into). "
-    "Pick a deterministic URI under viking://resources/. For example:\n"
-    "  - https://github.com/<org>/<repo>  -> to='viking://resources/<org>/<repo>'\n"
-    "  - https://example.com/docs/api     -> to='viking://resources/example.com/docs/api'\n"
-    "Tip: call add_resource without watch_interval first, observe the returned URI, "
-    "then call again with watch_interval=<minutes> and to=<that URI>."
-)
-
-
 @mcp.tool()
 async def add_resource(
     path: str = "",
@@ -455,8 +445,9 @@ async def add_resource(
     Three ways to invoke:
 
     1. Remote URL: pass ``path`` set to an http(s)://, git@, ssh://, or git:// URL.
-       Returns a success message immediately. Supports ``watch_interval`` + ``to`` for
-       auto-refresh subscriptions.
+       Returns a success message immediately. Supports ``watch_interval`` for
+       auto-refresh subscriptions; pass ``to`` to choose the exact target URI, or
+       omit it to bind the watch to the URI created by this add.
 
     2. Local file: pass ``path`` set to a local filesystem path (e.g. ``/tmp/foo.pdf``).
        The response is NOT a success message — it's a multi-step upload instruction.
@@ -475,12 +466,12 @@ async def add_resource(
         watch_interval: Auto-refresh cadence in minutes. 0 (default) = no watch.
             >0 = periodically re-fetch the resource at that cadence (full re-ingest
             each time). Prefer >=1440 (24h) unless the source genuinely changes
-            faster — every refresh re-embeds the entire resource. Requires ``to``.
+            faster — every refresh re-embeds the entire resource. When ``to`` is
+            omitted, the watch binds to the URI created by this add.
             Only applies to remote-URL invocations.
         to: Target URI under viking://resources/ (e.g.
-            "viking://resources/volcengine/OpenViking"). Required when
-            watch_interval > 0. Leave empty for one-shot adds — the system will
-            auto-derive a URI from the source.
+            "viking://resources/volcengine/OpenViking"). Leave empty to let the
+            system derive a URI from the source.
     """
     from openviking.server.local_input_guard import require_remote_resource_source
 
@@ -539,8 +530,6 @@ async def add_resource(
 
     # Branch 3: remote URL — same flow as before
     if is_remote_resource_source(path):
-        if watch_interval > 0 and not to:
-            return f"Error: {_WATCH_REQUIRES_TO_HINT}"
         try:
             path = require_remote_resource_source(path)
             result = await service.resources.add_resource(

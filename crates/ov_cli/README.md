@@ -104,6 +104,9 @@ ov read viking://resources/...
 - `config show` - Show configuration
 - `config validate` - Validate config
 
+### Display
+- `language` (`lang`) - Choose CLI display language (`en` / `zh-CN`)
+
 ## Output Formats
 
 ```bash

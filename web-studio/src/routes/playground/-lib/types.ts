@@ -1,11 +1,11 @@
 import type { VikingFsEntry } from '#/routes/resources/-types/viking-fm'
 
-export type StudioPanel = 'agent' | 'terminal'
+export type PlaygroundPanel = 'agent' | 'terminal'
 
-export type StudioSearch = {
+export type PlaygroundSearch = {
   uri?: string
   file?: string
-  panel?: StudioPanel
+  panel?: PlaygroundPanel
   session?: string
 }
 
@@ -33,7 +33,7 @@ export type TerminalCommandKey =
 
 export type TerminalCommandSuggestion = {
   command: string
-  /** i18n subkey under `studio.terminal.commands`. */
+  /** i18n subkey under `playground.terminal.commands`. */
   key: TerminalCommandKey
   insertText: string
 }

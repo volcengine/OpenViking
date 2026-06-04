@@ -1,10 +1,9 @@
-# Codex 记忆插件
 
 为 [Codex](https://developers.openai.com/codex) 提供持久化的跨 session 记忆。安装一次——每次用户输入前自动召回，每轮结束后增量捕获，compaction 前提交给记忆抽取器。插件同时把 Codex 接到 OpenViking 的 `/mcp` 端点，模型可以直接调用 search、store 等工具管理记忆。
 
 源码：[examples/codex-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/codex-memory-plugin) | [博客：动机与效果展示](https://blog.openviking.ai/post/openviking-coding-agent/)
 
-## 安装
+## 步骤 1：安装
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/codex-memory-plugin/setup-helper/install.sh)
@@ -32,13 +31,15 @@ codex              # 首次启动进 /hooks 审批一次
 
 </details>
 
-## 验证
+
+## 步骤 2：验证
 
 ```bash
 type codex         # 期望输出：codex is a shell function
 ```
 
 进入 Codex 后插件会在每次输入前召回记忆。设 `OPENVIKING_DEBUG=1` 可把事件写到 `~/.openviking/logs/codex-hooks.log`。
+
 
 ## 工作原理
 
@@ -63,6 +64,7 @@ type codex         # 期望输出：codex is a shell function
 
 </details>
 
+
 ## 故障排查
 
 | 现象 | 原因 | 修复 |
@@ -73,7 +75,8 @@ type codex         # 期望输出：codex is a shell function
 | 召回为空 | 服务器不可达或 URL 不对 | `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` |
 | Hook 401 但 MCP 可用，或反之 | env vs ovcli.conf 不一致 | Hook 每次重读 ovcli.conf，MCP 在启动时读 env。改完重启 codex。 |
 
-## 参见
+
+## 参考文档
 
 - [博客：在 Claude Code / Codex 中接入 OpenViking](https://blog.openviking.ai/post/openviking-coding-agent/) — 为什么以及如何给你的 Coding Agent 加上长期记忆
 - [插件 README](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md) — 完整环境变量、架构图

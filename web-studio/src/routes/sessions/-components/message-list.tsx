@@ -47,11 +47,11 @@ function getTextFromParts(message: Message): string {
     .join('\n')
 }
 
-function stripStudioContextSuffix(text: string): string {
+function stripPlaygroundContextSuffix(text: string): string {
   return text
     .replace(/\n\n当前选中的上下文资源：\s*viking:\/\/[\s\S]*$/u, '')
     .replace(
-      /\n\n当前用户在 Studio 中选中的上下文资源是：\s*viking:\/\/[\s\S]*$/u,
+      /\n\n当前用户在 Playground 中选中的上下文资源是：\s*viking:\/\/[\s\S]*$/u,
       '',
     )
 }
@@ -88,10 +88,11 @@ function TypingIndicator() {
 // BotAvatar — product brand avatar
 // ---------------------------------------------------------------------------
 
-function BotAvatar() {
+function BotAvatar({ compact }: { compact?: boolean }) {
+  const sizeClass = compact ? 'size-6' : 'size-7'
   return (
-    <div className="flex size-7 shrink-0 items-center justify-center rounded-full ring-1 ring-border/20 overflow-hidden">
-      <img src={OPENVIKING_ICON_SRC} alt="OpenViking" className="size-7" />
+    <div className={`flex ${sizeClass} shrink-0 items-center justify-center rounded-full ring-1 ring-border/20 overflow-hidden`}>
+      <img src={OPENVIKING_ICON_SRC} alt="OpenViking" className={sizeClass} />
     </div>
   )
 }
@@ -101,6 +102,7 @@ function BotAvatar() {
 // ---------------------------------------------------------------------------
 
 interface MessageListProps {
+  layout?: 'default' | 'expanded'
   messages: Message[]
   streaming?: {
     content: string
@@ -112,22 +114,30 @@ interface MessageListProps {
 }
 
 export function MessageList({
+  layout = 'default',
   messages,
   onResourceClick,
   streaming,
 }: MessageListProps) {
+  const isExpanded = layout === 'expanded'
   return (
     <>
       {messages.map((msg, idx) => {
         const prev = idx > 0 ? messages[idx - 1] : null
         const sameRole = prev?.role === msg.role
         return msg.role === 'user' ? (
-          <UserMessage key={msg.id} message={msg} compact={sameRole} />
+          <UserMessage
+            key={msg.id}
+            message={msg}
+            compact={sameRole}
+            expanded={isExpanded}
+          />
         ) : (
           <AssistantMessage
             key={msg.id}
             message={msg}
             compact={sameRole}
+            expanded={isExpanded}
             onResourceClick={onResourceClick}
           />
         )
@@ -135,6 +145,7 @@ export function MessageList({
       {streaming && (
         <StreamingAssistantMessage
           {...streaming}
+          expanded={isExpanded}
           onResourceClick={onResourceClick}
         />
       )}
@@ -147,25 +158,27 @@ export function MessageList({
 // ---------------------------------------------------------------------------
 
 const UserMessage = memo(function UserMessage({
+  expanded,
   message,
   compact,
 }: {
+  expanded?: boolean
   message: Message
   compact?: boolean
 }) {
-  const text = stripStudioContextSuffix(getTextFromParts(message))
+  const text = stripPlaygroundContextSuffix(getTextFromParts(message))
 
   return (
     <div
-      className={`group/msg flex w-full max-w-3xl gap-3 justify-end ${compact ? 'mb-1.5' : 'mb-5'}`}
+      className={`${expanded ? 'w-full' : 'w-full max-w-3xl'} group/msg flex gap-2 justify-end ${compact ? 'mb-1.5' : 'mb-5'}`}
     >
-      <div className="flex items-end gap-1.5 self-end">
+      <div className="flex items-end gap-1.5 self-end opacity-0 transition-opacity group-hover/msg:opacity-100">
         <span className="text-[10px] text-muted-foreground/40 opacity-0 transition-opacity group-hover/msg:opacity-100 select-none">
           {formatRelativeTime(message.created_at)}
         </span>
         <CopyButton text={text} />
       </div>
-      <div className="max-w-[75%] space-y-1.5">
+      <div className={expanded ? 'max-w-[88%] space-y-1.5' : 'max-w-[75%] space-y-1.5'}>
         {text && (
           <div className="whitespace-pre-wrap rounded-2xl rounded-tr-sm border border-border/70 bg-muted/70 px-4 py-2.5 text-sm leading-6 text-foreground shadow-sm">
             {text}
@@ -173,11 +186,11 @@ const UserMessage = memo(function UserMessage({
         )}
       </div>
       {!compact && (
-        <div className="flex size-7 shrink-0 items-center justify-center rounded-full border border-border/70 bg-muted/60">
+        <div className="flex size-6 shrink-0 items-center justify-center rounded-full border border-border/70 bg-muted/60">
           <UserIcon className="size-3.5 text-muted-foreground" />
         </div>
       )}
-      {compact && <div className="w-7 shrink-0" />}
+      {compact && <div className="w-6 shrink-0" />}
     </div>
   )
 })
@@ -187,10 +200,12 @@ const UserMessage = memo(function UserMessage({
 // ---------------------------------------------------------------------------
 
 const AssistantMessage = memo(function AssistantMessage({
+  expanded,
   message,
   compact,
   onResourceClick,
 }: {
+  expanded?: boolean
   message: Message
   compact?: boolean
   onResourceClick?: (uri: string) => void
@@ -199,10 +214,10 @@ const AssistantMessage = memo(function AssistantMessage({
 
   return (
     <div
-      className={`group/msg flex w-full max-w-3xl gap-3 items-start ${compact ? 'mb-1.5' : 'mb-5'}`}
+      className={`${expanded ? 'w-full' : 'w-full max-w-3xl'} group/msg flex gap-2 items-start ${compact ? 'mb-1.5' : 'mb-5'}`}
     >
-      {!compact ? <BotAvatar /> : <div className="w-7 shrink-0" />}
-      <div className="max-w-full min-w-0 flex-1 rounded-2xl rounded-tl-sm bg-background/95 px-4 py-3 text-sm shadow-sm ring-1 ring-border/30">
+      {!compact ? <BotAvatar compact={expanded} /> : <div className="w-6 shrink-0" />}
+      <div className="relative max-w-full min-w-0 flex-1 rounded-2xl rounded-tl-sm bg-background/95 px-4 py-3 text-sm shadow-sm ring-1 ring-border/30">
         {message.parts.map((part, i) => {
           switch (part.type) {
             case 'text':
@@ -223,12 +238,12 @@ const AssistantMessage = memo(function AssistantMessage({
               return null
           }
         })}
-      </div>
-      <div className="flex items-end gap-1.5 self-end">
-        <CopyButton text={textContent} />
-        <span className="text-[10px] text-muted-foreground/40 opacity-0 transition-opacity group-hover/msg:opacity-100 select-none">
-          {formatRelativeTime(message.created_at)}
-        </span>
+        <div className="absolute right-2 top-2 flex items-center gap-1.5 rounded-lg bg-background/85 px-1.5 py-1 opacity-0 shadow-sm ring-1 ring-border/40 backdrop-blur transition-opacity group-hover/msg:opacity-100">
+          <CopyButton text={textContent} />
+          <span className="text-[10px] text-muted-foreground/60 select-none">
+            {formatRelativeTime(message.created_at)}
+          </span>
+        </div>
       </div>
     </div>
   )
@@ -240,12 +255,14 @@ const AssistantMessage = memo(function AssistantMessage({
 
 function StreamingAssistantMessage({
   content,
+  expanded,
   toolCalls,
   reasoning,
   iteration,
   onResourceClick,
 }: {
   content: string
+  expanded?: boolean
   toolCalls: StreamToolCall[]
   reasoning: string
   iteration: number
@@ -255,8 +272,8 @@ function StreamingAssistantMessage({
   const hasContent = content || toolCalls.length > 0 || reasoning
 
   return (
-    <div className="mb-5 flex w-full max-w-3xl gap-3 items-start">
-      <BotAvatar />
+    <div className={`${expanded ? 'w-full' : 'w-full max-w-3xl'} mb-5 flex gap-2 items-start`}>
+      <BotAvatar compact={expanded} />
       <div className="max-w-full min-w-0 flex-1 rounded-2xl rounded-tl-sm bg-background/95 px-4 py-3 text-sm shadow-sm ring-1 ring-border/30">
         {iteration > 1 && (
           <div className="mb-2">

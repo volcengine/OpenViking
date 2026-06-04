@@ -132,7 +132,7 @@ const DIRECTORY_LEVEL_META: Array<{
 ]
 
 const JSONL_MESSAGE_PREVIEW_LIMIT = 720
-const JSONL_TOOLCALL_STORAGE_KEY = 'web-studio-jsonl-toolcall'
+const JSONL_TOOLCALL_STORAGE_KEY = 'openviking.playground.jsonlToolCall'
 
 type JsonlRecord = {
   error: Error | null
