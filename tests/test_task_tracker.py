@@ -11,13 +11,14 @@ import pytest
 from openviking.pyagfs.exceptions import AGFSAlreadyExistsError
 from openviking.server.identity import RequestContext, Role
 from openviking.service.session_service import SessionService
-from openviking.service.task_store import InMemoryTaskStore, PersistentTaskStore
+from openviking.service.task_store import PersistentTaskStore
 from openviking.service.task_tracker import (
     TaskStatus,
     TaskTracker,
     _sanitize_error,
     get_task_tracker,
     reset_task_tracker,
+    set_task_tracker,
 )
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -34,7 +35,7 @@ def clean_singleton():
 
 @pytest.fixture
 def tracker() -> TaskTracker:
-    return TaskTracker()
+    return TaskTracker(store=PersistentTaskStore(_FakeAgfs()))
 
 
 def _owner_kwargs(account_id: str = "acme", user_id: str = "alice"):
@@ -49,6 +50,12 @@ def _make_ctx(account_id: str = "acme", user_id: str = "alice") -> RequestContex
         user=UserIdentifier(account_id, user_id, "agent-1"),
         role=Role.ADMIN,
     )
+
+
+def _set_fake_global_tracker() -> TaskTracker:
+    tracker = TaskTracker(store=PersistentTaskStore(_FakeAgfs()))
+    set_task_tracker(tracker)
+    return tracker
 
 
 class _FakeAgfs:
@@ -122,6 +129,16 @@ async def test_start_task(tracker: TaskTracker):
     retrieved = await tracker.get(task.task_id)
     assert retrieved is not None
     assert retrieved.status == TaskStatus.RUNNING
+
+
+async def test_update_stage(tracker: TaskTracker):
+    task = await tracker.create("add_resource", **_owner_kwargs())
+    await tracker.start(task.task_id, stage="queued")
+    await tracker.update_stage(task.task_id, "parsing")
+    retrieved = await tracker.get(task.task_id)
+    assert retrieved is not None
+    assert retrieved.status == TaskStatus.RUNNING
+    assert retrieved.stage == "parsing"
 
 
 async def test_complete_task(tracker: TaskTracker):
@@ -300,6 +317,7 @@ async def test_to_dict(tracker: TaskTracker):
     assert d["status"] == "pending"
     assert d["task_type"] == "session_commit"
     assert d["resource_id"] == "s1"
+    assert d["stage"] is None
     assert isinstance(d["created_at"], float)
     assert isinstance(d["updated_at"], float)
     assert isinstance(d["created_at_iso"], str)
@@ -375,15 +393,15 @@ async def test_evict_fifo_when_over_limit(tracker: TaskTracker):
 
 
 async def test_singleton():
-    t1 = get_task_tracker()
+    t1 = _set_fake_global_tracker()
     t2 = get_task_tracker()
     assert t1 is t2
 
 
 async def test_singleton_reset():
-    t1 = get_task_tracker()
+    t1 = _set_fake_global_tracker()
     reset_task_tracker()
-    t2 = get_task_tracker()
+    t2 = _set_fake_global_tracker()
     assert t1 is not t2
 
 
@@ -415,18 +433,19 @@ async def test_persistent_store_writes_task_record_json():
         **_owner_kwargs(),
     )
 
-    raw = agfs.files[f"/local/acme/tasks/alice/{task.task_id}.json"]
+    raw = agfs.files[f"/local/acme/_system/tasks/alice/{task.task_id}.json"]
     payload = json.loads(raw.decode("utf-8"))
 
     assert payload["task_id"] == task.task_id
     assert payload["task_type"] == "add_resource"
     assert payload["account_id"] == "acme"
     assert payload["user_id"] == "alice"
+    assert payload["stage"] is None
     assert "schema_version" not in payload
 
 
-async def test_inmemory_store_keeps_tasktracker_tasks_dict():
-    tracker = TaskTracker(store=InMemoryTaskStore())
+async def test_persistent_store_keeps_tasktracker_tasks_dict():
+    tracker = TaskTracker(store=PersistentTaskStore(_FakeAgfs()))
     task = await tracker.create("session_commit", **_owner_kwargs())
     assert task.task_id in tracker._tasks
 
@@ -452,8 +471,8 @@ async def test_persistent_store_ignores_existing_task_dirs():
     second = await tracker.create("session_commit", resource_id="sess-2", **_owner_kwargs())
 
     assert first.task_id != second.task_id
-    assert agfs.files[f"/local/acme/tasks/alice/{first.task_id}.json"]
-    assert agfs.files[f"/local/acme/tasks/alice/{second.task_id}.json"]
+    assert agfs.files[f"/local/acme/_system/tasks/alice/{first.task_id}.json"]
+    assert agfs.files[f"/local/acme/_system/tasks/alice/{second.task_id}.json"]
 
 
 async def test_create_requires_owner(tracker: TaskTracker):
@@ -477,7 +496,7 @@ async def test_create_rejects_blank_owner_values(tracker: TaskTracker):
 
 
 async def test_session_service_get_commit_task_is_owner_scoped():
-    tracker = get_task_tracker()
+    tracker = _set_fake_global_tracker()
     task = await tracker.create("session_commit", resource_id="sess-123", **_owner_kwargs())
     service = SessionService()
 
@@ -491,7 +510,7 @@ async def test_session_service_get_commit_task_is_owner_scoped():
 
 
 async def test_session_service_get_commit_task_also_filters_account():
-    tracker = get_task_tracker()
+    tracker = _set_fake_global_tracker()
     task = await tracker.create("session_commit", resource_id="sess-123", **_owner_kwargs())
     service = SessionService()
 

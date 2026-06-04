@@ -77,6 +77,12 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 - **向量索引**：将内容向量化用于语义搜索
 - 通过 `SemanticQueue` 异步处理，可通过 `wait=True` 等待完成
 
+#### 异步 `add_resource` 任务
+- `wait=false` 时，OpenViking 仍会先校验资源来源、解析目标 URI，并预占最终 `root_uri`，然后再返回。
+- 立即响应包含 `status`、`root_uri` 和 `task_id`；抓取/解析/finalize 以及队列等待会在持久化后台任务中继续执行。
+- 可通过 `GET /api/v1/tasks/{task_id}` 查询任务状态。资源导入任务的阶段包括 `queued`、`fetching`、`parsing`、`finalizing`、`processing_queue`。
+- 任务状态响应只暴露当前 `stage`；实时 semantic 和 embedding 队列计数可通过 observer queue 查询，导入完成后的任务 `result` 会包含 `queue_status`。
+
 ### 资源的增量更新
 
 资源增量更新通过**监控任务 (Watch Task)** 机制实现：
@@ -110,11 +116,12 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 此接口是资源管理的核心入口，支持多种来源的资源添加，并可选择等待语义处理完成。SDK 可直接处理本地文件/目录、URL 等来源；直接 HTTP 调用只通过 `path` 接受远程 URL，或通过 `temp_file_id` 引用先上传的本地文件。
 
 **处理流程**：
-1. 识别资源来源（URL 或上传的临时文件）
-2. 调用对应 Parser 解析内容
-3. 构建目录树并写入 AGFS
-4. 如指定 `--watch-interval`，设置定时更新任务
-5. 如指定 `--wait=true`，等待语义处理完成
+1. 识别并校验资源来源（URL 或上传的临时文件）
+2. 解析目标 URI；`wait=false` 时会先预占最终 `root_uri` 再返回
+3. 调用对应 Parser 解析内容
+4. 构建目录树并写入 AGFS
+5. `wait=true` 时等待语义处理完成；否则通过返回的 `task_id` 查询后台任务状态
+6. 如指定 `--watch-interval`，设置定时更新任务
 
 **代码入口**：
 - `openviking/client/local.py:LocalClient.add_resource` - SDK 入口（嵌入式）
@@ -150,6 +157,8 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 **补充说明**：
 - `to` 和 `parent` 不能同时使用；如果使用 `parent` 且希望父目录不存在时自动创建，请传 `create_parent=true`。指定 `to` 且目标已存在时，触发增量更新。
 - `path` 和 `temp_file_id` 不能同时指定，上传本地文件需要先通过 [temp_upload](#temp_upload) 上传获取 `temp_file_id`，在 SDK 和 CLI 中已经封装好。
+- `wait=false` 时，请求仍会先完成资源 preflight 和目标规划。远程 URL/仓库不可达或父级目标无效会立即失败，不会创建后台任务。
+- 当 OpenViking 在 `viking://resources` 或 `parent` 下自动选择目标时，会在 `wait=false` 响应前完成冲突重命名和 URI 预占，因此返回的 `root_uri` 是稳定的。
 - `watch_interval > 0` 时，如果指定了 `to`，监控任务绑定该目标；如果未指定 `to`，监控任务绑定本次导入返回的 `root_uri`。如果无法得到稳定 `root_uri`，请求会报错并要求显式传 `to`。
 - 本地目录输入会遵循 `.gitignore`（根目录和子目录，标准 Git 语义）；`ignore_dirs`、`include`、`exclude` 会在此基础上进一步过滤。
 - 如果要直接创建或更新纯文本内容，请使用 [content/write](03-filesystem.md#write)，不要使用 `add_resource`。资源导入和内容写入后都会自动刷新语义与 embedding。
@@ -265,7 +274,7 @@ ov add-resource ./documents/guide.md -p viking://resources/docs/{calendar:today}
 
 #### 4. 响应示例
 
-**HTTP API 响应 (JSON)**
+**HTTP API 响应 (JSON, `wait=true`)**
 
 ```json
 {
@@ -289,17 +298,29 @@ ov add-resource ./documents/guide.md -p viking://resources/docs/{calendar:today}
 }
 ```
 
+**HTTP API 响应 (JSON, `wait=false`)**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "status": "success",
+    "root_uri": "viking://resources/guide",
+    "task_id": "uuid-xxx"
+  }
+}
+```
+
+使用返回的 `task_id` 轮询 `/api/v1/tasks/{task_id}`。任务完成后的 `result` 会包含完整导入结果，包括 `queue_status`。
+
 **CLI 响应 (默认表格格式)**
 
 ```
 Note: Resource is being processed in the background.
 Use 'ov wait' to wait for completion, or 'ov observer queue' to check status.
 status       success
-errors       []
-source_path  /Users/bytedance/workspace/github.com/OpenViking/docs/en/api/01-overview.md
-meta         {}
 root_uri     viking://resources/01-overview
-temp_uri     viking://temp/shengmaojia/04291108_b62dc7/01-overview
+task_id      uuid-xxx
 ```
 
 **CLI 响应 (JSON 格式，使用 -o json)**
@@ -308,10 +329,7 @@ temp_uri     viking://temp/shengmaojia/04291108_b62dc7/01-overview
 {
   "status": "success",
   "root_uri": "viking://resources/01-overview",
-  "temp_uri": "viking://temp/shengmaojia/04291108_b62dc7/01-overview",
-  "source_path": "/Users/bytedance/workspace/github.com/OpenViking/docs/en/api/01-overview.md",
-  "meta": {},
-  "errors": []
+  "task_id": "uuid-xxx"
 }
 ```
 
@@ -321,12 +339,15 @@ temp_uri     viking://temp/shengmaojia/04291108_b62dc7/01-overview
 |------|------|------|
 | `status` | string | 处理状态："success" 成功，"error" 失败 |
 | `root_uri` | string | 资源在 OpenViking 中的最终 URI |
+| `task_id` | string | （可选，仅当 `wait=false` 时）后台任务 ID，可轮询 `/api/v1/tasks/{task_id}` |
 | `temp_uri` | string | 处理过程中的临时 URI（仅在后台处理阶段有效） |
 | `source_path` | string | 原始源文件路径或 URL |
 | `meta` | object | 资源解析过程中的元数据（如文件类型、大小等） |
 | `errors` | array | 处理过程中的错误列表 |
 | `warnings` | array | （可选）处理过程中的警告列表（仅在 `strict=False` 时可能出现） |
 | `queue_status` | object | （可选，仅当 `wait=true` 时）队列处理状态，包含 `pending`、`processing`、`completed` 计数 |
+
+对于 `wait=false`，后台任务的 `task_type="add_resource"`，`resource_id` 等于返回的 `root_uri`。运行中的任务记录可能包含 `stage`；完成后的任务 `result` 会包含带有 semantic 和 embedding 汇总的 `queue_status`。
 
 ---
 

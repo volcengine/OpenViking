@@ -7,9 +7,23 @@ import asyncio
 import zipfile
 
 import httpx
+import pytest
 
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
+
+
+async def _wait_task_terminal(client: httpx.AsyncClient, task_id: str, timeout: float = 10.0):
+    deadline = asyncio.get_running_loop().time() + timeout
+    last_result = None
+    while asyncio.get_running_loop().time() < deadline:
+        task_resp = await client.get(f"/api/v1/tasks/{task_id}")
+        assert task_resp.status_code == 200
+        last_result = task_resp.json()["result"]
+        if last_result["status"] in {"completed", "failed"}:
+            return last_result
+        await asyncio.sleep(0.05)
+    raise AssertionError(f"Task {task_id} did not finish; last_result={last_result}")
 
 
 async def test_add_resource_success(
@@ -31,8 +45,12 @@ async def test_add_resource_success(
     assert "time" not in body
     assert "usage" not in body
     assert "telemetry" not in body
-    assert "root_uri" in body["result"]
+    assert body["result"]["status"] == "success"
     assert body["result"]["root_uri"].startswith("viking://")
+    assert body["result"]["task_id"]
+    task = await _wait_task_terminal(client, body["result"]["task_id"])
+    assert task["status"] == "completed"
+    assert task["result"]["root_uri"] == body["result"]["root_uri"]
 
 
 async def test_add_resource_with_wait(
@@ -155,6 +173,7 @@ async def test_add_resource_business_error_uses_error_envelope(
         json={
             "path": "https://example.com/bad.md",
             "reason": "test resource",
+            "wait": True,
         },
     )
 
@@ -200,7 +219,6 @@ async def test_add_skill_missing_name_returns_invalid_argument(client: httpx.Asy
                 "description": "Skill without name",
                 "content": "# No Name Skill\nTest content.",
             },
-            "wait": True,
         },
     )
 
@@ -292,6 +310,7 @@ async def test_add_resource_with_to(
             "temp_file_id": sample_markdown_file.name,
             "to": "viking://resources/custom/sample",
             "reason": "test resource",
+            "wait": True,
         },
     )
     assert resp.status_code == 200
@@ -314,6 +333,7 @@ async def test_add_resource_with_resources_root_to_uses_child_uri(
             "temp_file_id": archive_path.name,
             "to": "viking://resources",
             "reason": "test resource root import",
+            "wait": True,
         },
     )
     assert resp.status_code == 200
@@ -336,6 +356,7 @@ async def test_add_resource_with_resources_root_to_trailing_slash_uses_child_uri
             "temp_file_id": archive_path.name,
             "to": "viking://resources/",
             "reason": "test resource root import trailing slash",
+            "wait": True,
         },
     )
     assert resp.status_code == 200
@@ -358,6 +379,7 @@ async def test_add_resource_with_resources_root_to_keeps_single_file_directory(
             "source_name": "aa.txt",
             "to": "viking://resources",
             "reason": "test resource root file import",
+            "wait": True,
         },
     )
     assert resp.status_code == 200
@@ -380,12 +402,54 @@ async def test_add_resource_with_resources_root_to_trailing_slash_keeps_single_f
             "source_name": "aa.txt",
             "to": "viking://resources/",
             "reason": "test resource root file import trailing slash",
+            "wait": True,
         },
     )
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
     assert body["result"]["root_uri"] == "viking://resources/aa"
+
+
+async def test_add_resource_async_auto_name_reserves_unique_root_uri(
+    client: httpx.AsyncClient,
+    upload_temp_dir,
+):
+    first = upload_temp_dir / "first.md"
+    second = upload_temp_dir / "second.md"
+    first.write_text("# first\n")
+    second.write_text("# second\n")
+
+    first_resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "temp_file_id": first.name,
+            "source_name": "same.md",
+            "reason": "first async resource",
+            "wait": False,
+        },
+    )
+    second_resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "temp_file_id": second.name,
+            "source_name": "same.md",
+            "reason": "second async resource",
+            "wait": False,
+        },
+    )
+
+    assert first_resp.status_code == 200
+    assert second_resp.status_code == 200
+    first_result = first_resp.json()["result"]
+    second_result = second_resp.json()["result"]
+    assert first_result["root_uri"] == "viking://resources/same"
+    assert second_result["root_uri"] == "viking://resources/same_1"
+
+    first_task = await _wait_task_terminal(client, first_result["task_id"])
+    second_task = await _wait_task_terminal(client, second_result["task_id"])
+    assert first_task["result"]["root_uri"] == first_result["root_uri"]
+    assert second_task["result"]["root_uri"] == second_result["root_uri"]
 
 
 async def test_wait_processed_empty_queue(client: httpx.AsyncClient):
@@ -405,7 +469,7 @@ async def test_wait_processed_after_add(
 ):
     await client.post(
         "/api/v1/resources",
-        json={"temp_file_id": sample_markdown_file.name, "reason": "test"},
+        json={"temp_file_id": sample_markdown_file.name, "reason": "test", "wait": True},
     )
     resp = await client.post(
         "/api/v1/system/wait",
@@ -427,6 +491,7 @@ async def test_add_resource_with_watch_interval_auto_binds_root_uri(
             "temp_file_id": sample_markdown_file.name,
             "reason": "test resource with watch interval",
             "watch_interval": 5.0,
+            "wait": True,
         },
     )
     assert resp.status_code == 200
@@ -455,6 +520,7 @@ async def test_add_resource_with_default_watch_interval(
         json={
             "temp_file_id": sample_markdown_file.name,
             "reason": "test resource with default watch interval",
+            "wait": True,
         },
     )
     assert resp.status_code == 200
@@ -516,7 +582,7 @@ async def test_add_resource_accepts_temp_uploaded_file(
 
     resp = await client.post(
         "/api/v1/resources",
-        json={"temp_file_id": temp_file_id, "reason": "uploaded resource"},
+        json={"temp_file_id": temp_file_id, "reason": "uploaded resource", "wait": True},
     )
     assert resp.status_code == 200
     body = resp.json()
@@ -545,7 +611,7 @@ async def test_shared_temp_upload_and_add_resource_deletes_upload_dir(
 
     resp = await client.post(
         "/api/v1/resources",
-        json={"temp_file_id": temp_file_id, "reason": "shared upload"},
+        json={"temp_file_id": temp_file_id, "reason": "shared upload", "wait": True},
     )
     assert resp.status_code == 200
     body = resp.json()
@@ -570,11 +636,11 @@ async def test_shared_temp_upload_failed_consume_is_retryable(
         raise RuntimeError("boom")
 
     monkeypatch.setattr(service.resources, "add_resource", fake_add_resource)
-    resp = await client.post(
-        "/api/v1/resources",
-        json={"temp_file_id": temp_file_id, "reason": "shared upload"},
-    )
-    assert resp.status_code == 500
+    with pytest.raises(RuntimeError, match="boom"):
+        await client.post(
+            "/api/v1/resources",
+            json={"temp_file_id": temp_file_id, "reason": "shared upload", "wait": True},
+        )
 
     upload_id = temp_file_id[len("shared_") :]
     meta_uri = f"viking://upload/{upload_id}/meta.json"
@@ -582,7 +648,7 @@ async def test_shared_temp_upload_failed_consume_is_retryable(
     assert '"state": "uploaded"' in meta_raw
 
 
-async def test_shared_upload_fs_read_is_denied_for_non_root(
+async def test_shared_upload_content_read_rejects_internal_scope(
     client: httpx.AsyncClient,
 ):
     upload_resp = await client.post(
@@ -595,13 +661,13 @@ async def test_shared_upload_fs_read_is_denied_for_non_root(
     upload_id = temp_file_id[len("shared_") :]
 
     resp = await client.get(
-        "/api/v1/fs/read",
+        "/api/v1/content/read",
         params={"uri": f"viking://upload/{upload_id}/meta.json"},
     )
-    assert resp.status_code == 403
+    assert resp.status_code == 400
     body = resp.json()
     assert body["status"] == "error"
-    assert body["error"]["code"] == "PERMISSION_DENIED"
+    assert body["error"]["code"] == "INVALID_URI"
 
 
 async def test_add_resource_rejects_temp_file_id_directory(
@@ -657,8 +723,13 @@ async def test_add_resource_async_returns_task_id(
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
+    assert body["result"]["status"] == "success"
     assert "task_id" in body["result"]
     assert body["result"]["task_id"]
+    assert body["result"]["root_uri"].startswith("viking://")
+    task = await _wait_task_terminal(client, body["result"]["task_id"])
+    assert task["status"] == "completed"
+    assert task["result"]["root_uri"] == body["result"]["root_uri"]
 
 
 async def test_add_resource_sync_no_task_id(
@@ -698,145 +769,11 @@ async def test_add_resource_async_task_queryable(
         },
     )
     task_id = resp.json()["result"]["task_id"]
+    root_uri = resp.json()["result"]["root_uri"]
 
-    await asyncio.sleep(2.0)
-
-    task_resp = await client.get(f"/api/v1/tasks/{task_id}")
-    assert task_resp.status_code == 200
-    result = task_resp.json()["result"]
+    result = await _wait_task_terminal(client, task_id)
     assert result["task_id"] == task_id
     assert result["task_type"] == "add_resource"
-    assert result["status"] in {"running", "completed", "failed"}
-
-
-async def test_add_resource_async_failure_cleans_up_tracker(
-    client: httpx.AsyncClient,
-    service,
-    monkeypatch,
-    upload_temp_dir,
-):
-    """Regression: when wait=False and telemetry_id is registered but processor
-    raises before task/monitor creation, RequestWaitTracker and telemetry
-    registry must not leak state."""
-
-    from openviking.server.identity import RequestContext, Role
-    from openviking.telemetry.registry import _REGISTERED_TELEMETRY
-    from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
-    from openviking_cli.session.user_id import UserIdentifier
-
-    async def _failing_process_resource(**kwargs):
-        raise RuntimeError("processor exploded")
-
-    monkeypatch.setattr(
-        service.resources._resource_processor, "process_resource", _failing_process_resource
-    )
-
-    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
-
-    rwt_before = set(get_request_wait_tracker()._states.keys())
-    tel_before = set(_REGISTERED_TELEMETRY.keys())
-
-    try:
-        await service.resources.add_resource(
-            path="/tmp/fail_test.md",
-            ctx=ctx,
-            reason="failure cleanup test",
-            wait=False,
-        )
-    except RuntimeError:
-        pass
-
-    rwt_after = set(get_request_wait_tracker()._states.keys())
-    tel_after = set(_REGISTERED_TELEMETRY.keys())
-
-    leaked_rwt = rwt_after - rwt_before
-    assert not leaked_rwt, f"RequestWaitTracker leaked: {leaked_rwt}"
-
-    leaked_telemetry = tel_after - tel_before
-    assert not leaked_telemetry, f"Telemetry registry leaked: {leaked_telemetry}"
-
-
-async def test_add_resource_business_error_no_task(
-    client: httpx.AsyncClient,
-    service,
-    monkeypatch,
-    upload_temp_dir,
-):
-    """When process_resource returns status=error, no task should be created."""
-
-    from openviking.service.task_tracker import get_task_tracker
-
-    async def _error_process_resource(**kwargs):
-        return {"status": "error", "message": "unsupported format"}
-
-    monkeypatch.setattr(
-        service.resources._resource_processor, "process_resource", _error_process_resource
-    )
-
-    task_count_before = get_task_tracker().count()
-
-    await client.post(
-        "/api/v1/resources",
-        json={
-            "temp_file_id": "nonexistent",
-            "reason": "test business error",
-            "wait": False,
-        },
-    )
-
-    task_count_after = get_task_tracker().count()
-    assert task_count_after == task_count_before, "Business error should not create a task"
-
-
-async def test_monitor_marks_failed_on_queue_error(
-    service,
-    monkeypatch,
-):
-    """When queue processing has errors, _monitor_queue_processing should mark task as failed."""
-
-    from openviking.server.identity import RequestContext, Role
-    from openviking.service.task_tracker import get_task_tracker, reset_task_tracker
-    from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
-    from openviking_cli.session.user_id import UserIdentifier
-
-    reset_task_tracker()
-
-    async def _fake_process_resource(**kwargs):
-        return {"status": "success", "root_uri": "viking://resources/queue-err-test"}
-
-    monkeypatch.setattr(
-        service.resources._resource_processor, "process_resource", _fake_process_resource
-    )
-
-    original_wait_for_request = get_request_wait_tracker().wait_for_request
-
-    async def _mock_wait_then_error(telemetry_id, timeout=None, poll_interval=0.05):
-        rwt = get_request_wait_tracker()
-        with rwt._lock:
-            state = rwt._states.get(telemetry_id)
-            if state:
-                state.semantic_error_count = 1
-                state.semantic_errors.append("semantic processing failed")
-                state.pending_semantic_roots.clear()
-                state.pending_embedding_roots.clear()
-        await original_wait_for_request(telemetry_id, timeout=timeout, poll_interval=0.01)
-
-    monkeypatch.setattr(get_request_wait_tracker(), "wait_for_request", _mock_wait_then_error)
-
-    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
-    result = await service.resources.add_resource(
-        path="/tmp/queue_err_test.md",
-        ctx=ctx,
-        reason="queue error test",
-        wait=False,
-    )
-
-    task_id = result.get("task_id")
-    assert task_id, "Expected task_id in result"
-
-    await asyncio.sleep(1.0)
-
-    task = await get_task_tracker().get(task_id)
-    assert task is not None
-    assert task.status.value == "failed", f"Expected failed, got {task.status.value}"
-    assert "queue processing failed" in task.error
+    assert result["status"] == "completed"
+    assert result["stage"] in {"queued", "fetching", "parsing", "finalizing", "processing_queue"}
+    assert result["result"]["root_uri"] == root_uri

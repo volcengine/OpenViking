@@ -53,11 +53,11 @@ This changelog is automatically generated from [GitHub Releases](https://github.
 - **Native CLI distribution**: New `@openviking/cli` npm package installs the platform `ov` binary via `npm i -g @openviking/cli`; Rust CLI release pipeline adds Linux musl artifacts, npm trusted publishing, and a broader integration test suite.
 - **Retrieval and filesystem**: `find` / `search` accept a `level` filter for L0 abstracts, L1 overviews, and L2 file hits. Resource files gained a Phase 1 WebDAV adapter, and `observer.filesystem` exposes filesystem-level observability.
 - **Console and Usage/Audit**: New Usage/Audit module and `/api/v1/console/*` BFF aggregate token usage, retrieval counts, context commit heatmaps, request audit logs, and context inventory from the existing observability event bus.
-- **Storage and concurrency reliability**: Strengthened exact-path and lifecycle locks fix content-write races; blocking backend calls moved off the event loop; QueueFS SQLite persistence expanded; `storage.task_tracker.backend` adds a `persistent` backend for cross-instance task lookup.
+- **Storage and concurrency reliability**: Strengthened exact-path and lifecycle locks fix content-write races; blocking backend calls moved off the event loop; QueueFS SQLite persistence expanded; task records are now persisted for cross-instance lookup; `add_resource(wait=false)` returns a reserved `root_uri` plus persistent task progress while ingestion completes.
 
 ### Upgrade Notes
 
-- `storage.task_tracker.backend` is new. Single-instance deployments can keep the default `memory`; multi-instance or restart-survivable deployments should switch to `persistent`.
+- `storage.task_tracker` is deprecated and ignored. Task records are always persisted under each account's `_system/tasks` directory.
 - `vlm.backup` is a single-tier failover and only triggers on retryable errors (rate limit, `5xx`, connection failure, timeout). Auth, authorization, and billing failures do not trigger failover.
 - `vlm.extra_request_body` is merged into the OpenAI SDK / LiteLLM `extra_body`, useful for Ollama, OpenAI-compatible gateways, and providers requiring extra JSON fields.
 - New Codex memory plugin deployments should prefer `OPENVIKING_*` environment variables for tuning; the legacy `codex.*` block in `ov.conf` remains supported for backward compatibility but is no longer recommended.

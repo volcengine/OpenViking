@@ -1349,25 +1349,17 @@ openviking add-resource ./docs --exclude "*.tmp"
 
 路径锁机制的详细说明见 [路径锁与崩溃恢复](../concepts/09-transaction.md)。
 
-## storage.task_tracker 段
+## Task Tracker 持久化
 
-任务跟踪器记录异步任务状态，适用于返回 `task_id` 的接口（任务类型包括 `session_commit`、`add_resource`、`add_skill`、`admin_reindex`）。`persistent` 后端把任务状态写到 workspace 卷上，因此**一个实例返回的 `task_id` 可以在另一个实例上查询**，并且任务历史在重启后仍可访问。默认 `memory` 后端把任务状态保留在进程内存中——适合单实例部署。
+任务跟踪器记录异步任务状态，适用于返回 `task_id` 的接口（任务类型包括 `session_commit`、`add_resource`、`add_skill`、`admin_reindex`）。Task 记录始终持久化到 AGFS，因此一个实例返回的 `task_id` 可以在另一个实例上查询，任务历史也能在重启后继续访问。
 
-```json
-{
-  "storage": {
-    "task_tracker": {
-      "backend": "memory"
-    }
-  }
-}
+无需配置 `storage.task_tracker`。如果旧配置里仍包含 `storage.task_tracker`，OpenViking 会记录 warning 并忽略它。
+
+Task 记录文件位于所属账号的系统目录：
+
+```text
+/local/{account_id}/_system/tasks/{user_id}/{task_id}.json
 ```
-
-| 参数 | 类型 | 说明 | 默认值 |
-|------|------|------|--------|
-| `backend` | str | 任务跟踪器后端。`"memory"` 把任务状态保留在进程内存（单实例）；`"persistent"` 启用跨实例任务查询并在重启后仍可访问 | `"memory"` |
-
-多实例部署中如果调用方可能从任一实例 poll `GET /api/v1/tasks/{task_id}`，或者任务历史需要超过进程生命周期，请把 `backend` 设为 `"persistent"`。
 
 ## 完整 Schema
 

@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 from pathlib import Path
-from typing import Any, Dict, Literal
+from typing import Any, Dict
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -12,15 +12,6 @@ from .transaction_config import TransactionConfig
 from .vectordb_config import VectorDBBackendConfig
 
 logger = get_logger(__name__)
-
-
-class TaskTrackerConfig(BaseModel):
-    """Configuration for async task tracking backend."""
-
-    backend: Literal["memory", "persistent"] = Field(
-        default="memory",
-        description="Task tracker backend. 'persistent' enables cross-instance task lookup.",
-    )
 
 
 class StorageConfig(BaseModel):
@@ -45,16 +36,23 @@ class StorageConfig(BaseModel):
         description="VectorDB backend configuration",
     )
 
-    task_tracker: TaskTrackerConfig = Field(
-        default_factory=TaskTrackerConfig,
-        description="Task tracker backend configuration",
-    )
-
     params: Dict[str, Any] = Field(
         default_factory=dict, description="Additional storage-specific parameters"
     )
 
     model_config = {"extra": "forbid"}
+
+    @model_validator(mode="before")
+    @classmethod
+    def ignore_deprecated_task_tracker(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "task_tracker" in data:
+            data = dict(data)
+            data.pop("task_tracker", None)
+            logger.warning(
+                "StorageConfig: 'task_tracker' is deprecated and ignored. "
+                "Task records are always persisted."
+            )
+        return data
 
     @model_validator(mode="after")
     def resolve_paths(self):
@@ -91,10 +89,8 @@ class StorageConfig(BaseModel):
         return upload_temp_dir
 
     def build_task_tracker(self, agfs: Any):
-        """Build a TaskTracker from storage config."""
+        """Build the persistent TaskTracker from storage config."""
         from openviking.service.task_store import PersistentTaskStore
         from openviking.service.task_tracker import TaskTracker
 
-        if self.task_tracker.backend == "memory":
-            return TaskTracker()
         return TaskTracker(store=PersistentTaskStore(agfs))

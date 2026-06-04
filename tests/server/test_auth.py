@@ -23,13 +23,56 @@ from openviking.server.dependencies import set_service
 from openviking.server.identity import ResolvedIdentity, Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
 from openviking.service.core import OpenVikingService
-from openviking.service.task_tracker import get_task_tracker, reset_task_tracker
+from openviking.service.task_store import PersistentTaskStore
+from openviking.service.task_tracker import TaskTracker, get_task_tracker, reset_task_tracker, set_task_tracker
 from openviking_cli.exceptions import InvalidArgumentError, OpenVikingError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 
 
 def _uid() -> str:
     return f"acct_{uuid.uuid4().hex[:8]}"
+
+
+class _FakeAgfs:
+    def __init__(self):
+        self.files = {}
+        self.dirs = {"/", "/local"}
+
+    def mkdir(self, path: str, mode: str = "755"):
+        self.dirs.add(path.rstrip("/") or "/")
+        return {"message": "created", "mode": mode}
+
+    def write(self, path: str, data):
+        if isinstance(data, str):
+            data = data.encode("utf-8")
+        self.files[path] = data
+        self.dirs.add(path.rsplit("/", 1)[0] or "/")
+        return "OK"
+
+    def read(self, path: str, offset: int = 0, size: int = -1, stream: bool = False):
+        if path not in self.files:
+            raise FileNotFoundError(path)
+        data = self.files[path]
+        return data[offset : offset + size] if size >= 0 else data[offset:]
+
+    def ls(self, path: str = "/"):
+        prefix = path.rstrip("/") or "/"
+        if prefix not in self.dirs:
+            return []
+        return [
+            {"name": file_path[len(prefix) + 1 :], "path": file_path, "is_dir": False}
+            for file_path in self.files
+            if file_path.startswith(prefix + "/")
+            and "/" not in file_path[len(prefix) + 1 :]
+        ]
+
+    def rm(self, path: str, recursive: bool = False, force: bool = True):
+        self.files.pop(path, None)
+        return {"message": "deleted"}
+
+
+def _set_fake_task_tracker():
+    set_task_tracker(TaskTracker(store=PersistentTaskStore(_FakeAgfs())))
 
 
 ROOT_KEY = "root-secret-key-for-testing-only-1234567890abcdef"
@@ -318,6 +361,7 @@ async def test_task_endpoints_require_auth():
 async def test_task_endpoints_are_user_scoped():
     """Authenticated callers must not see another user's background tasks."""
     reset_task_tracker()
+    _set_fake_task_tracker()
     account_id = _uid()
     tracker = get_task_tracker()
     alice_task = await tracker.create(

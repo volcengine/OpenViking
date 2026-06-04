@@ -518,7 +518,7 @@ Reindex background tasks use `task_type="admin_reindex"` and `resource_id` equal
 GET /api/v1/tasks?task_type=admin_reindex&resource_id=viking://resources
 ```
 
-Task records are kept in memory and can expire or be lost on server restart.
+Task records are persisted under `/local/{account_id}/_system/tasks/{user_id}/{task_id}.json` and can be queried after restart.
 
 **Result fields**
 
