@@ -34,6 +34,7 @@ from openviking.telemetry.resource_summary import (
     build_queue_status_payload,
     record_resource_wait_metrics,
     register_wait_telemetry,
+    summarize_queue_errors,
     unregister_wait_telemetry,
 )
 from openviking.utils import is_git_repo_url, parse_code_hosting_url
@@ -291,6 +292,15 @@ class ResourceService:
                     user_id=ctx.user.user_id,
                 )
                 return
+            queue_errors = summarize_queue_errors(result.get("queue_status"))
+            if queue_errors:
+                await task_tracker.fail(
+                    task_id,
+                    "queue processing failed: " + "; ".join(queue_errors),
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                )
+                return
             success = True
             await task_tracker.complete(
                 task_id,
@@ -407,8 +417,8 @@ class ResourceService:
         *,
         request_validator: Optional[Callable[[str], None]] = None,
     ) -> _ResourceSourceInfo:
-        from openviking.parse.base import lazy_import
         from openviking.parse.accessors.http_accessor import HTTPAccessor
+        from openviking.parse.base import lazy_import
         from openviking.utils.network_guard import build_httpx_request_validation_hooks
 
         httpx = lazy_import("httpx")
@@ -470,9 +480,7 @@ class ResourceService:
                 f"Cannot access Git repository: {source}. The check timed out after 10s."
             ) from exc
         except Exception as exc:
-            raise InvalidArgumentError(
-                f"Cannot access Git repository: {source}. {exc}"
-            ) from exc
+            raise InvalidArgumentError(f"Cannot access Git repository: {source}. {exc}") from exc
 
         if proc.returncode != 0:
             detail = (stderr or stdout).decode("utf-8", errors="replace").strip()
@@ -633,9 +641,7 @@ class ResourceService:
                         status = request_wait_tracker.build_queue_status(telemetry_id)
                     else:
                         qm = get_queue_manager()
-                        status = build_queue_status_payload(
-                            await qm.wait_complete(timeout=timeout)
-                        )
+                        status = build_queue_status_payload(await qm.wait_complete(timeout=timeout))
             except TimeoutError as exc:
                 telemetry.set_error(
                     "resource_service.wait_complete",
