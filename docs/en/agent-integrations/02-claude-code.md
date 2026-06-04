@@ -93,6 +93,5 @@ The plugin renders an OpenViking status indicator under your Claude Code input b
 
 - [Blog: OpenViking in Claude Code / Codex](https://blog.openviking.ai/post/openviking-coding-agent/) — motivation, architecture overview, and demo
 - [Plugin README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md) — full env-var tables, hook details, architecture diagram
-- [Migration notes](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/MIGRATION.md) — upgrading from earlier plugin versions
 - [MCP Clients](./06-mcp-clients.md) — for MCP tool parameters and other clients
 - [Deployment Guide → CLI](../guides/03-deployment.md#cli) — `ovcli.conf` setup

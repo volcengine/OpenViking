@@ -8,7 +8,7 @@ from pathlib import Path
 
 import requests
 
-url = " `https://api.vikingdb.cn-beijing.volces.com/openviking` "
+url = "https://api.vikingdb.cn-beijing.volces.com/openviking"
 api_key = "[TODO]your-api-key"
 agent_id = "[TODO]your-agent-id"
 file_path = Path("[TODO]your-file-path") # e.g. test.txt

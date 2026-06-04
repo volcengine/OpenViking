@@ -11,7 +11,7 @@ pip install openviking --upgrade --force-reinstall
 ```python
 from openviking.client import SyncHTTPClient
 
-url = " `https://api.vikingdb.cn-beijing.volces.com/openviking` "
+url = "https://api.vikingdb.cn-beijing.volces.com/openviking"
 api_key = "[TODO]your-api-key"
 agent_id = "[TODO]your-agent-id"
 
