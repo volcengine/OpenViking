@@ -1,6 +1,7 @@
 use crate::client::HttpClient;
 use crate::error::Result;
 use crate::output::OutputFormat;
+use serde_json::Value;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
@@ -8,34 +9,31 @@ use std::path::Path;
 pub async fn read(
     client: &HttpClient,
     uri: &str,
-    _output_format: OutputFormat,
-    _compact: bool,
+    output_format: OutputFormat,
+    compact: bool,
 ) -> Result<()> {
-    let content = client.read(uri).await?;
-    println!("{}", content);
-    Ok(())
+    let content = client.read_profiled(uri).await?;
+    output_content_result(content, output_format, compact)
 }
 
 pub async fn abstract_content(
     client: &HttpClient,
     uri: &str,
-    _output_format: OutputFormat,
-    _compact: bool,
+    output_format: OutputFormat,
+    compact: bool,
 ) -> Result<()> {
-    let content = client.abstract_content(uri).await?;
-    println!("{}", content);
-    Ok(())
+    let content = client.abstract_content_profiled(uri).await?;
+    output_content_result(content, output_format, compact)
 }
 
 pub async fn overview(
     client: &HttpClient,
     uri: &str,
-    _output_format: OutputFormat,
-    _compact: bool,
+    output_format: OutputFormat,
+    compact: bool,
 ) -> Result<()> {
-    let content = client.overview(uri).await?;
-    println!("{}", content);
-    Ok(())
+    let content = client.overview_profiled(uri).await?;
+    output_content_result(content, output_format, compact)
 }
 
 pub async fn write(
@@ -99,4 +97,53 @@ pub async fn get(client: &HttpClient, uri: &str, local_path: &str) -> Result<()>
 
     println!("Downloaded {} bytes to {}", bytes.len(), local_path);
     Ok(())
+}
+
+fn output_content_result(result: Value, output_format: OutputFormat, compact: bool) -> Result<()> {
+    match output_format {
+        OutputFormat::Json => crate::output::output_success(result, output_format, compact),
+        OutputFormat::Table => {
+            if let Some(rendered) = crate::output::render_profiled_scalar_result(&result) {
+                println!("{}", rendered);
+            } else if let Some(content) = result.as_str() {
+                println!("{}", content);
+            } else {
+                crate::output::output_success(result, output_format, compact);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    #[test]
+    fn table_output_renders_profiled_scalar_content() {
+        let result = json!({
+            "result": "content",
+            "profile": [
+                "line one",
+                "line two"
+            ]
+        });
+
+        let rendered = crate::output::render_profiled_scalar_result(&result);
+
+        assert_eq!(
+            rendered,
+            Some(
+                [
+                    "content",
+                    "",
+                    "profile",
+                    "line one",
+                    "line two",
+                    "",
+                ]
+                .join("\n")
+            )
+        );
+    }
 }

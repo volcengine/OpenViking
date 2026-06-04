@@ -6,7 +6,7 @@ const en = {
       github: 'GitHub',
     },
     header: {
-      defaultTitle: 'OpenViking Studio',
+      defaultTitle: 'OpenViking Playground',
     },
     navigation: {
       home: {
@@ -30,11 +30,14 @@ const en = {
       sessions: {
         title: 'Sessions',
       },
+      playground: {
+        title: 'Playground',
+      },
     },
     sidebar: {
       loadingSessions: 'Loading...',
       noSessions: 'No sessions',
-      workspaceGroupLabel: 'OpenViking Studio',
+      workspaceGroupLabel: 'OpenViking Playground',
     },
   },
   common: {
@@ -57,12 +60,6 @@ const en = {
     theme: {
       toggle: 'Toggle theme',
     },
-    serverMode: {
-      checking: 'Detecting',
-      devImplicit: 'Server Identity',
-      explicitAuth: 'Explicit Auth',
-      offline: 'Offline',
-    },
   },
   connection: {
     devMode: {
@@ -74,7 +71,7 @@ const en = {
       title: 'Connection & Identity',
     },
     identitySummary: {
-      devImplicit: 'Server-managed identity',
+      dev: 'Server-managed identity',
       named: '{{identity}}',
       unset: 'Identity not set',
     },
@@ -82,6 +79,10 @@ const en = {
       accountId: {
         label: 'Account',
         placeholder: 'default',
+      },
+      agentId: {
+        label: 'Agent',
+        placeholder: 'web-playground',
       },
       apiKey: {
         label: 'API Key',
@@ -111,6 +112,114 @@ const en = {
       expiresIn: 'Expires in {{seconds}}s',
       expired: 'Expired — generate a new code.',
       generateError: 'Could not generate OTP: {{message}}',
+    },
+  },
+  settings: {
+    actions: {
+      addAccount: 'Add account',
+      addUser: 'Add user',
+      cancel: 'Cancel',
+      copy: 'Copy',
+      refresh: 'Refresh',
+      regenerate: 'Regenerate',
+      save: 'Save',
+      use: 'Use',
+    },
+    connection: {
+      adminError: 'Could not load admin identities: {{message}}',
+      description:
+        'Select the account and user that Playground should send with OpenViking requests.',
+      noKey:
+        'Enter an API key with admin access to load account and user choices.',
+      title: 'Connection settings',
+    },
+    dialogs: {
+      addAccount: {
+        description:
+          'Create a workspace account and its first admin user. The new key will be shown once.',
+        title: 'Add account',
+      },
+      addUser: {
+        description:
+          'Register a user under an existing account. The generated key will be shown once.',
+        title: 'Add user',
+      },
+      regenerate: {
+        description:
+          'Regenerate the API key for {{account}} / {{user}}. The current key stops working immediately.',
+        title: 'Regenerate API key?',
+      },
+    },
+    empty: {
+      adminDescription:
+        'Use a root or account admin API key to list users, copy keys, add identities, or regenerate credentials.',
+      adminTitle: 'Admin access required',
+      usersDescription: 'Create a user to mint the first API key.',
+      usersTitle: 'No users in this account',
+    },
+    fields: {
+      account: 'Account',
+      adminUser: 'Admin user',
+      agent: 'Agent',
+      apiKey: 'API key',
+      baseUrl: 'Server URL',
+      role: 'Role',
+      user: 'User',
+    },
+    keyResult: {
+      description:
+        'Copy it now. OpenViking may only show a prefix after you leave this state.',
+      dismiss: 'Dismiss',
+      title: 'New API key',
+    },
+    loading: 'Loading identities...',
+    management: {
+      accountFilter: 'Managed account',
+      description:
+        'Review users and credentials for one account, then add users or rotate keys from the web UI.',
+      title: 'User management',
+    },
+    page: {
+      description:
+        'Configure the active OpenViking identity and manage accounts, users, and API keys from Playground.',
+      title: 'Connection & Identity',
+    },
+    placeholders: {
+      account: 'team-account',
+      agent: 'web-playground',
+      apiKey: 'Enter X-API-Key or Bearer token',
+      baseUrl: 'http://127.0.0.1:1933',
+      user: 'default',
+    },
+    roles: {
+      admin: 'Admin',
+      user: 'User',
+    },
+    serverMode: {
+      api_key: 'API key mode',
+      checking: 'Checking...',
+      dev: 'Development mode',
+      offline: 'Offline',
+      trusted: 'Trusted mode',
+    },
+    stats: {
+      accounts: 'Total accounts',
+      apiKeys: 'Visible API keys',
+      users: 'Users',
+    },
+    table: {
+      account: 'Account',
+      actions: 'Actions',
+      apiKey: 'API key',
+      role: 'Role',
+      user: 'User',
+    },
+    toast: {
+      accountCreated: 'Account created',
+      connectionSaved: 'Connection saved',
+      copied: 'Copied',
+      keyRegenerated: 'API key regenerated',
+      userCreated: 'User created',
     },
   },
   oauthSetup: {
@@ -185,7 +294,7 @@ const en = {
           title: 'Playground',
         },
         requestLogs: {
-          description: 'Inspect Studio requests, status, and latency.',
+          description: 'Inspect Playground requests, status, and latency.',
           title: 'Request Logs',
         },
         resources: {
@@ -206,7 +315,7 @@ const en = {
     page: {
       description:
         'Aligned with the product overview: menu entries, context data volume, today tokens, today retrievals, agent access, token trend, and context commit stats.',
-      eyebrow: 'OpenViking Studio',
+      eyebrow: 'OpenViking Playground',
       settings: 'Connection & Settings',
       title: 'Overview',
     },
@@ -261,7 +370,7 @@ const en = {
       description: 'Failed to load audited request logs from the server.',
       title: 'Request failed',
     },
-    eyebrow: 'Studio telemetry',
+    eyebrow: 'Playground telemetry',
     filters: {
       all: 'All logs',
       apiTypePlaceholder: 'API type',
@@ -363,6 +472,9 @@ const en = {
     directlyUploadMedia: 'Directly Upload Media',
     'directlyUploadMedia.hint':
       'When enabled, media files (images, audio, video) are stored as-is. When disabled, media files are processed through AI vision/audio pipeline for content extraction first.',
+    createParent: 'Auto-create Parent Folder',
+    'createParent.hint':
+      'When enabled, automatically creates the parent directory if it does not exist.',
     reason: 'Reason',
     'reason.placeholder': 'Why are you adding this resource?',
     instruction: 'Instruction',
@@ -425,6 +537,7 @@ const en = {
       scope: {
         global: 'Search scope: Global',
         current: 'Search scope: {{name}}',
+        resetToGlobal: 'Click to reset to global search',
       },
       scopeState: {
         validatingTitle: 'Validating search scope',
@@ -472,6 +585,7 @@ const en = {
       back: 'Back',
       loading: 'Loading directory',
       filesSection: 'Files',
+      error: 'Failed to load directory',
       empty: {
         title: 'Empty directory',
         subtitle:
@@ -596,6 +710,7 @@ const en = {
       toolCall: 'Tool call',
       toolInput: 'Input',
       toolResult: 'Result',
+      loadMoreRefs: 'Load {{count}} more ({{remaining}} remaining)',
       toolStatus: {
         completed: 'Completed',
         failed: 'Failed',
@@ -631,7 +746,7 @@ const en = {
       scopesLabel: 'Scopes',
       scopesNone: '(none)',
       signInRequired:
-        'Sign in to OpenViking Studio (Connection & Identity) or paste an API key below to authorize this client.',
+        'Sign in to OpenViking Playground (Connection & Identity) or paste an API key below to authorize this client.',
       openConnectionDialog: 'Open Connection & Identity',
       authorize: 'Authorize',
       deny: 'Deny',
@@ -657,7 +772,124 @@ const en = {
       verifyError: 'Authorization failed: {{message}}',
       noApiKey: 'No API key available. Select an identity or paste a key.',
       signInRequired:
-        'Sign in to OpenViking Studio (Connection & Identity) or paste an API key below to verify.',
+        'Sign in to OpenViking Playground (Connection & Identity) or paste an API key below to verify.',
+    },
+  },
+  playground: {
+    copyUri: 'Copy current URI',
+    copied: 'URI copied',
+    resizeContext: 'Resize context tree width',
+    resizeAction: 'Resize Terminal and Agent width',
+    readFailed: 'Failed to read {{uri}}',
+    tabs: {
+      terminal: 'Terminal',
+      agent: 'Agent',
+    },
+    addResource: {
+      title: 'Add resource',
+      description:
+        'After it finishes, the context tree on the left refreshes and the Terminal on the right can locate the new resource.',
+      submitted: 'Resource add task submitted',
+    },
+    explorer: {
+      title: 'Context tree',
+      addResource: 'Add resource',
+      refresh: 'Refresh tree',
+      namespaces: {
+        user: 'Personalized user memories',
+        session: 'Raw sessions between the user and the Agent',
+        agent: "The Agent's capabilities, tools and experience",
+        resources: 'External resources the Agent can reference',
+      },
+    },
+    agent: {
+      autoRetrieve: 'The Agent retrieves on its own from messages and tools',
+      history: 'Session history',
+      newSession: 'New session',
+      creating: 'Creating Playground session...',
+      detectingBot: 'Detecting bot mode...',
+      createFailed: 'Failed to create session: {{error}}',
+      retry: 'Retry',
+      botDisabledFooter: 'Enable bot mode to chat with the Agent',
+      historyTitle: 'Agent session history',
+      historyDescription:
+        'Only sessions used by the Agent panel are shown here; a new session opens a blank Agent context.',
+      loadingSessions: 'Loading sessions...',
+      noSessions: 'No session history yet',
+      createTimeout:
+        'Creating the Playground session timed out. Check your connection settings and try again.',
+      newSessionTitle: 'New Playground session',
+      botPrompt: {
+        title: 'Please enable bot mode',
+        description:
+          'The current service has not enabled Agent chat. Start the service in bot mode and try again.',
+        retry: 'Detect again',
+      },
+      empty: {
+        heading: 'Agent actions sync with the tree on the left',
+        body: 'After you send a question, `viking://` files in the tool call output become clickable links — click to locate them on the left and open them in the middle.',
+        prompts: [
+          'Summarize the current directory',
+          'Recursively find related docs',
+          'Explain how this resource relates to the project',
+        ],
+      },
+    },
+    terminal: {
+      welcomeTitle: 'Terminal connected to the context tree',
+      welcomeBody:
+        'Run /status, /ls, /search, /read, /add-resource. Resource links in the output locate the left tree and open the middle preview.',
+      opened: 'Resource opened',
+      onlineTitle: 'Service online',
+      onlineBody:
+        'OpenViking API responded normally; found {{count}} nodes under the root.',
+      lsBody: 'Showing {{count}} nodes under {{uri}}.',
+      fileEmpty: 'File is empty; opened in the middle preview.',
+      searchUsage: 'Usage: {{name}} <query>',
+      readUsage: 'Usage: /read viking://resources/...',
+      enterUri: 'Please enter a viking:// URI',
+      hits: 'Hit {{resources}} resources, {{memories}} memories, {{skills}} skills.',
+      addResourceBody:
+        'Opened the add-resource dialog. After submitting, the left tree refreshes; use /ls or /search to keep locating new content.',
+      addResourceTitle: 'Add resource',
+      unknownCommand:
+        'Unknown command. Available: /status, /ls, /search, /find, /read, /add-resource.',
+      commandFailed: 'Command failed',
+      running: 'Running command...',
+      placeholder: 'Enter a CLI command, e.g. /status',
+      suggestionsTitle: 'Command suggestions',
+      suggestionsHint: '↑↓ select · Tab complete · Enter run',
+      groupLabels: {
+        resources: 'resource',
+        memories: 'memory',
+        skills: 'skill',
+      },
+      commands: {
+        status: {
+          description: 'Check the OpenViking API and root directory',
+          usage: '/status',
+        },
+        ls: {
+          description: 'List the current or a given directory',
+          usage: '/ls [viking://resources/...]',
+        },
+        search: {
+          description: 'Semantic search within the current context scope',
+          usage: '/search <query>',
+        },
+        find: {
+          description: 'Find related context resources',
+          usage: '/find <query>',
+        },
+        read: {
+          description: 'Read and open a resource file',
+          usage: '/read viking://resources/.../file.md',
+        },
+        addResource: {
+          description: 'Open the add-resource form',
+          usage: '/add-resource',
+        },
+      },
     },
   },
 } as const

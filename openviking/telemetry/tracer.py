@@ -172,7 +172,7 @@ def _init_asyncio_instrumentation() -> None:
         from opentelemetry.instrumentation.asyncio import AsyncioInstrumentor
 
         AsyncioInstrumentor().instrument()
-        logger.info("[TRACER] initialized AsyncioInstrumentor")
+        logger.debug("[TRACER] initialized AsyncioInstrumentor")
     except ImportError:
         logger.warning("[TRACER] opentelemetry-instrumentation-asyncio not installed")
     except Exception as e:
@@ -269,7 +269,7 @@ def init_tracer(
         # Initialize asyncio instrumentation to create child spans for create_task
         _init_asyncio_instrumentation()
 
-        logger.info(
+        logger.debug(
             "[TRACER] initialized with service_name=%s, protocol=%s, endpoint=%s",
             service_name,
             protocol,

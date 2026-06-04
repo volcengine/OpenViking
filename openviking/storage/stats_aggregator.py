@@ -16,7 +16,7 @@ from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 
-# Memory categories from MemoryCategory enum
+# Memory categories used by the stats API.
 MEMORY_CATEGORIES = [
     "profile",
     "preferences",

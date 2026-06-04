@@ -82,6 +82,22 @@ pub struct StatsQuery {
     pub path: Option<String>,
 }
 
+/// Query parameters for tree (recursive directory listing) operations
+#[derive(Debug, Deserialize)]
+pub struct TreeQuery {
+    /// Directory path to traverse
+    pub path: String,
+    /// Whether to include hidden entries (names starting with '.')
+    #[serde(default)]
+    pub show_hidden: bool,
+    /// Maximum number of nodes to return (None = unlimited)
+    #[serde(default)]
+    pub node_limit: Option<usize>,
+    /// Maximum depth relative to the query root (None = unlimited)
+    #[serde(default)]
+    pub level_limit: Option<usize>,
+}
+
 /// Statistics response for a single mount
 #[derive(Debug, Serialize)]
 pub struct MountStats {
@@ -447,6 +463,33 @@ pub async fn grep_content(State(state): State<AppState>, Json(req): Json<GrepReq
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiResponse::<GrepResult>::error(e.to_string())),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/v1/tree - Recursively list a directory tree.
+///
+/// Mirrors the binding-side `tree_directory` so HTTP clients have the same
+/// surface as the native binding client.
+pub async fn tree_directory(
+    State(state): State<AppState>,
+    Query(query): Query<TreeQuery>,
+) -> Response {
+    match state
+        .fs
+        .tree_directory(
+            &query.path,
+            query.show_hidden,
+            query.node_limit,
+            query.level_limit,
+        )
+        .await
+    {
+        Ok(entries) => (StatusCode::OK, Json(ApiResponse::success(entries))).into_response(),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiResponse::<()>::error(e.to_string())),
         )
             .into_response(),
     }

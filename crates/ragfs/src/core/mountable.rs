@@ -15,7 +15,7 @@ use super::filesystem::FileSystem;
 use super::plugin::ServicePlugin;
 use super::stats::{FilesystemStats, StatsCollector};
 use super::stats_wrapper::StatsWrappedFS;
-use super::types::{FileInfo, GrepResult, PluginConfig, WriteFlag};
+use super::types::{FileInfo, GrepResult, PluginConfig, TreeEntry, WriteFlag};
 
 /// Information about a mounted filesystem
 #[derive(Clone)]
@@ -373,6 +373,39 @@ impl FileSystem for MountableFS {
             )
             .await
     }
+
+    async fn tree_directory(
+        &self,
+        path: &str,
+        show_hidden: bool,
+        node_limit: Option<usize>,
+        level_limit: Option<usize>,
+    ) -> Result<Vec<TreeEntry>> {
+        let (mount_info, rel_path) = self.find_mount(path).await?;
+
+        let mount_prefix = if mount_info.path == "/" {
+            String::new()
+        } else {
+            mount_info.path.clone()
+        };
+
+        let mut entries = mount_info
+            .fs
+            .tree_directory(&rel_path, show_hidden, node_limit, level_limit)
+            .await?;
+
+        for entry in &mut entries {
+            if !mount_prefix.is_empty() {
+                entry.path = if entry.path == "/" {
+                    mount_prefix.clone()
+                } else {
+                    format!("{}{}", mount_prefix, entry.path)
+                };
+            }
+        }
+
+        Ok(entries)
+    }
 }
 
 #[cfg(test)]
@@ -383,12 +416,21 @@ mod tests {
     // Mock filesystem for testing
     struct MockFS {
         name: String,
+        tree_entries: Vec<TreeEntry>,
     }
 
     impl MockFS {
         fn new(name: &str) -> Self {
             Self {
                 name: name.to_string(),
+                tree_entries: vec![],
+            }
+        }
+
+        fn with_tree_entries(name: &str, entries: Vec<TreeEntry>) -> Self {
+            Self {
+                name: name.to_string(),
+                tree_entries: entries,
             }
         }
     }
@@ -456,17 +498,36 @@ mod tests {
             out.add_match(path.to_string(), 1, pattern.to_string());
             Ok(out)
         }
+
+        async fn tree_directory(
+            &self,
+            _path: &str,
+            _show_hidden: bool,
+            _node_limit: Option<usize>,
+            _level_limit: Option<usize>,
+        ) -> Result<Vec<TreeEntry>> {
+            Ok(self.tree_entries.clone())
+        }
     }
 
     // Mock plugin for testing
     struct MockPlugin {
         name: String,
+        tree_entries: Option<Vec<TreeEntry>>,
     }
 
     impl MockPlugin {
         fn new(name: &str) -> Self {
             Self {
                 name: name.to_string(),
+                tree_entries: None,
+            }
+        }
+
+        fn with_tree_entries(name: &str, entries: Vec<TreeEntry>) -> Self {
+            Self {
+                name: name.to_string(),
+                tree_entries: Some(entries),
             }
         }
     }
@@ -486,7 +547,14 @@ mod tests {
         }
 
         async fn initialize(&self, _config: PluginConfig) -> Result<Box<dyn FileSystem>> {
-            Ok(Box::new(MockFS::new(&self.name)))
+            if let Some(ref entries) = self.tree_entries {
+                Ok(Box::new(MockFS::with_tree_entries(
+                    &self.name,
+                    entries.clone(),
+                )))
+            } else {
+                Ok(Box::new(MockFS::new(&self.name)))
+            }
         }
 
         fn config_params(&self) -> &[super::super::types::ConfigParameter] {
@@ -768,5 +836,84 @@ mod tests {
         assert_eq!(result.matches[0].file, "/a.txt");
         assert_eq!(result.matches[0].line, 1);
         assert_eq!(result.matches[0].content, "foo");
+    }
+
+    fn make_tree_entry(path: &str, rel_path: &str, name: &str, is_dir: bool) -> TreeEntry {
+        TreeEntry {
+            path: path.to_string(),
+            rel_path: rel_path.to_string(),
+            info: FileInfo {
+                name: name.to_string(),
+                size: if is_dir { 0 } else { 100 },
+                mode: if is_dir { 0o755 } else { 0o644 },
+                mod_time: std::time::UNIX_EPOCH,
+                is_dir,
+            },
+            extra: HashMap::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_tree_directory_no_mount_returns_error() {
+        let mfs = MountableFS::new();
+        let result = mfs
+            .tree_directory("/nonexistent/subdir", false, None, None)
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_tree_directory_path_rewriting() {
+        let mfs = MountableFS::new();
+        let plugin = MockPlugin::with_tree_entries(
+            "rewrite",
+            vec![make_tree_entry(
+                "/sub/file.txt",
+                "sub/file.txt",
+                "file.txt",
+                false,
+            )],
+        );
+        mfs.register_plugin(plugin).await;
+        mfs.mount(PluginConfig {
+            name: "rewrite".to_string(),
+            mount_path: "/rewrite".to_string(),
+            params: HashMap::new(),
+        })
+        .await
+        .unwrap();
+
+        let result = mfs
+            .tree_directory("/rewrite/sub", false, None, None)
+            .await
+            .unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].path, "/rewrite/sub/file.txt");
+        assert_eq!(result[0].rel_path, "sub/file.txt");
+    }
+
+    #[tokio::test]
+    async fn test_tree_directory_rel_path_unchanged_by_routing() {
+        let mfs = MountableFS::new();
+        let plugin = MockPlugin::with_tree_entries(
+            "relpath",
+            vec![make_tree_entry("/a/b/c.txt", "a/b/c.txt", "c.txt", false)],
+        );
+        mfs.register_plugin(plugin).await;
+        mfs.mount(PluginConfig {
+            name: "relpath".to_string(),
+            mount_path: "/local/test_account".to_string(),
+            params: HashMap::new(),
+        })
+        .await
+        .unwrap();
+
+        let result = mfs
+            .tree_directory("/local/test_account/a", false, None, None)
+            .await
+            .unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].path, "/local/test_account/a/b/c.txt");
+        assert_eq!(result[0].rel_path, "a/b/c.txt");
     }
 }

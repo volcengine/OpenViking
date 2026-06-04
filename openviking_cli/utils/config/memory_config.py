@@ -10,7 +10,7 @@ class MemoryConfig(BaseModel):
 
     version: str = Field(
         default="v2",
-        description="Memory implementation version: 'v1' (legacy) or 'v2' (new templating system)",
+        description="Memory implementation version. Only 'v2' is supported.",
     )
     agent_scope_mode: str = Field(
         default="user+agent",
@@ -83,7 +83,15 @@ class MemoryConfig(BaseModel):
             "stateless deployments."
         ),
     )
-    enable_role_id_memory_isolate: bool = Field(
+    session_skill_extraction_enabled: bool = Field(
+        default=False,
+        description=(
+            "When enabled, session commit also extracts reusable skills from the archived "
+            "conversation and writes them into the agent skill directory. Disabled by "
+            "default."
+        ),
+    )
+    role_id_memory_isolation_enabled: bool = Field(
         default=False,
         description=(
             "When enabled, memory extraction uses role_id from messages to determine "
@@ -115,6 +123,13 @@ class MemoryConfig(BaseModel):
     def validate_agent_scope_mode(cls, value: str) -> str:
         if value not in {"user+agent", "agent"}:
             raise ValueError("memory.agent_scope_mode must be 'user+agent' or 'agent'")
+        return value
+
+    @field_validator("version")
+    @classmethod
+    def validate_version(cls, value: str) -> str:
+        if value != "v2":
+            raise ValueError("memory.version only supports 'v2'; legacy memory v1 has been removed")
         return value
 
     @classmethod

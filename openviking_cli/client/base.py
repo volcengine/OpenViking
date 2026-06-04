@@ -264,9 +264,19 @@ class BaseClient(ABC):
 
     @abstractmethod
     async def commit_session(
-        self, session_id: str, telemetry: TelemetryRequest = False
+        self,
+        session_id: str,
+        telemetry: TelemetryRequest = False,
+        *,
+        keep_recent_count: int = 0,
     ) -> Dict[str, Any]:
-        """Commit a session (archive and extract memories)."""
+        """Commit a session (archive and extract memories).
+
+        Args:
+            session_id: Session ID
+            telemetry: Whether to attach operation telemetry data to the result.
+            keep_recent_count: Number of recent live messages to retain after commit.
+        """
         ...
 
     @abstractmethod
@@ -292,6 +302,26 @@ class BaseClient(ABC):
             telemetry: Whether to attach operation telemetry data to the result.
 
         If both content and parts are provided, parts takes precedence.
+        """
+        ...
+
+    @abstractmethod
+    async def batch_add_messages(
+        self,
+        session_id: str,
+        messages: list[dict],
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Add multiple messages to a session in a single request.
+
+        Args:
+            session_id: Session ID
+            messages: List of message dicts, each with "role" and optionally
+                      "content", "parts", "created_at", "role_id".
+            telemetry: Whether to attach operation telemetry data to the result.
+
+        Returns:
+            Result dict with session_id, message_count, and added count.
         """
         ...
 

@@ -61,8 +61,10 @@ class IntentAnalyzer:
             target_abstract,
         )
 
-        # Call LLM
-        response = await get_openviking_config().vlm.get_completion_async(prompt)
+        # Call the lightweight query planner when configured; otherwise keep using VLM.
+        config = get_openviking_config()
+        query_planner = config.get_query_planner()
+        response = await query_planner.get_completion_async(prompt)
 
         # Parse result
         parsed = parse_json_from_response(response)

@@ -21,6 +21,8 @@ from .base import CollectionAdapter
 class VolcengineCollectionAdapter(CollectionAdapter):
     """Adapter for Volcengine-hosted VikingDB."""
 
+    _DATA_BATCH_SIZE = 100
+
     def __init__(
         self,
         *,

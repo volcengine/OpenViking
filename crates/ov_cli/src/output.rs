@@ -1,6 +1,9 @@
 use serde::Serialize;
-use serde_json::json;
+use serde_json::{Value, json};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+use crate::theme;
+use colored::Colorize;
 
 const MAX_COL_WIDTH: usize = 256;
 
@@ -22,7 +25,7 @@ impl From<&str> for OutputFormat {
 pub fn output_success<T: Serialize>(result: T, format: OutputFormat, compact: bool) {
     if matches!(format, OutputFormat::Json) {
         if compact {
-            println!("{}", json!({ "ok": true, "result": result }));
+            println!("{}", compact_success_value(result));
         } else {
             println!(
                 "{}",
@@ -32,6 +35,29 @@ pub fn output_success<T: Serialize>(result: T, format: OutputFormat, compact: bo
     } else {
         print_table(result, compact);
     }
+}
+
+fn compact_success_value<T: Serialize>(result: T) -> Value {
+    let mut obj = match serde_json::to_value(result).unwrap_or(Value::Null) {
+        Value::Object(obj) => obj,
+        value => return json!({ "ok": true, "result": value }),
+    };
+
+    let Some(profile) = obj.remove("profile") else {
+        return json!({ "ok": true, "result": Value::Object(obj) });
+    };
+
+    let result = if obj.len() == 1 && obj.contains_key("result") {
+        obj.remove("result").unwrap_or(Value::Null)
+    } else {
+        Value::Object(obj)
+    };
+
+    if profile.is_null() {
+        return json!({ "ok": true, "result": result });
+    }
+
+    json!({ "status": "ok", "result": result, "profile": profile })
 }
 
 #[allow(dead_code)]
@@ -48,7 +74,12 @@ pub fn output_error(code: &str, message: &str, format: OutputFormat, compact: bo
             })
         );
     } else {
-        eprintln!("ERROR[{}]: {}", code, message);
+        eprintln!(
+            "{}[{}]: {}",
+            theme::error("ERROR").bold(),
+            theme::error(code),
+            theme::body(message)
+        );
     }
 }
 
@@ -71,7 +102,7 @@ fn print_table<T: Serialize>(result: T, compact: bool) {
 
     // Handle string result
     if let Some(s) = value.as_str() {
-        println!("{}", s);
+        println!("{}", theme::body(s));
         return;
     }
 
@@ -83,7 +114,7 @@ fn print_table<T: Serialize>(result: T, compact: bool) {
                 return;
             }
         } else {
-            println!("(empty)");
+            println!("{}", theme::muted("(empty)"));
             return;
         }
     }
@@ -92,12 +123,12 @@ fn print_table<T: Serialize>(result: T, compact: bool) {
     if let Some(obj) = value.as_object() {
         if !obj.is_empty() {
             if let Some(rendered) = render_session_context(obj, compact) {
-                println!("{}", rendered);
+                println!("{}", append_profile_section(rendered, obj));
                 return;
             }
 
             if let Some(rendered) = render_session_archive(obj, compact) {
-                println!("{}", rendered);
+                println!("{}", append_profile_section(rendered, obj));
                 return;
             }
 
@@ -113,7 +144,10 @@ fn print_table<T: Serialize>(result: T, compact: bool) {
                 };
                 let name = obj["name"].as_str().unwrap_or("");
                 let status = obj["status"].as_str().unwrap_or("");
-                println!("[{}] ({})\n{}", name, health, status);
+                println!(
+                    "{}",
+                    append_profile_section(render_component_status(name, health, status), obj)
+                );
                 return;
             }
 
@@ -135,17 +169,30 @@ fn print_table<T: Serialize>(result: T, compact: bool) {
                 } else {
                     "unhealthy"
                 };
-                lines.push(format!("[system] ({})", health));
+                lines.push(format!(
+                    "{} {}",
+                    theme::heading("[system]").bold(),
+                    style_health_label(health)
+                ));
                 if let Some(errors) = obj.get("errors") {
                     if let Some(err_list) = errors.as_array() {
                         let error_strs: Vec<&str> =
                             err_list.iter().filter_map(|e| e.as_str()).collect();
                         if !error_strs.is_empty() {
-                            lines.push(format!("Errors: {}", error_strs.join(", ")));
+                            lines.push(format!(
+                                "{} {}",
+                                theme::error("Errors:").bold(),
+                                theme::body(error_strs.join(", "))
+                            ));
                         }
                     }
                 }
-                println!("{}", lines.join("\n"));
+                println!("{}", append_profile_section(lines.join("\n"), obj));
+                return;
+            }
+
+            if let Some(rendered) = value_to_table_with_profile(&value, compact) {
+                println!("{}", rendered);
                 return;
             }
 
@@ -154,6 +201,9 @@ fn print_table<T: Serialize>(result: T, compact: bool) {
             let mut prim_lists: Vec<(String, &Vec<serde_json::Value>)> = Vec::new();
 
             for (key, val) in obj {
+                if key == "profile" {
+                    continue;
+                }
                 if let Some(arr) = val.as_array() {
                     if !arr.is_empty() {
                         if arr.iter().all(|item| item.is_object()) {
@@ -185,7 +235,7 @@ fn print_table<T: Serialize>(result: T, compact: bool) {
                     rows.push(serde_json::Value::Object(row));
                 }
                 if let Some(table) = format_array_to_table(&rows, compact) {
-                    println!("{}", table);
+                    println!("{}", append_profile_section(table, obj));
                     return;
                 }
             }
@@ -194,7 +244,7 @@ fn print_table<T: Serialize>(result: T, compact: bool) {
             if dict_lists.len() == 1 && prim_lists.is_empty() {
                 let (_key, items) = &dict_lists[0];
                 if let Some(table) = format_array_to_table(items, compact) {
-                    println!("{}", table);
+                    println!("{}", append_profile_section(table, obj));
                     return;
                 }
             }
@@ -222,7 +272,7 @@ fn print_table<T: Serialize>(result: T, compact: bool) {
                 }
                 if !merged.is_empty() {
                     if let Some(table) = format_array_to_table(&merged, compact) {
-                        println!("{}", table);
+                        println!("{}", append_profile_section(table, obj));
                         return;
                     }
                 }
@@ -240,13 +290,20 @@ fn print_table<T: Serialize>(result: T, compact: bool) {
 
                 let mut output = String::new();
                 for (k, v) in obj {
+                    if k == "profile" {
+                        continue;
+                    }
                     let is_uri = k == "uri";
                     let formatted_value = format_value(v);
                     let (content, _) = truncate_string(&formatted_value, is_uri, MAX_COL_WIDTH);
                     let padded_key = pad_cell(k, max_key_width, false);
-                    output.push_str(&format!("{}  {}\n", padded_key, content));
+                    output.push_str(&format!(
+                        "{}  {}\n",
+                        theme::muted(padded_key),
+                        style_table_value(&content, is_uri)
+                    ));
                 }
-                println!("{}", output);
+                println!("{}", append_profile_section(output, obj));
                 return;
             }
         }
@@ -261,6 +318,84 @@ fn print_table<T: Serialize>(result: T, compact: bool) {
             serde_json::to_string_pretty(&result).unwrap_or_default()
         );
     }
+}
+
+fn value_to_table_with_profile(value: &serde_json::Value, compact: bool) -> Option<String> {
+    let obj = value.as_object()?;
+    let rendered = if let Some(rendered) = value_to_table(value, compact) {
+        rendered
+    } else {
+        let max_key_width = obj
+            .keys()
+            .filter(|k| k.as_str() != "profile")
+            .map(|k| k.width())
+            .max()
+            .unwrap_or(0)
+            .min(MAX_COL_WIDTH);
+
+        let mut output = String::new();
+        for (k, v) in obj {
+            if k == "profile" {
+                continue;
+            }
+            let is_uri = k == "uri";
+            let formatted_value = format_value(v);
+            let (content, _) = truncate_string(&formatted_value, is_uri, MAX_COL_WIDTH);
+            let padded_key = pad_cell(k, max_key_width, false);
+            output.push_str(&format!("{}  {}\n", padded_key, content));
+        }
+        output
+    };
+    Some(append_profile_section(rendered, obj))
+}
+
+fn append_profile_section(
+    rendered: String,
+    obj: &serde_json::Map<String, serde_json::Value>,
+) -> String {
+    let Some(profile) = obj.get("profile").and_then(|v| v.as_array()) else {
+        return rendered;
+    };
+    if profile.is_empty() {
+        return rendered;
+    }
+
+    let lines: Vec<String> = profile
+        .iter()
+        .map(|line| match line {
+            serde_json::Value::String(s) => s.clone(),
+            other => format_value(other),
+        })
+        .collect();
+    if lines.is_empty() {
+        return rendered;
+    }
+
+    let mut out = rendered.trim_end_matches('\n').to_string();
+    out.push_str("\n\nprofile\n");
+    out.push_str(&lines.join("\n"));
+    out.push('\n');
+    out
+}
+
+pub fn render_profiled_scalar_result(value: &serde_json::Value) -> Option<String> {
+    let obj = value.as_object()?;
+    let result = obj.get("result")?.as_str()?;
+    Some(append_profile_section(result.to_string(), obj))
+}
+
+pub fn append_profile_to_rendered(rendered: String, value: &serde_json::Value) -> String {
+    let Some(obj) = value.as_object() else {
+        return rendered;
+    };
+    append_profile_section(rendered, obj)
+}
+
+pub fn render_table_with_optional_profile(
+    value: &serde_json::Value,
+    compact: bool,
+) -> Option<String> {
+    value_to_table_with_profile(value, compact)
 }
 
 fn value_to_table(value: &serde_json::Value, compact: bool) -> Option<String> {
@@ -282,7 +417,7 @@ fn value_to_table(value: &serde_json::Value, compact: bool) -> Option<String> {
             };
             let name = obj["name"].as_str().unwrap_or("");
             let status = obj["status"].as_str().unwrap_or("");
-            return Some(format!("[{}] ({})\n{}", name, health, status));
+            return Some(render_component_status(name, health, status));
         }
 
         // Extract list fields
@@ -290,6 +425,9 @@ fn value_to_table(value: &serde_json::Value, compact: bool) -> Option<String> {
         let mut prim_lists: Vec<(String, &Vec<serde_json::Value>)> = Vec::new();
 
         for (key, val) in obj {
+            if key == "profile" {
+                continue;
+            }
             if let Some(arr) = val.as_array() {
                 if !arr.is_empty() {
                     if arr.iter().all(|item| item.is_object()) {
@@ -598,8 +736,8 @@ fn summarize_message_content(parts: Option<&Vec<serde_json::Value>>) -> String {
 }
 
 struct ColumnInfo {
-    max_width: usize,    // Max width for alignment (capped at 120)
-    is_numeric: bool,    // True if all values in column are numeric
+    max_width: usize,          // Max width for alignment (capped at 120)
+    is_numeric: bool,          // True if all values in column are numeric
     is_unbounded_column: bool, // True if column should respect server-side length
 }
 
@@ -614,7 +752,7 @@ fn format_array_to_table(items: &Vec<serde_json::Value>, compact: bool) -> Optio
         let mut output = String::new();
         for item in items {
             let (content, _) = truncate_string(&format_value(item), false, MAX_COL_WIDTH);
-            output.push_str(&format!("{}\n", content));
+            output.push_str(&format!("{}\n", theme::body(content)));
         }
         return Some(output);
     }
@@ -702,7 +840,11 @@ fn format_array_to_table(items: &Vec<serde_json::Value>, compact: bool) -> Optio
     let header_cells: Vec<String> = keys
         .iter()
         .enumerate()
-        .map(|(i, k)| pad_cell(k, column_info[i].max_width, false))
+        .map(|(i, k)| {
+            theme::heading(pad_cell(k, column_info[i].max_width, false))
+                .bold()
+                .to_string()
+        })
         .collect();
     output.push_str(&header_cells.join("  "));
     output.push('\n');
@@ -720,13 +862,15 @@ fn format_array_to_table(items: &Vec<serde_json::Value>, compact: bool) -> Optio
                     let (content, skip_padding) =
                         truncate_string(&value, info.is_unbounded_column, info.max_width);
 
-                    if skip_padding {
+                    let padded = if skip_padding {
                         // Long URI, output as-is without padding
                         content
                     } else {
                         // Normal cell, apply padding and alignment
                         pad_cell(&content, info.max_width, info.is_numeric)
-                    }
+                    };
+
+                    style_table_value(&padded, info.is_unbounded_column).to_string()
                 })
                 .collect();
 
@@ -736,6 +880,66 @@ fn format_array_to_table(items: &Vec<serde_json::Value>, compact: bool) -> Optio
     }
 
     Some(output)
+}
+
+fn render_component_status(name: &str, health: &str, status: &str) -> String {
+    format!(
+        "{} {}\n{}",
+        theme::heading(format!("[{name}]")).bold(),
+        style_health_label(health),
+        theme::body(status)
+    )
+}
+
+fn style_health_label(value: &str) -> String {
+    let styled = match value.to_ascii_lowercase().as_str() {
+        "healthy" | "ok" | "true" => theme::success(value).bold(),
+        "unhealthy" | "error" | "false" => theme::error(value).bold(),
+        _ => theme::warning(value).bold(),
+    };
+    format!("({styled})")
+}
+
+fn style_table_value(value: &str, is_uri: bool) -> String {
+    let trimmed = value.trim();
+    if is_uri
+        || trimmed.starts_with("http://")
+        || trimmed.starts_with("https://")
+        || trimmed.starts_with("~/")
+    {
+        return theme::sky_value(value).bold().to_string();
+    }
+
+    match table_value_tone(trimmed) {
+        TableValueTone::Success => theme::success(value).bold().to_string(),
+        TableValueTone::Warning => theme::warning(value).bold().to_string(),
+        TableValueTone::Error => theme::error(value).bold().to_string(),
+        TableValueTone::Muted => theme::muted(value).to_string(),
+        TableValueTone::Body => theme::body(value).to_string(),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TableValueTone {
+    Success,
+    Warning,
+    Error,
+    Muted,
+    Body,
+}
+
+fn table_value_tone(trimmed: &str) -> TableValueTone {
+    match trimmed.to_ascii_lowercase().as_str() {
+        "healthy" | "ok" | "true" | "success" | "completed" | "done" | "connected" => {
+            TableValueTone::Success
+        }
+        "running" | "in_progress" | "in-progress" | "pending" | "queued" | "processing"
+        | "checking" | "warning" => TableValueTone::Warning,
+        "unhealthy" | "failed" | "error" | "false" | "cancelled" | "canceled" | "timeout"
+        | "timed_out" | "unreachable" => TableValueTone::Error,
+        "unknown" | "null" | "(empty)" => TableValueTone::Muted,
+        _ => TableValueTone::Body,
+    }
 }
 
 fn format_value(v: &serde_json::Value) -> String {
@@ -805,6 +1009,7 @@ fn truncate_string(s: &str, is_unbounded: bool, max_width: usize) -> (String, bo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use colored::Colorize;
     use serde_json::json;
 
     #[test]
@@ -845,5 +1050,219 @@ mod tests {
         let (rendered, skip_padding) = truncate_string(&long_abstract, true, 10);
         assert_eq!(rendered, long_abstract);
         assert!(skip_padding);
+    }
+
+    #[test]
+    fn task_status_values_map_to_severity_tones() {
+        assert_eq!(table_value_tone("completed"), TableValueTone::Success);
+        assert_eq!(table_value_tone("done"), TableValueTone::Success);
+        assert_eq!(table_value_tone("connected"), TableValueTone::Success);
+
+        assert_eq!(table_value_tone("running"), TableValueTone::Warning);
+        assert_eq!(table_value_tone("pending"), TableValueTone::Warning);
+        assert_eq!(table_value_tone("queued"), TableValueTone::Warning);
+        assert_eq!(table_value_tone("processing"), TableValueTone::Warning);
+
+        assert_eq!(table_value_tone("failed"), TableValueTone::Error);
+        assert_eq!(table_value_tone("cancelled"), TableValueTone::Error);
+        assert_eq!(table_value_tone("unreachable"), TableValueTone::Error);
+
+        assert_eq!(table_value_tone("unknown"), TableValueTone::Muted);
+        assert_eq!(table_value_tone("task-1"), TableValueTone::Body);
+    }
+
+    #[test]
+    fn rendered_status_column_uses_severity_colors() {
+        let rows = vec![json!({
+            "task_id": "task-1",
+            "status": "running"
+        })];
+
+        colored::control::set_override(true);
+        let rendered = format_array_to_table(&rows, true).expect("table should render");
+        let expected = theme::warning("running").bold().to_string();
+        colored::control::unset_override();
+
+        assert!(
+            rendered.contains(&expected),
+            "rendered table should color the running status: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn test_profile_section_is_preserved_for_table_objects_with_list_payloads() {
+        let value = json!({
+            "items": [
+                {"id": "1", "name": "alpha"},
+                {"id": "2", "name": "beta"}
+            ],
+            "profile": [
+                "line one",
+                "line two"
+            ]
+        });
+
+        let rendered = value_to_table_with_profile(&value, true).map(|value| strip_ansi(&value));
+
+        assert_eq!(
+            rendered,
+            Some(
+                [
+                    "id  name ",
+                    " 1  alpha",
+                    " 2  beta ",
+                    "",
+                    "profile",
+                    "line one",
+                    "line two",
+                    "",
+                ]
+                .join("\n")
+            )
+        );
+    }
+
+    fn strip_ansi(input: &str) -> String {
+        let mut output = String::with_capacity(input.len());
+        let mut chars = input.chars().peekable();
+
+        while let Some(ch) = chars.next() {
+            if ch == '\u{1b}' && chars.peek() == Some(&'[') {
+                chars.next();
+                for next in chars.by_ref() {
+                    if next.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+                continue;
+            }
+            output.push(ch);
+        }
+
+        output
+    }
+
+    #[test]
+    fn test_compact_json_lifts_profile_next_to_result_for_list_payloads() {
+        let value = json!({
+            "result": [
+                {"id": "1", "name": "alpha"}
+            ],
+            "profile": [
+                "line one"
+            ]
+        });
+
+        let rendered = compact_success_value(value);
+
+        assert_eq!(
+            rendered,
+            json!({
+                "status": "ok",
+                "result": [
+                    {"id": "1", "name": "alpha"}
+                ],
+                "profile": [
+                    "line one"
+                ]
+            })
+        );
+    }
+
+    #[test]
+    fn test_compact_json_lifts_profile_next_to_result_for_object_payloads() {
+        let value = json!({
+            "healthy": true,
+            "version": "0.1.x",
+            "profile": [
+                "line one"
+            ]
+        });
+
+        let rendered = compact_success_value(value);
+
+        assert_eq!(
+            rendered,
+            json!({
+                "status": "ok",
+                "result": {
+                    "healthy": true,
+                    "version": "0.1.x"
+                },
+                "profile": [
+                    "line one"
+                ]
+            })
+        );
+    }
+
+    #[test]
+    fn test_compact_json_treats_null_profile_as_absent() {
+        let value = json!({
+            "result": [
+                {"id": "1", "name": "alpha"}
+            ],
+            "profile": null
+        });
+
+        let rendered = compact_success_value(value.clone());
+
+        assert_eq!(
+            rendered,
+            json!({
+                "ok": true,
+                "result": [
+                    {"id": "1", "name": "alpha"}
+                ]
+            })
+        );
+    }
+
+    #[test]
+    fn test_profile_section_is_not_duplicated_for_plain_object_output() {
+        let value = json!({
+            "healthy": true,
+            "version": "0.1.x",
+            "profile": [
+                "line one",
+                "line two"
+            ]
+        });
+
+        let rendered = value_to_table_with_profile(&value, true);
+
+        assert_eq!(
+            rendered,
+            Some(
+                [
+                    "healthy  true",
+                    "version  0.1.x",
+                    "",
+                    "profile",
+                    "line one",
+                    "line two",
+                    "",
+                ]
+                .join("\n")
+            )
+        );
+    }
+
+    #[test]
+    fn test_render_profiled_scalar_result_appends_profile_section() {
+        let value = json!({
+            "result": "content",
+            "profile": [
+                "line one",
+                "line two"
+            ]
+        });
+
+        let rendered = render_profiled_scalar_result(&value);
+
+        assert_eq!(
+            rendered,
+            Some(["content", "", "profile", "line one", "line two", "",].join("\n"))
+        );
     }
 }

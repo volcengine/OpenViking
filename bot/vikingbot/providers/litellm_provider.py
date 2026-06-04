@@ -335,7 +335,7 @@ class LiteLLMProvider(LLMProvider):
                     pass
             # Return error as content for graceful handling
             return LLMResponse(
-                content=f"Error calling LLM: {str(e)}",
+                content=f"Error calling LLM in LiteLLM: {str(e)}",
                 finish_reason="error",
             )
 

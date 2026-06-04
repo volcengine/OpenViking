@@ -166,6 +166,126 @@ if [ "$AUTO_COMMIT" = "true" ]; then
 fi
 GIT_COMMIT_ID=$(git rev-parse --short HEAD)
 TIMESTAMP=$(date +%Y%m%d%H%M%S)
+IMPORT_SUCCESS_CSV="./result/import_success.csv"
+IMPORT_ROW_START=0
+IMPORT_PERFORMED=false
+
+count_import_rows() {
+    IMPORT_SUCCESS_CSV="$IMPORT_SUCCESS_CSV" "$PYTHON_BIN" - <<'PY'
+import csv
+import os
+from pathlib import Path
+
+path = Path(os.environ["IMPORT_SUCCESS_CSV"])
+if not path.exists():
+    print(0)
+else:
+    with open(path, "r", encoding="utf-8", newline="") as f:
+        print(sum(1 for _ in csv.DictReader(f)))
+PY
+}
+
+capture_import_row_start() {
+    IMPORT_ROW_START=$(count_import_rows)
+    IMPORT_PERFORMED=false
+}
+
+print_import_summary_table() {
+    if [ "$SKIP_IMPORT" = "true" ] || [ "$IMPORT_PERFORMED" != "true" ]; then
+        return
+    fi
+
+    echo ""
+    IMPORT_SUCCESS_CSV="$IMPORT_SUCCESS_CSV" IMPORT_ROW_START="$IMPORT_ROW_START" "$PYTHON_BIN" - <<'PY'
+import csv
+import os
+from pathlib import Path
+
+
+def to_int(value: str) -> int:
+    try:
+        return int(float(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def to_float(value: str) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def render_table(headers: list[str], rows: list[list[str]], align_right: set[int] | None = None) -> str:
+    align_right = align_right or set()
+    widths = [len(header) for header in headers]
+    for row in rows:
+        for i, cell in enumerate(row):
+            widths[i] = max(widths[i], len(cell))
+
+    def format_row(row: list[str]) -> str:
+        cells = []
+        for i, cell in enumerate(row):
+            cells.append(cell.rjust(widths[i]) if i in align_right else cell.ljust(widths[i]))
+        return "| " + " | ".join(cells) + " |"
+
+    sep = "+-" + "-+-".join("-" * width for width in widths) + "-+"
+    lines = [sep, format_row(headers), sep]
+    for row in rows:
+        lines.append(format_row(row))
+    lines.append(sep)
+    return "\n".join(lines)
+
+
+path = Path(os.environ["IMPORT_SUCCESS_CSV"])
+start = int(os.environ.get("IMPORT_ROW_START", "0"))
+print("=== Import Summary ===")
+if not path.exists():
+    print("No import success CSV found.")
+    raise SystemExit(0)
+
+with open(path, "r", encoding="utf-8", newline="") as f:
+    rows = list(csv.DictReader(f))
+
+rows = rows[start:]
+if not rows:
+    print("No new import records were written in this run.")
+    raise SystemExit(0)
+
+totals = {
+    "sessions": len(rows),
+    "embedding_tokens": 0,
+    "vlm_tokens": 0,
+    "cache_tokens": 0,
+    "reasoning_tokens": 0,
+    "llm_output_tokens": 0,
+    "total_tokens": 0,
+    "duration_seconds": 0.0,
+}
+for row in rows:
+    totals["embedding_tokens"] += to_int(row.get("embedding_tokens"))
+    totals["vlm_tokens"] += to_int(row.get("vlm_tokens"))
+    totals["cache_tokens"] += to_int(row.get("cache_tokens"))
+    totals["reasoning_tokens"] += to_int(row.get("reasoning_tokens"))
+    totals["llm_output_tokens"] += to_int(row.get("llm_output_tokens"))
+    totals["total_tokens"] += to_int(row.get("total_tokens"))
+    totals["duration_seconds"] += to_float(row.get("duration_seconds"))
+
+avg_duration = totals["duration_seconds"] / totals["sessions"] if totals["sessions"] else 0.0
+summary_rows = [
+    ["sessions", str(totals["sessions"])],
+    ["embedding_tokens", str(totals["embedding_tokens"])],
+    ["vlm_tokens", str(totals["vlm_tokens"])],
+    ["cache_tokens", str(totals["cache_tokens"])],
+    ["reasoning_tokens", str(totals["reasoning_tokens"])],
+    ["llm_output_tokens", str(totals["llm_output_tokens"])],
+    ["total_tokens", str(totals["total_tokens"])],
+    ["total_duration_s", f"{totals['duration_seconds']:.3f}"],
+    ["avg_duration_s", f"{avg_duration:.3f}"],
+]
+print(render_table(["metric", "value"], summary_rows, align_right={1}))
+PY
+}
 
 # ========== 重跑错题模式（优先） ==========
 if [ -n "$RETRY_WRONG" ]; then
@@ -185,6 +305,7 @@ if [ -n "$RETRY_WRONG" ]; then
 
     # 从错题 CSV 中提取需要导入的对话（复用 import_to_ov.py 的并行逻辑）
     echo "[1/3] 导入错题相关对话..."
+    capture_import_row_start
     "$PYTHON_BIN" "$SCRIPT_DIR/import_to_ov.py" \
         --input "$INPUT_FILE" \
         --retry-wrong "$RETRY_WRONG" \
@@ -192,6 +313,7 @@ if [ -n "$RETRY_WRONG" ]; then
         --account "$ACCOUNT" \
         --openviking-url "$OPENVIKING_URL" \
         "${COMMON_OPTS[@]}"
+    IMPORT_PERFORMED=true
 
     echo "等待数据处理完成..."
     sleep 30
@@ -203,6 +325,7 @@ if [ -n "$RETRY_WRONG" ]; then
         --output "$RESULT_FILE" \
         --retry-wrong "$RETRY_WRONG" \
         --threads 20 \
+        --config "$OPENVIKING_CONFIG_FILE" \
         "${COMMON_OPTS[@]}"
 
     # 裁判打分
@@ -211,6 +334,7 @@ if [ -n "$RETRY_WRONG" ]; then
 
     # 统计结果
     "$PYTHON_BIN" "$SCRIPT_DIR/stat_judge_result.py" --input "$RESULT_FILE"
+    print_import_summary_table
 
     echo ""
     echo "=== 错题重跑完成 ==="
@@ -233,14 +357,16 @@ if [ -z "$SAMPLE" ]; then
         echo "[1/4] 跳过导入数据..."
     else
         echo "[1/4] 导入数据..."
+        capture_import_row_start
         "$PYTHON_BIN" "$SCRIPT_DIR/import_to_ov.py" --input "$INPUT_FILE" --force-ingest --account "$ACCOUNT" --openviking-url "$OPENVIKING_URL" "${COMMON_OPTS[@]}"
+        IMPORT_PERFORMED=true
         echo "等待 1 分钟..."
         sleep 60
     fi
 
     # 评估
     echo "[2/4] 评估..."
-    "$PYTHON_BIN" "$SCRIPT_DIR/run_eval.py" "$INPUT_FILE" --output "$RESULT_FILE" "${COMMON_OPTS[@]}"
+    "$PYTHON_BIN" "$SCRIPT_DIR/run_eval.py" "$INPUT_FILE" --output "$RESULT_FILE" --config "$OPENVIKING_CONFIG_FILE" "${COMMON_OPTS[@]}"
 
     # 裁判打分
     echo "[3/4] 裁判打分..."
@@ -249,6 +375,7 @@ if [ -z "$SAMPLE" ]; then
     # 计算结果
     echo "[4/4] 计算结果..."
     "$PYTHON_BIN" "$SCRIPT_DIR/stat_judge_result.py" --input "$RESULT_FILE"
+    print_import_summary_table
 
     echo ""
     echo "=== 全量评测完成 ==="
@@ -299,6 +426,7 @@ if [ -n "$QUESTION_INDEX" ]; then
         echo "[1/3] Skipping import (--skip-import)"
     else
         echo "[1/3] Importing sample $SAMPLE_INDEX, question $QUESTION_INDEX..."
+        capture_import_row_start
         "$PYTHON_BIN" "$SCRIPT_DIR/import_to_ov.py" \
             --input "$INPUT_FILE" \
             --sample "$SAMPLE_INDEX" \
@@ -307,6 +435,7 @@ if [ -n "$QUESTION_INDEX" ]; then
             --account "$ACCOUNT" \
             --openviking-url "$OPENVIKING_URL" \
             "${COMMON_OPTS[@]}"
+        IMPORT_PERFORMED=true
 
         echo "Waiting for data processing..."
         sleep 3
@@ -329,6 +458,7 @@ if [ -n "$QUESTION_INDEX" ]; then
         --question-index "$QUESTION_INDEX" \
         --count 1 \
         --output "$OUTPUT_FILE" \
+        --config "$OPENVIKING_CONFIG_FILE" \
         "${COMMON_OPTS[@]}"
 
     # 运行 Judge 评分
@@ -342,6 +472,7 @@ if [ -n "$QUESTION_INDEX" ]; then
     # 输出结果
     echo ""
     echo "=== 评测结果 ==="
+    print_import_summary_table
     OUTPUT_FILE="$OUTPUT_FILE" QUESTION_INDEX="$QUESTION_INDEX" "$PYTHON_BIN" - <<'PY'
 import csv
 import json
@@ -400,6 +531,7 @@ PY
         echo "[1/4] Skipping import (--skip-import)"
     else
         echo "[1/4] Importing all sessions for sample $SAMPLE_INDEX..."
+        capture_import_row_start
         "$PYTHON_BIN" "$SCRIPT_DIR/import_to_ov.py" \
             --input "$INPUT_FILE" \
             --sample "$SAMPLE_INDEX" \
@@ -407,6 +539,7 @@ PY
             --account "$ACCOUNT" \
             --openviking-url "$OPENVIKING_URL" \
             "${COMMON_OPTS[@]}"
+        IMPORT_PERFORMED=true
 
         echo "Waiting for data processing..."
         sleep 10
@@ -428,6 +561,7 @@ PY
         --sample "$SAMPLE_ID_FOR_CMD" \
         --output "$OUTPUT_FILE" \
         --threads 5 \
+        --config "$OPENVIKING_CONFIG_FILE" \
         "${COMMON_OPTS[@]}"
 
     # 运行 Judge 评分
@@ -445,6 +579,7 @@ PY
         echo "[4/4] Calculating statistics..."
     fi
     "$PYTHON_BIN" "$SCRIPT_DIR/stat_judge_result.py" --input "$OUTPUT_FILE"
+    print_import_summary_table
 
     echo ""
     echo "=== 批量评测完成 ==="

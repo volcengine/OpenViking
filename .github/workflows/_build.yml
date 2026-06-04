@@ -165,6 +165,13 @@ jobs:
         git config --global --add safe.directory "$GITHUB_WORKSPACE"
         git fetch --force --tags
 
+    - name: Set up Node.js for Studio build (Linux)
+      uses: actions/setup-node@v6
+      with:
+        node-version: '22'
+        cache: npm
+        cache-dependency-path: web-studio/package-lock.json
+
     - name: Build CPython (Dynamic Selection)
       run: |
         # Map short version to full version for our specific build environment
@@ -297,6 +304,7 @@ jobs:
         cd "$RUNNER_TEMP"
         "$PYTHON_BIN" - <<'PY'
         import importlib.util
+        from importlib.resources import files
 
         from openviking.pyagfs import get_binding_client
         import openviking.storage.vectordb.engine as engine
@@ -314,8 +322,13 @@ jobs:
         if backend_spec is None or backend_spec.origin is None:
             raise SystemExit(f"backend module {module_name} was not installed")
 
+        studio_index = files("openviking").joinpath("web_studio/dist/index.html")
+        if not studio_index.is_file():
+            raise SystemExit("Web Studio index.html was not installed")
+
         print(f"Imported backend module {module_name}")
         print(f"Backend module origin {backend_spec.origin}")
+        print(f"Bundled Web Studio index {studio_index}")
         PY
 
     - name: Store the distribution packages
@@ -385,6 +398,12 @@ jobs:
       uses: dtolnay/rust-toolchain@v1
       with:
         toolchain: stable
+    - name: Set up Node.js for Studio build
+      uses: actions/setup-node@v6
+      with:
+        node-version: '22'
+        cache: npm
+        cache-dependency-path: web-studio/package-lock.json
     - name: Install uv
       uses: astral-sh/setup-uv@v7
       with:
@@ -479,6 +498,7 @@ jobs:
         cd "$RUNNER_TEMP"
         python - <<'PY'
         import importlib.util
+        from importlib.resources import files
 
         from openviking.pyagfs import get_binding_client
         import openviking.storage.vectordb.engine as engine
@@ -496,8 +516,13 @@ jobs:
         if backend_spec is None or backend_spec.origin is None:
             raise SystemExit(f"backend module {module_name} was not installed")
 
+        studio_index = files("openviking").joinpath("web_studio/dist/index.html")
+        if not studio_index.is_file():
+            raise SystemExit("Web Studio index.html was not installed")
+
         print(f"Imported backend module {module_name}")
         print(f"Backend module origin {backend_spec.origin}")
+        print(f"Bundled Web Studio index {studio_index}")
         PY
 
     - name: Smoke test built wheel (Windows)
@@ -510,6 +535,7 @@ jobs:
         cd "$RUNNER_TEMP"
         python - <<'PY'
         import importlib.util
+        from importlib.resources import files
 
         import openviking.storage.vectordb.engine as engine
 
@@ -521,8 +547,13 @@ jobs:
         if backend_spec is None or backend_spec.origin is None:
             raise SystemExit(f"backend module {module_name} was not installed")
 
+        studio_index = files("openviking").joinpath("web_studio/dist/index.html")
+        if not studio_index.is_file():
+            raise SystemExit("Web Studio index.html was not installed")
+
         print(f"Imported backend module {module_name}")
         print(f"Backend module origin {backend_spec.origin}")
+        print(f"Bundled Web Studio index {studio_index}")
         PY
 
     - name: Store the distribution packages

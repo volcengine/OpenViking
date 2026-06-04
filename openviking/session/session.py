@@ -18,9 +18,17 @@ from openviking.message import Message, Part
 from openviking.message.part import ContextPart, TextPart, ToolPart
 from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.server.identity import RequestContext, Role
-from openviking.session.tool_result_store import ToolResultStore, make_preview, sha256_text
+from openviking.session.tool_result_synopsis import ToolResultSynopsis, generate_tool_result_synopsis
+from openviking.session.tool_result_store import (
+    ToolResultStore,
+    build_tool_result_id,
+    make_preview,
+    render_preview_from_synopsis,
+    sha256_text,
+)
 from openviking.telemetry import get_current_telemetry, tracer
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
+from openviking.utils.token_estimation import estimate_text_tokens
 from openviking.utils.time_utils import get_current_timestamp
 from openviking_cli.exceptions import FailedPreconditionError
 from openviking_cli.session.user_id import UserIdentifier
@@ -28,7 +36,7 @@ from openviking_cli.utils import get_logger, run_async
 from openviking_cli.utils.config import get_openviking_config
 
 if TYPE_CHECKING:
-    from openviking.session.compressor import SessionCompressor
+    from openviking.session.compressor_v2 import SessionCompressorV2 as SessionCompressor
     from openviking.storage import VikingDBManager
     from openviking.storage.viking_fs import VikingFS
 
@@ -187,6 +195,8 @@ class SessionMeta:
             "prompt_tokens": 0,
             "completion_tokens": 0,
             "total_tokens": 0,
+            "cached_tokens": 0,
+            "reasoning_tokens": 0,
         }
     )
     embedding_token_usage: Dict[str, int] = field(
@@ -258,6 +268,8 @@ class SessionMeta:
                 "prompt_tokens": llm_token_usage.get("prompt_tokens", 0),
                 "completion_tokens": llm_token_usage.get("completion_tokens", 0),
                 "total_tokens": llm_token_usage.get("total_tokens", 0),
+                "cached_tokens": llm_token_usage.get("cached_tokens", 0),
+                "reasoning_tokens": llm_token_usage.get("reasoning_tokens", 0),
             },
             embedding_token_usage={
                 "total_tokens": embedding_token_usage.get("total_tokens", 0),
@@ -581,6 +593,7 @@ class Session:
             sha256=sha256_text(output) if output else "",
             reason="source_read",
             original_chars=len(output),
+            mime_type=part.tool_output_mime_type or "text/plain",
         )
         part.tool_output = preview
         part.tool_output_ref = source_ref
@@ -608,6 +621,7 @@ class Session:
         reason: str,
         group_id: str,
         group_original_chars: int,
+        synopsis: Optional[ToolResultSynopsis] = None,
     ) -> None:
         store = self._tool_result_store()
         original_output = part.tool_output or ""
@@ -626,6 +640,7 @@ class Session:
                     created_at=msg.created_at,
                     preview_chars=preview_chars,
                     mime_type=part.tool_output_mime_type or "text/plain",
+                    synopsis=synopsis,
                 )
             )
         except Exception as exc:
@@ -644,6 +659,7 @@ class Session:
                     sha256=digest,
                     reason=f"{reason}:externalization_failed",
                     original_chars=len(original_output),
+                    mime_type=part.tool_output_mime_type or "text/plain",
                 )
                 part.tool_output_ref = ""
                 part.tool_output_truncated = True
@@ -654,14 +670,14 @@ class Session:
             return
 
         ref = stored.storage_uri
-        part.tool_output = make_preview(
-            original_output,
-            preview_chars=preview_chars,
+        part.tool_output = render_preview_from_synopsis(
+            stored.synopsis,
             ref=ref,
             tool_name=part.tool_name,
             sha256=digest,
             reason=reason,
             original_chars=len(original_output),
+            preview_chars=min(len(original_output), max(preview_chars, 0)),
         )
         part.tool_output_ref = ref
         part.tool_output_truncated = True
@@ -693,6 +709,9 @@ class Session:
         group_original_chars = sum(len(p.tool_output or "") for _, p in tool_parts)
         normal_indices: List[int] = []
         selected: set[int] = set()
+        externalized_preview_cache: Dict[
+            tuple[int, int, str], tuple[ToolResultSynopsis, int]
+        ] = {}
 
         for idx, (_msg, part) in enumerate(tool_parts):
             part.tool_output_group_id = group_id
@@ -711,13 +730,45 @@ class Session:
             if len(part.tool_output or "") > cfg.threshold_chars:
                 selected.add(idx)
 
+        def prepared_externalized_preview(
+            idx: int, part: ToolPart, preview_chars: int
+        ) -> tuple[ToolResultSynopsis, int]:
+            content = part.tool_output or ""
+            reason = "single_threshold" if len(content) > cfg.threshold_chars else "turn_budget"
+            cache_key = (idx, preview_chars, reason)
+            cached = externalized_preview_cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+            synopsis = generate_tool_result_synopsis(
+                content,
+                preview_chars=preview_chars,
+                tool_name=part.tool_name,
+                mime_type=part.tool_output_mime_type or "text/plain",
+            )
+            digest = sha256_text(content)
+            ref = f"{self._session_uri}/tool-results/{build_tool_result_id(part.tool_id, digest)}"
+            rendered = render_preview_from_synopsis(
+                synopsis,
+                ref=ref,
+                tool_name=part.tool_name,
+                sha256=digest,
+                reason=reason,
+                original_chars=len(content),
+                preview_chars=min(len(content), max(preview_chars, 0)),
+            )
+            prepared = (synopsis, len(rendered))
+            externalized_preview_cache[cache_key] = prepared
+            return prepared
+
         def projected_inline_chars(selected_indices: set[int]) -> int:
             preview_chars = self._effective_tool_preview_chars(cfg, len(selected_indices))
             total = 0
             for idx, (_, part) in enumerate(tool_parts):
                 output_len = len(part.tool_output or "")
                 if idx in selected_indices:
-                    total += min(output_len, preview_chars)
+                    _synopsis, rendered_len = prepared_externalized_preview(idx, part, preview_chars)
+                    total += rendered_len
                 else:
                     total += output_len
             return total
@@ -730,7 +781,17 @@ class Session:
         while (
             projected_inline_chars(selected) > cfg.assistant_turn_inline_budget_chars and remaining
         ):
-            selected.add(remaining.pop(0))
+            baseline = projected_inline_chars(selected)
+            chosen_pos = None
+            for pos, idx in enumerate(remaining):
+                candidate = set(selected)
+                candidate.add(idx)
+                if projected_inline_chars(candidate) < baseline:
+                    chosen_pos = pos
+                    break
+            if chosen_pos is None:
+                break
+            selected.add(remaining.pop(chosen_pos))
 
         preview_chars = self._effective_tool_preview_chars(cfg, len(selected))
         for idx in sorted(selected):
@@ -740,6 +801,7 @@ class Session:
                 if len(part.tool_output or "") > cfg.threshold_chars
                 else "turn_budget"
             )
+            synopsis, _rendered_len = prepared_externalized_preview(idx, part, preview_chars)
             self._externalize_tool_part(
                 msg,
                 part,
@@ -748,6 +810,7 @@ class Session:
                 reason=reason,
                 group_id=group_id,
                 group_original_chars=group_original_chars,
+                synopsis=synopsis,
             )
 
     def _externalize_large_tool_outputs(self, msg: Message) -> None:
@@ -758,34 +821,78 @@ class Session:
             role == "user" and len(parts) > 1 and all(isinstance(part, ToolPart) for part in parts)
         )
 
-    def _append_message(self, msg: Message) -> None:
-        self._messages.append(msg)
-        self._record_participant(msg)
+    def _append_messages(self, messages: List[Message]) -> None:
+        """Append multiple messages: update lists, stats, JSONL, meta."""
+        for msg in messages:
+            self._messages.append(msg)
+            self._record_participant(msg)
 
-        # Update statistics
-        if msg.role == "user":
-            self._stats.total_turns += 1
-        msg_tokens = int(msg.estimated_tokens or 0)
-        self._stats.total_tokens += msg_tokens
+            if msg.role == "user":
+                self._stats.total_turns += 1
+            msg_tokens = int(msg.estimated_tokens or 0)
+            self._stats.total_tokens += msg_tokens
 
-        # WM v2: maintain pending_tokens via sliding window.
-        # keep_recent_count == 0 (never-committed or compact path that chose 0):
-        #   every new message contributes to pending.
-        # keep_recent_count > 0:
-        #   only the message pushed OUT of the tail-keep window contributes.
-        keep = int(self._meta.keep_recent_count or 0)
-        if keep <= 0:
-            self._meta.pending_tokens += msg_tokens
-        elif len(self._messages) > keep:
-            pushed_out = self._messages[-(keep + 1)]
-            self._meta.pending_tokens += int(pushed_out.estimated_tokens or 0)
+            keep = int(self._meta.keep_recent_count or 0)
+            if keep <= 0:
+                self._meta.pending_tokens += msg_tokens
+            elif len(self._messages) > keep:
+                pushed_out = self._messages[-(keep + 1)]
+                self._meta.pending_tokens += int(pushed_out.estimated_tokens or 0)
 
-        self._append_to_jsonl(msg)
+        self._append_messages_to_jsonl_batch(messages)
 
         self._meta.message_count = len(self._messages)
         if self._meta.total_message_count is not None:
-            self._meta.total_message_count += 1
+            self._meta.total_message_count += len(messages)
         self._save_meta_sync()
+
+    def add_messages(
+        self,
+        messages_spec: List[dict],
+    ) -> List[Message]:
+        """Add multiple messages in a single batch.
+
+        Args:
+            messages_spec: List of dicts, each with keys:
+                role, parts, role_id (optional), created_at (optional)
+        """
+        all_messages = []
+        for i, spec in enumerate(messages_spec):
+            if "role" not in spec:
+                raise ValueError(f"messages_spec[{i}]: missing required key 'role'")
+            if "parts" not in spec:
+                raise ValueError(f"messages_spec[{i}]: missing required key 'parts'")
+            role = spec["role"]
+            parts = spec["parts"]
+            role_id = spec.get("role_id")
+            created_at = spec.get("created_at") or datetime.now(timezone.utc).isoformat()
+
+            if self._is_tool_result_aggregate(role, parts):
+                msgs = [
+                    Message(
+                        id=f"msg_{uuid4().hex}",
+                        role=role,
+                        parts=[part],
+                        role_id=role_id,
+                        created_at=created_at,
+                    )
+                    for part in parts
+                ]
+                self._externalize_large_tool_output_group(msgs)
+                all_messages.extend(msgs)
+            else:
+                msg = Message(
+                    id=f"msg_{uuid4().hex}",
+                    role=role,
+                    parts=parts,
+                    role_id=role_id,
+                    created_at=created_at,
+                )
+                self._externalize_large_tool_outputs(msg)
+                all_messages.append(msg)
+
+        self._append_messages(all_messages)
+        return all_messages
 
     def add_message(
         self,
@@ -799,33 +906,13 @@ class Session:
         A user message containing only multiple tool results is treated as a
         transport aggregate and stored as one message per tool result.
         """
-        created = created_at or datetime.now(timezone.utc).isoformat()
-        if self._is_tool_result_aggregate(role, parts):
-            messages = [
-                Message(
-                    id=f"msg_{uuid4().hex}",
-                    role=role,
-                    parts=[part],
-                    role_id=role_id,
-                    created_at=created,
-                )
-                for part in parts
-            ]
-            self._externalize_large_tool_output_group(messages)
-            for msg in messages:
-                self._append_message(msg)
-            return messages[0]
-
-        msg = Message(
-            id=f"msg_{uuid4().hex}",
-            role=role,
-            parts=parts,
-            role_id=role_id,
-            created_at=created,
-        )
-        self._externalize_large_tool_outputs(msg)
-        self._append_message(msg)
-        return msg
+        msgs = self.add_messages([{
+            "role": role,
+            "parts": parts,
+            "role_id": role_id,
+            "created_at": created_at,
+        }])
+        return msgs[0]
 
     def _record_participant(self, msg: Message) -> None:
         if msg.role == "user" and msg.role_id:
@@ -1122,6 +1209,7 @@ class Session:
         request_wait_tracker = get_request_wait_tracker()
 
         memories_extracted: Dict[str, int] = {}
+        extracted_skill_results: list[dict] = []
         active_count_updated = 0
         telemetry = OperationTelemetry(operation="session_commit_phase2", enabled=True)
         archive_index = self._archive_index_from_uri(archive_uri)
@@ -1200,8 +1288,8 @@ class Session:
                                 uri=f"{archive_uri}/.meta.json",
                                 content=json.dumps(
                                     {
-                                        "overview_tokens": -(-len(summary) // 4),
-                                        "abstract_tokens": -(-len(abstract) // 4),
+                                        "overview_tokens": estimate_text_tokens(summary),
+                                        "abstract_tokens": estimate_text_tokens(abstract),
                                     }
                                 ),
                                 ctx=self.ctx,
@@ -1209,34 +1297,56 @@ class Session:
 
                     # Summary generation, user memory and agent memory all run concurrently.
                     ov_config = get_openviking_config()
-                    if self._session_compressor and ov_config.memory.extraction_enabled:
+                    memory_extraction_enabled = ov_config.memory.extraction_enabled
+                    session_skill_extraction_enabled = (
+                        ov_config.memory.session_skill_extraction_enabled
+                    )
+                    if self._session_compressor and (
+                        memory_extraction_enabled or session_skill_extraction_enabled
+                    ):
                         logger.info(
-                            f"Starting memory extraction from {len(messages)} archived messages"
+                            "Starting post-commit extraction from %s archived messages",
+                            len(messages),
                         )
 
                         has_agent_memory = hasattr(
                             self._session_compressor, "extract_agent_memories"
                         )
 
-                        async def _noop_agent():
+                        async def _noop_list():
                             return []
 
-                        _results = await asyncio.gather(
-                            _run_archive_summary(),
-                            self._session_compressor.extract_long_term_memories(
+                        async def _noop_agent_result():
+                            return {"contexts": [], "session_skills": []}
+
+                        async def _run_long_term_memories():
+                            if not memory_extraction_enabled:
+                                return []
+                            return await self._session_compressor.extract_long_term_memories(
                                 messages=extraction_messages,
                                 user=self.user,
                                 session_id=self.session_id,
                                 ctx=self.ctx,
                                 latest_archive_overview=latest_archive_overview,
                                 archive_uri=archive_uri,
-                            ),
-                            self._session_compressor.extract_agent_memories(
+                            )
+
+                        async def _run_agent_memories():
+                            if not has_agent_memory:
+                                return {"contexts": [], "session_skills": []}
+                            if not (memory_extraction_enabled or session_skill_extraction_enabled):
+                                return {"contexts": [], "session_skills": []}
+                            return await self._session_compressor.extract_agent_memories(
                                 messages=extraction_messages,
                                 ctx=self.ctx,
+                                latest_archive_overview=latest_archive_overview,
+                                archive_uri=archive_uri,
                             )
-                            if has_agent_memory
-                            else _noop_agent(),
+
+                        _results = await asyncio.gather(
+                            _run_archive_summary(),
+                            _run_long_term_memories(),
+                            _run_agent_memories() if has_agent_memory else _noop_agent_result(),
                             return_exceptions=True,
                         )
                         summary_result, extracted_result, agent_result = _results
@@ -1251,7 +1361,7 @@ class Session:
                                 f"User memory extraction failed: {extracted_result}",
                                 exc_info=extracted_result,
                             )
-                            extracted = []
+                            raise extracted_result
                         else:
                             extracted = extracted_result
 
@@ -1261,15 +1371,18 @@ class Session:
                                 exc_info=agent_result,
                             )
                             agent_extracted = []
+                            session_skills = []
                         else:
-                            agent_extracted = agent_result
+                            agent_extracted = list(agent_result.get("contexts", []))
+                            session_skills = list(agent_result.get("session_skills", []))
 
-                        logger.info(f"Extracted {len(extracted)} memories")
-                        for ctx_item in extracted:
-                            cat = getattr(ctx_item, "category", "") or "unknown"
-                            memories_extracted[cat] = memories_extracted.get(cat, 0) + 1
-                        self._stats.memories_extracted += len(extracted)
-                        get_current_telemetry().set("memory.extracted", len(extracted))
+                        if memory_extraction_enabled:
+                            logger.info(f"Extracted {len(extracted)} memories")
+                            for ctx_item in extracted:
+                                cat = getattr(ctx_item, "category", "") or "unknown"
+                                memories_extracted[cat] = memories_extracted.get(cat, 0) + 1
+                            self._stats.memories_extracted += len(extracted)
+                            get_current_telemetry().set("memory.extracted", len(extracted))
 
                         if agent_extracted:
                             logger.info(f"Extracted {len(agent_extracted)} agent memories")
@@ -1277,10 +1390,15 @@ class Session:
                                 cat = getattr(ctx_item, "category", "") or "unknown"
                                 memories_extracted[cat] = memories_extracted.get(cat, 0) + 1
                             self._stats.memories_extracted += len(agent_extracted)
+                        if session_skills:
+                            logger.info(f"Extracted {len(session_skills)} session skills")
+                            extracted_skill_results = session_skills
                     else:
                         if self._session_compressor:
                             logger.info(
-                                "Memory extraction is disabled by config (memory.extraction_enabled=false)"
+                                "Memory and session skill extraction are disabled by config "
+                                "(memory.extraction_enabled=false, "
+                                "memory.session_skill_extraction_enabled=false)"
                             )
                         await _run_archive_summary()
 
@@ -1349,13 +1467,21 @@ class Session:
                     "session_id": self.session_id,
                     "archive_uri": archive_uri,
                     "memories_extracted": memories_extracted,
+                    "session_skills_extracted": len(extracted_skill_results),
+                    "session_skill_uris": [
+                        item.get("uri") or item.get("root_uri")
+                        for item in extracted_skill_results
+                        if isinstance(item, dict) and (item.get("uri") or item.get("root_uri"))
+                    ],
                     "active_count_updated": active_count_updated,
                     "token_usage": {
                         "llm": dict(self._meta.llm_token_usage),
                         "embedding": dict(self._meta.embedding_token_usage),
                         "total": {
                             "total_tokens": self._meta.llm_token_usage["total_tokens"]
-                            + self._meta.embedding_token_usage["total_tokens"]
+                            + self._meta.embedding_token_usage["total_tokens"],
+                            "cached_tokens": self._meta.llm_token_usage["cached_tokens"],
+                            "reasoning_tokens": self._meta.llm_token_usage["reasoning_tokens"],
                         },
                     },
                 },
@@ -1601,7 +1727,7 @@ class Session:
                     {
                         "archive_id": archive["archive_id"],
                         "abstract": abstract,
-                        "tokens": -(-len(abstract) // 4),
+                        "tokens": estimate_text_tokens(abstract),
                     }
                 )
             else:
@@ -1706,12 +1832,13 @@ class Session:
 
     async def _read_archive_overview_tokens(self, archive_uri: str, overview: str) -> int:
         """Read overview token estimate from archive metadata."""
-        overview_tokens = -(-len(overview) // 4)
+        overview_tokens = estimate_text_tokens(overview)
         try:
             meta_content = await self._viking_fs.read_file(
                 f"{archive_uri}/.meta.json", ctx=self.ctx
             )
-            overview_tokens = json.loads(meta_content).get("overview_tokens", overview_tokens)
+            meta_tokens = int(json.loads(meta_content).get("overview_tokens", overview_tokens))
+            overview_tokens = max(overview_tokens, meta_tokens)
         except Exception:
             pass
         return overview_tokens
@@ -1837,6 +1964,8 @@ class Session:
             latest_meta.llm_token_usage["prompt_tokens"] += llm.get("input", 0)
             latest_meta.llm_token_usage["completion_tokens"] += llm.get("output", 0)
             latest_meta.llm_token_usage["total_tokens"] += llm.get("total", 0)
+            latest_meta.llm_token_usage["cached_tokens"] += llm.get("prompt_cached", 0)
+            latest_meta.llm_token_usage["reasoning_tokens"] += llm.get("completion_reasoning", 0)
             embedding = telemetry_snapshot.summary.get("tokens", {}).get("embedding", {})
             latest_meta.embedding_token_usage["total_tokens"] += embedding.get("total", 0)
 
@@ -2221,7 +2350,7 @@ class Session:
             if name in Session._WM_APPEND_ONLY_SECTIONS:
                 continue
             items = Session._wm_extract_bullet_items(body)
-            est_tokens = len(body) // 4
+            est_tokens = estimate_text_tokens(body)
             if (
                 len(items) > Session._WM_SECTION_BULLET_THRESHOLD
                 or est_tokens > Session._WM_SECTION_TOKEN_THRESHOLD
@@ -2603,7 +2732,7 @@ class Session:
             return op
         if op_name == "APPEND":
             old_items = Session._wm_extract_bullet_items(old_content or "")
-            est_tokens = len(old_content or "") // 4
+            est_tokens = estimate_text_tokens(old_content or "")
             bullet_over = len(old_items) > Session._WM_SECTION_BULLET_THRESHOLD
             token_over = est_tokens > Session._WM_SECTION_TOKEN_THRESHOLD
             if not bullet_over and not token_over:
@@ -2657,7 +2786,7 @@ class Session:
         if not old_items:
             return op
 
-        est_tokens = len(old_content or "") // 4
+        est_tokens = estimate_text_tokens(old_content or "")
         is_emergency = (
             len(old_items) > Session._WM_SECTION_BULLET_THRESHOLD * 2
             or est_tokens > Session._WM_SECTION_TOKEN_THRESHOLD * 2
@@ -3021,14 +3150,15 @@ class Session:
             ctx=self.ctx,
         )
 
-    def _append_to_jsonl(self, msg: Message) -> None:
-        """Append to messages.jsonl."""
+    def _append_messages_to_jsonl_batch(self, messages: List[Message]) -> None:
+        """Append multiple messages to messages.jsonl in a single write."""
         if not self._viking_fs:
             return
+        batch_content = "".join(msg.to_jsonl() + "\n" for msg in messages)
         run_async(
             self._viking_fs.append_file(
                 f"{self._session_uri}/messages.jsonl",
-                msg.to_jsonl() + "\n",
+                batch_content,
                 ctx=self.ctx,
             )
         )

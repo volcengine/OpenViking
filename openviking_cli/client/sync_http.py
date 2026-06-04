@@ -38,6 +38,7 @@ class SyncHTTPClient:
         user: Optional[str] = None,
         timeout: float = 60.0,
         extra_headers: Optional[Dict[str, str]] = None,
+        profile_enabled: Optional[bool] = None,
     ):
         self._async_client = AsyncHTTPClient(
             url=url,
@@ -48,6 +49,7 @@ class SyncHTTPClient:
             user=user,
             timeout=timeout,
             extra_headers=extra_headers,
+            profile_enabled=profile_enabled,
         )
         self._initialized = False
 
@@ -147,6 +149,31 @@ class SyncHTTPClient:
             )
         )
 
+    def batch_add_messages(
+        self,
+        session_id: str,
+        messages: list[dict],
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Add multiple messages to a session in a single request.
+
+        Args:
+            session_id: Session ID
+            messages: List of message dicts, each with "role" and optionally
+                      "content", "parts", "created_at", "role_id".
+            telemetry: Whether to attach operation telemetry data to the result.
+
+        Returns:
+            Result dict with session_id, message_count, and added count.
+        """
+        return run_async(
+            self._async_client.batch_add_messages(
+                session_id,
+                messages,
+                telemetry,
+            )
+        )
+
     def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Query background task status."""
         return run_async(self._async_client.get_task(task_id))
@@ -167,10 +194,20 @@ class SyncHTTPClient:
         )
 
     def commit_session(
-        self, session_id: str, telemetry: TelemetryRequest = False
+        self,
+        session_id: str,
+        telemetry: TelemetryRequest = False,
+        *,
+        keep_recent_count: int = 0,
     ) -> Dict[str, Any]:
         """Commit a session (archive and extract memories)."""
-        return run_async(self._async_client.commit_session(session_id, telemetry=telemetry))
+        return run_async(
+            self._async_client.commit_session(
+                session_id,
+                telemetry=telemetry,
+                keep_recent_count=keep_recent_count,
+            )
+        )
 
     # ============= Resource =============
 
@@ -188,6 +225,7 @@ class SyncHTTPClient:
         include: Optional[str] = None,
         exclude: Optional[str] = None,
         directly_upload_media: bool = True,
+        watch_interval: float = 0,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
@@ -195,18 +233,19 @@ class SyncHTTPClient:
             raise ValueError("Cannot specify both 'to' and 'parent' at the same time.")
         return run_async(
             self._async_client.add_resource(
-                path,
-                to,
-                parent,
-                reason,
-                instruction,
-                wait,
-                timeout,
-                strict,
-                ignore_dirs,
-                include,
-                exclude,
-                directly_upload_media,
+                path=path,
+                to=to,
+                parent=parent,
+                reason=reason,
+                instruction=instruction,
+                wait=wait,
+                timeout=timeout,
+                strict=strict,
+                ignore_dirs=ignore_dirs,
+                include=include,
+                exclude=exclude,
+                directly_upload_media=directly_upload_media,
+                watch_interval=watch_interval,
                 telemetry=telemetry,
             )
         )

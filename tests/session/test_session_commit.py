@@ -5,11 +5,12 @@
 
 import asyncio
 import json
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from openviking import AsyncOpenViking
+from openviking.client.session import Session as ClientSession
 from openviking.message import TextPart
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
@@ -58,6 +59,62 @@ class TestCommit:
         # Wait for semantic/embedding queues
         await client.wait_processed(timeout=60.0)
 
+    async def test_commit_reports_session_skills_separately(
+        self, session_with_messages: Session, monkeypatch
+    ):
+        config = MagicMock()
+        config.memory.extraction_enabled = False
+        config.memory.session_skill_extraction_enabled = True
+        monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
+
+        session_with_messages._session_compressor.extract_long_term_memories = AsyncMock(
+            return_value=[]
+        )
+        if hasattr(session_with_messages._session_compressor, "extract_agent_memories"):
+            session_with_messages._session_compressor.extract_agent_memories = AsyncMock(
+                return_value={
+                    "contexts": [],
+                    "session_skills": [{"uri": "viking://account/test/agent/skills/code-review"}],
+                }
+            )
+
+        result = await session_with_messages.commit_async()
+        task_result = await _wait_for_task(result["task_id"])
+
+        assert task_result["status"] == "completed"
+        assert task_result["result"]["memories_extracted"] == {}
+        assert task_result["result"]["session_skills_extracted"] == 1
+        assert task_result["result"]["session_skill_uris"] == [
+            "viking://account/test/agent/skills/code-review"
+        ]
+        session_with_messages._session_compressor.extract_long_term_memories.assert_not_awaited()
+        session_with_messages._session_compressor.extract_agent_memories.assert_awaited_once()
+
+    async def test_commit_skips_session_skill_extraction_when_disabled(
+        self, session_with_messages: Session, monkeypatch
+    ):
+        config = MagicMock()
+        config.memory.extraction_enabled = True
+        config.memory.session_skill_extraction_enabled = False
+        monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
+
+        session_with_messages._session_compressor.extract_long_term_memories = AsyncMock(
+            return_value=[]
+        )
+        if hasattr(session_with_messages._session_compressor, "extract_agent_memories"):
+            session_with_messages._session_compressor.extract_agent_memories = AsyncMock(
+                return_value={"contexts": [], "session_skills": []}
+            )
+
+        result = await session_with_messages.commit_async()
+        task_result = await _wait_for_task(result["task_id"])
+
+        assert task_result["status"] == "completed"
+        assert task_result["result"]["session_skills_extracted"] == 0
+        assert task_result["result"]["session_skill_uris"] == []
+        session_with_messages._session_compressor.extract_long_term_memories.assert_awaited_once()
+        session_with_messages._session_compressor.extract_agent_memories.assert_awaited_once()
+
     async def test_commit_archives_messages(self, session_with_messages: Session):
         """Test commit archives messages"""
         initial_message_count = len(session_with_messages.messages)
@@ -97,6 +154,90 @@ class TestCommit:
         result2 = await session.commit_async()
         assert result2.get("status") == "accepted"
         assert result2.get("task_id") is not None
+
+    async def test_commit_keep_recent_count_retains_live_tail_and_resets_pending_tokens(
+        self, client: AsyncOpenViking
+    ):
+        session = client.session(session_id="commit_keep_recent_count_test")
+
+        session.add_message("user", [TextPart("Round 1 user")])
+        session.add_message("assistant", [TextPart("Round 1 assistant")])
+        session.add_message("user", [TextPart("Round 2 user")])
+        session.add_message("assistant", [TextPart("Round 2 assistant")])
+
+        result = await session.commit_async(keep_recent_count=2)
+        task_result = await _wait_for_task(result["task_id"])
+
+        assert task_result["status"] == "completed"
+        assert len(session.messages) == 2
+        assert [message.parts[0].text for message in session.messages] == [
+            "Round 2 user",
+            "Round 2 assistant",
+        ]
+
+        session_info = await client.get_session(session.session_id)
+        assert session_info["pending_tokens"] == 0
+
+        context = await session.get_session_context()
+        assert context["latest_archive_overview"]
+        assert [message["parts"][0]["text"] for message in context["messages"]] == [
+            "Round 2 user",
+            "Round 2 assistant",
+        ]
+
+    async def test_session_commit_keeps_telemetry_as_first_positional_argument(self):
+        calls = []
+
+        class _FakeClient:
+            async def commit_session(self, session_id, telemetry=False, *, keep_recent_count=0):
+                calls.append(
+                    {
+                        "session_id": session_id,
+                        "telemetry": telemetry,
+                        "keep_recent_count": keep_recent_count,
+                    }
+                )
+                return {"task_id": "task-1"}
+
+        session = ClientSession(_FakeClient(), "s1", "user-1")
+
+        result = await session.commit(True)
+
+        assert result == {"task_id": "task-1"}
+        assert calls == [
+            {
+                "session_id": "s1",
+                "telemetry": True,
+                "keep_recent_count": 0,
+            }
+        ]
+
+    async def test_session_commit_async_keeps_telemetry_as_first_positional_argument(self):
+        calls = []
+
+        class _FakeClient:
+            async def commit_session(self, session_id, telemetry=False, *, keep_recent_count=0):
+                calls.append(
+                    {
+                        "session_id": session_id,
+                        "telemetry": telemetry,
+                        "keep_recent_count": keep_recent_count,
+                    }
+                )
+                return {"task_id": "task-1"}
+
+        session = ClientSession(_FakeClient(), "s1", "user-1")
+
+        result = await session.commit_async(True)
+
+        assert result == {"task_id": "task-1"}
+        assert calls == [
+            {
+                "session_id": "s1",
+                "telemetry": True,
+                "keep_recent_count": 0,
+            }
+        ]
 
     async def test_commit_uses_latest_archive_overview_for_summary_and_extraction(
         self, client: AsyncOpenViking
@@ -139,40 +280,7 @@ class TestCommit:
         assert seen["summary"] == previous_overview
         assert seen["extract"] == previous_overview
 
-    async def test_commit_with_usage_records(self, client: AsyncOpenViking):
-        """Test commit with usage records"""
-        session = client.session(session_id="usage_commit_test")
-
-        session.add_message("user", [TextPart("Test message")])
-        session.used(contexts=["viking://user/test/resources/doc.md"])
-        session.add_message("assistant", [TextPart("Response")])
-
-        result = await session.commit_async()
-
-        assert result.get("status") == "accepted"
-        assert result.get("task_id") is not None
-
-        # active_count_updated is now in the background task result
-        task_result = await _wait_for_task(result["task_id"])
-        assert task_result["status"] == "completed"
-
     async def test_active_count_incremented_after_commit(self, client_with_resource_sync: tuple):
-        """Regression test: active_count must actually increment after commit.
-
-        Previously _update_active_counts() had three bugs:
-        1. Called storage.update() with MongoDB-style kwargs (filter=, update=)
-           that don't match the actual signature update(collection, id, data),
-           causing a silent TypeError on every commit.
-        2. Used $inc syntax which storage.update() does not support (merge semantics
-           require a plain value, not an increment operator).
-        3. Used fetch_by_uri() to locate the record, but that method's path-field
-           filter returns the entire subtree (hierarchical match), so any URI that
-           has child records triggers a 'Duplicate records found' error and returns
-           None — leaving active_count un-updated even after fixes 1 and 2.
-
-        Fix: use storage.filter() to look up the record by URI and read
-        its stored id, then call storage.update() with that id.
-        """
         client, uri = client_with_resource_sync
         vikingdb = client._client.service.vikingdb_manager
         # Use the client's own context to match the account_id used when adding the resource

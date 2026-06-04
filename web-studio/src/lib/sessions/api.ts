@@ -8,7 +8,12 @@ import {
   postSessionIdCommit,
   postSessionIdMessages,
 } from '#/gen/ov-client/sdk.gen'
-import { getOvResult, normalizeOvClientError, ovClient } from '#/lib/ov-client'
+import {
+  getOvResult,
+  normalizeOvClientError,
+  OvClientError,
+  ovClient,
+} from '#/lib/ov-client'
 
 import type { BotChatRequest, BotChatResponse } from '@ov-server/bot/v1/chat'
 import type { Message, MessagePart } from './types/message'
@@ -117,14 +122,58 @@ export async function commitSession(
 // Bot Chat
 // ---------------------------------------------------------------------------
 
+function extractErrorMessage(text: string, fallback: string): string {
+  if (!text.trim()) return fallback
+
+  try {
+    const parsed = JSON.parse(text) as unknown
+    if (parsed && typeof parsed === 'object') {
+      const record = parsed as Record<string, unknown>
+      if (typeof record.detail === 'string') return record.detail
+      const error = record.error
+      if (error && typeof error === 'object') {
+        const message = (error as Record<string, unknown>).message
+        if (typeof message === 'string') return message
+      }
+    }
+  } catch {
+    // Fall through to raw text.
+  }
+
+  return text
+}
+
 function buildFetchHeaders(): Record<string, string> {
   const conn = ovClient.getConnection()
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (conn.apiKey) headers['X-API-Key'] = conn.apiKey
   if (conn.accountId) headers['X-OpenViking-Account'] = conn.accountId
   if (conn.userId) headers['X-OpenViking-User'] = conn.userId
-  headers['X-OpenViking-Agent'] = 'web-studio'
+  headers['X-OpenViking-Agent'] = conn.agentId || 'web-playground'
   return headers
+}
+
+export async function fetchBotHealth(): Promise<unknown> {
+  const baseUrl = ovClient.getOptions().baseUrl
+  const response = await fetch(`${baseUrl}/bot/v1/health`, {
+    method: 'GET',
+    headers: buildFetchHeaders(),
+  })
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => '')
+    throw new OvClientError({
+      code: response.status === 503 ? 'BOT_MODE_DISABLED' : 'BOT_HEALTH_FAILED',
+      message: extractErrorMessage(
+        text,
+        `Bot health check failed (${response.status})`,
+      ),
+      responseBody: text,
+      statusCode: response.status,
+    })
+  }
+
+  return response.json().catch(() => ({ status: 'ok' }))
 }
 
 /**
@@ -136,10 +185,15 @@ export async function sendChatStream(
   signal?: AbortSignal,
 ): Promise<Response> {
   const baseUrl = ovClient.getOptions().baseUrl
+  const conn = ovClient.getConnection()
   const response = await fetch(`${baseUrl}/bot/v1/chat/stream`, {
     method: 'POST',
     headers: buildFetchHeaders(),
-    body: JSON.stringify({ ...request, stream: true }),
+    body: JSON.stringify({
+      ...request,
+      user_id: request.user_id || conn.userId || undefined,
+      stream: true,
+    }),
     signal,
   })
 
@@ -157,8 +211,12 @@ export async function sendChatStream(
 export async function sendChat(
   request: BotChatRequest,
 ): Promise<BotChatResponse> {
+  const conn = ovClient.getConnection()
   const response = await postBotV1Chat({
-    body: request,
+    body: {
+      ...request,
+      user_id: request.user_id || conn.userId || undefined,
+    },
     throwOnError: true,
   } as unknown as NonNullable<Parameters<typeof postBotV1Chat<true>>[0]>)
 

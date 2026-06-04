@@ -201,6 +201,7 @@ def _entry_uri(entry: dict) -> str:
 
 
 def _collect_source_trajectories(client: LocalClient, exp_entries: List[dict]) -> List[str]:
+    """Collect traj URIs from experience forward links (exp→traj, derived_from)."""
     all_uris: List[str] = []
     for entry in exp_entries:
         exp_uri = _entry_uri(entry)
@@ -208,12 +209,12 @@ def _collect_source_trajectories(client: LocalClient, exp_entries: List[dict]) -
             continue
         raw = run_async(client.read(exp_uri)) or ""
         mf = MemoryFileUtils.read(raw) if raw else None
-        metadata = mf.extra_fields if mf else {}
-        source = metadata.get("source_trajectories", [])
-        if isinstance(source, list):
-            all_uris.extend(str(u).strip() for u in source if str(u).strip())
-        elif isinstance(source, str):
-            all_uris.extend(line.strip() for line in source.splitlines() if line.strip())
+        if not mf:
+            continue
+        for link in mf.links:
+            to_uri = link.get("to_uri", "")
+            if link.get("link_type") == "derived_from" and to_uri:
+                all_uris.append(to_uri)
     return list(dict.fromkeys(all_uris))
 
 
@@ -222,13 +223,11 @@ def _collect_source_trajectories(client: LocalClient, exp_entries: List[dict]) -
 
 @pytest.fixture()
 def agent_memory_config_check():
-    """Skip unless agent_memory_enabled and memory.version == v2."""
+    """Skip unless agent_memory_enabled is configured."""
     OpenVikingConfigSingleton._instance = None
     config = get_openviking_config()
     if not getattr(config.memory, "agent_memory_enabled", False):
         pytest.skip("agent_memory_enabled is not set in config — skipping agent memory tests")
-    if config.memory.version != "v2":
-        pytest.skip("memory.version != v2 — skipping agent memory tests")
 
 
 @pytest.fixture()

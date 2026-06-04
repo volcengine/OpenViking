@@ -9,20 +9,9 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, Set
 
-import jinja2
-
 from openviking.session.memory.dataclass import MemoryTypeSchema
 from openviking.session.memory.utils.model import model_to_dict
-
-
-def _render_jinja_template(template: str, context: Dict[str, Any]) -> str:
-    """Render a Jinja2 template with the given context."""
-    env = jinja2.Environment(
-        autoescape=False,
-        keep_trailing_newline=True,
-    )
-    jinja_template = env.from_string(template)
-    return jinja_template.render(**context)
+from openviking.session.memory.utils.template_utils import TemplateUtils
 
 
 def render_template(
@@ -44,17 +33,12 @@ def render_template(
     Returns:
         Rendered template string
     """
-    # 创建 Jinja2 环境，允许未定义的变量（打印警告但不报错）
-    env = jinja2.Environment(autoescape=False, undefined=jinja2.DebugUndefined)
-
-    # 创建模板变量
-    template_vars = fields.copy()
-    # 始终传入 extract_context，即使是 None，避免模板中访问时 undefined
-    template_vars["extract_context"] = extract_context
-
-    # 渲染模板
-    jinja_template = env.from_string(template)
-    return jinja_template.render(**template_vars).strip()
+    return TemplateUtils.render(
+        template,
+        fields,
+        extract_context=extract_context,
+        debug_undefined=True,
+    )
 
 
 def generate_uri(

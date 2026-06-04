@@ -7,6 +7,7 @@ Extracts text from OLE2 compound binary .doc files using olefile,
 then delegates to MarkdownParser for tree structure creation.
 """
 
+import asyncio
 import struct
 from pathlib import Path
 from typing import List, Optional, Union
@@ -49,7 +50,7 @@ class LegacyDocParser(BaseParser):
         path = Path(source)
 
         if path.exists():
-            text = self._extract_text(path)
+            text = await asyncio.to_thread(self._extract_text, path)
             result = await self._md_parser.parse_content(
                 text, source_path=str(path), instruction=instruction, **kwargs
             )

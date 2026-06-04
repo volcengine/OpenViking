@@ -51,6 +51,8 @@ curl http://localhost:1933/health
 
 `openviking-server doctor` checks local configuration, model access, and auth readiness. `curl /health` only confirms that the server process is already running.
 
+Web Studio is also served at `http://localhost:1933/studio` (bundled with pip/pipx installs since v0.3.21 — no Docker required).
+
 ## Connect with Python SDK
 
 ```python

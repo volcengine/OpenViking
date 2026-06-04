@@ -39,7 +39,7 @@ from openviking_cli.exceptions import (
 )
 from openviking_cli.retrieve.types import FindResult
 from openviking_cli.session.user_id import UserIdentifier
-from openviking_cli.utils import run_async
+from openviking_cli.utils import get_logger, run_async
 from openviking_cli.utils.config.ovcli_config import load_ovcli_config
 from openviking_cli.utils.uri import VikingURI
 
@@ -66,6 +66,8 @@ ERROR_CODE_TO_EXCEPTION = {
     "SESSION_EXPIRED": SessionExpiredError,
     "UNKNOWN": OpenVikingError,
 }
+
+logger = get_logger(__name__)
 
 
 class _HTTPObserver:
@@ -144,6 +146,7 @@ class AsyncHTTPClient(BaseClient):
         user: Optional[str] = None,
         timeout: float = 60.0,
         extra_headers: Optional[Dict[str, str]] = None,
+        profile_enabled: Optional[bool] = None,
     ):
         """Initialize AsyncHTTPClient.
 
@@ -160,6 +163,7 @@ class AsyncHTTPClient(BaseClient):
             extra_headers: Additional HTTP headers to send with requests. If not provided, reads from ovcli.conf.
         """
         effective_user = user if user is not None else user_id
+        profile_load_requested = profile_enabled is None
         should_load_cli_config = (
             url is None
             or api_key is None
@@ -169,6 +173,7 @@ class AsyncHTTPClient(BaseClient):
             or timeout == 60.0
             or extra_headers is None
         )
+        cli_config = None
         if should_load_cli_config:
             cli_config = load_ovcli_config()
             if cli_config is not None:
@@ -181,6 +186,11 @@ class AsyncHTTPClient(BaseClient):
                     timeout = cli_config.timeout
                 if extra_headers is None:
                     extra_headers = cli_config.extra_headers
+        if profile_load_requested:
+            if cli_config is None:
+                cli_config = load_ovcli_config()
+            if cli_config is not None:
+                profile_enabled = cli_config.profile
         if not url:
             raise ValueError(
                 "url is required. Pass it explicitly or configure in "
@@ -194,6 +204,7 @@ class AsyncHTTPClient(BaseClient):
         self._user = UserIdentifier.the_default_user()
         self._timeout = timeout
         self._extra_headers = extra_headers
+        self._profile_enabled = bool(profile_enabled)
         self._upload_mode = None
         if should_load_cli_config and cli_config is not None and cli_config.upload is not None:
             self._upload_mode = cli_config.upload.mode
@@ -219,6 +230,7 @@ class AsyncHTTPClient(BaseClient):
             base_url=self._url,
             headers=headers,
             timeout=self._timeout,
+            params={"profile": "1"} if self._profile_enabled else None,
         )
         self._observer = _HTTPObserver(self)
 
@@ -334,15 +346,26 @@ class AsyncHTTPClient(BaseClient):
         if not dir_path.is_dir():
             raise ValueError(f"Path {dir_path} is not a directory")
 
+        root = dir_path.resolve()
         temp_dir = tempfile.gettempdir()
         zip_path = Path(temp_dir) / f"temp_upload_{uuid.uuid4().hex}.zip"
 
+        entry_count = 0
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
             for file_path in dir_path.rglob("*"):
+                if file_path.is_symlink():
+                    continue
                 if file_path.is_file():
-                    arcname = file_path.relative_to(dir_path)
-                    arcname = str(arcname).replace("\\", "/")
+                    # Defense-in-depth: drop files whose real path escapes the selected root
+                    # if traversal behavior changes or this walk implementation is replaced.
+                    if not file_path.resolve().is_relative_to(root):
+                        continue
+                    arcname = str(file_path.relative_to(dir_path)).replace("\\", "/")
                     zipf.write(file_path, arcname=arcname)
+                    entry_count += 1
+
+        if entry_count == 0:
+            logger.warning("Created empty directory upload archive for %s", dir_path)
 
         return str(zip_path)
 
@@ -378,6 +401,7 @@ class AsyncHTTPClient(BaseClient):
         exclude: Optional[str] = None,
         directly_upload_media: bool = True,
         preserve_structure: Optional[bool] = None,
+        watch_interval: float = 0,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
@@ -397,6 +421,7 @@ class AsyncHTTPClient(BaseClient):
             "include": include,
             "exclude": exclude,
             "directly_upload_media": directly_upload_media,
+            "watch_interval": watch_interval,
             "telemetry": telemetry,
         }
         if preserve_structure is not None:
@@ -425,6 +450,35 @@ class AsyncHTTPClient(BaseClient):
         response = await self._http.post(
             "/api/v1/resources",
             json=request_data,
+        )
+        response_data = self._handle_response_data(response)
+        return self._attach_telemetry(response_data.get("result"), response_data)
+
+    async def batch_add_messages(
+        self,
+        session_id: str,
+        messages: list[dict],
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Add multiple messages to a session in a single request.
+
+        Args:
+            session_id: Session ID
+            messages: List of message dicts, each with "role" and optionally
+                      "content", "parts", "created_at", "role_id".
+            telemetry: Whether to attach operation telemetry data to the result.
+
+        Returns:
+            Result dict with session_id, message_count, and added count.
+        """
+        telemetry = self._validate_telemetry(telemetry)
+        payload: Dict[str, Any] = {"messages": messages}
+        if telemetry is not False:
+            payload["telemetry"] = telemetry
+
+        response = await self._http.post(
+            f"/api/v1/sessions/{session_id}/messages/batch",
+            json=payload,
         )
         response_data = self._handle_response_data(response)
         return self._attach_telemetry(response_data.get("result"), response_data)
@@ -837,13 +891,20 @@ class AsyncHTTPClient(BaseClient):
         return self._handle_response(response)
 
     async def commit_session(
-        self, session_id: str, telemetry: TelemetryRequest = False
+        self,
+        session_id: str,
+        telemetry: TelemetryRequest = False,
+        *,
+        keep_recent_count: int = 0,
     ) -> Dict[str, Any]:
         """Commit a session (archive and extract memories)."""
         telemetry = self._validate_telemetry(telemetry)
         response = await self._http.post(
             f"/api/v1/sessions/{session_id}/commit",
-            json={"telemetry": telemetry},
+            json={
+                "keep_recent_count": keep_recent_count,
+                "telemetry": telemetry,
+            },
         )
         response_data = self._handle_response_data(response)
         return self._attach_telemetry(response_data.get("result"), response_data)

@@ -43,6 +43,12 @@ export {
   estimateTokenCount,
   prepareRecallQuery,
 };
+export {
+  estimateAgentMessageTokens,
+  estimateAgentMessagesTokens,
+  estimateSerializedTokens,
+  estimateTextTokens,
+} from "./token-estimator.js";
 export type {
   BuildMemoryLinesOptions,
   BuildMemoryLinesWithBudgetOptions,
@@ -144,7 +150,7 @@ type AddSkillToolInput = {
   timeout?: number;
 };
 
-type MemorySearchInput = {
+type OVSearchInput = {
   query: string;
   uri?: string;
   limit?: number;
@@ -405,13 +411,13 @@ export function parseAddSkillCommandArgs(args: string): AddSkillToolInput {
   };
 }
 
-export function parseMemorySearchCommandArgs(args: string): MemorySearchInput {
+export function parseOVSearchCommandArgs(args: string): OVSearchInput {
   const parsed = parseFlagArgs(args);
-  // `/memory-search` only accepts a single query string, so positional segments are
+  // `/ov-search` only accepts a single query string, so positional segments are
   // always re-joined to preserve unquoted multi-word searches.
   const query = parsed.positionals.join(" ").trim();
   if (!query) {
-    throw new Error('Usage: /memory-search "<query>" [--uri URI] [--limit N]');
+    throw new Error('Usage: /ov-search "<query>" [--uri URI] [--limit N]');
   }
   return {
     query,
@@ -761,7 +767,7 @@ const contextEnginePlugin = {
       };
     };
 
-    const formatMemorySearchRows = (result: FindResult): string[] => {
+    const formatOVSearchRows = (result: FindResult): string[] => {
       const truncateSummary = (value: string, maxChars = 220): string => {
         const collapsed = value.replace(/\s+/g, " ").trim();
         if (collapsed.length <= maxChars) {
@@ -802,7 +808,7 @@ const contextEnginePlugin = {
       ];
     };
 
-    const formatMemorySearchText = (query: string, uri: string | undefined, result: FindResult): string => {
+    const formatOVSearchText = (query: string, uri: string | undefined, result: FindResult): string => {
       if ((result.total ?? 0) <= 0) {
         const scope = uri ? ` under ${uri}` : "";
         return `No OpenViking resource or skill results found for "${query}"${scope}.`;
@@ -811,12 +817,12 @@ const contextEnginePlugin = {
       const lines = [
         `Found ${result.total ?? 0} OpenViking results for "${query}"${scope}`,
         "",
-        ...formatMemorySearchRows(result),
+        ...formatOVSearchRows(result),
       ].filter((line, index, all) => line || (all[index - 1] && all[index + 1]));
       return lines.join("\n");
     };
 
-    const memorySearchOpenViking = async (input: MemorySearchInput, agentId?: string) => {
+    const searchOpenViking = async (input: OVSearchInput, agentId?: string) => {
       const query = input.query.trim();
       if (!query) {
         throw new Error("query is required");
@@ -856,7 +862,7 @@ const contextEnginePlugin = {
         result = mergeFindResults(successful);
       }
       return {
-        content: [{ type: "text" as const, text: formatMemorySearchText(query, input.uri, result) }],
+        content: [{ type: "text" as const, text: formatOVSearchText(query, input.uri, result) }],
         details: {
           action: "searched",
           query,
@@ -935,8 +941,8 @@ const contextEnginePlugin = {
 
     api.registerTool(
       (ctx: ToolContext) => ({
-        name: "memory_search",
-        label: "Memory Search (OpenViking)",
+        name: "ov_search",
+        label: "Search (OpenViking)",
         description:
           "Search OpenViking resources and skills. Use after importing, or when the user asks to search OpenViking resources or skills.",
         parameters: Type.Object({
@@ -946,17 +952,17 @@ const contextEnginePlugin = {
         }),
         async execute(_toolCallId: string, params: Record<string, unknown>) {
           if (isBypassedSession(ctx)) {
-            return makeBypassedToolResult("memory_search");
+            return makeBypassedToolResult("ov_search");
           }
           const session = resolvePluginSessionRouting(ctx);
-          return memorySearchOpenViking({
+          return searchOpenViking({
             query: String((params as { query?: unknown }).query ?? ""),
             uri: typeof params.uri === "string" ? params.uri : undefined,
             limit: typeof params.limit === "number" ? params.limit : undefined,
           }, session.agentId);
         },
       }),
-      { name: "memory_search" },
+      { name: "ov_search" },
     );
 
     api.registerCommand?.({
@@ -1000,21 +1006,21 @@ const contextEnginePlugin = {
     });
 
     api.registerCommand?.({
-      name: "memory-search",
+      name: "ov-search",
       description: "Search OpenViking resources and skills.",
       acceptsArgs: true,
       handler: async (ctx: PluginCommandContext) => {
         try {
           if (isBypassedSession(ctx)) {
-            const bypassed = makeBypassedToolResult("memory_search");
+            const bypassed = makeBypassedToolResult("ov_search");
             return { text: bypassed.content[0]!.text, details: bypassed.details };
           }
           const session = resolvePluginSessionRouting(ctx);
-          const input = parseMemorySearchCommandArgs(ctx.args ?? "");
-          const result = await memorySearchOpenViking(input, session.agentId);
+          const input = parseOVSearchCommandArgs(ctx.args ?? "");
+          const result = await searchOpenViking(input, session.agentId);
           return { text: result.content[0]!.text, details: result.details };
         } catch (err) {
-          return { text: `OpenViking memory search failed: ${err instanceof Error ? err.message : String(err)}` };
+          return { text: `OpenViking search failed: ${err instanceof Error ? err.message : String(err)}` };
         }
       },
     });
@@ -1192,7 +1198,7 @@ const contextEnginePlugin = {
         name: "memory_store",
         label: "Memory Store (OpenViking)",
         description:
-          "Store text in OpenViking memory pipeline by writing to a session and running memory extraction.",
+          "Store text in OpenViking memory pipeline by writing to a session and running memory extraction. Use when the user explicitly asks to remember, save, or store an important long-term fact, preference, project, or decision; automatic capture is threshold/commit dependent.",
         parameters: Type.Object({
           text: Type.String({ description: "Information to store as memory source text" }),
           role: Type.Optional(Type.String({ description: "Session role, default user" })),
@@ -1276,8 +1282,27 @@ const contextEnginePlugin = {
             if (memoriesCount === 0) {
               api.logger.warn(
                 `openviking: memory_store committed but 0 memories extracted (sessionId=${sessionId}). ` +
-                  "Check OpenViking server logs for embedding/extract errors (e.g. 401 API key, or extraction pipeline).",
+                  "No OpenViking-managed long-term memory was created. Check memory.extraction_enabled, VLM configuration/API keys, or whether the text was judged not durable.",
               );
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text:
+                      `Memory extraction completed for session ${sessionId}, but produced 0 memories. ` +
+                      "No OpenViking-managed long-term memory was stored. Check memory.extraction_enabled, VLM configuration/API keys, or whether the text is durable enough to remember.",
+                  },
+                ],
+                details: {
+                  action: "failed",
+                  sessionId,
+                  status: commitResult.status,
+                  error: "no_memories_extracted",
+                  memoriesCount,
+                  archived: commitResult.archived ?? false,
+                  usedTempSession,
+                },
+              };
             } else {
               api.logger.info?.(`openviking: memory_store committed, memories=${memoriesCount}`);
             }

@@ -20,7 +20,6 @@ from openviking.session.memory.memory_type_registry import (
 from openviking.session.memory.merge_op.base import FieldType, MergeOp
 from openviking.session.memory.schema_model_generator import (
     SchemaModelGenerator,
-    SchemaPromptGenerator,
     to_pascal_case,
 )
 
@@ -419,103 +418,6 @@ class TestWikiLink:
 
         assert link_type_schema["type"] == "string"
         assert "enum" not in link_type_schema
-
-    def test_schema_prompt_generator_renders_conditional_descriptions(self):
-        memory_type = MemoryTypeSchema(
-            memory_type="conditional_prompt",
-            description="{% if language == 'en' %}English type{% else %}{{ language }} type{% endif %}",
-            fields=[
-                MemoryField(
-                    name="topic",
-                    field_type=FieldType.STRING,
-                    description="{% if language == 'en' %}english topic{% else %}{{ language }} topic{% endif %}",
-                    merge_op=MergeOp.IMMUTABLE,
-                )
-            ],
-        )
-
-        generator = SchemaPromptGenerator([memory_type], template_context={"language": "zh-CN"})
-
-        type_descriptions = generator.generate_type_descriptions()
-        field_descriptions = generator.generate_field_descriptions("conditional_prompt")
-
-        assert "zh-CN type" in type_descriptions
-        assert "zh-CN topic" in type_descriptions
-        assert "zh-CN topic" in field_descriptions
-
-
-class TestSchemaPromptGenerator:
-    """Tests for SchemaPromptGenerator."""
-
-    @pytest.fixture
-    def real_registry(self):
-        """Create a registry with real schemas."""
-        schemas_dir = (
-            Path(__file__).parent.parent.parent.parent
-            / "openviking"
-            / "prompts"
-            / "templates"
-            / "memory"
-        )
-        return create_default_registry(str(schemas_dir))
-
-    def test_generate_type_descriptions(self, real_registry):
-        """Test generating type descriptions."""
-        generator = SchemaPromptGenerator(real_registry)
-        descriptions = generator.generate_type_descriptions()
-
-        # Check it's not empty
-        assert len(descriptions) > 0
-
-        # Check it contains the structure header
-        assert "## Available Memory Types" in descriptions
-
-        # Check for memory types that should always be enabled
-        # (profile and preferences might be disabled, check for events or cards instead)
-        assert "### events" in descriptions or "### cards" in descriptions
-
-    def test_generate_field_descriptions(self, real_registry):
-        """Test generating field descriptions for a specific type."""
-        generator = SchemaPromptGenerator(real_registry)
-
-        # Get profile fields
-        profile_fields = generator.generate_field_descriptions("profile")
-        assert profile_fields is not None
-        assert "### profile Fields" in profile_fields
-        assert "content" in profile_fields
-
-        # Get preferences fields
-        pref_fields = generator.generate_field_descriptions("preferences")
-        assert pref_fields is not None
-        assert "topic" in pref_fields
-        assert "content" in pref_fields
-
-        # Non-existent type returns None
-        assert generator.generate_field_descriptions("non_existent") is None
-
-    def test_get_full_prompt_context(self, real_registry):
-        """Test getting the full prompt context."""
-        generator = SchemaPromptGenerator(real_registry)
-        context = generator.get_full_prompt_context()
-
-        # Check structure
-        assert "type_descriptions" in context
-        assert "memory_types" in context
-
-        # Check memory_types entries - should only include enabled types
-        memory_types = context["memory_types"]
-        assert len(memory_types) == len(real_registry.list_all())
-
-        # Check each entry has expected fields
-        for mt in memory_types:
-            assert "memory_type" in mt
-            assert "description" in mt
-            assert "fields" in mt
-            for field in mt["fields"]:
-                assert "name" in field
-                assert "type" in field
-                assert "description" in field
-
 
 class TestIntegration:
     """Integration tests for the complete schema system."""

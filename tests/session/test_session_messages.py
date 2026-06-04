@@ -3,6 +3,9 @@
 
 """Message management tests"""
 
+import pytest
+
+from openviking import AsyncOpenViking
 from openviking.message import ContextPart, TextPart, ToolPart
 from openviking.session import Session
 
@@ -70,6 +73,96 @@ class TestAddMessage:
         session.add_message("assistant", [TextPart("Response 1")])
 
         assert len(session.messages) == initial_count + 2
+
+    async def test_batch_add_messages_preserves_role_id_created_at_and_parts(
+        self, client: AsyncOpenViking
+    ):
+        session_id = "batch_message_preservation_test"
+        await client.create_session(session_id=session_id)
+
+        result = await client.batch_add_messages(
+            session_id,
+            [
+                {
+                    "role": "user",
+                    "role_id": "user-123",
+                    "created_at": "2026-05-01T12:00:00Z",
+                    "parts": [
+                        {"type": "text", "text": "Hello batch"},
+                        {
+                            "type": "context",
+                            "uri": "viking://resources/test-doc",
+                            "context_type": "resource",
+                            "abstract": "Test document",
+                        },
+                    ],
+                },
+                {
+                    "role": "assistant",
+                    "role_id": "assistant-123",
+                    "created_at": "2026-05-01T12:00:05Z",
+                    "parts": [
+                        {"type": "text", "text": "Executing tool"},
+                        {
+                            "type": "tool",
+                            "tool_id": "tool_123",
+                            "tool_name": "search_tool",
+                            "tool_uri": f"viking://session/test/{session_id}/tools/tool_123",
+                            "skill_uri": "viking://agent/skills/search",
+                            "tool_status": "completed",
+                            "tool_output": "Found a result",
+                        },
+                    ],
+                },
+            ],
+        )
+
+        assert result["added"] == 2
+
+        context = await client.get_session_context(session_id)
+        assert [message["role"] for message in context["messages"]] == ["user", "assistant"]
+        assert context["messages"][0]["role_id"] == "user-123"
+        assert context["messages"][0]["created_at"] == "2026-05-01T12:00:00Z"
+        assert context["messages"][0]["parts"][1] == {
+            "type": "context",
+            "uri": "viking://resources/test-doc",
+            "context_type": "resource",
+            "abstract": "Test document",
+        }
+        assert context["messages"][1]["role_id"] == "assistant-123"
+        assert context["messages"][1]["created_at"] == "2026-05-01T12:00:05Z"
+        assert context["messages"][1]["parts"][1]["type"] == "tool"
+        assert context["messages"][1]["parts"][1]["tool_status"] == "completed"
+        assert context["messages"][1]["parts"][1]["tool_output"] == "Found a result"
+
+    async def test_batch_add_messages_is_atomic_when_later_message_is_invalid(
+        self, client: AsyncOpenViking
+    ):
+        session_id = "batch_message_atomicity_test"
+        await client.create_session(session_id=session_id)
+
+        with pytest.raises(ValueError, match="Either content or parts must be provided"):
+            await client.batch_add_messages(
+                session_id,
+                [
+                    {"role": "user", "content": "first valid message"},
+                    {"role": "assistant"},
+                ],
+            )
+
+        context = await client.get_session_context(session_id)
+        assert context["messages"] == []
+
+        result = await client.batch_add_messages(
+            session_id,
+            [{"role": "user", "content": "first valid message"}],
+        )
+
+        assert result["added"] == 1
+        context = await client.get_session_context(session_id)
+        assert [message["parts"][0]["text"] for message in context["messages"]] == [
+            "first valid message"
+        ]
 
 
 class TestUpdateToolPart:

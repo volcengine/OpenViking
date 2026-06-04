@@ -1,15 +1,26 @@
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
 
 const OPENVIKING_CLI_CONFIG_ENV: &str = "OPENVIKING_CLI_CONFIG_FILE";
+pub const DEFAULT_SELF_MANAGED_PORT: &str = "1933";
+pub const DEFAULT_SELF_MANAGED_URL: &str = "http://127.0.0.1:1933";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UploadConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ignore_dirs: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub include: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub exclude: Option<String>,
+}
+
+impl UploadConfig {
+    fn is_default(&self) -> bool {
+        self.ignore_dirs.is_none() && self.include.is_none() && self.exclude.is_none()
+    }
 }
 
 impl Default for UploadConfig {
@@ -24,33 +35,38 @@ impl Default for UploadConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    #[serde(default = "default_url")]
+    #[serde(default = "default_url", skip_serializing_if = "is_default_url")]
     pub url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub root_api_key: Option<String>,
-    #[serde(alias = "account_id")]
+    #[serde(skip_serializing_if = "Option::is_none", alias = "account_id")]
     pub account: Option<String>,
-    #[serde(alias = "user_id")]
+    #[serde(skip_serializing_if = "Option::is_none", alias = "user_id")]
     pub user: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
-    #[serde(default = "default_timeout")]
+    #[serde(default = "default_timeout", skip_serializing_if = "is_default_timeout")]
     pub timeout: f64,
-    #[serde(default = "default_output_format")]
+    #[serde(default = "default_output_format", skip_serializing_if = "is_default_output")]
     pub output: String,
-    #[serde(default = "default_echo_command")]
+    #[serde(default = "default_echo_command", skip_serializing_if = "is_default_echo_command")]
     pub echo_command: bool,
-    #[serde(default = "default_show_progress")]
+    #[serde(default = "default_show_progress", skip_serializing_if = "is_default_show_progress")]
     pub show_progress: bool,
-    #[serde(default = "default_verbose")]
+    #[serde(default = "default_verbose", skip_serializing_if = "is_default_verbose")]
     pub verbose: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_default_profile")]
+    pub profile: bool,
+    #[serde(default, skip_serializing_if = "UploadConfig::is_default")]
     pub upload: UploadConfig,
-    #[serde(default, alias = "extra_header")]
+    #[serde(default, alias = "extra_header", skip_serializing_if = "Option::is_none")]
     pub extra_headers: Option<std::collections::HashMap<String, String>>,
 }
 
 fn default_url() -> String {
-    "http://localhost:1933".to_string()
+    DEFAULT_SELF_MANAGED_URL.to_string()
 }
 
 fn default_timeout() -> f64 {
@@ -73,10 +89,38 @@ fn default_verbose() -> bool {
     false
 }
 
+fn is_default_url(value: &str) -> bool {
+    value == default_url()
+}
+
+fn is_default_timeout(value: &f64) -> bool {
+    (*value - default_timeout()).abs() < f64::EPSILON
+}
+
+fn is_default_output(value: &str) -> bool {
+    value == default_output_format()
+}
+
+fn is_default_echo_command(value: &bool) -> bool {
+    *value == default_echo_command()
+}
+
+fn is_default_show_progress(value: &bool) -> bool {
+    *value == default_show_progress()
+}
+
+fn is_default_verbose(value: &bool) -> bool {
+    *value == default_verbose()
+}
+
+fn is_default_profile(value: &bool) -> bool {
+    !*value
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
-            url: "http://localhost:1933".to_string(),
+            url: DEFAULT_SELF_MANAGED_URL.to_string(),
             api_key: None,
             root_api_key: None,
             account: None,
@@ -87,6 +131,7 @@ impl Default for Config {
             echo_command: true,
             show_progress: false,
             verbose: false,
+            profile: false,
             upload: UploadConfig::default(),
             extra_headers: None,
         }
@@ -123,6 +168,16 @@ impl Config {
         Self::load_default()
     }
 
+    pub fn load_required() -> Result<Self> {
+        // Resolution order: env var > default path
+        if let Ok(env_path) = std::env::var(OPENVIKING_CLI_CONFIG_ENV) {
+            return Self::load_required_from_path(&PathBuf::from(env_path));
+        }
+
+        let config_path = default_config_path()?;
+        Self::load_required_from_path(&config_path)
+    }
+
     pub fn load_default() -> Result<Self> {
         // Resolution order: env var > default path
         if let Ok(env_path) = std::env::var(OPENVIKING_CLI_CONFIG_ENV) {
@@ -133,8 +188,20 @@ impl Config {
         }
 
         let config_path = default_config_path()?;
-        if config_path.exists() {
-            Self::from_file(&config_path.to_string_lossy())
+        Self::load_default_from_path(&config_path)
+    }
+
+    pub fn load_required_from_path(path: &Path) -> Result<Self> {
+        if path.exists() {
+            Self::from_file(&path.to_string_lossy())
+        } else {
+            Err(Error::MissingConfig)
+        }
+    }
+
+    pub fn load_default_from_path(path: &Path) -> Result<Self> {
+        if path.exists() {
+            Self::from_file(&path.to_string_lossy())
         } else {
             Ok(Self::default())
         }
@@ -168,6 +235,22 @@ pub fn default_config_path() -> Result<PathBuf> {
     Ok(home.join(".openviking").join("ovcli.conf"))
 }
 
+pub fn display_config_home() -> String {
+    let path = default_config_path()
+        .ok()
+        .and_then(|path| path.parent().map(|parent| parent.to_path_buf()));
+    let Some(path) = path else {
+        return "~/.openviking".to_string();
+    };
+    let Some(home) = dirs::home_dir() else {
+        return path.display().to_string();
+    };
+    if let Ok(stripped) = path.strip_prefix(&home) {
+        return format!("~/{}", stripped.display());
+    }
+    path.display().to_string()
+}
+
 /// Get a unique machine ID using machine-uid crate.
 ///
 /// Uses the system's machine ID, falls back to "default" if unavailable.
@@ -180,13 +263,41 @@ pub fn get_or_create_machine_id() -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    use crate::error::Error;
+
     use super::{Config, merge_csv_options};
+
+    #[test]
+    fn load_required_from_path_reports_missing_cli_config() {
+        let dir = tempfile::tempdir().expect("tempdir should be created");
+        let path = dir.path().join("missing-ovcli.conf");
+
+        let error = Config::load_required_from_path(&path)
+            .expect_err("missing required config should fail");
+
+        assert!(matches!(error, Error::MissingConfig));
+        let message = error.to_string();
+        assert!(message.contains("No ovcli.conf detected"));
+        assert!(message.contains("ov config"));
+        assert!(!message.contains("setup-cli"));
+    }
+
+    #[test]
+    fn load_default_from_path_keeps_default_fallback() {
+        let dir = tempfile::tempdir().expect("tempdir should be created");
+        let path = dir.path().join("missing-ovcli.conf");
+
+        let config = Config::load_default_from_path(&path)
+            .expect("default-loading path should still fall back");
+
+        assert_eq!(config.url, "http://127.0.0.1:1933");
+    }
 
     #[test]
     fn config_deserializes_account_and_user_fields() {
         let config: Config = serde_json::from_str(
             r#"{
-                "url": "http://localhost:1933",
+                "url": "http://127.0.0.1:1933",
                 "api_key": "test-key",
                 "account": "acme",
                 "user": "alice",
@@ -207,7 +318,7 @@ mod tests {
     fn config_deserializes_root_api_key() {
         let config: Config = serde_json::from_str(
             r#"{
-                "url": "http://localhost:1933",
+                "url": "http://127.0.0.1:1933",
                 "api_key": "user-key",
                 "root_api_key": "root-key"
             }"#,
@@ -222,7 +333,7 @@ mod tests {
     fn config_deserializes_account_id_and_user_id_aliases() {
         let config: Config = serde_json::from_str(
             r#"{
-                "url": "http://localhost:1933",
+                "url": "http://127.0.0.1:1933",
                 "account_id": "acme",
                 "user_id": "alice"
             }"#,
@@ -237,7 +348,7 @@ mod tests {
     fn config_deserializes_upload_fields() {
         let config: Config = serde_json::from_str(
             r#"{
-                "url": "http://localhost:1933",
+                "url": "http://127.0.0.1:1933",
                 "upload": {
                     "ignore_dirs": "node_modules,dist",
                     "include": "*.md,*.pdf",
@@ -306,7 +417,7 @@ mod tests {
     fn config_deserializes_extra_headers() {
         let config: Config = serde_json::from_str(
             r#"{
-                "url": "http://localhost:1933",
+                "url": "http://127.0.0.1:1933",
                 "extra_headers": {
                     "X-Custom-Header": "custom-value",
                     "Authorization": "Bearer token"
@@ -315,16 +426,24 @@ mod tests {
         )
         .expect("config should deserialize with extra_headers");
 
-        let headers = config.extra_headers.expect("extra_headers should be present");
-        assert_eq!(headers.get("X-Custom-Header"), Some(&"custom-value".to_string()));
-        assert_eq!(headers.get("Authorization"), Some(&"Bearer token".to_string()));
+        let headers = config
+            .extra_headers
+            .expect("extra_headers should be present");
+        assert_eq!(
+            headers.get("X-Custom-Header"),
+            Some(&"custom-value".to_string())
+        );
+        assert_eq!(
+            headers.get("Authorization"),
+            Some(&"Bearer token".to_string())
+        );
     }
 
     #[test]
     fn config_deserializes_extra_headers_none_when_missing() {
         let config: Config = serde_json::from_str(
             r#"{
-                "url": "http://localhost:1933"
+                "url": "http://127.0.0.1:1933"
             }"#,
         )
         .expect("config should deserialize");
@@ -333,10 +452,23 @@ mod tests {
     }
 
     #[test]
+    fn config_deserializes_profile_flag() {
+        let config: Config = serde_json::from_str(
+            r#"{
+                "url": "http://127.0.0.1:1933",
+                "profile": true
+            }"#,
+        )
+        .expect("config should deserialize with profile");
+
+        assert!(config.profile);
+    }
+
+    #[test]
     fn config_deserializes_extra_header_alias() {
         let config: Config = serde_json::from_str(
             r#"{
-                "url": "http://localhost:1933",
+                "url": "http://127.0.0.1:1933",
                 "extra_header": {
                     "X-Custom-Header": "custom-value",
                     "Authorization": "Bearer token"
@@ -345,8 +477,16 @@ mod tests {
         )
         .expect("config should deserialize with alias");
 
-        let headers = config.extra_headers.expect("extra_headers should be present");
-        assert_eq!(headers.get("X-Custom-Header"), Some(&"custom-value".to_string()));
-        assert_eq!(headers.get("Authorization"), Some(&"Bearer token".to_string()));
+        let headers = config
+            .extra_headers
+            .expect("extra_headers should be present");
+        assert_eq!(
+            headers.get("X-Custom-Header"),
+            Some(&"custom-value".to_string())
+        );
+        assert_eq!(
+            headers.get("Authorization"),
+            Some(&"Bearer token".to_string())
+        );
     }
 }

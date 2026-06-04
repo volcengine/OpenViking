@@ -8,6 +8,7 @@ import type { ServerMode } from './use-server-mode'
 
 export type ConnectionDraft = {
   accountId: string
+  agentId: string
   apiKey: string
   baseUrl: string
   userId: string
@@ -31,11 +32,33 @@ type AppConnectionContextValue = {
 
 const CONNECTION_STORAGE_KEY = 'ov_console_connection'
 
+const ENV_BASE_URL =
+  typeof import.meta.env.VITE_OV_BASE_URL === 'string'
+    ? import.meta.env.VITE_OV_BASE_URL.trim()
+    : ''
+const ENV_API_KEY =
+  typeof import.meta.env.VITE_OV_API_KEY === 'string'
+    ? import.meta.env.VITE_OV_API_KEY.trim()
+    : ''
+const ENV_ACCOUNT =
+  typeof import.meta.env.VITE_OV_ACCOUNT === 'string'
+    ? import.meta.env.VITE_OV_ACCOUNT.trim()
+    : ''
+const ENV_AGENT =
+  typeof import.meta.env.VITE_OV_AGENT === 'string'
+    ? import.meta.env.VITE_OV_AGENT.trim()
+    : ''
+const ENV_USER =
+  typeof import.meta.env.VITE_OV_USER === 'string'
+    ? import.meta.env.VITE_OV_USER.trim()
+    : ''
+
 const DEFAULT_CONNECTION: ConnectionDraft = {
-  accountId: '',
-  apiKey: '',
+  accountId: ENV_ACCOUNT || 'default',
+  agentId: ENV_AGENT || 'web-playground',
+  apiKey: ENV_API_KEY,
   baseUrl: ovClient.getOptions().baseUrl,
-  userId: '',
+  userId: ENV_USER || 'default',
 }
 
 const AppConnectionContext =
@@ -79,13 +102,27 @@ function persistConnection(connection: ConnectionDraft): void {
   }
 }
 
-function normalizeConnectionDraft(connection: ConnectionDraft): ConnectionDraft {
+function normalizeConnectionDraft(
+  connection: ConnectionDraft,
+): ConnectionDraft {
   return {
     accountId: connection.accountId.trim(),
+    agentId: connection.agentId.trim() || DEFAULT_CONNECTION.agentId,
     apiKey: connection.apiKey.trim(),
     baseUrl: normalizeBaseUrl(connection.baseUrl),
     userId: connection.userId.trim(),
   }
+}
+
+function resolveIdentityField(
+  envValue: string,
+  storedValue: string | undefined,
+  defaultValue: string,
+): string {
+  if (envValue) {
+    return envValue
+  }
+  return storedValue || defaultValue
 }
 
 function applyConnection(connection: ConnectionDraft): void {
@@ -94,6 +131,7 @@ function applyConnection(connection: ConnectionDraft): void {
   })
   ovClient.setConnection({
     accountId: connection.accountId,
+    agentId: connection.agentId,
     apiKey: connection.apiKey,
     userId: connection.userId,
   })
@@ -101,13 +139,29 @@ function applyConnection(connection: ConnectionDraft): void {
 
 function readInitialConnection(): ConnectionDraft {
   const storedConnection = readStoredConnection()
+  const apiKey =
+    ENV_API_KEY ||
+    ovClient.getConnection().apiKey ||
+    storedConnection.apiKey ||
+    DEFAULT_CONNECTION.apiKey
   return normalizeConnectionDraft({
     ...DEFAULT_CONNECTION,
     ...storedConnection,
-    apiKey:
-      ovClient.getConnection().apiKey ||
-      storedConnection.apiKey ||
-      DEFAULT_CONNECTION.apiKey,
+    accountId: resolveIdentityField(
+      ENV_ACCOUNT,
+      storedConnection.accountId,
+      DEFAULT_CONNECTION.accountId,
+    ),
+    agentId:
+      ENV_AGENT || storedConnection.agentId || DEFAULT_CONNECTION.agentId,
+    apiKey,
+    baseUrl:
+      ENV_BASE_URL || storedConnection.baseUrl || DEFAULT_CONNECTION.baseUrl,
+    userId: resolveIdentityField(
+      ENV_USER,
+      storedConnection.userId,
+      DEFAULT_CONNECTION.userId,
+    ),
   })
 }
 
@@ -115,11 +169,15 @@ export function summarizeConnectionIdentity(
   connection: ConnectionDraft,
   serverMode: ServerMode,
 ): ConnectionIdentitySummary {
-  if (serverMode === 'dev-implicit') {
-    return { labelKey: 'identitySummary.devImplicit' }
+  if (serverMode === 'dev') {
+    return { labelKey: 'identitySummary.dev' }
   }
 
-  const segments = [connection.accountId, connection.userId].filter(Boolean)
+  const segments = [
+    connection.accountId,
+    connection.userId,
+    connection.agentId,
+  ].filter(Boolean)
   if (!segments.length) {
     return { labelKey: 'identitySummary.unset' }
   }
@@ -207,8 +265,7 @@ export function AppConnectionProvider({
       connection,
       isConnectionDialogOpen,
       openConnectionDialog: () => setConnectionDialogOpen(true),
-      saveConnection: (next) =>
-        setConnection(normalizeConnectionDraft(next)),
+      saveConnection: (next) => setConnection(normalizeConnectionDraft(next)),
       serverMode,
       setConnectionDialogOpen,
     }),

@@ -15,6 +15,7 @@
       "client.ts",
       "process-manager.ts",
       "memory-ranking.ts",
+      "token-estimator.ts",
       "text-utils.ts",
       "tool-call-id.ts",
       "session-transcript-repair.ts",

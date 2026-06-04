@@ -14,7 +14,12 @@ from openviking.parse.tree_builder import TreeBuilder
 from openviking.server.identity import RequestContext
 from openviking.storage import VikingDBManager
 from openviking.storage.errors import LockAcquisitionError
-from openviking.storage.transaction import NO_LOCK, LockLease, OwnedLockLease
+from openviking.storage.transaction import (
+    LOCK_TIMEOUT_DEFAULT,
+    NO_LOCK,
+    LockLease,
+    OwnedLockLease,
+)
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.embedding_utils import index_resource
@@ -255,6 +260,7 @@ class ResourceProcessor:
             candidate_uri = getattr(context_tree, "_candidate_uri", None) if context_tree else None
             resource_lock: LockLease = NO_LOCK
             target_preexisting = False
+            source_committed = False
 
             if root_uri and temp_uri:
                 from openviking.storage.transaction import get_lock_manager
@@ -276,6 +282,11 @@ class ResourceProcessor:
                         resource_lock = await self._acquire_resource_lock(
                             lock_manager, dst_path, uri=root_uri
                         )
+                    if not target_preexisting:
+                        await viking_fs.persist_temp_tree(temp_uri, root_uri, ctx=ctx)
+                        await viking_fs.delete_temp(parse_result.temp_dir_path, ctx=ctx)
+                        temp_uri = root_uri
+                        source_committed = True
                 except Exception:
                     stage_status = "error"
                     raise
@@ -334,7 +345,7 @@ class ResourceProcessor:
                         pass
 
             if resource_lock.active:
-                if not should_summarize and temp_uri:
+                if not should_summarize and temp_uri and not source_committed:
                     viking_fs = get_viking_fs()
                     await viking_fs.persist_temp_tree(temp_uri, root_uri, ctx=ctx)
                     await viking_fs.delete_temp(parse_result.temp_dir_path, ctx=ctx)
@@ -384,7 +395,7 @@ class ResourceProcessor:
         path: str,
         *,
         uri: str = "",
-        timeout: Optional[float] = None,
+        timeout: Any = LOCK_TIMEOUT_DEFAULT,
     ) -> OwnedLockLease:
         """Acquire the per-resource TreeLock or raise a structured conflict."""
         from openviking.storage.errors import ResourceBusyError

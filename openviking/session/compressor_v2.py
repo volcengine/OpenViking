@@ -4,7 +4,7 @@
 Session Compressor V2 for OpenViking.
 
 Uses the new Memory Templating System with ReAct orchestrator.
-Maintains the same interface as compressor.py for backward compatibility.
+Maintains the service-facing compressor interface.
 """
 
 import asyncio
@@ -20,22 +20,24 @@ from openviking.core.namespace import (
 from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory import ExtractLoop, MemoryUpdater
-from openviking.session.memory.dataclass import ResolvedOperations
+from openviking.session.memory.dataclass import ResolvedOperations, StoredLink
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
-from openviking.session.memory.memory_updater import MemoryUpdateResult
+from openviking.session.memory.memory_updater import ExtractContext, MemoryUpdateResult, write_stored_links
 from openviking.session.memory.utils.json_parser import JsonUtils
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.uri import render_template
+from openviking.session.skill import SkillOperationUpdater, dedup_session_skill_operations
+from openviking.session.skill.session_skill_context_provider import SESSION_SKILL_MEMORY_TYPE
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import VikingFS, get_viking_fs
 from openviking.telemetry import get_current_telemetry, tracer
+from openviking.utils.skill_processor import SkillProcessor
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
 
-MAX_SOURCE_TRAJECTORIES = 5  # keep only the most recent N trajectory URIs per experience
 _MEMORY_LOCK_RETRY_WARNING_INTERVAL_SECONDS = 10.0
 
 ExtractPostApply = Callable[[MemoryUpdateResult, Dict[str, List[str]], Any], Awaitable[None]]
@@ -120,9 +122,11 @@ class SessionCompressorV2:
     def __init__(
         self,
         vikingdb: VikingDBManager,
+        skill_processor: Optional[SkillProcessor] = None,
     ):
         """Initialize session compressor."""
         self.vikingdb = vikingdb
+        self.skill_processor = skill_processor
 
     def _get_or_create_react(
         self,
@@ -172,6 +176,43 @@ class SessionCompressorV2:
             registry=registry, vikingdb=self.vikingdb, transaction_handle=transaction_handle
         )
 
+    def _split_operations_by_memory_type(
+        self,
+        operations: ResolvedOperations,
+    ) -> tuple[ResolvedOperations, ResolvedOperations, list[str]]:
+        memory_upserts = []
+        skill_upserts = []
+        for operation in operations.upsert_operations:
+            if operation.memory_type == SESSION_SKILL_MEMORY_TYPE:
+                skill_upserts.append(operation)
+            else:
+                memory_upserts.append(operation)
+
+        memory_deletes = []
+        unsupported_skill_deletes = []
+        for delete_file in operations.delete_file_contents:
+            if delete_file.uri.endswith("/SKILL.md") and "/skills/" in delete_file.uri:
+                unsupported_skill_deletes.append(delete_file.uri)
+            else:
+                memory_deletes.append(delete_file)
+
+        operation_errors = list(getattr(operations, "errors", []))
+        return (
+            ResolvedOperations(
+                upsert_operations=memory_upserts,
+                delete_file_contents=memory_deletes,
+                errors=list(operation_errors),
+                resolved_links=list(getattr(operations, "resolved_links", [])),
+            ),
+            ResolvedOperations(
+                upsert_operations=skill_upserts,
+                delete_file_contents=[],
+                errors=list(operation_errors),
+                resolved_links=[],
+            ),
+            unsupported_skill_deletes,
+        )
+
     @tracer()
     async def extract_long_term_memories(
         self,
@@ -215,7 +256,7 @@ class SessionCompressorV2:
         registry = create_default_registry()
         await registry.initialize_memory_files(ctx)
 
-        # Initialize telemetry to 0 (matching v1 pattern)
+        # Initialize telemetry counters before extraction.
         telemetry = get_current_telemetry()
         telemetry.set("memory.extract.candidates.total", 0)
         telemetry.set("memory.extract.candidates.standard", 0)
@@ -341,7 +382,7 @@ class SessionCompressorV2:
                 )
                 logger.info(f"Wrote memory_diff.json to {archive_uri}")
 
-            # Report telemetry stats (matching v1 pattern)
+            # Report telemetry stats.
             telemetry = get_current_telemetry()
             telemetry.set(
                 "memory.extract.candidates.total",
@@ -406,20 +447,20 @@ class SessionCompressorV2:
         messages: List[Message],
         ctx: Optional[RequestContext] = None,
         strict_extract_errors: bool = False,
-    ) -> List[Context]:
-        """Two-phase agent-scope memory extraction (trajectory + experience).
-
-        Phase 1: extract execution trajectories from the conversation and persist them.
-        Phase 2: for each newly written trajectory, decide whether to update an existing
-        experience, create a new one, or do nothing.
-
-        Gated by `config.memory.agent_memory_enabled`. Returns [] when disabled.
-        """
+        latest_archive_overview: str = "",
+        archive_uri: str = "",
+    ) -> Dict[str, List[Any]]:
+        """Two-phase agent-scope extraction for trajectories, experiences, and session skills."""
         config = get_openviking_config()
-        if not getattr(config.memory, "agent_memory_enabled", False):
-            return []
+        include_trajectories = bool(getattr(config.memory, "agent_memory_enabled", False))
+        include_session_skills = bool(
+            getattr(config.memory, "session_skill_extraction_enabled", False)
+        )
+        empty_result: Dict[str, List[Any]] = {"contexts": [], "session_skills": []}
+        if not (include_trajectories or include_session_skills):
+            return empty_result
         if not messages or not ctx:
-            return []
+            return empty_result
 
         from openviking.session.memory.agent_experience_context_provider import (
             AgentExperienceContextProvider,
@@ -429,9 +470,15 @@ class SessionCompressorV2:
         )
 
         contexts: List[Context] = []
+        session_skill_results: List[Dict[str, Any]] = []
 
-        # Phase 1: trajectory extraction
-        traj_provider = AgentTrajectoryContextProvider(messages=messages)
+        # Phase 1: trajectory extraction, optionally co-extracting session skills.
+        traj_provider = AgentTrajectoryContextProvider(
+            messages=messages,
+            latest_archive_overview=latest_archive_overview,
+            include_trajectories=include_trajectories,
+            include_session_skills=include_session_skills,
+        )
         traj_result = await self._run_extract_phase(
             provider=traj_provider,
             messages=messages,
@@ -440,26 +487,32 @@ class SessionCompressorV2:
             phase_label="trajectory",
         )
         if traj_result is None:
-            return []
+            return empty_result
 
-        written_trajectory_uris, _, traj_contexts, _ = traj_result
+        written_trajectory_uris, _, traj_contexts, _, traj_skill_results = traj_result
         contexts.extend(traj_contexts)
+        if archive_uri:
+            for item in traj_skill_results:
+                item["archive_uri"] = archive_uri
+        session_skill_results.extend(traj_skill_results)
 
         # Deduplicate: LLM may output the same trajectory_name twice in one call,
         # producing identical URIs. Without this, experience extraction would run
         # once per duplicate and generate near-identical experiences.
         written_trajectory_uris = list(dict.fromkeys(written_trajectory_uris))
 
-        if not written_trajectory_uris:
-            tracer.info("No trajectories extracted; skipping experience phase")
-            return contexts
+        if not include_trajectories or not written_trajectory_uris:
+            if not written_trajectory_uris:
+                tracer.info("No trajectories extracted; skipping experience phase")
+            return {
+                "contexts": contexts,
+                "session_skills": session_skill_results,
+            }
 
         # Phase 2: for each new trajectory, consolidate into experiences.
         viking_fs = get_viking_fs()
         for traj_uri in written_trajectory_uris:
             try:
-                from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
-
                 mf = MemoryFileUtils.read(await viking_fs.read_file(traj_uri, ctx=ctx) or "")
                 traj_content = mf.content
             except Exception as e:
@@ -507,7 +560,6 @@ class SessionCompressorV2:
                 phase_label=f"experience({traj_uri})",
                 post_apply=_append_sources_before_unlock,
             )
-
             if exp_result is None:
                 fallback_uris = await self._single_existing_experience_uris(
                     exp_dir=exp_dir,
@@ -523,10 +575,12 @@ class SessionCompressorV2:
                     )
                 continue
 
-            _, _, exp_contexts, _ = exp_result
+            _, _, exp_contexts, _, _ = exp_result
             contexts.extend(exp_contexts)
-
-        return contexts
+        return {
+            "contexts": contexts,
+            "session_skills": session_skill_results,
+        }
 
     async def _resolve_source_target_experience_uris(
         self,
@@ -604,13 +658,13 @@ class SessionCompressorV2:
     ):
         """Run one ExtractLoop phase with its own lock scope, then apply operations.
 
-        Returns (written_uris, edited_uris, contexts, inheritance_map) on success,
-        where inheritance_map maps new experience URI → inherited source_trajectory URIs
-        (only populated for experiences that supersede an existing one).
+        Returns (written_uris, edited_uris, contexts, inheritance_map, session_skill_results)
+        on success, where inheritance_map maps new experience URI → inherited
+        source_trajectory URIs (only populated for experiences that supersede an
+        existing one).
         Returns None on failure (unless strict_extract_errors is True, in which case
         the exception is re-raised).
         """
-        from openviking.session.memory.memory_updater import ExtractContext
         from openviking.storage.transaction import get_lock_manager, init_lock_manager
 
         config = get_openviking_config()
@@ -645,7 +699,11 @@ class SessionCompressorV2:
 
         try:
             if lock_manager:
-                schemas = provider.get_memory_schemas(ctx)
+                schemas = [
+                    schema
+                    for schema in provider.get_memory_schemas(ctx)
+                    if getattr(schema, "memory_type", None) != SESSION_SKILL_MEMORY_TYPE
+                ]
                 user_ids = [ctx.user.user_id] if ctx and ctx.user else ["default"]
                 agent_ids = [ctx.user.agent_id] if ctx and ctx.user else ["default"]
                 exact_lock_paths, tree_lock_dirs = _render_memory_schema_locks(
@@ -690,7 +748,7 @@ class SessionCompressorV2:
 
             if operations is None:
                 tracer.info(f"[{phase_label}] No memory operations generated")
-                return [], [], [], {}
+                return [], [], [], {}, []
 
             # Log raw LLM operations before applying.
             _op_items = [
@@ -707,33 +765,78 @@ class SessionCompressorV2:
             # superseding experience inherits the old source_trajectories.
             inheritance_map = await self._resolve_supersedes(operations, ctx, viking_fs, provider)
 
-            registry = provider._get_registry()
-            updater = self._get_or_create_updater(registry, transaction_handle)
-            result = await updater.apply_operations(
-                operations,
-                ctx,
-                extract_context=extract_context,
-                isolation_handler=isolation_handler,
+            memory_operations, skill_operations, unsupported_skill_deletes = (
+                self._split_operations_by_memory_type(operations)
             )
+            if unsupported_skill_deletes:
+                logger.warning(
+                    "[%s] Ignoring unsupported session skill deletes: %s",
+                    phase_label,
+                    unsupported_skill_deletes,
+                )
+
+            memory_result = MemoryUpdateResult()
+            if (
+                memory_operations.upsert_operations
+                or memory_operations.delete_file_contents
+                or memory_operations.errors
+            ):
+                registry = provider._get_registry()
+                updater = self._get_or_create_updater(registry, transaction_handle)
+                memory_result = await updater.apply_operations(
+                    memory_operations,
+                    ctx,
+                    extract_context=extract_context,
+                    isolation_handler=isolation_handler,
+                )
 
             tracer.info(
-                f"[{phase_label}] Applied: written={len(result.written_uris)}, "
-                f"edited={len(result.edited_uris)}, deleted={len(result.deleted_uris)}, "
-                f"errors={len(result.errors)}"
+                f"[{phase_label}] Applied memory ops: written={len(memory_result.written_uris)}, "
+                f"edited={len(memory_result.edited_uris)}, deleted={len(memory_result.deleted_uris)}, "
+                f"errors={len(memory_result.errors)}"
             )
 
             if post_apply:
-                await post_apply(result, inheritance_map, transaction_handle)
+                await post_apply(memory_result, inheritance_map, transaction_handle)
+
+            skill_results: List[Dict[str, Any]] = []
+            if skill_operations.upsert_operations:
+                if not self.skill_processor:
+                    raise RuntimeError("SkillProcessor is required for session skill extraction")
+                skill_operations = dedup_session_skill_operations(skill_operations)
+                skill_updater = SkillOperationUpdater(
+                    registry=provider._get_registry(),
+                    skill_processor=self.skill_processor,
+                    viking_fs=viking_fs,
+                )
+                skill_result = await skill_updater.apply_operations(skill_operations, ctx)
+                tracer.info(
+                    f"[{phase_label}] Applied session skill ops: written={len(skill_result.written_uris)}, "
+                    f"edited={len(skill_result.edited_uris)}, errors={len(skill_result.errors)}"
+                )
+                if skill_result.errors:
+                    logger.warning(
+                        "[%s] Session skill extraction completed with %d errors",
+                        phase_label,
+                        len(skill_result.errors),
+                    )
+                skill_results = list(skill_result.operation_results)
 
             contexts: List[Context] = []
-            for uri in result.written_uris:
+            for uri in memory_result.written_uris:
                 contexts.append(Context(uri=uri, category="memory_write", context_type="memory"))
-            for uri in result.edited_uris:
+            for uri in memory_result.edited_uris:
                 contexts.append(Context(uri=uri, category="memory_edit", context_type="memory"))
-            for uri in result.deleted_uris:
+            for uri in memory_result.deleted_uris:
                 contexts.append(Context(uri=uri, category="memory_delete", context_type="memory"))
 
-            return list(result.written_uris), list(result.edited_uris), contexts, inheritance_map
+            return (
+                list(memory_result.written_uris),
+                list(memory_result.edited_uris),
+                contexts,
+                inheritance_map,
+                skill_results,
+            )
         except Exception as e:
             logger.error(f"[{phase_label}] Failed to extract: {e}", exc_info=True)
             if strict_extract_errors:
@@ -801,15 +904,13 @@ class SessionCompressorV2:
                 operations.delete_file_contents.append(old_mf)
                 tracer.info(f"[supersedes] '{supersedes_name}' → queued for delete: {old_uri}")
 
-                # Map inherited source_trajectories to the new (superseding) URI only.
+                # Inherit traj URIs from old exp's links (exp→traj, derived_from) to the new URI only.
                 if new_uri:
-                    existing = old_mf.extra_fields.get("source_trajectories", [])
-                    if isinstance(existing, list):
-                        inherited = list(existing)
-                    elif isinstance(existing, str) and existing.strip():
-                        inherited = [line.strip() for line in existing.splitlines() if line.strip()]
-                    else:
-                        inherited = []
+                    inherited = [
+                        link.get("to_uri", "")
+                        for link in old_mf.links
+                        if link.get("link_type") == "derived_from" and link.get("to_uri", "")
+                    ]
                     if inherited:
                         inheritance_map[new_uri] = inherited
             except Exception as e:
@@ -825,10 +926,10 @@ class SessionCompressorV2:
         viking_fs,
         lock_handle: Optional[Any] = None,
     ) -> None:
-        """Append traj_uris to the source_trajectories list of each experience file.
+        """Write bidirectional StoredLinks between traj_uris and each exp file.
 
-        This is the system-side management of source_trajectories — the LLM never
-        outputs this field; the pipeline appends the batch after a write or edit.
+        Called after experience write/edit. The LLM never outputs these links;
+        the pipeline appends them so the relationship is always system-managed.
         """
         normalized_traj_uris = [uri for uri in traj_uris if uri]
         if not normalized_traj_uris:
@@ -872,34 +973,32 @@ class SessionCompressorV2:
         ctx,
         viking_fs,
     ) -> None:
+        from datetime import timezone
+        from openviking.session.memory.merge_op.link_merge import merge_links
+
         raw = await viking_fs.read_file(exp_uri, ctx=ctx) or ""
         mf = MemoryFileUtils.read(raw, uri=exp_uri)
 
-        existing = mf.extra_fields.get("source_trajectories", [])
-        if isinstance(existing, list):
-            uris = list(existing)
-        elif isinstance(existing, str) and existing.strip():
-            uris = [line.strip() for line in existing.splitlines() if line.strip()]
+        # exp→traj: one directed edge per trajectory.
+        # write_stored_links writes it to exp.links (forward) and traj.backlinks (reverse) automatically.
+        now = datetime.now(timezone.utc).isoformat()
+        links = [
+            StoredLink(from_uri=exp_uri, to_uri=t, link_type="derived_from", weight=1.0, created_at=now)
+            for t in traj_uris
+        ]
+
+        new_exp_links = merge_links(mf.links, [l.model_dump() for l in links])
+        links_changed = len(new_exp_links) != len(mf.links)
+        mf.links = new_exp_links
+
+        if links_changed:
+            await viking_fs.write_file(exp_uri, MemoryFileUtils.write(mf), ctx=ctx)
+            tracer.info(f"[agent_link] wrote exp→traj links -> {exp_uri} (traj_count={len(traj_uris)})")
         else:
-            uris = []
+            tracer.info(f"[agent_link] links already present, skip: {exp_uri}")
 
-        changed = False
-        for traj_uri in traj_uris:
-            if traj_uri not in uris:
-                uris.append(traj_uri)
-                changed = True
-
-        if len(uris) > MAX_SOURCE_TRAJECTORIES:
-            uris = uris[-MAX_SOURCE_TRAJECTORIES:]
-            changed = True
-
-        if changed:
-            mf.extra_fields["source_trajectories"] = uris
-            new_raw = MemoryFileUtils.write(mf)
-            await viking_fs.write_file(exp_uri, new_raw, ctx=ctx)
-            tracer.info(f"[source_traj] appended {len(traj_uris)} trajectories -> {exp_uri}")
-        else:
-            tracer.info(f"[source_traj] already present, skip: {exp_uri}")
+        # Write traj.backlinks — exp_uri already handled above
+        await write_stored_links(links, ctx, viking_fs, skip_uris={exp_uri})
 
     async def _build_memory_diff(
         self,
