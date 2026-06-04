@@ -163,7 +163,10 @@ async def build_index_expectations(
             expectations.append(IndexExpectation(uri=uri, rel_path=rel_path, level=1))
 
     for uri, rel_path, name in _file_candidates(root_uri, entries):
-        if get_resource_content_type(name) == ResourceContentType.TEXT:
+        if (
+            await get_resource_content_type(name, file_path=uri, ctx=ctx)
+            == ResourceContentType.TEXT
+        ):
             expectations.append(IndexExpectation(uri=uri, rel_path=rel_path, level=2))
 
     return tuple(sorted(expectations, key=lambda item: (item.rel_path, item.level)))

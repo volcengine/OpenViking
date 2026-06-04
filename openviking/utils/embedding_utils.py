@@ -32,6 +32,33 @@ _PORTABLE_SCALAR_FIELDS = frozenset(
     }
 )
 
+# Maximum bytes to read for content sniffing.
+_SNIFF_READ_SIZE = 1024
+# If more than this ratio of null bytes in the sample, treat as binary.
+_SNIFF_NULL_BYTE_RATIO = 0.05
+
+# Magic bytes for content-based file type detection.
+_IMAGE_MAGIC = (
+    (b"\x89PNG\r\n\x1a\n",),
+    (b"\xff\xd8\xff",),
+    (b"GIF87a", b"GIF89a"),
+    (b"BM",),
+    (b"RIFF",),  # WebP: RIFF....WEBP — checked below
+)
+_VIDEO_MAGIC = (
+    (b"\x00\x00\x00",),  # MP4 ftyp box — checked via 'ftyp' substring
+    (b"RIFF",),  # AVI: RIFF....AVI — checked below
+    (b"\x30\x26\xb2\x75",),  # WMV
+    (b"FLV",),
+)
+_AUDIO_MAGIC = (
+    (b"ID3",),  # MP3 with ID3 tag
+    (b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"),  # MP3 frame sync
+    (b"RIFF",),  # WAV: RIFF....WAVE — checked below
+    (b"\xff\xf1", b"\xff\xf9"),  # AAC
+    (b"fLaC",),  # FLAC
+)
+
 
 def _apply_scalar_overrides(embedding_msg, overrides: Optional[Dict[str, Any]]) -> None:
     if not embedding_msg or not overrides:
@@ -113,10 +140,17 @@ async def _resolve_context_timestamps(
     return created_at, updated_at
 
 
-def get_resource_content_type(file_name: str) -> Optional[ResourceContentType]:
-    """Determine resource content type based on file extension.
+async def get_resource_content_type(
+    file_name: str,
+    file_path: Optional[str] = None,
+    ctx: Optional[RequestContext] = None,
+) -> Optional[ResourceContentType]:
+    """Determine resource content type based on file extension and content sniffing.
 
-    Returns None if the file type is not recognized.
+    When extension matching fails and *file_path* is provided, reads the file
+    and falls back to magic-byte / null-byte-ratio content sniffing.
+
+    Returns None if the file type cannot be determined.
     """
     file_name = file_name.lower()
 
@@ -190,6 +224,72 @@ def get_resource_content_type(file_name: str) -> Optional[ResourceContentType]:
         return ResourceContentType.VIDEO
     elif any(file_name.endswith(ext) for ext in audio_extensions):
         return ResourceContentType.AUDIO
+
+    # Fall back to content sniffing when file_path is available.
+    if file_path:
+        try:
+            raw = await get_viking_fs().read_file_bytes(file_path, ctx=ctx)
+            return _sniff_content_type(raw)
+        except Exception:
+            pass
+
+    return None
+
+
+def _sniff_content_type(content: bytes) -> Optional[ResourceContentType]:
+    """Detect file type from raw content bytes using magic bytes and null-byte ratio.
+
+    Returns ResourceContentType or None if undetermined.
+    """
+    if not content:
+        return None
+
+    sample = content[:_SNIFF_READ_SIZE]
+
+    # --- Magic byte detection ---
+
+    # Image: PNG, JPEG, GIF, BMP
+    for candidates in _IMAGE_MAGIC:
+        for magic in candidates:
+            if sample.startswith(magic):
+                if magic == b"RIFF":
+                    # RIFF container: WebP has "WEBP" at offset 8
+                    if len(sample) > 11 and sample[8:12] == b"WEBP":
+                        return ResourceContentType.IMAGE
+                    # AVI has "AVI " at offset 8
+                    if len(sample) > 11 and sample[8:12] == b"AVI ":
+                        return ResourceContentType.VIDEO
+                    # WAV has "WAVE" at offset 8
+                    if len(sample) > 11 and sample[8:12] == b"WAVE":
+                        return ResourceContentType.AUDIO
+                    continue
+                return ResourceContentType.IMAGE
+
+    # Video: MP4 (ftyp box), WMV, FLV
+    for candidates in _VIDEO_MAGIC:
+        for magic in candidates:
+            if magic == b"\x00\x00\x00":
+                # MP4: bytes 4-7 are "ftyp"
+                if len(sample) > 7 and sample[4:8] == b"ftyp":
+                    return ResourceContentType.VIDEO
+                continue
+            if magic == b"RIFF":
+                continue  # already handled above
+            if sample.startswith(magic):
+                return ResourceContentType.VIDEO
+
+    # Audio: MP3 (ID3 / frame sync), AAC, FLAC
+    for candidates in _AUDIO_MAGIC:
+        for magic in candidates:
+            if magic == b"RIFF":
+                continue  # already handled above
+            if sample.startswith(magic):
+                return ResourceContentType.AUDIO
+
+    # --- Null-byte ratio: binary vs text ---
+    null_count = sample.count(b"\x00")
+    if (null_count / len(sample)) <= _SNIFF_NULL_BYTE_RATIO:
+        return ResourceContentType.TEXT
 
     return None
 
@@ -349,13 +449,13 @@ async def vectorize_file(
             owner_space=owner_space_for_uri(file_path, ctx),
         )
 
-        content_type = get_resource_content_type(file_name)
+        content_type = await get_resource_content_type(file_name, file_path=file_path, ctx=ctx)
         embedding_cfg = get_openviking_config().embedding
         configured_text_source = getattr(embedding_cfg, "text_source", "content_only")
         effective_text_source = "summary_only" if use_summary else configured_text_source
 
         if content_type is None:
-            # Unsupported file type: fall back to summary if available
+            # Still unknown: fall back to summary if available.
             if summary:
                 logger.warning(
                     f"Unsupported file type for {file_path}, falling back to summary for vectorization"

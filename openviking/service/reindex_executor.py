@@ -1279,7 +1279,8 @@ class ReindexExecutor:
         text_source = getattr(get_openviking_config().embedding, "text_source", "summary_first")
         existing = await self._fetch_existing_record(uri=uri, level=2, ctx=ctx)
         fallback = self._record_abstract(existing)
-        content_type = get_resource_content_type(uri.rsplit("/", 1)[-1])
+        file_name = uri.rsplit("/", 1)[-1]
+        content_type = await get_resource_content_type(file_name, file_path=uri, ctx=ctx)
 
         if content_type == ResourceContentType.TEXT:
             content = await self._safe_read_text(uri, ctx=ctx)
