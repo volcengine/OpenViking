@@ -106,17 +106,17 @@ OpenViking CLI configs can hold a user key, a root key, or both.
 - Root key: use this for admin work and commands that require `--sudo`. A root key has no built-in tenant identity. If a config only has a root key, it must also include `--account` and `--user`; that root key then serves normal commands for that identity and `--sudo` commands.
 - User key plus root key: use this when the same config should support daily data work and occasional admin work. Normal commands use the user key. `--sudo` commands use the root key with the configured account and user.
 
-For VolcEngine Cloud, `--account` and `--user` are optional; cloud API keys normally carry the required identity.
-
 ## Choose a Target
 
 ### VolcEngine Cloud
 
 Choose this when you want OpenViking hosted on VolcEngine Cloud.
 
-- Server endpoint is fixed: `https://api.vikingdb.cn-beijing.volces.com/openviking`
+- Server endpoint used by `ov`: `https://api.vikingdb.cn-beijing.volces.com/openviking`
+- Console page for API keys: https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing
+- In the console, go to User Management → API Key to view and copy your key.
 - API key is required.
-- Get the API key from: https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing
+- Standard setup only needs the API key. Do not ask for `--account` or `--user` unless the user's administrator specifically provides identity override values.
 
 ### Self-Managed
 
@@ -257,7 +257,7 @@ If you must read from stdin instead:
 printf '%s' "$OV_API_KEY" | ov config add cloud --name prod --api-key-stdin --activate -o json
 ```
 
-Use `--account` and `--user` only when the user or their OpenViking administrator provides those identities.
+Do not pass `--account` or `--user` for standard VolcEngine Cloud setup. Use them only when the user or their OpenViking administrator provides identity override values.
 
 ### Add a Local Self-Managed Server
 

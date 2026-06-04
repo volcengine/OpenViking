@@ -106,17 +106,17 @@ OpenViking CLI 配置可以包含 user key、root key，或同时包含两者。
 - Root key：用于管理操作和需要 `--sudo` 的命令。Root key 自身不包含租户身份。如果一个配置只有 root key，就必须同时包含 `--account` 和 `--user`；这个 root key 会同时服务于该身份下的普通命令和 `--sudo` 命令。
 - User key + root key：适合一个配置同时支持日常数据操作和偶尔的管理操作。普通命令使用 user key，`--sudo` 命令使用 root key，并带上配置中的 account 和 user。
 
-对于 VolcEngine Cloud，`--account` 和 `--user` 是可选项；cloud API key 通常已经带有需要的身份信息。
-
 ## 选择连接目标
 
 ### VolcEngine Cloud
 
 如果你希望使用火山引擎托管的 OpenViking，选择此项。
 
-- 服务端端点固定为：`https://api.vikingdb.cn-beijing.volces.com/openviking`
+- `ov` 使用的服务端端点：`https://api.vikingdb.cn-beijing.volces.com/openviking`
+- 管理 API Key 的控制台页面：https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing
+- 在控制台进入 User Management → API Key，查看并复制你的 key。
 - API Key 必填。
-- API Key 获取地址：https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing
+- 标准配置只需要 API Key。除非用户的管理员明确提供身份覆盖值，否则不要询问 `--account` 或 `--user`。
 
 ### Self-Managed
 
@@ -257,7 +257,7 @@ ov config add cloud --name prod --api-key-env OV_API_KEY --activate -o json
 printf '%s' "$OV_API_KEY" | ov config add cloud --name prod --api-key-stdin --activate -o json
 ```
 
-只有当用户或 OpenViking 管理员提供了身份信息时，才使用 `--account` 和 `--user`。
+标准 VolcEngine Cloud 配置不要传 `--account` 或 `--user`。只有当用户或 OpenViking 管理员提供身份覆盖值时，才使用它们。
 
 ### 添加本地自托管服务
 
