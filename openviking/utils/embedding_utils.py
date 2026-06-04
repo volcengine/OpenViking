@@ -230,8 +230,10 @@ async def get_resource_content_type(
         try:
             raw = await get_viking_fs().read_file_bytes(file_path, ctx=ctx)
             return _sniff_content_type(raw)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(
+                f"Content sniffing failed for {file_path}, falling back to extension-only detection: {e}"
+            )
 
     return None
 
