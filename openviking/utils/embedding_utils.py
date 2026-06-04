@@ -228,7 +228,7 @@ async def get_resource_content_type(
     # Fall back to content sniffing when file_path is available.
     if file_path:
         try:
-            raw = await get_viking_fs().read_file_bytes(file_path, ctx=ctx)
+            raw = await get_viking_fs().read(file_path, offset=0, size=_SNIFF_READ_SIZE, ctx=ctx)
             return _sniff_content_type(raw)
         except Exception as e:
             logger.debug(
