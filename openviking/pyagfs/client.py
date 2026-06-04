@@ -127,6 +127,45 @@ class AGFSClient:
         except Exception as e:
             self._handle_request_error(e)
 
+    def tree_directory(
+        self,
+        path: str,
+        show_hidden: bool = False,
+        node_limit: Optional[int] = None,
+        level_limit: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Recursively list a directory tree.
+
+        Mirrors the native binding client's ``tree_directory`` so the HTTP
+        client exposes the same surface.
+
+        Args:
+            path: Directory path to traverse.
+            show_hidden: Include hidden entries (names starting with '.').
+            node_limit: Maximum number of nodes to return (None = unlimited).
+            level_limit: Maximum depth relative to the query root (None = unlimited).
+
+        Returns:
+            List of tree entry dicts (path, rel_path, info, extra).
+        """
+        try:
+            params: Dict[str, Any] = {"path": path}
+            if show_hidden:
+                params["show_hidden"] = "true"
+            if node_limit is not None:
+                params["node_limit"] = str(node_limit)
+            if level_limit is not None:
+                params["level_limit"] = str(level_limit)
+            response = self.session.get(
+                f"{self.api_base}/tree", params=params, timeout=self.timeout
+            )
+            response.raise_for_status()
+            data = response.json()
+            entries = data.get("data")
+            return entries if entries is not None else []
+        except Exception as e:
+            self._handle_request_error(e)
+
     def read(self, path: str, offset: int = 0, size: int = -1, stream: bool = False):
         return self.cat(path, offset, size, stream)
 

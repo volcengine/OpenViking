@@ -128,7 +128,7 @@ impl HttpClient {
 
     // ============ File Helper Methods ============
 
-    fn create_uploader(&self) -> FileUploader {
+    fn create_uploader(&self) -> FileUploader<'_> {
         FileUploader::new(&self.base).with_upload_mode(self.upload_mode())
     }
 
@@ -282,7 +282,7 @@ impl HttpClient {
                 }
             };
 
-            return Err(Error::Api(error_msg));
+            return Err(Error::api(error_msg));
         }
 
         response
@@ -776,7 +776,7 @@ impl HttpClient {
                 }
             };
 
-            return Err(Error::Api(error_msg));
+            return Err(Error::api(error_msg));
         }
 
         let bytes = response

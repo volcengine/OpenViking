@@ -88,3 +88,18 @@ class AsyncAGFSClient:
 
     async def grep(self, **kwargs: Any) -> Dict[str, Any]:
         return await self.run("grep", **kwargs)
+
+    async def tree_directory(
+        self,
+        path: str,
+        show_hidden: bool = False,
+        node_limit: int | None = None,
+        level_limit: int | None = None,
+    ) -> list[Dict[str, Any]]:
+        return await self.run(
+            "tree_directory",
+            path,
+            show_hidden=show_hidden,
+            node_limit=node_limit,
+            level_limit=level_limit,
+        )

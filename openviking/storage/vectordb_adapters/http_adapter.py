@@ -19,6 +19,8 @@ from .base import CollectionAdapter, _normalize_collection_names, _parse_url
 class HttpCollectionAdapter(CollectionAdapter):
     """Adapter for remote HTTP vectordb project."""
 
+    _DATA_BATCH_SIZE = 100
+
     def __init__(
         self,
         host: str,

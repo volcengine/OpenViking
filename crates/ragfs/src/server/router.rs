@@ -15,7 +15,7 @@ use tracing::Level;
 use super::handlers::{
     create_directory, create_file, delete_file, ensure_parent_dirs, get_stats, grep_content,
     health_check, list_directory, list_mounts, mount_filesystem, read_file, stat_file,
-    unmount_filesystem, write_file, AppState,
+    tree_directory, unmount_filesystem, write_file, AppState,
 };
 
 /// Create the main application router
@@ -31,6 +31,8 @@ pub fn create_router(state: AppState, enable_cors: bool) -> Router {
         .route("/directories", get(list_directory))
         .route("/directories", post(create_directory))
         .route("/directories/ensure-parent", post(ensure_parent_dirs))
+        // Tree (recursive directory listing)
+        .route("/tree", get(tree_directory))
         // Mount management
         .route("/mounts", get(list_mounts))
         .route("/mount", post(mount_filesystem))

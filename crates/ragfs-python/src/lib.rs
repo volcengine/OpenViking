@@ -13,7 +13,7 @@ use std::time::UNIX_EPOCH;
 
 use ragfs::core::{
     ConfigValue, FileInfo, FileSystem, FilesystemStats, FsOperation, GrepResult, MountableFS,
-    OperationStats, PluginConfig, WriteFlag,
+    OperationStats, PluginConfig, TreeEntry, WriteFlag,
 };
 #[cfg(feature = "s3")]
 use ragfs::plugins::S3FSPlugin;
@@ -98,6 +98,62 @@ fn file_info_to_py_dict(py: Python<'_>, info: &FileInfo) -> PyResult<Py<PyDict>>
 
     dict.set_item("isDir", info.is_dir)?;
     Ok(dict.into())
+}
+
+/// Convert TreeEntry to a Python dict:
+/// {"path": str, "rel_path": str, "info": dict, "extra": dict}
+fn tree_entry_to_py_dict(py: Python<'_>, entry: &TreeEntry) -> PyResult<Py<PyDict>> {
+    let dict = PyDict::new(py);
+    dict.set_item("path", &entry.path)?;
+    dict.set_item("rel_path", &entry.rel_path)?;
+    dict.set_item("info", file_info_to_py_dict(py, &entry.info)?)?;
+
+    let extra_dict = PyDict::new(py);
+    for (k, v) in &entry.extra {
+        let py_val: Py<PyAny> = serde_json_to_py(py, v)?;
+        extra_dict.set_item(k, py_val)?;
+    }
+    dict.set_item("extra", extra_dict)?;
+
+    Ok(dict.into())
+}
+
+/// Convert a serde_json::Value to a Python object.
+fn serde_json_to_py(py: Python<'_>, val: &serde_json::Value) -> PyResult<Py<PyAny>> {
+    match val {
+        serde_json::Value::Null => Ok(py.None()),
+        serde_json::Value::Bool(b) => {
+            let val: bool = *b;
+            let bound = val
+                .into_pyobject(py)
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+            Ok(bound.as_any().clone().unbind())
+        }
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Ok(i.into_pyobject(py)?.into_any().unbind())
+            } else if let Some(f) = n.as_f64() {
+                Ok(f.into_pyobject(py)?.into_any().unbind())
+            } else {
+                Ok(py.None())
+            }
+        }
+        serde_json::Value::String(s) => Ok(s.into_pyobject(py)?.into_any().unbind()),
+        serde_json::Value::Array(arr) => {
+            let list = PyList::empty(py);
+            for item in arr {
+                list.append(serde_json_to_py(py, item)?)?;
+            }
+            Ok(list.into())
+        }
+        serde_json::Value::Object(obj) => {
+            let d = PyDict::new(py);
+            for (k, v) in obj {
+                d.set_item(k, serde_json_to_py(py, v)?)?;
+            }
+            Ok(d.into())
+        }
+    }
 }
 
 /// Convert GrepResult to a Python dict matching the Go binding JSON format:
@@ -644,6 +700,46 @@ impl RAGFSBindingClient {
         Python::attach(|py| {
             let dict = grep_result_to_py_dict(py, &result)?;
             Ok(dict.into())
+        })
+    }
+
+    /// Recursively traverse a directory tree.
+    ///
+    /// Args:
+    ///     path: The root path of the traversal
+    ///     show_hidden: Whether to include hidden files (default: False)
+    ///     node_limit: Maximum number of nodes to return (default: None, no limit)
+    ///     level_limit: Maximum depth relative to query root (default: None, no limit)
+    ///
+    /// Returns:
+    ///     A list of dicts, each with keys: path, rel_path, info, extra
+    #[pyo3(signature = (path, show_hidden=false, node_limit=None, level_limit=None))]
+    fn tree_directory(
+        &self,
+        path: String,
+        show_hidden: bool,
+        node_limit: Option<i32>,
+        level_limit: Option<i32>,
+    ) -> PyResult<Py<PyAny>> {
+        let fs = self.fs.clone();
+        let limit = node_limit.map(|n| if n < 0 { 0 } else { n as usize });
+        let level_limit_usize = level_limit.map(|n| if n < 0 { 0 } else { n as usize });
+
+        let entries = self
+            .rt
+            .block_on(async move {
+                fs.tree_directory(&path, show_hidden, limit, level_limit_usize)
+                    .await
+            })
+            .map_err(to_py_err)?;
+
+        Python::attach(|py| {
+            let list = PyList::empty(py);
+            for entry in &entries {
+                let dict = tree_entry_to_py_dict(py, entry)?;
+                list.append(dict)?;
+            }
+            Ok(list.into())
         })
     }
 

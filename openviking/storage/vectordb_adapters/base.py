@@ -60,6 +60,11 @@ class CollectionAdapter(ABC):
     Internal extension hooks for subclasses use leading underscore.
     """
 
+    # Maximum number of records per single data-plane request (upsert / fetch / delete).
+    # ``None`` means no batching (suitable for backends without a hard limit).
+    # VikingDB-backed adapters override this to 100 to avoid 400 errors.
+    _DATA_BATCH_SIZE: int | None = None
+
     mode: str
     _URI_FIELD_NAMES = {"uri", "parent_uri"}
 
@@ -387,28 +392,45 @@ class CollectionAdapter(ABC):
             record["id"] = record_id
             ids.append(record_id)
             normalized.append(record)
-        coll.upsert_data(normalized)
+        batch_size = self._DATA_BATCH_SIZE
+        if not normalized:
+            pass
+        elif batch_size and len(normalized) > batch_size:
+            for i in range(0, len(normalized), batch_size):
+                coll.upsert_data(normalized[i : i + batch_size])
+        else:
+            coll.upsert_data(normalized)
         return ids
 
     def get(self, ids: list[str]) -> list[Dict[str, Any]]:
+        if not ids:
+            return []
         coll = self.get_collection()
-        result = coll.fetch_data(ids)
+        batch_size = self._DATA_BATCH_SIZE
 
+        if not batch_size or len(ids) <= batch_size:
+            return self._fetch_and_normalize(coll, ids)
+
+        records: list[Dict[str, Any]] = []
+        for i in range(0, len(ids), batch_size):
+            records.extend(self._fetch_and_normalize(coll, ids[i : i + batch_size]))
+        return records
+
+    def _fetch_and_normalize(self, coll: Collection, ids: list[str]) -> list[Dict[str, Any]]:
+        result = coll.fetch_data(ids)
         records: list[Dict[str, Any]] = []
         if isinstance(result, FetchDataInCollectionResult):
             for item in result.items:
                 record = dict(item.fields) if item.fields else {}
                 record["id"] = item.id
                 records.append(self._normalize_record_for_read(record))
-            return records
-
-        if isinstance(result, dict) and "fetch" in result:
+        elif isinstance(result, dict) and "fetch" in result:
             for item in result.get("fetch", []):
                 record = dict(item.get("fields", {})) if item.get("fields") else {}
                 record_id = item.get("id")
                 if record_id:
                     record["id"] = record_id
-                    records.append(self._normalize_record_for_read(record))
+                records.append(self._normalize_record_for_read(record))
         return records
 
     def query(
@@ -483,7 +505,12 @@ class CollectionAdapter(ABC):
         if not delete_ids:
             return 0
 
-        coll.delete_data(delete_ids)
+        batch_size = self._DATA_BATCH_SIZE
+        if batch_size and len(delete_ids) > batch_size:
+            for i in range(0, len(delete_ids), batch_size):
+                coll.delete_data(delete_ids[i : i + batch_size])
+        else:
+            coll.delete_data(delete_ids)
         return len(delete_ids)
 
     @staticmethod

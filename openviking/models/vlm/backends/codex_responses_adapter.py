@@ -185,6 +185,35 @@ def _build_chat_completion_like_response(final_response: Any, model: str) -> Any
     )
 
 
+def _build_final_response_from_stream_events(
+    completed_response: Any,
+    collected_output_items: List[Any],
+    collected_text_deltas: List[str],
+    has_function_calls: bool,
+) -> Any:
+    output = getattr(completed_response, "output", None) if completed_response is not None else None
+    if output:
+        return completed_response
+
+    fallback_output: List[Any] = []
+    if collected_output_items:
+        fallback_output = list(collected_output_items)
+    elif collected_text_deltas and not has_function_calls:
+        fallback_output = [
+            SimpleNamespace(
+                type="message",
+                role="assistant",
+                status="completed",
+                content=[SimpleNamespace(type="output_text", text="".join(collected_text_deltas))],
+            )
+        ]
+
+    return SimpleNamespace(
+        output=fallback_output,
+        usage=getattr(completed_response, "usage", None) if completed_response is not None else None,
+    )
+
+
 class CodexCompletionsAdapter:
     def __init__(self, client_factory: Callable[[], Any], model: str):
         self._client_factory = client_factory
@@ -218,7 +247,9 @@ class CodexCompletionsAdapter:
         collected_output_items: List[Any] = []
         collected_text_deltas: List[str] = []
         has_function_calls = False
-        with client.responses.stream(**response_kwargs) as stream:
+        completed_response = None
+        stream = client.responses.create(**response_kwargs, stream=True)
+        try:
             for event in stream:
                 event_type = getattr(event, "type", "")
                 if event_type == "response.output_item.done":
@@ -233,22 +264,19 @@ class CodexCompletionsAdapter:
                     continue
                 if "function_call" in event_type:
                     has_function_calls = True
-            final_response = stream.get_final_response()
-        output = getattr(final_response, "output", None)
-        if not output:
-            if collected_output_items:
-                final_response.output = list(collected_output_items)
-            elif collected_text_deltas and not has_function_calls:
-                final_response.output = [
-                    SimpleNamespace(
-                        type="message",
-                        role="assistant",
-                        status="completed",
-                        content=[
-                            SimpleNamespace(type="output_text", text="".join(collected_text_deltas))
-                        ],
-                    )
-                ]
+                    continue
+                if event_type == "response.completed":
+                    completed_response = getattr(event, "response", None)
+        finally:
+            close = getattr(stream, "close", None)
+            if callable(close):
+                close()
+        final_response = _build_final_response_from_stream_events(
+            completed_response,
+            collected_output_items,
+            collected_text_deltas,
+            has_function_calls,
+        )
         return _build_chat_completion_like_response(final_response, model)
 
     def create(self, **kwargs) -> Any:

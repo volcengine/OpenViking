@@ -151,25 +151,6 @@ pub struct BaseClient {
 }
 
 impl BaseClient {
-    /// Create a new BaseClient with minimal configuration for health probing
-    pub fn new_simple(base_url: impl Into<String>, timeout_secs: f64) -> Self {
-        let http = ReqwestClient::builder()
-            .timeout(std::time::Duration::from_secs_f64(timeout_secs))
-            .build()
-            .expect("Failed to build HTTP client");
-
-        Self {
-            http,
-            base_url: base_url.into().trim_end_matches('/').to_string(),
-            api_key: None,
-            account: None,
-            user: None,
-            agent_id: None,
-            profile_enabled: false,
-            extra_headers: None,
-        }
-    }
-
     pub fn new(
         base_url: impl Into<String>,
         api_key: Option<String>,
@@ -203,10 +184,6 @@ impl BaseClient {
             merged.push(("profile".to_string(), "1".to_string()));
         }
         merged
-    }
-
-    pub fn base_url(&self) -> &str {
-        &self.base_url
     }
 
     pub fn user_id(&self) -> Option<&str> {
@@ -287,7 +264,10 @@ impl BaseClient {
         };
 
         if !status.is_success() {
-            return Err(Error::Api(api_error_from_envelope(&json, status)));
+            return Err(Error::api_with_status(
+                api_error_from_envelope(&json, status),
+                status.as_u16(),
+            ));
         }
 
         if let Some(error) = json.get("error") {
@@ -300,7 +280,10 @@ impl BaseClient {
                     .get("message")
                     .and_then(|m| m.as_str())
                     .unwrap_or("Unknown error");
-                return Err(Error::Api(format!("[{}] {}", code, message)));
+                return Err(Error::api_with_status(
+                    format!("[{}] {}", code, message),
+                    status.as_u16(),
+                ));
             }
         }
 

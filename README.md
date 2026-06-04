@@ -29,6 +29,8 @@ English / [中文](README_CN.md) / [日本語](README_JA.md)
 
 ***
 
+✨ **May 2026 Update**: Updated OpenViking benchmark results across User Memory, Agent Memory, and Knowledge Base QA scenarios. → See [Evaluation Highlights](#evaluation-highlights).
+
 ## Overview
 
 ### Challenges in Agent Development
@@ -54,68 +56,6 @@ With OpenViking, developers can build an Agent's brain just like managing local 
 - **Directory Recursive Retrieval** → **Improves Retrieval Effect**: Supports native filesystem retrieval methods, combining directory positioning with semantic search to achieve recursive and precise context acquisition.
 - **Visualized Retrieval Trajectory** → **Observable Context**: Supports visualization of directory retrieval trajectories, allowing users to clearly observe the root cause of issues and guide retrieval logic optimization.
 - **Automatic Session Management** → **Context Self-Iteration**: Automatically compresses content, resource references, tool calls, etc., in conversations, extracting long-term memory, making the Agent smarter with use.
-
-***
-
-## Evaluation Highlights
-
-OpenViking 1.0 has been evaluated across three scenarios: long-conversation user memory, agent experience memory, and knowledge-base QA.
-
-### 1. User Memory on LoCoMo
-
-On the LoCoMo benchmark, OpenViking improves long-context QA accuracy while reducing both latency and token usage across multiple agent integrations:
-
-| Integration | Accuracy | Avg. Query Time | Total Input Tokens |
-| ----------- | -------- | --------------- | ------------------ |
-| OpenClaw + native memory | 24.20% | 95.14s | 392,559,404 |
-| OpenClaw + OpenViking | **82.08%** | 38.8s | 37,423,456 |
-| Hermes native memory | 33.38% | 82.4s | 79,228,398 |
-| Hermes + OpenViking | **82.86%** | **27.9s** | 52,026,755 |
-| Claude Code auto-memory | 57.21% | 49.1s | 353,306,422 |
-| Claude Code + OpenViking | **80.32%** | **20.4s** | 129,968,899 |
-
-### 1.2 Key Efficiency Improvements
-
-| Agent | Accuracy Improvement | Latency Reduction | Token Reduction |
-| ----- | -------------------- | ----------------- | --------------- |
-| OpenClaw | 24.20% → 82.08% (+3.39×) | -59.22% | **-91.0%** |
-| Hermes | 33.38% → 82.86% (+2.48×) | -66.10% | -34.3% |
-| Claude Code | 57.21% → 80.32% (+1.40×) | -58.45% | -63.2% |
-
-### 2. Agent Experience Memory on tau2-bench
-
-For multi-turn agent tasks on tau2-bench, OpenViking's experience memory improves task success in both retail and airline domains:
-
-| Setting | Retail Accuracy | Airline Accuracy |
-| ------- | --------------- | ---------------- |
-| LLM without memory | 70.94% | 54.38% |
-| LLM + OpenViking experience memory | **77.81%** (+6.87pp) | **66.25%** (+11.87pp) |
-
-### 3. Knowledge Base QA on HotpotQA
-
-On multi-hop RAG tasks from HotpotQA, increasing OpenViking retrieval from top-5 to top-20 delivers the highest accuracy in this comparison while keeping retrieval latency low:
-
-| Method | Retrieval Pattern | Accuracy | Tokens / QA | Latency / QA |
-| ------ | ----------------- | -------- | ----------- | ------------ |
-| Naive RAG | Vector retrieval | 62.50% | 1,290 | **0.11s** |
-| HippoRAG 2 | Vector + knowledge graph | 61.00% | 726 | 20s |
-| LightRAG | Vector + knowledge graph | 89.00% | 28,443 | 75s |
-| LangChain SQL (Agent) | SQL agent | 78.00% | 4,776 | 132s |
-| OpenViking (top-5) | Vector retrieval | 72.75% | 3,154 | 0.22s |
-| OpenViking (top-20) | Vector retrieval | **91.00%** | 12,533 | 0.23s |
-| Nanobot + OpenViking (Agent) | Vector retrieval + Agent | 87.00% | 71,300 | 61.6s |
-
-### 3.2 Single-turn RAG Across 5 Open-source Datasets
-
-| Method | Retrieval Pattern | Average Accuracy | Indexing Tokens | Tokens / QA | Retrieval Latency |
-| ------ | ----------------- | ---------------- | --------------- | ----------- | ----------------- |
-| Naive RAG | Vector retrieval | 53.93% | 2,755,356 | 1,435 | **0.13s** |
-| PageIndex | Vector + tree structure | 36.75% | 5,609,206 | 710,480 | 84.60s |
-| HippoRAG 2 | Vector + knowledge graph | 44.50% | 124,963,618 | **637** | 18.83s |
-| LightRAG | Vector + knowledge graph | **76.00%** | 62,705,469 | 27,035 | 9.19s |
-| **OpenViking** | **Vector retrieval** | **66.87%** | **8,671,538** | **3,060** | **0.19s** |
-
-> Datasets: FinanceBench, NaturalQuestions, ClapNQ, Qasper, and SyllabusQA. OpenViking reaches 66.87% average accuracy with very low retrieval latency (0.19s), while indexing cost is only 13.8% of LightRAG.
 
 ## Quick Start
 
@@ -392,7 +332,7 @@ If you prefer manual configuration, create `~/.openviking/ov.conf`, remove the c
     "api_key"  : "<your-api-key>",     // Model service API Key (optional for openai-codex)
     "provider" : "<provider-type>",    // Provider type (volcengine, openai, openai-codex, kimi, glm, etc.)
     "model"    : "<model-name>",       // VLM model name (e.g., doubao-seed-2-0-pro-260215 or gpt-4-vision-preview)
-    "max_concurrent": 100              // Max concurrent LLM calls for semantic processing (default: 100)
+    "max_concurrent": 64              // Max concurrent LLM calls for semantic processing (default: 64)
   }
 }
 ```
@@ -430,7 +370,7 @@ If you prefer manual configuration, create `~/.openviking/ov.conf`, remove the c
     "api_key"  : "your-volcengine-api-key",
     "provider" : "volcengine",
     "model"    : "doubao-seed-2-0-pro-260215",
-    "max_concurrent": 100
+    "max_concurrent": 64
   }
 }
 ```
@@ -464,7 +404,7 @@ If you prefer manual configuration, create `~/.openviking/ov.conf`, remove the c
     "api_key"  : "your-openai-api-key",
     "provider" : "openai",
     "model"    : "gpt-4-vision-preview",
-    "max_concurrent": 100
+    "max_concurrent": 64
   }
 }
 ```
@@ -499,7 +439,7 @@ pip install "google-genai>=1.0.0"
     "api_key"  : "your-openai-api-key",
     "provider" : "openai",
     "model"    : "gpt-4o",
-    "max_concurrent": 100
+    "max_concurrent": 64
   }
 }
 ```
@@ -531,7 +471,7 @@ Use `openviking-server init` and choose `OpenAI Codex`, then run `openviking-ser
     "api_base" : "https://chatgpt.com/backend-api/codex",
     "provider" : "openai-codex",
     "model"    : "gpt-5.3-codex",
-    "max_concurrent": 100
+    "max_concurrent": 64
   }
 }
 ```
@@ -564,7 +504,7 @@ set "OPENVIKING_CONFIG_FILE=%USERPROFILE%\.openviking\ov.conf"
 
 #### CLI/Client Configuration Examples
 
-You can initialize the configuration of the CLI/client interactively through the `ov config setup-cli` command. If you have multiple openviking servers, you can also switch to other configurations using the `ov config switch` command.
+You can initialize the configuration of the CLI/client interactively through the `ov config` command. If you have multiple openviking servers, you can also switch to other configurations using the `ov config switch` command.
 
 👇 Expand to see the configuration example for your CLI/Client:
 <details>
@@ -664,6 +604,80 @@ For production environments, we recommend running OpenViking as a standalone HTT
 To ensure optimal storage performance and data security, we recommend deploying on **Volcengine Elastic Compute Service (ECS)** using the **veLinux** operating system. We have prepared a detailed step-by-step guide to get you started quickly.
 
 👉 **[View: Server Deployment & ECS Setup Guide](./docs/en/getting-started/03-quickstart-server.md)**
+
+---
+
+## Evaluation Highlights
+
+OpenViking 1.0 has been evaluated across three scenarios: long-conversation user memory, agent experience memory, and knowledge-base QA.
+
+### 1. User Memory on LoCoMo
+
+On the LoCoMo benchmark, OpenViking improves long-context QA accuracy while reducing both latency and token usage across multiple agent integrations:
+
+| Integration | Accuracy | Avg. Query Time | Total Input Tokens |
+|:-----------:|---------:|----------------:|-------------------:|
+| OpenClaw + native memory | 24.20% | 95.14s | 392,559,404 |
+| OpenClaw + OpenViking | **82.08%** | 38.8s | 37,423,456 |
+| Hermes native memory | 33.38% | 82.4s | 79,228,398 |
+| Hermes + OpenViking | **82.86%** | **27.9s** | 52,026,755 |
+| Claude Code auto-memory | 57.21% | 49.1s | 353,306,422 |
+| Claude Code + OpenViking | **80.32%** | **20.4s** | 129,968,899 |
+
+#### 1.1 Key Efficiency Improvements
+
+| Agent | Accuracy Improvement | Latency Reduction | Token Reduction |
+|:-----:|---------------------:|------------------:|----------------:|
+| OpenClaw | 24.20% → 82.08% (+3.39×) | -59.22% | **-91.0%** |
+| Hermes | 33.38% → 82.86% (+2.48×) | -66.10% | -34.3% |
+| Claude Code | 57.21% → 80.32% (+1.40×) | -58.45% | -63.2% |
+
+### 2. Agent Experience Memory on tau2-bench
+
+For multi-turn agent tasks on tau2-bench, OpenViking's experience memory improves task success in both retail and airline domains:
+
+| Setting | Retail Accuracy | Airline Accuracy |
+|:-------:|----------------:|-----------------:|
+| LLM without memory | 70.94% | 54.38% |
+| LLM + OpenViking experience memory | **77.81%** (+6.87pp) | **66.25%** (+11.87pp) |
+
+### 3. Knowledge Base QA on HotpotQA
+
+On multi-hop RAG tasks from HotpotQA, increasing OpenViking retrieval from top-5 to top-20 delivers the highest accuracy in this comparison while keeping retrieval latency low:
+
+| Method | Retrieval Pattern | Accuracy | Tokens / QA | Latency / QA |
+|:------:|:-----------------:|---------:|------------:|-------------:|
+| Naive RAG | Vector retrieval | 62.50% | 1,290 | **0.11s** |
+| HippoRAG 2 | Vector + knowledge graph | 61.00% | 726 | 20s |
+| LightRAG | Vector + knowledge graph | 89.00% | 28,443 | 75s |
+| LangChain SQL (Agent) | SQL agent | 78.00% | 4,776 | 132s |
+| OpenViking (top-5) | Vector retrieval | 72.75% | 3,154 | 0.22s |
+| OpenViking (top-20) | Vector retrieval | **91.00%** | 12,533 | 0.23s |
+| Nanobot + OpenViking (Agent) | Vector retrieval + Agent | 87.00% | 71,300 | 61.6s |
+
+#### 3.1 Single-turn RAG Across 5 Open-source Datasets
+
+| Method | Retrieval Pattern | Average Accuracy | Indexing Tokens | Tokens / QA | Retrieval Latency |
+|:------:|:-----------------:|-----------------:|----------------:|------------:|------------------:|
+| Naive RAG | Vector retrieval | 53.93% | 2,755,356 | 1,435 | **0.13s** |
+| PageIndex | Vector + tree structure | 36.75% | 5,609,206 | 710,480 | 84.60s |
+| HippoRAG 2 | Vector + knowledge graph | 44.50% | 124,963,618 | **637** | 18.83s |
+| LightRAG | Vector + knowledge graph | **76.00%** | 62,705,469 | 27,035 | 9.19s |
+| **OpenViking** | **Vector retrieval** | **66.87%** | **8,671,538** | **3,060** | **0.19s** |
+
+> Datasets: FinanceBench, NaturalQuestions, ClapNQ, Qasper, and SyllabusQA. OpenViking reaches 66.87% average accuracy with very low retrieval latency (0.19s), while indexing cost is only 13.8% of LightRAG.
+
+---
+
+## Academic Backing
+
+OpenViking open-sources a subset of the core capabilities described in the `VikingMem` paper, making the context database and memory management ideas accessible to AI agent developers.
+
+> **VikingMem: A Memory Base Management System for Stateful LLM-based Applications**
+> Jiajie Fu, Junwen Chen, Mengzhao Wang, Aoxiang He, Maojia Sheng, Xiangyu Ke, Yifan Zhu, and Yunjun Gao.
+> arXiv:2605.29640, 2026. Accepted by VLDB 2026.
+>
+> 📄 [Read the paper on arXiv](https://arxiv.org/abs/2605.29640)
 
 ## Core Concepts
 

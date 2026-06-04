@@ -1,5 +1,7 @@
 import asyncio
 import threading
+import zipfile
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -18,6 +20,61 @@ from openviking_cli.utils.config import OPENVIKING_CLI_CONFIG_ENV
 def clear_ovcli_config(monkeypatch):
     monkeypatch.delenv(OPENVIKING_CLI_CONFIG_ENV, raising=False)
     monkeypatch.setattr(http_module, "load_ovcli_config", lambda: None)
+
+
+def test_async_http_client_zip_directory_skips_symlinked_entries(tmp_path):
+    root = tmp_path / "upload"
+    root.mkdir()
+    (root / "keep.txt").write_text("keep", encoding="utf-8")
+    nested = root / "nested"
+    nested.mkdir()
+    (nested / "nested.txt").write_text("nested", encoding="utf-8")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside", encoding="utf-8")
+
+    try:
+        (root / "inside-link.txt").symlink_to(root / "keep.txt")
+        (root / "outside-link.txt").symlink_to(outside)
+        (root / "dir-link").symlink_to(tmp_path, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlinks are not available in this environment: {exc}")
+
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    zip_path = Path(client._zip_directory(str(root)))
+    try:
+        with zipfile.ZipFile(zip_path) as zipf:
+            names = sorted(zipf.namelist())
+    finally:
+        zip_path.unlink(missing_ok=True)
+
+    assert names == ["keep.txt", "nested/nested.txt"]
+
+
+def test_async_http_client_zip_directory_warns_when_archive_is_empty(tmp_path):
+    root = tmp_path / "upload"
+    root.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside", encoding="utf-8")
+
+    try:
+        (root / "outside-link.txt").symlink_to(outside)
+    except OSError as exc:
+        pytest.skip(f"symlinks are not available in this environment: {exc}")
+
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    with patch.object(http_module.logger, "warning") as mock_warning:
+        zip_path = Path(client._zip_directory(str(root)))
+    try:
+        with zipfile.ZipFile(zip_path) as zipf:
+            names = sorted(zipf.namelist())
+    finally:
+        zip_path.unlink(missing_ok=True)
+
+    assert names == []
+    mock_warning.assert_called_once_with(
+        "Created empty directory upload archive for %s",
+        root,
+    )
 
 
 async def test_async_openviking_reindex_forwards_to_local_client(tmp_path):

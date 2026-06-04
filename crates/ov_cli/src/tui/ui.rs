@@ -8,10 +8,6 @@ use ratatui::{
 
 use super::app::{App, Panel};
 
-pub fn render(frame: &mut Frame, app: &App) {
-    let _ = render_with_content_area(frame, app);
-}
-
 /// Render the UI and return the content area rect for image preview
 pub fn render_with_content_area(frame: &mut Frame, app: &App) -> (Rect, Rect) {
     let chunks = Layout::default()

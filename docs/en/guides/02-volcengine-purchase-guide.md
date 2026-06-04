@@ -58,7 +58,7 @@ Visit: [Model Management Page](https://console.volcengine.com/ark/region:ark+cn-
 
 1. Select **"Provisioning Management"** (开通管理) in the left navigation bar.
 2. Select the **"Language Model"** (语言模型) column.
-3. Find the **Doubao-Seed-1.8** model.
+3. Find the **Doubao-Seed-2.0** model.
 4. Click the "Activate" (开通) button.
 5. Confirm the payment method.
 
@@ -277,7 +277,7 @@ Error: Connection timeout
 
 | Model Name | Current Version | Release Date |
 |------------|-----------------|--------------|
-| Doubao-Seed-1.8 | `doubao-seed-2-0-pro-260215` | 2025-12-28 |
+| Doubao-Seed-2.0 | `doubao-seed-2-0-pro-260215` | 2025-12-28 |
 | Doubao-Embedding-Vision | `doubao-embedding-vision-251215` | 2025-06-15 |
 
 > Note: Model versions may be updated, please refer to the Volcano Ark Console for the latest information.

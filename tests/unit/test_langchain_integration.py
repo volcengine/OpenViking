@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from typing import Any
+
 import pytest
 
 pytest.importorskip("langchain_core")
@@ -33,11 +36,29 @@ from openviking.integrations.langchain.history import (
 )
 from openviking.integrations.langchain.middleware import _message_signature
 from openviking.integrations.langchain.tools import _archive_grep_pattern
+from openviking_cli.exceptions import InvalidArgumentError
 
 
 def test_langchain_client_exposes_apply_commit_policy_without_legacy_alias():
     assert hasattr(client_helpers, "apply_commit_policy")
     assert not hasattr(client_helpers, "maybe_commit_session")
+
+
+def _tool_schema(tool: Any) -> dict[str, Any]:
+    args_schema = tool.args_schema
+    if hasattr(args_schema, "model_json_schema"):
+        return args_schema.model_json_schema()
+    return args_schema.schema()
+
+
+def _schema_enums(schema: dict[str, Any]) -> set[str]:
+    values: set[str] = set()
+    if "enum" in schema:
+        values.update(str(value) for value in schema["enum"])
+    for child_key in ("anyOf", "oneOf", "allOf"):
+        for child in schema.get(child_key, []):
+            values.update(_schema_enums(child))
+    return values
 
 
 def test_retriever_returns_langchain_documents():
@@ -90,6 +111,7 @@ def test_create_openviking_tools_exposes_common_viking_primitives():
     )
 
     store_tool = next(tool for tool in tools if tool.name == "viking_store")
+    assert "explicit durable memories" in store_tool.description
     stored = store_tool.invoke(
         {
             "messages": [
@@ -105,6 +127,14 @@ def test_create_openviking_tools_exposes_common_viking_primitives():
     assert client.sessions["test-session"][0]["parts"][0]["text"] == (
         "Remember that azure is preferred."
     )
+
+    add_resource_tool = next(tool for tool in tools if tool.name == "viking_add_resource")
+    assert "resource-management operation" in add_resource_tool.description
+
+    health_tool = next(tool for tool in tools if tool.name == "viking_health")
+    health = health_tool.invoke({})
+    assert '"backend": "OpenViking"' in health
+    assert "VikingDB is internal vector/index storage" in health
 
 
 def test_create_openviking_tools_profiles_control_destructive_tools():
@@ -159,11 +189,104 @@ def test_openviking_tools_read_l0_l1_l2_content_modes():
             "content_mode": "read",
         }
     )
+    uppercase = read_tool.invoke(
+        {
+            "uris": "viking://resources/runbooks/release.md",
+            "content_mode": "READ",
+        }
+    )
 
     assert '"content_mode": "abstract"' in abstract
     assert '"content_mode": "overview"' in overview
     assert '"content_mode": "read"' in full
+    assert '"content_mode": "read"' in uppercase
     assert "Release runbook full details." in full
+
+
+def test_openviking_read_tool_schema_describes_file_and_directory_contract():
+    client = InMemoryOpenVikingClient()
+    tools = {tool.name: tool for tool in create_openviking_tools(client=client)}
+    read_tool = tools["viking_read"]
+    browse_tool = tools["viking_browse"]
+
+    read_schema = _tool_schema(read_tool)
+    content_mode_schema = read_schema["properties"]["content_mode"]
+
+    assert "Directory URIs are not readable" in read_tool.description
+    assert "file/document" in read_schema["properties"]["uris"]["description"]
+    assert "viking_browse" in read_tool.description
+    assert _schema_enums(content_mode_schema) == {"abstract", "overview", "read"}
+    assert "List child entries" in browse_tool.description
+    assert "namespace or directory" in _tool_schema(browse_tool)["properties"]["uri"]["description"]
+
+
+def test_openviking_tool_schemas_describe_model_visible_arguments():
+    client = InMemoryOpenVikingClient()
+    tools = create_openviking_tools(client=client, profile="admin", allow_forget=True)
+
+    for tool in tools:
+        schema = _tool_schema(tool)
+        for name, property_schema in schema.get("properties", {}).items():
+            assert property_schema.get("description"), f"{tool.name}.{name} lacks a description"
+
+
+def test_openviking_health_tool_returns_safe_summary():
+    class StatusClient(InMemoryOpenVikingClient):
+        def get_status(self) -> dict[str, Any]:
+            return {
+                "status": "degraded",
+                "state_detail": "service is starting up and loading initial data from the persistence layer",
+                "hostname": "internal-openviking.local",
+                "database_url": "postgres://user:secret@example.internal/db",
+                "components": {"storage": {"status": "ok"}},
+            }
+
+    tools = {tool.name: tool for tool in create_openviking_tools(client=StatusClient())}
+    payload = json.loads(tools["viking_health"].invoke({}))
+
+    assert payload["backend"] == "OpenViking"
+    assert payload["state"] == "degraded"
+    assert payload["healthy"] is False
+    assert payload["summary"] == {
+        "status": "degraded",
+        "state_detail": "service is starting up and loading initial data from the pers...",
+        "component_count": 1,
+    }
+    assert "internal-openviking.local" not in json.dumps(payload)
+    assert "postgres://" not in json.dumps(payload)
+
+
+def test_openviking_read_directory_uri_returns_recoverable_tool_result_for_all_modes():
+    class DirectoryReadClient(InMemoryOpenVikingClient):
+        def read(self, uri: str, offset: int = 0, limit: int = -1) -> str:
+            raise InvalidArgumentError(
+                f"Directory cannot be used here: {uri}",
+                details={"resource": uri, "expected": "file", "actual": "directory"},
+            )
+
+    client = DirectoryReadClient()
+    tools = {tool.name: tool for tool in create_openviking_tools(client=client)}
+
+    for content_mode in ("abstract", "overview", "read"):
+        result = tools["viking_read"].invoke(
+            {
+                "uris": "viking://user/default/memories/events/2026/05/09",
+                "content_mode": content_mode,
+            }
+        )
+
+        payload = json.loads(result)
+        assert payload == [
+            {
+                "uri": "viking://user/default/memories/events/2026/05/09",
+                "content_mode": content_mode,
+                "error": "directory_uri_not_readable",
+                "message": (
+                    "This URI is a directory. Use viking_browse on this URI to list children, "
+                    "then call viking_read on file/document URIs."
+                ),
+            }
+        ]
 
 
 def test_ensure_client_defaults_to_http_client(monkeypatch):

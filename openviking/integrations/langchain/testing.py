@@ -11,6 +11,8 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any
 
+from openviking.utils.token_estimation import estimate_text_tokens
+
 
 class InMemoryOpenVikingClient:
     """Small OpenViking-compatible client for examples and CI smoke tests.
@@ -240,7 +242,7 @@ class InMemoryOpenVikingClient:
         if role_id is not None:
             message["role_id"] = role_id
         self.sessions.setdefault(session_id, []).append(message)
-        self.pending_tokens[session_id] += max(1, len(_message_text(message)) // 4)
+        self.pending_tokens[session_id] += max(1, estimate_text_tokens(_message_text(message)))
         return {
             "session_id": session_id,
             "role": role,
@@ -289,8 +291,10 @@ class InMemoryOpenVikingClient:
         latest_archive = self.archives.get(session_id, [])[-1:] or []
         latest = latest_archive[0] if latest_archive else {}
         messages = list(self.sessions.get(session_id, []))
-        active_tokens = sum(max(1, len(_message_text(message)) // 4) for message in messages)
-        archive_tokens = max(0, len(str(latest.get("overview", ""))) // 4)
+        active_tokens = sum(
+            max(1, estimate_text_tokens(_message_text(message))) for message in messages
+        )
+        archive_tokens = max(0, estimate_text_tokens(str(latest.get("overview", ""))))
         return {
             "latest_archive_overview": latest.get("overview", ""),
             "pre_archive_abstracts": [

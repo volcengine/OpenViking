@@ -22,10 +22,18 @@ import {
   getResourceSearchSpec,
 } from '../-lib/find-search'
 import {
+  PALETTE_ROOT_URI,
+  buildDirBrowseQuery,
+  isResetGlobalCommand,
+  parsePaletteMode,
+} from '../-lib/palette-mode'
+import {
   useVikingFsList,
   useVikingFsStat,
   useVikingFsTree,
+  useDebouncedValue,
 } from '../-hooks/viking-fm'
+import { useListNavigation } from '../-hooks/use-list-navigation'
 import type { VikingFsEntry } from '../-types/viking-fm'
 import { FilePreview } from './file-preview'
 import { DirBrowser } from './dir-browser'
@@ -37,31 +45,7 @@ interface FindPaletteProps {
   onNavigateDir: (uri: string) => void
   scopeUri?: string
 }
-
-const findPaletteSession = {
-  inputQuery: '',
-  targetUri: undefined as string | undefined,
-}
-const KEY_ENTER_LABEL = 'Enter'
 const KEY_ESCAPE_LABEL = 'esc'
-
-function parseScopeCommand(query: string): string | null {
-  const trimmed = query.trim()
-  if (!trimmed.startsWith('/')) return null
-
-  const rawPath = trimmed.slice(1).trim()
-  if (!rawPath) return null
-
-  const normalizedPath = rawPath
-    .split('/')
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .join('/')
-
-  if (!normalizedPath) return 'viking://'
-
-  return normalizeDirUri(`viking://${normalizedPath}`)
-}
 
 function displayName(uri: string): { name: string; parent: string } {
   const name = fileNameFromUri(uri)
@@ -79,53 +63,89 @@ export function FindPalette({
   scopeUri,
 }: FindPaletteProps) {
   const { t } = useTranslation('resources')
-  const [query, setQuery] = useState(() => findPaletteSession.inputQuery)
+  const [query, setQuery] = useState('')
   const [findTargetUri, setFindTargetUri] = useState(() =>
-    normalizeDirUri(findPaletteSession.targetUri || scopeUri || 'viking://'),
+    normalizeDirUri(scopeUri || PALETTE_ROOT_URI),
   )
-  const [activeIndex, setActiveIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const resultsRef = useRef<HTMLDivElement>(null)
   const composingRef = useRef(false)
 
-  const isDirMode = query === '/'
-  const scopeCommandUri = isDirMode ? null : parseScopeCommand(query)
-  const trimmedQuery = query.trim()
-  const hasQuery = trimmedQuery.length > 0 && !scopeCommandUri && !isDirMode
-  const isRoot = findTargetUri === 'viking://'
-  const searchSpec = useMemo(
-    () => getResourceSearchSpec(query, findTargetUri),
+  // Single parse entry point. No component code reads `query` structurally.
+  const mode = useMemo(
+    () => parsePaletteMode(query, findTargetUri),
     [query, findTargetUri],
   )
+  const isRoot = findTargetUri === PALETTE_ROOT_URI
+  const showIdleBrowse = mode.kind === 'idle' && !isRoot
 
-  const scopeValidationQuery = useVikingFsList(
-    scopeCommandUri || 'viking://',
-    { output: 'agent', showAllHidden: true, nodeLimit: 1 },
-    Boolean(scopeCommandUri && scopeCommandUri !== 'viking://'),
+  const searchSpec = useMemo(
+    () =>
+      mode.kind === 'search'
+        ? getResourceSearchSpec(mode.query, findTargetUri)
+        : null,
+    [mode, findTargetUri],
   )
-  const isScopeCommandValid =
-    Boolean(scopeCommandUri) &&
-    (scopeCommandUri === 'viking://' || scopeValidationQuery.isSuccess)
+
+  const idleBrowseQuery = useVikingFsList(
+    findTargetUri,
+    { output: 'agent', showAllHidden: true },
+    showIdleBrowse,
+  )
+  const idleEntries = useMemo(
+    () => (showIdleBrowse ? idleBrowseQuery.data?.entries || [] : []),
+    [showIdleBrowse, idleBrowseQuery.data?.entries],
+  )
 
   const treeQuery = useVikingFsTree(
-    searchSpec?.rootUri || 'viking://',
+    searchSpec?.rootUri || PALETTE_ROOT_URI,
     { output: 'agent', showAllHidden: true, nodeLimit: 2000, levelLimit: 100 },
-    hasQuery && Boolean(searchSpec),
+    mode.kind === 'search' && Boolean(searchSpec),
   )
-
   const filteredEntries = useMemo(() => {
-    if (!hasQuery || !treeQuery.data?.nodes) return []
+    if (mode.kind !== 'search' || !treeQuery.data?.nodes) return []
     return filterResourceSearchEntries(treeQuery.data.nodes, searchSpec)
-  }, [hasQuery, treeQuery.data?.nodes, searchSpec])
+  }, [mode.kind, treeQuery.data?.nodes, searchSpec])
 
+  // Directory listing lifted up from DirBrowser so the cursor (activeIndex) and
+  // keyboard handling can live in one place. DirBrowser is now a pure view.
+  const dirListQuery = useVikingFsList(
+    mode.kind === 'dirBrowse' ? mode.uri : PALETTE_ROOT_URI,
+    { output: 'agent', showAllHidden: true, nodeLimit: 200 },
+    mode.kind === 'dirBrowse',
+  )
+  const dirItems = useMemo(() => {
+    if (mode.kind !== 'dirBrowse') return []
+    const entries = dirListQuery.data?.entries ?? []
+    const dirs = entries.filter((e) => e.isDir)
+    const files = entries.filter((e) => !e.isDir)
+    const all = [...dirs, ...files]
+    if (!mode.filter) return all
+    const lower = mode.filter.toLowerCase()
+    return all.filter((e) => e.name.toLowerCase().includes(lower))
+  }, [mode, dirListQuery.data])
   const hasResults = filteredEntries.length > 0
-  const activeEntry =
-    activeIndex >= 0 ? (filteredEntries[activeIndex] ?? null) : null
+  const visibleEntries = useMemo(() => {
+    if (mode.kind === 'dirBrowse') return dirItems
+    if (hasResults) return filteredEntries
+    return idleEntries
+  }, [mode.kind, dirItems, hasResults, filteredEntries, idleEntries])
 
-  const statQuery = useVikingFsStat(activeEntry?.uri)
+  const { index: activeIndex, setIndex, moveUp, moveDown, reset } =
+    useListNavigation(visibleEntries.length)
+  const activeEntry = activeIndex >= 0 ? (visibleEntries[activeIndex] ?? null) : null
+
+  // Preview stat only for search / idle file cursor. dirBrowse renders its own
+  // preview inside DirBrowser. Debounced so arrow-scanning doesn't storm stat.
+  const statTargetUri =
+    mode.kind !== 'dirBrowse' && activeEntry && !activeEntry.isDir
+      ? activeEntry.uri
+      : undefined
+  const debouncedStatUri = useDebouncedValue(statTargetUri, 150)
+  const statQuery = useVikingFsStat(debouncedStatUri)
   const previewEntry = useMemo(() => {
     if (!activeEntry) return null
-    if (statQuery.data) {
+    if (statQuery.data && debouncedStatUri === activeEntry.uri) {
       return {
         ...activeEntry,
         size: statQuery.data.size,
@@ -134,112 +154,168 @@ export function FindPalette({
       }
     }
     return activeEntry
-  }, [activeEntry, statQuery.data])
+  }, [activeEntry, statQuery.data, debouncedStatUri])
+
+  const focusInput = useCallback(() => {
+    requestAnimationFrame(() => {
+      inputRef.current?.focus()
+      inputRef.current?.select()
+    })
+  }, [])
 
   useEffect(() => {
     if (open) {
-      setActiveIndex(0)
-      requestAnimationFrame(() => {
-        inputRef.current?.focus()
-        inputRef.current?.select()
-      })
+      reset()
+      focusInput()
     }
-  }, [open])
+  }, [open, reset, focusInput])
 
   useEffect(() => {
-    setActiveIndex(0)
-  }, [filteredEntries])
+    if (!open) return
 
-  useEffect(() => {
-    findPaletteSession.inputQuery = query
-  }, [query])
+    const restoreFocus = () => {
+      if (document.visibilityState === 'visible') focusInput()
+    }
+    window.addEventListener('focus', focusInput)
+    document.addEventListener('visibilitychange', restoreFocus)
+    return () => {
+      window.removeEventListener('focus', focusInput)
+      document.removeEventListener('visibilitychange', restoreFocus)
+    }
+  }, [open, focusInput])
 
+  // Cursor resets on query change (navigation / filter typing) and whenever the
+  // visible list identity changes (new data arrives). Arrow moves don't touch
+  // query or the list, so they don't trigger a reset.
   useEffect(() => {
-    findPaletteSession.targetUri = findTargetUri
-  }, [findTargetUri])
+    reset()
+  }, [query, visibleEntries, reset])
 
   useEffect(() => {
     if (!resultsRef.current) return
     const el = resultsRef.current.querySelector('[data-active="true"]')
     el?.scrollIntoView({ block: 'nearest' })
   }, [activeIndex])
+  // Navigation writes go through buildDirBrowseQuery — the only place that
+  // turns a uri back into a query string. setQuery is the single owner.
+  const enterDir = useCallback((uri: string) => {
+    setQuery(buildDirBrowseQuery(uri))
+  }, [])
+
+  const goToParent = useCallback(() => {
+    if (mode.kind !== 'dirBrowse') return
+    const parent = getParentUri(mode.uri)
+    if (parent !== mode.uri) {
+      setQuery(buildDirBrowseQuery(parent))
+    }
+  }, [mode])
+
+  const confirmDirScope = useCallback((uri: string) => {
+    setFindTargetUri(normalizeDirUri(uri))
+    setQuery('')
+  }, [])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (composingRef.current) return
-      if (isDirMode) {
-        if (e.key === 'Escape') {
-          e.preventDefault()
-          onClose()
-        }
+
+      // `//` + Enter resets scope to global root, regardless of mode.
+      if (isResetGlobalCommand(query) && e.key === 'Enter') {
+        e.preventDefault()
+        setFindTargetUri(PALETTE_ROOT_URI)
+        setQuery('')
         return
       }
-      if (scopeCommandUri) {
+
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        onClose()
+        return
+      }
+
+      if (mode.kind === 'dirBrowse') {
         switch (e.key) {
+          case 'ArrowDown':
+            e.preventDefault()
+            moveDown()
+            return
+          case 'ArrowUp':
+            e.preventDefault()
+            moveUp()
+            return
+          case 'ArrowRight':
+          case 'Tab':
+            e.preventDefault()
+            if (activeEntry?.isDir) {
+              enterDir(activeEntry.uri)
+            } else if (e.key === 'Tab' && activeEntry) {
+              onNavigate(activeEntry.uri)
+              onClose()
+            }
+            return
+          case 'ArrowLeft':
+            e.preventDefault()
+            goToParent()
+            return
           case 'Enter':
             e.preventDefault()
-            if (!isScopeCommandValid) return
-            setFindTargetUri(scopeCommandUri)
-            setActiveIndex(0)
-            setQuery('')
+            if (activeEntry && !activeEntry.isDir) {
+              onNavigate(activeEntry.uri)
+              onClose()
+            } else if (dirListQuery.isSuccess) {
+              confirmDirScope(mode.uri)
+            }
             return
-          case 'Escape':
-            e.preventDefault()
-            onClose()
-            return
-        }
-      }
-      if (!hasQuery || filteredEntries.length === 0) {
-        if (e.key === 'Escape') {
-          e.preventDefault()
-          onClose()
         }
         return
       }
+
+      // search / idle list navigation
+      if (visibleEntries.length === 0) return
       switch (e.key) {
-        case 'ArrowDown': {
+        case 'ArrowDown':
           e.preventDefault()
-          setActiveIndex((i) => Math.min(i + 1, filteredEntries.length - 1))
-          break
-        }
-        case 'ArrowUp': {
+          moveDown()
+          return
+        case 'ArrowUp':
           e.preventDefault()
-          setActiveIndex((i) => Math.max(i - 1, 0))
-          break
-        }
+          moveUp()
+          return
         case 'Enter':
           e.preventDefault()
-          if (activeEntry) {
+          if (!activeEntry) return
+          if (mode.kind === 'idle' && activeEntry.isDir) {
+            confirmDirScope(activeEntry.uri)
+          } else {
             onNavigate(activeEntry.uri)
             onClose()
           }
-          break
-        case 'Escape':
-          e.preventDefault()
-          onClose()
-          break
+          return
       }
     },
     [
       query,
-      hasQuery,
-      filteredEntries,
+      mode,
       activeEntry,
+      visibleEntries.length,
+      dirListQuery.isSuccess,
+      moveUp,
+      moveDown,
+      enterDir,
+      goToParent,
+      confirmDirScope,
       onNavigate,
       onClose,
-      isDirMode,
-      scopeCommandUri,
-      isScopeCommandValid,
     ],
   )
 
   if (!open) return null
 
-  const showPreview = hasQuery && activeEntry !== null && !activeEntry.isDir
+  const showPreview =
+    mode.kind !== 'dirBrowse' && activeEntry !== null && !activeEntry.isDir
   const paletteWidth = showPreview
     ? 'w-[min(92vw,67rem)]'
     : 'w-[min(90vw,45rem)]'
-
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center px-4 sm:items-start sm:px-6 sm:pt-[12vh]"
@@ -281,10 +357,7 @@ export function FindPalette({
             <button
               type="button"
               className="rounded-md p-1 text-muted-foreground/70 transition-colors hover:text-foreground"
-              onClick={() => {
-                setActiveIndex(0)
-                setQuery('')
-              }}
+              onClick={() => setQuery('')}
             >
               <X className="size-3.5" />
             </button>
@@ -293,30 +366,38 @@ export function FindPalette({
             {isRoot ? (
               t('searchPalette.scope.global')
             ) : (
-              <>
+              <button
+                type="button"
+                className="flex items-center gap-1 rounded px-1 py-0.5 transition-colors hover:bg-muted hover:text-foreground"
+                title={t('searchPalette.scope.resetToGlobal')}
+                onClick={() => setFindTargetUri(PALETTE_ROOT_URI)}
+              >
                 <FolderOpen className="size-3" />
                 {t('searchPalette.scope.current', {
                   name: findTargetUri.split('/').filter(Boolean).pop(),
                 })}
-              </>
+                <X className="size-3" />
+              </button>
             )}
           </span>
         </div>
 
         {/* Body */}
         <div className="flex min-h-0 flex-1" ref={resultsRef}>
-          {isDirMode ? (
+          {mode.kind === 'dirBrowse' ? (
             <DirBrowser
-              startUri={findTargetUri}
-              onConfirm={(uri) => {
-                setFindTargetUri(normalizeDirUri(uri))
-                setActiveIndex(0)
-                setQuery('')
+              currentUri={mode.uri}
+              items={dirItems}
+              activeIndex={activeIndex}
+              loading={dirListQuery.isLoading}
+              errored={dirListQuery.isError}
+              onCursorChange={setIndex}
+              onEnterDir={enterDir}
+              onOpenFile={(uri) => {
+                onNavigate(uri)
+                onClose()
               }}
-              onCancel={() => {
-                setActiveIndex(0)
-                setQuery('')
-              }}
+              onGoBack={goToParent}
             />
           ) : (
             <>
@@ -327,83 +408,56 @@ export function FindPalette({
                   showPreview && 'border-r',
                 )}
               >
-                {scopeCommandUri ? (
-                  <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-                    <FolderOpen
-                      className={cn(
-                        'size-6',
-                        isScopeCommandValid
-                          ? 'text-blue-500/50'
-                          : 'text-destructive/60',
-                      )}
-                    />
-                    {scopeValidationQuery.isLoading ? (
-                      <div>
-                        <p className="text-sm font-medium text-foreground/80">
-                          {t('searchPalette.scopeState.validatingTitle')}
-                        </p>
-                        <p className="mt-1 text-xs text-muted-foreground/75">
-                          {t('searchPalette.scopeState.validatingPrefix')}{' '}
-                          <span className="font-medium text-foreground/80">
-                            {scopeCommandUri}
-                          </span>{' '}
-                          {t('searchPalette.scopeState.validatingSuffix')}
-                        </p>
-                      </div>
-                    ) : isScopeCommandValid ? (
-                      <div>
-                        <p className="text-sm font-medium text-foreground/80">
-                          {t('searchPalette.scopeState.switchTitle')}
-                        </p>
-                        <p className="mt-1 text-xs text-muted-foreground/75">
-                          {t('searchPalette.scopeState.switchPrefix')}{' '}
-                          <kbd className="rounded border border-border bg-muted/50 px-1 py-0.5 font-mono text-[11px] text-foreground/70">
-                            {KEY_ENTER_LABEL}
-                          </kbd>{' '}
-                          {t('searchPalette.scopeState.switchMiddle')}{' '}
-                          <span className="font-medium text-foreground/80">
-                            {scopeCommandUri}
-                          </span>
-                        </p>
-                      </div>
-                    ) : (
-                      <div>
-                        <p className="text-sm font-medium text-destructive">
-                          {t('searchPalette.scopeState.invalidTitle')}
-                        </p>
-                        <p className="mt-1 text-xs text-muted-foreground/75">
-                          {t('searchPalette.scopeState.invalidPrefix')}{' '}
-                          <span className="font-medium text-foreground/80">
-                            {scopeCommandUri}
-                          </span>{' '}
-                          {t('searchPalette.scopeState.invalidSuffix')}
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                ) : !hasQuery ? (
-                  <div className="animate-palette-in flex flex-col items-center gap-3 px-4 py-12 text-center">
-                    <Search className="size-6 text-muted-foreground/30" />
-                    <div>
-                      <p className="text-sm text-muted-foreground/70">
-                        {t('searchPalette.empty.title')}
-                      </p>
-                      <p className="mt-1 text-xs text-muted-foreground/50">
-                        {t('searchPalette.browseDirHint.before')}{' '}
-                        <kbd className="rounded border border-border bg-muted/50 px-1 py-0.5 font-mono text-[11px] text-foreground/70">
-                          /
-                        </kbd>{' '}
-                        {t('searchPalette.browseDirHint.after')}
-                      </p>
-                      <p className="mt-1 text-xs text-muted-foreground/50">
-                        {t('searchPalette.globalScopeHint.before')}{' '}
-                        <kbd className="rounded border border-border bg-muted/50 px-1 py-0.5 font-mono text-[11px] text-foreground/70">
-                          //
-                        </kbd>{' '}
-                        {t('searchPalette.globalScopeHint.after')}
-                      </p>
+                {mode.kind === 'idle' ? (
+                  showIdleBrowse && idleBrowseQuery.isError ? (
+                    <div
+                      role="alert"
+                      className="px-4 py-6 text-center text-xs text-destructive"
+                    >
+                      {t('dirBrowser.error')}
                     </div>
-                  </div>
+                  ) : showIdleBrowse && idleEntries.length > 0 ? (
+                    <DirResultList
+                      className="h-full"
+                      items={idleEntries}
+                      activeIndex={activeIndex}
+                      onSelect={(entry) => {
+                        if (entry.isDir) {
+                          confirmDirScope(entry.uri)
+                        } else {
+                          onNavigate(entry.uri)
+                          onClose()
+                        }
+                      }}
+                      onOpenDir={(entry) => {
+                        onNavigateDir(getParentUri(entry.uri))
+                        onClose()
+                      }}
+                    />
+                  ) : (
+                    <div className="animate-palette-in flex flex-col items-center gap-3 px-4 py-12 text-center">
+                      <Search className="size-6 text-muted-foreground/30" />
+                      <div>
+                        <p className="text-sm text-muted-foreground/70">
+                          {t('searchPalette.empty.title')}
+                        </p>
+                        <p className="mt-1 text-xs text-muted-foreground/50">
+                          {t('searchPalette.browseDirHint.before')}{' '}
+                          <kbd className="rounded border border-border bg-muted/50 px-1 py-0.5 font-mono text-[11px] text-foreground/70">
+                            /
+                          </kbd>{' '}
+                          {t('searchPalette.browseDirHint.after')}
+                        </p>
+                        <p className="mt-1 text-xs text-muted-foreground/50">
+                          {t('searchPalette.globalScopeHint.before')}{' '}
+                          <kbd className="rounded border border-border bg-muted/50 px-1 py-0.5 font-mono text-[11px] text-foreground/70">
+                            //
+                          </kbd>{' '}
+                          {t('searchPalette.globalScopeHint.after')}
+                        </p>
+                      </div>
+                    </div>
+                  )
                 ) : treeQuery.isLoading ? (
                   <div className="flex flex-col items-center gap-3 py-12">
                     <Loader2 className="size-5 animate-spin text-muted-foreground/50" />
@@ -412,7 +466,10 @@ export function FindPalette({
                     </p>
                   </div>
                 ) : treeQuery.error ? (
-                  <div className="px-4 py-6 text-center text-xs text-destructive">
+                  <div
+                    role="alert"
+                    className="px-4 py-6 text-center text-xs text-destructive"
+                  >
                     {t('searchPalette.error')}
                   </div>
                 ) : !hasResults ? (
@@ -447,7 +504,7 @@ export function FindPalette({
                 <div className="animate-palette-preview flex h-full w-[32rem] flex-col overflow-hidden">
                   <FilePreview
                     file={previewEntry}
-                    onClose={() => setActiveIndex(-1)}
+                    onClose={() => setIndex(-1)}
                     showCloseButton={false}
                   />
                 </div>
@@ -456,8 +513,7 @@ export function FindPalette({
           )}
         </div>
 
-        {/* Footer */}
-        {isDirMode ? (
+        {mode.kind === 'dirBrowse' ? (
           <div className="flex items-center gap-3 border-t px-4 py-2 text-xs text-muted-foreground/70">
             <span>
               <kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">
@@ -517,7 +573,6 @@ export function FindPalette({
     </div>
   )
 }
-
 function DirResultList({
   className,
   items,
@@ -607,3 +662,4 @@ function DirResultList({
     </div>
   )
 }
+

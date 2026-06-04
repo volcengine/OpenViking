@@ -11,7 +11,7 @@ import pytest_asyncio
 from openviking.resource.watch_manager import WatchManager
 from openviking.server.identity import RequestContext, Role
 from openviking.service.resource_service import ResourceService
-from openviking_cli.exceptions import ConflictError, InvalidArgumentError
+from openviking_cli.exceptions import ConflictError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -29,7 +29,7 @@ class MockResourceProcessor:
     """Mock ResourceProcessor for testing."""
 
     async def process_resource(self, **kwargs):
-        return {"root_uri": kwargs.get("to", "viking://resources/test")}
+        return {"root_uri": kwargs.get("to") or "viking://resources/test"}
 
 
 class MockSkillProcessor:
@@ -116,16 +116,24 @@ class TestWatchTaskCreation:
         assert task.is_active is True
 
     @pytest.mark.asyncio
-    async def test_watch_interval_requires_to_when_watch_enabled(
+    async def test_watch_interval_auto_binds_root_uri_when_to_omitted(
         self, resource_service: ResourceService, request_context: RequestContext
     ):
-        with pytest.raises(InvalidArgumentError, match="requires 'to'"):
-            await resource_service.add_resource(
-                path="/test/path",
-                ctx=request_context,
-                to=None,
-                watch_interval=30.0,
-            )
+        result = await resource_service.add_resource(
+            path="/test/path",
+            ctx=request_context,
+            to=None,
+            watch_interval=30.0,
+        )
+
+        assert result["root_uri"] == "viking://resources/test"
+
+        task = await get_task_by_uri(resource_service, "viking://resources/test", request_context)
+        assert task is not None
+        assert task.path == "/test/path"
+        assert task.to_uri == "viking://resources/test"
+        assert task.parent_uri is None
+        assert task.watch_interval == 30.0
 
     @pytest.mark.asyncio
     async def test_watch_task_aligns_processor_params(

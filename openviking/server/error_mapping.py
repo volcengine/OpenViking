@@ -416,6 +416,13 @@ def _resource_details(resource: str | None) -> dict[str, str] | None:
     return {"resource": resource} if resource else None
 
 
+def _file_directory_details(resource: str | None) -> dict[str, str]:
+    details = {"expected": "file", "actual": "directory"}
+    if resource:
+        details["resource"] = resource
+    return details
+
+
 def map_exception(
     exc: Exception,
     *,
@@ -482,7 +489,7 @@ def map_exception(
     if isinstance(exc, AGFSNotADirectoryError):
         return FailedPreconditionError(str(exc), details=_resource_details(resource))
     if isinstance(exc, AGFSIsADirectoryError):
-        return InvalidArgumentError(str(exc), details=_resource_details(resource))
+        return InvalidArgumentError(str(exc), details=_file_directory_details(resource))
     if isinstance(exc, AGFSDirectoryNotEmptyError):
         return FailedPreconditionError(str(exc), details=_resource_details(resource))
     if isinstance(exc, AGFSInvalidOperationError):

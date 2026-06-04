@@ -1,17 +1,22 @@
+import { useEffect, useMemo, useState } from 'react'
 import { Streamdown } from 'streamdown'
 import { code } from '@streamdown/code'
 import { cjk } from '@streamdown/cjk'
 import { useTranslation } from 'react-i18next'
 import {
   CheckCircle2Icon,
+  ChevronDownIcon,
   CircleAlertIcon,
+  FileTextIcon,
   LoaderIcon,
   WrenchIcon,
 } from 'lucide-react'
 
 import { cn } from '#/lib/utils'
+import { cleanVikingUri, VIKING_URI_RE } from '#/lib/viking-uri'
 
 const plugins = { code, cjk }
+const TOOL_REF_PAGE_SIZE = 5
 
 // ---------------------------------------------------------------------------
 // MarkdownContent
@@ -104,6 +109,7 @@ interface ToolCallBlockProps {
   result?: string
   isError?: boolean
   isRunning: boolean
+  onResourceClick?: (uri: string) => void
 }
 
 export function ToolCallBlock({
@@ -112,8 +118,17 @@ export function ToolCallBlock({
   result,
   isError,
   isRunning,
+  onResourceClick,
 }: ToolCallBlockProps) {
   const { t } = useTranslation('sessions')
+  const refs = useMemo(() => extractVikingUris(result), [result])
+  const [visibleRefCount, setVisibleRefCount] = useState(TOOL_REF_PAGE_SIZE)
+  const visibleRefs = refs.slice(0, visibleRefCount)
+  const hiddenRefCount = Math.max(0, refs.length - visibleRefs.length)
+
+  useEffect(() => {
+    setVisibleRefCount(TOOL_REF_PAGE_SIZE)
+  }, [result])
 
   return (
     <details className="my-2 rounded-lg border border-border/30 bg-muted/20">
@@ -155,6 +170,38 @@ export function ToolCallBlock({
             >
               {result}
             </pre>
+            {refs.length > 0 && onResourceClick ? (
+              <div className="mt-2 grid gap-1.5">
+                {visibleRefs.map((uri) => (
+                  <button
+                    key={uri}
+                    type="button"
+                    className="flex min-w-0 items-center gap-2 rounded-md border bg-background px-2 py-1.5 text-left transition-colors hover:border-primary/50 hover:bg-primary/5"
+                    onClick={() => onResourceClick(uri)}
+                  >
+                    <FileTextIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                    <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-primary">
+                      {uri}
+                    </span>
+                  </button>
+                ))}
+                {hiddenRefCount > 0 ? (
+                  <button
+                    type="button"
+                    className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-dashed bg-background px-2 text-[11px] font-medium text-muted-foreground transition-colors hover:border-primary/50 hover:bg-primary/5 hover:text-primary"
+                    onClick={() =>
+                      setVisibleRefCount((count) => count + TOOL_REF_PAGE_SIZE)
+                    }
+                  >
+                    <ChevronDownIcon className="size-3.5" />
+                    {t('chat.loadMoreRefs', {
+                      count: Math.min(TOOL_REF_PAGE_SIZE, hiddenRefCount),
+                      remaining: hiddenRefCount,
+                    })}
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         )}
       </div>
@@ -173,4 +220,107 @@ function ToolStatusIcon({
     return <LoaderIcon className="size-3 animate-spin text-muted-foreground" />
   if (isError) return <CircleAlertIcon className="size-3 text-destructive" />
   return <CheckCircle2Icon className="size-3 text-primary/70" />
+}
+
+function extractVikingUris(text: string | undefined): string[] {
+  if (!text) return []
+  const seen = new Set<string>()
+
+  const parsed = parseJsonResult(text)
+  if (parsed !== undefined) {
+    collectStructuredUris(parsed, seen)
+    return [...seen]
+  }
+
+  // Non-JSON tool results may contain XML/plain-text snippets with URI refs.
+  if (text.includes('<memory')) {
+    collectMemoryBlockUrisFromText(text, seen)
+    if (seen.size > 0) return [...seen]
+  }
+
+  collectUrisFromText(text, seen)
+  return [...seen]
+}
+
+function parseJsonResult(text: string): unknown {
+  const trimmed = text.trim()
+  if (!trimmed) return undefined
+
+  try {
+    return JSON.parse(trimmed) as unknown
+  } catch {
+    return undefined
+  }
+}
+
+function collectStructuredUris(
+  value: unknown,
+  seen: Set<string>,
+  path: string[] = [],
+): void {
+  if (typeof value === 'string') {
+    collectUrisFromText(value, seen)
+    return
+  }
+
+  if (Array.isArray(value)) {
+    const parentKey = path[path.length - 1]
+    if (isUriArrayKey(parentKey)) {
+      for (const item of value) {
+        if (typeof item !== 'string') continue
+        const uri = cleanVikingUri(item)
+        if (uri) seen.add(uri)
+      }
+      return
+    }
+
+    for (const item of value) collectStructuredUris(item, seen, path)
+    return
+  }
+
+  if (!value || typeof value !== 'object') return
+
+  for (const [key, nested] of Object.entries(value)) {
+    if (isUriScalarKey(key) && typeof nested === 'string') {
+      const uri = cleanVikingUri(nested)
+      if (uri) seen.add(uri)
+      continue
+    }
+
+    if (Array.isArray(nested) || (nested && typeof nested === 'object')) {
+      collectStructuredUris(nested, seen, [...path, key])
+      continue
+    }
+
+    if (typeof nested === 'string') {
+      collectUrisFromText(nested, seen)
+    }
+  }
+}
+
+function collectUrisFromText(text: string, seen: Set<string>): void {
+  const matches = text.match(VIKING_URI_RE) ?? []
+  for (const match of matches) {
+    const uri = cleanVikingUri(match)
+    if (uri) seen.add(uri)
+  }
+}
+
+function collectMemoryBlockUrisFromText(text: string, seen: Set<string>): void {
+  const memoryBlocks = text.match(/<memory\b[\s\S]*?<\/memory>/g) ?? []
+  for (const block of memoryBlocks) {
+    const uriMatch = block.match(/<uri>([\s\S]*?)<\/uri>/)
+    if (!uriMatch) continue
+    const uri = cleanVikingUri(uriMatch[1])
+    if (uri) seen.add(uri)
+  }
+}
+
+function isUriScalarKey(key: string): boolean {
+  if (key === 'target_uri') return false
+  return key === 'uri' || key.endsWith('_uri')
+}
+
+function isUriArrayKey(key: string | undefined): boolean {
+  return Boolean(key && (key === 'uris' || key.endsWith('_uris')))
 }

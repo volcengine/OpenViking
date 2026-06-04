@@ -6,7 +6,7 @@ const zhCN = {
       github: 'GitHub',
     },
     header: {
-      defaultTitle: 'OpenViking Studio',
+      defaultTitle: 'OpenViking Playground',
     },
     navigation: {
       home: {
@@ -30,11 +30,14 @@ const zhCN = {
       sessions: {
         title: '会话',
       },
+      playground: {
+        title: '实验场',
+      },
     },
     sidebar: {
       loadingSessions: '加载中...',
       noSessions: '暂无会话',
-      workspaceGroupLabel: 'OpenViking Studio',
+      workspaceGroupLabel: 'OpenViking Playground',
     },
   },
   common: {
@@ -79,7 +82,7 @@ const zhCN = {
       },
       agentId: {
         label: 'Agent',
-        placeholder: 'web-studio',
+        placeholder: 'web-playground',
       },
       apiKey: {
         label: 'API Key',
@@ -109,6 +112,114 @@ const zhCN = {
       expiresIn: '{{seconds}} 秒后失效',
       expired: '已过期 —— 请重新生成。',
       generateError: '生成 OTP 失败：{{message}}',
+    },
+  },
+  settings: {
+    actions: {
+      addAccount: '新增 account',
+      addUser: '新增 user',
+      cancel: '取消',
+      copy: '复制',
+      refresh: '刷新',
+      regenerate: '重新生成',
+      save: '保存',
+      use: '使用',
+    },
+    connection: {
+      adminError: '加载 admin 身份失败：{{message}}',
+      description:
+        '选择 Playground 调用 OpenViking API 时要携带的 account 和 user。',
+      noKey:
+        '输入具备 admin 权限的 API key 后，可以加载 account 和 user 可选项。',
+      title: '连接设置',
+    },
+    dialogs: {
+      addAccount: {
+        description:
+          '创建一个工作区 account 和第一个 admin user。新 key 只会在创建后展示一次。',
+        title: '新增 account',
+      },
+      addUser: {
+        description:
+          '在已有 account 下注册 user。生成的 key 只会在创建后展示一次。',
+        title: '新增 user',
+      },
+      regenerate: {
+        description:
+          '要重新生成 {{account}} / {{user}} 的 API key 吗？当前 key 会立即失效。',
+        title: '重新生成 API key？',
+      },
+    },
+    empty: {
+      adminDescription:
+        '使用 root 或 account admin API key 后，可以列出用户、复制 key、新增身份或轮换凭证。',
+      adminTitle: '需要 admin 权限',
+      usersDescription: '创建一个 user 来生成第一个 API key。',
+      usersTitle: '当前 account 下没有 user',
+    },
+    fields: {
+      account: 'Account',
+      adminUser: 'Admin user',
+      agent: 'Agent',
+      apiKey: 'API key',
+      baseUrl: '服务地址',
+      role: '角色',
+      user: 'User',
+    },
+    keyResult: {
+      description:
+        '请现在复制保存。离开当前状态后，OpenViking 可能只展示前缀。',
+      dismiss: '收起',
+      title: '新的 API key',
+    },
+    loading: '正在加载身份...',
+    management: {
+      accountFilter: '管理的 account',
+      description:
+        '查看某个 account 下的 users 和凭证，并在网页端新增 user 或轮换 key。',
+      title: '用户管理',
+    },
+    page: {
+      description:
+        '在 Playground 中配置当前 OpenViking 身份，并管理 accounts、users 和 API keys。',
+      title: '连接与身份',
+    },
+    placeholders: {
+      account: 'team-account',
+      agent: 'web-playground',
+      apiKey: '输入 X-API-Key 或 Bearer token',
+      baseUrl: 'http://127.0.0.1:1933',
+      user: 'default',
+    },
+    roles: {
+      admin: 'Admin',
+      user: 'User',
+    },
+    serverMode: {
+      api_key: 'API key 模式',
+      checking: '检查中...',
+      dev: '开发模式',
+      offline: '离线',
+      trusted: 'Trusted 模式',
+    },
+    stats: {
+      accounts: 'Accounts 总数',
+      apiKeys: '可见 API keys',
+      users: 'Users',
+    },
+    table: {
+      account: 'Account',
+      actions: '操作',
+      apiKey: 'API key',
+      role: '角色',
+      user: 'User',
+    },
+    toast: {
+      accountCreated: 'Account 已创建',
+      connectionSaved: '连接已保存',
+      copied: '已复制',
+      keyRegenerated: 'API key 已重新生成',
+      userCreated: 'User 已创建',
     },
   },
   oauthSetup: {
@@ -183,7 +294,7 @@ const zhCN = {
           title: 'Playground',
         },
         requestLogs: {
-          description: '查看 Studio 发出的请求、状态与耗时。',
+          description: '查看 Playground 发出的请求、状态与耗时。',
           title: '请求日志',
         },
         resources: {
@@ -204,7 +315,7 @@ const zhCN = {
     page: {
       description:
         '按产品需求对齐首页内容：菜单入口、上下文数据量、今日 tokens、今日检索、Agent 访问、tokens 趋势和上下文提交统计。',
-      eyebrow: 'OpenViking Studio',
+      eyebrow: 'OpenViking Playground',
       settings: '连接与设置',
       title: 'Overview',
     },
@@ -254,7 +365,7 @@ const zhCN = {
       description: '无法从服务端加载审计请求日志。',
       title: '请求失败',
     },
-    eyebrow: 'Studio 遥测',
+    eyebrow: 'Playground 遥测',
     filters: {
       all: '所有日志',
       apiTypePlaceholder: 'API 类型',
@@ -353,6 +464,8 @@ const zhCN = {
     directlyUploadMedia: '直接上传媒体文件',
     'directlyUploadMedia.hint':
       '开启时，媒体文件（图片、音频、视频）原样存储。关闭后，媒体文件会先通过 AI 视觉/音频管道提取内容再存储。',
+    createParent: '自动创建父文件夹',
+    'createParent.hint': '开启时，若目标父目录不存在则自动创建。',
     reason: '添加原因',
     'reason.placeholder': '为什么要添加这个资源？',
     instruction: '处理指令',
@@ -413,6 +526,7 @@ const zhCN = {
       scope: {
         global: '搜索范围: 全局',
         current: '搜索范围: {{name}}',
+        resetToGlobal: '点击重置为全局搜索',
       },
       scopeState: {
         validatingTitle: '正在校验搜索范围',
@@ -460,6 +574,7 @@ const zhCN = {
       back: '返回上一级',
       loading: '正在加载目录',
       filesSection: '文件',
+      error: '加载目录失败',
       empty: {
         title: '空目录',
         subtitle: '这一层目前没有可继续展开的子目录',
@@ -583,6 +698,7 @@ const zhCN = {
       toolCall: '工具调用',
       toolInput: '输入',
       toolResult: '结果',
+      loadMoreRefs: '加载更多 {{count}} 条（剩余 {{remaining}} 条）',
       toolStatus: {
         completed: '完成',
         failed: '失败',
@@ -615,7 +731,7 @@ const zhCN = {
       scopesLabel: '权限范围',
       scopesNone: '（无）',
       signInRequired:
-        '请先在“连接与身份”中登录 OpenViking Studio，或在下方临时粘贴 API key 完成授权。',
+        '请先在“连接与身份”中登录 OpenViking Playground，或在下方临时粘贴 API key 完成授权。',
       openConnectionDialog: '打开连接与身份',
       authorize: '授权',
       deny: '拒绝',
@@ -638,7 +754,122 @@ const zhCN = {
       verifyError: '授权失败：{{message}}',
       noApiKey: '没有可用的 API key。请选择一个身份或粘贴 key。',
       signInRequired:
-        '请先在“连接与身份”中登录 OpenViking Studio，或在下方临时粘贴 API key 完成授权。',
+        '请先在“连接与身份”中登录 OpenViking Playground，或在下方临时粘贴 API key 完成授权。',
+    },
+  },
+  playground: {
+    copyUri: '复制当前 URI',
+    copied: '已复制 URI',
+    resizeContext: '调整上下文目录宽度',
+    resizeAction: '调整 Terminal 和 Agent 宽度',
+    readFailed: '无法读取 {{uri}}',
+    tabs: {
+      terminal: '终端',
+      agent: 'Agent',
+    },
+    addResource: {
+      title: '添加资源',
+      description:
+        '添加完成后左侧目录树会刷新，右侧 Terminal 可继续定位新资源。',
+      submitted: '资源添加任务已提交',
+    },
+    explorer: {
+      title: '上下文目录',
+      addResource: '添加资源',
+      refresh: '刷新目录',
+      namespaces: {
+        user: '用户个性化记忆',
+        session: '用户与 Agent 的原始会话',
+        agent: 'Agent 的能力、工具和经验',
+        resources: 'Agent 可引用的外部资源',
+      },
+    },
+    agent: {
+      autoRetrieve: 'Agent 会根据消息和工具自主检索',
+      history: '历史会话',
+      newSession: '新建会话',
+      creating: '正在创建 Playground 会话...',
+      detectingBot: '正在检测 bot 模式...',
+      createFailed: '创建会话失败：{{error}}',
+      retry: '重试',
+      botDisabledFooter: '开启 bot 模式后可使用 Agent 对话',
+      historyTitle: 'Agent 会话历史',
+      historyDescription:
+        '这里只展示实验场右侧 Agent 使用过的会话；新建会话会开启一个空白 Agent 上下文。',
+      loadingSessions: '正在加载会话...',
+      noSessions: '暂无历史会话',
+      createTimeout: '创建 Playground 会话超时，请检查连接设置后重试。',
+      newSessionTitle: '新建 Playground 会话',
+      botPrompt: {
+        title: '请开启 bot 模式',
+        description:
+          '当前服务未启用 Agent 对话能力，请使用 bot 模式启动服务后重试。',
+        retry: '重新检测',
+      },
+      empty: {
+        heading: 'Agent 动作会和左侧目录联动',
+        body: '发送问题后，tool call 输出里的 `viking://` 文件会变成可点击链接，点击即可在左侧定位并在中间打开。',
+        prompts: [
+          '总结当前目录',
+          '递归查找相关文档',
+          '解释这个资源和项目的关系',
+        ],
+      },
+    },
+    terminal: {
+      welcomeTitle: 'Terminal 已连接上下文目录',
+      welcomeBody:
+        '可执行 /status、/ls、/search、/read、/add-resource。输出中的资源链接会定位左侧目录并打开中间预览。',
+      opened: '已打开资源',
+      onlineTitle: '服务在线',
+      onlineBody: 'OpenViking API 正常响应，根目录下发现 {{count}} 个节点。',
+      lsBody: '{{uri}} 下共展示 {{count}} 个节点。',
+      fileEmpty: '文件为空，已在中间预览区打开。',
+      searchUsage: '用法：{{name}} 查询词',
+      readUsage: '用法：/read viking://resources/...',
+      enterUri: '请输入 viking:// URI',
+      hits: '命中 resources {{resources}} 条，memory {{memories}} 条，skill {{skills}} 条。',
+      addResourceBody:
+        '已打开添加资源弹窗。提交后左侧目录会刷新，也可以用 /ls 或 /search 继续定位新内容。',
+      addResourceTitle: '添加资源',
+      unknownCommand:
+        '未知命令。可用命令：/status、/ls、/search、/find、/read、/add-resource。',
+      commandFailed: '命令失败',
+      running: '正在执行命令...',
+      placeholder: '输入 CLI 命令，例如 /status',
+      suggestionsTitle: '命令建议',
+      suggestionsHint: '↑↓ 选择 · Tab 补全 · Enter 执行',
+      groupLabels: {
+        resources: '资源',
+        memories: '记忆',
+        skills: '技能',
+      },
+      commands: {
+        status: {
+          description: '检查 OpenViking API 和根目录',
+          usage: '/status',
+        },
+        ls: {
+          description: '列出当前目录或指定目录',
+          usage: '/ls [viking://resources/...]',
+        },
+        search: {
+          description: '在当前上下文范围内语义搜索',
+          usage: '/search 查询词',
+        },
+        find: {
+          description: '查找相关上下文资源',
+          usage: '/find 查询词',
+        },
+        read: {
+          description: '读取并打开一个资源文件',
+          usage: '/read viking://resources/.../file.md',
+        },
+        addResource: {
+          description: '打开添加资源表单',
+          usage: '/add-resource',
+        },
+      },
     },
   },
 } as const

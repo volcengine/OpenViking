@@ -166,9 +166,7 @@ class ResourceService:
         if telemetry_id:
             request_wait_tracker.register_request(telemetry_id)
         watch_manager = self._get_watch_manager()
-        watch_enabled = bool(
-            watch_manager and to and not skip_watch_management and watch_interval > 0
-        )
+        watch_enabled = bool(watch_manager and not skip_watch_management and watch_interval > 0)
 
         telemetry.set("resource.flags.wait", wait)
         telemetry.set("resource.flags.build_index", build_index)
@@ -192,10 +190,6 @@ class ResourceService:
                 field_name="parent",
                 allowed_scopes={"resources"},
             )
-            if watch_manager and not skip_watch_management and watch_interval > 0 and not to:
-                raise InvalidArgumentError(
-                    "watch_interval > 0 requires 'to' to be specified (target URI to watch)"
-                )
             if enforce_public_remote_targets and is_remote_resource_source(path):
                 path = require_remote_resource_source(path)
                 kwargs.setdefault("request_validator", ensure_public_remote_target)
@@ -257,15 +251,29 @@ class ResourceService:
                     root_uri=result.get("root_uri"),
                 )
                 telemetry.set("queue.wait.duration_ms", queue_wait_duration_ms)
-            if watch_manager and to and not skip_watch_management:
+            if watch_manager and not skip_watch_management:
                 with telemetry.measure("resource.watch"):
                     if watch_interval > 0:
+                        watch_to = to
+                        parent_uri = parent
+                        if not watch_to:
+                            watch_to = validate_optional_viking_uri(
+                                result.get("root_uri"),
+                                field_name="root_uri",
+                                allowed_scopes={"resources"},
+                            )
+                            parent_uri = None
+                        if not watch_to:
+                            raise InvalidArgumentError(
+                                "watch_interval > 0 requires a stable target URI. "
+                                "Pass 'to' explicitly, or add a resource type that returns root_uri."
+                            )
                         try:
                             processor_kwargs = self._sanitize_watch_processor_kwargs(kwargs)
                             await self._handle_watch_task_creation(
                                 path=path,
-                                to_uri=to,
-                                parent_uri=parent,
+                                to_uri=watch_to,
+                                parent_uri=parent_uri,
                                 reason=reason,
                                 instruction=instruction,
                                 watch_interval=watch_interval,
@@ -278,9 +286,9 @@ class ResourceService:
                             raise
                         except Exception as e:
                             logger.warning(
-                                f"[ResourceService] Failed to create watch task for {to}: {e}"
+                                f"[ResourceService] Failed to create watch task for {watch_to}: {e}"
                             )
-                    else:
+                    elif to:
                         try:
                             await self._handle_watch_task_cancellation(to_uri=to, ctx=ctx)
                         except Exception as e:

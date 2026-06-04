@@ -93,8 +93,6 @@ struct ChatResponse {
     session_id: String,
     message: String,
     #[serde(default)]
-    response_id: Option<String>,
-    #[serde(default)]
     events: Option<Vec<serde_json::Value>>,
 }
 
@@ -103,7 +101,6 @@ struct ChatResponse {
 struct ChatStreamEvent {
     event: String, // "reasoning", "tool_call", "tool_result", "response"
     data: serde_json::Value,
-    timestamp: Option<String>,
 }
 
 struct ChatAuth {
@@ -132,10 +129,16 @@ impl ChatCommand {
 
     fn resolve_auth(&self) -> Result<ChatAuth> {
         let config = Config::load()?;
+        let auth = config.effective_auth_with_overrides(
+            self.api_key.clone(),
+            self.account.clone(),
+            self.user.clone(),
+            false,
+        );
         Ok(ChatAuth {
-            api_key: self.api_key.clone().or(config.api_key),
-            account: self.account.clone().or(config.account),
-            user: self.user.clone().or(config.user),
+            api_key: auth.api_key,
+            account: auth.account,
+            user: auth.user,
         })
     }
 
@@ -192,7 +195,7 @@ impl ChatCommand {
         if !response.status().is_success() {
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
-            return Err(Error::Api(format!("Request failed ({}): {}", status, text)));
+            return Err(Error::api(format!("Request failed ({}): {}", status, text)));
         }
 
         let chat_response: ChatResponse = response
@@ -236,7 +239,7 @@ impl ChatCommand {
         if !response.status().is_success() {
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
-            return Err(Error::Api(format!("Request failed ({}): {}", status, text)));
+            return Err(Error::api(format!("Request failed ({}): {}", status, text)));
         }
 
         // Process the SSE stream
@@ -429,7 +432,7 @@ impl ChatCommand {
         if !response.status().is_success() {
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
-            return Err(Error::Api(format!("Request failed ({}): {}", status, text)));
+            return Err(Error::api(format!("Request failed ({}): {}", status, text)));
         }
 
         let chat_response: ChatResponse = response
@@ -482,7 +485,7 @@ impl ChatCommand {
         if !response.status().is_success() {
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
-            return Err(Error::Api(format!("Request failed ({}): {}", status, text)));
+            return Err(Error::api(format!("Request failed ({}): {}", status, text)));
         }
 
         let mut response = response;

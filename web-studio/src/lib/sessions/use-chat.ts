@@ -6,18 +6,44 @@ import { addMessage, sendChatStream, serializeParts } from './api'
 import { generateTitle } from './generate-title'
 import { parseSseStream, streamEventDataToText } from './sse'
 import { setSessionTitle } from './use-session-titles'
-
-function generateId(): string {
-  return `msg_${crypto.randomUUID().replace(/-/g, '')}`
-}
+import { createBrowserId } from '../browser-crypto'
 
 function createUserMessage(content: string): Message {
   return {
-    id: generateId(),
+    id: createBrowserId('msg'),
     role: 'user',
     parts: [{ type: 'text', text: content }],
     created_at: new Date().toISOString(),
   }
+}
+
+function toolCallKey(toolCall: StreamToolCall): string {
+  return `${toolCall.iteration ?? 0}\u0000${toolCall.name}\u0000${toolCall.arguments}`
+}
+
+function dedupeToolCalls(toolCalls: StreamToolCall[]): StreamToolCall[] {
+  const result: StreamToolCall[] = []
+  const byKey = new Map<string, StreamToolCall>()
+
+  for (const toolCall of toolCalls) {
+    const key = toolCallKey(toolCall)
+    const existing = byKey.get(key)
+    if (!existing) {
+      const next = { ...toolCall }
+      byKey.set(key, next)
+      result.push(next)
+      continue
+    }
+    if (!existing.result && toolCall.result) {
+      existing.result = toolCall.result
+    }
+  }
+
+  return result
+}
+
+type SendOptions = {
+  displayMessage?: string
 }
 
 function buildAssistantMessage(
@@ -51,7 +77,7 @@ function buildAssistantMessage(
   }
 
   return {
-    id: generateId(),
+    id: createBrowserId('msg'),
     role: 'assistant',
     parts,
     created_at: new Date().toISOString(),
@@ -74,7 +100,7 @@ export interface UseChatReturn {
   streamingToolCalls: StreamToolCall[]
   streamingReasoning: string
   iteration: number
-  send: (message: string) => Promise<void>
+  send: (message: string, options?: SendOptions) => Promise<void>
   abort: () => void
   reset: () => void
   setMessages: React.Dispatch<React.SetStateAction<Message[]>>
@@ -95,12 +121,16 @@ export function useChat(options: UseChatOptions): UseChatReturn {
 
   const abortRef = useRef<AbortController | null>(null)
   const messagesRef = useRef<Message[]>(messages)
+  const lastSyncedInitialMessagesRef = useRef<Message[] | undefined>(undefined)
+  const pendingInitialMessagesRef = useRef<Message[] | undefined>(undefined)
   messagesRef.current = messages
 
   // Reset state when sessionId changes
   useEffect(() => {
     abortRef.current?.abort()
     abortRef.current = null
+    lastSyncedInitialMessagesRef.current = undefined
+    pendingInitialMessagesRef.current = undefined
     setMessages([])
     setStatus('idle')
     setError(undefined)
@@ -110,16 +140,25 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     setIteration(0)
   }, [sessionId])
 
-  // Sync initialMessages into state when they load (e.g. history fetched)
+  // Sync initialMessages into state when they load or when switching sessions.
   useEffect(() => {
-    if (
-      initialMessages &&
-      initialMessages.length > 0 &&
-      status !== 'streaming'
-    ) {
-      setMessages(initialMessages)
+    if (!initialMessages) return
+
+    if (status === 'streaming') {
+      pendingInitialMessagesRef.current = initialMessages
+      return
     }
-  }, [initialMessages])
+
+    const nextInitialMessages =
+      pendingInitialMessagesRef.current ?? initialMessages
+    // Consume the deferred snapshot on every non-streaming run so it can never
+    // permanently shadow later initialMessages updates.
+    pendingInitialMessagesRef.current = undefined
+    if (lastSyncedInitialMessagesRef.current === nextInitialMessages) return
+
+    lastSyncedInitialMessagesRef.current = nextInitialMessages
+    setMessages(nextInitialMessages)
+  }, [initialMessages, sessionId, status])
 
   const abort = useCallback(() => {
     abortRef.current?.abort()
@@ -138,12 +177,13 @@ export function useChat(options: UseChatOptions): UseChatReturn {
   }, [abort, initialMessages])
 
   const send = useCallback(
-    async (message: string) => {
+    async (message: string, options?: SendOptions) => {
       if (status === 'streaming') return
 
       const isFirstExchange = messagesRef.current.length === 0
+      const displayMessage = options?.displayMessage ?? message
 
-      const userMsg = createUserMessage(message)
+      const userMsg = createUserMessage(displayMessage)
       setMessages((prev) => [...prev, userMsg])
       setStatus('streaming')
       setError(undefined)
@@ -160,6 +200,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       let accReasoning = ''
       const accToolCalls: StreamToolCall[] = []
       let lastToolCall: StreamToolCall | null = null
+      let currentIteration = 0
 
       try {
         const response = await sendChatStream(
@@ -174,7 +215,10 @@ export function useChat(options: UseChatOptions): UseChatReturn {
             case 'iteration': {
               const data = streamEventDataToText(event.data)
               const match = data.match(/(\d+)/)
-              if (match) setIteration(Number(match[1]))
+              if (match) {
+                currentIteration = Number(match[1])
+                setIteration(currentIteration)
+              }
               break
             }
 
@@ -205,16 +249,32 @@ export function useChat(options: UseChatOptions): UseChatReturn {
               const parenIdx = raw.indexOf('(')
               const name = parenIdx > 0 ? raw.slice(0, parenIdx) : raw
               const args = parenIdx > 0 ? raw.slice(parenIdx + 1, -1) : ''
-              lastToolCall = { name, arguments: args }
+              const duplicate = accToolCalls.find(
+                (tc) =>
+                  tc.iteration === currentIteration &&
+                  tc.name === name &&
+                  tc.arguments === args &&
+                  !tc.result,
+              )
+              if (duplicate) {
+                lastToolCall = duplicate
+                setStreamingToolCalls(dedupeToolCalls(accToolCalls))
+                break
+              }
+              lastToolCall = {
+                name,
+                arguments: args,
+                iteration: currentIteration,
+              }
               accToolCalls.push(lastToolCall)
-              setStreamingToolCalls([...accToolCalls])
+              setStreamingToolCalls(dedupeToolCalls(accToolCalls))
               break
             }
 
             case 'tool_result': {
               if (lastToolCall) {
                 lastToolCall.result = streamEventDataToText(event.data)
-                setStreamingToolCalls([...accToolCalls])
+                setStreamingToolCalls(dedupeToolCalls(accToolCalls))
               }
               break
             }
@@ -229,18 +289,21 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         }
 
         // Build assistant message and finalize
-        const assistantMsg = buildAssistantMessage(accContent, accToolCalls)
-        setMessages((prev) => [...prev, assistantMsg])
-        setStatus('idle')
+        const assistantMsg = buildAssistantMessage(
+          accContent,
+          dedupeToolCalls(accToolCalls),
+        )
         setStreamingContent('')
         setStreamingToolCalls([])
         setStreamingReasoning('')
+        setStatus('idle')
+        setMessages((prev) => [...prev, assistantMsg])
 
         // Persist to openviking session (bot doesn't do this automatically)
         if (persistMessages) {
           try {
             // Sequential: user message must precede assistant message
-            await addMessage(sessionId, 'user', message)
+            await addMessage(sessionId, 'user', displayMessage)
             await addMessage(
               sessionId,
               'assistant',
@@ -255,9 +318,9 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         // Generate session title on first exchange
         if (sessionId && isFirstExchange) {
           // Immediate: use first user message as temp title
-          setSessionTitle(sessionId, message.slice(0, 20))
+          setSessionTitle(sessionId, displayMessage.slice(0, 20))
           // Async: ask AI for a better title
-          generateTitle(message, accContent)
+          generateTitle(displayMessage, accContent)
             .then((title) => {
               if (title) setSessionTitle(sessionId, title)
             })
@@ -269,7 +332,13 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         if (controller.signal.aborted) {
           // Aborted intentionally — still finalize any partial content
           if (accContent) {
-            const partialMsg = buildAssistantMessage(accContent, accToolCalls)
+            const partialMsg = buildAssistantMessage(
+              accContent,
+              dedupeToolCalls(accToolCalls),
+            )
+            setStreamingContent('')
+            setStreamingToolCalls([])
+            setStreamingReasoning('')
             setMessages((prev) => [...prev, partialMsg])
           }
           setStatus('idle')
