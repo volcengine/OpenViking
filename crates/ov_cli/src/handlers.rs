@@ -24,11 +24,7 @@ pub async fn handle_add_resource(
     exclude: Option<String>,
     no_directly_upload_media: bool,
     watch_interval: f64,
-    depth: u32,
-    max_pages: u32,
-    include_paths: Option<String>,
-    exclude_paths: Option<String>,
-    allow_external_links: bool,
+    resource_args: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
     let is_url =
@@ -73,6 +69,7 @@ pub async fn handle_add_resource(
         merge_csv_options(ctx.config.upload.ignore_dirs.clone(), ignore_dirs);
     let effective_include = merge_csv_options(ctx.config.upload.include.clone(), include);
     let effective_exclude = merge_csv_options(ctx.config.upload.exclude.clone(), exclude);
+    let add_resource_args = parse_add_resource_args(resource_args.as_deref())?;
 
     let effective_timeout = if wait {
         timeout.unwrap_or(60.0).max(ctx.config.timeout)
@@ -105,17 +102,138 @@ pub async fn handle_add_resource(
         effective_exclude,
         directly_upload_media,
         watch_interval,
-        depth,
-        max_pages,
-        include_paths,
-        exclude_paths,
-        allow_external_links,
+        add_resource_args,
         ctx.output_format,
         ctx.compact,
         ctx.should_show_progress(),
         ctx.is_verbose(),
     )
     .await
+}
+
+fn parse_add_resource_args(
+    raw: Option<&str>,
+) -> Result<Option<serde_json::Map<String, serde_json::Value>>> {
+    let Some(raw) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+
+    let mut parsed = serde_json::Map::new();
+    for entry in split_add_resource_args(raw)?
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+    {
+        let Some((key, value)) = entry.split_once(':').or_else(|| entry.split_once('=')) else {
+            return Err(Error::Parse(format!(
+                "Invalid --args entry '{entry}'. Expected key:value."
+            )));
+        };
+        let key = key.trim();
+        if key.is_empty() {
+            return Err(Error::Parse(
+                "Invalid --args entry with empty key.".to_string(),
+            ));
+        }
+        parsed.insert(key.to_string(), parse_add_resource_arg_value(value.trim())?);
+    }
+
+    Ok(Some(parsed))
+}
+
+fn split_add_resource_args(raw: &str) -> Result<Vec<String>> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut square_depth = 0usize;
+    let mut brace_depth = 0usize;
+
+    for ch in raw.chars() {
+        if in_string {
+            current.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' => {
+                in_string = true;
+                current.push(ch);
+            }
+            '[' => {
+                square_depth += 1;
+                current.push(ch);
+            }
+            ']' => {
+                square_depth = square_depth.checked_sub(1).ok_or_else(|| {
+                    Error::Parse("Invalid --args value: unmatched ']'.".to_string())
+                })?;
+                current.push(ch);
+            }
+            '{' => {
+                brace_depth += 1;
+                current.push(ch);
+            }
+            '}' => {
+                brace_depth = brace_depth.checked_sub(1).ok_or_else(|| {
+                    Error::Parse("Invalid --args value: unmatched '}'.".to_string())
+                })?;
+                current.push(ch);
+            }
+            ',' if square_depth == 0 && brace_depth == 0 => {
+                parts.push(current);
+                current = String::new();
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    if in_string {
+        return Err(Error::Parse(
+            "Invalid --args value: unterminated string.".to_string(),
+        ));
+    }
+    if square_depth != 0 || brace_depth != 0 {
+        return Err(Error::Parse(
+            "Invalid --args value: unmatched bracket or brace.".to_string(),
+        ));
+    }
+
+    parts.push(current);
+    Ok(parts)
+}
+
+fn parse_add_resource_arg_value(raw: &str) -> Result<serde_json::Value> {
+    if raw.eq_ignore_ascii_case("true") {
+        return Ok(serde_json::Value::Bool(true));
+    }
+    if raw.eq_ignore_ascii_case("false") {
+        return Ok(serde_json::Value::Bool(false));
+    }
+    if raw.eq_ignore_ascii_case("null") {
+        return Ok(serde_json::Value::Null);
+    }
+    if let Ok(value) = raw.parse::<i64>() {
+        return Ok(serde_json::Value::Number(value.into()));
+    }
+    if let Ok(value) = raw.parse::<f64>() {
+        return serde_json::Number::from_f64(value)
+            .map(serde_json::Value::Number)
+            .ok_or_else(|| Error::Parse(format!("Invalid numeric --args value '{raw}'.")));
+    }
+    if raw.starts_with('{') || raw.starts_with('[') || (raw.starts_with('"') && raw.ends_with('"'))
+    {
+        return serde_json::from_str(raw).map_err(Error::Serialization);
+    }
+
+    Ok(serde_json::Value::String(raw.to_string()))
 }
 
 pub async fn handle_add_skill(
@@ -1440,6 +1558,37 @@ pub async fn handle_tui(uri: String, ctx: CliContext) -> Result<()> {
     }
 
     tui::run_tui(client, &uri).await
+}
+
+#[cfg(test)]
+mod add_resource_args_tests {
+    use super::*;
+
+    #[test]
+    fn parses_add_resource_args_as_json_fields() {
+        let parsed = parse_add_resource_args(Some(
+            r#"depth:1,max_pages:3,include_paths:"/docs/a/*,/docs/b/*",allow_external_links:true"#,
+        ))
+        .expect("args should parse")
+        .expect("args should be present");
+
+        assert_eq!(parsed.get("depth"), Some(&serde_json::json!(1)));
+        assert_eq!(parsed.get("max_pages"), Some(&serde_json::json!(3)));
+        assert_eq!(
+            parsed.get("include_paths"),
+            Some(&serde_json::json!("/docs/a/*,/docs/b/*"))
+        );
+        assert_eq!(
+            parsed.get("allow_external_links"),
+            Some(&serde_json::json!(true))
+        );
+    }
+
+    #[test]
+    fn rejects_add_resource_args_without_separator() {
+        let err = parse_add_resource_args(Some("depth")).expect_err("args should fail");
+        assert!(err.to_string().contains("Expected key:value"));
+    }
 }
 
 #[cfg(test)]

@@ -363,6 +363,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 label: "ov add-resource https://example.com/spec.md --to viking://specs/api.md",
                 description: "Import a URL to an exact target URI.",
             },
+            HelpItem {
+                label: "ov add-resource https://example.com --args='depth:1,max_pages:3'",
+                description: "Import a URL with parser-specific options.",
+            },
         ],
         arguments: &[HelpItem {
             label: "<path-or-url>",
@@ -404,24 +408,8 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Set automatic refresh cadence.",
             },
             HelpItem {
-                label: "--depth <n>",
-                description: "Recursion depth for web page URLs (0 = no recursion).",
-            },
-            HelpItem {
-                label: "--max-pages <n>",
-                description: "Maximum total number of pages to crawl.",
-            },
-            HelpItem {
-                label: "--include-paths <paths>",
-                description: "Only follow URLs matching these path patterns (comma-separated).",
-            },
-            HelpItem {
-                label: "--exclude-paths <paths>",
-                description: "Exclude URLs matching these path patterns (comma-separated).",
-            },
-            HelpItem {
-                label: "--allow-external-links",
-                description: "Allow following links to external domains.",
+                label: "--args <key:value,...>",
+                description: "Pass parser-specific options; quote values containing commas.",
             },
             HelpItem {
                 label: "--progress / --no-progress",

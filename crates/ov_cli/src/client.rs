@@ -482,11 +482,7 @@ impl HttpClient {
         exclude: Option<String>,
         directly_upload_media: bool,
         watch_interval: f64,
-        depth: u32,
-        max_pages: u32,
-        include_paths: Option<String>,
-        exclude_paths: Option<String>,
-        allow_external_links: bool,
+        resource_args: Option<serde_json::Map<String, serde_json::Value>>,
         show_progress: bool,
         verbose: bool,
     ) -> Result<serde_json::Value> {
@@ -509,6 +505,14 @@ impl HttpClient {
                 body.as_object_mut()
                     .expect("add_resource request body must be an object")
                     .insert("create_parent".to_string(), serde_json::Value::Bool(true));
+            }
+            if let Some(resource_args) = &resource_args {
+                let body_obj = body
+                    .as_object_mut()
+                    .expect("add_resource request body must be an object");
+                for (key, value) in resource_args {
+                    body_obj.insert(key.clone(), value.clone());
+                }
             }
             body
         };
@@ -546,11 +550,6 @@ impl HttpClient {
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
                     "watch_interval": watch_interval,
-                    "depth": depth,
-                    "max_pages": max_pages,
-                    "include_paths": include_paths,
-                    "exclude_paths": exclude_paths,
-                    "allow_external_links": allow_external_links,
                 }));
 
                 let dynamic_timeout =
@@ -585,11 +584,6 @@ impl HttpClient {
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
                     "watch_interval": watch_interval,
-                    "depth": depth,
-                    "max_pages": max_pages,
-                    "include_paths": include_paths,
-                    "exclude_paths": exclude_paths,
-                    "allow_external_links": allow_external_links,
                 }));
 
                 let dynamic_timeout =
@@ -612,11 +606,6 @@ impl HttpClient {
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
                     "watch_interval": watch_interval,
-                    "depth": depth,
-                    "max_pages": max_pages,
-                    "include_paths": include_paths,
-                    "exclude_paths": exclude_paths,
-                    "allow_external_links": allow_external_links,
                 }));
 
                 self.post("/api/v1/resources", &body).await
@@ -636,11 +625,6 @@ impl HttpClient {
                 "exclude": exclude,
                 "directly_upload_media": directly_upload_media,
                 "watch_interval": watch_interval,
-                    "depth": depth,
-                    "max_pages": max_pages,
-                    "include_paths": include_paths,
-                    "exclude_paths": exclude_paths,
-                    "allow_external_links": allow_external_links,
             }));
 
             self.post("/api/v1/resources", &body).await
