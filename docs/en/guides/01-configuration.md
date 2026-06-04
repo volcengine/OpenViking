@@ -853,6 +853,7 @@ Storage configuration for context data, including file storage (RAGFS) and vecto
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `workspace` | str | Local data storage path (main configuration) | "./data" |
+| `skip_process_lock` | bool | Whether to skip the startup process-lock check for `storage.workspace`. When enabled, OpenViking will not check or create the `.openviking.pid` lock file. | `false` |
 | `agfs` | object | RAGFS (Rust-based AGFS) configuration | {} |
 | `vectordb` | object | Vector database storage configuration | {} |
 
