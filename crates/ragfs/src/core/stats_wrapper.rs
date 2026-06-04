@@ -13,13 +13,24 @@ use super::{
 
 /// A wrapper around FileSystem that automatically collects operation statistics
 pub struct StatsWrappedFS {
-    inner: Box<dyn FileSystem>,
+    inner: Arc<dyn FileSystem>,
     stats: Arc<StatsCollector>,
 }
 
 impl StatsWrappedFS {
     /// Create a new statistics-wrapped filesystem
     pub fn new(inner: Box<dyn FileSystem>) -> Self {
+        Self {
+            inner: Arc::from(inner),
+            stats: Arc::new(StatsCollector::new()),
+        }
+    }
+
+    /// Create a new statistics-wrapped filesystem from an `Arc` inner.
+    ///
+    /// Used by the stack builder to wrap an already shared lower layer
+    /// (e.g. `Arc<EncryptionWrappedFS>` or `Arc<MountableFS>`) as the top stats layer.
+    pub fn with_arc(inner: Arc<dyn FileSystem>) -> Self {
         Self {
             inner,
             stats: Arc::new(StatsCollector::new()),
@@ -28,7 +39,10 @@ impl StatsWrappedFS {
 
     /// Create a new statistics-wrapped filesystem with an existing collector
     pub fn with_collector(inner: Box<dyn FileSystem>, stats: Arc<StatsCollector>) -> Self {
-        Self { inner, stats }
+        Self {
+            inner: Arc::from(inner),
+            stats,
+        }
     }
 
     /// Get a reference to the statistics collector
@@ -38,7 +52,7 @@ impl StatsWrappedFS {
 
     /// Get the inner filesystem (for testing)
     #[cfg(test)]
-    pub fn into_inner(self) -> Box<dyn FileSystem> {
+    pub fn into_inner(self) -> Arc<dyn FileSystem> {
         self.inner
     }
 }

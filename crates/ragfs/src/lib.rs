@@ -30,6 +30,7 @@
 #![warn(clippy::all)]
 
 pub mod core;
+pub mod crypto;
 pub mod plugins;
 
 // Re-export core types for convenience

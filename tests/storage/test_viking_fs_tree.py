@@ -16,6 +16,14 @@ def _default_ctx() -> RequestContext:
     return RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
 
 
+def test_viking_fs_no_longer_exposes_python_encryption_api(fs: VikingFS):
+    """VikingFS should not expose Python-side encryption helpers after ragfs migration."""
+    assert not hasattr(fs, "_encrypt_content")
+    assert not hasattr(fs, "_decrypt_content")
+    assert not hasattr(fs, "encrypt_bytes")
+    assert not hasattr(fs, "decrypt_bytes")
+
+
 # ── Shared fixtures / builders ──────────────────────────────────────────────
 
 
