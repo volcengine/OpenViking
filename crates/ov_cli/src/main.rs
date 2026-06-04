@@ -90,17 +90,13 @@ impl CliContext {
     }
 
     pub fn get_client_with_timeout(&self, timeout_secs: Option<f64>) -> client::HttpClient {
-        let api_key = if self.sudo {
-            self.config.root_api_key.clone()
-        } else {
-            self.config.api_key.clone()
-        };
+        let auth = self.config.effective_auth(self.sudo);
         client::HttpClient::new(
             &self.config.url,
-            api_key,
+            auth.api_key,
             self.config.agent_id.clone(),
-            self.config.account.clone(),
-            self.config.user.clone(),
+            auth.account,
+            auth.user,
             timeout_secs.unwrap_or(self.config.timeout),
             self.profile.unwrap_or(self.config.profile),
             self.config.extra_headers.clone(),
@@ -683,7 +679,10 @@ enum Commands {
 impl Commands {
     /// Returns true if this is an admin command that supports --sudo
     fn is_admin_command(&self) -> bool {
-        matches!(self, Self::Admin { .. } | Self::System { .. } | Self::Reindex { .. })
+        matches!(
+            self,
+            Self::Admin { .. } | Self::System { .. } | Self::Reindex { .. }
+        )
     }
 
     fn supports_upload_options(&self) -> bool {
@@ -1109,9 +1108,6 @@ struct ConfigAddSelfManagedArgs {
     /// Read root API key from an environment variable
     #[arg(long, conflicts_with = "root_api_key_stdin")]
     root_api_key_env: Option<String>,
-    /// Also use the root key for normal commands. Requires --account and --user.
-    #[arg(long)]
-    use_root_key_for_normal_commands: bool,
     /// Account identifier to send as X-OpenViking-Account
     #[arg(long)]
     account: Option<String>,
@@ -1154,9 +1150,6 @@ struct ConfigEditArgs {
     /// Remove the root API key
     #[arg(long, conflicts_with_all = ["root_api_key_stdin", "root_api_key_env"])]
     clear_root_api_key: bool,
-    /// Also use the root key for normal commands. Requires --account and --user.
-    #[arg(long)]
-    use_root_key_for_normal_commands: bool,
     /// Account identifier to send as X-OpenViking-Account
     #[arg(long)]
     account: Option<String>,
@@ -1714,7 +1707,10 @@ fn language_gate_action(
     has_saved_language: bool,
     is_interactive: bool,
 ) -> LanguageGateAction {
-    if has_saved_language || is_language_command_request(args) || is_config_agent_command_request(args) {
+    if has_saved_language
+        || is_language_command_request(args)
+        || is_config_agent_command_request(args)
+    {
         LanguageGateAction::Continue
     } else if is_interactive {
         LanguageGateAction::Prompt
@@ -2332,8 +2328,8 @@ mod tests {
         Cli, CliContext, Commands, ConfigAddTarget, ConfigCommands, LanguageGateAction,
         PrivacyCommands, UploadCliOptions, first_command_token, is_language_command_request,
         language_command_can_run_picker, language_gate_action, language_required_message,
-        legacy_upload_option_error,
-        plain_help_misuse, pre_parse_requires_cli_config_file, preprocess_privacy_args,
+        legacy_upload_option_error, plain_help_misuse, pre_parse_requires_cli_config_file,
+        preprocess_privacy_args,
     };
     use crate::config::{Config, DEFAULT_SELF_MANAGED_URL};
     use crate::handlers;
@@ -2457,9 +2453,30 @@ mod tests {
         assert!(edit.activate);
 
         assert!(
-            Cli::try_parse_from(["ov", "config", "add", "cloud", "--api-key", "secret"])
-                .is_err(),
+            Cli::try_parse_from(["ov", "config", "add", "cloud", "--api-key", "secret"]).is_err(),
             "plain API key flag must stay rejected"
+        );
+        assert!(
+            Cli::try_parse_from([
+                "ov",
+                "config",
+                "add",
+                "self-managed",
+                "--use-root-key-for-normal-commands",
+            ])
+            .is_err(),
+            "root-as-normal flag is obsolete and must stay rejected"
+        );
+        assert!(
+            Cli::try_parse_from([
+                "ov",
+                "config",
+                "edit",
+                "prod",
+                "--use-root-key-for-normal-commands",
+            ])
+            .is_err(),
+            "root-as-normal edit flag is obsolete and must stay rejected"
         );
     }
 

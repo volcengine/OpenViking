@@ -1837,7 +1837,7 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["config", "add", "self-managed"],
         purpose: "Create a self-managed config without prompts.",
-        usage: "ov config add self-managed [--name <name>] [--url <url>] [--api-key-stdin|--api-key-env <env>] [--root-api-key-stdin|--root-api-key-env <env>] [--use-root-key-for-normal-commands] [--account <account>] [--user <user>] [--activate] [--force]",
+        usage: "ov config add self-managed [--name <name>] [--url <url>] [--api-key-stdin|--api-key-env <env>] [--root-api-key-stdin|--root-api-key-env <env>] [--account <account>] [--user <user>] [--activate] [--force]",
         examples: &[
             HelpItem {
                 label: "ov config add self-managed --name local --url http://127.0.0.1:1933 --activate",
@@ -1877,16 +1877,12 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         ],
         advanced_options: &[
             HelpItem {
-                label: "--use-root-key-for-normal-commands",
-                description: "Copy the root key into api_key; requires --account and --user.",
-            },
-            HelpItem {
                 label: "--account <account>",
-                description: "Account identity. Required with root-key normal commands.",
+                description: "Account identity. Required when only a root key is supplied.",
             },
             HelpItem {
                 label: "--user <user>",
-                description: "User identity. Required with root-key normal commands.",
+                description: "User identity. Required when only a root key is supplied.",
             },
         ],
         subcommands: &[],
@@ -1950,10 +1946,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             },
         ],
         advanced_options: &[
-            HelpItem {
-                label: "--use-root-key-for-normal-commands",
-                description: "Copy the root key into api_key; requires --account and --user.",
-            },
             HelpItem {
                 label: "--account <account>",
                 description: "Replace account identity.",
@@ -2471,18 +2463,13 @@ fn localized_help_item_description<'a>(
         "--api-key-stdin" => "从 stdin 读取 API Key。",
         "--api-key-env <env>" => "从环境变量读取 API Key。",
         "--api-key-stdin / --api-key-env <env>" => "从 stdin 或环境变量读取普通 API Key。",
-        "--api-key-stdin / --api-key-env <env> / --clear-api-key" => {
-            "替换或清除普通 API Key。"
-        },
+        "--api-key-stdin / --api-key-env <env> / --clear-api-key" => "替换或清除普通 API Key。",
         "--root-api-key-stdin / --root-api-key-env <env>" => {
             "从 stdin 或环境变量读取 root API Key。"
-        },
+        }
         "--root-api-key-stdin / --root-api-key-env <env> / --clear-root-api-key" => {
             "替换或清除 root API Key。"
-        },
-        "--use-root-key-for-normal-commands" => {
-            "把 root API Key 写入 api_key；需要同时提供 --account 和 --user。"
-        },
+        }
         "--activate" => "同时写入当前 ovcli.conf。",
         "--force" => "替换已有的已保存配置。",
         "-o, --output <table|json>" => "选择表格输出或机器可读 JSON。",
@@ -2673,9 +2660,7 @@ fn command_help_path(args: &[OsString]) -> Option<Vec<String>> {
     }
 
     let has_help_flag = tokens.iter().skip(1).any(|token| is_help_flag(token));
-    if has_help_flag
-        && let Some(path) = config_help_path(&tokens)
-    {
+    if has_help_flag && let Some(path) = config_help_path(&tokens) {
         return Some(path);
     }
 
@@ -3072,14 +3057,8 @@ mod tests {
         assert!(config.contains("self-managed"));
 
         let cloud = strip_ansi(
-            &render_command_help_request(&os_args(&[
-                "ov",
-                "config",
-                "add",
-                "cloud",
-                "--help",
-            ]))
-            .expect("config add cloud help should render"),
+            &render_command_help_request(&os_args(&["ov", "config", "add", "cloud", "--help"]))
+                .expect("config add cloud help should render"),
         );
         assert!(cloud.contains("ov config add cloud"));
         assert!(cloud.contains("--api-key-stdin"));
@@ -3097,7 +3076,7 @@ mod tests {
         );
         assert!(self_managed.contains("ov config add self-managed"));
         assert!(self_managed.contains("--root-api-key-stdin"));
-        assert!(self_managed.contains("--use-root-key-for-normal-commands"));
+        assert!(!self_managed.contains("--use-root-key-for-normal-commands"));
 
         let edit = strip_ansi(
             &render_command_help_request(&os_args(&["ov", "config", "edit", "prod", "--help"]))
@@ -3105,6 +3084,7 @@ mod tests {
         );
         assert!(edit.contains("ov config edit <name>"));
         assert!(edit.contains("--clear-api-key"));
+        assert!(!edit.contains("--use-root-key-for-normal-commands"));
 
         let delete = strip_ansi(
             &render_command_help_request(&os_args(&["ov", "config", "delete", "prod", "--help"]))

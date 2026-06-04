@@ -528,12 +528,13 @@ pub(crate) async fn validate_candidate_config_with_role(
     }
 
     let timeout = config.timeout.clamp(1.0, 10.0);
+    let auth = config.effective_auth(false);
     let client = BaseClient::new(
         &config.url,
-        api_key.clone(),
+        auth.api_key.clone(),
         config.agent_id.clone(),
-        config.account.clone(),
-        config.user.clone(),
+        auth.account,
+        auth.user,
         timeout,
         config.profile,
         config.extra_headers.clone(),
@@ -550,11 +551,11 @@ pub(crate) async fn validate_candidate_config_with_role(
         ));
     }
 
-    if should_run_authenticated_probe(&value, require_api_key, api_key.is_some()) {
+    if should_run_authenticated_probe(&value, require_api_key, auth.api_key.is_some()) {
         let _: Value = client.get("/api/v1/system/status", &[]).await?;
     }
 
-    if api_key.is_some() {
+    if auth.api_key.is_some() {
         return detect_api_key_role(&client).await.map(Some);
     }
 
@@ -665,10 +666,10 @@ fn non_empty_option(value: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ApiKeyRole, ConfigDraft, ConfigKind, ConfigStore, VOLCENGINE_CLOUD_URL, build_config,
-        admin_probe_ambiguous_status, admin_probe_regular_key_status,
-        should_run_authenticated_probe, validate_candidate_config, validate_candidate_config_with_role,
-        validate_config_name, validation_error_copy,
+        ApiKeyRole, ConfigDraft, ConfigKind, ConfigStore, VOLCENGINE_CLOUD_URL,
+        admin_probe_ambiguous_status, admin_probe_regular_key_status, build_config,
+        should_run_authenticated_probe, validate_candidate_config,
+        validate_candidate_config_with_role, validate_config_name, validation_error_copy,
     };
     use crate::config::Config;
     use std::fs;

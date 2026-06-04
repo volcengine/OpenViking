@@ -2,8 +2,8 @@ use crate::CliContext;
 use crate::PrivacyCommands;
 use crate::client;
 use crate::commands;
-use crate::config_agent;
 use crate::config::merge_csv_options;
+use crate::config_agent;
 use crate::error::{Error, Result};
 use crate::theme;
 use crate::tui;
@@ -74,12 +74,13 @@ pub async fn handle_add_resource(
     } else {
         ctx.config.timeout
     };
+    let auth = ctx.config.effective_auth(ctx.sudo);
     let client = client::HttpClient::new(
         &ctx.config.url,
-        ctx.config.api_key.clone(),
+        auth.api_key,
         ctx.config.agent_id.clone(),
-        ctx.config.account.clone(),
-        ctx.config.user.clone(),
+        auth.account,
+        auth.user,
         effective_timeout,
         ctx.profile.unwrap_or(ctx.config.profile),
         ctx.config.extra_headers.clone(),

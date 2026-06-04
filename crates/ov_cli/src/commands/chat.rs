@@ -129,10 +129,16 @@ impl ChatCommand {
 
     fn resolve_auth(&self) -> Result<ChatAuth> {
         let config = Config::load()?;
+        let auth = config.effective_auth_with_overrides(
+            self.api_key.clone(),
+            self.account.clone(),
+            self.user.clone(),
+            false,
+        );
         Ok(ChatAuth {
-            api_key: self.api_key.clone().or(config.api_key),
-            account: self.account.clone().or(config.account),
-            user: self.user.clone().or(config.user),
+            api_key: auth.api_key,
+            account: auth.account,
+            user: auth.user,
         })
     }
 

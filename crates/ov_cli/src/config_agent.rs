@@ -10,8 +10,8 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
-    CliContext, ConfigAddCloudArgs, ConfigAddSelfManagedArgs, ConfigAddTarget,
-    ConfigDeleteArgs, ConfigEditArgs,
+    CliContext, ConfigAddCloudArgs, ConfigAddSelfManagedArgs, ConfigAddTarget, ConfigDeleteArgs,
+    ConfigEditArgs,
     config::{Config, DEFAULT_SELF_MANAGED_URL, display_config_home},
     config_wizard::{
         ApiKeyRole, ConfigKind, ConfigStore, VOLCENGINE_CLOUD_URL, configs_equivalent,
@@ -336,7 +336,7 @@ async fn add_cloud(store: &ConfigStore, args: ConfigAddCloudArgs) -> AgentResult
         return Ok(result);
     }
 
-    validate_config_for_write(&config, ConfigKind::VolcengineCloud, true, None).await?;
+    validate_config_for_write(&config, ConfigKind::VolcengineCloud, true).await?;
     save_new_config(
         store,
         &name,
@@ -364,14 +364,7 @@ async fn add_self_managed(
     )?;
     let url = normalize_self_managed_url(args.url.as_deref().unwrap_or(DEFAULT_SELF_MANAGED_URL));
 
-    let config = build_self_managed_config(
-        url,
-        api_key,
-        root_api_key,
-        args.account,
-        args.user,
-        args.use_root_key_for_normal_commands,
-    )?;
+    let config = build_self_managed_config(url, api_key, root_api_key, args.account, args.user)?;
 
     if let Some(result) = existing_add_preflight(
         store,
@@ -384,17 +377,7 @@ async fn add_self_managed(
         return Ok(result);
     }
 
-    validate_config_for_write(
-        &config,
-        ConfigKind::SelfManaged,
-        false,
-        if args.use_root_key_for_normal_commands {
-            Some(ApiKeyRole::Root)
-        } else {
-            None
-        },
-    )
-    .await?;
+    validate_config_for_write(&config, ConfigKind::SelfManaged, false).await?;
 
     save_new_config(
         store,
@@ -407,22 +390,22 @@ async fn add_self_managed(
     )
 }
 
-async fn edit_saved_config(store: &ConfigStore, args: ConfigEditArgs) -> AgentResult<AddEditResult> {
+async fn edit_saved_config(
+    store: &ConfigStore,
+    args: ConfigEditArgs,
+) -> AgentResult<AddEditResult> {
     validate_config_name(&args.name).map_err(config_error)?;
     let existing = store.load_saved_config(&args.name).map_err(|error| {
-        AgentError::bad_input(format!("Could not load saved config '{}': {error}", args.name))
+        AgentError::bad_input(format!(
+            "Could not load saved config '{}': {error}",
+            args.name
+        ))
     })?;
     let old_kind = ConfigKind::from_config(&existing);
-    let preserves_root_key_for_normal_commands = existing
-        .root_api_key
-        .as_ref()
-        .is_some_and(|root_key| existing.api_key.as_deref() == Some(root_key.as_str()))
-        && !args.api_key_stdin
-        && args.api_key_env.is_none()
-        && !args.clear_api_key
-        && !args.root_api_key_stdin
-        && args.root_api_key_env.is_none()
-        && !args.clear_root_api_key;
+    let existing_root_as_normal = root_as_normal(&existing);
+    let api_key_touched = args.api_key_stdin || args.api_key_env.is_some() || args.clear_api_key;
+    let root_key_touched =
+        args.root_api_key_stdin || args.root_api_key_env.is_some() || args.clear_root_api_key;
     let new_name = args.new_name.clone().unwrap_or_else(|| args.name.clone());
     validate_config_name(&new_name).map_err(config_error)?;
     validate_optional_identity(args.account.as_deref(), args.user.as_deref())?;
@@ -454,8 +437,14 @@ async fn edit_saved_config(store: &ConfigStore, args: ConfigEditArgs) -> AgentRe
     }
     if args.clear_root_api_key {
         edited.root_api_key = None;
+        if existing_root_as_normal && !api_key_touched {
+            edited.api_key = None;
+        }
     }
     if let Some(root_api_key) = root_secret {
+        if !api_key_touched && (existing_root_as_normal || existing.api_key.is_none()) {
+            edited.api_key = Some(root_api_key.clone());
+        }
         edited.root_api_key = Some(root_api_key);
     }
     if args.account.is_some() {
@@ -464,34 +453,25 @@ async fn edit_saved_config(store: &ConfigStore, args: ConfigEditArgs) -> AgentRe
     if args.user.is_some() {
         edited.user = args.user;
     }
-    if args.use_root_key_for_normal_commands {
-        let root_api_key = edited.root_api_key.clone().ok_or_else(|| {
-            AgentError::bad_input(
-                "--use-root-key-for-normal-commands requires a root API key.",
-            )
-        })?;
-        if edited.account.is_none() || edited.user.is_none() {
-            return Err(AgentError::auth(
-                "Root API keys require explicit --account and --user.",
-            ));
-        }
-        edited.api_key = Some(root_api_key);
+    if !api_key_touched
+        && !root_key_touched
+        && existing_root_as_normal
+        && edited.api_key.as_deref() != edited.root_api_key.as_deref()
+    {
+        edited.api_key = edited.root_api_key.clone();
     }
 
     let new_kind = ConfigKind::from_config(&edited);
-    validate_config_for_write(
-        &edited,
-        new_kind,
-        new_kind == ConfigKind::VolcengineCloud,
-        if args.use_root_key_for_normal_commands || preserves_root_key_for_normal_commands {
-            Some(ApiKeyRole::Root)
-        } else {
-            None
-        },
-    )
-    .await?;
+    validate_config_for_write(&edited, new_kind, new_kind == ConfigKind::VolcengineCloud).await?;
 
-    save_edited_config(store, &args.name, &new_name, &edited, args.activate, args.force)
+    save_edited_config(
+        store,
+        &args.name,
+        &new_name,
+        &edited,
+        args.activate,
+        args.force,
+    )
 }
 
 fn build_self_managed_config(
@@ -500,21 +480,14 @@ fn build_self_managed_config(
     root_api_key: Option<String>,
     mut account: Option<String>,
     mut user: Option<String>,
-    use_root_key_for_normal_commands: bool,
 ) -> AgentResult<Config> {
-    if api_key.is_none()
-        && root_api_key.is_none()
-        && self_managed_requires_api_key(&url)
-    {
+    if api_key.is_none() && root_api_key.is_none() && self_managed_requires_api_key(&url) {
         return Err(AgentError::bad_input(
             "Remote self-managed servers require --api-key-stdin, --api-key-env, --root-api-key-stdin, or --root-api-key-env.",
         ));
     }
 
-    if api_key.is_none()
-        && root_api_key.is_none()
-        && self_managed_allows_empty_api_key(&url)
-    {
+    if api_key.is_none() && root_api_key.is_none() && self_managed_allows_empty_api_key(&url) {
         account.get_or_insert_with(|| "default".to_string());
         user.get_or_insert_with(|| "default".to_string());
     }
@@ -528,12 +501,11 @@ fn build_self_managed_config(
         ..Config::default()
     };
 
-    if use_root_key_for_normal_commands {
-        let root_api_key = config.root_api_key.clone().ok_or_else(|| {
-            AgentError::bad_input(
-                "--use-root-key-for-normal-commands requires a root API key.",
-            )
-        })?;
+    if config.api_key.is_none() && config.root_api_key.is_some() {
+        let root_api_key = config
+            .root_api_key
+            .clone()
+            .ok_or_else(|| AgentError::bad_input("A root API key is required."))?;
         if config.account.is_none() || config.user.is_none() {
             return Err(AgentError::auth(
                 "Root API keys require explicit --account and --user.",
@@ -549,7 +521,6 @@ async fn validate_config_for_write(
     config: &Config,
     kind: ConfigKind,
     require_api_key: bool,
-    expected_api_key_role: Option<ApiKeyRole>,
 ) -> AgentResult<()> {
     if let Some(root_key) = config.root_api_key.as_deref() {
         let mut root_probe = config.clone();
@@ -574,22 +545,23 @@ async fn validate_config_for_write(
         Err(error) => return Err(validation_error(kind, error)),
     };
 
-    if let Some(expected) = expected_api_key_role {
-        if api_key_role != Some(expected) {
-            return Err(AgentError::auth(match expected {
-                ApiKeyRole::Root => {
-                    "The API key must be a root key when --use-root-key-for-normal-commands is set."
-                }
-                ApiKeyRole::Regular => "The API key must be a regular API key.",
-            }));
-        }
-    } else if kind == ConfigKind::SelfManaged && api_key_role == Some(ApiKeyRole::Root) {
+    if kind == ConfigKind::SelfManaged
+        && api_key_role == Some(ApiKeyRole::Root)
+        && !root_as_normal(config)
+    {
         return Err(AgentError::auth(
-            "The supplied API key is a root key. Use --root-api-key-stdin/--root-api-key-env, or pass --use-root-key-for-normal-commands with --account and --user.",
+            "The supplied API key is a root key. Use --root-api-key-stdin/--root-api-key-env with --account and --user.",
         ));
     }
 
     Ok(())
+}
+
+fn root_as_normal(config: &Config) -> bool {
+    config
+        .root_api_key
+        .as_ref()
+        .is_some_and(|root_key| config.api_key.as_deref() == Some(root_key.as_str()))
 }
 
 fn save_new_config(
@@ -625,9 +597,13 @@ fn save_new_config(
     if activate {
         // Saved and active config files are separate writes: validate first,
         // write the saved config, then write active ovcli.conf.
-        store.save_and_activate(name, config).map_err(config_error)?;
+        store
+            .save_and_activate(name, config)
+            .map_err(config_error)?;
     } else {
-        store.save_named_config(name, config).map_err(config_error)?;
+        store
+            .save_named_config(name, config)
+            .map_err(config_error)?;
     }
     Ok(add_edit_result(store, action, name, kind, config, activate))
 }
@@ -650,7 +626,9 @@ fn existing_add_preflight(
         if activate {
             store.activate_config(name).map_err(config_error)?;
         }
-        return Ok(Some(add_edit_result(store, "add", name, kind, config, activate)));
+        return Ok(Some(add_edit_result(
+            store, "add", name, kind, config, activate,
+        )));
     }
     if !force {
         return Err(AgentError::exists_different(format!(
@@ -684,7 +662,10 @@ fn save_edited_config(
                 "Config '{new_name}' already exists with different values. Pass --force to replace it."
             )));
         }
-        if store.is_config_name_active(new_name).map_err(config_error)? {
+        if store
+            .is_config_name_active(new_name)
+            .map_err(config_error)?
+        {
             return Err(AgentError::refused(
                 "Cannot overwrite another active saved config.",
             ));
@@ -745,7 +726,11 @@ fn add_edit_result(
 }
 
 fn print_add_edit_result(result: &AddEditResult) {
-    let verb = if result.action == "add" { "Saved" } else { "Updated" };
+    let verb = if result.action == "add" {
+        "Saved"
+    } else {
+        "Updated"
+    };
     let active_copy = if result.activated {
         " and made it active"
     } else {
@@ -771,14 +756,18 @@ fn print_add_edit_result(result: &AddEditResult) {
         println!(
             "{} {}",
             theme::warning("Note:"),
-            theme::muted("No active config is set. Run 'ov config switch <name>' or add with --activate.")
+            theme::muted(
+                "No active config is set. Run 'ov config switch <name>' or add with --activate."
+            )
         );
     }
     if result.root_key_only {
         eprintln!(
             "{} {}",
             theme::warning("Note:"),
-            theme::muted("This config has only a root API key. Normal commands require --sudo or a regular API key.")
+            theme::muted(
+                "This config has only a root API key. Normal commands require --sudo or a regular API key."
+            )
         );
     }
 }
@@ -869,7 +858,11 @@ fn config_name_or_generate(
     for _ in 0..32 {
         let suffix = Uuid::new_v4().simple().to_string();
         let candidate = format!("{prefix}-{}", &suffix[..6]);
-        if !store.saved_config_path(&candidate).map_err(config_error)?.exists() {
+        if !store
+            .saved_config_path(&candidate)
+            .map_err(config_error)?
+            .exists()
+        {
             return Ok(candidate);
         }
     }
@@ -993,7 +986,10 @@ mod tests {
         fs::create_dir_all(&dir).expect("dir should exist");
         let store = ConfigStore::for_config_dir(dir);
         store
-            .save_named_config("local", &sample_config("http://127.0.0.1:1933", Some("old")))
+            .save_named_config(
+                "local",
+                &sample_config("http://127.0.0.1:1933", Some("old")),
+            )
             .expect("config should be saved");
 
         let error = save_new_config(
@@ -1008,6 +1004,52 @@ mod tests {
         .expect_err("different config should require --force");
 
         assert_eq!(error.exit_code(), EXIT_EXISTS_DIFFERENT);
+    }
+
+    #[test]
+    fn self_managed_root_only_config_populates_normal_and_root_keys() {
+        let config = build_self_managed_config(
+            "http://127.0.0.1:1933".to_string(),
+            None,
+            Some("root-key".to_string()),
+            Some("acme".to_string()),
+            Some("alice".to_string()),
+        )
+        .expect("root-only self-managed config should build");
+
+        assert_eq!(config.api_key.as_deref(), Some("root-key"));
+        assert_eq!(config.root_api_key.as_deref(), Some("root-key"));
+        assert_eq!(config.account.as_deref(), Some("acme"));
+        assert_eq!(config.user.as_deref(), Some("alice"));
+    }
+
+    #[test]
+    fn self_managed_user_and_root_keys_stay_separate() {
+        let config = build_self_managed_config(
+            "https://ov.example.com".to_string(),
+            Some("user-key".to_string()),
+            Some("root-key".to_string()),
+            Some("acme".to_string()),
+            Some("alice".to_string()),
+        )
+        .expect("self-managed config with both keys should build");
+
+        assert_eq!(config.api_key.as_deref(), Some("user-key"));
+        assert_eq!(config.root_api_key.as_deref(), Some("root-key"));
+    }
+
+    #[test]
+    fn self_managed_root_key_requires_explicit_identity() {
+        let error = build_self_managed_config(
+            "http://127.0.0.1:1933".to_string(),
+            None,
+            Some("root-key".to_string()),
+            None,
+            Some("alice".to_string()),
+        )
+        .expect_err("root key without account should fail");
+
+        assert_eq!(error.exit_code(), EXIT_AUTH);
     }
 
     #[test]
@@ -1062,7 +1104,10 @@ mod tests {
         fs::create_dir_all(&dir).expect("dir should exist");
         let store = ConfigStore::for_config_dir(dir);
         store
-            .save_and_activate("local", &sample_config("http://127.0.0.1:1933", Some("key")))
+            .save_and_activate(
+                "local",
+                &sample_config("http://127.0.0.1:1933", Some("key")),
+            )
             .expect("config should be active");
 
         let error = delete_saved_config(

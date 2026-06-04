@@ -748,12 +748,13 @@ async fn status_box_runtime(active: Option<&Config>) -> StatusBoxRuntime {
         return StatusBoxRuntime::not_configured();
     };
 
+    let auth = config.effective_auth(false);
     let client = BaseClient::new(
         config.url.clone(),
-        config.api_key.clone(),
+        auth.api_key,
         config.agent_id.clone(),
-        config.account.clone(),
-        config.user.clone(),
+        auth.account,
+        auth.user,
         STATUS_BOX_PROBE_TIMEOUT_SECS,
         config.profile,
         config.extra_headers.clone(),
@@ -3780,8 +3781,8 @@ mod tests {
         status_box_width, status_payload_is_healthy, styled_logo_to_width_for_color_level,
         styled_wordmark_line_for_color_level, tagline_ice_color_for_theme,
         user_key_redirect_labels, validate_config_name, validate_draft,
-        volcengine_api_key_helper_lines, wizard_header_lines,
-        wordmark_gradient_color_for_theme, wordmark_lines, wordmark_width,
+        volcengine_api_key_helper_lines, wizard_header_lines, wordmark_gradient_color_for_theme,
+        wordmark_lines, wordmark_width,
     };
     use crate::config::Config;
     use crate::config_wizard::store::{
