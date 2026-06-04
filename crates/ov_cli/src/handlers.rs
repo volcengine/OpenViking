@@ -724,10 +724,19 @@ fn language_no_change(language: Language) -> &'static str {
 /// Interactive configuration switcher
 async fn handle_config_switch() -> Result<()> {
     let store = ConfigStore::new()?;
-    let configs = store.list_configs()?;
+    let report = store.list_configs_report()?;
+    let invalid_config_names: Vec<String> = report
+        .invalid_configs
+        .iter()
+        .map(|config| config.name.clone())
+        .collect();
+    let configs = report.configs;
 
     if configs.is_empty() {
-        print!("{}", config_command_ui::render_no_saved_configs());
+        print!(
+            "{}",
+            config_command_ui::render_no_saved_configs(&invalid_config_names)
+        );
         return Ok(());
     }
 
@@ -737,6 +746,7 @@ async fn handle_config_switch() -> Result<()> {
         config_command_ui::render_switch_header(
             active.map(|config| config.name.as_str()),
             active.map(|config| config.kind),
+            &invalid_config_names,
         )
     );
 

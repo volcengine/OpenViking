@@ -70,6 +70,18 @@ pub struct ConfigEntry {
 }
 
 #[derive(Debug, Clone)]
+pub struct InvalidSavedConfig {
+    pub name: String,
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConfigListReport {
+    pub configs: Vec<ConfigEntry>,
+    pub invalid_configs: Vec<InvalidSavedConfig>,
+}
+
+#[derive(Debug, Clone)]
 pub struct ConfigStore {
     config_dir: PathBuf,
     active_path: PathBuf,
@@ -128,10 +140,25 @@ impl ConfigStore {
     }
 
     pub fn list_configs(&self) -> Result<Vec<ConfigEntry>> {
+        let report = self.list_configs_report()?;
+        for invalid in &report.invalid_configs {
+            eprintln!(
+                "Warning: skipped invalid OpenViking config '{}'",
+                invalid.path.display()
+            );
+        }
+        Ok(report.configs)
+    }
+
+    pub fn list_configs_report(&self) -> Result<ConfigListReport> {
         let mut configs = Vec::new();
+        let mut invalid_configs = Vec::new();
 
         if !self.config_dir.exists() {
-            return Ok(configs);
+            return Ok(ConfigListReport {
+                configs,
+                invalid_configs,
+            });
         }
 
         for entry in fs::read_dir(&self.config_dir)? {
@@ -152,10 +179,10 @@ impl ConfigStore {
             }
 
             let Ok(config) = Config::from_file(&path.to_string_lossy()) else {
-                eprintln!(
-                    "Warning: skipped invalid OpenViking config '{}'",
-                    path.display()
-                );
+                invalid_configs.push(InvalidSavedConfig {
+                    name: name.to_string(),
+                    path,
+                });
                 continue;
             };
 
@@ -178,8 +205,12 @@ impl ConfigStore {
         }
 
         configs.sort_by(|left, right| left.name.cmp(&right.name));
+        invalid_configs.sort_by(|left, right| left.name.cmp(&right.name));
         normalize_active_config(&mut configs);
-        Ok(configs)
+        Ok(ConfigListReport {
+            configs,
+            invalid_configs,
+        })
     }
 
     pub fn save_named_config(&self, name: &str, config: &Config) -> Result<()> {

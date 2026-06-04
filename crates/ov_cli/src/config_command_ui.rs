@@ -177,6 +177,7 @@ pub(crate) fn render_validate_failure_with_language(
 pub(crate) fn render_switch_header(
     active_name: Option<&str>,
     active_kind: Option<ConfigKind>,
+    invalid_config_names: &[String],
 ) -> String {
     let language = Language::current();
     let mut lines = Vec::new();
@@ -197,6 +198,10 @@ pub(crate) fn render_switch_header(
             theme::muted(copy(language, "Active:", "当前配置：")),
             unknown_value(copy(language, "none", "无"))
         )),
+    }
+    if let Some(warning) = invalid_saved_configs_notice(language, invalid_config_names) {
+        lines.push(String::new());
+        lines.push(warning);
     }
     format!("{}\n", lines.join("\n"))
 }
@@ -222,7 +227,7 @@ pub(crate) fn switch_labels(rows: &[SwitchConfigRow]) -> Vec<String> {
         .collect()
 }
 
-pub(crate) fn render_no_saved_configs() -> String {
+pub(crate) fn render_no_saved_configs(invalid_config_names: &[String]) -> String {
     let language = Language::current();
     let mut lines = Vec::new();
     lines.push(title(copy(
@@ -244,6 +249,10 @@ pub(crate) fn render_no_saved_configs() -> String {
             "请先运行 ov config 添加并保存配置。",
         ))
     ));
+    if let Some(warning) = invalid_saved_configs_notice(language, invalid_config_names) {
+        lines.push(String::new());
+        lines.push(warning);
+    }
     format!("{}\n", lines.join("\n"))
 }
 
@@ -310,6 +319,30 @@ fn copy_target_validation_failed(language: Language, name: &str) -> String {
         Language::En => format!("Target config '{name}' failed validation."),
         Language::ZhCn => format!("目标配置 '{name}' 验证失败。"),
     }
+}
+
+fn invalid_saved_configs_notice(language: Language, invalid_config_names: &[String]) -> Option<String> {
+    if invalid_config_names.is_empty() {
+        return None;
+    }
+
+    let names = invalid_config_names.join(", ");
+    Some(match language {
+        Language::En => format!(
+            "  {}",
+            theme::warning(format!(
+                "Note: Saved configs with damaged JSON structure were skipped: {names}."
+            ))
+            .bold()
+        ),
+        Language::ZhCn => format!(
+            "  {}",
+            theme::warning(format!(
+                "提示：以下已保存配置因 JSON 结构损坏已跳过：{names}。"
+            ))
+            .bold()
+        ),
+    })
 }
 
 fn title(value: &str) -> String {

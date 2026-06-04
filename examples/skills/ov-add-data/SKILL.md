@@ -80,6 +80,32 @@ ov add-resource /User/volcengine/Photo/Travels/2026/2026-01-01/ --to "viking://r
 ov add-resource /User/volcengine/Photo/Travels/2026/2026-01-02/ --parent "viking://resources/2026/"
 ```
 
+### Scheduled refresh with `--watch-interval`
+
+Use `--watch-interval <minutes>` to create or update a watch task so OpenViking re-imports the same source periodically.
+
+- `--watch-interval` is measured in **minutes**.
+- When the value is **greater than 0**, OV creates or updates a watch task.
+- When `--to` is provided, the watch task is bound to that exact target URI.
+- When `--to` is omitted, OV binds the watch task to the `root_uri` returned by this import.
+- Use `--watch-interval 0` together with the same `--to` target to cancel an existing watch task.
+- Prefer `--to` for long-term watched imports, because it gives the task a stable destination.
+
+```bash
+# Refresh a remote repository every 60 minutes and bind the watch to a fixed URI
+ov add-resource https://github.com/volcengine/OpenViking \
+  --to "viking://resources/repos/OpenViking" \
+  --watch-interval 60
+
+# Refresh every 30 minutes and bind the watch to the imported root_uri automatically
+ov add-resource https://example.com/product-spec.md --watch-interval 30
+
+# Cancel the watch task for the same target URI
+ov add-resource https://github.com/volcengine/OpenViking \
+  --to "viking://resources/repos/OpenViking" \
+  --watch-interval 0
+```
+
 ## CLI Output
 
 Returns the root URI of the imported resource, like:
