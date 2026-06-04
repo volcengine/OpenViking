@@ -6,15 +6,20 @@
 hermes memory setup
 ```
 
-The wizard asks for:
+## Step 2: Copy the Base URL and API Key
 
-- **OpenViking service URL** - A self-hosted server (default `http://127.0.0.1:1933`) or Volcengine OpenViking Cloud
-- **API Key** - Leave empty for local development mode
-- **Tenant account / user / agent ID** - Used for multi-tenant deployments
+After running the setup command, Hermes prompts for the Base URL and API Key. Copy them and paste them into Hermes:
+
+- Base URL: Copy the following Base URL into Hermes:
+```text
+https://api.vikingdb.cn-beijing.volces.com/openviking
+```
+- API Key: Copy the API Key shown on the page into your Hermes terminal
+- Tenant account / user / agent ID: Used for multi-tenant deployments
 
 The configuration is saved to Hermes `config.yaml` and `.env` files.
 
-## Step 2: Verify Hermes memory status
+## Step 3: Verify Hermes memory status
 
 ```bash
 hermes memory status
