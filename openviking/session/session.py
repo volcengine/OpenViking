@@ -168,6 +168,7 @@ class SessionMeta:
     """Session metadata persisted in .meta.json."""
 
     session_id: str = ""
+    account_id: str = ""
     created_at: str = ""
     updated_at: str = ""
     created_by_user_id: str = ""
@@ -218,6 +219,7 @@ class SessionMeta:
     def to_dict(self) -> Dict[str, Any]:
         data = {
             "session_id": self.session_id,
+            "account_id": self.account_id,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "created_by_user_id": self.created_by_user_id,
@@ -244,6 +246,7 @@ class SessionMeta:
 
         return cls(
             session_id=data.get("session_id", ""),
+            account_id=data.get("account_id", ""),
             created_at=data.get("created_at", ""),
             updated_at=data.get("updated_at", ""),
             created_by_user_id=data.get("created_by_user_id", ""),
@@ -322,6 +325,7 @@ class Session:
         self._stats: SessionStats = SessionStats()
         self._meta = SessionMeta(
             session_id=self.session_id,
+            account_id=self.ctx.account_id,
             created_at=get_current_timestamp(),
             created_by_user_id=self.ctx.user.user_id,
             participant_user_ids=[self.ctx.user.user_id],
@@ -381,6 +385,8 @@ class Session:
 
         if not self._meta.created_by_user_id:
             self._meta.created_by_user_id = self.ctx.user.user_id
+        if not self._meta.account_id:
+            self._meta.account_id = self.ctx.account_id
         if not self._meta.participant_user_ids:
             self._meta.participant_user_ids = [self._meta.created_by_user_id]
         for message in self._messages:

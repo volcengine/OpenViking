@@ -12,7 +12,7 @@ from openviking.message.part import Part, TextPart, part_from_dict
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import AuthMode, RequestContext
-from openviking.server.models import ErrorInfo, Response
+from openviking.server.models import Response
 from openviking.server.responses import error_response
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
@@ -206,9 +206,9 @@ async def get_session(
     try:
         session = await service.sessions.get(session_id, _ctx, auto_create=auto_create)
     except NotFoundError:
-        return Response(
-            status="error",
-            error=ErrorInfo(code="NOT_FOUND", message=f"Session {session_id} not found"),
+        return error_response(
+            "NOT_FOUND",
+            f"Session {session_id} not found",
         )
     result = session.meta.to_dict()
     result["user"] = session.user.to_dict()
@@ -290,11 +290,10 @@ async def get_session_context(
             "INVALID_ARGUMENT",
             "token_budget must be greater than or equal to 0",
             details={"field": "token_budget", "value": token_budget},
-        )
+    )
 
     service = get_service()
-    session = service.sessions.session(_ctx, session_id)
-    await session.load()
+    session = await service.sessions.get(session_id, _ctx, auto_create=False)
     result = await session.get_session_context(token_budget=token_budget)
     return Response(status="ok", result=_to_jsonable(result))
 
@@ -309,14 +308,13 @@ async def get_session_archive(
     from openviking_cli.exceptions import NotFoundError
 
     service = get_service()
-    session = service.sessions.session(_ctx, session_id)
-    await session.load()
+    session = await service.sessions.get(session_id, _ctx, auto_create=False)
     try:
         result = await session.get_session_archive(archive_id)
     except NotFoundError:
-        return Response(
-            status="error",
-            error=ErrorInfo(code="NOT_FOUND", message=f"Archive {archive_id} not found"),
+        return error_response(
+            "NOT_FOUND",
+            f"Archive {archive_id} not found",
         )
     return Response(status="ok", result=_to_jsonable(result))
 
@@ -487,8 +485,7 @@ async def record_used(
 ):
     """Record actually used contexts and skills in a session."""
     service = get_service()
-    session = service.sessions.session(_ctx, session_id)
-    await session.load()
+    session = await service.sessions.get(session_id, _ctx, auto_create=False)
 
     # Resolve path variables in contexts
     resolved_contexts = None

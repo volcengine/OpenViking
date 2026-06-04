@@ -6,13 +6,14 @@ Session Service for OpenViking.
 Provides session management operations: session, sessions, add_message, commit, delete.
 """
 
+import json
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.core.namespace import canonical_session_uri
 from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker import get_task_tracker
-from openviking.session import Session
+from openviking.session import Session, SessionMeta
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import AlreadyExistsError, NotFoundError, NotInitializedError
@@ -109,6 +110,34 @@ class SessionService:
             tool_output_externalization_config=self._tool_output_externalization_config,
         )
 
+    def _session_is_visible_to_user(self, ctx: RequestContext, meta: SessionMeta) -> bool:
+        if ctx.role == Role.ROOT:
+            return True
+        if meta.account_id and meta.account_id != ctx.account_id:
+            return False
+        if ctx.role == Role.ADMIN:
+            return True
+        user_id = ctx.user.user_id
+        return meta.created_by_user_id == user_id or user_id in meta.participant_user_ids
+
+    async def _read_session_meta(self, session_id: str, ctx: RequestContext) -> SessionMeta:
+        self._ensure_initialized()
+        raw = await self._viking_fs.read_file(
+            f"{canonical_session_uri(session_id)}/.meta.json",
+            ctx=ctx,
+        )
+        return SessionMeta.from_dict(json.loads(raw))
+
+    async def _assert_session_visible(self, session_id: str, ctx: RequestContext) -> None:
+        if ctx.role == Role.ROOT:
+            return
+        try:
+            meta = await self._read_session_meta(session_id, ctx)
+        except Exception as exc:
+            raise NotFoundError(session_id, "session") from exc
+        if not self._session_is_visible_to_user(ctx, meta):
+            raise NotFoundError(session_id, "session")
+
     async def create(self, ctx: RequestContext, session_id: Optional[str] = None) -> Session:
         """Create a session and persist its root path.
 
@@ -151,6 +180,8 @@ class SessionService:
                 if not auto_create:
                     raise NotFoundError(session_id, "session")
                 await session.ensure_exists()
+            else:
+                await self._assert_session_visible(session_id, ctx)
             await session.load()
             self._record_lifecycle_metric("get", "ok")
             return session
@@ -174,6 +205,13 @@ class SessionService:
                 name = entry.get("name", "")
                 if name in [".", ".."]:
                     continue
+                if ctx.role != Role.ROOT:
+                    try:
+                        meta = await self._read_session_meta(name, ctx)
+                    except Exception:
+                        continue
+                    if not self._session_is_visible_to_user(ctx, meta):
+                        continue
                 sessions.append(
                     {
                         "session_id": name,
