@@ -3,6 +3,42 @@
 OpenViking 的所有重要变更都将记录在此文件中。
 此更新日志从 [GitHub Releases](https://github.com/volcengine/OpenViking/releases) 自动生成。
 
+## v0.3.23 (2026-06-03)
+
+### 重点更新
+
+- **原生 `ov` CLI 体验重构**：`ov config` 现在是配置管理入口，可交互式添加、编辑、删除、切换配置；`ov config show`、`ov config validate`、`ov config switch` 保留为显式子命令。新增 `ov language` / `ov lang` 选择显示语言，`ov status [--verbose]` 提供聚合诊断视图，`ov health` 与错误提示改为更可读的渲染。
+- **Web Studio Playground 与身份管理**：Studio 侧边栏新增 Playground，可查看上下文树、运行 Terminal 操作并与 Agent 面板交互；Connection & Identity 页面支持保存连接、选择 account/user/agent、创建 account/user、复制或重新生成 API key。
+- **VikingBot 经验召回配置化**：新增 `bot.ov_server.recall_exp_first_round_only`、`exp_recall_limit`、`exp_recall_max_chars`，用于在单任务/评测场景中只在第一轮注入 agent experience；本地与远端模式都按传入 `agent_id` 做经验命名空间隔离。
+- **资源 Watch 更易用**：`add_resource` 设置 `watch_interval > 0` 时不再强制要求显式 `to`；如果导入结果返回稳定 `root_uri`，watch task 会自动绑定到该 URI，CLI/MCP/文档示例同步更新。
+- **插件结构化工具结果与 CJK token 估算**：Claude Code / OpenClaw 插件改为向 OpenViking 写入结构化 tool parts，工具调用与结果不再只能内联到文本；CJK-aware token 估算覆盖 Python 与插件侧，降低中文、日文、韩文会话的预算低估风险。
+
+### 升级说明
+
+- `ov config setup-cli` 已移除，请使用裸 `ov config` 进行配置。首次使用新 CLI 时，交互环境会提示选择显示语言；非交互自动化应先运行 `ov language en` 或 `ov language zh-CN`。
+- `ov status` 默认展示整理后的诊断视图；需要原始组件数据时使用 `ov status --verbose` 或 `-o json`。
+- `ovcli.conf` 默认 URL 统一为 `http://127.0.0.1:1933`，配置序列化会跳过默认值和空字段。
+- 语义处理默认并发从 100 调整为 64，文档中 `vlm.max_concurrent` 默认值同步修正为 64；本地目录上传现在会跳过 symlink。
+
+[完整变更记录](https://github.com/volcengine/OpenViking/compare/v0.3.22...v0.3.23)
+
+## v0.3.22 (2026-05-29)
+
+### 重点更新
+
+- **检索 query planner 可配置**：新增轻量 query planner 配置，可选择并调整检索阶段意图分析所用的模型。
+- **移除 legacy Memory V1**：删除已废弃的 memory v1 路径，memory `version` 字段现在会拒绝 `v1` 负载。
+- **LangChain 可靠性**：自动恢复失效的 OpenViking client，并支持 LangChain 集成的本地批量消息写入。
+- **VikingDB 健壮性**：向量检索会跳过 fields 损坏的候选，并为 VikingDB 增加 `ap-southeast-1` region host 映射。
+- **CLI 与 server 打磨**：`ov` CLI 在向 server 发请求前先报告缺失的 CLI 配置，server mode 术语从 `dev-implicit` 统一为 `dev`，并统一 embedding 输入截断逻辑。
+
+### 升级说明
+
+- Memory V1 已移除；调用方需使用当前的 memory `version`，`v1` 负载会被拒绝。
+- server mode 术语由 `dev-implicit` 改为 `dev`；请更新匹配旧术语的脚本或仪表盘。
+
+[完整变更记录](https://github.com/volcengine/OpenViking/compare/v0.3.21...v0.3.22)
+
 ## v0.3.21 (2026-05-27)
 
 ### 重点更新

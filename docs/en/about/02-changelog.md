@@ -3,6 +3,42 @@
 All notable changes to OpenViking will be documented in this file.
 This changelog is automatically generated from [GitHub Releases](https://github.com/volcengine/OpenViking/releases).
 
+## v0.3.23 (2026-06-03)
+
+### Highlights
+
+- **Native `ov` CLI refresh**: `ov config` is now the interactive configuration manager for adding, editing, deleting, and switching saved configs, while `ov config show`, `ov config validate`, and `ov config switch` remain explicit subcommands. New `ov language` / `ov lang` selects the display language, `ov status [--verbose]` provides aggregated diagnostics, and `ov health` plus runtime errors render with clearer guidance.
+- **Web Studio Playground and identity management**: Studio adds a Playground with a context tree, Terminal, and Agent panel, plus a Connection & Identity page that can save connection state, select account/user/agent, create accounts and users, and copy or regenerate API keys.
+- **Config-driven VikingBot experience recall**: New `bot.ov_server.recall_exp_first_round_only`, `exp_recall_limit`, and `exp_recall_max_chars` inject agent experience only on the first turn, and both local and remote modes isolate experience namespaces by incoming `agent_id`.
+- **Simpler resource watches**: `add_resource` no longer requires an explicit `to` when `watch_interval > 0`; when the import returns a stable `root_uri`, the watch task binds to it automatically, with CLI, MCP, and docs examples updated to match.
+- **Structured plugin tool results and CJK token estimation**: Claude Code and OpenClaw plugins now write structured tool parts instead of flattening calls and results into text only, and CJK-aware token estimation is shared across Python and plugin code to reduce budget underestimation for Chinese, Japanese, and Korean sessions.
+
+### Upgrade Notes
+
+- `ov config setup-cli` has been removed; use bare `ov config` for setup. On first use the new CLI prompts for a display language in interactive shells, so non-interactive automation should run `ov language en` or `ov language zh-CN` first.
+- `ov status` now defaults to a curated diagnostic view; use `ov status --verbose` or `-o json` for raw component data.
+- `ovcli.conf` defaults to `http://127.0.0.1:1933`, and config serialization now omits default and empty fields.
+- Semantic processing concurrency now defaults to 64 instead of 100, and the documented `vlm.max_concurrent` default is corrected to 64. Local directory uploads now skip symlinks to avoid recursive, duplicate, or out-of-scope ingestion.
+
+[Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.3.22...v0.3.23)
+
+## v0.3.22 (2026-05-29)
+
+### Highlights
+
+- **Configurable retrieval query planner**: Added a lightweight query-planner config so the intent-analysis model used during retrieval can be selected and tuned.
+- **Legacy Memory V1 removed**: The deprecated memory v1 path was removed, and the memory `version` field now rejects `v1` payloads.
+- **LangChain reliability**: Stale OpenViking clients are now recovered automatically, and LangChain integrations can perform local batch message writes.
+- **VikingDB robustness**: Vector search now skips candidates with corrupted JSON fields, and `ap-southeast-1` region host mappings were added for VikingDB.
+- **CLI and server polish**: The `ov` CLI reports a missing CLI config before issuing server requests, server-mode terminology was clarified from `dev-implicit` to `dev`, and embedding input truncation was unified.
+
+### Upgrade Notes
+
+- Memory V1 has been removed; callers must use the current memory `version`, and `v1` payloads are now rejected.
+- Server-mode wording changed from `dev-implicit` to `dev`; update scripts or dashboards that match on the previous term.
+
+[Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.3.21...v0.3.22)
+
 ## v0.3.21 (2026-05-27)
 
 ### Highlights
