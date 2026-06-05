@@ -299,10 +299,10 @@ fn unknown(language: Language) -> &'static str {
 
 fn kind_label(kind: ConfigKind, language: Language) -> &'static str {
     match language {
-        Language::En => kind.label(),
+        Language::En => kind.compact_label(),
         Language::ZhCn => match kind {
-            ConfigKind::VolcengineCloud => "火山引擎云",
-            ConfigKind::SelfManaged => "自托管",
+            ConfigKind::OpenVikingService => "OpenViking 服务",
+            ConfigKind::Custom => "自定义",
         },
     }
 }
@@ -321,7 +321,10 @@ fn copy_target_validation_failed(language: Language, name: &str) -> String {
     }
 }
 
-fn invalid_saved_configs_notice(language: Language, invalid_config_names: &[String]) -> Option<String> {
+fn invalid_saved_configs_notice(
+    language: Language,
+    invalid_config_names: &[String],
+) -> Option<String> {
     if invalid_config_names.is_empty() {
         return None;
     }
@@ -476,7 +479,7 @@ mod tests {
 
         let plain = strip_ansi(&rendered);
         assert!(plain.contains("OPENVIKING CONFIG CHECK"));
-        assert!(plain.contains("Active        VPS (Self-Managed)"));
+        assert!(plain.contains("Active        VPS (Custom)"));
         assert!(plain.contains("Server        http://127.0.0.1:1933"));
         assert!(plain.contains("Config file   valid"));
         assert!(plain.contains("Server        reachable"));
@@ -507,19 +510,24 @@ mod tests {
         let labels = super::switch_labels(&[
             super::SwitchConfigRow {
                 name: "local".to_string(),
-                kind: ConfigKind::SelfManaged,
+                kind: ConfigKind::Custom,
                 is_active: true,
             },
             super::SwitchConfigRow {
-                name: "cloud-799f84".to_string(),
-                kind: ConfigKind::VolcengineCloud,
+                name: "ov-service-799f84".to_string(),
+                kind: ConfigKind::OpenVikingService,
                 is_active: false,
             },
         ]);
 
         let plain = strip_ansi(&labels.join("\n"));
-        assert!(plain.contains("local            Self-Managed      [Active]"));
-        assert!(plain.contains("cloud-799f84     VolcEngine Cloud"));
+        assert!(plain.lines().any(|line| line.contains("local")
+            && line.contains("Custom")
+            && line.contains("[Active]")));
+        assert!(plain.lines().any(|line| line.contains("ov-service-799f84")
+            && line.contains("OpenViking Service")
+            && !line.contains("VolcEngine Cloud")
+            && !line.contains("[Active]")));
         assert_eq!(plain.matches("[Active]").count(), 1);
         assert!(!plain.contains("http://"));
         assert!(!plain.contains("https://"));

@@ -2,7 +2,7 @@
 
 本文介绍如何安装 OpenViking CLI、完成配置，并验证它可以连接到 OpenViking。
 
-`ov` 是客户端 CLI。它连接到已经存在的 OpenViking 服务端，或连接到 VolcEngine Cloud。它不是服务端安装命令。如果你还没有安装或启动自托管服务端，请先阅读[快速开始](02-quickstart.md)或[服务端模式](03-quickstart-server.md)。
+`ov` 是客户端 CLI。它连接到已经存在的 OpenViking 服务端，或连接到 OpenViking Service（火山引擎云）。它不是服务端安装命令。如果你还没有安装或启动自定义 OpenViking 服务端，请先阅读[快速开始](02-quickstart.md)或[服务端模式](03-quickstart-server.md)。
 
 你可以用两种方式阅读本文：
 
@@ -27,9 +27,9 @@ CLI 使用 `~/.openviking/ovcli.conf` 作为 active 客户端连接配置。
 
 除非用户已经明确说明，Agent 应先询问用户要连接哪种目标。已有配置、active 配置、本地文件、默认端口和正在运行的服务可以帮助 Agent 追问细节，但不代表用户同意 Agent 选择目标、切换或替换配置、探测本地服务、启动服务端，或写入数据。
 
-### VolcEngine Cloud
+### OpenViking Service（火山引擎云）
 
-如果你希望使用 VolcEngine Cloud 托管的 OpenViking，选择此项。
+如果你希望使用火山引擎云上的 OpenViking 托管服务，选择此项。
 
 - `ov` 使用的服务端端点：`https://api.vikingdb.cn-beijing.volces.com/openviking`
 - 管理 API Key 的控制台页面：https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing
@@ -37,21 +37,21 @@ CLI 使用 `~/.openviking/ovcli.conf` 作为 active 客户端连接配置。
 - API Key 必填。
 - 标准配置只需要 API Key。除非用户的管理员明确提供身份覆盖值，否则不要询问 `--account` 或 `--user`。
 
-### 远程自托管
+### 远程自定义
 
-如果你要连接不在当前机器上的自托管 OpenViking 服务端，选择此项。
+如果你要连接不在当前机器上的自定义 OpenViking 服务端，选择此项。
 
 - 服务端 URL 由用户或服务端管理员提供。
 - 可能需要 API Key。
 - 只有 root key 的配置需要 `--account` 和 `--user`。
 
-### 本地自托管
+### 本地自定义
 
-只有当用户要连接当前机器上的自托管 OpenViking 服务端时，才选择此项。
+只有当用户要连接当前机器上的自定义 OpenViking 服务端时，才选择此项。
 
 - 本地默认 URL：`http://127.0.0.1:1933`
 - 本地无鉴权服务通常不需要 API Key。
-- 除非用户选择本地自托管，否则 Agent 不应探测本地端口、curl 本地 health endpoint，或运行启动服务端的命令。
+- 除非用户选择本地自定义配置，否则 Agent 不应探测本地端口、curl 本地 health endpoint，或运行启动服务端的命令。
 
 ## 开始前
 
@@ -61,8 +61,8 @@ CLI 使用 `~/.openviking/ovcli.conf` 作为 active 客户端连接配置。
   - 使用 Node.js 和 npm 安装独立的 `@openviking/cli` 包，或
   - 使用 Python 工具安装完整的 `openviking` 包。
 - 一个可访问的 OpenViking 目标：
-  - VolcEngine Cloud，或
-  - 自托管 OpenViking 服务端。
+  - OpenViking Service（火山引擎云），或
+  - 自定义 OpenViking 服务端。
 - 如果目标需要鉴权，需要准备 API Key。
 
 API Key 是敏感凭证。手动配置时优先通过 `ov config` 的交互式输入框输入。只有当你明确相信当前渠道时，才把 API Key 提供给 Agent。Agent 应通过 stdin 传入 key，不能把 key 写进 shell 命令、日志、长期记忆或原始配置输出。只有当 key 已经存在于当前 shell 环境变量中时，才使用环境变量。
@@ -133,7 +133,7 @@ ov config
 然后选择：
 
 1. `Add config`
-2. `VolcEngine Cloud` 或 `Self-Managed`
+2. `OpenViking Service（火山引擎云）` 或 `自定义`
 3. 配置名称，或留空自动生成
 4. 上面选择的目标所需的 URL 和 API Key
 5. 校验成功后保存配置
@@ -154,7 +154,7 @@ ov config switch
 
 ### Agent 检查清单
 
-1. 除非用户已经明确说明，先询问用户要连接哪种目标：VolcEngine Cloud、远程自托管，还是本地自托管。
+1. 除非用户已经明确说明，先询问用户要连接哪种目标：OpenViking Service（火山引擎云）、远程自定义，还是本地自定义。
 2. 不要根据已有配置、active 配置、本地文件、默认端口或正在运行的服务推断用户想要的 setup。
 3. 切换配置、替换配置、探测本地服务、启动服务端或写入数据前，都要先询问用户。
 4. 在选择命令前，运行 `ov --help`、`ov config --help` 和相关 config 子命令的帮助。
@@ -174,8 +174,8 @@ ov config switch
 ov --help
 ov config --help
 ov config add --help
-ov config add cloud --help
-ov config add self-managed --help
+ov config add ov-service --help
+ov config add custom --help
 ov config edit --help
 ```
 
@@ -227,7 +227,7 @@ ov config list -o json
 列表输出形状如下：
 
 ```json
-{"status":"ok","result":[{"name":"<CONFIG-NAME>","kind":"VolcEngine Cloud","url":"https://api.vikingdb.cn-beijing.volces.com/openviking","active":true}]}
+{"status":"ok","result":[{"name":"<CONFIG-NAME>","kind":"OpenViking Service","url":"https://api.vikingdb.cn-beijing.volces.com/openviking","active":true}]}
 ```
 
 做存在性检查时，读取 `result[].name`。判断是否还需要切换 active config 时，读取匹配项的 `active` 标记。
@@ -240,56 +240,56 @@ ov config switch <CONFIG-NAME> -o json
 
 然后运行验证命令。
 
-### 添加 VolcEngine Cloud
+### 添加 OpenViking Service
 
 如果 Agent 已经通过可信渠道拿到 API Key，运行：
 
 ```bash
-ov config add cloud --name <CONFIG-NAME> --api-key-stdin --activate -o json
+ov config add ov-service --name <CONFIG-NAME> --api-key-stdin --activate -o json
 ```
 
 shell pipe 形式如下：
 
 ```bash
-printf '%s' "$API_KEY" | ov config add cloud --name <CONFIG-NAME> --api-key-stdin --activate -o json
+printf '%s' "$API_KEY" | ov config add ov-service --name <CONFIG-NAME> --api-key-stdin --activate -o json
 ```
 
 `$API_KEY` 表示可信的运行时密钥来源，不是字面量 key。Agent 能在不把 key 写进命令文本、shell history、日志或长期 export 的环境变量时提供 key，就应使用 stdin。
 
-只把 API Key 内容写入 stdin，不要把 key 放进 shell 命令本身。这会写入一个 VolcEngine Cloud 配置，并使用固定端点：`https://api.vikingdb.cn-beijing.volces.com/openviking`。`cloud` 目标不接受自定义服务端 URL。
+只把 API Key 内容写入 stdin，不要把 key 放进 shell 命令本身。这会写入一个 OpenViking Service 配置，并使用固定端点：`https://api.vikingdb.cn-beijing.volces.com/openviking`。`ov-service` 目标不接受自定义服务端 URL。
 
 只有当环境变量已经存在时，才使用环境变量：
 
 ```bash
-ov config add cloud --name <CONFIG-NAME> --api-key-env <API-KEY-ENV-VAR> --activate -o json
+ov config add ov-service --name <CONFIG-NAME> --api-key-env <API-KEY-ENV-VAR> --activate -o json
 ```
 
-标准 VolcEngine Cloud 配置不要传 `--account` 或 `--user`。只有当用户或 OpenViking 管理员提供身份覆盖值时，才使用它们。
+标准 OpenViking Service 配置不要传 `--account` 或 `--user`。只有当用户或 OpenViking 管理员提供身份覆盖值时，才使用它们。
 
-### 添加本地自托管服务
+### 添加本地自定义服务
 
-只有当用户选择本地自托管时，才使用这个路径。
+只有当用户选择本地自定义时，才使用这个路径。
 
 对于本地无鉴权服务：
 
 ```bash
-ov config add self-managed --name <CONFIG-NAME> --url http://127.0.0.1:1933 --activate -o json
+ov config add custom --name <CONFIG-NAME> --url http://127.0.0.1:1933 --activate -o json
 ```
 
 如果本地服务没有运行，请先引导用户启动服务端。参见[服务端模式](03-quickstart-server.md)。
 
-### 添加远程自托管服务
+### 添加远程自定义服务
 
-对于使用普通 API Key 的远程自托管服务：
+对于使用普通 API Key 的远程自定义服务：
 
 ```bash
-ov config add self-managed --name <CONFIG-NAME> --url <REMOTE-OPENVIKING-URL> --api-key-stdin --activate -o json
+ov config add custom --name <CONFIG-NAME> --url <REMOTE-OPENVIKING-URL> --api-key-stdin --activate -o json
 ```
 
 stdin pipe 形式如下：
 
 ```bash
-printf '%s' "$API_KEY" | ov config add self-managed --name <CONFIG-NAME> --url <REMOTE-OPENVIKING-URL> --api-key-stdin --activate -o json
+printf '%s' "$API_KEY" | ov config add custom --name <CONFIG-NAME> --url <REMOTE-OPENVIKING-URL> --api-key-stdin --activate -o json
 ```
 
 把 API Key 写入 stdin。如果 key 已经存在于当前 shell 环境变量中，可以改用 `--api-key-env <API-KEY-ENV-VAR>`。
@@ -297,7 +297,7 @@ printf '%s' "$API_KEY" | ov config add self-managed --name <CONFIG-NAME> --url <
 如果用户只提供 root API key，需要同时提供目标 account 和 user：
 
 ```bash
-ov config add self-managed --name <CONFIG-NAME> --url <REMOTE-OPENVIKING-URL> --root-api-key-stdin --account <ACCOUNT-ID> --user <USER-ID> --activate -o json
+ov config add custom --name <CONFIG-NAME> --url <REMOTE-OPENVIKING-URL> --root-api-key-stdin --account <ACCOUNT-ID> --user <USER-ID> --activate -o json
 ```
 
 把 root API key 写入 stdin。Root key 需要显式 `--account` 和 `--user`，这样普通 CLI 命令才知道以哪个身份执行。
@@ -305,7 +305,7 @@ ov config add self-managed --name <CONFIG-NAME> --url <REMOTE-OPENVIKING-URL> --
 如果用户同时拥有 user key 和 root key，可以把两者放在同一个配置里：
 
 ```bash
-ov config add self-managed --name <CONFIG-NAME> --url <REMOTE-OPENVIKING-URL> --api-key-stdin --root-api-key-env <ROOT-API-KEY-ENV-VAR> --account <ACCOUNT-ID> --user <USER-ID> --activate -o json
+ov config add custom --name <CONFIG-NAME> --url <REMOTE-OPENVIKING-URL> --api-key-stdin --root-api-key-env <ROOT-API-KEY-ENV-VAR> --account <ACCOUNT-ID> --user <USER-ID> --activate -o json
 ```
 
 这样普通命令使用 user key，需要 `--sudo` 的命令使用 root key。因为一个命令只有一个 stdin 流，第二个 key 必须来自已经存在的环境变量。如果两个 key 都不在环境变量中，请使用 `ov config` 并引导用户完成交互式流程。
@@ -332,10 +332,10 @@ ov config edit <CONFIG-NAME> --api-key-stdin --activate -o json
 
 把新的 API Key 写入 stdin。
 
-替换自托管 URL：
+替换自定义服务 URL：
 
 ```bash
-ov config edit <CONFIG-NAME> --url <SELF-MANAGED-URL> --activate -o json
+ov config edit <CONFIG-NAME> --url <CUSTOM-OPENVIKING-URL> --activate -o json
 ```
 
 只有在你明确要覆盖已有 saved config 名称时，才使用 `--force`。
@@ -417,7 +417,7 @@ npm prefix -g
 
 ### 本地服务端没有运行
 
-只有当用户选择本地自托管时才使用此项。先验证服务端：
+只有当用户选择本地自定义时才使用此项。先验证服务端：
 
 ```bash
 curl http://127.0.0.1:1933/health
@@ -427,7 +427,7 @@ curl http://127.0.0.1:1933/health
 
 ### API Key 校验失败
 
-重新运行 `ov config` 并编辑配置。对于 VolcEngine Cloud，确认 API Key 来自上面的 OpenViking 控制台地址。对于自托管服务，确认服务端是否要求鉴权。
+重新运行 `ov config` 并编辑配置。对于 OpenViking Service，确认 API Key 来自上面的 OpenViking 控制台地址。对于自定义服务，确认服务端是否要求鉴权。
 
 Agent 不应该反复重试未知 key。请让用户确认目标类型、服务端 URL、key 类型、account 和 user。
 
