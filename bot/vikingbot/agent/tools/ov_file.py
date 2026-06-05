@@ -272,26 +272,44 @@ class VikingSearchTool(OVFileTool):
         try:
             client = await self._get_client(tool_context)
             admin_user_id = client.admin_user_id
+            memory_peer_ids = getattr(tool_context, "memory_peer_ids", None)
+            legacy_memory_user_ids = getattr(tool_context, "memory_user_ids", None)
 
-            if not target_uri and tool_context.memory_peer_ids:
+            if not target_uri and (memory_peer_ids or legacy_memory_user_ids):
                 grouped_items = {
                     "memory": [],
                     "resource": [],
                     "skill": [],
                 }
 
-                search_requests = client.build_memory_search_requests(
-                    owner_user_id=tool_context.sender_id if client.should_sender_fanout() else None,
-                    peer_ids=tool_context.memory_peer_ids,
-                )
+                if memory_peer_ids:
+                    search_requests = client.build_memory_search_requests(
+                        owner_user_id=tool_context.sender_id if client.should_sender_fanout() else None,
+                        peer_ids=memory_peer_ids,
+                    )
+                else:
+                    user_ids = legacy_memory_user_ids if client.should_sender_fanout() else [None]
+                    deduped_user_ids: list[str | None] = []
+                    for user_id in user_ids or []:
+                        if user_id in deduped_user_ids:
+                            continue
+                        deduped_user_ids.append(user_id)
+                    search_requests = [
+                        {"target_uri": client._memory_target_uri(user_id), "peer_id": None}
+                        for user_id in deduped_user_ids
+                    ]
 
                 for request in search_requests:
+                    search_kwargs = {
+                        "target_uri": request["target_uri"],
+                        "limit": 10,
+                        "user_id": admin_user_id,
+                    }
+                    if request.get("peer_id") is not None:
+                        search_kwargs["peer_id"] = request.get("peer_id")
                     results = await client.search(
                         query,
-                        target_uri=request["target_uri"],
-                        limit=10,
-                        user_id=admin_user_id,
-                        peer_id=request.get("peer_id"),
+                        **search_kwargs,
                     )
                     filtered_items = self._filter_search_items(results, min_score=min_score)
                     for item_type, items in filtered_items.items():

@@ -355,9 +355,12 @@ class VikingClient:
         peer_id: Optional[str] = None,
     ):
         """搜索资源"""
+        kwargs: Dict[str, Any] = {}
+        if peer_id is not None:
+            kwargs["peer_id"] = peer_id
         if target_uri:
-            return await self.client.find(query, target_uri=target_uri, peer_id=peer_id)
-        return await self.client.find(query, peer_id=peer_id)
+            return await self.client.find(query, target_uri=target_uri, **kwargs)
+        return await self.client.find(query, **kwargs)
 
     async def add_resource(self, local_path: str, desc: str) -> Optional[Dict[str, Any]]:
         """添加资源到 Viking"""
@@ -622,12 +625,14 @@ class VikingClient:
 
         all_user_memories = []
         for request in search_requests:
-            user_memory = await self.client.find(
-                query=query,
-                target_uri=request["target_uri"],
-                limit=limit,
-                peer_id=request.get("peer_id"),
-            )
+            find_kwargs: Dict[str, Any] = {
+                "query": query,
+                "target_uri": request["target_uri"],
+                "limit": limit,
+            }
+            if request.get("peer_id") is not None:
+                find_kwargs["peer_id"] = request.get("peer_id")
+            user_memory = await self.client.find(**find_kwargs)
             all_user_memories.extend(_extract_memories(user_memory))
 
         if agent_user_id is not None:
