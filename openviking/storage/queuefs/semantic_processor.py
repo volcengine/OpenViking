@@ -446,7 +446,7 @@ class SemanticProcessor(DequeueHandlerBase):
                                 run_uri,
                                 executor.get_stats(),
                             )
-                            if not executor.stale:
+                            if not executor.stale and executor.has_effective_changes:
                                 await self._enqueue_parent_refresh(msg, target_uri or msg.uri)
                     finally:
                         if not lock_transferred:

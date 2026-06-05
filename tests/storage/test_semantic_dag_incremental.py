@@ -112,6 +112,61 @@ class _FakeProcessor:
 
 
 @pytest.mark.asyncio
+async def test_incremental_missing_summary_does_not_trigger_content_regen(monkeypatch):
+    _mock_transaction_layer(monkeypatch)
+
+    root_uri = "viking://resources/root"
+    target_uri = "viking://resources/target"
+    tree = {
+        root_uri: [{"name": "a.txt", "isDir": False}],
+        target_uri: [{"name": "a.txt", "isDir": False}],
+    }
+
+    fake_fs = _FakeVikingFS(
+        tree=tree,
+        file_contents={
+            f"{root_uri}/a.txt": "hello",
+            f"{target_uri}/a.txt": "hello",
+            f"{target_uri}/.overview.md": "FILES:\n",
+            f"{target_uri}/.abstract.md": "old-abstract",
+        },
+    )
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+
+    processor = _FakeProcessor(fake_fs)
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1", "agent1"), role=Role.USER)
+
+    executor1 = SemanticDagExecutor(
+        processor=processor,
+        context_type="resource",
+        max_concurrent_llm=2,
+        ctx=ctx,
+        incremental_update=True,
+        target_uri=target_uri,
+    )
+    monkeypatch.setattr(executor1, "_add_vectorize_task", AsyncMock())
+    await executor1.run(root_uri)
+
+    assert fake_fs._file_contents[f"{root_uri}/.overview.md"] == "FILES:\n"
+    assert fake_fs._file_contents[f"{target_uri}/.overview.md"] == "FILES:\n"
+    first_run_calls = len(processor.summarized_files)
+
+    executor2 = SemanticDagExecutor(
+        processor=processor,
+        context_type="resource",
+        max_concurrent_llm=2,
+        ctx=ctx,
+        incremental_update=True,
+        target_uri=target_uri,
+    )
+    monkeypatch.setattr(executor2, "_add_vectorize_task", AsyncMock())
+    await executor2.run(root_uri)
+
+    assert len(processor.summarized_files) == first_run_calls
+    assert first_run_calls == 0
+
+
+@pytest.mark.asyncio
 async def test_direct_incremental_update_uses_changes_without_temp_sync(monkeypatch):
     _mock_transaction_layer(monkeypatch)
 

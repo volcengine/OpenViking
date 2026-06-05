@@ -540,62 +540,6 @@ class SemanticDagExecutor:
         except Exception:
             return True
 
-    async def _read_existing_summary(self, file_path: str) -> Optional[Dict[str, str]]:
-        """Read existing summary from parent directory's .overview.md.
-
-        Args:
-            file_path: Current file path
-
-        Returns:
-            Summary dict with 'name' and 'summary' keys, or None if not found
-        """
-        target_path = self._get_target_file_path(file_path)
-        if not target_path:
-            return None
-
-        try:
-            parent_uri = "/".join(target_path.rsplit("/", 1)[:-1])
-            if not parent_uri:
-                return None
-
-            if parent_uri not in self._overview_cache:
-                try:
-                    from openviking.metrics.datasources.cache import CacheEventDataSource
-
-                    CacheEventDataSource.record_miss("L1")
-                except Exception:
-                    pass
-                async with self._overview_cache_lock:
-                    if parent_uri not in self._overview_cache:
-                        overview_path = f"{parent_uri}/.overview.md"
-                        overview_content = await self._viking_fs.read_file(
-                            overview_path, ctx=self._ctx
-                        )
-                        if overview_content:
-                            self._overview_cache[parent_uri] = self._processor._parse_overview_md(
-                                overview_content
-                            )
-                        else:
-                            self._overview_cache[parent_uri] = {}
-            else:
-                try:
-                    from openviking.metrics.datasources.cache import CacheEventDataSource
-
-                    CacheEventDataSource.record_hit("L1")
-                except Exception:
-                    pass
-
-            existing_summaries = self._overview_cache.get(parent_uri, {})
-            file_name = file_path.split("/")[-1]
-
-            if file_name in existing_summaries:
-                return {"name": file_name, "summary": existing_summaries[file_name]}
-
-        except Exception as e:
-            logger.debug(f"Failed to read existing summary from overview.md for {file_path}: {e}")
-
-        return None
-
     async def _check_dir_children_changed(
         self, dir_uri: str, current_files: List[str], current_dirs: List[str]
     ) -> bool:
@@ -654,26 +598,24 @@ class SemanticDagExecutor:
         file_name = file_path.split("/")[-1]
         need_vectorize = True
         try:
-            summary_dict = None
+            summary_dict: Optional[Dict[str, str]] = None
             if self._incremental_update:
                 content_changed = await self._check_file_content_changed(file_path)
                 self._file_change_status[file_path] = content_changed
 
                 if not content_changed:
-                    summary_dict = await self._read_existing_summary(file_path)
-                    if summary_dict is not None:
-                        need_vectorize = False
-                    else:
-                        self._file_change_status[file_path] = True
+                    need_vectorize = False
             else:
                 self._file_change_status[file_path] = True
-            if summary_dict is None:
+            if summary_dict is None and need_vectorize:
                 summary_dict = await self._processor._generate_single_file_summary(
                     file_path, llm_sem=self._llm_sem, ctx=self._ctx
                 )
         except Exception as e:
             logger.warning(f"Failed to generate summary for {file_path}: {e}")
             summary_dict = {"name": file_name, "summary": ""}
+            self._file_change_status[file_path] = True
+            need_vectorize = True
         finally:
             self._stats.done_nodes += 1
             self._stats.in_progress_nodes = max(0, self._stats.in_progress_nodes - 1)
@@ -698,7 +640,7 @@ class SemanticDagExecutor:
         await self._on_file_done(parent_uri, file_path, summary_dict)
 
     async def _on_file_done(
-        self, parent_uri: str, file_path: str, summary_dict: Dict[str, str]
+        self, parent_uri: str, file_path: str, summary_dict: Optional[Dict[str, str]]
     ) -> None:
         node = self._nodes.get(parent_uri)
         if not node:
@@ -733,12 +675,61 @@ class SemanticDagExecutor:
         node.overview_scheduled = True
         self._schedule_work(DagWork(kind="overview", dir_uri=dir_uri))
 
-    def _finalize_file_summaries(self, node: DirNode) -> List[Dict[str, str]]:
+    async def _read_existing_summaries_for_dir(self, dir_uri: str) -> Dict[str, str]:
+        target_path = self._get_target_file_path(dir_uri)
+        if not target_path:
+            return {}
+
+        if target_path in self._overview_cache:
+            try:
+                from openviking.metrics.datasources.cache import CacheEventDataSource
+
+                CacheEventDataSource.record_hit("L1")
+            except Exception:
+                pass
+            return self._overview_cache.get(target_path, {})
+
+        try:
+            from openviking.metrics.datasources.cache import CacheEventDataSource
+
+            CacheEventDataSource.record_miss("L1")
+        except Exception:
+            pass
+
+        async with self._overview_cache_lock:
+            if target_path not in self._overview_cache:
+                try:
+                    overview_content = await self._viking_fs.read_file(
+                        f"{target_path}/.overview.md", ctx=self._ctx
+                    )
+                    if overview_content:
+                        self._overview_cache[target_path] = self._processor._parse_overview_md(
+                            overview_content
+                        )
+                    else:
+                        self._overview_cache[target_path] = {}
+                except Exception as e:
+                    logger.debug(
+                        "Failed to read existing overview summaries for %s: %s",
+                        dir_uri,
+                        e,
+                    )
+                    self._overview_cache[target_path] = {}
+
+        return self._overview_cache.get(target_path, {})
+
+    async def _finalize_file_summaries(self, node: DirNode) -> List[Dict[str, str]]:
+        existing_summaries: Optional[Dict[str, str]] = None
         summaries: List[Dict[str, str]] = []
         for idx, file_path in enumerate(node.file_paths):
             item = node.file_summaries[idx]
             if item is None:
-                summaries.append({"name": file_path.split("/")[-1], "summary": ""})
+                file_name = file_path.split("/")[-1]
+                if existing_summaries is None:
+                    existing_summaries = await self._read_existing_summaries_for_dir(node.uri)
+                summaries.append(
+                    {"name": file_name, "summary": existing_summaries.get(file_name, "")}
+                )
             else:
                 summaries.append(item)
         return summaries
@@ -746,6 +737,12 @@ class SemanticDagExecutor:
     @property
     def stale(self) -> bool:
         return self._stale
+
+    @property
+    def has_effective_changes(self) -> bool:
+        if not self._incremental_update:
+            return True
+        return any(self._file_change_status.values()) or any(self._dir_change_status.values())
 
     async def _finalize_children_abstracts(self, node: DirNode) -> List[Dict[str, str]]:
         results: List[Dict[str, str]] = []
@@ -804,9 +801,9 @@ class SemanticDagExecutor:
                 if not children_changed:
                     need_vectorize = False
                     overview, abstract = await self._read_existing_overview_abstract(dir_uri)
-            if overview is None or abstract is None:
+            if children_changed and (overview is None or abstract is None):
                 async with node.lock:
-                    file_summaries = self._finalize_file_summaries(node)
+                    file_summaries = await self._finalize_file_summaries(node)
                     children_abstracts = await self._finalize_children_abstracts(node)
                 async with self._llm_sem:
                     overview = await self._processor._generate_overview(
@@ -816,12 +813,15 @@ class SemanticDagExecutor:
                 overview, abstract = self._processor._enforce_size_limits(overview, abstract)
 
             # Write directly, protected by the outer semantic lock.
-            try:
-                wrote = await self._write_directory_semantics(dir_uri, overview, abstract)
-                if not wrote:
-                    need_vectorize = False
-            except Exception:
-                logger.info(f"[SemanticDag] {dir_uri} write failed, skipping")
+            if overview is not None and abstract is not None:
+                try:
+                    wrote = await self._write_directory_semantics(dir_uri, overview, abstract)
+                    if not wrote:
+                        need_vectorize = False
+                except Exception:
+                    logger.info(f"[SemanticDag] {dir_uri} write failed, skipping")
+            else:
+                need_vectorize = False
 
             try:
                 if need_vectorize:
