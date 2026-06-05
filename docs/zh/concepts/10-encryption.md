@@ -211,10 +211,9 @@ ov crypto init-key --output ~/.openviking/master.key
 
 ## 配置示例
 
-详细配置说明请参考 [配置文档](../guides/01-configuration.md#encryption)。
+详细配置说明请参考 [配置文档](../guides/01-configuration.md#encryption-段)。
 
 ## 相关文档
 
 - [存储架构](./05-storage.md) - VikingFS 和 AGFS 架构
 - [配置指南](../guides/01-configuration.md) - 加密配置详解
-- [技术设计](../../design/multi-tenant-file-encryption-desigin.md) - 加密技术设计文档

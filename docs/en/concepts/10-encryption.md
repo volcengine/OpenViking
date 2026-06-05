@@ -211,10 +211,9 @@ Different accounts' data is encrypted with independent Account Keys:
 
 ## Configuration Example
 
-See [Configuration Guide](../guides/01-configuration.md#encryption) for detailed configuration.
+See [Configuration Guide](../guides/01-configuration.md#encryption-section) for detailed configuration.
 
 ## Related Documentation
 
 - [Storage Architecture](./05-storage.md) - VikingFS and AGFS architecture
 - [Configuration Guide](../guides/01-configuration.md) - Encryption configuration details
-- [Technical Design](../../design/multi-tenant-file-encryption-desigin.md) - Encryption technical design

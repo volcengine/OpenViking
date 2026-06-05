@@ -139,7 +139,7 @@ OAuth 2.1 对非 localhost 的 issuer **强制要求 HTTPS**。
 [公网访问指南](12-public-access.md)详细介绍了 Caddy、nginx、docker compose、
 CDN 的配置方法。简要步骤：
 
-1. 按[公网访问指南 § 添加 HTTPS](12-public-access.md#添加-https公网访问)
+1. 按[公网访问指南 § 添加 HTTPS](12-public-access.md)
    配置好 `https://your-domain.com`，使 1934 端口走 TLS。
 2. 启用 OAuth：`ov.conf` 里 `{ "oauth": { "enabled": true } }`。
 3. 重启：`docker compose restart openviking`。
