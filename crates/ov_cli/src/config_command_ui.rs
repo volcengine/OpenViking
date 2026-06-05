@@ -177,6 +177,7 @@ pub(crate) fn render_validate_failure_with_language(
 pub(crate) fn render_switch_header(
     active_name: Option<&str>,
     active_kind: Option<ConfigKind>,
+    invalid_config_names: &[String],
 ) -> String {
     let language = Language::current();
     let mut lines = Vec::new();
@@ -197,6 +198,10 @@ pub(crate) fn render_switch_header(
             theme::muted(copy(language, "Active:", "当前配置：")),
             unknown_value(copy(language, "none", "无"))
         )),
+    }
+    if let Some(warning) = invalid_saved_configs_notice(language, invalid_config_names) {
+        lines.push(String::new());
+        lines.push(warning);
     }
     format!("{}\n", lines.join("\n"))
 }
@@ -222,7 +227,7 @@ pub(crate) fn switch_labels(rows: &[SwitchConfigRow]) -> Vec<String> {
         .collect()
 }
 
-pub(crate) fn render_no_saved_configs() -> String {
+pub(crate) fn render_no_saved_configs(invalid_config_names: &[String]) -> String {
     let language = Language::current();
     let mut lines = Vec::new();
     lines.push(title(copy(
@@ -244,6 +249,10 @@ pub(crate) fn render_no_saved_configs() -> String {
             "请先运行 ov config 添加并保存配置。",
         ))
     ));
+    if let Some(warning) = invalid_saved_configs_notice(language, invalid_config_names) {
+        lines.push(String::new());
+        lines.push(warning);
+    }
     format!("{}\n", lines.join("\n"))
 }
 
@@ -290,10 +299,10 @@ fn unknown(language: Language) -> &'static str {
 
 fn kind_label(kind: ConfigKind, language: Language) -> &'static str {
     match language {
-        Language::En => kind.label(),
+        Language::En => kind.compact_label(),
         Language::ZhCn => match kind {
-            ConfigKind::VolcengineCloud => "火山引擎云",
-            ConfigKind::SelfManaged => "自托管",
+            ConfigKind::OpenVikingService => "OpenViking 服务",
+            ConfigKind::Custom => "自定义",
         },
     }
 }
@@ -310,6 +319,33 @@ fn copy_target_validation_failed(language: Language, name: &str) -> String {
         Language::En => format!("Target config '{name}' failed validation."),
         Language::ZhCn => format!("目标配置 '{name}' 验证失败。"),
     }
+}
+
+fn invalid_saved_configs_notice(
+    language: Language,
+    invalid_config_names: &[String],
+) -> Option<String> {
+    if invalid_config_names.is_empty() {
+        return None;
+    }
+
+    let names = invalid_config_names.join(", ");
+    Some(match language {
+        Language::En => format!(
+            "  {}",
+            theme::warning(format!(
+                "Note: Saved configs with damaged JSON structure were skipped: {names}."
+            ))
+            .bold()
+        ),
+        Language::ZhCn => format!(
+            "  {}",
+            theme::warning(format!(
+                "提示：以下已保存配置因 JSON 结构损坏已跳过：{names}。"
+            ))
+            .bold()
+        ),
+    })
 }
 
 fn title(value: &str) -> String {
@@ -379,7 +415,7 @@ impl ValidationFailureKind {
         match error {
             Error::Network(message) if message.contains("unhealthy") => Self::Unhealthy,
             Error::Network(_) => Self::Network,
-            Error::Api(message) if looks_like_auth_error(message) => Self::Auth,
+            Error::Api { message, .. } if looks_like_auth_error(message) => Self::Auth,
             _ => Self::Other,
         }
     }
@@ -443,7 +479,7 @@ mod tests {
 
         let plain = strip_ansi(&rendered);
         assert!(plain.contains("OPENVIKING CONFIG CHECK"));
-        assert!(plain.contains("Active        VPS (Self-Managed)"));
+        assert!(plain.contains("Active        VPS (Custom)"));
         assert!(plain.contains("Server        http://127.0.0.1:1933"));
         assert!(plain.contains("Config file   valid"));
         assert!(plain.contains("Server        reachable"));
@@ -474,19 +510,24 @@ mod tests {
         let labels = super::switch_labels(&[
             super::SwitchConfigRow {
                 name: "local".to_string(),
-                kind: ConfigKind::SelfManaged,
+                kind: ConfigKind::Custom,
                 is_active: true,
             },
             super::SwitchConfigRow {
-                name: "cloud-799f84".to_string(),
-                kind: ConfigKind::VolcengineCloud,
+                name: "ov-service-799f84".to_string(),
+                kind: ConfigKind::OpenVikingService,
                 is_active: false,
             },
         ]);
 
         let plain = strip_ansi(&labels.join("\n"));
-        assert!(plain.contains("local            Self-Managed      [Active]"));
-        assert!(plain.contains("cloud-799f84     Volcengine Cloud"));
+        assert!(plain.lines().any(|line| line.contains("local")
+            && line.contains("Custom")
+            && line.contains("[Active]")));
+        assert!(plain.lines().any(|line| line.contains("ov-service-799f84")
+            && line.contains("OpenViking Service")
+            && !line.contains("VolcEngine Cloud")
+            && !line.contains("[Active]")));
         assert_eq!(plain.matches("[Active]").count(), 1);
         assert!(!plain.contains("http://"));
         assert!(!plain.contains("https://"));

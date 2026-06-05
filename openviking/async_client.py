@@ -46,14 +46,12 @@ class AsyncOpenViking:
     def __init__(
         self,
         path: Optional[str] = None,
-        **kwargs,
     ):
         """
         Initialize OpenViking client (embedded mode).
 
         Args:
             path: Local storage path (overrides ov.conf storage path).
-            **kwargs: Additional configuration parameters.
         """
         # Singleton guard for repeated initialization
         if hasattr(self, "_singleton_initialized") and self._singleton_initialized:
@@ -129,7 +127,10 @@ class AsyncOpenViking:
         return await self._client.session_exists(session_id)
 
     async def create_session(
-        self, session_id: Optional[str] = None, telemetry: TelemetryRequest = False
+        self,
+        session_id: Optional[str] = None,
+        telemetry: TelemetryRequest = False,
+        memory_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Create a new session.
 
@@ -138,7 +139,11 @@ class AsyncOpenViking:
                        If None, creates a new session with auto-generated ID.
         """
         await self._ensure_initialized()
-        return await self._client.create_session(session_id, telemetry=telemetry)
+        return await self._client.create_session(
+            session_id,
+            telemetry=telemetry,
+            memory_policy=memory_policy,
+        )
 
     async def list_sessions(self) -> List[Any]:
         """List all sessions."""
@@ -174,7 +179,7 @@ class AsyncOpenViking:
         content: str | None = None,
         parts: list[dict] | None = None,
         created_at: str | None = None,
-        role_id: str | None = None,
+        peer_id: str | None = None,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add a message to a session.
@@ -185,7 +190,7 @@ class AsyncOpenViking:
             content: Text content (simple mode)
             parts: Parts array (full Part support: TextPart, ContextPart, ToolPart)
             created_at: Message creation time (ISO format string)
-            role_id: Optional explicit actor identity. Omit to let the client/server derive it.
+            peer_id: Optional stable interaction peer identity.
 
         If both content and parts are provided, parts takes precedence.
         """
@@ -196,7 +201,7 @@ class AsyncOpenViking:
             content=content,
             parts=parts,
             created_at=created_at,
-            role_id=role_id,
+            peer_id=peer_id,
             telemetry=telemetry,
         )
 
@@ -220,6 +225,7 @@ class AsyncOpenViking:
         telemetry: TelemetryRequest = False,
         *,
         keep_recent_count: int = 0,
+        memory_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Commit a session (archive and extract memories)."""
         await self._ensure_initialized()
@@ -227,6 +233,7 @@ class AsyncOpenViking:
             session_id,
             telemetry=telemetry,
             keep_recent_count=keep_recent_count,
+            memory_policy=memory_policy,
         )
 
     async def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
@@ -365,6 +372,7 @@ class AsyncOpenViking:
         until: Optional[str] = None,
         time_field: Optional[str] = None,
         level: Optional[List[int]] = None,
+        peer_id: Optional[str] = None,
     ):
         """
         Complex search with session context.
@@ -394,6 +402,7 @@ class AsyncOpenViking:
             until=until,
             time_field=time_field,
             level=level,
+            peer_id=peer_id,
         )
 
     async def find(
@@ -408,6 +417,7 @@ class AsyncOpenViking:
         until: Optional[str] = None,
         time_field: Optional[str] = None,
         level: Optional[List[int]] = None,
+        peer_id: Optional[str] = None,
     ):
         """Semantic search"""
         await self._ensure_initialized()
@@ -422,6 +432,7 @@ class AsyncOpenViking:
             until=until,
             time_field=time_field,
             level=level,
+            peer_id=peer_id,
         )
 
     # ============= FS methods =============

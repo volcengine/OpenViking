@@ -24,7 +24,6 @@ async def get_watch_task(client: AsyncOpenViking, to_uri: str):
         account_id=client._service.user.account_id,
         user_id=client._service.user.user_id,
         role=Role.USER.value,
-        agent_id=client._service.user.agent_id,
     )
 
 
@@ -384,14 +383,14 @@ class TestWatchE2EMultipleResources:
 
         intervals = [30.0, 60.0, 120.0]
 
-        for uri, interval in zip(uris, intervals):
+        for uri, interval in zip(uris, intervals, strict=True):
             await client.add_resource(
                 path=str(watch_test_file),
                 to=uri,
                 watch_interval=interval,
             )
 
-        for uri, expected_interval in zip(uris, intervals):
+        for uri, expected_interval in zip(uris, intervals, strict=True):
             task = await get_watch_task(client, uri)
             assert task is not None
             assert task.is_active is True
@@ -475,7 +474,7 @@ class TestWatchE2EErrorHandling:
         )
 
         ctx = RequestContext(
-            user=UserIdentifier("test_account", "test_user", "test_agent"),
+            user=UserIdentifier("test_account", "test_user"),
             role=Role.USER,
         )
 

@@ -34,6 +34,29 @@ pub struct GrepResult {
     pub count: usize,
 }
 
+/// Tree traversal entry.
+///
+/// Represents one flattened node in a recursive directory traversal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TreeEntry {
+    /// Internal trait contract: plugin-root-relative absolute path,
+    /// e.g. "/a/file.txt".
+    ///
+    /// External bindings contract: after `MountableFS.tree_directory()`
+    /// rewrites the mount prefix back, Python-visible `path` must be a
+    /// global AGFS absolute path such as "/local/{account}/resources/a/file.txt".
+    pub path: String,
+
+    /// Path relative to traversal root, e.g. "a/file.txt"
+    pub rel_path: String,
+
+    /// File metadata for this node.
+    pub info: FileInfo,
+
+    /// Backend-specific fields required for zero-regression original output.
+    pub extra: HashMap<String, serde_json::Value>,
+}
+
 impl GrepResult {
     /// Create a new empty GrepResult
     pub fn new() -> Self {

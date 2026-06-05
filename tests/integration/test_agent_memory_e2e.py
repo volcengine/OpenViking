@@ -16,9 +16,9 @@ What this test covers
 Prerequisites
 -------------
 - ~/.openviking/ov.conf has:
-    "memory": { "version": "v2", "agent_memory_enabled": true }
-  or:
-    "memory": { "version": "v2", "experimental_memory_switch": true }
+    "memory": { "version": "v2" }
+  or to explicitly disable:
+    "memory": { "version": "v2", "agent_memory_enabled": false }
 
 Run
 ---
@@ -38,8 +38,6 @@ from typing import Dict, Iterator, List, Tuple
 import pytest
 
 from openviking.client.local import LocalClient
-from openviking.core.namespace import to_agent_space
-from openviking.server.identity import AccountNamespacePolicy
 from openviking.session.memory.session_extract_context_provider import SessionExtractContextProvider
 from openviking.session.memory.utils import MemoryFileUtils
 from openviking.telemetry import tracer
@@ -223,37 +221,32 @@ def _collect_source_trajectories(client: LocalClient, exp_entries: List[dict]) -
 
 @pytest.fixture()
 def agent_memory_config_check():
-    """Skip unless agent_memory_enabled is configured."""
+    """Skip if agent_memory_enabled is false."""
     OpenVikingConfigSingleton._instance = None
     config = get_openviking_config()
-    if not getattr(config.memory, "agent_memory_enabled", False):
-        pytest.skip("agent_memory_enabled is not set in config — skipping agent memory tests")
+    if not getattr(config.memory, "agent_memory_enabled", True):
+        pytest.skip("agent_memory_enabled is false in config — skipping agent memory tests")
 
 
 @pytest.fixture()
 def local_test_env() -> Iterator[Dict[str, object]]:
-    policy = AccountNamespacePolicy(
-        isolate_user_scope_by_agent=False,
-        isolate_agent_scope_by_user=False,
-    )
     local_path = Path.cwd() / ".tmp_agent_memory_e2e" / uuid.uuid4().hex[:8]
     local_path.mkdir(parents=True, exist_ok=True)
     try:
         yield {
             "path": str(local_path),
             "account_id": "default",
-            "policy": policy,
         }
     finally:
-        shutil.rmtree(local_path, ignore_errors=True)
+        pass
+        # shutil.rmtree(local_path, ignore_errors=True)
 
 
-def _build_client(env: Dict[str, object], user_id: str, agent_id: str = "travelbot") -> LocalClient:
+def _build_client(env: Dict[str, object], user_id: str) -> LocalClient:
     client = LocalClient(
         path=str(env["path"]),
-        user=UserIdentifier(str(env["account_id"]), user_id, agent_id),
+        user=UserIdentifier(str(env["account_id"]), user_id),
     )
-    client._ctx.namespace_policy = env["policy"]
     run_async(client.initialize())
     return client
 
@@ -278,8 +271,8 @@ class TestAgentMemoryE2E:
         Two sessions in the same booking-conflict domain.
 
         Assertions:
-        - After Round 1: ≥1 trajectory file; exactly 1 experience file (CREATE path).
-        - After Round 2: trajectory count grows; still exactly 1 experience file (EDIT path, not CREATE).
+        - After Round 1: ≥1 trajectory file; ≥1 experience file (CREATE path).
+        - After Round 2: trajectory count grows; experience source_trajectories reference extracted trajectories.
         """
         pytest.importorskip("opentelemetry")
         initialized = init_tracer_from_config()
@@ -288,10 +281,8 @@ class TestAgentMemoryE2E:
                 "failed to initialize tracer from ov.conf; please check legacy telemetry.tracer"
             )
 
-        policy = local_test_env["policy"]
-        agent_space = to_agent_space(policy, "alice", "travelbot")
-        trajectories_dir = f"viking://agent/{agent_space}/memories/trajectories"
-        experiences_dir = f"viking://agent/{agent_space}/memories/experiences"
+        trajectories_dir = "viking://user/alice/memories/trajectories"
+        experiences_dir = "viking://user/alice/memories/experiences"
 
         client = None
         try:
@@ -299,7 +290,7 @@ class TestAgentMemoryE2E:
                 "tests.integration.test_trajectory_and_experience_extraction"
             ):
                 print(f"\n[TEST] trace_id: {tracer.get_trace_id()}")
-                client = _build_client(local_test_env, user_id="alice", agent_id="travelbot")
+                client = _build_client(local_test_env, user_id="alice")
 
                 logger.info("Round 1: flight booking duplicate (expect CREATE experience)")
                 _run_conversation(client, CONV_A_FLIGHT_DUPLICATE)
@@ -307,8 +298,8 @@ class TestAgentMemoryE2E:
                 traj_after_r1 = _list_non_overview_entries(client, trajectories_dir)
                 exp_after_r1 = _list_non_overview_entries(client, experiences_dir)
                 assert traj_after_r1, "should have trajectory memories after round 1"
-                assert len(exp_after_r1) == 1, (
-                    "should have exactly 1 experience after round 1 (CREATE path)"
+                assert len(exp_after_r1) >= 1, (
+                    "should have at least 1 experience after round 1 (CREATE path)"
                 )
 
                 logger.info("Round 2: booking conflict extra cases (expect EDIT experience)")

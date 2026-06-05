@@ -1,6 +1,8 @@
 """Base class for agent tools."""
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import Any
 
 from vikingbot.config.schema import SessionKey
 from vikingbot.sandbox.manager import SandboxManager
@@ -24,6 +26,9 @@ class ToolContext:
             and permission checks.
         memory_user_ids: Optional list of user IDs for memory retrieval. Used by
             openviking_search tool to search specific users' memory spaces.
+        openviking_connection: Optional request-scoped OpenViking identity. Studio
+            requests use this so tools call OpenViking with the same connection
+            selected in the browser.
 
     Example:
         >>> context = ToolContext(
@@ -38,12 +43,7 @@ class ToolContext:
     workspace_id: str = sandbox_manager.to_workspace_id(session_key) if sandbox_manager else None
     sender_id: str | None = None
     memory_user_ids: list[str] | None = None
-
-
-"""Base class for agent tools."""
-
-from abc import ABC, abstractmethod
-from typing import Any
+    openviking_connection: dict[str, Any] | None = None
 
 
 class Tool(ABC):

@@ -1,44 +1,24 @@
-"""Tests for UserIdentifier, specifically agent_space_name collision safety."""
+"""Tests for account/user-only UserIdentifier."""
 
 from openviking_cli.session.user_id import UserIdentifier
-from openviking_cli.utils.config import OpenVikingConfigSingleton
 
 
-class TestAgentSpaceNameCollision:
-    """Verify that agent_space_name uses a separator to prevent hash collisions."""
+class TestUserIdentifier:
+    """Verify that UserIdentifier is keyed by account/user only."""
 
-    def test_different_pairs_produce_different_hashes(self):
-        """Pairs like (alice, bot) vs (aliceb, ot) must not collide."""
-        u1 = UserIdentifier("acct", "alice", "bot")
-        u2 = UserIdentifier("acct", "aliceb", "ot")
-        assert u1.agent_space_name() != u2.agent_space_name()
+    def test_same_user_produces_same_space(self):
+        u1 = UserIdentifier("acct", "alice")
+        u2 = UserIdentifier("acct", "alice")
+        assert u1.user_space_name() == u2.user_space_name()
+        assert u1 == u2
 
-    def test_same_pair_produces_same_hash(self):
-        """Same (user_id, agent_id) must always produce the same hash."""
-        u1 = UserIdentifier("acct", "alice", "bot")
-        u2 = UserIdentifier("acct", "alice", "bot")
-        assert u1.agent_space_name() == u2.agent_space_name()
+    def test_different_users_produce_different_spaces(self):
+        u1 = UserIdentifier("acct", "alpha")
+        u2 = UserIdentifier("acct", "beta")
+        assert u1.user_space_name() != u2.user_space_name()
 
-    def test_swapped_ids_produce_different_hashes(self):
-        """(user_id=a, agent_id=b) vs (user_id=b, agent_id=a) must differ."""
-        u1 = UserIdentifier("acct", "alpha", "beta")
-        u2 = UserIdentifier("acct", "beta", "alpha")
-        assert u1.agent_space_name() != u2.agent_space_name()
-
-    def test_hash_length(self):
-        """agent_space_name must return a 12-character hex string."""
-        u = UserIdentifier("acct", "user1", "agent1")
-        name = u.agent_space_name()
-        assert len(name) == 12
-        assert all(c in "0123456789abcdef" for c in name)
-
-    def test_agent_scope_mode_is_ignored(self):
-        """Deprecated memory.agent_scope_mode no longer changes agent_space_name."""
-        OpenVikingConfigSingleton.reset_instance()
-        OpenVikingConfigSingleton.initialize(config_dict={"memory": {"agent_scope_mode": "agent"}})
-
-        u1 = UserIdentifier("acct", "alice", "bot")
-        u2 = UserIdentifier("acct", "bob", "bot")
-        assert u1.agent_space_name() != u2.agent_space_name()
-
-        OpenVikingConfigSingleton.reset_instance()
+    def test_memory_space_uri_uses_user_space(self):
+        u = UserIdentifier("acct", "user1")
+        assert u.user_space_name() == "user1"
+        assert u.memory_space_uri() == "viking://user/user1/memories"
+        assert u.to_dict() == {"account_id": "acct", "user_id": "user1"}

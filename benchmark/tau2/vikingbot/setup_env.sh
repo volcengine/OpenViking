@@ -25,7 +25,7 @@
 #   TAU2_BENCH_REPO   git URL to clone tau2-bench    (default sierra-research/tau2-bench)
 #   TAU2_BENCH_REF    git ref/branch/tag to check out after clone (default: repo default)
 #   VIKINGBOT_ROOT    vikingbot package dir          (default REPO_ROOT/bot)
-#   OPENVIKING_CONFIG_FILE, OPENAI_API_KEY / ARK_API_KEY, OPENAI_API_BASE
+#   OPENVIKING_CONFIG_FILE, OPENVIKING_PROVISION_API_KEY, OPENAI_API_KEY / ARK_API_KEY, OPENAI_API_BASE
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # OpenViking repo root (this folder lives at benchmark/tau2/vikingbot/).

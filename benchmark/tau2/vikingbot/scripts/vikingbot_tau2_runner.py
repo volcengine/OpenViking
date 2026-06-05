@@ -7,6 +7,7 @@ Key points:
 3) We register Tau2 tools into VikingBot ToolRegistry and let the agent decide.
 """
 
+# ruff: noqa: E402
 from __future__ import annotations
 
 import argparse
@@ -130,15 +131,12 @@ def _extract_memory_content(content: str) -> str | None:
     return content[start:end]
 
 
-
-
 async def _run_agent(
     agent: AgentLoop,
     system_prompt: str,
     user_prompt: str,
     session_key: SessionKey,
     sender_id: str | None,
-    agent_id: str | None,
     keep_default_tools: bool,
     messages_output_path: Path | None,
 ) -> tuple[str | None, str | None, dict[str, int], int, str | None]:
@@ -149,7 +147,6 @@ async def _run_agent(
         ov_tools_enable=keep_default_tools,
         media=None,
         profile_user_list=[],
-        agent_id=agent_id,
     )
     if system_prompt:
         messages.insert(1, {"role": "system", "content": system_prompt})
@@ -194,7 +191,6 @@ def main() -> None:
         help="If output file exists, skip running and exit",
     )
     parser.add_argument("--sender", default="tau2_user")
-    parser.add_argument("--agent-id", default="", help="airline_v0 domain split workspace")
     parser.add_argument("--session", default=None)
     parser.add_argument("--config", default=None, help="ov.conf path (optional)")
     parser.add_argument(
@@ -234,7 +230,7 @@ def main() -> None:
         for tool_name in list(agent.tools.tool_names):
             # print(tool_name)
             agent.tools.unregister(tool_name)
-    
+
     agent.tools.unregister("openviking_memory_commit")
     for schema in provider.list_openai_tools():
         agent.tools.register(Tau2Tool(schema, provider))
@@ -244,11 +240,15 @@ def main() -> None:
         instructions.append(policy)
     instructions.append("Use the provided tools to interact with the environment.")
     if args.keep_default_tools:
-        instructions.append("Before you attend to customer, you MUST read relevant agent memory that stores experiences distilled from similar tasks and carefully learn them.")
+        instructions.append(
+            "Before you attend to customer, you MUST read relevant agent memory that stores experiences distilled from similar tasks and carefully learn them."
+        )
     instructions.append(
         "If you need to communicate with the user, you MUST call tool `communicate_with_user`."
     )
-    instructions.append("When the task is finished or terminated, call tool `done` first and output an ending content without using any tool calling for the next round to exit.")
+    instructions.append(
+        "When the task is finished or terminated, call tool `done` first and output an ending content without using any tool calling for the next round to exit."
+    )
 
     system_prompt = "\n".join(instructions)
     user_prompt = user_query
@@ -258,16 +258,17 @@ def main() -> None:
 
     messages_output_path = _derive_messages_path(output_path)
 
-    final_content, final_reasoning_content, tools_used, token_usage, iteration, memory_content = asyncio.run(
-        _run_agent(
-            agent,
-            system_prompt,
-            user_prompt,
-            session_key,
-            args.sender,
-            args.agent_id,
-            args.keep_default_tools,
-            messages_output_path,
+    final_content, final_reasoning_content, tools_used, token_usage, iteration, memory_content = (
+        asyncio.run(
+            _run_agent(
+                agent,
+                system_prompt,
+                user_prompt,
+                session_key,
+                args.sender,
+                args.keep_default_tools,
+                messages_output_path,
+            )
         )
     )
 

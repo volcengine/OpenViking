@@ -111,7 +111,7 @@ function RetrievalPage() {
   ])
 
   const handleUploadClick = useCallback(() => {
-    void navigate({ to: '/resources', search: { upload: true } })
+    void navigate({ to: '/playground', search: { upload: true } })
   }, [navigate])
 
   useEffect(() => {

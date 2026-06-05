@@ -5,8 +5,7 @@
       "bearer_token_env_var": "OPENVIKING_API_KEY",
       "env_http_headers": {
         "X-OpenViking-Account": "OPENVIKING_ACCOUNT",
-        "X-OpenViking-User": "OPENVIKING_USER",
-        "X-OpenViking-Agent": "OPENVIKING_AGENT_ID"
+        "X-OpenViking-User": "OPENVIKING_USER"
       }
     }
   }

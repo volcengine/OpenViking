@@ -371,18 +371,18 @@ class TestSessionMessages:
             if session_id:
                 api_client.delete_session(session_id)
 
-    def test_message_role_id_field(self, api_client):
+    def test_message_peer_id_field(self, api_client):
         session_id = None
         try:
             r = api_client.create_session()
             session_id = r.json()["result"]["session_id"]
-            api_client.add_message(session_id, "user", "Role ID test")
+            api_client.add_message(session_id, "user", "Peer ID test", peer_id="web_user_1")
 
             ctx = api_client.get_session_context(session_id, token_budget=128000)
             messages = ctx.json().get("result", {}).get("messages", [])
             for msg in messages:
-                if "role_id" in msg:
-                    assert isinstance(msg["role_id"], str)
+                if "peer_id" in msg:
+                    assert isinstance(msg["peer_id"], str)
         finally:
             if session_id:
                 api_client.delete_session(session_id)

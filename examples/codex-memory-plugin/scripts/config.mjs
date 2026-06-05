@@ -3,7 +3,7 @@
  *
  * Resolution priority (highest → lowest), per-field:
  *   1. Environment variables (OPENVIKING_*)
- *   2. ovcli.conf — the CLI client config (carries url/api_key/account/user/agent_id)
+ *   2. ovcli.conf — the CLI client config (carries url/api_key/account/user)
  *   3. ov.conf — the server config (server.* + optional codex.* block for tuning)
  *   4. Built-in defaults
  *
@@ -24,7 +24,7 @@
  * Connection / identity env vars:
  *   OPENVIKING_URL / OPENVIKING_BASE_URL
  *   OPENVIKING_API_KEY / OPENVIKING_BEARER_TOKEN
- *   OPENVIKING_ACCOUNT, OPENVIKING_USER, OPENVIKING_AGENT_ID
+ *   OPENVIKING_ACCOUNT, OPENVIKING_USER, OPENVIKING_PEER_ID
  *
  * Misc env vars:
  *   OPENVIKING_TIMEOUT_MS, OPENVIKING_CAPTURE_TIMEOUT_MS
@@ -173,11 +173,10 @@ export function loadConfig() {
     str(cliFile.user, null) ||
     str(cx.userId, "");
 
-  // agentId: env > cliFile.agent_id > codex.agentId > "codex"
-  const agentId =
-    str(process.env.OPENVIKING_AGENT_ID, null) ||
-    str(cliFile.agent_id, null) ||
-    str(cx.agentId, "codex");
+  const peerId =
+    str(process.env.OPENVIKING_PEER_ID, null) ||
+    str(cx.peerId, null) ||
+    str(cx.peer_id, "");
 
   const debug = envBool("OPENVIKING_DEBUG") ?? (cx.debug === true);
   const defaultLogPath = join(homedir(), ".openviking", "logs", "codex-hooks.log");
@@ -200,7 +199,7 @@ export function loadConfig() {
     apiKey,
     account,
     user,
-    agentId,
+    peerId,
     timeoutMs,
 
     autoRecall: envBool("OPENVIKING_AUTO_RECALL") ?? (cx.autoRecall !== false),

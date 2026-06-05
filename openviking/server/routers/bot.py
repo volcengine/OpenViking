@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
 from openviking.server.auth import get_request_context
-from openviking.server.identity import RequestContext
+from openviking.server.identity import AuthMode, RequestContext
 from openviking_cli.utils.logger import get_logger
 
 router = APIRouter(prefix="", tags=["bot"])
@@ -22,6 +22,11 @@ logger = get_logger(__name__)
 # Bot API configuration - set when --with-bot is enabled
 BOT_API_URL: Optional[str] = None  # e.g., "http://localhost:18791"
 BOT_API_KEY: str = ""
+DEFAULT_BOT_AGENT_ID = "web-playground"
+DEFAULT_NAMESPACE_POLICY = {
+    "isolate_user_scope_by_agent": False,
+    "isolate_agent_scope_by_user": False,
+}
 
 
 def _create_bot_proxy_client() -> httpx.AsyncClient:
@@ -54,6 +59,52 @@ def get_bot_url() -> str:
             detail="Bot service not enabled. Start server with --with-bot option.",
         )
     return BOT_API_URL
+
+
+def _extract_forward_api_key(request: Request) -> str:
+    api_key = request.headers.get("X-API-Key") or request.headers.get("x-api-key")
+    if api_key:
+        return api_key
+    authorization = request.headers.get("Authorization") or request.headers.get("authorization")
+    if authorization and authorization.lower().startswith("bearer "):
+        return authorization[7:].strip()
+    return ""
+
+
+def _attach_openviking_connection(
+    body: dict,
+    request: Request,
+    ctx: RequestContext,
+) -> dict:
+    """Attach the authenticated Studio connection to the bot request body.
+
+    The OpenViking proxy authenticates the browser request before forwarding it to
+    vikingbot. Bot tools must keep using that same identity instead of falling back
+    to vikingbot's static root/user-key configuration.
+    """
+    enriched = dict(body)
+    api_key = _extract_forward_api_key(request)
+    auth_mode = AuthMode.API_KEY
+    config = getattr(request.app.state, "config", None)
+    if config is not None and hasattr(config, "get_effective_auth_mode"):
+        auth_mode = config.get_effective_auth_mode()
+    if not api_key:
+        if auth_mode == AuthMode.DEV:
+            enriched.setdefault("user_id", ctx.user.user_id)
+            return enriched
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Bot proxy requires a forwardable OpenViking API key.",
+        )
+    enriched["openviking_connection"] = {
+        "api_key": api_key,
+        "account_id": ctx.user.account_id,
+        "user_id": ctx.user.user_id,
+        "agent_id": DEFAULT_BOT_AGENT_ID,
+        "role": getattr(ctx.role, "value", str(ctx.role)),
+        "namespace_policy": dict(DEFAULT_NAMESPACE_POLICY),
+    }
+    return enriched
 
 
 @router.get("/health")
@@ -118,7 +169,7 @@ async def chat(
             # Forward to Vikingbot OpenAPIChannel chat endpoint
             response = await client.post(
                 f"{bot_url}/bot/v1/chat",
-                json=body,
+                json=_attach_openviking_connection(body, request, _ctx),
                 headers=headers,
                 timeout=300.0,  # 5 minute timeout for chat
             )
@@ -226,7 +277,7 @@ async def chat_stream(
                 async with client.stream(
                     "POST",
                     f"{bot_url}/bot/v1/chat/stream",
-                    json=body,
+                    json=_attach_openviking_connection(body, request, _ctx),
                     headers=headers,
                     timeout=300.0,
                 ) as response:

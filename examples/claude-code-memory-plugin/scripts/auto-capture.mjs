@@ -392,13 +392,16 @@ function sanitizePartsForSend(parts) {
 async function pushTurnsToOv(ovSessionId, turns) {
   let ok = 0;
   let failed = 0;
+  const peerId = cfg.peerId || null;
   for (const turn of turns) {
     // Send structured parts: tool calls/results are dedicated `tool` parts, not
     // inlined into content, so the server can process them separately.
     const parts = sanitizePartsForSend(turn.parts);
     if (parts.length === 0) continue;
 
-    const res = await addMessage(fetchJSON, ovSessionId, { role: turn.role, parts });
+    const payload = { role: turn.role, parts };
+    if (peerId) payload.peer_id = peerId;
+    const res = await addMessage(fetchJSON, ovSessionId, payload);
     if (res.ok) ok++;
     else failed++;
   }

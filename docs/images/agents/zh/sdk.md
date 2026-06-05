@@ -11,23 +11,19 @@ pip install openviking --upgrade --force-reinstall
 ```python
 from openviking.client import SyncHTTPClient
 
-url = " `https://api.vikingdb.cn-beijing.volces.com/openviking` "
+url = "https://api.vikingdb.cn-beijing.volces.com/openviking"
 api_key = "[TODO]your-api-key"
-agent_id = "[TODO]your-agent-id"
 
 client = SyncHTTPClient(
     url=url,
     api_key=api_key,
-    agent_id=agent_id,
     timeout=120.0,
 )
 client.initialize()
 ```
 
-## 步骤 3 选择 API Key
-复制页面中展示的 API Key 到你的 Agent 终端
 
-## 步骤 4 写入资源
+## 步骤 3：写入资源
 参考 GitHub 提供的规范写入示例，自动填入 API Key 和域名
 
 ```python
@@ -43,7 +39,7 @@ client.add_resource(
 )
 ```
 
-## 步骤 5 写入记忆
+## 步骤 4：写入记忆
 参考 GitHub 提供的记忆写入示例，自动填入 API Key 和域名
 
 ```python

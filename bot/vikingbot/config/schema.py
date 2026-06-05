@@ -435,7 +435,7 @@ class AgentsConfig(BaseModel):
     memory_window: int = 50
     session_context_enabled: bool = False
     session_context_token_budget: int = 3000
-    commit_token_threshold: int = 20000
+    commit_token_threshold: int = 200000
     commit_keep_recent_count: int = 5
     gen_image_model: str = "openai/doubao-seedream-4-5-251128"
     provider: str = ""
@@ -519,7 +519,6 @@ class OpenVikingConfig(BaseModel):
     root_api_key: str = ""
     account_id: str = "default"
     admin_user_id: str = "default"
-    agent_id: str = ""
     exp_write_tools: list[str] = Field(default_factory=lambda: ["write_file", "edit_file"])
     # When True, switch auto-recall mode: skip the per-turn user+agent memory retrieval
     # entirely, and instead retrieve experience memory once per session (on the first

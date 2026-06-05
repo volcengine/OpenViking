@@ -585,7 +585,7 @@ Vision Language Model for semantic extraction (L0/L1 generation).
 | `model` | str | Model name |
 | `api_base` | str | API endpoint (optional) |
 | `thinking` | bool | Enable thinking mode for VolcEngine models (default: `false`) |
-| `max_concurrent` | int | Maximum concurrent semantic LLM calls (default: `100`) |
+| `max_concurrent` | int | Maximum concurrent semantic LLM calls (default: `64`) |
 | `max_retries` | int | Maximum retry attempts for transient VLM provider errors (default: `3`; `0` disables retry) |
 | `backup` | object | Optional backup VLM configuration (same shape as `vlm`) for automatic failover when the primary fails with retryable errors such as rate limits, `5xx` responses, or connection/timeout failures. Only one level of failover is supported &mdash; the backup itself cannot define a nested `backup` |
 | `timeout` | float | Per-request HTTP timeout in seconds passed to the underlying OpenAI/LiteLLM client. Increase for slow endpoints (e.g., DashScope, local inference). Must be `> 0` (default: `60.0`) |
@@ -690,13 +690,21 @@ For OpenAI-compatible providers that return SSE (Server-Sent Events) format resp
 
 Optional lightweight model for retrieval intent analysis and query planning. It uses the same configuration shape as `vlm`, but only affects `search()` intent analysis and query expansion. If `query_planner` is omitted or empty, OpenViking falls back to `vlm` for backward compatibility.
 
-Only add this section when the planner model is already available in your environment. For example, the Ollama model below must be pulled and served locally before use.
+We recommend the local Ollama model [`guoxuter/ov_intent_analysis_sft:v4_q8`](https://ollama.com/guoxuter/ov_intent_analysis_sft:v4_q8). Fine-tuned from Qwen3.5-0.8B, it can be deployed locally and is well suited to letting a small model handle retrieval planning: for small talk, greetings, or turns where the context is already sufficient, it returns no queries to reduce unnecessary memory injection and token consumption; when retrieval is needed, it emits structured queries targeting `skill`, `resource`, and `memory`.
+
+Pull the model first and make sure the Ollama service is reachable:
+
+```bash
+ollama pull guoxuter/ov_intent_analysis_sft:v4_q8
+```
+
+Then add the following to your OpenViking configuration:
 
 ```json
 {
   "query_planner": {
     "provider": "litellm",
-    "model": "ollama/guoxuter/ov_intent_analysis_sft:v1_q8",
+    "model": "ollama/guoxuter/ov_intent_analysis_sft:v4_q8",
     "api_base": "http://127.0.0.1:11434",
     "temperature": 0.0,
     "timeout": 60,
@@ -707,7 +715,106 @@ Only add this section when the planner model is already available in your enviro
 }
 ```
 
-Use `query_planner` when you want a smaller or cheaper model to handle retrieval planning while keeping a stronger `vlm` for semantic extraction, memory extraction, and multimodal processing.
+> `v4_q8` produces more compact output with lower inference latency, but you also need to replace OpenViking's prompt file with the v4 prompt at `openviking/prompts/templates/retrieval/intent_analysis.yaml` to match the model's expected output schema.  
+> If you prefer not to modify the prompt file, you can keep using `v1_q8`, which is compatible with the current prompt: `ollama/guoxuter/ov_intent_analysis_sft:v1_q8`.
+
+Replace `openviking/prompts/templates/retrieval/intent_analysis.yaml` with:
+
+```yaml
+metadata:
+  id: "retrieval.intent_analysis"
+  name: "Intent Analysis v4"
+  description: "v4 prompt for compact intent-analysis models that emit only queries."
+  version: "4.0.0"
+  language: "en"
+  category: "retrieval"
+
+variables:
+  - name: "compression_summary"
+    type: "string"
+    description: "Session summary"
+    default: ""
+    required: false
+
+  - name: "recent_messages"
+    type: "string"
+    description: "Recent conversation"
+    required: true
+
+  - name: "current_message"
+    type: "string"
+    description: "Current message"
+    required: true
+
+  - name: "context_type"
+    type: "string"
+    description: "Restricted context type (skill/resource/memory)"
+    default: ""
+    required: false
+
+  - name: "target_abstract"
+    type: "string"
+    description: "Abstract of target directory"
+    default: ""
+    required: false
+
+template: |
+  You are OpenViking's context query planner. Given the session context and the current message, decide what context information is missing and emit retrieval queries to fill the gap.
+
+  ## Session Context
+
+  ### Session Summary
+  {{ compression_summary }}
+
+  ### Recent Conversation
+  {{ recent_messages }}
+
+  ### Current Message
+  {{ current_message }}
+  {% if context_type %}
+
+  ## Search Scope Constraints
+
+  **Restricted Context Type**: {{ context_type }}
+  {% if target_abstract %}
+  **Target Directory Abstract**: {{ target_abstract }}
+  {% endif %}
+
+  Only emit `{{ context_type }}` queries; do not generate other types.
+  {% endif %}
+
+  External information takes priority over built-in knowledge - actively query for any missing context.
+
+  ## Context Types
+
+  - `skill` - executable capability (tool, function, API, automation). Query style: imperative starting with a verb.
+  - `resource` - knowledge artifact (doc, spec, guide, code, configuration). Query style: noun phrase.
+  - `memory` - user preference or agent execution experience.
+
+  ## Procedure
+
+  1. Classify the task: operational tasks typically need skill+resource+memory; informational tasks typically need resource+memory; conversational small talk needs no query.
+  2. Skip any context type already covered explicitly in the conversation.
+  3. For each needed type, emit 1-5 concise retrievable queries with `priority` from 1 to 5.
+
+  ## Output Format
+
+  Output a single JSON object with exactly one top-level key:
+
+  - `queries`: array of objects with:
+    - `query`: actual query text
+    - `context_type`: one of `skill`, `resource`, `memory`
+    - `priority`: integer from 1 to 5
+
+  If no query is needed, set `queries` to an empty array `[]`.
+
+  Output the JSON object directly. Do not wrap it in markdown code fences.
+
+llm_config:
+  temperature: 0.0
+```
+
+This lets a small model handle retrieval planning with lower latency, while keeping a stronger `vlm` for semantic extraction, memory extraction, and multimodal processing.
 
 ### feishu
 
@@ -853,6 +960,7 @@ Storage configuration for context data, including file storage (RAGFS) and vecto
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `workspace` | str | Local data storage path (main configuration) | "./data" |
+| `skip_process_lock` | bool | Whether to skip the startup process-lock check for `storage.workspace`. When enabled, OpenViking will not check or create the `.openviking.pid` lock file. | `false` |
 | `agfs` | object | RAGFS (Rust-based AGFS) configuration | {} |
 | `vectordb` | object | Vector database storage configuration | {} |
 
@@ -885,6 +993,9 @@ Storage configuration for context data, including file storage (RAGFS) and vecto
 **Configuration Examples**
 
 RAGFS uses Rust binding mode by default, directly accessing the file system through the Rust implementation.
+
+> [!WARNING]
+> `storage.agfs` no longer supports the AGFS HTTP client mode, and the old HTTP client entry should not be configured anymore. AGFS / RAGFS filesystem access now happens only through the in-process Rust binding (`RAGFSBindingClient`). This does not affect the OpenViking server HTTP API, the `ov` CLI, or `AsyncHTTPClient` / `SyncHTTPClient` when they connect to an OpenViking server.
 
 ##### QueueFS Configuration
 
@@ -1152,7 +1263,7 @@ For memory-related settings, add a `memory` section in `ov.conf`:
 {
   "memory": {
     "version": "v2",
-    "agent_scope_mode": "user+agent"
+    "agent_memory_enabled": false
   }
 }
 ```
@@ -1160,13 +1271,13 @@ For memory-related settings, add a `memory` section in `ov.conf`:
 | Field | Description | Default |
 |-------|-------------|---------|
 | `version` | Memory implementation version. Only `"v2"` is supported (legacy `"v1"` removed in #2264 — passing `"v1"` now raises a `ValueError` at config load). | `"v2"` |
-| `agent_scope_mode` | Deprecated and ignored. Kept only for backward compatibility with older `ov.conf` files. Agent/user namespace behavior is now controlled by per-account namespace policy. | `"user+agent"` |
-
-`agent_scope_mode` no longer changes namespace behavior. The server now uses account-level namespace policy to choose between `viking://agent/{agent_id}/...` and `viking://agent/{agent_id}/user/{user_id}/...`.
+| `agent_memory_enabled` | Enables trajectory/experience memory extraction after user-memory extraction. | `false` |
 
 ### ovcli.conf
 
 You can edit this file by hand, or generate it interactively with `ov config`. If you maintain configurations for multiple servers, switch between them with `ov config switch`.
+
+For the guided CLI setup flow, see [OpenViking CLI Setup](../getting-started/05-cli-setup.md).
 
 Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI to connect to a remote server:
 
@@ -1174,9 +1285,6 @@ Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI t
 {
   "url": "http://localhost:1933",
   "api_key": "your-secret-key",
-  "account": "acme",
-  "user": "alice",
-  "agent_id": "my-agent",
   "profile": false,
   "upload": {
     "mode": "local",
@@ -1191,9 +1299,8 @@ Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI t
 |-------|-------------|---------|
 | `url` | Server address | (required) |
 | `api_key` | API key for authentication (root key or user key) | `null` (no auth) |
-| `account` | Default account sent as `X-OpenViking-Account` | `null` |
-| `user` | Default user sent as `X-OpenViking-User` | `null` |
-| `agent_id` | Agent identifier for agent space isolation | `null` |
+| `account` | Optional trusted-mode account identity header value | `null` |
+| `user` | Optional trusted-mode user identity header value | `null` |
 | `profile` | Whether to append `profile=1` to HTTP requests by default. Applies to both the Python HTTP client and the `ov` CLI; `ov --profile` can enable it per invocation. Actual effect still depends on the server enabling `server.profile_enabled`. | `false` |
 | `upload.ignore_dirs` | Default directory ignore list for `add-resource` (CSV) | `null` |
 | `upload.include` | Default include patterns for `add-resource` (CSV) | `null` |
@@ -1202,10 +1309,10 @@ Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI t
 
 Local directory uploads respect `.gitignore` files (root and nested). `ignore_dirs/include/exclude` apply on top of that.
 
-CLI flags can override these identity fields per command:
+For trusted gateway deployments, CLI flags can override these identity fields per command:
 
 ```bash
-openviking --account acme --user alice --agent-id assistant-2 ls viking://
+openviking --account acme --user alice ls viking://
 ```
 
 For `add-resource`, upload filter flags are merged additively with `ovcli.conf` defaults:
@@ -1284,25 +1391,17 @@ Path locks are enabled by default and usually require no configuration. **The de
 
 For details on the lock mechanism, see [Path Locks and Crash Recovery](../concepts/09-transaction.md).
 
-## storage.task_tracker Section
+## Task Tracker Persistence
 
-The task tracker records async task state for endpoints that return a `task_id` (task types include `session_commit`, `add_resource`, `add_skill`, and `admin_reindex`). The `persistent` backend stores task state on the workspace volume so that **a `task_id` returned by one instance can be looked up from another instance**, and task history survives a restart. The default `memory` backend keeps task state per process — sufficient for single-instance deployments.
+The task tracker records async task state for endpoints that return a `task_id` (task types include `session_commit`, `add_resource`, `add_skill`, and `admin_reindex`). Task records are always persisted in AGFS, so a `task_id` returned by one instance can be looked up from another instance and task history survives a restart.
 
-```json
-{
-  "storage": {
-    "task_tracker": {
-      "backend": "memory"
-    }
-  }
-}
+No `storage.task_tracker` configuration is required. If an older configuration still includes `storage.task_tracker`, OpenViking logs a warning and ignores it.
+
+Task record files are stored under the owning account's system directory:
+
+```text
+/local/{account_id}/_system/tasks/{user_id}/{task_id}.json
 ```
-
-| Parameter | Type | Description | Default |
-|-----------|------|-------------|---------|
-| `backend` | str | Task tracker backend. `"memory"` keeps task state in process memory (single-instance). `"persistent"` enables cross-instance task lookup and survives restarts. | `"memory"` |
-
-Set `backend` to `"persistent"` for multi-instance deployments where callers may poll `GET /api/v1/tasks/{task_id}` from any instance, or when task history needs to outlive the process.
 
 ## encryption Section
 
@@ -1421,7 +1520,7 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
     "model": "string",
     "api_base": "string",
     "thinking": false,
-    "max_concurrent": 100,
+    "max_concurrent": 64,
     "max_retries": 3,
     "extra_headers": {},
     "extra_request_body": {},

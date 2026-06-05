@@ -12,14 +12,6 @@ class MemoryConfig(BaseModel):
         default="v2",
         description="Memory implementation version. Only 'v2' is supported.",
     )
-    agent_scope_mode: str = Field(
-        default="user+agent",
-        description=(
-            "Deprecated and ignored. Kept only for backward compatibility with older ov.conf files. "
-            "Agent/user namespace behavior is now controlled by per-account namespace policy."
-        ),
-    )
-
     custom_templates_dir: str = Field(
         default="",
         description="Custom memory templates directory. If set, templates from this directory will be loaded in addition to built-in templates",
@@ -105,16 +97,8 @@ class MemoryConfig(BaseModel):
         default=False,
         description=(
             "When enabled, session commit also extracts reusable skills from the archived "
-            "conversation and writes them into the agent skill directory. Disabled by "
+            "conversation and writes them into the current user's skill directory. Disabled by "
             "default."
-        ),
-    )
-    role_id_memory_isolation_enabled: bool = Field(
-        default=False,
-        description=(
-            "When enabled, memory extraction uses role_id from messages to determine "
-            "which user/agent the memory belongs to. When disabled (default), role_id "
-            "is ignored and the login user from the request context is used instead."
         ),
     )
     link_enabled: bool = Field(
@@ -135,13 +119,6 @@ class MemoryConfig(BaseModel):
             data = data.copy()
             data.setdefault("agent_memory_enabled", True)
         return data
-
-    @field_validator("agent_scope_mode")
-    @classmethod
-    def validate_agent_scope_mode(cls, value: str) -> str:
-        if value not in {"user+agent", "agent"}:
-            raise ValueError("memory.agent_scope_mode must be 'user+agent' or 'agent'")
-        return value
 
     @field_validator("version")
     @classmethod

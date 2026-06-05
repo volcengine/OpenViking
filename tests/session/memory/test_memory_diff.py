@@ -32,7 +32,6 @@ class TestMemoryDiffArchive:
     def mock_ctx(self):
         """Mock RequestContext for testing."""
         ctx = MagicMock()
-        ctx.namespace_policy = MagicMock()
         ctx.user = MagicMock()
         ctx.user.user_id = "test_user"
         ctx.account_id = "test_account"

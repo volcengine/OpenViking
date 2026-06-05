@@ -361,9 +361,7 @@ class TestVikingFSEncryptionWithVault:
         await svc.initialize()
 
         # Create APIKeyManager using VikingFS to ensure system files are encrypted
-        api_key_manager = APIKeyManager(
-            root_key=self.ROOT_KEY, viking_fs=svc.viking_fs, encryption_enabled=True
-        )
+        api_key_manager = APIKeyManager(root_key=self.ROOT_KEY, viking_fs=svc.viking_fs)
         await api_key_manager.load()
 
         yield {"service": svc, "api_key_manager": api_key_manager, "test_data_dir": test_data_dir}
@@ -415,7 +413,7 @@ class TestVikingFSEncryptionWithVault:
                     else:
                         # Use VikingFS's _uri_to_path method to get file path
                         agfs_path = svc.viking_fs._uri_to_path(entry_uri, ctx=ctx)
-                        raw_content = agfs_client.read(agfs_path)
+                        raw_content = agfs_client.read_raw(agfs_path)
                         assert raw_content.startswith(b"OVE1"), f"File {entry_uri} is not encrypted"
                         if print_paths:
                             print(f"✓ File is encrypted: {entry_uri}")
@@ -443,7 +441,7 @@ class TestVikingFSEncryptionWithVault:
 
         from openviking.server.identity import RequestContext, Role
 
-        user = UserIdentifier(account_id, admin_user_id, admin_user_id)
+        user = UserIdentifier(account_id, admin_user_id)
         ctx = RequestContext(user=user, role=Role.ADMIN)
 
         # Create test resource file
@@ -460,7 +458,7 @@ class TestVikingFSEncryptionWithVault:
         # Verify file is encrypted
         agfs_client = svc._agfs_client
         agfs_path = svc.viking_fs._uri_to_path(test_uri, ctx=ctx)
-        raw_content = agfs_client.read(agfs_path)
+        raw_content = agfs_client.read_raw(agfs_path)
         assert raw_content.startswith(b"OVE1")
 
         # Test various operations
@@ -475,11 +473,9 @@ class TestVikingFSEncryptionWithVault:
         assert len(tree_entries) > 0
 
         # grep operation
-        try:
-            grep_result = await svc.viking_fs.grep(resources_dir_uri, "Vault", ctx=ctx)
-            assert grep_result is not None
-        except Exception as e:
-            print(f"[WARNING] grep operation may not be supported: {e}")
+        grep_result = await svc.viking_fs.grep(resources_dir_uri, "Vault", ctx=ctx)
+        assert grep_result["count"] > 0
+        assert any("Vault" in match["content"] for match in grep_result["matches"])
 
         # abstract operation
         try:
@@ -511,11 +507,11 @@ class TestVikingFSEncryptionWithVault:
 
         from openviking.server.identity import RequestContext, Role
 
-        user = UserIdentifier(account_id, admin_user_id, admin_user_id)
+        user = UserIdentifier(account_id, admin_user_id)
         ctx = RequestContext(user=user, role=Role.ADMIN)
 
         # Create skill directory and file
-        skill_dir_uri = f"viking://{account_id}/agent/test-skill"
+        skill_dir_uri = f"viking://user/{admin_user_id}/skills/test-skill"
         skill_md_uri = f"{skill_dir_uri}/SKILL.md"
 
         # Create directory
@@ -541,7 +537,7 @@ This is a test skill for verifying Vault encryption.
         # Verify file is encrypted
         agfs_client = svc._agfs_client
         agfs_path = svc.viking_fs._uri_to_path(skill_md_uri, ctx=ctx)
-        raw_content = agfs_client.read(agfs_path)
+        raw_content = agfs_client.read_raw(agfs_path)
         assert raw_content.startswith(b"OVE1")
 
         # Test various operations
@@ -574,7 +570,7 @@ This is a test skill for verifying Vault encryption.
 
         from openviking.server.identity import RequestContext, Role
 
-        user = UserIdentifier(account_id, user_id, user_id)
+        user = UserIdentifier(account_id, user_id)
         ctx = RequestContext(user=user, role=Role.USER)
 
         # Create memory directory and file
@@ -598,7 +594,7 @@ This is a test skill for verifying Vault encryption.
         # Verify file is encrypted
         agfs_client = svc._agfs_client
         agfs_path = svc.viking_fs._uri_to_path(memory_file_uri, ctx=ctx)
-        raw_content = agfs_client.read(agfs_path)
+        raw_content = agfs_client.read_raw(agfs_path)
         assert raw_content.startswith(b"OVE1")
 
     @pytest.mark.asyncio
@@ -617,7 +613,7 @@ This is a test skill for verifying Vault encryption.
 
         from openviking.server.identity import RequestContext, Role
 
-        user = UserIdentifier(account_id, user_id, user_id)
+        user = UserIdentifier(account_id, user_id)
         ctx = RequestContext(user=user, role=Role.USER)
 
         # Create session
@@ -654,7 +650,7 @@ This is a test skill for verifying Vault encryption.
         print(f"\n=== Creating account: {random_account_id}, user: {random_user_id} ===")
 
         await api_key_manager.create_account(random_account_id, random_user_id)
-        user = UserIdentifier(random_account_id, random_user_id, random_user_id)
+        user = UserIdentifier(random_account_id, random_user_id)
         ctx = RequestContext(user=user, role=Role.ADMIN)
 
         # 2. Execution: Resource, skill, session operations
@@ -667,7 +663,7 @@ This is a test skill for verifying Vault encryption.
         print(f"✓ Resource created successfully: {test_resource_uri}")
 
         # Create skill
-        skill_dir_uri = f"viking://{random_account_id}/agent/test-workflow-skill"
+        skill_dir_uri = "viking://user/admin/skills/test-workflow-skill"
         skill_md_uri = f"{skill_dir_uri}/SKILL.md"
         await svc.viking_fs.mkdir(skill_dir_uri, ctx=ctx)
         skill_content = """---

@@ -20,7 +20,6 @@ DISPLAY_NAME = "小明"
 DEFAULT_URL = "http://localhost:1934"
 PANEL_WIDTH = 78
 DEFAULT_API_KEY = "1cf407c39990e5dc874ccc697942da4892208a86a44c4781396dfdc57aa5c98d"
-DEFAULT_AGENT_ID = "test"
 DEFAULT_SESSION_ID = "event-span-multiple-turns"
 
 
@@ -234,7 +233,6 @@ def main():
     parser = argparse.ArgumentParser(description=f"OpenViking 记忆演示 — {DISPLAY_NAME}")
     parser.add_argument("--url", default=DEFAULT_URL, help=f"Server URL (默认: {DEFAULT_URL})")
     parser.add_argument("--api-key", default=DEFAULT_API_KEY, help="API key")
-    parser.add_argument("--agent-id", default=DEFAULT_AGENT_ID, help="Agent ID")
     parser.add_argument(
         "--phase",
         choices=["all", "ingest", "verify"],
@@ -248,9 +246,7 @@ def main():
 
     args = parser.parse_args()
 
-    client = ov.SyncHTTPClient(
-        url=args.url, api_key=args.api_key, agent_id=args.agent_id, timeout=180
-    )
+    client = ov.SyncHTTPClient(url=args.url, api_key=args.api_key, timeout=180)
 
     try:
         client.initialize()

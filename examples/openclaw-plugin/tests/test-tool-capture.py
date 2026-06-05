@@ -33,8 +33,6 @@ from rich.table import Table
 
 GATEWAY_URL = "http://127.0.0.1:18789"
 OPENVIKING_URL = "http://127.0.0.1:1933"
-AGENT_ID = "openclaw"
-
 console = Console()
 assertions: list[dict] = []
 
@@ -52,6 +50,7 @@ def load_gateway_token() -> str:
     """从 openclaw.json 读取 gateway auth token。"""
     try:
         import pathlib
+
         cfg_path = pathlib.Path.home() / ".openclaw" / "openclaw.json"
         cfg = json.loads(cfg_path.read_text())
         return cfg.get("gateway", {}).get("auth", {}).get("token", "")
@@ -100,14 +99,11 @@ def has_tool_use_in_output(data: dict) -> bool:
 
 
 class OVInspector:
-    def __init__(self, base_url: str, agent_id: str = AGENT_ID):
+    def __init__(self, base_url: str):
         self.base_url = base_url.rstrip("/")
-        self.agent_id = agent_id
 
     def _headers(self) -> dict:
         h: dict[str, str] = {"Content-Type": "application/json"}
-        if self.agent_id:
-            h["X-OpenViking-Agent"] = self.agent_id
         return h
 
     def _get(self, path: str, timeout: int = 10):
@@ -138,7 +134,8 @@ class OVInspector:
         通过检查每个 session 的 updated_at 来找到最新的。"""
         sessions = self.list_sessions()
         real_sessions = [
-            s for s in sessions
+            s
+            for s in sessions
             if isinstance(s, dict) and not s.get("session_id", "").startswith("memory-store-")
         ]
         if not real_sessions:
@@ -210,7 +207,9 @@ def run_test(
 
     gateway_responses = []
     for i, msg_cfg in enumerate(TOOL_TRIGGER_MESSAGES):
-        console.print(f"\n[cyan]消息 {i + 1}/{len(TOOL_TRIGGER_MESSAGES)}:[/cyan] {msg_cfg['description']}")
+        console.print(
+            f"\n[cyan]消息 {i + 1}/{len(TOOL_TRIGGER_MESSAGES)}:[/cyan] {msg_cfg['description']}"
+        )
         console.print(f"  [dim]> {msg_cfg['input'][:80]}...[/dim]")
 
         try:
@@ -223,15 +222,19 @@ def run_test(
                 console.print("  [yellow]检测到 tool_use 在响应中[/yellow]")
 
             if verbose:
-                console.print(f"  [dim]完整响应: {json.dumps(data, ensure_ascii=False)[:500]}[/dim]")
+                console.print(
+                    f"  [dim]完整响应: {json.dumps(data, ensure_ascii=False)[:500]}[/dim]"
+                )
 
-            gateway_responses.append({
-                "index": i,
-                "msg": msg_cfg,
-                "response": data,
-                "reply": reply,
-                "has_tool": has_tool,
-            })
+            gateway_responses.append(
+                {
+                    "index": i,
+                    "msg": msg_cfg,
+                    "response": data,
+                    "reply": reply,
+                    "has_tool": has_tool,
+                }
+            )
 
             check(
                 f"消息 {i + 1} 发送成功",
@@ -298,13 +301,15 @@ def run_test(
                 all_stored_text += (part.get("text", "") or "") + "\n"
 
     if verbose:
-        console.print(Panel(
-            all_stored_text[:3000] + ("..." if len(all_stored_text) > 3000 else ""),
-            title="OV 存储的全部文本",
-        ))
+        console.print(
+            Panel(
+                all_stored_text[:3000] + ("..." if len(all_stored_text) > 3000 else ""),
+                title="OV 存储的全部文本",
+            )
+        )
 
     # 检查 toolUse 标记是否存在
-    has_tool_use_marker = bool(re.search(r'\[toolUse:', all_stored_text, re.IGNORECASE))
+    has_tool_use_marker = bool(re.search(r"\[toolUse:", all_stored_text, re.IGNORECASE))
     check(
         "存储文本包含 [toolUse:] 标记",
         has_tool_use_marker,
@@ -312,7 +317,7 @@ def run_test(
     )
 
     # 检查 toolResult 标记是否存在
-    has_tool_result_marker = bool(re.search(r'result\]:', all_stored_text, re.IGNORECASE))
+    has_tool_result_marker = bool(re.search(r"result\]:", all_stored_text, re.IGNORECASE))
     check(
         "存储文本包含 tool result 标记",
         has_tool_result_marker,
@@ -320,7 +325,7 @@ def run_test(
     )
 
     # 检查 assistant 标记
-    has_assistant = bool(re.search(r'\[assistant\]:', all_stored_text, re.IGNORECASE))
+    has_assistant = bool(re.search(r"\[assistant\]:", all_stored_text, re.IGNORECASE))
     check(
         "存储文本包含 [assistant] 标记",
         has_assistant,
@@ -328,7 +333,7 @@ def run_test(
     )
 
     # 检查 user 标记
-    has_user = bool(re.search(r'\[user\]:', all_stored_text, re.IGNORECASE))
+    has_user = bool(re.search(r"\[user\]:", all_stored_text, re.IGNORECASE))
     check(
         "存储文本包含 [user] 标记",
         has_user,
@@ -354,9 +359,9 @@ def run_test(
     tool_related_lines = []
     for line in all_stored_text.split("\n"):
         stripped = line.strip()
-        if re.search(r'\[toolUse:', stripped, re.IGNORECASE):
+        if re.search(r"\[toolUse:", stripped, re.IGNORECASE):
             tool_related_lines.append(("toolUse", stripped[:150]))
-        elif re.search(r'result\]:', stripped, re.IGNORECASE):
+        elif re.search(r"result\]:", stripped, re.IGNORECASE):
             tool_related_lines.append(("toolResult", stripped[:150]))
 
     if tool_related_lines:
@@ -402,7 +407,9 @@ def print_summary():
         console.print("\n[green bold]全部通过！toolUse/toolResult 捕获验证成功。[/green bold]")
     else:
         console.print(f"\n[red bold]有 {failed} 个断言失败。[/red bold]")
-        console.print("[yellow]注: 如果模型没有调用工具，toolUse/toolResult 标记可能不存在 — 这不代表代码有 bug。[/yellow]")
+        console.print(
+            "[yellow]注: 如果模型没有调用工具，toolUse/toolResult 标记可能不存在 — 这不代表代码有 bug。[/yellow]"
+        )
         console.print("[yellow]可以在 gateway 日志中确认 afterTurn 的存储内容。[/yellow]")
 
 

@@ -1,5 +1,3 @@
-import pytest
-
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.utils.link_renderer import LinkRenderer
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
@@ -37,7 +35,7 @@ class TestRelativePath:
     def test_cross_scope_returns_none(self):
         result = LinkRenderer.relative_path(
             "viking://user/Caroline/memories/profile.md",
-            "viking://agent/Bot/memories/skills/pdf.md",
+            "viking://resources/skills/pdf.md",
         )
         assert result is None
 
@@ -232,7 +230,7 @@ class TestRenderLinks:
         links = [
             {
                 "from_uri": "viking://user/Caroline/memories/profile.md",
-                "to_uri": "viking://agent/Bot/memories/skills/research.md",
+                "to_uri": "viking://resources/skills/research.md",
                 "weight": 1.0,
                 "match_text": "skill",
             }
@@ -242,7 +240,7 @@ class TestRenderLinks:
             "viking://user/Caroline/memories/profile.md",
             links,
         )
-        assert "viking://agent/Bot/memories/skills/research.md" in result
+        assert "viking://resources/skills/research.md" in result
 
     def test_weight_priority(self):
         content = "She loves painting and painting is fun."
@@ -292,10 +290,7 @@ class TestRenderLinks:
             "viking://user/Caroline/memories/profile.md",
             links,
         )
-        assert (
-            result
-            == "她喜欢[角色扮演游戏](entities/games/rpg.md)，也喜欢开放世界游戏。"
-        )
+        assert result == "她喜欢[角色扮演游戏](entities/games/rpg.md)，也喜欢开放世界游戏。"
 
 
 class TestStripLinks:
@@ -310,12 +305,12 @@ class TestStripLinks:
         assert result == content
 
     def test_keep_viking_uri_link(self):
-        content = "Check [skill](viking://agent/Bot/memories/skills/research.md)."
+        content = "Check [skill](viking://user/Bot/skills/research.md)."
         result = LinkRenderer.strip_links(content)
         assert result == content
 
     def test_keep_viking_uri_link_when_target_uses_supported_scheme(self):
-        content = "Check [skill](viking://agent/Bot/memories/skills/research.md)."
+        content = "Check [skill](viking://user/Bot/skills/research.md)."
         result = LinkRenderer.strip_links(content)
         assert result == content
 
@@ -437,5 +432,8 @@ class TestRoundTrip:
         second_write = MemoryFileUtils.write(reparsed)
 
         assert "[Gina](events/2023/02/08/Gina与Jon的日常交流.md)" not in first_write
-        assert "[[Gina](events/2023/02/08/Gina与Jon的日常交流.md)](events/2023/02/08/Gina与Jon的日常交流.md)" not in second_write
+        assert (
+            "[[Gina](events/2023/02/08/Gina与Jon的日常交流.md)](events/2023/02/08/Gina与Jon的日常交流.md)"
+            not in second_write
+        )
         assert "Gina" in second_write

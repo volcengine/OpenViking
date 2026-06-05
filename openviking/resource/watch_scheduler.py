@@ -230,7 +230,6 @@ class WatchScheduler:
                 user = UserIdentifier(
                     account_id=task.account_id,
                     user_id=task.user_id,
-                    agent_id=task.agent_id,
                 )
                 role_value = getattr(task, "original_role", None) or Role.USER.value
                 try:
@@ -289,7 +288,6 @@ class WatchScheduler:
                                 account_id=task.account_id,
                                 user_id=task.user_id,
                                 role=getattr(task, "original_role", None) or Role.USER.value,
-                                agent_id=task.agent_id,
                                 is_active=False,
                             )
                         )

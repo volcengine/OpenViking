@@ -444,6 +444,7 @@ jobs:
         run: |
           cd tests/api_test
           export OPENVIKING_API_KEY=test-root-api-key
+          export OPENVIKING_ROOT_API_KEY=test-root-api-key
           export SERVER_URL=http://127.0.0.1:${{ env.SERVER_PORT }}
           
           if [ "${{ env.HAS_SECRETS }}" = "true" ]; then
@@ -478,6 +479,7 @@ jobs:
         run: |
           cd tests/api_test
           $env:OPENVIKING_API_KEY = "test-root-api-key"
+          $env:OPENVIKING_ROOT_API_KEY = "test-root-api-key"
           $env:SERVER_URL = "http://127.0.0.1:${{ env.SERVER_PORT }}"
           
           if ($env:HAS_SECRETS -eq "true") {
@@ -519,8 +521,7 @@ jobs:
           export OPENVIKING_CLI_BIN="${OPENVIKING_CLI_BIN}"
           export OPENVIKING_URL="http://127.0.0.1:${{ env.SERVER_PORT }}"
           export OPENVIKING_API_KEY="test-root-api-key"
-          export OPENVIKING_ACCOUNT="test-account"
-          export OPENVIKING_USER="test-user"
+          export OPENVIKING_ROOT_API_KEY="test-root-api-key"
 
           echo "Running CLI compatibility tests (serial)..."
           uv run python -m pytest test_cli_compatibility.py -v --tb=short -m cli_remote || true
@@ -539,8 +540,7 @@ jobs:
           export OPENVIKING_CLI_BIN="${OPENVIKING_CLI_BIN}"
           export OPENVIKING_URL="http://127.0.0.1:${{ env.SERVER_PORT }}"
           export OPENVIKING_API_KEY="test-root-api-key"
-          export OPENVIKING_ACCOUNT="test-account"
-          export OPENVIKING_USER="test-user"
+          export OPENVIKING_ROOT_API_KEY="test-root-api-key"
 
           echo "Running CLI integration tests (serial to avoid resource conflicts)..."
           uv run python -m pytest \

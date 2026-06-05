@@ -125,7 +125,7 @@ async def test_semantic_dag_stats_collects_nodes(monkeypatch):
     )
 
     processor = _FakeProcessor()
-    ctx = RequestContext(user=UserIdentifier("acc1", "user1", "agent1"), role=Role.USER)
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
     executor = SemanticDagExecutor(
         processor=processor,
         context_type="resource",
@@ -161,7 +161,7 @@ async def test_semantic_dag_bounds_active_node_work(monkeypatch):
     )
 
     processor = _TrackingProcessor()
-    ctx = RequestContext(user=UserIdentifier("acc1", "user1", "agent1"), role=Role.USER)
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
     executor = SemanticDagExecutor(
         processor=processor,
         context_type="resource",
@@ -202,7 +202,7 @@ async def test_semantic_dag_shares_node_scheduler_across_roots(monkeypatch):
     )
 
     processor = _TrackingProcessor()
-    ctx = RequestContext(user=UserIdentifier("acc1", "user1", "agent1"), role=Role.USER)
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
     executor_a = SemanticDagExecutor(
         processor=processor,
         context_type="resource",
@@ -260,7 +260,7 @@ async def test_semantic_dag_skip_vectorization_does_not_schedule_tasks(monkeypat
     )
 
     processor = _FakeProcessor()
-    ctx = RequestContext(user=UserIdentifier("acc1", "user1", "agent1"), role=Role.USER)
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
     executor = SemanticDagExecutor(
         processor=processor,
         context_type="resource",

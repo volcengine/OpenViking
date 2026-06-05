@@ -86,8 +86,7 @@ ov session new
     "session_id": "a1b2c3d4",
     "user": {
       "account_id": "default",
-      "user_id": "alice",
-      "agent_id": "default"
+      "user_id": "alice"
     }
   },
   "time": 0.1
@@ -258,12 +257,13 @@ ov session get a1b2c3d4
     "llm_token_usage": {
       "prompt_tokens": 5200,
       "completion_tokens": 1800,
-      "total_tokens": 7000
+      "total_tokens": 7000,
+      "cached_tokens": 1200,
+      "reasoning_tokens": 800
     },
     "user": {
       "account_id": "default",
-      "user_id": "alice",
-      "agent_id": "default"
+      "user_id": "alice"
     },
     "pending_tokens": 450
   }
@@ -568,7 +568,7 @@ ov session delete a1b2c3d4
 | parts | List[Part] | 条件必填 | - | 消息部分列表（Python SDK 必填；HTTP API 可选，与 content 二选一） |
 | content | str | 条件必填 | - | 消息文本内容（HTTP API 简单模式，与 parts 二选一） |
 | created_at | str | 否 | None | 可选的 ISO 8601 时间戳，会原样保存到消息中 |
-| role_id | str | 否 | None | 可选的显式参与者 ID，省略时由服务器推导 |
+| peer_id | str | 否 | None | 可选的稳定交互对象 ID |
 
 > **注意**：HTTP API 支持两种模式：
 > 1. **简单模式**：使用 `content` 字符串（向后兼容）
@@ -595,7 +595,7 @@ ContextPart(
 ToolPart(
     tool_id="call_123",
     tool_name="search_web",
-    skill_uri="viking://agent/skills/search-web/",
+    skill_uri="viking://user/skills/search-web/",
     tool_input={"query": "OAuth best practices"},
     tool_output="",
     tool_status="pending"  # "pending"、"running"、"completed"、"error"
@@ -836,7 +836,7 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
 curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
-  -d '{"skill": {"uri": "viking://agent/skills/search-web/", "input": {"query": "OAuth"}, "output": "Results...", "success": true}}'
+  -d '{"skill": {"uri": "viking://user/skills/search-web/", "input": {"query": "OAuth"}, "output": "Results...", "success": true}}'
 ```
 
 **Python SDK**
@@ -856,7 +856,7 @@ await client.session_used(
 await client.session_used(
     session_id="a1b2c3d4",
     skill={
-        "uri": "viking://agent/skills/search-web/",
+        "uri": "viking://user/skills/search-web/",
         "input": {"query": "OAuth"},
         "output": "Results...",
         "success": True
@@ -884,7 +884,7 @@ await client.session_used(
 
 #### 1. API 实现介绍
 
-提交会话。归档消息（Phase 1）立即完成，摘要生成和记忆提取（Phase 2）在后台异步执行。返回 `task_id` 用于查询后台任务进度。
+提交会话。归档消息（Phase 1）立即完成，摘要生成和记忆提取（Phase 2）在后台异步执行。返回 `task_id` 用于查询后台任务状态。
 
 **两阶段提交流程**：
 - **Phase 1（同步）**: 快照当前消息，清空 live session，创建归档目录，写入原始消息
@@ -908,6 +908,7 @@ await client.session_used(
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | session_id | str | 是 | - | 要提交的会话 ID |
+| keep_recent_count | int | 否 | 0 | 提交后保留为 live 状态的最近消息数 (保持 live, 不归档)。`0` (默认) 归档全部消息。 |
 
 #### 3. 使用示例
 
@@ -940,7 +941,7 @@ result = await client.commit_session("a1b2c3d4")
 print(f"Status: {result['status']}")
 print(f"Task ID: {result['task_id']}")
 
-# 查询后台任务进度
+# 查询后台任务状态
 task = await client.get_task(result["task_id"])
 if task["status"] == "completed":
     memories = task["result"]["memories_extracted"]
@@ -1012,7 +1013,7 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/extract \
 
 #### 1. API 实现介绍
 
-查询后台任务状态（如 commit 的摘要生成和记忆提取进度）。
+查询返回 `task_id` 的后台任务状态，例如 session commit、`add_resource` 和 admin reindex。
 
 **任务状态**：
 - `pending`: 任务等待执行
@@ -1023,13 +1024,15 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/extract \
 **代码入口**：
 - `openviking/server/routers/tasks.py:get_task()` - HTTP 路由
 
+任务记录会持久化到 AGFS，服务重启后仍可查询，但仍受任务保留清理策略影响。
+
 #### 2. 接口和参数说明
 
 **参数**
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| task_id | str | 是 | - | 任务 ID（由 commit 返回） |
+| task_id | str | 是 | - | 后台 API 返回的任务 ID |
 
 #### 3. 使用示例
 
@@ -1055,18 +1058,22 @@ task = await client.get_task(task_id="uuid-xxx")
 print(f"Status: {task['status']}")
 ```
 
-**响应示例（进行中）**
+**响应示例（资源导入进行中）**
 
 ```json
 {
   "status": "ok",
   "result": {
     "task_id": "uuid-xxx",
-    "task_type": "session_commit",
-    "status": "running"
+    "task_type": "add_resource",
+    "status": "running",
+    "resource_id": "viking://resources/guide",
+    "stage": "processing_queue"
   }
 }
 ```
+
+`stage` 可以为 `null`。Git 仓库资源导入任务可能报告 `queued`、`fetching`、`parsing`、`finalizing`、`processing_queue`；其他任务类型可能将其留空。实时队列计数不会出现在任务状态中；需要实时数量时使用 observer queue，任务完成后可读取 `result.queue_status`。
 
 **响应示例（完成）**
 
@@ -1154,7 +1161,8 @@ curl -X GET "http://localhost:1933/api/v1/tasks?task_type=session_commit&status=
       "created_at": 1770000000.0,
       "updated_at": 1770000005.0,
       "result": null,
-      "error": null
+      "error": null,
+      "stage": null
     }
   ]
 }
@@ -1261,10 +1269,10 @@ viking://session/{user_id}/{session_id}/
 | preferences | `user/memories/preferences/` | 按主题分类的用户偏好 |
 | entities | `user/memories/entities/` | 重要实体（人物、项目等） |
 | events | `user/memories/events/` | 重要事件 |
-| cases | `agent/memories/cases/` | 问题-解决方案案例 |
-| patterns | `agent/memories/patterns/` | 交互模式 |
-| tools | `agent/memories/tools/` | 工具使用经验与最佳实践 |
-| skills | `agent/memories/skills/` | 技能执行经验与工作流策略 |
+| trajectories | `user/memories/trajectories/` | 可复用的操作契约 |
+| experiences | `user/memories/experiences/` | 可复用的执行经验 |
+| tools | `user/memories/tools/` | 工具使用经验与最佳实践 |
+| skills | `user/memories/skills/` | 技能执行经验与工作流策略 |
 
 ---
 
@@ -1366,7 +1374,7 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/commit \
   -H "X-API-Key: your-key"
 # 返回：{"status": "ok", "result": {"status": "accepted", "task_id": "uuid-xxx", ...}}
 
-# 步骤 7：查询后台任务进度（可选）
+# 步骤 7：查询后台任务状态（可选）
 curl -X GET http://localhost:1933/api/v1/tasks/uuid-xxx \
   -H "X-API-Key: your-key"
 ```

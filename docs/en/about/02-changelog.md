@@ -3,6 +3,81 @@
 All notable changes to OpenViking will be documented in this file.
 This changelog is automatically generated from [GitHub Releases](https://github.com/volcengine/OpenViking/releases).
 
+## v0.3.23 (2026-06-03)
+
+### Highlights
+
+- **Native `ov` CLI refresh**: `ov config` is now the interactive configuration manager for adding, editing, deleting, and switching saved configs, while `ov config show`, `ov config validate`, and `ov config switch` remain explicit subcommands. New `ov language` / `ov lang` selects the display language, `ov status [--verbose]` provides aggregated diagnostics, and `ov health` plus runtime errors render with clearer guidance.
+- **Web Studio Playground and identity management**: Studio adds a Playground with a context tree, Terminal, and Agent panel, plus a Connection & Identity page that can save connection state, select account/user identity, create accounts and users, and copy or regenerate API keys.
+- **Config-driven VikingBot experience recall**: New `bot.ov_server.recall_exp_first_round_only`, `exp_recall_limit`, and `exp_recall_max_chars` inject agent experience only on the first turn, and both local and remote modes isolate experience namespaces by incoming `agent_id`.
+- **Simpler resource watches**: `add_resource` no longer requires an explicit `to` when `watch_interval > 0`; when the import returns a stable `root_uri`, the watch task binds to it automatically, with CLI, MCP, and docs examples updated to match.
+- **Structured plugin tool results and CJK token estimation**: Claude Code and OpenClaw plugins now write structured tool parts instead of flattening calls and results into text only, and CJK-aware token estimation is shared across Python and plugin code to reduce budget underestimation for Chinese, Japanese, and Korean sessions.
+
+### Upgrade Notes
+
+- `ov config setup-cli` has been removed; use bare `ov config` for setup. On first use the new CLI prompts for a display language in interactive shells, so non-interactive automation should run `ov language en` or `ov language zh-CN` first.
+- `ov status` now defaults to a curated diagnostic view; use `ov status --verbose` or `-o json` for raw component data.
+- `ovcli.conf` defaults to `http://127.0.0.1:1933`, and config serialization now omits default and empty fields.
+- Semantic processing concurrency now defaults to 64 instead of 100, and the documented `vlm.max_concurrent` default is corrected to 64. Local directory uploads now skip symlinks to avoid recursive, duplicate, or out-of-scope ingestion.
+
+[Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.3.22...v0.3.23)
+
+## v0.3.22 (2026-05-29)
+
+### Highlights
+
+- **Configurable retrieval query planner**: Added a lightweight query-planner config so the intent-analysis model used during retrieval can be selected and tuned.
+- **Legacy Memory V1 removed**: The deprecated memory v1 path was removed, and the memory `version` field now rejects `v1` payloads.
+- **LangChain reliability**: Stale OpenViking clients are now recovered automatically, and LangChain integrations can perform local batch message writes.
+- **VikingDB robustness**: Vector search now skips candidates with corrupted JSON fields, and `ap-southeast-1` region host mappings were added for VikingDB.
+- **CLI and server polish**: The `ov` CLI reports a missing CLI config before issuing server requests, server-mode terminology was clarified from `dev-implicit` to `dev`, and embedding input truncation was unified.
+
+### Upgrade Notes
+
+- Memory V1 has been removed; callers must use the current memory `version`, and `v1` payloads are now rejected.
+- Server-mode wording changed from `dev-implicit` to `dev`; update scripts or dashboards that match on the previous term.
+
+[Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.3.21...v0.3.22)
+
+## v0.3.21 (2026-05-27)
+
+### Highlights
+
+- **More retrievable trajectory memory**: The trajectory schema now has `retrieval_anchor` and an `embedding_template`, so vector indexing uses `trajectory_name + retrieval_anchor` instead of the full operation contract. Experiences and trajectories are connected with system-managed `derived_from` `StoredLink` records (forward `links` + reverse `backlinks`), replacing fragile `source_trajectories` metadata.
+- **Batch session message ingestion**: Added `POST /api/v1/sessions/{session_id}/messages/batch` and `ov session add-messages` to add multiple messages in one call (useful for history import and memory extraction); `ov add-memory` now uses the same stricter JSON message parser.
+- **OpenClaw search is now `ov_search`**: The OpenViking OpenClaw plugin no longer registers `memory_search`, avoiding collisions with OpenClaw built-ins. Use `ov_search` or `/ov-search` after importing resources or skills.
+- **Stronger URL and document parsing**: HTTP import detection now recognizes image, audio, video, Office, EPUB, and zip downloads, and re-checks headers after `GET` when `HEAD` is unreliable. Local Word/PowerPoint/Excel/EPUB/legacy-doc conversions now run in worker threads so they no longer block the event loop.
+- **Web Studio ships with Python installs**: `setup`/`build` now builds and bundles the Web Studio static assets, so `/studio` works from pip/pipx installs without Docker.
+- **NVIDIA NIM through LiteLLM VLM**: Model names containing `nvidia_nim` or `nemotron` now route through the NVIDIA NIM LiteLLM prefix and `NVIDIA_NIM_API_KEY`.
+- **tau2/VikingBot benchmark runner**: Added `benchmark/tau2/vikingbot` for cold start, train trajectory commits, repeated test averaging, and cross-epoch self-improvement; the previous tau2 LLM harness moved to `benchmark/tau2/llm`.
+
+### Upgrade Notes
+
+- OpenClaw users should migrate `/memory-search` and `memory_search` calls to `/ov-search` and `ov_search`.
+- pip/pipx and Docker builds now produce the Web Studio bundle through the Python build path; set `OV_SKIP_STUDIO_BUILD=1` to skip the Studio build during local development.
+- `content.read` adds a `raw=true` parameter; default reads still hide memory internals for compatibility.
+
+[Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.3.20...v0.3.21)
+
+## v0.3.20 (2026-05-25)
+
+### Highlights
+
+- **Request-scoped HTTP profiling**: Servers can enable `server.profile_enabled`; requests with `profile=1` then run `cProfile` for only that HTTP request and append `profile` lines to JSON responses. The `ov` CLI can enable and display this with `--profile`.
+- **Batch Session message ingestion**: Added `POST /api/v1/sessions/{session_id}/messages/batch` plus Python HTTP client and Session wrapper support via `batch_add_messages` (up to 100 messages per request), reducing HTTP round trips for LangChain/LangGraph-style integrations.
+- **Memory embedding templates**: Memory schemas now support a top-level `embedding_template`, replacing field-level `searchable` flags. The built-in `entities`, `events`, and `preferences` templates include key fields plus final content in embedding input.
+- **Semantic indexing reliability**: Resource processing now syncs temp source trees into the target before running the semantic DAG (diff results use target URIs); stale semantic lock handoffs can be recovered by reacquiring tree locks, and lock acquisition failures requeue work instead of tripping the API circuit breaker.
+- **Embedding input guardrails**: Embedding queue input is truncated according to `embedding.max_input_tokens`, and oversized-input errors are classified as `input_too_large` to avoid repeated retries for unrecoverable payloads.
+
+### Upgrade Notes
+
+- If a custom memory schema still uses field-level `searchable: true`, migrate it to top-level `embedding_template`; field-level `searchable` no longer contributes to embedding text generation.
+- Rename `memory.enable_role_id_memory_isolate` to `memory.role_id_memory_isolation_enabled` in custom `ov.conf` files.
+- Treat `profile=1` as a debugging tool, not a high-traffic production default. Profile output is capped at about 16 KiB.
+- The batch message endpoint accepts up to 100 messages per request.
+
+[Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.3.19...v0.3.20)
+
 ## v0.3.19 (2026-05-22)
 
 ### Highlights
@@ -30,7 +105,7 @@ This changelog is automatically generated from [GitHub Releases](https://github.
 - **Web Studio as the default console**: Added the `web-studio` console workspace, shipped it in Docker and pip distributions, served it at `/studio`, moved OAuth authorize UI into it, and retired the legacy console while keeping favicon compatibility routes.
 - **MCP, API, and CLI automation**: Added Watch Management across REST, `ov`, and MCP; added progressive single-entrypoint local-file upload; added `code_outline`, `code_search`, and `code_expand`; and tightened upload-only and zip `--ignore-dirs` handling.
 - **Agent and OpenClaw ecosystem**: OpenClaw setup helper now supports npm plugin installs, plugin docs align with ClawHub package metadata, `ov_dream` was added as an OpenClaw skill, and oversized OpenClaw tool results can be externalized to OpenViking.
-- **Memory and retrieval**: Upgraded trajectory extraction, added memory link support, added switchable Vaka memory templates, fixed missing tool-call counts and missing `role_id` retrieval, and parallelized hierarchical child search.
+- **Memory and retrieval**: Upgraded trajectory extraction, added memory link support, added switchable Vaka memory templates, fixed missing tool-call counts and missing message-peer retrieval, and parallelized hierarchical child search.
 - **Storage, VectorDB, and model reliability**: Async storage locks/IO and loop-isolated async clients reduce contention; fixes cover semantic lock ownership, false `mv not found`, URI remapping, S3 grep performance, VectorDB Unicode recovery, oversized byte rows, embedding error surfacing, and VLM LiteLLM native routes.
 - **Observability, docs, and deployment polish**: Added VikingBot feedback observability, centralized the metric registry, moved usage audit SQLite into system data, refreshed Helm chart defaults, updated brand assets and QR code, and documented public base URL, signed upload TTLs, Watch APIs, MCP code tools, readiness probes, and the `/studio` migration.
 
@@ -53,11 +128,11 @@ This changelog is automatically generated from [GitHub Releases](https://github.
 - **Native CLI distribution**: New `@openviking/cli` npm package installs the platform `ov` binary via `npm i -g @openviking/cli`; Rust CLI release pipeline adds Linux musl artifacts, npm trusted publishing, and a broader integration test suite.
 - **Retrieval and filesystem**: `find` / `search` accept a `level` filter for L0 abstracts, L1 overviews, and L2 file hits. Resource files gained a Phase 1 WebDAV adapter, and `observer.filesystem` exposes filesystem-level observability.
 - **Console and Usage/Audit**: New Usage/Audit module and `/api/v1/console/*` BFF aggregate token usage, retrieval counts, context commit heatmaps, request audit logs, and context inventory from the existing observability event bus.
-- **Storage and concurrency reliability**: Strengthened exact-path and lifecycle locks fix content-write races; blocking backend calls moved off the event loop; QueueFS SQLite persistence expanded; `storage.task_tracker.backend` adds a `persistent` backend for cross-instance task lookup.
+- **Storage and concurrency reliability**: Strengthened exact-path and lifecycle locks fix content-write races; blocking backend calls moved off the event loop; QueueFS SQLite persistence expanded; task records are now persisted for cross-instance lookup; Git repository `add_resource(wait=false)` returns a reserved `root_uri` plus persistent task progress while ingestion completes.
 
 ### Upgrade Notes
 
-- `storage.task_tracker.backend` is new. Single-instance deployments can keep the default `memory`; multi-instance or restart-survivable deployments should switch to `persistent`.
+- `storage.task_tracker` is deprecated and ignored. Task records are always persisted under each account's `_system/tasks` directory.
 - `vlm.backup` is a single-tier failover and only triggers on retryable errors (rate limit, `5xx`, connection failure, timeout). Auth, authorization, and billing failures do not trigger failover.
 - `vlm.extra_request_body` is merged into the OpenAI SDK / LiteLLM `extra_body`, useful for Ollama, OpenAI-compatible gateways, and providers requiring extra JSON fields.
 - New Codex memory plugin deployments should prefer `OPENVIKING_*` environment variables for tuning; the legacy `codex.*` block in `ov.conf` remains supported for backward compatibility but is no longer recommended.
@@ -72,14 +147,14 @@ This changelog is automatically generated from [GitHub Releases](https://github.
 - **Observability**: OTLP export now supports custom `headers` for traces, logs, and metrics, enabling direct connection to backends that require extra auth or gRPC metadata.
 - **Upload**: Local directory scans and uploads now respect root and nested `.gitignore` rules, reducing noise from build artifacts and temp files.
 - **Search**: `search` and `find` now accept multiple target URIs for cross-directory and cross-repo retrieval.
-- **Multi-tenant**: OpenClaw plugin clarifies `agent_prefix` as prefix-only; OpenCode memory plugin adds tenant header forwarding.
-- **Admin**: New agent namespace discovery API, CLI command, and docs for listing existing agent namespaces under an account.
+- **Multi-tenant**: OpenClaw plugin clarifies `peer_prefix` as peer metadata only; OpenCode memory plugin adds tenant header forwarding.
+- **Admin**: Deprecated agent namespace discovery surfaces are removed.
 
 ### Upgrade Notes
 
 - OTLP backends requiring extra auth can now use `headers` across all three exporter types (gRPC metadata in gRPC mode, HTTP headers in HTTP mode).
 - Local directory uploads will now filter files per `.gitignore` by default — previously imported temp/generated files may be excluded after upgrade.
-- OpenClaw plugin `agent_prefix` is now prefix-only and no longer treated as a full agent identifier; docs migrate `agentId` → `agent_prefix`.
+- OpenClaw plugin runtime identity now maps through `peer_prefix` peer metadata instead of an OpenViking agent namespace.
 
 [Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.3.13...v0.3.14)
 
@@ -98,7 +173,7 @@ This changelog is automatically generated from [GitHub Releases](https://github.
 ### Upgrade Notes
 
 - `encryption.api_key_hashing.enabled` must now be configured explicitly (defaults to `false`). If you relied on implicit hashing, add it to your config.
-- OpenClaw plugin is remote-only (no local subprocess), `agentId` → `agent_prefix`, `recallTokenBudget` → `recallMaxInjectedChars`.
+- OpenClaw plugin is remote-only (no local subprocess), runtime agent identity moved to peer metadata, `recallTokenBudget` → `recallMaxInjectedChars`.
 
 [Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.3.12...v0.3.13)
 
@@ -130,7 +205,7 @@ This changelog is automatically generated from [GitHub Releases](https://github.
 - Adjusted the default `recallTokenBudget` and `recallMaxContentChars` to reduce the risk of overlong OpenClaw auto-recall context injection.
 - `ov add-memory` now returns `OK` for asynchronous commit workflows instead of implying the background task has already finished.
 - `ov chat` now reads authentication from `ovcli.conf` and sends the required request headers.
-- The OpenClaw plugin now aligns remote connection behavior, auth, namespace, and `role_id` handling with the server multi-tenant model.
+- The OpenClaw plugin now aligns remote connection behavior, auth, namespace, and `peer_id` handling with the server multi-tenant model.
 
 ### Fixes
 
@@ -338,7 +413,7 @@ This release focuses on stability and developer experience improvements. Key fix
 
 ### Highlights
 
-- OpenClaw plugin upgraded to 2.0 (context engine), OpenCode memory plugin added, multi-agent memory isolation via `agentId`.
+- OpenClaw plugin upgraded to 2.0 (context engine), OpenCode memory plugin added, multi-agent memory isolation via peer metadata.
 - Memory cold-storage archival with hotness scoring, chunked vectorization for long memories, `used()` tracking interface.
 - Rerank integration in hierarchical retrieval, RetrievalObserver for quality metrics.
 - Resource watch scheduling, reindex endpoint, legacy `.doc`/`.xls` parser support, path locking and crash recovery.

@@ -10,7 +10,7 @@ embedding_template: |-
 
   {{ retrieval_anchor }}
 
-directory: "viking://agent/{{ agent_space }}/memories/trajectories"
+directory: "viking://user/{{ user_space }}/memories/trajectories"
 filename_template: "{{ trajectory_name }}_{{ extract_context.get_session_timestamp() }}.md"
 enabled: true
 operation_mode: "add_only"

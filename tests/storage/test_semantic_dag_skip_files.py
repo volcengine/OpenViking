@@ -106,7 +106,7 @@ async def test_messages_jsonl_excluded_from_summary(monkeypatch):
     )
 
     processor = _FakeProcessor()
-    ctx = RequestContext(user=UserIdentifier("acc1", "user1", "agent1"), role=Role.USER)
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
     executor = SemanticDagExecutor(
         processor=processor,
         context_type="session",
@@ -143,7 +143,7 @@ async def test_messages_jsonl_excluded_in_subdirectory(monkeypatch):
     )
 
     processor = _FakeProcessor()
-    ctx = RequestContext(user=UserIdentifier("acc1", "user1", "agent1"), role=Role.USER)
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
     executor = SemanticDagExecutor(
         processor=processor,
         context_type="session",

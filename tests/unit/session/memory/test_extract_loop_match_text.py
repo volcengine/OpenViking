@@ -51,7 +51,7 @@ class TestResolveOperations:
 
         isolation_handler = Mock()
         isolation_handler.get_read_scope.return_value = None
-        isolation_handler.fill_role_ids.side_effect = lambda item, role_scope=None: item
+        isolation_handler.fill_identity_fields.side_effect = lambda item, role_scope=None: item
 
         loop = ExtractLoop(
             vlm=Mock(model="test-model"),
@@ -492,10 +492,10 @@ class TestResolveOperations:
         loop._extract_context = Mock()
         loop._extract_context.page_id_map = Mock()
         loop._extract_context.page_id_map._id_to_uri = {
-            100: "viking://agent/agent_sample_0/memories/trajectories/a.md"
+            100: "viking://user/user_sample_0/memories/trajectories/a.md"
         }
         loop._extract_context.page_id_map.resolve.side_effect = lambda page_id: {
-            100: "viking://agent/agent_sample_0/memories/trajectories/a.md"
+            100: "viking://user/user_sample_0/memories/trajectories/a.md"
         }.get(page_id)
         loop._extract_context.page_id_map.register_new_page_id = Mock()
 
@@ -511,7 +511,7 @@ class TestResolveOperations:
         mock_error.assert_not_called()
         mock_info.assert_any_call(
             "Skipping link with unresolved page_ids: f=100, t=102, "
-            "from_uri=viking://agent/agent_sample_0/memories/trajectories/a.md, to_uri=None, "
+            "from_uri=viking://user/user_sample_0/memories/trajectories/a.md, to_uri=None, "
             "op_page_map_keys=[]"
         )
 
@@ -580,7 +580,7 @@ class TestPageIdInstruction:
 
         isolation_handler = Mock()
         isolation_handler.get_read_scope.return_value = None
-        isolation_handler.fill_role_ids.side_effect = lambda item, role_scope=None: item
+        isolation_handler.fill_identity_fields.side_effect = lambda item, role_scope=None: item
         isolation_handler.calculate_memory_uris.return_value = [
             "viking://user/alice/memories/experiences/chat.md"
         ]
@@ -659,7 +659,7 @@ class TestPageIdInstruction:
 
         isolation_handler = Mock()
         isolation_handler.get_read_scope.return_value = None
-        isolation_handler.fill_role_ids.side_effect = lambda item, role_scope=None: item
+        isolation_handler.fill_identity_fields.side_effect = lambda item, role_scope=None: item
         isolation_handler.calculate_memory_uris.return_value = [
             "viking://user/alice/memories/experiences/chat.md"
         ]
@@ -735,7 +735,7 @@ class TestFinalOperationsHydration:
 
         isolation_handler = Mock()
         isolation_handler.get_read_scope.return_value = "user://Caroline"
-        isolation_handler.fill_role_ids.side_effect = lambda item, role_scope=None: item
+        isolation_handler.fill_identity_fields.side_effect = lambda item, role_scope=None: item
 
         loop = ExtractLoop(
             vlm=Mock(model="test-model"),

@@ -218,8 +218,8 @@ def _memory_corpus_dir(config: dict[str, Any], configured_run_id: str, corpus_ke
     return output_dir(config, configured_run_id) / "memory_corpora" / corpus_key
 
 
-def _search_uri(agent_id: str, search_memory_type: str) -> str:
-    return f"viking://agent/{agent_id}/memories/{search_memory_type}"
+def _search_uri(search_memory_type: str) -> str:
+    return f"viking://user/memories/{search_memory_type}"
 
 
 def _train_transcript_format(strategy: dict[str, Any]) -> str:
@@ -246,7 +246,7 @@ def _manifest_openviking_identity(corpus_dir: Path) -> dict[str, str] | None:
     except json.JSONDecodeError:
         return None
     openviking = manifest.get("openviking") or {}
-    required = ("account", "user", "agent_id", "search_uri")
+    required = ("account", "user", "search_uri")
     if not all(openviking.get(key) for key in required):
         return None
     return {key: str(openviking[key]) for key in required}
@@ -311,17 +311,14 @@ def _tau2_command(
         reuse_identity = _manifest_openviking_identity(corpus_dir)
         if reuse_identity is not None:
             account = reuse_identity["account"]
-            agent_id = reuse_identity["agent_id"]
             user = reuse_identity["user"]
             search_uri = ""
         elif openviking.get("reuse_corpus_across_runs", False):
             account = f"{openviking['account']}-{corpus_key}"
-            agent_id = f"{openviking['agent_id']}-{domain}-{corpus_id}"
             user = f"tau2-{domain}-{corpus_id}"
             search_uri = ""
         else:
             account = f"{openviking['account']}-{configured_run_id}-{domain}-{corpus_id}"
-            agent_id = f"{openviking['agent_id']}-{domain}-{corpus_id}"
             user = f"tau2-{domain}-{corpus_id}"
             search_uri = ""
         search_memory_type = str(strategy.get("search_memory_type", "experiences"))
@@ -330,7 +327,7 @@ def _tau2_command(
                 f"Unsupported search_memory_type for {strategy['id']}: {search_memory_type}"
             )
         if not search_uri:
-            search_uri = _search_uri(agent_id, search_memory_type)
+            search_uri = _search_uri(search_memory_type)
         budget = _retrieval_budget(config, strategy)
         command = [
             sys.executable,
@@ -369,8 +366,6 @@ def _tau2_command(
             account,
             "--openviking-user",
             user,
-            "--openviking-agent-id",
-            agent_id,
             "--openviking-timeout",
             str(openviking.get("timeout_seconds", 600.0)),
             "--openviking-wait-timeout",

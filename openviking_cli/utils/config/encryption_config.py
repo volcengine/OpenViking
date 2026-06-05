@@ -30,6 +30,24 @@ class VaultEncryptionProviderConfig(BaseModel):
         default="transit", description="HashiCorp Vault transit secrets engine mount point"
     )
     key_name: str = Field(default="openviking-root", description="HashiCorp Vault key name")
+    kv_mount_point: str = Field(
+        default="secret",
+        description="KV secrets engine mount point for persisting the encrypted root key",
+    )
+    kv_version: int = Field(
+        default=1,
+        ge=1,
+        le=2,
+        description="KV secrets engine version (1 or 2)",
+    )
+    root_key_name: str = Field(
+        default="openviking-root-key",
+        description="Transit engine key name used for envelope encryption (primary, preferred over key_name)",
+    )
+    encrypted_root_key_key: str = Field(
+        default="openviking-encrypted-root-key",
+        description="KV path under which the encrypted root key is stored",
+    )
 
 
 class VolcengineKMSEncryptionProviderConfig(BaseModel):

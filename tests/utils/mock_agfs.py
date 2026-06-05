@@ -5,8 +5,9 @@ from unittest.mock import MagicMock
 
 class MockLocalAGFS:
     """
-    A mock implementation of AGFSClient that operates on a local directory.
-    Useful for tests where running a real AGFS server is not feasible or desired.
+    A mock implementation of the AGFS binding client that operates on a local
+    directory. Useful for tests where running the real RAGFS binding is not
+    feasible or desired.
     """
 
     def __init__(self, config=None, root_path=None):

@@ -49,12 +49,12 @@ def create_openviking_tools(
     account: str | None = None,
     user: str | None = None,
     user_id: str | None = None,
-    agent_id: str | None = None,
     path: str | None = None,
     timeout: float = 60.0,
     extra_headers: dict[str, str] | None = None,
     auto_initialize: bool = True,
     profile: str = "agent",
+    peer_id: str | None = None,
     tool_names: Iterable[str] | None = None,
     allow_forget: bool = False,
 ) -> list[StructuredTool]:
@@ -78,7 +78,6 @@ def create_openviking_tools(
                     account=account,
                     user=user,
                     user_id=user_id,
-                    agent_id=agent_id,
                     path=path,
                     timeout=timeout,
                     extra_headers=extra_headers,
@@ -106,6 +105,7 @@ def create_openviking_tools(
             "find",
             query=query,
             target_uri=target_uri,
+            peer_id=peer_id,
             limit=limit,
             score_threshold=min_score,
         )
@@ -135,6 +135,7 @@ def create_openviking_tools(
             query=query,
             target_uri=target_uri,
             session_id=session_id,
+            peer_id=peer_id,
             limit=limit,
             score_threshold=min_score,
         )
@@ -285,6 +286,7 @@ def create_openviking_tools(
                 role=message["role"],
                 content=message.get("content"),
                 parts=message.get("parts"),
+                peer_id=peer_id,
             )
         result: dict[str, Any] = {
             "session_id": session_id,

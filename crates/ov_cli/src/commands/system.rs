@@ -50,13 +50,14 @@ pub async fn diagnostic_status(
                 status_ui::render_status(&response, config, meta.active_name.as_deref(),)?
             );
         }
-        Err(_) => {
+        Err(error) => {
             print!(
                 "{}",
                 status_ui::render_unreachable_status(
                     config,
                     meta.active_name.as_deref(),
                     meta.saved_count,
+                    Some(&error),
                 )
             );
         }

@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Tests for MiniMax provider support (MiniMax-M2.7, MiniMax-M2.7-highspeed)."""
+"""Tests for MiniMax provider support (MiniMax-M3, MiniMax-M2.7, MiniMax-M2.7-highspeed)."""
 
 from urllib.parse import urlparse
 
@@ -28,6 +28,12 @@ class TestMiniMaxRegistry:
         assert not spec.is_gateway
         assert not spec.is_local
 
+    def test_minimax_m3_matched_by_keyword(self):
+        """MiniMax-M3 should be matched to the minimax ProviderSpec."""
+        spec = find_by_model("MiniMax-M3")
+        assert spec is not None, "MiniMax-M3 not matched to any provider"
+        assert spec.name == "minimax"
+
     def test_minimax_m2_7_matched_by_keyword(self):
         """MiniMax-M2.7 should be matched to the minimax ProviderSpec."""
         spec = find_by_model("MiniMax-M2.7")
@@ -42,7 +48,7 @@ class TestMiniMaxRegistry:
 
     def test_minimax_keyword_is_case_insensitive(self):
         """Model name matching must be case-insensitive."""
-        for model in ("minimax-m2.7", "MINIMAX-M2.7", "MiniMax-M2.7"):
+        for model in ("minimax-m2.7", "MINIMAX-M2.7", "MiniMax-M2.7", "MiniMax-m3"):
             spec = find_by_model(model)
             assert spec is not None, f"{model!r} not matched"
             assert spec.name == "minimax"
@@ -70,6 +76,11 @@ class TestMiniMaxModelPrefixResolution:
             if not any(model.startswith(s) for s in spec.skip_prefixes):
                 model = f"{spec.litellm_prefix}/{model}"
         return model
+
+    def test_m3_gets_minimax_prefix(self):
+        """MiniMax-M3 should be prefixed as minimax/MiniMax-M3."""
+        resolved = self._resolve_model("MiniMax-M3")
+        assert resolved == "minimax/MiniMax-M3"
 
     def test_m2_7_gets_minimax_prefix(self):
         """MiniMax-M2.7 should be prefixed as minimax/MiniMax-M2.7."""
@@ -106,6 +117,18 @@ class TestMiniMaxSystemMessageHandling:
     # ------------------------------------------------------------------ #
     # LiteLLMProvider tests (model name after prefix resolution)
     # ------------------------------------------------------------------ #
+
+    def test_litellm_system_message_merged_for_m3(self):
+        """System message is merged into the first user message for minimax/MiniMax-M3."""
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "Hello!"},
+        ]
+        result = self._handle_system_litellm("minimax/MiniMax-M3", messages)
+        assert all(m["role"] != "system" for m in result), "System message not removed"
+        user_content = next(m["content"] for m in result if m["role"] == "user")
+        assert "You are a helpful assistant." in user_content
+        assert "Hello!" in user_content
 
     def test_litellm_system_message_merged_for_m2_7(self):
         """System message is merged into the first user message for minimax/MiniMax-M2.7."""

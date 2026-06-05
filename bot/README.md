@@ -171,6 +171,7 @@ All configurations are under the `bot` field in `ov.conf`, with default values f
 - `gateway`: Gateway configuration
   - `host`: Gateway listening address, default value is `0.0.0.0`
   - `port`: Gateway listening port, default value is `18790`
+  - `token`: Gateway authentication token. Required when `host` is non-localhost (such as the default `0.0.0.0`) — the gateway refuses to start without it (`SECURITY: bot.gateway.token is required when gateway.host is non-localhost`). Set a random secret; clients then send it in the `X-Gateway-Token` header.
 - `sandbox`: Sandbox configuration
   - `mode`: Sandbox mode, optional values are `shared` (all sessions share workspace) or `private` (private, workspace isolated by Channel and session). Default value is `shared`.
 - `ov_server`: OpenViking Server configuration.
@@ -181,6 +182,9 @@ All configurations are under the `bot` field in `ov.conf`, with default values f
     - `account_id`: Defaults to `default`, which is the OpenViking account ID. All users under the same OpenViking account share resources.
     - `api_key_type`: Optional `root` or `user`, default `root`. `root` keeps the original root-key fanout behavior; `user` switches the bot to the user-key flow for OpenViking client calls. For a hosted remote OpenViking service, `user` is usually the recommended choice.
     - exp_write_tools: Optional list of tool names that trigger experience-memory injection before the call (self-evolving agent memory loop, see #2007). Defaults to `["write_file", "edit_file"]`. Injection only fires when the OpenViking server has `memory.agent_memory_enabled` set; otherwise this list is harmless.
+    - `recall_exp_first_round_only`: Optional. When `true`, `ContextBuilder._build_user_memory` skips per-turn user/agent experience recall and injects experiences only once on the first user turn. Defaults to `false`.
+    - `exp_recall_limit`: Optional. Number of experiences to retrieve per task during recall. Defaults to `5`.
+    - `exp_recall_max_chars`: Optional. Character budget for the formatted experience block injected into context. Defaults to `2000`.
 - `channels`: Message platform configuration, see [Message Platform Configuration](bot/docs/CHANNEL.md) for details
 
 ```json
@@ -327,7 +331,7 @@ Provider configuration is read from OpenViking config (`vlm` section in `ov.conf
 > - **Groq** provides free voice transcription via Whisper. If configured, Telegram voice messages will be automatically transcribed.
 > - **Zhipu Coding Plan**: If you're on Zhipu's coding plan, set `"apiBase": "https://open.bigmodel.cn/api/coding/paas/v4"` in your zhipu provider config.
 > - **MiniMax (Mainland China)**: If your API key is from MiniMax's mainland China platform (minimaxi.com), set `"apiBase": "https://api.minimaxi.com/v1"` in your minimax provider config.
-> - **MiniMax Recommended Models**: `MiniMax-M2.7` (peak performance) and `MiniMax-M2.7-highspeed` (faster, more agile). Configure with `"model": "MiniMax-M2.7"` in your agent config.
+> - **MiniMax Recommended Models**: `MiniMax-M3` (flagship, default), `MiniMax-M2.7` (peak performance) and `MiniMax-M2.7-highspeed` (faster, more agile). Configure with `"model": "MiniMax-M3"` in your agent config.
 
 | Provider | Purpose | Get API Key |
 |----------|---------|-------------|

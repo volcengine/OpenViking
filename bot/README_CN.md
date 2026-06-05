@@ -174,6 +174,7 @@ bot 将连接到远程 OpenViking Server，使用前请先启动 OpenViking Serv
 - `gateway`：Gateway 配置
   - host：Gateway 监听地址，默认值为 `0.0.0.0`
   - port：Gateway 监听端口，默认值为 `18790`
+  - token：Gateway 鉴权 token。当 `host` 为非 localhost 地址（例如默认的 `0.0.0.0`）时必须设置——否则网关会拒绝启动（`SECURITY: bot.gateway.token is required when gateway.host is non-localhost`）。请设置为随机密钥；客户端通过 `X-Gateway-Token` 请求头携带。
 - `sandbox`：沙箱配置
   - `mode`：沙箱模式，可选值为 `shared`（所有 session 共享工作空间）或 `private`（私有，按 Channel、session 隔离工作空间）。默认值为 `shared`。
 - `ov_server`：OpenViking Server 配置
@@ -184,6 +185,9 @@ bot 将连接到远程 OpenViking Server，使用前请先启动 OpenViking Serv
     - `account_id`：默认值为 `default`，即 OpenViking 的账号 ID。同一 OpenViking account 下的所有 user 共享 resources。
     - `api_key_type`：可选 `root` 或 `user`，默认 `root`。`root` 保留原有的 root-key fanout 行为；`user` 切换 bot 走 user-key 流程调用 OpenViking 客户端。对于托管型远端 OpenViking 服务，通常推荐使用 `user`。
     - `exp_write_tools`：可选，触发经验记忆注入的工具名列表（自演化 agent memory 循环，详见 #2007）。默认 `["write_file", "edit_file"]`。注入仅在 OpenViking Server 启用 `memory.agent_memory_enabled` 时生效，否则此列表无作用。
+    - `recall_exp_first_round_only`：可选。为 `true` 时，`ContextBuilder._build_user_memory` 跳过每轮 user/agent 经验召回，仅在首个 user turn 注入一次经验。默认 `false`。
+    - `exp_recall_limit`：可选。召回时每个任务检索的经验条数。默认 `5`。
+    - `exp_recall_max_chars`：可选。注入到上下文的格式化经验块的字符预算。默认 `2000`。
 - `channels`：消息平台配置，详见 [消息平台配置](bot/docs/CHANNEL.md)
 
 ```json

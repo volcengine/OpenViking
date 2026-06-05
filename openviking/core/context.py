@@ -73,7 +73,6 @@ class Context:
         user: Optional[UserIdentifier] = None,
         account_id: Optional[str] = None,
         owner_user_id: Optional[str] = None,
-        owner_agent_id: Optional[str] = None,
         owner_space: Optional[str] = None,
         id: Optional[str] = None,
     ):
@@ -108,9 +107,6 @@ class Context:
         self.owner_user_id = (
             owner_user_id if owner_user_id is not None else owner_fields["owner_user_id"]
         )
-        self.owner_agent_id = (
-            owner_agent_id if owner_agent_id is not None else owner_fields["owner_agent_id"]
-        )
         self.owner_space = owner_space or self._derive_owner_space(user)
         self.vector: Optional[List[float]] = None
         self.vectorize = Vectorize(abstract)
@@ -119,8 +115,6 @@ class Context:
         """Best-effort owner space derived from URI and user."""
         if not user:
             return ""
-        if self.uri.startswith("viking://agent/"):
-            return user.agent_id
         if self.uri.startswith("viking://user/") or self.uri.startswith("viking://session/"):
             return user.user_id
         return ""
@@ -181,7 +175,6 @@ class Context:
             "session_id": self.session_id,
             "account_id": self.account_id,
             "owner_user_id": self.owner_user_id,
-            "owner_agent_id": self.owner_agent_id,
             "owner_space": self.owner_space,
         }
         if self.level is not None:
@@ -243,7 +236,6 @@ class Context:
             user=user_obj,
             account_id=data.get("account_id"),
             owner_user_id=data.get("owner_user_id"),
-            owner_agent_id=data.get("owner_agent_id"),
             owner_space=data.get("owner_space"),
         )
         obj.id = data.get("id", obj.id)

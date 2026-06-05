@@ -17,16 +17,18 @@ class OpenVikingAPIClient:
         base_url: Optional[str] = None,
         server_url: Optional[str] = None,
         api_key: Optional[str] = None,
+        root_api_key: Optional[str] = None,
         account: Optional[str] = None,
         user: Optional[str] = None,
-        agent: Optional[str] = None,
+        send_identity_headers: bool = False,
     ):
         self.base_url = base_url or Config.CONSOLE_URL
         self.server_url = server_url or Config.SERVER_URL
         self.api_key = api_key or Config.OPENVIKING_API_KEY
+        self.root_api_key = root_api_key or Config.OPENVIKING_ROOT_API_KEY
         self.account = account or Config.OPENVIKING_ACCOUNT
         self.user = user or Config.OPENVIKING_USER
-        self.agent = agent or Config.OPENVIKING_AGENT
+        self.send_identity_headers = send_identity_headers
         self.session = requests.Session()
         self._setup_default_headers()
         self.max_retries = 3
@@ -61,8 +63,13 @@ class OpenVikingAPIClient:
             return data
 
     def _request_with_retry(self, method: str, url: str, **kwargs) -> requests.Response:
-        filtered_headers = self._filter_sensitive_headers(dict(self.session.headers))
-        filtered_kwargs = self._filter_sensitive_data(kwargs)
+        request_headers = dict(self.session.headers)
+        if kwargs.get("headers"):
+            request_headers.update(kwargs["headers"])
+        filtered_headers = self._filter_sensitive_headers(request_headers)
+        filtered_kwargs = self._filter_sensitive_data(
+            {key: value for key, value in kwargs.items() if key != "headers"}
+        )
 
         self.last_request_info = {
             "method": method,
@@ -108,13 +115,18 @@ class OpenVikingAPIClient:
             "Connection": "keep-alive",
             "Content-Type": "application/json",
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-            "X-OpenViking-Account": self.account,
-            "X-OpenViking-User": self.user,
-            "X-OpenViking-Agent": self.agent,
         }
+        if self.send_identity_headers:
+            headers["X-OpenViking-Account"] = self.account
+            headers["X-OpenViking-User"] = self.user
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         self.session.headers.update(headers)
+
+    def _admin_headers(self) -> Dict[str, str]:
+        if not self.root_api_key:
+            return {}
+        return {"Authorization": f"Bearer {self.root_api_key}"}
 
     def _build_url(self, base: str, endpoint: str, params: Optional[Dict[str, Any]] = None) -> str:
         url = f"{base}{endpoint}"
@@ -162,12 +174,15 @@ class OpenVikingAPIClient:
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
+        peer_id: Optional[str] = None,
     ) -> requests.Response:
         endpoint = "/api/v1/search/find"
         url = self._build_url(self.server_url, endpoint)
         payload = {"query": query, "limit": limit}
         if target_uri:
             payload["target_uri"] = target_uri
+        if peer_id is not None:
+            payload["peer_id"] = peer_id
         if score_threshold is not None:
             payload["score_threshold"] = score_threshold
         if filter:
@@ -182,6 +197,7 @@ class OpenVikingAPIClient:
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
+        peer_id: Optional[str] = None,
     ) -> requests.Response:
         endpoint = "/api/v1/search/search"
         url = self._build_url(self.server_url, endpoint)
@@ -190,6 +206,8 @@ class OpenVikingAPIClient:
             payload["target_uri"] = target_uri
         if session_id:
             payload["session_id"] = session_id
+        if peer_id is not None:
+            payload["peer_id"] = peer_id
         if score_threshold is not None:
             payload["score_threshold"] = score_threshold
         if filter:
@@ -326,13 +344,13 @@ class OpenVikingAPIClient:
         session_id: str,
         role: str,
         content: str,
-        role_id: Optional[str] = None,
+        peer_id: Optional[str] = None,
     ) -> requests.Response:
         endpoint = f"/api/v1/sessions/{session_id}/messages"
         url = self._build_url(self.server_url, endpoint)
         payload = {"role": role, "content": content}
-        if role_id is not None:
-            payload["role_id"] = role_id
+        if peer_id is not None:
+            payload["peer_id"] = peer_id
         return self._request_with_retry("POST", url, json=payload)
 
     def fs_ls(self, uri: str, simple: bool = False, recursive: bool = False) -> requests.Response:
@@ -558,45 +576,52 @@ class OpenVikingAPIClient:
         endpoint = "/api/v1/admin/accounts"
         url = self._build_url(self.server_url, endpoint)
         return self._request_with_retry(
-            "POST", url, json={"account_id": account_id, "admin_user_id": admin_user_id}
+            "POST",
+            url,
+            json={"account_id": account_id, "admin_user_id": admin_user_id},
+            headers=self._admin_headers(),
         )
 
     def admin_list_accounts(self) -> requests.Response:
         endpoint = "/api/v1/admin/accounts"
         url = self._build_url(self.server_url, endpoint)
-        return self._request_with_retry("GET", url)
+        return self._request_with_retry("GET", url, headers=self._admin_headers())
 
     def admin_delete_account(self, account_id: str) -> requests.Response:
         endpoint = f"/api/v1/admin/accounts/{account_id}"
         url = self._build_url(self.server_url, endpoint)
-        return self._request_with_retry("DELETE", url)
+        return self._request_with_retry("DELETE", url, headers=self._admin_headers())
 
     def admin_register_user(
         self, account_id: str, user_id: str, role: str = "user"
     ) -> requests.Response:
         endpoint = f"/api/v1/admin/accounts/{account_id}/users"
         url = self._build_url(self.server_url, endpoint)
-        return self._request_with_retry("POST", url, json={"user_id": user_id, "role": role})
+        return self._request_with_retry(
+            "POST", url, json={"user_id": user_id, "role": role}, headers=self._admin_headers()
+        )
 
     def admin_list_users(self, account_id: str) -> requests.Response:
         endpoint = f"/api/v1/admin/accounts/{account_id}/users"
         url = self._build_url(self.server_url, endpoint)
-        return self._request_with_retry("GET", url)
+        return self._request_with_retry("GET", url, headers=self._admin_headers())
 
     def admin_remove_user(self, account_id: str, user_id: str) -> requests.Response:
         endpoint = f"/api/v1/admin/accounts/{account_id}/users/{user_id}"
         url = self._build_url(self.server_url, endpoint)
-        return self._request_with_retry("DELETE", url)
+        return self._request_with_retry("DELETE", url, headers=self._admin_headers())
 
     def admin_set_role(self, account_id: str, user_id: str, role: str) -> requests.Response:
         endpoint = f"/api/v1/admin/accounts/{account_id}/users/{user_id}/role"
         url = self._build_url(self.server_url, endpoint)
-        return self._request_with_retry("PUT", url, json={"role": role})
+        return self._request_with_retry(
+            "PUT", url, json={"role": role}, headers=self._admin_headers()
+        )
 
     def admin_regenerate_key(self, account_id: str, user_id: str) -> requests.Response:
         endpoint = f"/api/v1/admin/accounts/{account_id}/users/{user_id}/key"
         url = self._build_url(self.server_url, endpoint)
-        return self._request_with_retry("POST", url, json={})
+        return self._request_with_retry("POST", url, json={}, headers=self._admin_headers())
 
     def add_skill(
         self, data: Any, wait: bool = False, timeout: Optional[float] = None

@@ -242,7 +242,7 @@ python import_to_ov.py [选项]
 - `--sessions`: 指定会话范围，如 `1-4`
 - `--question-index`: 根据 question 的 evidence 自动推断需要的 session
 - `--force-ingest`: 强制重新导入
-- `--no-user-agent-id`: 不传入 user_id 和 agent_id 给 OpenViking 客户端
+- `--no-user-id`: 不传入 user_id 给 OpenViking 客户端
 - `--openviking-url`: OpenViking 服务地址，默认 `http://localhost:1933`
 - `--success-csv`: 成功记录 CSV 路径，默认 `./result/import_success.csv`
 - `--error-log`: 错误日志路径，默认 `./result/import_errors.log`
@@ -252,8 +252,8 @@ python import_to_ov.py [选项]
 # 导入所有数据（跳过已导入的）
 python import_to_ov.py
 
-# 强制重新导入，不使用 user/agent id
-python import_to_ov.py --force-ingest --no-user-agent-id
+# 强制重新导入，不使用 user id
+python import_to_ov.py --force-ingest --no-user-id
 
 # 只导入第 0 个 sample
 python import_to_ov.py --sample 0
