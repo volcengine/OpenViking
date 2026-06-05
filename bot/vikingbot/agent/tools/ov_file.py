@@ -272,23 +272,18 @@ class VikingSearchTool(OVFileTool):
         try:
             client = await self._get_client(tool_context)
             admin_user_id = client.admin_user_id
+            memory_user_ids = getattr(tool_context, "memory_user_ids", None)
             memory_peer_ids = getattr(tool_context, "memory_peer_ids", None)
-            legacy_memory_user_ids = getattr(tool_context, "memory_user_ids", None)
 
-            if not target_uri and (memory_peer_ids or legacy_memory_user_ids):
+            if not target_uri and (memory_user_ids or memory_peer_ids):
                 grouped_items = {
                     "memory": [],
                     "resource": [],
                     "skill": [],
                 }
 
-                if memory_peer_ids:
-                    search_requests = client.build_memory_search_requests(
-                        owner_user_id=tool_context.sender_id if client.should_sender_fanout() else None,
-                        peer_ids=memory_peer_ids,
-                    )
-                else:
-                    user_ids = legacy_memory_user_ids if client.should_sender_fanout() else [None]
+                if memory_user_ids:
+                    user_ids = memory_user_ids if client.should_sender_fanout() else [None]
                     deduped_user_ids: list[str | None] = []
                     for user_id in user_ids or []:
                         if user_id in deduped_user_ids:
@@ -298,6 +293,11 @@ class VikingSearchTool(OVFileTool):
                         {"target_uri": client._memory_target_uri(user_id), "peer_id": None}
                         for user_id in deduped_user_ids
                     ]
+                else:
+                    search_requests = client.build_memory_search_requests(
+                        owner_user_id=tool_context.sender_id if client.should_sender_fanout() else None,
+                        peer_ids=memory_peer_ids,
+                    )
 
                 for request in search_requests:
                     search_kwargs = {

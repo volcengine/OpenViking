@@ -156,9 +156,6 @@ class ChatChannel(BaseChannel):
                 self._last_response = None
 
                 sender_id = self.sender or "user"
-                metadata = {}
-                if self.config.memory_peer:
-                    metadata["memory_peer_ids"] = self.config.memory_peer
                 msg = InboundMessage(
                     session_key=SessionKey(
                         type="cli",
@@ -167,7 +164,6 @@ class ChatChannel(BaseChannel):
                     ),
                     sender_id=sender_id,
                     content=user_input,
-                    metadata=metadata,
                 )
                 await self.bus.publish_inbound(msg)
 

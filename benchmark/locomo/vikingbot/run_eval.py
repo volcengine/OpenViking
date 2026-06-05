@@ -235,7 +235,7 @@ def run_vikingbot_chat(
     sample_id: str | None = None,
     question_id: str | None = None,
     config: str | None = None,
-    memory_peers: list[str] | None = None,
+    memory_users: list[str] | None = None,
 ) -> tuple[str, dict, float, int, list]:
     """执行vikingbot chat命令，返回回答、token使用情况、耗时（秒）、迭代次数、使用的工具列表"""
     # 先执行 /new 命令清除会话
@@ -254,9 +254,9 @@ def run_vikingbot_chat(
                 question_id,
             ]
         )
-        if memory_peers:
-            for peer in memory_peers:
-                new_cmd.extend(["--memory-peer", peer])
+        if memory_users:
+            for user in memory_users:
+                new_cmd.extend(["--memory-user", user])
         try:
             # print(f'new_cmd={new_cmd}')
             subprocess.run(new_cmd, capture_output=True, text=True, timeout=300)
@@ -277,10 +277,10 @@ def run_vikingbot_chat(
     # 添加 --sender 作为 user_id，--session 作为会话隔离标识
     if sample_id:
         cmd.extend(["--sender", sample_id, "--session", question_id])
-    # 添加 --memory-peer 参数，指定检索哪些 peer 的记忆
-    if memory_peers:
-        for peer in memory_peers:
-            cmd.extend(["--memory-peer", peer])
+    # 添加 --memory-user 参数，指定检索哪些用户的记忆
+    if memory_users:
+        for user in memory_users:
+            cmd.extend(["--memory-user", user])
     start_time = time.time()
     try:
         # print(f'cmd={cmd}')
@@ -533,7 +533,7 @@ def main():
         if question_time:
             print(f"  [time context: {question_time}]")
         if speakers:
-            print(f"  [memory peers: {speakers}]")
+            print(f"  [memory users: {speakers}]")
 
         response, token_usage, time_cost, iteration, tools_used_names = run_vikingbot_chat(
             question,

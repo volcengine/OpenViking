@@ -62,10 +62,10 @@ class SingleTurnChannel(BaseChannel):
 
         # Send the message
         sender_id = self.sender or "user"
-        # Pass memory_peer through metadata
+        # Pass memory_user through metadata
         metadata = {}
-        if self.config.memory_peer:
-            metadata["memory_peer_ids"] = self.config.memory_peer
+        if self.config.memory_user:
+            metadata["memory_users"] = self.config.memory_user
         msg = InboundMessage(
             session_key=SessionKey(
                 type="cli",
