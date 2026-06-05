@@ -115,19 +115,12 @@ class SessionService:
     def _session_account_id(meta: SessionMeta) -> str:
         return getattr(meta, "created_by_account_id", "") or getattr(meta, "account_id", "")
 
-    def _session_is_visible_to_user(self, ctx: RequestContext, meta: SessionMeta) -> bool:
+    def _session_is_visible_in_account(self, ctx: RequestContext, meta: SessionMeta) -> bool:
         if ctx.role == Role.ROOT:
             return True
 
         account_id = self._session_account_id(meta)
-        if not account_id or account_id != ctx.account_id:
-            return False
-
-        if ctx.role == Role.ADMIN:
-            return True
-
-        user_id = ctx.user.user_id
-        return meta.created_by_user_id == user_id or user_id in meta.participant_user_ids
+        return bool(account_id and account_id == ctx.account_id)
 
     async def _read_session_meta(self, session_id: str, ctx: RequestContext) -> SessionMeta:
         self._ensure_initialized()
@@ -167,7 +160,7 @@ class SessionService:
             meta = await self._load_session_meta_for_visibility(session_id, ctx)
         except Exception as exc:
             raise NotFoundError(session_id, "session") from exc
-        if not self._session_is_visible_to_user(ctx, meta):
+        if not self._session_is_visible_in_account(ctx, meta):
             raise NotFoundError(session_id, "session")
 
     async def create(
@@ -251,7 +244,7 @@ class SessionService:
                         meta = await self._load_session_meta_for_visibility(name, ctx)
                     except Exception:
                         continue
-                    if not self._session_is_visible_to_user(ctx, meta):
+                    if not self._session_is_visible_in_account(ctx, meta):
                         continue
                 sessions.append(
                     {

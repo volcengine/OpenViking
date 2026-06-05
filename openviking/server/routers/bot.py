@@ -13,7 +13,6 @@ from fastapi.responses import StreamingResponse
 
 from openviking.server.auth import get_request_context
 from openviking.server.identity import AuthMode, RequestContext
-from openviking_cli.session.user_id import validate_identifier_part
 from openviking_cli.utils.logger import get_logger
 
 router = APIRouter(prefix="", tags=["bot"])
@@ -72,21 +71,6 @@ def _extract_forward_api_key(request: Request) -> str:
     return ""
 
 
-def _extract_forward_agent_id(request: Request) -> str:
-    agent_id = (
-        request.headers.get("X-OpenViking-Agent")
-        or request.headers.get("x-openviking-agent")
-        or DEFAULT_BOT_AGENT_ID
-    ).strip()
-    validation_error = validate_identifier_part(agent_id, "agent_id")
-    if validation_error:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=validation_error,
-        )
-    return agent_id
-
-
 def _attach_openviking_connection(
     body: dict,
     request: Request,
@@ -116,7 +100,7 @@ def _attach_openviking_connection(
         "api_key": api_key,
         "account_id": ctx.user.account_id,
         "user_id": ctx.user.user_id,
-        "agent_id": _extract_forward_agent_id(request),
+        "agent_id": DEFAULT_BOT_AGENT_ID,
         "role": getattr(ctx.role, "value", str(ctx.role)),
         "namespace_policy": dict(DEFAULT_NAMESPACE_POLICY),
     }

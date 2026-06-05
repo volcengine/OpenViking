@@ -8,7 +8,6 @@ export interface OvConnectionState {
   adminApiKey: string
   apiKey: string
   accountId: string
-  agentId: string
   identityHeaders: boolean
   userId: string
 }

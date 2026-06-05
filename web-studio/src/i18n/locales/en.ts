@@ -164,7 +164,6 @@ const en = {
       account: 'Account',
       adminUser: 'Admin user',
       adminApiKey: 'Admin API key',
-      agent: 'Agent',
       apiKey: 'API key',
       baseUrl: 'Server URL',
       dataApiKey: 'User API key',
@@ -203,7 +202,6 @@ const en = {
     placeholders: {
       account: 'team-account',
       adminApiKey: 'Root or account-admin key',
-      agent: 'web-playground',
       apiKey: 'Enter X-API-Key or Bearer token',
       baseUrl: 'http://127.0.0.1:1933',
       devModeApiKey: '[dev mode, no api key required]',

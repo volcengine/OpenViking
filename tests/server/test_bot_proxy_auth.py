@@ -128,7 +128,6 @@ async def test_chat_proxy_attaches_authenticated_openviking_connection(monkeypat
                 "X-API-Key": "active-user-key",
                 "X-OpenViking-Account": "acct",
                 "X-OpenViking-User": "alice",
-                "X-OpenViking-Agent": "web-playground",
             },
             json={"message": "hello", "user_id": "ignored-by-proxy-identity"},
         )

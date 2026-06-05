@@ -151,7 +151,6 @@ function buildFetchHeaders(): Record<string, string> {
     if (conn.accountId) headers['X-OpenViking-Account'] = conn.accountId
     if (conn.userId) headers['X-OpenViking-User'] = conn.userId
   }
-  headers['X-OpenViking-Agent'] = conn.agentId || 'web-playground'
   return headers
 }
 

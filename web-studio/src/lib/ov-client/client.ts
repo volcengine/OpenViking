@@ -20,8 +20,6 @@ const DEFAULT_TELEMETRY_PATHS = new Set([
 ])
 const CONTROL_PLANE_PREFIXES = ['/api/v1/admin', '/api/v1/console'] as const
 const SESSION_COMMIT_PATH = /^\/api\/v1\/sessions\/[^/]+\/commit$/
-const WEB_PLAYGROUND_AGENT_ID = 'web-playground'
-
 function isBrowser(): boolean {
   return typeof window !== 'undefined'
 }
@@ -164,7 +162,6 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
       options.connection?.apiKey ??
       readSessionStorage(runtimeOptions.apiKeyStorageKey),
     accountId: options.connection?.accountId ?? '',
-    agentId: options.connection?.agentId ?? WEB_PLAYGROUND_AGENT_ID,
     identityHeaders: options.connection?.identityHeaders ?? false,
     userId: options.connection?.userId ?? '',
   }
@@ -190,10 +187,6 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
         ? connection.adminApiKey
         : connection.apiKey
     setOptionalHeader(headers, 'X-API-Key', apiKey)
-    headers.set(
-      'X-OpenViking-Agent',
-      connection.agentId || WEB_PLAYGROUND_AGENT_ID,
-    )
     if (connection.identityHeaders) {
       setOptionalHeader(headers, 'X-OpenViking-Account', connection.accountId)
       setOptionalHeader(headers, 'X-OpenViking-User', connection.userId)
@@ -274,7 +267,6 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
       adminApiKey: '',
       apiKey: '',
       accountId: '',
-      agentId: WEB_PLAYGROUND_AGENT_ID,
       identityHeaders: false,
       userId: '',
     }

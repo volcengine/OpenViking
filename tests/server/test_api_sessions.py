@@ -176,14 +176,19 @@ async def test_legacy_session_without_meta_remains_visible_to_owner(service):
     assert any(item["session_id"] == session_id for item in listed)
 
 
-def test_session_visibility_requires_account_id_for_non_root(service):
+def test_session_visibility_is_account_scoped_for_non_root(service):
     ctx = RequestContext(
         user=UserIdentifier("acct-current", "owner"),
         role=Role.USER,
     )
     meta = SessionMeta(created_by_user_id="owner", participant_user_ids=["owner"])
 
-    assert service.sessions._session_is_visible_to_user(ctx, meta) is False
+    assert service.sessions._session_is_visible_in_account(ctx, meta) is False
+
+    meta.created_by_account_id = "acct-current"
+    meta.created_by_user_id = "someone-else"
+    meta.participant_user_ids = ["someone-else"]
+    assert service.sessions._session_is_visible_in_account(ctx, meta) is True
 
 
 async def test_get_session_context(client: httpx.AsyncClient):

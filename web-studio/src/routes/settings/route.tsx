@@ -1101,8 +1101,8 @@ function SettingsRoute() {
             className={cn(
               'grid gap-3',
               hasAdminAccess
-                ? 'xl:grid-cols-[minmax(16rem,1.2fr)_minmax(12rem,0.8fr)_minmax(12rem,0.8fr)_minmax(11rem,0.8fr)]'
-                : 'xl:grid-cols-[minmax(16rem,1.2fr)_minmax(12rem,0.8fr)_minmax(16rem,1fr)]',
+                ? 'xl:grid-cols-[minmax(16rem,1.2fr)_minmax(12rem,0.8fr)_minmax(12rem,0.8fr)]'
+                : 'xl:grid-cols-[minmax(16rem,1.2fr)_minmax(16rem,1fr)]',
             )}
           >
             <Field>
@@ -1117,21 +1117,6 @@ function SettingsRoute() {
                     updateDraft({ baseUrl: event.target.value })
                   }
                   placeholder={t('placeholders.baseUrl')}
-                />
-              </FieldContent>
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="settings-agent-id">
-                {t('fields.agent')}
-              </FieldLabel>
-              <FieldContent>
-                <Input
-                  id="settings-agent-id"
-                  value={draft.agentId}
-                  onChange={(event) =>
-                    updateDraft({ agentId: event.target.value })
-                  }
-                  placeholder={t('placeholders.agent')}
                 />
               </FieldContent>
             </Field>

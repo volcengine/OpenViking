@@ -164,7 +164,6 @@ const zhCN = {
       account: 'Account',
       adminUser: 'Admin user',
       adminApiKey: 'Admin API key',
-      agent: 'Agent',
       apiKey: 'API key',
       baseUrl: '服务地址',
       dataApiKey: 'User API key',
@@ -203,7 +202,6 @@ const zhCN = {
     placeholders: {
       account: 'team-account',
       adminApiKey: 'Root 或 account-admin key',
-      agent: 'web-playground',
       apiKey: '输入 X-API-Key 或 Bearer token',
       baseUrl: 'http://127.0.0.1:1933',
       devModeApiKey: '[dev mode，无需 API key]',
