@@ -6,7 +6,7 @@ const en = {
       github: 'GitHub',
     },
     header: {
-      defaultTitle: 'OpenViking Playground',
+      defaultTitle: 'OpenViking Studio',
     },
     navigation: {
       home: {
@@ -37,7 +37,7 @@ const en = {
     sidebar: {
       loadingSessions: 'Loading...',
       noSessions: 'No sessions',
-      workspaceGroupLabel: 'OpenViking Playground',
+      workspaceGroupLabel: 'OpenViking Studio',
     },
   },
   common: {
@@ -84,12 +84,19 @@ const en = {
         label: 'API Key',
         placeholder: 'Enter X-API-Key or Bearer token',
       },
+      adminApiKey: {
+        label: 'Admin API key',
+        placeholder: 'Root or account-admin key',
+      },
       baseUrl: {
         label: 'Service URL',
         placeholder: 'http://127.0.0.1:1933',
       },
       credentials: {
         title: 'Identity & Credentials',
+      },
+      dataApiKey: {
+        label: 'User API key',
       },
       userId: {
         label: 'User',
@@ -120,13 +127,16 @@ const en = {
       regenerate: 'Regenerate',
       save: 'Save',
       use: 'Use',
+      useForData: 'Use as user key',
     },
     connection: {
+      accountListLimited:
+        'This key cannot list all accounts, but it can still manage the selected account if it has account-admin access.',
       adminError: 'Could not load admin identities: {{message}}',
       description:
-        'Select the account and user that Playground should send with OpenViking requests.',
+        'Use a user API key for tenant data APIs and an optional root or account-admin key for control APIs.',
       noKey:
-        'Enter an API key with admin access to load account and user choices.',
+        'Enter a root or account-admin API key to load account and user choices.',
       title: 'Connection settings',
     },
     dialogs: {
@@ -151,15 +161,28 @@ const en = {
         'Use a root or account admin API key to list users, copy keys, add identities, or regenerate credentials.',
       adminTitle: 'Admin access required',
       usersDescription: 'Create a user to mint the first API key.',
-      usersTitle: 'No users in this account',
+      usersTitle: 'No users in the selected accounts',
     },
     fields: {
       account: 'Account',
       adminUser: 'Admin user',
+      adminApiKey: 'Admin API key',
       apiKey: 'API key',
       baseUrl: 'Server URL',
+      dataApiKey: 'User API key',
+      userApiKey: 'User API key',
       role: 'Role',
       user: 'User',
+    },
+    health: {
+      admin: 'Admin control',
+      data: 'Data access',
+      state: {
+        checking: 'Checking',
+        error: 'Error',
+        ok: 'OK',
+        skipped: 'Not checked',
+      },
     },
     keyResult: {
       description:
@@ -169,9 +192,9 @@ const en = {
     },
     loading: 'Loading identities...',
     management: {
-      accountFilter: 'Managed account',
+      accountFilter: 'Accounts',
       description:
-        'Review users and credentials for one account, then add users or rotate keys from the web UI.',
+        'Review users and credentials for selected accounts, then add users or rotate keys from the web UI.',
       title: 'User management',
     },
     page: {
@@ -181,8 +204,10 @@ const en = {
     },
     placeholders: {
       account: 'team-account',
+      adminApiKey: 'Root or account-admin key',
       apiKey: 'Enter X-API-Key or Bearer token',
       baseUrl: 'http://127.0.0.1:1933',
+      userApiKey: 'User API key',
       user: 'default',
     },
     roles: {
@@ -212,6 +237,7 @@ const en = {
       accountCreated: 'Account created',
       connectionSaved: 'Connection saved',
       copied: 'Copied',
+      dataKeySelected: 'User API key selected',
       keyRegenerated: 'API key regenerated',
       userCreated: 'User created',
     },
@@ -303,7 +329,7 @@ const en = {
     page: {
       description:
         'Aligned with the product overview: menu entries, context data volume, today tokens, today retrievals, agent access, token trend, and context commit stats.',
-      eyebrow: 'OpenViking Playground',
+      eyebrow: 'OpenViking Studio',
       settings: 'Connection & Settings',
       title: 'Overview',
     },
@@ -734,8 +760,8 @@ const en = {
       scopesLabel: 'Scopes',
       scopesNone: '(none)',
       signInRequired:
-        'Sign in to OpenViking Playground (Connection & Identity) or paste an API key below to authorize this client.',
-      openConnectionDialog: 'Open Connection & Identity',
+        'Sign in to OpenViking Studio (Connection & Identity) or paste an API key below to authorize this client.',
+      openConnectionSettings: 'Open Connection & Identity',
       authorize: 'Authorize',
       deny: 'Deny',
       useAnotherDevice: 'Use another device →',
@@ -760,7 +786,7 @@ const en = {
       verifyError: 'Authorization failed: {{message}}',
       noApiKey: 'No API key available. Select an identity or paste a key.',
       signInRequired:
-        'Sign in to OpenViking Playground (Connection & Identity) or paste an API key below to verify.',
+        'Sign in to OpenViking Studio (Connection & Identity) or paste an API key below to verify.',
     },
   },
   playground: {

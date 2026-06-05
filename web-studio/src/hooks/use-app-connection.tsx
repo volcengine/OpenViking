@@ -1,5 +1,6 @@
 import * as React from 'react'
 import { useQueryClient } from '@tanstack/react-query'
+import { useNavigate, useRouterState } from '@tanstack/react-router'
 
 import { isOvClientError, ovClient } from '#/lib/ov-client'
 
@@ -8,6 +9,7 @@ import type { ServerMode } from './use-server-mode'
 
 export type ConnectionDraft = {
   accountId: string
+  adminApiKey: string
   apiKey: string
   baseUrl: string
   userId: string
@@ -22,11 +24,9 @@ export type ConnectionIdentitySummary = {
 
 type AppConnectionContextValue = {
   connection: ConnectionDraft
-  isConnectionDialogOpen: boolean
-  openConnectionDialog: () => void
+  openConnectionSettings: () => void
   saveConnection: (next: ConnectionDraft) => void
   serverMode: ServerMode
-  setConnectionDialogOpen: (open: boolean) => void
 }
 
 const CONNECTION_STORAGE_KEY = 'ov_console_connection'
@@ -39,6 +39,10 @@ const ENV_API_KEY =
   typeof import.meta.env.VITE_OV_API_KEY === 'string'
     ? import.meta.env.VITE_OV_API_KEY.trim()
     : ''
+const ENV_ADMIN_API_KEY =
+  typeof import.meta.env.VITE_OV_ADMIN_API_KEY === 'string'
+    ? import.meta.env.VITE_OV_ADMIN_API_KEY.trim()
+    : ''
 const ENV_ACCOUNT =
   typeof import.meta.env.VITE_OV_ACCOUNT === 'string'
     ? import.meta.env.VITE_OV_ACCOUNT.trim()
@@ -50,6 +54,7 @@ const ENV_USER =
 
 const DEFAULT_CONNECTION: ConnectionDraft = {
   accountId: ENV_ACCOUNT || 'default',
+  adminApiKey: ENV_ADMIN_API_KEY,
   apiKey: ENV_API_KEY,
   baseUrl: ovClient.getOptions().baseUrl,
   userId: ENV_USER || 'default',
@@ -101,6 +106,7 @@ function normalizeConnectionDraft(
 ): ConnectionDraft {
   return {
     accountId: connection.accountId.trim(),
+    adminApiKey: connection.adminApiKey.trim(),
     apiKey: connection.apiKey.trim(),
     baseUrl: normalizeBaseUrl(connection.baseUrl),
     userId: connection.userId.trim(),
@@ -118,19 +124,28 @@ function resolveIdentityField(
   return storedValue || defaultValue
 }
 
-function applyConnection(connection: ConnectionDraft): void {
+function applyConnection(
+  connection: ConnectionDraft,
+  serverMode: ServerMode,
+): void {
   ovClient.setOptions({
     baseUrl: connection.baseUrl,
   })
   ovClient.setConnection({
     accountId: connection.accountId,
+    adminApiKey: connection.adminApiKey,
     apiKey: connection.apiKey,
+    identityHeaders: serverMode === 'trusted',
     userId: connection.userId,
   })
 }
 
 function readInitialConnection(): ConnectionDraft {
   const storedConnection = readStoredConnection()
+  const adminApiKey =
+    ENV_ADMIN_API_KEY ||
+    storedConnection.adminApiKey ||
+    DEFAULT_CONNECTION.adminApiKey
   const apiKey =
     ENV_API_KEY ||
     ovClient.getConnection().apiKey ||
@@ -144,6 +159,7 @@ function readInitialConnection(): ConnectionDraft {
       storedConnection.accountId,
       DEFAULT_CONNECTION.accountId,
     ),
+    adminApiKey,
     apiKey,
     baseUrl:
       ENV_BASE_URL || storedConnection.baseUrl || DEFAULT_CONNECTION.baseUrl,
@@ -163,10 +179,7 @@ export function summarizeConnectionIdentity(
     return { labelKey: 'identitySummary.dev' }
   }
 
-  const segments = [
-    connection.accountId,
-    connection.userId,
-  ].filter(Boolean)
+  const segments = [connection.accountId, connection.userId].filter(Boolean)
   if (!segments.length) {
     return { labelKey: 'identitySummary.unset' }
   }
@@ -196,24 +209,32 @@ export function AppConnectionProvider({
   children: React.ReactNode
 }) {
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
+  const pathname = useRouterState({
+    select: (state) => state.location.pathname,
+  })
   const initialConnectionRef = React.useRef<ConnectionDraft | null>(null)
   if (initialConnectionRef.current === null) {
     initialConnectionRef.current = readInitialConnection()
-    applyConnection(initialConnectionRef.current)
+    applyConnection(initialConnectionRef.current, 'checking')
   }
 
   const [connection, setConnection] = React.useState<ConnectionDraft>(
     initialConnectionRef.current,
   )
-  const [isConnectionDialogOpen, setConnectionDialogOpen] =
-    React.useState(false)
   const [serverMode, setServerMode] = React.useState<ServerMode>('checking')
 
+  const openConnectionSettings = React.useCallback(() => {
+    if (pathname !== '/settings') {
+      void navigate({ to: '/settings' })
+    }
+  }, [navigate, pathname])
+
   React.useEffect(() => {
-    applyConnection(connection)
+    applyConnection(connection, serverMode)
     persistConnection(connection)
     void queryClient.invalidateQueries()
-  }, [connection, queryClient])
+  }, [connection, queryClient, serverMode])
 
   React.useEffect(() => {
     let cancelled = false
@@ -238,7 +259,7 @@ export function AppConnectionProvider({
           isOvClientError(error) &&
           (error.statusCode === 401 || error.statusCode === 403)
         ) {
-          setConnectionDialogOpen(true)
+          openConnectionSettings()
         }
         return Promise.reject(error)
       },
@@ -247,18 +268,16 @@ export function AppConnectionProvider({
     return () => {
       ovClient.instance.interceptors.response.eject(interceptorId)
     }
-  }, [])
+  }, [openConnectionSettings])
 
   const value = React.useMemo<AppConnectionContextValue>(
     () => ({
       connection,
-      isConnectionDialogOpen,
-      openConnectionDialog: () => setConnectionDialogOpen(true),
+      openConnectionSettings,
       saveConnection: (next) => setConnection(normalizeConnectionDraft(next)),
       serverMode,
-      setConnectionDialogOpen,
     }),
-    [connection, isConnectionDialogOpen, serverMode],
+    [connection, openConnectionSettings, serverMode],
   )
 
   return (

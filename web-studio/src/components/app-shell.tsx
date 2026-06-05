@@ -26,7 +26,6 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from '#/components/ui/collapsible'
-import { ConnectionDialog } from '#/components/connection-dialog'
 import { OAuthSetupDialog } from '#/components/oauth-setup-dialog'
 import { ScrollArea } from '#/components/ui/scroll-area'
 import {
@@ -578,7 +577,6 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
         </ScrollArea>
       </SidebarInset>
 
-      <ConnectionDialog />
       <OAuthSetupDialog
         open={oauthSetupOpen}
         onOpenChange={setOauthSetupOpen}

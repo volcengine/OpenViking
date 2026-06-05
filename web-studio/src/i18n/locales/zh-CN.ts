@@ -6,7 +6,7 @@ const zhCN = {
       github: 'GitHub',
     },
     header: {
-      defaultTitle: 'OpenViking Playground',
+      defaultTitle: 'OpenViking Studio',
     },
     navigation: {
       home: {
@@ -37,7 +37,7 @@ const zhCN = {
     sidebar: {
       loadingSessions: '加载中...',
       noSessions: '暂无会话',
-      workspaceGroupLabel: 'OpenViking Playground',
+      workspaceGroupLabel: 'OpenViking Studio',
     },
   },
   common: {
@@ -84,12 +84,19 @@ const zhCN = {
         label: 'API Key',
         placeholder: '输入 X-API-Key 或 Bearer token',
       },
+      adminApiKey: {
+        label: 'Admin API key',
+        placeholder: 'Root 或 account-admin key',
+      },
       baseUrl: {
         label: '服务地址',
         placeholder: 'http://127.0.0.1:1933',
       },
       credentials: {
         title: '身份与凭证',
+      },
+      dataApiKey: {
+        label: 'User API key',
       },
       userId: {
         label: 'User',
@@ -120,13 +127,16 @@ const zhCN = {
       regenerate: '重新生成',
       save: '保存',
       use: '使用',
+      useForData: '用作 User key',
     },
     connection: {
+      accountListLimited:
+        '当前 key 不能列出所有 account；如果它有 account-admin 权限，仍可管理选中的 account。',
       adminError: '加载 admin 身份失败：{{message}}',
       description:
-        '选择 Playground 调用 OpenViking API 时要携带的 account 和 user。',
+        '租户数据 API 使用 User API key；控制 API 可单独使用 root 或 account-admin key。',
       noKey:
-        '输入具备 admin 权限的 API key 后，可以加载 account 和 user 可选项。',
+        '输入 root 或 account-admin API key 后，可以加载 account 和 user 可选项。',
       title: '连接设置',
     },
     dialogs: {
@@ -151,15 +161,28 @@ const zhCN = {
         '使用 root 或 account admin API key 后，可以列出用户、复制 key、新增身份或轮换凭证。',
       adminTitle: '需要 admin 权限',
       usersDescription: '创建一个 user 来生成第一个 API key。',
-      usersTitle: '当前 account 下没有 user',
+      usersTitle: '选中的 accounts 下没有 user',
     },
     fields: {
       account: 'Account',
       adminUser: 'Admin user',
+      adminApiKey: 'Admin API key',
       apiKey: 'API key',
       baseUrl: '服务地址',
+      dataApiKey: 'User API key',
+      userApiKey: 'User API key',
       role: '角色',
       user: 'User',
+    },
+    health: {
+      admin: '控制面权限',
+      data: '数据访问',
+      state: {
+        checking: '检查中',
+        error: '异常',
+        ok: '正常',
+        skipped: '未检查',
+      },
     },
     keyResult: {
       description:
@@ -169,9 +192,9 @@ const zhCN = {
     },
     loading: '正在加载身份...',
     management: {
-      accountFilter: '管理的 account',
+      accountFilter: 'Accounts',
       description:
-        '查看某个 account 下的 users 和凭证，并在网页端新增 user 或轮换 key。',
+        '查看选中 accounts 下的 users 和凭证，并在网页端新增 user 或轮换 key。',
       title: '用户管理',
     },
     page: {
@@ -181,8 +204,10 @@ const zhCN = {
     },
     placeholders: {
       account: 'team-account',
+      adminApiKey: 'Root 或 account-admin key',
       apiKey: '输入 X-API-Key 或 Bearer token',
       baseUrl: 'http://127.0.0.1:1933',
+      userApiKey: 'User API key',
       user: 'default',
     },
     roles: {
@@ -212,6 +237,7 @@ const zhCN = {
       accountCreated: 'Account 已创建',
       connectionSaved: '连接已保存',
       copied: '已复制',
+      dataKeySelected: '已选择 User API key',
       keyRegenerated: 'API key 已重新生成',
       userCreated: 'User 已创建',
     },
@@ -258,8 +284,7 @@ const zhCN = {
       },
     },
     contextData: {
-      description:
-        '包含文件、技能与用户记忆，用于衡量当前上下文资源规模。',
+      description: '包含文件、技能与用户记忆，用于衡量当前上下文资源规模。',
       files: '文件',
       memories: '记忆',
       skills: '技能',
@@ -303,7 +328,7 @@ const zhCN = {
     page: {
       description:
         '按产品需求对齐首页内容：菜单入口、上下文数据量、今日 tokens、今日检索、Agent 访问、tokens 趋势和上下文提交统计。',
-      eyebrow: 'OpenViking Playground',
+      eyebrow: 'OpenViking Studio',
       settings: '连接与设置',
       title: 'Overview',
     },
@@ -719,8 +744,8 @@ const zhCN = {
       scopesLabel: '权限范围',
       scopesNone: '（无）',
       signInRequired:
-        '请先在“连接与身份”中登录 OpenViking Playground，或在下方临时粘贴 API key 完成授权。',
-      openConnectionDialog: '打开连接与身份',
+        '请先在“连接与身份”中登录 OpenViking Studio，或在下方临时粘贴 API key 完成授权。',
+      openConnectionSettings: '打开连接与身份',
       authorize: '授权',
       deny: '拒绝',
       useAnotherDevice: '在另一台设备上授权 →',
@@ -742,7 +767,7 @@ const zhCN = {
       verifyError: '授权失败：{{message}}',
       noApiKey: '没有可用的 API key。请选择一个身份或粘贴 key。',
       signInRequired:
-        '请先在“连接与身份”中登录 OpenViking Playground，或在下方临时粘贴 API key 完成授权。',
+        '请先在“连接与身份”中登录 OpenViking Studio，或在下方临时粘贴 API key 完成授权。',
     },
   },
   playground: {

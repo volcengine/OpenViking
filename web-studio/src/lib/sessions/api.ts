@@ -147,8 +147,10 @@ function buildFetchHeaders(): Record<string, string> {
   const conn = ovClient.getConnection()
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (conn.apiKey) headers['X-API-Key'] = conn.apiKey
-  if (conn.accountId) headers['X-OpenViking-Account'] = conn.accountId
-  if (conn.userId) headers['X-OpenViking-User'] = conn.userId
+  if (conn.identityHeaders) {
+    if (conn.accountId) headers['X-OpenViking-Account'] = conn.accountId
+    if (conn.userId) headers['X-OpenViking-User'] = conn.userId
+  }
   return headers
 }
 
