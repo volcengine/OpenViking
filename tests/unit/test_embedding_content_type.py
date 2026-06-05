@@ -3,8 +3,11 @@
 
 """Tests for get_resource_content_type and _sniff_content_type."""
 
+from types import SimpleNamespace
+
 import pytest
 
+import openviking.utils.embedding_utils as embedding_utils
 from openviking.core.context import ResourceContentType
 from openviking.utils.embedding_utils import _sniff_content_type, get_resource_content_type
 
@@ -145,6 +148,145 @@ class TestGetResourceContentTypeExtension:
         assert await get_resource_content_type("AUDIO.MP3") == ResourceContentType.AUDIO
 
 
+class TestGetResourceContentTypeSniffing:
+    """Test async fallback sniffing path via VikingFS.read."""
+
+    @staticmethod
+    def _install_dummy_fs(monkeypatch, payload, calls=None):
+        class DummyFS:
+            async def read(self, file_path, offset=0, size=0, ctx=None):
+                if calls is not None:
+                    calls.append((file_path, offset, size, ctx))
+                return payload
+
+        monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS())
+
+    @pytest.mark.asyncio
+    async def test_unknown_extension_sniffed_as_text_via_read(self, monkeypatch):
+        calls = []
+        self._install_dummy_fs(monkeypatch, b"plain text content\nwith multiple lines\n", calls)
+
+        result = await get_resource_content_type(
+            "Makefile",
+            file_path="viking://resources/project/Makefile",
+        )
+
+        assert result == ResourceContentType.TEXT
+        assert calls == [("viking://resources/project/Makefile", 0, 1024, None)]
+
+    @pytest.mark.asyncio
+    async def test_known_extension_does_not_trigger_read(self, monkeypatch):
+        class DummyFS:
+            async def read(self, file_path, offset=0, size=0, ctx=None):
+                raise AssertionError("read should not be called for known extensions")
+
+        monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS())
+
+        result = await get_resource_content_type(
+            "known.py",
+            file_path="viking://resources/project/known.py",
+        )
+
+        assert result == ResourceContentType.TEXT
+
+    @pytest.mark.asyncio
+    async def test_read_failure_returns_none(self, monkeypatch):
+        class DummyFS:
+            async def read(self, file_path, offset=0, size=0, ctx=None):
+                raise RuntimeError("boom")
+
+        monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS())
+
+        result = await get_resource_content_type(
+            "unknown.bin",
+            file_path="viking://resources/project/unknown.bin",
+        )
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_read_receives_ctx(self, monkeypatch):
+        seen_ctx = []
+
+        ctx = SimpleNamespace(account_id="default")
+        self._install_dummy_fs(monkeypatch, b"text from fs", seen_ctx)
+
+        result = await get_resource_content_type(
+            "Dockerfile",
+            file_path="viking://resources/project/Dockerfile",
+            ctx=ctx,
+        )
+
+        assert result == ResourceContentType.TEXT
+        assert seen_ctx == [("viking://resources/project/Dockerfile", 0, 1024, ctx)]
+
+    @pytest.mark.parametrize(
+        ("payload", "expected"),
+        [
+            (b"%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\n", None),
+            (b"PK\x03\x04\x14\x00\x00\x00\x08\x00" + b"a" * 20, None),
+            (b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03" + b"a" * 20, None),
+            (b"\x89PNG\r\n\x1a\n" + b"\x00" * 20, ResourceContentType.IMAGE),
+            (b"RIFF\x00\x00\x00\x00WEBPVP8 " + b"\x00" * 10, ResourceContentType.IMAGE),
+            (b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom", ResourceContentType.VIDEO),
+            (b"RIFF\x00\x00\x00\x00AVI LIST" + b"\x00" * 10, ResourceContentType.VIDEO),
+            (b"RIFF\x00\x00\x00\x00WAVEfmt " + b"\x00" * 10, ResourceContentType.AUDIO),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_unknown_extension_binary_payloads(self, monkeypatch, payload, expected):
+        self._install_dummy_fs(monkeypatch, payload)
+
+        result = await get_resource_content_type(
+            "artifact.bin",
+            file_path="viking://resources/project/artifact.bin",
+        )
+
+        assert result == expected
+
+    @pytest.mark.parametrize(
+        ("payload", "file_name"),
+        [
+            (b"\xef\xbb\xbfhello from utf8 bom\n", "README"),
+            ("hello from utf16 le".encode("utf-16"), "notes.data"),
+            ((b"\xfe\xff") + "hello from utf16 be".encode("utf-16-be"), "story.textblob"),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_unknown_extension_text_encodings(self, monkeypatch, payload, file_name):
+        self._install_dummy_fs(monkeypatch, payload)
+
+        result = await get_resource_content_type(
+            file_name,
+            file_path=f"viking://resources/project/{file_name}",
+        )
+
+        assert result == ResourceContentType.TEXT
+
+    @pytest.mark.asyncio
+    async def test_unknown_extension_invalid_utf8_returns_none(self, monkeypatch):
+        self._install_dummy_fs(monkeypatch, b"\xff\xfa\xf8\xf0")
+
+        result = await get_resource_content_type(
+            "corrupt.payload",
+            file_path="viking://resources/project/corrupt.payload",
+        )
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_unknown_extension_suspicious_control_bytes_returns_none(self, monkeypatch):
+        payload = (b"\x01" * 30) + (b"a" * 970)
+        self._install_dummy_fs(monkeypatch, payload)
+
+        result = await get_resource_content_type(
+            "opaque.data",
+            file_path="viking://resources/project/opaque.data",
+        )
+
+        assert result is None
+
+
 class TestSniffContentTypeText:
     """Test _sniff_content_type for text content."""
 
@@ -258,13 +400,40 @@ class TestSniffContentTypeEdgeCases:
         content = b"\x00" * 60 + b"a" * 964
         assert _sniff_content_type(content) is None
 
-    def test_low_null_ratio_still_text(self):
-        """Content with <=5% null bytes is treated as text."""
-        # 51 null bytes out of 1024 = ~4.98% <= 5%
-        content = b"\x00" * 51 + b"a" * 973
+    def test_allowed_text_control_bytes_still_text(self):
+        """Allowed text control bytes such as newline and tab still classify as text."""
+        content = (b"a\n\tb\r\n" * 128) + b"plain text"
         assert _sniff_content_type(content) == ResourceContentType.TEXT
 
     def test_content_shorter_than_sniff_size(self):
         """Content shorter than _SNIFF_READ_SIZE uses actual length."""
         assert _sniff_content_type(b"hi") == ResourceContentType.TEXT
         assert _sniff_content_type(b"\x00\x00") is None
+
+    def test_pdf_magic_is_not_misclassified_as_text(self):
+        content = b"%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\n"
+        assert _sniff_content_type(content) is None
+
+    def test_zip_magic_is_not_misclassified_as_text(self):
+        content = b"PK\x03\x04\x14\x00\x00\x00\x08\x00" + b"a" * 20
+        assert _sniff_content_type(content) is None
+
+    def test_gzip_magic_is_not_misclassified_as_text(self):
+        content = b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03" + b"a" * 20
+        assert _sniff_content_type(content) is None
+
+    def test_invalid_utf8_is_not_misclassified_as_text(self):
+        content = b"\xff\xfa\xf8\xf0"
+        assert _sniff_content_type(content) is None
+
+    def test_suspicious_control_chars_are_not_text(self):
+        content = (b"\x01" * 30) + (b"a" * 970)
+        assert _sniff_content_type(content) is None
+
+    def test_utf16_with_bom_is_text(self):
+        content = "hello world".encode("utf-16")
+        assert _sniff_content_type(content) == ResourceContentType.TEXT
+
+    def test_direct_sniff_uses_full_content_without_internal_truncation(self):
+        content = (b"a" * 1024) + (b"\x01" * 64)
+        assert _sniff_content_type(content) is None

@@ -36,6 +36,9 @@ _PORTABLE_SCALAR_FIELDS = frozenset(
 _SNIFF_READ_SIZE = 1024
 # If more than this ratio of null bytes in the sample, treat as binary.
 _SNIFF_NULL_BYTE_RATIO = 0.05
+# If more than this ratio of suspicious control bytes in the sample, treat as binary.
+_SNIFF_CONTROL_CHAR_RATIO = 0.02
+_TEXT_CONTROL_BYTES = frozenset({0x09, 0x0A, 0x0C, 0x0D})
 
 # Magic bytes for content-based file type detection.
 _IMAGE_MAGIC = (
@@ -57,6 +60,17 @@ _AUDIO_MAGIC = (
     (b"RIFF",),  # WAV: RIFF....WAVE — checked below
     (b"\xff\xf1", b"\xff\xf9"),  # AAC
     (b"fLaC",),  # FLAC
+)
+_BINARY_MAGIC = (
+    b"%PDF-",  # PDF
+    b"PK\x03\x04",  # ZIP local file header
+    b"PK\x05\x06",  # ZIP end of central directory record
+    b"PK\x07\x08",  # ZIP data descriptor / spanning marker
+    b"\x1f\x8b",  # gzip
+    b"\xfd7zXZ\x00",  # xz
+    b"7z\xbc\xaf\x27\x1c",  # 7z
+    b"Rar!\x1a\x07\x00",  # RAR v1-v4
+    b"Rar!\x1a\x07\x01\x00",  # RAR v5+
 )
 
 
@@ -246,24 +260,49 @@ def _sniff_content_type(content: bytes) -> Optional[ResourceContentType]:
     if not content:
         return None
 
-    sample = content[:_SNIFF_READ_SIZE]
+    sample = content
 
-    # --- Magic byte detection ---
+    if _has_binary_magic(sample):
+        return None
 
-    # Image: PNG, JPEG, GIF, BMP
+    media_type = _sniff_known_media_type(sample)
+    if media_type is not None:
+        return media_type
+
+    if _is_valid_utf16_text(sample):
+        return ResourceContentType.TEXT
+
+    text_sample = _extract_text_sample(sample)
+    if text_sample is None:
+        return None
+
+    if _has_too_many_null_bytes(sample):
+        return None
+
+    if _has_suspicious_control_bytes(text_sample):
+        return None
+
+    return ResourceContentType.TEXT
+
+
+def _has_binary_magic(sample: bytes) -> bool:
+    """Return True when the sample matches known generic binary signatures."""
+    for magic in _BINARY_MAGIC:
+        if sample.startswith(magic):
+            return True
+    return False
+
+
+def _sniff_known_media_type(sample: bytes) -> Optional[ResourceContentType]:
+    """Detect known media types by magic bytes."""
+    # Image: PNG, JPEG, GIF, BMP, WebP(RIFF)
     for candidates in _IMAGE_MAGIC:
         for magic in candidates:
             if sample.startswith(magic):
                 if magic == b"RIFF":
-                    # RIFF container: WebP has "WEBP" at offset 8
-                    if len(sample) > 11 and sample[8:12] == b"WEBP":
-                        return ResourceContentType.IMAGE
-                    # AVI has "AVI " at offset 8
-                    if len(sample) > 11 and sample[8:12] == b"AVI ":
-                        return ResourceContentType.VIDEO
-                    # WAV has "WAVE" at offset 8
-                    if len(sample) > 11 and sample[8:12] == b"WAVE":
-                        return ResourceContentType.AUDIO
+                    riff_type = _sniff_riff_container_type(sample)
+                    if riff_type is not None:
+                        return riff_type
                     continue
                 return ResourceContentType.IMAGE
 
@@ -271,12 +310,11 @@ def _sniff_content_type(content: bytes) -> Optional[ResourceContentType]:
     for candidates in _VIDEO_MAGIC:
         for magic in candidates:
             if magic == b"\x00\x00\x00":
-                # MP4: bytes 4-7 are "ftyp"
                 if len(sample) > 7 and sample[4:8] == b"ftyp":
                     return ResourceContentType.VIDEO
                 continue
             if magic == b"RIFF":
-                continue  # already handled above
+                continue
             if sample.startswith(magic):
                 return ResourceContentType.VIDEO
 
@@ -284,16 +322,73 @@ def _sniff_content_type(content: bytes) -> Optional[ResourceContentType]:
     for candidates in _AUDIO_MAGIC:
         for magic in candidates:
             if magic == b"RIFF":
-                continue  # already handled above
+                continue
             if sample.startswith(magic):
                 return ResourceContentType.AUDIO
 
-    # --- Null-byte ratio: binary vs text ---
-    null_count = sample.count(b"\x00")
-    if (null_count / len(sample)) <= _SNIFF_NULL_BYTE_RATIO:
-        return ResourceContentType.TEXT
-
     return None
+
+
+def _sniff_riff_container_type(sample: bytes) -> Optional[ResourceContentType]:
+    """Detect content type for RIFF-based containers using bytes 8-11."""
+    if len(sample) <= 11:
+        return None
+
+    riff_type = sample[8:12]
+    if riff_type == b"WEBP":
+        return ResourceContentType.IMAGE
+    if riff_type == b"AVI ":
+        return ResourceContentType.VIDEO
+    if riff_type == b"WAVE":
+        return ResourceContentType.AUDIO
+    return None
+
+
+def _extract_text_sample(sample: bytes) -> Optional[bytes]:
+    """Return a UTF-8-compatible sample for text validation.
+
+    - UTF-8 BOM: strip BOM and continue validating as UTF-8 text.
+    - No BOM: require UTF-8 decodability.
+    """
+    if sample.startswith(b"\xef\xbb\xbf"):
+        text_sample = sample[3:]
+        try:
+            text_sample.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+        return text_sample
+
+    try:
+        sample.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    return sample
+
+
+def _is_valid_utf16_text(sample: bytes) -> bool:
+    """Return True when the sample looks like valid UTF-16 text with BOM."""
+    if not sample.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return False
+
+    try:
+        sample.decode("utf-16")
+    except UnicodeDecodeError:
+        return False
+    return True
+
+
+def _has_too_many_null_bytes(sample: bytes) -> bool:
+    """Return True when null-byte density suggests binary content."""
+    null_count = sample.count(b"\x00")
+    return (null_count / len(sample)) > _SNIFF_NULL_BYTE_RATIO
+
+
+def _has_suspicious_control_bytes(text_sample: bytes) -> bool:
+    """Return True when control-byte density is too high for normal text."""
+    control_count = sum(
+        1 for byte in text_sample if byte < 0x20 and byte not in _TEXT_CONTROL_BYTES
+    )
+    return bool(text_sample) and (control_count / len(text_sample)) > _SNIFF_CONTROL_CHAR_RATIO
 
 
 async def vectorize_directory_meta(
