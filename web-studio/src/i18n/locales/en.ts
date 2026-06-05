@@ -234,6 +234,7 @@ const en = {
     toast: {
       accountCreated: 'Account created',
       connectionSaved: 'Connection saved',
+      copyFailed: 'Copy failed',
       copied: 'Copied',
       dataKeySelected: 'User API key selected',
       keyRegenerated: 'API key regenerated',

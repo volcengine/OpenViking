@@ -234,6 +234,7 @@ const zhCN = {
     toast: {
       accountCreated: 'Account 已创建',
       connectionSaved: '连接已保存',
+      copyFailed: '复制失败',
       copied: '已复制',
       dataKeySelected: '已选择 User API key',
       keyRegenerated: 'API key 已重新生成',
