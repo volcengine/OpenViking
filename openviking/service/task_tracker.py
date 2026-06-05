@@ -504,9 +504,9 @@ class TaskTracker:
 
 def _build_default_task_tracker() -> TaskTracker:
     """Build the default persistent tracker from the active storage config."""
-    from openviking.utils.agfs_utils import create_agfs_client
+    from openviking.utils.agfs_utils import RagfsBindingConfig, create_agfs_client
     from openviking_cli.utils.config import get_openviking_config
 
     config = get_openviking_config()
-    agfs = create_agfs_client(config.storage.agfs)
+    agfs = create_agfs_client(RagfsBindingConfig(agfs=config.storage.agfs))
     return config.storage.build_task_tracker(agfs)
