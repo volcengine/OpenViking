@@ -181,7 +181,6 @@ def test_viking_client_request_connection_uses_active_identity(monkeypatch):
     assert first.kwargs == {
         "url": "http://studio.local",
         "api_key": "anonymous-key",
-        "agent_id": "web-playground",
         "profile_enabled": False,
     }
 
@@ -205,7 +204,6 @@ def test_viking_client_request_connection_preserves_admin_scope(monkeypatch):
     assert first.kwargs == {
         "url": "http://studio.local",
         "api_key": "admin-key",
-        "agent_id": "web-playground",
         "profile_enabled": False,
         "account": "acct",
         "user": "default",

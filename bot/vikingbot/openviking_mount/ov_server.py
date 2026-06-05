@@ -57,10 +57,7 @@ class VikingClient:
                 self.client = ov.AsyncHTTPClient(url=openviking_config.server_url)
                 self.agent_id = "default"
             else:
-                self.client = ov.AsyncHTTPClient(
-                    url=openviking_config.server_url,
-                    agent_id=agent_id,
-                )
+                self.client = ov.AsyncHTTPClient(url=openviking_config.server_url)
             self.account_id = "default"
             self.user_id = "default"
             self.admin_user_id = "default"
@@ -76,7 +73,6 @@ class VikingClient:
         remote_client_kwargs = {
             "url": openviking_config.server_url,
             "api_key": openviking_config.root_api_key,
-            "agent_id": agent_id,
         }
         if self._is_root_key_mode():
             remote_client_kwargs["account"] = openviking_config.account_id
@@ -135,7 +131,6 @@ class VikingClient:
         remote_client_kwargs = {
             "url": connection.get("server_url") or self.openviking_config.server_url,
             "api_key": connection["api_key"],
-            "agent_id": self.agent_id,
             "profile_enabled": False,
         }
         if request_role != "user" and self.account_id:
@@ -468,7 +463,6 @@ class VikingClient:
             client_kwargs = {
                 "url": self.openviking_config.server_url,
                 "api_key": user_api_key,
-                "agent_id": self.agent_id,
                 "profile_enabled": False,
             }
             if effective_user_id == self.admin_user_id:
@@ -609,7 +603,6 @@ class VikingClient:
             client = ov.AsyncHTTPClient(
                 url=self.openviking_config.server_url,
                 api_key=api_key,
-                agent_id=self.agent_id,
                 account=self.account_id,
                 user=user_id,
                 profile_enabled=False,
