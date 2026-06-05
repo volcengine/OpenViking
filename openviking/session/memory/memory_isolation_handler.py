@@ -56,6 +56,25 @@ class MemoryIsolationHandler:
         """No-op hook kept for the extraction pipeline."""
         return
 
+    def _messages(self) -> List[Any]:
+        messages = getattr(self._extract_context, "messages", None)
+        return messages if isinstance(messages, list) else []
+
+    def _has_self_user_message(self) -> bool:
+        for msg in self._messages():
+            if getattr(msg, "role", None) != "user":
+                continue
+            if safe_peer_id(getattr(msg, "peer_id", None)) is None:
+                return True
+        return False
+
+    def _first_peer_id_in_messages(self) -> Optional[str]:
+        for msg in self._messages():
+            peer_id = safe_peer_id(getattr(msg, "peer_id", None))
+            if peer_id and self._can_write_peer(peer_id):
+                return peer_id
+        return None
+
     def get_read_scope(self) -> RoleScope:
         user_ids = set()
         peer_ids = set()
@@ -170,9 +189,17 @@ class MemoryIsolationHandler:
                     return []
                 peer_ids_to_write = [peer_id]
                 operation.memory_fields["peer_id"] = peer_id
-            elif self.allow_self:
-                include_self = True
+            else:
                 operation.memory_fields.pop("peer_id", None)
+                if self.allow_self and self._has_self_user_message():
+                    include_self = True
+                else:
+                    fallback_peer_id = self._first_peer_id_in_messages()
+                    if fallback_peer_id:
+                        peer_ids_to_write = [fallback_peer_id]
+                        operation.memory_fields["peer_id"] = fallback_peer_id
+                    elif self.allow_self:
+                        include_self = True
 
         if not include_self and not peer_ids_to_write:
             return []
