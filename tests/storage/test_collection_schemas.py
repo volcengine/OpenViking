@@ -915,6 +915,75 @@ async def test_schedule_with_zero_delta_is_noop():
 
 
 @pytest.mark.asyncio
+async def test_below_threshold_schedule_during_inflight_preserves_residue():
+    """In-flight rebuild + concurrent below-threshold delta: residue is preserved.
+
+    Locks in the documented amortizing-trigger semantic: when a schedule() call
+    lands during an in-flight rebuild and the call alone does not cross
+    growth_factor, the delta accumulates in pending_inserts / pending_deletes
+    rather than firing an extra rebuild. The next schedule() will then evaluate
+    against the residue + new delta, so the increment is not lost.
+
+    Codex flagged this as P1 ("late deltas dropped from scheduler accounting");
+    the test pins down that residue IS preserved and no spurious extra rebuild
+    fires.
+    """
+    sparse = LocalBM25Embedder(rebuild_min_docs=10, rebuild_growth_factor=1.5)
+    vikingdb = _RebuildCountingVikingDB(sizes=[1])
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="default", user_id="default", agent_id="default"),
+        role=Role.ROOT,
+    )
+
+    import time as _time
+
+    state = vikingdb._local_bm25_rebuilds.setdefault(
+        "default", _LocalBM25RebuildState()
+    )
+    # last_rebuild_size=100 → growth threshold = 150, shrink threshold = ~67.
+    state.last_rebuild_size = 100
+    state.last_rebuild_at = _time.monotonic()
+
+    # Simulate an in-flight rebuild by attaching a never-done future as the task.
+    loop = asyncio.get_event_loop()
+    fake_inflight = loop.create_future()
+    state.task = fake_inflight
+
+    # Fire a below-threshold delta: approx_size = 100 + 1 = 101, far below 150
+    # and far above shrink threshold. Should NOT set state.pending and should
+    # NOT start a new rebuild — the residue accumulates in pending_inserts.
+    vikingdb.schedule_local_bm25_rebuild(sparse, ctx=ctx, delta_docs=1)
+
+    assert state.pending is False
+    assert state.pending_inserts == 1
+    assert vikingdb.calls == 0  # no extra rebuild fired for the residue
+    assert state.task is fake_inflight  # in-flight task untouched
+
+    # A subsequent schedule call evaluates against accumulated residue. Now bring
+    # the corpus DOWN past the shrinkage threshold to confirm the residue still
+    # feeds future trigger evaluations correctly.
+    state.task = None  # simulate the in-flight rebuild having completed
+    # 33 more deletes: pending_deletes = 33, approx_size = 100 + 1 - 33 = 68 > 67.
+    for _ in range(33):
+        vikingdb.schedule_local_bm25_rebuild(sparse, ctx=ctx, delta_docs=-1)
+    assert vikingdb.calls == 0  # still above shrinkage threshold
+
+    # One more delete: approx_size = 67. 67 * 1.5 = 100.5 > 100 → not yet.
+    # Two more: approx_size = 66. 66 * 1.5 = 99 <= 100 → fires.
+    vikingdb.schedule_local_bm25_rebuild(sparse, ctx=ctx, delta_docs=-1)
+    assert vikingdb.calls == 0
+    vikingdb.schedule_local_bm25_rebuild(sparse, ctx=ctx, delta_docs=-1)
+    task = vikingdb._local_bm25_rebuilds["default"].task
+    assert task is not None
+    await task
+
+    # The residue from the in-flight era was carried into this evaluation.
+    assert vikingdb.calls == 1
+
+    fake_inflight.cancel()
+
+
+@pytest.mark.asyncio
 async def test_invalid_growth_factor_rejected_at_config():
     from openviking_cli.utils.config.embedding_config import EmbeddingModelConfig
 
