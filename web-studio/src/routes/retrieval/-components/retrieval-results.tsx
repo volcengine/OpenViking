@@ -224,7 +224,7 @@ function ResultRow({
 
   return (
     <Link
-      to="/resources"
+      to="/playground"
       search={resourceSearch}
       target="_blank"
       rel="noreferrer noopener"

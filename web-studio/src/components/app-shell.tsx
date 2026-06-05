@@ -4,7 +4,6 @@ import {
   BlocksIcon,
   BookOpenIcon,
   ChevronRightIcon,
-  FolderTreeIcon,
   HomeIcon,
   GithubIcon,
   KeyRoundIcon,
@@ -93,12 +92,6 @@ const NAV_ITEMS: readonly NavItem[] = [
     id: 'playground',
     titleKey: 'navigation.playground.title',
     to: '/playground',
-  },
-  {
-    icon: FolderTreeIcon,
-    id: 'resources',
-    titleKey: 'navigation.resources.title',
-    to: '/resources',
   },
   {
     icon: SearchIcon,

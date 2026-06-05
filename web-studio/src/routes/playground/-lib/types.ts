@@ -7,6 +7,7 @@ export type PlaygroundSearch = {
   file?: string
   panel?: PlaygroundPanel
   session?: string
+  upload?: boolean
 }
 
 export type ResourceRef = {

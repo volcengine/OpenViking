@@ -21,9 +21,6 @@ const zhCN = {
       requestLogs: {
         title: '请求日志',
       },
-      resources: {
-        title: '上下文管理',
-      },
       retrieval: {
         title: '检索',
       },
@@ -291,41 +288,6 @@ const zhCN = {
       skills: '技能',
       title: '上下文数据量',
     },
-    menuIntro: {
-      description:
-        '左侧导航可折叠；常用入口包括总览、上下文管理、目录递归检索、请求日志、设置、GitHub 和文档站。',
-      items: {
-        github: {
-          description: '打开 OpenViking 源码仓库。',
-          title: 'GitHub',
-        },
-        overview: {
-          description: '查看上下文规模与使用概览。',
-          title: '总览',
-        },
-        playground: {
-          description: '打开文档站和 Playground 入口。',
-          title: 'Playground',
-        },
-        requestLogs: {
-          description: '查看 Playground 发出的请求、状态与耗时。',
-          title: '请求日志',
-        },
-        resources: {
-          description: '管理文件、技能和上下文目录。',
-          title: '上下文管理',
-        },
-        retrieval: {
-          description: '使用 find() 与 search() 做语义检索。',
-          title: '目录递归检索',
-        },
-        settings: {
-          description: '配置服务地址、身份和 API Key。',
-          title: '设置',
-        },
-      },
-      title: 'Overview + 整体菜单介绍',
-    },
     page: {
       description:
         '按产品需求对齐首页内容：菜单入口、上下文数据量、今日 tokens、今日检索、Agent 访问、tokens 趋势和上下文提交统计。',
@@ -495,29 +457,6 @@ const zhCN = {
     },
   },
   resources: {
-    page: {
-      placeholder: '资源工作区能力尚未接入。',
-    },
-    toolbar: {
-      parent: '返回父级',
-      refresh: '刷新目录',
-      search: '搜索 ⌘K',
-      processingTasks: '文件处理任务',
-      upload: '上传',
-    },
-    emptyState: {
-      title: '您的上下文空间还是空的',
-      upload: '上传文件',
-    },
-    uploadDialog: {
-      title: '上传',
-      description: '添加本地文件或远程资源到当前上下文资源库。',
-    },
-    processingNotice: {
-      prefix: '文件正在处理中，点击',
-      action: '文件处理任务',
-      suffix: '查看处理进度与结果。',
-    },
     processingTasks: {
       title: '文件处理任务',
       empty: '暂无处理任务',
@@ -533,70 +472,6 @@ const zhCN = {
         failed: '处理失败',
       },
     },
-    searchPalette: {
-      ariaLabel: '搜索',
-      openContainingDirectory: '打开所在目录',
-      placeholder: '搜索',
-      scope: {
-        global: '搜索范围: 全局',
-        current: '搜索范围: {{name}}',
-        resetToGlobal: '点击重置为全局搜索',
-      },
-      scopeState: {
-        validatingTitle: '正在校验搜索范围',
-        validatingPrefix: '正在检查',
-        validatingSuffix: '是否存在',
-        switchTitle: '切换搜索范围',
-        switchPrefix: '按',
-        switchMiddle: '切换到',
-        invalidTitle: '搜索范围不存在',
-        invalidPrefix: '路径',
-        invalidSuffix: '无法访问，不能切换',
-      },
-      empty: {
-        title: '搜索文件和目录',
-      },
-      browseDirHint: {
-        before: '输入',
-        after: '浏览目录结构',
-      },
-      globalScopeHint: {
-        before: '输入',
-        after: '切换搜索范围到全局',
-      },
-      error: '搜索出错',
-      emptyResults: {
-        title: '没有找到匹配的文件或目录',
-        subtitle: '试试换个关键词？',
-      },
-      footer: {
-        dirMode: {
-          select: '选择',
-          level: '层级',
-          confirm: '确定',
-          cancel: '取消',
-        },
-        resultMode: {
-          navigate: '导航',
-          open: '打开',
-          close: '关闭',
-          count: '{{count}} 个结果',
-        },
-      },
-    },
-    dirBrowser: {
-      back: '返回上一级',
-      loading: '正在加载目录',
-      filesSection: '文件',
-      error: '加载目录失败',
-      empty: {
-        title: '空目录',
-        subtitle: '这一层目前没有可继续展开的子目录',
-      },
-    },
-    fileList: {
-      empty: '当前目录为空',
-    },
     filePreview: {
       cancel: '取消',
       edit: '编辑',
@@ -611,21 +486,6 @@ const zhCN = {
       markdownSource: '源码',
       save: '保存',
       unsupportedBinary: '二进制文件不支持文本预览。',
-    },
-    fileTree: {
-      collapse: '收起',
-      expand: '展开',
-      loading: '加载中...',
-    },
-    findResults: {
-      collapse: '收起',
-      expandDetails: '展开详情',
-      groups: {
-        memories: '记忆',
-        resources: '资源',
-        skills: '技能',
-      },
-      noResults: '未找到相关结果',
     },
   },
   retrieval: {

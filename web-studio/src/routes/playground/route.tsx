@@ -70,6 +70,7 @@ export const Route = createFileRoute('/playground')({
         ? search.panel
         : undefined,
     session: typeof search.session === 'string' ? search.session : undefined,
+    upload: search.upload === true || search.upload === 'true',
     uri: typeof search.uri === 'string' ? search.uri : undefined,
   }),
   component: PlaygroundRoute,
@@ -107,7 +108,9 @@ function PlaygroundWorkbench() {
   const [activePanel, setActivePanel] = useState<PlaygroundPanel>(
     search.panel ?? 'agent',
   )
-  const [uploadDialogOpen, setUploadDialogOpen] = useState(false)
+  const [uploadDialogOpen, setUploadDialogOpen] = useState(
+    () => search.upload ?? false,
+  )
   const [taskDialogOpen, setTaskDialogOpen] = useState(false)
   const [openingUri, setOpeningUri] = useState<string | null>(null)
   const layoutRef = useRef<HTMLDivElement>(null)
@@ -156,6 +159,7 @@ function PlaygroundWorkbench() {
       file?: string
       panel?: PlaygroundPanel
       session?: string
+      upload?: boolean
       uri?: string
     }) => {
       navigate({
@@ -187,6 +191,22 @@ function PlaygroundWorkbench() {
       setActivePanel(search.panel)
     }
   }, [search.panel])
+
+  useEffect(() => {
+    if (search.upload) {
+      setUploadDialogOpen(true)
+    }
+  }, [search.upload])
+
+  const handleUploadDialogOpenChange = useCallback(
+    (open: boolean) => {
+      setUploadDialogOpen(open)
+      if (!open && search.upload) {
+        syncSearch({ upload: undefined })
+      }
+    },
+    [search.upload, syncSearch],
+  )
 
   const revealResource = useCallback(
     async (rawUri: string) => {
@@ -519,7 +539,10 @@ function PlaygroundWorkbench() {
         </aside>
       </div>
 
-      <Dialog open={uploadDialogOpen} onOpenChange={setUploadDialogOpen}>
+      <Dialog
+        open={uploadDialogOpen}
+        onOpenChange={handleUploadDialogOpenChange}
+      >
         <DialogContent className="max-h-[min(86vh,760px)] gap-0 overflow-hidden p-0 sm:max-w-4xl">
           <DialogHeader className="border-b px-6 py-5">
             <DialogTitle className="text-xl">
@@ -532,7 +555,7 @@ function PlaygroundWorkbench() {
           <div className="max-h-[calc(min(86vh,760px)-6rem)] overflow-y-auto px-6 py-5">
             <AddResourceForm
               onSubmitted={() => {
-                setUploadDialogOpen(false)
+                handleUploadDialogOpenChange(false)
                 void invalidateList()
                 toast.success(t('addResource.submitted'))
               }}

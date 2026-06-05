@@ -21,9 +21,6 @@ const en = {
       requestLogs: {
         title: 'Request Logs',
       },
-      resources: {
-        title: 'Context Management',
-      },
       retrieval: {
         title: 'Retrieval',
       },
@@ -292,41 +289,6 @@ const en = {
       skills: 'Skills',
       title: 'Context Data Volume',
     },
-    menuIntro: {
-      description:
-        'The left navigation is collapsible. Primary entries include overview, context management, recursive retrieval, request logs, settings, GitHub, and docs.',
-      items: {
-        github: {
-          description: 'Open the OpenViking source repository.',
-          title: 'GitHub',
-        },
-        overview: {
-          description: 'Review context scale and usage overview.',
-          title: 'Overview',
-        },
-        playground: {
-          description: 'Open the docs site and Playground entry.',
-          title: 'Playground',
-        },
-        requestLogs: {
-          description: 'Inspect Playground requests, status, and latency.',
-          title: 'Request Logs',
-        },
-        resources: {
-          description: 'Manage files, skills, and context directories.',
-          title: 'Context Management',
-        },
-        retrieval: {
-          description: 'Run semantic retrieval with find() and search().',
-          title: 'Recursive Retrieval',
-        },
-        settings: {
-          description: 'Configure service URL, identity, and API key.',
-          title: 'Settings',
-        },
-      },
-      title: 'Overview + Menu Guide',
-    },
     page: {
       description:
         'Aligned with the product overview: menu entries, context data volume, today tokens, today retrievals, agent access, token trend, and context commit stats.',
@@ -506,30 +468,6 @@ const en = {
     },
   },
   resources: {
-    page: {
-      placeholder: 'Resources workspace is under construction.',
-    },
-    toolbar: {
-      parent: 'Go to Parent',
-      refresh: 'Refresh Directory',
-      search: 'Search ⌘K',
-      processingTasks: 'File Processing Tasks',
-      upload: 'Upload',
-    },
-    emptyState: {
-      title: 'Your context space is empty',
-      upload: 'Upload File',
-    },
-    uploadDialog: {
-      title: 'Upload',
-      description:
-        'Add a local file or remote resource to the context resource library.',
-    },
-    processingNotice: {
-      prefix: 'Files are being processed.',
-      action: 'File Processing Tasks',
-      suffix: 'shows progress and results.',
-    },
     processingTasks: {
       title: 'File Processing Tasks',
       empty: 'No processing tasks',
@@ -545,71 +483,6 @@ const en = {
         failed: 'Processing failed',
       },
     },
-    searchPalette: {
-      ariaLabel: 'Search',
-      openContainingDirectory: 'Open containing directory',
-      placeholder: 'Search',
-      scope: {
-        global: 'Search scope: Global',
-        current: 'Search scope: {{name}}',
-        resetToGlobal: 'Click to reset to global search',
-      },
-      scopeState: {
-        validatingTitle: 'Validating search scope',
-        validatingPrefix: 'Checking whether',
-        validatingSuffix: 'exists',
-        switchTitle: 'Switch search scope',
-        switchPrefix: 'Press',
-        switchMiddle: 'to switch to',
-        invalidTitle: 'Search scope not found',
-        invalidPrefix: 'Path',
-        invalidSuffix: 'is inaccessible and cannot be switched to',
-      },
-      empty: {
-        title: 'Search files and directories',
-      },
-      browseDirHint: {
-        before: 'Enter',
-        after: 'to browse directories',
-      },
-      globalScopeHint: {
-        before: 'Enter',
-        after: 'to switch search scope to global',
-      },
-      error: 'Search failed',
-      emptyResults: {
-        title: 'No matching files or directories found',
-        subtitle: 'Try another keyword?',
-      },
-      footer: {
-        dirMode: {
-          select: 'Select',
-          level: 'Level',
-          confirm: 'Confirm',
-          cancel: 'Cancel',
-        },
-        resultMode: {
-          navigate: 'Navigate',
-          open: 'Open',
-          close: 'Close',
-          count: '{{count}} results',
-        },
-      },
-    },
-    dirBrowser: {
-      back: 'Back',
-      loading: 'Loading directory',
-      filesSection: 'Files',
-      error: 'Failed to load directory',
-      empty: {
-        title: 'Empty directory',
-        subtitle:
-          'There are currently no subdirectories to expand at this level',
-      },
-    },
-    fileList: {
-      empty: 'This directory is empty',
-    },
     filePreview: {
       cancel: 'Cancel',
       edit: 'Edit',
@@ -624,21 +497,6 @@ const en = {
       markdownSource: 'Source',
       save: 'Save',
       unsupportedBinary: 'Binary files do not support text preview.',
-    },
-    fileTree: {
-      collapse: 'Collapse',
-      expand: 'Expand',
-      loading: 'Loading...',
-    },
-    findResults: {
-      collapse: 'Collapse',
-      expandDetails: 'Expand details',
-      groups: {
-        memories: 'Memories',
-        resources: 'Resources',
-        skills: 'Skills',
-      },
-      noResults: 'No matching results',
     },
   },
   retrieval: {
