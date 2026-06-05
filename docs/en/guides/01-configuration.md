@@ -1156,7 +1156,7 @@ For memory-related settings, add a `memory` section in `ov.conf`:
 {
   "memory": {
     "version": "v2",
-    "agent_memory_enabled": false
+    "agent_memory_enabled": true
   }
 }
 ```
@@ -1164,7 +1164,7 @@ For memory-related settings, add a `memory` section in `ov.conf`:
 | Field | Description | Default |
 |-------|-------------|---------|
 | `version` | Memory implementation version. Only `"v2"` is supported (legacy `"v1"` removed in #2264 — passing `"v1"` now raises a `ValueError` at config load). | `"v2"` |
-| `agent_memory_enabled` | Enables trajectory/experience memory extraction after user-memory extraction. | `false` |
+| `agent_memory_enabled` | Enables trajectory/experience memory extraction after user-memory extraction. | `true` |
 
 ### ovcli.conf
 
