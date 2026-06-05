@@ -476,4 +476,3 @@ If using encrypted files created with an older OpenViking version, partial reads
 
 - [Data Encryption](../concepts/10-encryption.md) - Encryption concepts
 - [Configuration Guide](./01-configuration.md) - Complete configuration reference
-- [Technical Design](../../design/multi-tenant-file-encryption-desigin.md) - Encryption technical design

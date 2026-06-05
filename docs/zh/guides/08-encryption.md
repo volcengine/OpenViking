@@ -476,4 +476,3 @@ Error: KeyMismatchError
 
 - [数据加密](../concepts/10-encryption.md) - 加密概念说明
 - [配置指南](./01-configuration.md) - 完整配置参考
-- [技术设计](../../design/multi-tenant-file-encryption-desigin.md) - 加密技术设计文档

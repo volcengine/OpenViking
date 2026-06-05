@@ -156,7 +156,7 @@ OAuth 2.1 **requires HTTPS** for any non-localhost issuer. The
 [Public Access Guide](12-public-access.md) covers the full setup — Caddy,
 nginx, docker compose, CDN — in detail. The short version:
 
-1. Follow [Public Access Guide § Adding HTTPS](12-public-access.md#adding-https-for-public-access)
+1. Follow [Public Access Guide § Adding HTTPS](12-public-access.md)
    to get `https://your-domain.com` serving port 1934 over TLS.
 2. Enable OAuth: `{ "oauth": { "enabled": true } }` in `ov.conf`.
 3. Restart: `docker compose restart openviking`.
