@@ -254,10 +254,10 @@ def _build_client(env: Dict[str, object], user_id: str) -> LocalClient:
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
 
-# @pytest.mark.skipif(
-#     os.environ.get("RUN_AGENT_MEMORY_TESTS") != "1",
-#     reason="set RUN_AGENT_MEMORY_TESTS=1 to run agent memory e2e tests",
-# )
+@pytest.mark.skipif(
+    os.environ.get("RUN_AGENT_MEMORY_TESTS") != "1",
+    reason="set RUN_AGENT_MEMORY_TESTS=1 to run agent memory e2e tests",
+)
 @pytest.mark.integration
 class TestAgentMemoryE2E:
     """End-to-end tests for the agent memory two-phase extraction pipeline."""
