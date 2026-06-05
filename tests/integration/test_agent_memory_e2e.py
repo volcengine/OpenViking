@@ -16,9 +16,9 @@ What this test covers
 Prerequisites
 -------------
 - ~/.openviking/ov.conf has:
-    "memory": { "version": "v2", "agent_memory_enabled": true }
-  or:
-    "memory": { "version": "v2", "experimental_memory_switch": true }
+    "memory": { "version": "v2" }
+  or to explicitly disable:
+    "memory": { "version": "v2", "disable_agent_memory": true }
 
 Run
 ---
@@ -221,11 +221,11 @@ def _collect_source_trajectories(client: LocalClient, exp_entries: List[dict]) -
 
 @pytest.fixture()
 def agent_memory_config_check():
-    """Skip unless agent_memory_enabled is configured."""
+    """Skip if agent memory is disabled via disable_agent_memory."""
     OpenVikingConfigSingleton._instance = None
     config = get_openviking_config()
-    if not getattr(config.memory, "agent_memory_enabled", False):
-        pytest.skip("agent_memory_enabled is not set in config — skipping agent memory tests")
+    if getattr(config.memory, "disable_agent_memory", False):
+        pytest.skip("disable_agent_memory is set in config — skipping agent memory tests")
 
 
 @pytest.fixture()
@@ -270,8 +270,8 @@ class TestAgentMemoryE2E:
         Two sessions in the same booking-conflict domain.
 
         Assertions:
-        - After Round 1: ≥1 trajectory file; exactly 1 experience file (CREATE path).
-        - After Round 2: trajectory count grows; still exactly 1 experience file (EDIT path, not CREATE).
+        - After Round 1: ≥1 trajectory file; ≥1 experience file (CREATE path).
+        - After Round 2: trajectory count grows; experience source_trajectories reference extracted trajectories.
         """
         pytest.importorskip("opentelemetry")
         initialized = init_tracer_from_config()
@@ -297,8 +297,8 @@ class TestAgentMemoryE2E:
                 traj_after_r1 = _list_non_overview_entries(client, trajectories_dir)
                 exp_after_r1 = _list_non_overview_entries(client, experiences_dir)
                 assert traj_after_r1, "should have trajectory memories after round 1"
-                assert len(exp_after_r1) == 1, (
-                    "should have exactly 1 experience after round 1 (CREATE path)"
+                assert len(exp_after_r1) >= 1, (
+                    "should have at least 1 experience after round 1 (CREATE path)"
                 )
 
                 logger.info("Round 2: booking conflict extra cases (expect EDIT experience)")

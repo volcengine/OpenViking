@@ -64,7 +64,7 @@ class TestCommit:
     ):
         config = MagicMock()
         config.memory.extraction_enabled = False
-        config.memory.agent_memory_enabled = False
+        config.memory.disable_agent_memory = True
         config.memory.session_skill_extraction_enabled = True
         monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
 
@@ -96,7 +96,7 @@ class TestCommit:
     ):
         config = MagicMock()
         config.memory.extraction_enabled = True
-        config.memory.agent_memory_enabled = False
+        config.memory.disable_agent_memory = True
         config.memory.session_skill_extraction_enabled = False
         monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
 
@@ -125,7 +125,7 @@ class TestCommit:
         """Peer memory uses one full-context extraction and operation-level routing."""
         config = MagicMock()
         config.memory.extraction_enabled = True
-        config.memory.agent_memory_enabled = True
+        config.memory.disable_agent_memory = False
         config.memory.session_skill_extraction_enabled = True
         monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
 

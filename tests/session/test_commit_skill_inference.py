@@ -64,7 +64,7 @@ def _build_duplicate_session_skill_operations() -> ResolvedOperations:
 @pytest.mark.asyncio
 async def test_session_compressor_v2_extract_agent_memories_returns_session_skills(monkeypatch):
     config = MagicMock()
-    config.memory.agent_memory_enabled = False
+    config.memory.disable_agent_memory = True
     config.memory.session_skill_extraction_enabled = True
 
     async def _fake_run_extract_phase(

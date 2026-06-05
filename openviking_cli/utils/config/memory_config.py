@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 from typing import Any, Dict
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class MemoryConfig(BaseModel):
@@ -32,10 +32,10 @@ class MemoryConfig(BaseModel):
             "0 means unlimited retries."
         ),
     )
-    agent_memory_enabled: bool = Field(
+    disable_agent_memory: bool = Field(
         default=False,
         description=(
-            "Enable trajectory/experience memory extraction. When true, "
+            "Disable trajectory/experience memory extraction. When false (default), "
             "a two-phase pipeline runs after user-memory extraction: Phase 1 extracts "
             "execution trajectories from the conversation; Phase 2 consolidates them "
             "into higher-level experience memories."
@@ -45,8 +45,7 @@ class MemoryConfig(BaseModel):
         default=False,
         description=(
             "Experimental memory switch for experimental testing. When enabled, "
-            "experimental memory templates are loaded and agent_memory_enabled defaults "
-            "to true unless explicitly configured."
+            "experimental memory templates are loaded."
         ),
     )
     eager_prefetch: bool = Field(
@@ -93,14 +92,6 @@ class MemoryConfig(BaseModel):
     )
 
     model_config = {"extra": "forbid"}
-
-    @model_validator(mode="before")
-    @classmethod
-    def default_agent_memory_for_experimental_switch(cls, data: Any) -> Any:
-        if isinstance(data, dict) and data.get("experimental_memory_switch") is True:
-            data = data.copy()
-            data.setdefault("agent_memory_enabled", True)
-        return data
 
     @field_validator("version")
     @classmethod

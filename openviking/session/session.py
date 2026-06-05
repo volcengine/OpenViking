@@ -1349,9 +1349,7 @@ class Session:
                     # Summary generation, user memory and agent memory all run concurrently.
                     ov_config = get_openviking_config()
                     memory_extraction_enabled = ov_config.memory.extraction_enabled
-                    agent_memory_enabled = bool(
-                        getattr(ov_config.memory, "agent_memory_enabled", False)
-                    )
+                    agent_memory_enabled = not ov_config.memory.disable_agent_memory
                     config_session_skill_extraction_enabled = (
                         ov_config.memory.session_skill_extraction_enabled
                     )
