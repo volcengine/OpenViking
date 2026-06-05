@@ -109,9 +109,9 @@ type claude        # 期望输出：claude is a shell function
 
 | 现象 | 原因 | 修复 |
 |------|------|------|
-| 插件未激活 | 未找到 `ov.conf` 或 `ovcli.conf` 配置文件 | 运行 [安装脚本](#安装)，或手动设置 `OPENVIKING_MEMORY_ENABLED=1` 配合 URL/API_KEY 使用。 |
+| 插件未激活 | 未找到 `ov.conf` 或 `ovcli.conf` 配置文件 | 运行 [步骤 1：安装](#步骤-1安装)，或手动设置 `OPENVIKING_MEMORY_ENABLED=1` 配合 URL/API_KEY 使用。 |
 | Hook 已触发但召回结果为空 | 服务器未启动或 URL 配置错误 | 执行命令测试连通性：`curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` |
-| MCP 工具连接到了 `127.0.0.1` 而非远程服务器 | 缺少 `claude` 函数封装 | 检查 `type claude` 的输出是否包含 "shell function"；详情见 [手动安装](#安装) |
+| MCP 工具连接到了 `127.0.0.1` 而非远程服务器 | 缺少 `claude` 函数封装 | 检查 `type claude` 的输出是否包含 "shell function"；详情见 [步骤 1：安装](#步骤-1安装) |
 | 远程认证失败 (401 / 403) | API Key 错误或缺少租户 Header | 检查 `OPENVIKING_API_KEY` 是否正确；多租户环境下还需核对 `OPENVIKING_ACCOUNT` 和 `OPENVIKING_USER` |
 
 

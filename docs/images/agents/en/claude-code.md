@@ -105,9 +105,9 @@ The plugin renders OpenViking status below the Claude Code input box: connection
 
 | Symptom | Cause | Fix |
 |------|------|------|
-| Plugin is not active | `ov.conf` / `ovcli.conf` cannot be found | Run the [installer](#install), or set `OPENVIKING_MEMORY_ENABLED=1` plus URL/API_KEY |
+| Plugin is not active | `ov.conf` / `ovcli.conf` cannot be found | Run [Step 1: Install](#step-1-install), or set `OPENVIKING_MEMORY_ENABLED=1` plus URL/API_KEY |
 | Hooks run but recall is empty | Server is down or URL is wrong | `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` |
-| MCP tools connect to `127.0.0.1` instead of remote | Missing shell function wrapper | Confirm `type claude` returns "shell function"; see [Manual installation](#install) |
+| MCP tools connect to `127.0.0.1` instead of remote | Missing shell function wrapper | Confirm `type claude` returns "shell function"; see [Step 1: Install](#step-1-install) |
 | Remote auth returns 401 / 403 | API key is wrong or tenant headers are missing | Check `OPENVIKING_API_KEY`; for multi-tenant deployments also verify `OPENVIKING_ACCOUNT` / `OPENVIKING_USER` |
 
 ## Reference docs
