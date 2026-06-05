@@ -26,6 +26,7 @@
  */
 
 import { readFile } from "node:fs/promises";
+import { sanitizeCapturedText } from "./captured-text.mjs";
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
 import { loadState, resolveOvSessionId, saveState } from "./session-state.mjs";
@@ -114,7 +115,7 @@ function extractTurns(rolloutEntries) {
 
     if (role !== "user" && role !== "assistant") continue;
     if (role === "assistant" && !cfg.captureAssistantTurns) continue;
-    const trimmed = text.trim();
+    const trimmed = sanitizeCapturedText(text);
     if (!trimmed) continue;
 
     const capped = trimmed.length > cfg.captureMaxLength

@@ -109,8 +109,15 @@ All plugin behavior is controlled by `OPENVIKING_*` environment variables — se
 ```sh
 # ~/.zshrc — examples
 export OPENVIKING_RECALL_LIMIT=6
+export OPENVIKING_SCORE_THRESHOLD=0.35
+export OPENVIKING_MIN_INJECT_SCORE=0.55
+export OPENVIKING_MIN_BASE_INJECT_SCORE=0.55
+export OPENVIKING_FULL_CONTENT_SCORE=0.65
+export OPENVIKING_RECALL_MAX_MEMORY_CHARS=1200
 export OPENVIKING_CAPTURE_ASSISTANT_TURNS=1
 export OPENVIKING_AUTO_COMMIT_ON_COMPACT=1
+export OPENVIKING_COMMIT_POLL_TIMEOUT_MS=45000
+export OPENVIKING_COMMIT_POLL_INTERVAL_MS=1000
 export OPENVIKING_DEBUG=1
 ```
 
@@ -119,6 +126,28 @@ Full list: see the `Misc env vars` block in `scripts/config.mjs`. Every field ha
 #### Legacy `codex` block in `ov.conf`
 
 Earlier plugin versions configured tuning fields under a `codex` block in `~/.openviking/ov.conf`. That still works for backward compat — every env var above has a camelCase counterpart (`OPENVIKING_RECALL_LIMIT` → `codex.recallLimit`, etc.) — but **new deployments should prefer env vars**: this is the codex CLI's per-machine plugin tuning, and the server-side `ov.conf` is the wrong place for it. (It's read from `ov.conf`, not `ovcli.conf`, by historical accident in `scripts/config.mjs`.)
+
+Auto-recall is intentionally conservative: if the best result is not
+confident enough, the hook emits `{}` and Codex receives no injected memory
+for that turn. This is the expected behavior for vague prompts such as
+"look into what happened" or diagnostic prompts about the memory plugin
+itself. The recall gate is controlled by:
+
+| Setting | Env var | Default | Purpose |
+|---|---|---:|---|
+| `recallLimit` | `OPENVIKING_RECALL_LIMIT` | `6` | Maximum candidate memories to inject after filtering. |
+| `scoreThreshold` | `OPENVIKING_SCORE_THRESHOLD` | `0.35` | Minimum raw retrieval score before local ranking. |
+| `minInjectScore` | `OPENVIKING_MIN_INJECT_SCORE` | `0.55` | Minimum final local ranking score for injection. |
+| `minBaseInjectScore` | `OPENVIKING_MIN_BASE_INJECT_SCORE` | `0.55` | Minimum raw retrieval score; ranking boosts cannot bypass this. |
+| `fullContentScore` | `OPENVIKING_FULL_CONTENT_SCORE` | `0.65` | Read full memory content only for high-confidence hits. |
+| `recallMaxMemoryChars` | `OPENVIKING_RECALL_MAX_MEMORY_CHARS` | `1200` | Per-memory injected character cap. |
+
+Captured turns are sanitized before they are appended to the OpenViking
+session. The sanitizer strips Codex/OpenClaw runtime blocks such as
+`<relevant-memories>`, `Conversation context (untrusted metadata)`,
+subagent prompts, inter-session messages, and internal OpenClaw context
+envelopes. This prevents hook-generated context from becoming future
+long-term memory.
 
 ## Architecture
 
@@ -176,13 +205,18 @@ On any /commit failure (OV unreachable, non-2xx, timeout) we **preserve state** 
 
 ### Auto-recall (every UserPromptSubmit)
 
-`auto-recall.mjs` reads `prompt` from stdin, calls `/api/v1/search/find`, ranks results, reads full content for top-ranked leaves, and emits:
+`auto-recall.mjs` reads `prompt` from stdin, calls `/api/v1/search/find`,
+ranks results, applies the conservative injection gates above, reads full
+content only for high-confidence leaves, and emits:
 
 ```json
 { "hookSpecificOutput": { "hookEventName": "UserPromptSubmit", "additionalContext": "<relevant-memories>...</relevant-memories>" } }
 ```
 
 Codex injects `additionalContext` into the model turn, so memories arrive without an extra tool call.
+
+If no result survives the confidence gate, the script emits `{}`. That is a
+successful no-op, not an error.
 
 ### Stop (turn end → `add_message`, NOT `commit`)
 
@@ -194,7 +228,8 @@ Codex injects `additionalContext` into the model turn, so memories arrive withou
 
 1. Catch-up append for any turns Stop hasn't captured yet (race-safe via `capturedTurnCount`)
 2. Commit the long-lived OV session so the extractor runs against the full pre-compact transcript
-3. Reset `ovSessionId` to `null` so the next `Stop` re-derives the same `cx-<safe-session-id>` and appends the post-compact half under that deterministic OV session id
+3. If the server returns an async `task_id`, poll `/api/v1/tasks/{task_id}` briefly so the hook message reflects the actual extraction count instead of the immediate accepted response
+4. Reset `ovSessionId` to `null` so the next `Stop` re-derives the same `cx-<safe-session-id>` and appends the post-compact half under that deterministic OV session id
 
 ### Known gap: SIGTERM / Ctrl+C / `/exit` are silent
 

@@ -211,6 +211,22 @@ export function loadConfig() {
       process.env.OPENVIKING_SCORE_THRESHOLD,
       num(cx.scoreThreshold, 0.35),
     ))),
+    minInjectScore: Math.min(1, Math.max(0, num(
+      process.env.OPENVIKING_MIN_INJECT_SCORE,
+      num(cx.minInjectScore, 0.55),
+    ))),
+    minBaseInjectScore: Math.min(1, Math.max(0, num(
+      process.env.OPENVIKING_MIN_BASE_INJECT_SCORE,
+      num(cx.minBaseInjectScore, 0.55),
+    ))),
+    fullContentScore: Math.min(1, Math.max(0, num(
+      process.env.OPENVIKING_FULL_CONTENT_SCORE,
+      num(cx.fullContentScore, 0.65),
+    ))),
+    recallMaxMemoryChars: Math.max(200, Math.floor(num(
+      process.env.OPENVIKING_RECALL_MAX_MEMORY_CHARS,
+      num(cx.recallMaxMemoryChars, 1200),
+    ))),
     minQueryLength: Math.max(1, Math.floor(num(
       process.env.OPENVIKING_MIN_QUERY_LENGTH,
       num(cx.minQueryLength, 3),
@@ -234,6 +250,14 @@ export function loadConfig() {
     captureLastAssistantOnStop: envBool("OPENVIKING_CAPTURE_LAST_ASSISTANT_ON_STOP") ?? (cx.captureLastAssistantOnStop !== false),
 
     autoCommitOnCompact: envBool("OPENVIKING_AUTO_COMMIT_ON_COMPACT") ?? (cx.autoCommitOnCompact !== false),
+    commitPollTimeoutMs: Math.max(0, Math.floor(num(
+      process.env.OPENVIKING_COMMIT_POLL_TIMEOUT_MS,
+      num(cx.commitPollTimeoutMs, 45000),
+    ))),
+    commitPollIntervalMs: Math.max(250, Math.floor(num(
+      process.env.OPENVIKING_COMMIT_POLL_INTERVAL_MS,
+      num(cx.commitPollIntervalMs, 1000),
+    ))),
 
     debug,
     debugLogPath,
