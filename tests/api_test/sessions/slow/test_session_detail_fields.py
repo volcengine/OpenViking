@@ -223,9 +223,6 @@ class TestSessionDetailFields:
             assert isinstance(result.get("participant_user_ids"), (list, type(None))), (
                 "participant_user_ids should be a list or None"
             )
-            assert isinstance(result.get("participant_agent_ids"), (list, type(None))), (
-                "participant_agent_ids should be a list or None"
-            )
         finally:
             if session_id:
                 api_client.delete_session(session_id)

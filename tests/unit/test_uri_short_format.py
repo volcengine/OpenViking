@@ -35,10 +35,10 @@ class TestVikingURIShortFormat:
         assert uri.scope == "user"
 
     def test_bare_nested_path(self):
-        """'agent/skills/pdf' should normalize correctly."""
-        uri = VikingURI("agent/skills/pdf")
-        assert uri.uri == "viking://agent/skills/pdf"
-        assert uri.scope == "agent"
+        """'user/skills/pdf' should normalize correctly."""
+        uri = VikingURI("user/skills/pdf")
+        assert uri.uri == "viking://user/skills/pdf"
+        assert uri.scope == "user"
 
     def test_full_format_unchanged(self):
         """Full-format URIs should pass through unchanged."""
@@ -93,7 +93,7 @@ class TestVikingURIShortFormat:
         [
             ("/resources", "viking://resources"),
             ("/user", "viking://user"),
-            ("/agent/skills", "viking://agent/skills"),
+            ("/user/skills", "viking://user/skills"),
             ("/session/abc123", "viking://session/abc123"),
             ("/queue", "viking://queue"),
             ("/temp", "viking://temp"),

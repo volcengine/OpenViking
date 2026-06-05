@@ -1,5 +1,6 @@
 import * as React from 'react'
 import { useQueryClient } from '@tanstack/react-query'
+import { useNavigate, useRouterState } from '@tanstack/react-router'
 
 import { isOvClientError, ovClient } from '#/lib/ov-client'
 
@@ -10,6 +11,7 @@ export type ConnectionRole = 'admin' | 'root' | 'unknown' | 'user'
 
 export type ConnectionDraft = {
   accountId: string
+  adminApiKey: string
   agentId: string
   apiKey: string
   baseUrl: string
@@ -27,11 +29,9 @@ type AppConnectionContextValue = {
   connection: ConnectionDraft
   connectionRole: ConnectionRole
   isConnectionRoleLoading: boolean
-  isConnectionDialogOpen: boolean
-  openConnectionDialog: () => void
+  openConnectionSettings: () => void
   saveConnection: (next: ConnectionDraft) => void
   serverMode: ServerMode
-  setConnectionDialogOpen: (open: boolean) => void
 }
 
 const CONNECTION_STORAGE_KEY = 'ov_console_connection'
@@ -44,6 +44,10 @@ const ENV_BASE_URL =
 const ENV_API_KEY =
   typeof import.meta.env.VITE_OV_API_KEY === 'string'
     ? import.meta.env.VITE_OV_API_KEY.trim()
+    : ''
+const ENV_ADMIN_API_KEY =
+  typeof import.meta.env.VITE_OV_ADMIN_API_KEY === 'string'
+    ? import.meta.env.VITE_OV_ADMIN_API_KEY.trim()
     : ''
 const ENV_ACCOUNT =
   typeof import.meta.env.VITE_OV_ACCOUNT === 'string'
@@ -60,6 +64,7 @@ const ENV_USER =
 
 const DEFAULT_CONNECTION: ConnectionDraft = {
   accountId: ENV_ACCOUNT || 'default',
+  adminApiKey: ENV_ADMIN_API_KEY,
   agentId: ENV_AGENT || 'web-playground',
   apiKey: ENV_API_KEY,
   baseUrl: ovClient.getOptions().baseUrl,
@@ -121,6 +126,7 @@ function normalizeConnectionDraft(
 ): ConnectionDraft {
   return {
     accountId: connection.accountId.trim(),
+    adminApiKey: connection.adminApiKey.trim(),
     agentId: connection.agentId.trim() || DEFAULT_CONNECTION.agentId,
     apiKey: connection.apiKey.trim(),
     baseUrl: normalizeBaseUrl(connection.baseUrl),
@@ -139,15 +145,19 @@ function resolveIdentityField(
   return storedValue || defaultValue
 }
 
-function applyConnection(connection: ConnectionDraft): void {
+function applyConnection(
+  connection: ConnectionDraft,
+  serverMode: ServerMode,
+): void {
   ovClient.setOptions({
     baseUrl: connection.baseUrl,
   })
   ovClient.setConnection({
     accountId: connection.accountId,
+    adminApiKey: connection.adminApiKey,
     agentId: connection.agentId,
     apiKey: connection.apiKey,
-    role: 'unknown',
+    identityHeaders: serverMode === 'trusted',
     userId: connection.userId,
   })
 }
@@ -156,8 +166,9 @@ async function detectConnectionRole(
   connection: ConnectionDraft,
 ): Promise<ConnectionRole> {
   const headers: Record<string, string> = {}
-  if (connection.apiKey) {
-    headers['X-API-Key'] = connection.apiKey
+  const apiKey = connection.apiKey || connection.adminApiKey
+  if (apiKey) {
+    headers['X-API-Key'] = apiKey
   }
   if (connection.agentId) {
     headers['X-OpenViking-Agent'] = connection.agentId
@@ -176,6 +187,10 @@ async function detectConnectionRole(
 
 function readInitialConnection(): ConnectionDraft {
   const storedConnection = readStoredConnection()
+  const adminApiKey =
+    ENV_ADMIN_API_KEY ||
+    storedConnection.adminApiKey ||
+    DEFAULT_CONNECTION.adminApiKey
   const apiKey =
     ENV_API_KEY ||
     ovClient.getConnection().apiKey ||
@@ -189,6 +204,7 @@ function readInitialConnection(): ConnectionDraft {
       storedConnection.accountId,
       DEFAULT_CONNECTION.accountId,
     ),
+    adminApiKey,
     agentId:
       ENV_AGENT || storedConnection.agentId || DEFAULT_CONNECTION.agentId,
     apiKey,
@@ -245,10 +261,14 @@ export function AppConnectionProvider({
 }) {
   const queryClient = useQueryClient()
   const authPromptSuppressedUntilRef = React.useRef(0)
+  const navigate = useNavigate()
+  const pathname = useRouterState({
+    select: (state) => state.location.pathname,
+  })
   const initialConnectionRef = React.useRef<ConnectionDraft | null>(null)
   if (initialConnectionRef.current === null) {
     initialConnectionRef.current = readInitialConnection()
-    applyConnection(initialConnectionRef.current)
+    applyConnection(initialConnectionRef.current, 'checking')
   }
 
   const [connection, setConnection] = React.useState<ConnectionDraft>(
@@ -258,15 +278,19 @@ export function AppConnectionProvider({
     React.useState<ConnectionRole>('unknown')
   const [isConnectionRoleLoading, setConnectionRoleLoading] =
     React.useState(false)
-  const [isConnectionDialogOpen, setConnectionDialogOpen] =
-    React.useState(false)
   const [serverMode, setServerMode] = React.useState<ServerMode>('checking')
 
+  const openConnectionSettings = React.useCallback(() => {
+    if (pathname !== '/settings') {
+      void navigate({ to: '/settings' })
+    }
+  }, [navigate, pathname])
+
   React.useEffect(() => {
-    applyConnection(connection)
+    applyConnection(connection, serverMode)
     persistConnection(connection)
     void queryClient.invalidateQueries()
-  }, [connection, queryClient])
+  }, [connection, queryClient, serverMode])
 
   React.useEffect(() => {
     let cancelled = false
@@ -285,10 +309,11 @@ export function AppConnectionProvider({
 
   React.useEffect(() => {
     let cancelled = false
+    const apiKey = connection.apiKey || connection.adminApiKey
 
     setConnectionRole('unknown')
-    setConnectionRoleLoading(Boolean(connection.baseUrl && connection.apiKey))
-    if (!connection.baseUrl || !connection.apiKey) {
+    setConnectionRoleLoading(Boolean(connection.baseUrl && apiKey))
+    if (!connection.baseUrl || !apiKey) {
       return () => {
         cancelled = true
       }
@@ -300,13 +325,11 @@ export function AppConnectionProvider({
           return
         }
         setConnectionRole(role)
-        ovClient.setConnection({ role })
         setConnectionRoleLoading(false)
       })
       .catch(() => {
         if (!cancelled) {
           setConnectionRole('unknown')
-          ovClient.setConnection({ role: 'unknown' })
           setConnectionRoleLoading(false)
         }
       })
@@ -316,6 +339,7 @@ export function AppConnectionProvider({
     }
   }, [
     connection.accountId,
+    connection.adminApiKey,
     connection.agentId,
     connection.apiKey,
     connection.baseUrl,
@@ -326,14 +350,12 @@ export function AppConnectionProvider({
     const interceptorId = ovClient.instance.interceptors.response.use(
       (response) => response,
       (error) => {
-        const suppressAuthPrompt =
-          Date.now() < authPromptSuppressedUntilRef.current
         if (
           isOvClientError(error) &&
-          (error.statusCode === 401 || error.code === 'UNAUTHENTICATED') &&
-          !suppressAuthPrompt
+          (error.statusCode === 401 || error.statusCode === 403) &&
+          Date.now() >= authPromptSuppressedUntilRef.current
         ) {
-          setConnectionDialogOpen(true)
+          openConnectionSettings()
         }
         return Promise.reject(error)
       },
@@ -342,36 +364,28 @@ export function AppConnectionProvider({
     return () => {
       ovClient.instance.interceptors.response.eject(interceptorId)
     }
-  }, [])
-
-  const saveConnection = React.useCallback(
-    (next: ConnectionDraft) => {
-      authPromptSuppressedUntilRef.current =
-        Date.now() + AUTH_PROMPT_SUPPRESSION_MS
-      setConnectionDialogOpen(false)
-      void queryClient.cancelQueries()
-      setConnection(normalizeConnectionDraft(next))
-    },
-    [queryClient],
-  )
+  }, [openConnectionSettings])
 
   const value = React.useMemo<AppConnectionContextValue>(
     () => ({
       connection,
       connectionRole,
       isConnectionRoleLoading,
-      isConnectionDialogOpen,
-      openConnectionDialog: () => setConnectionDialogOpen(true),
-      saveConnection,
+      openConnectionSettings,
+      saveConnection: (next) => {
+        authPromptSuppressedUntilRef.current =
+          Date.now() + AUTH_PROMPT_SUPPRESSION_MS
+        void queryClient.cancelQueries()
+        setConnection(normalizeConnectionDraft(next))
+      },
       serverMode,
-      setConnectionDialogOpen,
     }),
     [
       connection,
       connectionRole,
       isConnectionRoleLoading,
-      isConnectionDialogOpen,
-      saveConnection,
+      openConnectionSettings,
+      queryClient,
       serverMode,
     ],
   )

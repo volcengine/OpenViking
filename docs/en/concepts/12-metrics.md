@@ -499,7 +499,7 @@ Example:
 ## Related Documentation
 
 - [Architecture Overview](./01-architecture.md) - overall OpenViking architecture
-- [Multi-Tenant](./11-multi-tenant.md) - `account/user/agent` isolation model
+- [Multi-Tenant](./11-multi-tenant.md) - `account/user/peer` isolation model
 - [Data Encryption](./10-encryption.md) - storage-layer encryption and isolation
 - [Metrics API](../api/09-metrics.md) - `/metrics` endpoint usage
 - [VikingBot Feedback Observability Design](../../../bot/docs/vikingbot-feedback-observability-design.md) - feedback observability design background and rollout plan (Chinese)

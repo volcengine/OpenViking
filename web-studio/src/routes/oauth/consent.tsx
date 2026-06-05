@@ -52,7 +52,7 @@ export const Route = createFileRoute('/oauth/consent')({
 function ConsentPage() {
   const { t } = useTranslation(['oauth', 'common'])
   const { pending } = Route.useSearch()
-  const { connection, openConnectionDialog, serverMode } = useAppConnection()
+  const { connection, openConnectionSettings, serverMode } = useAppConnection()
 
   const currentIdentity = React.useMemo(() => {
     const summary = summarizeConnectionIdentity(connection, serverMode)
@@ -243,12 +243,12 @@ function ConsentPage() {
                     variant="outline"
                     size="sm"
                     className="w-fit"
-                    onClick={openConnectionDialog}
+                    onClick={openConnectionSettings}
                     disabled={
                       phase.kind === 'verifying' || phase.kind === 'denying'
                     }
                   >
-                    {t('consent.openConnectionDialog')}
+                    {t('consent.openConnectionSettings')}
                   </Button>
                 </div>
               ) : null}

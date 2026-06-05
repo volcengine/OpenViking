@@ -1,4 +1,5 @@
 # Generated eval artifacts
+.generated/
 result/
 result_*/
 trajectory/

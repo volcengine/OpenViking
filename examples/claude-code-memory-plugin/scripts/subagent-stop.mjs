@@ -12,9 +12,8 @@
  * ovSessionId we created in subagent-start.mjs. An immediate commit runs
  * so the subagent's context is archived before the parent continues.
  *
- * OV agent identity is overridden per-call via X-OpenViking-Agent header
- * (e.g. "claude-code_general-purpose") so memories segregate by subagent
- * type in viking://agent/<type>/memories/.
+ * Each subagent is written to a distinct OpenViking session derived from the
+ * parent session id and Claude's subagent id.
  */
 
 import { readFile, unlink } from "node:fs/promises";
@@ -45,14 +44,19 @@ function approve() {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
 }
 
-function stateFile(agentId) {
-  const safe = String(agentId).replace(/[^a-zA-Z0-9_-]/g, "_");
+function stateFile(subagentId) {
+  const safe = String(subagentId).replace(/[^a-zA-Z0-9_-]/g, "_");
   return join(STATE_DIR, `${safe}.json`);
 }
 
-async function loadState(agentId) {
+function peerIdFromSubagent(subagentId) {
+  if (cfg.peerId) return cfg.peerId;
+  return String(subagentId || "").replace(/[^A-Za-z0-9._-]/g, "-") || null;
+}
+
+async function loadState(subagentId) {
   try {
-    const data = await readFile(stateFile(agentId), "utf-8");
+    const data = await readFile(stateFile(subagentId), "utf-8");
     return JSON.parse(data);
   } catch {
     return null;
@@ -223,11 +227,8 @@ function extractTurns(messages) {
   return turns;
 }
 
-async function pushTurns(ovSessionId, ovAgentId, turns) {
-  // Per-call agent override: we mint a new fetchJSON whose cfg has agentId
-  // replaced so X-OpenViking-Agent reflects the subagent type.
-  const subCfg = { ...cfg, agentId: ovAgentId };
-  const fetchJSON = makeFetchJSON(subCfg);
+async function pushTurns(ovSessionId, turns, peerId = null) {
+  const fetchJSON = makeFetchJSON(cfg);
   let ok = 0;
   let failed = 0;
   for (const turn of turns) {
@@ -237,13 +238,14 @@ async function pushTurns(ovSessionId, ovAgentId, turns) {
       (p) => p.type !== "text" || (p.text && p.text.trim()),
     );
     if (parts.length === 0) continue;
-    const res = await addMessage(fetchJSON, ovSessionId, { role: turn.role, parts });
+    const payload = { role: turn.role, parts };
+    if (peerId) payload.peer_id = peerId;
+    const res = await addMessage(fetchJSON, ovSessionId, payload);
     if (res.ok) ok++;
     else failed++;
   }
-  // Commit once at the end — subagents are short-lived, no point tracking
-  // the threshold. This also makes their context available to the parent
-  // via viking://agent/<type> immediately.
+  // Commit once at the end; subagents are short-lived, so threshold tracking
+  // adds little value.
   let committed = false;
   if (ok > 0) {
     const commitRes = await commitSession(fetchJSON, ovSessionId);
@@ -270,11 +272,10 @@ async function main() {
 
   const sessionId = input.session_id;
   const cwd = input.cwd;
-  const agentId = input.agent_id;
+  const subagentId = input.agent_id;
   const transcriptPath = input.agent_transcript_path;
-  const agentType = input.agent_type || "subagent";
 
-  if (!sessionId || !agentId || !transcriptPath) {
+  if (!sessionId || !subagentId || !transcriptPath) {
     log("skip", { reason: "missing required input fields" });
     approve();
     return;
@@ -288,11 +289,10 @@ async function main() {
 
   // Prefer state from SubagentStart (may carry ovSessionId from config snapshot);
   // fall back to live derivation if state file is missing.
-  const state = await loadState(agentId);
-  const ovSessionId = state?.ovSessionId || deriveOvSessionId(sessionId, `agent:${agentId}`);
-  const ovAgentId = state?.ovAgentId || `${cfg.agentId || "claude-code"}_${agentType}`;
+  const state = await loadState(subagentId);
+  const ovSessionId = state?.ovSessionId || deriveOvSessionId(sessionId, `subagent:${subagentId}`);
 
-  const fetchJSON = makeFetchJSON({ ...cfg, agentId: ovAgentId });
+  const fetchJSON = makeFetchJSON(cfg);
   const health = await fetchJSON("/health");
   if (!health.ok) {
     logError("health_check", "server unreachable");
@@ -312,22 +312,22 @@ async function main() {
   const messages = parseTranscript(transcript);
   const turns = extractTurns(messages);
   log("transcript_parse", {
-    agentId,
+    subagentId,
     ovSessionId,
-    ovAgentId,
     totalTurns: turns.length,
   });
 
   if (turns.length === 0) {
-    await unlink(stateFile(agentId)).catch(() => {});
+    await unlink(stateFile(subagentId)).catch(() => {});
     approve();
     return;
   }
 
-  const result = await pushTurns(ovSessionId, ovAgentId, turns);
-  log("push_turns", { ovSessionId, ovAgentId, ...result });
+  const peerId = peerIdFromSubagent(subagentId);
+  const result = await pushTurns(ovSessionId, turns, peerId);
+  log("push_turns", { ovSessionId, ...result });
 
-  await unlink(stateFile(agentId)).catch(() => {});
+  await unlink(stateFile(subagentId)).catch(() => {});
   approve();
 }
 

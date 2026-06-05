@@ -3,13 +3,13 @@
 
 """Shared token estimation tests."""
 
-from openviking.message import Message
+from openviking.message import Message, TextPart
 from openviking.session import Session
 
 
 def test_message_estimated_tokens_is_cjk_aware():
     """Chinese text should not be estimated with the ASCII chars/4 fallback."""
-    msg = Message.create_user("\u4f60\u597d\u4e16\u754c")
+    msg = Message(id="msg-cjk", role="user", parts=[TextPart("\u4f60\u597d\u4e16\u754c")])
 
     assert msg.estimated_tokens == 6
 

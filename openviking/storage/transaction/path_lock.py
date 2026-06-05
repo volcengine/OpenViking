@@ -5,7 +5,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional, Tuple
 
-from openviking.pyagfs import AGFSClient, AsyncAGFSClient
+from openviking.pyagfs import AGFSSyncClientProtocol, AsyncAGFSClient
 from openviking.storage.transaction.lock_handle import LockOwner
 from openviking_cli.utils.logger import get_logger
 
@@ -65,7 +65,7 @@ def _log_timeout_waiting(message: str) -> None:
 
 
 class PathLockEngine:
-    def __init__(self, agfs_client: AGFSClient, lock_expire: float = 300.0):
+    def __init__(self, agfs_client: AGFSSyncClientProtocol, lock_expire: float = 300.0):
         self._agfs = agfs_client
         self._async_agfs = AsyncAGFSClient(agfs_client)
         self._lock_expire = lock_expire

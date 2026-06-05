@@ -303,7 +303,7 @@ def run_claude_code(
     mcp_config: Optional[str] = None,
     ov_config: Optional[str] = None,
     ov_cli_config: Optional[str] = None,
-    ov_agent_id: Optional[str] = None,
+    ov_user_id: Optional[str] = None,
 ) -> dict:
     """Run claude -p with retries on TIMEOUT/ERROR."""
     env = os.environ.copy()
@@ -320,9 +320,8 @@ def run_claude_code(
         env["OPENVIKING_DEBUG"] = "1"
     if ov_cli_config:
         env["OPENVIKING_CLI_CONFIG_FILE"] = ov_cli_config
-    if ov_agent_id:
-        env["OPENVIKING_AGENT_ID"] = ov_agent_id
-        env["OPENVIKING_USER"] = ov_agent_id
+    if ov_user_id:
+        env["OPENVIKING_USER"] = ov_user_id
     # Disable detached-worker write path (subprocess.run reaps the worker
     # before persistence). Strip any inherited prod URL/auth that the parent
     # shell's `claude` shell function exports from the default ovcli.conf.
@@ -415,7 +414,7 @@ def process_question(
         mcp_config=mcp_config,
         ov_config=ov_config,
         ov_cli_config=ov_cli_config,
-        ov_agent_id=(ov_shared_id if ov_shared_id is not None else sample_id),
+        ov_user_id=(ov_shared_id if ov_shared_id is not None else sample_id),
     )
     elapsed = time.perf_counter() - t0
 
@@ -557,7 +556,7 @@ def main():
     parser.add_argument(
         "--ov-shared-id",
         default=None,
-        help="If set, use this single agent_id/user for all samples (no per-sample isolation). Empty string '' means do NOT set OPENVIKING_AGENT_ID at all (server falls back to 'default').",
+        help="If set, use this single OpenViking user for all samples (no per-sample isolation). Empty string '' means do not set OPENVIKING_USER.",
     )
     parser.add_argument(
         "--ov-preamble",

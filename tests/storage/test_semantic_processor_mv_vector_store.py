@@ -125,7 +125,7 @@ class _NoopLockContext:
 async def test_mv_vector_store_moves_records(monkeypatch):
     from openviking.storage.viking_fs import VikingFS
 
-    ctx = RequestContext(user=UserIdentifier("acc", "user", "agent"), role=Role.ROOT)
+    ctx = RequestContext(user=UserIdentifier("acc", "user"), role=Role.ROOT)
     old_uri = "viking://resources/a"
     new_uri = "viking://resources/b"
 
@@ -200,7 +200,7 @@ async def test_mv_vector_store_moves_records(monkeypatch):
 async def test_mv_vector_store_requires_directories(monkeypatch):
     from openviking.storage.viking_fs import VikingFS
 
-    ctx = RequestContext(user=UserIdentifier("acc", "user", "agent"), role=Role.ROOT)
+    ctx = RequestContext(user=UserIdentifier("acc", "user"), role=Role.ROOT)
     old_uri = "viking://resources/a"
     new_uri = "viking://resources/b"
 

@@ -43,7 +43,7 @@ def _build_duplicate_session_skill_operations() -> ResolvedOperations:
                     "content": content,
                 },
                 memory_type="session_skills",
-                uris=["viking://agent/default/skills/general-knowledge-flow/SKILL.md"],
+                uris=["viking://user/default/skills/general-knowledge-flow/SKILL.md"],
             ),
             ResolvedOperation(
                 old_memory_file_content=None,
@@ -53,7 +53,7 @@ def _build_duplicate_session_skill_operations() -> ResolvedOperations:
                     "content": content,
                 },
                 memory_type="session_skills",
-                uris=["viking://agent/default/skills/general-knowledge-steps/SKILL.md"],
+                uris=["viking://user/default/skills/general-knowledge-steps/SKILL.md"],
             ),
         ],
         delete_file_contents=[],
@@ -75,8 +75,9 @@ async def test_session_compressor_v2_extract_agent_memories_returns_session_skil
         strict_extract_errors,
         phase_label,
         post_apply=None,
+        **kwargs,
     ):
-        del self, messages, ctx, strict_extract_errors, post_apply
+        del self, messages, ctx, strict_extract_errors, post_apply, kwargs
         assert phase_label == "trajectory"
         assert provider._include_trajectories is False
         assert provider._include_session_skills is True
@@ -89,9 +90,9 @@ async def test_session_compressor_v2_extract_agent_memories_returns_session_skil
                 {
                     "status": "success",
                     "action": "create",
-                    "uri": "viking://agent/default/skills/code-review",
-                    "root_uri": "viking://agent/default/skills/code-review",
-                    "skill_md_uri": "viking://agent/default/skills/code-review/SKILL.md",
+                    "uri": "viking://user/default/skills/code-review",
+                    "root_uri": "viking://user/default/skills/code-review",
+                    "skill_md_uri": "viking://user/default/skills/code-review/SKILL.md",
                 }
             ],
         )
@@ -113,9 +114,9 @@ async def test_session_compressor_v2_extract_agent_memories_returns_session_skil
             {
                 "status": "success",
                 "action": "create",
-                "uri": "viking://agent/default/skills/code-review",
-                "root_uri": "viking://agent/default/skills/code-review",
-                "skill_md_uri": "viking://agent/default/skills/code-review/SKILL.md",
+                "uri": "viking://user/default/skills/code-review",
+                "root_uri": "viking://user/default/skills/code-review",
+                "skill_md_uri": "viking://user/default/skills/code-review/SKILL.md",
                 "archive_uri": "viking://sessions/s1/history/archive_001",
             }
         ],
@@ -178,7 +179,7 @@ async def test_session_compressor_v2_run_extract_phase_dedups_duplicate_session_
     )
 
     assert result is not None
-    assert result[4][0]["uri"] == "viking://agent/default/skills/general-knowledge-flow"
+    assert result[4][0]["uri"] == "viking://user/default/skills/general-knowledge-flow"
 
 
 @pytest.mark.asyncio
@@ -189,7 +190,7 @@ async def test_session_skill_context_provider_prefetch_lists_existing_skills():
         return_value=[
             {
                 "name": "code-review",
-                "uri": "viking://agent/default/skills/code-review",
+                "uri": "viking://user/default/skills/code-review",
                 "isDir": True,
                 "abstract": "name: code-review\ndescription: Review code carefully",
             }
@@ -239,7 +240,7 @@ async def test_agent_trajectory_context_provider_delegates_skill_prefetch_and_re
         return_value=[
             {
                 "name": "code-review",
-                "uri": "viking://agent/default/skills/code-review",
+                "uri": "viking://user/default/skills/code-review",
                 "isDir": True,
                 "abstract": "name: code-review\ndescription: Review code carefully",
             }
@@ -274,7 +275,7 @@ tags:
     read_result = await provider.execute_tool(
         SimpleNamespace(
             name="read",
-            arguments={"uri": "viking://agent/default/skills/code-review/SKILL.md"},
+            arguments={"uri": "viking://user/default/skills/code-review/SKILL.md"},
         )
     )
 
@@ -283,7 +284,7 @@ tags:
     assert provider.get_tools() == ["read"]
     assert read_result["name"] == "code-review"
     assert "先读文件" in read_result["content"]
-    assert "viking://agent/default/skills/code-review/SKILL.md" in provider.read_file_contents
+    assert "viking://user/default/skills/code-review/SKILL.md" in provider.read_file_contents
     assert provider._skill_provider.read_file_contents is provider.read_file_contents
     assert provider._skill_provider._ctx is ctx
     assert provider._skill_provider._viking_fs is viking_fs
@@ -296,8 +297,8 @@ async def test_skill_operation_updater_creates_skill_with_session_defaults():
     processor.process_skill = AsyncMock(
         return_value={
             "status": "success",
-            "uri": "viking://agent/default/skills/code-review",
-            "root_uri": "viking://agent/default/skills/code-review",
+            "uri": "viking://user/default/skills/code-review",
+            "root_uri": "viking://user/default/skills/code-review",
         }
     )
     processor.sanitize_skill_privacy = AsyncMock(side_effect=lambda skill_dict, _ctx: skill_dict)
@@ -308,7 +309,7 @@ async def test_skill_operation_updater_creates_skill_with_session_defaults():
         skill_processor=processor,
         viking_fs=viking_fs,
     )
-    uri = "viking://agent/default/skills/code-review/SKILL.md"
+    uri = "viking://user/default/skills/code-review/SKILL.md"
     operations = ResolvedOperations(
         upsert_operations=[
             ResolvedOperation(
@@ -387,7 +388,7 @@ tags:
         skill_processor=processor,
         viking_fs=viking_fs,
     )
-    uri = "viking://agent/default/skills/code-review/SKILL.md"
+    uri = "viking://user/default/skills/code-review/SKILL.md"
     operations = ResolvedOperations(
         upsert_operations=[
             ResolvedOperation(
@@ -490,7 +491,7 @@ tags:
         skill_processor=processor,
         viking_fs=viking_fs,
     )
-    uri = "viking://agent/default/skills/code-review/SKILL.md"
+    uri = "viking://user/default/skills/code-review/SKILL.md"
     operations = ResolvedOperations(
         upsert_operations=[
             ResolvedOperation(

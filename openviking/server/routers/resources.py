@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 from openviking.core.path_variables import resolve_path_variables
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
-from openviking.server.identity import AccountNamespacePolicy, RequestContext, Role
+from openviking.server.identity import RequestContext, Role
 from openviking.server.local_input_guard import require_remote_resource_source
 from openviking.server.responses import response_from_result
 from openviking.server.telemetry import run_operation
@@ -149,24 +149,23 @@ async def temp_upload_signed(
     """Upload via short-lived signed token. Used by the MCP progressive-upload flow.
 
     No identity headers required — the token (issued by ``add_resource`` MCP for local-file
-    paths) carries the bound (account_id, user_id, agent_id). The token is consumed on first
+    paths) carries the bound (account_id, user_id). The token is consumed on first
     use; subsequent attempts return 401. The server mints the ``temp_file_id`` at write time
-    and returns it in the response body; the agent then calls ``add_resource`` with that id.
+    and returns it in the response body; the caller then calls ``add_resource`` with that id.
 
     Persistence flows through :class:`TempUploadStore`, so the same local/shared upload modes
     and size limit (``temp_upload.shared_max_size_bytes``) as the auth'd ``/temp_upload`` route
     apply here too.
     """
     try:
-        account_id, user_id, agent_id = upload_token_store.consume(token)
+        account_id, user_id = upload_token_store.consume(token)
     except UploadTokenError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
     try:
         ctx = RequestContext(
-            user=UserIdentifier(account_id, user_id, agent_id),
+            user=UserIdentifier(account_id, user_id),
             role=Role.USER,
-            namespace_policy=AccountNamespacePolicy(),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=f"invalid identity in token: {exc}") from exc
@@ -199,6 +198,12 @@ async def add_resource(
     allow_local_path_resolution = False
     original_filename = None
     resolved = None
+    store = None
+
+    # Resolve path variables before passing to service.
+    to = resolve_path_variables(request.to) if request.to else None
+    parent = resolve_path_variables(request.parent) if request.parent else None
+
     if request.temp_file_id:
         store = TempUploadStore.build(http_request.app.state.config)
         resolved = await store.resolve_for_consume(request.temp_file_id, _ctx)
@@ -228,11 +233,16 @@ async def add_resource(
     if request.preserve_structure is not None:
         kwargs["preserve_structure"] = request.preserve_structure
 
-    # Resolve path variables before passing to service
-    to = resolve_path_variables(request.to) if request.to else None
-    parent = resolve_path_variables(request.parent) if request.parent else None
-
-    store = TempUploadStore.build(http_request.app.state.config) if resolved else None
+    async def _cleanup_resolved(success: bool) -> None:
+        if not resolved or not store:
+            return
+        try:
+            if success:
+                await store.mark_consumed(resolved, _ctx)
+            else:
+                await store.mark_failed(resolved, _ctx)
+        finally:
+            await resolved.cleanup()
 
     async def _add() -> dict[str, Any]:
         try:
@@ -247,19 +257,17 @@ async def add_resource(
                 timeout=request.timeout,
                 allow_local_path_resolution=allow_local_path_resolution,
                 enforce_public_remote_targets=True,
+                source_cleanup=_cleanup_resolved if resolved and not request.wait else None,
                 **kwargs,
             )
         except Exception:
-            if resolved and store:
-                await store.mark_failed(resolved, _ctx)
+            if request.wait:
+                await _cleanup_resolved(False)
             raise
         else:
-            if resolved and store:
-                await store.mark_consumed(resolved, _ctx)
+            if request.wait:
+                await _cleanup_resolved(True)
             return result
-        finally:
-            if resolved:
-                await resolved.cleanup()
 
     execution = await run_operation(
         operation="resources.add_resource",

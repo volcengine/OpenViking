@@ -1,6 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import pytest
+
 from openviking.telemetry.request_wait_tracker import RequestWaitTracker
 
 
@@ -50,3 +52,14 @@ def test_request_wait_tracker_records_requeues():
         "Semantic": {"processed": 0, "requeue_count": 1, "error_count": 0, "errors": []},
         "Embedding": {"processed": 0, "requeue_count": 2, "error_count": 0, "errors": []},
     }
+
+
+async def test_wait_for_request_timeout_keeps_existing_error():
+    tracker = RequestWaitTracker()
+    telemetry_id = "tm_wait_timeout"
+
+    tracker.register_request(telemetry_id)
+    tracker.register_embedding_root(telemetry_id, "embedding-1")
+
+    with pytest.raises(TimeoutError, match="Request processing not complete after 0.01s"):
+        await tracker.wait_for_request(telemetry_id, timeout=0.01, poll_interval=0.001)

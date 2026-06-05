@@ -60,7 +60,6 @@ class OpenVikingStore(BaseStore):
         account: str | None = None,
         user: str | None = None,
         user_id: str | None = None,
-        agent_id: str | None = None,
         path: str | None = None,
         root_uri: str = "viking://user/memories/langgraph_store",
         index: bool | list[str] | None = None,
@@ -68,6 +67,7 @@ class OpenVikingStore(BaseStore):
         timeout: float | None = None,
         search_fetch_limit: int = 50,
         auto_initialize: bool = True,
+        peer_id: str | None = None,
     ):
         if _LANGGRAPH_IMPORT_ERROR is not None:
             raise _LANGGRAPH_IMPORT_ERROR
@@ -79,7 +79,6 @@ class OpenVikingStore(BaseStore):
             account=account,
             user=user,
             user_id=user_id,
-            agent_id=agent_id,
             path=path,
             auto_initialize=auto_initialize,
         )
@@ -88,6 +87,7 @@ class OpenVikingStore(BaseStore):
         self.wait = wait
         self.timeout = timeout
         self.search_fetch_limit = search_fetch_limit
+        self.peer_id = peer_id
         self._client_cache: Any = None
 
     def batch(self, ops: Iterable[Any]) -> list[Any]:
@@ -231,6 +231,7 @@ class OpenVikingStore(BaseStore):
             "find",
             query=query,
             target_uri=self._index_prefix_uri(namespace_prefix),
+            peer_id=self.peer_id,
             limit=max(limit + offset, self.search_fetch_limit),
         )
         items: list[Any] = []
@@ -463,7 +464,7 @@ def _parse_canonicalized_record_uri(
 
 
 def _identity_relative_root_tail(classification: UriClassification) -> tuple[str, ...] | None:
-    if classification.scope not in {"user", "agent"}:
+    if classification.scope != "user":
         return None
     if classification.content_index != 1:
         return None

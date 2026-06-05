@@ -290,7 +290,7 @@ impl TreeState {
             self.scroll_offset = self.cursor - viewport_height + 1;
         }
     }
-    
+
     /// Expand a node by its URI
     pub async fn expand_node_by_uri(&mut self, client: &HttpClient, uri: &str) {
         // Find the node in visible rows
@@ -316,7 +316,7 @@ impl TreeState {
             }
         }
     }
-    
+
     pub fn allow_deletion(&self, selected_uri: &str) -> bool {
         selected_uri != "/" && !Self::ROOT_SCOPES.iter().any(|s| selected_uri == format!("viking://{}", s))
     }

@@ -10,7 +10,6 @@ import requests
 
 url = "https://api.vikingdb.cn-beijing.volces.com/openviking"
 api_key = "[TODO]your-api-key"
-agent_id = "[TODO]your-agent-id"
 file_path = Path("[TODO]your-file-path")  # e.g. test.txt
 resource_to = "[TODO]your-resource-path"  # e.g. viking://resources/test.txt
 reason = "[TODO]your-reason"  # e.g. External API documentation
@@ -19,7 +18,6 @@ reason = "[TODO]your-reason"  # e.g. External API documentation
 headers = {
     "Content-Type": "application/json",
     "Authorization": "Bearer " + api_key,
-    "X-OpenViking-Agent": agent_id,
 }
 
 def post_json(path: str, payload: dict, timeout: float):
@@ -33,7 +31,6 @@ with file_path.open("rb") as file:
         f"{url}/api/v1/resources/temp_upload",
         headers={
             "Authorization": "Bearer " + api_key,
-            "X-OpenViking-Agent": agent_id,
         },
         files={"file": (file_path.name, file, "application/octet-stream")},
         timeout=120.0,

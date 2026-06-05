@@ -44,6 +44,12 @@ pub(crate) enum ApiKeyRole {
     Regular,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IdentityField {
+    Account,
+    User,
+}
+
 #[derive(Debug, Clone)]
 pub struct ConfigDraft {
     pub name: String,
@@ -61,6 +67,18 @@ pub struct ConfigEntry {
     pub config: Config,
     pub is_active: bool,
     pub kind: ConfigKind,
+}
+
+#[derive(Debug, Clone)]
+pub struct InvalidSavedConfig {
+    pub name: String,
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConfigListReport {
+    pub configs: Vec<ConfigEntry>,
+    pub invalid_configs: Vec<InvalidSavedConfig>,
 }
 
 #[derive(Debug, Clone)]
@@ -112,11 +130,35 @@ impl ConfigStore {
         )?))
     }
 
+    pub(crate) fn load_saved_config(&self, name: &str) -> Result<Config> {
+        let path = self.saved_config_path(name)?;
+        if !path.exists() {
+            return Err(Error::Config(format!("Config '{name}' does not exist")));
+        }
+        Config::from_file(&path.to_string_lossy())
+            .map_err(|e| Error::Config(format!("Failed to read config '{name}': {e}")))
+    }
+
     pub fn list_configs(&self) -> Result<Vec<ConfigEntry>> {
+        let report = self.list_configs_report()?;
+        for invalid in &report.invalid_configs {
+            eprintln!(
+                "Warning: skipped invalid OpenViking config '{}'",
+                invalid.path.display()
+            );
+        }
+        Ok(report.configs)
+    }
+
+    pub fn list_configs_report(&self) -> Result<ConfigListReport> {
         let mut configs = Vec::new();
+        let mut invalid_configs = Vec::new();
 
         if !self.config_dir.exists() {
-            return Ok(configs);
+            return Ok(ConfigListReport {
+                configs,
+                invalid_configs,
+            });
         }
 
         for entry in fs::read_dir(&self.config_dir)? {
@@ -137,10 +179,10 @@ impl ConfigStore {
             }
 
             let Ok(config) = Config::from_file(&path.to_string_lossy()) else {
-                eprintln!(
-                    "Warning: skipped invalid OpenViking config '{}'",
-                    path.display()
-                );
+                invalid_configs.push(InvalidSavedConfig {
+                    name: name.to_string(),
+                    path,
+                });
                 continue;
             };
 
@@ -163,8 +205,12 @@ impl ConfigStore {
         }
 
         configs.sort_by(|left, right| left.name.cmp(&right.name));
+        invalid_configs.sort_by(|left, right| left.name.cmp(&right.name));
         normalize_active_config(&mut configs);
-        Ok(configs)
+        Ok(ConfigListReport {
+            configs,
+            invalid_configs,
+        })
     }
 
     pub fn save_named_config(&self, name: &str, config: &Config) -> Result<()> {
@@ -338,6 +384,53 @@ pub fn validate_config_name(name: &str) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn validate_account_id_value(value: &str) -> Result<()> {
+    validate_identity_value(value, IdentityField::Account)
+}
+
+pub(crate) fn validate_user_id_value(value: &str) -> Result<()> {
+    validate_identity_value(value, IdentityField::User)
+}
+
+pub(crate) fn validate_identity_value(value: &str, field: IdentityField) -> Result<()> {
+    let field_name = match field {
+        IdentityField::Account => "Account ID",
+        IdentityField::User => "User ID",
+    };
+    let identifier_name = match field {
+        IdentityField::Account => "account_id",
+        IdentityField::User => "user_id",
+    };
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(Error::Config(format!("{field_name} cannot be empty")));
+    }
+    if trimmed != value {
+        return Err(Error::Config(format!(
+            "{field_name} cannot start or end with whitespace"
+        )));
+    }
+    if matches!(field, IdentityField::Account) && trimmed.starts_with('_') {
+        return Err(Error::Config(
+            "Account ID cannot start with '_'".to_string(),
+        ));
+    }
+    if !trimmed
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | '@'))
+    {
+        return Err(Error::Config(format!(
+            "{field_name} can only contain letters, numbers, '_', '-', '.', and '@'"
+        )));
+    }
+    if trimmed.matches('@').count() > 1 {
+        return Err(Error::Config(format!(
+            "{identifier_name} must have at most one '@'"
+        )));
+    }
+    Ok(())
+}
+
 pub fn build_config(draft: &ConfigDraft) -> Result<Config> {
     validate_config_name(&draft.name)?;
 
@@ -401,15 +494,15 @@ pub(crate) fn normalize_self_managed_url(url: &str) -> String {
     if trimmed.eq_ignore_ascii_case("::1") || trimmed.eq_ignore_ascii_case("[::1]") {
         return format!("http://[::1]:{DEFAULT_SELF_MANAGED_PORT}");
     }
-    if let Some(port) = trimmed.strip_prefix("[::1]:") {
-        if !port.trim().is_empty() {
-            return format!("http://[::1]:{port}");
-        }
+    if let Some(port) = trimmed.strip_prefix("[::1]:")
+        && !port.trim().is_empty()
+    {
+        return format!("http://[::1]:{port}");
     }
-    if let Some(port) = trimmed.strip_prefix("::1:") {
-        if !port.trim().is_empty() {
-            return format!("http://[::1]:{port}");
-        }
+    if let Some(port) = trimmed.strip_prefix("::1:")
+        && !port.trim().is_empty()
+    {
+        return format!("http://[::1]:{port}");
     }
 
     if Url::parse(trimmed).is_ok() {
@@ -466,12 +559,12 @@ pub(crate) async fn validate_candidate_config_with_role(
     }
 
     let timeout = config.timeout.clamp(1.0, 10.0);
+    let auth = config.effective_auth(false);
     let client = BaseClient::new(
         &config.url,
-        api_key.clone(),
-        config.agent_id.clone(),
-        config.account.clone(),
-        config.user.clone(),
+        auth.api_key.clone(),
+        auth.account,
+        auth.user,
         timeout,
         config.profile,
         config.extra_headers.clone(),
@@ -488,11 +581,11 @@ pub(crate) async fn validate_candidate_config_with_role(
         ));
     }
 
-    if should_run_authenticated_probe(&value, require_api_key, api_key.is_some()) {
+    if should_run_authenticated_probe(&value, require_api_key, auth.api_key.is_some()) {
         let _: Value = client.get("/api/v1/system/status", &[]).await?;
     }
 
-    if api_key.is_some() {
+    if auth.api_key.is_some() {
         return detect_api_key_role(&client).await.map(Some);
     }
 
@@ -502,9 +595,30 @@ pub(crate) async fn validate_candidate_config_with_role(
 async fn detect_api_key_role(client: &BaseClient) -> Result<ApiKeyRole> {
     match client.get::<Value>("/api/v1/admin/accounts", &[]).await {
         Ok(_) => Ok(ApiKeyRole::Root),
-        Err(Error::Api(_)) => Ok(ApiKeyRole::Regular),
+        Err(Error::Api {
+            status: Some(status),
+            ..
+        }) if admin_probe_regular_key_status(status) => Ok(ApiKeyRole::Regular),
+        Err(Error::Api { message, status }) => Err(Error::Api { message, status }),
         Err(error) => Err(error),
     }
+}
+
+fn admin_probe_regular_key_status(status: u16) -> bool {
+    matches!(
+        status,
+        // 401/403 means the key works but does not have admin access.
+        401 | 403
+            // Some self-managed deployments may not expose the admin endpoint.
+            // Treat explicit absence as regular access rather than blocking a
+            // valid non-admin setup.
+            | 404
+    )
+}
+
+#[cfg(test)]
+fn admin_probe_ambiguous_status(status: u16) -> bool {
+    matches!(status, 408 | 429 | 500..=599)
 }
 
 fn should_run_authenticated_probe(
@@ -568,7 +682,7 @@ fn write_file_atomically(path: &Path, content: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn configs_equivalent(left: &Config, right: &Config) -> Result<bool> {
+pub(crate) fn configs_equivalent(left: &Config, right: &Config) -> Result<bool> {
     Ok(serde_json::to_value(left)? == serde_json::to_value(right)?)
 }
 
@@ -582,7 +696,8 @@ fn non_empty_option(value: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ApiKeyRole, ConfigDraft, ConfigKind, ConfigStore, VOLCENGINE_CLOUD_URL, build_config,
+        ApiKeyRole, ConfigDraft, ConfigKind, ConfigStore, VOLCENGINE_CLOUD_URL,
+        admin_probe_ambiguous_status, admin_probe_regular_key_status, build_config,
         should_run_authenticated_probe, validate_candidate_config,
         validate_candidate_config_with_role, validate_config_name, validation_error_copy,
     };
@@ -855,6 +970,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn api_key_role_detection_fails_on_ambiguous_admin_probe_errors() {
+        let url = spawn_admin_probe_500_server("maybe-root").await;
+        let config = sample_config(&url, Some("maybe-root"));
+
+        let error = validate_candidate_config_with_role(&config, true)
+            .await
+            .expect_err("admin probe 500 should not be classified as regular");
+
+        assert!(matches!(
+            error,
+            crate::error::Error::Api {
+                status: Some(500),
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
     async fn self_managed_config_with_api_key_validates_authenticated_probe() {
         let url = spawn_auth_probe_server("good-key").await;
         let config = sample_config(&url, Some("bad-key"));
@@ -863,7 +996,7 @@ mod tests {
             .await
             .expect_err("bad self-managed API key should fail validation");
 
-        assert!(matches!(error, crate::error::Error::Api(_)));
+        assert!(matches!(error, crate::error::Error::Api { .. }));
     }
 
     #[tokio::test]
@@ -875,7 +1008,7 @@ mod tests {
             .await
             .expect_err("auth-required local server should reject empty API key");
 
-        assert!(matches!(error, crate::error::Error::Api(_)));
+        assert!(matches!(error, crate::error::Error::Api { .. }));
     }
 
     #[test]
@@ -900,8 +1033,20 @@ mod tests {
     }
 
     #[test]
+    fn admin_probe_status_classification_is_explicit() {
+        assert!(admin_probe_regular_key_status(401));
+        assert!(admin_probe_regular_key_status(403));
+        assert!(admin_probe_regular_key_status(404));
+        assert!(admin_probe_ambiguous_status(408));
+        assert!(admin_probe_ambiguous_status(429));
+        assert!(admin_probe_ambiguous_status(500));
+        assert!(admin_probe_ambiguous_status(503));
+        assert!(!admin_probe_regular_key_status(500));
+    }
+
+    #[test]
     fn validation_error_copy_hides_raw_backend_details() {
-        let error = crate::error::Error::Api(
+        let error = crate::error::Error::api(
             "[AuthenticationError] invalid key. Request ID: 02177930089909800000000000000000ffff"
                 .to_string(),
         );
@@ -1135,10 +1280,53 @@ mod tests {
         format!("http://{addr}")
     }
 
+    async fn spawn_admin_probe_500_server(api_key: &'static str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test server should bind");
+        let addr = listener.local_addr().expect("test server should have addr");
+        tokio::spawn(async move {
+            for _ in 0..3 {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let mut buffer = vec![0; 4096];
+                let Ok(read) = stream.read(&mut buffer).await else {
+                    return;
+                };
+                let request = String::from_utf8_lossy(&buffer[..read]);
+                let lower_request = request.to_ascii_lowercase();
+                let api_header = format!("x-api-key: {api_key}");
+                let response = if request.starts_with("GET /health ") {
+                    http_response(200, r#"{"healthy":true,"auth_mode":"api_key"}"#)
+                } else if request.starts_with("GET /api/v1/system/status ") {
+                    if lower_request.contains(&api_header) {
+                        http_response(200, r#"{"status":"ok","result":{"initialized":true}}"#)
+                    } else {
+                        http_response(
+                            401,
+                            r#"{"error":{"code":"AuthenticationError","message":"invalid key"}}"#,
+                        )
+                    }
+                } else if request.starts_with("GET /api/v1/admin/accounts ") {
+                    http_response(
+                        500,
+                        r#"{"error":{"code":"INTERNAL","message":"admin probe failed"}}"#,
+                    )
+                } else {
+                    http_response(404, r#"{"error":{"message":"not found"}}"#)
+                };
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+        format!("http://{addr}")
+    }
+
     fn http_response(status: u16, body: &str) -> String {
         let reason = match status {
             200 => "OK",
             401 => "Unauthorized",
+            500 => "Internal Server Error",
             404 => "Not Found",
             _ => "OK",
         };

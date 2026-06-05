@@ -15,7 +15,8 @@ from openviking_cli.exceptions import PermissionDeniedError
 def _make_viking_fs() -> VikingFS:
     """Create a VikingFS instance with a mocked AGFS backend."""
     fs = VikingFS.__new__(VikingFS)
-    fs.agfs = MagicMock()
+    fs.agfs = AsyncMock()
+    fs._async_agfs = fs.agfs
     fs.query_embedder = None
     fs.rerank_config = None
     fs.vector_store = None
@@ -119,8 +120,8 @@ class TestVikingFSURITraversalGuard:
     @pytest.mark.asyncio
     async def test_read_file_keeps_valid_uri_behavior(self) -> None:
         fs = _make_viking_fs()
-        fs.agfs.stat = MagicMock(return_value=MagicMock())
-        fs.agfs.read = MagicMock(return_value=b"hello")
+        fs.agfs.stat = AsyncMock(return_value=MagicMock())
+        fs.agfs.read = AsyncMock(return_value=b"hello")
 
         content = await fs.read_file("viking://resources/docs/guide.md")
         assert content == "hello"
@@ -149,7 +150,7 @@ class TestVikingFSURITraversalGuard:
         fs = _make_viking_fs()
         fs._encryptor = None
         fs._ensure_access = MagicMock()
-        fs.agfs.grep = MagicMock(
+        fs.agfs.grep = AsyncMock(
             return_value={
                 "matches": [
                     {
@@ -175,7 +176,7 @@ class TestVikingFSURITraversalGuard:
         fs = _make_viking_fs()
         fs._encryptor = None
         fs._ensure_access = MagicMock()
-        fs.agfs.grep = MagicMock(
+        fs.agfs.grep = AsyncMock(
             return_value={
                 "matches": [
                     {
@@ -195,7 +196,8 @@ class TestVikingFSURITraversalGuard:
         assert result["matches"][0]["line"] == 1
         assert result["matches"][0]["content"] == "act"
 
-    def test_ls_entries_hides_reserved_tasks_dir_under_account_root(self) -> None:
+    @pytest.mark.asyncio
+    async def test_ls_entries_filters_account_root_to_listable_scopes(self) -> None:
         fs = _make_viking_fs()
         fs.agfs.ls.return_value = [
             {"name": "resources", "isDir": True},
@@ -203,6 +205,6 @@ class TestVikingFSURITraversalGuard:
             {"name": "_system", "isDir": True},
         ]
 
-        entries = fs._ls_entries("/local/default")
+        entries = await fs._ls_entries("/local/default")
 
         assert [entry["name"] for entry in entries] == ["resources"]

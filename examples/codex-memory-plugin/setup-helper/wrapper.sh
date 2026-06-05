@@ -111,7 +111,6 @@ codex() {
   [ -n "$_ov_key" ]     && _env_args+=("OPENVIKING_API_KEY=$_ov_key")
   [ -n "$_ov_account" ] && _env_args+=("OPENVIKING_ACCOUNT=$_ov_account")
   [ -n "$_ov_user" ]    && _env_args+=("OPENVIKING_USER=$_ov_user")
-  _env_args+=("OPENVIKING_AGENT_ID=${OPENVIKING_AGENT_ID:-codex}")
 
   env "${_env_args[@]}" codex "$@"
 }

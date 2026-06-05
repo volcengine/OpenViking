@@ -18,7 +18,7 @@ from openviking_cli.session.user_id import UserIdentifier
 
 def _ctx(role: Role = Role.ADMIN) -> RequestContext:
     return RequestContext(
-        user=UserIdentifier(account_id="acct-1", user_id="user-1", agent_id="agent-1"),
+        user=UserIdentifier(account_id="acct-1", user_id="user-1"),
         role=role,
     )
 
@@ -83,7 +83,6 @@ class FakeConsoleService:
             "context_counts": {},
             "today_tokens": {},
             "today_retrievals": {},
-            "agent_overview": {"total": 0, "items": []},
         }
 
     async def audit_logs(self, **kwargs):

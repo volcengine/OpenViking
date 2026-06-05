@@ -46,7 +46,7 @@ def _write_config(config_path: Path, templates_dir: Path) -> None:
             {
                 "storage": {
                     "workspace": str(config_path.parent / "workspace"),
-                    "agfs": {"backend": "local", "mode": "binding-client"},
+                    "agfs": {"backend": "local"},
                     "vectordb": {"backend": "local"},
                 },
                 "embedding": {
@@ -326,8 +326,10 @@ def test_context_provider_schema_directories_prefer_custom_memory_dir_over_promp
     )
     monkeypatch.setattr(
         "os.path.exists",
-        lambda path: path == str(custom_memory_dir)
-        or path == str(PromptManager._get_bundled_templates_dir() / "memory"),
+        lambda path: (
+            path == str(custom_memory_dir)
+            or path == str(PromptManager._get_bundled_templates_dir() / "memory")
+        ),
     )
 
     provider = SessionExtractContextProvider(messages=[])

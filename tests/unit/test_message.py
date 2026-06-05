@@ -136,7 +136,7 @@ class TestToolPart:
             tool_id="call-123",
             tool_name="search",
             tool_uri="viking://session/test/tools/call-123",
-            skill_uri="viking://agent/test/skills/search",
+            skill_uri="viking://user/test/skills/search",
             tool_input={"query": "test"},
             tool_output="Result",
             tool_status="completed",
@@ -155,7 +155,7 @@ class TestToolPart:
         assert part.tool_id == "call-123"
         assert part.tool_name == "search"
         assert part.tool_uri == "viking://session/test/tools/call-123"
-        assert part.skill_uri == "viking://agent/test/skills/search"
+        assert part.skill_uri == "viking://user/test/skills/search"
         assert part.tool_input == {"query": "test"}
         assert part.tool_output == "Result"
         assert part.tool_status == "completed"
@@ -232,7 +232,7 @@ class TestPartFromDict:
             "tool_id": "call-123",
             "tool_name": "search",
             "tool_uri": "viking://session/test/tools/call-123",
-            "skill_uri": "viking://agent/test/skills/search",
+            "skill_uri": "viking://user/test/skills/search",
             "tool_input": {"query": "test"},
             "tool_output": "Result",
             "tool_status": "completed",
@@ -607,7 +607,7 @@ class TestMessageFromDict:
             "content": "Legacy message",
             "created_at": "2026-03-26T10:30:00Z",
         }
-        fresh = Message.create_user("Fresh message", msg_id="msg-fresh")
+        fresh = Message(id="msg-fresh", role="user", parts=[TextPart("Fresh message")])
 
         reloaded_messages = [Message.from_dict(legacy_row), Message.from_dict(fresh.to_dict())]
 
@@ -623,86 +623,8 @@ class TestMessageFromDict:
         ]
 
 
-class TestMessageFactoryMethods:
-    """Test Message factory methods."""
-
-    def test_create_user(self):
-        """Test create_user factory method."""
-        msg = Message.create_user("Hello, assistant!")
-
-        assert msg.role == "user"
-        assert msg.content == "Hello, assistant!"
-        assert len(msg.parts) == 1
-        assert msg.id.startswith("msg_")
-
-    def test_create_user_with_id(self):
-        """Test create_user with custom ID."""
-        msg = Message.create_user("Hello", msg_id="custom-id")
-
-        assert msg.id == "custom-id"
-
-    def test_create_assistant(self):
-        """Test create_assistant factory method."""
-        msg = Message.create_assistant("Hello, user!")
-
-        assert msg.role == "assistant"
-        assert msg.content == "Hello, user!"
-        assert len(msg.parts) == 1
-
-    def test_create_assistant_with_context_refs(self):
-        """Test create_assistant with context references."""
-        msg = Message.create_assistant(
-            content="Here's what I found:",
-            context_refs=[
-                {"uri": "viking://test/1.md", "context_type": "memory"},
-                {"uri": "viking://test/2.md", "context_type": "resource"},
-            ],
-        )
-
-        assert msg.role == "assistant"
-        assert len(msg.parts) == 3  # 1 text + 2 context
-
-    def test_create_assistant_with_tool_calls(self):
-        """Test create_assistant with tool calls."""
-        msg = Message.create_assistant(
-            content="Let me search for that.",
-            tool_calls=[
-                {"id": "call-1", "name": "search", "uri": "viking://tools/1"},
-            ],
-        )
-
-        assert msg.role == "assistant"
-        assert len(msg.parts) == 2  # 1 text + 1 tool
-
-    def test_create_assistant_empty(self):
-        """Test create_assistant with no content."""
-        msg = Message.create_assistant()
-
-        assert msg.role == "assistant"
-        assert msg.content == ""
-        assert len(msg.parts) == 0
-
-
 class TestMessageMethods:
     """Test Message methods."""
-
-    def test_get_context_parts(self):
-        """Test get_context_parts method."""
-        msg = Message(
-            id="msg-1",
-            role="assistant",
-            parts=[
-                TextPart(text="Hello"),
-                ContextPart(uri="viking://test/1.md"),
-                TextPart(text="More text"),
-                ContextPart(uri="viking://test/2.md"),
-            ],
-        )
-
-        context_parts = msg.get_context_parts()
-
-        assert len(context_parts) == 2
-        assert all(isinstance(p, ContextPart) for p in context_parts)
 
     def test_get_tool_parts(self):
         """Test get_tool_parts method."""

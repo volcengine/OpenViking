@@ -37,8 +37,7 @@ Easiest path — write `~/.openviking/ovcli.conf` (the same file `ov` CLI uses):
   "url": "https://your-openviking-server.example.com",
   "api_key": "<your-api-key>",
   "account": "my-team",
-  "user": "alice",
-  "agent_id": "claude-code"
+  "user": "alice"
 }
 ```
 
@@ -71,8 +70,7 @@ claude mcp add --scope user --transport http openviking \
   '${OPENVIKING_URL:-http://127.0.0.1:1933}/mcp' \
   --header 'Authorization: Bearer ${OPENVIKING_API_KEY:-}' \
   --header 'X-OpenViking-Account: ${OPENVIKING_ACCOUNT:-}' \
-  --header 'X-OpenViking-User: ${OPENVIKING_USER:-}' \
-  --header 'X-OpenViking-Agent: ${OPENVIKING_AGENT_ID:-}'
+  --header 'X-OpenViking-User: ${OPENVIKING_USER:-}'
 
 # Merge plugin hooks into ~/.claude/settings.json (with backup).
 mkdir -p ~/.claude && [ -f ~/.claude/settings.json ] || echo '{}' > ~/.claude/settings.json
@@ -147,7 +145,7 @@ Re-source your rc (`source ~/.zshrc`, or `source ~/.bashrc` on bash) and restart
 Every plugin field follows this chain (highest → lowest):
 
 1. **Environment variables** (`OPENVIKING_*` — see tables below)
-2. **`ovcli.conf`** — CLI client config (`~/.openviking/ovcli.conf` or `OPENVIKING_CLI_CONFIG_FILE`); only carries connection fields (`url`, `api_key`, `account`, `user`, `agent_id`)
+2. **`ovcli.conf`** — CLI client config (`~/.openviking/ovcli.conf` or `OPENVIKING_CLI_CONFIG_FILE`); only carries connection fields (`url`, `api_key`, `account`, `user`)
 3. **`ov.conf`** — server config (`~/.openviking/ov.conf` or `OPENVIKING_CONFIG_FILE`); the plugin reads `server.url`, `server.root_api_key`, and a legacy `claude_code` block if present (see [Legacy `claude_code` block](#legacy-claude_code-block-in-ovconf))
 4. **Built-in defaults** (`http://127.0.0.1:1933`, no auth)
 
@@ -165,7 +163,9 @@ All plugin behavior can be set via env vars. Connection / identity vars affect b
 | `OPENVIKING_API_KEY` / `OPENVIKING_BEARER_TOKEN` | API key; sent as `Authorization: Bearer <key>`                           |
 | `OPENVIKING_ACCOUNT`                             | Multi-tenant account (`X-OpenViking-Account` header)                     |
 | `OPENVIKING_USER`                                | Multi-tenant user (`X-OpenViking-User` header)                           |
-| `OPENVIKING_AGENT_ID`                            | Agent identity, default `claude-code` (`X-OpenViking-Agent` header)      |
+| `OPENVIKING_PEER_ID`                             | Optional stable peer for recall and captured session messages            |
+
+When `OPENVIKING_PEER_ID` is set, hooks pass it as request-level `peer_id`. Subagent capture falls back to Claude's `agent_id` when no explicit peer is configured, so different subagents can keep separate peer memory by default.
 
 #### Recall tuning
 

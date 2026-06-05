@@ -5,8 +5,8 @@ LLMProvider interface, so that bot.agents.provider / bot.agents.model
 configuration semantics are consistent with openviking server's vlm section.
 """
 
-from typing import Any
 from collections.abc import AsyncIterator
+from typing import Any
 
 from loguru import logger
 
@@ -238,8 +238,7 @@ class VLMProviderAdapter(LLMProvider):
             output_text = llm_response.content or ""
             if llm_response.tool_calls:
                 output_text = (
-                    output_text
-                    or f"[Tool calls: {[tc.name for tc in llm_response.tool_calls]}]"
+                    output_text or f"[Tool calls: {[tc.name for tc in llm_response.tool_calls]}]"
                 )
 
             update_kwargs: dict[str, Any] = {

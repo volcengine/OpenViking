@@ -3,7 +3,6 @@ import {
   HEATMAP_EMPTY_COLOR,
 } from '../-constants/dashboard'
 import type {
-  ConsoleAgentVisit,
   ConsoleContextCommitItem,
   ConsoleTokenSeriesItem,
 } from '@ov-server/api/v1/console'
@@ -171,16 +170,4 @@ export function normalizeCommitItems(
         addResource + addSkill + sessionAddMessage + sessionCommit,
     }
   })
-}
-
-export function normalizeAgents(items: unknown): ConsoleAgentVisit[] {
-  return asArray(items)
-    .map((raw) => {
-      const record = asRecord(raw)
-      return {
-        agent_id: asString(record.agent_id),
-        last_seen_at: asString(record.last_seen_at),
-      }
-    })
-    .filter((item) => item.agent_id)
 }

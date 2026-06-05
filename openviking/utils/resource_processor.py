@@ -7,7 +7,9 @@ Handles coordinated writes and self-iteration processes
 as described in the OpenViking design document.
 """
 
+import inspect
 import time
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.parse.tree_builder import TreeBuilder
@@ -113,6 +115,7 @@ class ResourceProcessor:
         to: Optional[str] = None,
         parent: Optional[str] = None,
         summarize: bool = False,
+        stage_callback: Optional[Callable[[str], Any]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -130,7 +133,15 @@ class ResourceProcessor:
             "errors": [],
             "source_path": None,
         }
+        preacquired_lock = kwargs.pop("resource_lock", NO_LOCK) or NO_LOCK
         telemetry = get_current_telemetry()
+
+        async def _set_stage(stage: str) -> None:
+            if stage_callback is None:
+                return
+            result = stage_callback(stage)
+            if inspect.isawaitable(result):
+                await result
 
         with telemetry.measure("resource.process"):
             # ============ Phase 1: Parse source and writes to temp viking fs ============
@@ -147,6 +158,10 @@ class ResourceProcessor:
                 # Use reason as instruction fallback so it influences L0/L1
                 # generation and improves search relevance as documented.
                 effective_instruction = instruction or reason
+                if path.startswith(("http://", "https://", "git@", "ssh://", "git://")):
+                    await _set_stage("fetching")
+                else:
+                    await _set_stage("parsing")
                 with viking_fs.bind_request_context(ctx):
                     parse_result = await media_processor.process(
                         source=path,
@@ -207,6 +222,7 @@ class ResourceProcessor:
 
             # ============ Phase 3: TreeBuilder finalizes from temp (scan + move to AGFS) ============
             try:
+                await _set_stage("finalizing")
                 stage_start = time.perf_counter()
                 stage_status = "ok"
                 finalize_start = time.perf_counter()
@@ -258,7 +274,7 @@ class ResourceProcessor:
             temp_uri = result.get("temp_uri")  # temp_doc_uri
             original_temp_uri = temp_uri  # 保存原始 temp_uri 用于最终输出
             candidate_uri = getattr(context_tree, "_candidate_uri", None) if context_tree else None
-            resource_lock: LockLease = NO_LOCK
+            resource_lock: LockLease = preacquired_lock
             target_preexisting = False
             source_committed = False
 
@@ -271,17 +287,21 @@ class ResourceProcessor:
                 lock_manager = get_lock_manager()
                 try:
                     if candidate_uri:
-                        root_uri, resource_lock = await self._commit_unique_candidate(
-                            candidate_uri=candidate_uri,
-                            ctx=ctx,
-                        )
-                        result["root_uri"] = root_uri
+                        if resource_lock.active:
+                            root_uri = candidate_uri
+                        else:
+                            root_uri, resource_lock = await self.reserve_unique_candidate(
+                                candidate_uri=candidate_uri,
+                                ctx=ctx,
+                            )
+                            result["root_uri"] = root_uri
                     else:
                         target_preexisting = await viking_fs.exists(root_uri, ctx=ctx)
-                        dst_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
-                        resource_lock = await self._acquire_resource_lock(
-                            lock_manager, dst_path, uri=root_uri
-                        )
+                        if not resource_lock.active:
+                            dst_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
+                            resource_lock = await self.acquire_resource_lock(
+                                lock_manager, dst_path, uri=root_uri
+                            )
                     if not target_preexisting:
                         await viking_fs.persist_temp_tree(temp_uri, root_uri, ctx=ctx)
                         await viking_fs.delete_temp(parse_result.temp_dir_path, ctx=ctx)
@@ -357,7 +377,7 @@ class ResourceProcessor:
 
             return result
 
-    async def _commit_unique_candidate(
+    async def reserve_unique_candidate(
         self,
         *,
         candidate_uri: str,
@@ -378,7 +398,7 @@ class ResourceProcessor:
 
             dst_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
             try:
-                resource_lock = await self._acquire_resource_lock(
+                resource_lock = await self.acquire_resource_lock(
                     lock_manager, dst_path, uri=root_uri, timeout=0.0
                 )
                 return root_uri, resource_lock
@@ -390,7 +410,7 @@ class ResourceProcessor:
         )
 
     @staticmethod
-    async def _acquire_resource_lock(
+    async def acquire_resource_lock(
         lock_manager,
         path: str,
         *,

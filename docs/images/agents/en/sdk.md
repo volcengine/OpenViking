@@ -15,12 +15,10 @@ from openviking.client import SyncHTTPClient
 
 url = "https://api.vikingdb.cn-beijing.volces.com/openviking"
 api_key = "[TODO]your-api-key"
-agent_id = "[TODO]your-agent-id"
 
 client = SyncHTTPClient(
     url=url,
     api_key=api_key,
-    agent_id=agent_id,
     timeout=120.0,
 )
 client.initialize()

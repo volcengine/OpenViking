@@ -135,7 +135,7 @@ Prerequisites:
 
 This TUI is useful for two kinds of inspection:
 
-- checking what actually exists under `viking://resources`, `viking://user`, `viking://agent`, and `viking://session`
+- checking what actually exists under `viking://resources`, `viking://user`, and `viking://session`
 - checking whether vector records for a URI were actually written, and how many there are
 
 Common keys:

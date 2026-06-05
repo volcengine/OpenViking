@@ -44,7 +44,6 @@ MEMORY_DEDUP_OUTPUT_FIELDS = [
     "level",
     "account_id",
     "owner_user_id",
-    "owner_agent_id",
 ]
 
 FETCH_BY_URI_OUTPUT_FIELDS = [
@@ -61,7 +60,6 @@ FETCH_BY_URI_OUTPUT_FIELDS = [
     "abstract",
     "account_id",
     "owner_user_id",
-    "owner_agent_id",
 ]
 
 URI_REWRITE_OUTPUT_FIELDS = [

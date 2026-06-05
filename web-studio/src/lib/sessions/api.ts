@@ -147,7 +147,7 @@ function buildFetchHeaders(): Record<string, string> {
   const conn = ovClient.getConnection()
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (conn.apiKey) headers['X-API-Key'] = conn.apiKey
-  if (conn.role !== 'user') {
+  if (conn.identityHeaders) {
     if (conn.accountId) headers['X-OpenViking-Account'] = conn.accountId
     if (conn.userId) headers['X-OpenViking-User'] = conn.userId
   }
@@ -187,12 +187,13 @@ export async function sendChatStream(
   signal?: AbortSignal,
 ): Promise<Response> {
   const baseUrl = ovClient.getOptions().baseUrl
+  const conn = ovClient.getConnection()
   const response = await fetch(`${baseUrl}/bot/v1/chat/stream`, {
     method: 'POST',
     headers: buildFetchHeaders(),
     body: JSON.stringify({
       ...request,
-      user_id: request.user_id || undefined,
+      user_id: request.user_id || conn.userId || undefined,
       stream: true,
     }),
     signal,
@@ -212,10 +213,11 @@ export async function sendChatStream(
 export async function sendChat(
   request: BotChatRequest,
 ): Promise<BotChatResponse> {
+  const conn = ovClient.getConnection()
   const response = await postBotV1Chat({
     body: {
       ...request,
-      user_id: request.user_id || undefined,
+      user_id: request.user_id || conn.userId || undefined,
     },
     throwOnError: true,
   } as unknown as NonNullable<Parameters<typeof postBotV1Chat<true>>[0]>)
@@ -230,20 +232,17 @@ export async function sendChat(
 export function serializeParts(
   parts: MessagePart[],
 ): Array<Record<string, unknown>> {
-  return parts.flatMap((part) => {
+  return parts.map((part) => {
     if (part.type === 'text') {
-      return [{ type: 'text', text: part.text }]
-    }
-    if (part.type === 'reasoning') {
-      return []
+      return { type: 'text', text: part.text }
     }
     if (part.type === 'context') {
-      return [{
+      return {
         type: 'context',
         uri: part.uri,
         context_type: part.context_type,
         abstract: part.abstract,
-      }]
+      }
     }
     // tool
     const d: Record<string, unknown> = {
@@ -260,6 +259,6 @@ export function serializeParts(
     if (part.prompt_tokens != null) d.prompt_tokens = part.prompt_tokens
     if (part.completion_tokens != null)
       d.completion_tokens = part.completion_tokens
-    return [d]
+    return d
   })
 }

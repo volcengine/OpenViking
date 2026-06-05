@@ -19,7 +19,7 @@ except ImportError:
         __version__ = "0.0.0+unknown"
 
 try:
-    from openviking.pyagfs import AGFSClient
+    from openviking.pyagfs import get_binding_client
 except ImportError as exc:
     raise ImportError(
         "Bundled OpenViking AGFS client is unavailable. "

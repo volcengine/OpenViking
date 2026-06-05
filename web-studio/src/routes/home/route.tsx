@@ -4,7 +4,6 @@ import { createFileRoute } from '@tanstack/react-router'
 
 import { ContextCommitsPanel } from './-components/context-commits-panel'
 import {
-  AgentAccessPanel,
   ContextDataPanel,
   TodayRetrievalsPanel,
   TodayTokensPanel,
@@ -67,7 +66,7 @@ function HomePage() {
 
   return (
     <div className="flex flex-col gap-5 pb-8">
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-3">
         <ContextDataPanel
           data={summary?.context_counts}
           disabled={usageDisabled}
@@ -84,13 +83,6 @@ function HomePage() {
         />
         <TodayRetrievalsPanel
           data={summary?.today_retrievals}
-          disabled={usageDisabled}
-          isError={dashboard.isError}
-          isLoading={dashboard.isLoading}
-          t={t}
-        />
-        <AgentAccessPanel
-          data={summary?.agent_overview}
           disabled={usageDisabled}
           isError={dashboard.isError}
           isLoading={dashboard.isLoading}

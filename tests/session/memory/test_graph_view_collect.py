@@ -30,7 +30,7 @@ async def test_collect_graph_data_preserves_markdown_links_in_content_full():
     mock_fs.read_file = AsyncMock(return_value=content)
 
     graph = MemoryGraph(viking_fs=mock_fs)
-    ctx = RequestContext(user=UserIdentifier("acme", "alice", "bot"), role=Role.USER)
+    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
 
     nodes, edges = await graph._collect_graph_data(["viking://user/Calvin/memories"], ctx)
 
@@ -53,7 +53,7 @@ async def test_collect_graph_data_includes_root_level_profile_markdown():
     mock_fs.read_file = AsyncMock(return_value=content)
 
     graph = MemoryGraph(viking_fs=mock_fs)
-    ctx = RequestContext(user=UserIdentifier("acme", "alice", "bot"), role=Role.USER)
+    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
 
     nodes, edges = await graph._collect_graph_data(["viking://user/Caroline/memories"], ctx)
 
@@ -69,14 +69,16 @@ async def test_collect_graph_data_includes_content_preview():
 
     mock_fs = MagicMock()
     mock_fs.tree = AsyncMock(
-        return_value=[_file_entry("viking://agent/demo/memories/experiences/a.md", "experiences/a.md")]
+        return_value=[
+            _file_entry("viking://user/demo/memories/experiences/a.md", "experiences/a.md")
+        ]
     )
     mock_fs.read_file = AsyncMock(return_value=content)
 
     graph = MemoryGraph(viking_fs=mock_fs)
-    ctx = RequestContext(user=UserIdentifier("acme", "alice", "bot"), role=Role.USER)
+    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
 
-    nodes, edges = await graph._collect_graph_data(["viking://agent/demo/memories"], ctx)
+    nodes, edges = await graph._collect_graph_data(["viking://user/demo/memories"], ctx)
 
     assert len(nodes) == 1
     assert nodes[0]["memory_type"] == "experiences"
@@ -96,7 +98,7 @@ async def test_collect_graph_data_keeps_profile_body_as_content_preview():
     mock_fs.read_file = AsyncMock(return_value=content)
 
     graph = MemoryGraph(viking_fs=mock_fs)
-    ctx = RequestContext(user=UserIdentifier("acme", "alice", "bot"), role=Role.USER)
+    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
 
     nodes, edges = await graph._collect_graph_data(["viking://user/Caroline/memories"], ctx)
 
@@ -118,7 +120,7 @@ async def test_collect_graph_data_infers_memory_type_from_parent_directory():
     mock_fs.read_file = AsyncMock(return_value=content)
 
     graph = MemoryGraph(viking_fs=mock_fs)
-    ctx = RequestContext(user=UserIdentifier("acme", "alice", "bot"), role=Role.USER)
+    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
 
     nodes, edges = await graph._collect_graph_data(["viking://user/Caroline/memories"], ctx)
 
@@ -145,7 +147,7 @@ async def test_collect_graph_data_reads_all_nodes_before_filling_edge_targets():
     mock_fs.read_file = AsyncMock(side_effect=[child_content, profile_content])
 
     graph = MemoryGraph(viking_fs=mock_fs)
-    ctx = RequestContext(user=UserIdentifier("acme", "alice", "bot"), role=Role.USER)
+    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
 
     nodes, edges = await graph._collect_graph_data(["viking://user/Caroline/memories"], ctx)
 
@@ -171,7 +173,7 @@ async def test_collect_graph_data_raises_when_reading_memory_file_fails():
     mock_fs.read_file = AsyncMock(side_effect=RuntimeError("boom"))
 
     graph = MemoryGraph(viking_fs=mock_fs)
-    ctx = RequestContext(user=UserIdentifier("acme", "alice", "bot"), role=Role.USER)
+    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
 
     with pytest.raises(RuntimeError, match="boom"):
         await graph._collect_graph_data(["viking://user/Caroline/memories"], ctx)
@@ -184,13 +186,11 @@ async def test_collect_graph_data_drops_edges_to_unloaded_external_nodes():
     child_content = f"""Blue\n\n<!-- MEMORY_FIELDS\n{{\"memory_type\": \"preferences\", \"links\": [{{\"to_uri\": \"{external_profile_uri}\", \"link_type\": \"belongs_to\"}}]}}\n-->"""
 
     mock_fs = MagicMock()
-    mock_fs.tree = AsyncMock(
-        return_value=[_file_entry(child_uri, "preferences/color.md")]
-    )
+    mock_fs.tree = AsyncMock(return_value=[_file_entry(child_uri, "preferences/color.md")])
     mock_fs.read_file = AsyncMock(return_value=child_content)
 
     graph = MemoryGraph(viking_fs=mock_fs)
-    ctx = RequestContext(user=UserIdentifier("acme", "alice", "bot"), role=Role.USER)
+    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
 
     nodes, edges = await graph._collect_graph_data(["viking://user/Melanie/memories"], ctx)
 

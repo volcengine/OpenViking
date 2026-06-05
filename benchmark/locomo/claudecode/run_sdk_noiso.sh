@@ -2,7 +2,7 @@
 #
 # LoCoMo evaluation: SDK pre-ingest + SHARED OpenViking namespace.
 #
-# All 10 LoCoMo samples are imported into the same OV user/agent (no
+# All 10 LoCoMo samples are imported into the same OV user (no
 # per-sample isolation). QA at recall time relies on semantic retrieval to
 # pick the right conv's memories out of the shared pool.
 #
@@ -30,12 +30,12 @@ fi
 
 echo '{}' > "$PROJECT_ROOT/sample_mapping.json"
 
-echo "[1/4] SDK pre-ingest (shared namespace, --no-user-agent-id)..."
+echo "[1/4] SDK pre-ingest (shared namespace, --no-user-id)..."
 uv run python "$SCRIPT_DIR/import_to_ov.py" \
   --input "$INPUT" \
   --success-csv "$RESULT_DIR/ingest_success.csv" \
   --error-log "$RESULT_DIR/ingest_errors.log" \
-  --no-user-agent-id \
+  --no-user-id \
   "${SAMPLE_ARG[@]}"
 
 echo "[2/4] running QA (shared OV namespace via --ov-shared-id \"\")..."

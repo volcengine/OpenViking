@@ -6,9 +6,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from openviking.server.identity import AccountNamespacePolicy, RequestContext, Role
-from openviking.session.memory.agent_experience_context_provider import AgentExperienceContextProvider
-from openviking.session.memory.memory_updater import ExtractContext
+from openviking.server.identity import RequestContext, Role
+from openviking.session.memory.agent_experience_context_provider import (
+    AgentExperienceContextProvider,
+)
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -16,12 +17,12 @@ def test_create_tool_context_uses_extract_context_page_id_map():
     provider = AgentExperienceContextProvider(
         messages=[],
         trajectory_summary="album release party discussion",
-        trajectory_uri="viking://agent/agent_sample_9/memories/trajectories/album_release_party_discussion.md",
+        trajectory_uri="viking://user/user_sample_9/memories/trajectories/album_release_party_discussion.md",
     )
 
     extract_context = provider.get_extract_context()
     extract_context.page_id_map.get_page_id(
-        "viking://agent/agent_sample_9/memories/trajectories/album_release_party_discussion.md"
+        "viking://user/user_sample_9/memories/trajectories/album_release_party_discussion.md"
     )
 
     tool_ctx = provider.create_tool_context()
@@ -34,12 +35,11 @@ async def test_agent_experience_prefetch_starts_with_conversation_and_new_trajec
     provider = AgentExperienceContextProvider(
         messages=[],
         trajectory_summary="album release party discussion",
-        trajectory_uri="viking://agent/agent_sample_9/memories/trajectories/album_release_party_discussion.md",
+        trajectory_uri="viking://user/user_sample_9/memories/trajectories/album_release_party_discussion.md",
     )
     provider._ctx = RequestContext(
-        user=UserIdentifier(account_id="acc", user_id="user_1", agent_id="agent_sample_9"),
+        user=UserIdentifier(account_id="acc", user_id="user_1"),
         role=Role.USER,
-        namespace_policy=AccountNamespacePolicy(),
     )
     provider._viking_fs = AsyncMock()
     provider._transaction_handle = None
@@ -66,18 +66,19 @@ async def test_agent_experience_prefetch_includes_structured_read_results():
     provider = AgentExperienceContextProvider(
         messages=[],
         trajectory_summary="album release party discussion",
-        trajectory_uri="viking://agent/agent_sample_9/memories/trajectories/album_release_party_discussion.md",
+        trajectory_uri="viking://user/user_sample_9/memories/trajectories/album_release_party_discussion.md",
     )
     provider._ctx = RequestContext(
-        user=UserIdentifier(account_id="acc", user_id="user_1", agent_id="agent_sample_9"),
+        user=UserIdentifier(account_id="acc", user_id="user_1"),
         role=Role.USER,
-        namespace_policy=AccountNamespacePolicy(),
     )
     provider._viking_fs = AsyncMock()
     provider._transaction_handle = None
 
     provider.search_files = AsyncMock(
-        return_value=["viking://agent/agent_sample_9/memories/experiences/personal_experience_sharing_conversation_flow.md"]
+        return_value=[
+            "viking://user/user_sample_9/memories/experiences/personal_experience_sharing_conversation_flow.md"
+        ]
     )
 
     read_result = {
@@ -88,7 +89,7 @@ async def test_agent_experience_prefetch_includes_structured_read_results():
     }
     provider.read_file = AsyncMock(return_value=read_result)
     provider._read_file_contents = {
-        "viking://agent/agent_sample_9/memories/experiences/personal_experience_sharing_conversation_flow.md": SimpleNamespace(
+        "viking://user/user_sample_9/memories/experiences/personal_experience_sharing_conversation_flow.md": SimpleNamespace(
             extra_fields={"experience_name": "personal_experience_sharing_conversation_flow"},
             content="line one\nline two",
             links=[],
@@ -102,5 +103,8 @@ async def test_agent_experience_prefetch_includes_structured_read_results():
 
     assert any(msg.get("role") == "user" for msg in messages)
     assert add_tool_call_pair.call_count == 2
-    assert add_tool_call_pair.call_args_list[1].kwargs["result"]["context_role"] == "candidate_experience"
+    assert (
+        add_tool_call_pair.call_args_list[1].kwargs["result"]["context_role"]
+        == "candidate_experience"
+    )
     assert add_tool_call_pair.call_args_list[1].kwargs["result"]["page_id"] == 1

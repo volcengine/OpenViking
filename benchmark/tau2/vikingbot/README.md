@@ -70,6 +70,27 @@ Then start the OpenViking server with the bot enabled:
 openviking-server --config "${OPENVIKING_CONFIG_FILE}" --with-bot
 ```
 
+### Provision a benchmark user
+
+The benchmark runner should not use a root/admin key for runtime memory access. Use a
+provisioning key only to create a synthetic benchmark user and generate a user-key config:
+
+```bash
+export OPENVIKING_PROVISION_API_KEY="<root-or-admin-key>"
+
+python benchmark/tau2/vikingbot/scripts/provision_openviking_user.py \
+  --account default \
+  --user tau2_airline_v0 \
+  --base-config "${OPENVIKING_CONFIG_FILE}" \
+  --out benchmark/tau2/vikingbot/.generated/tau2_airline_v0.ov.conf
+```
+
+The generated config stores the returned user key in `bot.ov_server.root_api_key` with
+`bot.ov_server.api_key_type="user"`. That field name is historical VikingBot config shape; at
+runtime it is a user key, not a root key. The provision key is not written into the runtime config.
+
+Use a different generated config for each isolated benchmark user. If all domains run with the
+same user-key config, they intentionally share the same OpenViking user memory.
 
 ---
 
@@ -79,7 +100,11 @@ Run one epoch — **1 train run + 8 test runs in parallel** (`--test-repeats`, d
 evaluate (test accuracy is averaged over the repeats) and commit the train trajectories to memory:
 
 ```bash
-bash benchmark/tau2/vikingbot/run_full_test.sh --domain airline --epoch 0 --result-dir result
+bash benchmark/tau2/vikingbot/run_full_test.sh \
+  --domain airline \
+  --epoch 0 \
+  --result-dir result \
+  --config benchmark/tau2/vikingbot/.generated/tau2_airline_v0.ov.conf
 ```
 
 The async memory commit happens on the server, so wait for it to
@@ -89,6 +114,7 @@ finish before starting the next epoch. The per-domain report is appended to
 Multi-epoch examples (cold start → memory-augmented epochs):
 
 ```bash
+TAU2_VIKINGBOT_CONFIG=benchmark/tau2/vikingbot/.generated/tau2_airline_v0.ov.conf \
 bash benchmark/tau2/vikingbot/run_airline_2epochs.sh
 ```
 
@@ -111,13 +137,15 @@ averaged. The one-click `run_full_test.sh` does all of this for you (`--test-rep
 # train: a single run (try 0)
 bash scripts/run_tau2_domain.sh \
   --domain airline --split train --epoch 0 --try-no 0 \
-  --result-dir result --concurrency 5 --use-continue --agent-id airline_v0
+  --result-dir result --concurrency 5 --use-continue \
+  --config .generated/tau2_airline_v0.ov.conf
 
 # test: 8 independent runs (try 0..7)
 for t in 0 1 2 3 4 5 6 7; do
   bash scripts/run_tau2_domain.sh \
     --domain airline --split test --epoch 0 --try-no "$t" \
-    --result-dir result --concurrency 5 --use-continue --agent-id airline_v0
+    --result-dir result --concurrency 5 --use-continue \
+    --config .generated/tau2_airline_v0.ov.conf
 done
 ```
 
@@ -133,15 +161,15 @@ bash scripts/run_eval_reward.sh result/airline_test 0 0
 
 ### 3) Commit trajectories to memory
 
-> VikingBot natively commits a task's trajectory into memory automatically as soon as that task finishes. 
+> VikingBot natively commits a task's trajectory into memory automatically as soon as that task finishes.
 > For these experiments that auto-commit is **disabled**, so that all
-> tasks within an epoch (train + test, run in parallel) execute under identical memory conditions — no run sees memory written by a sibling run mid-experiment. 
+> tasks within an epoch (train + test, run in parallel) execute under identical memory conditions — no run sees memory written by a sibling run mid-experiment.
 > Instead, the commit is performed explicitly as a separate, controlled step via the script below (run once between epochs).
 
 ```bash
 python scripts/commit_trajectory_to_memory.py \
   --input result/airline_train \
-  --domain airline_v0 \
+  --config .generated/tau2_airline_v0.ov.conf \
   --pattern "*_0_0_trajectory.json" \
   --include-eval-result
 ```
@@ -159,6 +187,10 @@ Adaptation happens in two places:
    experience-memory recall mode tau2 needs. **No core code edits required.** See
    [Required `ov.conf` flags for tau2](#required-ovconf-flags-for-tau2) below.
 
+VikingBot runtime does not receive deprecated agent identity, peer identity, or a synthetic user
+override; it only consumes the configured authenticated user. Per-domain isolation is achieved by
+provisioning a separate user-key config before the run.
+
 ### Runner-level adaptations:
 
 - **Tool registry swap** — the tau2 environment tools are injected into VikingBot's `ToolRegistry`
@@ -175,6 +207,21 @@ Adaptation happens in two places:
 - **Epoch-based memory commit** — `commit_trajectory_to_memory.py` writes train trajectories
   (optionally only failed ones, via `--only-wrong`) into OpenViking memory between epochs.
 
+### Identity model
+
+The benchmark does not pass identity through VikingBot. A provisioned user-key config determines
+the OpenViking runtime identity:
+
+```
+provision_openviking_user.py  ->  .generated/tau2_airline_v0.ov.conf
+run_full_test.sh --config .generated/tau2_airline_v0.ov.conf
+  -> VikingBot uses that user key
+  -> OpenViking resolves user=tau2_airline_v0
+  -> memory is stored under viking://user/tau2_airline_v0/memories/
+```
+
+The provision key is control-plane only. It creates or refreshes the benchmark user key through the
+Admin API, then leaves the runtime path.
 
 ### Required `ov.conf` flags for tau2
 
@@ -183,9 +230,9 @@ Two VikingBot behaviours need to change for tau2 self-improvement:
 1. **Per-domain workspace isolation** — each tau2 domain (airline, retail, …) must read and
    write its own OpenViking namespace so experiences learned on one domain don't leak into
    another.
-2. **Recall *agent experience* instead of *user* memory** — by default VikingBot pulls user
-   memory into every turn. For tau2 we want the agent's own accumulated **experience** memory,
-   pulled once per task, with a larger character budget per experience.
+2. **Recall experience memory once per task** — by default VikingBot pulls user memory into every
+   turn. For tau2 we want accumulated **experience** memory pulled once per task, with a larger
+   character budget per experience.
 
 Both are now controlled by config — set these three flags in the `bot.ov_server` section of the
 `ov.conf` pointed to by `OPENVIKING_CONFIG_FILE`:
@@ -194,7 +241,7 @@ Both are now controlled by config — set these three flags in the `bot.ov_serve
 {
   "bot": {
     "ov_server": {
-      "recall_exp_first_round_only": true,  // skip per-turn user/agent recall; inject exp once on the first user turn
+      "recall_exp_first_round_only": true,  // skip per-turn recall; inject exp once on the first user turn
       "exp_recall_limit": 2,                // fetch 2 experiences per task (default: 5)
       "exp_recall_max_chars": 10000         // character budget for the injected experience block (default: 2000)
     }
@@ -205,53 +252,16 @@ Both are now controlled by config — set these three flags in the `bot.ov_serve
 What each flag does:
 
 - **`recall_exp_first_round_only`** — when `true`, `ContextBuilder._build_user_memory` skips the
-  default `get_viking_memory_context` (user + agent memory, every turn) and instead calls
-  `get_viking_experience_context` once, on the first user-turn of the session. The runner only
-  ever sends one user turn per task, so this becomes "fetch experience once per task."
+  default per-turn memory recall and instead calls `get_viking_experience_context` once, on the
+  first user-turn of the session. The runner only ever sends one user turn per task, so this
+  becomes "fetch experience once per task."
 - **`exp_recall_limit`** — how many experiences to retrieve. tau2 prefers **fewer but longer**
   (2) over many shallow hits (5).
 - **`exp_recall_max_chars`** — total character budget for the formatted experience block. Bumped
   to **10000** so each of the 2 experiences gets room for full context (default 2000 truncates).
 
-Workspace isolation does not need a config flag: it follows automatically from `--agent-id`
-plumbing, described below.
-
-
-#### How `--agent-id` flows from the runner into the core
-
-The `--agent-id airline_v0` you pass on the command line is threaded all the way down into the
-OpenViking client, and resolves to `viking://agent/airline_v0/memories/experiences/`:
-
-```
-run_full_test.sh                AGENT_ID=${DOMAIN}_v0            # e.g. airline_v0, retail_v0
-  └─ run_tau2_domain.sh         --agent-id airline_v0
-       └─ vikingbot_tau2_runner.py
-            build_messages(..., agent_id=agent_id)              # explicit agent_id param
-              └─ context.py  _build_user_memory
-                   exp_workspace_id = agent_id or _get_workspace_id(session_key)
-                   └─ memory.py  get_viking_experience_context(query, exp_workspace_id)
-                        └─ VikingClient.create(agent_id=exp_workspace_id)
-                             └─ ov_server.py  VikingClient.__init__ / search_experiences
-                                  viking://agent/airline_v0/memories/experiences/
-```
-
-Isolation holds in **both** `local` and `remote` `bot.ov_server.mode` (no patching required):
-
-- `VikingClient.__init__` — in `remote` mode (root api-key, account/user auth) the incoming
-  `agent_id` is *always* threaded into the HTTP client, so per-domain isolation already holds.
-  In `local` mode (no auth, account/user fixed to `default`) the client used to hardcode
-  `agent_id="default"` — collapsing every domain into one namespace — and now opens against the
-  given `agent_id` whenever it isn't a session key (contains no `__`), giving local runs the same
-  isolation as remote.
-- `search_experiences` — in both modes, prefers the per-instance `self.agent_id` (a non-session
-  id, e.g. `airline_v0`) over the global `openviking_config.agent_id`.
-
-So `--agent-id airline_v0` ⇒ the agent reads/writes `viking://agent/airline_v0/...`, giving each
-domain an isolated workspace.
-
-> Verified end-to-end in both modes: after committing a trajectory under `airline_v0`, the
-> experience is recalled **only** when querying with `--agent-id airline_v0`, and never leaks to
-> a different agent id (a control id with nothing written returns zero hits).
+Workspace isolation does not need a legacy namespace flag. The generated user-key config is the
+runtime identity, so each domain reads and writes `viking://user/<domain_user>/...`.
 
 
 ---
@@ -263,6 +273,7 @@ domain an isolated workspace.
 - `run_airline_2epochs.sh` — multi-epoch example (cold start → memory-augmented epochs)
 - `tau2_env/` — tau2 environment integration (`tau2_environment.py`, `tau2_tool_provider.py`)
 - `scripts/`
+  - `provision_openviking_user.py` — create/refresh a benchmark user and write a user-key config
   - `vikingbot_tau2_runner.py` — runs a single tau2 task through the VikingBot agent loop
   - `run_tau2_domain.sh` — runs all tasks in a `{domain}_{split}` slice with bounded concurrency
   - `run_eval_reward.sh` — average reward over a result folder

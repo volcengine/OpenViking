@@ -211,8 +211,10 @@ enum StatusFailureKind {
 impl StatusFailureKind {
     fn from_error(error: Option<&Error>) -> Self {
         match error {
-            Some(Error::Api(message)) if looks_like_auth_error(message) => Self::Authentication,
-            Some(Error::Api(_)) => Self::Api,
+            Some(Error::Api { message, .. }) if looks_like_auth_error(message) => {
+                Self::Authentication
+            }
+            Some(Error::Api { .. }) => Self::Api,
             _ => Self::Connection,
         }
     }
@@ -884,7 +886,7 @@ mod tests {
 
     #[test]
     fn unreachable_status_distinguishes_auth_failures() {
-        let error = crate::error::Error::Api(
+        let error = crate::error::Error::api(
             "[AuthenticationError] API key invalid. Request ID: abc".to_string(),
         );
         let rendered =

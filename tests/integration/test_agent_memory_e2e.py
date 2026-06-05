@@ -38,8 +38,6 @@ from typing import Dict, Iterator, List, Tuple
 import pytest
 
 from openviking.client.local import LocalClient
-from openviking.core.namespace import to_agent_space
-from openviking.server.identity import AccountNamespacePolicy
 from openviking.session.memory.session_extract_context_provider import SessionExtractContextProvider
 from openviking.session.memory.utils import MemoryFileUtils
 from openviking.telemetry import tracer
@@ -232,28 +230,22 @@ def agent_memory_config_check():
 
 @pytest.fixture()
 def local_test_env() -> Iterator[Dict[str, object]]:
-    policy = AccountNamespacePolicy(
-        isolate_user_scope_by_agent=False,
-        isolate_agent_scope_by_user=False,
-    )
     local_path = Path.cwd() / ".tmp_agent_memory_e2e" / uuid.uuid4().hex[:8]
     local_path.mkdir(parents=True, exist_ok=True)
     try:
         yield {
             "path": str(local_path),
             "account_id": "default",
-            "policy": policy,
         }
     finally:
         shutil.rmtree(local_path, ignore_errors=True)
 
 
-def _build_client(env: Dict[str, object], user_id: str, agent_id: str = "travelbot") -> LocalClient:
+def _build_client(env: Dict[str, object], user_id: str) -> LocalClient:
     client = LocalClient(
         path=str(env["path"]),
-        user=UserIdentifier(str(env["account_id"]), user_id, agent_id),
+        user=UserIdentifier(str(env["account_id"]), user_id),
     )
-    client._ctx.namespace_policy = env["policy"]
     run_async(client.initialize())
     return client
 
@@ -288,10 +280,8 @@ class TestAgentMemoryE2E:
                 "failed to initialize tracer from ov.conf; please check legacy telemetry.tracer"
             )
 
-        policy = local_test_env["policy"]
-        agent_space = to_agent_space(policy, "alice", "travelbot")
-        trajectories_dir = f"viking://agent/{agent_space}/memories/trajectories"
-        experiences_dir = f"viking://agent/{agent_space}/memories/experiences"
+        trajectories_dir = "viking://user/alice/memories/trajectories"
+        experiences_dir = "viking://user/alice/memories/experiences"
 
         client = None
         try:
@@ -299,7 +289,7 @@ class TestAgentMemoryE2E:
                 "tests.integration.test_trajectory_and_experience_extraction"
             ):
                 print(f"\n[TEST] trace_id: {tracer.get_trace_id()}")
-                client = _build_client(local_test_env, user_id="alice", agent_id="travelbot")
+                client = _build_client(local_test_env, user_id="alice")
 
                 logger.info("Round 1: flight booking duplicate (expect CREATE experience)")
                 _run_conversation(client, CONV_A_FLIGHT_DUPLICATE)

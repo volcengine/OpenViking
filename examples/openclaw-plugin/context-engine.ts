@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { DEFAULT_PHASE2_POLL_TIMEOUT_MS } from "./client.js";
-import type { OpenVikingClient, OVMessage } from "./client.js";
+import type { OpenVikingClient, OVMemoryPolicy, OVMessage } from "./client.js";
 import type { MemoryOpenVikingConfig } from "./config.js";
 import {
   AUTO_RECALL_SOURCE_MARKER,
@@ -49,7 +49,7 @@ type IngestResult = {
   ingested: boolean;
 };
 
-export function toRoleId(senderId: string | undefined): string | undefined {
+export function toPeerId(senderId: string | undefined): string | undefined {
   if (!senderId) {
     return undefined;
   }
@@ -59,6 +59,49 @@ export function toRoleId(senderId: string | undefined): string | undefined {
     .replace(/^_+|_+$/g, "")
     .replace(/_+/g, "_");
   return normalized || undefined;
+}
+
+export function resolveMessagePeerId(params: {
+  peerRole: Required<MemoryOpenVikingConfig>["peer_role"];
+  role?: string;
+  personPeerId?: string;
+  assistantPeerId?: string;
+}): string | undefined {
+  if (params.peerRole === "person" && params.role === "user") {
+    return params.personPeerId;
+  }
+  if (params.peerRole === "assistant" && params.role === "assistant") {
+    return params.assistantPeerId;
+  }
+  return undefined;
+}
+
+export function resolveSearchPeerId(params: {
+  peerRole: Required<MemoryOpenVikingConfig>["peer_role"];
+  personPeerId?: string;
+  assistantPeerId?: string;
+}): string | undefined {
+  const role = params.peerRole === "person"
+    ? "user"
+    : params.peerRole === "assistant"
+      ? "assistant"
+      : undefined;
+  return resolveMessagePeerId({
+    ...params,
+    role,
+  });
+}
+
+export function defaultMemoryPolicyForPeerRole(
+  peerRole: Required<MemoryOpenVikingConfig>["peer_role"],
+): OVMemoryPolicy | undefined {
+  if (peerRole === "none") {
+    return undefined;
+  }
+  return {
+    self: { enabled: true },
+    peer: { enabled: true },
+  };
 }
 
 type IngestBatchResult = {
@@ -136,6 +179,25 @@ type Logger = {
 type ExtractedSender = {
   found: boolean;
   senderId?: string;
+};
+
+type ResolvedSender = ExtractedSender & {
+  source: "runtimeContext" | "promptMetadata" | "none";
+  senderName?: string;
+};
+
+type PromptMetadata = {
+  senderId?: string;
+  senderName?: string;
+};
+
+type RecallQueryInput = {
+  text: string;
+  source: "latestUserMessage" | "prompt" | "none";
+};
+
+type AssembleRecall = Awaited<ReturnType<typeof buildAutoRecallContext>> & {
+  queryChars: number;
 };
 
 interface ContextBudgets {
@@ -279,17 +341,39 @@ function prependTextToMessageContent(content: unknown, text: string): unknown {
   return text;
 }
 
+function prependRecallAtIndex(messages: AgentMessage[], index: number, recallBlock: string): AgentMessage[] {
+  return messages.map((msg, msgIndex) =>
+    msgIndex === index
+      ? { ...msg, content: prependTextToMessageContent(msg.content, recallBlock) }
+      : msg
+  );
+}
+
 function prependRecallToLatestUserMessage(messages: AgentMessage[], recallBlock: string): AgentMessage[] {
   const latest = messages.at(-1);
   if (!latest || latest.role !== "user" || hasAutoRecallBlock(latest)) {
     return messages;
   }
+  return prependRecallAtIndex(messages, messages.length - 1, recallBlock);
+}
+
+function injectRecallIntoContext(messages: AgentMessage[], recallBlock: string): AgentMessage[] {
+  const latest = messages.at(-1);
+  if (latest?.role === "user" && !hasAutoRecallBlock(latest)) {
+    return prependRecallToLatestUserMessage(messages, recallBlock);
+  }
+
+  const firstUserIndex = messages.findIndex((msg) => msg.role === "user" && !hasAutoRecallBlock(msg));
+  if (firstUserIndex >= 0) {
+    return prependRecallAtIndex(messages, firstUserIndex, recallBlock);
+  }
+
   return [
-    ...messages.slice(0, -1),
     {
-      ...latest,
-      content: prependTextToMessageContent(latest.content, recallBlock),
+      role: "user",
+      content: recallBlock,
     },
+    ...messages,
   ];
 }
 
@@ -328,6 +412,139 @@ function extractRuntimeSenderId(
     }
   }
   return { found: false };
+}
+
+function readStringField(record: Record<string, unknown>, ...keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function safeJsonRecord(text: string): Record<string, unknown> | undefined {
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function extractJsonFenceAfterLabel(text: string, label: string): Record<string, unknown> | undefined {
+  const labelIndex = text.indexOf(label);
+  if (labelIndex < 0) {
+    return undefined;
+  }
+  const rest = text.slice(labelIndex + label.length);
+  const match = rest.match(/```json\s*([\s\S]*?)\s*```/i);
+  if (!match?.[1]) {
+    return undefined;
+  }
+  return safeJsonRecord(match[1]);
+}
+
+function uniqueString(values: Array<string | undefined>): string | undefined {
+  const unique = new Set(values.map((value) => value?.trim()).filter(Boolean) as string[]);
+  return unique.size === 1 ? [...unique][0] : undefined;
+}
+
+function extractPromptMetadata(prompt: unknown): PromptMetadata {
+  if (typeof prompt !== "string" || !prompt.trim()) {
+    return {};
+  }
+
+  // Only inspect the OpenClaw-generated metadata preamble before the actual
+  // message body. This avoids treating user-authored text as identity data.
+  const bodyMarker = prompt.search(/\n?\[message_id:/i);
+  const preamble = bodyMarker >= 0 ? prompt.slice(0, bodyMarker) : prompt.slice(0, 3000);
+  const conversation = extractJsonFenceAfterLabel(preamble, "Conversation info");
+  const sender = extractJsonFenceAfterLabel(preamble, "Sender");
+
+  const senderId = uniqueString([
+    conversation ? readStringField(conversation, "sender_id", "senderId") : undefined,
+    sender ? readStringField(sender, "id", "sender_id", "senderId") : undefined,
+  ]);
+  const senderName = uniqueString([
+    conversation ? readStringField(conversation, "sender", "sender_name", "senderName") : undefined,
+    sender ? readStringField(sender, "name", "label", "username") : undefined,
+  ]);
+
+  return { senderId, senderName };
+}
+
+function resolveSender(params: {
+  runtimeContext?: Record<string, unknown>;
+  prompt?: unknown;
+}): ResolvedSender {
+  const metadata = extractPromptMetadata(params.prompt);
+  const runtime = extractRuntimeSenderId(params.runtimeContext);
+  if (runtime.found) {
+    return { ...runtime, senderName: metadata.senderName, source: "runtimeContext" };
+  }
+
+  if (metadata.senderId) {
+    return {
+      found: true,
+      senderId: metadata.senderId,
+      senderName: metadata.senderName,
+      source: "promptMetadata",
+    };
+  }
+
+  return {
+    found: false,
+    senderName: metadata.senderName,
+    source: "none",
+  };
+}
+
+function stripSpeakerPrefix(text: string): string {
+  return text.replace(/^[^\n:：]{1,80}[:：]\s*/, "").trim();
+}
+
+function expandShortRecallQuery(text: string, senderName?: string): string {
+  return text.length < 5 && senderName
+    ? `${senderName} ${text}`
+    : text;
+}
+
+function extractPromptMessageText(prompt: unknown): string {
+  if (typeof prompt !== "string" || !prompt.trim()) {
+    return "";
+  }
+  const matches = [...prompt.matchAll(/\[message_id:[^\]]+\]\s*([\s\S]*?)(?=\n\s*\[System:|\s+\[System:|$)/gi)];
+  const raw = matches.at(-1)?.[1]?.trim();
+  return raw ? stripSpeakerPrefix(raw) : prompt.trim();
+}
+
+function resolveRecallQueryInput(params: {
+  latestMessage?: AgentMessage;
+  prompt?: unknown;
+  senderName?: string;
+  preferPrompt?: boolean;
+}): RecallQueryInput {
+  const promptText = extractPromptMessageText(params.prompt);
+  if (params.preferPrompt && promptText) {
+    return { text: expandShortRecallQuery(promptText, params.senderName), source: "prompt" };
+  }
+
+  if (params.latestMessage?.role === "user") {
+    const text = extractAgentMessageText(params.latestMessage);
+    if (text.trim()) {
+      return { text, source: "latestUserMessage" };
+    }
+  }
+
+  if (promptText) {
+    return { text: expandShortRecallQuery(promptText, params.senderName), source: "prompt" };
+  }
+
+  return { text: "", source: "none" };
 }
 
 /** OpenClaw session UUID (path-safe on Windows). */
@@ -902,6 +1119,7 @@ export function createMemoryOpenVikingContextEngine(params: {
 
   const diagEnabled = cfg.emitStandardDiagnostics;
   const bypassSessionPatterns = compileSessionPatterns(cfg.bypassSessionPatterns);
+  const defaultMemoryPolicy = defaultMemoryPolicyForPeerRole(cfg.peer_role);
   const diag = (stage: string, sessionId: string, data: Record<string, unknown>) =>
     emitDiag(logger, stage, sessionId, data, diagEnabled);
 
@@ -933,6 +1151,7 @@ export function createMemoryOpenVikingContextEngine(params: {
         wait: true,
         agentId,
         keepRecentCount: 0,
+        memoryPolicy: defaultMemoryPolicy,
       });
       const memCount = totalExtractedMemories(commitResult.memories_extracted);
       if (commitResult.status === "failed") {
@@ -1070,6 +1289,109 @@ export function createMemoryOpenVikingContextEngine(params: {
     return { sanitized, archive, session, budgets, instruction };
   }
 
+  async function buildRecallForAssemble(params: {
+    ovSessionId: string;
+    agentId: string;
+    peerId?: string;
+    queryInput: RecallQueryInput;
+    client?: OpenVikingClient;
+  }): Promise<AssembleRecall> {
+    const query = prepareRecallQuery(params.queryInput.text);
+    if (!query.query || query.query.length < 5) {
+      diag("assemble_recall_skip", params.ovSessionId, {
+        reason: "empty_or_short_query",
+        querySource: params.queryInput.source,
+        queryChars: query.finalChars,
+        peerId: params.peerId ?? null,
+      });
+      return { memoryCount: 0, estimatedTokens: 0, queryChars: query.finalChars };
+    }
+
+    if (query.truncated) {
+      logger.info(
+        `openviking: recall query truncated (` +
+          `chars=${query.originalChars}->${query.finalChars})`,
+      );
+    }
+
+    const recall = await buildAutoRecallContext({
+      cfg,
+      client: params.client ?? await getClient(),
+      agentId: params.agentId,
+      peerId: params.peerId,
+      queryText: query.query,
+      logger,
+      verbose: (message) => logger.info(message),
+    });
+    return { ...recall, queryChars: query.finalChars };
+  }
+
+  function recallDiagFields(params: {
+    recall: AssembleRecall;
+    queryInput: RecallQueryInput;
+    peerId?: string;
+    sender?: ResolvedSender;
+  }): Record<string, unknown> {
+    return {
+      autoRecallMemoryCount: params.recall.memoryCount,
+      autoRecallTokens: params.recall.estimatedTokens,
+      querySource: params.queryInput.source,
+      queryChars: params.recall.queryChars,
+      peerId: params.peerId ?? null,
+      ...(params.sender
+        ? {
+            senderIdFound: params.sender.found,
+            senderId: params.sender.senderId ?? null,
+            senderSource: params.sender.source,
+          }
+        : {}),
+    };
+  }
+
+  function resolveAssembleRecallPeerId(agentId: string, sender: ResolvedSender): string | undefined {
+    return resolveSearchPeerId({
+      peerRole: cfg.peer_role,
+      personPeerId: toPeerId(sender.senderId),
+      assistantPeerId: agentId,
+    });
+  }
+
+  function emptyAssembleRecall(): AssembleRecall {
+    return { memoryCount: 0, estimatedTokens: 0, queryChars: 0 };
+  }
+
+  function assembleRecallOnlyResult(params: {
+    ovSessionId: string;
+    reason: string;
+    baseMessages: AgentMessage[];
+    originalTokens: number;
+    recall: AssembleRecall;
+    recallBlock: string;
+    queryInput: RecallQueryInput;
+    peerId?: string;
+    sender: ResolvedSender;
+    extra?: Record<string, unknown>;
+  }): AssembleResult {
+    const withRecall = injectRecallIntoContext(params.baseMessages, params.recallBlock);
+    const estimatedTokens = roughEstimate(withRecall);
+    diag("assemble_result", params.ovSessionId, {
+      passthrough: false,
+      reason: params.reason,
+      ...(params.extra ?? {}),
+      outputMessagesCount: withRecall.length,
+      inputTokenEstimate: params.originalTokens,
+      estimatedTokens,
+      ...recallDiagFields({
+        recall: params.recall,
+        queryInput: params.queryInput,
+        peerId: params.peerId,
+        sender: params.sender,
+      }),
+      messages: messageDigest(withRecall),
+    });
+    return { messages: withRecall, estimatedTokens };
+  }
+
   return {
     info: {
       id,
@@ -1094,7 +1416,10 @@ export function createMemoryOpenVikingContextEngine(params: {
       const { messages } = assembleParams;
       const tokenBudget = validTokenBudget(assembleParams.tokenBudget) ?? 128_000;
       const { sessionKey, ovSessionId: OVSessionId } = resolveSessionIdentity(assembleParams);
-      const sender = extractRuntimeSenderId(assembleParams.runtimeContext);
+      const sender = resolveSender({
+        runtimeContext: assembleParams.runtimeContext,
+        prompt: assembleParams.prompt,
+      });
       const latestMessage = messages.at(-1);
       const isMainAssemble =
         Object.prototype.hasOwnProperty.call(assembleParams, "availableTools") ||
@@ -1117,6 +1442,7 @@ export function createMemoryOpenVikingContextEngine(params: {
         sessionKey: sessionKey ?? null,
         senderIdFound: sender.found,
         senderId: sender.senderId ?? null,
+        senderSource: sender.source,
         messages: messageDigest(messages),
       });
 
@@ -1137,33 +1463,28 @@ export function createMemoryOpenVikingContextEngine(params: {
           return assemblePassthrough(OVSessionId, "transform_context_recall_already_injected", messages, originalTokens);
         }
 
-        const recallQuery = prepareRecallQuery(extractAgentMessageText(latestMessage));
-        if (!recallQuery.query || recallQuery.query.length < 5) {
+        const recallQueryInput = resolveRecallQueryInput({
+          latestMessage,
+          senderName: sender.senderName,
+        });
+        if (recallQueryInput.source === "none") {
           return assemblePassthrough(OVSessionId, "transform_context_empty_recall_query", messages, originalTokens);
-        }
-        if (recallQuery.truncated) {
-          logger.info(
-            `openviking: recall query truncated (` +
-              `chars=${recallQuery.originalChars}->${recallQuery.finalChars})`,
-          );
         }
 
         try {
-          const client = await getClient();
           const routingRef = assembleParams.sessionId ?? sessionKey ?? OVSessionId;
           const agentId = resolveAgentId(routingRef, sessionKey, OVSessionId);
-          const recall = await buildAutoRecallContext({
-            cfg,
-            client,
+          const peerId = resolveAssembleRecallPeerId(agentId, sender);
+          const recall = await buildRecallForAssemble({
+            ovSessionId: OVSessionId,
             agentId,
-            queryText: recallQuery.query,
-            logger,
-            verbose: (message) => logger.info(message),
+            peerId,
+            queryInput: recallQueryInput,
           });
 
           if (!recall.block) {
             return assemblePassthrough(OVSessionId, "transform_context_no_recall_hits", messages, originalTokens, {
-              memoryCount: recall.memoryCount,
+              ...recallDiagFields({ recall, queryInput: recallQueryInput, peerId }),
             });
           }
 
@@ -1175,8 +1496,7 @@ export function createMemoryOpenVikingContextEngine(params: {
             outputMessagesCount: withRecall.length,
             inputTokenEstimate: originalTokens,
             estimatedTokens,
-            autoRecallMemoryCount: recall.memoryCount,
-            autoRecallTokens: recall.estimatedTokens,
+            ...recallDiagFields({ recall, queryInput: recallQueryInput, peerId, sender }),
             messages: messageDigest(withRecall),
           });
           return { messages: withRecall, estimatedTokens };
@@ -1192,13 +1512,74 @@ export function createMemoryOpenVikingContextEngine(params: {
         const client = await getClient();
         const routingRef = assembleParams.sessionId ?? sessionKey ?? OVSessionId;
         const agentId = resolveAgentId(routingRef, sessionKey, OVSessionId);
-        const ctx = await client.getSessionContext(OVSessionId, tokenBudget, agentId);
+        const peerId = resolveAssembleRecallPeerId(agentId, sender);
+        const recallQueryInput = resolveRecallQueryInput({
+          latestMessage,
+          prompt: assembleParams.prompt,
+          senderName: sender.senderName,
+          preferPrompt: true,
+        });
+        const hasInjectedRecall = messages.some((message) => hasAutoRecallBlock(message));
+        let recall = emptyAssembleRecall();
+        if (cfg.autoRecall && !hasInjectedRecall) {
+          try {
+            recall = await buildRecallForAssemble({
+              ovSessionId: OVSessionId,
+              agentId,
+              peerId,
+              queryInput: recallQueryInput,
+              client,
+            });
+          } catch (recallErr) {
+            logger.warn?.(`openviking: auto-recall failed: ${String(recallErr)}`);
+            diag("assemble_recall_failed", OVSessionId, {
+              error: String(recallErr),
+              querySource: recallQueryInput.source,
+              peerId: peerId ?? null,
+              senderSource: sender.source,
+            });
+          }
+        }
+        let ctx;
+        try {
+          ctx = await client.getSessionContext(OVSessionId, tokenBudget, agentId);
+        } catch (ctxErr) {
+          if (recall.block) {
+            return assembleRecallOnlyResult({
+              ovSessionId: OVSessionId,
+              reason: "recall_only_context_unavailable",
+              baseMessages: messages,
+              originalTokens,
+              recall,
+              recallBlock: recall.block,
+              queryInput: recallQueryInput,
+              peerId,
+              sender,
+              extra: { contextError: String(ctxErr) },
+            });
+          }
+          throw ctxErr;
+        }
 
         const preAbstracts = ctx?.pre_archive_abstracts ?? [];
         const hasArchives = !!ctx?.latest_archive_overview || preAbstracts.length > 0;
         const activeCount = ctx?.messages?.length ?? 0;
 
         if (!ctx || (!hasArchives && activeCount === 0)) {
+          if (recall.block) {
+            return assembleRecallOnlyResult({
+              ovSessionId: OVSessionId,
+              reason: "recall_only_no_ov_data",
+              baseMessages: messages,
+              originalTokens,
+              recall,
+              recallBlock: recall.block,
+              queryInput: recallQueryInput,
+              peerId,
+              sender,
+              extra: { archiveCount: 0, activeCount: 0 },
+            });
+          }
           return assemblePassthrough(OVSessionId, "no_ov_data", messages, originalTokens, {
             archiveCount: 0, activeCount: 0,
           });
@@ -1223,7 +1604,10 @@ export function createMemoryOpenVikingContextEngine(params: {
           });
         }
 
-        const assembledTokens = roughEstimate(sanitized) + instruction.tokens;
+        const outputMessages = recall.block
+          ? injectRecallIntoContext(sanitized, recall.block)
+          : sanitized;
+        const assembledTokens = roughEstimate(outputMessages) + instruction.tokens;
         const tokensSaved = originalTokens - assembledTokens;
         const savingPct = originalTokens > 0 ? Math.round((tokensSaved / originalTokens) * 100) : 0;
 
@@ -1231,7 +1615,7 @@ export function createMemoryOpenVikingContextEngine(params: {
           passthrough: false,
           archiveCount: preAbstracts.length,
           activeCount,
-          outputMessagesCount: sanitized.length,
+          outputMessagesCount: outputMessages.length,
           inputTokenEstimate: originalTokens,
           estimatedTokens: assembledTokens,
           tokensSaved,
@@ -1241,13 +1625,12 @@ export function createMemoryOpenVikingContextEngine(params: {
           sessionTokens: session.tokens,
           sessionBudget: budgets.sessionContext,
           reservedBudget: budgets.reserved,
-          senderIdFound: sender.found,
-          senderId: sender.senderId ?? null,
-          messages: messageDigest(sanitized),
+          ...recallDiagFields({ recall, queryInput: recallQueryInput, peerId, sender }),
+          messages: messageDigest(outputMessages),
         });
 
         return {
-          messages: sanitized,
+          messages: outputMessages,
           estimatedTokens: assembledTokens,
           ...(instruction.text ? { systemPromptAddition: instruction.text } : {}),
         };
@@ -1262,6 +1645,7 @@ export function createMemoryOpenVikingContextEngine(params: {
           agentId: resolveAgentId(OVSessionId),
           senderIdFound: sender.found,
           senderId: sender.senderId ?? null,
+          senderSource: sender.source,
         });
         return { messages, estimatedTokens: roughEstimate(messages) };
       }
@@ -1353,7 +1737,14 @@ export function createMemoryOpenVikingContextEngine(params: {
 
         const client = await getClient();
         const createdAt = pickLatestCreatedAt(turnMessages);
-        const senderRoleId = toRoleId(sender.senderId);
+        const senderPeerId = toPeerId(sender.senderId);
+        if (defaultMemoryPolicy) {
+          await client.ensureSession(
+            OVSessionId,
+            { memoryPolicy: defaultMemoryPolicy },
+            agentId,
+          );
+        }
         // 发送结构化消息：统一 role 为 user，通过 parts 区分类型
         for (const msg of extractedMessages) {
           const ovParts = msg.parts.map((part) => {
@@ -1377,13 +1768,19 @@ export function createMemoryOpenVikingContextEngine(params: {
           });
 
           if (ovParts.length > 0) {
+            const peerId = resolveMessagePeerId({
+              peerRole: cfg.peer_role,
+              role: msg.role,
+              personPeerId: senderPeerId,
+              assistantPeerId: agentId,
+            });
             await client.addSessionMessage(
               OVSessionId,
-              msg.role, // 统一是 "user"
+              msg.role,
               ovParts,
               agentId,
               createdAt,
-              msg.role === "user" ? senderRoleId : undefined,
+              peerId,
             );
           }
         }
@@ -1406,6 +1803,7 @@ export function createMemoryOpenVikingContextEngine(params: {
           wait: false,
           agentId,
           keepRecentCount: cfg.commitKeepRecentCount,
+          memoryPolicy: defaultMemoryPolicy,
         });
         logger.info(
           `openviking: committed session=${OVSessionId}, ` +
@@ -1503,6 +1901,7 @@ export function createMemoryOpenVikingContextEngine(params: {
           wait: true,
           agentId,
           keepRecentCount: 0,
+          memoryPolicy: defaultMemoryPolicy,
         });
         const memCount = totalExtractedMemories(commitResult.memories_extracted);
 

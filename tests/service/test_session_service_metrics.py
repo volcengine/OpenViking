@@ -14,7 +14,7 @@ from openviking_cli.session.user_id import UserIdentifier
 
 def _make_ctx() -> RequestContext:
     return RequestContext(
-        user=UserIdentifier("acme", "alice", "agent1"),
+        user=UserIdentifier("acme", "alice"),
         role=Role.ADMIN,
     )
 
