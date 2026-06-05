@@ -574,7 +574,7 @@ async def test_embedding_handler_local_bm25_rebuilds_are_coalesced(monkeypatch):
     vikingdb = _SlowVikingDB()
     handler = TextEmbeddingHandler(vikingdb)
     ctx = RequestContext(
-        user=UserIdentifier(account_id="default", user_id="default", agent_id="default"),
+        user=UserIdentifier(account_id="default", user_id="default"),
         role=Role.ROOT,
     )
 
@@ -619,7 +619,7 @@ async def test_embedding_handler_local_bm25_restarts_after_late_pending(monkeypa
     vikingdb = _CountingVikingDB()
     TextEmbeddingHandler(vikingdb)
     ctx = RequestContext(
-        user=UserIdentifier(account_id="default", user_id="default", agent_id="default"),
+        user=UserIdentifier(account_id="default", user_id="default"),
         role=Role.ROOT,
     )
     state = vikingdb._local_bm25_rebuilds.setdefault(
@@ -666,7 +666,7 @@ def _build_rebuild_handler(monkeypatch, sparse, vikingdb):
     )
     handler = TextEmbeddingHandler(vikingdb)
     ctx = RequestContext(
-        user=UserIdentifier(account_id="default", user_id="default", agent_id="default"),
+        user=UserIdentifier(account_id="default", user_id="default"),
         role=Role.ROOT,
     )
     return handler, ctx
@@ -825,7 +825,7 @@ async def test_bulk_delete_coalesces_to_one_rebuild():
     sparse = LocalBM25Embedder(rebuild_min_docs=10, rebuild_growth_factor=1.5)
     vikingdb = _RebuildCountingVikingDB(sizes=[0])
     ctx = RequestContext(
-        user=UserIdentifier(account_id="default", user_id="default", agent_id="default"),
+        user=UserIdentifier(account_id="default", user_id="default"),
         role=Role.ROOT,
     )
     state = vikingdb._local_bm25_rebuilds.setdefault(
@@ -852,7 +852,7 @@ async def test_single_deletes_skip_rebuild_until_shrinkage_threshold():
     # 100 / 1.5 ≈ 66.67 → trigger fires when approx_size <= 66 (the 34th delete).
     vikingdb = _RebuildCountingVikingDB(sizes=[66])
     ctx = RequestContext(
-        user=UserIdentifier(account_id="default", user_id="default", agent_id="default"),
+        user=UserIdentifier(account_id="default", user_id="default"),
         role=Role.ROOT,
     )
     state = vikingdb._local_bm25_rebuilds.setdefault(
@@ -881,7 +881,7 @@ async def test_empty_corpus_rebuild_always_fires():
     sparse = LocalBM25Embedder(rebuild_min_docs=10, rebuild_growth_factor=1.5)
     vikingdb = _RebuildCountingVikingDB(sizes=[0])
     ctx = RequestContext(
-        user=UserIdentifier(account_id="default", user_id="default", agent_id="default"),
+        user=UserIdentifier(account_id="default", user_id="default"),
         role=Role.ROOT,
     )
     state = vikingdb._local_bm25_rebuilds.setdefault(
@@ -906,7 +906,7 @@ async def test_schedule_with_zero_delta_is_noop():
     sparse = LocalBM25Embedder(rebuild_min_docs=10, rebuild_growth_factor=1.5)
     vikingdb = _RebuildCountingVikingDB(sizes=[1])
     ctx = RequestContext(
-        user=UserIdentifier(account_id="default", user_id="default", agent_id="default"),
+        user=UserIdentifier(account_id="default", user_id="default"),
         role=Role.ROOT,
     )
     vikingdb.schedule_local_bm25_rebuild(sparse, ctx=ctx, delta_docs=0)
@@ -969,7 +969,7 @@ async def test_update_uri_mapping_preserves_sparse_vector():
     }
     facade = _StubFacade(original)
     ctx = RequestContext(
-        user=UserIdentifier(account_id="default", user_id="default", agent_id="default"),
+        user=UserIdentifier(account_id="default", user_id="default"),
         role=Role.ROOT,
     )
 
@@ -1007,7 +1007,7 @@ async def test_below_threshold_schedule_during_inflight_preserves_residue():
     sparse = LocalBM25Embedder(rebuild_min_docs=10, rebuild_growth_factor=1.5)
     vikingdb = _RebuildCountingVikingDB(sizes=[1])
     ctx = RequestContext(
-        user=UserIdentifier(account_id="default", user_id="default", agent_id="default"),
+        user=UserIdentifier(account_id="default", user_id="default"),
         role=Role.ROOT,
     )
 
