@@ -22,8 +22,8 @@ from openviking.server.identity import RequestContext, Role, UserIdentifier
 from openviking.storage.collection_schemas import (
     CollectionSchemas,
     TextEmbeddingHandler,
-    _LocalBM25RebuildState,
     _build_embedding_metadata,
+    _LocalBM25RebuildState,
     init_context_collection,
 )
 from openviking.storage.errors import EmbeddingRebuildRequiredError
@@ -42,6 +42,23 @@ from openviking_cli.utils.config.vectordb_config import (
     VectorDBBackendConfig,
     VolcengineConfig,
 )
+
+
+class _LocalBM25SchedulerMixin:
+    """Reuses the real VikingVectorIndexBackend scheduler methods on fake VikingDBs.
+
+    The scheduler only touches `rebuild_local_bm25_sparse_vectors` and an instance
+    dict `_local_bm25_rebuilds`, so the bound methods drop in cleanly. Each fake
+    must call `_LocalBM25SchedulerMixin.__init__(self)` to initialise state.
+    """
+
+    schedule_local_bm25_rebuild = VikingVectorIndexBackend.schedule_local_bm25_rebuild
+    _start_local_bm25_rebuild = VikingVectorIndexBackend._start_local_bm25_rebuild
+    _finish_local_bm25_rebuild = VikingVectorIndexBackend._finish_local_bm25_rebuild
+    _drain_local_bm25_rebuilds = VikingVectorIndexBackend._drain_local_bm25_rebuilds
+
+    def __init__(self):
+        self._local_bm25_rebuilds: dict = {}
 
 skip_if_not_manual = pytest.mark.skipif(
     os.environ.get("RUN_MANUAL") != "1", reason="manual 10k local BM25 rebuild test"
@@ -495,11 +512,12 @@ async def test_embedding_handler_truncates_queue_input_before_embed(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_embedding_handler_local_bm25_write_embeds_dense_then_rebuilds(monkeypatch):
-    class _CapturingVikingDB:
+    class _CapturingVikingDB(_LocalBM25SchedulerMixin):
         is_closing = False
         mode = "local"
 
         def __init__(self):
+            super().__init__()
             self.rebuilt_with = None
 
         async def upsert(self, _data, *, ctx):
@@ -521,7 +539,7 @@ async def test_embedding_handler_local_bm25_write_embeds_dense_then_rebuilds(mon
     handler = TextEmbeddingHandler(vikingdb)
 
     await handler.on_dequeue(_build_queue_payload())
-    rebuild_task = handler._local_bm25_rebuilds_by_account["default"].task
+    rebuild_task = vikingdb._local_bm25_rebuilds["default"].task
     assert rebuild_task is not None
     await rebuild_task
 
@@ -532,11 +550,12 @@ async def test_embedding_handler_local_bm25_write_embeds_dense_then_rebuilds(mon
 
 @pytest.mark.asyncio
 async def test_embedding_handler_local_bm25_rebuilds_are_coalesced(monkeypatch):
-    class _SlowVikingDB:
+    class _SlowVikingDB(_LocalBM25SchedulerMixin):
         is_closing = False
         mode = "local"
 
         def __init__(self):
+            super().__init__()
             self.calls = 0
             self.active = 0
             self.max_active = 0
@@ -572,7 +591,7 @@ async def test_embedding_handler_local_bm25_rebuilds_are_coalesced(monkeypatch):
     await vikingdb.started.wait()
     handler._schedule_local_bm25_sparse_rebuild(ctx)
 
-    state = handler._local_bm25_rebuilds_by_account["default"]
+    state = vikingdb._local_bm25_rebuilds["default"]
     assert state.task is not None
     assert vikingdb.calls == 1
 
@@ -585,11 +604,12 @@ async def test_embedding_handler_local_bm25_rebuilds_are_coalesced(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_embedding_handler_local_bm25_restarts_after_late_pending(monkeypatch):
-    class _CountingVikingDB:
+    class _CountingVikingDB(_LocalBM25SchedulerMixin):
         is_closing = False
         mode = "local"
 
         def __init__(self):
+            super().__init__()
             self.calls = 0
 
         async def rebuild_local_bm25_sparse_vectors(self, sparse_embedder, *, ctx):
@@ -606,12 +626,12 @@ async def test_embedding_handler_local_bm25_restarts_after_late_pending(monkeypa
     )
 
     vikingdb = _CountingVikingDB()
-    handler = TextEmbeddingHandler(vikingdb)
+    TextEmbeddingHandler(vikingdb)
     ctx = RequestContext(
         user=UserIdentifier(account_id="default", user_id="default", agent_id="default"),
         role=Role.ROOT,
     )
-    state = handler._local_bm25_rebuilds_by_account.setdefault(
+    state = vikingdb._local_bm25_rebuilds.setdefault(
         "default", _LocalBM25RebuildState()
     )
     completed_task = asyncio.create_task(asyncio.sleep(0))
@@ -619,7 +639,7 @@ async def test_embedding_handler_local_bm25_restarts_after_late_pending(monkeypa
     state.task = completed_task
     state.pending = True
 
-    handler._finish_local_bm25_sparse_rebuild(completed_task, ctx, sparse, state)
+    vikingdb._finish_local_bm25_rebuild(completed_task, ctx, sparse, state)
 
     assert state.task is not completed_task
     assert state.task is not None
@@ -628,13 +648,14 @@ async def test_embedding_handler_local_bm25_restarts_after_late_pending(monkeypa
     assert state.task is None
 
 
-class _RebuildCountingVikingDB:
+class _RebuildCountingVikingDB(_LocalBM25SchedulerMixin):
     """Counts rebuild calls; returns a configurable corpus size per rebuild."""
 
     is_closing = False
     mode = "local"
 
     def __init__(self, sizes: list[int] | None = None):
+        super().__init__()
         self.calls = 0
         self._sizes = sizes or []
 
@@ -669,7 +690,7 @@ async def test_rebuild_fires_below_min_docs(monkeypatch):
 
     for _ in range(3):
         handler._schedule_local_bm25_sparse_rebuild(ctx)
-        task = handler._local_bm25_rebuilds_by_account["default"].task
+        task = vikingdb._local_bm25_rebuilds["default"].task
         if task is not None:
             await task
 
@@ -683,7 +704,7 @@ async def test_rebuild_skips_when_growth_threshold_not_met(monkeypatch):
     vikingdb = _RebuildCountingVikingDB(sizes=[10])
     handler, ctx = _build_rebuild_handler(monkeypatch, sparse, vikingdb)
 
-    state = handler._local_bm25_rebuilds_by_account.setdefault(
+    state = vikingdb._local_bm25_rebuilds.setdefault(
         "default", _LocalBM25RebuildState()
     )
     state.last_rebuild_size = 10
@@ -709,7 +730,7 @@ async def test_rebuild_fires_at_growth_threshold(monkeypatch):
     vikingdb = _RebuildCountingVikingDB(sizes=[15])
     handler, ctx = _build_rebuild_handler(monkeypatch, sparse, vikingdb)
 
-    state = handler._local_bm25_rebuilds_by_account.setdefault(
+    state = vikingdb._local_bm25_rebuilds.setdefault(
         "default", _LocalBM25RebuildState()
     )
     state.last_rebuild_size = 10
@@ -719,7 +740,7 @@ async def test_rebuild_fires_at_growth_threshold(monkeypatch):
     for _ in range(5):
         handler._schedule_local_bm25_sparse_rebuild(ctx)
 
-    task = handler._local_bm25_rebuilds_by_account["default"].task
+    task = vikingdb._local_bm25_rebuilds["default"].task
     assert task is not None
     await task
 
@@ -740,7 +761,7 @@ async def test_rebuild_fires_at_max_interval(monkeypatch):
     vikingdb = _RebuildCountingVikingDB(sizes=[11])
     handler, ctx = _build_rebuild_handler(monkeypatch, sparse, vikingdb)
 
-    state = handler._local_bm25_rebuilds_by_account.setdefault(
+    state = vikingdb._local_bm25_rebuilds.setdefault(
         "default", _LocalBM25RebuildState()
     )
     state.last_rebuild_size = 10
@@ -748,7 +769,7 @@ async def test_rebuild_fires_at_max_interval(monkeypatch):
     state.last_rebuild_at = _time.monotonic() - 120.0
 
     handler._schedule_local_bm25_sparse_rebuild(ctx)
-    task = handler._local_bm25_rebuilds_by_account["default"].task
+    task = vikingdb._local_bm25_rebuilds["default"].task
     assert task is not None
     await task
 
@@ -759,11 +780,12 @@ async def test_rebuild_fires_at_max_interval(monkeypatch):
 async def test_rebuild_coalescing_still_works_with_triggers(monkeypatch):
     """In-flight rebuild + new inserts past the threshold still coalesce to 2 calls, not N."""
 
-    class _SlowCountingVikingDB:
+    class _SlowCountingVikingDB(_LocalBM25SchedulerMixin):
         is_closing = False
         mode = "local"
 
         def __init__(self):
+            super().__init__()
             self.calls = 0
             self.started = asyncio.Event()
             self.release_first = asyncio.Event()
@@ -780,7 +802,7 @@ async def test_rebuild_coalescing_still_works_with_triggers(monkeypatch):
     vikingdb = _SlowCountingVikingDB()
     handler, ctx = _build_rebuild_handler(monkeypatch, sparse, vikingdb)
 
-    state = handler._local_bm25_rebuilds_by_account.setdefault(
+    state = vikingdb._local_bm25_rebuilds.setdefault(
         "default", _LocalBM25RebuildState()
     )
     state.last_rebuild_size = 10
@@ -804,6 +826,101 @@ async def test_rebuild_coalescing_still_works_with_triggers(monkeypatch):
 
     assert vikingdb.calls == 2  # not 11 — coalescing held
     assert state.last_rebuild_size == 30
+
+
+@pytest.mark.asyncio
+async def test_bulk_delete_coalesces_to_one_rebuild():
+    """A bulk delta_docs=-N from rm fires at most one rebuild, not N."""
+    sparse = LocalBM25Embedder(rebuild_min_docs=10, rebuild_growth_factor=1.5)
+    vikingdb = _RebuildCountingVikingDB(sizes=[0])
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="default", user_id="default", agent_id="default"),
+        role=Role.ROOT,
+    )
+    state = vikingdb._local_bm25_rebuilds.setdefault(
+        "default", _LocalBM25RebuildState()
+    )
+    state.last_rebuild_size = 100
+    import time as _time
+    state.last_rebuild_at = _time.monotonic()
+
+    # Bulk delete of 200 records — far past the shrinkage trigger.
+    vikingdb.schedule_local_bm25_rebuild(sparse, ctx=ctx, delta_docs=-200)
+
+    task = vikingdb._local_bm25_rebuilds["default"].task
+    assert task is not None
+    await task
+
+    assert vikingdb.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_single_deletes_skip_rebuild_until_shrinkage_threshold():
+    """One-by-one deletes after a rebuild at 100 only fire once corpus dips past 1/1.5."""
+    sparse = LocalBM25Embedder(rebuild_min_docs=10, rebuild_growth_factor=1.5)
+    # 100 / 1.5 ≈ 66.67 → trigger fires when approx_size <= 66 (the 34th delete).
+    vikingdb = _RebuildCountingVikingDB(sizes=[66])
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="default", user_id="default", agent_id="default"),
+        role=Role.ROOT,
+    )
+    state = vikingdb._local_bm25_rebuilds.setdefault(
+        "default", _LocalBM25RebuildState()
+    )
+    state.last_rebuild_size = 100
+    import time as _time
+    state.last_rebuild_at = _time.monotonic()
+
+    for _ in range(33):
+        vikingdb.schedule_local_bm25_rebuild(sparse, ctx=ctx, delta_docs=-1)
+    assert vikingdb.calls == 0  # 100 - 33 = 67, still above 100 / 1.5
+
+    vikingdb.schedule_local_bm25_rebuild(sparse, ctx=ctx, delta_docs=-1)  # 34th
+    task = vikingdb._local_bm25_rebuilds["default"].task
+    assert task is not None
+    await task
+
+    assert vikingdb.calls == 1
+    assert state.last_rebuild_size == 66
+
+
+@pytest.mark.asyncio
+async def test_empty_corpus_rebuild_always_fires():
+    """If pending deletes empty the corpus, rebuild fires even when min_docs is small."""
+    sparse = LocalBM25Embedder(rebuild_min_docs=10, rebuild_growth_factor=1.5)
+    vikingdb = _RebuildCountingVikingDB(sizes=[0])
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="default", user_id="default", agent_id="default"),
+        role=Role.ROOT,
+    )
+    state = vikingdb._local_bm25_rebuilds.setdefault(
+        "default", _LocalBM25RebuildState()
+    )
+    state.last_rebuild_size = 100
+    import time as _time
+    state.last_rebuild_at = _time.monotonic()
+
+    vikingdb.schedule_local_bm25_rebuild(sparse, ctx=ctx, delta_docs=-100)
+
+    task = vikingdb._local_bm25_rebuilds["default"].task
+    assert task is not None
+    await task
+
+    assert vikingdb.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_schedule_with_zero_delta_is_noop():
+    """delta_docs=0 (mv-style no-op) must not allocate state or schedule."""
+    sparse = LocalBM25Embedder(rebuild_min_docs=10, rebuild_growth_factor=1.5)
+    vikingdb = _RebuildCountingVikingDB(sizes=[1])
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="default", user_id="default", agent_id="default"),
+        role=Role.ROOT,
+    )
+    vikingdb.schedule_local_bm25_rebuild(sparse, ctx=ctx, delta_docs=0)
+    assert vikingdb.calls == 0
+    assert "default" not in vikingdb._local_bm25_rebuilds
 
 
 @pytest.mark.asyncio

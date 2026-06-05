@@ -2288,13 +2288,24 @@ class VikingFS:
 
         try:
             await vector_store.delete_uris(real_ctx, uris)
-            await self._rebuild_local_bm25_sparse_vectors(real_ctx)
+            self._schedule_local_bm25_after_delete(real_ctx, len(uris))
             for uri in uris:
                 logger.debug(f"[VikingFS] Deleted from vector store: {uri}")
         except Exception as e:
             logger.warning(f"[VikingFS] Failed to delete from vector store: {e}")
 
-    async def _rebuild_local_bm25_sparse_vectors(self, ctx: RequestContext) -> None:
+    def _schedule_local_bm25_after_delete(
+        self, ctx: RequestContext, removed_count: int
+    ) -> None:
+        """Route corpus shrinkage through the amortizing scheduler.
+
+        Mirrors the insert-side scheduling in TextEmbeddingHandler: a single
+        delete (or a bulk delete) only fires a rebuild once the corpus has
+        shrunk past 1/growth_factor, has dropped below min_docs, has emptied,
+        or time staleness has been exceeded.
+        """
+        if removed_count <= 0:
+            return
         from openviking.models.embedder.local_bm25_embedder import extract_local_bm25_embedder
 
         vector_store = self._get_vector_store()
@@ -2303,7 +2314,9 @@ class VikingFS:
         local_bm25 = extract_local_bm25_embedder(self._get_embedder())
         if local_bm25 is None:
             return
-        await vector_store.rebuild_local_bm25_sparse_vectors(local_bm25, ctx=ctx)
+        vector_store.schedule_local_bm25_rebuild(
+            local_bm25, ctx=ctx, delta_docs=-removed_count
+        )
 
     async def _update_vector_store_uris(
         self,
@@ -2316,6 +2329,12 @@ class VikingFS:
         """Update URIs in vector store (when moving files).
 
         Preserves vector data and updates URI-derived identifiers without regenerating embeddings.
+
+        Note: URI rename preserves the precomputed `sparse_vector` on each
+        record and does not change tokens, so the local BM25 corpus stats
+        (doc_count, avgdl, term_doc_freq) stay valid. No rebuild is scheduled
+        here. If a future caller makes mv rewrite content, that caller must
+        call `vector_store.schedule_local_bm25_rebuild`.
         """
         vector_store = self._get_vector_store()
         if not vector_store:
