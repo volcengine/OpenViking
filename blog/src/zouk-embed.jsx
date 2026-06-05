@@ -380,6 +380,149 @@ function parseInjectedMessage(content) {
   return { context, body: text.slice(match[0].length).trimStart() };
 }
 
+function splitMarkdownTableRow(line = '') {
+  let text = String(line).trim();
+  if (text.startsWith('|')) text = text.slice(1);
+  if (text.endsWith('|')) text = text.slice(0, -1);
+  const cells = [];
+  let cell = '';
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === '\\' && text[index + 1] === '|') {
+      cell += '|';
+      index += 1;
+      continue;
+    }
+    if (char === '|') {
+      cells.push(cell.trim());
+      cell = '';
+      continue;
+    }
+    cell += char;
+  }
+  cells.push(cell.trim());
+  return cells;
+}
+
+function isMarkdownTableRow(line = '') {
+  const text = String(line).trim();
+  return text.includes('|') && splitMarkdownTableRow(text).length >= 2;
+}
+
+function isMarkdownTableSeparator(line = '') {
+  const cells = splitMarkdownTableRow(line);
+  return cells.length >= 2 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.trim()));
+}
+
+function tableAlignment(separatorCell = '') {
+  const text = String(separatorCell).trim();
+  if (text.startsWith(':') && text.endsWith(':')) return 'center';
+  if (text.endsWith(':')) return 'right';
+  return 'left';
+}
+
+function normalizeTableRow(cells, size) {
+  return Array.from({ length: size }, (_, index) => cells[index] || '');
+}
+
+function parseMessageContentBlocks(content = '') {
+  const lines = String(content || '').replace(/\r\n?/g, '\n').split('\n');
+  const blocks = [];
+  const textLines = [];
+  let inFence = false;
+
+  const flushText = () => {
+    const text = textLines.join('\n');
+    if (text.trim()) blocks.push({ type: 'text', text });
+    textLines.length = 0;
+  };
+
+  for (let index = 0; index < lines.length;) {
+    const line = lines[index];
+    const trimmed = line.trim();
+    if (/^```/.test(trimmed)) {
+      inFence = !inFence;
+      textLines.push(line);
+      index += 1;
+      continue;
+    }
+
+    const nextLine = lines[index + 1] || '';
+    if (!inFence && isMarkdownTableRow(line) && isMarkdownTableSeparator(nextLine)) {
+      const header = splitMarkdownTableRow(line);
+      const separators = splitMarkdownTableRow(nextLine);
+      const columnCount = header.length;
+      const rows = [];
+      let rowIndex = index + 2;
+      while (rowIndex < lines.length && isMarkdownTableRow(lines[rowIndex])) {
+        rows.push(normalizeTableRow(splitMarkdownTableRow(lines[rowIndex]), columnCount));
+        rowIndex += 1;
+      }
+
+      flushText();
+      blocks.push({
+        type: 'table',
+        header: normalizeTableRow(header, columnCount),
+        alignments: normalizeTableRow(separators, columnCount).map(tableAlignment),
+        rows,
+      });
+      index = rowIndex;
+      continue;
+    }
+
+    textLines.push(line);
+    index += 1;
+  }
+
+  flushText();
+  return blocks;
+}
+
+function alignmentClassName(alignment) {
+  return alignment === 'center' || alignment === 'right' ? `is-${alignment}` : '';
+}
+
+function MessageContentBlocks({ content }) {
+  const blocks = parseMessageContentBlocks(content);
+  if (!blocks.length) return null;
+  return blocks.map((block, blockIndex) => {
+    if (block.type === 'text') {
+      return (
+        <div className="zouk-message-text" key={`text-${blockIndex}`}>
+          {block.text}
+        </div>
+      );
+    }
+
+    return (
+      <div className="zouk-message-table-wrap" key={`table-${blockIndex}`}>
+        <table className="zouk-message-table">
+          <thead>
+            <tr>
+              {block.header.map((cell, cellIndex) => (
+                <th className={alignmentClassName(block.alignments[cellIndex])} key={`head-${cellIndex}`}>
+                  {cell}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {block.rows.map((row, rowIndex) => (
+              <tr key={`row-${rowIndex}`}>
+                {row.map((cell, cellIndex) => (
+                  <td className={alignmentClassName(block.alignments[cellIndex])} key={`cell-${rowIndex}-${cellIndex}`}>
+                    {cell}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  });
+}
+
 function avatarLabel(name) {
   const clean = String(name || 'z').replace(/^@/, '').trim();
   return (clean[0] || 'z').toUpperCase();
@@ -454,7 +597,7 @@ function MessageBody({ content }) {
           ))}
         </div>
       ) : null}
-      {parsed.body ? <div className="zouk-message-text">{parsed.body}</div> : null}
+      {parsed.body ? <MessageContentBlocks content={parsed.body} /> : null}
     </>
   );
 }
