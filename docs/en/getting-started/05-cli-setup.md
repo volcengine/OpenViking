@@ -76,6 +76,14 @@ command -v ov
 ov --version
 ```
 
+If `ov --version` or any other `ov` command says OpenViking needs a display language, choose one and retry:
+
+```bash
+ov language en
+# or
+ov language zh-CN
+```
+
 Install or upgrade the npm package:
 
 ```bash
@@ -94,14 +102,6 @@ Verify:
 
 ```bash
 ov --help
-```
-
-If `ov --help` says OpenViking needs a display language, choose one and retry:
-
-```bash
-ov language en
-# or
-ov language zh-CN
 ```
 
 If `ov` is still not found, close and reopen the shell, or check the npm global prefix:

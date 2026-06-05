@@ -76,6 +76,14 @@ command -v ov
 ov --version
 ```
 
+如果 `ov --version` 或任何其他 `ov` 命令提示 OpenViking 需要显示语言，请先选择语言再重试：
+
+```bash
+ov language en
+# 或
+ov language zh-CN
+```
+
 安装或升级 npm 包：
 
 ```bash
@@ -94,14 +102,6 @@ pip install openviking --upgrade --force-reinstall
 
 ```bash
 ov --help
-```
-
-如果 `ov --help` 提示 OpenViking 需要显示语言，请先选择语言再重试：
-
-```bash
-ov language en
-# 或
-ov language zh-CN
 ```
 
 如果仍然找不到 `ov`，关闭并重新打开 shell，或检查 npm 全局 prefix：
