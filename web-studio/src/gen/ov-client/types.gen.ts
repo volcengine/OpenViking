@@ -839,9 +839,6 @@ export type GetSystemStatusData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: never;
@@ -883,9 +880,6 @@ export type PostSystemWaitData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: never;
@@ -927,9 +921,6 @@ export type PostSystemConsistencyData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: never;
@@ -971,9 +962,6 @@ export type GetAdminAccountsData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: never;
@@ -1015,9 +1003,6 @@ export type PostAdminAccountsData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: never;
@@ -1059,9 +1044,6 @@ export type DeleteAdminAccountByAccountIdData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path: {
         /**
@@ -1110,9 +1092,6 @@ export type GetAdminAccountIdUsersData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path: {
         /**
@@ -1174,9 +1153,6 @@ export type PostAdminAccountIdUsersData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path: {
         /**
@@ -1225,9 +1201,6 @@ export type DeleteAdminAccountIdUserByUserIdData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path: {
         /**
@@ -1282,9 +1255,6 @@ export type PutAdminAccountIdUserIdRoleData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path: {
         /**
@@ -1339,9 +1309,6 @@ export type PostAdminAccountIdUserIdKeyData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path: {
         /**
@@ -1396,9 +1363,6 @@ export type PostResourcesTempUploadData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: never;
@@ -1440,9 +1404,6 @@ export type PostResourcesData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: never;
@@ -1484,9 +1445,6 @@ export type PostSkillsData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: never;
@@ -1528,9 +1486,6 @@ export type GetFsLsData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query: {
@@ -1621,9 +1576,6 @@ export type GetFsTreeData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query: {
@@ -1708,9 +1660,6 @@ export type GetFsStatData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query: {
@@ -1759,9 +1708,6 @@ export type PostFsMkdirData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: never;
@@ -1803,9 +1749,6 @@ export type DeleteFsData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query: {
@@ -1860,9 +1803,6 @@ export type PostFsMvData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: never;
@@ -1904,9 +1844,6 @@ export type GetContentReadData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query: {
@@ -1967,9 +1904,6 @@ export type GetContentAbstractData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query: {
@@ -2018,9 +1952,6 @@ export type GetContentOverviewData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query: {
@@ -2069,9 +2000,6 @@ export type GetContentDownloadData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query: {
@@ -2120,9 +2048,6 @@ export type PostContentWriteData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: never;
@@ -2164,9 +2089,6 @@ export type PostContentReindexData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: never;
@@ -2208,9 +2130,6 @@ export type GetConsoleDashboardSummaryData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: {
@@ -2259,9 +2178,6 @@ export type GetConsoleTokensData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query: {
@@ -2326,9 +2242,6 @@ export type GetConsoleContextCommitsData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query: {
@@ -2393,9 +2306,6 @@ export type GetConsoleAuditData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: {
@@ -2458,9 +2368,6 @@ export type PostSearchFindData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: never;
@@ -2502,9 +2409,6 @@ export type PostSearchSearchData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: never;
@@ -2546,9 +2450,6 @@ export type PostSearchGrepData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: never;
@@ -2590,9 +2491,6 @@ export type PostSearchGlobData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: never;
@@ -2634,9 +2532,6 @@ export type GetRelationsData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query: {
@@ -2685,9 +2580,6 @@ export type DeleteRelationsLinkData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: never;
@@ -2729,9 +2621,6 @@ export type PostRelationsLinkData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: never;
@@ -2773,9 +2662,6 @@ export type GetPrivacyConfigsData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: never;
@@ -2817,9 +2703,6 @@ export type GetPrivacyConfigsByCategoryData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path: {
         /**
@@ -2868,9 +2751,6 @@ export type GetPrivacyConfigsByCategoryAndTargetKeyData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path: {
         /**
@@ -2925,9 +2805,6 @@ export type PostPrivacyConfigsByCategoryAndTargetKeyData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path: {
         /**
@@ -2982,9 +2859,6 @@ export type GetPrivacyConfigsVersionsByCategoryAndTargetKeyData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path: {
         /**
@@ -3039,9 +2913,6 @@ export type GetPrivacyConfigsVersionByCategoryAndTargetKeyAndVersionData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path: {
         /**
@@ -3102,9 +2973,6 @@ export type PostPrivacyConfigsActivateByCategoryAndTargetKeyData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path: {
         /**
@@ -3159,9 +3027,6 @@ export type GetSessionsData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: never;
@@ -3203,9 +3068,6 @@ export type PostSessionsData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: never;
@@ -3247,9 +3109,6 @@ export type DeleteSessionBySessionIdData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path: {
         /**
@@ -3298,9 +3157,6 @@ export type GetSessionBySessionIdData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path: {
         /**
@@ -3356,9 +3212,6 @@ export type GetSessionIdContextData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path: {
         /**
@@ -3414,9 +3267,6 @@ export type GetSessionIdArchiveByArchiveIdData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path: {
         /**
@@ -3471,9 +3321,6 @@ export type PostSessionIdCommitData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path: {
         /**
@@ -3522,9 +3369,6 @@ export type PostSessionIdExtractData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path: {
         /**
@@ -3573,9 +3417,6 @@ export type PostSessionIdMessagesData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path: {
         /**
@@ -3624,9 +3465,6 @@ export type PostSessionIdUsedData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path: {
         /**
@@ -3675,9 +3513,6 @@ export type GetStatsMemoriesData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: {
@@ -3726,9 +3561,6 @@ export type GetStatsSessionBySessionIdData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path: {
         /**
@@ -3777,9 +3609,6 @@ export type PostPackExportData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: never;
@@ -3824,9 +3653,6 @@ export type PostPackBackupData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: never;
@@ -3868,9 +3694,6 @@ export type PostPackImportData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: never;
@@ -3912,9 +3735,6 @@ export type PostPackRestoreData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: never;
@@ -3956,9 +3776,6 @@ export type GetDebugHealthData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: never;
@@ -4000,9 +3817,6 @@ export type GetDebugVectorScrollData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: {
@@ -4057,9 +3871,6 @@ export type GetDebugVectorCountData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: {
@@ -4110,9 +3921,6 @@ export type GetObserverQueueData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: never;
@@ -4154,9 +3962,6 @@ export type GetObserverVikingdbData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: never;
@@ -4198,9 +4003,6 @@ export type GetObserverModelsData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: never;
@@ -4242,9 +4044,6 @@ export type GetObserverLockData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: never;
@@ -4286,9 +4085,6 @@ export type GetObserverRetrievalData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: never;
@@ -4330,9 +4126,6 @@ export type GetObserverFilesystemData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: never;
@@ -4374,9 +4167,6 @@ export type GetObserverSystemData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: never;
@@ -4432,9 +4222,6 @@ export type GetTaskByTaskIdData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path: {
         /**
@@ -4481,9 +4268,6 @@ export type GetTasksData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: {
@@ -4550,9 +4334,6 @@ export type DeleteWebdavResourceByResourcePathData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path: {
         /**
@@ -4599,9 +4380,6 @@ export type GetWebdavResourceByResourcePathData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path: {
         /**
@@ -4648,9 +4426,6 @@ export type HeadWebdavResourceByResourcePathData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path: {
         /**
@@ -4725,9 +4500,6 @@ export type PutWebdavResourceByResourcePathData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path: {
         /**
@@ -4774,9 +4546,6 @@ export type DeleteWebdavResourcesData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: {
@@ -4823,9 +4592,6 @@ export type GetWebdavResourcesData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: {
@@ -4872,9 +4638,6 @@ export type HeadWebdavResourcesData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: {
@@ -4949,9 +4712,6 @@ export type PutWebdavResourcesData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: {
@@ -5012,9 +4772,6 @@ export type PostBotV1ChatData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: never;
@@ -5056,9 +4813,6 @@ export type PostBotV1FeedbackData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: never;
@@ -5100,9 +4854,6 @@ export type PostBotV1ChatStreamData = {
          * X-Openviking-User
          */
         'X-OpenViking-User'?: string | null;
-        /**
-         * X-Openviking-Agent
-         */
     };
     path?: never;
     query?: never;

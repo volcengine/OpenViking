@@ -362,7 +362,7 @@ Claude Code 自带 `MEMORY.md` 文件系统，本插件**与之互补**：
 | `PreCompact`          | Claude Code 重写 transcript 之前      | 在 CC 改 transcript 之前先把 pending 提交为归档                                                  |
 | `SessionEnd`          | Claude Code 会话关闭                  | 最后一次 commit                                                                                  |
 | `SubagentStart`       | 父 session 通过 Task 工具孵化子 agent | 为子 agent 派生隔离的 OV session ID，写 start state                                              |
-| `SubagentStop`        | 子 agent 结束                         | 读子 agent transcript → 推到隔离 session（带子 agent 类型 header）→ commit                       |
+| `SubagentStop`        | 子 agent 结束                         | 读子 agent transcript → 推到带子 agent peer 身份的隔离 session → commit                          |
 
 ### 异步写路径
 
