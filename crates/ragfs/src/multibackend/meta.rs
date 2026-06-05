@@ -6,14 +6,15 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
-use super::context::{FsContext, FsContextInner, FS_CTX};
-use super::errors::{Error, Result};
-use super::filesystem::FileSystem;
-use super::types::{RedirectMeta, SyncLogMeta, WriteFlag};
+use crate::core::context::{FsContext, FsContextInner, FS_CTX};
+use crate::core::errors::{Error, Result};
+use crate::core::filesystem::FileSystem;
+use crate::core::types::{RedirectMeta, SyncLogMeta, WriteFlag};
 
 /// Trait for resolving `FsContext` from a filesystem path.
 ///
@@ -47,11 +48,33 @@ impl FsContextResolver for DefaultFsContextResolver {
 /// Internal file names for metadata files.
 const REDIRECT_FILE: &str = ".redirect.json";
 const SYNC_LOG_FILE: &str = ".sync_log.json";
+const GLOBAL_STATE_FILE: &str = "/local/_system/.multiwrite.global.json";
+const GLOBAL_STATE_VERSION: u32 = 1;
+const DEFAULT_META_CACHE_CAPACITY: usize = 1024;
+const DEFAULT_META_CACHE_TTL: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 struct DirMetaCacheEntry {
     redirect: RedirectMeta,
     sync_log: SyncLogMeta,
+    cached_at: Instant,
+    last_accessed_at: Instant,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct GlobalMultiWriteState {
+    version: u32,
+    next_seq: u64,
+}
+
+impl Default for GlobalMultiWriteState {
+    /// Create the default persisted global state for multi-write sequencing.
+    fn default() -> Self {
+        Self {
+            version: GLOBAL_STATE_VERSION,
+            next_seq: 1,
+        }
+    }
 }
 
 /// Unified metadata store for `.redirect.json` and `.sync_log.json`.
@@ -66,6 +89,10 @@ pub struct MetaStateStore {
     dir_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     /// In-memory directory metadata cache to reduce repeated full JSON reads.
     meta_cache: Mutex<HashMap<String, DirMetaCacheEntry>>,
+    /// Maximum number of directory cache entries to retain.
+    meta_cache_capacity: usize,
+    /// Time-to-live for one directory cache entry.
+    meta_cache_ttl: Duration,
     /// Context resolver for background tasks
     ctx_resolver: Arc<dyn FsContextResolver>,
 }
@@ -76,10 +103,27 @@ impl MetaStateStore {
         primary_backend: Arc<dyn FileSystem>,
         ctx_resolver: Arc<dyn FsContextResolver>,
     ) -> Self {
+        Self::with_cache_config(
+            primary_backend,
+            ctx_resolver,
+            DEFAULT_META_CACHE_CAPACITY,
+            DEFAULT_META_CACHE_TTL,
+        )
+    }
+
+    /// Create a new MetaStateStore with explicit cache sizing.
+    pub fn with_cache_config(
+        primary_backend: Arc<dyn FileSystem>,
+        ctx_resolver: Arc<dyn FsContextResolver>,
+        meta_cache_capacity: usize,
+        meta_cache_ttl: Duration,
+    ) -> Self {
         Self {
             primary_backend,
             dir_locks: Mutex::new(HashMap::new()),
             meta_cache: Mutex::new(HashMap::new()),
+            meta_cache_capacity: meta_cache_capacity.max(1),
+            meta_cache_ttl,
             ctx_resolver,
         }
     }
@@ -93,12 +137,9 @@ impl MetaStateStore {
             .clone()
     }
 
-    /// Remove an idle directory lock from the lock map.
-    async fn cleanup_dir_lock(&self, dir: &str, lock: &Arc<Mutex<()>>) {
-        let mut locks = self.dir_locks.lock().await;
-        if Arc::strong_count(lock) <= 2 {
-            locks.remove(dir);
-        }
+    /// Return the dedicated `_system` context used by global metadata.
+    fn system_ctx() -> FsContext {
+        Arc::new(FsContextInner::new("_system".to_string()))
     }
 
     /// Build the full path for a metadata file in a directory.
@@ -126,7 +167,7 @@ impl MetaStateStore {
                 if data.is_empty() {
                     Ok(T::default())
                 } else {
-                    Ok(serde_json::from_slice(&data).unwrap_or_default())
+                    serde_json::from_slice(&data).map_err(Error::from)
                 }
             }
             Err(Error::NotFound(_)) => Ok(T::default()),
@@ -150,8 +191,16 @@ impl MetaStateStore {
         dir: &str,
         ctx: &FsContext,
     ) -> Result<(RedirectMeta, SyncLogMeta)> {
-        if let Some(cached) = self.meta_cache.lock().await.get(dir).cloned() {
-            return Ok((cached.redirect, cached.sync_log));
+        let now = Instant::now();
+        {
+            let mut cache = self.meta_cache.lock().await;
+            if let Some(cached) = cache.get_mut(dir) {
+                if now.duration_since(cached.cached_at) <= self.meta_cache_ttl {
+                    cached.last_accessed_at = now;
+                    return Ok((cached.redirect.clone(), cached.sync_log.clone()));
+                }
+            }
+            cache.remove(dir);
         }
 
         let redirect = self.read_redirect_meta(dir, ctx).await?;
@@ -161,17 +210,45 @@ impl MetaStateStore {
             DirMetaCacheEntry {
                 redirect: redirect.clone(),
                 sync_log: sync_log.clone(),
+                cached_at: now,
+                last_accessed_at: now,
             },
         );
+        self.prune_meta_cache().await;
         Ok((redirect, sync_log))
     }
 
     /// Update cached metadata for a directory.
     async fn update_meta_cache(&self, dir: &str, redirect: RedirectMeta, sync_log: SyncLogMeta) {
-        self.meta_cache
-            .lock()
-            .await
-            .insert(dir.to_string(), DirMetaCacheEntry { redirect, sync_log });
+        let now = Instant::now();
+        self.meta_cache.lock().await.insert(
+            dir.to_string(),
+            DirMetaCacheEntry {
+                redirect,
+                sync_log,
+                cached_at: now,
+                last_accessed_at: now,
+            },
+        );
+        self.prune_meta_cache().await;
+    }
+
+    /// Remove expired cache entries and trim the cache to capacity.
+    async fn prune_meta_cache(&self) {
+        let now = Instant::now();
+        let mut cache = self.meta_cache.lock().await;
+        cache.retain(|_, entry| now.duration_since(entry.cached_at) <= self.meta_cache_ttl);
+        while cache.len() > self.meta_cache_capacity {
+            let oldest_key = cache
+                .iter()
+                .min_by_key(|(_, entry)| entry.last_accessed_at)
+                .map(|(key, _)| key.clone());
+            if let Some(oldest_key) = oldest_key {
+                cache.remove(&oldest_key);
+            } else {
+                break;
+            }
+        }
     }
 
     /// Write one JSON metadata file to a directory.
@@ -242,8 +319,6 @@ impl MetaStateStore {
         }
         self.update_meta_cache(dir, redirect_meta, sync_log_meta)
             .await;
-        drop(_guard);
-        self.cleanup_dir_lock(dir, &lock).await;
 
         Ok(())
     }
@@ -314,10 +389,6 @@ impl MetaStateStore {
             .await;
         self.update_meta_cache(target_dir, tgt_redirect, tgt_sync_log)
             .await;
-        drop(_guard2);
-        drop(_guard1);
-        self.cleanup_dir_lock(first_dir, &lock1).await;
-        self.cleanup_dir_lock(second_dir, &lock2).await;
 
         Ok(())
     }
@@ -345,6 +416,62 @@ impl MetaStateStore {
     pub fn primary_backend(&self) -> &Arc<dyn FileSystem> {
         &self.primary_backend
     }
+
+    /// Allocate and persist the next global sequence number.
+    pub async fn next_seq(&self) -> Result<u64> {
+        let lock = self.get_dir_lock(GLOBAL_STATE_FILE).await;
+        let _guard = lock.lock().await;
+        let mut state = self.read_global_state().await?;
+        let seq = state.next_seq;
+        state.next_seq = state.next_seq.saturating_add(1);
+        self.write_global_state(&state).await?;
+        Ok(seq)
+    }
+
+    /// Read the persisted global state file.
+    async fn read_global_state(&self) -> Result<GlobalMultiWriteState> {
+        let ctx = Self::system_ctx();
+        match FS_CTX
+            .scope(ctx.clone(), async {
+                self.primary_backend.read(GLOBAL_STATE_FILE, 0, 0).await
+            })
+            .await
+        {
+            Ok(data) => {
+                if data.is_empty() {
+                    Ok(GlobalMultiWriteState::default())
+                } else {
+                    let state: GlobalMultiWriteState = serde_json::from_slice(&data)?;
+                    if state.version != GLOBAL_STATE_VERSION {
+                        return Err(Error::config(format!(
+                            "unsupported multi-write global state version {}",
+                            state.version
+                        )));
+                    }
+                    Ok(state)
+                }
+            }
+            Err(Error::NotFound(_)) => Ok(GlobalMultiWriteState::default()),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Persist the global sequence state through the primary backend.
+    async fn write_global_state(&self, state: &GlobalMultiWriteState) -> Result<()> {
+        let ctx = Self::system_ctx();
+        let data = serde_json::to_vec(state)?;
+        FS_CTX
+            .scope(ctx.clone(), async {
+                self.primary_backend
+                    .ensure_parent_dirs(GLOBAL_STATE_FILE, 0o755)
+                    .await?;
+                self.primary_backend
+                    .write(GLOBAL_STATE_FILE, &data, 0, WriteFlag::Create)
+                    .await
+                    .map(|_| ())
+            })
+            .await
+    }
 }
 
 /// Per-path serialization queue for async write ordering.
@@ -370,14 +497,6 @@ impl PathSerializer {
             .entry(path.to_string())
             .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone()
-    }
-
-    /// Remove an idle path lock from the queue map.
-    pub async fn cleanup_path_lock(&self, path: &str, lock: &Arc<Mutex<()>>) {
-        let mut queues = self.queues.lock().await;
-        if Arc::strong_count(lock) <= 2 {
-            queues.remove(path);
-        }
     }
 }
 
@@ -408,12 +527,14 @@ pub(crate) fn file_name(path: &str) -> &str {
 pub fn current_required_ctx() -> Result<FsContext> {
     FS_CTX
         .try_with(|c| c.clone())
-        .map_err(|_| Error::internal("FsContext not set in current task"))
+        .map_err(|_| Error::context_missing("FsContext not set in current task"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugins::memfs::MemFileSystem;
+    use std::sync::Arc;
 
     #[test]
     fn test_parent_dir() {
@@ -441,5 +562,33 @@ mod tests {
     fn test_default_resolver_invalid_path() {
         let resolver = DefaultFsContextResolver;
         assert!(resolver.resolve("/invalid/path").is_err());
+    }
+
+    #[tokio::test]
+    async fn test_invalid_sync_log_json_returns_error() {
+        let primary: Arc<dyn FileSystem> = Arc::new(MemFileSystem::new());
+        let store = MetaStateStore::new(primary.clone(), Arc::new(DefaultFsContextResolver));
+        let ctx = Arc::new(FsContextInner::new("acct".to_string()));
+
+        FS_CTX
+            .scope(ctx.clone(), async {
+                primary
+                    .ensure_parent_dirs("/local/acct/docs/.sync_log.json", 0o755)
+                    .await?;
+                primary
+                    .write(
+                        "/local/acct/docs/.sync_log.json",
+                        b"{not valid json",
+                        0,
+                        WriteFlag::Create,
+                    )
+                    .await?;
+                Ok::<(), Error>(())
+            })
+            .await
+            .unwrap();
+
+        let result = store.get_sync_log_meta("/local/acct/docs", &ctx).await;
+        assert!(result.is_err(), "corrupted metadata must fail fast");
     }
 }

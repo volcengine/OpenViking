@@ -301,14 +301,26 @@ impl S3Client {
 
     /// Get an object's contents
     pub async fn get_object(&self, key: &str) -> Result<Vec<u8>> {
-        let resp = self
+        let resp = match self
             .client
             .get_object()
             .bucket(&self.bucket)
             .key(key)
             .send()
             .await
-            .map_err(|e| Error::internal(format!("S3 GetObject error: {}", e)))?;
+        {
+            Ok(resp) => resp,
+            Err(sdk_err) => {
+                let service_err = sdk_err.into_service_error();
+                if service_err.is_no_such_key() {
+                    return Err(Error::NotFound(key.to_string()));
+                }
+                return Err(Error::internal(format!(
+                    "S3 GetObject error: {}",
+                    service_err
+                )));
+            }
+        };
 
         let bytes = resp
             .body
@@ -327,7 +339,7 @@ impl S3Client {
             format!("bytes={}-{}", offset, offset + size - 1)
         };
 
-        let resp = self
+        let resp = match self
             .client
             .get_object()
             .bucket(&self.bucket)
@@ -335,7 +347,19 @@ impl S3Client {
             .range(range)
             .send()
             .await
-            .map_err(|e| Error::internal(format!("S3 GetObject range error: {}", e)))?;
+        {
+            Ok(resp) => resp,
+            Err(sdk_err) => {
+                let service_err = sdk_err.into_service_error();
+                if service_err.is_no_such_key() {
+                    return Err(Error::NotFound(key.to_string()));
+                }
+                return Err(Error::internal(format!(
+                    "S3 GetObject range error: {}",
+                    service_err
+                )));
+            }
+        };
 
         let bytes = resp
             .body

@@ -321,6 +321,16 @@ pub struct BackendsConfig {
     pub write_ack_timeout_ms: Option<u64>,
     /// Max concurrent async writes
     pub write_concurrency: Option<usize>,
+    /// Retry loop interval in milliseconds
+    pub retry_interval_ms: Option<u64>,
+    /// Base backoff in milliseconds for retry attempts
+    pub retry_backoff_base_ms: Option<u64>,
+    /// Maximum retry attempts per file/target in one round
+    pub retry_max_retries_per_round: Option<usize>,
+    /// Failure threshold before quarantining one file/target pair
+    pub retry_quarantine_after_failures: Option<u32>,
+    /// TTL for read-route probe cache in milliseconds
+    pub read_probe_cache_ttl_ms: Option<u64>,
     /// Backup items
     pub items: Vec<BackendItemConfig>,
 }
@@ -393,23 +403,10 @@ pub enum RedirectPolicy {
 pub enum SyncOp {
     /// Create an empty file.
     Create,
-    /// Write the captured request bytes with the original offset and flags.
-    Write {
-        /// Original write offset.
-        offset: u64,
-        /// Original write flags.
-        flags: WriteFlag,
+    /// Synchronize file content by copying the current primary state to the backup.
+    SyncFile {
         /// File size used by retry/exclude policy decisions.
         size: u64,
-        /// Captured request payload.
-        content: Vec<u8>,
-    },
-    /// Truncate to size, with a post-primary snapshot for missing lagging replicas.
-    Truncate {
-        /// Requested target size.
-        size: u64,
-        /// Post-truncate primary snapshot.
-        content: Vec<u8>,
     },
     /// Create a directory.
     Mkdir {

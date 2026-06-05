@@ -73,6 +73,7 @@ fn to_py_err(e: ragfs::core::Error) -> PyErr {
         ragfs::core::Error::Serialization(_) => new_py_err("AGFSSerializationError", msg),
         ragfs::core::Error::Network(_) => new_py_err("AGFSNetworkError", msg),
         ragfs::core::Error::Timeout(_) => new_py_err("AGFSTimeoutError", msg),
+        ragfs::core::Error::ContextMissing(_) => new_py_err("AGFSInternalError", msg),
         ragfs::core::Error::Internal(_) => new_py_err("AGFSInternalError", msg),
     }
 }

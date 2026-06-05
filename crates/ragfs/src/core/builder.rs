@@ -98,18 +98,27 @@ mod tests {
         }
     }
 
+    /// Create a plugin config for stack builder tests.
+    fn plugin_config(
+        name: &str,
+        mount_path: &str,
+        params: HashMap<String, ConfigValue>,
+    ) -> PluginConfig {
+        PluginConfig {
+            name: name.to_string(),
+            mount_path: mount_path.to_string(),
+            params,
+            backups: None,
+            server_encryption_enabled: false,
+            primary_encryption_enabled: false,
+            primary_redirects: Vec::new(),
+        }
+    }
+
     async fn mount_mem(stack: &RagfsStack) {
         stack
             .mountable
-            .mount(PluginConfig {
-                name: "memfs".to_string(),
-                mount_path: "/mem".to_string(),
-                params: HashMap::new(),
-                backups: None,
-                server_encryption_enabled: false,
-                primary_encryption_enabled: false,
-                primary_redirects: Vec::new(),
-            })
+            .mount(plugin_config("memfs", "/mem", HashMap::new()))
             .await
             .unwrap();
     }
@@ -123,15 +132,7 @@ mod tests {
         );
         stack
             .mountable
-            .mount(PluginConfig {
-                name: "localfs".to_string(),
-                mount_path: mount_path.to_string(),
-                params,
-                backups: None,
-                server_encryption_enabled: false,
-                primary_encryption_enabled: false,
-                primary_redirects: Vec::new(),
-            })
+            .mount(plugin_config("localfs", mount_path, params))
             .await
     }
 
@@ -176,15 +177,7 @@ mod tests {
         let stack = build_default_stack(enc_config()).await;
         stack
             .mountable
-            .mount(PluginConfig {
-                name: "queuefs".to_string(),
-                mount_path: "/queue".to_string(),
-                params: HashMap::new(),
-                backups: None,
-                server_encryption_enabled: false,
-                primary_encryption_enabled: false,
-                primary_redirects: Vec::new(),
-            })
+            .mount(plugin_config("queuefs", "/queue", HashMap::new()))
             .await
             .unwrap();
 

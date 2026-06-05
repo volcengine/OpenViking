@@ -141,21 +141,7 @@ def _generate_plugin_config(
             "local_dir": str(vikingfs_path),
         }
     elif backend == "s3" and s3_config:
-        primary_plugin_config = {
-            "bucket": s3_config.bucket,
-            "region": s3_config.region,
-            "access_key_id": s3_config.access_key,
-            "secret_access_key": s3_config.secret_key,
-            "endpoint": s3_config.endpoint,
-            "prefix": s3_config.prefix,
-            "disable_ssl": not s3_config.use_ssl,
-            "use_path_style": s3_config.use_path_style,
-            "directory_marker_mode": s3_config.directory_marker_mode.value
-            if hasattr(s3_config.directory_marker_mode, "value")
-            else s3_config.directory_marker_mode,
-            "disable_batch_delete": s3_config.disable_batch_delete,
-            "normalize_encoding_chars": s3_config.normalize_encoding_chars,
-        }
+        primary_plugin_config = _serialize_s3_plugin_params(s3_config)
 
     # Build the mount config dict for the primary backend
     mount_config: Dict[str, Any] = dict(primary_plugin_config)
@@ -202,6 +188,39 @@ def _map_backend_to_plugin_name(backend: str) -> str:
     return mapping.get(backend, backend)
 
 
+def _serialize_s3_plugin_params(s3_config: Any) -> Dict[str, Any]:
+    """Serialize user-facing S3 config into Rust s3fs plugin parameters."""
+    directory_marker_mode = s3_config.directory_marker_mode
+    return {
+        "bucket": s3_config.bucket,
+        "region": s3_config.region,
+        "access_key_id": s3_config.access_key,
+        "secret_access_key": s3_config.secret_key,
+        "endpoint": s3_config.endpoint,
+        "prefix": s3_config.prefix,
+        "disable_ssl": not s3_config.use_ssl,
+        "use_path_style": s3_config.use_path_style,
+        "directory_marker_mode": directory_marker_mode.value
+        if hasattr(directory_marker_mode, "value")
+        else directory_marker_mode,
+        "disable_batch_delete": s3_config.disable_batch_delete,
+        "normalize_encoding_chars": s3_config.normalize_encoding_chars,
+    }
+
+
+def _dump_config_object(config: Any) -> Dict[str, Any]:
+    """Dump a pydantic or namespace-like config object without None values."""
+    if hasattr(config, "model_dump"):
+        return config.model_dump(exclude_none=True)
+    if isinstance(config, dict):
+        return {key: value for key, value in config.items() if value is not None}
+    return {
+        key: value
+        for key, value in vars(config).items()
+        if value is not None and not key.startswith("_")
+    }
+
+
 def _serialize_backups_config(backups_config: Any, data_path: Path) -> Dict[str, Any]:
     """Serialize BackupsConfig to a dict suitable for JSON passthrough via FFI."""
     result: Dict[str, Any] = {
@@ -238,7 +257,7 @@ def _serialize_backups_config(backups_config: Any, data_path: Path) -> Dict[str,
         if backend_type == "s3" and "s3" in item.model_fields_set:
             s3_config = item.s3
             if s3_config is not None:
-                item_dict["params"] = s3_config.model_dump(exclude_none=True)
+                item_dict["params"] = _serialize_s3_plugin_params(s3_config)
         elif backend_type == "local":
             local_config = getattr(item, "local", None)
             local_dir = None
@@ -251,6 +270,10 @@ def _serialize_backups_config(backups_config: Any, data_path: Path) -> Dict[str,
             local_dir_path = Path(local_dir).expanduser()
             local_dir_path.mkdir(parents=True, exist_ok=True)
             item_dict["params"] = {"local_dir": str(local_dir_path)}
+        elif backend_type in item.model_fields_set:
+            backend_config = getattr(item, backend_type, None)
+            if backend_config is not None:
+                item_dict["params"] = _dump_config_object(backend_config)
 
         items.append(item_dict)
 
@@ -360,3 +383,4 @@ def mount_agfs_backend(agfs: Any, config: RagfsBindingConfig | Any) -> None:
             logger.debug(f"[RAGFSUtils] Successfully mounted {plugin_name}")
         except Exception as e:
             logger.error(f"[RAGFSUtils] Failed to mount {plugin_name}: {e}")
+            raise

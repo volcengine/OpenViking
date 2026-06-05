@@ -298,6 +298,11 @@ class _FakeMountClient:
         return None
 
 
+class _FailingMountClient(_FakeMountClient):
+    def mount(self, plugin_name, mount_path, config):
+        raise RuntimeError(f"mount failed: {plugin_name}:{mount_path}")
+
+
 class _FakeBindingClient:
     def __init__(self, *, config):
         self.config = config
@@ -343,6 +348,15 @@ def test_mount_agfs_backend_creates_queue_sqlite_dirs_for_sqlite_backend(tmp_pat
     queuefs_mount = next(call for call in client.mount_calls if call[0] == "queuefs")
     assert queuefs_mount[2]["backend"] == "sqlite"
     assert queuefs_mount[2]["db_path"] == str(queue_db_path.resolve())
+
+
+def test_mount_agfs_backend_raises_mount_error(tmp_path):
+    """Mount failures must fail fast instead of being delayed to later filesystem calls."""
+    config = AGFSConfig(path=str(tmp_path), backend="local")
+    client = _FailingMountClient()
+
+    with pytest.raises(RuntimeError, match="mount failed"):
+        mount_agfs_backend(client, config)
 
 
 def test_ragfs_binding_config_builds_single_binding_dict_for_local_backend(tmp_path):

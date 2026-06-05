@@ -372,4 +372,19 @@ class BackupsConfig(BaseModel):
     write_concurrency: Optional[int] = Field(
         default=None, description="Max concurrent async writes"
     )
+    retry_interval_ms: Optional[int] = Field(
+        default=None, description="Retry loop interval in milliseconds"
+    )
+    retry_backoff_base_ms: Optional[int] = Field(
+        default=None, description="Base backoff for retry attempts in milliseconds"
+    )
+    retry_max_retries_per_round: Optional[int] = Field(
+        default=None, description="Maximum retry attempts per file/target in one round"
+    )
+    retry_quarantine_after_failures: Optional[int] = Field(
+        default=None, description="Failure threshold before quarantining one file/target pair"
+    )
+    read_probe_cache_ttl_ms: Optional[int] = Field(
+        default=None, description="Read-route probe cache TTL in milliseconds"
+    )
     items: List[BackupItemConfig] = Field(description="Backup items")

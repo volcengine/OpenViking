@@ -77,6 +77,10 @@ pub enum Error {
     #[error("operation timed out: {0}")]
     Timeout(String),
 
+    /// Required filesystem context is missing from the current task
+    #[error("filesystem context missing: {0}")]
+    ContextMissing(String),
+
     /// Internal error
     #[error("internal error: {0}")]
     Internal(String),
@@ -122,6 +126,16 @@ impl Error {
     /// Create an Internal error
     pub fn internal(msg: impl Into<String>) -> Self {
         Self::Internal(msg.into())
+    }
+
+    /// Create a ContextMissing error
+    pub fn context_missing(msg: impl Into<String>) -> Self {
+        Self::ContextMissing(msg.into())
+    }
+
+    /// Create a Timeout error
+    pub fn timeout(msg: impl Into<String>) -> Self {
+        Self::Timeout(msg.into())
     }
 
     /// Create an InvalidOperation error
