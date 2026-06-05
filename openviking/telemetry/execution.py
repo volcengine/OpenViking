@@ -60,6 +60,19 @@ def _log_telemetry_summary(snapshot: Optional[TelemetrySnapshot]) -> None:
     )
 
 
+def _record_telemetry_summary_to_metrics_bridge(snapshot: Optional[TelemetrySnapshot]) -> None:
+    try:
+        if snapshot is None:
+            return
+        from openviking.metrics.datasources.telemetry_bridge import (
+            TelemetryBridgeEventDataSource,
+        )
+
+        TelemetryBridgeEventDataSource.record_summary(snapshot.summary)
+    except Exception:
+        logger.debug("failed to record telemetry summary into metrics bridge", exc_info=True)
+
+
 def attach_telemetry_payload(
     result: Any,
     telemetry_payload: Optional[dict[str, Any]],
@@ -203,6 +216,7 @@ async def run_with_telemetry(
             collector.set_error(operation, type(exc).__name__, str(exc))
             snapshot = collector.finish(status=error_status)
             _log_telemetry_summary(snapshot)
+            _record_telemetry_summary_to_metrics_bridge(snapshot)
 
             # If a span exists, record exception and backfill summary (best-effort).
             if otel_trace is not None:
@@ -232,15 +246,7 @@ async def run_with_telemetry(
             except Exception:
                 logger.debug("failed to backfill telemetry summary into span", exc_info=True)
 
-        try:
-            if snapshot is not None:
-                from openviking.metrics.datasources.telemetry_bridge import (
-                    TelemetryBridgeEventDataSource,
-                )
-
-                TelemetryBridgeEventDataSource.record_summary(snapshot.summary)
-        except Exception:
-            logger.debug("failed to record telemetry summary into metrics bridge", exc_info=True)
+        _record_telemetry_summary_to_metrics_bridge(snapshot)
         telemetry_payload = build_telemetry_payload(
             snapshot,
             selection,

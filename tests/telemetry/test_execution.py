@@ -169,6 +169,41 @@ async def test_run_with_telemetry_returns_usage_and_payload():
 
 
 @pytest.mark.asyncio
+async def test_run_with_telemetry_records_error_summary_to_metrics_bridge(monkeypatch):
+    from openviking.telemetry import get_current_telemetry
+    from openviking.telemetry.execution import run_with_telemetry
+
+    captured = []
+    monkeypatch.setattr(
+        "openviking.metrics.datasources.telemetry_bridge.TelemetryBridgeEventDataSource.record_summary",
+        lambda summary: captured.append(dict(summary)),
+    )
+
+    async def _run():
+        telemetry = get_current_telemetry()
+        telemetry.increment("memory.apply.trace.total")
+        telemetry.increment("memory.apply.trace.status.failed")
+        telemetry.increment("memory.apply.exact_file_lock.trace.total")
+        telemetry.increment("memory.apply.exact_file_lock.trace.status.failed")
+        raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await run_with_telemetry(
+            operation="session.commit",
+            telemetry=True,
+            fn=_run,
+        )
+
+    assert len(captured) == 1
+    assert captured[0]["operation"] == "session.commit"
+    assert captured[0]["status"] == "error"
+    assert captured[0]["errors"]["error_code"] == "RuntimeError"
+    trace_summary = captured[0]["memory"]["apply"]["trace"]
+    assert trace_summary["status"]["failed"] == 1
+    assert trace_summary["exact_file_lock"]["status"]["failed"] == 1
+
+
+@pytest.mark.asyncio
 async def test_run_with_telemetry_raises_invalid_argument_for_bad_request():
     from openviking.telemetry.execution import run_with_telemetry
 

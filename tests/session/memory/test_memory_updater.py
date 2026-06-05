@@ -37,6 +37,7 @@ from openviking.session.memory.utils import (
     MemoryFileUtils,
     parse_memory_file_with_fields,
 )
+from openviking.telemetry import OperationTelemetry, bind_telemetry
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -843,14 +844,25 @@ class TestConsecutivePatchesSameURI:
             uris=[uri],
         )
 
-        await updater._apply_upsert(op, MagicMock())
+        telemetry = OperationTelemetry(operation="session.commit", enabled=True)
+        with bind_telemetry(telemetry):
+            apply_traces = await updater._apply_upsert(op, MagicMock())
 
         parsed = parse_memory_file_with_fields(store[uri])
         assert parsed["title"] == "Updated Title"
         assert parsed["content"] == "Original body"
+        assert [trace["status"] for trace in apply_traces] == [
+            "applied",
+            "skipped_after_error",
+        ]
         trace_info.assert_any_call(
             f"[memory_updater] Skipping field update after merge_op failure: uri={uri}, field=content, error=patch failed"
         )
+        trace_summary = telemetry.finish().summary["memory"]["apply"]["trace"]
+        assert trace_summary["total"] == 2
+        assert trace_summary["status"]["applied"] == 1
+        assert trace_summary["status"]["skipped_after_error"] == 1
+        assert "exact_file_lock" not in trace_summary
 
     @pytest.mark.asyncio
     async def test_apply_upsert_raises_field_failure_under_file_lock_mode(self, monkeypatch):
@@ -906,10 +918,16 @@ class TestConsecutivePatchesSameURI:
             uris=[uri],
         )
 
+        telemetry = OperationTelemetry(operation="session.commit", enabled=True)
         with pytest.raises(RuntimeError, match="merge_op failed under exact file-lock mode"):
-            await updater._apply_upsert(op, MagicMock())
+            with bind_telemetry(telemetry):
+                await updater._apply_upsert(op, MagicMock())
 
         mock_viking_fs.write_file.assert_not_awaited()
+        trace_summary = telemetry.finish().summary["memory"]["apply"]["trace"]
+        assert trace_summary["total"] == 1
+        assert trace_summary["status"]["failed"] == 1
+        assert trace_summary["exact_file_lock"]["status"]["failed"] == 1
 
     @pytest.mark.asyncio
     async def test_apply_upsert_wraps_plain_string_patch_with_read_base_under_file_lock_mode(
@@ -1032,7 +1050,9 @@ class TestConsecutivePatchesSameURI:
             uris=[uri],
         )
 
-        apply_traces = await updater._apply_upsert(op, MagicMock())
+        telemetry = OperationTelemetry(operation="session.commit", enabled=True)
+        with bind_telemetry(telemetry):
+            apply_traces = await updater._apply_upsert(op, MagicMock())
 
         written = mock_viking_fs.write_file.await_args.args[1]
         parsed = parse_memory_file_with_fields(written)
@@ -1048,6 +1068,13 @@ class TestConsecutivePatchesSameURI:
         assert apply_traces[0]["rewrite_attempted"] == "merge_op_owned"
         assert apply_traces[0]["status"] == "applied"
         assert apply_traces[0]["changed"] is True
+        trace_summary = telemetry.finish().summary["memory"]["apply"]["trace"]
+        assert trace_summary["total"] == 1
+        assert trace_summary["status"]["applied"] == 1
+        assert trace_summary["stale_detected"] == 1
+        assert trace_summary["rewrite_attempted"] == 1
+        assert trace_summary["exact_file_lock"]["status"]["applied"] == 1
+        assert trace_summary["exact_file_lock"]["stale_detected"] == 1
 
     @pytest.mark.asyncio
     async def test_apply_upsert_plain_string_patch_records_stale_synthesis_trace_under_file_lock_mode(
@@ -1120,7 +1147,9 @@ class TestConsecutivePatchesSameURI:
             uris=[uri],
         )
 
-        apply_traces = await updater._apply_upsert(op, MagicMock())
+        telemetry = OperationTelemetry(operation="session.commit", enabled=True)
+        with bind_telemetry(telemetry):
+            apply_traces = await updater._apply_upsert(op, MagicMock())
 
         written = mock_viking_fs.write_file.await_args.args[1]
         parsed = parse_memory_file_with_fields(written)
@@ -1136,6 +1165,13 @@ class TestConsecutivePatchesSameURI:
         assert apply_traces[0]["rewrite_attempted"] == "merge_op_owned"
         assert apply_traces[0]["status"] == "applied"
         assert apply_traces[0]["changed"] is True
+        trace_summary = telemetry.finish().summary["memory"]["apply"]["trace"]
+        assert trace_summary["total"] == 1
+        assert trace_summary["status"]["applied"] == 1
+        assert trace_summary["stale_detected"] == 1
+        assert trace_summary["rewrite_attempted"] == 1
+        assert trace_summary["exact_file_lock"]["status"]["applied"] == 1
+        assert trace_summary["exact_file_lock"]["rewrite_attempted"] == 1
 
     @pytest.mark.asyncio
     async def test_exact_plain_string_patch_does_not_apply_as_substring_patch(self, monkeypatch):
@@ -1241,10 +1277,12 @@ class TestConsecutivePatchesSameURI:
             uris=[uri],
         )
 
-        result = await updater.apply_operations(
-            ResolvedOperations(upsert_operations=[op], delete_file_contents=[], errors=[]),
-            MagicMock(),
-        )
+        telemetry = OperationTelemetry(operation="session.commit", enabled=True)
+        with bind_telemetry(telemetry):
+            result = await updater.apply_operations(
+                ResolvedOperations(upsert_operations=[op], delete_file_contents=[], errors=[]),
+                MagicMock(),
+            )
 
         mock_viking_fs.write_file.assert_not_awaited()
         updater.generate_overview.assert_not_awaited()
@@ -1265,6 +1303,11 @@ class TestConsecutivePatchesSameURI:
         assert trace["rewrite_attempted"] == "not_applicable_unread_existing"
         assert trace["status"] == "skipped_stale_unread_existing"
         assert trace["changed"] is False
+        trace_summary = telemetry.finish().summary["memory"]["apply"]["trace"]
+        assert trace_summary["total"] == 1
+        assert trace_summary["status"]["skipped_stale_unread_existing"] == 1
+        assert trace_summary["stale_detected"] == 1
+        assert trace_summary["exact_file_lock"]["status"]["skipped_stale_unread_existing"] == 1
 
     @pytest.mark.asyncio
     async def test_apply_upsert_wraps_unstructured_patch_value_with_read_base_under_file_lock_mode(
@@ -1812,11 +1855,14 @@ class TestConsecutivePatchesSameURI:
             uris=[uri],
         )
 
+        telemetry = OperationTelemetry(operation="session.commit", enabled=True)
         with pytest.raises(RuntimeError, match="write failed"):
-            await updater._apply_upsert(op, MagicMock())
+            with bind_telemetry(telemetry):
+                await updater._apply_upsert(op, MagicMock())
 
         assert events == ["lock", "unlock"]
         assert mock_viking_fs.write_file.await_count == 1
+        assert "memory" not in telemetry.finish().summary
 
     @pytest.mark.asyncio
     async def test_apply_operations_exact_existing_update_skips_stale_deleted_latest(
@@ -1865,10 +1911,12 @@ class TestConsecutivePatchesSameURI:
             uris=[uri],
         )
 
-        result = await updater.apply_operations(
-            ResolvedOperations(upsert_operations=[op], delete_file_contents=[], errors=[]),
-            MagicMock(),
-        )
+        telemetry = OperationTelemetry(operation="session.commit", enabled=True)
+        with bind_telemetry(telemetry):
+            result = await updater.apply_operations(
+                ResolvedOperations(upsert_operations=[op], delete_file_contents=[], errors=[]),
+                MagicMock(),
+            )
 
         mock_viking_fs.write_file.assert_not_awaited()
         updater.generate_overview.assert_not_awaited()
@@ -1888,6 +1936,11 @@ class TestConsecutivePatchesSameURI:
         assert trace["rewrite_attempted"] == "not_applicable_latest_deleted"
         assert trace["status"] == "skipped_stale_deleted"
         assert trace["changed"] is False
+        trace_summary = telemetry.finish().summary["memory"]["apply"]["trace"]
+        assert trace_summary["total"] == 1
+        assert trace_summary["status"]["skipped_stale_deleted"] == 1
+        assert trace_summary["stale_detected"] == 1
+        assert trace_summary["exact_file_lock"]["status"]["skipped_stale_deleted"] == 1
 
     @pytest.mark.asyncio
     async def test_write_stored_links_exact_lock_wraps_endpoint_update(self, monkeypatch):

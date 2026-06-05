@@ -8,9 +8,7 @@ Maintains the service-facing compressor interface.
 """
 
 import asyncio
-import hashlib
 import json
-import re
 from datetime import datetime
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
@@ -71,14 +69,6 @@ def _filename_has_variables(schema: Any) -> bool:
 def _append_unique(paths: list[str], path: str) -> None:
     if path and path not in paths:
         paths.append(path)
-
-
-def _phase_memory_diff_filename(phase_label: str) -> str:
-    label = re.sub(r"[^A-Za-z0-9._-]+", "_", phase_label).strip("_") or "phase"
-    if len(label) > 80:
-        digest = hashlib.sha1(phase_label.encode("utf-8")).hexdigest()[:12]
-        label = f"{label[:64].rstrip('_')}_{digest}"
-    return f"memory_diff_{label}.json"
 
 
 def _log_memory_lock_retry(
@@ -605,7 +595,6 @@ class SessionCompressorV2:
             ctx=ctx,
             strict_extract_errors=strict_extract_errors,
             phase_label="trajectory",
-            archive_uri=archive_uri,
         )
         if traj_result is None:
             return empty_result
@@ -682,7 +671,6 @@ class SessionCompressorV2:
                 strict_extract_errors=strict_extract_errors,
                 phase_label=f"experience({traj_uri})",
                 post_apply=_append_sources_before_unlock,
-                archive_uri=archive_uri,
             )
             if exp_result is None:
                 fallback_uris = await self._single_existing_experience_uris(
@@ -779,7 +767,6 @@ class SessionCompressorV2:
         strict_extract_errors: bool,
         phase_label: str,
         post_apply: Optional[ExtractPostApply] = None,
-        archive_uri: str = "",
     ):
         """Run one ExtractLoop phase with its own lock scope, then apply operations.
 
@@ -967,30 +954,6 @@ class SessionCompressorV2:
                     transaction_handle,
                     exact_file_apply_enabled,
                 )
-
-            if (
-                archive_uri
-                and viking_fs
-                and (
-                    memory_operations.upsert_operations
-                    or memory_operations.delete_file_contents
-                    or memory_operations.errors
-                )
-            ):
-                memory_diff = await self._build_memory_diff(
-                    result=memory_result,
-                    operations=memory_operations,
-                    viking_fs=viking_fs,
-                    ctx=ctx,
-                    archive_uri=archive_uri,
-                )
-                diff_uri = f"{archive_uri}/{_phase_memory_diff_filename(phase_label)}"
-                await viking_fs.write_file(
-                    uri=diff_uri,
-                    content=json.dumps(memory_diff, ensure_ascii=False, indent=4),
-                    ctx=ctx,
-                )
-                logger.info("[%s] Wrote memory diff to %s", phase_label, diff_uri)
 
             skill_results: List[Dict[str, Any]] = []
             if skill_operations.upsert_operations:
@@ -1329,7 +1292,6 @@ class SessionCompressorV2:
         return {
             "archive_uri": archive_uri,
             "extracted_at": datetime.utcnow().isoformat() + "Z",
-            "apply_trace": list(getattr(result, "apply_traces", []) or []),
             "operations": {
                 "adds": adds,
                 "updates": updates,
@@ -1339,7 +1301,6 @@ class SessionCompressorV2:
                 "total_adds": len(adds),
                 "total_updates": len(updates),
                 "total_deletes": len(deletes),
-                "total_apply_traces": len(getattr(result, "apply_traces", []) or []),
             },
         }
 

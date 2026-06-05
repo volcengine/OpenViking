@@ -6,7 +6,6 @@ Test for SessionCompressorV2.
 Uses MockVikingFS and real VLM (from config).
 """
 
-import json
 import logging
 from types import SimpleNamespace
 from typing import Any, Dict, List
@@ -789,104 +788,6 @@ class TestCompressorV2:
 
         assert result[0] == ["viking://agent/default/memories/experiences/debug.md"]
         assert events == ["acquire", "apply", "post_apply", "release"]
-
-    @pytest.mark.asyncio
-    async def test_extract_phase_writes_phase_memory_diff_with_apply_trace(self):
-        compressor = SessionCompressorV2(vikingdb=None)
-        user = UserIdentifier.the_default_user()
-        ctx = RequestContext(user=user, role=Role.ROOT)
-        messages = [Message.create_user("test")]
-        memory_uri = "viking://agent/default/memories/experiences/debug.md"
-        archive_uri = "viking://account/default/session/test/history/archive_001"
-        viking_fs = MockVikingFS()
-
-        class DummyProvider:
-            def get_memory_schemas(self, _ctx):
-                return []
-
-            def _get_registry(self):
-                return object()
-
-        class DummyExtractLoop:
-            def __init__(self, **kwargs):
-                pass
-
-            async def run(self):
-                return (
-                    ResolvedOperations(
-                        upsert_operations=[
-                            ResolvedOperation(
-                                memory_fields={"content": "debug login issue"},
-                                memory_type="experiences",
-                                uris=[memory_uri],
-                            )
-                        ],
-                        delete_file_contents=[],
-                        errors=[],
-                    ),
-                    [],
-                )
-
-        class DummyUpdater:
-            async def apply_operations(self, operations, ctx, **kwargs):
-                result = MemoryUpdateResult()
-                result.written_uris = [memory_uri]
-                result.apply_traces = [
-                    {
-                        "uri": memory_uri,
-                        "memory_type": "experiences",
-                        "field": "content",
-                        "merge_op": "replace",
-                        "input_shape": "str",
-                        "wrapper_shape": "replace_with_base",
-                        "stale_detected": False,
-                        "rewrite_attempted": None,
-                        "status": "applied",
-                    }
-                ]
-                await viking_fs.write_file(
-                    memory_uri,
-                    MemoryFileUtils.write(MemoryFile(uri=memory_uri, content="after")),
-                    ctx=ctx,
-                )
-                return result
-
-        config = SimpleNamespace(
-            vlm=SimpleNamespace(get_vlm_instance=lambda: object()),
-            memory=SimpleNamespace(role_id_memory_isolation_enabled=False),
-        )
-
-        with (
-            patch("openviking.session.compressor_v2.get_viking_fs", return_value=viking_fs),
-            patch("openviking.session.compressor_v2.get_openviking_config", return_value=config),
-            patch(
-                "openviking.session.memory.memory_isolation_handler.get_openviking_config",
-                return_value=config,
-            ),
-            patch("openviking.session.compressor_v2.ExtractLoop", DummyExtractLoop),
-            patch.object(compressor, "_get_or_create_updater", return_value=DummyUpdater()),
-        ):
-            result = await compressor._run_extract_phase(
-                provider=DummyProvider(),
-                messages=messages,
-                ctx=ctx,
-                strict_extract_errors=True,
-                phase_label="experience(viking://agent/default/memories/trajectories/traj.md)",
-                archive_uri=archive_uri,
-            )
-
-        assert result[0] == [memory_uri]
-        diff_uris = [
-            uri
-            for uri, entry in viking_fs._store.items()
-            if entry.get("type") == "file" and uri.startswith(f"{archive_uri}/memory_diff_")
-        ]
-        assert len(diff_uris) == 1
-        assert "/" not in diff_uris[0].removeprefix(f"{archive_uri}/memory_diff_")
-        diff = json.loads(viking_fs._store[diff_uris[0]]["content"])
-        assert diff["summary"]["total_apply_traces"] == 1
-        assert diff["apply_trace"][0]["status"] == "applied"
-        assert diff["operations"]["adds"][0]["after"] == "after"
 
     @pytest.mark.asyncio
     async def test_extract_phase_skips_schema_lock_when_memory_apply_exact_file_lock_enabled(self):

@@ -126,6 +126,14 @@ class TelemetrySummaryBuilder:
         )
 
     @classmethod
+    def _counter_suffix_map(cls, counters: Dict[str, float], prefix: str) -> Dict[str, int]:
+        return {
+            key.removeprefix(prefix): cls._i(value, 0)
+            for key, value in counters.items()
+            if key.startswith(prefix) and cls._i(value, 0) > 0
+        }
+
+    @classmethod
     def _build_stage_token_summary(cls, counters: Dict[str, float]) -> Dict[str, Dict[str, Any]]:
         """Build a low-cardinality stage -> source -> token breakdown from counter keys."""
         summary: Dict[str, Dict[str, Any]] = {}
@@ -252,6 +260,51 @@ class TelemetrySummaryBuilder:
                     "stages": {
                         public_key: cls._f(gauges.get(metric_key), 0.0)
                         for public_key, metric_key in cls._MEMORY_EXTRACT_STAGE_KEYS.items()
+                    },
+                }
+            if cls._has_metric_prefix("memory.apply", counters, gauges):
+                memory_summary["apply"] = {
+                    "trace": {
+                        "total": cls._i(counters.get("memory.apply.trace.total"), 0),
+                        "status": cls._counter_suffix_map(
+                            counters,
+                            "memory.apply.trace.status.",
+                        ),
+                        "stale_detected": cls._i(
+                            counters.get("memory.apply.trace.stale_detected"),
+                            0,
+                        ),
+                        "rewrite_attempted": cls._i(
+                            counters.get("memory.apply.trace.rewrite_attempted"),
+                            0,
+                        ),
+                        "changed": cls._i(counters.get("memory.apply.trace.changed"), 0),
+                        "unchanged": cls._i(
+                            counters.get("memory.apply.trace.unchanged"),
+                            0,
+                        ),
+                        "exact_file_lock": {
+                            "total": cls._i(
+                                counters.get("memory.apply.exact_file_lock.trace.total"),
+                                0,
+                            ),
+                            "status": cls._counter_suffix_map(
+                                counters,
+                                "memory.apply.exact_file_lock.trace.status.",
+                            ),
+                            "stale_detected": cls._i(
+                                counters.get(
+                                    "memory.apply.exact_file_lock.trace.stale_detected"
+                                ),
+                                0,
+                            ),
+                            "rewrite_attempted": cls._i(
+                                counters.get(
+                                    "memory.apply.exact_file_lock.trace.rewrite_attempted"
+                                ),
+                                0,
+                            ),
+                        },
                     },
                 }
             summary["memory"] = memory_summary
