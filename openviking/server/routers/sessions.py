@@ -296,7 +296,7 @@ async def get_session_context(
         )
 
     service = get_service()
-    session = await service.sessions.get(session_id, _ctx, auto_create=False)
+    session = await service.sessions.get(session_id, _ctx, auto_create=True)
     result = await session.get_session_context(token_budget=token_budget)
     return Response(status="ok", result=_to_jsonable(result))
 

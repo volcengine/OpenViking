@@ -172,6 +172,19 @@ async def test_get_session_context(client: httpx.AsyncClient):
     assert [m["parts"][0]["text"] for m in body["result"]["messages"]] == ["Current live message"]
 
 
+async def test_get_session_context_nonexistent_returns_empty_context(client: httpx.AsyncClient):
+    resp = await client.get("/api/v1/sessions/nonexistent-session-xyz/context")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["result"]["latest_archive_overview"] == ""
+    assert body["result"]["pre_archive_abstracts"] == []
+    assert body["result"]["messages"] == []
+    assert body["result"]["estimatedTokens"] == 0
+    assert body["result"]["stats"]["activeTokens"] == 0
+
+
 async def test_get_session_context_rejects_negative_token_budget(client: httpx.AsyncClient):
     resp = await client.get("/api/v1/sessions/any-session/context?token_budget=-1")
 
