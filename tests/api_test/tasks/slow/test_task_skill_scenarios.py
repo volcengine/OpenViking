@@ -97,4 +97,4 @@ class TestSkillBusinessScenarios:
         assert resp.status_code == 200
         result = resp.json().get("result", {})
         uri = result.get("uri", "")
-        assert uri.startswith("viking://agent/default/skills/"), f"skill uri format: {uri}"
+        assert uri.startswith("viking://user/default/skills/"), f"skill uri format: {uri}"

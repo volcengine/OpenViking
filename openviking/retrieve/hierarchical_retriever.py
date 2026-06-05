@@ -15,12 +15,12 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-from openviking.core.namespace import canonical_agent_root, canonical_user_root
+from openviking.core.retrieval_targets import default_target_directories
 from openviking.models.embedder.base import EmbedResult, embed_compat
 from openviking.models.rerank import RerankClient
 from openviking.retrieve.memory_lifecycle import hotness_score
 from openviking.retrieve.retrieval_stats import get_stats_collector
-from openviking.server.identity import RequestContext, Role
+from openviking.server.identity import RequestContext
 from openviking.storage import VikingDBManager, VikingDBManagerProxy
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
@@ -140,11 +140,11 @@ class HierarchicalRetriever:
             query_vector = result.dense_vector
             sparse_query_vector = result.sparse_vector
 
-        # Step 1: Determine starting directories based on target_directories or context_type
+        # Step 1: Determine starting directories based on explicit target dirs.
         if target_dirs:
             root_uris = target_dirs
         else:
-            root_uris = self._get_root_uris_for_type(query.context_type, ctx=ctx)
+            root_uris = default_target_directories(ctx, context_type=query.context_type)
 
         # Step 2: Global vector search to supplement starting points
         global_results = await self._global_vector_search(
@@ -625,34 +625,3 @@ class HierarchicalRetriever:
         if uri.endswith("/") and not uri.endswith("://"):
             uri = uri.rstrip("/")
         return f"{uri}/{suffix}"
-
-    def _get_root_uris_for_type(
-        self, context_type: Optional[ContextType], ctx: Optional[RequestContext] = None
-    ) -> List[str]:
-        """Return starting directory URI list based on context_type and user context.
-
-        When context_type is None, returns roots for all types.
-        ROOT has no space, relies on global_vector_search without URI prefix filter.
-        """
-        if not ctx or ctx.role == Role.ROOT:
-            return []
-
-        user_root = canonical_user_root(ctx)
-        agent_root = canonical_agent_root(ctx)
-        if context_type is None:
-            return [
-                f"{user_root}/memories",
-                f"{agent_root}/memories",
-                "viking://resources",
-                f"{agent_root}/skills",
-            ]
-        elif context_type == ContextType.MEMORY:
-            return [
-                f"{user_root}/memories",
-                f"{agent_root}/memories",
-            ]
-        elif context_type == ContextType.RESOURCE:
-            return ["viking://resources"]
-        elif context_type == ContextType.SKILL:
-            return [f"{agent_root}/skills"]
-        return []

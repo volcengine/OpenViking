@@ -17,9 +17,9 @@ class TestSummarizerContextType:
         uri = "viking://user/default/memories/entities/mem_abc123.md"
         assert context_type_for_uri(uri) == "memory"
 
-    def test_agent_memory_uri(self):
-        """Agent memory URIs should classify as 'memory'."""
-        uri = "viking://agent/default/memories/cases/mem_xyz789.md"
+    def test_peer_memory_uri(self):
+        """Peer memory URIs should classify as 'memory'."""
+        uri = "viking://user/default/peers/support-bot/memories/cases/mem_xyz789.md"
         assert context_type_for_uri(uri) == "memory"
 
     def test_memory_profile_uri(self):
@@ -34,7 +34,7 @@ class TestSummarizerContextType:
 
     def test_skill_uri(self):
         """Skill URIs should classify as 'skill'."""
-        uri = "viking://agent/default/skills/search.md"
+        uri = "viking://user/default/skills/search.md"
         assert context_type_for_uri(uri) == "skill"
 
     def test_resource_uri(self):
@@ -62,7 +62,7 @@ class TestSummarizerContextType:
         # These real memory URIs do NOT start with "viking://memory/"
         real_uris = [
             "viking://user/default/memories/entities/mem_001.md",
-            "viking://agent/default/memories/patterns/mem_002.md",
+            "viking://user/default/peers/support-bot/memories/patterns/mem_002.md",
             "viking://user/john/memories/events/mem_003.md",
         ]
         for uri in real_uris:

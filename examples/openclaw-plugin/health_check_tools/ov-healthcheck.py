@@ -17,7 +17,6 @@ from typing import Any
 
 DEFAULT_GATEWAY_URL = "http://127.0.0.1:19789"
 DEFAULT_OPENVIKING_URL = "http://127.0.0.1:1933"
-DEFAULT_AGENT_ID = "default"
 DEFAULT_SESSION_SCAN_LIMIT = 0
 META_FILE_SUFFIXES = (".abstract.md", ".overview.md")
 
@@ -195,9 +194,6 @@ def parse_args() -> argparse.Namespace:
         "--openviking-api-key",
         default="",
         help="OpenViking API key. Auto-discovered from plugin config when possible.",
-    )
-    parser.add_argument(
-        "--agent-id", default="", help=f"OpenViking agent id (default: {DEFAULT_AGENT_ID})"
     )
     parser.add_argument("--user-id", default="", help="User id for the real conversation session.")
     parser.add_argument(
@@ -661,20 +657,15 @@ def wait_for_commit_visibility(
 
 
 class OpenVikingInspector:
-    def __init__(
-        self, base_url: str, api_key: str, agent_id: str, *, insecure: bool = False
-    ) -> None:
+    def __init__(self, base_url: str, api_key: str, *, insecure: bool = False) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
-        self.agent_id = agent_id or DEFAULT_AGENT_ID
         self.insecure = insecure
 
     def headers(self) -> dict[str, str]:
         headers: dict[str, str] = {}
         if self.api_key:
             headers["X-API-Key"] = self.api_key
-        if self.agent_id:
-            headers["X-OpenViking-Agent"] = self.agent_id
         return headers
 
     def health(self) -> bool:
@@ -1136,7 +1127,6 @@ def main() -> int:
         )
         or str(os.environ.get("OPENVIKING_API_KEY", "")).strip()
     )
-    agent_id = args.agent_id or str(plugin_config.get("agent_prefix", "")).strip() or DEFAULT_AGENT_ID
     user_id = args.user_id or f"ov-healthcheck-{uuid.uuid4().hex[:8]}"
     probe = f"probe-{uuid.uuid4().hex[:8]}"
     run_facts = build_run_facts(probe)
@@ -1205,9 +1195,7 @@ def main() -> int:
     else:
         recorder.add("WARN", "Gateway token not found", "continuing without Authorization header")
 
-    inspector = OpenVikingInspector(
-        openviking_url, openviking_api_key, agent_id, insecure=args.insecure
-    )
+    inspector = OpenVikingInspector(openviking_url, openviking_api_key, insecure=args.insecure)
     try:
         sessions_before_probe = collect_session_ids(inspector.list_sessions())
     except Exception:

@@ -15,7 +15,7 @@ from openviking.server.api_keys.legacy import (
     LegacyAPIKeyManager,
 )
 from openviking.server.api_keys.models import AccountInfo, UserKeyEntry
-from openviking.server.identity import AccountNamespacePolicy, ResolvedIdentity, Role
+from openviking.server.identity import ResolvedIdentity, Role
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import InvalidArgumentError, UnauthenticatedError
 from openviking_cli.session.user_id import validate_account_id, validate_user_id
@@ -141,7 +141,6 @@ class NewAPIKeyManager:
                                     role=Role(user_info.get("role", "user")),
                                     account_id=account_id,
                                     user_id=user_id,
-                                    namespace_policy=self.get_account_policy(account_id),
                                 )
                         else:
                             # Plaintext key
@@ -150,7 +149,6 @@ class NewAPIKeyManager:
                                     role=Role(user_info.get("role", "user")),
                                     account_id=account_id,
                                     user_id=user_id,
-                                    namespace_policy=self.get_account_policy(account_id),
                                 )
             except Exception:
                 # If parsing fails or verification fails, fall through to try legacy path
@@ -163,8 +161,6 @@ class NewAPIKeyManager:
         self,
         account_id: str,
         admin_user_id: str,
-        *,
-        namespace_policy: Optional[AccountNamespacePolicy] = None,
     ) -> str:
         """Create a new account (workspace) with its first admin user.
 
@@ -180,7 +176,6 @@ class NewAPIKeyManager:
 
         # Generate new format key
         key = generate_api_key(account_id, admin_user_id)
-        policy = namespace_policy or AccountNamespacePolicy()
 
         # Use legacy to create account but with our new key
         # We temporarily replace the generate method, call, then restore
@@ -217,7 +212,6 @@ class NewAPIKeyManager:
         self._legacy._accounts[account_id] = AccountInfo(
             created_at=now,
             users={admin_user_id: user_info},
-            namespace_policy=policy,
         )
 
         entry = UserKeyEntry(
@@ -235,7 +229,6 @@ class NewAPIKeyManager:
 
         await self._legacy._save_accounts_json()
         await self._legacy._save_users_json(account_id)
-        await self._legacy._save_settings_json(account_id)
         return key
 
     async def delete_account(self, account_id: str) -> None:
@@ -379,9 +372,6 @@ class NewAPIKeyManager:
         """List all accounts."""
         return self._legacy.get_accounts()
 
-    def get_account_policy(self, account_id: Optional[str]) -> AccountNamespacePolicy:
-        return self._legacy.get_account_policy(account_id)
-
     def get_users(
         self,
         account_id: str,
@@ -461,14 +451,3 @@ class NewAPIKeyManager:
 
     async def _save_users_json(self, account_id: str) -> None:
         return await self._legacy._save_users_json(account_id)
-
-    async def _save_settings_json(
-        self,
-        account_id: str,
-        *,
-        settings_data: Optional[dict] = None,
-    ) -> None:
-        return await self._legacy._save_settings_json(
-            account_id,
-            settings_data=settings_data,
-        )

@@ -445,7 +445,7 @@ class TestVikingFSEncryptionWithAccounts:
         from openviking.server.identity import RequestContext, Role
         from openviking_cli.session.user_id import UserIdentifier
 
-        default_user = UserIdentifier("default", "default", "default")
+        default_user = UserIdentifier("default", "default")
         ctx = RequestContext(user=default_user, role=Role.ROOT)
 
         # Write test file directly via VikingFS
@@ -514,7 +514,7 @@ class TestVikingFSEncryptionWithAccounts:
         from openviking.server.identity import RequestContext, Role
         from openviking_cli.session.user_id import UserIdentifier
 
-        default_user = UserIdentifier("default", "default", "default")
+        default_user = UserIdentifier("default", "default")
         ctx = RequestContext(user=default_user, role=Role.ROOT)
 
         # Create skill directory and files directly via VikingFS
@@ -651,7 +651,7 @@ This is a test skill for verifying encryption functionality.
         from openviking.server.identity import RequestContext, Role
         from openviking_cli.session.user_id import UserIdentifier
 
-        test_user = UserIdentifier(test_account_id, test_user_id, "default")
+        test_user = UserIdentifier(test_account_id, test_user_id)
         ctx = RequestContext(user=test_user, role=Role.USER)
         root_ctx = RequestContext(user=test_user, role=Role.ROOT)
 
@@ -777,31 +777,30 @@ This is a test skill for verifying encryption functionality.
 - Verify file storage
 """
 
-        # Create test file directly using VikingFS (using root_ctx to access agent directory)
-        test_skill_uri = "viking://agent/test_encryption_skill/SKILL.md"
-        test_skill_dir_uri = "viking://agent/test_encryption_skill"
+        # Create test file directly using VikingFS.
+        test_skill_uri = "viking://user/default/skills/test_encryption_skill/SKILL.md"
+        test_skill_dir_uri = "viking://user/default/skills/test_encryption_skill"
         await svc.viking_fs.mkdir(test_skill_dir_uri, ctx=root_ctx)
         await svc.viking_fs.write_file(test_skill_uri, skill_content, ctx=root_ctx)
         print(f"  ✓ Test skill created successfully: {test_skill_uri}")
 
-        # Check all files in agent directory are encrypted
-        print("[2.1] Check files in agent directory are encrypted")
-        agent_dir_uri = "viking://agent"
-        await self._check_all_files_encrypted(agent_dir_uri, root_ctx, svc, agfs_client)
+        # Check all files in the skill directory are encrypted
+        print("[2.1] Check files in skill directory are encrypted")
+        await self._check_all_files_encrypted(test_skill_dir_uri, root_ctx, svc, agfs_client)
 
         # 2.2 Verify various operations return unencrypted
         print("[2.2] Verify various operations return unencrypted content")
 
         # ls operation
         print("  Executing ls operation...")
-        skill_ls_entries = await svc.viking_fs.ls(agent_dir_uri, ctx=root_ctx)
+        skill_ls_entries = await svc.viking_fs.ls(test_skill_dir_uri, ctx=root_ctx)
         assert len(skill_ls_entries) > 0
         print("  ✓ ls operation successful")
 
         # tree operation
         print("  Executing tree operation...")
         try:
-            skill_tree_entries = await svc.viking_fs.tree(agent_dir_uri, ctx=root_ctx)
+            skill_tree_entries = await svc.viking_fs.tree(test_skill_dir_uri, ctx=root_ctx)
             assert len(skill_tree_entries) > 0
             print("  ✓ tree operation successful")
         except Exception as e:
@@ -822,7 +821,11 @@ This is a test skill for verifying encryption functionality.
         # grep operation
         print("  Executing grep operation...")
         try:
-            skill_grep_result = await svc.viking_fs.grep(agent_dir_uri, "Test Skill", ctx=root_ctx)
+            skill_grep_result = await svc.viking_fs.grep(
+                test_skill_dir_uri,
+                "Test Skill",
+                ctx=root_ctx,
+            )
             assert skill_grep_result is not None
             print("  ✓ grep operation successful")
         except Exception as e:
@@ -1106,7 +1109,7 @@ This is a test skill for verifying encryption functionality.
         from openviking.server.identity import RequestContext, Role
         from openviking_cli.session.user_id import UserIdentifier
 
-        default_user = UserIdentifier("default", "default", "default")
+        default_user = UserIdentifier("default", "default")
         ctx = RequestContext(user=default_user, role=Role.ROOT)
 
         # Write a multi-line test file
@@ -1160,7 +1163,7 @@ This is a test skill for verifying encryption functionality.
         from openviking.server.identity import RequestContext, Role
         from openviking_cli.session.user_id import UserIdentifier
 
-        default_user = UserIdentifier("default", "default", "default")
+        default_user = UserIdentifier("default", "default")
         ctx = RequestContext(user=default_user, role=Role.ROOT)
 
         # Write a test file
@@ -1292,7 +1295,7 @@ class TestAddResourceWithSemanticProcessing:
         from openviking.server.identity import RequestContext, Role
         from openviking_cli.session.user_id import UserIdentifier
 
-        test_user = UserIdentifier(test_account_id, test_user_id, "default")
+        test_user = UserIdentifier(test_account_id, test_user_id)
         ctx = RequestContext(user=test_user, role=Role.USER)
 
         agfs_client = svc._agfs_client

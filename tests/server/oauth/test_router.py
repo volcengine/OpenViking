@@ -111,7 +111,7 @@ async def app_with_oauth(tmp_path):
 
     def _fixed_ctx() -> RequestContext:
         return RequestContext(
-            user=UserIdentifier("acct1", "alice", "default"),
+            user=UserIdentifier("acct1", "alice"),
             role=Role.USER,
         )
 
@@ -575,7 +575,7 @@ async def test_otp_rejects_oauth_issued_caller(app_with_oauth, client):
 
     def _oauth_ctx() -> RequestContext:
         return RequestContext(
-            user=UserIdentifier("acct1", "alice", "default"),
+            user=UserIdentifier("acct1", "alice"),
             role=Role.USER,
             from_oauth=True,
         )
@@ -590,7 +590,7 @@ async def test_otp_rejects_oauth_issued_caller(app_with_oauth, client):
         # Reset to the fixture's default (non-OAuth) ctx for other tests.
         def _fixed_ctx() -> RequestContext:
             return RequestContext(
-                user=UserIdentifier("acct1", "alice", "default"),
+                user=UserIdentifier("acct1", "alice"),
                 role=Role.USER,
             )
 
@@ -611,7 +611,7 @@ async def test_oauth_verify_rejects_oauth_issued_caller(app_with_oauth, client):
 
     def _oauth_ctx() -> RequestContext:
         return RequestContext(
-            user=UserIdentifier("acct1", "alice", "default"),
+            user=UserIdentifier("acct1", "alice"),
             role=Role.USER,
             from_oauth=True,
         )
@@ -629,7 +629,7 @@ async def test_oauth_verify_rejects_oauth_issued_caller(app_with_oauth, client):
 
         def _fixed_ctx() -> RequestContext:
             return RequestContext(
-                user=UserIdentifier("acct1", "alice", "default"),
+                user=UserIdentifier("acct1", "alice"),
                 role=Role.USER,
             )
 

@@ -293,16 +293,15 @@ OpenViking 原生已经支持 tool result preview。原有链路能够在 sessio
 3. `message_id`
 4. `tool_id`
 5. `tool_name`
-6. `agent_id`
-7. `created_at`
-8. `original_chars`
-9. `preview_chars`
-10. `sha256`
-11. `mime_type`
-12. `synopsis_kind`
-13. `synopsis`
-14. `storage_uri`
-15. `output_uri`
+6. `created_at`
+7. `original_chars`
+8. `preview_chars`
+9. `sha256`
+10. `mime_type`
+11. `synopsis_kind`
+12. `synopsis`
+13. `storage_uri`
+14. `output_uri`
 16. `offset_unit=unicode_code_point`
 
 ### 读取方式

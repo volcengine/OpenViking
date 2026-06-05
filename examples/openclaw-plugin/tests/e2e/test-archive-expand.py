@@ -205,8 +205,6 @@ USER_ID = f"xiaojie-{uuid.uuid4().hex[:8]}"
 DISPLAY_NAME = "小杰"
 DEFAULT_GATEWAY = "http://127.0.0.1:19789"
 DEFAULT_OPENVIKING = "http://127.0.0.1:2934"
-AGENT_ID = "main"
-
 console = Console(force_terminal=True)
 
 # ── 测试结果收集 ──────────────────────────────────────────────────────────
@@ -227,19 +225,12 @@ def check(label: str, condition: bool, detail: str = ""):
 
 CHAT_BATCH_1 = [
     "嗨！我叫小杰，刚入职三个月，在做一个用户画像系统。后端用 Go，框架是 Gin，数据库用 ClickHouse。我想跟你聊聊项目的技术细节，你帮我记一下。",
-
     "我们的 API 认证用的是自己写的 JWT 中间件，token 过期时间设的 7200 秒，刷新 token 有效期 30 天，密钥存在环境变量 AUTH_JWT_SECRET 里。",
-
     "数据采集这块，我写了个 Kafka consumer，group id 是 user-profile-sync-v2，消费的 topic 是 user_behavior_events，每批最多拉 500 条消息。",
-
     "画像数据的 ClickHouse 表叫 user_profiles_v3，主键是 (user_id, event_date)，用了 MergeTree 引擎，TTL 设的 180 天。",
-
     "部署脚本在 deploy/scripts/rollout.sh，里面有个关键的金丝雀发布逻辑，先把 10% 流量切到新版本，观察 5 分钟没报警再全量。",
-
     "我们的 Prometheus 告警规则在 monitoring/alerts/backend.yml，有一条关键的：当 P99 延迟超过 500ms 持续 3 分钟就会触发 page 告警。",
-
     "代码规范方面，Go 项目用 golangci-lint，配置文件在 .golangci.yml，禁用了 gocyclo，开启了 govet、errcheck、staticcheck。",
-
     "上周修了个严重 bug：当 ClickHouse 连接超时时，consumer 没有正确回退 offset，导致消息丢失。我写了个 RetryableConsumer wrapper 来修复，重试间隔是指数退避，基础间隔 200ms，最大重试 5 次。",
 ]
 
@@ -248,19 +239,12 @@ CHAT_BATCH_1 = [
 
 CHAT_BATCH_2 = [
     "紧急情况！线上推荐接口大面积超时，错误日志里出现了一条：failed to connect to reco-model-svc:8091: dial tcp 10.0.3.17:8091: i/o timeout。我先帮你记录下排障过程。",
-
     "我先跑了 kubectl get pods -n reco-prod，发现 reco-model-svc-7b9f4d6c8-x2k9p 这个 pod 的 RESTARTS 是 47 次，状态是 CrashLoopBackOff。kubectl logs 看到 OOM Killed，内存限制是 512Mi 但模型加载需要 800Mi。",
-
     "临时解决方案：kubectl edit deployment reco-model-svc -n reco-prod，把 resources.limits.memory 从 512Mi 改成 1Gi，然后 kubectl rollout restart deployment reco-model-svc -n reco-prod。等了 3 分钟 pod 恢复正常。",
-
     "但还有个隐患：我用 tcpdump -i eth0 port 8091 -w /tmp/reco-debug-20260315.pcap 抓了 5 分钟的包，发现有个上游服务 gateway-proxy (IP 10.0.2.33) 的连接没有正确关闭，导致连接泄漏。",
-
     "连接泄漏的根因：gateway-proxy 用了一个自定义的 HTTP client，pool_maxsize 设成了 200，但 idle_timeout 是 0（永不超时）。我在 gateway-proxy 的 config/http-pool.yaml 里改成了 idle_timeout: 30s，pool_maxsize: 50。",
-
     "修完之后跑了个回归测试：curl -w '@curl-format.txt' -o /dev/null -s 'http://10.0.3.17:8091/predict?user_id=test_user_42&features=age,gender,region' 返回 time_total: 0.023s，比之前的 2.1s 快了 100 倍。",
-
     "事后我写了个 incident report，编号是 INC-2026-0315-RECO-OOM，根因分类是 Resource Misconfiguration，影响时长 47 分钟，影响用户数约 12000。",
-
     "老王看完报告说，以后所有服务的 memory limit 至少设置为实际用量的 1.5 倍，并且要在 Grafana 上加一个 container_memory_working_set_bytes / container_spec_memory_limit_bytes > 0.8 的告警。",
 ]
 
@@ -269,19 +253,12 @@ CHAT_BATCH_2 = [
 
 CHAT_BATCH_3 = [
     "今天代码评审了我的推荐接口 PR，PR 编号是 #1847。老王给了 3 个重要 comment，我一个个跟你说。",
-
     "第一个 comment 在 internal/handler/recommend.go 的第 73 行：老王说我的错误处理不对，原来写的是 if err != nil { return nil, err }，但应该包装一下上下文：return nil, fmt.Errorf('recommend handler: fetch features for user %s: %w', userID, err)。",
-
     "第二个 comment 在 internal/cache/feature_cache.go 第 142 行：我用了 sync.Map 来缓存用户特征，但老王建议改用分段锁 map，因为 sync.Map 在写多读少的场景下性能不好。他推荐用 github.com/orcaman/concurrent-map/v2 这个库。",
-
     "第三个 comment 是关于测试覆盖率的：当前 recommend 包的覆盖率只有 38%，老王要求至少到 70%。他特别指出 internal/handler/recommend_test.go 缺少对 context.Canceled 和 context.DeadlineExceeded 的边界测试。",
-
     "我按老王的建议改了代码。feature_cache.go 的改动最大，从 sync.Map 迁移到 cmap.ConcurrentMap[string, *UserFeatures]。benchmark 跑下来：BenchmarkFeatureCacheGet-8 从 834 ns/op 降到了 412 ns/op，快了差不多一倍。",
-
     "测试也补了，加了 TestRecommendHandler_ContextCanceled 和 TestRecommendHandler_DeadlineExceeded 两个用例。覆盖率从 38% 提升到了 74%。go test -cover ./internal/handler/ 输出：coverage: 74.2% of statements。",
-
     "PR 最终在周三下午 3:42 合并，commit hash 是 a3f7b2d。合并前跑了 CI，全部 green：lint 42s, test 1m18s, build 2m03s。",
-
     "对了，合并后我发现有个小问题：feature_cache.go 里有一行 import 多余了，_ 'net/http/pprof' 是调试时加的忘了删。我又开了个 hotfix PR #1852 修掉了。",
 ]
 
@@ -289,19 +266,12 @@ CHAT_BATCH_3 = [
 
 CHAT_BATCH_4 = [
     "最近团队在讨论要不要把推荐服务拆成微服务。我画了一个架构图，核心是 3 个服务：feature-store (负责用户特征存储), model-server (负责模型推理), ranking-api (负责排序和过滤)。",
-
     "feature-store 的设计：用 Redis Cluster 做热数据缓存，冷数据存 ClickHouse。Redis 集群是 3 主 3 从，每个节点 maxmemory 8GB，eviction 策略用 allkeys-lru。",
-
     "model-server 计划用 gRPC 通信，proto 文件在 api/proto/model_service.proto。核心 RPC 是 Predict(PredictRequest) returns (PredictResponse)，PredictRequest 里有 user_id (string), features (map<string, float>), model_version (string, 默认 'v3.2.1')。",
-
     "ranking-api 是面向外部的 REST 接口。我设计了一个两层缓存：L1 是本地 LRU cache (github.com/hashicorp/golang-lru/v2, 容量 10000), L2 是 Redis。缓存 key 的格式是 reco:{user_id}:{model_version}:{timestamp_bucket}，timestamp_bucket 每 5 分钟一个。",
-
     "团队讨论的争议点：老王认为 feature-store 和 model-server 可以合并，因为两者耦合度高。但我觉得拆开更好，因为 feature-store 的扩展需求（加新特征）和 model-server 的扩展需求（换模型）是独立的。",
-
     "最终架构评审的结论：先按 3 服务拆分，但 feature-store 和 model-server 共享一个 K8s namespace (reco-services)。服务间通信走 Istio service mesh，mTLS 加密。",
-
     "部署策略：feature-store 3 副本（HPA min=3, max=10, CPU 阈值 70%），model-server 2 副本（HPA min=2, max=6, CPU 阈值 60%），ranking-api 4 副本（HPA min=4, max=20, CPU 阈值 65%）。",
-
     "对了，架构评审文档存在 Confluence 上，页面 ID 是 ARCH-2026-RECO-MS，最后更新时间是 3 月 20 号。评审参与人：我、老王、测试小李、运维老赵。",
 ]
 
@@ -406,20 +376,19 @@ def extract_reply_text(data: dict) -> str:
 
 
 class OVInspector:
-    def __init__(self, base_url: str, agent_id: str = AGENT_ID):
+    def __init__(self, base_url: str):
         self.base_url = base_url.rstrip("/")
-        self.agent_id = agent_id
 
     def _headers(self) -> dict:
         h: dict[str, str] = {"Content-Type": "application/json"}
-        if self.agent_id:
-            h["X-OpenViking-Agent"] = self.agent_id
         return h
 
     def _get(self, path: str, timeout: int = 10):
         try:
             resp = requests.get(
-                f"{self.base_url}{path}", headers=self._headers(), timeout=timeout,
+                f"{self.base_url}{path}",
+                headers=self._headers(),
+                timeout=timeout,
             )
             if resp.status_code == 200:
                 data = resp.json()
@@ -486,9 +455,9 @@ class OVInspector:
     def find_latest_session(self) -> str | None:
         sessions = self.list_sessions()
         real = [
-            s for s in sessions
-            if isinstance(s, dict)
-            and not s.get("session_id", "").startswith("memory-store-")
+            s
+            for s in sessions
+            if isinstance(s, dict) and not s.get("session_id", "").startswith("memory-store-")
         ]
         if not real:
             return None
@@ -527,8 +496,12 @@ def render_json(data: Any, title: str = "JSON"):
 
 
 def run_phase_chat(
-    gateway_url: str, user_id: str, messages: list[str],
-    batch_label: str, delay: float, verbose: bool,
+    gateway_url: str,
+    user_id: str,
+    messages: list[str],
+    batch_label: str,
+    delay: float,
+    verbose: bool,
 ) -> tuple[int, int]:
     console.print()
     console.rule(
@@ -544,7 +517,11 @@ def run_phase_chat(
         console.rule(f"[dim]Turn {i}/{total}[/dim]", style="dim")
         preview = msg[:150] + ("..." if len(msg) > 150 else "")
         console.print(
-            Panel(preview, title=f"[bold cyan]{DISPLAY_NAME} [{i}/{total}][/bold cyan]", border_style="cyan"),
+            Panel(
+                preview,
+                title=f"[bold cyan]{DISPLAY_NAME} [{i}/{total}][/bold cyan]",
+                border_style="cyan",
+            ),
         )
         try:
             data = send_message(gateway_url, msg, user_id)
@@ -635,7 +612,10 @@ def run_phase_verify_index(openviking_url: str, verbose: bool) -> str:
 
 
 def run_phase_expand(
-    gateway_url: str, user_id: str, delay: float, verbose: bool,
+    gateway_url: str,
+    user_id: str,
+    delay: float,
+    verbose: bool,
 ) -> list:
     console.print()
     console.rule(
@@ -683,18 +663,30 @@ def run_phase_expand(
             )
 
             if verbose:
-                console.print(f"  [dim]完整输出: {json.dumps(data.get('output', []), ensure_ascii=False)[:500]}[/dim]")
+                console.print(
+                    f"  [dim]完整输出: {json.dumps(data.get('output', []), ensure_ascii=False)[:500]}[/dim]"
+                )
 
-            results.append({
-                "question": q, "hits": hits, "hit_rate": hit_rate,
-                "success": success, "description": desc,
-            })
+            results.append(
+                {
+                    "question": q,
+                    "hits": hits,
+                    "hit_rate": hit_rate,
+                    "success": success,
+                    "description": desc,
+                }
+            )
         except Exception as e:
             check(f"Expand Q{i}: 发送成功", False, str(e))
-            results.append({
-                "question": q, "hits": [], "hit_rate": 0,
-                "success": False, "description": desc,
-            })
+            results.append(
+                {
+                    "question": q,
+                    "hits": [],
+                    "hit_rate": 0,
+                    "success": False,
+                    "description": desc,
+                }
+            )
 
         if i < total:
             time.sleep(delay)
@@ -706,7 +698,10 @@ def run_phase_expand(
 
 
 def run_phase_no_expand(
-    gateway_url: str, user_id: str, delay: float, verbose: bool,
+    gateway_url: str,
+    user_id: str,
+    delay: float,
+    verbose: bool,
 ) -> list:
     console.print()
     console.rule(
@@ -745,7 +740,9 @@ def run_phase_no_expand(
                 hit_rate >= 0.5,
                 f"命中={hits}, rate={hit_rate:.0%}",
             )
-            results.append({"question": q, "hits": hits, "hit_rate": hit_rate, "success": hit_rate >= 0.5})
+            results.append(
+                {"question": q, "hits": hits, "hit_rate": hit_rate, "success": hit_rate >= 0.5}
+            )
         except Exception as e:
             check(f"NoExpand Q{i}: 发送成功", False, str(e))
             results.append({"question": q, "hits": [], "hit_rate": 0, "success": False})
@@ -760,7 +757,11 @@ def run_phase_no_expand(
 
 
 def run_full_test(
-    gateway_url: str, openviking_url: str, user_id: str, delay: float, verbose: bool,
+    gateway_url: str,
+    openviking_url: str,
+    user_id: str,
+    delay: float,
+    verbose: bool,
     gateway_restart_cmd: str = "",
 ):
     console.print()
@@ -777,34 +778,50 @@ def run_full_test(
 
     # Phase 1: 第一批对话 — 项目技术细节
     ok1, fail1 = run_phase_chat(
-        gateway_url, user_id, CHAT_BATCH_1,
-        "Phase 1: 第一段对话 — 项目技术细节", delay, verbose,
+        gateway_url,
+        user_id,
+        CHAT_BATCH_1,
+        "Phase 1: 第一段对话 — 项目技术细节",
+        delay,
+        verbose,
     )
     check(f"Phase 1: {ok1}/{len(CHAT_BATCH_1)} 轮成功", fail1 == 0, f"ok={ok1}, fail={fail1}")
 
     # Phase 2a: 第二批对话 — 排障过程
     ok2, fail2 = run_phase_chat(
-        gateway_url, user_id, CHAT_BATCH_2,
-        "Phase 2a: 第二段对话 — 线上排障过程", delay, verbose,
+        gateway_url,
+        user_id,
+        CHAT_BATCH_2,
+        "Phase 2a: 第二段对话 — 线上排障过程",
+        delay,
+        verbose,
     )
     check(f"Phase 2a: {ok2}/{len(CHAT_BATCH_2)} 轮成功", fail2 == 0, f"ok={ok2}, fail={fail2}")
 
     # Phase 2b: 第三批对话 — 代码评审讨论
     ok3, fail3 = run_phase_chat(
-        gateway_url, user_id, CHAT_BATCH_3,
-        "Phase 2b: 第三段对话 — 代码评审讨论", delay, verbose,
+        gateway_url,
+        user_id,
+        CHAT_BATCH_3,
+        "Phase 2b: 第三段对话 — 代码评审讨论",
+        delay,
+        verbose,
     )
     check(f"Phase 2b: {ok3}/{len(CHAT_BATCH_3)} 轮成功", fail3 == 0, f"ok={ok3}, fail={fail3}")
 
     # Phase 2c: 第四批对话 — 架构设计讨论
     ok4, fail4 = run_phase_chat(
-        gateway_url, user_id, CHAT_BATCH_4,
-        "Phase 2c: 第四段对话 — 架构设计讨论", delay, verbose,
+        gateway_url,
+        user_id,
+        CHAT_BATCH_4,
+        "Phase 2c: 第四段对话 — 架构设计讨论",
+        delay,
+        verbose,
     )
     check(f"Phase 2c: {ok4}/{len(CHAT_BATCH_4)} 轮成功", fail4 == 0, f"ok={ok4}, fail={fail4}")
 
     # Phase 3: 验证 Archive Index
-    session_id = run_phase_verify_index(openviking_url, verbose)
+    run_phase_verify_index(openviking_url, verbose)
 
     # Gateway 重启 — 清除工作记忆，迫使 LLM 从归档获取信息
     if gateway_restart_cmd:
@@ -814,15 +831,20 @@ def run_full_test(
         time.sleep(10)
         console.print(f"[yellow]执行: {gateway_restart_cmd}[/yellow]")
         import subprocess
+
         try:
             result = subprocess.run(
-                gateway_restart_cmd, shell=True, capture_output=True, text=True, timeout=60,
+                gateway_restart_cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=60,
             )
             console.print(f"[yellow]Gateway 重启完成: {result.stdout.strip()}[/yellow]")
         except subprocess.TimeoutExpired:
             console.print("[yellow]Gateway 重启命令超时，检查健康状态...[/yellow]")
         # 等待 Gateway 恢复
-        for attempt in range(15):
+        for _attempt in range(15):
             time.sleep(2)
             try:
                 r = requests.get(f"{gateway_url}/health", timeout=3)
@@ -866,7 +888,7 @@ def run_full_test(
     tree.add(f"Phase 2a: 线上排障 — {ok2}/{len(CHAT_BATCH_2)}")
     tree.add(f"Phase 2b: 代码评审 — {ok3}/{len(CHAT_BATCH_3)}")
     tree.add(f"Phase 2c: 架构设计 — {ok4}/{len(CHAT_BATCH_4)}")
-    tree.add(f"Phase 3: Archive Index 验证")
+    tree.add("Phase 3: Archive Index 验证")
 
     expand_ok = sum(1 for r in expand_results if r["success"])
     tree.add(f"Phase 4: 归档展开 — {expand_ok}/{len(expand_results)} 问题回答正确")
@@ -935,6 +957,7 @@ def scan_expand_log(log_path: str):
     log_table.add_column("详情", style="dim")
 
     import re
+
     row_idx = 0
     for line in invoked_lines:
         row_idx += 1
@@ -951,7 +974,9 @@ def scan_expand_log(log_path: str):
         msgs = m_msg.group(1) if m_msg else "?"
         chars = m_chars.group(1) if m_chars else "?"
         log_table.add_row(
-            str(row_idx), "expanded", archive_id,
+            str(row_idx),
+            "expanded",
+            archive_id,
             f"恢复 {msgs} 条消息, {chars} 字符",
         )
 
@@ -965,8 +990,9 @@ def scan_expand_log(log_path: str):
             archive_counts[aid] = archive_counts.get(aid, 0) + 1
 
     console.print()
-    console.print(f"[green]共 {len(invoked_lines)} 次 invoked, "
-                  f"{len(expanded_lines)} 次 expanded[/green]")
+    console.print(
+        f"[green]共 {len(invoked_lines)} 次 invoked, {len(expanded_lines)} 次 expanded[/green]"
+    )
     for aid, cnt in sorted(archive_counts.items()):
         console.print(f"  {aid}: {cnt} 次调用")
 
@@ -985,8 +1011,14 @@ def main():
         description=f"ov_archive_expand 归档展开测试 — {DISPLAY_NAME}",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--gateway", default=DEFAULT_GATEWAY, help=f"Gateway 地址 (默认: {DEFAULT_GATEWAY})")
-    parser.add_argument("--openviking", default=DEFAULT_OPENVIKING, help=f"OpenViking 地址 (默认: {DEFAULT_OPENVIKING})")
+    parser.add_argument(
+        "--gateway", default=DEFAULT_GATEWAY, help=f"Gateway 地址 (默认: {DEFAULT_GATEWAY})"
+    )
+    parser.add_argument(
+        "--openviking",
+        default=DEFAULT_OPENVIKING,
+        help=f"OpenViking 地址 (默认: {DEFAULT_OPENVIKING})",
+    )
     parser.add_argument("--user-id", default=USER_ID, help="测试用户 ID (默认: 随机)")
     parser.add_argument(
         "--phase",
@@ -996,14 +1028,15 @@ def main():
     )
     parser.add_argument("--delay", type=float, default=3.0, help="轮次间等待秒数 (默认: 3)")
     parser.add_argument("--token", default="", help="Gateway auth token (默认: 自动发现)")
-    parser.add_argument("--agent-id", default=AGENT_ID, help=f"Agent ID (默认: {AGENT_ID})")
     parser.add_argument(
-        "--gateway-restart-cmd", default="",
+        "--gateway-restart-cmd",
+        default="",
         help="Gateway 重启命令 (在 Phase 4 前执行，清除工作记忆以迫使 archive expand)",
     )
     parser.add_argument("--verbose", "-v", action="store_true", help="详细输出")
     parser.add_argument(
-        "--log-path", default="",
+        "--log-path",
+        default="",
         help="Gateway 日志路径 (如 config/.openclaw/logs/openclaw.log)，测试后自动扫描 ov_archive_expand 调用",
     )
     args = parser.parse_args()
@@ -1022,7 +1055,11 @@ def main():
 
     if args.phase == "all":
         run_full_test(
-            gateway_url, openviking_url, user_id, args.delay, args.verbose,
+            gateway_url,
+            openviking_url,
+            user_id,
+            args.delay,
+            args.verbose,
             gateway_restart_cmd=args.gateway_restart_cmd,
         )
     elif args.phase == "chat1":

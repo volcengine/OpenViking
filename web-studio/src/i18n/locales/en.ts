@@ -6,7 +6,7 @@ const en = {
       github: 'GitHub',
     },
     header: {
-      defaultTitle: 'OpenViking Playground',
+      defaultTitle: 'OpenViking Studio',
     },
     navigation: {
       home: {
@@ -21,9 +21,6 @@ const en = {
       requestLogs: {
         title: 'Request Logs',
       },
-      resources: {
-        title: 'Context Management',
-      },
       retrieval: {
         title: 'Retrieval',
       },
@@ -37,7 +34,7 @@ const en = {
     sidebar: {
       loadingSessions: 'Loading...',
       noSessions: 'No sessions',
-      workspaceGroupLabel: 'OpenViking Playground',
+      workspaceGroupLabel: 'OpenViking Studio',
     },
   },
   common: {
@@ -80,13 +77,13 @@ const en = {
         label: 'Account',
         placeholder: 'default',
       },
-      agentId: {
-        label: 'Agent',
-        placeholder: 'web-playground',
-      },
       apiKey: {
         label: 'API Key',
         placeholder: 'Enter X-API-Key or Bearer token',
+      },
+      adminApiKey: {
+        label: 'Admin API key',
+        placeholder: 'Root or account-admin key',
       },
       baseUrl: {
         label: 'Service URL',
@@ -94,6 +91,9 @@ const en = {
       },
       credentials: {
         title: 'Identity & Credentials',
+      },
+      dataApiKey: {
+        label: 'User API key',
       },
       userId: {
         label: 'User',
@@ -124,13 +124,16 @@ const en = {
       regenerate: 'Regenerate',
       save: 'Save',
       use: 'Use',
+      useForData: 'Use as user key',
     },
     connection: {
+      accountListLimited:
+        'This key cannot list all accounts, but it can still manage the selected account if it has account-admin access.',
       adminError: 'Could not load admin identities: {{message}}',
       description:
-        'Select the account and user that Playground should send with OpenViking requests.',
+        'Use a user API key for tenant data APIs and an optional root or account-admin key for control APIs.',
       noKey:
-        'Enter an API key with admin access to load account and user choices.',
+        'Enter a root or account-admin API key to load account and user choices.',
       title: 'Connection settings',
     },
     dialogs: {
@@ -155,16 +158,28 @@ const en = {
         'Use a root or account admin API key to list users, copy keys, add identities, or regenerate credentials.',
       adminTitle: 'Admin access required',
       usersDescription: 'Create a user to mint the first API key.',
-      usersTitle: 'No users in this account',
+      usersTitle: 'No users in the selected accounts',
     },
     fields: {
       account: 'Account',
       adminUser: 'Admin user',
-      agent: 'Agent',
+      adminApiKey: 'Admin API key',
       apiKey: 'API key',
       baseUrl: 'Server URL',
+      dataApiKey: 'User API key',
+      userApiKey: 'User API key',
       role: 'Role',
       user: 'User',
+    },
+    health: {
+      admin: 'Admin control',
+      data: 'Data access',
+      state: {
+        checking: 'Checking',
+        error: 'Error',
+        ok: 'OK',
+        skipped: 'Not checked',
+      },
     },
     keyResult: {
       description:
@@ -174,21 +189,23 @@ const en = {
     },
     loading: 'Loading identities...',
     management: {
-      accountFilter: 'Managed account',
+      accountFilter: 'Accounts',
       description:
-        'Review users and credentials for one account, then add users or rotate keys from the web UI.',
+        'Review users and credentials for selected accounts, then add users or rotate keys from the web UI.',
       title: 'User management',
     },
     page: {
       description:
-        'Configure the active OpenViking identity and manage accounts, users, and API keys from Playground.',
+        'Configure the active OpenViking Studio identity and manage accounts, users, and API keys.',
       title: 'Connection & Identity',
     },
     placeholders: {
       account: 'team-account',
-      agent: 'web-playground',
+      adminApiKey: 'Root or account-admin key',
       apiKey: 'Enter X-API-Key or Bearer token',
       baseUrl: 'http://127.0.0.1:1933',
+      devModeApiKey: '[dev mode, no api key required]',
+      userApiKey: 'User API key',
       user: 'default',
     },
     roles: {
@@ -218,6 +235,7 @@ const en = {
       accountCreated: 'Account created',
       connectionSaved: 'Connection saved',
       copied: 'Copied',
+      dataKeySelected: 'User API key selected',
       keyRegenerated: 'API key regenerated',
       userCreated: 'User created',
     },
@@ -231,12 +249,6 @@ const en = {
     },
   },
   home: {
-    agentAccess: {
-      description:
-        'Deduplicates agents that accessed OpenViking today and shows the latest visit time.',
-      empty: 'No agent visits today',
-      title: 'Agent Visits',
-    },
     contextCommits: {
       description:
         'Groups resource, skill, session message, and session commit writes into 4-hour buckets. Hover a cell for details.',
@@ -271,51 +283,16 @@ const en = {
     },
     contextData: {
       description:
-        'Includes files, skills, user memories, and agent memories to show the current context resource scale.',
+        'Includes files, skills, and user memories to show the current context resource scale.',
       files: 'Files',
       memories: 'Memories',
       skills: 'Skills',
       title: 'Context Data Volume',
     },
-    menuIntro: {
-      description:
-        'The left navigation is collapsible. Primary entries include overview, context management, recursive retrieval, request logs, settings, GitHub, and docs.',
-      items: {
-        github: {
-          description: 'Open the OpenViking source repository.',
-          title: 'GitHub',
-        },
-        overview: {
-          description: 'Review context scale and usage overview.',
-          title: 'Overview',
-        },
-        playground: {
-          description: 'Open the docs site and Playground entry.',
-          title: 'Playground',
-        },
-        requestLogs: {
-          description: 'Inspect Playground requests, status, and latency.',
-          title: 'Request Logs',
-        },
-        resources: {
-          description: 'Manage files, skills, and context directories.',
-          title: 'Context Management',
-        },
-        retrieval: {
-          description: 'Run semantic retrieval with find() and search().',
-          title: 'Recursive Retrieval',
-        },
-        settings: {
-          description: 'Configure service URL, identity, and API key.',
-          title: 'Settings',
-        },
-      },
-      title: 'Overview + Menu Guide',
-    },
     page: {
       description:
         'Aligned with the product overview: menu entries, context data volume, today tokens, today retrievals, agent access, token trend, and context commit stats.',
-      eyebrow: 'OpenViking Playground',
+      eyebrow: 'OpenViking Studio',
       settings: 'Connection & Settings',
       title: 'Overview',
     },
@@ -491,30 +468,6 @@ const en = {
     },
   },
   resources: {
-    page: {
-      placeholder: 'Resources workspace is under construction.',
-    },
-    toolbar: {
-      parent: 'Go to Parent',
-      refresh: 'Refresh Directory',
-      search: 'Search ⌘K',
-      processingTasks: 'File Processing Tasks',
-      upload: 'Upload',
-    },
-    emptyState: {
-      title: 'Your context space is empty',
-      upload: 'Upload File',
-    },
-    uploadDialog: {
-      title: 'Upload',
-      description:
-        'Add a local file or remote resource to the context resource library.',
-    },
-    processingNotice: {
-      prefix: 'Files are being processed.',
-      action: 'File Processing Tasks',
-      suffix: 'shows progress and results.',
-    },
     processingTasks: {
       title: 'File Processing Tasks',
       empty: 'No processing tasks',
@@ -530,71 +483,6 @@ const en = {
         failed: 'Processing failed',
       },
     },
-    searchPalette: {
-      ariaLabel: 'Search',
-      openContainingDirectory: 'Open containing directory',
-      placeholder: 'Search',
-      scope: {
-        global: 'Search scope: Global',
-        current: 'Search scope: {{name}}',
-        resetToGlobal: 'Click to reset to global search',
-      },
-      scopeState: {
-        validatingTitle: 'Validating search scope',
-        validatingPrefix: 'Checking whether',
-        validatingSuffix: 'exists',
-        switchTitle: 'Switch search scope',
-        switchPrefix: 'Press',
-        switchMiddle: 'to switch to',
-        invalidTitle: 'Search scope not found',
-        invalidPrefix: 'Path',
-        invalidSuffix: 'is inaccessible and cannot be switched to',
-      },
-      empty: {
-        title: 'Search files and directories',
-      },
-      browseDirHint: {
-        before: 'Enter',
-        after: 'to browse directories',
-      },
-      globalScopeHint: {
-        before: 'Enter',
-        after: 'to switch search scope to global',
-      },
-      error: 'Search failed',
-      emptyResults: {
-        title: 'No matching files or directories found',
-        subtitle: 'Try another keyword?',
-      },
-      footer: {
-        dirMode: {
-          select: 'Select',
-          level: 'Level',
-          confirm: 'Confirm',
-          cancel: 'Cancel',
-        },
-        resultMode: {
-          navigate: 'Navigate',
-          open: 'Open',
-          close: 'Close',
-          count: '{{count}} results',
-        },
-      },
-    },
-    dirBrowser: {
-      back: 'Back',
-      loading: 'Loading directory',
-      filesSection: 'Files',
-      error: 'Failed to load directory',
-      empty: {
-        title: 'Empty directory',
-        subtitle:
-          'There are currently no subdirectories to expand at this level',
-      },
-    },
-    fileList: {
-      empty: 'This directory is empty',
-    },
     filePreview: {
       cancel: 'Cancel',
       edit: 'Edit',
@@ -609,21 +497,6 @@ const en = {
       markdownSource: 'Source',
       save: 'Save',
       unsupportedBinary: 'Binary files do not support text preview.',
-    },
-    fileTree: {
-      collapse: 'Collapse',
-      expand: 'Expand',
-      loading: 'Loading...',
-    },
-    findResults: {
-      collapse: 'Collapse',
-      expandDetails: 'Expand details',
-      groups: {
-        memories: 'Memories',
-        resources: 'Resources',
-        skills: 'Skills',
-      },
-      noResults: 'No matching results',
     },
   },
   retrieval: {
@@ -746,8 +619,8 @@ const en = {
       scopesLabel: 'Scopes',
       scopesNone: '(none)',
       signInRequired:
-        'Sign in to OpenViking Playground (Connection & Identity) or paste an API key below to authorize this client.',
-      openConnectionDialog: 'Open Connection & Identity',
+        'Sign in to OpenViking Studio (Connection & Identity) or paste an API key below to authorize this client.',
+      openConnectionSettings: 'Open Connection & Identity',
       authorize: 'Authorize',
       deny: 'Deny',
       useAnotherDevice: 'Use another device →',
@@ -772,7 +645,7 @@ const en = {
       verifyError: 'Authorization failed: {{message}}',
       noApiKey: 'No API key available. Select an identity or paste a key.',
       signInRequired:
-        'Sign in to OpenViking Playground (Connection & Identity) or paste an API key below to verify.',
+        'Sign in to OpenViking Studio (Connection & Identity) or paste an API key below to verify.',
     },
   },
   playground: {
@@ -798,7 +671,6 @@ const en = {
       namespaces: {
         user: 'Personalized user memories',
         session: 'Raw sessions between the user and the Agent',
-        agent: "The Agent's capabilities, tools and experience",
         resources: 'External resources the Agent can reference',
       },
     },

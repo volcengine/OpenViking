@@ -58,12 +58,12 @@ class OpenVikingSessionContextAssembler:
         account: str | None = None,
         user: str | None = None,
         user_id: str | None = None,
-        agent_id: str | None = None,
         path: str | None = None,
         timeout: float = 60.0,
         extra_headers: dict[str, str] | None = None,
         auto_initialize: bool = True,
         target_uri: str | list[str] = "",
+        peer_id: str | None = None,
         limit: int = 5,
         score_threshold: float | None = None,
         token_budget: int = 128_000,
@@ -79,7 +79,6 @@ class OpenVikingSessionContextAssembler:
             account=account,
             user=user,
             user_id=user_id,
-            agent_id=agent_id,
             path=path,
             timeout=timeout,
             extra_headers=extra_headers,
@@ -92,28 +91,39 @@ class OpenVikingSessionContextAssembler:
             account=account,
             user=user,
             user_id=user_id,
-            agent_id=agent_id,
             path=path,
             timeout=timeout,
             extra_headers=extra_headers,
             auto_initialize=auto_initialize,
             target_uri=target_uri,
+            peer_id=peer_id,
             limit=limit,
             score_threshold=score_threshold,
             search_mode="search",
         )
         self.token_budget = token_budget
+        self.peer_id = peer_id if peer_id is not None else getattr(self.retriever, "peer_id", None)
         self.include_session_context = include_session_context
         self.include_active_messages = include_active_messages
         self.include_recall = include_recall
         self.recall_header = recall_header
         self._client_cache: Any = None
 
-    def assemble(self, *, session_id: str, query: str = "") -> OpenVikingAssembledContext:
+    def assemble(
+        self,
+        *,
+        session_id: str,
+        query: str = "",
+        peer_id: str | None = None,
+    ) -> OpenVikingAssembledContext:
         client = self._get_client()
         self._ensure_session(client, session_id)
         session_context = self._get_session_context(client, session_id)
-        recall_documents = self._get_recall_documents(session_id, query)
+        recall_documents = self._get_recall_documents(
+            session_id,
+            query,
+            peer_id if peer_id is not None else self.peer_id,
+        )
         block = self._format_context_block(session_context, recall_documents)
         return OpenVikingAssembledContext(
             block=block,
@@ -148,11 +158,22 @@ class OpenVikingSessionContextAssembler:
             logger.debug("OpenViking session context assembly failed", exc_info=True)
             return {}
 
-    def _get_recall_documents(self, session_id: str, query: str) -> list[Any]:
+    def _get_recall_documents(
+        self,
+        session_id: str,
+        query: str,
+        peer_id: str | None,
+    ) -> list[Any]:
         if not self.include_recall or not query:
             return []
         try:
-            return list(_retriever_for_session(self.retriever, session_id).invoke(query))
+            return list(
+                _retriever_for_session(
+                    self.retriever,
+                    session_id,
+                    peer_id=peer_id,
+                ).invoke(query)
+            )
         except Exception:
             logger.debug("OpenViking recall retrieval failed", exc_info=True)
             return []
@@ -207,12 +228,12 @@ def with_openviking_context(
     account: str | None = None,
     user: str | None = None,
     user_id: str | None = None,
-    agent_id: str | None = None,
     path: str | None = None,
     timeout: float = 60.0,
     extra_headers: dict[str, str] | None = None,
     auto_initialize: bool = True,
     session_id: str | None = None,
+    peer_id: str | None = None,
     target_uri: str | list[str] = "",
     limit: int = 5,
     score_threshold: float | None = None,
@@ -222,6 +243,7 @@ def with_openviking_context(
     history_messages_key: str | None = None,
     commit_policy: OpenVikingCommitPolicy | None = None,
     session_id_config_key: str = "session_id",
+    peer_id_config_key: str = "peer_id",
     inject_context: bool = True,
 ) -> RunnableWithMessageHistory:
     """Wrap a LangChain runnable with OpenViking context and message history."""
@@ -233,30 +255,35 @@ def with_openviking_context(
         account=account,
         user=user,
         user_id=user_id,
-        agent_id=agent_id,
         path=path,
         timeout=timeout,
         extra_headers=extra_headers,
         auto_initialize=auto_initialize,
         target_uri=target_uri,
+        peer_id=peer_id,
         limit=limit,
         score_threshold=score_threshold,
         token_budget=token_budget,
         include_active_messages=False,
         include_recall=inject_context,
     )
-    pending_context_parts: dict[str, list[dict[str, Any]]] = {}
+    pending_context_parts: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    active_peer_ids: dict[str, str | None] = {}
 
     def make_history(active_session_id: str) -> OpenVikingChatMessageHistory:
         return OpenVikingChatMessageHistory(
             session_id=active_session_id,
+            peer_id=peer_id,
+            peer_id_provider=lambda current_session_id: active_peer_ids.get(
+                current_session_id,
+                peer_id,
+            ),
             client=client,
             url=url,
             api_key=api_key,
             account=account,
             user=user,
             user_id=user_id,
-            agent_id=agent_id,
             path=path,
             timeout=timeout,
             extra_headers=extra_headers,
@@ -264,7 +291,10 @@ def with_openviking_context(
             token_budget=token_budget,
             commit_policy=commit_policy,
             context_parts_provider=lambda current_session_id: pending_context_parts.pop(
-                current_session_id,
+                _pending_context_key(
+                    current_session_id,
+                    active_peer_ids.get(current_session_id, peer_id),
+                ),
                 [],
             ),
         )
@@ -294,27 +324,35 @@ def with_openviking_context(
         history_factory_config = None
 
     def inject(input_value: Any, config: dict[str, Any] | None = None) -> Any:
-        if not inject_context:
-            return input_value
         resolved_session_id = session_id or _session_id_from_config(
             config,
             key=session_id_config_key,
         )
-        pending_context_parts.pop(resolved_session_id, None)
+        resolved_peer_id = _peer_id_from_config(
+            config,
+            key=peer_id_config_key,
+            default=peer_id,
+        )
+        active_peer_ids[resolved_session_id] = resolved_peer_id
+        if not inject_context:
+            return input_value
+        pending_key = _pending_context_key(resolved_session_id, resolved_peer_id)
+        pending_context_parts.pop(pending_key, None)
         query = _latest_user_text_from_input(input_value, input_messages_key)
-        assembled = assembler.assemble(session_id=resolved_session_id, query=query)
+        assembled = assembler.assemble(
+            session_id=resolved_session_id,
+            query=query,
+            peer_id=resolved_peer_id,
+        )
         if not assembled.block:
             return input_value
         if assembled.context_parts:
-            pending_context_parts[resolved_session_id] = assembled.context_parts
+            pending_context_parts[pending_key] = assembled.context_parts
         return _inject_system_context(input_value, assembled.block, input_messages_key)
 
     def clear_pending_on_error(_run: Any, config: dict[str, Any] | None = None) -> None:
         del config
-        if session_id is not None:
-            pending_context_parts.pop(session_id, None)
-        else:
-            pending_context_parts.clear()
+        pending_context_parts.clear()
 
     bound = (RunnableLambda(inject) | runnable).with_listeners(on_error=clear_pending_on_error)
     return RunnableWithMessageHistory(
@@ -332,6 +370,20 @@ def _session_id_from_config(config: dict[str, Any] | None, *, key: str) -> str:
     return _validate_session_id(configurable.get(key), key=key)
 
 
+def _peer_id_from_config(
+    config: dict[str, Any] | None,
+    *,
+    key: str,
+    default: str | None,
+) -> str | None:
+    configurable = (config or {}).get("configurable") or {}
+    value = configurable.get(key, default)
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
 def _validate_session_id(value: Any, *, key: str) -> str:
     session_id = str(value or "").strip()
     if not session_id:
@@ -343,15 +395,25 @@ def _validate_session_id(value: Any, *, key: str) -> str:
     return session_id
 
 
-def _retriever_for_session(retriever: Any, session_id: str) -> Any:
+def _retriever_for_session(
+    retriever: Any,
+    session_id: str,
+    *,
+    peer_id: str | None = None,
+) -> Any:
     if hasattr(retriever, "model_copy"):
-        return retriever.model_copy(
-            update={
-                "session_id": session_id,
-                "search_mode": "search",
-            }
-        )
+        update = {
+            "session_id": session_id,
+            "search_mode": "search",
+        }
+        if peer_id is not None:
+            update["peer_id"] = peer_id
+        return retriever.model_copy(update=update)
     return retriever
+
+
+def _pending_context_key(session_id: str, peer_id: str | None) -> tuple[str, str]:
+    return (session_id, peer_id or "")
 
 
 def _latest_user_text_from_input(input_value: Any, input_messages_key: str | None) -> str:

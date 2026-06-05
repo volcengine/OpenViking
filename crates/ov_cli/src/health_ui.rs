@@ -99,20 +99,6 @@ pub(crate) fn render_health_with_language(
     ));
     lines.push(detail_line(
         match language {
-            Language::En => "Agent",
-            Language::ZhCn => "Agent",
-        },
-        plain_or_unknown(
-            identity_field(
-                payload,
-                "agent_id",
-                config.and_then(|c| c.agent_id.as_deref()),
-            ),
-            language,
-        ),
-    ));
-    lines.push(detail_line(
-        match language {
             Language::En => "Role",
             Language::ZhCn => "角色",
         },
@@ -267,7 +253,6 @@ mod tests {
             "auth_mode": "api_key",
             "account_id": "default",
             "user_id": "haozhe",
-            "agent_id": "default",
             "role": "admin"
         });
 
@@ -287,7 +272,6 @@ mod tests {
         assert!(plain.contains("Identity"));
         assert!(plain.contains("Account       default"));
         assert!(plain.contains("User          haozhe"));
-        assert!(plain.contains("Agent         default"));
         assert!(plain.contains("Role          admin"));
         assert!(plain.contains("Details"));
         assert!(plain.contains("ov status                 Full system diagnostics"));
@@ -302,7 +286,6 @@ mod tests {
             "auth_mode": "api_key",
             "account_id": "default",
             "user_id": "haozhe",
-            "agent_id": "default",
             "role": "admin"
         });
 

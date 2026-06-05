@@ -10,7 +10,6 @@ import { quickRecallPrecheck, withTimeout } from "./process-manager.js";
 import { sanitizeUserTextForCapture } from "./text-utils.js";
 import { estimateTextTokens } from "./token-estimator.js";
 
-const AUTO_RECALL_TIMEOUT_MS = 5_000;
 const RECALL_QUERY_MAX_CHARS = 4_000;
 export const AUTO_RECALL_SOURCE_MARKER = "Source: openviking-auto-recall";
 
@@ -189,11 +188,12 @@ export async function buildAutoRecallContext(params: {
   cfg: Required<MemoryOpenVikingConfig>;
   client: OpenVikingClient;
   agentId: string;
+  peerId?: string;
   queryText: string;
   logger: Logger;
   verbose?: (message: string) => void;
 }): Promise<{ block?: string; memoryCount: number; estimatedTokens: number }> {
-  const { cfg, client, agentId, queryText, logger, verbose } = params;
+  const { cfg, client, agentId, peerId, queryText, logger, verbose } = params;
 
   if (!cfg.autoRecall || queryText.length < 5) {
     return { memoryCount: 0, estimatedTokens: 0 };
@@ -213,11 +213,13 @@ export async function buildAutoRecallContext(params: {
           targetUri: "viking://user/memories",
           limit: candidateLimit,
           scoreThreshold: 0,
+          peerId,
         }, agentId),
         client.find(queryText, {
-          targetUri: "viking://agent/memories",
+          targetUri: "viking://user/memories",
           limit: candidateLimit,
           scoreThreshold: 0,
+          peerId,
         }, agentId),
       ];
       if (cfg.recallResources) {
@@ -226,6 +228,7 @@ export async function buildAutoRecallContext(params: {
             targetUri: "viking://resources",
             limit: candidateLimit,
             scoreThreshold: 0,
+            peerId,
           }, agentId),
         );
       }
@@ -281,7 +284,7 @@ export async function buildAutoRecallContext(params: {
 
       return { block, memoryCount: memoryLines.length, estimatedTokens };
     })(),
-    AUTO_RECALL_TIMEOUT_MS,
+    cfg.autoRecallTimeoutMs,
     "openviking: auto-recall search timeout",
   );
 }

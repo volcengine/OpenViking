@@ -67,7 +67,6 @@ def openviking_headers(*, content_type: bool = False) -> dict[str, str]:
     headers = {
         "X-OpenViking-Account": os.getenv("OPENVIKING_ACCOUNT", "default"),
         "X-OpenViking-User": os.getenv("OPENVIKING_USER", "default"),
-        "X-OpenViking-Agent": os.getenv("OPENVIKING_AGENT", "hermes"),
     }
     api_key = os.getenv("OPENVIKING_API_KEY", "")
     if api_key:

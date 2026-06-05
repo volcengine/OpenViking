@@ -10,13 +10,16 @@ import json
 import os
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from openviking.core.namespace import to_agent_space, to_user_space
 from openviking.message.part import ToolPart
 from openviking.prompts.manager import PromptManager
 from openviking.server.identity import RequestContext, ToolContext
 from openviking.session.memory.core import ExtractContextProvider
 from openviking.session.memory.dataclass import MemoryFile
-from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler, RoleScope
+from openviking.session.memory.memory_isolation_handler import (
+    MemoryIsolationHandler,
+    RoleScope,
+    peer_user_space,
+)
 from openviking.session.memory.memory_type_registry import (
     MemoryTypeRegistry,
     resolve_memory_templates_dir,
@@ -138,6 +141,15 @@ All memory content MUST be written in {output_language}.
 
 ## URI Handling
 The system automatically generates URIs based on memory_type and fields. Just provide correct memory_type and fields.
+
+## Self and Peer Memory
+When a memory item describes the current user, omit peer_id.
+When a memory item describes a peer, set peer_id to one of the peer_id values allowed by
+the output schema. Do not invent peer_id values.
+For events with ranges, the system derives self/peer targets from the message range.
+Message role is authoritative: user-role content is the source for profile/preferences/entities/events,
+and assistant-role content is the source for cases/patterns/tools/skills. Do not infer ownership
+from neighboring messages.
 """
 
         return goal
@@ -219,9 +231,9 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             return "\n".join(formatted_parts) if formatted_parts else msg.content
 
         def format_message_header(msg: Message, idx: int) -> str:
-            """Format message header with role and role_id."""
-            role_id_display = msg.role_id if msg.role_id else msg.role
-            return f"[{idx}][{msg.role}][{role_id_display}]: {format_message_with_parts(msg)}"
+            """Format message header with role and stable interaction peer when present."""
+            speaker = msg.peer_id or msg.role
+            return f"[{idx}][{msg.role}][{speaker}]: {format_message_with_parts(msg)}"
 
         conversation_sections.append(
             "\n".join([format_message_header(msg, idx) for idx, msg in enumerate(messages)])
@@ -277,7 +289,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
 
         for msg in self.messages:
             role = getattr(msg, "role", "")
-            role_id = getattr(msg, "role_id", "") or role
+            speaker = getattr(msg, "peer_id", "") or role
             parts = getattr(msg, "parts", [])
 
             text_parts: List[str] = []
@@ -297,14 +309,14 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                         tool_parts.append(tool_part)
 
             if text_parts:
-                section = f"{role_id}: " + "\n".join(text_parts)
+                section = f"{speaker}: " + "\n".join(text_parts)
                 if role == "user":
                     primary_sections.append(section)
                 else:
                     supporting_sections.append(section)
 
             if tool_parts:
-                supporting_sections.append(f"{role_id}: " + "\n".join(tool_parts))
+                supporting_sections.append(f"{speaker}: " + "\n".join(tool_parts))
 
         query = "\n\n".join(primary_sections + supporting_sections)
         if not query.strip():
@@ -403,13 +415,14 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             for s in self._get_registry().list_all(include_disabled=False)
             if not getattr(s, "agent_only", False)
         ]
+        if self._isolation_handler:
+            schemas = [s for s in schemas if self._isolation_handler.allows_schema(s)]
 
         # Step 1: Separate schemas into multi-file (ls) and single-file (direct read)
         ls_dirs = set()  # directories to ls (for multi-file schemas)
         read_files = set()  # files to read directly (for single-file schemas)
 
         rolescope: RoleScope = self._isolation_handler.get_read_scope()
-        policy = self._ctx.namespace_policy
 
         for schema in schemas:
             if not schema.directory:
@@ -420,14 +433,21 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                 continue
 
             schema_dirs = set()
-            for user_id in rolescope.user_ids:
-                for agent_id in rolescope.agent_ids:
-                    user_space = to_user_space(policy, user_id, agent_id)
-                    agent_space = to_agent_space(policy, user_id, agent_id)
+            if self._isolation_handler:
+                schema_dirs.update(self._isolation_handler.render_schema_directories(schema))
+            else:
+                for user_id in rolescope.user_ids:
                     dir_path = render_template(
-                        schema.directory, {"user_space": user_space, "agent_space": agent_space}
+                        schema.directory,
+                        {"user_space": user_id},
                     )
                     schema_dirs.add(dir_path)
+                    for peer_id in rolescope.peer_ids:
+                        dir_path = render_template(
+                            schema.directory,
+                            {"user_space": peer_user_space(user_id, peer_id)},
+                        )
+                        schema_dirs.add(dir_path)
             if schema.filename_has_variables():
                 for dir_path in schema_dirs:
                     ls_dirs.add(dir_path)
@@ -511,11 +531,14 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
 
     def get_memory_schemas(self, ctx: RequestContext) -> List[Any]:
         """获取需要参与的 memory schemas（内部自动加载）"""
-        return [
+        schemas = [
             s
             for s in self._get_registry().list_all(include_disabled=False)
             if not getattr(s, "agent_only", False)
         ]
+        if self._isolation_handler:
+            schemas = [s for s in schemas if self._isolation_handler.allows_schema(s)]
+        return schemas
 
     def get_schema_directories(self) -> List[str]:
         """返回需要加载的 schema 目录"""
@@ -525,9 +548,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             custom_dir = config.memory.custom_templates_dir
             self._schema_directories = [memory_templates_dir]
             if getattr(config.memory, "experimental_memory_switch", False):
-                experimental_memory_dir = os.path.join(
-                    memory_templates_dir, "experimental_memory"
-                )
+                experimental_memory_dir = os.path.join(memory_templates_dir, "experimental_memory")
                 if os.path.exists(experimental_memory_dir):
                     self._schema_directories.append(experimental_memory_dir)
             if custom_dir:

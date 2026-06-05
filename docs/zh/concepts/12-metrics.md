@@ -503,7 +503,7 @@ max by (job) (openviking_feedback_events_total{valid="0"})
 ## 相关文档
 
 - [架构概述](./01-architecture.md) - OpenViking 总体架构
-- [多租户](./11-multi-tenant.md) - `account/user/agent` 隔离模型
+- [多租户](./11-multi-tenant.md) - `account/user/peer` 隔离模型
 - [数据加密](./10-encryption.md) - 存储层加密与隔离
 - [Metrics API](../api/09-metrics.md) - `/metrics` 端点用法
 - [VikingBot 问答效果反馈观测方案设计](../../../bot/docs/vikingbot-feedback-observability-design.md) - feedback 指标与阶段性落地背景

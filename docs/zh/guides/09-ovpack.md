@@ -13,14 +13,12 @@ checksum，保证包内容没有偏离 manifest；如果攻击者能同时篡改
 
 - `viking://resources/...`
 - `viking://user/...`
-- `viking://agent/...`
 - `viking://session/...`
 
 全量迁移使用单独的 `backup/restore`，它会把公开 scope root 一起打进备份包：
 
 - `viking://resources`
 - `viking://user`
-- `viking://agent`
 - `viking://session`
 
 `temp`、`queue`、`upload`、锁文件、watch control 文件、`.relations.json` 等内部或运行态数据
@@ -307,7 +305,7 @@ type, context_type, level, name, description, tags, abstract
 这些字段不会从包里直接恢复，而是在目标环境重新生成：
 
 ```text
-id, uri, account_id, owner_user_id, owner_agent_id, owner_space,
+id, uri, account_id, owner_user_id, owner_space,
 created_at, updated_at, active_count
 ```
 
@@ -386,11 +384,11 @@ ov export viking://user/default/memories ./exports/user-memories.ovpack
 ov import ./exports/user-memories.ovpack viking://user/default/ --on-conflict overwrite
 ```
 
-Agent 记忆：
+用户记忆：
 
 ```bash
-ov export viking://agent/default/memories ./exports/agent-memories.ovpack
-ov import ./exports/agent-memories.ovpack viking://agent/default/ --on-conflict overwrite
+ov export viking://user/default/memories ./exports/agent-memories.ovpack
+ov import ./exports/agent-memories.ovpack viking://user/default/ --on-conflict overwrite
 ```
 
 Session 只恢复文件状态，不触发向量化：

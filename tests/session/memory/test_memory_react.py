@@ -4,7 +4,7 @@
 Tests for memory ExtractLoop orchestrator.
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -14,6 +14,7 @@ from openviking.session.memory.dataclass import (
 from openviking.session.memory.extract_loop import (
     ExtractLoop,
 )
+from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 
 
 class TestPreFetchFileFiltering:
@@ -154,47 +155,30 @@ class TestAllowedDirectoriesList:
 
     def test_get_allowed_directories_list(self, mock_vlm, mock_viking_fs):
         """Test that allowed directories list is properly formatted."""
-        # Patch the registry loading so we can inject our own schemas
-        with patch(
-            "openviking.session.memory.extract_loop.MemoryTypeRegistry"
-        ) as mock_registry_cls:
-            mock_registry = MagicMock()
+        registry = MemoryTypeRegistry(load_schemas=False)
 
-            # Create test schemas
-            schema1 = MemoryTypeSchema(
-                memory_type="preferences",
-                description="Preferences",
-                directory="viking://user/{user_space}/memories/preferences",
-                filename_template="{topic}.md",
-                fields=[],
-            )
-            schema2 = MemoryTypeSchema(
-                memory_type="tools",
-                description="Tools",
-                directory="viking://agent/{agent_space}/memories/tools",
-                filename_template="{tool_name}.md",
-                fields=[],
-            )
+        schema1 = MemoryTypeSchema(
+            memory_type="preferences",
+            description="Preferences",
+            directory="viking://user/{{ user_space }}/memories/preferences",
+            filename_template="{{ topic }}.md",
+            fields=[],
+        )
+        schema2 = MemoryTypeSchema(
+            memory_type="tools",
+            description="Tools",
+            directory="viking://user/{{ user_space }}/memories/tools",
+            filename_template="{{ tool_name }}.md",
+            fields=[],
+        )
 
-            mock_registry.list_all.return_value = [schema1, schema2]
-            mock_registry_cls.return_value = mock_registry
+        registry.register(schema1)
+        registry.register(schema2)
 
-            # Also patch schema_model_generator.
-            with patch("openviking.session.memory.extract_loop.SchemaModelGenerator") as mock_smg:
-                mock_smg_instance = MagicMock()
-                mock_smg_instance.generate_all_models = MagicMock()
-                mock_smg_instance.get_llm_json_schema = MagicMock(return_value={})
-                mock_smg.return_value = mock_smg_instance
+        result = registry.list_search_uris(user_space="default")
 
-                # Create ExtractLoop
-                extract_loop = ExtractLoop(mock_vlm, mock_viking_fs)
-
-                # Call the method
-                result = extract_loop._get_allowed_directories_list()
-
-                # Verify the result contains the expected directories with variables replaced
-                assert "viking://user/default/memories/preferences" in result
-                assert "viking://agent/default/memories/tools" in result
+        assert "viking://user/default/memories/preferences" in result
+        assert "viking://user/default/memories/tools" in result
 
 
 class TestExtractLoopFinalJsonRetry:
@@ -249,6 +233,9 @@ class TestExtractLoopFinalJsonRetry:
 
             def get_extract_context(self):
                 return MagicMock()
+
+            def get_output_language(self):
+                return "en"
 
             def instruction(self):
                 return "Extract memory operations."

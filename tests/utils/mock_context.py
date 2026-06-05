@@ -10,10 +10,9 @@ from openviking_cli.session.user_id import UserIdentifier
 def make_test_user(
     account_id: str = "acc1",
     user_id: str = "test_user",
-    agent_id: str = "test_agent",
 ) -> UserIdentifier:
     """Create a test UserIdentifier"""
-    return UserIdentifier(account_id, user_id, agent_id)
+    return UserIdentifier(account_id, user_id)
 
 
 def make_test_ctx(
@@ -21,9 +20,8 @@ def make_test_ctx(
     role: Role = Role.ROOT,
     account_id: str = "acc1",
     user_id: str = "test_user",
-    agent_id: str = "test_agent",
 ) -> RequestContext:
     """Create a test RequestContext"""
     if user is None:
-        user = make_test_user(account_id, user_id, agent_id)
+        user = make_test_user(account_id, user_id)
     return RequestContext(user=user, role=role)

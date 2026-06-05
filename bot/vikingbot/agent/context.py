@@ -169,7 +169,6 @@ Skills with available="false" need dependencies installed first - you can try in
         memory_users: list[str] | None = None,
         ov_tools_enable: bool = True,
         is_first_round: bool = True,
-        agent_id: str | None = None,
     ) -> str:
         """
         Build the system prompt from bootstrap files, memory, and skills.
@@ -204,11 +203,8 @@ Skills with available="false" need dependencies installed first - you can try in
             exp_first_round_only = load_config().ov_server.recall_exp_first_round_only
 
             if exp_first_round_only:
-                # Alt mode: skip per-turn user+agent recall; inject exp once per session.
-                # When the caller provides an explicit agent_id (e.g. tau2 runner passing
-                # a per-domain id like "airline_v0"), use it as the experience workspace
-                # so retrieval targets viking://agent/<agent_id>/memories/experiences/.
-                exp_workspace_id = agent_id or workspace_id
+                # Alt mode: skip per-turn recall; inject experience memory once per session.
+                exp_workspace_id = workspace_id
                 self.latest_relevant_memories = None
                 if is_first_round:
                     start = _time.time()
@@ -314,7 +310,6 @@ IMPORTANT:
         ov_tools_enable: bool = True,
         profile_user_list: list[str] | None = None,
         memory_users: list[str] | None = None,
-        agent_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """
         Build the complete message list for an LLM call.
@@ -352,7 +347,6 @@ IMPORTANT:
             memory_users,
             ov_tools_enable=ov_tools_enable,
             is_first_round=not history,
-            agent_id=agent_id,
         )
         messages.append({"role": "user", "content": user_info})
 

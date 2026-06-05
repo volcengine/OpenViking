@@ -12,13 +12,11 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as SettingsRouteRouteImport } from './routes/settings/route'
 import { Route as SessionsRouteRouteImport } from './routes/sessions/route'
 import { Route as RetrievalRouteRouteImport } from './routes/retrieval/route'
-import { Route as ResourcesRouteRouteImport } from './routes/resources/route'
 import { Route as RequestLogsRouteRouteImport } from './routes/request-logs/route'
 import { Route as PlaygroundRouteRouteImport } from './routes/playground/route'
 import { Route as HomeRouteRouteImport } from './routes/home/route'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as SessionsIndexRouteImport } from './routes/sessions/index'
-import { Route as ResourcesIndexRouteImport } from './routes/resources/index'
 import { Route as OauthVerifyRouteImport } from './routes/oauth/verify'
 import { Route as OauthSetupRouteImport } from './routes/oauth/setup'
 import { Route as OauthConsentRouteImport } from './routes/oauth/consent'
@@ -36,11 +34,6 @@ const SessionsRouteRoute = SessionsRouteRouteImport.update({
 const RetrievalRouteRoute = RetrievalRouteRouteImport.update({
   id: '/retrieval',
   path: '/retrieval',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ResourcesRouteRoute = ResourcesRouteRouteImport.update({
-  id: '/resources',
-  path: '/resources',
   getParentRoute: () => rootRouteImport,
 } as any)
 const RequestLogsRouteRoute = RequestLogsRouteRouteImport.update({
@@ -68,11 +61,6 @@ const SessionsIndexRoute = SessionsIndexRouteImport.update({
   path: '/',
   getParentRoute: () => SessionsRouteRoute,
 } as any)
-const ResourcesIndexRoute = ResourcesIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => ResourcesRouteRoute,
-} as any)
 const OauthVerifyRoute = OauthVerifyRouteImport.update({
   id: '/oauth/verify',
   path: '/oauth/verify',
@@ -94,14 +82,12 @@ export interface FileRoutesByFullPath {
   '/home': typeof HomeRouteRoute
   '/playground': typeof PlaygroundRouteRoute
   '/request-logs': typeof RequestLogsRouteRoute
-  '/resources': typeof ResourcesRouteRouteWithChildren
   '/retrieval': typeof RetrievalRouteRoute
   '/sessions': typeof SessionsRouteRouteWithChildren
   '/settings': typeof SettingsRouteRoute
   '/oauth/consent': typeof OauthConsentRoute
   '/oauth/setup': typeof OauthSetupRoute
   '/oauth/verify': typeof OauthVerifyRoute
-  '/resources/': typeof ResourcesIndexRoute
   '/sessions/': typeof SessionsIndexRoute
 }
 export interface FileRoutesByTo {
@@ -114,7 +100,6 @@ export interface FileRoutesByTo {
   '/oauth/consent': typeof OauthConsentRoute
   '/oauth/setup': typeof OauthSetupRoute
   '/oauth/verify': typeof OauthVerifyRoute
-  '/resources': typeof ResourcesIndexRoute
   '/sessions': typeof SessionsIndexRoute
 }
 export interface FileRoutesById {
@@ -123,14 +108,12 @@ export interface FileRoutesById {
   '/home': typeof HomeRouteRoute
   '/playground': typeof PlaygroundRouteRoute
   '/request-logs': typeof RequestLogsRouteRoute
-  '/resources': typeof ResourcesRouteRouteWithChildren
   '/retrieval': typeof RetrievalRouteRoute
   '/sessions': typeof SessionsRouteRouteWithChildren
   '/settings': typeof SettingsRouteRoute
   '/oauth/consent': typeof OauthConsentRoute
   '/oauth/setup': typeof OauthSetupRoute
   '/oauth/verify': typeof OauthVerifyRoute
-  '/resources/': typeof ResourcesIndexRoute
   '/sessions/': typeof SessionsIndexRoute
 }
 export interface FileRouteTypes {
@@ -140,14 +123,12 @@ export interface FileRouteTypes {
     | '/home'
     | '/playground'
     | '/request-logs'
-    | '/resources'
     | '/retrieval'
     | '/sessions'
     | '/settings'
     | '/oauth/consent'
     | '/oauth/setup'
     | '/oauth/verify'
-    | '/resources/'
     | '/sessions/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -160,7 +141,6 @@ export interface FileRouteTypes {
     | '/oauth/consent'
     | '/oauth/setup'
     | '/oauth/verify'
-    | '/resources'
     | '/sessions'
   id:
     | '__root__'
@@ -168,14 +148,12 @@ export interface FileRouteTypes {
     | '/home'
     | '/playground'
     | '/request-logs'
-    | '/resources'
     | '/retrieval'
     | '/sessions'
     | '/settings'
     | '/oauth/consent'
     | '/oauth/setup'
     | '/oauth/verify'
-    | '/resources/'
     | '/sessions/'
   fileRoutesById: FileRoutesById
 }
@@ -184,7 +162,6 @@ export interface RootRouteChildren {
   HomeRouteRoute: typeof HomeRouteRoute
   PlaygroundRouteRoute: typeof PlaygroundRouteRoute
   RequestLogsRouteRoute: typeof RequestLogsRouteRoute
-  ResourcesRouteRoute: typeof ResourcesRouteRouteWithChildren
   RetrievalRouteRoute: typeof RetrievalRouteRoute
   SessionsRouteRoute: typeof SessionsRouteRouteWithChildren
   SettingsRouteRoute: typeof SettingsRouteRoute
@@ -214,13 +191,6 @@ declare module '@tanstack/react-router' {
       path: '/retrieval'
       fullPath: '/retrieval'
       preLoaderRoute: typeof RetrievalRouteRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/resources': {
-      id: '/resources'
-      path: '/resources'
-      fullPath: '/resources'
-      preLoaderRoute: typeof ResourcesRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/request-logs': {
@@ -258,13 +228,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SessionsIndexRouteImport
       parentRoute: typeof SessionsRouteRoute
     }
-    '/resources/': {
-      id: '/resources/'
-      path: '/'
-      fullPath: '/resources/'
-      preLoaderRoute: typeof ResourcesIndexRouteImport
-      parentRoute: typeof ResourcesRouteRoute
-    }
     '/oauth/verify': {
       id: '/oauth/verify'
       path: '/oauth/verify'
@@ -289,18 +252,6 @@ declare module '@tanstack/react-router' {
   }
 }
 
-interface ResourcesRouteRouteChildren {
-  ResourcesIndexRoute: typeof ResourcesIndexRoute
-}
-
-const ResourcesRouteRouteChildren: ResourcesRouteRouteChildren = {
-  ResourcesIndexRoute: ResourcesIndexRoute,
-}
-
-const ResourcesRouteRouteWithChildren = ResourcesRouteRoute._addFileChildren(
-  ResourcesRouteRouteChildren,
-)
-
 interface SessionsRouteRouteChildren {
   SessionsIndexRoute: typeof SessionsIndexRoute
 }
@@ -318,7 +269,6 @@ const rootRouteChildren: RootRouteChildren = {
   HomeRouteRoute: HomeRouteRoute,
   PlaygroundRouteRoute: PlaygroundRouteRoute,
   RequestLogsRouteRoute: RequestLogsRouteRoute,
-  ResourcesRouteRoute: ResourcesRouteRouteWithChildren,
   RetrievalRouteRoute: RetrievalRouteRoute,
   SessionsRouteRoute: SessionsRouteRouteWithChildren,
   SettingsRouteRoute: SettingsRouteRoute,

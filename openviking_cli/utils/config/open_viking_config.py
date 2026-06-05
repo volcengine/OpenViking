@@ -57,7 +57,10 @@ class OpenVikingConfig(BaseModel):
         default="default", description="Default account identifier"
     )
     default_user: Optional[str] = Field(default="default", description="Default user identifier")
-    default_agent: Optional[str] = Field(default="default", description="Default agent identifier")
+    default_agent: Optional[str] = Field(
+        default=None,
+        description="Deprecated and ignored. User is the only data-plane identity.",
+    )
 
     storage: StorageConfig = Field(
         default_factory=StorageConfig, description="Storage configuration"
@@ -262,16 +265,16 @@ class OpenVikingConfig(BaseModel):
 
             # Apply memory configuration
             if memory_config_data is not None:
-                if (
-                    isinstance(memory_config_data, dict)
-                    and "agent_scope_mode" in memory_config_data
-                ):
-                    _get_config_warning_logger().warning(
-                        "memory.agent_scope_mode is deprecated and ignored. "
-                        "User/agent namespace behavior is now controlled by per-account "
-                        "namespace policy."
-                    )
-                instance.memory = MemoryConfig.from_dict(memory_config_data)
+                try:
+                    instance.memory = MemoryConfig.from_dict(memory_config_data)
+                except ValidationError as e:
+                    raise ValueError(
+                        format_validation_error(
+                            root_model=MemoryConfig,
+                            error=e,
+                            path_prefix="memory",
+                        )
+                    ) from e
 
             # Apply parser configurations
             for parser_type, parser_data in parser_configs.items():
@@ -502,7 +505,6 @@ def initialize_openviking_config(
         # Set user if provided, like a email address or a account_id
         config.default_account = user._account_id
         config.default_user = user._user_id
-        config.default_agent = user._agent_id
 
     # Configure storage based on provided parameters
     if path:

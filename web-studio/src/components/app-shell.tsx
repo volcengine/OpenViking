@@ -4,7 +4,6 @@ import {
   BlocksIcon,
   BookOpenIcon,
   ChevronRightIcon,
-  FolderTreeIcon,
   HomeIcon,
   GithubIcon,
   KeyRoundIcon,
@@ -26,7 +25,6 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from '#/components/ui/collapsible'
-import { ConnectionDialog } from '#/components/connection-dialog'
 import { OAuthSetupDialog } from '#/components/oauth-setup-dialog'
 import { ScrollArea } from '#/components/ui/scroll-area'
 import {
@@ -94,12 +92,6 @@ const NAV_ITEMS: readonly NavItem[] = [
     id: 'playground',
     titleKey: 'navigation.playground.title',
     to: '/playground',
-  },
-  {
-    icon: FolderTreeIcon,
-    id: 'resources',
-    titleKey: 'navigation.resources.title',
-    to: '/resources',
   },
   {
     icon: SearchIcon,
@@ -383,9 +375,9 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
       className="flex h-svh overflow-hidden bg-sidebar"
     >
       <Sidebar variant="sidebar" collapsible="icon" className="!border-r-0">
-        <SidebarHeader className="border-b border-sidebar-border/70 p-2">
-          <div className="flex items-center justify-between gap-2 group-data-[collapsible=icon]:justify-center">
-            <span className="truncate px-2 text-base font-semibold group-data-[collapsible=icon]:hidden">
+        <SidebarHeader className="h-12 border-b border-sidebar-border/70 px-2 py-0">
+          <div className="flex h-full items-center justify-between gap-2 group-data-[collapsible=icon]:justify-center">
+            <span className="flex h-8 min-w-0 items-center truncate px-2 text-base font-semibold leading-none group-data-[collapsible=icon]:hidden">
               {t('sidebar.workspaceGroupLabel', { ns: 'appShell' })}
             </span>
             <SidebarTrigger className="hidden shrink-0 md:inline-flex" />
@@ -578,7 +570,6 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
         </ScrollArea>
       </SidebarInset>
 
-      <ConnectionDialog />
       <OAuthSetupDialog
         open={oauthSetupOpen}
         onOpenChange={setOauthSetupOpen}

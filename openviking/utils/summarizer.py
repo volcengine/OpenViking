@@ -115,7 +115,7 @@ class Summarizer:
                     context_type=context_type,
                     account_id=ctx.account_id,
                     user_id=ctx.user.user_id,
-                    agent_id=ctx.user.agent_id,
+                    peer_id=ctx.user.user_id,
                     role=ctx.role.value,
                     skip_vectorization=skip_vectorization,
                     telemetry_id=telemetry.telemetry_id,

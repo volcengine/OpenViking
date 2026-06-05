@@ -4,6 +4,8 @@
 
 帮助用户以最小路径完成 OpenViking 安装、配置、自检和启动。
 
+本文面向 OpenViking 服务端安装。如果只需要配置客户端 CLI，请使用 [OpenViking CLI 配置指南](05-cli-setup.md)。
+
 ## 总原则
 
 - 默认走普通用户安装路径，不默认走源码构建

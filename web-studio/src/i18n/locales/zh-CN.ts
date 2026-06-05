@@ -6,7 +6,7 @@ const zhCN = {
       github: 'GitHub',
     },
     header: {
-      defaultTitle: 'OpenViking Playground',
+      defaultTitle: 'OpenViking Studio',
     },
     navigation: {
       home: {
@@ -21,9 +21,6 @@ const zhCN = {
       requestLogs: {
         title: '请求日志',
       },
-      resources: {
-        title: '上下文管理',
-      },
       retrieval: {
         title: '检索',
       },
@@ -37,7 +34,7 @@ const zhCN = {
     sidebar: {
       loadingSessions: '加载中...',
       noSessions: '暂无会话',
-      workspaceGroupLabel: 'OpenViking Playground',
+      workspaceGroupLabel: 'OpenViking Studio',
     },
   },
   common: {
@@ -80,13 +77,13 @@ const zhCN = {
         label: 'Account',
         placeholder: 'default',
       },
-      agentId: {
-        label: 'Agent',
-        placeholder: 'web-playground',
-      },
       apiKey: {
         label: 'API Key',
         placeholder: '输入 X-API-Key 或 Bearer token',
+      },
+      adminApiKey: {
+        label: 'Admin API key',
+        placeholder: 'Root 或 account-admin key',
       },
       baseUrl: {
         label: '服务地址',
@@ -94,6 +91,9 @@ const zhCN = {
       },
       credentials: {
         title: '身份与凭证',
+      },
+      dataApiKey: {
+        label: 'User API key',
       },
       userId: {
         label: 'User',
@@ -124,13 +124,16 @@ const zhCN = {
       regenerate: '重新生成',
       save: '保存',
       use: '使用',
+      useForData: '用作 User key',
     },
     connection: {
+      accountListLimited:
+        '当前 key 不能列出所有 account；如果它有 account-admin 权限，仍可管理选中的 account。',
       adminError: '加载 admin 身份失败：{{message}}',
       description:
-        '选择 Playground 调用 OpenViking API 时要携带的 account 和 user。',
+        '租户数据 API 使用 User API key；控制 API 可单独使用 root 或 account-admin key。',
       noKey:
-        '输入具备 admin 权限的 API key 后，可以加载 account 和 user 可选项。',
+        '输入 root 或 account-admin API key 后，可以加载 account 和 user 可选项。',
       title: '连接设置',
     },
     dialogs: {
@@ -155,16 +158,28 @@ const zhCN = {
         '使用 root 或 account admin API key 后，可以列出用户、复制 key、新增身份或轮换凭证。',
       adminTitle: '需要 admin 权限',
       usersDescription: '创建一个 user 来生成第一个 API key。',
-      usersTitle: '当前 account 下没有 user',
+      usersTitle: '选中的 accounts 下没有 user',
     },
     fields: {
       account: 'Account',
       adminUser: 'Admin user',
-      agent: 'Agent',
+      adminApiKey: 'Admin API key',
       apiKey: 'API key',
       baseUrl: '服务地址',
+      dataApiKey: 'User API key',
+      userApiKey: 'User API key',
       role: '角色',
       user: 'User',
+    },
+    health: {
+      admin: '控制面权限',
+      data: '数据访问',
+      state: {
+        checking: '检查中',
+        error: '异常',
+        ok: '正常',
+        skipped: '未检查',
+      },
     },
     keyResult: {
       description:
@@ -174,21 +189,23 @@ const zhCN = {
     },
     loading: '正在加载身份...',
     management: {
-      accountFilter: '管理的 account',
+      accountFilter: 'Accounts',
       description:
-        '查看某个 account 下的 users 和凭证，并在网页端新增 user 或轮换 key。',
+        '查看选中 accounts 下的 users 和凭证，并在网页端新增 user 或轮换 key。',
       title: '用户管理',
     },
     page: {
       description:
-        '在 Playground 中配置当前 OpenViking 身份，并管理 accounts、users 和 API keys。',
+        '配置当前 OpenViking Studio 身份，并管理 accounts、users 和 API keys。',
       title: '连接与身份',
     },
     placeholders: {
       account: 'team-account',
-      agent: 'web-playground',
+      adminApiKey: 'Root 或 account-admin key',
       apiKey: '输入 X-API-Key 或 Bearer token',
       baseUrl: 'http://127.0.0.1:1933',
+      devModeApiKey: '[dev mode，无需 API key]',
+      userApiKey: 'User API key',
       user: 'default',
     },
     roles: {
@@ -218,6 +235,7 @@ const zhCN = {
       accountCreated: 'Account 已创建',
       connectionSaved: '连接已保存',
       copied: '已复制',
+      dataKeySelected: '已选择 User API key',
       keyRegenerated: 'API key 已重新生成',
       userCreated: 'User 已创建',
     },
@@ -231,12 +249,6 @@ const zhCN = {
     },
   },
   home: {
-    agentAccess: {
-      description:
-        '去重统计今日访问过 OpenViking 的 Agent，并展示最近访问时间。',
-      empty: '今日暂无 Agent 访问',
-      title: 'Agent 访问数',
-    },
     contextCommits: {
       description:
         '按 4 小时聚合资源、技能、会话消息和提交写入，鼠标悬停可查看明细。',
@@ -270,52 +282,16 @@ const zhCN = {
       },
     },
     contextData: {
-      description:
-        '包含文件、技能、用户记忆与 Agent 记忆，用于衡量当前上下文资源规模。',
+      description: '包含文件、技能与用户记忆，用于衡量当前上下文资源规模。',
       files: '文件',
       memories: '记忆',
       skills: '技能',
       title: '上下文数据量',
     },
-    menuIntro: {
-      description:
-        '左侧导航可折叠；常用入口包括总览、上下文管理、目录递归检索、请求日志、设置、GitHub 和文档站。',
-      items: {
-        github: {
-          description: '打开 OpenViking 源码仓库。',
-          title: 'GitHub',
-        },
-        overview: {
-          description: '查看上下文规模与使用概览。',
-          title: '总览',
-        },
-        playground: {
-          description: '打开文档站和 Playground 入口。',
-          title: 'Playground',
-        },
-        requestLogs: {
-          description: '查看 Playground 发出的请求、状态与耗时。',
-          title: '请求日志',
-        },
-        resources: {
-          description: '管理文件、技能和上下文目录。',
-          title: '上下文管理',
-        },
-        retrieval: {
-          description: '使用 find() 与 search() 做语义检索。',
-          title: '目录递归检索',
-        },
-        settings: {
-          description: '配置服务地址、身份和 API Key。',
-          title: '设置',
-        },
-      },
-      title: 'Overview + 整体菜单介绍',
-    },
     page: {
       description:
         '按产品需求对齐首页内容：菜单入口、上下文数据量、今日 tokens、今日检索、Agent 访问、tokens 趋势和上下文提交统计。',
-      eyebrow: 'OpenViking Playground',
+      eyebrow: 'OpenViking Studio',
       settings: '连接与设置',
       title: 'Overview',
     },
@@ -481,29 +457,6 @@ const zhCN = {
     },
   },
   resources: {
-    page: {
-      placeholder: '资源工作区能力尚未接入。',
-    },
-    toolbar: {
-      parent: '返回父级',
-      refresh: '刷新目录',
-      search: '搜索 ⌘K',
-      processingTasks: '文件处理任务',
-      upload: '上传',
-    },
-    emptyState: {
-      title: '您的上下文空间还是空的',
-      upload: '上传文件',
-    },
-    uploadDialog: {
-      title: '上传',
-      description: '添加本地文件或远程资源到当前上下文资源库。',
-    },
-    processingNotice: {
-      prefix: '文件正在处理中，点击',
-      action: '文件处理任务',
-      suffix: '查看处理进度与结果。',
-    },
     processingTasks: {
       title: '文件处理任务',
       empty: '暂无处理任务',
@@ -519,70 +472,6 @@ const zhCN = {
         failed: '处理失败',
       },
     },
-    searchPalette: {
-      ariaLabel: '搜索',
-      openContainingDirectory: '打开所在目录',
-      placeholder: '搜索',
-      scope: {
-        global: '搜索范围: 全局',
-        current: '搜索范围: {{name}}',
-        resetToGlobal: '点击重置为全局搜索',
-      },
-      scopeState: {
-        validatingTitle: '正在校验搜索范围',
-        validatingPrefix: '正在检查',
-        validatingSuffix: '是否存在',
-        switchTitle: '切换搜索范围',
-        switchPrefix: '按',
-        switchMiddle: '切换到',
-        invalidTitle: '搜索范围不存在',
-        invalidPrefix: '路径',
-        invalidSuffix: '无法访问，不能切换',
-      },
-      empty: {
-        title: '搜索文件和目录',
-      },
-      browseDirHint: {
-        before: '输入',
-        after: '浏览目录结构',
-      },
-      globalScopeHint: {
-        before: '输入',
-        after: '切换搜索范围到全局',
-      },
-      error: '搜索出错',
-      emptyResults: {
-        title: '没有找到匹配的文件或目录',
-        subtitle: '试试换个关键词？',
-      },
-      footer: {
-        dirMode: {
-          select: '选择',
-          level: '层级',
-          confirm: '确定',
-          cancel: '取消',
-        },
-        resultMode: {
-          navigate: '导航',
-          open: '打开',
-          close: '关闭',
-          count: '{{count}} 个结果',
-        },
-      },
-    },
-    dirBrowser: {
-      back: '返回上一级',
-      loading: '正在加载目录',
-      filesSection: '文件',
-      error: '加载目录失败',
-      empty: {
-        title: '空目录',
-        subtitle: '这一层目前没有可继续展开的子目录',
-      },
-    },
-    fileList: {
-      empty: '当前目录为空',
-    },
     filePreview: {
       cancel: '取消',
       edit: '编辑',
@@ -597,21 +486,6 @@ const zhCN = {
       markdownSource: '源码',
       save: '保存',
       unsupportedBinary: '二进制文件不支持文本预览。',
-    },
-    fileTree: {
-      collapse: '收起',
-      expand: '展开',
-      loading: '加载中...',
-    },
-    findResults: {
-      collapse: '收起',
-      expandDetails: '展开详情',
-      groups: {
-        memories: '记忆',
-        resources: '资源',
-        skills: '技能',
-      },
-      noResults: '未找到相关结果',
     },
   },
   retrieval: {
@@ -731,8 +605,8 @@ const zhCN = {
       scopesLabel: '权限范围',
       scopesNone: '（无）',
       signInRequired:
-        '请先在“连接与身份”中登录 OpenViking Playground，或在下方临时粘贴 API key 完成授权。',
-      openConnectionDialog: '打开连接与身份',
+        '请先在“连接与身份”中登录 OpenViking Studio，或在下方临时粘贴 API key 完成授权。',
+      openConnectionSettings: '打开连接与身份',
       authorize: '授权',
       deny: '拒绝',
       useAnotherDevice: '在另一台设备上授权 →',
@@ -754,7 +628,7 @@ const zhCN = {
       verifyError: '授权失败：{{message}}',
       noApiKey: '没有可用的 API key。请选择一个身份或粘贴 key。',
       signInRequired:
-        '请先在“连接与身份”中登录 OpenViking Playground，或在下方临时粘贴 API key 完成授权。',
+        '请先在“连接与身份”中登录 OpenViking Studio，或在下方临时粘贴 API key 完成授权。',
     },
   },
   playground: {
@@ -780,7 +654,6 @@ const zhCN = {
       namespaces: {
         user: '用户个性化记忆',
         session: '用户与 Agent 的原始会话',
-        agent: 'Agent 的能力、工具和经验',
         resources: 'Agent 可引用的外部资源',
       },
     },

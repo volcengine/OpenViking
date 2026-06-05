@@ -15,7 +15,11 @@ import {
 } from '#/components/ui/dialog'
 import { FilePreview } from '#/routes/resources/-components/file-preview'
 import { AddResourceForm } from '#/routes/resources/-components/add-resource-page'
-import { ResourceUploadProvider } from '#/routes/resources/-hooks/use-resource-upload'
+import { UploadTaskDialog } from '#/routes/resources/-components/upload-task-dialog'
+import {
+  ResourceUploadProvider,
+  useResourceUpload,
+} from '#/routes/resources/-hooks/use-resource-upload'
 import {
   useInvalidateVikingFs,
   useVikingFsList,
@@ -66,6 +70,7 @@ export const Route = createFileRoute('/playground')({
         ? search.panel
         : undefined,
     session: typeof search.session === 'string' ? search.session : undefined,
+    upload: search.upload === true || search.upload === 'true',
     uri: typeof search.uri === 'string' ? search.uri : undefined,
   }),
   component: PlaygroundRoute,
@@ -103,7 +108,10 @@ function PlaygroundWorkbench() {
   const [activePanel, setActivePanel] = useState<PlaygroundPanel>(
     search.panel ?? 'agent',
   )
-  const [uploadDialogOpen, setUploadDialogOpen] = useState(false)
+  const [uploadDialogOpen, setUploadDialogOpen] = useState(
+    () => search.upload ?? false,
+  )
+  const [taskDialogOpen, setTaskDialogOpen] = useState(false)
   const [openingUri, setOpeningUri] = useState<string | null>(null)
   const layoutRef = useRef<HTMLDivElement>(null)
   const [leftWidth, setLeftWidth] = useState(() =>
@@ -137,6 +145,13 @@ function PlaygroundWorkbench() {
     showAllHidden: true,
     nodeLimit: 500,
   })
+  const {
+    activeTaskCount,
+    hasActiveTasks,
+    isRefreshingTasks,
+    refreshTasks,
+    tasks,
+  } = useResourceUpload()
   const { invalidateList } = useInvalidateVikingFs()
 
   const syncSearch = useCallback(
@@ -144,6 +159,7 @@ function PlaygroundWorkbench() {
       file?: string
       panel?: PlaygroundPanel
       session?: string
+      upload?: boolean
       uri?: string
     }) => {
       navigate({
@@ -175,6 +191,22 @@ function PlaygroundWorkbench() {
       setActivePanel(search.panel)
     }
   }, [search.panel])
+
+  useEffect(() => {
+    if (search.upload) {
+      setUploadDialogOpen(true)
+    }
+  }, [search.upload])
+
+  const handleUploadDialogOpenChange = useCallback(
+    (open: boolean) => {
+      setUploadDialogOpen(open)
+      if (!open && search.upload) {
+        syncSearch({ upload: undefined })
+      }
+    },
+    [search.upload, syncSearch],
+  )
 
   const revealResource = useCallback(
     async (rawUri: string) => {
@@ -280,6 +312,11 @@ function PlaygroundWorkbench() {
     },
     [syncSearch],
   )
+
+  const handleOpenProcessingTasks = useCallback(() => {
+    setTaskDialogOpen(true)
+    void refreshTasks()
+  }, [refreshTasks])
 
   const selectedUri = selectedFile?.uri ?? currentUri
   const displayUri =
@@ -391,13 +428,17 @@ function PlaygroundWorkbench() {
     <div className="-mx-4 -my-6 flex h-[calc(100svh-3rem)] min-h-0 flex-col bg-background md:-mx-6">
       <div
         ref={layoutRef}
-        className="flex min-h-0 flex-1 flex-col border-t bg-background lg:flex-row"
+        className="flex min-h-0 flex-1 flex-col bg-background lg:flex-row"
         style={layoutStyle}
       >
         <aside className="flex min-h-[260px] min-w-0 flex-col border-b bg-muted/20 lg:min-h-0 lg:w-[var(--playground-left-width)] lg:min-w-[var(--playground-left-width)] lg:border-b-0">
           <ContextExplorerHeader
+            activeTaskCount={activeTaskCount}
+            hasActiveTasks={hasActiveTasks}
             isRefreshing={listQuery.isFetching}
+            isRefreshingTasks={isRefreshingTasks}
             onAddResource={() => setUploadDialogOpen(true)}
+            onOpenProcessingTasks={handleOpenProcessingTasks}
             onRefresh={() => {
               void invalidateList(currentUri)
               void listQuery.refetch()
@@ -448,6 +489,7 @@ function PlaygroundWorkbench() {
           <div className="min-h-0 flex-1">
             <FilePreview
               file={selectedFile}
+              hideDirectoryHeader
               onClose={() => setSelectedFile(null)}
               showCloseButton={false}
             />
@@ -497,7 +539,10 @@ function PlaygroundWorkbench() {
         </aside>
       </div>
 
-      <Dialog open={uploadDialogOpen} onOpenChange={setUploadDialogOpen}>
+      <Dialog
+        open={uploadDialogOpen}
+        onOpenChange={handleUploadDialogOpenChange}
+      >
         <DialogContent className="max-h-[min(86vh,760px)] gap-0 overflow-hidden p-0 sm:max-w-4xl">
           <DialogHeader className="border-b px-6 py-5">
             <DialogTitle className="text-xl">
@@ -510,7 +555,7 @@ function PlaygroundWorkbench() {
           <div className="max-h-[calc(min(86vh,760px)-6rem)] overflow-y-auto px-6 py-5">
             <AddResourceForm
               onSubmitted={() => {
-                setUploadDialogOpen(false)
+                handleUploadDialogOpenChange(false)
                 void invalidateList()
                 toast.success(t('addResource.submitted'))
               }}
@@ -518,6 +563,11 @@ function PlaygroundWorkbench() {
           </div>
         </DialogContent>
       </Dialog>
+      <UploadTaskDialog
+        open={taskDialogOpen}
+        onOpenChange={setTaskDialogOpen}
+        tasks={tasks}
+      />
     </div>
   )
 }

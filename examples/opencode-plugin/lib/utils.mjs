@@ -7,7 +7,7 @@ export const DEFAULT_CONFIG = {
   apiKey: "",
   account: "",
   user: "",
-  agentId: "",
+  peerId: "",
   enabled: true,
   timeoutMs: 30000,
   runtime: {
@@ -35,7 +35,7 @@ function cloneDefaultConfig() {
 
 function mergeConfig(fileConfig = {}) {
   const config = cloneDefaultConfig()
-  for (const key of ["endpoint", "apiKey", "account", "user", "agentId", "enabled", "timeoutMs"]) {
+  for (const key of ["endpoint", "apiKey", "account", "user", "peerId", "enabled", "timeoutMs"]) {
     if (fileConfig[key] !== undefined) config[key] = fileConfig[key]
   }
   config.runtime = {
@@ -54,8 +54,8 @@ function mergeConfig(fileConfig = {}) {
   if (process.env.OPENVIKING_USER) {
     config.user = process.env.OPENVIKING_USER
   }
-  if (process.env.OPENVIKING_AGENT_ID) {
-    config.agentId = process.env.OPENVIKING_AGENT_ID
+  if (process.env.OPENVIKING_PEER_ID) {
+    config.peerId = process.env.OPENVIKING_PEER_ID
   }
 
   config.timeoutMs = normalizeNumber(config.timeoutMs, DEFAULT_CONFIG.timeoutMs, 1000, 300000)
@@ -179,6 +179,10 @@ export function normalizeEndpoint(endpoint) {
   return endpoint.replace(/\/+$/, "")
 }
 
+export function effectivePeerId(config) {
+  return String(config.peerId || "").trim() || null
+}
+
 export async function makeRequest(config, options) {
   const url = `${normalizeEndpoint(config.endpoint)}${options.endpoint}`
   const headers = makeAuthHeaders(config, { "Content-Type": "application/json", ...(options.headers ?? {}) })
@@ -286,7 +290,6 @@ function makeAuthHeaders(config, headers = {}) {
   if (config.apiKey) result["X-API-Key"] = config.apiKey
   if (config.account) result["X-OpenViking-Account"] = config.account
   if (config.user) result["X-OpenViking-User"] = config.user
-  if (config.agentId) result["X-OpenViking-Agent"] = config.agentId
   return result
 }
 

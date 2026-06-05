@@ -99,7 +99,6 @@ VITE_OV_BASE_URL=http://127.0.0.1:1933 npm run dev
 - `X-API-Key`
 - `X-OpenViking-Account`
 - `X-OpenViking-User`
-- `X-OpenViking-Agent: web-studio`
 
 生产或多租户部署应在 OpenViking Server 中配置真实的 `server.root_api_key` 或 user key，并在 Web Studio 中填写匹配的连接信息。
 

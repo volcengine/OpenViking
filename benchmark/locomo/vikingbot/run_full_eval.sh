@@ -25,7 +25,7 @@ for arg in "$@"; do
         echo ""
         echo "开关参数:"
         echo "  --skip-import     跳过导入步骤，直接使用已导入的数据进行评测"
-        echo "  --group-chat      群聊模式，设置 role_id/speaker，传 --memory-user"
+        echo "  --group-chat      群聊模式，设置 peer_id/speaker，传 --memory-user"
         echo "  --auto-commit     自动提交未提交的代码变更，结果文件名带 commit id 和时间戳"
         echo "  --retry-wrong CSV 只重跑指定结果文件中的有效错题（导入相关对话+重新问答）"
         exit 0

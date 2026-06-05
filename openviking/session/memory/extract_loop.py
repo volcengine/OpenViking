@@ -322,7 +322,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
             for item in items:
                 item_dict = dict(item)
                 item_dict["memory_type"] = memory_type
-                self._isolation_handler.fill_role_ids(item_dict, role_scope=role_scope)
+                self._isolation_handler.fill_identity_fields(item_dict, role_scope=role_scope)
 
                 page_id = item_dict.pop("page_id", None)
                 resolved_op = ResolvedOperation(

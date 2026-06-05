@@ -145,7 +145,6 @@ pub struct BaseClient {
     pub(crate) api_key: Option<String>,
     pub(crate) account: Option<String>,
     pub(crate) user: Option<String>,
-    pub(crate) agent_id: Option<String>,
     pub(crate) profile_enabled: bool,
     pub(crate) extra_headers: Option<std::collections::HashMap<String, String>>,
 }
@@ -154,7 +153,6 @@ impl BaseClient {
     pub fn new(
         base_url: impl Into<String>,
         api_key: Option<String>,
-        agent_id: Option<String>,
         account: Option<String>,
         user: Option<String>,
         timeout_secs: f64,
@@ -172,7 +170,6 @@ impl BaseClient {
             api_key,
             account,
             user,
-            agent_id,
             profile_enabled,
             extra_headers,
         }
@@ -190,10 +187,6 @@ impl BaseClient {
         self.user.as_deref()
     }
 
-    pub fn agent_id(&self) -> Option<&str> {
-        self.agent_id.as_deref()
-    }
-
     pub fn api_key(&self) -> Option<&str> {
         self.api_key.as_deref()
     }
@@ -207,11 +200,6 @@ impl BaseClient {
         if let Some(api_key) = &self.api_key {
             if let Ok(value) = reqwest::header::HeaderValue::from_str(api_key) {
                 headers.insert("X-API-Key", value);
-            }
-        }
-        if let Some(agent_id) = &self.agent_id {
-            if let Ok(value) = reqwest::header::HeaderValue::from_str(agent_id) {
-                headers.insert("X-OpenViking-Agent", value);
             }
         }
         if let Some(account) = &self.account {
@@ -264,7 +252,10 @@ impl BaseClient {
         };
 
         if !status.is_success() {
-            return Err(Error::Api(api_error_from_envelope(&json, status)));
+            return Err(Error::api_with_status(
+                api_error_from_envelope(&json, status),
+                status.as_u16(),
+            ));
         }
 
         if let Some(error) = json.get("error") {
@@ -277,7 +268,10 @@ impl BaseClient {
                     .get("message")
                     .and_then(|m| m.as_str())
                     .unwrap_or("Unknown error");
-                return Err(Error::Api(format!("[{}] {}", code, message)));
+                return Err(Error::api_with_status(
+                    format!("[{}] {}", code, message),
+                    status.as_u16(),
+                ));
             }
         }
 
@@ -580,16 +574,7 @@ mod tests {
 
     #[test]
     fn append_profile_query_adds_flag_when_enabled() {
-        let client = BaseClient::new(
-            "http://localhost:1933",
-            None,
-            None,
-            None,
-            None,
-            5.0,
-            true,
-            None,
-        );
+        let client = BaseClient::new("http://localhost:1933", None, None, None, 5.0, true, None);
 
         let params =
             client.append_profile_query(&[("to_uri".to_string(), "viking://x".to_string())]);
@@ -605,16 +590,7 @@ mod tests {
 
     #[test]
     fn append_profile_query_keeps_existing_profile_flag() {
-        let client = BaseClient::new(
-            "http://localhost:1933",
-            None,
-            None,
-            None,
-            None,
-            5.0,
-            true,
-            None,
-        );
+        let client = BaseClient::new("http://localhost:1933", None, None, None, 5.0, true, None);
 
         let params = client.append_profile_query(&[("profile".to_string(), "1".to_string())]);
 

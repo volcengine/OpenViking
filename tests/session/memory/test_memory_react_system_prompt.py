@@ -40,6 +40,15 @@ class TestProviderInstruction:
         assert "Target Output Language" in instruction
         assert "All memory content MUST be written in" in instruction
 
+    def test_instruction_explains_peer_memory_routing(self):
+        provider = SessionExtractContextProvider(messages=[])
+
+        instruction = provider.instruction()
+
+        assert "Peer Memory" in instruction
+        assert "profile/preferences/entities/events" in instruction
+        assert "cases/patterns/tools/skills" in instruction
+
 
 class TestSkillToolCallExposure:
     def test_assemble_conversation_includes_skill_tool_call(self):
@@ -53,7 +62,7 @@ class TestSkillToolCallExposure:
                         tool_id="tool_1",
                         tool_name="read",
                         tool_uri="viking://session/test/tools/tool_1",
-                        skill_uri="viking://agent/skills/create_presentation",
+                        skill_uri="viking://user/skills/create_presentation",
                         tool_input={"file_path": "/skills/ppt/SKILL.md"},
                         tool_output="ok",
                         tool_status="completed",
@@ -95,6 +104,22 @@ class TestSkillToolCallExposure:
         assert "[ToolCall]" in conversation
         assert '"tool_name": "read"' in conversation
         assert '"skill_name":' not in conversation
+
+    def test_assemble_conversation_uses_peer_id_when_present(self):
+        messages = [
+            Message(
+                id="m1",
+                role="user",
+                parts=[TextPart("My invoice is still missing.")],
+                peer_id="web:visitor:alice",
+            )
+        ]
+        provider = SessionExtractContextProvider(messages=messages)
+
+        conversation = provider._assemble_conversation(messages)
+
+        assert "[0][user][web:visitor:alice]" in conversation
+        assert "[0][user][default]" not in conversation
 
     def test_detect_language_only_uses_text_parts(self):
         messages = [

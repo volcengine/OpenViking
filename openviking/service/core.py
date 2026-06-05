@@ -69,9 +69,7 @@ class OpenVikingService:
             path=path,
         )
         self._config = config
-        self._user = user or UserIdentifier(
-            config.default_account, config.default_user, config.default_agent
-        )
+        self._user = user or UserIdentifier(config.default_account, config.default_user)
 
         # Infrastructure
         self._agfs_client: Optional[Any] = None
@@ -242,9 +240,15 @@ class OpenVikingService:
 
         # Acquire advisory lock on data directory to prevent multi-process
         # contention (see https://github.com/volcengine/OpenViking/issues/473).
-        from openviking.utils.process_lock import acquire_data_dir_lock
+        if not self._config.storage.skip_process_lock:
+            from openviking.utils.process_lock import acquire_data_dir_lock
 
-        acquire_data_dir_lock(self._config.storage.workspace)
+            acquire_data_dir_lock(self._config.storage.workspace)
+        else:
+            logger.warning(
+                "Skipping workspace process lock for '%s'; multi-process access may corrupt data",
+                self._config.storage.workspace,
+            )
 
         if self._vikingdb_manager is None:
             self._init_storage(
@@ -375,6 +379,8 @@ class OpenVikingService:
 
     async def close(self) -> None:
         """Close OpenViking and release resources."""
+        await self._resource_service.close_background_tasks()
+
         if self._watch_scheduler:
             await self._watch_scheduler.stop()
             self._watch_scheduler = None

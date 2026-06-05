@@ -3,7 +3,7 @@ description: |
   A generalizable, reusable insight distilled from agent execution — not a process record.
   Captures a transferable pattern: what situation triggers it, what approach works, and why.
 
-directory: "viking://agent/{{ agent_space }}/memories/experiences"
+directory: "viking://user/{{ user_space }}/memories/experiences"
 filename_template: "{{ experience_name }}.md"
 enabled: true
 operation_mode: "upsert"
