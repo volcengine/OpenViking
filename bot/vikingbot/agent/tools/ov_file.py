@@ -108,9 +108,10 @@ class VikingSearchTool(OVFileTool):
     def description(self) -> str:
         return (
             "Using query to search for resources (knowledge, code, files, workflow, etc.) in OpenViking. "
-            "Result: Only URIs and summaries are included here. To view the full content, use openviking_multi_read tool."
-            "This operation performs semantic retrieval, not full character matching. Please avoid repeated calls with similar queries as much as possible."
-            "bad-case: after searching with ‘Nate Joanna dog playdate 3:00 pm', another search was performed using 'Nate Joanna dog playdate'."
+            "Result: Only URIs and summaries are included here. To view the full content, use openviking_multi_read tool. "
+            "This operation performs semantic retrieval, not full character matching. "
+            "Avoid duplicate calls with the same intent in the same turn, but do search again for a new user question or a follow-up that asks for a different remembered fact. "
+            "For questions about the user's memory, profile, preferences, or personal facts, use this tool before concluding no relevant record exists."
         )
 
     @property
@@ -386,7 +387,7 @@ class VikingGrepTool(OVFileTool):
         return (
             "Search Viking resources using a regex pattern (like grep)."
             "Result: Only URIs and summaries are included here. To view the full content, use openviking_multi_read tool."
-            "Please avoid repeated calls with similar queries as much as possible."
+            "Avoid duplicate calls with the same intent in the same turn."
         )
 
     @property

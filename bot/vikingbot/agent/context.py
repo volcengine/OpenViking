@@ -208,6 +208,12 @@ Skills with available="false" need dependencies installed first - you can try in
         if ov_tools_enable:
             exp_first_round_only = load_config().ov_server.recall_exp_first_round_only
 
+            parts.append(
+                "## OpenViking Memory Retrieval\n"
+                "- For questions about the user's remembered facts, preferences, profile, or personal context, use openviking_search for the current question before saying there is no relevant record.\n"
+                "- A previous empty search result does not prove that a different follow-up question has no memory; search again when the requested fact changes."
+            )
+
             if exp_first_round_only:
                 # Alt mode: skip per-turn recall; inject experience memory once per session.
                 exp_workspace_id = workspace_id

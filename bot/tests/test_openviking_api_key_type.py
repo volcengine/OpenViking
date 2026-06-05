@@ -3,6 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from vikingbot.agent.context import ContextBuilder
 from vikingbot.agent.loop import _is_tool_result_success
 from vikingbot.agent.tools.ov_file import VikingGrepTool, VikingMemoryCommitTool, VikingSearchTool
 from vikingbot.config.schema import SessionKey
@@ -1227,6 +1228,37 @@ async def test_openviking_search_user_key_mode_uses_current_user_namespace(monke
 
     assert "viking://user/memories/" in result
     assert calls == [("viking://user/memories/", "admin")]
+
+
+def test_openviking_search_description_allows_follow_up_memory_queries():
+    description = VikingSearchTool().description
+
+    assert "follow-up" in description
+    assert "different remembered fact" in description
+    assert "before concluding no relevant record exists" in description
+    assert "avoid repeated calls with similar queries" not in description.lower()
+
+
+@pytest.mark.asyncio
+async def test_context_reminds_agent_to_search_current_memory_question(tmp_path):
+    class _EmptyMemory:
+        async def get_viking_memory_context(self, **_kwargs):
+            return ""
+
+    context = ContextBuilder(workspace=tmp_path, sender_id="sender-1")
+    context._memory = _EmptyMemory()
+
+    user_info = await context._build_user_memory(
+        session_key=SessionKey(type="cli", channel_id="default", chat_id="chat-1"),
+        current_message="我会哪些语言",
+        sender_id="sender-1",
+        ov_tools_enable=True,
+        is_first_round=False,
+    )
+
+    assert "OpenViking Memory Retrieval" in user_info
+    assert "use openviking_search for the current question" in user_info
+    assert "A previous empty search result does not prove" in user_info
 
 
 @pytest.mark.asyncio
