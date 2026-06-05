@@ -1130,7 +1130,7 @@ class ReindexExecutor:
                 details={"uri": uri},
             )
 
-        skill_dict, _, _ = SkillProcessor(service.vikingdb_manager)._parse_skill(
+        skill_dict, _, _, _ = SkillProcessor(service.vikingdb_manager)._parse_skill(
             skill_content,
             allow_local_path_resolution=False,
         )

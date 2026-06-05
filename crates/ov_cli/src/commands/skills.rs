@@ -205,6 +205,7 @@ pub async fn update(
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
+    let update_all = skill_names.is_empty();
     let names = resolve_installed_skill_names(client, skill_names).await?;
     if names.is_empty() {
         output_message_result(
@@ -226,8 +227,19 @@ pub async fn update(
     }
 
     let mut updated = Vec::new();
+    let mut skipped = Vec::new();
     for name in names {
-        let update_target = resolve_update_target(client, &name).await?;
+        let update_target = match resolve_update_target(client, &name, !update_all).await {
+            Ok(target) => target,
+            Err(error) if update_all => {
+                skipped.push(json!({
+                    "name": name,
+                    "reason": error.to_string(),
+                }));
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
         let source_metadata = source_record_value(update_target.source.as_ref())?;
         let result = client
             .skill_update(
@@ -243,10 +255,13 @@ pub async fn update(
         updated.push(result);
     }
     let total = updated.len();
+    let skipped_total = skipped.len();
     output_success(
         serde_json::json!({
             "updated": updated,
             "total": total,
+            "skipped": skipped,
+            "skipped_total": skipped_total,
         }),
         output_format,
         compact,
@@ -779,8 +794,8 @@ fn parse_github_tree_source(data: &str) -> Option<GitSource> {
 
     let owner = segments[0];
     let repo = segments[1].trim_end_matches(".git");
-    let branch = segments[3];
-    let subdir = segments[4..]
+    let (branch, subdir_segments) = split_github_tree_ref_and_subdir(&segments)?;
+    let subdir = subdir_segments
         .iter()
         .fold(PathBuf::new(), |mut path, segment| {
             path.push(segment);
@@ -792,9 +807,43 @@ fn parse_github_tree_source(data: &str) -> Option<GitSource> {
 
     Some(GitSource {
         clone_url: format!("https://github.com/{owner}/{repo}.git"),
-        ref_name: Some(branch.to_string()),
+        ref_name: Some(branch),
         subdir: Some(subdir),
     })
+}
+
+fn split_github_tree_ref_and_subdir(segments: &[&str]) -> Option<(String, Vec<String>)> {
+    if segments.len() < 5 {
+        return None;
+    }
+    let default_branch = segments[3];
+    let default_subdir = &segments[4..];
+    if default_branch.is_empty() || default_subdir.is_empty() {
+        return None;
+    }
+
+    if let Some(skill_root_index) = segments[4..]
+        .iter()
+        .position(|segment| *segment == "skills")
+    {
+        let split_at = 4 + skill_root_index;
+        let branch = segments[3..split_at].join("/");
+        let subdir = segments[split_at..]
+            .iter()
+            .map(|segment| (*segment).to_string())
+            .collect::<Vec<_>>();
+        if !branch.is_empty() && !subdir.is_empty() {
+            return Some((branch, subdir));
+        }
+    }
+
+    Some((
+        default_branch.to_string(),
+        default_subdir
+            .iter()
+            .map(|segment| (*segment).to_string())
+            .collect::<Vec<_>>(),
+    ))
 }
 
 fn resolve_add_targets(source: &PreparedSource, skill_names: &[String]) -> Result<Vec<AddTarget>> {
@@ -1037,17 +1086,23 @@ fn skill_target_label(target: &AddTarget) -> String {
         .to_string()
 }
 
-async fn resolve_update_target(client: &HttpClient, name: &str) -> Result<AddTarget> {
+async fn resolve_update_target(
+    client: &HttpClient,
+    name: &str,
+    allow_prompt: bool,
+) -> Result<AddTarget> {
     if let Some(record) = read_skill_source_record(client, name).await? {
-        return update_target_from_record(&record, name);
+        return update_target_from_record(&record, name, allow_prompt);
     }
 
-    if let Some(target) = prompt_update_source(name)? {
-        return Ok(target);
+    if allow_prompt {
+        if let Some(target) = prompt_update_source(name)? {
+            return Ok(target);
+        }
     }
 
     Err(Error::Client(format!(
-        "Skill '{}' has no recorded source metadata. Reinstall it with 'ov skills add <source>' or run update interactively to provide a new source.",
+        "Skill '{}' has no recorded updateable source metadata. Reinstall it with 'ov skills add <source>' or run update interactively to provide a new source.",
         name
     )))
 }
@@ -1073,7 +1128,11 @@ async fn read_skill_source_record(
     Ok(Some(record))
 }
 
-fn update_target_from_record(record: &SkillSourceRecord, name: &str) -> Result<AddTarget> {
+fn update_target_from_record(
+    record: &SkillSourceRecord,
+    name: &str,
+    allow_prompt: bool,
+) -> Result<AddTarget> {
     match record.source_type.as_str() {
         "git" => {
             let prepared = prepare_source_from_git_record(record)?;
@@ -1098,8 +1157,10 @@ fn update_target_from_record(record: &SkillSourceRecord, name: &str) -> Result<A
             })?;
             let path_obj = Path::new(path);
             if !path_obj.exists() {
-                if let Some(target) = prompt_update_source(name)? {
-                    return Ok(target);
+                if allow_prompt {
+                    if let Some(target) = prompt_update_source(name)? {
+                        return Ok(target);
+                    }
                 }
                 return Err(Error::Client(format!(
                     "Recorded source path for skill '{}' no longer exists: {}",
@@ -1677,8 +1738,9 @@ fn output_message_result(
 #[cfg(test)]
 mod tests {
     use super::{
-        PreparedSource, SourceOrigin, filter_skill_show_level, parse_github_tree_source,
-        parse_skill_md, render_skill_show_for_table, resolve_add_targets,
+        PreparedSource, SkillSourceRecord, SourceOrigin, filter_skill_show_level,
+        parse_github_tree_source, parse_skill_md, render_skill_show_for_table, resolve_add_targets,
+        update_target_from_record,
     };
     use serde_json::json;
     use std::path::Path;
@@ -1778,6 +1840,42 @@ mod tests {
         assert_eq!(
             source.subdir.as_deref(),
             Some(Path::new("skills/algorithmic-art"))
+        );
+    }
+
+    #[test]
+    fn github_tree_skill_url_supports_slash_branch_before_skills_dir() {
+        let source = parse_github_tree_source(
+            "https://github.com/acme/skills/tree/feature/foo/skills/demo-skill",
+        )
+        .expect("github tree source");
+
+        assert_eq!(source.clone_url, "https://github.com/acme/skills.git");
+        assert_eq!(source.ref_name.as_deref(), Some("feature/foo"));
+        assert_eq!(
+            source.subdir.as_deref(),
+            Some(Path::new("skills/demo-skill"))
+        );
+    }
+
+    #[test]
+    fn update_target_rejects_api_source_record_without_prompt() {
+        let record = SkillSourceRecord {
+            source_type: "api".to_string(),
+            source: Some("inline_content".to_string()),
+            path: None,
+            clone_url: None,
+            ref_name: None,
+            subdir: None,
+            skill_name: Some("api-skill".to_string()),
+        };
+
+        let error = update_target_from_record(&record, "api-skill", false)
+            .expect_err("api source should not be directly updateable");
+        assert!(
+            error
+                .to_string()
+                .contains("Unsupported source type 'api' for skill 'api-skill'")
         );
     }
 

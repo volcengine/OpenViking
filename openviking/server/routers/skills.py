@@ -3,6 +3,7 @@
 """Agent-scope skill management endpoints for OpenViking HTTP Server."""
 
 import re
+import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -347,7 +348,7 @@ def _parse_skill_data(service, data: Any, *, allow_local_path_resolution: bool) 
     skill_processor = getattr(service.resources, "_skill_processor", None)
     if skill_processor is None:
         raise RuntimeError("SkillProcessor is required for skill validation")
-    skill_dict, _, _ = skill_processor._parse_skill(  # noqa: SLF001 - keep parser authority centralized.
+    skill_dict, _, _, _ = skill_processor._parse_skill(  # noqa: SLF001 - keep parser authority centralized.
         data,
         allow_local_path_resolution=allow_local_path_resolution,
     )
@@ -533,6 +534,8 @@ async def update_skill(
     store = TempUploadStore.build(http_request.app.state.config) if resolved else None
 
     async def _update() -> Dict[str, Any]:
+        backup_uri = f"{_agent_skills_root(_ctx)}/.{skill_name}.update-backup-{uuid.uuid4().hex}"
+        backup_created = False
         try:
             _validate_data_matches_name(
                 service,
@@ -540,7 +543,8 @@ async def update_skill(
                 skill_name,
                 allow_local_path_resolution=allow_local_path_resolution,
             )
-            await service.fs.rm(root_uri, ctx=_ctx, recursive=True)
+            await service.fs.mv(root_uri, backup_uri, ctx=_ctx)
+            backup_created = True
             result = await service.resources.add_skill(
                 data=data,
                 ctx=_ctx,
@@ -550,10 +554,21 @@ async def update_skill(
             )
             await persist_skill_source_metadata(service, _ctx, result, source_metadata)
         except Exception:
+            if backup_created:
+                try:
+                    await service.fs.rm(root_uri, ctx=_ctx, recursive=True)
+                except Exception:
+                    pass
+                try:
+                    await service.fs.mv(backup_uri, root_uri, ctx=_ctx)
+                except Exception:
+                    pass
             if resolved and store:
                 await store.mark_failed(resolved, _ctx)
             raise
         else:
+            if backup_created:
+                await service.fs.rm(backup_uri, ctx=_ctx, recursive=True)
             if resolved and store:
                 await store.mark_consumed(resolved, _ctx)
             result["action"] = "update"

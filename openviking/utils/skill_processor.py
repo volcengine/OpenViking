@@ -6,6 +6,7 @@ Skill Processor for OpenViking.
 Handles skill parsing, LLM generation, and storage operations.
 """
 
+import shutil
 import tempfile
 import time
 import zipfile
@@ -123,144 +124,155 @@ class SkillProcessor:
         telemetry = get_current_telemetry()
 
         parse_start = time.perf_counter()
-        skill_dict, auxiliary_files, base_path = self._parse_skill(
-            data,
-            allow_local_path_resolution=allow_local_path_resolution,
-        )
-        self._validate_skill_dict(skill_dict)
-        telemetry.set(
-            "skill.parse.duration_ms", round((time.perf_counter() - parse_start) * 1000, 3)
-        )
+        cleanup_path: Optional[Path] = None
+        try:
+            skill_dict, auxiliary_files, base_path, cleanup_path = self._parse_skill(
+                data,
+                allow_local_path_resolution=allow_local_path_resolution,
+            )
+            self._validate_skill_dict(skill_dict)
+            telemetry.set(
+                "skill.parse.duration_ms", round((time.perf_counter() - parse_start) * 1000, 3)
+            )
 
-        skill_dict = await self.sanitize_skill_privacy(skill_dict, ctx)
-        skill_abstract = self._build_skill_abstract(skill_dict)
+            skill_dict = await self.sanitize_skill_privacy(skill_dict, ctx)
+            skill_abstract = self._build_skill_abstract(skill_dict)
 
-        skill_root_uri = f"{canonical_user_root(ctx)}/skills"
-        context = Context(
-            uri=f"{skill_root_uri}/{skill_dict['name']}",
-            parent_uri=skill_root_uri,
-            is_leaf=False,
-            abstract=skill_abstract,
-            context_type=ContextType.SKILL.value,
-            user=ctx.user,
-            account_id=ctx.account_id,
-            owner_space=user_space_fragment(ctx),
-            meta={
+            skill_root_uri = f"{canonical_user_root(ctx)}/skills"
+            context = Context(
+                uri=f"{skill_root_uri}/{skill_dict['name']}",
+                parent_uri=skill_root_uri,
+                is_leaf=False,
+                abstract=skill_abstract,
+                context_type=ContextType.SKILL.value,
+                user=ctx.user,
+                account_id=ctx.account_id,
+                owner_space=user_space_fragment(ctx),
+                meta={
+                    "name": skill_dict["name"],
+                    "description": skill_dict.get("description", ""),
+                    "allowed_tools": skill_dict.get("allowed_tools", []),
+                    "tags": skill_dict.get("tags", []),
+                    "source_path": skill_dict.get("source_path", ""),
+                },
+            )
+            context.set_vectorize(Vectorize(text=context.abstract))
+
+            overview_start = time.perf_counter()
+            overview = await self._generate_overview(skill_dict, config)
+            telemetry.set(
+                "skill.overview.duration_ms",
+                round((time.perf_counter() - overview_start) * 1000, 3),
+            )
+
+            skill_dir_uri = context.uri
+
+            write_start = time.perf_counter()
+            await self._write_skill_content(
+                viking_fs=viking_fs,
+                skill_dict=skill_dict,
+                skill_dir_uri=skill_dir_uri,
+                abstract=skill_abstract,
+                overview=overview,
+                ctx=ctx,
+            )
+
+            await self._write_auxiliary_files(
+                viking_fs=viking_fs,
+                auxiliary_files=auxiliary_files,
+                base_path=base_path,
+                skill_dir_uri=skill_dir_uri,
+                ctx=ctx,
+            )
+            telemetry.set(
+                "skill.write.duration_ms", round((time.perf_counter() - write_start) * 1000, 3)
+            )
+
+            index_start = time.perf_counter()
+            await self._index_skill(
+                context=context,
+                skill_dir_uri=skill_dir_uri,
+            )
+            telemetry.set(
+                "skill.index.duration_ms", round((time.perf_counter() - index_start) * 1000, 3)
+            )
+            return {
+                "status": "success",
+                "root_uri": skill_dir_uri,
+                "uri": skill_dir_uri,
                 "name": skill_dict["name"],
-                "description": skill_dict.get("description", ""),
-                "allowed_tools": skill_dict.get("allowed_tools", []),
-                "tags": skill_dict.get("tags", []),
-                "source_path": skill_dict.get("source_path", ""),
-            },
-        )
-        context.set_vectorize(Vectorize(text=context.abstract))
-
-        overview_start = time.perf_counter()
-        overview = await self._generate_overview(skill_dict, config)
-        telemetry.set(
-            "skill.overview.duration_ms",
-            round((time.perf_counter() - overview_start) * 1000, 3),
-        )
-
-        skill_dir_uri = context.uri
-
-        write_start = time.perf_counter()
-        await self._write_skill_content(
-            viking_fs=viking_fs,
-            skill_dict=skill_dict,
-            skill_dir_uri=skill_dir_uri,
-            abstract=skill_abstract,
-            overview=overview,
-            ctx=ctx,
-        )
-
-        await self._write_auxiliary_files(
-            viking_fs=viking_fs,
-            auxiliary_files=auxiliary_files,
-            base_path=base_path,
-            skill_dir_uri=skill_dir_uri,
-            ctx=ctx,
-        )
-        telemetry.set(
-            "skill.write.duration_ms", round((time.perf_counter() - write_start) * 1000, 3)
-        )
-
-        index_start = time.perf_counter()
-        await self._index_skill(
-            context=context,
-            skill_dir_uri=skill_dir_uri,
-        )
-        telemetry.set(
-            "skill.index.duration_ms", round((time.perf_counter() - index_start) * 1000, 3)
-        )
-        return {
-            "status": "success",
-            "root_uri": skill_dir_uri,
-            "uri": skill_dir_uri,
-            "name": skill_dict["name"],
-            "auxiliary_files": len(auxiliary_files),
-        }
+                "auxiliary_files": len(auxiliary_files),
+            }
+        finally:
+            if cleanup_path:
+                shutil.rmtree(cleanup_path, ignore_errors=True)
 
     def _parse_skill(
         self,
         data: Any,
         allow_local_path_resolution: bool = True,
-    ) -> tuple[Dict[str, Any], List[Path], Optional[Path]]:
+    ) -> tuple[Dict[str, Any], List[Path], Optional[Path], Optional[Path]]:
         """Parse skill data from various formats."""
         if data is None:
             raise ValueError("Skill data cannot be None")
 
         auxiliary_files = []
         base_path = None
+        cleanup_path = None
 
-        if isinstance(data, str):
-            if allow_local_path_resolution:
-                path_obj = Path(data)
-                if path_obj.exists():
-                    data = self._resolve_skill_path(path_obj)
+        try:
+            if isinstance(data, str):
+                if allow_local_path_resolution:
+                    path_obj = Path(data)
+                    if path_obj.exists():
+                        data, cleanup_path = self._resolve_skill_path(path_obj)
+                else:
+                    deny_direct_local_skill_input(data)
+
+            if isinstance(data, Path):
+                data, cleanup_path = self._resolve_skill_path(data)
+
+            if isinstance(data, Path):
+                if data.is_dir():
+                    # Directory containing SKILL.md
+                    skill_file = data / "SKILL.md"
+                    if not skill_file.exists():
+                        raise ValueError(f"SKILL.md not found in {data}")
+
+                    skill_dict = SkillLoader.load(str(skill_file))
+                    base_path = data
+                    for item in data.rglob("*"):
+                        if item.is_file() and item.name != "SKILL.md":
+                            auxiliary_files.append(item)
+                else:
+                    # Single SKILL.md file
+                    if data.name != "SKILL.md":
+                        raise InvalidArgumentError(
+                            "Skill file must be named SKILL.md",
+                            details={"path": str(data), "expected": "SKILL.md"},
+                        )
+                    skill_dict = SkillLoader.load(str(data))
+            elif isinstance(data, str):
+                # Raw SKILL.md content
+                skill_dict = SkillLoader.parse(data)
+            elif isinstance(data, dict):
+                if is_mcp_format(data):
+                    skill_dict = mcp_to_skill(data)
+                else:
+                    skill_dict = data
             else:
-                deny_direct_local_skill_input(data)
+                raise ValueError(f"Unsupported data type: {type(data)}")
 
-        if isinstance(data, Path):
-            data = self._resolve_skill_path(data)
-
-        if isinstance(data, Path):
-            if data.is_dir():
-                # Directory containing SKILL.md
-                skill_file = data / "SKILL.md"
-                if not skill_file.exists():
-                    raise ValueError(f"SKILL.md not found in {data}")
-
-                skill_dict = SkillLoader.load(str(skill_file))
-                base_path = data
-                for item in data.rglob("*"):
-                    if item.is_file() and item.name != "SKILL.md":
-                        auxiliary_files.append(item)
-            else:
-                # Single SKILL.md file
-                if data.name != "SKILL.md":
-                    raise InvalidArgumentError(
-                        "Skill file must be named SKILL.md",
-                        details={"path": str(data), "expected": "SKILL.md"},
-                    )
-                skill_dict = SkillLoader.load(str(data))
-        elif isinstance(data, str):
-            # Raw SKILL.md content
-            skill_dict = SkillLoader.parse(data)
-        elif isinstance(data, dict):
-            if is_mcp_format(data):
-                skill_dict = mcp_to_skill(data)
-            else:
-                skill_dict = data
-        else:
-            raise ValueError(f"Unsupported data type: {type(data)}")
-
-        skill_dict = self._normalize_skill_dict(skill_dict)
-        self._validate_skill_dict(skill_dict)
-        return skill_dict, auxiliary_files, base_path
+            skill_dict = self._normalize_skill_dict(skill_dict)
+            self._validate_skill_dict(skill_dict)
+            return skill_dict, auxiliary_files, base_path, cleanup_path
+        except Exception:
+            if cleanup_path:
+                shutil.rmtree(cleanup_path, ignore_errors=True)
+            raise
 
     @staticmethod
-    def _resolve_skill_path(path_obj: Path) -> Path:
+    def _resolve_skill_path(path_obj: Path) -> tuple[Path, Optional[Path]]:
         """Resolve uploaded/local skill path, including ZIP archives."""
         if path_obj.is_file() and (
             zipfile.is_zipfile(path_obj) or path_obj.suffix.lower() == ".zip"
@@ -270,6 +282,7 @@ class SkillProcessor:
                 with zipfile.ZipFile(path_obj, "r") as zipf:
                     safe_extract_zip(zipf, temp_dir)
             except zipfile.BadZipFile as exc:
+                shutil.rmtree(temp_dir, ignore_errors=True)
                 raise InvalidArgumentError(
                     f"Invalid skill ZIP archive: {path_obj}",
                     details={"path": str(path_obj), "expected": "zip"},
@@ -278,10 +291,10 @@ class SkillProcessor:
             if not (temp_dir / "SKILL.md").exists():
                 children = [child for child in temp_dir.iterdir() if child.is_dir()]
                 if len(children) == 1 and (children[0] / "SKILL.md").exists():
-                    return children[0]
-            return temp_dir
+                    return children[0], temp_dir
+            return temp_dir, temp_dir
 
-        return path_obj
+        return path_obj, None
 
     @staticmethod
     def _normalize_list_field(value: Any) -> Any:

@@ -207,6 +207,40 @@ async def test_skills_api_update_requires_matching_name(client):
     assert shown["source"]["skill_name"] == "update-skill"
 
 
+async def test_skills_api_update_rolls_back_when_replace_fails(client, monkeypatch):
+    await _add_skill(client, "rollback-skill", "Original description")
+
+    async def _fail_persist(*_args, **_kwargs):
+        raise RuntimeError("source metadata write failed")
+
+    monkeypatch.setattr(
+        "openviking.server.routers.skills.persist_skill_source_metadata",
+        _fail_persist,
+    )
+
+    with pytest.raises(RuntimeError, match="source metadata write failed"):
+        await client.put(
+            "/api/v1/skills/rollback-skill",
+            json={
+                "data": _skill_md(
+                    "rollback-skill",
+                    "Updated description",
+                    "This update should be rolled back.",
+                ),
+                "wait": True,
+            },
+        )
+
+    show_response = await client.get(
+        "/api/v1/skills/rollback-skill",
+        params={"include_content": True},
+    )
+    assert show_response.status_code == 200, show_response.text
+    shown = show_response.json()["result"]
+    assert shown["description"] == "Original description"
+    assert "This update should be rolled back." not in shown["content"]
+
+
 async def test_skills_api_rejects_invalid_skill_names(client):
     invalid_names = [
         "team/sql-helper",

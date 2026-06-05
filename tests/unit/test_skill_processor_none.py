@@ -7,6 +7,8 @@ skill data is None, instead of falling through to the generic
 'Unsupported data type' error.
 """
 
+import shutil
+import zipfile
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -36,16 +38,17 @@ class TestParseSkillNoneData:
     def test_parse_skill_valid_dict_passes(self):
         """A valid dict should not raise."""
         processor = SkillProcessor(vikingdb=None)
-        skill_dict, aux_files, base_path = processor._parse_skill(
+        skill_dict, aux_files, base_path, cleanup_path = processor._parse_skill(
             {"name": "test-skill", "description": "A test skill"}
         )
         assert skill_dict["name"] == "test-skill"
         assert aux_files == []
         assert base_path is None
+        assert cleanup_path is None
 
     def test_parse_skill_normalizes_hyphenated_allowed_tools(self):
         processor = SkillProcessor(vikingdb=None)
-        skill_dict, _, _ = processor._parse_skill(
+        skill_dict, _, _, _ = processor._parse_skill(
             {
                 "name": "test-skill",
                 "description": "A test skill",
@@ -57,6 +60,26 @@ class TestParseSkillNoneData:
         assert skill_dict["allowed_tools"] == ["Read", "Write"]
         assert "allowed-tools" not in skill_dict
         assert skill_dict["tags"] == ["test"]
+
+    def test_parse_skill_zip_returns_cleanup_path(self, tmp_path):
+        processor = SkillProcessor(vikingdb=None)
+        archive = tmp_path / "skill.zip"
+        with zipfile.ZipFile(archive, "w") as zipf:
+            zipf.writestr(
+                "zip-skill/SKILL.md",
+                "---\nname: zip-skill\ndescription: Zip skill\n---\n\n# Zip Skill\n",
+            )
+            zipf.writestr("zip-skill/helper.txt", "helper")
+
+        skill_dict, aux_files, base_path, cleanup_path = processor._parse_skill(archive)
+
+        assert skill_dict["name"] == "zip-skill"
+        assert cleanup_path is not None
+        assert cleanup_path.exists()
+        assert base_path is not None
+        assert base_path.exists()
+        assert len(aux_files) == 1
+        shutil.rmtree(cleanup_path, ignore_errors=True)
 
     @pytest.mark.parametrize("skill_dict", [{}, {"description": "missing name"}])
     def test_validate_skill_dict_requires_name_field(self, skill_dict):
