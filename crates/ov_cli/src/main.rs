@@ -114,23 +114,30 @@ impl CliContext {
 #[command(arg_required_else_help = true)]
 struct Cli {
     /// Output format
-    #[arg(short, long, value_enum, default_value = "table", global = true)]
+    #[arg(
+        short,
+        long,
+        value_enum,
+        default_value = "table",
+        global = true,
+        hide = true
+    )]
     output: OutputFormat,
 
     /// Compact representation, defaults to true - compacts JSON output or uses simplified representation for Table output
-    #[arg(short, long, global = true, default_value = "true")]
+    #[arg(short, long, global = true, default_value = "true", hide = true)]
     compact: bool,
 
     /// Account identifier to send as X-OpenViking-Account
-    #[arg(long, global = true)]
+    #[arg(long, global = true, hide = true)]
     account: Option<String>,
 
     /// User identifier to send as X-OpenViking-User
-    #[arg(long, global = true)]
+    #[arg(long, global = true, hide = true)]
     user: Option<String>,
 
     /// Agent identifier to send as X-OpenViking-Agent
-    #[arg(long = "agent-id", global = true)]
+    #[arg(long = "agent-id", global = true, hide = true)]
     agent_id: Option<String>,
 
     /// Use root API key for admin commands
@@ -138,7 +145,7 @@ struct Cli {
     sudo: bool,
 
     /// Enable HTTP request profiling for this command
-    #[arg(long, global = true)]
+    #[arg(long, global = true, hide = true)]
     profile: bool,
 
     /// Show upload progress (legacy pre-command placement; prefer command-local --progress)
@@ -281,6 +288,11 @@ enum Commands {
         timeout: Option<f64>,
         #[command(flatten)]
         upload_options: UploadCliOptions,
+    },
+    /// [Data] Manage installed skills
+    Skills {
+        #[command(subcommand)]
+        action: SkillCommands,
     },
     /// [Data] List directory contents
     #[command(alias = "list")]
@@ -828,6 +840,109 @@ enum SessionCommands {
 }
 
 #[derive(Subcommand)]
+enum SkillCommands {
+    /// Add skills from a source
+    Add {
+        /// Skill source
+        source: String,
+        /// Install only the named skill(s); use '*' to install all skills in a source
+        #[arg(short = 's', long = "skill", value_name = "NAME", num_args = 1.., value_delimiter = ',')]
+        skills: Vec<String>,
+        /// List available skills in the source without installing
+        #[arg(short = 'l', long = "list")]
+        list: bool,
+        /// Wait until processing is complete
+        #[arg(short = 'w', long)]
+        wait: bool,
+        /// Skip confirmation prompt
+        #[arg(short = 'y', long = "yes")]
+        yes: bool,
+    },
+    /// List installed agent skills
+    #[command(alias = "ls")]
+    List {
+        /// Maximum number of skills to list
+        #[arg(
+            short = 'n',
+            long = "node-limit",
+            alias = "limit",
+            default_value = "1000"
+        )]
+        node_limit: i32,
+    },
+    /// Find installed agent skills semantically
+    Find {
+        /// Search query
+        query: String,
+        /// Maximum number of results
+        #[arg(
+            short = 'n',
+            long = "node-limit",
+            alias = "limit",
+            default_value = "10"
+        )]
+        node_limit: i32,
+        /// Score threshold
+        #[arg(short, long)]
+        threshold: Option<f64>,
+        /// Only include results with specific level(s) (0=abstract, 1=overview, 2=file)
+        #[arg(short = 'L', long = "level", value_delimiter = ',')]
+        level: Option<Vec<i32>>,
+    },
+    /// Show one installed skill
+    Show {
+        /// Skill name
+        name: String,
+        /// Detail level to show (0=abstract, 1=overview, 2=SKILL.md content)
+        #[arg(short = 'L', long = "level", value_parser = clap::value_parser!(i32).range(0..=2))]
+        level: Option<i32>,
+        /// Include files under the skill directory
+        #[arg(short = 'f', long = "files")]
+        files: bool,
+        /// Include source metadata when available
+        #[arg(long = "source")]
+        source: bool,
+        /// Output format for this command
+        #[arg(long = "format", value_parser = ["table", "json"])]
+        format: Option<String>,
+        /// Include full SKILL.md content (legacy alias for --level 2)
+        #[arg(long, hide = true)]
+        content: bool,
+    },
+    /// Update installed skills from their recorded source
+    Update {
+        /// Skill name(s) to update; omit to update all installed skills
+        skills: Vec<String>,
+        /// Wait until processing is complete
+        #[arg(short = 'w', long)]
+        wait: bool,
+        /// Skip confirmation prompt
+        #[arg(short = 'y', long = "yes")]
+        yes: bool,
+    },
+    /// Remove installed skills
+    #[command(alias = "rm", alias = "delete")]
+    Remove {
+        /// Skill name(s) to remove
+        skills: Vec<String>,
+        /// Remove all installed skills
+        #[arg(long = "all")]
+        all: bool,
+        /// Skip confirmation prompt
+        #[arg(short = 'y', long = "yes")]
+        yes: bool,
+    },
+    /// Validate a local SKILL.md file or skill directory
+    Validate {
+        /// SKILL.md file or skill directory path
+        path: String,
+        /// Strict mode; warnings such as name mismatch are reported as errors
+        #[arg(long = "strict")]
+        strict: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum WatchCommands {
     /// List watch tasks (auto-refresh subscriptions)
     Ls {
@@ -1159,6 +1274,7 @@ fn consumes_plain_help_value(token: &str) -> bool {
             | "--level"
             | "--level-limit"
             | "-s"
+            | "--skill"
             | "--session"
             | "--sender"
             | "--message"
@@ -1170,6 +1286,7 @@ fn consumes_plain_help_value(token: &str) -> bool {
             | "--token-budget"
             | "--interval"
             | "--active"
+            | "--format"
     ) || token.starts_with("--output=")
         || token.starts_with("--compact=")
         || token.starts_with("--account=")
@@ -1191,6 +1308,7 @@ fn consumes_plain_help_value(token: &str) -> bool {
         || token.starts_with("--abs-limit=")
         || token.starts_with("--level=")
         || token.starts_with("--level-limit=")
+        || token.starts_with("--skill=")
         || token.starts_with("--session=")
         || token.starts_with("--sender=")
         || token.starts_with("--message=")
@@ -1202,6 +1320,7 @@ fn consumes_plain_help_value(token: &str) -> bool {
         || token.starts_with("--token-budget=")
         || token.starts_with("--interval=")
         || token.starts_with("--active=")
+        || token.starts_with("--format=")
 }
 
 fn canonical_plain_help_token(token: &str) -> &str {
@@ -1224,7 +1343,7 @@ fn allows_plain_help_as_user_input(command: &str) -> bool {
 fn is_plain_help_group(command: &str) -> bool {
     matches!(
         command,
-        "config" | "task" | "admin" | "system" | "session" | "privacy" | "observer"
+        "config" | "task" | "admin" | "system" | "session" | "privacy" | "observer" | "skills"
     )
 }
 
@@ -1261,6 +1380,10 @@ fn pre_parse_requires_cli_config_file(args: &[OsString]) -> bool {
         "privacy" => tokens
             .get(1)
             .map(|token| is_privacy_subcommand(token))
+            .unwrap_or(false),
+        "skills" => tokens
+            .get(1)
+            .map(|token| is_skill_subcommand(token))
             .unwrap_or(false),
         "observer" => tokens
             .get(1)
@@ -1412,6 +1535,22 @@ fn is_watch_subcommand(token: &str) -> bool {
     matches!(
         token,
         "ls" | "show" | "rm" | "pause" | "resume" | "update" | "trigger"
+    )
+}
+
+fn is_skill_subcommand(token: &str) -> bool {
+    matches!(
+        token,
+        "add"
+            | "list"
+            | "ls"
+            | "find"
+            | "show"
+            | "update"
+            | "remove"
+            | "rm"
+            | "delete"
+            | "validate"
     )
 }
 
@@ -1890,6 +2029,92 @@ async fn main() {
                 ctx.with_upload_options(upload_options.merged_with_legacy(legacy_upload_options));
             handlers::handle_add_skill(data, wait, timeout, ctx).await
         }
+        Commands::Skills { action } => match action {
+            SkillCommands::Add {
+                source,
+                skills,
+                list,
+                wait,
+                yes,
+            } => {
+                let client = ctx.get_client();
+                commands::skills::add(
+                    &client,
+                    &source,
+                    skills,
+                    list,
+                    wait,
+                    yes,
+                    ctx.should_show_progress(),
+                    ctx.is_verbose(),
+                    ctx.output_format,
+                    ctx.compact,
+                )
+                .await
+            }
+            SkillCommands::List { node_limit } => {
+                let client = ctx.get_client();
+                commands::skills::list(&client, node_limit, ctx.output_format, ctx.compact).await
+            }
+            SkillCommands::Find {
+                query,
+                node_limit,
+                threshold,
+                level,
+            } => {
+                let client = ctx.get_client();
+                commands::skills::find(
+                    &client,
+                    &query,
+                    node_limit,
+                    threshold,
+                    level,
+                    ctx.output_format,
+                    ctx.compact,
+                )
+                .await
+            }
+            SkillCommands::Show {
+                name,
+                level,
+                files,
+                source,
+                format,
+                content,
+            } => {
+                let client = ctx.get_client();
+                let output_format = format
+                    .as_deref()
+                    .map(OutputFormat::from)
+                    .unwrap_or(ctx.output_format);
+                let level = if content { Some(2) } else { level };
+                commands::skills::show(
+                    &client,
+                    &name,
+                    level,
+                    files,
+                    source,
+                    output_format,
+                    ctx.compact,
+                )
+                .await
+            }
+            SkillCommands::Update { skills, wait, yes } => {
+                let client = ctx.get_client();
+                commands::skills::update(&client, skills, wait, yes, ctx.output_format, ctx.compact)
+                    .await
+            }
+            SkillCommands::Remove { skills, all, yes } => {
+                let client = ctx.get_client();
+                commands::skills::remove(&client, skills, all, yes, ctx.output_format, ctx.compact)
+                    .await
+            }
+            SkillCommands::Validate { path, strict } => {
+                let client = ctx.get_client();
+                commands::skills::validate(&client, &path, strict, ctx.output_format, ctx.compact)
+                    .await
+            }
+        },
         Commands::Relations { uri } => handlers::handle_relations(uri, ctx).await,
         Commands::Link {
             from_uri,
@@ -2174,10 +2399,11 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        Cli, CliContext, Commands, LanguageGateAction, PrivacyCommands, UploadCliOptions,
-        first_command_token, is_language_command_request, language_command_can_run_picker,
-        language_gate_action, language_required_message, legacy_upload_option_error,
-        plain_help_misuse, pre_parse_requires_cli_config_file, preprocess_privacy_args,
+        Cli, CliContext, Commands, LanguageGateAction, PrivacyCommands, SkillCommands,
+        UploadCliOptions, first_command_token, is_language_command_request,
+        language_command_can_run_picker, language_gate_action, language_required_message,
+        legacy_upload_option_error, plain_help_misuse, pre_parse_requires_cli_config_file,
+        preprocess_privacy_args,
     };
     use crate::config::{Config, DEFAULT_SELF_MANAGED_URL};
     use crate::handlers;
@@ -2342,6 +2568,16 @@ mod tests {
             &["ov", "observer", "retrieval"],
             &["ov", "observer", "filesystem"],
             &["ov", "observer", "system"],
+            &["ov", "skills", "add"],
+            &["ov", "skills", "list"],
+            &["ov", "skills", "ls"],
+            &["ov", "skills", "find"],
+            &["ov", "skills", "show"],
+            &["ov", "skills", "update"],
+            &["ov", "skills", "remove"],
+            &["ov", "skills", "rm"],
+            &["ov", "skills", "delete"],
+            &["ov", "skills", "validate"],
         ];
 
         for args in cases {
@@ -2473,6 +2709,160 @@ mod tests {
             }
             _ => panic!("expected add-skill command"),
         }
+
+        assert!(Cli::try_parse_from(["ov", "skills", "add", "./skill", "--progress"]).is_err());
+        assert!(Cli::try_parse_from(["ov", "skills", "update", "--progress"]).is_err());
+    }
+
+    #[test]
+    fn cli_parses_skills_command_group() {
+        let list = Cli::try_parse_from(["ov", "skills", "list", "--limit", "25"])
+            .expect("skills list should parse");
+        match list.command {
+            Commands::Skills {
+                action: SkillCommands::List { node_limit },
+            } => assert_eq!(node_limit, 25),
+            _ => panic!("expected skills list"),
+        }
+
+        let find = Cli::try_parse_from([
+            "ov",
+            "skills",
+            "find",
+            "review code",
+            "--threshold",
+            "0.4",
+            "--level",
+            "0,1",
+        ])
+        .expect("skills find should parse");
+        match find.command {
+            Commands::Skills {
+                action:
+                    SkillCommands::Find {
+                        query,
+                        threshold,
+                        level,
+                        ..
+                    },
+            } => {
+                assert_eq!(query, "review code");
+                assert_eq!(threshold, Some(0.4));
+                assert_eq!(level, Some(vec![0, 1]));
+            }
+            _ => panic!("expected skills find"),
+        }
+
+        let update =
+            Cli::try_parse_from(["ov", "skills", "update", "code-review", "--wait", "--yes"])
+                .expect("skills update should parse");
+        match update.command {
+            Commands::Skills {
+                action:
+                    SkillCommands::Update {
+                        skills, wait, yes, ..
+                    },
+            } => {
+                assert_eq!(skills, vec!["code-review"]);
+                assert!(wait);
+                assert!(yes);
+            }
+            _ => panic!("expected skills update"),
+        }
+
+        let add_selected = Cli::try_parse_from([
+            "ov",
+            "skills",
+            "add",
+            "https://github.com/acme/skills.git",
+            "--skill",
+            "foo",
+            "bar",
+            "--list",
+            "--yes",
+        ])
+        .expect("skills add RFC flags should parse");
+        match add_selected.command {
+            Commands::Skills {
+                action:
+                    SkillCommands::Add {
+                        source,
+                        skills,
+                        list,
+                        yes,
+                        ..
+                    },
+            } => {
+                assert_eq!(source, "https://github.com/acme/skills.git");
+                assert_eq!(skills, vec!["foo", "bar"]);
+                assert!(list);
+                assert!(yes);
+            }
+            _ => panic!("expected skills add"),
+        }
+
+        let show = Cli::try_parse_from([
+            "ov",
+            "skills",
+            "show",
+            "code-review",
+            "--level",
+            "2",
+            "--files",
+            "--source",
+            "--format",
+            "json",
+        ])
+        .expect("skills show RFC flags should parse");
+        match show.command {
+            Commands::Skills {
+                action:
+                    SkillCommands::Show {
+                        level,
+                        files,
+                        source,
+                        format,
+                        ..
+                    },
+            } => {
+                assert_eq!(level, Some(2));
+                assert!(files);
+                assert!(source);
+                assert_eq!(format.as_deref(), Some("json"));
+            }
+            _ => panic!("expected skills show"),
+        }
+
+        let show_global_output =
+            Cli::try_parse_from(["ov", "skills", "show", "code-review", "-o", "json"])
+                .expect("skills show should accept global -o after the subcommand");
+        assert_eq!(show_global_output.output, OutputFormat::Json);
+
+        let remove = Cli::try_parse_from(["ov", "skills", "remove", "foo", "bar", "--yes"])
+            .expect("skills remove --yes should parse");
+        match remove.command {
+            Commands::Skills {
+                action: SkillCommands::Remove { skills, yes, all },
+            } => {
+                assert_eq!(skills, vec!["foo", "bar"]);
+                assert!(yes);
+                assert!(!all);
+            }
+            _ => panic!("expected skills remove"),
+        }
+
+        let validate =
+            Cli::try_parse_from(["ov", "skills", "validate", "./skills/foo", "--strict"])
+                .expect("skills validate --strict should parse");
+        match validate.command {
+            Commands::Skills {
+                action: SkillCommands::Validate { path, strict },
+            } => {
+                assert_eq!(path, "./skills/foo");
+                assert!(strict);
+            }
+            _ => panic!("expected skills validate"),
+        }
     }
 
     #[test]
@@ -2510,6 +2900,15 @@ mod tests {
         let add_resource = Cli::try_parse_from(["ov", "--progress", "add-resource", "./README.md"])
             .expect("legacy pre-command upload flags should parse for add-resource");
         assert!(legacy_upload_option_error(upload_options, &add_resource.command).is_none());
+
+        let skills_add = Cli::try_parse_from(["ov", "--progress", "skills", "add", "./skill"])
+            .expect("hidden legacy flag still parses before runtime validation");
+        assert_eq!(
+            legacy_upload_option_error(upload_options, &skills_add.command),
+            Some(
+                "--progress, --no-progress, and --verbose are only supported for add-resource and add-skill."
+            )
+        );
     }
 
     #[test]

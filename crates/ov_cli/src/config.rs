@@ -47,21 +47,40 @@ pub struct Config {
     pub user: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
-    #[serde(default = "default_timeout", skip_serializing_if = "is_default_timeout")]
+    #[serde(
+        default = "default_timeout",
+        skip_serializing_if = "is_default_timeout"
+    )]
     pub timeout: f64,
-    #[serde(default = "default_output_format", skip_serializing_if = "is_default_output")]
+    #[serde(
+        default = "default_output_format",
+        skip_serializing_if = "is_default_output"
+    )]
     pub output: String,
-    #[serde(default = "default_echo_command", skip_serializing_if = "is_default_echo_command")]
+    #[serde(
+        default = "default_echo_command",
+        skip_serializing_if = "is_default_echo_command"
+    )]
     pub echo_command: bool,
-    #[serde(default = "default_show_progress", skip_serializing_if = "is_default_show_progress")]
+    #[serde(
+        default = "default_show_progress",
+        skip_serializing_if = "is_default_show_progress"
+    )]
     pub show_progress: bool,
-    #[serde(default = "default_verbose", skip_serializing_if = "is_default_verbose")]
+    #[serde(
+        default = "default_verbose",
+        skip_serializing_if = "is_default_verbose"
+    )]
     pub verbose: bool,
     #[serde(default, skip_serializing_if = "is_default_profile")]
     pub profile: bool,
     #[serde(default, skip_serializing_if = "UploadConfig::is_default")]
     pub upload: UploadConfig,
-    #[serde(default, alias = "extra_header", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        alias = "extra_header",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub extra_headers: Option<std::collections::HashMap<String, String>>,
 }
 

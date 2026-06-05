@@ -178,15 +178,12 @@ class SkillProcessor:
             if allow_local_path_resolution:
                 path_obj = Path(data)
                 if path_obj.exists():
-                    if zipfile.is_zipfile(path_obj):
-                        temp_dir = Path(tempfile.mkdtemp())
-                        with zipfile.ZipFile(path_obj, "r") as zipf:
-                            safe_extract_zip(zipf, temp_dir)
-                        data = temp_dir
-                    else:
-                        data = path_obj
+                    data = self._resolve_skill_path(path_obj)
             else:
                 deny_direct_local_skill_input(data)
+
+        if isinstance(data, Path):
+            data = self._resolve_skill_path(data)
 
         if isinstance(data, Path):
             if data.is_dir():
@@ -202,6 +199,11 @@ class SkillProcessor:
                         auxiliary_files.append(item)
             else:
                 # Single SKILL.md file
+                if data.name != "SKILL.md":
+                    raise InvalidArgumentError(
+                        "Skill file must be named SKILL.md",
+                        details={"path": str(data), "expected": "SKILL.md"},
+                    )
                 skill_dict = SkillLoader.load(str(data))
         elif isinstance(data, str):
             # Raw SKILL.md content
@@ -217,6 +219,30 @@ class SkillProcessor:
         skill_dict = self._normalize_skill_dict(skill_dict)
         self._validate_skill_dict(skill_dict)
         return skill_dict, auxiliary_files, base_path
+
+    @staticmethod
+    def _resolve_skill_path(path_obj: Path) -> Path:
+        """Resolve uploaded/local skill path, including ZIP archives."""
+        if path_obj.is_file() and (
+            zipfile.is_zipfile(path_obj) or path_obj.suffix.lower() == ".zip"
+        ):
+            temp_dir = Path(tempfile.mkdtemp())
+            try:
+                with zipfile.ZipFile(path_obj, "r") as zipf:
+                    safe_extract_zip(zipf, temp_dir)
+            except zipfile.BadZipFile as exc:
+                raise InvalidArgumentError(
+                    f"Invalid skill ZIP archive: {path_obj}",
+                    details={"path": str(path_obj), "expected": "zip"},
+                ) from exc
+
+            if not (temp_dir / "SKILL.md").exists():
+                children = [child for child in temp_dir.iterdir() if child.is_dir()]
+                if len(children) == 1 and (children[0] / "SKILL.md").exists():
+                    return children[0]
+            return temp_dir
+
+        return path_obj
 
     @staticmethod
     def _normalize_list_field(value: Any) -> Any:
