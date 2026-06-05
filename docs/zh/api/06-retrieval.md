@@ -56,6 +56,7 @@ OpenViking 提供多种检索方法，包括简单的向量相似度搜索、带
 |------|------|------|--------|------|
 | query | str | 是 | - | 搜索查询字符串 |
 | target_uri | str \| List[str] | 否 | "" | 限制搜索范围到指定的 URI 前缀 |
+| peer_id | str | 否 | None | 稳定交互对象 ID。检索默认 user memory 范围时，会同时检索当前 user memory 和该 peer 的 memory。CLI `--peer-id` 会映射到这个字段 |
 | limit | int | 否 | 10 | 最大返回结果数 |
 | node_limit | int | 否 | None | 可选 HTTP 别名；如果提供，会覆盖 limit |
 | score_threshold | float | 否 | None | 最低相关性分数阈值 |
@@ -172,7 +173,7 @@ results = client.find(
 # 仅在技能中搜索
 results = client.find(
     "web search",
-    target_uri="viking://agent/skills"
+    target_uri="viking://user/skills"
 )
 
 # 在特定项目中搜索
@@ -274,6 +275,7 @@ openviking find "how to authenticate users" -L 1,2
 | target_uri | str \| List[str] | 否 | "" | 限制搜索范围到指定的 URI 前缀 |
 | session | Session | 否 | None | 用于上下文感知搜索的会话（SDK）|
 | session_id | str | 否 | None | 用于上下文感知搜索的会话 ID（HTTP）|
+| peer_id | str | 否 | None | 稳定交互对象 ID。检索默认 user memory 范围时，会同时检索当前 user memory 和该 peer 的 memory。CLI `--peer-id` 会映射到这个字段 |
 | limit | int | 否 | 10 | 最大返回结果数 |
 | node_limit | int | 否 | None | 可选 HTTP 别名；如果提供，会覆盖 limit |
 | score_threshold | float | 否 | None | 最低相关性分数阈值 |

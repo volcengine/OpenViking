@@ -37,7 +37,6 @@ async def test_usage_audit_runtime_subscribes_to_shared_event_bus(tmp_path):
                 "request_id": "req-runtime",
                 "account_id": "acct-runtime",
                 "user_id": "user-runtime",
-                "agent_id": "agent-runtime",
                 "method": "POST",
                 "route": "/api/v1/search/find",
                 "status": "200",

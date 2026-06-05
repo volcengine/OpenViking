@@ -228,11 +228,11 @@ class MissingSidecarBackupVikingFS(FakeBackupVikingFS):
         level_limit=None,
         ctx=None,
     ):
-        if uri == "viking://agent":
+        if uri == "viking://user":
             return [
                 {
                     "rel_path": ".overview.md",
-                    "uri": "viking://agent/.overview.md",
+                    "uri": "viking://user/.overview.md",
                     "isDir": False,
                     "size": 0,
                 }
@@ -341,7 +341,7 @@ class HybridIndexVectorStore(FakeVectorStore):
 
 @pytest.fixture
 def request_ctx() -> RequestContext:
-    return RequestContext(user=UserIdentifier("acct", "alice", "agent1"), role=Role.USER)
+    return RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER)
 
 
 @pytest.fixture
@@ -595,7 +595,7 @@ async def test_backup_restore_contract(temp_ovpack_path: Path, request_ctx: Requ
         "scope": "root",
         "package_type": "backup",
     }
-    assert manifest["scopes"] == ["resources", "user", "agent", "session"]
+    assert manifest["scopes"] == ["resources", "user", "session"]
 
     with pytest.raises(InvalidArgumentError, match=r"must be restored"):
         await import_ovpack(FakeVikingFS(), str(temp_ovpack_path), "viking://", request_ctx)
@@ -606,7 +606,7 @@ async def test_backup_restore_contract(temp_ovpack_path: Path, request_ctx: Requ
         "viking://resources/README.md",
         "viking://session/sess_1/.meta.json",
     ]
-    assert fake_fs.tree_calls == ["viking://resources", "viking://user", "viking://agent"]
+    assert fake_fs.tree_calls == ["viking://resources", "viking://user"]
 
 
 @pytest.mark.asyncio
@@ -625,9 +625,9 @@ async def test_backup_skips_missing_semantic_sidecars(
         manifest = json.loads(zf.read("openviking-backup/_ovpack/manifest.json").decode("utf-8"))
 
     manifest_paths = {entry["path"] for entry in manifest["entries"]}
-    assert "openviking-backup/files/agent/.overview.md" not in names
-    assert "agent/.overview.md" not in manifest_paths
-    assert "agent" in manifest_paths
+    assert "openviking-backup/files/user/.overview.md" not in names
+    assert "user/.overview.md" not in manifest_paths
+    assert "user" in manifest_paths
 
 
 @pytest.mark.asyncio

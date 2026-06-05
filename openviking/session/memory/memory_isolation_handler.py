@@ -1,141 +1,141 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""
-Memory Isolation Handler - 处理记忆的隔离机制
+"""Memory isolation helpers for resolving session memory write targets."""
 
-根据 account namespace policy 和 session 参与者列表，
-计算记忆的写入目录并校验 role_id。
-"""
-
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
-from openviking.core.namespace import to_agent_space, to_user_space
+from openviking.core.peer_id import safe_peer_id
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import MemoryTypeSchema, ResolvedOperation
 from openviking.session.memory.memory_updater import ExtractContext
-from openviking.session.memory.utils.uri import generate_uri
+from openviking.session.memory.utils.uri import generate_uri, render_template
 from openviking_cli.utils import get_logger
-from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
 
 
 @dataclass
 class RoleScope:
-    """Role 作用范围 - 从 messages 推断的可访问范围"""
+    """Participant scope inferred from session messages."""
 
-    user_ids: List[str]  # 参与者中的 user_id 列表
-    agent_ids: List[str]  # 参与者中的 agent_id 列表
+    user_ids: List[str]
+    peer_ids: List[str] = field(default_factory=list)
+
+
+def peer_user_space(user_space: str, peer_id: str) -> str:
+    """Return the user-space fragment for memory about a stable peer."""
+    return f"{user_space}/peers/{peer_id}"
 
 
 class MemoryIsolationHandler:
     """Memory isolation handler."""
 
-    def __init__(self, ctx: RequestContext, extract_context: Any):
+    def __init__(
+        self,
+        ctx: RequestContext,
+        extract_context: Any,
+        allowed_memory_types: Optional[Set[str]] = None,
+        allow_self: bool = True,
+        allowed_peer_ids: Optional[Set[str]] = None,
+    ):
         self.ctx = ctx
         self._extract_context = extract_context
-        config = get_openviking_config()
-        self.role_id_memory_isolation_enabled = (
-            config.memory.role_id_memory_isolation_enabled if config.memory else False
+        self.allowed_memory_types = (
+            {str(item) for item in allowed_memory_types}
+            if allowed_memory_types is not None
+            else None
         )
+        peer_ids = {safe_peer_id(item) for item in allowed_peer_ids or set()}
+        peer_ids = {item for item in peer_ids if item}
+        self.allow_self = bool(allow_self)
+        self.allowed_peer_ids = peer_ids
+        self.allow_peer = bool(peer_ids)
 
     def prepare_messages(self) -> None:
-        """开关关闭时，规范化 messages 中的 role_id，缺失时回退到登录身份。"""
-        if self.role_id_memory_isolation_enabled:
-            return
-        messages = self._extract_context.messages if self._extract_context else []
-        for msg in messages:
-            msg.role_id = None
+        """No-op hook kept for the extraction pipeline."""
+        return
 
     def get_read_scope(self) -> RoleScope:
         user_ids = set()
-        agent_ids = set()
+        peer_ids = set()
 
-        # 先从 messages 中提取 role_id
-        messages = self._extract_context.messages if self._extract_context else []
-        for msg in messages:
-            role = msg.role
-            role_id = msg.role_id
-            if not role_id:
-                continue
-            if role == "user":
-                user_ids.add(role_id)
-            elif role == "assistant":
-                agent_ids.add(role_id)
-
-        # 只有当 messages 中没有提取到 user_ids/agent_ids 时，才添加 ctx 中的 userid/agentid
         if self.ctx and self.ctx.user:
             user_id = self.ctx.user.user_id
-            agent_id = self.ctx.user.agent_id
-            if not user_ids and user_id:
+            if user_id:
                 user_ids.add(user_id)
-            if not agent_ids and agent_id:
-                agent_ids.add(agent_id)
+
+        if self.allow_peer:
+            peer_ids.update(self.allowed_peer_ids)
 
         return RoleScope(
-            user_ids=list(user_ids),
-            agent_ids=list(agent_ids),
+            user_ids=sorted(user_ids),
+            peer_ids=sorted(peer_ids),
         )
 
-    def fill_role_ids(self, item_dict: Dict[str, Any], role_scope: RoleScope) -> None:
-        user_ids = set()
-        agent_ids = set()
+    def fill_identity_fields(self, item_dict: Dict[str, Any], role_scope: RoleScope) -> None:
+        del role_scope
+        if self.ctx and self.ctx.user and self.ctx.user.user_id:
+            item_dict["user_id"] = self.ctx.user.user_id
+        item_dict.pop("user_ids", None)
 
-        def add_role_id(role_ids, role_id, scope_ids):
-            if role_id is None:
-                return
-            if role_id not in scope_ids:
-                return
-            role_ids.add(role_id)
-
-        def add_user_id(user_id):
-            add_role_id(user_ids, user_id, role_scope.user_ids)
-
-        def add_agent_id(agent_id):
-            add_role_id(agent_ids, agent_id, role_scope.agent_ids)
-
-        def check_set_default():
-            if not user_ids:
-                user_ids.add(role_scope.user_ids[0])
-            if not agent_ids:
-                agent_ids.add(role_scope.agent_ids[0])
-
-        if item_dict.get("ranges") is None:
-            add_user_id(item_dict.get("user_id"))
-            add_agent_id(item_dict.get("agent_id"))
-            check_set_default()
-            item_dict["user_id"] = list(user_ids)[0]
-            item_dict["agent_id"] = list(agent_ids)[0]
-
+        peer_id = safe_peer_id(item_dict.get("peer_id"))
+        if peer_id:
+            item_dict["peer_id"] = peer_id
         else:
-            # 使用 ExtractContext 的方法解析 ranges
-            msg_range = self._extract_context.read_message_ranges(item_dict.get("ranges"))
-            # elements 是 List[List[Message]] - 遍历所有消息组
-            for msg_group in msg_range.elements:
-                for msg in msg_group:
-                    if msg.role == "user":
-                        add_user_id(msg.role_id)
-                    elif msg.role == "assistant":
-                        add_agent_id(msg.role_id)
-            check_set_default()
-            item_dict["user_ids"] = list(user_ids)
-            item_dict["agent_ids"] = list(agent_ids)
+            item_dict.pop("peer_id", None)
 
-    def _extract_role_ids_from_messages_range(
-        self, ranges: Optional[str], user_ids: Set[str], agent_ids: Set[str]
-    ):
-        """
-        从 events 的 ranges 字段提取涉及的 role_id。
+    def allows_schema(self, memory_type_schema: MemoryTypeSchema) -> bool:
+        memory_type = getattr(memory_type_schema, "memory_type", "")
+        if self.allowed_memory_types is not None and memory_type not in self.allowed_memory_types:
+            return False
+        return True
 
-        解析 ranges 格式，提取范围内的所有 user 角色的消息参与者。
-        """
+    def _can_write_peer(self, peer_id: str) -> bool:
+        return self.allow_peer and peer_id in self.allowed_peer_ids
+
+    def render_schema_directories(self, memory_type_schema: MemoryTypeSchema) -> List[str]:
+        user_id = self.ctx.user.user_id if self.ctx and self.ctx.user else "default"
+        user_space = user_id
+        user_spaces: List[str] = []
+        if self.allow_self:
+            user_spaces.append(user_space)
+        if self.allow_peer:
+            for peer_id in sorted(self.allowed_peer_ids):
+                user_spaces.append(peer_user_space(user_space, peer_id))
+
+        directories = []
+        for target_user_space in dict.fromkeys(user_spaces):
+            directories.append(
+                render_template(
+                    memory_type_schema.directory,
+                    {"user_space": target_user_space},
+                    self._extract_context,
+                )
+            )
+        return directories
+
+    def _range_targets(self, ranges: Any) -> tuple[bool, List[str]]:
         if not ranges or not self._extract_context:
-            return
+            return False, []
+        try:
+            msg_range = self._extract_context.read_message_ranges(str(ranges))
+        except Exception:
+            logger.warning("Failed to parse memory ranges for peer routing: %s", ranges)
+            return False, []
 
-        messages = self._extract_context.messages
-        if not messages:
-            return []
+        include_self = False
+        peer_ids = set()
+        for msg_group in getattr(msg_range, "elements", []) or []:
+            for msg in msg_group:
+                raw_peer_id = getattr(msg, "peer_id", None)
+                peer_id = safe_peer_id(raw_peer_id)
+                if peer_id:
+                    if self._can_write_peer(peer_id):
+                        peer_ids.add(peer_id)
+                elif self.allow_self:
+                    include_self = True
+        return include_self, sorted(peer_ids)
 
     def calculate_memory_uris(
         self,
@@ -143,27 +143,61 @@ class MemoryIsolationHandler:
         operation: ResolvedOperation,
         extract_context: ExtractContext,
     ):
-        policy = self.ctx.namespace_policy
+        if not self.allows_schema(memory_type_schema):
+            return []
 
-        user_ids = operation.memory_fields.get("user_ids") or [
-            operation.memory_fields.get("user_id")
-        ]
-        agent_ids = operation.memory_fields.get("agent_ids") or [
-            operation.memory_fields.get("agent_id")
-        ]
+        if not self.ctx or not self.ctx.user:
+            return []
+
+        user_id = self.ctx.user.user_id
+        operation.memory_fields["user_id"] = user_id
+
+        peer_ids_to_write: List[str] = []
+        include_self = False
+
+        if operation.memory_fields.get("ranges") is not None:
+            include_self, peer_ids_to_write = self._range_targets(
+                operation.memory_fields.get("ranges"),
+            )
+            operation.memory_fields.pop("peer_id", None)
+        else:
+            raw_peer_id = operation.memory_fields.get("peer_id")
+            peer_id = safe_peer_id(raw_peer_id)
+            if raw_peer_id and not peer_id:
+                return []
+            if peer_id:
+                if not self._can_write_peer(peer_id):
+                    return []
+                peer_ids_to_write = [peer_id]
+                operation.memory_fields["peer_id"] = peer_id
+            elif self.allow_self:
+                include_self = True
+                operation.memory_fields.pop("peer_id", None)
+
+        if not include_self and not peer_ids_to_write:
+            return []
+
         # 文件
         uris = set()
-        for user_id in user_ids:
-            for agent_id in agent_ids:
-                user_space = to_user_space(policy, user_id, agent_id)
-                agent_space = to_agent_space(policy, user_id, agent_id)
-                uri = generate_uri(
+        user_space = user_id
+        if include_self:
+            uris.add(
+                generate_uri(
                     memory_type=memory_type_schema,
                     fields=operation.memory_fields,
                     user_space=user_space,
-                    agent_space=agent_space,
                     extract_context=extract_context,
                 )
-                uris.add(uri)
+            )
+        for peer_id in peer_ids_to_write:
+            target_user_space = peer_user_space(user_space, peer_id)
+            uris.add(
+                generate_uri(
+                    memory_type=memory_type_schema,
+                    fields=operation.memory_fields,
+                    user_space=target_user_space,
+                    extract_context=extract_context,
+                )
+            )
 
         return list(uris)

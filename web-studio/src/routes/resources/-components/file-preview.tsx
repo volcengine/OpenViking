@@ -101,6 +101,7 @@ async function ensureLanguage(lang: string): Promise<void> {
 
 interface FilePreviewProps {
   file: VikingFsEntry | null
+  hideDirectoryHeader?: boolean
   onClose: () => void
   showCloseButton?: boolean
 }
@@ -132,7 +133,7 @@ const DIRECTORY_LEVEL_META: Array<{
 ]
 
 const JSONL_MESSAGE_PREVIEW_LIMIT = 720
-const JSONL_TOOLCALL_STORAGE_KEY = 'web-studio-jsonl-toolcall'
+const JSONL_TOOLCALL_STORAGE_KEY = 'openviking.playground.jsonlToolCall'
 
 type JsonlRecord = {
   error: Error | null
@@ -619,7 +620,7 @@ function getJsonlMessage(record: JsonlRecord): JsonlMessage {
     kind,
     label: toolResult ? 'tool-result' : role,
     lineNo: index + 1,
-    roleId: String(parsed.role_id ?? source.role_id ?? ''),
+    roleId: String(parsed.peer_id ?? source.peer_id ?? ''),
     text,
     time: String(
       parsed.timestamp ?? parsed.created_at ?? source.created_at ?? '',
@@ -725,7 +726,10 @@ function JsonlToolBody({ text, toolName }: { text: string; toolName: string }) {
 function JsonlMarkdownBody({ content }: { content: string }) {
   return (
     <div className="prose prose-sm max-w-none break-words dark:prose-invert dark:prose-pre:bg-muted-foreground/20">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={markdownComponents}
+      >
         {content || 'Empty message'}
       </ReactMarkdown>
     </div>
@@ -892,6 +896,7 @@ function JsonlPreview({ content }: { content: string }) {
 
 export function FilePreview({
   file,
+  hideDirectoryHeader = false,
   onClose,
   showCloseButton = true,
 }: FilePreviewProps) {
@@ -1079,67 +1084,74 @@ export function FilePreview({
   const visibleDirectoryLevels = availableDirectoryLevels.filter((level) =>
     activeDirectoryLevels.has(level.id),
   )
+  const showHeader = !(hideDirectoryHeader && file.isDir)
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      <div className="flex items-center justify-between border-b px-4 py-3">
-        <div className="flex min-w-0 items-center gap-2">
-          <div className="min-w-0">
-            <div className="truncate text-sm font-medium">{file.name}</div>
-            <div className="text-xs text-muted-foreground">
-              {file.isDir ? 'Folder' : formatSize(file.sizeBytes ?? file.size)}{' '}
-              · {file.modTime || '-'}
+      {showHeader ? (
+        <div className="flex min-h-14 items-center justify-between border-b px-4">
+          <div className="flex min-w-0 items-center gap-2">
+            <div className="min-w-0">
+              <div className="truncate text-sm font-medium leading-5">
+                {file.name}
+              </div>
+              {!file.isDir ? (
+                <div className="text-xs leading-5 text-muted-foreground">
+                  {formatSize(file.sizeBytes ?? file.size)} ·{' '}
+                  {file.modTime || '-'}
+                </div>
+              ) : null}
             </div>
+            {editing ? (
+              <div className="flex items-center gap-1">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={saving}
+                  onClick={() => setEditing(false)}
+                >
+                  <XCircle className="mr-1 size-3.5" />
+                  {t('filePreview.cancel')}
+                </Button>
+                <Button
+                  size="sm"
+                  className="active:scale-[0.96] transition-transform"
+                  disabled={saving}
+                  onClick={handleSave}
+                >
+                  {saving ? (
+                    <Loader2 className="mr-1 size-3.5 animate-spin" />
+                  ) : (
+                    <Save className="mr-1 size-3.5" />
+                  )}
+                  {t('filePreview.save')}
+                </Button>
+              </div>
+            ) : (
+              canEdit && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setEditing(true)}
+                >
+                  <Pencil className="mr-1 size-3.5" />
+                  {t('filePreview.edit')}
+                </Button>
+              )
+            )}
           </div>
-          {editing ? (
-            <div className="flex items-center gap-1">
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={saving}
-                onClick={() => setEditing(false)}
-              >
-                <XCircle className="mr-1 size-3.5" />
-                {t('filePreview.cancel')}
-              </Button>
-              <Button
-                size="sm"
-                className="active:scale-[0.96] transition-transform"
-                disabled={saving}
-                onClick={handleSave}
-              >
-                {saving ? (
-                  <Loader2 className="mr-1 size-3.5 animate-spin" />
-                ) : (
-                  <Save className="mr-1 size-3.5" />
-                )}
-                {t('filePreview.save')}
-              </Button>
-            </div>
-          ) : (
-            canEdit && (
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setEditing(true)}
-              >
-                <Pencil className="mr-1 size-3.5" />
-                {t('filePreview.edit')}
-              </Button>
-            )
-          )}
+          {showCloseButton ? (
+            <Button
+              size="icon"
+              variant="ghost"
+              className="size-10"
+              onClick={onClose}
+            >
+              <X className="size-4" />
+            </Button>
+          ) : null}
         </div>
-        {showCloseButton ? (
-          <Button
-            size="icon"
-            variant="ghost"
-            className="size-10"
-            onClick={onClose}
-          >
-            <X className="size-4" />
-          </Button>
-        ) : null}
-      </div>
+      ) : null}
 
       {editing && preview?.content != null ? (
         <div className="h-full min-h-0 p-2">

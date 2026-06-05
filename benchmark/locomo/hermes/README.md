@@ -22,7 +22,7 @@ cd benchmark/locomo/hermes
 - LoCoMo dataset at `../data/locomo10.json`, or set `LOCOMO_JSON=/path/to/locomo10.json`.
 - Judge model credentials through `JUDGE_TOKEN` or `ARK_API_KEY`.
 
-The default OpenViking benchmark setup is local and does not require an API key. For non-default namespaces or authenticated servers, set `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, `OPENVIKING_AGENT`, and `OPENVIKING_API_KEY` consistently for import and eval.
+The default OpenViking benchmark setup is local and does not require an API key. For non-default namespaces or authenticated servers, set `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, and `OPENVIKING_API_KEY` consistently for import and eval.
 
 ## Fresh Runs
 

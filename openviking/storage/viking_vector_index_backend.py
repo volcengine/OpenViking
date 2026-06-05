@@ -44,7 +44,6 @@ MEMORY_DEDUP_OUTPUT_FIELDS = [
     "level",
     "account_id",
     "owner_user_id",
-    "owner_agent_id",
 ]
 
 FETCH_BY_URI_OUTPUT_FIELDS = [
@@ -61,7 +60,6 @@ FETCH_BY_URI_OUTPUT_FIELDS = [
     "abstract",
     "account_id",
     "owner_user_id",
-    "owner_agent_id",
 ]
 
 URI_REWRITE_OUTPUT_FIELDS = [
@@ -356,7 +354,7 @@ class _SingleAccountBackend:
                 order_desc=order_desc,
             )
         except Exception as e:
-            logger.error("Error querying collection: %s", e)
+            logger.error("Error querying collection: %s", e, exc_info=True)
             return []
 
     async def search(

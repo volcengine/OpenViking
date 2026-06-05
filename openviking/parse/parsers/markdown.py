@@ -18,6 +18,7 @@ The parser handles scenarios:
 """
 
 import hashlib
+import os
 import re
 import time
 from pathlib import Path
@@ -41,6 +42,19 @@ for extensions in IANA_MEDIA_TYPE_TO_EXTENSION.values():
 KNOWN_EXTENSIONS.update(CODE_EXTENSIONS)
 KNOWN_EXTENSIONS.update(DOCUMENTATION_EXTENSIONS)
 KNOWN_EXTENSIONS.update(IGNORE_EXTENSIONS)
+
+# Markdown link/image in one pass: optional leading "!" marks images.
+# Scope (per spec, YAGNI): only inline [..](..)/![..](..) are handled. Reference-style
+# links, HTML, and links inside fenced/indented code blocks are NOT excluded — a
+# code-block link to an existing relative .md could be rewritten. Acceptable for now.
+# NOTE: `[^)]+` stops at the first ")", so a target whose filename literally
+# contains ")" is captured truncated; it then fails the on-disk existence check
+# and is left unchanged (conservative). Such filenames are unsupported.
+_MD_LINK_RE = re.compile(r"(!?)\[([^\]]*)\]\(([^)]+)\)")
+# Splits a link target into its path part and optional "#fragment"/"?query" suffix.
+_MD_FRAGMENT_RE = re.compile(r"^([^#?]*)([#?].*)?$")
+# Extensions whose targets become directories on ingest (see _rewrite_single_link).
+_MD_DIR_EXTS = {".md", ".markdown", ".mdown", ".mkd"}
 
 
 def _smart_stem(path_or_name: str | Path) -> str:
@@ -66,6 +80,34 @@ def _smart_stem(path_or_name: str | Path) -> str:
 
 
 logger = get_logger(__name__)
+
+
+def _gh_slug(text: str) -> str:
+    """GitHub-style heading slug: lowercase, strip punctuation, spaces→'-', keep CJK."""
+    s = text.strip().lower()
+    s = re.sub(r"[^\w\s-]", "", s)
+    s = re.sub(r"\s+", "-", s)
+    return s
+
+
+class _InMemoryFS:
+    """Minimal write-only VikingFS stand-in to capture a parser's split layout
+    without touching the real store (used for in-memory anchor location)."""
+
+    def __init__(self) -> None:
+        self.files: Dict[str, Any] = {}
+        self._n = 0
+
+    def create_temp_uri(self) -> str:
+        self._n += 1
+        return f"mem://t{self._n}"
+
+    async def mkdir(self, uri: str, exist_ok: bool = False, **kw) -> None:
+        return None
+
+    async def write_file(self, uri: str, content: Any) -> None:
+        self.files[uri] = content
+
 
 if TYPE_CHECKING:
     pass
@@ -119,6 +161,9 @@ class MarkdownParser(BaseParser):
 
         # Cache for VikingFS instance
         self._viking_fs = None
+
+        # Relative-link rewrite context, set per parse_content() call.
+        self._rewrite_ctx = None
 
     @property
     def supported_extensions(self) -> List[str]:
@@ -174,7 +219,8 @@ class MarkdownParser(BaseParser):
             source_path: Optional source file path
             instruction: Processing instruction (unused in v5.0)
             base_dir: Base directory for relative paths
-            **kwargs: Additional runtime options
+            **kwargs: Additional runtime options, incl. resource_name/source_name and
+                enable_link_rewrite/link_rewrite_root (the latter set by DirectoryParser)
 
         Returns:
             ParseResult with temp_dir_path (Viking URI)
@@ -229,6 +275,20 @@ class MarkdownParser(BaseParser):
             # Create root directory
             root_dir = f"{temp_uri}/{self._sanitize_for_path(doc_title)}"
 
+            # Set up relative-link rewrite context consumed by _write_section.
+            # Link rewriting is opt-in via kwargs (DirectoryParser sets these);
+            # parse_content keeps the base **kwargs signature rather than adding
+            # dedicated parameters, so read them from kwargs here.
+            self._rewrite_ctx = {
+                "enabled": bool(kwargs.get("enable_link_rewrite", False)),
+                "source_path": source_path,
+                "doc_name": self._sanitize_for_path(doc_title),
+                "root_dir": root_dir,
+                # Rewrite is driven only by DirectoryParser, which passes the ingest
+                # root. Single-file ingestion never sets this, so it never rewrites.
+                "import_root": kwargs.get("link_rewrite_root"),
+            }
+
             # Find all headings
             headings = self._find_headings(content)
             logger.info(f"[MarkdownParser] Found {len(headings)} headings")
@@ -270,6 +330,9 @@ class MarkdownParser(BaseParser):
         except Exception as e:
             logger.error(f"[MarkdownParser] Parse failed: {e}", exc_info=True)
             raise
+        finally:
+            # Rewrite context lives exactly one parse_content call.
+            self._rewrite_ctx = None
 
     # ========== Helper Methods ==========
 
@@ -422,6 +485,191 @@ class MarkdownParser(BaseParser):
             return f"{safe[: max_length - 9]}_{hash_suffix}"
         return safe
 
+    @staticmethod
+    def _doc_landing(layout: Dict[str, str]) -> Tuple[str, bool]:
+        """目标 .md 入库后的落点（相对其磁盘父目录），完全由真实 layout 推断，不对
+        parser 是否目录化做任何假设：
+
+        - 所有 section 收拢在同一公共目录下 → (该目录, True)，链接指向目录；
+        - 否则即单个裸文件（如未来小 .md 不再拆成目录）→ (该文件, False)，指向文件。
+
+        落点是文件还是目录、叫什么，全部由 in-memory parse 出来的 layout 结构决定；
+        parse_content 怎么改，这里自动跟随。
+        """
+        keys = list(layout)
+        first_segs = {k.split("/", 1)[0] for k in keys}
+        if len(first_segs) == 1 and all("/" in k for k in keys):
+            return first_segs.pop(), True
+        return keys[0], False
+
+    async def _rewrite_single_link(
+        self, link: str, src_dir: str, import_root_abs: str, source_new_dir: str
+    ) -> str:
+        """Rewrite one link target; return original `link` if it must not change."""
+        raw = link.strip()
+        if (
+            not raw
+            or raw.startswith("#")
+            or raw.startswith("/")
+            or raw.startswith("mailto:")
+            or "://" in raw
+        ):
+            return link
+
+        m = _MD_FRAGMENT_RE.match(raw)
+        path_part = m.group(1)
+        suffix = m.group(2) or ""
+        if not path_part:
+            return link  # pure fragment/query
+
+        target_disk = os.path.normpath(os.path.join(src_dir, path_part))
+        if not os.path.exists(target_disk):
+            return link
+        try:
+            if os.path.commonpath([import_root_abs, target_disk]) != import_root_abs:
+                return link
+        except ValueError:
+            return link  # different drives, etc.
+
+        def _to_rel(new_disk: str, keep_suffix: bool) -> str:
+            r = os.path.relpath(new_disk, source_new_dir).replace(os.sep, "/")
+            return (r + suffix) if keep_suffix else (r if r.endswith("/") else r + "/")
+
+        ext = os.path.splitext(target_disk)[1].lower()
+        if ext not in _MD_DIR_EXTS:
+            # Non-.md target (image, sibling directory, ...): keep its path; only the
+            # source's added depth shifts the relative prefix.
+            return _to_rel(target_disk, keep_suffix=True)
+
+        # .md target → on ingest MarkdownParser turns it into some layout (a directory
+        # of section files, or — in future variants — a single file). Resolve against
+        # that REAL layout from an in-memory parse with the SAME parser: the landing
+        # (file vs directory), its name and the section files all come straight from
+        # the parser, so NOTHING about ingest is assumed here. Whatever parse_content
+        # does, running it in-memory tells us the final result.
+        layout = await self._target_split_files(target_disk)
+        if not layout:
+            return link  # target unparsable → leave the link untouched
+
+        target_parent = os.path.dirname(target_disk)
+        landing, landing_is_dir = self._doc_landing(layout)
+
+        if suffix:
+            # A) #anchor uniquely located in a real section → point at that section file.
+            if suffix.startswith("#"):
+                anchor = suffix[1:]
+                hits = [
+                    rel
+                    for rel, text in layout.items()
+                    if any(
+                        _gh_slug(h) == anchor
+                        for h in re.findall(r"^#{1,6}\s+(.+)$", text, re.M)
+                    )
+                ]
+                if len(hits) == 1:
+                    return _to_rel(
+                        os.path.join(target_parent, hits[0]), keep_suffix=True
+                    )
+            # B) Single-file document (a bare file, or a directory holding exactly one
+            #    file) → the anchor/query lives in that one file; keep the suffix.
+            if len(layout) == 1:
+                return _to_rel(
+                    os.path.join(target_parent, next(iter(layout))), keep_suffix=True
+                )
+
+        # C) Single bare file with no suffix to place (e.g. a future small .md kept as
+        #    a file) → point at the file itself (empty suffix ⇒ no trailing slash).
+        if not landing_is_dir:
+            return _to_rel(os.path.join(target_parent, landing), keep_suffix=True)
+        # D) Directory landing → point at the directory and drop any suffix.
+        return _to_rel(os.path.join(target_parent, landing), keep_suffix=False)
+
+    async def _rewrite_relative_links(
+        self,
+        content: str,
+        *,
+        source_path: str,
+        doc_name: str,
+        section_subpath: str,
+        import_root: str,
+    ) -> str:
+        """Rewrite all relative markdown links/images in `content` (disk-coordinate)."""
+        src_dir = os.path.dirname(os.path.abspath(source_path))
+        import_root_abs = os.path.abspath(import_root)
+        source_new_dir = os.path.join(src_dir, doc_name, section_subpath)
+
+        out: List[str] = []
+        last = 0
+        for match in _MD_LINK_RE.finditer(content):
+            out.append(content[last : match.start()])
+            bang, text, link = match.group(1), match.group(2), match.group(3)
+            new_link = await self._rewrite_single_link(
+                link, src_dir, import_root_abs, source_new_dir
+            )
+            out.append(f"{bang}[{text}]({new_link})")
+            last = match.end()
+        out.append(content[last:])
+        return "".join(out)
+
+    async def _target_split_files(self, target_path: str) -> Optional[Dict[str, str]]:
+        """The target's real ingest layout {"<doc_dir>/<section...>": text} via an
+        in-memory parse, cached per parse_content() call. None on parse failure."""
+        ctx = self._rewrite_ctx or {}
+        cache = ctx.setdefault("_split_cache", {})
+        key = os.path.abspath(target_path)
+        if key not in cache:
+            cache[key] = await self._inmemory_split_files(target_path)
+        return cache[key]
+
+    async def _inmemory_split_files(self, target_path: str) -> Optional[Dict[str, str]]:
+        """Parse target into an in-memory FS; return {"<doc_dir>/<section...>": text}
+        keyed by path relative to the temp root, i.e. INCLUDING the doc-root dir
+        segment so callers can map each key straight onto the target's parent dir."""
+        try:
+            fs = _InMemoryFS()
+            sub_parser = MarkdownParser(self.extract_frontmatter, self.config)
+            # _get_viking_fs() ignores self._viking_fs and returns the global
+            # singleton, so override it on the instance to use our in-memory FS.
+            sub_parser._get_viking_fs = lambda: fs  # type: ignore[method-assign]
+            result = await sub_parser.parse(target_path)
+            root = (result.temp_dir_path or "").rstrip("/")
+            out: Dict[str, str] = {}
+            for uri, content in fs.files.items():
+                if not isinstance(content, str):
+                    continue
+                # rel = "<doc_dir>/<section...>" kept whole (temp_dir_path is the temp
+                # root, WITHOUT the doc-root dir), so it maps directly onto the
+                # target's parent directory on disk.
+                rel = uri[len(root) :].lstrip("/") if uri.startswith(root) else uri
+                out[rel] = content
+            return out
+        except Exception as exc:
+            logger.debug(f"[_inmemory_split_files] failed for {target_path}: {exc}")
+            return None
+
+    def _section_subpath(self, uri: str, root_dir: str) -> str:
+        """Return the section file's directory path relative to root_dir (POSIX)."""
+        section_dir = uri.rsplit("/", 1)[0]
+        root = root_dir.rstrip("/")
+        if section_dir == root:
+            return ""
+        if section_dir.startswith(root + "/"):
+            return section_dir[len(root) + 1 :]
+        return ""
+
+    async def _write_section(self, uri: str, content: str) -> None:
+        """Write a markdown section file, rewriting relative links when enabled."""
+        ctx = self._rewrite_ctx
+        if ctx and ctx.get("enabled") and ctx.get("source_path") and ctx.get("import_root"):
+            content = await self._rewrite_relative_links(
+                content,
+                source_path=ctx["source_path"],
+                doc_name=ctx["doc_name"],
+                section_subpath=self._section_subpath(uri, ctx["root_dir"]),
+                import_root=ctx["import_root"],
+            )
+        await self._get_viking_fs().write_file(uri, content)
+
     # ========== New Parsing Logic (v5.0) ==========
 
     async def _parse_and_create_structure(
@@ -468,7 +716,7 @@ class MarkdownParser(BaseParser):
         # Small document: save as single file (check both token and char limits)
         if estimated_tokens <= max_size and len(content) <= max_chars:
             file_path = f"{root_dir}/{doc_name}.md"
-            await viking_fs.write_file(file_path, content)
+            await self._write_section(file_path, content)
             logger.debug(f"[MarkdownParser] Small document saved as: {file_path}")
             return
 
@@ -477,7 +725,7 @@ class MarkdownParser(BaseParser):
             logger.info("[MarkdownParser] No headings, splitting by paragraphs")
             parts = self._smart_split_content(content, max_size)
             for part_idx, part in enumerate(parts, 1):
-                await viking_fs.write_file(f"{root_dir}/{doc_name}_{part_idx}.md", part)
+                await self._write_section(f"{root_dir}/{doc_name}_{part_idx}.md", part)
             logger.debug(f"[MarkdownParser] Split into {len(parts)} parts")
             return
 
@@ -681,7 +929,7 @@ class MarkdownParser(BaseParser):
 
         # Fits in one file (check both token and char limits)
         if tokens <= max_size and len(content_text) <= self.config.max_section_chars:
-            await viking_fs.write_file(f"{parent_dir}/{name}.md", content_text)
+            await self._write_section(f"{parent_dir}/{name}.md", content_text)
             logger.debug(f"[MarkdownParser] Saved: {name}.md")
             return
 
@@ -732,7 +980,7 @@ class MarkdownParser(BaseParser):
         logger.info(f"[MarkdownParser] Splitting: {name}")
         parts = self._smart_split_content(content, max_size)
         for i, part in enumerate(parts, 1):
-            await viking_fs.write_file(f"{section_dir}/{name}_{i}.md", part)
+            await self._write_section(f"{section_dir}/{name}_{i}.md", part)
 
     def _generate_merged_filename(self, sections: List[Tuple[str, str, int]]) -> str:
         """
@@ -788,12 +1036,12 @@ class MarkdownParser(BaseParser):
             max_size = self.config.max_section_size or self.DEFAULT_MAX_SECTION_SIZE
             parts = self._smart_split_content(content, max_size)
             for i, part in enumerate(parts, 1):
-                await viking_fs.write_file(f"{parent_dir}/{name}_{i}.md", part)
+                await self._write_section(f"{parent_dir}/{name}_{i}.md", part)
             logger.debug(
                 f"[MarkdownParser] Merged then split: {name} ({len(sections)} sections → {len(parts)} parts)"
             )
         else:
-            await viking_fs.write_file(f"{parent_dir}/{name}.md", content)
+            await self._write_section(f"{parent_dir}/{name}.md", content)
             logger.debug(f"[MarkdownParser] Merged: {name}.md ({len(sections)} sections)")
 
     def _get_section_info(

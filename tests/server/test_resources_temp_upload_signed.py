@@ -19,8 +19,8 @@ def _reset_token_store():
     upload_token_store.clear()
 
 
-def _issue(account_id: str = "acct", user_id: str = "user", agent_id: str = "agent"):
-    token, _ = upload_token_store.issue(account_id, user_id, agent_id, ttl_seconds=600)
+def _issue(account_id: str = "acct", user_id: str = "user"):
+    token, _ = upload_token_store.issue(account_id, user_id, ttl_seconds=600)
     return token
 
 

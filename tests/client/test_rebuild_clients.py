@@ -1,5 +1,7 @@
 import asyncio
 import threading
+import zipfile
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -18,6 +20,61 @@ from openviking_cli.utils.config import OPENVIKING_CLI_CONFIG_ENV
 def clear_ovcli_config(monkeypatch):
     monkeypatch.delenv(OPENVIKING_CLI_CONFIG_ENV, raising=False)
     monkeypatch.setattr(http_module, "load_ovcli_config", lambda: None)
+
+
+def test_async_http_client_zip_directory_skips_symlinked_entries(tmp_path):
+    root = tmp_path / "upload"
+    root.mkdir()
+    (root / "keep.txt").write_text("keep", encoding="utf-8")
+    nested = root / "nested"
+    nested.mkdir()
+    (nested / "nested.txt").write_text("nested", encoding="utf-8")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside", encoding="utf-8")
+
+    try:
+        (root / "inside-link.txt").symlink_to(root / "keep.txt")
+        (root / "outside-link.txt").symlink_to(outside)
+        (root / "dir-link").symlink_to(tmp_path, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlinks are not available in this environment: {exc}")
+
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    zip_path = Path(client._zip_directory(str(root)))
+    try:
+        with zipfile.ZipFile(zip_path) as zipf:
+            names = sorted(zipf.namelist())
+    finally:
+        zip_path.unlink(missing_ok=True)
+
+    assert names == ["keep.txt", "nested/nested.txt"]
+
+
+def test_async_http_client_zip_directory_warns_when_archive_is_empty(tmp_path):
+    root = tmp_path / "upload"
+    root.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside", encoding="utf-8")
+
+    try:
+        (root / "outside-link.txt").symlink_to(outside)
+    except OSError as exc:
+        pytest.skip(f"symlinks are not available in this environment: {exc}")
+
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    with patch.object(http_module.logger, "warning") as mock_warning:
+        zip_path = Path(client._zip_directory(str(root)))
+    try:
+        with zipfile.ZipFile(zip_path) as zipf:
+            names = sorted(zipf.namelist())
+    finally:
+        zip_path.unlink(missing_ok=True)
+
+    assert names == []
+    mock_warning.assert_called_once_with(
+        "Created empty directory upload archive for %s",
+        root,
+    )
 
 
 async def test_async_openviking_reindex_forwards_to_local_client(tmp_path):
@@ -97,7 +154,7 @@ async def test_local_client_batch_add_messages_forwards_to_session():
 
     client = LocalClient.__new__(LocalClient)
     client._service = SimpleNamespace(sessions=FakeSessions())
-    client._ctx = SimpleNamespace(user=SimpleNamespace(user_id="user-1", agent_id="agent-1"))
+    client._ctx = SimpleNamespace(user=SimpleNamespace(user_id="user-1"))
 
     result = await LocalClient.batch_add_messages(
         client,
@@ -106,7 +163,7 @@ async def test_local_client_batch_add_messages_forwards_to_session():
             {
                 "role": "user",
                 "content": "hello",
-                "role_id": "explicit-user",
+                "peer_id": "explicit-user",
                 "created_at": "2026-05-28T00:00:00+00:00",
             },
             {"role": "assistant", "parts": [{"type": "text", "text": "hi"}]},
@@ -115,11 +172,11 @@ async def test_local_client_batch_add_messages_forwards_to_session():
 
     assert result == {"session_id": "batch-session", "message_count": 2, "added": 2}
     assert fake_session.messages[0]["role"] == "user"
-    assert fake_session.messages[0]["role_id"] == "explicit-user"
+    assert fake_session.messages[0]["peer_id"] == "explicit-user"
     assert fake_session.messages[0]["created_at"] == "2026-05-28T00:00:00+00:00"
     assert fake_session.messages[0]["parts"][0].text == "hello"
     assert fake_session.messages[1]["role"] == "assistant"
-    assert fake_session.messages[1]["role_id"] == "agent-1"
+    assert fake_session.messages[1]["peer_id"] is None
     assert fake_session.messages[1]["parts"][0].text == "hi"
 
 
@@ -135,7 +192,7 @@ async def test_async_http_client_batch_add_messages_posts_batch_payload():
         {
             "role": "user",
             "content": "hello",
-            "role_id": "explicit-user",
+            "peer_id": "explicit-user",
             "created_at": "2026-05-28T00:00:00+00:00",
         },
         {"role": "assistant", "parts": [{"type": "text", "text": "hi"}]},
@@ -203,7 +260,7 @@ def test_sync_http_client_batch_add_messages_forwards_to_async_client():
         {
             "role": "user",
             "content": "hello",
-            "role_id": "explicit-user",
+            "peer_id": "explicit-user",
             "created_at": "2026-05-28T00:00:00+00:00",
         },
         {"role": "assistant", "parts": [{"type": "text", "text": "hi"}]},

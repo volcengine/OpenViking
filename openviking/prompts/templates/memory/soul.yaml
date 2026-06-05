@@ -1,7 +1,7 @@
 memory_type: soul
 description: |
   Agent soul: core truths, boundaries, vibe, and continuity - defines who the agent is.
-directory: "viking://agent/{{ agent_space }}/memories"
+directory: "viking://user/{{ user_space }}/memories"
 filename_template: "soul.md"
 enabled: true
 operation_mode: "upsert"

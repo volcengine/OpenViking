@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from typing import Any
+
 import pytest
 
 pytest.importorskip("langchain_core")
@@ -33,11 +36,29 @@ from openviking.integrations.langchain.history import (
 )
 from openviking.integrations.langchain.middleware import _message_signature
 from openviking.integrations.langchain.tools import _archive_grep_pattern
+from openviking_cli.exceptions import InvalidArgumentError
 
 
 def test_langchain_client_exposes_apply_commit_policy_without_legacy_alias():
     assert hasattr(client_helpers, "apply_commit_policy")
     assert not hasattr(client_helpers, "maybe_commit_session")
+
+
+def _tool_schema(tool: Any) -> dict[str, Any]:
+    args_schema = tool.args_schema
+    if hasattr(args_schema, "model_json_schema"):
+        return args_schema.model_json_schema()
+    return args_schema.schema()
+
+
+def _schema_enums(schema: dict[str, Any]) -> set[str]:
+    values: set[str] = set()
+    if "enum" in schema:
+        values.update(str(value) for value in schema["enum"])
+    for child_key in ("anyOf", "oneOf", "allOf"):
+        for child in schema.get(child_key, []):
+            values.update(_schema_enums(child))
+    return values
 
 
 def test_retriever_returns_langchain_documents():
@@ -60,6 +81,21 @@ def test_retriever_returns_langchain_documents():
         "viking://user/memories/preferences.md",
     }
     assert all(doc.page_content for doc in docs)
+
+
+def test_retriever_passes_peer_id_to_retrieval():
+    client = InMemoryOpenVikingClient(
+        {"viking://user/memories/preferences.md": "The peer prefers azure deploys."}
+    )
+    retriever = OpenVikingRetriever(
+        client=client,
+        target_uri="viking://user/memories",
+        peer_id="peer-1",
+    )
+
+    retriever.invoke("azure")
+
+    assert client.find_calls[-1]["peer_id"] == "peer-1"
 
 
 def test_create_openviking_tools_exposes_common_viking_primitives():
@@ -90,6 +126,7 @@ def test_create_openviking_tools_exposes_common_viking_primitives():
     )
 
     store_tool = next(tool for tool in tools if tool.name == "viking_store")
+    assert "explicit durable memories" in store_tool.description
     stored = store_tool.invoke(
         {
             "messages": [
@@ -104,6 +141,41 @@ def test_create_openviking_tools_exposes_common_viking_primitives():
     assert len(client.sessions["test-session"]) == 2
     assert client.sessions["test-session"][0]["parts"][0]["text"] == (
         "Remember that azure is preferred."
+    )
+
+    add_resource_tool = next(tool for tool in tools if tool.name == "viking_add_resource")
+    assert "resource-management operation" in add_resource_tool.description
+
+    health_tool = next(tool for tool in tools if tool.name == "viking_health")
+    health = health_tool.invoke({})
+    assert '"backend": "OpenViking"' in health
+    assert "VikingDB is internal vector/index storage" in health
+
+
+def test_create_openviking_tools_passes_peer_id_without_exposing_tool_arg():
+    client = InMemoryOpenVikingClient(
+        {"viking://user/memories/profile.md": "The peer likes LangGraph agents."}
+    )
+    tools = {
+        tool.name: tool for tool in create_openviking_tools(client=client, peer_id="peer-tools")
+    }
+
+    assert "peer_id" not in _tool_schema(tools["viking_find"]).get("properties", {})
+
+    tools["viking_find"].invoke({"query": "LangGraph"})
+    tools["viking_search"].invoke({"query": "LangGraph", "session_id": "tool-session"})
+    tools["viking_store"].invoke(
+        {
+            "messages": [{"role": "user", "content": "Remember peer tools."}],
+            "commit": False,
+        }
+    )
+
+    assert client.find_calls[-1]["peer_id"] == "peer-tools"
+    assert client.search_calls[-1]["peer_id"] == "peer-tools"
+    assert any(
+        messages and messages[0].get("peer_id") == "peer-tools"
+        for messages in client.sessions.values()
     )
 
 
@@ -159,11 +231,104 @@ def test_openviking_tools_read_l0_l1_l2_content_modes():
             "content_mode": "read",
         }
     )
+    uppercase = read_tool.invoke(
+        {
+            "uris": "viking://resources/runbooks/release.md",
+            "content_mode": "READ",
+        }
+    )
 
     assert '"content_mode": "abstract"' in abstract
     assert '"content_mode": "overview"' in overview
     assert '"content_mode": "read"' in full
+    assert '"content_mode": "read"' in uppercase
     assert "Release runbook full details." in full
+
+
+def test_openviking_read_tool_schema_describes_file_and_directory_contract():
+    client = InMemoryOpenVikingClient()
+    tools = {tool.name: tool for tool in create_openviking_tools(client=client)}
+    read_tool = tools["viking_read"]
+    browse_tool = tools["viking_browse"]
+
+    read_schema = _tool_schema(read_tool)
+    content_mode_schema = read_schema["properties"]["content_mode"]
+
+    assert "Directory URIs are not readable" in read_tool.description
+    assert "file/document" in read_schema["properties"]["uris"]["description"]
+    assert "viking_browse" in read_tool.description
+    assert _schema_enums(content_mode_schema) == {"abstract", "overview", "read"}
+    assert "List child entries" in browse_tool.description
+    assert "namespace or directory" in _tool_schema(browse_tool)["properties"]["uri"]["description"]
+
+
+def test_openviking_tool_schemas_describe_model_visible_arguments():
+    client = InMemoryOpenVikingClient()
+    tools = create_openviking_tools(client=client, profile="admin", allow_forget=True)
+
+    for tool in tools:
+        schema = _tool_schema(tool)
+        for name, property_schema in schema.get("properties", {}).items():
+            assert property_schema.get("description"), f"{tool.name}.{name} lacks a description"
+
+
+def test_openviking_health_tool_returns_safe_summary():
+    class StatusClient(InMemoryOpenVikingClient):
+        def get_status(self) -> dict[str, Any]:
+            return {
+                "status": "degraded",
+                "state_detail": "service is starting up and loading initial data from the persistence layer",
+                "hostname": "internal-openviking.local",
+                "database_url": "postgres://user:secret@example.internal/db",
+                "components": {"storage": {"status": "ok"}},
+            }
+
+    tools = {tool.name: tool for tool in create_openviking_tools(client=StatusClient())}
+    payload = json.loads(tools["viking_health"].invoke({}))
+
+    assert payload["backend"] == "OpenViking"
+    assert payload["state"] == "degraded"
+    assert payload["healthy"] is False
+    assert payload["summary"] == {
+        "status": "degraded",
+        "state_detail": "service is starting up and loading initial data from the pers...",
+        "component_count": 1,
+    }
+    assert "internal-openviking.local" not in json.dumps(payload)
+    assert "postgres://" not in json.dumps(payload)
+
+
+def test_openviking_read_directory_uri_returns_recoverable_tool_result_for_all_modes():
+    class DirectoryReadClient(InMemoryOpenVikingClient):
+        def read(self, uri: str, offset: int = 0, limit: int = -1) -> str:
+            raise InvalidArgumentError(
+                f"Directory cannot be used here: {uri}",
+                details={"resource": uri, "expected": "file", "actual": "directory"},
+            )
+
+    client = DirectoryReadClient()
+    tools = {tool.name: tool for tool in create_openviking_tools(client=client)}
+
+    for content_mode in ("abstract", "overview", "read"):
+        result = tools["viking_read"].invoke(
+            {
+                "uris": "viking://user/default/memories/events/2026/05/09",
+                "content_mode": content_mode,
+            }
+        )
+
+        payload = json.loads(result)
+        assert payload == [
+            {
+                "uri": "viking://user/default/memories/events/2026/05/09",
+                "content_mode": content_mode,
+                "error": "directory_uri_not_readable",
+                "message": (
+                    "This URI is a directory. Use viking_browse on this URI to list children, "
+                    "then call viking_read on file/document URIs."
+                ),
+            }
+        ]
 
 
 def test_ensure_client_defaults_to_http_client(monkeypatch):
@@ -185,7 +350,6 @@ def test_ensure_client_defaults_to_http_client(monkeypatch):
         OpenVikingConnection(
             api_key="test-key",
             user_id="test-user",
-            agent_id="test-agent",
         )
     )
 
@@ -193,7 +357,6 @@ def test_ensure_client_defaults_to_http_client(monkeypatch):
     assert isinstance(client.get(), FakeHTTPClient)
     assert created["api_key"] == "test-key"
     assert created["user_id"] == "test-user"
-    assert created["agent_id"] == "test-agent"
     assert created["url"] is None
 
 
@@ -375,7 +538,7 @@ def test_in_memory_openviking_client_batch_add_messages_records_messages():
             {
                 "role": "assistant",
                 "parts": [{"type": "text", "text": "hi"}],
-                "role_id": "agent-1",
+                "peer_id": "agent-1",
                 "created_at": "2026-05-26T00:00:00+00:00",
             },
         ],
@@ -388,7 +551,7 @@ def test_in_memory_openviking_client_batch_add_messages_records_messages():
     ]
     assert client.sessions["batch-session"][0]["parts"][0]["text"] == "hello"
     assert client.sessions["batch-session"][1]["parts"][0]["text"] == "hi"
-    assert client.sessions["batch-session"][1]["role_id"] == "agent-1"
+    assert client.sessions["batch-session"][1]["peer_id"] == "agent-1"
     assert client.sessions["batch-session"][1]["created_at"] == "2026-05-26T00:00:00+00:00"
 
 
@@ -427,6 +590,27 @@ def test_chat_message_history_preserves_tool_parts():
     assert len(restored_ai_messages) == 1
     assert len(restored_ai_messages[0].tool_calls) == 1
     assert len(restored_tool_messages) == 1
+
+
+def test_chat_message_history_writes_peer_id_to_messages():
+    client = InMemoryOpenVikingClient()
+    history = OpenVikingChatMessageHistory(
+        session_id="peer-history-session",
+        client=client,
+        peer_id="peer-history",
+    )
+
+    history.add_messages(
+        [
+            HumanMessage(content="Remember peer history."),
+            AIMessage(content="Stored."),
+        ]
+    )
+
+    assert [message.get("peer_id") for message in client.sessions["peer-history-session"]] == [
+        "peer-history",
+        "peer-history",
+    ]
 
 
 def test_openviking_tool_result_restores_without_duplicate_ai_tool_call():
@@ -487,6 +671,21 @@ def test_session_context_assembler_uses_archive_active_messages_and_recall():
     assert "Active turn" in assembled.block
     assert "Azure deployments" in assembled.block
     assert assembled.context_parts[0]["type"] == "context"
+
+
+def test_session_context_assembler_passes_peer_id_to_recall():
+    client = InMemoryOpenVikingClient(
+        {"viking://user/memories/peer.md": "Peer memory mentions azure."}
+    )
+    assembler = OpenVikingSessionContextAssembler(
+        client=client,
+        target_uri="viking://user/memories",
+        peer_id="peer-assembler",
+    )
+
+    assembler.assemble(session_id="assembler-peer-session", query="azure")
+
+    assert client.search_calls[-1]["peer_id"] == "peer-assembler"
 
 
 def test_with_openviking_context_wraps_runnable_with_history():
@@ -569,6 +768,31 @@ def test_with_openviking_context_dynamic_session_can_use_thread_id_key():
     assert result.content == "thread ok"
     assert client.search_calls[-1]["session_id"] == "thread-session"
     assert len(client.sessions["thread-session"]) == 2
+
+
+def test_with_openviking_context_dynamic_peer_uses_config_for_recall_and_history():
+    client = InMemoryOpenVikingClient(
+        {"viking://resources/runbooks/deploy.md": "Thread peer dynamic context."}
+    )
+    runnable = with_openviking_context(
+        RunnableLambda(lambda _messages: AIMessage(content="peer ok")),
+        client=client,
+        target_uri="viking://resources",
+        session_id_config_key="thread_id",
+    )
+
+    result = runnable.invoke(
+        [HumanMessage(content="What peer context?")],
+        config={"configurable": {"thread_id": "thread-peer-session", "peer_id": "peer-dynamic"}},
+    )
+
+    assert result.content == "peer ok"
+    assert client.search_calls[-1]["session_id"] == "thread-peer-session"
+    assert client.search_calls[-1]["peer_id"] == "peer-dynamic"
+    assert [message.get("peer_id") for message in client.sessions["thread-peer-session"]] == [
+        "peer-dynamic",
+        "peer-dynamic",
+    ]
 
 
 def test_with_openviking_context_clears_pending_context_after_failure():
@@ -790,6 +1014,16 @@ def test_langgraph_store_round_trip_and_semantic_search():
     assert store.list_namespaces(prefix=("users",)) == [("users", "ada")]
 
 
+def test_langgraph_store_semantic_search_passes_peer_id():
+    client = InMemoryOpenVikingClient()
+    store = OpenVikingStore(client=client, peer_id="peer-store")
+
+    store.put(("users",), "ada", {"color": "azure"})
+    store.search(("users",), query="azure", limit=5)
+
+    assert client.find_calls[-1]["peer_id"] == "peer-store"
+
+
 def test_langgraph_store_rejects_ttl_writes():
     store = OpenVikingStore(client=InMemoryOpenVikingClient())
 
@@ -821,33 +1055,9 @@ def test_langgraph_store_batch_rejects_ttl_writes():
             "viking://user/memories",
             "viking://user/default/memories",
         ),
-        (
-            "viking://user/memories/langgraph_store",
-            "viking://user/memories",
-            "viking://user/default/agent/support/memories",
-        ),
-        (
-            "viking://agent/memories/langgraph_store",
-            "viking://agent/memories",
-            "viking://agent/support/memories",
-        ),
-        (
-            "viking://agent/memories/langgraph_store",
-            "viking://agent/memories",
-            "viking://agent/support/user/default/memories",
-        ),
-        (
-            "viking://agent/skills/langgraph_store",
-            "viking://agent/skills",
-            "viking://agent/support/user/default/skills",
-        ),
     ],
     ids=[
         "user-memory",
-        "user-memory-isolated-by-agent",
-        "agent-memory",
-        "agent-memory-isolated-by-user",
-        "agent-skills-isolated-by-user",
     ],
 )
 def test_langgraph_store_accepts_canonical_result_uris_for_shorthand_root(
@@ -903,9 +1113,7 @@ def test_langgraph_store_ignores_unrelated_canonical_result_uris():
         is None
     )
     assert (
-        store._parse_index_uri(
-            "viking://agent/support/user/default/memories/langgraph_store/index/users/ada.md"
-        )
+        store._parse_index_uri("viking://user/support/memories/other_store/index/users/ada.md")
         is None
     )
 
@@ -1020,6 +1228,47 @@ def test_langgraph_middleware_injects_recall_and_captures_messages():
     assert len(archived_messages) == 2
     assistant_parts = archived_messages[1]["parts"]
     assert any(part["type"] == "context" for part in assistant_parts)
+
+
+def test_langgraph_middleware_passes_peer_id_to_recall_and_capture():
+    client = InMemoryOpenVikingClient(
+        {"viking://user/memories/profile.md": "The middleware peer prefers azure."}
+    )
+    middleware = OpenVikingContextMiddleware(
+        client=client,
+        target_uri="viking://user/memories",
+        session_id_resolver=lambda state, runtime: "middleware-peer-session",
+    )
+
+    class Request:
+        state = {"peer_id": "peer-middleware"}
+        messages = [HumanMessage(content="What peer color?")]
+        system_message = None
+
+        def override(self, **overrides):
+            new_request = Request()
+            new_request.messages = overrides.get("messages", self.messages)
+            new_request.system_message = overrides.get("system_message", self.system_message)
+            new_request.state = self.state
+            return new_request
+
+    middleware.wrap_model_call(Request(), lambda request: AIMessage(content="ok"))
+    middleware.after_agent(
+        {
+            "peer_id": "peer-middleware",
+            "messages": [
+                HumanMessage(content="Remember middleware peer."),
+                AIMessage(content="Stored."),
+            ],
+        },
+        runtime=None,
+    )
+
+    assert client.search_calls[-1]["peer_id"] == "peer-middleware"
+    assert [message.get("peer_id") for message in client.sessions["middleware-peer-session"]] == [
+        "peer-middleware",
+        "peer-middleware",
+    ]
 
 
 def test_langgraph_middleware_does_not_duplicate_active_messages_in_context():

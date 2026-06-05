@@ -45,7 +45,7 @@ OpenViking 原生已经支持 tool result preview。原有链路能够在 sessio
 
 ### 1. 选择哪些输出需要 externalize
 
-入口在 [session.py](/F:/code/OpenViking/openviking/session/session.py:685) 的 `_externalize_large_tool_output_group()`。
+入口在 [session.py](https://github.com/volcengine/OpenViking/blob/main/openviking/session/session.py#L685) 的 `_externalize_large_tool_output_group()`。
 
 当前按两类条件触发：
 
@@ -56,7 +56,7 @@ OpenViking 原生已经支持 tool result preview。原有链路能够在 sessio
 
 ### 2. 外置原始结果并替换 ToolPart
 
-入口在 [session.py](/F:/code/OpenViking/openviking/session/session.py:606) 的 `_externalize_tool_part()`。
+入口在 [session.py](https://github.com/volcengine/OpenViking/blob/main/openviking/session/session.py#L606) 的 `_externalize_tool_part()`。
 
 这一步会：
 
@@ -69,13 +69,13 @@ OpenViking 原生已经支持 tool result preview。原有链路能够在 sessio
 
 ### 3. 生成 synopsis 和 stub
 
-入口在 [tool_result_store.py](/F:/code/OpenViking/openviking/session/tool_result_store.py:38) 的 `make_preview()`：
+入口在 [tool_result_store.py](https://github.com/volcengine/OpenViking/blob/main/openviking/session/tool_result_store.py#L38) 的 `make_preview()`：
 
 1. 原生 preview/stub 能力保留，但内容生成逻辑从简单截断演进为 typed synopsis。
 2. `generate_tool_result_synopsis()` 负责类型识别和摘要生成。
 3. `render_tool_result_stub()` 负责把摘要渲染成最终 stub 文本。
 
-核心实现位于 [tool_result_synopsis.py](/F:/code/OpenViking/openviking/session/tool_result_synopsis.py:363)。
+核心实现位于 [tool_result_synopsis.py](https://github.com/volcengine/OpenViking/blob/main/openviking/session/tool_result_synopsis.py#L363)。
 
 当前原则：
 
@@ -87,17 +87,17 @@ OpenViking 原生已经支持 tool result preview。原有链路能够在 sessio
 
 当前回溯能力由 session 暴露三类工具：
 
-1. [session.py](/F:/code/OpenViking/openviking/session/session.py:932) `read_tool_result()`：按 `offset/limit` 读取原始内容片段。
-2. [session.py](/F:/code/OpenViking/openviking/session/session.py:952) `search_tool_result()`：在原始内容中做关键字搜索。
-3. [session.py](/F:/code/OpenViking/openviking/session/session.py:972) `list_tool_results()`：列出当前 session 已 externalize 的结果。
+1. [session.py](https://github.com/volcengine/OpenViking/blob/main/openviking/session/session.py#L932) `read_tool_result()`：按 `offset/limit` 读取原始内容片段。
+2. [session.py](https://github.com/volcengine/OpenViking/blob/main/openviking/session/session.py#L952) `search_tool_result()`：在原始内容中做关键字搜索。
+3. [session.py](https://github.com/volcengine/OpenViking/blob/main/openviking/session/session.py#L972) `list_tool_results()`：列出当前 session 已 externalize 的结果。
 
-对应存储层实现位于 [tool_result_store.py](/F:/code/OpenViking/openviking/session/tool_result_store.py:77)。
+对应存储层实现位于 [tool_result_store.py](https://github.com/volcengine/OpenViking/blob/main/openviking/session/tool_result_store.py#L77)。
 
 ---
 
 ## 支持的数据类型
 
-当前支持的 synopsis kind 定义在 [tool_result_synopsis.py](/F:/code/OpenViking/openviking/session/tool_result_synopsis.py:18)：
+当前支持的 synopsis kind 定义在 [tool_result_synopsis.py](https://github.com/volcengine/OpenViking/blob/main/openviking/session/tool_result_synopsis.py#L18)：
 
 `json` / `csv` / `tsv` / `yaml` / `xml` / `code` / `text` / `unknown`
 
@@ -118,7 +118,7 @@ OpenViking 原生已经支持 tool result preview。原有链路能够在 sessio
 
 ## 类型识别顺序
 
-识别顺序定义在 [tool_result_synopsis.py](/F:/code/OpenViking/openviking/session/tool_result_synopsis.py:363)。
+识别顺序定义在 [tool_result_synopsis.py](https://github.com/volcengine/OpenViking/blob/main/openviking/session/tool_result_synopsis.py#L363)。
 
 当前顺序如下：
 
@@ -140,7 +140,7 @@ OpenViking 原生已经支持 tool result preview。原有链路能够在 sessio
 
 ### JSON
 
-实现位于 [tool_result_synopsis.py](/F:/code/OpenViking/openviking/session/tool_result_synopsis.py:150)。
+实现位于 [tool_result_synopsis.py](https://github.com/volcengine/OpenViking/blob/main/openviking/session/tool_result_synopsis.py#L150)。
 
 输出重点：
 
@@ -153,7 +153,7 @@ OpenViking 原生已经支持 tool result preview。原有链路能够在 sessio
 
 ### CSV / TSV
 
-实现位于 [tool_result_synopsis.py](/F:/code/OpenViking/openviking/session/tool_result_synopsis.py:218)。
+实现位于 [tool_result_synopsis.py](https://github.com/volcengine/OpenViking/blob/main/openviking/session/tool_result_synopsis.py#L218)。
 
 输出重点：
 
@@ -165,7 +165,7 @@ OpenViking 原生已经支持 tool result preview。原有链路能够在 sessio
 
 ### YAML
 
-实现位于 [tool_result_synopsis.py](/F:/code/OpenViking/openviking/session/tool_result_synopsis.py:184) 与 [tool_result_synopsis.py](/F:/code/OpenViking/openviking/session/tool_result_synopsis.py:268)。
+实现位于 [tool_result_synopsis.py](https://github.com/volcengine/OpenViking/blob/main/openviking/session/tool_result_synopsis.py#L184) 与 [tool_result_synopsis.py](https://github.com/volcengine/OpenViking/blob/main/openviking/session/tool_result_synopsis.py#L268)。
 
 输出重点：
 
@@ -176,7 +176,7 @@ OpenViking 原生已经支持 tool result preview。原有链路能够在 sessio
 
 ### XML
 
-实现位于 [tool_result_synopsis.py](/F:/code/OpenViking/openviking/session/tool_result_synopsis.py:204)。
+实现位于 [tool_result_synopsis.py](https://github.com/volcengine/OpenViking/blob/main/openviking/session/tool_result_synopsis.py#L204)。
 
 输出重点：
 
@@ -187,7 +187,7 @@ OpenViking 原生已经支持 tool result preview。原有链路能够在 sessio
 
 ### Code
 
-实现位于 [tool_result_synopsis.py](/F:/code/OpenViking/openviking/session/tool_result_synopsis.py:280)。
+实现位于 [tool_result_synopsis.py](https://github.com/volcengine/OpenViking/blob/main/openviking/session/tool_result_synopsis.py#L280)。
 
 输出重点：
 
@@ -200,7 +200,7 @@ OpenViking 原生已经支持 tool result preview。原有链路能够在 sessio
 
 ### Text
 
-实现位于 [tool_result_synopsis.py](/F:/code/OpenViking/openviking/session/tool_result_synopsis.py:319)。
+实现位于 [tool_result_synopsis.py](https://github.com/volcengine/OpenViking/blob/main/openviking/session/tool_result_synopsis.py#L319)。
 
 `text` 类型明确不接 LLM，只做 deterministic fallback。摘录采用固定上限，不受 `preview_chars` 影响。
 
@@ -243,7 +243,7 @@ OpenViking 原生已经支持 tool result preview。原有链路能够在 sessio
 
 ## Stub 文本结构
 
-渲染逻辑位于 [tool_result_synopsis.py](/F:/code/OpenViking/openviking/session/tool_result_synopsis.py:436)。
+渲染逻辑位于 [tool_result_synopsis.py](https://github.com/volcengine/OpenViking/blob/main/openviking/session/tool_result_synopsis.py#L436)。
 
 当前 stub 由两部分组成：
 
@@ -279,7 +279,7 @@ OpenViking 原生已经支持 tool result preview。原有链路能够在 sessio
 
 ## 原始内容存储与回溯
 
-实现位于 [tool_result_store.py](/F:/code/OpenViking/openviking/session/tool_result_store.py:101)。
+实现位于 [tool_result_store.py](https://github.com/volcengine/OpenViking/blob/main/openviking/session/tool_result_store.py#L101)。
 
 每个 externalized tool result 会写入两类文件：
 
@@ -293,16 +293,15 @@ OpenViking 原生已经支持 tool result preview。原有链路能够在 sessio
 3. `message_id`
 4. `tool_id`
 5. `tool_name`
-6. `agent_id`
-7. `created_at`
-8. `original_chars`
-9. `preview_chars`
-10. `sha256`
-11. `mime_type`
-12. `synopsis_kind`
-13. `synopsis`
-14. `storage_uri`
-15. `output_uri`
+6. `created_at`
+7. `original_chars`
+8. `preview_chars`
+9. `sha256`
+10. `mime_type`
+11. `synopsis_kind`
+12. `synopsis`
+13. `storage_uri`
+14. `output_uri`
 16. `offset_unit=unicode_code_point`
 
 ### 读取方式
@@ -327,9 +326,9 @@ OpenViking 原生已经支持 tool result preview。原有链路能够在 sessio
 
 当前相关测试包括：
 
-1. [test_tool_result_synopsis.py](/F:/code/OpenViking/tests/session/test_tool_result_synopsis.py:1)：覆盖类型识别和 synopsis 生成，包括固定 caps、text 的 500/500 deterministic fallback，以及 unknown 的 head/tail fallback。
-2. [test_tool_result_externalization.py](/F:/code/OpenViking/tests/session/test_tool_result_externalization.py:1)：覆盖 externalization、stub 替换、阈值边界、aggregate budget、ref 回溯等端到端流程。
-3. [test_api_sessions.py](/F:/code/OpenViking/tests/server/test_api_sessions.py:190)：覆盖 HTTP API 层的 tool result externalization、stub 文案、`read/list/search` 回溯，以及 `synopsis_kind` / `synopsis.kind` 元数据透出。
+1. [test_tool_result_synopsis.py](https://github.com/volcengine/OpenViking/blob/main/tests/session/test_tool_result_synopsis.py#L1)：覆盖类型识别和 synopsis 生成，包括固定 caps、text 的 500/500 deterministic fallback，以及 unknown 的 head/tail fallback。
+2. [test_tool_result_externalization.py](https://github.com/volcengine/OpenViking/blob/main/tests/session/test_tool_result_externalization.py#L1)：覆盖 externalization、stub 替换、阈值边界、aggregate budget、ref 回溯等端到端流程。
+3. [test_api_sessions.py](https://github.com/volcengine/OpenViking/blob/main/tests/server/test_api_sessions.py#L190)：覆盖 HTTP API 层的 tool result externalization、stub 文案、`read/list/search` 回溯，以及 `synopsis_kind` / `synopsis.kind` 元数据透出。
 
 当前相关测试共 29 个用例通过，可作为后续继续补齐真实输出回归用例的基础。
 

@@ -99,7 +99,6 @@ Request headers injected by the adapter:
 - `X-API-Key`
 - `X-OpenViking-Account`
 - `X-OpenViking-User`
-- `X-OpenViking-Agent: web-studio`
 
 For production or multi-tenant deployments, configure a real `server.root_api_key` or user key in OpenViking Server and enter the matching connection settings in Web Studio.
 

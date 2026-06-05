@@ -97,7 +97,7 @@ export { OpenVikingPlugin, default } from "./openviking/index.mjs"
   "apiKey": "",
   "account": "",
   "user": "",
-  "agentId": "",
+  "peerId": "",
   "enabled": true,
   "timeoutMs": 30000,
   "repoContext": { "enabled": true, "cacheTtlMs": 60000 },
@@ -118,11 +118,14 @@ export { OpenVikingPlugin, default } from "./openviking/index.mjs"
 export OPENVIKING_API_KEY="your-api-key-here"
 ```
 
-`apiKey` 会作为 `X-API-Key` 发送。`account`、`user`、`agentId` 会分别作为
-`X-OpenViking-Account`、`X-OpenViking-User`、`X-OpenViking-Agent` 发送。
-如果 OpenViking 服务启用了多租户认证，租户级 API 通常必须配置 `account` 和 `user`。
+`apiKey` 会作为 `X-API-Key` 发送。`account` 和 `user` 是 trusted mode
+身份头，会作为 `X-OpenViking-Account`、`X-OpenViking-User` 发送；使用
+user/admin API key 的 API_KEY mode 时应留空。
+`peerId` 会作为请求级 `peer_id` 用于 memory recall/search 和 session message 写入；
+需要 peer 维度路由时请显式配置。
 
-`OPENVIKING_API_KEY`、`OPENVIKING_ACCOUNT`、`OPENVIKING_USER`、`OPENVIKING_AGENT_ID`
+`OPENVIKING_API_KEY`、`OPENVIKING_ACCOUNT`、`OPENVIKING_USER`、
+`OPENVIKING_PEER_ID`
 优先级高于 `openviking-config.json` 里的同名配置。
 
 高级场景可以用 `OPENVIKING_PLUGIN_CONFIG` 指向其他配置文件路径。

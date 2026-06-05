@@ -35,7 +35,6 @@ DEFAULT_IMPORT_ERROR_RETRIES = int(os.getenv("IMPORT_ERROR_RETRIES", "2"))
 DEFAULT_SESSION_PREFIX = "locomo-ovpreingest"
 DEFAULT_OPENVIKING_ACCOUNT = os.getenv("OPENVIKING_ACCOUNT", "default")
 DEFAULT_OPENVIKING_USER = os.getenv("OPENVIKING_USER", "default")
-DEFAULT_OPENVIKING_AGENT = os.getenv("OPENVIKING_AGENT", "hermes")
 DEFAULT_OPENVIKING_API_KEY = os.getenv("OPENVIKING_API_KEY", "")
 DEFAULT_DATASET_LOCATION = "benchmark/locomo/data/locomo10.json"
 
@@ -302,7 +301,6 @@ async def viking_ingest(
     replace_session: bool = False,
     account: str = DEFAULT_OPENVIKING_ACCOUNT,
     user: str = DEFAULT_OPENVIKING_USER,
-    agent: str = DEFAULT_OPENVIKING_AGENT,
     api_key: str = DEFAULT_OPENVIKING_API_KEY,
 ) -> Dict[str, Any]:
     base_datetime = _parse_locomo_session_datetime(session_time or "")
@@ -314,7 +312,6 @@ async def viking_ingest(
         api_key=api_key or None,
         account=account,
         user=user,
-        agent_id=agent,
     )
     await client.initialize()
 
@@ -339,7 +336,7 @@ async def viking_ingest(
                 role=msg["role"],
                 parts=[{"type": "text", "text": msg["text"]}],
                 created_at=msg_created_at,
-                role_id=msg.get("role_id"),
+                peer_id=msg.get("peer_id"),
             )
 
         result = await client.commit_session(resolved_session_id, telemetry=True)
@@ -512,7 +509,6 @@ async def process_single_session(
                 replace_session=replace_session,
                 account=args.account,
                 user=args.user,
-                agent=args.agent,
                 api_key=args.api_key,
             )
             token_usage = result["token_usage"]
@@ -813,9 +809,6 @@ def main():
         "--account", default=DEFAULT_OPENVIKING_ACCOUNT, help="OpenViking account namespace"
     )
     parser.add_argument("--user", default=DEFAULT_OPENVIKING_USER, help="OpenViking user namespace")
-    parser.add_argument(
-        "--agent", default=DEFAULT_OPENVIKING_AGENT, help="OpenViking agent namespace"
-    )
     parser.add_argument("--api-key", default=DEFAULT_OPENVIKING_API_KEY, help="OpenViking API key")
     parser.add_argument("--sample", type=int, default=None, help="Sample index (0-based)")
     parser.add_argument(

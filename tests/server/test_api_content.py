@@ -42,6 +42,11 @@ async def test_read_directory_uri_returns_invalid_argument(client_with_resource)
     assert body["status"] == "error"
     assert body["error"]["code"] == "INVALID_ARGUMENT"
     assert "Cannot read directory as file" in body["error"]["message"]
+    assert body["error"]["details"] == {
+        "resource": uri,
+        "expected": "file",
+        "actual": "directory",
+    }
 
 
 @pytest.mark.parametrize("uri", ["viking://temp/generated", "viking://queue/tasks"])
@@ -149,7 +154,7 @@ async def test_reindex_uses_request_tenant_for_exists(monkeypatch):
             return {"status": "completed", "uri": uri, "mode": mode}
 
     ctx = RequestContext(
-        user=UserIdentifier(account_id="test", user_id="alice", agent_id="default"),
+        user=UserIdentifier(account_id="test", user_id="alice"),
         role=Role.ADMIN,
     )
     request = ReindexRequest(

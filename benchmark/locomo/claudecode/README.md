@@ -6,7 +6,7 @@ exercising a different way of giving Claude Code long-term memory.
 | Mode | Ingest path | OV namespace | Entry point |
 |---|---|---|---|
 | **Prompted** | `claude -p` per session, CC writes `MEMORY.md` | — (no OpenViking) | `run_prompted.sh` |
-| **SDK iso** | OpenViking Python SDK direct import | per-sample `agent_id` | `run_sdk_iso.sh` |
+| **SDK iso** | OpenViking Python SDK direct import | per-sample user | `run_sdk_iso.sh` |
 | **SDK no-iso** | OpenViking Python SDK direct import | shared (default) | `run_sdk_noiso.sh` |
 | **e2e** | `claude -p` stream-json multi-turn, auto-capture into OV | shared | `run_e2e.sh` |
 
@@ -75,8 +75,8 @@ and saved to `.tmp/result-<mode>/summary.txt`. Per-question CSVs land in
 - `ingest.py` — feeds each LoCoMo session as a `claude -p` invocation;
   CC's vanilla auto-memory writes `MEMORY.md` inside the project dir.
 - `import_to_ov.py` — uses the OpenViking Python SDK to push LoCoMo
-  conversations directly into OV. Per-sample namespace by default; pass
-  `--no-user-agent-id` for shared namespace.
+  conversations directly into OV. Per-sample user namespace by default; pass
+  `--no-user-id` for shared namespace.
 - `ingest_e2e.py` — opens one `claude -p` per LoCoMo session in
   `--input-format stream-json` mode and streams the messages one at a time
   through stdin. The plugin's Stop hook auto-captures per turn; SessionEnd

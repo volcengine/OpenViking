@@ -245,7 +245,6 @@ async def viking_ingest(
     openviking_url: str,
     session_time: Optional[str] = None,
     user_id: Optional[str] = None,
-    agent_id: Optional[str] = None,
 ) -> Dict[str, int]:
     """Save messages to OpenViking via OpenViking SDK client.
     Returns token usage dict with embedding and vlm token counts.
@@ -255,7 +254,6 @@ async def viking_ingest(
         openviking_url: OpenViking service URL
         session_time: Session time string (e.g., "9:36 am on 2 April, 2023")
         user_id: User identifier for separate userspace (e.g., "conv-26")
-        agent_id: Agent identifier for separate agentspace (e.g., "conv-26")
     """
     # 解析 session_time - 为每条消息计算递增的时间戳
     base_datetime = None
@@ -269,8 +267,6 @@ async def viking_ingest(
     client_kwargs = {"url": openviking_url}
     if user_id is not None:
         client_kwargs["user"] = user_id
-    if agent_id is not None:
-        client_kwargs["agent_id"] = agent_id
     client = ov.AsyncHTTPClient(**client_kwargs)
     await client.initialize()
 
@@ -348,15 +344,12 @@ async def process_single_session(
     """处理单个会话的导入任务"""
     started_at = time.perf_counter()
     try:
-        # 根据参数决定是否使用 sample_id 作为 user_id 和 agent_id
-        user_id = str(sample_id) if not args.no_user_agent_id else None
-        agent_id = str(sample_id) if not args.no_user_agent_id else None
+        user_id = str(sample_id) if not args.no_user_id else None
         result = await viking_ingest(
             messages,
             args.openviking_url,
             meta.get("date_time"),
             user_id=user_id,
-            agent_id=agent_id,
         )
         elapsed_seconds = time.perf_counter() - started_at
         token_usage = result["token_usage"]
@@ -654,10 +647,11 @@ def main():
         help="Force re-import even if already recorded as completed",
     )
     parser.add_argument(
-        "--no-user-agent-id",
+        "--no-user-id",
+        dest="no_user_id",
         action="store_true",
         default=False,
-        help="Do not pass user_id and agent_id to OpenViking client",
+        help="Do not pass user_id to OpenViking client",
     )
     args = parser.parse_args()
 

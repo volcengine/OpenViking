@@ -2,14 +2,14 @@
 # SPDX-License-Identifier: AGPL-3.0
 """In-memory store for short-lived upload tokens used by the MCP progressive upload flow.
 
-Issued by the MCP ``add_resource`` tool when an agent passes a local-file path; consumed by
+Issued by the MCP ``add_resource`` tool when a caller passes a local-file path; consumed by
 ``POST /api/v1/resources/temp_upload_signed``. Tokens are 6-character base62 strings indexed
 in a process-local dict — no signing key, no on-disk state, no replay-set bookkeeping.
 ``dict.pop`` doubles as the consume-and-burn primitive.
 
-The token only carries the identity bound at issue time (account/user/agent). The
+The token only carries the identity bound at issue time (account/user). The
 ``temp_file_id`` is minted by :class:`openviking.server.temp_upload_store.TempUploadStore`
-at upload time and returned to the agent in the upload response body — the token does
+at upload time and returned in the upload response body — the token does
 not pre-bind a filename, so the upload can flow through either the local or shared
 TempUploadStore mode without a side-channel.
 
@@ -38,7 +38,6 @@ class UploadTokenError(Exception):
 class _TokenInfo:
     account_id: str
     user_id: str
-    agent_id: str
     expires_at: float
 
 
@@ -50,13 +49,12 @@ class UploadTokenStore:
         self,
         account_id: str,
         user_id: str,
-        agent_id: str,
         ttl_seconds: int,
     ) -> Tuple[str, float]:
-        """Mint a fresh token bound to (account, user, agent). Returns (token, expires_at)."""
+        """Mint a fresh token bound to (account, user). Returns (token, expires_at)."""
         self._purge_expired()
         expires_at = time.time() + max(1, ttl_seconds)
-        info = _TokenInfo(account_id, user_id, agent_id, expires_at)
+        info = _TokenInfo(account_id, user_id, expires_at)
         for _ in range(8):
             token = "".join(secrets.choice(_TOKEN_ALPHABET) for _ in range(_TOKEN_LENGTH))
             if token not in self._store:
@@ -64,8 +62,8 @@ class UploadTokenStore:
                 return token, expires_at
         raise RuntimeError("upload_token_store: failed to mint a unique token after 8 attempts")
 
-    def consume(self, token: str) -> Tuple[str, str, str]:
-        """Pop the token and validate it. Returns (account_id, user_id, agent_id) on success."""
+    def consume(self, token: str) -> Tuple[str, str]:
+        """Pop the token and validate it. Returns (account_id, user_id) on success."""
         if not token:
             raise UploadTokenError("missing upload token")
         info = self._store.pop(token, None)
@@ -73,7 +71,7 @@ class UploadTokenStore:
             raise UploadTokenError("unknown or already-consumed upload token")
         if info.expires_at < time.time():
             raise UploadTokenError("upload token expired")
-        return info.account_id, info.user_id, info.agent_id
+        return info.account_id, info.user_id
 
     def peek(self, token: str) -> Optional[_TokenInfo]:
         """Read a token without consuming. Test helper only."""

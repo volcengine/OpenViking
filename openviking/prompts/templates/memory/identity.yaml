@@ -1,7 +1,7 @@
 memory_type: identity
 description: |
   Agent identity: name, creature type, vibe/temperament, signature emoji, avatar path, and self introduction.
-directory: "viking://agent/{{ agent_space }}/memories"
+directory: "viking://user/{{ user_space }}/memories"
 filename_template: "identity.md"
 enabled: true
 operation_mode: "upsert"

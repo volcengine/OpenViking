@@ -47,7 +47,6 @@ async function fetchJSON(path, init = {}) {
     }
     if (cfg.account) headers["X-OpenViking-Account"] = cfg.account;
     if (cfg.user) headers["X-OpenViking-User"] = cfg.user;
-    if (cfg.agentId) headers["X-OpenViking-Agent"] = cfg.agentId;
     const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
     const body = await res.json().catch(() => null);
     if (!body) return null;
@@ -167,15 +166,14 @@ function postProcess(items, limit, threshold) {
 }
 
 // ---------------------------------------------------------------------------
-// URI space resolution (mirrors MCP normalizeTargetUri)
+// User URI space resolution
 // ---------------------------------------------------------------------------
 
-const USER_RESERVED_DIRS = new Set(["memories"]);
-const AGENT_RESERVED_DIRS = new Set(["memories", "skills", "instructions", "workspaces"]);
-const _spaceCache = {};
+const USER_RESERVED_DIRS = new Set(["memories", "skills"]);
+let _userSpaceCache = "";
 
-async function resolveScopeSpace(scope) {
-  if (_spaceCache[scope]) return _spaceCache[scope];
+async function resolveUserSpace() {
+  if (_userSpaceCache) return _userSpaceCache;
 
   let fallbackSpace = "default";
   try {
@@ -185,60 +183,57 @@ async function resolveScopeSpace(scope) {
     }
   } catch { /* fallback */ }
 
-  const reservedDirs = scope === "user" ? USER_RESERVED_DIRS : AGENT_RESERVED_DIRS;
   try {
-    const entries = await fetchJSON(`/api/v1/fs/ls?uri=${encodeURIComponent(`viking://${scope}`)}&output=original`);
+    const entries = await fetchJSON(`/api/v1/fs/ls?uri=${encodeURIComponent("viking://user")}&output=original`);
     if (Array.isArray(entries)) {
       const spaces = entries
         .filter((e) => e?.isDir)
         .map((e) => (typeof e.name === "string" ? e.name.trim() : ""))
-        .filter((n) => n && !n.startsWith(".") && !reservedDirs.has(n));
+        .filter((n) => n && !n.startsWith(".") && !USER_RESERVED_DIRS.has(n));
       if (spaces.length > 0) {
-        if (spaces.includes(fallbackSpace)) { _spaceCache[scope] = fallbackSpace; return fallbackSpace; }
-        if (scope === "user" && spaces.includes("default")) { _spaceCache[scope] = "default"; return "default"; }
-        if (spaces.length === 1) { _spaceCache[scope] = spaces[0]; return spaces[0]; }
+        if (spaces.includes(fallbackSpace)) { _userSpaceCache = fallbackSpace; return fallbackSpace; }
+        if (spaces.includes("default")) { _userSpaceCache = "default"; return "default"; }
+        if (spaces.length === 1) { _userSpaceCache = spaces[0]; return spaces[0]; }
       }
     }
   } catch { /* fallback */ }
 
-  _spaceCache[scope] = fallbackSpace;
+  _userSpaceCache = fallbackSpace;
   return fallbackSpace;
 }
 
 async function resolveTargetUri(targetUri) {
   const trimmed = targetUri.trim().replace(/\/+$/, "");
-  const m = trimmed.match(/^viking:\/\/(user|agent)(?:\/(.*))?$/);
+  const m = trimmed.match(/^viking:\/\/user(?:\/(.*))?$/);
   if (!m) return trimmed;
-  const scope = m[1];
-  const rawRest = (m[2] ?? "").trim();
+  const rawRest = (m[1] ?? "").trim();
   if (!rawRest) return trimmed;
   const parts = rawRest.split("/").filter(Boolean);
   if (parts.length === 0) return trimmed;
-  const reservedDirs = scope === "user" ? USER_RESERVED_DIRS : AGENT_RESERVED_DIRS;
-  if (!reservedDirs.has(parts[0])) return trimmed;
-  const space = await resolveScopeSpace(scope);
-  return `viking://${scope}/${space}/${parts.join("/")}`;
+  if (!USER_RESERVED_DIRS.has(parts[0])) return trimmed;
+  const space = await resolveUserSpace();
+  return `viking://user/${space}/${parts.join("/")}`;
 }
 
 async function searchScope(query, targetUri, limit, bucket = "memories") {
   const resolvedUri = await resolveTargetUri(targetUri);
+  const body = { query, target_uri: resolvedUri, limit, score_threshold: 0 };
+  if (cfg.peerId) body.peer_id = cfg.peerId;
   const result = await fetchJSON("/api/v1/search/find", {
     method: "POST",
-    body: JSON.stringify({ query, target_uri: resolvedUri, limit, score_threshold: 0 }),
+    body: JSON.stringify(body),
   });
   return result?.[bucket] || [];
 }
 
 async function searchAll(query, limit) {
-  const [userMems, agentMems, agentSkills] = await Promise.all([
+  const [userMems, userSkills] = await Promise.all([
     searchScope(query, "viking://user/memories", limit),
-    searchScope(query, "viking://agent/memories", limit),
-    searchScope(query, "viking://agent/skills", limit, "skills"),
+    searchScope(query, "viking://user/skills", limit, "skills"),
   ]);
   log("search_complete", { scope: "user", rawCount: userMems.length, topScores: userMems.slice(0, 3).map((m) => m.score) });
-  log("search_complete", { scope: "agent", rawCount: agentMems.length, topScores: agentMems.slice(0, 3).map((m) => m.score) });
-  log("search_complete", { scope: "skills", rawCount: agentSkills.length, topScores: agentSkills.slice(0, 3).map((m) => m.score) });
-  const all = [...userMems, ...agentMems, ...agentSkills];
+  log("search_complete", { scope: "skills", rawCount: userSkills.length, topScores: userSkills.slice(0, 3).map((m) => m.score) });
+  const all = [...userMems, ...userSkills];
   const seen = new Set();
   return all.filter((m) => {
     if (seen.has(m.uri)) return false;

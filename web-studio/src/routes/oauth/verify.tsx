@@ -35,7 +35,7 @@ export const Route = createFileRoute('/oauth/verify')({
 
 function VerifyPage() {
   const { t } = useTranslation(['oauth', 'common'])
-  const { connection, openConnectionDialog, serverMode } = useAppConnection()
+  const { connection, openConnectionSettings, serverMode } = useAppConnection()
 
   const currentIdentity = React.useMemo(() => {
     const summary = summarizeConnectionIdentity(connection, serverMode)
@@ -124,10 +124,10 @@ function VerifyPage() {
                       variant="outline"
                       size="sm"
                       className="w-fit"
-                      onClick={openConnectionDialog}
+                      onClick={openConnectionSettings}
                       disabled={phase.kind === 'verifying'}
                     >
-                      {t('consent.openConnectionDialog')}
+                      {t('consent.openConnectionSettings')}
                     </Button>
                   </div>
                 ) : null}

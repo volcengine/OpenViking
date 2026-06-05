@@ -78,18 +78,22 @@ class SchemaModelGenerator:
 
         Args:
             memory_type: The memory type schema
-            role_scope: Role scope to determine if user_id/agent_id fields are needed
+            role_scope: Role scope to determine if user_id fields are needed
 
         Returns:
             Dynamically created flat Pydantic model class
         """
         # Determine cache key based on role_scope
+        has_peer_scope = bool(role_scope and role_scope.peer_ids)
         if role_scope and len(role_scope.user_ids) > 1:
             cache_key = f"{memory_type.memory_type}_multi_user"
             model_name = f"{to_pascal_case(memory_type.memory_type)}DataMultiUser"
         else:
             cache_key = memory_type.memory_type
             model_name = f"{to_pascal_case(memory_type.memory_type)}Data"
+        if has_peer_scope:
+            cache_key = f"{cache_key}_peer"
+            model_name = f"{model_name}Peer"
 
         # Check cache for both single and multi-user cases
         if cache_key in self._flat_data_models:
@@ -98,7 +102,7 @@ class SchemaModelGenerator:
         # Build field definitions - no memory_type field needed
         field_definitions: Dict[str, Tuple[Type[Any], Any]] = {}
 
-        # Add user_id and agent_id fields when multiple users are in scope
+        # Add user_id when multiple users are in scope
         # Skip if schema has "ranges" field (like events) - these are message-based and don't need user isolation
         has_ranges = any(field.name == "ranges" for field in memory_type.fields)
         if role_scope and len(role_scope.user_ids) > 1 and not has_ranges:
@@ -106,10 +110,18 @@ class SchemaModelGenerator:
                 str,
                 Field(..., description="User ID to distinguish which user's memory to write"),
             )
-        if role_scope and len(role_scope.agent_ids) > 1 and not has_ranges:
-            field_definitions["agent_id"] = (
-                str,
-                Field(..., description="Agent ID to distinguish which agent's memory to write"),
+        if has_peer_scope and not has_ranges:
+            peer_values = ", ".join(role_scope.peer_ids)
+            field_definitions["peer_id"] = (
+                Optional[str],
+                Field(
+                    None,
+                    description=(
+                        "Stable peer identity to write peer memory for. "
+                        "Use only when the memory describes a peer instead of the current user. "
+                        f"Available peer_id values in this session: {peer_values}"
+                    ),
+                ),
             )
 
         field_definitions["page_id"] = (
@@ -246,7 +258,7 @@ class SchemaModelGenerator:
 
         for mt in enabled_memory_types:
             flat_model = self.create_flat_data_model(mt, role_scope)
-            # Always use List to support multiple users' memories (e.g., identity for different user_id/agent_id)
+            # Always use List to support multiple users' memories.
             field_definitions[mt.memory_type] = (
                 List[flat_model],  # type: ignore
                 Field(
@@ -351,3 +363,111 @@ class SchemaModelGenerator:
         """
         memory_model = self.create_discriminated_union_model()
         return memory_model.model_json_schema()
+
+
+class SchemaPromptGenerator:
+    """
+    Prompt generator that incorporates schema information into LLM prompts.
+
+    Generates descriptive text about memory types and their fields
+    based on the YAML schema definitions.
+    """
+
+    def __init__(
+        self,
+        schemas: List[MemoryTypeSchema],
+        template_context: Optional[Dict[str, Any]] = None,
+    ):
+        self.schemas = schemas
+        self._template_context = dict(template_context or {})
+
+    def _render_description(self, description: str) -> str:
+        if not description:
+            return description
+        return TemplateUtils.render(description, self._template_context)
+
+    def generate_type_descriptions(self) -> str:
+        """
+        Generate descriptions of all memory types.
+
+        Returns:
+            Formatted string with all memory type descriptions
+        """
+        lines = ["## Available Memory Types"]
+
+        for mt in self.schemas:
+            lines.append(f"\n### {mt.memory_type}")
+            lines.append(f"{self._render_description(mt.description)}")
+
+            # Add URI format information
+            if mt.directory or mt.filename_template:
+                lines.append("\n**URI Format:**")
+                if mt.directory and mt.filename_template:
+                    lines.append(f"- URI: `{mt.directory}/{mt.filename_template}`")
+                elif mt.directory:
+                    lines.append(f"- Directory: `{mt.directory}`")
+                elif mt.filename_template:
+                    lines.append(f"- Filename: `{mt.filename_template}`")
+
+                # Add variable substitution info
+                lines.append("\n**Variable Substitution:**")
+                lines.append("- `{{ user_space }}` → 'default'")
+                if mt.fields:
+                    for field in mt.fields:
+                        lines.append(f"- `{{ {field.name} }}` → use value from fields")
+
+            if mt.fields:
+                lines.append("\n**Fields:**")
+                for field in mt.fields:
+                    lines.append(
+                        f"- `{field.name}` ({field.field_type.value}): {self._render_description(field.description)}"
+                    )
+
+        return "\n".join(lines)
+
+    def generate_field_descriptions(self, memory_type: str) -> Optional[str]:
+        """
+        Generate descriptions for a specific memory type's fields.
+
+        Args:
+            memory_type: The memory type to describe
+
+        Returns:
+            Formatted string with field descriptions, or None if not found
+        """
+        mt = next((s for s in self.schemas if s.memory_type == memory_type), None)
+        if not mt:
+            return None
+
+        lines = [f"### {mt.memory_type} Fields"]
+        for field in mt.fields:
+            lines.append(f"- `{field.name}`: {self._render_description(field.description)}")
+
+        return "\n".join(lines)
+
+    def get_full_prompt_context(self) -> Dict[str, Any]:
+        """
+        Get the full prompt context including all schema information.
+
+        Returns:
+            Dictionary with all prompt context components
+        """
+        return {
+            "type_descriptions": self.generate_type_descriptions(),
+            "memory_types": [
+                {
+                    "memory_type": mt.memory_type,
+                    "description": mt.description,
+                    "fields": [
+                        {
+                            "name": f.name,
+                            "type": f.field_type.value,
+                            "description": f.description,
+                            "merge_op": f.merge_op.value,
+                        }
+                        for f in mt.fields
+                    ],
+                }
+                for mt in self.schemas
+            ],
+        }

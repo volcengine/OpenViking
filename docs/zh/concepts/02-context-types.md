@@ -50,7 +50,7 @@ results = client.find(
 
 - **Agent 主动：**由 Agent 主动提取和记录的记忆信息
 - **动态更新：**由 Agent 从交互中持续更新
-- **个性化：**针对特定用户或 特定 Agent 学习记录
+- **个性化：**针对特定用户和稳定 peer 学习记录
 
 ### 8 种分类
 
@@ -60,10 +60,10 @@ results = client.find(
 | **preferences** | `user/memories/preferences/` | 按主题的用户偏好 | ✅ 可追加 |
 | **entities** | `user/memories/entities/` | 实体记忆（人物、项目） | ✅ 可追加 |
 | **events** | `user/memories/events/` | 事件记录（决策、里程碑） | ❌ 不更新 |
-| **cases** | `agent/memories/cases/` | 学习的案例 | ❌ 不更新 |
-| **patterns** | `agent/memories/patterns/` | 学习的模式 | ✅ 可合并 |
-| **tools** | `agent/memories/tools/` | 工具使用经验与最佳实践 | ✅ 可合并 |
-| **skills** | `agent/memories/skills/` | 技能执行经验与工作流策略 | ✅ 可合并 |
+| **trajectories** | `user/memories/trajectories/` | 可复用的操作契约 | ❌ 不更新 |
+| **experiences** | `user/memories/experiences/` | 可复用的执行经验 | ✅ 可合并 |
+| **tools** | `user/memories/tools/` | 工具使用经验与最佳实践 | ✅ 可合并 |
+| **skills** | `user/memories/skills/` | 技能执行经验与工作流策略 | ✅ 可合并 |
 
 ### 使用
 
@@ -94,7 +94,7 @@ results = await client.find(
 ### 存储位置
 
 ```
-viking://agent/skills/{skill-name}/
+viking://user/skills/{skill-name}/
 ├── .abstract.md          # L0: 简短描述
 ├── SKILL.md   						# L1: 详细概览
 └── scripts           		# L2: 完整定义
@@ -114,7 +114,7 @@ await client.add_skill({
 # 搜索技能
 results = await client.find(
     "网络搜索",
-    target_uri="viking://agent/skills/"
+    target_uri="viking://user/skills/"
 )
 ```
 

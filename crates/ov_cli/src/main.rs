@@ -2,16 +2,31 @@ mod base_client;
 mod client;
 mod commands;
 mod config;
+mod config_agent;
+mod config_command_ui;
+mod config_wizard;
 mod error;
+mod error_classifier;
+mod error_ui;
 mod handlers;
+mod health_ui;
+mod help_ui;
+mod i18n;
 mod output;
+mod status_ui;
+mod theme;
 mod tui;
 mod utils;
 
 use clap::{ArgAction, Args, Parser, Subcommand};
+use colored::Colorize;
 use config::Config;
+use error::{Error, Result};
 use output::OutputFormat;
-use std::ffi::OsString;
+use std::{
+    ffi::OsString,
+    io::{self, IsTerminal},
+};
 
 /// CLI context shared across commands
 #[derive(Debug, Clone)]
@@ -34,7 +49,6 @@ impl CliContext {
         compact: bool,
         account: Option<String>,
         user: Option<String>,
-        agent_id: Option<String>,
         sudo: bool,
         show_progress: Option<bool>,
         verbose: Option<bool>,
@@ -45,9 +59,6 @@ impl CliContext {
         }
         if user.is_some() {
             config.user = user;
-        }
-        if agent_id.is_some() {
-            config.agent_id = agent_id;
         }
         Self {
             config,
@@ -75,17 +86,12 @@ impl CliContext {
     }
 
     pub fn get_client_with_timeout(&self, timeout_secs: Option<f64>) -> client::HttpClient {
-        let api_key = if self.sudo {
-            self.config.root_api_key.clone()
-        } else {
-            self.config.api_key.clone()
-        };
+        let auth = self.config.effective_auth(self.sudo);
         client::HttpClient::new(
             &self.config.url,
-            api_key,
-            self.config.agent_id.clone(),
-            self.config.account.clone(),
-            self.config.user.clone(),
+            auth.api_key,
+            auth.account,
+            auth.user,
             timeout_secs.unwrap_or(self.config.timeout),
             self.profile.unwrap_or(self.config.profile),
             self.config.extra_headers.clone(),
@@ -115,12 +121,8 @@ struct Cli {
     #[arg(long, global = true)]
     user: Option<String>,
 
-    /// Agent identifier to send as X-OpenViking-Agent
-    #[arg(long = "agent-id", global = true)]
-    agent_id: Option<String>,
-
     /// Use root API key for admin commands
-    #[arg(long)]
+    #[arg(long, global = true, hide = true)]
     sudo: bool,
 
     /// Enable HTTP request profiling for this command
@@ -347,17 +349,17 @@ enum Commands {
         /// Viking URI to get metadata for
         uri: String,
     },
-    /// [Data] Read file content (L2)
+    /// [Data] Read file content (Level 2)
     Read {
         /// Viking URI
         uri: String,
     },
-    /// [Data] Read abstract content (L0)
+    /// [Data] Read abstract content (Level 0)
     Abstract {
         /// Directory URI
         uri: String,
     },
-    /// [Data] Read overview content (L1)
+    /// [Data] Read overview content (Level 1)
     Overview {
         /// Directory URI
         uri: String,
@@ -419,6 +421,9 @@ enum Commands {
         /// Only include results with specific level(s) (0=abstract, 1=overview, 2=file)
         #[arg(short = 'L', long = "level", value_delimiter = ',')]
         level: Option<Vec<i32>>,
+        /// Limit memory retrieval to this peer plus the current user memory
+        #[arg(long = "peer-id")]
+        peer_id: Option<String>,
     },
     /// [Experimental][Data] Run context-aware retrieval
     Search {
@@ -450,6 +455,9 @@ enum Commands {
         /// Only include results with specific level(s) (0=abstract, 1=overview, 2=file)
         #[arg(short = 'L', long = "level", value_delimiter = ',')]
         level: Option<Vec<i32>>,
+        /// Limit memory retrieval to this peer plus the current user memory
+        #[arg(long = "peer-id")]
+        peer_id: Option<String>,
     },
     /// [Data] Run content pattern search
     Grep {
@@ -615,7 +623,11 @@ enum Commands {
         action: TaskCommands,
     },
     /// [Status] All OpenViking Server components status
-    Status,
+    Status {
+        /// Show full component tables
+        #[arg(long)]
+        verbose: bool,
+    },
     /// [Status] Observe OpenViking Server components status
     Observer {
         #[command(subcommand)]
@@ -623,10 +635,16 @@ enum Commands {
     },
     /// [Status] Quick health check
     Health,
-    /// [Status] Configuration management
+    /// [Status] Configuration management; run without a subcommand to add, edit, or delete configs
     Config {
         #[command(subcommand)]
-        action: ConfigCommands,
+        action: Option<ConfigCommands>,
+    },
+    /// [Status] Choose CLI display language
+    #[command(alias = "lang")]
+    Language {
+        /// Language code: en or zh-CN
+        language: Option<String>,
     },
     /// [Status] Show CLI version
     Version,
@@ -658,10 +676,10 @@ enum Commands {
 impl Commands {
     /// Returns true if this is an admin command that supports --sudo
     fn is_admin_command(&self) -> bool {
-        match self {
-            Self::Admin { .. } | Self::System { .. } | Self::Reindex { .. } => true,
-            _ => false,
-        }
+        matches!(
+            self,
+            Self::Admin { .. } | Self::System { .. } | Self::Reindex { .. }
+        )
     }
 
     fn supports_upload_options(&self) -> bool {
@@ -675,7 +693,7 @@ fn legacy_upload_option_error(
 ) -> Option<&'static str> {
     if options.is_set() && !command.supports_upload_options() {
         Some(
-            "--progress, --no-progress, and --verbose are only supported for add-resource and add-skill",
+            "--progress, --no-progress, and --verbose are only supported for add-resource and add-skill.",
         )
     } else {
         None
@@ -788,6 +806,9 @@ enum SessionCommands {
         /// Message content
         #[arg(long)]
         content: String,
+        /// Stable interaction peer id. Omit for self memory.
+        #[arg(long = "peer-id")]
+        peer_id: Option<String>,
     },
     /// Add multiple messages to a session
     AddMessages {
@@ -962,11 +983,6 @@ enum AdminCommands {
         #[arg(long)]
         role: Option<String>,
     },
-    /// List all agent namespaces in an account
-    ListAgents {
-        /// Account ID
-        account_id: String,
-    },
     /// Remove a user from an account
     RemoveUser {
         /// Account ID
@@ -997,7 +1013,14 @@ impl Commands {
         !matches!(
             self,
             Commands::Config {
-                action: ConfigCommands::SetupCli | ConfigCommands::Switch,
+                action: None
+                    | Some(
+                        ConfigCommands::Switch { .. }
+                            | ConfigCommands::Add { .. }
+                            | ConfigCommands::Edit(_)
+                            | ConfigCommands::Delete(_)
+                            | ConfigCommands::List,
+                    ),
             } | Commands::Version
         )
     }
@@ -1009,10 +1032,140 @@ enum ConfigCommands {
     Show,
     /// Validate configuration file
     Validate,
-    /// Interactive setup to configure CLI
-    SetupCli,
-    /// Switch between saved configurations
-    Switch,
+    /// Switch between saved configs
+    Switch {
+        /// Saved config name to activate. Omit to open the interactive selector.
+        name: Option<String>,
+    },
+    /// List saved configs
+    List,
+    /// Delete a saved config
+    Delete(ConfigDeleteArgs),
+    /// Add a saved config without opening the interactive wizard
+    Add {
+        #[command(subcommand)]
+        target: ConfigAddTarget,
+    },
+    /// Edit a saved config without opening the interactive wizard
+    Edit(ConfigEditArgs),
+}
+
+#[derive(Subcommand)]
+enum ConfigAddTarget {
+    /// Add a Volcengine Cloud config
+    Cloud(ConfigAddCloudArgs),
+    /// Add a self-managed config
+    SelfManaged(ConfigAddSelfManagedArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+struct ConfigAddCloudArgs {
+    /// Saved config name. Agents should pass this for idempotent retries; generated when omitted.
+    #[arg(long)]
+    name: Option<String>,
+    /// Read API key from stdin
+    #[arg(long, conflicts_with = "api_key_env")]
+    api_key_stdin: bool,
+    /// Read API key from an environment variable
+    #[arg(long, conflicts_with = "api_key_stdin")]
+    api_key_env: Option<String>,
+    /// Account identifier to send as X-OpenViking-Account
+    #[arg(long)]
+    account: Option<String>,
+    /// User identifier to send as X-OpenViking-User
+    #[arg(long)]
+    user: Option<String>,
+    /// Make the saved config active after validation
+    #[arg(long)]
+    activate: bool,
+    /// Replace an existing saved config
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+struct ConfigAddSelfManagedArgs {
+    /// Saved config name. Agents should pass this for idempotent retries; generated when omitted.
+    #[arg(long)]
+    name: Option<String>,
+    /// OpenViking server URL
+    #[arg(long)]
+    url: Option<String>,
+    /// Read API key from stdin
+    #[arg(long, conflicts_with_all = ["api_key_env", "root_api_key_stdin"])]
+    api_key_stdin: bool,
+    /// Read API key from an environment variable
+    #[arg(long, conflicts_with = "api_key_stdin")]
+    api_key_env: Option<String>,
+    /// Read root API key from stdin
+    #[arg(long, conflicts_with_all = ["root_api_key_env", "api_key_stdin"])]
+    root_api_key_stdin: bool,
+    /// Read root API key from an environment variable
+    #[arg(long, conflicts_with = "root_api_key_stdin")]
+    root_api_key_env: Option<String>,
+    /// Account identifier to send as X-OpenViking-Account
+    #[arg(long)]
+    account: Option<String>,
+    /// User identifier to send as X-OpenViking-User
+    #[arg(long)]
+    user: Option<String>,
+    /// Make the saved config active after validation
+    #[arg(long)]
+    activate: bool,
+    /// Replace an existing saved config
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+struct ConfigEditArgs {
+    /// Saved config name to edit
+    name: String,
+    /// Rename the saved config
+    #[arg(long)]
+    new_name: Option<String>,
+    /// New server URL. Volcengine Cloud configs use a fixed URL.
+    #[arg(long)]
+    url: Option<String>,
+    /// Read replacement API key from stdin
+    #[arg(long, conflicts_with_all = ["api_key_env", "clear_api_key", "root_api_key_stdin"])]
+    api_key_stdin: bool,
+    /// Read replacement API key from an environment variable
+    #[arg(long, conflicts_with_all = ["api_key_stdin", "clear_api_key"])]
+    api_key_env: Option<String>,
+    /// Remove the API key
+    #[arg(long, conflicts_with_all = ["api_key_stdin", "api_key_env"])]
+    clear_api_key: bool,
+    /// Read replacement root API key from stdin
+    #[arg(long, conflicts_with_all = ["root_api_key_env", "clear_root_api_key", "api_key_stdin"])]
+    root_api_key_stdin: bool,
+    /// Read replacement root API key from an environment variable
+    #[arg(long, conflicts_with_all = ["root_api_key_stdin", "clear_root_api_key"])]
+    root_api_key_env: Option<String>,
+    /// Remove the root API key
+    #[arg(long, conflicts_with_all = ["root_api_key_stdin", "root_api_key_env"])]
+    clear_root_api_key: bool,
+    /// Account identifier to send as X-OpenViking-Account
+    #[arg(long)]
+    account: Option<String>,
+    /// User identifier to send as X-OpenViking-User
+    #[arg(long)]
+    user: Option<String>,
+    /// Make the saved config active after validation
+    #[arg(long)]
+    activate: bool,
+    /// Replace an existing saved config when renaming
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+struct ConfigDeleteArgs {
+    /// Saved config name to delete
+    name: String,
+    /// Delete even when the saved file cannot be parsed
+    #[arg(long)]
+    force: bool,
 }
 
 fn find_command_index(args: &[OsString]) -> Option<usize> {
@@ -1020,7 +1173,7 @@ fn find_command_index(args: &[OsString]) -> Option<usize> {
     while i < args.len() {
         let token = args[i].to_string_lossy();
         match token.as_ref() {
-            "--output" | "-o" | "--compact" | "--account" | "--user" | "--agent-id" => {
+            "--output" | "-o" | "--compact" | "--account" | "--user" => {
                 i += 2;
             }
             "--sudo" | "--progress" | "--no-progress" | "--verbose" | "-v" => {
@@ -1033,6 +1186,410 @@ fn find_command_index(args: &[OsString]) -> Option<usize> {
         }
     }
     None
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PlainHelpMisuse {
+    help_command: String,
+}
+
+fn plain_help_misuse(args: &[OsString]) -> Option<PlainHelpMisuse> {
+    let tokens = command_tokens_for_plain_help(args);
+    let help_index = tokens.iter().position(|token| token == "help")?;
+    if help_index == 0 {
+        return Some(PlainHelpMisuse {
+            help_command: "ov --help".to_string(),
+        });
+    }
+
+    let command = tokens
+        .first()
+        .map(|token| canonical_plain_help_token(token))?;
+    if allows_plain_help_as_user_input(command) {
+        return None;
+    }
+
+    let mut path = vec![command.to_string()];
+    if is_plain_help_group(command) {
+        if help_index == 1 {
+            return Some(PlainHelpMisuse {
+                help_command: prefixed_help_command(&path),
+            });
+        }
+        if let Some(subcommand) = tokens.get(1).map(|token| canonical_plain_help_token(token)) {
+            path.push(subcommand.to_string());
+        }
+        if command == "task"
+            && path.get(1).is_some_and(|token| token == "watch")
+            && let Some(watch_subcommand) =
+                tokens.get(2).map(|token| canonical_plain_help_token(token))
+            && watch_subcommand != "help"
+        {
+            path.push(watch_subcommand.to_string());
+        }
+        return Some(PlainHelpMisuse {
+            help_command: prefixed_help_command(&path),
+        });
+    }
+
+    Some(PlainHelpMisuse {
+        help_command: prefixed_help_command(&path),
+    })
+}
+
+fn command_tokens_for_plain_help(args: &[OsString]) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut i = 1;
+    while i < args.len() {
+        let token = args[i].to_string_lossy();
+        let token_ref = token.as_ref();
+        if consumes_plain_help_value(token_ref) {
+            i += if token_ref.contains('=') { 1 } else { 2 };
+            continue;
+        }
+        if token_ref.starts_with('-') {
+            i += 1;
+            continue;
+        }
+        tokens.push(token.into_owned());
+        i += 1;
+    }
+    tokens
+}
+
+fn consumes_plain_help_value(token: &str) -> bool {
+    matches!(
+        token,
+        "-o" | "--output"
+            | "-c"
+            | "--compact"
+            | "--account"
+            | "--user"
+            | "-u"
+            | "--uri"
+            | "-x"
+            | "--exclude-uri"
+            | "--to"
+            | "--parent"
+            | "-p"
+            | "--parent-auto-create"
+            | "--reason"
+            | "--instruction"
+            | "--timeout"
+            | "--ignore-dirs"
+            | "--include"
+            | "--exclude"
+            | "-n"
+            | "--node-limit"
+            | "--limit"
+            | "-l"
+            | "--abs-limit"
+            | "-L"
+            | "--level"
+            | "--level-limit"
+            | "-s"
+            | "--session"
+            | "--sender"
+            | "--message"
+            | "--role"
+            | "--content"
+            | "--mode"
+            | "--on-conflict"
+            | "--vector-mode"
+            | "--token-budget"
+            | "--interval"
+            | "--active"
+    ) || token.starts_with("--output=")
+        || token.starts_with("--compact=")
+        || token.starts_with("--account=")
+        || token.starts_with("--user=")
+        || token.starts_with("--uri=")
+        || token.starts_with("--exclude-uri=")
+        || token.starts_with("--to=")
+        || token.starts_with("--parent=")
+        || token.starts_with("--parent-auto-create=")
+        || token.starts_with("--reason=")
+        || token.starts_with("--instruction=")
+        || token.starts_with("--timeout=")
+        || token.starts_with("--ignore-dirs=")
+        || token.starts_with("--include=")
+        || token.starts_with("--exclude=")
+        || token.starts_with("--node-limit=")
+        || token.starts_with("--limit=")
+        || token.starts_with("--abs-limit=")
+        || token.starts_with("--level=")
+        || token.starts_with("--level-limit=")
+        || token.starts_with("--session=")
+        || token.starts_with("--sender=")
+        || token.starts_with("--message=")
+        || token.starts_with("--role=")
+        || token.starts_with("--content=")
+        || token.starts_with("--mode=")
+        || token.starts_with("--on-conflict=")
+        || token.starts_with("--vector-mode=")
+        || token.starts_with("--token-budget=")
+        || token.starts_with("--interval=")
+        || token.starts_with("--active=")
+}
+
+fn canonical_plain_help_token(token: &str) -> &str {
+    match token {
+        "list" => "ls",
+        "del" | "delete" => "rm",
+        "rename" => "mv",
+        "lang" => "language",
+        other => other,
+    }
+}
+
+fn allows_plain_help_as_user_input(command: &str) -> bool {
+    matches!(
+        command,
+        "add-resource" | "add-skill" | "find" | "search" | "grep" | "glob" | "add-memory"
+    )
+}
+
+fn is_plain_help_group(command: &str) -> bool {
+    matches!(
+        command,
+        "config" | "task" | "admin" | "system" | "session" | "privacy" | "observer"
+    )
+}
+
+fn prefixed_help_command(path: &[String]) -> String {
+    if path.is_empty() {
+        "ov --help".to_string()
+    } else {
+        format!("ov {} --help", path.join(" "))
+    }
+}
+
+fn pre_parse_requires_cli_config_file(args: &[OsString]) -> bool {
+    let tokens = command_tokens_for_config_gate(args);
+    let Some(command) = tokens
+        .first()
+        .map(|token| canonical_plain_help_token(token))
+    else {
+        return false;
+    };
+
+    match command {
+        "config" => config_command_requires_cli_config_file(&tokens),
+        "language" | "version" => false,
+        "task" => known_task_command_requires_config(&tokens),
+        "admin" => tokens
+            .get(1)
+            .map(|token| is_admin_subcommand(token))
+            .unwrap_or(false),
+        "system" => known_system_command_requires_config(&tokens),
+        "session" => tokens
+            .get(1)
+            .map(|token| is_session_subcommand(token))
+            .unwrap_or(false),
+        "privacy" => tokens
+            .get(1)
+            .map(|token| is_privacy_subcommand(token))
+            .unwrap_or(false),
+        "observer" => tokens
+            .get(1)
+            .map(|token| is_observer_subcommand(token))
+            .unwrap_or(false),
+        _ => is_top_level_server_command(command),
+    }
+}
+
+fn config_command_requires_cli_config_file(tokens: &[String]) -> bool {
+    matches!(tokens.get(1).map(String::as_str), Some("show" | "validate"))
+}
+
+fn is_config_agent_command_request(args: &[OsString]) -> bool {
+    let tokens = command_tokens_for_config_gate(args);
+    if tokens.first().map(String::as_str) != Some("config") {
+        return false;
+    }
+
+    match tokens.get(1).map(String::as_str) {
+        Some("add" | "edit" | "delete" | "list") => true,
+        Some("switch") => tokens.get(2).is_some(),
+        _ => false,
+    }
+}
+
+fn command_tokens_for_config_gate(args: &[OsString]) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut seen_command = false;
+    let mut i = 1;
+
+    while i < args.len() {
+        let token = args[i].to_string_lossy();
+        let token_ref = token.as_ref();
+
+        if token_ref == "--" {
+            tokens.extend(
+                args.iter()
+                    .skip(i + 1)
+                    .map(|arg| arg.to_string_lossy().to_string()),
+            );
+            break;
+        }
+
+        if !seen_command {
+            if token_ref == "--compact" || token_ref == "-c" {
+                i += if args
+                    .get(i + 1)
+                    .is_some_and(|value| is_bool_arg(&value.to_string_lossy()))
+                {
+                    2
+                } else {
+                    1
+                };
+                continue;
+            }
+            if token_ref.starts_with("--") {
+                i += if global_option_takes_value(token_ref) && !token_ref.contains('=') {
+                    2
+                } else {
+                    1
+                };
+                continue;
+            }
+            if token_ref.starts_with('-') {
+                i += if global_short_option_takes_value(token_ref) {
+                    2
+                } else {
+                    1
+                };
+                continue;
+            }
+            seen_command = true;
+            tokens.push(token.into_owned());
+            i += 1;
+            continue;
+        }
+
+        if token_ref == "--compact" || token_ref == "-c" {
+            i += if args
+                .get(i + 1)
+                .is_some_and(|value| is_bool_arg(&value.to_string_lossy()))
+            {
+                2
+            } else {
+                1
+            };
+            continue;
+        }
+        if consumes_plain_help_value(token_ref) {
+            i += if token_ref.contains('=') { 1 } else { 2 };
+            continue;
+        }
+        if token_ref.starts_with('-') {
+            i += 1;
+            continue;
+        }
+        tokens.push(token.into_owned());
+        i += 1;
+    }
+
+    tokens
+}
+
+fn known_task_command_requires_config(tokens: &[String]) -> bool {
+    match tokens.get(1).map(String::as_str) {
+        Some("status" | "list") => true,
+        Some("watch") => match tokens.get(2).map(String::as_str) {
+            None => true,
+            Some(token) => is_watch_subcommand(token),
+        },
+        _ => false,
+    }
+}
+
+fn known_system_command_requires_config(tokens: &[String]) -> bool {
+    match tokens.get(1).map(String::as_str) {
+        Some("wait" | "status" | "health" | "consistency") => true,
+        Some("crypto") => matches!(tokens.get(2).map(String::as_str), None | Some("init-key")),
+        _ => false,
+    }
+}
+
+fn is_top_level_server_command(command: &str) -> bool {
+    matches!(
+        command,
+        "add-resource"
+            | "add-skill"
+            | "ls"
+            | "tree"
+            | "mkdir"
+            | "rm"
+            | "mv"
+            | "stat"
+            | "read"
+            | "abstract"
+            | "overview"
+            | "write"
+            | "get"
+            | "find"
+            | "search"
+            | "grep"
+            | "glob"
+            | "add-memory"
+            | "relations"
+            | "link"
+            | "unlink"
+            | "export"
+            | "backup"
+            | "import"
+            | "restore"
+            | "tui"
+            | "chat"
+            | "wait"
+            | "status"
+            | "health"
+            | "reindex"
+    )
+}
+
+fn is_watch_subcommand(token: &str) -> bool {
+    matches!(
+        token,
+        "ls" | "show" | "rm" | "pause" | "resume" | "update" | "trigger"
+    )
+}
+
+fn is_admin_subcommand(token: &str) -> bool {
+    matches!(
+        token,
+        "create-account"
+            | "list-accounts"
+            | "delete-account"
+            | "register-user"
+            | "list-users"
+            | "remove-user"
+            | "set-role"
+            | "regenerate-key"
+    )
+}
+
+fn is_observer_subcommand(token: &str) -> bool {
+    matches!(
+        token,
+        "queue" | "vikingdb" | "models" | "transaction" | "retrieval" | "filesystem" | "system"
+    )
+}
+
+fn is_session_subcommand(token: &str) -> bool {
+    matches!(
+        token,
+        "new"
+            | "list"
+            | "get"
+            | "get-session-context"
+            | "get-session-archive"
+            | "delete"
+            | "add-message"
+            | "add-messages"
+            | "commit"
+    )
 }
 
 fn is_privacy_subcommand(token: &str) -> bool {
@@ -1130,9 +1687,181 @@ fn preprocess_privacy_args(args: Vec<OsString>) -> Vec<OsString> {
     preprocess_privacy_upsert_key_flags(args)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LanguageGateAction {
+    Continue,
+    Prompt,
+    ExitNonInteractive,
+}
+
+fn language_gate_action(
+    args: &[OsString],
+    has_saved_language: bool,
+    is_interactive: bool,
+) -> LanguageGateAction {
+    if has_saved_language
+        || is_language_command_request(args)
+        || is_config_agent_command_request(args)
+    {
+        LanguageGateAction::Continue
+    } else if is_interactive {
+        LanguageGateAction::Prompt
+    } else {
+        LanguageGateAction::ExitNonInteractive
+    }
+}
+
+async fn ensure_language_selected_before_command(args: &[OsString]) -> Result<bool> {
+    match language_gate_action(
+        args,
+        i18n::has_saved_language(),
+        io::stdin().is_terminal() && io::stdout().is_terminal(),
+    ) {
+        LanguageGateAction::Continue => Ok(true),
+        LanguageGateAction::Prompt => {
+            handlers::handle_language(None).await?;
+            Ok(i18n::has_saved_language())
+        }
+        LanguageGateAction::ExitNonInteractive => {
+            eprintln!("{}", language_required_message());
+            std::process::exit(2);
+        }
+    }
+}
+
+fn is_language_command_request(args: &[OsString]) -> bool {
+    matches!(
+        first_command_token(args).as_deref(),
+        Some("language" | "lang")
+    )
+}
+
+fn first_command_token(args: &[OsString]) -> Option<String> {
+    let mut index = 1usize;
+
+    while index < args.len() {
+        let token = args[index].to_string_lossy();
+        if token == "--" {
+            return args
+                .get(index + 1)
+                .map(|value| value.to_string_lossy().to_string());
+        }
+        if token == "--compact" || token == "-c" {
+            index += if args
+                .get(index + 1)
+                .is_some_and(|value| is_bool_arg(&value.to_string_lossy()))
+            {
+                2
+            } else {
+                1
+            };
+            continue;
+        }
+        if token.starts_with("--") {
+            index += if global_option_takes_value(&token) && !token.contains('=') {
+                2
+            } else {
+                1
+            };
+            continue;
+        }
+        if token.starts_with('-') {
+            index += if global_short_option_takes_value(&token) {
+                2
+            } else {
+                1
+            };
+            continue;
+        }
+        return Some(token.to_string());
+    }
+
+    None
+}
+
+fn global_option_takes_value(option: &str) -> bool {
+    matches!(option, "--output" | "--account" | "--user")
+}
+
+fn global_short_option_takes_value(option: &str) -> bool {
+    matches!(option, "-o")
+}
+
+fn is_bool_arg(value: &str) -> bool {
+    matches!(
+        value,
+        "true" | "false" | "True" | "False" | "TRUE" | "FALSE"
+    )
+}
+
+fn language_required_message() -> String {
+    format!(
+        "{} {}\n{}:\n  {}\n  {}",
+        theme::brand_title("OpenViking").bold(),
+        theme::body("needs a display language before running commands."),
+        theme::strong("Run one of"),
+        theme::command("ov language en").bold(),
+        theme::command("ov language zh-CN").bold(),
+    )
+}
+
+fn language_command_can_run_picker(has_language_value: bool, is_interactive: bool) -> bool {
+    has_language_value || is_interactive
+}
+
 #[tokio::main]
 async fn main() {
-    let cli = Cli::parse_from(preprocess_privacy_args(std::env::args_os().collect()));
+    let args = preprocess_privacy_args(std::env::args_os().collect());
+    let command_display = error_ui::display_command(&args);
+    match ensure_language_selected_before_command(&args).await {
+        Ok(true) => {}
+        Ok(false) => return,
+        Err(e) => {
+            let report = error_ui::report_for_runtime_error(&command_display, &e);
+            error_ui::print_report(&report, false);
+            std::process::exit(2);
+        }
+    }
+
+    if help_ui::is_top_level_help_request(&args) {
+        print!("{}", help_ui::render_top_level_help());
+        return;
+    }
+    if let Some(help) = help_ui::render_command_help_request(&args) {
+        print!("{help}");
+        return;
+    }
+    if let Some(misuse) = plain_help_misuse(&args) {
+        let report = error_ui::report_for_plain_help_error(&command_display, misuse.help_command);
+        error_ui::print_report(&report, false);
+        std::process::exit(2);
+    }
+
+    let mut preloaded_required_config = if pre_parse_requires_cli_config_file(&args) {
+        match Config::load_required() {
+            Ok(config) => Some(config),
+            Err(e) => {
+                let report = error_ui::report_for_runtime_error(&command_display, &e);
+                error_ui::print_report(&report, false);
+                std::process::exit(2);
+            }
+        }
+    } else {
+        None
+    };
+
+    let cli = match Cli::try_parse_from(args.clone()) {
+        Ok(cli) => cli,
+        Err(error) => {
+            if error.exit_code() == 0 {
+                let _ = error.print();
+            } else {
+                let report = error_ui::report_for_clap_error(&args, &error.to_string());
+                error_ui::print_report(&report, false);
+            }
+            std::process::exit(error.exit_code());
+        }
+    };
 
     let output_format = cli.output;
     let compact = cli.compact;
@@ -1142,18 +1871,76 @@ async fn main() {
         verbose: cli.verbose,
     };
     if let Some(message) = legacy_upload_option_error(legacy_upload_options, &cli.command) {
-        eprintln!("Error: {}", message);
+        let report = error_ui::report_for_message_error(
+            &command_display,
+            "Command Error",
+            message,
+            vec![
+                error_ui::ErrorAction::new("ov add-resource --help", "Show add-resource options"),
+                error_ui::ErrorAction::new("ov add-skill --help", "Show add-skill options"),
+            ],
+        );
+        error_ui::print_report(&report, false);
         std::process::exit(2);
     }
 
-    let config = match if cli.command.requires_cli_config_file() {
-        Config::load_required()
+    // Check this before loading config so misplaced --sudo reports the command rule directly.
+    if cli.sudo && !cli.command.is_admin_command() {
+        let language = i18n::Language::current();
+        let (title, message, actions) = match language {
+            i18n::Language::En => (
+                "Command Error",
+                "--sudo is only supported for admin, system, and reindex commands.",
+                vec![
+                    error_ui::ErrorAction::new("ov admin --help", "Show admin commands"),
+                    error_ui::ErrorAction::new("ov system --help", "Show system commands"),
+                    error_ui::ErrorAction::new("ov reindex --help", "Show reindex options"),
+                ],
+            ),
+            i18n::Language::ZhCn => (
+                "命令错误",
+                "--sudo 只支持 admin、system 和 reindex 命令。",
+                vec![
+                    error_ui::ErrorAction::new("ov admin --help", "查看管理命令"),
+                    error_ui::ErrorAction::new("ov system --help", "查看系统命令"),
+                    error_ui::ErrorAction::new("ov reindex --help", "查看重建索引选项"),
+                ],
+            ),
+        };
+        let report = error_ui::report_for_message_error(&command_display, title, message, actions);
+        error_ui::print_report(&report, false);
+        std::process::exit(2);
+    }
+
+    if let Commands::Language { language } = &cli.command {
+        if !language_command_can_run_picker(
+            language.is_some(),
+            io::stdin().is_terminal() && io::stdout().is_terminal(),
+        ) {
+            eprintln!("{}", language_required_message());
+            std::process::exit(2);
+        }
+        if let Err(e) = handlers::handle_language(language.clone()).await {
+            let report = error_ui::report_for_runtime_error(&command_display, &e);
+            error_ui::print_report(&report, cli.verbose);
+            std::process::exit(2);
+        }
+        return;
+    }
+
+    let config_result = if cli.command.requires_cli_config_file() {
+        match preloaded_required_config.take() {
+            Some(config) => Ok(config),
+            None => Config::load_required(),
+        }
     } else {
         Config::load_default()
-    } {
+    };
+    let config = match config_result {
         Ok(config) => config,
         Err(e) => {
-            eprintln!("Error: {}", e);
+            let report = error_ui::report_for_runtime_error(&command_display, &e);
+            error_ui::print_report(&report, cli.verbose);
             std::process::exit(2);
         }
     };
@@ -1163,24 +1950,36 @@ async fn main() {
         compact,
         cli.account.clone(),
         cli.user.clone(),
-        cli.agent_id.clone(),
         cli.sudo,
         None,
         None,
         if cli.profile { Some(true) } else { None },
     );
+    let verbose_errors = ctx.is_verbose();
 
     // Check if --sudo is used but root_api_key is not configured
     if ctx.sudo && ctx.config.root_api_key.is_none() {
-        eprintln!(
-            "Error: --sudo requires root_api_key to be configured in ~/.openviking/ovcli.conf"
-        );
-        std::process::exit(2);
-    }
-
-    // Check if --sudo is used with non-admin command
-    if ctx.sudo && !cli.command.is_admin_command() {
-        eprintln!("Error: --sudo is only supported for admin commands (admin, system, reindex)");
+        let language = i18n::Language::current();
+        let (title, message, actions) = match language {
+            i18n::Language::En => (
+                "Configuration Error",
+                "--sudo requires root_api_key in ~/.openviking/ovcli.conf.",
+                vec![
+                    error_ui::ErrorAction::new("ov config", "Edit the active config"),
+                    error_ui::ErrorAction::new("ov config show", "Show the active config"),
+                ],
+            ),
+            i18n::Language::ZhCn => (
+                "配置错误",
+                "--sudo 需要在 ~/.openviking/ovcli.conf 中配置 root_api_key。",
+                vec![
+                    error_ui::ErrorAction::new("ov config", "编辑当前配置"),
+                    error_ui::ErrorAction::new("ov config show", "显示当前配置"),
+                ],
+            ),
+        };
+        let report = error_ui::report_for_message_error(&command_display, title, message, actions);
+        error_ui::print_report(&report, false);
         std::process::exit(2);
     };
 
@@ -1286,28 +2085,20 @@ async fn main() {
                 let client = ctx.get_client();
                 match action {
                     WatchCommands::Ls { active_only } => {
-                        commands::watch::ls(
-                            &client,
-                            active_only,
-                            ctx.output_format,
-                            ctx.compact,
-                        )
-                        .await
+                        commands::watch::ls(&client, active_only, ctx.output_format, ctx.compact)
+                            .await
                     }
                     WatchCommands::Show { key } => {
-                        commands::watch::show(&client, &key, ctx.output_format, ctx.compact)
-                            .await
+                        commands::watch::show(&client, &key, ctx.output_format, ctx.compact).await
                     }
                     WatchCommands::Rm { key } => {
                         commands::watch::rm(&client, &key, ctx.output_format, ctx.compact).await
                     }
                     WatchCommands::Pause { key } => {
-                        commands::watch::pause(&client, &key, ctx.output_format, ctx.compact)
-                            .await
+                        commands::watch::pause(&client, &key, ctx.output_format, ctx.compact).await
                     }
                     WatchCommands::Resume { key } => {
-                        commands::watch::resume(&client, &key, ctx.output_format, ctx.compact)
-                            .await
+                        commands::watch::resume(&client, &key, ctx.output_format, ctx.compact).await
                     }
                     WatchCommands::Update {
                         key,
@@ -1329,20 +2120,22 @@ async fn main() {
                         .await
                     }
                     WatchCommands::Trigger { key } => {
-                        commands::watch::trigger(
-                            &client,
-                            &key,
-                            ctx.output_format,
-                            ctx.compact,
-                        )
-                        .await
+                        commands::watch::trigger(&client, &key, ctx.output_format, ctx.compact)
+                            .await
                     }
                 }
             }
         },
-        Commands::Status => {
+        Commands::Status { verbose } => {
             let client = ctx.get_client();
-            commands::observer::system(&client, ctx.output_format, ctx.compact).await
+            commands::system::diagnostic_status(
+                &client,
+                &ctx.config,
+                ctx.output_format,
+                ctx.compact,
+                verbose,
+            )
+            .await
         }
         Commands::Health => handlers::handle_health(ctx).await,
         Commands::System { action } => handlers::handle_system(action, ctx).await,
@@ -1405,15 +2198,24 @@ async fn main() {
             cmd.run().await
         }
         Commands::Config { action } => handlers::handle_config(action, ctx).await,
+        Commands::Language { .. } => unreachable!("language command is handled before config load"),
         Commands::Version => {
-            println!("CLI:     {}", env!("OPENVIKING_CLI_VERSION"));
+            println!(
+                "{}     {}",
+                theme::muted("CLI:"),
+                theme::version(env!("OPENVIKING_CLI_VERSION")).bold()
+            );
 
             // Try to get server version from /health endpoint with a short timeout (3 seconds)
             let client = ctx.get_client_with_timeout(Some(3.0));
             match client.get::<serde_json::Value>("/health", &[]).await {
                 Ok(health) => {
                     if let Some(version) = health.get("version").and_then(|v| v.as_str()) {
-                        println!("Server:  {}", version);
+                        println!(
+                            "{}  {}",
+                            theme::muted("Server:"),
+                            theme::sky_value(version).bold()
+                        );
                     }
                 }
                 Err(_) => {
@@ -1456,7 +2258,13 @@ async fn main() {
             after,
             before,
             level,
-        } => handlers::handle_find(query, uri, node_limit, threshold, after, before, level, ctx).await,
+            peer_id,
+        } => {
+            handlers::handle_find(
+                query, uri, node_limit, threshold, after, before, level, peer_id, ctx,
+            )
+            .await
+        }
         Commands::Search {
             query,
             uri,
@@ -1466,9 +2274,10 @@ async fn main() {
             after,
             before,
             level,
+            peer_id,
         } => {
             handlers::handle_search(
-                query, uri, session_id, node_limit, threshold, after, before, level, ctx,
+                query, uri, session_id, node_limit, threshold, after, before, level, peer_id, ctx,
             )
             .await
         }
@@ -1500,7 +2309,10 @@ async fn main() {
     };
 
     if let Err(e) = result {
-        eprintln!("Error: {}", e);
+        if !matches!(e, Error::AlreadyReported) {
+            let report = error_ui::report_for_runtime_error(&command_display, &e);
+            error_ui::print_report(&report, verbose_errors);
+        }
         std::process::exit(1);
     }
 }
@@ -1508,32 +2320,56 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        Cli, CliContext, Commands, PrivacyCommands, UploadCliOptions, legacy_upload_option_error,
+        Cli, CliContext, Commands, ConfigAddTarget, ConfigCommands, LanguageGateAction,
+        PrivacyCommands, UploadCliOptions, first_command_token, is_language_command_request,
+        language_command_can_run_picker, language_gate_action, language_required_message,
+        legacy_upload_option_error, plain_help_misuse, pre_parse_requires_cli_config_file,
         preprocess_privacy_args,
     };
-    use crate::config::Config;
+    use crate::config::{Config, DEFAULT_SELF_MANAGED_URL};
     use crate::handlers;
     use crate::output::OutputFormat;
     use clap::{CommandFactory, Parser};
     use std::ffi::OsString;
 
+    fn os_args(args: &[&str]) -> Vec<OsString> {
+        args.iter().map(OsString::from).collect()
+    }
+
     #[test]
     fn cli_parses_global_identity_override_flags() {
-        let cli = Cli::try_parse_from([
-            "ov",
-            "--account",
-            "acme",
-            "--user",
-            "alice",
-            "--agent-id",
-            "assistant-1",
-            "ls",
-        ])
-        .expect("cli should parse");
+        let cli = Cli::try_parse_from(["ov", "--account", "acme", "--user", "alice", "ls"])
+            .expect("cli should parse");
 
         assert_eq!(cli.account.as_deref(), Some("acme"));
         assert_eq!(cli.user.as_deref(), Some("alice"));
-        assert_eq!(cli.agent_id.as_deref(), Some("assistant-1"));
+    }
+
+    #[test]
+    fn cli_parses_find_peer_id() {
+        let cli = Cli::try_parse_from(["ov", "find", "invoice", "--peer-id", "web:visitor:alice"])
+            .expect("find peer id should parse");
+
+        match cli.command {
+            Commands::Find { peer_id, .. } => {
+                assert_eq!(peer_id.as_deref(), Some("web:visitor:alice"));
+            }
+            _ => panic!("expected find command"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_search_peer_id() {
+        let cli =
+            Cli::try_parse_from(["ov", "search", "invoice", "--peer-id", "web:visitor:alice"])
+                .expect("search peer id should parse");
+
+        match cli.command {
+            Commands::Search { peer_id, .. } => {
+                assert_eq!(peer_id.as_deref(), Some("web:visitor:alice"));
+            }
+            _ => panic!("expected search command"),
+        }
     }
 
     #[test]
@@ -1546,16 +2382,284 @@ mod tests {
     }
 
     #[test]
-    fn setup_switch_and_version_do_not_require_existing_cli_config() {
-        let setup = Cli::try_parse_from(["ov", "config", "setup-cli"])
-            .expect("config setup-cli should parse");
+    fn bare_config_switch_and_version_do_not_require_existing_cli_config() {
+        let setup = Cli::try_parse_from(["ov", "config"]).expect("bare config should parse");
         let switch =
             Cli::try_parse_from(["ov", "config", "switch"]).expect("config switch should parse");
+        let switch_named = Cli::try_parse_from(["ov", "config", "switch", "prod"])
+            .expect("named config switch should parse");
         let version = Cli::try_parse_from(["ov", "version"]).expect("version should parse");
 
         assert!(!setup.command.requires_cli_config_file());
         assert!(!switch.command.requires_cli_config_file());
+        assert!(!switch_named.command.requires_cli_config_file());
         assert!(!version.command.requires_cli_config_file());
+    }
+
+    #[test]
+    fn config_agent_commands_parse_without_secret_value_flags() {
+        let add_cloud = Cli::try_parse_from([
+            "ov",
+            "config",
+            "add",
+            "cloud",
+            "--name",
+            "prod",
+            "--api-key-stdin",
+            "--activate",
+        ])
+        .expect("cloud add should parse");
+        let Commands::Config {
+            action:
+                Some(ConfigCommands::Add {
+                    target: ConfigAddTarget::Cloud(cloud),
+                }),
+        } = add_cloud.command
+        else {
+            panic!("expected cloud add command");
+        };
+        assert_eq!(cloud.name.as_deref(), Some("prod"));
+        assert!(cloud.api_key_stdin);
+        assert!(cloud.activate);
+
+        let add_self_managed = Cli::try_parse_from([
+            "ov",
+            "config",
+            "add",
+            "self-managed",
+            "--url",
+            "https://ov.example.com",
+            "--api-key-env",
+            "OV_KEY",
+        ])
+        .expect("self-managed add should parse");
+        let Commands::Config {
+            action:
+                Some(ConfigCommands::Add {
+                    target: ConfigAddTarget::SelfManaged(self_managed),
+                }),
+        } = add_self_managed.command
+        else {
+            panic!("expected self-managed add command");
+        };
+        assert_eq!(self_managed.url.as_deref(), Some("https://ov.example.com"));
+        assert_eq!(self_managed.api_key_env.as_deref(), Some("OV_KEY"));
+
+        let edit = Cli::try_parse_from([
+            "ov",
+            "config",
+            "edit",
+            "prod",
+            "--clear-api-key",
+            "--activate",
+        ])
+        .expect("config edit should parse");
+        let Commands::Config {
+            action: Some(ConfigCommands::Edit(edit)),
+        } = edit.command
+        else {
+            panic!("expected edit command");
+        };
+        assert_eq!(edit.name, "prod");
+        assert!(edit.clear_api_key);
+        assert!(edit.activate);
+
+        assert!(
+            Cli::try_parse_from(["ov", "config", "add", "cloud", "--api-key", "secret"]).is_err(),
+            "plain API key flag must stay rejected"
+        );
+        assert!(
+            Cli::try_parse_from([
+                "ov",
+                "config",
+                "add",
+                "self-managed",
+                "--use-root-key-for-normal-commands",
+            ])
+            .is_err(),
+            "root-as-normal flag is obsolete and must stay rejected"
+        );
+        assert!(
+            Cli::try_parse_from([
+                "ov",
+                "config",
+                "edit",
+                "prod",
+                "--use-root-key-for-normal-commands",
+            ])
+            .is_err(),
+            "root-as-normal edit flag is obsolete and must stay rejected"
+        );
+    }
+
+    #[test]
+    fn pre_parse_config_gate_catches_incomplete_known_server_commands() {
+        for args in [
+            &["ov", "find"][..],
+            &["ov", "task", "status"],
+            &["ov", "task", "watch", "show"],
+            &["ov", "config", "validate"],
+            &["ov", "config", "show"],
+            &["ov", "system", "consistency"],
+            &["ov", "admin", "list-accounts"],
+        ] {
+            assert!(
+                pre_parse_requires_cli_config_file(&os_args(args)),
+                "{args:?} should require ovcli.conf before Clap positional validation"
+            );
+        }
+    }
+
+    #[test]
+    fn pre_parse_config_gate_covers_known_top_level_server_commands() {
+        for command in [
+            "add-resource",
+            "add-skill",
+            "ls",
+            "tree",
+            "mkdir",
+            "rm",
+            "mv",
+            "stat",
+            "read",
+            "abstract",
+            "overview",
+            "write",
+            "get",
+            "find",
+            "search",
+            "grep",
+            "glob",
+            "add-memory",
+            "relations",
+            "link",
+            "unlink",
+            "export",
+            "backup",
+            "import",
+            "restore",
+            "tui",
+            "chat",
+            "wait",
+            "status",
+            "health",
+            "reindex",
+        ] {
+            assert!(
+                pre_parse_requires_cli_config_file(&os_args(&["ov", command])),
+                "{command} should require ovcli.conf before Clap validation"
+            );
+        }
+    }
+
+    #[test]
+    fn pre_parse_config_gate_covers_known_group_server_commands() {
+        let cases: &[&[&str]] = &[
+            &["ov", "config", "show"],
+            &["ov", "config", "validate"],
+            &["ov", "task", "status"],
+            &["ov", "task", "list"],
+            &["ov", "task", "watch"],
+            &["ov", "task", "watch", "ls"],
+            &["ov", "task", "watch", "show"],
+            &["ov", "task", "watch", "rm"],
+            &["ov", "task", "watch", "pause"],
+            &["ov", "task", "watch", "resume"],
+            &["ov", "task", "watch", "update"],
+            &["ov", "task", "watch", "trigger"],
+            &["ov", "admin", "create-account"],
+            &["ov", "admin", "list-accounts"],
+            &["ov", "admin", "delete-account"],
+            &["ov", "admin", "register-user"],
+            &["ov", "admin", "list-users"],
+            &["ov", "admin", "remove-user"],
+            &["ov", "admin", "set-role"],
+            &["ov", "admin", "regenerate-key"],
+            &["ov", "system", "wait"],
+            &["ov", "system", "status"],
+            &["ov", "system", "health"],
+            &["ov", "system", "consistency"],
+            &["ov", "system", "crypto"],
+            &["ov", "system", "crypto", "init-key"],
+            &["ov", "session", "new"],
+            &["ov", "session", "list"],
+            &["ov", "session", "get"],
+            &["ov", "session", "get-session-context"],
+            &["ov", "session", "get-session-archive"],
+            &["ov", "session", "delete"],
+            &["ov", "session", "add-message"],
+            &["ov", "session", "add-messages"],
+            &["ov", "session", "commit"],
+            &["ov", "privacy", "categories"],
+            &["ov", "privacy", "list"],
+            &["ov", "privacy", "get"],
+            &["ov", "privacy", "upsert"],
+            &["ov", "privacy", "versions"],
+            &["ov", "privacy", "version"],
+            &["ov", "privacy", "activate"],
+            &["ov", "observer", "queue"],
+            &["ov", "observer", "vikingdb"],
+            &["ov", "observer", "models"],
+            &["ov", "observer", "transaction"],
+            &["ov", "observer", "retrieval"],
+            &["ov", "observer", "filesystem"],
+            &["ov", "observer", "system"],
+        ];
+
+        for args in cases {
+            assert!(
+                pre_parse_requires_cli_config_file(&os_args(args)),
+                "{args:?} should require ovcli.conf before Clap validation"
+            );
+        }
+
+        assert!(
+            pre_parse_requires_cli_config_file(&preprocess_privacy_args(os_args(&[
+                "ov", "privacy", "skill", "demo",
+            ]))),
+            "privacy shortcut should require ovcli.conf after preprocessing"
+        );
+    }
+
+    #[test]
+    fn pre_parse_config_gate_respects_aliases_and_valid_help_values() {
+        for args in [
+            &["ov", "list"][..],
+            &["ov", "delete"],
+            &["ov", "rename"],
+            &["ov", "lang", "en"],
+        ] {
+            let expected = args[1] != "lang";
+            assert_eq!(
+                pre_parse_requires_cli_config_file(&os_args(args)),
+                expected,
+                "{args:?} pre-parse gate mismatch"
+            );
+        }
+    }
+
+    #[test]
+    fn pre_parse_config_gate_allows_non_server_and_unknown_commands() {
+        for args in [
+            &["ov", "con"][..],
+            &["ov", "task", "nope"],
+            &["ov", "config"],
+            &["ov", "config", "switch"],
+            &["ov", "config", "switch", "prod"],
+            &["ov", "config", "list"],
+            &["ov", "config", "delete", "prod"],
+            &["ov", "config", "add", "cloud", "--api-key-stdin"],
+            &["ov", "config", "edit", "prod", "--activate"],
+            &["ov", "config", "setup-cli"],
+            &["ov", "version"],
+            &["ov", "language", "en"],
+            &["ov", "lang", "en"],
+        ] {
+            assert!(
+                !pre_parse_requires_cli_config_file(&os_args(args)),
+                "{args:?} should not be gated before Clap parsing"
+            );
+        }
     }
 
     #[test]
@@ -1596,18 +2700,30 @@ mod tests {
     }
 
     #[test]
-    fn cli_tree_rejects_upload_and_admin_only_flags_after_subcommand() {
+    fn cli_tree_rejects_upload_flags_after_subcommand() {
         assert!(Cli::try_parse_from(["ov", "tree", "viking://", "--progress"]).is_err());
         assert!(Cli::try_parse_from(["ov", "tree", "viking://", "--no-progress"]).is_err());
         assert!(Cli::try_parse_from(["ov", "tree", "viking://", "--verbose"]).is_err());
-        assert!(Cli::try_parse_from(["ov", "tree", "viking://", "--sudo"]).is_err());
+    }
+
+    #[test]
+    fn cli_parses_sudo_as_hidden_global_flag_after_subcommand() {
+        let cli = Cli::try_parse_from(["ov", "tree", "viking://", "--sudo"])
+            .expect("sudo should parse anywhere so runtime can show a precise command error");
+
+        assert!(cli.sudo);
     }
 
     #[test]
     fn cli_parses_upload_flags_on_upload_commands() {
-        let add_resource =
-            Cli::try_parse_from(["ov", "add-resource", "./README.md", "--progress", "--verbose"])
-                .expect("add-resource upload flags should parse");
+        let add_resource = Cli::try_parse_from([
+            "ov",
+            "add-resource",
+            "./README.md",
+            "--progress",
+            "--verbose",
+        ])
+        .expect("add-resource upload flags should parse");
         match add_resource.command {
             Commands::AddResource { upload_options, .. } => {
                 assert!(upload_options.progress);
@@ -1651,11 +2767,15 @@ mod tests {
 
         let tree = Cli::try_parse_from(["ov", "--progress", "tree", "viking://"])
             .expect("hidden legacy flag still parses before runtime validation");
-        assert!(legacy_upload_option_error(upload_options, &tree.command).is_some());
+        assert_eq!(
+            legacy_upload_option_error(upload_options, &tree.command),
+            Some(
+                "--progress, --no-progress, and --verbose are only supported for add-resource and add-skill."
+            )
+        );
 
-        let add_resource =
-            Cli::try_parse_from(["ov", "--progress", "add-resource", "./README.md"])
-                .expect("legacy pre-command upload flags should parse for add-resource");
+        let add_resource = Cli::try_parse_from(["ov", "--progress", "add-resource", "./README.md"])
+            .expect("legacy pre-command upload flags should parse for add-resource");
         assert!(legacy_upload_option_error(upload_options, &add_resource.command).is_none());
     }
 
@@ -1668,14 +2788,227 @@ mod tests {
     }
 
     #[test]
+    fn cli_parses_sudo_after_admin_command() {
+        let cli = Cli::try_parse_from(["ov", "admin", "list-accounts", "--sudo"])
+            .expect("post-command sudo should parse");
+
+        assert!(cli.sudo);
+    }
+
+    #[test]
+    fn cli_config_without_subcommand_parses_as_setup_entrypoint() {
+        Cli::try_parse_from(["ov", "config"]).expect("bare config command should parse");
+    }
+
+    #[test]
+    fn cli_config_single_purpose_subcommands_still_parse() {
+        for subcommand in ["show", "validate", "switch"] {
+            Cli::try_parse_from(["ov", "config", subcommand])
+                .unwrap_or_else(|_| panic!("config {subcommand} should parse"));
+        }
+    }
+
+    #[test]
+    fn cli_config_rejects_removed_setup_cli_subcommand() {
+        assert!(Cli::try_parse_from(["ov", "config", "setup-cli"]).is_err());
+    }
+
+    #[test]
+    fn cli_language_command_and_alias_parse() {
+        let cli = Cli::try_parse_from(["ov", "language", "zh-CN"])
+            .expect("language command should parse");
+        match cli.command {
+            Commands::Language { language } => assert_eq!(language.as_deref(), Some("zh-CN")),
+            _ => panic!("expected language command"),
+        }
+
+        let cli = Cli::try_parse_from(["ov", "lang"]).expect("language alias should parse");
+        match cli.command {
+            Commands::Language { language } => assert!(language.is_none()),
+            _ => panic!("expected language command"),
+        }
+    }
+
+    #[test]
+    fn language_gate_detects_language_command_after_global_flags() {
+        assert!(is_language_command_request(&os_args(&["ov", "language"])));
+        assert!(is_language_command_request(&os_args(&[
+            "ov", "lang", "zh-CN"
+        ])));
+        assert!(is_language_command_request(&os_args(&[
+            "ov", "--output", "json", "language", "en",
+        ])));
+        assert!(is_language_command_request(&os_args(&[
+            "ov",
+            "--output=json",
+            "--compact",
+            "false",
+            "lang",
+        ])));
+        assert!(is_language_command_request(&os_args(&[
+            "ov",
+            "--compact",
+            "lang",
+        ])));
+        assert!(!is_language_command_request(&os_args(&["ov", "status"])));
+        assert!(!is_language_command_request(&os_args(&["ov", "--help"])));
+    }
+
+    #[test]
+    fn language_gate_action_continues_prompts_or_exits() {
+        assert_eq!(
+            language_gate_action(&os_args(&["ov", "status"]), true, false),
+            LanguageGateAction::Continue
+        );
+        assert_eq!(
+            language_gate_action(&os_args(&["ov", "language"]), false, false),
+            LanguageGateAction::Continue
+        );
+        assert_eq!(
+            language_gate_action(&os_args(&["ov", "status"]), false, true),
+            LanguageGateAction::Prompt
+        );
+        assert_eq!(
+            language_gate_action(&os_args(&["ov", "status"]), false, false),
+            LanguageGateAction::ExitNonInteractive
+        );
+    }
+
+    #[test]
+    fn language_gate_allows_config_agent_commands_without_saved_language() {
+        for args in [
+            &["ov", "config", "add", "cloud", "--api-key-stdin"][..],
+            &["ov", "config", "add", "self-managed"],
+            &["ov", "config", "edit", "prod", "--activate"],
+            &["ov", "config", "delete", "prod"],
+            &["ov", "config", "list"],
+            &["ov", "config", "switch", "prod"],
+        ] {
+            assert_eq!(
+                language_gate_action(&os_args(args), false, false),
+                LanguageGateAction::Continue,
+                "{args:?} should bypass first-run language selection"
+            );
+        }
+
+        assert_eq!(
+            language_gate_action(&os_args(&["ov", "config"]), false, false),
+            LanguageGateAction::ExitNonInteractive
+        );
+    }
+
+    #[test]
+    fn language_gate_message_points_to_explicit_language_commands() {
+        let message = language_required_message();
+
+        assert!(message.contains("ov language en"));
+        assert!(message.contains("ov language zh-CN"));
+    }
+
+    #[test]
+    fn language_command_without_value_requires_interactive_picker() {
+        assert!(language_command_can_run_picker(true, false));
+        assert!(language_command_can_run_picker(false, true));
+        assert!(!language_command_can_run_picker(false, false));
+    }
+
+    #[test]
+    fn first_command_token_skips_global_flags() {
+        assert_eq!(
+            first_command_token(&os_args(&[
+                "ov",
+                "--output",
+                "json",
+                "--account=acme",
+                "--sudo",
+                "admin",
+            ]))
+            .as_deref(),
+            Some("admin")
+        );
+        assert_eq!(
+            first_command_token(&os_args(&["ov", "--help"])).as_deref(),
+            None
+        );
+    }
+
+    #[test]
+    fn cli_status_parses_verbose_flag() {
+        let cli =
+            Cli::try_parse_from(["ov", "status", "--verbose"]).expect("status verbose parses");
+
+        match cli.command {
+            Commands::Status { verbose } => assert!(verbose),
+            _ => panic!("expected status command"),
+        }
+    }
+
+    #[test]
+    fn plain_help_is_rejected_for_top_level_group_and_structured_leaf_commands() {
+        for (args, expected_help) in [
+            (vec!["ov", "help"], "ov --help"),
+            (vec!["ov", "config", "help"], "ov config --help"),
+            (vec!["ov", "task", "help"], "ov task --help"),
+            (vec!["ov", "admin", "help"], "ov admin --help"),
+            (vec!["ov", "ls", "help"], "ov ls --help"),
+            (vec!["ov", "tree", "help"], "ov tree --help"),
+            (vec!["ov", "read", "help"], "ov read --help"),
+            (
+                vec!["ov", "task", "status", "help"],
+                "ov task status --help",
+            ),
+            (
+                vec!["ov", "system", "consistency", "help"],
+                "ov system consistency --help",
+            ),
+        ] {
+            let misuse = plain_help_misuse(&os_args(&args))
+                .unwrap_or_else(|| panic!("{args:?} should be plain-help misuse"));
+            assert_eq!(misuse.help_command, expected_help);
+        }
+    }
+
+    #[test]
+    fn plain_help_is_allowed_as_free_form_user_input() {
+        for args in [
+            vec!["ov", "find", "help"],
+            vec!["ov", "search", "help"],
+            vec!["ov", "grep", "help"],
+            vec!["ov", "glob", "help"],
+            vec!["ov", "add-memory", "help"],
+            vec!["ov", "add-resource", "help"],
+            vec!["ov", "add-skill", "help"],
+        ] {
+            assert!(
+                plain_help_misuse(&os_args(&args)).is_none(),
+                "{args:?} should remain normal user input"
+            );
+        }
+    }
+
+    #[test]
+    fn plain_help_ignores_option_values() {
+        assert!(
+            plain_help_misuse(&os_args(&[
+                "ov",
+                "read",
+                "--account",
+                "help",
+                "viking://resource",
+            ]))
+            .is_none()
+        );
+        assert!(plain_help_misuse(&os_args(&["ov", "grep", "--uri", "help", "TODO",])).is_none());
+    }
+
+    #[test]
     fn cli_context_overrides_identity_from_cli_flags() {
         let config = Config {
-            url: "http://localhost:1933".to_string(),
+            url: DEFAULT_SELF_MANAGED_URL.to_string(),
             api_key: Some("test-key".to_string()),
             root_api_key: None,
             account: Some("from-config-account".to_string()),
             user: Some("from-config-user".to_string()),
-            agent_id: Some("from-config-agent".to_string()),
             timeout: 60.0,
             output: "table".to_string(),
             echo_command: true,
@@ -1692,7 +3025,6 @@ mod tests {
             true,
             Some("from-cli-account".to_string()),
             Some("from-cli-user".to_string()),
-            Some("from-cli-agent".to_string()),
             false,
             None,
             None,
@@ -1701,18 +3033,16 @@ mod tests {
 
         assert_eq!(ctx.config.account.as_deref(), Some("from-cli-account"));
         assert_eq!(ctx.config.user.as_deref(), Some("from-cli-user"));
-        assert_eq!(ctx.config.agent_id.as_deref(), Some("from-cli-agent"));
     }
 
     #[test]
     fn cli_context_uses_root_api_key_with_sudo() {
         let config = Config {
-            url: "http://localhost:1933".to_string(),
+            url: DEFAULT_SELF_MANAGED_URL.to_string(),
             api_key: Some("user-key".to_string()),
             root_api_key: Some("root-key".to_string()),
             account: None,
             user: None,
-            agent_id: None,
             timeout: 60.0,
             output: "table".to_string(),
             echo_command: true,
@@ -1730,7 +3060,6 @@ mod tests {
             true,
             None,
             None,
-            None,
             false,
             None,
             None,
@@ -1744,7 +3073,6 @@ mod tests {
             config,
             OutputFormat::Json,
             true,
-            None,
             None,
             None,
             true,

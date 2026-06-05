@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenVikingClient } from "../../client.js";
 import { memoryOpenVikingConfigSchema } from "../../config.js";
 import { createMemoryOpenVikingContextEngine } from "../../context-engine.js";
+import { estimateAgentMessagesTokens, estimateTextTokens } from "../../token-estimator.js";
 
 const cfg = memoryOpenVikingConfigSchema.parse({
   mode: "remote",
@@ -12,11 +13,11 @@ const cfg = memoryOpenVikingConfigSchema.parse({
 });
 
 function roughEstimate(messages: unknown[]): number {
-  return Math.ceil(JSON.stringify(messages).length / 4);
+  return estimateAgentMessagesTokens(messages);
 }
 
 function systemPromptTokens(text?: string): number {
-  return text ? Math.ceil(text.length / 4) : 0;
+  return estimateTextTokens(text);
 }
 
 function makeLogger() {
@@ -46,6 +47,7 @@ function makeEngine(
 ) {
   const logger = makeLogger();
   const client = {
+    healthCheck: vi.fn().mockResolvedValue(undefined),
     getSessionContext: vi.fn().mockResolvedValue(contextResult),
     find: vi.fn().mockResolvedValue({ memories: [], resources: [], total: 0 }),
     read: vi.fn().mockResolvedValue(""),
@@ -72,6 +74,7 @@ function makeEngine(
   return {
     engine,
     client: client as unknown as {
+      healthCheck: ReturnType<typeof vi.fn>;
       getSessionContext: ReturnType<typeof vi.fn>;
       find: ReturnType<typeof vi.fn>;
       read: ReturnType<typeof vi.fn>;
@@ -84,6 +87,71 @@ function makeEngine(
 
 describe("context-engine assemble()", () => {
   it("prepends auto-recall to the latest user message during transformContext", async () => {
+    const { engine, client } = makeEngine(
+      {
+        latest_archive_overview: "This OV context must not be rebuilt during transformContext.",
+        pre_archive_abstracts: [],
+        messages: [
+          {
+            id: "stored-current-user",
+            role: "user",
+            created_at: "2026-04-30T00:00:00Z",
+            parts: [{ type: "text", text: "stale stored prompt" }],
+          },
+        ],
+        estimatedTokens: 12,
+        stats: makeStats(),
+      },
+      {
+        cfgOverrides: {
+          autoRecall: true,
+          recallPreferAbstract: true,
+        },
+      },
+    );
+    client.find
+      .mockResolvedValueOnce({
+        memories: [
+          {
+            uri: "viking://user/default/memories/rust-pref",
+            level: 2,
+            category: "preferences",
+            abstract: "User prefers Rust for backend tasks.",
+            score: 0.93,
+          },
+        ],
+        total: 1,
+      })
+      .mockResolvedValueOnce({ memories: [], total: 0 });
+
+    const sourceMessages = [
+      { role: "user", content: "[Session History Summary]\nOlder archive summary." },
+      { role: "assistant", content: [{ type: "text", text: "Previous answer." }] },
+      { role: "user", content: "what backend language should we use?" },
+    ];
+
+    const result = await engine.assemble({
+      sessionId: "session-transform",
+      messages: sourceMessages,
+    });
+
+    expect(client.healthCheck).toHaveBeenCalledWith("agent:session-transform", 500);
+    expect(client.getSessionContext).not.toHaveBeenCalled();
+    expect(result.messages).toHaveLength(sourceMessages.length);
+    expect(result.messages[0]).toBe(sourceMessages[0]);
+    expect(result.messages[1]).toBe(sourceMessages[1]);
+    expect(result.messages[2]?.role).toBe("user");
+    expect(result.messages[2]?.content).toMatch(/^<relevant-memories>/);
+    expect(result.messages[2]?.content).toContain("Source: openviking-auto-recall");
+    expect(result.messages[2]?.content).toContain(
+      "<uri>viking://user/default/memories/rust-pref</uri>",
+    );
+    expect(result.messages[2]?.content).toContain("User prefers Rust for backend tasks.");
+    expect(result.messages[2]?.content).toContain("what backend language should we use?");
+    expect(result.systemPromptAddition).toBeUndefined();
+  });
+
+  it("passes sender peer_id to transformContext auto-recall when peer_role is person", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
@@ -94,62 +162,209 @@ describe("context-engine assemble()", () => {
     try {
       const { engine, client } = makeEngine(
         {
-          latest_archive_overview: "This OV context must not be rebuilt during transformContext.",
+          latest_archive_overview: "",
           pre_archive_abstracts: [],
-          messages: [
-            {
-              id: "stored-current-user",
-              role: "user",
-              created_at: "2026-04-30T00:00:00Z",
-              parts: [{ type: "text", text: "stale stored prompt" }],
-            },
-          ],
-          estimatedTokens: 12,
+          messages: [],
+          estimatedTokens: 0,
           stats: makeStats(),
         },
         {
           cfgOverrides: {
             autoRecall: true,
+            peer_role: "person",
+          },
+        },
+      );
+
+      const sourceMessages = [
+        { role: "assistant", content: [{ type: "text", text: "Previous answer." }] },
+        { role: "user", content: "what backend language should we use?" },
+      ];
+
+      await engine.assemble({
+        sessionId: "session-person-peer",
+        runtimeContext: { senderId: "wx/user-01@abc" },
+        messages: sourceMessages,
+      });
+
+      expect(client.find).toHaveBeenCalledTimes(2);
+      for (const call of client.find.mock.calls) {
+        expect(call[1]).toMatchObject({ peerId: "wx_user-01_abc" });
+      }
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("uses prompt metadata sender_id for main assemble peer auto-recall when runtimeContext is missing", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ status: "ok" }),
+      }),
+    );
+    try {
+      const { engine, client } = makeEngine(
+        new Error("should be replaced"),
+        {
+          cfgOverrides: {
+            autoRecall: true,
+            peer_role: "person",
             recallPreferAbstract: true,
           },
         },
+      );
+      client.getSessionContext.mockRejectedValueOnce(
+        new Error("OpenViking request failed [NOT_FOUND]: Session not found"),
       );
       client.find
         .mockResolvedValueOnce({
           memories: [
             {
-              uri: "viking://user/default/memories/rust-pref",
+              uri: "viking://user/acme/peers/ou_bcc/memories/profile.md",
               level: 2,
-              category: "preferences",
-              abstract: "User prefers Rust for backend tasks.",
-              score: 0.93,
+              category: "profile",
+              abstract: "# 秦浩杰\n- 正在维护的项目：openviking",
+              score: 0.92,
             },
           ],
           total: 1,
         })
         .mockResolvedValueOnce({ memories: [], total: 0 });
 
+      const prompt = [
+        "Conversation info (untrusted metadata):",
+        "```json",
+        JSON.stringify({
+          message_id: "om_1",
+          sender_id: "ou_bcc",
+          sender: "秦浩杰",
+          is_group_chat: true,
+        }),
+        "```",
+        "",
+        "Sender (untrusted metadata):",
+        "```json",
+        JSON.stringify({
+          id: "ou_bcc",
+          name: "秦浩杰",
+        }),
+        "```",
+        "",
+        "[message_id: om_1]",
+        "秦浩杰: 我是谁",
+        "",
+        "[System: mention metadata]",
+      ].join("\n");
+
+      const result = await engine.assemble({
+        sessionId: "session-main-prompt-peer",
+        sessionKey: "agent:main:feishu:group:oc_123",
+        messages: [],
+        prompt,
+      });
+
+      expect(client.find).toHaveBeenCalledTimes(2);
+      for (const call of client.find.mock.calls) {
+        expect(call[1]).toMatchObject({ peerId: "ou_bcc" });
+      }
+      expect(result.messages[0]?.role).toBe("user");
+      expect(result.messages[0]?.content).toContain("Source: openviking-auto-recall");
+      expect(result.messages[0]?.content).toContain("正在维护的项目：openviking");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("prefers runtimeContext senderId over prompt metadata for main assemble recall", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ status: "ok" }),
+      }),
+    );
+    try {
+      const { engine, client } = makeEngine(
+        {
+          latest_archive_overview: "",
+          pre_archive_abstracts: [],
+          messages: [],
+          estimatedTokens: 0,
+          stats: makeStats(),
+        },
+        {
+          cfgOverrides: {
+            autoRecall: true,
+            peer_role: "person",
+          },
+        },
+      );
+
+      await engine.assemble({
+        sessionId: "session-main-runtime-peer",
+        runtimeContext: { senderId: "trusted/runtime-user" },
+        messages: [],
+        prompt: [
+          "Conversation info (untrusted metadata):",
+          "```json",
+          JSON.stringify({ sender_id: "fake-prompt-user", sender: "Prompt User" }),
+          "```",
+          "",
+          "[message_id: om_1]",
+          "Prompt User: 我喜欢什么水果？",
+        ].join("\n"),
+      });
+
+      expect(client.find).toHaveBeenCalledTimes(2);
+      for (const call of client.find.mock.calls) {
+        expect(call[1]).toMatchObject({ peerId: "trusted_runtime-user" });
+      }
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("passes assistant peer_id to transformContext auto-recall when peer_role is assistant", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ status: "ok" }),
+      }),
+    );
+    try {
+      const { engine, client } = makeEngine(
+        {
+          latest_archive_overview: "",
+          pre_archive_abstracts: [],
+          messages: [],
+          estimatedTokens: 0,
+          stats: makeStats(),
+        },
+        {
+          cfgOverrides: {
+            autoRecall: true,
+            peer_role: "assistant",
+          },
+        },
+      );
+
       const sourceMessages = [
-        { role: "user", content: "[Session History Summary]\nOlder archive summary." },
         { role: "assistant", content: [{ type: "text", text: "Previous answer." }] },
         { role: "user", content: "what backend language should we use?" },
       ];
 
-      const result = await engine.assemble({
-        sessionId: "session-transform",
+      await engine.assemble({
+        sessionId: "session-assistant-peer",
         messages: sourceMessages,
       });
 
-      expect(client.getSessionContext).not.toHaveBeenCalled();
-      expect(result.messages).toHaveLength(sourceMessages.length);
-      expect(result.messages[0]).toBe(sourceMessages[0]);
-      expect(result.messages[1]).toBe(sourceMessages[1]);
-      expect(result.messages[2]?.role).toBe("user");
-      expect(result.messages[2]?.content).toMatch(/^<relevant-memories>/);
-      expect(result.messages[2]?.content).toContain("Source: openviking-auto-recall");
-      expect(result.messages[2]?.content).toContain("User prefers Rust for backend tasks.");
-      expect(result.messages[2]?.content).toContain("what backend language should we use?");
-      expect(result.systemPromptAddition).toBeUndefined();
+      expect(client.find).toHaveBeenCalledTimes(2);
+      for (const call of client.find.mock.calls) {
+        expect(call[1]).toMatchObject({ peerId: "agent:session-assistant-peer" });
+      }
     } finally {
       vi.unstubAllGlobals();
     }
@@ -209,6 +424,29 @@ describe("context-engine assemble()", () => {
     expect(getClient).not.toHaveBeenCalled();
     expect(result.messages).toBe(sourceMessages);
     expect(result.estimatedTokens).toBe(roughEstimate(sourceMessages));
+  });
+
+  it("does not underestimate CJK messages when passing through transformContext", async () => {
+    const { engine, getClient } = makeEngine({
+      latest_archive_overview: "unused",
+      pre_archive_abstracts: [],
+      messages: [],
+      estimatedTokens: 0,
+      stats: makeStats(),
+    });
+    const sourceMessages = [
+      { role: "assistant", content: [{ type: "text", text: "Previous answer." }] },
+      { role: "user", content: "\u4f60\u597d".repeat(100) },
+    ];
+
+    const result = await engine.assemble({
+      sessionId: "session-cjk-estimate",
+      messages: sourceMessages,
+    });
+
+    expect(getClient).not.toHaveBeenCalled();
+    expect(result.messages).toBe(sourceMessages);
+    expect(result.estimatedTokens).toBeGreaterThanOrEqual(300);
   });
 
   it("treats prompt-less assemble with availableTools as main assemble", async () => {

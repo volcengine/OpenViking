@@ -15,6 +15,7 @@ export type ChatStatus = 'idle' | 'streaming' | 'error'
 export interface StreamToolCall {
   name: string
   arguments: string
+  iteration?: number
   result?: string
 }
 
@@ -29,6 +30,8 @@ export interface ChatState {
   streamingToolCalls: StreamToolCall[]
   /** Reasoning content from the current streaming round. */
   streamingReasoning: string
+  /** Ordered event parts observed during the current streaming round. */
+  streamingParts: Message['parts']
   /** Current iteration index. */
   iteration: number
 }

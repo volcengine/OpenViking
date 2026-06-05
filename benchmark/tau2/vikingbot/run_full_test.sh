@@ -7,7 +7,7 @@ set -euo pipefail
 #            so averaging repeats gives a more confident accuracy estimate)
 # Then evaluate rewards and commit the train trajectories to memory.
 # Usage:
-#   bash run_full_test.sh --domain airline [--epoch 0] [--test-repeats 8] [--result-dir result] [--concurrency N] [--commit|--no-commit]
+#   bash run_full_test.sh --domain airline [--epoch 0] [--test-repeats 8] [--result-dir result] [--concurrency N] [--config PATH] [--commit|--no-commit]
 
 CUR_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPTS_DIR="${CUR_DIR}/scripts"
@@ -45,6 +45,7 @@ TEST_REPEATS=8
 RESULT_DIR="result"
 CONCURRENCY=1
 DO_COMMIT=1
+CONFIG=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -58,12 +59,14 @@ while [[ $# -gt 0 ]]; do
       RESULT_DIR="$2"; shift 2 ;;
     --concurrency)
       CONCURRENCY="$2"; shift 2 ;;
+    --config)
+      CONFIG="$2"; shift 2 ;;
     --no-commit)
       DO_COMMIT=0; shift ;;
     --commit)
       DO_COMMIT=1; shift ;;
     -h|--help)
-      echo "Usage: bash run_full_test.sh --domain DOMAIN [--epoch N] [--test-repeats N] [--result-dir DIR] [--concurrency N] [--commit|--no-commit]"
+      echo "Usage: bash run_full_test.sh --domain DOMAIN [--epoch N] [--test-repeats N] [--result-dir DIR] [--concurrency N] [--config PATH] [--commit|--no-commit]"
       exit 0 ;;
     *)
       echo "Unknown argument: $1" >&2; exit 1 ;;
@@ -89,8 +92,8 @@ else
 fi
 TRAIN_DIR="${OUTPUT_ROOT}/${DOMAIN}_train"
 TEST_DIR="${OUTPUT_ROOT}/${DOMAIN}_test"
-AGENT_ID=${DOMAIN}_v0
-AGENT_ID_FLAG="--agent-id ${AGENT_ID}"
+CONFIG_FLAG=""
+[[ -n "${CONFIG}" ]] && CONFIG_FLAG="--config ${CONFIG}"
 # train runs once per epoch; test repeats are averaged.
 TRAIN_TRY_NO=0
 
@@ -105,7 +108,7 @@ bash "${SCRIPTS_DIR}/run_tau2_domain.sh" \
   --result-dir "${RESULT_DIR}" \
   --concurrency "${CONCURRENCY}" \
   ${KEEP_DEFAULT_TOOLS_FLAG} \
-  --use-continue ${AGENT_ID_FLAG} &
+  --use-continue ${CONFIG_FLAG} &
 PIDS+=("$!")
 
 # test: TEST_REPEATS independent runs (try-no 0 .. TEST_REPEATS-1), averaged at eval time
@@ -118,7 +121,7 @@ for ((t=0; t<TEST_REPEATS; t++)); do
     --result-dir "${RESULT_DIR}" \
     --concurrency "${CONCURRENCY}" \
     ${KEEP_DEFAULT_TOOLS_FLAG} \
-    --use-continue ${AGENT_ID_FLAG} &
+    --use-continue ${CONFIG_FLAG} &
   PIDS+=("$!")
 done
 
@@ -159,9 +162,9 @@ if [[ "${DO_COMMIT}" -eq 1 ]]; then
   echo "[run_full_test] Commit train trajectories to memory..."
   python "${SCRIPTS_DIR}/commit_trajectory_to_memory.py" \
     --input "${TRAIN_DIR}" \
-    --domain "${AGENT_ID}" \
     --pattern "*_${EPOCH}_${TRAIN_TRY_NO}_trajectory.json" \
     --include-eval-result \
+    ${CONFIG_FLAG} \
     ${ONLY_WRONG_FLAG}
 else
   echo "[run_full_test] Skip commit (--no-commit)"
