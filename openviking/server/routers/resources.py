@@ -199,11 +199,6 @@ async def add_resource(
     original_filename = None
     resolved = None
     store = None
-
-    # Resolve path variables before passing to service.
-    to = resolve_path_variables(request.to) if request.to else None
-    parent = resolve_path_variables(request.parent) if request.parent else None
-
     if request.temp_file_id:
         store = TempUploadStore.build(http_request.app.state.config)
         resolved = await store.resolve_for_consume(request.temp_file_id, _ctx)
@@ -233,16 +228,9 @@ async def add_resource(
     if request.preserve_structure is not None:
         kwargs["preserve_structure"] = request.preserve_structure
 
-    async def _cleanup_resolved(success: bool) -> None:
-        if not resolved or not store:
-            return
-        try:
-            if success:
-                await store.mark_consumed(resolved, _ctx)
-            else:
-                await store.mark_failed(resolved, _ctx)
-        finally:
-            await resolved.cleanup()
+    # Resolve path variables before passing to service.
+    to = resolve_path_variables(request.to) if request.to else None
+    parent = resolve_path_variables(request.parent) if request.parent else None
 
     async def _add() -> dict[str, Any]:
         try:
@@ -257,17 +245,19 @@ async def add_resource(
                 timeout=request.timeout,
                 allow_local_path_resolution=allow_local_path_resolution,
                 enforce_public_remote_targets=True,
-                source_cleanup=_cleanup_resolved if resolved and not request.wait else None,
                 **kwargs,
             )
         except Exception:
-            if request.wait:
-                await _cleanup_resolved(False)
+            if resolved and store:
+                await store.mark_failed(resolved, _ctx)
             raise
         else:
-            if request.wait:
-                await _cleanup_resolved(True)
+            if resolved and store:
+                await store.mark_consumed(resolved, _ctx)
             return result
+        finally:
+            if resolved:
+                await resolved.cleanup()
 
     execution = await run_operation(
         operation="resources.add_resource",

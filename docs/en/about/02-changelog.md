@@ -128,7 +128,7 @@ This changelog is automatically generated from [GitHub Releases](https://github.
 - **Native CLI distribution**: New `@openviking/cli` npm package installs the platform `ov` binary via `npm i -g @openviking/cli`; Rust CLI release pipeline adds Linux musl artifacts, npm trusted publishing, and a broader integration test suite.
 - **Retrieval and filesystem**: `find` / `search` accept a `level` filter for L0 abstracts, L1 overviews, and L2 file hits. Resource files gained a Phase 1 WebDAV adapter, and `observer.filesystem` exposes filesystem-level observability.
 - **Console and Usage/Audit**: New Usage/Audit module and `/api/v1/console/*` BFF aggregate token usage, retrieval counts, context commit heatmaps, request audit logs, and context inventory from the existing observability event bus.
-- **Storage and concurrency reliability**: Strengthened exact-path and lifecycle locks fix content-write races; blocking backend calls moved off the event loop; QueueFS SQLite persistence expanded; task records are now persisted for cross-instance lookup; `add_resource(wait=false)` returns a reserved `root_uri` plus persistent task progress while ingestion completes.
+- **Storage and concurrency reliability**: Strengthened exact-path and lifecycle locks fix content-write races; blocking backend calls moved off the event loop; QueueFS SQLite persistence expanded; task records are now persisted for cross-instance lookup; Git repository `add_resource(wait=false)` returns a reserved `root_uri` plus persistent task progress while ingestion completes.
 
 ### Upgrade Notes
 

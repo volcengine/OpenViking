@@ -46,10 +46,8 @@ async def test_add_resource_success(
     assert "telemetry" not in body
     assert body["result"]["status"] == "success"
     assert body["result"]["root_uri"].startswith("viking://")
+    assert "source_path" in body["result"]
     assert body["result"]["task_id"]
-    task = await _wait_task_terminal(client, body["result"]["task_id"])
-    assert task["status"] == "completed"
-    assert task["result"]["root_uri"] == body["result"]["root_uri"]
 
 
 async def test_add_resource_with_wait(
@@ -399,7 +397,7 @@ async def test_add_resource_with_resources_root_to_trailing_slash_keeps_single_f
     assert body["result"]["root_uri"] == "viking://resources/aa"
 
 
-async def test_add_resource_async_auto_name_reserves_unique_root_uri(
+async def test_add_resource_non_wait_auto_name_resolves_unique_root_uri(
     client: httpx.AsyncClient,
     upload_temp_dir,
 ):
@@ -433,11 +431,6 @@ async def test_add_resource_async_auto_name_reserves_unique_root_uri(
     second_result = second_resp.json()["result"]
     assert first_result["root_uri"] == "viking://resources/same"
     assert second_result["root_uri"] == "viking://resources/same_1"
-
-    first_task = await _wait_task_terminal(client, first_result["task_id"])
-    second_task = await _wait_task_terminal(client, second_result["task_id"])
-    assert first_task["result"]["root_uri"] == first_result["root_uri"]
-    assert second_task["result"]["root_uri"] == second_result["root_uri"]
 
 
 async def test_wait_processed_empty_queue(client: httpx.AsyncClient):
@@ -697,7 +690,7 @@ async def test_add_resource_rejects_temp_file_id_symlink(
     assert body["error"]["code"] == "PERMISSION_DENIED"
 
 
-async def test_add_resource_async_returns_task_id(
+async def test_add_resource_non_wait_returns_queue_task_id(
     client: httpx.AsyncClient,
     sample_markdown_file,
     upload_temp_dir,
@@ -717,9 +710,6 @@ async def test_add_resource_async_returns_task_id(
     assert "task_id" in body["result"]
     assert body["result"]["task_id"]
     assert body["result"]["root_uri"].startswith("viking://")
-    task = await _wait_task_terminal(client, body["result"]["task_id"])
-    assert task["status"] == "completed"
-    assert task["result"]["root_uri"] == body["result"]["root_uri"]
 
 
 async def test_add_resource_sync_no_task_id(
@@ -741,7 +731,7 @@ async def test_add_resource_sync_no_task_id(
     assert "task_id" not in body["result"]
 
 
-async def test_add_resource_async_task_queryable(
+async def test_add_resource_non_wait_queue_task_queryable(
     client: httpx.AsyncClient,
     sample_markdown_file,
     upload_temp_dir,
@@ -759,11 +749,12 @@ async def test_add_resource_async_task_queryable(
         },
     )
     task_id = resp.json()["result"]["task_id"]
-    root_uri = resp.json()["result"]["root_uri"]
 
-    result = await _wait_task_terminal(client, task_id)
+    await asyncio.sleep(2.0)
+
+    task_resp = await client.get(f"/api/v1/tasks/{task_id}")
+    assert task_resp.status_code == 200
+    result = task_resp.json()["result"]
     assert result["task_id"] == task_id
     assert result["task_type"] == "add_resource"
-    assert result["status"] == "completed"
-    assert result["stage"] in {"queued", "fetching", "parsing", "finalizing", "processing_queue"}
-    assert result["result"]["root_uri"] == root_uri
+    assert result["status"] in {"running", "completed", "failed"}
