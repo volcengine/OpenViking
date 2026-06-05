@@ -726,7 +726,6 @@ function SettingsRoute() {
   }, [connection])
 
   const controlApiKey = draft.adminApiKey.trim() || draft.apiKey.trim()
-  const canQueryAdmin = Boolean(controlApiKey)
   const adminConnection = React.useMemo<AdminConnection>(
     () => ({
       accountId: draft.accountId || DEFAULT_ACCOUNT_ID,
@@ -760,6 +759,30 @@ function SettingsRoute() {
     retry: false,
     staleTime: 15_000,
   })
+
+  const hasAdminAccess =
+    serverMode !== 'dev' && probeQuery.data?.admin.state === 'ok'
+  const hasSavedAdminApiKey = Boolean(draft.adminApiKey.trim())
+  const showAdminCredentialFields =
+    serverMode !== 'dev' && (hasAdminAccess || hasSavedAdminApiKey)
+  const canQueryAdmin = Boolean(controlApiKey) && hasAdminAccess
+  const showDevApiKeyPlaceholder = serverMode === 'dev'
+  const shouldPromoteApiKeyToAdmin =
+    hasAdminAccess && !draft.adminApiKey.trim() && Boolean(draft.apiKey.trim())
+
+  React.useEffect(() => {
+    if (!hasAdminAccess || draft.adminApiKey.trim() || !draft.apiKey.trim()) {
+      return
+    }
+
+    const next = {
+      ...draft,
+      adminApiKey: draft.apiKey,
+      apiKey: '',
+    }
+    setDraft(next)
+    saveConnection(next)
+  }, [draft, hasAdminAccess, saveConnection])
 
   const accountsQuery = useQuery({
     enabled: canQueryAdmin,
@@ -1077,7 +1100,14 @@ function SettingsRoute() {
           </div>
         </CardHeader>
         <CardContent className="grid gap-3 px-5 py-4">
-          <div className="grid gap-3 xl:grid-cols-[minmax(16rem,1.2fr)_minmax(12rem,0.8fr)_minmax(12rem,0.8fr)]">
+          <div
+            className={cn(
+              'grid gap-3',
+              hasAdminAccess
+                ? 'xl:grid-cols-[minmax(16rem,1.2fr)_minmax(12rem,0.8fr)_minmax(12rem,0.8fr)]'
+                : 'xl:grid-cols-[minmax(16rem,1.2fr)_minmax(16rem,1fr)]',
+            )}
+          >
             <Field>
               <FieldLabel htmlFor="settings-base-url">
                 {t('fields.baseUrl')}
@@ -1093,113 +1123,154 @@ function SettingsRoute() {
                 />
               </FieldContent>
             </Field>
-            <Field>
-              <FieldLabel>{t('fields.account')}</FieldLabel>
-              <FieldContent>
-                <AccountSelect
-                  accounts={accountOptions}
-                  disabled={!canQueryAdmin || accountsQuery.isLoading}
-                  label={t('fields.account')}
-                  value={draft.accountId || DEFAULT_ACCOUNT_ID}
-                  onChange={updateConnectionAccount}
-                />
-              </FieldContent>
-            </Field>
-            <Field>
-              <FieldLabel>{t('fields.user')}</FieldLabel>
-              <FieldContent>
-                <UserSelect
-                  disabled={!canQueryAdmin || usersQuery.isLoading}
-                  label={t('fields.user')}
-                  users={users}
-                  value={draft.userId || DEFAULT_USER_ID}
-                  onChange={updateConnectionUser}
-                />
-              </FieldContent>
-            </Field>
+            {hasAdminAccess ? (
+              <>
+                <Field>
+                  <FieldLabel>{t('fields.account')}</FieldLabel>
+                  <FieldContent>
+                    <AccountSelect
+                      accounts={accountOptions}
+                      disabled={!canQueryAdmin || accountsQuery.isLoading}
+                      label={t('fields.account')}
+                      value={draft.accountId || DEFAULT_ACCOUNT_ID}
+                      onChange={updateConnectionAccount}
+                    />
+                  </FieldContent>
+                </Field>
+                <Field>
+                  <FieldLabel>{t('fields.user')}</FieldLabel>
+                  <FieldContent>
+                    <UserSelect
+                      disabled={!canQueryAdmin || usersQuery.isLoading}
+                      label={t('fields.user')}
+                      users={users}
+                      value={draft.userId || DEFAULT_USER_ID}
+                      onChange={updateConnectionUser}
+                    />
+                  </FieldContent>
+                </Field>
+              </>
+            ) : showDevApiKeyPlaceholder ? (
+              <Field>
+                <FieldLabel htmlFor="settings-api-key-dev">
+                  {t('fields.apiKey')}
+                </FieldLabel>
+                <FieldContent>
+                  <Input
+                    id="settings-api-key-dev"
+                    value={t('placeholders.devModeApiKey')}
+                    disabled
+                    readOnly
+                  />
+                </FieldContent>
+              </Field>
+            ) : showAdminCredentialFields ? null : (
+              <Field>
+                <FieldLabel htmlFor="settings-api-key">
+                  {t('fields.apiKey')}
+                </FieldLabel>
+                <FieldContent>
+                  <Input
+                    id="settings-api-key"
+                    type="password"
+                    value={draft.apiKey}
+                    onChange={(event) =>
+                      updateDraft({ apiKey: event.target.value })
+                    }
+                    placeholder={t('placeholders.apiKey')}
+                  />
+                </FieldContent>
+              </Field>
+            )}
           </div>
-          <div className="grid gap-3">
-            <Field>
-              <FieldLabel htmlFor="settings-admin-api-key">
-                {t('fields.adminApiKey')}
-              </FieldLabel>
-              <FieldContent>
-                <Input
-                  id="settings-admin-api-key"
-                  type="password"
-                  value={draft.adminApiKey}
-                  onChange={(event) =>
-                    updateDraft({ adminApiKey: event.target.value })
-                  }
-                  placeholder={t('placeholders.adminApiKey')}
+          {showAdminCredentialFields ? (
+            <>
+              <div className="grid gap-3">
+                <Field>
+                  <FieldLabel htmlFor="settings-admin-api-key">
+                    {t('fields.adminApiKey')}
+                  </FieldLabel>
+                  <FieldContent>
+                    <Input
+                      id="settings-admin-api-key"
+                      type="password"
+                      value={
+                        shouldPromoteApiKeyToAdmin
+                          ? draft.apiKey
+                          : draft.adminApiKey
+                      }
+                      onChange={(event) =>
+                        updateDraft({ adminApiKey: event.target.value })
+                      }
+                      placeholder={t('placeholders.adminApiKey')}
+                    />
+                  </FieldContent>
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="settings-user-api-key">
+                    {t('fields.userApiKey')}
+                  </FieldLabel>
+                  <FieldContent>
+                    <UserApiKeyInput
+                      accountId={draft.accountId || DEFAULT_ACCOUNT_ID}
+                      id="settings-user-api-key"
+                      userId={draft.userId || DEFAULT_USER_ID}
+                      value={shouldPromoteApiKeyToAdmin ? '' : draft.apiKey}
+                      onChange={(apiKey) => updateDraft({ apiKey })}
+                      placeholder={t('placeholders.userApiKey')}
+                    />
+                  </FieldContent>
+                </Field>
+              </div>
+              <div className="grid gap-2 md:grid-cols-2">
+                <CapabilityStatus
+                  isLoading={probeQuery.isFetching}
+                  label={t('health.admin')}
+                  result={probeQuery.data?.admin}
                 />
-              </FieldContent>
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="settings-api-key">
-                {t('fields.userApiKey')}
-              </FieldLabel>
-              <FieldContent>
-                <UserApiKeyInput
-                  accountId={draft.accountId || DEFAULT_ACCOUNT_ID}
-                  id="settings-api-key"
-                  userId={draft.userId || DEFAULT_USER_ID}
-                  value={draft.apiKey}
-                  onChange={(apiKey) => updateDraft({ apiKey })}
-                  placeholder={t('placeholders.userApiKey')}
+                <CapabilityStatus
+                  isLoading={probeQuery.isFetching}
+                  label={t('health.data')}
+                  result={probeQuery.data?.data}
                 />
-              </FieldContent>
-            </Field>
-          </div>
-          <div className="grid gap-2 md:grid-cols-2">
-            <CapabilityStatus
-              isLoading={probeQuery.isFetching}
-              label={t('health.admin')}
-              result={probeQuery.data?.admin}
-            />
-            <CapabilityStatus
-              isLoading={probeQuery.isFetching}
-              label={t('health.data')}
-              result={probeQuery.data?.data}
-            />
-          </div>
-          {!canQueryAdmin ? (
-            <p className="text-sm text-muted-foreground">
-              {t('connection.noKey')}
-            </p>
-          ) : accountsQuery.isError && managedUsersQuery.isError ? (
-            <p className="text-sm text-destructive">
-              {t('connection.adminError', {
-                message: getErrorMessage(accountsQuery.error),
-              })}
-            </p>
-          ) : accountsQuery.isError ? (
-            <p className="text-sm text-muted-foreground">
-              {t('connection.accountListLimited')}
-            </p>
+              </div>
+              {accountsQuery.isError && managedUsersQuery.isError ? (
+                <p className="text-sm text-destructive">
+                  {t('connection.adminError', {
+                    message: getErrorMessage(accountsQuery.error),
+                  })}
+                </p>
+              ) : accountsQuery.isError ? (
+                <p className="text-sm text-muted-foreground">
+                  {t('connection.accountListLimited')}
+                </p>
+              ) : null}
+            </>
           ) : null}
         </CardContent>
       </Card>
 
-      <div className="grid gap-3 md:grid-cols-3">
-        <StatCard
-          label={t('stats.accounts')}
-          value={totalAccounts || '-'}
-          icon={<ServerIcon className="size-4" />}
-        />
-        <StatCard
-          label={t('stats.users')}
-          value={totalUsers || '-'}
-          icon={<UsersRoundIcon className="size-4" />}
-        />
-        <StatCard
-          label={t('stats.apiKeys')}
-          value={visibleKeys || '-'}
-          icon={<KeyRoundIcon className="size-4" />}
-        />
-      </div>
+      {hasAdminAccess ? (
+        <div className="grid gap-3 md:grid-cols-3">
+          <StatCard
+            label={t('stats.accounts')}
+            value={totalAccounts || '-'}
+            icon={<ServerIcon className="size-4" />}
+          />
+          <StatCard
+            label={t('stats.users')}
+            value={totalUsers || '-'}
+            icon={<UsersRoundIcon className="size-4" />}
+          />
+          <StatCard
+            label={t('stats.apiKeys')}
+            value={visibleKeys || '-'}
+            icon={<KeyRoundIcon className="size-4" />}
+          />
+        </div>
+      ) : null}
 
-      {keyResult ? (
+      {hasAdminAccess && keyResult ? (
         <KeyResultCard
           result={keyResult}
           onClear={() => setKeyResult(null)}
@@ -1207,167 +1278,171 @@ function SettingsRoute() {
         />
       ) : null}
 
-      <Card className="overflow-hidden">
-        <CardHeader className="gap-4 border-b bg-muted/20">
-          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
-            <div className="min-w-0">
-              <CardTitle>{t('management.title')}</CardTitle>
-              <CardDescription>{t('management.description')}</CardDescription>
-            </div>
-            <div className="flex flex-wrap items-end gap-2 lg:justify-end">
-              <AccountFilterChips
-                accounts={accountOptions}
-                disabled={!canQueryAdmin || accountsQuery.isLoading}
-                label={t('management.accountFilter')}
-                selectedAccountIds={selectedManagedAccountIds}
-                onChange={setManagedAccountIds}
-              />
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => void refreshAdmin()}
-                disabled={!canQueryAdmin || managedUsersQuery.isFetching}
-              >
-                <RefreshCwIcon
-                  className={cn(managedUsersQuery.isFetching && 'animate-spin')}
+      {hasAdminAccess ? (
+        <Card className="overflow-hidden">
+          <CardHeader className="gap-4 border-b bg-muted/20">
+            <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+              <div className="min-w-0">
+                <CardTitle>{t('management.title')}</CardTitle>
+                <CardDescription>{t('management.description')}</CardDescription>
+              </div>
+              <div className="flex flex-wrap items-end gap-2 lg:justify-end">
+                <AccountFilterChips
+                  accounts={accountOptions}
+                  disabled={!canQueryAdmin || accountsQuery.isLoading}
+                  label={t('management.accountFilter')}
+                  selectedAccountIds={selectedManagedAccountIds}
+                  onChange={setManagedAccountIds}
                 />
-                {t('actions.refresh')}
-              </Button>
-              <Button
-                type="button"
-                onClick={() => setAddAccountOpen(true)}
-                disabled={!canQueryAdmin}
-              >
-                <PlusIcon />
-                {t('actions.addAccount')}
-              </Button>
-              <Button
-                type="button"
-                onClick={() => setAddUserOpen(true)}
-                disabled={!canQueryAdmin}
-              >
-                <PlusIcon />
-                {t('actions.addUser')}
-              </Button>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent className="p-0">
-          {adminUnavailable ? (
-            <div className="flex min-h-56 flex-col items-center justify-center gap-2 px-6 text-center">
-              <div className="flex size-11 items-center justify-center rounded-lg border bg-muted/30 text-muted-foreground">
-                <KeyRoundIcon className="size-5" />
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => void refreshAdmin()}
+                  disabled={!canQueryAdmin || managedUsersQuery.isFetching}
+                >
+                  <RefreshCwIcon
+                    className={cn(
+                      managedUsersQuery.isFetching && 'animate-spin',
+                    )}
+                  />
+                  {t('actions.refresh')}
+                </Button>
+                <Button
+                  type="button"
+                  onClick={() => setAddAccountOpen(true)}
+                  disabled={!canQueryAdmin}
+                >
+                  <PlusIcon />
+                  {t('actions.addAccount')}
+                </Button>
+                <Button
+                  type="button"
+                  onClick={() => setAddUserOpen(true)}
+                  disabled={!canQueryAdmin}
+                >
+                  <PlusIcon />
+                  {t('actions.addUser')}
+                </Button>
               </div>
-              <p className="font-medium">{t('empty.adminTitle')}</p>
-              <p className="max-w-lg text-sm text-muted-foreground">
-                {t('empty.adminDescription')}
-              </p>
             </div>
-          ) : managedUsersQuery.isLoading ? (
-            <div className="flex min-h-56 items-center justify-center text-sm text-muted-foreground">
-              {t('loading')}
-            </div>
-          ) : managedUsers.length === 0 ? (
-            <div className="flex min-h-56 flex-col items-center justify-center gap-2 px-6 text-center">
-              <div className="flex size-11 items-center justify-center rounded-lg border bg-muted/30 text-muted-foreground">
-                <UserRoundIcon className="size-5" />
+          </CardHeader>
+          <CardContent className="p-0">
+            {adminUnavailable ? (
+              <div className="flex min-h-56 flex-col items-center justify-center gap-2 px-6 text-center">
+                <div className="flex size-11 items-center justify-center rounded-lg border bg-muted/30 text-muted-foreground">
+                  <KeyRoundIcon className="size-5" />
+                </div>
+                <p className="font-medium">{t('empty.adminTitle')}</p>
+                <p className="max-w-lg text-sm text-muted-foreground">
+                  {t('empty.adminDescription')}
+                </p>
               </div>
-              <p className="font-medium">{t('empty.usersTitle')}</p>
-              <p className="text-sm text-muted-foreground">
-                {t('empty.usersDescription')}
-              </p>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow className="bg-muted/20 hover:bg-muted/20">
-                    <TableHead>{t('table.account')}</TableHead>
-                    <TableHead>{t('table.user')}</TableHead>
-                    <TableHead>{t('table.role')}</TableHead>
-                    <TableHead>{t('table.apiKey')}</TableHead>
-                    <TableHead className="text-right">
-                      {t('table.actions')}
-                    </TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {managedUsers.map((user) => (
-                    <TableRow key={`${user.accountId}:${user.userId}`}>
-                      <TableCell className="font-mono text-xs text-muted-foreground">
-                        {user.accountId}
-                      </TableCell>
-                      <TableCell className="font-medium">
-                        {user.userId}
-                      </TableCell>
-                      <TableCell>
-                        <Badge
-                          variant={
-                            user.role === 'admin' ? 'secondary' : 'outline'
-                          }
-                        >
-                          {t(`roles.${user.role}`, {
-                            defaultValue: user.role,
-                          })}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex min-w-0 items-center gap-2">
-                          <code className="max-w-[20rem] truncate rounded-md border bg-muted/40 px-2 py-1 font-mono text-xs">
-                            {resolveKeyLabel(user)}
-                          </code>
-                          {user.apiKey ? (
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon-xs"
-                              aria-label={t('actions.copy')}
-                              onClick={() => void copyKey(user.apiKey)}
-                            >
-                              <CopyIcon />
-                            </Button>
-                          ) : null}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex justify-end gap-2">
-                          {user.apiKey ? (
-                            <Button
-                              type="button"
-                              variant="secondary"
-                              size="sm"
-                              onClick={() =>
-                                useKeyForData({
-                                  accountId: user.accountId,
-                                  apiKey: user.apiKey || '',
-                                  userId: user.userId,
-                                })
-                              }
-                            >
-                              <DatabaseIcon />
-                              {t('actions.useForData')}
-                            </Button>
-                          ) : null}
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setPendingRegenerateUser(user)}
-                            disabled={regenerateMutation.isPending}
-                          >
-                            <RotateCwIcon />
-                            {t('actions.regenerate')}
-                          </Button>
-                        </div>
-                      </TableCell>
+            ) : managedUsersQuery.isLoading ? (
+              <div className="flex min-h-56 items-center justify-center text-sm text-muted-foreground">
+                {t('loading')}
+              </div>
+            ) : managedUsers.length === 0 ? (
+              <div className="flex min-h-56 flex-col items-center justify-center gap-2 px-6 text-center">
+                <div className="flex size-11 items-center justify-center rounded-lg border bg-muted/30 text-muted-foreground">
+                  <UserRoundIcon className="size-5" />
+                </div>
+                <p className="font-medium">{t('empty.usersTitle')}</p>
+                <p className="text-sm text-muted-foreground">
+                  {t('empty.usersDescription')}
+                </p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-muted/20 hover:bg-muted/20">
+                      <TableHead>{t('table.account')}</TableHead>
+                      <TableHead>{t('table.user')}</TableHead>
+                      <TableHead>{t('table.role')}</TableHead>
+                      <TableHead>{t('table.apiKey')}</TableHead>
+                      <TableHead className="text-right">
+                        {t('table.actions')}
+                      </TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+                  </TableHeader>
+                  <TableBody>
+                    {managedUsers.map((user) => (
+                      <TableRow key={`${user.accountId}:${user.userId}`}>
+                        <TableCell className="font-mono text-xs text-muted-foreground">
+                          {user.accountId}
+                        </TableCell>
+                        <TableCell className="font-medium">
+                          {user.userId}
+                        </TableCell>
+                        <TableCell>
+                          <Badge
+                            variant={
+                              user.role === 'admin' ? 'secondary' : 'outline'
+                            }
+                          >
+                            {t(`roles.${user.role}`, {
+                              defaultValue: user.role,
+                            })}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex min-w-0 items-center gap-2">
+                            <code className="max-w-[20rem] truncate rounded-md border bg-muted/40 px-2 py-1 font-mono text-xs">
+                              {resolveKeyLabel(user)}
+                            </code>
+                            {user.apiKey ? (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon-xs"
+                                aria-label={t('actions.copy')}
+                                onClick={() => void copyKey(user.apiKey)}
+                              >
+                                <CopyIcon />
+                              </Button>
+                            ) : null}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex justify-end gap-2">
+                            {user.apiKey ? (
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                size="sm"
+                                onClick={() =>
+                                  useKeyForData({
+                                    accountId: user.accountId,
+                                    apiKey: user.apiKey || '',
+                                    userId: user.userId,
+                                  })
+                                }
+                              >
+                                <DatabaseIcon />
+                                {t('actions.useForData')}
+                              </Button>
+                            ) : null}
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setPendingRegenerateUser(user)}
+                              disabled={regenerateMutation.isPending}
+                            >
+                              <RotateCwIcon />
+                              {t('actions.regenerate')}
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      ) : null}
 
       <AddAccountDialog
         open={addAccountOpen}

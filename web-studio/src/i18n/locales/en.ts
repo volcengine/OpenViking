@@ -199,7 +199,7 @@ const en = {
     },
     page: {
       description:
-        'Configure the active OpenViking identity and manage accounts, users, and API keys from Playground.',
+        'Configure the active OpenViking Studio identity and manage accounts, users, and API keys.',
       title: 'Connection & Identity',
     },
     placeholders: {
@@ -207,6 +207,7 @@ const en = {
       adminApiKey: 'Root or account-admin key',
       apiKey: 'Enter X-API-Key or Bearer token',
       baseUrl: 'http://127.0.0.1:1933',
+      devModeApiKey: '[dev mode, no api key required]',
       userApiKey: 'User API key',
       user: 'default',
     },

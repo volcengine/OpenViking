@@ -199,7 +199,7 @@ const zhCN = {
     },
     page: {
       description:
-        '在 Playground 中配置当前 OpenViking 身份，并管理 accounts、users 和 API keys。',
+        '配置当前 OpenViking Studio 身份，并管理 accounts、users 和 API keys。',
       title: '连接与身份',
     },
     placeholders: {
@@ -207,6 +207,7 @@ const zhCN = {
       adminApiKey: 'Root 或 account-admin key',
       apiKey: '输入 X-API-Key 或 Bearer token',
       baseUrl: 'http://127.0.0.1:1933',
+      devModeApiKey: '[dev mode，无需 API key]',
       userApiKey: 'User API key',
       user: 'default',
     },
