@@ -38,6 +38,8 @@ codex              # 首次启动需进入 /hooks 完成一次审批
 type codex         # 期望输出：codex is a shell function
 ```
 
+> 若上一步输出的是一个路径而非 `shell function`，说明 wrapper 尚未生效，请先 `source` 那行 wrapper（或新开一个终端）再启动；否则 codex 启动时拿不到 `OPENVIKING_API_KEY`，会报 `MCP server is not logged in`。
+
 进入 Codex 后，插件将在每次用户输入前自动召回记忆。若设置环境变量 `OPENVIKING_DEBUG=1`，则会将相关事件日志写入 `~/.openviking/logs/codex-hooks.log`。
 
 ## 工作原理

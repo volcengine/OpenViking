@@ -55,7 +55,9 @@ If you prefer to install manually:
 type claude        # Expected: claude is a shell function
 ```
 
-After starting Claude Code, you can verify the setup as follows:
+> If the previous command printed a path instead of `shell function`, the wrapper isn't active yet. Re-source it (or open a new terminal) before launching `claude`, otherwise it silently connects to `127.0.0.1` with no auth.
+
+Launch `claude` from the terminal where `type claude` reports a shell function, then:
 
 - `/plugins` -> Find **openviking-memory** under Installed. Its **openviking** MCP entry should be connected.
 - `/mcp` -> The OpenViking entry should show your server URL and valid authentication.

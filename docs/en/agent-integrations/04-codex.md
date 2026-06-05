@@ -38,6 +38,8 @@ Prerequisites: Node.js >= 22, Codex >= 0.130.0, and the `codex_hooks` feature en
 type codex         # Expectation: codex is a shell function
 ```
 
+> If the previous command printed a path instead of `shell function`, the wrapper isn't active yet. Re-source it (or open a new terminal) before launching, otherwise codex starts without `OPENVIKING_API_KEY` and reports `MCP server is not logged in`.
+
 Once inside Codex, the plugin should seamlessly recall memories on every prompt. Set `OPENVIKING_DEBUG=1` to write events to `~/.openviking/logs/codex-hooks.log`.
 
 ## How it works

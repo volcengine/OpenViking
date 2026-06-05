@@ -57,7 +57,9 @@ If you prefer to set it up manually:
 type claude        # expect: claude is a shell function
 ```
 
-Inside Claude Code, run the following commands:
+> If the previous command printed a path instead of `shell function`, the wrapper isn't active yet. Re-source it (or open a new terminal) before launching `claude`, otherwise it silently connects to `127.0.0.1` with no auth.
+
+Launch `claude` from the terminal where `type claude` reports a shell function, then:
 
 - `/plugins` → Verify that **openviking-memory** is listed under "Installed", with the **openviking** MCP connected below it.
 - `/mcp` → Ensure the OpenViking entry displays your server URL along with valid authentication.

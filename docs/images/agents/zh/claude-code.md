@@ -56,7 +56,9 @@ source ~/.openviking/openviking-repo/examples/claude-code-memory-plugin/setup-he
 type claude        # 期望输出：claude is a shell function
 ```
 
-启动 Claude Code 后，您可以通过以下方式进行验证：
+> 若上一步输出的是一个路径而非 `shell function`，说明 wrapper 尚未生效，请先 `source` 那行 wrapper（或新开一个终端）再启动；否则 `claude` 会静默连到本地 `127.0.0.1` 且不带鉴权。
+
+在 `type claude` 显示为 shell function 的终端中运行 `claude` 启动，随后：
 
 - 输入 `/plugins` → 在 Installed 列表中应能找到 **openviking-memory**（其子项 **openviking** MCP 应显示为已连接状态）。
 - 输入 `/mcp` → OpenViking 对应的条目应显示您的服务器 URL 及有效的认证信息。
