@@ -21,6 +21,7 @@ from openviking.session.skill.skill_operation_updater import (
     SkillOperationUpdateResult,
 )
 from openviking.utils.skill_processor import SkillProcessor
+from openviking_cli.exceptions import NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -211,6 +212,27 @@ async def test_session_skill_context_provider_prefetch_lists_existing_skills():
     assert "Conversation History" in prefetched[0]["content"]
     assert "code-review" in prefetched[1]["content"]
     assert "SKILL.md" in prefetched[1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_session_skill_context_provider_prefetch_treats_missing_skill_root_as_empty():
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    viking_fs = MagicMock()
+    viking_fs.ls = AsyncMock(side_effect=NotFoundError("viking://user/default/skills", "directory"))
+    provider = SessionSkillContextProvider(
+        messages=[
+            Message(id="m1", role="assistant", parts=[TextPart("Summarize a reusable review flow")])
+        ],
+        latest_archive_overview="",
+        ctx=ctx,
+        viking_fs=viking_fs,
+    )
+
+    prefetched = await provider.prefetch()
+
+    assert len(prefetched) == 2
+    assert "Conversation History" in prefetched[0]["content"]
+    assert "Directory is empty" in prefetched[1]["content"]
 
 
 @pytest.mark.asyncio

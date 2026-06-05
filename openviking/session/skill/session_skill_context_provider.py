@@ -16,6 +16,7 @@ from openviking.session.memory.session_extract_context_provider import SessionEx
 from openviking.session.memory.tools import add_tool_call_pair_to_messages
 from openviking.session.memory.utils import add_line_numbers, line_count, slice_content_lines
 from openviking.session.memory.utils.messages import parse_memory_file_with_fields
+from openviking.pyagfs.exceptions import AGFSNotFoundError
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
 
@@ -130,6 +131,14 @@ class SessionSkillContextProvider(SessionExtractContextProvider):
                 result=listed_skills
                 if listed_skills
                 else "Directory is empty. You can create a new skill if the conversation shows a reusable workflow.",
+            )
+        except (FileNotFoundError, AGFSNotFoundError, NotFoundError):
+            add_tool_call_pair_to_messages(
+                messages=pre_fetch_messages,
+                call_id=0,
+                tool_name="ls",
+                params={"uri": skill_root_uri},
+                result="Directory is empty. You can create a new skill if the conversation shows a reusable workflow.",
             )
         except Exception as exc:
             add_tool_call_pair_to_messages(
