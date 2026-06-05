@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
+from openviking.utils.exceptions import AllCredentialsFailedError
 from openviking.utils.model_retry import (
     OrderedCredentialSwitcher,
     classify_api_error,
@@ -575,22 +576,6 @@ class FailoverVLM(VLMBase):
         """Reset token usage for both primary and backup instances."""
         self.primary.reset_token_usage()
         self.backup.reset_token_usage()
-
-
-class AllCredentialsFailedError(Exception):
-    """Raised when all credentials in the chain have failed."""
-
-    def __init__(self, errors: list[tuple[str, str, Exception, int]]):
-        """Initialize the error with a list of credential failures.
-
-        Args:
-            errors: List of tuples containing (credential_id, error_class, exception, attempts)
-        """
-        self.errors = errors
-        message = "All credentials failed:\n" + "\n".join(
-            f"  - {cred_id}: {error_class} - {exc}" for cred_id, error_class, exc, attempts in errors
-        )
-        super().__init__(message)
 
 
 class MultiCredentialVLM(VLMBase):
