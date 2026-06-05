@@ -24,6 +24,8 @@ from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 
+_STALE_PATCH_REWRITE_MAX_ATTEMPTS = 1
+
 
 def _is_patch_stale(current_value: str, patch_value: StrPatchWithBase) -> bool:
     """Return whether a runtime patch was generated against an older field value."""
@@ -38,11 +40,11 @@ def _stale_patch_rewrite_config() -> tuple[bool, int]:
 
         memory_config = get_openviking_config().memory
         return (
-            bool(getattr(memory_config, "stale_patch_rewrite_enabled", False)),
-            int(getattr(memory_config, "stale_patch_rewrite_max_attempts", 0) or 0),
+            bool(getattr(memory_config, "memory_apply_exact_file_lock_enabled", False)),
+            _STALE_PATCH_REWRITE_MAX_ATTEMPTS,
         )
     except Exception:
-        return False, 0
+        return False, _STALE_PATCH_REWRITE_MAX_ATTEMPTS
 
 
 async def _rewrite_stale_patch(

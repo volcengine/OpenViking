@@ -48,23 +48,6 @@ class MemoryConfig(BaseModel):
             "without relying on a broad schema tree lock. Disabled by default."
         ),
     )
-    stale_patch_rewrite_enabled: bool = Field(
-        default=False,
-        description=(
-            "Experimental. When enabled, stale SEARCH/REPLACE string patches and stale "
-            "string replacements can be reconciled against the latest file content "
-            "before being applied. Disabled by default and only used for runtime patch "
-            "envelopes, not LLM output schemas."
-        ),
-    )
-    stale_patch_rewrite_max_attempts: int = Field(
-        default=1,
-        ge=0,
-        description=(
-            "Maximum LLM rewrite/synthesis attempts for a stale string patch or "
-            "replacement when stale_patch_rewrite_enabled is true."
-        ),
-    )
     agent_memory_enabled: bool = Field(
         default=False,
         description=(

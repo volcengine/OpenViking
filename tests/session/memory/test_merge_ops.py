@@ -401,7 +401,7 @@ class TestReplaceOp:
         assert telemetry.durations[0][0] == "memory.apply.replace_rewrite"
         assert telemetry.durations[0][1] >= 0
 
-    def test_apply_async_stale_replace_requires_enabled_synthesis(self, monkeypatch):
+    def test_apply_async_stale_replace_requires_exact_lock_synthesis(self, monkeypatch):
         op = ReplaceOp()
         value = ReplaceValueWithBase(
             proposed_value="new",

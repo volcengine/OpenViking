@@ -29,6 +29,8 @@ from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 
+_STALE_REPLACE_REWRITE_MAX_ATTEMPTS = 1
+
 
 def _is_replace_stale(current_value: Any, patch_value: ReplaceValueWithBase) -> bool:
     if patch_value.base_digest and isinstance(current_value, str):
@@ -44,11 +46,11 @@ def _stale_replace_rewrite_config() -> tuple[bool, int]:
 
         memory_config = get_openviking_config().memory
         return (
-            bool(getattr(memory_config, "stale_patch_rewrite_enabled", False)),
-            int(getattr(memory_config, "stale_patch_rewrite_max_attempts", 0) or 0),
+            bool(getattr(memory_config, "memory_apply_exact_file_lock_enabled", False)),
+            _STALE_REPLACE_REWRITE_MAX_ATTEMPTS,
         )
     except Exception:
-        return False, 0
+        return False, _STALE_REPLACE_REWRITE_MAX_ATTEMPTS
 
 
 def _format_unified_diff(base_value: str, proposed_value: str) -> str:
