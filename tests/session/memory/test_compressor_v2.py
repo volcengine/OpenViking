@@ -751,7 +751,7 @@ class TestCompressorV2:
                             ResolvedOperation(
                                 memory_fields={"content": "debug login issue"},
                                 memory_type="experiences",
-                                uris=["viking://agent/default/memories/experiences/debug.md"],
+                                uris=["viking://user/default/memories/experiences/debug.md"],
                             )
                         ],
                         delete_file_contents=[],
@@ -764,7 +764,7 @@ class TestCompressorV2:
             async def apply_operations(self, operations, ctx, **kwargs):
                 events.append("apply")
                 result = MemoryUpdateResult()
-                result.written_uris = ["viking://agent/default/memories/experiences/debug.md"]
+                result.written_uris = ["viking://user/default/memories/experiences/debug.md"]
                 return result
 
         config = SimpleNamespace(
@@ -790,7 +790,7 @@ class TestCompressorV2:
         )
 
         async def post_apply(result, inheritance_map, lock_handle, exact_file_lock_enabled):
-            assert result.written_uris == ["viking://agent/default/memories/experiences/debug.md"]
+            assert result.written_uris == ["viking://user/default/memories/experiences/debug.md"]
             assert inheritance_map == {}
             assert lock_handle is handle
             assert exact_file_lock_enabled is False
@@ -813,7 +813,7 @@ class TestCompressorV2:
                 post_apply=post_apply,
             )
 
-        assert result[0] == ["viking://agent/default/memories/experiences/debug.md"]
+        assert result[0] == ["viking://user/default/memories/experiences/debug.md"]
         assert events == ["acquire", "apply", "post_apply", "release"]
 
     @pytest.mark.asyncio
@@ -860,7 +860,7 @@ class TestCompressorV2:
                             ResolvedOperation(
                                 memory_fields={"content": "debug login issue"},
                                 memory_type="experiences",
-                                uris=["viking://agent/default/memories/experiences/debug.md"],
+                                uris=["viking://user/default/memories/experiences/debug.md"],
                             )
                         ],
                         delete_file_contents=[],
@@ -873,7 +873,7 @@ class TestCompressorV2:
             async def apply_operations(self, operations, ctx, **kwargs):
                 events.append("apply")
                 result = MemoryUpdateResult()
-                result.written_uris = ["viking://agent/default/memories/experiences/debug.md"]
+                result.written_uris = ["viking://user/default/memories/experiences/debug.md"]
                 return result
 
         config = SimpleNamespace(
@@ -894,7 +894,7 @@ class TestCompressorV2:
         )
 
         async def post_apply(result, inheritance_map, lock_handle, exact_file_lock_enabled):
-            assert result.written_uris == ["viking://agent/default/memories/experiences/debug.md"]
+            assert result.written_uris == ["viking://user/default/memories/experiences/debug.md"]
             assert inheritance_map == {}
             assert lock_handle is handle
             assert exact_file_lock_enabled is True
@@ -917,7 +917,7 @@ class TestCompressorV2:
                 post_apply=post_apply,
             )
 
-        assert result[0] == ["viking://agent/default/memories/experiences/debug.md"]
+        assert result[0] == ["viking://user/default/memories/experiences/debug.md"]
         lock_manager.acquire_exact_tree_batch.assert_not_awaited()
         assert events == ["apply", "post_apply", "release"]
 
@@ -1034,7 +1034,7 @@ class TestCompressorV2:
                             ResolvedOperation(
                                 memory_fields={"content": "debug login issue"},
                                 memory_type="experiences",
-                                uris=["viking://agent/default/memories/experiences/debug.md"],
+                                uris=["viking://user/default/memories/experiences/debug.md"],
                             )
                         ],
                         delete_file_contents=[],
@@ -1104,7 +1104,7 @@ class TestCompressorV2:
 
             def _uri_to_path(self, uri: str, ctx=None) -> str:
                 memory_path = uri.split("/memories/", 1)[1]
-                return f"/local/default/agent/default/memories/{memory_path}"
+                return f"/local/default/user/default/memories/{memory_path}"
 
             async def read_file(self, uri: str, ctx=None):
                 events.append("read")
@@ -1170,13 +1170,13 @@ class TestCompressorV2:
 
         # event order: lock → read exp → write exp → read traj → write traj → release
         assert events == [
-            "exact:/local/default/agent/default/memories/experiences/debug.md:timeout=None",
+            "exact:/local/default/user/default/memories/experiences/debug.md:timeout=None",
             "read",  # exp read
             "write",  # exp write (exp.links)
-            "exact:/local/default/agent/default/memories/trajectories/traj-1.md:timeout=None",
+            "exact:/local/default/user/default/memories/trajectories/traj-1.md:timeout=None",
             "read",  # traj read  (write_stored_links)
             "write",  # traj write (traj.backlinks)
-            "release_selected:['/local/default/agent/default/memories/trajectories/traj-1.md.path.ovlock']",
+            "release_selected:['/local/default/user/default/memories/trajectories/traj-1.md.path.ovlock']",
             "release",
         ]
 
@@ -1186,8 +1186,8 @@ class TestCompressorV2:
         compressor = SessionCompressorV2(vikingdb=None)
         user = UserIdentifier.the_default_user()
         ctx = RequestContext(user=user, role=Role.ROOT)
-        exp_uri = "viking://agent/default/memories/experiences/debug.md"
-        traj_uri = "viking://agent/default/memories/trajectories/traj-1.md"
+        exp_uri = "viking://user/default/memories/experiences/debug.md"
+        traj_uri = "viking://user/default/memories/trajectories/traj-1.md"
         events: List[str] = []
 
         class FakeVikingFS:
