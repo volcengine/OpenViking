@@ -127,6 +127,8 @@ claude() {
 
 Re-source your rc (`source ~/.zshrc`, or `source ~/.bashrc` on bash) and restart `claude` — `/mcp` should then show your remote URL with valid auth.
 
+**Wrapping extra launch commands.** If you start Claude Code through a different command — a custom wrapper like `cc-custom`, or a multi-word launcher (a base command plus a sub-command) — the installer can wrap those too. Answer its "Extra launch commands" prompt, or pass `OPENVIKING_CC_WRAP_EXTRA='cc-custom'` when running it. The list is stored in the same rc marker block (read by the wrapper as `$OPENVIKING_CC_WRAP_EXTRA`); for a multi-word entry, only invocations whose leading args match the sub-command get credentials injected, so every *other* use of that command passes through untouched.
+
 > **Why a function instead of `export`?** A globally exported API key leaks into every child process spawned from your shell — npm scripts, build tools, crash dumps, `/proc/<pid>/environ`. The function wrapper limits the secret to the `claude` process tree only.
 >
 > Don't have `ovcli.conf` yet? See the [Deployment Guide → CLI](../../docs/en/guides/03-deployment.md#cli) to set one up.
