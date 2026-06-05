@@ -13,6 +13,7 @@ from openviking.server.dependencies import get_service
 from openviking.server.identity import AccountNamespacePolicy, RequestContext, Role
 from openviking.server.local_input_guard import require_remote_resource_source
 from openviking.server.responses import response_from_result
+from openviking.server.skill_source_metadata import persist_skill_source_metadata
 from openviking.server.telemetry import run_operation
 from openviking.server.temp_upload_store import TempUploadStore
 from openviking.server.upload_token_store import UploadTokenError, upload_token_store
@@ -280,11 +281,20 @@ async def add_skill(
     data = request.data
     allow_local_path_resolution = False
     resolved = None
+    source_metadata = {"type": "api", "source": "inline_content", "operation": "add"}
     if request.temp_file_id:
         store = TempUploadStore.build(http_request.app.state.config)
         resolved = await store.resolve_for_consume(request.temp_file_id, _ctx)
         data = resolved.local_path
         allow_local_path_resolution = True
+        source_metadata = {
+            "type": "api",
+            "source": "temp_upload",
+            "operation": "add",
+            "upload_mode": resolved.mode,
+        }
+        if resolved.original_filename:
+            source_metadata["original_filename"] = resolved.original_filename
 
     store = TempUploadStore.build(http_request.app.state.config) if resolved else None
 
@@ -297,6 +307,7 @@ async def add_skill(
                 timeout=request.timeout,
                 allow_local_path_resolution=allow_local_path_resolution,
             )
+            await persist_skill_source_metadata(service, _ctx, result, source_metadata)
         except Exception:
             if resolved and store:
                 await store.mark_failed(resolved, _ctx)

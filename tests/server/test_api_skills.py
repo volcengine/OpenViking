@@ -70,7 +70,11 @@ async def test_skills_api_list_show_find_and_delete(client):
     assert shown["skill_md_uri"].endswith("/skills/api-skill/SKILL.md")
     assert "# api-skill" in shown["content"]
     assert any(file["name"] == "SKILL.md" for file in shown["files"])
-    assert shown["source"]["tracked"] is False
+    assert shown["source"]["tracked"] is True
+    assert shown["source"]["type"] == "api"
+    assert shown["source"]["source"] == "inline_content"
+    assert shown["source"]["operation"] == "add"
+    assert shown["source"]["skill_name"] == "api-skill"
 
     level_zero_response = await client.get(
         "/api/v1/skills/api-skill",
@@ -146,11 +150,16 @@ async def test_skills_api_update_requires_matching_name(client):
 
     show_response = await client.get(
         "/api/v1/skills/update-skill",
-        params={"include_content": True},
+        params={"include_content": True, "include_source": True},
     )
     shown = show_response.json()["result"]
     assert shown["description"] == "Updated description"
     assert "Updated instructions" in shown["content"]
+    assert shown["source"]["tracked"] is True
+    assert shown["source"]["type"] == "api"
+    assert shown["source"]["source"] == "inline_content"
+    assert shown["source"]["operation"] == "update"
+    assert shown["source"]["skill_name"] == "update-skill"
 
 
 async def test_skills_api_show_reads_source_metadata_and_hides_internal_file(client):
@@ -165,7 +174,7 @@ async def test_skills_api_show_reads_source_metadata_and_hides_internal_file(cli
                 '{"type":"git","clone_url":"https://github.com/acme/skills.git",'
                 '"ref_name":"main","subdir":"skills/source-skill","skill_name":"source-skill"}'
             ),
-            "mode": "create",
+            "mode": "replace",
             "wait": True,
         },
     )

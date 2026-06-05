@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Agent-scope skill management endpoints for OpenViking HTTP Server."""
 
-import json
 import re
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -18,14 +17,17 @@ from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
+from openviking.server.skill_source_metadata import (
+    SOURCE_METADATA_FILENAME,
+    persist_skill_source_metadata,
+    read_skill_source_metadata,
+)
 from openviking.server.telemetry import run_operation
 from openviking.server.temp_upload_store import TempUploadStore
 from openviking.telemetry import TelemetryRequest
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 
 router = APIRouter(prefix="/api/v1/skills", tags=["skills"])
-
-SOURCE_METADATA_FILENAME = ".source.json"
 
 
 class UpdateSkillRequest(BaseModel):
@@ -89,10 +91,6 @@ def _skill_md_uri(root_uri: str) -> str:
     return f"{root_uri.rstrip('/')}/SKILL.md"
 
 
-def _skill_source_metadata_uri(root_uri: str) -> str:
-    return f"{root_uri.rstrip('/')}/{SOURCE_METADATA_FILENAME}"
-
-
 def _skill_name_from_uri(uri: str) -> str:
     return uri.rstrip("/").split("/")[-1]
 
@@ -112,36 +110,6 @@ def _skill_file_kind(path: str, is_dir: bool) -> str:
     if path in {".abstract.md", ".overview.md"}:
         return "summary"
     return "auxiliary"
-
-
-async def _read_skill_source_metadata(
-    service, ctx: RequestContext, root_uri: str
-) -> Dict[str, Any]:
-    uri = _skill_source_metadata_uri(root_uri)
-    try:
-        raw = await service.fs.read(uri, ctx=ctx)
-    except Exception:
-        return {
-            "tracked": False,
-            "message": "Skill source metadata is not tracked yet.",
-        }
-
-    try:
-        metadata = json.loads(raw)
-    except Exception:
-        return {
-            "tracked": False,
-            "message": "Skill source metadata is invalid.",
-        }
-
-    if not isinstance(metadata, dict):
-        return {
-            "tracked": False,
-            "message": "Skill source metadata is invalid.",
-        }
-    metadata["tracked"] = True
-    metadata["metadata_uri"] = uri
-    return metadata
 
 
 def _parse_abstract_meta(abstract: str) -> Dict[str, Any]:
@@ -527,7 +495,7 @@ async def get_skill(
             and _relative_skill_path(root_uri, entry.get("uri", "")) != SOURCE_METADATA_FILENAME
         ]
     if include_source:
-        result["source"] = await _read_skill_source_metadata(service, _ctx, root_uri)
+        result["source"] = await read_skill_source_metadata(service, _ctx, root_uri)
     return Response(status="ok", result=result)
 
 
@@ -545,11 +513,20 @@ async def update_skill(
     data = request.data
     allow_local_path_resolution = False
     resolved = None
+    source_metadata = {"type": "api", "source": "inline_content", "operation": "update"}
     if request.temp_file_id:
         store = TempUploadStore.build(http_request.app.state.config)
         resolved = await store.resolve_for_consume(request.temp_file_id, _ctx)
         data = Path(resolved.local_path)
         allow_local_path_resolution = True
+        source_metadata = {
+            "type": "api",
+            "source": "temp_upload",
+            "operation": "update",
+            "upload_mode": resolved.mode,
+        }
+        if resolved.original_filename:
+            source_metadata["original_filename"] = resolved.original_filename
 
     store = TempUploadStore.build(http_request.app.state.config) if resolved else None
 
@@ -568,6 +545,7 @@ async def update_skill(
                 timeout=request.timeout,
                 allow_local_path_resolution=allow_local_path_resolution,
             )
+            await persist_skill_source_metadata(service, _ctx, result, source_metadata)
         except Exception:
             if resolved and store:
                 await store.mark_failed(resolved, _ctx)
