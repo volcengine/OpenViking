@@ -1,0 +1,70 @@
+{
+    "archive_uri": "viking://session/7fd97a9e-b826-43a1-8f55-189dbf91b43b/history/archive_001",
+    "extracted_at": "2026-06-05T07:20:11.693641Z",
+    "operations": {
+        "adds": [
+            {
+                "uri": "viking://user/alice/memories/events/2026/06/05/北京到上海机票查询请求.md",
+                "memory_type": "events",
+                "after": "Summary: 2026-06-05，用户请求预订2026-06-10（下周三）北京到上海上午出发的机票，助理使用search_flights工具查询到CA1501（07:30）、MU5101（08:00）、HU7603（09:45）三个候选航班\n2026-06-05 (Friday) ChatLog:\n[user]: 帮我订一张下周三北京到上海的机票，上午出发\n[assistant]: 好的，我先用 search_flights 工具查询下周三（2026-04-22）北京到上海上午的航班。\n[assistant]: [tool_call: search_flights(from=PEK, to=SHA, date=2026-04-22, time=morning)] 返回了 3 个候选航班：CA1501 07:30、MU5101 08:00、HU7603 09:45。"
+            },
+            {
+                "uri": "viking://user/alice/memories/events/2026/06/05/MU5101航班预订选择.md",
+                "memory_type": "events",
+                "after": "Summary: 2026-06-05，用户选择预订MU5101航班，首次使用book_flight工具订票失败，原因是用户已存在相同日期的CA1501航班预订\n2026-06-05 (Friday) ChatLog:\n[user]: 那就订 MU5101 吧\n[assistant]: [tool_call: book_flight(flight=MU5101, passenger=user_123)] 订票失败：该用户已存在一张相同日期的预订 (CA1501)。"
+            },
+            {
+                "uri": "viking://user/alice/memories/events/2026/06/05/原有航班取消确认.md",
+                "memory_type": "events",
+                "after": "Summary: 2026-06-05，用户确认取消已有的CA1501航班预订，助理使用cancel_booking工具完成原预订取消\n2026-06-05 (Friday) ChatLog:\n[assistant]: 检测到重复预订，我先询问你的偏好。你是想取消已有的 CA1501 换成 MU5101，还是保留现有预订？\n[user]: 那就取消 CA1501，改订 MU5101\n[assistant]: [tool_call: cancel_booking(booking_id=CA1501-xyz)] 已取消原预订。"
+            },
+            {
+                "uri": "viking://user/alice/memories/events/2026/06/05/MU5101航班预订成功.md",
+                "memory_type": "events",
+                "after": "Summary: 2026-06-05，助理再次调用book_flight工具成功预订MU5101航班，票号为MU5101-abc，已发送至用户邮箱\n2026-06-05 (Friday) ChatLog:\n[assistant]: [tool_call: book_flight(flight=MU5101, passenger=user_123)] 预订成功，票号 MU5101-abc。已将新票号发送到你的邮箱。"
+            },
+            {
+                "uri": "viking://user/alice/memories/tools/search_flights.md",
+                "memory_type": "tools",
+                "after": "Tool: search_flights\n\nStatic Description:\n\"查询指定日期、出发地、目的地和时间段的可用航班信息\"\n\n- Success rate: 100% (1/1)\n- When to use: 当用户需要查询特定航线、日期和时段的航班信息时使用\n- Optimal params: from参数使用机场三字码，to参数使用机场三字码，date参数使用YYYY-MM-DD格式，time参数可选morning/afternoon/evening\n- Common failures: 日期格式错误会导致查询失败，机场代码错误会返回无结果\n- Recommendation: 调用前需确认出发地、目的地、日期和时间段信息准确，优先使用机场三字码"
+            },
+            {
+                "uri": "viking://user/alice/memories/tools/book_flight.md",
+                "memory_type": "tools",
+                "after": "Tool: book_flight\n\nStatic Description:\n\"为指定乘客预订选定的航班\"\n\n- Success rate: 50% (1/2)\n- When to use: 当用户确认选定航班后，为其完成机票预订时使用\n- Optimal params: flight参数使用航班号，passenger参数使用用户唯一标识\n- Common failures: 用户已存在相同日期的预订会导致订票失败，乘客信息错误会导致预订失败\n- Recommendation: 调用前需检查用户是否已有相同日期的航班预订，确认乘客信息准确"
+            },
+            {
+                "uri": "viking://user/alice/memories/tools/cancel_booking.md",
+                "memory_type": "tools",
+                "after": "Tool: cancel_booking\n\nStatic Description:\n\"取消指定的已预订航班\"\n\n- Success rate: 100% (1/1)\n- When to use: 当用户需要取消已有的航班预订时使用\n- Optimal params: booking_id参数使用预订成功后返回的唯一预订编号\n- Common failures: 预订编号错误会导致取消失败，已起飞的航班无法取消\n- Recommendation: 调用前需确认用户要取消的预订编号准确，且航班尚未起飞"
+            },
+            {
+                "uri": "viking://user/alice/memories/entities/航班/MU5101.md",
+                "memory_type": "entities",
+                "after": "## 基本信息\n- 航线：北京（PEK）→上海（SHA）\n- 出发时间：08:00\n- 所属航司：东方航空\n## 预订记录\n- 2026-06-05用户预订该航班2026-06-10的机票，票号MU5101-abc，预订成功"
+            },
+            {
+                "uri": "viking://user/alice/memories/entities/航班/CA1501.md",
+                "memory_type": "entities",
+                "after": "## 基本信息\n- 航线：北京（PEK）→上海（SHA）\n- 出发时间：07:30\n- 所属航司：中国国际航空\n## 预订记录\n- 2026-06-05用户取消该航班2026-06-10的预订，原预订编号CA1501-xyz"
+            },
+            {
+                "uri": "viking://user/alice/memories/entities/航班/HU7603.md",
+                "memory_type": "entities",
+                "after": "## 基本信息\n- 航线：北京（PEK）→上海（SHA）\n- 出发时间：09:45\n- 所属航司：海南航空"
+            },
+            {
+                "uri": "viking://user/alice/memories/preferences/user_123/机票预订偏好.md",
+                "memory_type": "preferences",
+                "after": "- 偏好选择上午出发的航班（evidenced by 2026-06-05预订北京到上海机票时明确要求上午出发）\n- 在可选的上午航班中优先选择08:00时段的MU5101航班（evidenced by 2026-06-05在三个候选航班中选择MU5101，且愿意取消已有的更早航班改订该航班）"
+            }
+        ],
+        "updates": [],
+        "deletes": []
+    },
+    "summary": {
+        "total_adds": 11,
+        "total_updates": 0,
+        "total_deletes": 0
+    }
+}

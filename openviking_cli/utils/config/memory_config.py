@@ -32,10 +32,10 @@ class MemoryConfig(BaseModel):
             "0 means unlimited retries."
         ),
     )
-    disable_agent_memory: bool = Field(
-        default=False,
+    agent_memory_enabled: bool = Field(
+        default=True,
         description=(
-            "Disable trajectory/experience memory extraction. When false (default), "
+            "Enable trajectory/experience memory extraction. When true (default), "
             "a two-phase pipeline runs after user-memory extraction: Phase 1 extracts "
             "execution trajectories from the conversation; Phase 2 consolidates them "
             "into higher-level experience memories."

@@ -18,7 +18,7 @@ Prerequisites
 - ~/.openviking/ov.conf has:
     "memory": { "version": "v2" }
   or to explicitly disable:
-    "memory": { "version": "v2", "disable_agent_memory": true }
+    "memory": { "version": "v2", "agent_memory_enabled": false }
 
 Run
 ---
@@ -221,11 +221,11 @@ def _collect_source_trajectories(client: LocalClient, exp_entries: List[dict]) -
 
 @pytest.fixture()
 def agent_memory_config_check():
-    """Skip if agent memory is disabled via disable_agent_memory."""
+    """Skip if agent_memory_enabled is false."""
     OpenVikingConfigSingleton._instance = None
     config = get_openviking_config()
-    if getattr(config.memory, "disable_agent_memory", False):
-        pytest.skip("disable_agent_memory is set in config — skipping agent memory tests")
+    if not getattr(config.memory, "agent_memory_enabled", True):
+        pytest.skip("agent_memory_enabled is false in config — skipping agent memory tests")
 
 
 @pytest.fixture()
@@ -238,7 +238,8 @@ def local_test_env() -> Iterator[Dict[str, object]]:
             "account_id": "default",
         }
     finally:
-        shutil.rmtree(local_path, ignore_errors=True)
+        pass
+        # shutil.rmtree(local_path, ignore_errors=True)
 
 
 def _build_client(env: Dict[str, object], user_id: str) -> LocalClient:
@@ -253,10 +254,10 @@ def _build_client(env: Dict[str, object], user_id: str) -> LocalClient:
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
 
-@pytest.mark.skipif(
-    os.environ.get("RUN_AGENT_MEMORY_TESTS") != "1",
-    reason="set RUN_AGENT_MEMORY_TESTS=1 to run agent memory e2e tests",
-)
+# @pytest.mark.skipif(
+#     os.environ.get("RUN_AGENT_MEMORY_TESTS") != "1",
+#     reason="set RUN_AGENT_MEMORY_TESTS=1 to run agent memory e2e tests",
+# )
 @pytest.mark.integration
 class TestAgentMemoryE2E:
     """End-to-end tests for the agent memory two-phase extraction pipeline."""

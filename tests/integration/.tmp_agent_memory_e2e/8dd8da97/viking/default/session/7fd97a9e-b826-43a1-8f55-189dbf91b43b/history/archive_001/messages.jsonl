@@ -1,0 +1,9 @@
+{"id": "msg_20f579a9dbd94fa8b23dbef41b9062cb", "role": "user", "parts": [{"type": "text", "text": "帮我订一张下周三北京到上海的机票，上午出发"}], "created_at": "2026-06-05T07:19:32.034204+00:00"}
+{"id": "msg_8d4822d46e764dd2a056801862b7825d", "role": "assistant", "parts": [{"type": "text", "text": "好的，我先用 search_flights 工具查询下周三（2026-04-22）北京到上海上午的航班。"}], "created_at": "2026-06-05T07:19:32.040540+00:00"}
+{"id": "msg_5e06da8a4fb14f61a480df344642829c", "role": "assistant", "parts": [{"type": "text", "text": "[tool_call: search_flights(from=PEK, to=SHA, date=2026-04-22, time=morning)] 返回了 3 个候选航班：CA1501 07:30、MU5101 08:00、HU7603 09:45。"}], "created_at": "2026-06-05T07:19:32.046366+00:00"}
+{"id": "msg_e0de62f7c23a4a5097dfd907dbf49465", "role": "user", "parts": [{"type": "text", "text": "那就订 MU5101 吧"}], "created_at": "2026-06-05T07:19:32.052892+00:00"}
+{"id": "msg_bc3b5cd525434f69a2091a9bf9008e9f", "role": "assistant", "parts": [{"type": "text", "text": "[tool_call: book_flight(flight=MU5101, passenger=user_123)] 订票失败：该用户已存在一张相同日期的预订 (CA1501)。"}], "created_at": "2026-06-05T07:19:32.058154+00:00"}
+{"id": "msg_1bdd2952b5ab4398962a3bf23fab6a48", "role": "assistant", "parts": [{"type": "text", "text": "检测到重复预订，我先询问你的偏好。你是想取消已有的 CA1501 换成 MU5101，还是保留现有预订？"}], "created_at": "2026-06-05T07:19:32.064754+00:00"}
+{"id": "msg_20c1d39f802d4f3d80ef36c2c3ce5086", "role": "user", "parts": [{"type": "text", "text": "那就取消 CA1501，改订 MU5101"}], "created_at": "2026-06-05T07:19:32.079194+00:00"}
+{"id": "msg_a64af8884829431e8b1e1a3d6dfcb800", "role": "assistant", "parts": [{"type": "text", "text": "[tool_call: cancel_booking(booking_id=CA1501-xyz)] 已取消原预订。"}], "created_at": "2026-06-05T07:19:32.091838+00:00"}
+{"id": "msg_313b361ea0ca42cebf863f65ac4619e9", "role": "assistant", "parts": [{"type": "text", "text": "[tool_call: book_flight(flight=MU5101, passenger=user_123)] 预订成功，票号 MU5101-abc。已将新票号发送到你的邮箱。"}], "created_at": "2026-06-05T07:19:32.102603+00:00"}

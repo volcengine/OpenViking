@@ -199,7 +199,7 @@ def test_openviking_config_rejects_memory_v1(monkeypatch):
     OpenVikingConfigSingleton.reset_instance()
 
 
-def test_openviking_config_memory_disable_agent_memory(monkeypatch):
+def test_openviking_config_memory_agent_memory_enabled(monkeypatch):
     monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
 
     from openviking_cli.utils.config.open_viking_config import (
@@ -208,15 +208,15 @@ def test_openviking_config_memory_disable_agent_memory(monkeypatch):
     )
 
     default_config = OpenVikingConfig.from_dict({})
-    disabled_config = OpenVikingConfig.from_dict({"memory": {"disable_agent_memory": True}})
+    disabled_config = OpenVikingConfig.from_dict({"memory": {"agent_memory_enabled": False}})
     experimental_config = OpenVikingConfig.from_dict(
         {"memory": {"experimental_memory_switch": True}}
     )
 
-    assert default_config.memory.disable_agent_memory is False
-    assert disabled_config.memory.disable_agent_memory is True
+    assert default_config.memory.agent_memory_enabled is True
+    assert disabled_config.memory.agent_memory_enabled is False
     assert experimental_config.memory.experimental_memory_switch is True
-    assert experimental_config.memory.disable_agent_memory is False
+    assert experimental_config.memory.agent_memory_enabled is True
 
     OpenVikingConfigSingleton.reset_instance()
 

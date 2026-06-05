@@ -1,0 +1,61 @@
+{
+    "CollectionName": "context",
+    "IndexName": "default",
+    "UpdateTimeStamp": 1780644132555764000,
+    "ScalarIndex": [
+        {
+            "FieldName": "account_id",
+            "FieldType": "string"
+        },
+        {
+            "FieldName": "active_count",
+            "FieldType": "int64"
+        },
+        {
+            "FieldName": "context_type",
+            "FieldType": "string"
+        },
+        {
+            "FieldName": "created_at",
+            "FieldType": "int64"
+        },
+        {
+            "FieldName": "level",
+            "FieldType": "int64"
+        },
+        {
+            "FieldName": "name",
+            "FieldType": "string"
+        },
+        {
+            "FieldName": "owner_user_id",
+            "FieldType": "string"
+        },
+        {
+            "FieldName": "tags",
+            "FieldType": "string"
+        },
+        {
+            "FieldName": "type",
+            "FieldType": "string"
+        },
+        {
+            "FieldName": "updated_at",
+            "FieldType": "int64"
+        },
+        {
+            "FieldName": "uri",
+            "FieldType": "path"
+        }
+    ],
+    "VectorIndex": {
+        "IndexType": "flat",
+        "ElementCount": 63,
+        "MaxElementCount": 63,
+        "Dimension": 1024,
+        "Distance": "ip",
+        "Quant": "int8",
+        "EnableSparse": false,
+        "SearchWithSparseLogitAlpha": 0.0
+    }
+}

@@ -476,7 +476,7 @@ class SessionCompressorV2:
             if allowed_memory_types is None
             else set(allowed_memory_types)
         )
-        agent_memory_enabled = not config.memory.disable_agent_memory
+        agent_memory_enabled = config.memory.agent_memory_enabled
         include_trajectories = agent_memory_enabled and "trajectories" in allowed_agent_types
         include_experiences = agent_memory_enabled and "experiences" in allowed_agent_types
         if include_session_skills is None:

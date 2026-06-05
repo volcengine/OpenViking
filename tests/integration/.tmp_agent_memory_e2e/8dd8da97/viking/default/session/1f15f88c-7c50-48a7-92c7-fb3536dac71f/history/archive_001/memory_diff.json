@@ -1,0 +1,83 @@
+{
+    "archive_uri": "viking://session/1f15f88c-7c50-48a7-92c7-fb3536dac71f/history/archive_001",
+    "extracted_at": "2026-06-05T07:21:51.420073Z",
+    "operations": {
+        "adds": [
+            {
+                "uri": "viking://user/alice/memories/events/2026/06/05/航班查询请求.md",
+                "memory_type": "events",
+                "after": "Summary: 2026-06-05用户请求查询2026-04-28北京到广州下午出发的航班，查询结果为CZ3101 14:00、CA1315 15:30、MF8023 16:20。\n2026-06-05 (Friday) ChatLog:\n[user]: 帮我订 4 月 28 日北京到广州的机票，下午的\n[assistant]: [tool_call: search_flights(from=PEK, to=CAN, date=2026-04-28, time=afternoon)] 找到了 CZ3101 14:00、CA1315 15:30、MF8023 16:20。"
+            },
+            {
+                "uri": "viking://user/alice/memories/events/2026/06/05/航班预订申请.md",
+                "memory_type": "events",
+                "after": "Summary: 2026-06-05用户选定CA1315航班申请预订，首次预订失败，因该日期已有CZ3101航班预订。\n2026-06-05 (Friday) ChatLog:\n[user]: 订 CA1315\n[assistant]: [tool_call: book_flight(flight=CA1315, passenger=user_123)] 订票失败：同一日期已有一张预订 (CZ3101)。"
+            },
+            {
+                "uri": "viking://user/alice/memories/events/2026/06/05/多预订需求确认.md",
+                "memory_type": "events",
+                "after": "Summary: 2026-06-05用户确认需保留2026-04-28的CZ3101和CA1315两张机票，为不同行程使用。\n2026-06-05 (Friday) ChatLog:\n[assistant]: 检测到重复预订。这次你想取消 CZ3101 改订 CA1315，还是这两张都要保留？\n[user]: 这两张都要，是不同行程"
+            },
+            {
+                "uri": "viking://user/alice/memories/events/2026/06/05/多预订政策查询.md",
+                "memory_type": "events",
+                "after": "Summary: 2026-06-05查询确认2026-04-28允许同一用户有多张机票预订，系统不强制合并。\n2026-06-05 (Friday) ChatLog:\n[assistant]: [tool_call: check_multi_booking_policy(date=2026-04-28)] 确认：同一天多个预订是允许的，系统不强制合并。"
+            },
+            {
+                "uri": "viking://user/alice/memories/events/2026/06/05/重复预订覆盖成功.md",
+                "memory_type": "events",
+                "after": "Summary: 2026-06-05调用book_flight工具携带override_duplicate=true参数成功预订CA1315航班，票号CA1315-xyz，两张机票均生效。\n2026-06-05 (Friday) ChatLog:\n[assistant]: [tool_call: book_flight(flight=CA1315, passenger=user_123, override_duplicate=true)] 预订成功，票号 CA1315-xyz。两张机票均已生效。"
+            },
+            {
+                "uri": "viking://user/alice/memories/events/2026/06/05/机票取消申请.md",
+                "memory_type": "events",
+                "after": "Summary: 2026-06-05用户申请取消上周预订的MF7801航班，取消失败，因距出发时间不足24小时不符合免费取消政策。\n2026-06-05 (Friday) ChatLog:\n[user]: 好的，另外我想取消上周订的 MF7801\n[assistant]: [tool_call: cancel_booking(booking_id=MF7801-001)] 取消失败：距出发时间不足 24 小时，航空公司不允许免费取消。"
+            },
+            {
+                "uri": "viking://user/alice/memories/events/2026/06/05/取消后续处理确认.md",
+                "memory_type": "events",
+                "after": "Summary: 2026-06-05用户确认放弃MF7801航班的取消或改期操作，保持该预订原状。\n2026-06-05 (Friday) ChatLog:\n[assistant]: MF7801 的出发时间距现在不足 24 小时，按航空公司政策无法免费取消。有两个选择：1) 支付改签费改期；2) 放弃该票（退款仅限税费）。请问你想怎么处理？\n[user]: 算了，就不管了\n[assistant]: 好的，MF7801 保持原状，CA1315 新预订已生效。"
+            },
+            {
+                "uri": "viking://user/alice/memories/entities/航班/CA1315.md",
+                "memory_type": "entities",
+                "after": "## 基本信息\n- 航线：北京（PEK）→广州（CAN）\n- 出发时间：15:30\n- 所属航司：中国国际航空\n## 预订记录\n- 2026-06-05用户预订该航班2026-04-28的机票，票号CA1315-xyz，预订成功"
+            },
+            {
+                "uri": "viking://user/alice/memories/entities/航班/CZ3101.md",
+                "memory_type": "entities",
+                "after": "## 基本信息\n- 航线：北京（PEK）→广州（CAN）\n- 出发时间：14:00\n- 所属航司：南方航空\n## 预订记录\n- 2026-06-05前用户已预订该航班2026-04-28的机票，用户确认保留该预订"
+            },
+            {
+                "uri": "viking://user/alice/memories/entities/航班/MF8023.md",
+                "memory_type": "entities",
+                "after": "## 基本信息\n- 航线：北京（PEK）→广州（CAN）\n- 出发时间：16:20\n- 所属航司：厦门航空"
+            },
+            {
+                "uri": "viking://user/alice/memories/entities/航班/MF7801.md",
+                "memory_type": "entities",
+                "after": "## 预订记录\n- 2026-06-05前用户预订该航班，2026-06-05申请取消失败，因距出发不足24小时无法免费取消，用户确认放弃处理"
+            }
+        ],
+        "updates": [
+            {
+                "uri": "viking://user/alice/memories/tools/book_flight.md",
+                "memory_type": "tools",
+                "before": "Tool: book_flight\n\nStatic Description:\n\"为指定乘客预订选定的航班\"\n\n- Success rate: 50% (1/2)\n- When to use: 当用户确认选定航班后，为其完成机票预订时使用\n- Optimal params: flight参数使用航班号，passenger参数使用用户唯一标识\n- Common failures: 用户已存在相同日期的预订会导致订票失败，乘客信息错误会导致预订失败\n- Recommendation: 调用前需检查用户是否已有相同日期的航班预订，确认乘客信息准确",
+                "after": "Tool: book_flight\n\nStatic Description:\n\"为指定乘客预订选定的航班\"\n\n- Success rate: 50% (2/4)\n- When to use: 当用户确认选定航班后，为其完成机票预订时使用\n- Optimal params: flight参数使用航班号，passenger参数使用用户唯一标识\n- Common failures: 用户已存在相同日期的预订会导致订票失败，乘客信息错误会导致预订失败\n- Recommendation: 调用前需检查用户是否已有相同日期的航班预订，确认乘客信息准确"
+            },
+            {
+                "uri": "viking://user/alice/memories/preferences/user_123/机票预订偏好.md",
+                "memory_type": "preferences",
+                "before": "- 偏好选择上午出发的航班（evidenced by 2026-06-05预订北京到上海机票时明确要求上午出发）\n- 在可选的上午航班中优先选择08:00时段的MU5101航班（evidenced by 2026-06-05在三个候选航班中选择MU5101，且愿意取消已有的更早航班改订该航班）",
+                "after": "- 可根据行程需要选择上午或下午出发的航班（evidenced by 2026-06-05预订北京到上海机票时要求上午出发，预订北京到广州机票时要求下午出发）\n- 在可选的上午航班中优先选择08:00时段的MU5101航班（evidenced by 2026-06-05在三个候选航班中选择MU5101，且愿意取消已有的更早航班改订该航班）\n- 支持同一日期预订多张不同行程的机票（evidenced by 2026-06-05明确要求保留2026-04-28的CZ3101和CA1315两张机票）\n- 距出发时间不足24小时的航班优先选择放弃操作而非支付改签费（evidenced by 2026-06-05针对MF7801航班选择不处理）"
+            }
+        ],
+        "deletes": []
+    },
+    "summary": {
+        "total_adds": 11,
+        "total_updates": 2,
+        "total_deletes": 0
+    }
+}
