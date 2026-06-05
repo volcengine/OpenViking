@@ -502,6 +502,9 @@ class ResourceService:
         telemetry.set("resource.flags.summarize", summarize)
         telemetry.set("resource.flags.watch_enabled", watch_enabled)
 
+        if max_pages < 1:
+            raise InvalidArgumentError("max_pages must be >= 1 for recursive web crawling.")
+
         try:
             # Resolve path variables before validation
             if to:
@@ -552,13 +555,13 @@ class ResourceService:
             if result.get("status") == "error":
                 return result
 
-            if depth > 0 and self._should_crawl(path, result):
-                html_content = result.get("_html_content", "")
+            root_uri = result.get("root_uri")
+            crawl_parent_uri = self._get_parent_resource_uri(root_uri) or parent
+            if depth != 0 and self._should_crawl(path, result):
                 crawl_root_url = result.get("_html_final_url") or path
                 try:
                     crawl_result = await self._crawl_and_add_resources(
                         root_url=crawl_root_url,
-                        html_content=html_content,
                         depth=depth,
                         max_pages=max_pages,
                         include_paths=include_paths,
@@ -566,7 +569,8 @@ class ResourceService:
                         allow_external_links=allow_external_links,
                         use_playwright=use_playwright,
                         ctx=ctx,
-                        parent_uri=result.get("root_uri"),
+                        parent_uri=crawl_parent_uri,
+                        root_uri=root_uri,
                         instruction=instruction,
                         reason=reason,
                         build_index=build_index,
@@ -577,6 +581,9 @@ class ResourceService:
                         "total_crawled": crawl_result.total_crawled,
                         "total_failed": crawl_result.total_failed,
                         "total_skipped": crawl_result.total_skipped,
+                        "root_updated": crawl_result.root_updated,
+                        "child_added": crawl_result.child_added,
+                        "child_failed": crawl_result.child_failed,
                     }
                 except Exception as e:
                     logger.warning(f"[Crawl] Crawl failed for {path}: {e}")
@@ -756,7 +763,6 @@ class ResourceService:
     async def _crawl_and_add_resources(
         self,
         root_url: str,
-        html_content: str,
         depth: int,
         max_pages: int,
         include_paths: Optional[str],
@@ -764,6 +770,7 @@ class ResourceService:
         allow_external_links: bool,
         ctx: RequestContext,
         parent_uri: Optional[str],
+        root_uri: Optional[str],
         instruction: str,
         reason: str,
         build_index: bool,
@@ -795,25 +802,28 @@ class ResourceService:
 
         crawler = WebCrawler(config)
         try:
-            crawl_result: CrawlResult = await crawler.crawl(
-                root_url, seed_html=html_content or None
-            )
+            crawl_result: CrawlResult = await crawler.crawl(root_url)
 
+            success_pages = [page for page in crawl_result.pages if page.status == "success"]
             logger.info(
-                f"[Crawl] Adding {len(crawl_result.pages)} child resources "
+                f"[Crawl] Persisting {len(success_pages)} crawled pages "
                 f"(concurrency=3, parent={parent_uri})"
             )
             sem = asyncio.Semaphore(3)
             added_count = 0
             failed_count = 0
+            root_updated = False
 
-            async def _add_child(page):
-                nonlocal added_count, failed_count
+            async def _add_page(page):
+                nonlocal added_count, failed_count, root_updated
                 async with sem:
                     try:
                         import tempfile
                         import os
                         from openviking.parse.parsers.html import HTMLParser
+
+                        target_to = root_uri if page.depth == 0 and root_uri else None
+                        target_parent = None if target_to else parent_uri
 
                         if page.content:
                             # 1. 无论是 SSR 直接来的还是 HTML 退级，如果它有内容，都可以考虑清洗
@@ -829,10 +839,11 @@ class ResourceService:
 
                                 await self.add_resource(
                                     path=temp_path,
+                                    to=target_to,
                                     source_name=page.title or page.url,
                                     original_source=page.url,
                                     ctx=ctx,
-                                    parent=parent_uri,
+                                    parent=target_parent,
                                     instruction=instruction,
                                     reason=reason,
                                     build_index=build_index,
@@ -847,8 +858,9 @@ class ResourceService:
                             # fallback (理论上不会发生)
                             await self.add_resource(
                                 path=page.url,
+                                to=target_to,
                                 ctx=ctx,
-                                parent=parent_uri,
+                                parent=target_parent,
                                 instruction=instruction,
                                 reason=reason,
                                 build_index=build_index,
@@ -857,24 +869,31 @@ class ResourceService:
                                 **kwargs,
                             )
 
-                        added_count += 1
-                        if added_count % 10 == 0:
+                        if page.depth == 0 and root_uri:
+                            root_updated = True
+                        else:
+                            added_count += 1
+                        if added_count > 0 and added_count % 10 == 0:
                             logger.info(
-                                f"[Crawl] Progress: {added_count}/{len(crawl_result.pages)} added"
+                                f"[Crawl] Progress: {added_count}/{len(success_pages)} child pages added"
                             )
                     except Exception as e:
                         failed_count += 1
                         if failed_count <= 5:
                             logger.warning(f"[Crawl] Failed to add {page.url}: {e}")
 
-            tasks = [_add_child(page) for page in crawl_result.pages if page.status == "success"]
+            tasks = [_add_page(page) for page in success_pages]
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
 
             logger.info(
                 f"[Crawl] Child resources done: "
-                f"added={added_count} failed={failed_count} total={len(tasks)}"
+                f"root_updated={root_updated} added={added_count} "
+                f"failed={failed_count} total={len(tasks)}"
             )
+            crawl_result.root_updated = root_updated
+            crawl_result.child_added = added_count
+            crawl_result.child_failed = failed_count
 
             return crawl_result
         finally:

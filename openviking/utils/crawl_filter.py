@@ -45,6 +45,10 @@ class CrawlConfig:
     use_playwright: bool = True
     request_validator: Optional[Callable[[str], None]] = None
 
+    def __post_init__(self) -> None:
+        if self.max_pages < 1:
+            raise ValueError("max_pages must be >= 1 for recursive web crawling.")
+
 
 class CrawlFilter:
     INVALID_SCHEMES = frozenset(

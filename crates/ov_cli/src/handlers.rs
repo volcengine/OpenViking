@@ -135,7 +135,19 @@ fn parse_add_resource_args(
                 "Invalid --args entry with empty key.".to_string(),
             ));
         }
-        parsed.insert(key.to_string(), parse_add_resource_arg_value(value.trim())?);
+        let parsed_value = parse_add_resource_arg_value(value.trim())?;
+        if key == "max_pages" {
+            match parsed_value.as_i64() {
+                Some(value) if value >= 1 => {}
+                _ => {
+                    return Err(Error::Parse(
+                        "Invalid --args value for max_pages: must be an integer >= 1."
+                            .to_string(),
+                    ));
+                }
+            }
+        }
+        parsed.insert(key.to_string(), parsed_value);
     }
 
     Ok(Some(parsed))
@@ -1588,6 +1600,24 @@ mod add_resource_args_tests {
     fn rejects_add_resource_args_without_separator() {
         let err = parse_add_resource_args(Some("depth")).expect_err("args should fail");
         assert!(err.to_string().contains("Expected key:value"));
+    }
+
+    #[test]
+    fn rejects_non_positive_max_pages_in_add_resource_args() {
+        let err = parse_add_resource_args(Some("depth:-1,max_pages:-1"))
+            .expect_err("max_pages < 1 should fail");
+        assert!(err.to_string().contains("max_pages"));
+
+        let err = parse_add_resource_args(Some("max_pages:0"))
+            .expect_err("max_pages = 0 should fail");
+        assert!(err.to_string().contains("max_pages"));
+    }
+
+    #[test]
+    fn rejects_non_integer_max_pages_in_add_resource_args() {
+        let err = parse_add_resource_args(Some("max_pages:1.5"))
+            .expect_err("fractional max_pages should fail");
+        assert!(err.to_string().contains("integer >= 1"));
     }
 }
 

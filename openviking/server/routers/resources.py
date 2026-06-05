@@ -5,7 +5,7 @@
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from openviking.core.path_variables import resolve_path_variables
 from openviking.server.auth import get_request_context
@@ -84,7 +84,7 @@ class AddResourceRequest(BaseModel):
     telemetry: TelemetryRequest = False
     watch_interval: float = 0
     depth: int = 0
-    max_pages: int = 100
+    max_pages: int = Field(default=100, ge=1)
     include_paths: Optional[str] = None
     exclude_paths: Optional[str] = None
     allow_external_links: bool = False

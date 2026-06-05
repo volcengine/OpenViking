@@ -34,6 +34,9 @@ class CrawlResult:
     total_crawled: int = 0
     total_skipped: int = 0
     total_failed: int = 0
+    root_updated: bool = False
+    child_added: int = 0
+    child_failed: int = 0
 
 
 class WebCrawler:
@@ -169,7 +172,7 @@ class WebCrawler:
         return result
 
     def _is_schedule_limit_reached(self) -> bool:
-        return self.config.max_pages > 0 and self._pages_scheduled >= self.config.max_pages
+        return self._pages_scheduled >= self.config.max_pages
 
     async def _crawl_one(
         self,
