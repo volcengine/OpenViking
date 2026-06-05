@@ -83,7 +83,7 @@ def test_structured_string_patch_schema_rejects_plain_string_outputs():
         model.model_validate({"page_id": 1, "content": "plain replacement"})
 
 
-def test_schema_exact_file_apply_gate_allows_sum_and_immutable_fields():
+def test_schema_exact_file_apply_gate_allows_string_immutable_fields():
     schema = MemoryTypeSchema(
         memory_type="experiences",
         fields=[
@@ -92,7 +92,6 @@ def test_schema_exact_file_apply_gate_allows_sum_and_immutable_fields():
                 field_type=FieldType.STRING,
                 merge_op=MergeOp.IMMUTABLE,
             ),
-            MemoryField(name="call_count", field_type=FieldType.INT64, merge_op=MergeOp.SUM),
         ],
     )
 
@@ -102,7 +101,7 @@ def test_schema_exact_file_apply_gate_allows_sum_and_immutable_fields():
     assert unsupported == []
 
 
-def test_schema_exact_file_apply_gate_allows_non_string_patch_fields():
+def test_schema_exact_file_apply_gate_rejects_non_string_patch_fields():
     schema = MemoryTypeSchema(
         memory_type="experiences",
         fields=[
@@ -112,8 +111,8 @@ def test_schema_exact_file_apply_gate_allows_non_string_patch_fields():
 
     allowed, unsupported = compressor_v2_module._schemas_support_exact_file_apply([schema])
 
-    assert allowed is True
-    assert unsupported == []
+    assert allowed is False
+    assert unsupported == ["experiences.count:patch:int64"]
 
 
 def test_schema_exact_file_apply_gate_allows_replace_fields():

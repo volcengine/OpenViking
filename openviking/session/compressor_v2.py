@@ -157,6 +157,9 @@ def _schemas_support_exact_file_apply(
     base-aware synthesis for stale string replacements. String PATCH fields are
     exact-safe only when plain string outputs have an explicit base-aware full
     replacement interpretation, or when the extraction schema excludes them.
+    The PR-1 agent memory allowlist is intentionally string-only so future
+    schema additions cannot silently degrade exact-mode phases back to tree
+    locks.
     """
     unsupported: list[str] = []
     if not schemas:
@@ -173,29 +176,22 @@ def _schemas_support_exact_file_apply(
             except Exception:
                 merge_op = raw_merge_op
             field_name = getattr(field, "name", "unknown") or "unknown"
-            if merge_op == MergeOp.REPLACE:
-                raw_field_type = getattr(field, "field_type", None)
-                try:
-                    field_type = FieldType(raw_field_type)
-                except Exception:
-                    field_type = raw_field_type
-                if field_type == FieldType.STRING:
-                    continue
-                merge_op_label = getattr(merge_op, "value", str(merge_op))
-                field_type_label = getattr(field_type, "value", str(field_type))
+            raw_field_type = getattr(field, "field_type", None)
+            try:
+                field_type = FieldType(raw_field_type)
+            except Exception:
+                field_type = raw_field_type
+            merge_op_label = getattr(merge_op, "value", str(merge_op))
+            field_type_label = getattr(field_type, "value", str(field_type))
+            if field_type != FieldType.STRING:
                 unsupported.append(
                     f"{memory_type}.{field_name}:{merge_op_label}:{field_type_label}"
                 )
                 continue
+            if merge_op == MergeOp.REPLACE:
+                continue
             if merge_op == MergeOp.PATCH:
-                raw_field_type = getattr(field, "field_type", None)
-                try:
-                    field_type = FieldType(raw_field_type)
-                except Exception:
-                    field_type = raw_field_type
-                if field_type == FieldType.STRING and not string_patch_exact_safe:
-                    merge_op_label = getattr(merge_op, "value", str(merge_op))
-                    field_type_label = getattr(field_type, "value", str(field_type))
+                if not string_patch_exact_safe:
                     unsupported.append(
                         f"{memory_type}.{field_name}:{merge_op_label}:{field_type_label}"
                     )
@@ -839,6 +835,15 @@ class SessionCompressorV2:
                         string_patch_exact_safe=exact_config_enabled,
                     )
                 )
+                if exact_config_enabled and not exact_apply_supported:
+                    get_current_telemetry().increment(
+                        "memory.extract.exact_apply_schema_unsupported"
+                    )
+                    raise RuntimeError(
+                        f"[{phase_label}] exact file apply requested but schemas are "
+                        "not exact-safe; refusing tree-lock fallback: "
+                        f"{unsupported_exact_apply_fields}"
+                    )
                 exact_file_apply_enabled = exact_config_enabled and exact_apply_supported
                 orchestrator.structured_string_patches_only = exact_file_apply_enabled
             if lock_manager and exact_file_apply_enabled:
@@ -1027,7 +1032,7 @@ class SessionCompressorV2:
             )
         except Exception as e:
             logger.error(f"[{phase_label}] Failed to extract: {e}", exc_info=True)
-            if strict_extract_errors or exact_file_apply_enabled:
+            if strict_extract_errors or exact_config_enabled or exact_file_apply_enabled:
                 raise
             return None
         finally:

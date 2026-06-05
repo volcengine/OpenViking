@@ -998,6 +998,81 @@ class TestCompressorV2:
         assert events == ["apply", "post_apply", "release"]
 
     @pytest.mark.asyncio
+    async def test_extract_phase_exact_mode_rejects_unsupported_agent_schema(self):
+        """Exact mode should not silently fall back to tree locks for agent schemas."""
+        compressor = SessionCompressorV2(vikingdb=None)
+        user = UserIdentifier.the_default_user()
+        ctx = RequestContext(user=user, role=Role.ROOT)
+        messages = [Message.create_user("test")]
+
+        class FakeVikingFS:
+            agfs = object()
+
+            def _uri_to_path(self, uri: str, ctx=None) -> str:
+                return uri
+
+        class DummyProvider:
+            def get_memory_schemas(self, _ctx):
+                return [
+                    MemoryTypeSchema(
+                        memory_type="experiences",
+                        fields=[
+                            MemoryField(
+                                name="score",
+                                field_type=FieldType.INT64,
+                                merge_op=MergeOp.REPLACE,
+                            )
+                        ],
+                    )
+                ]
+
+            def _get_registry(self):
+                return object()
+
+        class DummyExtractLoop:
+            def __init__(self, **kwargs):
+                pass
+
+        config = SimpleNamespace(
+            vlm=SimpleNamespace(get_vlm_instance=lambda: object()),
+            memory=SimpleNamespace(
+                memory_apply_exact_file_lock_enabled=True,
+                role_id_memory_isolation_enabled=False,
+                v2_lock_max_retries=1,
+                v2_lock_retry_interval_seconds=0.0,
+            ),
+        )
+        handle = SimpleNamespace(id="handle-1", locks=[])
+        lock_manager = SimpleNamespace(
+            create_handle=lambda: handle,
+            acquire_exact_tree_batch=AsyncMock(return_value=True),
+            release=AsyncMock(),
+        )
+
+        with (
+            patch("openviking.session.compressor_v2.get_viking_fs", return_value=FakeVikingFS()),
+            patch("openviking.session.compressor_v2.get_openviking_config", return_value=config),
+            patch(
+                "openviking.session.memory.memory_isolation_handler.get_openviking_config",
+                return_value=config,
+            ),
+            patch("openviking.session.compressor_v2.ExtractLoop", DummyExtractLoop),
+            patch("openviking.storage.transaction.init_lock_manager"),
+            patch("openviking.storage.transaction.get_lock_manager", return_value=lock_manager),
+        ):
+            with pytest.raises(RuntimeError, match="refusing tree-lock fallback") as exc_info:
+                await compressor._run_extract_phase(
+                    provider=DummyProvider(),
+                    messages=messages,
+                    ctx=ctx,
+                    strict_extract_errors=False,
+                    phase_label="experience(test)",
+                )
+
+        assert "experiences.score:replace:int64" in str(exc_info.value)
+        lock_manager.acquire_exact_tree_batch.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_extract_phase_exact_mode_reraises_apply_failure(self):
         compressor = SessionCompressorV2(vikingdb=None)
         user = UserIdentifier.the_default_user()
