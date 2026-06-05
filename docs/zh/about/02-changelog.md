@@ -128,7 +128,7 @@ OpenViking 的所有重要变更都将记录在此文件中。
 - **原生 CLI 分发**：新增 `@openviking/cli` npm 包，可通过 `npm i -g @openviking/cli` 使用 `ov`；Rust CLI 发布流水线扩展 Linux musl 构建、npm trusted publishing 和 CLI 集成测试。
 - **检索与文件系统能力**：`find` / `search` 新增 `level` 过滤，可限定 L0 abstract、L1 overview 或 L2 文件命中；资源文件增加 Phase 1 WebDAV 适配；`observer.filesystem` 暴露文件系统观测入口。
 - **Console 与 Usage/Audit**：新增 Usage/Audit 模块和 `/api/v1/console/*` BFF，基于现有 observability event bus 统计 token、检索次数、上下文提交热力图、请求审计和上下文库存。
-- **存储与并发可靠性**：增强精确路径锁和生命周期锁修复内容写入并发覆盖；阻塞后端调用移出 event loop；QueueFS SQLite 持久化扩展；task 记录现在会持久化以支持多实例查询；`add_resource(wait=false)` 会返回已预占的 `root_uri`，并在导入完成前提供持久化 task 进度。
+- **存储与并发可靠性**：增强精确路径锁和生命周期锁修复内容写入并发覆盖；阻塞后端调用移出 event loop；QueueFS SQLite 持久化扩展；task 记录现在会持久化以支持多实例查询；Git 仓库 `add_resource(wait=false)` 会返回已预占的 `root_uri`，并在导入完成前提供持久化 task 进度。
 
 ### 升级说明
 

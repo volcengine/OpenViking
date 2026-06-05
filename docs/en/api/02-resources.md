@@ -82,11 +82,11 @@ Source Input -> Parse -> Resource Tree Build -> Persistence -> Semantic Processi
 - **Vector Index**: Vectorizes content for semantic search
 - Processed asynchronously via `SemanticQueue`, can wait for completion with `wait=True`
 
-#### Async `add_resource` Tasks
-- With `wait=false`, OpenViking validates the source, resolves the target URI, and reserves the final `root_uri` before returning.
-- The immediate response contains `status`, `root_uri`, and `task_id`; fetching/parsing/finalizing and queue waiting continue in a persistent background task.
-- Poll `GET /api/v1/tasks/{task_id}` to inspect task state. Resource import tasks use stages such as `queued`, `fetching`, `parsing`, `finalizing`, and `processing_queue`.
-- Task status responses expose the current `stage`; live semantic and embedding queue counts are available through observer queue APIs, and completed imports include `queue_status` in the task `result`.
+#### Non-Wait Git Repository Imports
+- For Git repository sources with `wait=false`, OpenViking validates the repository, resolves the target URI, reserves the final `root_uri`, and returns before clone/parse/finalize completes.
+- The immediate response contains `status`, `root_uri`, and `task_id`; fetching, parsing, finalizing, and queue waiting continue in a persistent background task.
+- Poll `GET /api/v1/tasks/{task_id}` to inspect task state. Git resource import tasks use stages such as `queued`, `fetching`, `parsing`, `finalizing`, and `processing_queue`.
+- Other resource sources with `wait=false` finish fetching/parsing/finalizing before the response; their returned `task_id` tracks semantic and embedding queue completion only.
 
 ### Incremental Updates for Resources
 
@@ -122,10 +122,10 @@ This endpoint is the core entry point for resource management, supporting adding
 
 **Processing Flow**:
 1. Identify and validate the resource source (URL or uploaded temporary file)
-2. Resolve the target URI; when `wait=false`, reserve the final `root_uri` before returning
+2. Resolve the target URI
 3. Call the corresponding Parser to parse content
 4. Build the directory tree and write to AGFS
-5. Wait for semantic processing completion when `wait=true`, or track background task state with the returned `task_id`
+5. Wait for semantic processing completion when `wait=true`; with `wait=false`, return a `task_id` for queue tracking
 6. Set up scheduled update task if `watch_interval` is specified
 
 **Code Entry Points**:
@@ -164,8 +164,8 @@ This endpoint is the core entry point for resource management, supporting adding
 - `path` and `temp_file_id` cannot be specified together
 - Raw HTTP calls for local files require first uploading via [temp_upload](#temp_upload) to obtain `temp_file_id`
 - When `to` is specified and the target already exists, triggers incremental update
-- When `wait=false`, the request still performs source preflight and target planning before returning. Unreachable remote URLs/repositories or invalid parent targets fail immediately instead of creating a task.
-- When OpenViking auto-selects a target under `viking://resources` or `parent`, URI conflicts are resolved and reserved before the `wait=false` response is returned, so the returned `root_uri` is stable.
+- Only Git repository sources use full background import when `wait=false`; OpenViking performs repository preflight and target planning before returning the `task_id`.
+- Other sources with `wait=false` finish source parsing, target resolution, and AGFS writes before returning. Only semantic and embedding queues continue asynchronously.
 - When `watch_interval > 0`, the watch task binds to `to` if provided; otherwise it binds to the `root_uri` returned by this import. If no stable `root_uri` is available, the request fails and asks for an explicit `to`.
 - For local directory inputs, scanning respects `.gitignore` files (root and nested) with standard Git semantics; `ignore_dirs`, `include`, and `exclude` further refine what is ingested.
 - To create or update plain text directly, use [content/write](03-filesystem.md#write) instead of `add_resource`. Semantic processing and embeddings are refreshed automatically after resource ingestion and content writes.
@@ -305,7 +305,7 @@ ov add-resource ./documents/guide.md -p viking://resources/docs/{calendar:today}
 }
 ```
 
-**HTTP API Response (JSON, `wait=false`)**
+**HTTP API Response (JSON, non-Git `wait=false`)**
 
 ```json
 {
@@ -313,12 +313,16 @@ ov add-resource ./documents/guide.md -p viking://resources/docs/{calendar:today}
   "result": {
     "status": "success",
     "root_uri": "viking://resources/guide",
+    "temp_uri": "viking://temp/username/04291108_b62dc7/guide",
+    "source_path": "./documents/guide.md",
+    "meta": {},
+    "errors": [],
     "task_id": "uuid-xxx"
   }
 }
 ```
 
-Use the returned `task_id` to poll `/api/v1/tasks/{task_id}`. The completed task result contains the full import result, including `queue_status`.
+Use the returned `task_id` to poll `/api/v1/tasks/{task_id}` for queue completion. For Git repository sources with `wait=false`, the same endpoint tracks the full background import and the completed task result contains the full import result, including `queue_status`.
 
 **CLI Response (Default Table Format)**
 
@@ -346,15 +350,15 @@ task_id      uuid-xxx
 |-------|------|-------------|
 | `status` | string | Processing status: "success" or "error" |
 | `root_uri` | string | Final URI of the resource in OpenViking |
-| `task_id` | string | (Optional, only when `wait=false`) Background task ID for polling `/api/v1/tasks/{task_id}` |
-| `temp_uri` | string | Temporary URI during processing (only valid during background processing) |
+| `task_id` | string | (Optional, only when `wait=false`) Task ID for polling `/api/v1/tasks/{task_id}`. Non-Git imports use it for queue tracking; Git repository imports use it for full background import tracking. |
+| `temp_uri` | string | Temporary URI produced during import |
 | `source_path` | string | Original source file path or URL |
 | `meta` | object | Metadata from resource parsing (file type, size, etc.) |
 | `errors` | array | List of errors encountered during processing |
 | `warnings` | array | (Optional) List of warnings (only when `strict=False`) |
 | `queue_status` | object | (Optional, only when `wait=true`) Queue processing status with `pending`, `processing`, `completed` counts |
 
-For `wait=false`, the background task has `task_type="add_resource"` and `resource_id` equal to the returned `root_uri`. Running task records may include `stage`; completed task results include `queue_status` with the final semantic and embedding queue summary.
+For Git repository sources with `wait=false`, the background task has `task_type="add_resource"` and `resource_id` equal to the returned `root_uri`. Running task records may include `stage`; completed task results include `queue_status` with the final semantic and embedding queue summary.
 
 ---
 
