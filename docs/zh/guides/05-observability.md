@@ -366,8 +366,8 @@ scrape_configs:
 
 OpenViking 仓库里已经提供了可直接导入的 dashboard JSON：
 
-- [openviking_demo_dashboard.json](../../../examples/grafana/openviking_demo_dashboard.json)
-- [openviking_token_demo_dashboard.json](../../../examples/grafana/openviking_token_demo_dashboard.json) （注意，该 dashboard 依赖 `tim012432-calendarheatmap-panel` grafana 插件，需要先安装才能正常工作）
+- [openviking_demo_dashboard.json](https://github.com/volcengine/OpenViking/blob/main/examples/grafana/openviking_demo_dashboard.json)
+- [openviking_token_demo_dashboard.json](https://github.com/volcengine/OpenViking/blob/main/examples/grafana/openviking_token_demo_dashboard.json) （注意，该 dashboard 依赖 `tim012432-calendarheatmap-panel` grafana 插件，需要先安装才能正常工作）
 
 导入步骤可以按下面做：
 

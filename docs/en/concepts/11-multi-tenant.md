@@ -292,6 +292,6 @@ That is only dev mode:
 - [Admin API](../api/08-admin.md) - Admin API reference
 - [API Overview](../api/01-overview.md) - CLI and HTTP connection patterns
 - [Data Encryption](./10-encryption.md) - At-rest encryption in multi-tenant deployments
-- [Multi-tenant Example](../../../examples/multi_tenant/README.md) - End-to-end management workflow
-- [OpenClaw Plugin](../../../examples/openclaw-plugin/README.md) - OpenClaw integration
-- [Vikingbot](../../../bot/README.md) - Bot-side multi-user integration
+- [Multi-tenant Example](https://github.com/volcengine/OpenViking/blob/main/examples/multi_tenant/README.md) - End-to-end management workflow
+- [OpenClaw Plugin](https://github.com/volcengine/OpenViking/blob/main/examples/openclaw-plugin/README.md) - OpenClaw integration
+- [Vikingbot](https://github.com/volcengine/OpenViking/blob/main/bot/README.md) - Bot-side multi-user integration

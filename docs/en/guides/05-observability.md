@@ -367,8 +367,8 @@ If there is no data yet, go back to the Prometheus scrape configuration above an
 
 The OpenViking repository already includes ready-to-import dashboard JSON:
 
-- [openviking_demo_dashboard.json](../../../examples/grafana/openviking_demo_dashboard.json)
-- [openviking_token_demo_dashboard.json](../../../examples/grafana/openviking_token_demo_dashboard.json) (Note: this dashboard depends on the `tim012432-calendarheatmap-panel` Grafana plugin. Install it before importing to ensure panels render correctly.)
+- [openviking_demo_dashboard.json](https://github.com/volcengine/OpenViking/blob/main/examples/grafana/openviking_demo_dashboard.json)
+- [openviking_token_demo_dashboard.json](https://github.com/volcengine/OpenViking/blob/main/examples/grafana/openviking_token_demo_dashboard.json) (Note: this dashboard depends on the `tim012432-calendarheatmap-panel` Grafana plugin. Install it before importing to ensure panels render correctly.)
 
 You can import it with the following steps:
 

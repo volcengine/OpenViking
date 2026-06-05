@@ -340,7 +340,7 @@ helm install openviking ./examples/k8s-helm \
   --set openviking.config.vlm.api_key="YOUR_API_KEY"
 ```
 
-详细的云上部署指南（包括火山引擎 TOS + VikingDB + 方舟配置）请参考 [云上部署指南](../../../examples/cloud/GUIDE.md)。
+详细的云上部署指南（包括火山引擎 TOS + VikingDB + 方舟配置）请参考 [云上部署指南](https://github.com/volcengine/OpenViking/blob/main/examples/cloud/GUIDE.md)。
 
 ## 健康检查
 
