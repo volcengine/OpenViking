@@ -15,7 +15,11 @@ import {
 } from '#/components/ui/dialog'
 import { FilePreview } from '#/routes/resources/-components/file-preview'
 import { AddResourceForm } from '#/routes/resources/-components/add-resource-page'
-import { ResourceUploadProvider } from '#/routes/resources/-hooks/use-resource-upload'
+import { UploadTaskDialog } from '#/routes/resources/-components/upload-task-dialog'
+import {
+  ResourceUploadProvider,
+  useResourceUpload,
+} from '#/routes/resources/-hooks/use-resource-upload'
 import {
   useInvalidateVikingFs,
   useVikingFsList,
@@ -104,6 +108,7 @@ function PlaygroundWorkbench() {
     search.panel ?? 'agent',
   )
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false)
+  const [taskDialogOpen, setTaskDialogOpen] = useState(false)
   const [openingUri, setOpeningUri] = useState<string | null>(null)
   const layoutRef = useRef<HTMLDivElement>(null)
   const [leftWidth, setLeftWidth] = useState(() =>
@@ -137,6 +142,13 @@ function PlaygroundWorkbench() {
     showAllHidden: true,
     nodeLimit: 500,
   })
+  const {
+    activeTaskCount,
+    hasActiveTasks,
+    isRefreshingTasks,
+    refreshTasks,
+    tasks,
+  } = useResourceUpload()
   const { invalidateList } = useInvalidateVikingFs()
 
   const syncSearch = useCallback(
@@ -281,6 +293,11 @@ function PlaygroundWorkbench() {
     [syncSearch],
   )
 
+  const handleOpenProcessingTasks = useCallback(() => {
+    setTaskDialogOpen(true)
+    void refreshTasks()
+  }, [refreshTasks])
+
   const selectedUri = selectedFile?.uri ?? currentUri
   const displayUri =
     selectedUri === ROOT_URI ? selectedUri : selectedUri.replace(/\/$/, '')
@@ -396,8 +413,12 @@ function PlaygroundWorkbench() {
       >
         <aside className="flex min-h-[260px] min-w-0 flex-col border-b bg-muted/20 lg:min-h-0 lg:w-[var(--playground-left-width)] lg:min-w-[var(--playground-left-width)] lg:border-b-0">
           <ContextExplorerHeader
+            activeTaskCount={activeTaskCount}
+            hasActiveTasks={hasActiveTasks}
             isRefreshing={listQuery.isFetching}
+            isRefreshingTasks={isRefreshingTasks}
             onAddResource={() => setUploadDialogOpen(true)}
+            onOpenProcessingTasks={handleOpenProcessingTasks}
             onRefresh={() => {
               void invalidateList(currentUri)
               void listQuery.refetch()
@@ -519,6 +540,11 @@ function PlaygroundWorkbench() {
           </div>
         </DialogContent>
       </Dialog>
+      <UploadTaskDialog
+        open={taskDialogOpen}
+        onOpenChange={setTaskDialogOpen}
+        tasks={tasks}
+      />
     </div>
   )
 }
