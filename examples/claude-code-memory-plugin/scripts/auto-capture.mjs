@@ -28,8 +28,10 @@ import {
   addMessage,
   commitSession,
   deriveOvSessionId,
+  enqueuePendingDirectly,
   getSession,
   isBypassed,
+  isRetryableFailure,
   makeFetchJSON,
 } from "./lib/ov-session.mjs";
 import { maybeDetach, readHookStdin } from "./lib/async-writer.mjs";
@@ -391,7 +393,9 @@ function sanitizePartsForSend(parts) {
 
 async function pushTurnsToOv(ovSessionId, turns) {
   let ok = 0;
+  let queued = 0;
   let failed = 0;
+  let enqueueFailed = 0;
   const peerId = cfg.peerId || null;
   for (const turn of turns) {
     // Send structured parts: tool calls/results are dedicated `tool` parts, not
@@ -403,9 +407,28 @@ async function pushTurnsToOv(ovSessionId, turns) {
     if (peerId) payload.peer_id = peerId;
     const res = await addMessage(fetchJSON, ovSessionId, payload);
     if (res.ok) ok++;
+    else if (res.pendingQueued) queued++;
+    else if (res.pendingEnqueueFailed) enqueueFailed++;
     else failed++;
   }
-  return { ok, failed };
+  return { ok, queued, failed, enqueueFailed };
+}
+
+async function enqueueTurnsToPending(ovSessionId, turns) {
+  let queued = 0;
+  let failed = 0;
+  const peerId = cfg.peerId || null;
+  for (const turn of turns) {
+    const parts = sanitizePartsForSend(turn.parts);
+    if (parts.length === 0) continue;
+
+    const payload = { role: turn.role, parts };
+    if (peerId) payload.peer_id = peerId;
+    const res = await enqueuePendingDirectly("addMessage", ovSessionId, payload);
+    if (res.ok) queued++;
+    else failed++;
+  }
+  return { ok: 0, queued, failed, enqueueFailed: failed };
 }
 
 // ---------------------------------------------------------------------------
@@ -439,13 +462,6 @@ async function main() {
 
   if (isBypassed(cfg, { sessionId, cwd })) {
     log("skip", { reason: "bypass_session_pattern" });
-    approve();
-    return;
-  }
-
-  const health = await fetchJSON("/health");
-  if (!health.ok) {
-    logError("health_check", "server unreachable or unhealthy");
     approve();
     return;
   }
@@ -545,11 +561,62 @@ async function main() {
     combinedLength: combined.length,
   });
 
-  const result = await pushTurnsToOv(ovSessionId, captureTurns);
-  log("push_turns", { ovSessionId, ok: result.ok, failed: result.failed });
+  const health = await fetchJSON("/health");
+  let result;
+  if (health.ok) {
+    result = await pushTurnsToOv(ovSessionId, captureTurns);
+  } else if (isRetryableFailure(health)) {
+    logError("health_check", "server unreachable or unhealthy; enqueuing capture");
+    result = await enqueueTurnsToPending(ovSessionId, captureTurns);
+    log("push_turns", {
+      ovSessionId,
+      ok: result.ok,
+      queued: result.queued,
+      failed: result.failed,
+    });
+    if (result.failed > 0) {
+      logError("pending_enqueue", "some turns failed to enqueue; state not advanced");
+      approve();
+      return;
+    }
+    await saveState(sessionId, { capturedTurnCount: allTurns.length });
+    log("state_update", { newCapturedTurnCount: allTurns.length, reason: "pending_queued" });
+    writeJsonState("last-capture.json", {
+      turns_captured: 0,
+      turns_queued: result.queued,
+      turns_failed: 0,
+      pending_tokens: 0,
+      commit_threshold: cfg.commitTokenThreshold,
+      committed: false,
+      commit_count: 0,
+      total_message_count: 0,
+      ov_session_id: ovSessionId,
+      cc_session_id: sessionId,
+    });
+    approve(result.queued > 0 ? `queued ${result.queued} turns to pending queue` : undefined);
+    return;
+  } else {
+    logError("health_check", `non-retryable status ${health.status || "unknown"}`);
+    approve();
+    return;
+  }
+  log("push_turns", {
+    ovSessionId,
+    ok: result.ok,
+    queued: result.queued,
+    failed: result.failed,
+    enqueueFailed: result.enqueueFailed,
+  });
 
-  // Advance state regardless of per-turn failures: retrying the same turns on
-  // a persistent session would duplicate them. Accepting the loss is cheaper.
+  if (result.enqueueFailed > 0) {
+    logError("pending_enqueue", "some retryable failures could not be enqueued; state not advanced");
+    approve();
+    return;
+  }
+
+  // Advance state only after every retryable write was either sent or durably
+  // enqueued. Non-retryable 4xx failures are still treated as terminal so they
+  // do not loop forever.
   await saveState(sessionId, { capturedTurnCount: allTurns.length });
   log("state_update", { newCapturedTurnCount: allTurns.length });
 
@@ -580,6 +647,7 @@ async function main() {
   // from `committed` (which is just whether THIS turn triggered a commit).
   writeJsonState("last-capture.json", {
     turns_captured: result.ok,
+    turns_queued: result.queued,
     turns_failed: result.failed,
     pending_tokens: pendingTokens,
     commit_threshold: cfg.commitTokenThreshold,
