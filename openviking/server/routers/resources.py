@@ -257,16 +257,13 @@ async def add_resource(
                 timeout=request.timeout,
                 allow_local_path_resolution=allow_local_path_resolution,
                 enforce_public_remote_targets=True,
-                source_cleanup=_cleanup_resolved if resolved and not request.wait else None,
                 **kwargs,
             )
         except Exception:
-            if request.wait:
-                await _cleanup_resolved(False)
+            await _cleanup_resolved(False)
             raise
         else:
-            if request.wait:
-                await _cleanup_resolved(True)
+            await _cleanup_resolved(True)
             return result
 
     execution = await run_operation(

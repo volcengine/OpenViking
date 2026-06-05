@@ -45,18 +45,13 @@ async def test_run_add_resource_task_fails_when_queue_status_has_errors(monkeypa
     tracker = TaskTracker(store=_NoopTaskStore())
     set_task_tracker(tracker)
     service = ResourceService()
-    ctx = RequestContext(
-        user=UserIdentifier("acme", "alice", "agent-1"),
-        role=Role.ADMIN,
-    )
+    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.ADMIN)
     task = await tracker.create(
         "add_resource",
         resource_id="viking://resources/demo",
         account_id=ctx.account_id,
         user_id=ctx.user.user_id,
     )
-    cleanup_calls = []
-
     async def fake_add_resource(**kwargs):
         assert kwargs["wait"] is True
         return {
@@ -78,9 +73,6 @@ async def test_run_add_resource_task_fails_when_queue_status_has_errors(monkeypa
             },
         }
 
-    async def cleanup(success: bool):
-        cleanup_calls.append(success)
-
     monkeypatch.setattr(service, "add_resource", fake_add_resource)
 
     await service._run_add_resource_task(
@@ -88,7 +80,6 @@ async def test_run_add_resource_task_fails_when_queue_status_has_errors(monkeypa
         ctx=ctx,
         add_kwargs={"path": "/tmp/demo.md", "ctx": ctx},
         resource_lock=NO_LOCK,
-        source_cleanup=cleanup,
     )
 
     stored = await tracker.get(
@@ -102,4 +93,3 @@ async def test_run_add_resource_task_fails_when_queue_status_has_errors(monkeypa
     assert "queue processing failed" in stored.error
     assert "Semantic error_count=1" in stored.error
     assert "semantic processing failed" in stored.error
-    assert cleanup_calls == [False]
