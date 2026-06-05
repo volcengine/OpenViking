@@ -544,29 +544,42 @@ class MarkdownParser(BaseParser):
             base_dir: Base directory for resolving relative paths
 
         Returns:
-            Resolved absolute Path if the file exists, otherwise None
+            Resolved absolute Path if the file exists and stays within an
+            allowed root, otherwise None
         """
         try:
             path = Path(path_str)
 
+            # Reject absolute paths: they can point anywhere on the host
             if path.is_absolute():
-                # Already absolute path
-                if path.exists():
-                    return path
+                logger.warning(
+                    f"[MarkdownParser] Rejected absolute image path: {path_str}"
+                )
                 return None
 
+            # Build the list of allowed roots to confine resolution to.
+            allowed_roots: list[Path] = []
             if base_dir:
-                # Try with base_dir first
-                path_with_base = base_dir / path
-                if path_with_base.exists():
-                    return path_with_base.resolve()
-
-            # Fall back to the storage base_path
+                allowed_roots.append(base_dir)
             from openviking_cli.utils.storage import get_storage
             storage = get_storage()
-            path_with_cwd = storage.base_path / path
-            if path_with_cwd.exists():
-                return path_with_cwd.resolve()
+            allowed_roots.append(storage.base_path)
+
+            for root in allowed_roots:
+                candidate = (root / path).resolve()
+
+                # Verify the resolved candidate stays under the allowed root,
+                # rejecting traversal attempts such as ../../private.png.
+                try:
+                    candidate.relative_to(root.resolve())
+                except ValueError:
+                    logger.warning(
+                        f"[MarkdownParser] Rejected image path outside base dir: {path_str}"
+                    )
+                    continue
+
+                if candidate.exists():
+                    return candidate
 
             return None
         except Exception:
