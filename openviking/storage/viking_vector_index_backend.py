@@ -899,6 +899,11 @@ class VikingVectorIndexBackend:
                     return
                 state.last_rebuild_size = rebuilt
                 state.last_rebuild_at = time.monotonic()
+                # Subtract the pre-rebuild snapshot rather than zeroing: any
+                # below-threshold schedule() calls that landed during the await
+                # are preserved as residue in pending_inserts / pending_deletes,
+                # so the next schedule() evaluates against the accumulated total
+                # instead of dropping those deltas on the floor.
                 state.pending_inserts = max(0, state.pending_inserts - inserts_consumed)
                 state.pending_deletes = max(0, state.pending_deletes - deletes_consumed)
                 logger.debug(
