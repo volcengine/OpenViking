@@ -915,6 +915,82 @@ async def test_schedule_with_zero_delta_is_noop():
 
 
 @pytest.mark.asyncio
+async def test_update_uri_mapping_preserves_sparse_vector():
+    """mv invariant: URI rename preserves the precomputed sparse_vector.
+
+    The mv code path in viking_fs (_update_vector_store_uris) skips the BM25
+    rebuild scheduler on the assumption that update_uri_mapping carries the
+    pre-computed sparse_vector forward to the new record. If a future change
+    to update_uri_mapping strips sparse_vector (e.g., narrowing the spread
+    to drop "dead" fields), the mv path silently produces records with no
+    sparse_vector and BM25 retrieval degrades. This test pins down the
+    spread contract so that regression fails loudly here instead.
+    """
+
+    class _StubFacade:
+        """Minimal stand-in that exposes only what update_uri_mapping needs."""
+
+        update_uri_mapping = VikingVectorIndexBackend.update_uri_mapping
+
+        def __init__(self, record):
+            self._record = dict(record)
+            self.upserts: list[dict] = []
+            self.deletes: list[str] = []
+
+        async def filter(self, *, filter=None, limit=10, offset=0,
+                         output_fields=None, order_by=None, order_desc=False, ctx):
+            del filter, limit, offset, order_by, order_desc, ctx
+            projected = {k: self._record.get(k) for k in (output_fields or self._record.keys())}
+            return [projected]
+
+        async def get(self, ids, *, ctx):
+            del ctx
+            return [dict(self._record) for rid in ids if rid == self._record["id"]]
+
+        async def upsert(self, data, *, ctx):
+            del ctx
+            self.upserts.append(dict(data))
+            return data.get("id", "")
+
+        async def delete(self, ids, *, ctx):
+            del ctx
+            self.deletes.extend(ids)
+            return len(ids)
+
+    sparse = {"hash_x": 0.42, "hash_y": 0.13}
+    original = {
+        "id": "old-id-1",
+        "uri": "viking://resources/old",
+        "level": 2,
+        "account_id": "default",
+        "sparse_vector": sparse,
+        "vector": [0.1] * 8,
+        "abstract": "sample abstract",
+    }
+    facade = _StubFacade(original)
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="default", user_id="default", agent_id="default"),
+        role=Role.ROOT,
+    )
+
+    success = await facade.update_uri_mapping(
+        ctx=ctx,
+        uri="viking://resources/old",
+        new_uri="viking://resources/new",
+    )
+
+    assert success is True
+    assert len(facade.upserts) == 1
+    upserted = facade.upserts[0]
+    assert upserted["uri"] == "viking://resources/new"
+    assert upserted["sparse_vector"] == sparse
+    assert upserted["vector"] == original["vector"]
+    assert upserted["abstract"] == original["abstract"]
+    # The old id was queued for deletion (since new_id differs from old).
+    assert facade.deletes == [original["id"]]
+
+
+@pytest.mark.asyncio
 async def test_below_threshold_schedule_during_inflight_preserves_residue():
     """In-flight rebuild + concurrent below-threshold delta: residue is preserved.
 
