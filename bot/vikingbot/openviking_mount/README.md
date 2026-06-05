@@ -8,7 +8,7 @@
 ## 功能特性
 
 - **文件系统范式**: 将 OpenViking 的 `viking://` URI 映射到本地文件路径
-- **多作用域支持**: 支持 resources、session、user、agent 等多种作用域挂载
+- **多作用域支持**: 支持 resources、session、user 等多种作用域挂载
 - **挂载管理**: 支持多个挂载点的生命周期管理
 - **语义搜索**: 通过文件系统路径进行语义搜索
 - **层级内容访问**: 支持 L0 (abstract)、L1 (overview)、L2 (details) 三层内容访问
@@ -125,7 +125,6 @@ vikingbot/openviking_mount/
 | `RESOURCES` | 只挂载资源目录 |
 | `SESSION` | 只挂载会话目录 |
 | `USER` | 只挂载用户目录 |
-| `AGENT` | 只挂载 Agent 目录 |
 | `ALL` | 挂载所有作用域 |
 
 #### 主要方法
@@ -177,7 +176,6 @@ OpenViking URI                    本地路径
 viking://resources/foo     ->    {mount_point}/resources/foo
 viking://session/bar       ->    {mount_point}/session/bar
 viking://user/baz          ->    {mount_point}/user/baz
-viking://agent/qux         ->    {mount_point}/agent/qux
 ```
 
 ## 测试

@@ -75,8 +75,7 @@ class TreeBuilder:
         if scope == "user":
             # user resources go to memories (no separate resources dir)
             return "viking://user"
-        # Agent scope
-        return "viking://agent"
+        raise ValueError(f"unsupported tree scope: {scope}")
 
     # ============================================================================
     # v5.0 Methods (temporary directory + SemanticQueue architecture)
@@ -133,9 +132,7 @@ class TreeBuilder:
             except FileNotFoundError:
                 raise
             except Exception as e:
-                raise FileNotFoundError(
-                    f"Parent URI does not exist: {effective_parent_uri}"
-                ) from e
+                raise FileNotFoundError(f"Parent URI does not exist: {effective_parent_uri}") from e
             if not stat_result.get("isDir"):
                 raise ValueError(f"Parent URI is not a directory: {effective_parent_uri}")
             base_uri = effective_parent_uri

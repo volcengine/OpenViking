@@ -27,8 +27,7 @@ Create `~/.openviking/ovcli.conf`:
   "url": "http://localhost:1933",
   "api_key": "your-api-key",
   "account": "acme",
-  "user": "alice",
-  "agent_id": "assistant-1"
+  "user": "alice"
 }
 ```
 
@@ -135,7 +134,7 @@ ov find "API authentication" --threshold 0.7 --limit 5
 ov ls viking://resources --recursive
 
 # Temporarily override identity from CLI flags
-ov --account acme --user alice --agent-id assistant-2 ls viking://
+ov --account acme --user alice ls viking://
 
 # Glob search
 ov glob "**/*.md" --uri viking://resources

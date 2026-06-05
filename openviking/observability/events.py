@@ -30,7 +30,6 @@ class ObservabilityEvent:
     request_id: str | None = None
     account_id: str | None = None
     user_id: str | None = None
-    agent_id: str | None = None
 
 
 class ObservabilitySubscriber(Protocol):
@@ -119,7 +118,6 @@ def _metadata_from_context(payload: dict[str, Any]) -> dict[str, str | None]:
         "request_id": _first(payload.get("request_id"), getattr(root, "request_id", None)),
         "account_id": _first(payload.get("account_id"), getattr(root, "account_id", None)),
         "user_id": _first(payload.get("user_id"), getattr(root, "user_id", None)),
-        "agent_id": _first(payload.get("agent_id"), getattr(root, "agent_id", None)),
     }
 
 
@@ -133,7 +131,6 @@ def build_event(event_name: str, payload: dict[str, Any] | None = None) -> Obser
         request_id=metadata["request_id"],
         account_id=metadata["account_id"],
         user_id=metadata["user_id"],
-        agent_id=metadata["agent_id"],
     )
 
 
@@ -157,7 +154,7 @@ def make_payload_subscriber(
 
     def _subscriber(event: ObservabilityEvent) -> None:
         payload = dict(event.payload)
-        for key in ("request_id", "account_id", "user_id", "agent_id"):
+        for key in ("request_id", "account_id", "user_id"):
             if payload.get(key) is None:
                 value = getattr(event, key)
                 if value is not None:

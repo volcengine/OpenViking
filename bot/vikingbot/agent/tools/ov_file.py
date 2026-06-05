@@ -19,8 +19,9 @@ class OVFileTool(Tool, ABC):
         self._client = None
 
     async def _get_client(self, tool_context: ToolContext):
+        del tool_context
         if self._client is None:
-            self._client = await VikingClient.create(tool_context.workspace_id)
+            self._client = await VikingClient.create()
         return self._client
 
 
@@ -335,7 +336,7 @@ class VikingAddResourceTool(OVFileTool):
                 if not local_path.is_file():
                     return f"Error: Not a file: {path}"
 
-            client = await VikingClient.create(tool_context.workspace_id)
+            client = await VikingClient.create()
             result = await client.add_resource(path, description)
 
             if result:

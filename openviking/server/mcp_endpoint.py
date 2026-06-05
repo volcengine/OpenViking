@@ -10,7 +10,7 @@ Mounted on the FastAPI app at /mcp. The MCP session manager lifecycle is
 tied to the FastAPI app lifespan (not a sub-app lifespan) so the task group
 is always initialized before requests arrive.
 
-Identity headers (X-OpenViking-Account, X-OpenViking-User, X-OpenViking-Agent)
+Identity headers (X-OpenViking-Account, X-OpenViking-User)
 are extracted from HTTP request scope and propagated via contextvars.
 """
 
@@ -145,7 +145,6 @@ class _IdentityASGIMiddleware:
                 authorization=request.headers.get("authorization"),
                 x_openviking_account=request.headers.get("x-openviking-account"),
                 x_openviking_user=request.headers.get("x-openviking-user"),
-                x_openviking_agent=request.headers.get("x-openviking-agent"),
             )
         except (UnauthenticatedError, PermissionDeniedError, InvalidArgumentError) as exc:
             status = (
@@ -175,10 +174,8 @@ class _IdentityASGIMiddleware:
             user=UserIdentifier(
                 identity.account_id or "default",
                 identity.user_id or "default",
-                identity.agent_id or "default",
             ),
             role=identity.role,
-            namespace_policy=identity.namespace_policy,
         )
         url_info = {
             "x_forwarded_proto": request.headers.get("x-forwarded-proto"),
@@ -214,6 +211,7 @@ async def find(
     limit: int = 10,
     min_score: float = 0.35,
     level: Optional[List[int]] = None,
+    peer_id: Optional[str] = None,
 ) -> str:
     """Fast semantic retrieval without session context. Returns ranked memories, resources, and skills with URI, abstract, and score."""
     service = get_service()
@@ -221,6 +219,7 @@ async def find(
         query=query,
         ctx=_get_ctx(),
         target_uri=target_uri,
+        peer_id=peer_id,
         limit=limit,
         score_threshold=min_score,
         level=level,
@@ -236,6 +235,7 @@ async def search(
     limit: int = 10,
     min_score: float = 0.35,
     level: Optional[List[int]] = None,
+    peer_id: Optional[str] = None,
 ) -> str:
     """Deep semantic retrieval with optional session context and intent analysis. Returns ranked memories, resources, and skills with URI, abstract, and score."""
     service = get_service()
@@ -248,6 +248,7 @@ async def search(
         query=query,
         ctx=ctx,
         target_uri=target_uri,
+        peer_id=peer_id,
         session=session,
         limit=limit,
         score_threshold=min_score,
@@ -366,7 +367,6 @@ async def remember(messages: list[StoreMessage]) -> str:
             session.add_message(
                 msg.role,
                 [TextPart(text=msg.content)],
-                role_id=ctx.resolve_role_id(msg.role),
             )
     await service.sessions.commit_async(session_id, ctx)
     return f"Stored {len(messages)} message(s) and committed for memory extraction."
@@ -565,7 +565,6 @@ async def add_resource(
     token, expires_at = upload_token_store.issue(
         ctx.user.account_id,
         ctx.user.user_id,
-        ctx.user.agent_id,
         ttl_seconds=ttl_seconds,
     )
     base_url, url_source = _resolve_public_base_url()
@@ -613,7 +612,7 @@ async def add_resource(
 
 @mcp.tool()
 async def list_watches() -> str:
-    """List watch tasks (auto-refresh subscriptions) visible to the current agent.
+    """List watch tasks (auto-refresh subscriptions) visible to the current user.
 
     Each line shows: target URI, refresh interval (minutes), active/paused status,
     and the next scheduled execution time. Returns "No watch tasks." when empty.
@@ -634,7 +633,6 @@ async def list_watches() -> str:
         ctx.user.user_id,
         ctx.role.value,
         active_only=False,
-        agent_id=ctx.user.agent_id,
     )
     if not tasks:
         return "No watch tasks."
@@ -670,7 +668,6 @@ async def cancel_watch(to_uri: str) -> str:
         ctx.account_id,
         ctx.user.user_id,
         ctx.role.value,
-        ctx.user.agent_id,
     )
     if task is None:
         return f"No watch task found for {to_uri}"
@@ -686,7 +683,6 @@ async def cancel_watch(to_uri: str) -> str:
             ctx.account_id,
             ctx.user.user_id,
             ctx.role.value,
-            ctx.user.agent_id,
         )
     except _wm_mod.PermissionDeniedError:
         return f"Permission denied for {to_uri}"

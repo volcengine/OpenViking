@@ -23,9 +23,8 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.captureMode).toBe("semantic");
     expect(cfg.captureMaxLength).toBe(24000);
     expect(cfg.recallMaxContentChars).toBe(5000);
-    expect(cfg.agent_prefix).toBe("");
-    expect(cfg.isolateUserScopeByAgent).toBe(false);
-    expect(cfg.isolateAgentScopeByUser).toBe(false);
+    expect(cfg.peer_role).toBe("none");
+    expect(cfg.peer_prefix).toBe("");
     expect(cfg.emitStandardDiagnostics).toBe(false);
   });
 
@@ -168,29 +167,32 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfgHigh.recallMaxContentChars).toBe(10000);
   });
 
-  it("resolves agent_prefix from configured value", () => {
-    const cfg = memoryOpenVikingConfigSchema.parse({ agent_prefix: "  my-agent  " });
-    expect(cfg.agent_prefix).toBe("my-agent");
+  it("accepts explicit peer_role values", () => {
+    expect(memoryOpenVikingConfigSchema.parse({ peer_role: "none" }).peer_role).toBe("none");
+    expect(memoryOpenVikingConfigSchema.parse({ peer_role: "assistant" }).peer_role).toBe("assistant");
+    expect(memoryOpenVikingConfigSchema.parse({ peer_role: "person" }).peer_role).toBe("person");
   });
 
-  it("falls back to an empty prefix for empty agent_prefix", () => {
-    const cfg = memoryOpenVikingConfigSchema.parse({ agent_prefix: "  " });
-    expect(cfg.agent_prefix).toBe("");
+  it("throws on invalid peer_role", () => {
+    expect(() =>
+      memoryOpenVikingConfigSchema.parse({ peer_role: "agent" }),
+    ).toThrow('peer_role must be "none", "assistant", or "person"');
   });
 
-  it("normalizes legacy 'default' agent_prefix to an empty prefix", () => {
-    const cfg = memoryOpenVikingConfigSchema.parse({ agent_prefix: "default" });
-    expect(cfg.agent_prefix).toBe("");
+  it("resolves peer_prefix from configured value", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ peer_prefix: "  my-agent  " });
+    expect(cfg.peer_role).toBe("none");
+    expect(cfg.peer_prefix).toBe("my-agent");
   });
 
-  it("migrates legacy agentId to agent_prefix", () => {
-    const cfg = memoryOpenVikingConfigSchema.parse({ agentId: "legacy-agent" });
-    expect(cfg.agent_prefix).toBe("legacy-agent");
+  it("falls back to an empty prefix for empty peer_prefix", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ peer_prefix: "  " });
+    expect(cfg.peer_prefix).toBe("");
   });
 
-  it("agent_prefix takes precedence over legacy agentId", () => {
-    const cfg = memoryOpenVikingConfigSchema.parse({ agentId: "old", agent_prefix: "new" });
-    expect(cfg.agent_prefix).toBe("new");
+  it("normalizes legacy 'default' peer_prefix to an empty prefix", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ peer_prefix: "default" });
+    expect(cfg.peer_prefix).toBe("");
   });
 
   it("parses accountId and trims whitespace", () => {
@@ -218,56 +220,15 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.userId).toBe("");
   });
 
-  it("default user-key flow does not require accountId, userId, or agentScopeMode", () => {
+  it("default user-key flow does not require accountId or userId", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({
       baseUrl: "http://127.0.0.1:1933",
       apiKey: "sk-user",
-      agent_prefix: "coding-agent",
+      peer_role: "assistant",
+      peer_prefix: "coding-agent",
     });
     expect(cfg.accountId).toBe("");
     expect(cfg.userId).toBe("");
-    expect(cfg.agentScopeMode).toBe("agent");
-    expect(cfg.isolateUserScopeByAgent).toBe(false);
-    expect(cfg.isolateAgentScopeByUser).toBe(false);
-  });
-
-  it("defaults namespace policy to the current server-side false/false policy", () => {
-    const cfg = memoryOpenVikingConfigSchema.parse({});
-    expect(cfg.agentScopeMode).toBe("agent");
-    expect(cfg.isolateUserScopeByAgent).toBe(false);
-    expect(cfg.isolateAgentScopeByUser).toBe(false);
-  });
-
-  it("maps deprecated agentScopeMode 'agent' to false/false namespace policy", () => {
-    const cfg = memoryOpenVikingConfigSchema.parse({ agentScopeMode: "agent" });
-    expect(cfg.agentScopeMode).toBe("agent");
-    expect(cfg.isolateUserScopeByAgent).toBe(false);
-    expect(cfg.isolateAgentScopeByUser).toBe(false);
-  });
-
-  it("falls back to user_agent for invalid agentScopeMode", () => {
-    const cfg = memoryOpenVikingConfigSchema.parse({ agentScopeMode: "invalid" });
-    expect(cfg.agentScopeMode).toBe("agent");
-    expect(cfg.isolateUserScopeByAgent).toBe(false);
-    expect(cfg.isolateAgentScopeByUser).toBe(false);
-  });
-
-  it("maps explicit deprecated agentScopeMode 'user_agent' to false/true namespace policy", () => {
-    const cfg = memoryOpenVikingConfigSchema.parse({ agentScopeMode: "user_agent" });
-    expect(cfg.agentScopeMode).toBe("user_agent");
-    expect(cfg.isolateUserScopeByAgent).toBe(false);
-    expect(cfg.isolateAgentScopeByUser).toBe(true);
-  });
-
-  it("explicit namespace policy overrides deprecated agentScopeMode", () => {
-    const cfg = memoryOpenVikingConfigSchema.parse({
-      agentScopeMode: "agent",
-      isolateUserScopeByAgent: true,
-      isolateAgentScopeByUser: true,
-    });
-    expect(cfg.agentScopeMode).toBe("agent");
-    expect(cfg.isolateUserScopeByAgent).toBe(true);
-    expect(cfg.isolateAgentScopeByUser).toBe(true);
   });
 
   it("accepts deprecated serverAuthMode without exposing it in parsed config", () => {

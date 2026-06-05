@@ -15,7 +15,7 @@ def test_embedding_msg_roundtrip_preserves_id_for_request_wait_tracker():
     try:
         msg = EmbeddingMsg(
             "hello",
-            {"uri": "viking://agent/skills/demo"},
+            {"uri": "viking://user/default/skills/demo"},
             telemetry_id=telemetry_id,
         )
         tracker.register_embedding_root(telemetry_id, msg.id)

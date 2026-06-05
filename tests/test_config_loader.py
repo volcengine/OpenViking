@@ -171,7 +171,7 @@ def test_openviking_config_rejects_unknown_top_level_section_with_suggestion(mon
     OpenVikingConfigSingleton.reset_instance()
 
 
-def test_openviking_config_warns_when_agent_scope_mode_is_configured(monkeypatch, caplog):
+def test_openviking_config_rejects_unknown_memory_field(monkeypatch):
     monkeypatch.setenv("OPENVIKING_CONFIG_FILE", "/tmp/codex-no-config.json")
 
     from openviking_cli.utils.config.open_viking_config import (
@@ -179,11 +179,8 @@ def test_openviking_config_warns_when_agent_scope_mode_is_configured(monkeypatch
         OpenVikingConfigSingleton,
     )
 
-    with caplog.at_level("WARNING"):
-        config = OpenVikingConfig.from_dict({"memory": {"agent_scope_mode": "agent"}})
-
-    assert config.memory.agent_scope_mode == "agent"
-    assert "memory.agent_scope_mode is deprecated and ignored" in caplog.text
+    with pytest.raises(ValueError, match="Unknown config field 'memory.unknown_memory_field'"):
+        OpenVikingConfig.from_dict({"memory": {"unknown_memory_field": "value"}})
 
     OpenVikingConfigSingleton.reset_instance()
 
@@ -198,21 +195,6 @@ def test_openviking_config_rejects_memory_v1(monkeypatch):
 
     with pytest.raises(ValueError, match="legacy memory v1 has been removed"):
         OpenVikingConfig.from_dict({"memory": {"version": "v1"}})
-
-    OpenVikingConfigSingleton.reset_instance()
-
-
-def test_openviking_config_accepts_role_id_memory_isolation_enabled(monkeypatch):
-    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
-
-    from openviking_cli.utils.config.open_viking_config import (
-        OpenVikingConfig,
-        OpenVikingConfigSingleton,
-    )
-
-    config = OpenVikingConfig.from_dict({"memory": {"role_id_memory_isolation_enabled": True}})
-
-    assert config.memory.role_id_memory_isolation_enabled is True
 
     OpenVikingConfigSingleton.reset_instance()
 

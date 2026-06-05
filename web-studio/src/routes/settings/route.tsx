@@ -533,12 +533,11 @@ function SettingsRoute() {
   const adminConnection = React.useMemo<AdminConnection>(
     () => ({
       accountId: draft.accountId || DEFAULT_ACCOUNT_ID,
-      agentId: draft.agentId || 'web-playground',
       apiKey: draft.apiKey,
       baseUrl: draft.baseUrl,
       userId: draft.userId || DEFAULT_USER_ID,
     }),
-    [draft.accountId, draft.agentId, draft.apiKey, draft.baseUrl, draft.userId],
+    [draft.accountId, draft.apiKey, draft.baseUrl, draft.userId],
   )
 
   const accountsQuery = useQuery({
@@ -550,7 +549,6 @@ function SettingsRoute() {
       adminConnection.apiKey,
       adminConnection.accountId,
       adminConnection.userId,
-      adminConnection.agentId,
     ],
     retry: false,
   })
@@ -567,7 +565,6 @@ function SettingsRoute() {
       adminConnection.apiKey,
       adminConnection.accountId,
       adminConnection.userId,
-      adminConnection.agentId,
       selectedAccountId,
     ],
     retry: false,
@@ -582,7 +579,6 @@ function SettingsRoute() {
       adminConnection.apiKey,
       adminConnection.accountId,
       adminConnection.userId,
-      adminConnection.agentId,
       managedAccountId,
     ],
     retry: false,
@@ -806,21 +802,6 @@ function SettingsRoute() {
                   users={users}
                   value={draft.userId || DEFAULT_USER_ID}
                   onChange={(userId) => updateDraft({ userId })}
-                />
-              </FieldContent>
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="settings-agent-id">
-                {t('fields.agent')}
-              </FieldLabel>
-              <FieldContent>
-                <Input
-                  id="settings-agent-id"
-                  value={draft.agentId}
-                  onChange={(event) =>
-                    updateDraft({ agentId: event.target.value })
-                  }
-                  placeholder={t('placeholders.agent')}
                 />
               </FieldContent>
             </Field>

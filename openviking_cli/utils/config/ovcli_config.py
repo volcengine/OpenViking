@@ -28,7 +28,6 @@ class OVCLIConfig(BaseModel):
 
     url: Optional[str] = None
     api_key: Optional[str] = None
-    agent_id: Optional[str] = None
     account: Optional[str] = None
     user: Optional[str] = None
     timeout: float = 60.0

@@ -49,7 +49,6 @@ impl CliContext {
         compact: bool,
         account: Option<String>,
         user: Option<String>,
-        agent_id: Option<String>,
         sudo: bool,
         show_progress: Option<bool>,
         verbose: Option<bool>,
@@ -60,9 +59,6 @@ impl CliContext {
         }
         if user.is_some() {
             config.user = user;
-        }
-        if agent_id.is_some() {
-            config.agent_id = agent_id;
         }
         Self {
             config,
@@ -94,7 +90,6 @@ impl CliContext {
         client::HttpClient::new(
             &self.config.url,
             auth.api_key,
-            self.config.agent_id.clone(),
             auth.account,
             auth.user,
             timeout_secs.unwrap_or(self.config.timeout),
@@ -125,10 +120,6 @@ struct Cli {
     /// User identifier to send as X-OpenViking-User
     #[arg(long, global = true)]
     user: Option<String>,
-
-    /// Agent identifier to send as X-OpenViking-Agent
-    #[arg(long = "agent-id", global = true)]
-    agent_id: Option<String>,
 
     /// Use root API key for admin commands
     #[arg(long, global = true, hide = true)]
@@ -430,6 +421,9 @@ enum Commands {
         /// Only include results with specific level(s) (0=abstract, 1=overview, 2=file)
         #[arg(short = 'L', long = "level", value_delimiter = ',')]
         level: Option<Vec<i32>>,
+        /// Limit memory retrieval to this peer plus the current user memory
+        #[arg(long = "peer-id")]
+        peer_id: Option<String>,
     },
     /// [Experimental][Data] Run context-aware retrieval
     Search {
@@ -461,6 +455,9 @@ enum Commands {
         /// Only include results with specific level(s) (0=abstract, 1=overview, 2=file)
         #[arg(short = 'L', long = "level", value_delimiter = ',')]
         level: Option<Vec<i32>>,
+        /// Limit memory retrieval to this peer plus the current user memory
+        #[arg(long = "peer-id")]
+        peer_id: Option<String>,
     },
     /// [Data] Run content pattern search
     Grep {
@@ -809,6 +806,9 @@ enum SessionCommands {
         /// Message content
         #[arg(long)]
         content: String,
+        /// Stable interaction peer id. Omit for self memory.
+        #[arg(long = "peer-id")]
+        peer_id: Option<String>,
     },
     /// Add multiple messages to a session
     AddMessages {
@@ -982,11 +982,6 @@ enum AdminCommands {
         /// Filter users by role
         #[arg(long)]
         role: Option<String>,
-    },
-    /// List all agent namespaces in an account
-    ListAgents {
-        /// Account ID
-        account_id: String,
     },
     /// Remove a user from an account
     RemoveUser {
@@ -1178,7 +1173,7 @@ fn find_command_index(args: &[OsString]) -> Option<usize> {
     while i < args.len() {
         let token = args[i].to_string_lossy();
         match token.as_ref() {
-            "--output" | "-o" | "--compact" | "--account" | "--user" | "--agent-id" => {
+            "--output" | "-o" | "--compact" | "--account" | "--user" => {
                 i += 2;
             }
             "--sudo" | "--progress" | "--no-progress" | "--verbose" | "-v" => {
@@ -1270,7 +1265,6 @@ fn consumes_plain_help_value(token: &str) -> bool {
             | "--compact"
             | "--account"
             | "--user"
-            | "--agent-id"
             | "-u"
             | "--uri"
             | "-x"
@@ -1309,7 +1303,6 @@ fn consumes_plain_help_value(token: &str) -> bool {
         || token.starts_with("--compact=")
         || token.starts_with("--account=")
         || token.starts_with("--user=")
-        || token.starts_with("--agent-id=")
         || token.starts_with("--uri=")
         || token.starts_with("--exclude-uri=")
         || token.starts_with("--to=")
@@ -1571,7 +1564,6 @@ fn is_admin_subcommand(token: &str) -> bool {
             | "delete-account"
             | "register-user"
             | "list-users"
-            | "list-agents"
             | "remove-user"
             | "set-role"
             | "regenerate-key"
@@ -1788,7 +1780,7 @@ fn first_command_token(args: &[OsString]) -> Option<String> {
 }
 
 fn global_option_takes_value(option: &str) -> bool {
-    matches!(option, "--output" | "--account" | "--user" | "--agent-id")
+    matches!(option, "--output" | "--account" | "--user")
 }
 
 fn global_short_option_takes_value(option: &str) -> bool {
@@ -1958,7 +1950,6 @@ async fn main() {
         compact,
         cli.account.clone(),
         cli.user.clone(),
-        cli.agent_id.clone(),
         cli.sudo,
         None,
         None,
@@ -2267,9 +2258,12 @@ async fn main() {
             after,
             before,
             level,
+            peer_id,
         } => {
-            handlers::handle_find(query, uri, node_limit, threshold, after, before, level, ctx)
-                .await
+            handlers::handle_find(
+                query, uri, node_limit, threshold, after, before, level, peer_id, ctx,
+            )
+            .await
         }
         Commands::Search {
             query,
@@ -2280,9 +2274,10 @@ async fn main() {
             after,
             before,
             level,
+            peer_id,
         } => {
             handlers::handle_search(
-                query, uri, session_id, node_limit, threshold, after, before, level, ctx,
+                query, uri, session_id, node_limit, threshold, after, before, level, peer_id, ctx,
             )
             .await
         }
@@ -2343,21 +2338,38 @@ mod tests {
 
     #[test]
     fn cli_parses_global_identity_override_flags() {
-        let cli = Cli::try_parse_from([
-            "ov",
-            "--account",
-            "acme",
-            "--user",
-            "alice",
-            "--agent-id",
-            "assistant-1",
-            "ls",
-        ])
-        .expect("cli should parse");
+        let cli = Cli::try_parse_from(["ov", "--account", "acme", "--user", "alice", "ls"])
+            .expect("cli should parse");
 
         assert_eq!(cli.account.as_deref(), Some("acme"));
         assert_eq!(cli.user.as_deref(), Some("alice"));
-        assert_eq!(cli.agent_id.as_deref(), Some("assistant-1"));
+    }
+
+    #[test]
+    fn cli_parses_find_peer_id() {
+        let cli = Cli::try_parse_from(["ov", "find", "invoice", "--peer-id", "web:visitor:alice"])
+            .expect("find peer id should parse");
+
+        match cli.command {
+            Commands::Find { peer_id, .. } => {
+                assert_eq!(peer_id.as_deref(), Some("web:visitor:alice"));
+            }
+            _ => panic!("expected find command"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_search_peer_id() {
+        let cli =
+            Cli::try_parse_from(["ov", "search", "invoice", "--peer-id", "web:visitor:alice"])
+                .expect("search peer id should parse");
+
+        match cli.command {
+            Commands::Search { peer_id, .. } => {
+                assert_eq!(peer_id.as_deref(), Some("web:visitor:alice"));
+            }
+            _ => panic!("expected search command"),
+        }
     }
 
     #[test]
@@ -2560,7 +2572,6 @@ mod tests {
             &["ov", "admin", "delete-account"],
             &["ov", "admin", "register-user"],
             &["ov", "admin", "list-users"],
-            &["ov", "admin", "list-agents"],
             &["ov", "admin", "remove-user"],
             &["ov", "admin", "set-role"],
             &["ov", "admin", "regenerate-key"],
@@ -2998,7 +3009,6 @@ mod tests {
             root_api_key: None,
             account: Some("from-config-account".to_string()),
             user: Some("from-config-user".to_string()),
-            agent_id: Some("from-config-agent".to_string()),
             timeout: 60.0,
             output: "table".to_string(),
             echo_command: true,
@@ -3015,7 +3025,6 @@ mod tests {
             true,
             Some("from-cli-account".to_string()),
             Some("from-cli-user".to_string()),
-            Some("from-cli-agent".to_string()),
             false,
             None,
             None,
@@ -3024,7 +3033,6 @@ mod tests {
 
         assert_eq!(ctx.config.account.as_deref(), Some("from-cli-account"));
         assert_eq!(ctx.config.user.as_deref(), Some("from-cli-user"));
-        assert_eq!(ctx.config.agent_id.as_deref(), Some("from-cli-agent"));
     }
 
     #[test]
@@ -3035,7 +3043,6 @@ mod tests {
             root_api_key: Some("root-key".to_string()),
             account: None,
             user: None,
-            agent_id: None,
             timeout: 60.0,
             output: "table".to_string(),
             echo_command: true,
@@ -3053,7 +3060,6 @@ mod tests {
             true,
             None,
             None,
-            None,
             false,
             None,
             None,
@@ -3067,7 +3073,6 @@ mod tests {
             config,
             OutputFormat::Json,
             true,
-            None,
             None,
             None,
             true,

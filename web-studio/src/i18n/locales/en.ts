@@ -80,10 +80,6 @@ const en = {
         label: 'Account',
         placeholder: 'default',
       },
-      agentId: {
-        label: 'Agent',
-        placeholder: 'web-playground',
-      },
       apiKey: {
         label: 'API Key',
         placeholder: 'Enter X-API-Key or Bearer token',
@@ -160,7 +156,6 @@ const en = {
     fields: {
       account: 'Account',
       adminUser: 'Admin user',
-      agent: 'Agent',
       apiKey: 'API key',
       baseUrl: 'Server URL',
       role: 'Role',
@@ -186,7 +181,6 @@ const en = {
     },
     placeholders: {
       account: 'team-account',
-      agent: 'web-playground',
       apiKey: 'Enter X-API-Key or Bearer token',
       baseUrl: 'http://127.0.0.1:1933',
       user: 'default',
@@ -231,12 +225,6 @@ const en = {
     },
   },
   home: {
-    agentAccess: {
-      description:
-        'Deduplicates agents that accessed OpenViking today and shows the latest visit time.',
-      empty: 'No agent visits today',
-      title: 'Agent Visits',
-    },
     contextCommits: {
       description:
         'Groups resource, skill, session message, and session commit writes into 4-hour buckets. Hover a cell for details.',
@@ -271,7 +259,7 @@ const en = {
     },
     contextData: {
       description:
-        'Includes files, skills, user memories, and agent memories to show the current context resource scale.',
+        'Includes files, skills, and user memories to show the current context resource scale.',
       files: 'Files',
       memories: 'Memories',
       skills: 'Skills',
@@ -798,7 +786,6 @@ const en = {
       namespaces: {
         user: 'Personalized user memories',
         session: 'Raw sessions between the user and the Agent',
-        agent: "The Agent's capabilities, tools and experience",
         resources: 'External resources the Agent can reference',
       },
     },

@@ -563,7 +563,6 @@ pub(crate) async fn validate_candidate_config_with_role(
     let client = BaseClient::new(
         &config.url,
         auth.api_key.clone(),
-        config.agent_id.clone(),
         auth.account,
         auth.user,
         timeout,

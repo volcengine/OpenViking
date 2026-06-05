@@ -80,10 +80,6 @@ const zhCN = {
         label: 'Account',
         placeholder: 'default',
       },
-      agentId: {
-        label: 'Agent',
-        placeholder: 'web-playground',
-      },
       apiKey: {
         label: 'API Key',
         placeholder: '输入 X-API-Key 或 Bearer token',
@@ -160,7 +156,6 @@ const zhCN = {
     fields: {
       account: 'Account',
       adminUser: 'Admin user',
-      agent: 'Agent',
       apiKey: 'API key',
       baseUrl: '服务地址',
       role: '角色',
@@ -186,7 +181,6 @@ const zhCN = {
     },
     placeholders: {
       account: 'team-account',
-      agent: 'web-playground',
       apiKey: '输入 X-API-Key 或 Bearer token',
       baseUrl: 'http://127.0.0.1:1933',
       user: 'default',
@@ -231,12 +225,6 @@ const zhCN = {
     },
   },
   home: {
-    agentAccess: {
-      description:
-        '去重统计今日访问过 OpenViking 的 Agent，并展示最近访问时间。',
-      empty: '今日暂无 Agent 访问',
-      title: 'Agent 访问数',
-    },
     contextCommits: {
       description:
         '按 4 小时聚合资源、技能、会话消息和提交写入，鼠标悬停可查看明细。',
@@ -271,7 +259,7 @@ const zhCN = {
     },
     contextData: {
       description:
-        '包含文件、技能、用户记忆与 Agent 记忆，用于衡量当前上下文资源规模。',
+        '包含文件、技能与用户记忆，用于衡量当前上下文资源规模。',
       files: '文件',
       memories: '记忆',
       skills: '技能',
@@ -780,7 +768,6 @@ const zhCN = {
       namespaces: {
         user: '用户个性化记忆',
         session: '用户与 Agent 的原始会话',
-        agent: 'Agent 的能力、工具和经验',
         resources: 'Agent 可引用的外部资源',
       },
     },

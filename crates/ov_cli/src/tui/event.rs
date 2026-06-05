@@ -43,7 +43,7 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) {
         }
         return;
     }
-    
+
     match key.code {
         KeyCode::Char('q') => {
             app.should_quit = true;

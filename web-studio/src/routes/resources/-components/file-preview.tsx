@@ -619,7 +619,7 @@ function getJsonlMessage(record: JsonlRecord): JsonlMessage {
     kind,
     label: toolResult ? 'tool-result' : role,
     lineNo: index + 1,
-    roleId: String(parsed.role_id ?? source.role_id ?? ''),
+    roleId: String(parsed.peer_id ?? source.peer_id ?? ''),
     text,
     time: String(
       parsed.timestamp ?? parsed.created_at ?? source.created_at ?? '',

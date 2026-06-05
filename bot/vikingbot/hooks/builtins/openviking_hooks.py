@@ -30,18 +30,16 @@ except Exception:
     VikingClient = None
     ov = None
 
-# Clients are cached per workspace so canonical agent_id routing stays aligned
-# with OpenViking account namespace policy.
-_global_clients: dict[str | None, VikingClient] = {}
+_global_client: Any = None
 
 
 async def get_global_client(workspace_id: str | None) -> VikingClient:
-    """Get or create a workspace-scoped VikingClient."""
-    client = _global_clients.get(workspace_id)
-    if client is None:
-        client = await VikingClient.create(workspace_id)
-        _global_clients[workspace_id] = client
-    return client
+    """Get or create the shared VikingClient."""
+    del workspace_id
+    global _global_client
+    if _global_client is None:
+        _global_client = await VikingClient.create()
+    return _global_client
 
 
 class OpenVikingCompactHook(Hook):
@@ -135,7 +133,7 @@ class OpenVikingCompactHook(Hook):
                         append_result = await client.append_messages(
                             session_id=sender_session_id,
                             messages=user_messages,
-                            default_user_role_id=user_id,
+                            default_user_peer_id=user_id,
                             session_user_id=user_id,
                         )
                     return {
@@ -182,7 +180,7 @@ class OpenVikingCompactHook(Hook):
             admin_append_result = await client.append_messages(
                 session_id=session_id,
                 messages=messages_to_sync,
-                default_user_role_id=admin_user_id,
+                default_user_peer_id=admin_user_id,
                 session_user_id=admin_user_id,
             )
             state["last_synced_local_index"] = len(session.messages) - 1

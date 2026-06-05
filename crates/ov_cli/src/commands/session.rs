@@ -66,9 +66,6 @@ fn render_session_get_for_table(value: &Value) -> Option<String> {
     if let Some(users) = object.get("participant_user_ids") {
         push_row(&mut lines, "participants", &format_list(users));
     }
-    if let Some(agents) = object.get("participant_agent_ids") {
-        push_row(&mut lines, "agents", &format_list(agents));
-    }
     if let Some(user) = object.get("user").and_then(Value::as_object) {
         push_row(&mut lines, "active user", &format_identity(user));
     }
@@ -175,7 +172,7 @@ fn format_list(value: &Value) -> String {
 }
 
 fn format_identity(object: &serde_json::Map<String, Value>) -> String {
-    ["account_id", "user_id", "agent_id"]
+    ["account_id", "user_id"]
         .into_iter()
         .filter_map(|key| object.get(key).map(|value| (key, format_json_value(value))))
         .filter(|(_, value)| !value.is_empty() && value != "null")
@@ -311,14 +308,18 @@ pub async fn add_message(
     session_id: &str,
     role: &str,
     content: &str,
+    peer_id: Option<&str>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
     let path = format!("/api/v1/sessions/{}/messages", url_encode(session_id));
-    let body = json!({
+    let mut body = json!({
         "role": role,
         "content": content
     });
+    if let Some(peer_id) = peer_id {
+        body["peer_id"] = json!(peer_id);
+    }
 
     let response: serde_json::Value = client.post(&path, &body).await?;
     output_success(&response, output_format, compact);
@@ -477,7 +478,6 @@ mod tests {
             "updated_at": "2026-05-26T10:00:07.603Z",
             "created_by_user_id": "haozhe",
             "participant_user_ids": ["haozhe"],
-            "participant_agent_ids": ["deerflow"],
             "message_count": 0,
             "commit_count": 1,
             "memories_extracted": {
@@ -499,8 +499,7 @@ mod tests {
             "total_message_count": 2,
             "user": {
                 "account_id": "default",
-                "user_id": "haozhe",
-                "agent_id": "default"
+                "user_id": "haozhe"
             }
         });
 

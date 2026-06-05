@@ -96,7 +96,6 @@ def _make_config(api_key_type: str, mode: str = "remote", **ov_overrides):
         root_api_key="root-key",
         account_id="acct",
         admin_user_id="admin",
-        agent_id="",
         **ov_overrides,
     )
     return SimpleNamespace(
@@ -113,19 +112,18 @@ def _patch_http_client(monkeypatch):
 def test_viking_client_init_root_mode_sets_account_and_user(monkeypatch):
     monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("root"))
 
-    client = VikingClient(agent_id="workspace#channel")
+    client = VikingClient()
 
     first = _DummyHTTPClient.instances[0]
     assert client.api_key_type == "root"
     assert first.kwargs["account"] == "acct"
     assert first.kwargs["user"] == "admin"
-    assert first.kwargs["agent_id"] == "workspace"
 
 
 def test_viking_client_init_user_mode_does_not_set_user_or_account(monkeypatch):
     monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("user"))
 
-    client = VikingClient(agent_id="workspace")
+    client = VikingClient()
 
     first = _DummyHTTPClient.instances[0]
     assert client.api_key_type == "user"
@@ -136,7 +134,7 @@ def test_viking_client_init_user_mode_does_not_set_user_or_account(monkeypatch):
 @pytest.mark.asyncio
 async def test_commit_user_mode_ignores_user_specific_key_flow(monkeypatch):
     monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("user"))
-    client = VikingClient(agent_id="workspace")
+    client = VikingClient()
 
     async def _must_not_call(*_args, **_kwargs):
         raise AssertionError("user mode should not call user management path")
@@ -157,7 +155,7 @@ async def test_commit_user_mode_ignores_user_specific_key_flow(monkeypatch):
 @pytest.mark.asyncio
 async def test_commit_root_mode_uses_sender_user_key(monkeypatch):
     monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("root"))
-    client = VikingClient(agent_id="workspace")
+    client = VikingClient()
 
     async def _exists(_user_id):
         return True
@@ -252,14 +250,14 @@ async def test_compact_hook_session_context_commits_admin_and_sender_sessions(mo
             self,
             session_id,
             messages,
-            default_user_role_id=None,
+            default_user_peer_id=None,
             session_user_id=None,
         ):
             self.append_calls.append(
                 (
                     session_id,
                     [message["content"] for message in messages],
-                    default_user_role_id,
+                    default_user_peer_id,
                     session_user_id,
                 )
             )
@@ -386,7 +384,7 @@ async def test_compact_hook_force_commit_does_not_resync_already_synced_messages
             self,
             session_id,
             messages,
-            default_user_role_id=None,
+            default_user_peer_id=None,
             session_user_id=None,
         ):
             self.append_calls.append((session_id, [message["content"] for message in messages]))
@@ -465,7 +463,7 @@ async def test_compact_hook_force_commit_commits_sender_sessions_without_unsynce
             self,
             session_id,
             messages,
-            default_user_role_id=None,
+            default_user_peer_id=None,
             session_user_id=None,
         ):
             self.append_calls.append((session_id, [message["content"] for message in messages]))
@@ -541,7 +539,7 @@ async def test_compact_hook_session_context_sender_failure_does_not_advance_sync
             self,
             session_id,
             messages,
-            default_user_role_id=None,
+            default_user_peer_id=None,
             session_user_id=None,
         ):
             self.append_calls.append((session_id, [message["content"] for message in messages]))
@@ -618,7 +616,7 @@ async def test_compact_hook_session_context_commits_when_message_threshold_reach
             self,
             session_id,
             messages,
-            default_user_role_id=None,
+            default_user_peer_id=None,
             session_user_id=None,
         ):
             self.append_calls.append((session_id, [message["content"] for message in messages]))
@@ -700,7 +698,7 @@ async def test_compact_hook_sender_commit_failure_does_not_commit_admin_and_retr
             self,
             session_id,
             messages,
-            default_user_role_id=None,
+            default_user_peer_id=None,
             session_user_id=None,
         ):
             self.append_calls.append((session_id, [message["content"] for message in messages]))
@@ -792,7 +790,7 @@ async def test_compact_hook_session_context_skips_message_threshold_after_recent
             self,
             session_id,
             messages,
-            default_user_role_id=None,
+            default_user_peer_id=None,
             session_user_id=None,
         ):
             self.append_calls.append((session_id, [message["content"] for message in messages]))
@@ -848,7 +846,7 @@ async def test_compact_hook_session_context_skips_message_threshold_after_recent
 @pytest.mark.asyncio
 async def test_viking_client_normalizes_system_tool_and_tool_result_messages(monkeypatch):
     monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("root"))
-    client = VikingClient(agent_id="workspace")
+    client = VikingClient(workspace_id="workspace")
 
     normalized = client._normalize_session_messages(
         [
@@ -875,7 +873,7 @@ async def test_viking_client_normalizes_system_tool_and_tool_result_messages(mon
                 "timestamp": "2026-05-01T12:00:02Z",
             },
         ],
-        default_user_role_id="admin",
+        default_user_peer_id="admin",
     )
 
     assert [message["role"] for message in normalized] == [
@@ -883,20 +881,22 @@ async def test_viking_client_normalizes_system_tool_and_tool_result_messages(mon
         "assistant",
         "assistant",
     ]
-    assert [message["role_id"] for message in normalized] == [
-        "workspace",
-        "workspace",
-        "workspace",
+    assert [message["peer_id"] for message in normalized] == [
+        "admin",
+        "admin",
+        "admin",
     ]
     assert normalized[0]["content"] == "system context"
     assert normalized[1]["content"] == "tool response"
     assert normalized[2]["content"] == "assistant answer"
+    assert normalized[2]["parts"][1]["type"] == "tool"
+    assert normalized[2]["parts"][1]["tool_name"] == "read_file"
 
 
 @pytest.mark.asyncio
 async def test_viking_client_append_messages_chunks_batches_at_server_limit(monkeypatch):
     monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("root"))
-    client = VikingClient(agent_id="workspace")
+    client = VikingClient(workspace_id="workspace")
 
     async def _exists(_session_id):
         return True
@@ -917,7 +917,7 @@ async def test_viking_client_append_messages_chunks_batches_at_server_limit(monk
     result = await client.append_messages(
         "session-1",
         [{"role": "user", "content": f"message {index}"} for index in range(101)],
-        default_user_role_id="admin",
+        default_user_peer_id="admin",
     )
 
     assert [len(messages) for _, messages in calls] == [100, 1]
@@ -925,9 +925,9 @@ async def test_viking_client_append_messages_chunks_batches_at_server_limit(monk
 
 
 @pytest.mark.asyncio
-async def test_search_memory_uses_flat_namespaces(monkeypatch):
+async def test_search_memory_uses_user_namespace(monkeypatch):
     monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("root"))
-    client = VikingClient(agent_id="workspace")
+    client = VikingClient()
 
     calls = []
 
@@ -944,18 +944,15 @@ async def test_search_memory_uses_flat_namespaces(monkeypatch):
     monkeypatch.setattr(client, "_check_user_exists", _exists)
     monkeypatch.setattr(client.client, "find", _find)
 
-    await client.search_memory("hello", "sender-1", "admin", limit=5)
+    await client.search_memory("hello", "sender-1", limit=5)
 
-    assert calls == [
-        "viking://user/sender-1/memories/",
-        "viking://agent/workspace/memories/",
-    ]
+    assert calls == ["viking://user/sender-1/memories/"]
 
 
 @pytest.mark.asyncio
-async def test_search_memory_uses_policy_scoped_namespaces(monkeypatch):
+async def test_search_memory_uses_user_namespace_without_agent_scope(monkeypatch):
     monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("root"))
-    client = VikingClient(agent_id="workspace")
+    client = VikingClient()
 
     calls = []
 
@@ -969,47 +966,22 @@ async def test_search_memory_uses_policy_scoped_namespaces(monkeypatch):
         calls.append(target_uri)
         return _Result()
 
-    async def _accounts():
-        return [
-            {
-                "account_id": "acct",
-                "isolate_user_scope_by_agent": True,
-                "isolate_agent_scope_by_user": True,
-            }
-        ]
-
     monkeypatch.setattr(client, "_check_user_exists", _exists)
     monkeypatch.setattr(client.client, "find", _find)
-    monkeypatch.setattr(client.client, "admin_list_accounts", _accounts)
 
-    await client.search_memory("hello", "sender-1", "admin", limit=5)
+    await client.search_memory("hello", "sender-1", limit=5)
 
-    assert calls == [
-        "viking://user/sender-1/agent/workspace/memories/",
-        "viking://agent/workspace/user/admin/memories/",
-    ]
+    assert calls == ["viking://user/sender-1/memories/"]
 
 
 @pytest.mark.asyncio
-async def test_skill_memory_uri_respects_namespace_policy(monkeypatch):
+async def test_skill_memory_uri_uses_user_memory_namespace(monkeypatch):
     monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("root"))
-    client = VikingClient(agent_id="workspace")
-
-    async def _accounts():
-        return [
-            {
-                "account_id": "acct",
-                "isolate_user_scope_by_agent": False,
-                "isolate_agent_scope_by_user": True,
-            }
-        ]
-
-    monkeypatch.setattr(client.client, "admin_list_accounts", _accounts)
-    await client._load_namespace_policy()
+    client = VikingClient()
 
     assert (
         client._skill_memory_uri("planner", "admin")
-        == "viking://agent/workspace/user/admin/memories/skills/planner.md"
+        == "viking://user/admin/memories/skills/planner.md"
     )
 
 
@@ -1057,51 +1029,40 @@ async def test_openviking_grep_passes_admin_user_id(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_openviking_search_uses_policy_scoped_user_namespace(monkeypatch):
+async def test_openviking_search_uses_user_namespace(monkeypatch):
     monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("root"))
     tool = VikingSearchTool()
-    client = VikingClient(agent_id="workspace")
+    client = VikingClient()
 
     calls = []
 
-    async def _accounts():
-        return [
-            {
-                "account_id": "acct",
-                "isolate_user_scope_by_agent": True,
-                "isolate_agent_scope_by_user": False,
-            }
-        ]
-
     async def _search(query, target_uri=None, limit=20, user_id=None):
-        calls.append(target_uri)
+        calls.append((target_uri, user_id))
         return {"memories": [{"uri": target_uri, "abstract": "a", "score": 0.9, "is_leaf": True}]}
 
     async def _fake_get_client(_tool_context):
         return client
 
-    monkeypatch.setattr(client.client, "admin_list_accounts", _accounts)
     monkeypatch.setattr(client, "search", _search)
     monkeypatch.setattr(tool, "_get_client", _fake_get_client)
-    await client._load_namespace_policy()
 
     tool_context = SimpleNamespace(workspace_id="workspace", memory_user_ids=["sender-1"])
     result = await tool.execute(tool_context, query="hello")
 
-    assert "sender-1/agent/workspace/memories" in result
-    assert calls == ["viking://user/sender-1/agent/workspace/memories/"]
+    assert "sender-1/memories" in result
+    assert calls == [("viking://user/sender-1/memories/", "admin")]
 
 
 @pytest.mark.asyncio
 async def test_openviking_search_user_key_mode_uses_current_user_namespace(monkeypatch):
     monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("user"))
     tool = VikingSearchTool()
-    client = VikingClient(agent_id="workspace")
+    client = VikingClient()
 
     calls = []
 
     async def _search(query, target_uri=None, limit=20, user_id=None):
-        calls.append(target_uri)
+        calls.append((target_uri, user_id))
         return {"memories": [{"uri": target_uri, "abstract": "a", "score": 0.9, "is_leaf": True}]}
 
     async def _fake_get_client(_tool_context):
@@ -1116,4 +1077,4 @@ async def test_openviking_search_user_key_mode_uses_current_user_namespace(monke
     result = await tool.execute(tool_context, query="hello")
 
     assert "viking://user/memories/" in result
-    assert calls == ["viking://user/memories/"]
+    assert calls == [("viking://user/memories/", "admin")]

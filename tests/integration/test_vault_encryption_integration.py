@@ -441,7 +441,7 @@ class TestVikingFSEncryptionWithVault:
 
         from openviking.server.identity import RequestContext, Role
 
-        user = UserIdentifier(account_id, admin_user_id, admin_user_id)
+        user = UserIdentifier(account_id, admin_user_id)
         ctx = RequestContext(user=user, role=Role.ADMIN)
 
         # Create test resource file
@@ -507,11 +507,11 @@ class TestVikingFSEncryptionWithVault:
 
         from openviking.server.identity import RequestContext, Role
 
-        user = UserIdentifier(account_id, admin_user_id, admin_user_id)
+        user = UserIdentifier(account_id, admin_user_id)
         ctx = RequestContext(user=user, role=Role.ADMIN)
 
         # Create skill directory and file
-        skill_dir_uri = f"viking://{account_id}/agent/test-skill"
+        skill_dir_uri = f"viking://user/{admin_user_id}/skills/test-skill"
         skill_md_uri = f"{skill_dir_uri}/SKILL.md"
 
         # Create directory
@@ -570,7 +570,7 @@ This is a test skill for verifying Vault encryption.
 
         from openviking.server.identity import RequestContext, Role
 
-        user = UserIdentifier(account_id, user_id, user_id)
+        user = UserIdentifier(account_id, user_id)
         ctx = RequestContext(user=user, role=Role.USER)
 
         # Create memory directory and file
@@ -613,7 +613,7 @@ This is a test skill for verifying Vault encryption.
 
         from openviking.server.identity import RequestContext, Role
 
-        user = UserIdentifier(account_id, user_id, user_id)
+        user = UserIdentifier(account_id, user_id)
         ctx = RequestContext(user=user, role=Role.USER)
 
         # Create session
@@ -650,7 +650,7 @@ This is a test skill for verifying Vault encryption.
         print(f"\n=== Creating account: {random_account_id}, user: {random_user_id} ===")
 
         await api_key_manager.create_account(random_account_id, random_user_id)
-        user = UserIdentifier(random_account_id, random_user_id, random_user_id)
+        user = UserIdentifier(random_account_id, random_user_id)
         ctx = RequestContext(user=user, role=Role.ADMIN)
 
         # 2. Execution: Resource, skill, session operations
@@ -663,7 +663,7 @@ This is a test skill for verifying Vault encryption.
         print(f"✓ Resource created successfully: {test_resource_uri}")
 
         # Create skill
-        skill_dir_uri = f"viking://{random_account_id}/agent/test-workflow-skill"
+        skill_dir_uri = "viking://user/admin/skills/test-workflow-skill"
         skill_md_uri = f"{skill_dir_uri}/SKILL.md"
         await svc.viking_fs.mkdir(skill_dir_uri, ctx=ctx)
         skill_content = """---

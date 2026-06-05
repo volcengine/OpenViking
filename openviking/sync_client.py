@@ -22,8 +22,8 @@ class SyncOpenViking:
     Wraps AsyncOpenViking with synchronous methods.
     """
 
-    def __init__(self, **kwargs):
-        self._async_client = AsyncOpenViking(**kwargs)
+    def __init__(self, path: Optional[str] = None):
+        self._async_client = AsyncOpenViking(path=path)
         self._initialized = False
 
     def initialize(self) -> None:
@@ -40,7 +40,10 @@ class SyncOpenViking:
         return run_async(self._async_client.session_exists(session_id))
 
     def create_session(
-        self, session_id: Optional[str] = None, telemetry: TelemetryRequest = False
+        self,
+        session_id: Optional[str] = None,
+        telemetry: TelemetryRequest = False,
+        memory_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Create a new session.
 
@@ -48,7 +51,13 @@ class SyncOpenViking:
             session_id: Optional session ID. If provided, creates a session with the given ID.
                        If None, creates a new session with auto-generated ID.
         """
-        return run_async(self._async_client.create_session(session_id, telemetry=telemetry))
+        return run_async(
+            self._async_client.create_session(
+                session_id,
+                telemetry=telemetry,
+                memory_policy=memory_policy,
+            )
+        )
 
     def list_sessions(self) -> List[Any]:
         """List all sessions."""
@@ -79,7 +88,7 @@ class SyncOpenViking:
         content: str | None = None,
         parts: list[dict] | None = None,
         created_at: str | None = None,
-        role_id: str | None = None,
+        peer_id: str | None = None,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add a message to a session.
@@ -90,19 +99,19 @@ class SyncOpenViking:
             content: Text content (simple mode)
             parts: Parts array (full Part support: TextPart, ContextPart, ToolPart)
             created_at: Message creation time (ISO format string). If not provided, current time is used.
-            role_id: Optional explicit actor identity. Omit to let the client/server derive it.
+            peer_id: Optional stable interaction peer identity.
 
         If both content and parts are provided, parts takes precedence.
         """
         return run_async(
             self._async_client.add_message(
-                session_id,
-                role,
-                content,
-                parts,
-                created_at,
-                role_id,
-                telemetry,
+                session_id=session_id,
+                role=role,
+                content=content,
+                parts=parts,
+                created_at=created_at,
+                peer_id=peer_id,
+                telemetry=telemetry,
             )
         )
 
@@ -127,6 +136,7 @@ class SyncOpenViking:
         telemetry: TelemetryRequest = False,
         *,
         keep_recent_count: int = 0,
+        memory_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Commit a session (archive and extract memories)."""
         return run_async(
@@ -134,6 +144,7 @@ class SyncOpenViking:
                 session_id,
                 telemetry=telemetry,
                 keep_recent_count=keep_recent_count,
+                memory_policy=memory_policy,
             )
         )
 
@@ -224,6 +235,7 @@ class SyncOpenViking:
         until: Optional[str] = None,
         time_field: Optional[str] = None,
         level: Optional[List[int]] = None,
+        peer_id: Optional[str] = None,
     ):
         """Execute complex retrieval (intent analysis, hierarchical retrieval)."""
         return run_async(
@@ -240,6 +252,7 @@ class SyncOpenViking:
                 until=until,
                 time_field=time_field,
                 level=level,
+                peer_id=peer_id,
             )
         )
 
@@ -255,6 +268,7 @@ class SyncOpenViking:
         until: Optional[str] = None,
         time_field: Optional[str] = None,
         level: Optional[List[int]] = None,
+        peer_id: Optional[str] = None,
     ):
         """Quick retrieval"""
         return run_async(
@@ -269,6 +283,7 @@ class SyncOpenViking:
                 until,
                 time_field,
                 level,
+                peer_id=peer_id,
             )
         )
 

@@ -55,11 +55,11 @@ class _FakeOVClient:
         self,
         session_id,
         messages,
-        default_user_role_id=None,
+        default_user_peer_id=None,
         session_user_id=None,
     ):
         self.append_calls.append(
-            (session_id, list(messages), default_user_role_id, session_user_id)
+            (session_id, list(messages), default_user_peer_id, session_user_id)
         )
         return {"session_id": session_id, "added": len(messages), "message_count": len(messages)}
 

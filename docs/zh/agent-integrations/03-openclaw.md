@@ -96,7 +96,7 @@ python examples/openclaw-plugin/health_check_tools/ov-healthcheck.py
 | --- | --- | --- |
 | `baseUrl` | `http://127.0.0.1:1933` | OpenViking 服务端点 |
 | `apiKey` | 空 | OpenViking API Key |
-| `agent_prefix` | `default` | Agent 前缀，用于记忆命名空间隔离 |
+| `peer_prefix` | 空 | `peer_role=assistant` 时 assistant peer 身份的可选前缀 |
 
 ```bash
 openclaw config set plugins.entries.openviking.config.baseUrl http://your-server:1933

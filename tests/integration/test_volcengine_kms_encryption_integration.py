@@ -461,7 +461,7 @@ class TestVikingFSEncryptionWithVolcengineKMS:
 
         from openviking.server.identity import RequestContext, Role
 
-        user = UserIdentifier(account_id, admin_user_id, admin_user_id)
+        user = UserIdentifier(account_id, admin_user_id)
         ctx = RequestContext(user=user, role=Role.ADMIN)
 
         test_content = "Test content with Volcengine KMS encryption"
@@ -503,7 +503,7 @@ class TestVikingFSEncryptionWithVolcengineKMS:
 
         from openviking.server.identity import RequestContext, Role
 
-        user = UserIdentifier(account_id, admin_user_id, admin_user_id)
+        user = UserIdentifier(account_id, admin_user_id)
         ctx = RequestContext(user=user, role=Role.ADMIN)
 
         # Create test resource file
@@ -571,11 +571,11 @@ class TestVikingFSEncryptionWithVolcengineKMS:
 
         from openviking.server.identity import RequestContext, Role
 
-        user = UserIdentifier(account_id, admin_user_id, admin_user_id)
+        user = UserIdentifier(account_id, admin_user_id)
         ctx = RequestContext(user=user, role=Role.ADMIN)
 
         # Create skill directory and file
-        skill_dir_uri = f"viking://{account_id}/agent/test-skill"
+        skill_dir_uri = f"viking://user/{admin_user_id}/skills/test-skill"
         skill_md_uri = f"{skill_dir_uri}/SKILL.md"
 
         # Create directory
@@ -634,7 +634,7 @@ This is a test skill for verifying Volcengine KMS encryption.
 
         from openviking.server.identity import RequestContext, Role
 
-        user = UserIdentifier(account_id, user_id, user_id)
+        user = UserIdentifier(account_id, user_id)
         ctx = RequestContext(user=user, role=Role.USER)
 
         # Create memory directory and file
@@ -677,7 +677,7 @@ This is a test skill for verifying Volcengine KMS encryption.
 
         from openviking.server.identity import RequestContext, Role
 
-        user = UserIdentifier(account_id, user_id, user_id)
+        user = UserIdentifier(account_id, user_id)
         ctx = RequestContext(user=user, role=Role.USER)
 
         # Create session
@@ -710,7 +710,7 @@ This is a test skill for verifying Volcengine KMS encryption.
 
         from openviking.server.identity import RequestContext, Role
 
-        user = UserIdentifier(test_account_id, test_user_id, test_user_id)
+        user = UserIdentifier(test_account_id, test_user_id)
         ctx = RequestContext(user=user, role=Role.ADMIN)
 
         print(f"\n✓ Created test account: {test_account_id}")
@@ -726,7 +726,7 @@ This is a test skill for verifying Volcengine KMS encryption.
 
         # 2. Skill operations
         print("\n2. Testing skill operations...")
-        skill_dir_uri = f"viking://{test_account_id}/agent/test-workflow-skill"
+        skill_dir_uri = "viking://user/admin/skills/test-workflow-skill"
         skill_md_uri = f"{skill_dir_uri}/SKILL.md"
         await svc.viking_fs.mkdir(skill_dir_uri, ctx=ctx)
         skill_content = """---

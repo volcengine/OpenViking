@@ -226,7 +226,7 @@ class FakeRerankClient:
 
 
 def _ctx() -> RequestContext:
-    return RequestContext(user=UserIdentifier("acc1", "user1", "agent1"), role=Role.USER)
+    return RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
 
 
 def _query() -> TypedQuery:

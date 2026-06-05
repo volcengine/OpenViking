@@ -469,14 +469,13 @@ class LockManager:
         session_uri = info.get("session_uri")
         account_id = info.get("account_id", "default")
         user_id = info.get("user_id", "default")
-        agent_id = info.get("agent_id", "default")
         role_str = info.get("role", "root")
 
         if not archive_uri or not session_uri:
             raise ValueError("Cannot redo session_memory: missing archive_uri or session_uri")
 
         # 1. Build request context (needed for path conversion below)
-        user = UserIdentifier(account_id=account_id, user_id=user_id, agent_id=agent_id)
+        user = UserIdentifier(account_id=account_id, user_id=user_id)
         ctx = RequestContext(user=user, role=Role(role_str))
 
         # 2. Read archived messages
@@ -523,7 +522,7 @@ class LockManager:
             context_type="memory",
             account_id=account_id,
             user_id=user_id,
-            agent_id=agent_id,
+            peer_id=user_id,
             role=role_str,
         )
 
@@ -546,7 +545,7 @@ class LockManager:
             context_type=params.get("context_type", "resource"),
             account_id=params.get("account_id", "default"),
             user_id=params.get("user_id", "default"),
-            agent_id=params.get("agent_id", "default"),
+            peer_id=params.get("peer_id", "default"),
             role=params.get("role", "root"),
         )
         semantic_queue: SemanticQueue = queue_manager.get_queue(queue_manager.SEMANTIC)  # type: ignore[assignment]

@@ -78,7 +78,6 @@ pub async fn handle_add_resource(
     let client = client::HttpClient::new(
         &ctx.config.url,
         auth.api_key,
-        ctx.config.agent_id.clone(),
         auth.account,
         auth.user,
         effective_timeout,
@@ -331,12 +330,14 @@ pub async fn handle_session(cmd: SessionCommands, ctx: CliContext) -> Result<()>
             session_id,
             role,
             content,
+            peer_id,
         } => {
             commands::session::add_message(
                 &client,
                 &session_id,
                 &role,
                 &content,
+                peer_id.as_deref(),
                 ctx.output_format,
                 ctx.compact,
             )
@@ -418,9 +419,6 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
                 ctx.compact,
             )
             .await
-        }
-        AdminCommands::ListAgents { account_id } => {
-            commands::admin::list_agents(&client, &account_id, ctx.output_format, ctx.compact).await
         }
         AdminCommands::RemoveUser {
             account_id,
@@ -1108,6 +1106,7 @@ pub async fn handle_find(
     after: Option<String>,
     before: Option<String>,
     level: Option<Vec<i32>>,
+    peer_id: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
@@ -1124,6 +1123,9 @@ pub async fn handle_find(
                 .join(",")
         ));
     }
+    if let Some(ref p) = peer_id {
+        params.push(format!("--peer-id {}", p));
+    }
     params.push(format!("\"{}\"", query));
     print_command_echo("ov find", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
@@ -1137,6 +1139,7 @@ pub async fn handle_find(
         before.as_deref(),
         None,
         level,
+        peer_id.as_deref(),
         ctx.output_format,
         ctx.compact,
     )
@@ -1152,6 +1155,7 @@ pub async fn handle_search(
     after: Option<String>,
     before: Option<String>,
     level: Option<Vec<i32>>,
+    peer_id: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
@@ -1171,6 +1175,9 @@ pub async fn handle_search(
                 .join(",")
         ));
     }
+    if let Some(ref p) = peer_id {
+        params.push(format!("--peer-id {}", p));
+    }
     params.push(format!("\"{}\"", query));
     print_command_echo("ov search", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
@@ -1185,6 +1192,7 @@ pub async fn handle_search(
         before.as_deref(),
         None,
         level,
+        peer_id.as_deref(),
         ctx.output_format,
         ctx.compact,
     )

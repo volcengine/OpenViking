@@ -78,10 +78,15 @@
       "placeholder": "http://127.0.0.1:1933",
       "help": "HTTP URL when mode is remote (or ${OPENVIKING_BASE_URL})"
     },
-    "agent_prefix": {
-      "label": "Agent Prefix",
+    "peer_role": {
+      "label": "Peer Role",
+      "placeholder": "none",
+      "help": "Controls which messages include peer_id: none, assistant, or person. New installs default to none."
+    },
+    "peer_prefix": {
+      "label": "Peer Prefix",
       "placeholder": "optional-prefix",
-      "help": "Optional OpenViking agent prefix. Empty: follow OpenClaw ctx.agentId directly. Non-empty: use `<prefix>_<OpenClaw ctx.agentId>` (sanitized to letters/digits/_/-). If OpenClaw ctx.agentId is unavailable, use OpenClaw default agent `main`."
+      "help": "Optional prefix for assistant peer_id values derived from OpenClaw runtime agent IDs."
     },
     "apiKey": {
       "label": "OpenViking API Key",
@@ -99,24 +104,6 @@
       "label": "User ID",
       "placeholder": "(derived from API key)",
       "help": "Advanced option. Tenant user ID. Only needed when explicitly sending identity headers.",
-      "advanced": true
-    },
-    "isolateUserScopeByAgent": {
-      "label": "Isolate User Scope By Agent",
-      "placeholder": "false",
-      "help": "Canonical namespace policy. false (default): user alias expands to viking://user/<user_id>/... . true: expands to viking://user/<user_id>/agent/<agent_id>/... . Must match the server-side account namespace policy.",
-      "advanced": true
-    },
-    "isolateAgentScopeByUser": {
-      "label": "Isolate Agent Scope By User",
-      "placeholder": "false",
-      "help": "Canonical namespace policy. false (default): agent alias expands to viking://agent/<agent_id>/... . true: expands to viking://agent/<agent_id>/user/<user_id>/... . Must match the server-side account namespace policy.",
-      "advanced": true
-    },
-    "agentScopeMode": {
-      "label": "Deprecated Agent Scope Mode",
-      "placeholder": "agent",
-      "help": "Deprecated compatibility alias for older routing. Prefer isolateUserScopeByAgent / isolateAgentScopeByUser. Explicit user_agent => false/true, explicit agent => false/false. When fully unset, the plugin defaults to false/false to match the current server-side policy.",
       "advanced": true
     },
     "targetUri": {
@@ -227,12 +214,19 @@
       "baseUrl": {
         "type": "string"
       },
-      "agent_prefix": {
-        "type": "string"
-      },
-      "agentId": {
+      "peer_role": {
         "type": "string",
-        "description": "Deprecated: use agent_prefix instead"
+        "enum": [
+          "none",
+          "assistant",
+          "person"
+        ],
+        "default": "none",
+        "description": "Controls which session messages include peer_id."
+      },
+      "peer_prefix": {
+        "type": "string",
+        "description": "Optional prefix for assistant peer_id values."
       },
       "serverAuthMode": {
         "type": "string",
@@ -245,15 +239,6 @@
         "type": "string"
       },
       "userId": {
-        "type": "string"
-      },
-      "isolateUserScopeByAgent": {
-        "type": "boolean"
-      },
-      "isolateAgentScopeByUser": {
-        "type": "boolean"
-      },
-      "agentScopeMode": {
         "type": "string"
       },
       "targetUri": {

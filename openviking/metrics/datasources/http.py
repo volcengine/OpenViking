@@ -34,7 +34,6 @@ class HttpRequestLifecycleDataSource(EventMetricDataSource):
         account_id: str | None = None,
         request_id: str | None = None,
         user_id: str | None = None,
-        agent_id: str | None = None,
         url_path: str | None = None,
     ) -> None:
         """
@@ -54,8 +53,6 @@ class HttpRequestLifecycleDataSource(EventMetricDataSource):
             payload["request_id"] = str(request_id)
         if user_id is not None:
             payload["user_id"] = str(user_id)
-        if agent_id is not None:
-            payload["agent_id"] = str(agent_id)
         if url_path is not None:
             payload["url_path"] = str(url_path)
         EventMetricDataSource._emit("http.request", payload)

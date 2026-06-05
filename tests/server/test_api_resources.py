@@ -7,7 +7,6 @@ import asyncio
 import zipfile
 
 import httpx
-import pytest
 
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
@@ -288,17 +287,6 @@ async def test_add_resource_rejects_events_only_telemetry(
     assert "events" in body["error"]["message"]
 
 
-async def test_add_resource_file_not_found(client: httpx.AsyncClient):
-    resp = await client.post(
-        "/api/v1/resources",
-        json={"path": "/nonexistent/file.txt", "reason": "test"},
-    )
-    assert resp.status_code == 403
-    body = resp.json()
-    assert body["status"] == "error"
-    assert body["error"]["code"] == "PERMISSION_DENIED"
-
-
 async def test_add_resource_with_to(
     client: httpx.AsyncClient,
     sample_markdown_file,
@@ -503,7 +491,6 @@ async def test_add_resource_with_watch_interval_auto_binds_root_uri(
         account_id="default",
         user_id="test_user",
         role="ROOT",
-        agent_id="default",
     )
     assert task is not None
     assert task.to_uri == root_uri
@@ -622,6 +609,7 @@ async def test_shared_temp_upload_and_add_resource_deletes_upload_dir(
 
 async def test_shared_temp_upload_failed_consume_is_retryable(
     client: httpx.AsyncClient,
+    app,
     service,
     monkeypatch,
 ):
@@ -636,11 +624,13 @@ async def test_shared_temp_upload_failed_consume_is_retryable(
         raise RuntimeError("boom")
 
     monkeypatch.setattr(service.resources, "add_resource", fake_add_resource)
-    with pytest.raises(RuntimeError, match="boom"):
-        await client.post(
+    transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as http_client:
+        resp = await http_client.post(
             "/api/v1/resources",
             json={"temp_file_id": temp_file_id, "reason": "shared upload", "wait": True},
         )
+    assert resp.status_code == 500
 
     upload_id = temp_file_id[len("shared_") :]
     meta_uri = f"viking://upload/{upload_id}/meta.json"

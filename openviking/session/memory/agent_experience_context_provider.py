@@ -12,7 +12,6 @@ source_trajectories as grounding material.
 
 from typing import Any, Dict, List, Optional
 
-from openviking.core.namespace import to_agent_space, to_user_space
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.session_extract_context_provider import (
@@ -102,18 +101,13 @@ All memory content must be written in {output_language}.
             return ""
 
         if ctx and ctx.user:
-            user_space = to_user_space(ctx.namespace_policy, ctx.user.user_id, ctx.user.agent_id)
-            agent_space = to_agent_space(ctx.namespace_policy, ctx.user.user_id, ctx.user.agent_id)
+            user_space = ctx.user.user_id
         else:
             user_space = "default"
-            agent_space = "default"
 
         return TemplateUtils.render(
             schema.directory,
-            {
-                "user_space": user_space,
-                "agent_space": agent_space,
-            },
+            {"user_space": user_space},
         )
 
     async def _load_source_trajectories(

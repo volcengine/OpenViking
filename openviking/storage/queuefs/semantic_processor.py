@@ -168,7 +168,7 @@ class SemanticProcessor(DequeueHandlerBase):
     def _ctx_from_semantic_msg(msg: SemanticMsg) -> RequestContext:
         role = Role(msg.role) if msg.role in {r.value for r in Role} else Role.ROOT
         return RequestContext(
-            user=UserIdentifier(msg.account_id, msg.user_id, msg.agent_id),
+            user=UserIdentifier(msg.account_id, msg.user_id),
             role=role,
         )
 
@@ -283,7 +283,7 @@ class SemanticProcessor(DequeueHandlerBase):
             recursive=False,
             account_id=msg.account_id,
             user_id=msg.user_id,
-            agent_id=msg.agent_id,
+            peer_id=msg.peer_id,
             role=msg.role,
             skip_vectorization=msg.skip_vectorization,
             changes={"modified": [uri]},
@@ -292,7 +292,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 uri=parent_uri,
                 account_id=msg.account_id,
                 user_id=msg.user_id,
-                agent_id=msg.agent_id,
+                peer_id=msg.peer_id,
             ),
         )
         await semantic_queue.enqueue(parent_msg)
@@ -351,7 +351,6 @@ class SemanticProcessor(DequeueHandlerBase):
                 )
                 root_attrs.account_id = msg.account_id
                 root_attrs.user_id = msg.user_id
-                root_attrs.agent_id = msg.agent_id
                 root_context_token = bind_root_observability_context(root_attrs)
                 try:
                     current_ctx = self._ctx_from_semantic_msg(msg)
@@ -506,6 +505,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 else:
                     self.report_error(str(e), data)
             return None
+
     def get_dag_stats(self) -> Optional["DagStats"]:
         return SemanticDagExecutor.get_active_stats()
 

@@ -111,7 +111,6 @@ client.initialize()
 client = ov.SyncHTTPClient(
     url="http://localhost:1933",
     api_key="<user-key>",
-    agent_id="my-agent",
 )
 ```
 
@@ -155,8 +154,7 @@ content = client.read("viking://resources/my-project/README.md")
 
 - `viking://resources/`
 - `viking://user/memories/`
-- `viking://agent/memories/`
-- `viking://agent/skills/`
+- `viking://user/skills/`
 
 ### 检索
 

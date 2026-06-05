@@ -347,7 +347,6 @@ fn contextual_help_command(command: &str) -> Option<String> {
                 "delete-account",
                 "register-user",
                 "list-users",
-                "list-agents",
                 "remove-user",
                 "set-role",
                 "regenerate-key",

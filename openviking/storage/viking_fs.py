@@ -24,14 +24,11 @@ from datetime import datetime, timezone
 from pathlib import PurePath
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
-from openviking.core.namespace import (
-    NamespaceShapeError,
-    canonicalize_uri,
-    classify_uri,
-)
+from openviking.core.namespace import canonicalize_uri
 from openviking.core.namespace import (
     is_accessible as namespace_is_accessible,
 )
+from openviking.core.retrieval_targets import resolve_retrieval_targets
 from openviking.pyagfs import AsyncAGFSClient
 from openviking.pyagfs.exceptions import (
     AGFSClientError,
@@ -1193,6 +1190,7 @@ class VikingFS:
         filter: Optional[Dict] = None,
         ctx: Optional[RequestContext] = None,
         level: Optional[List[int]] = None,
+        peer_id: Optional[str] = None,
     ):
         """Semantic search.
 
@@ -1215,23 +1213,11 @@ class VikingFS:
             TypedQuery,
         )
 
-        # Normalize target_uri to list
-        target_uri_list = [target_uri] if isinstance(target_uri, str) else (target_uri or [])
         real_ctx = self._ctx_or_default(ctx)
-        canonical_target_uri_list: List[str] = []
-        for item in target_uri_list:
-            if not item or item in {"/", "viking://"}:
-                continue
-            try:
-                canonical_target_uri_list.append(canonicalize_uri(item, real_ctx))
-            except NamespaceShapeError as exc:
-                raise InvalidArgumentError(str(exc)) from exc
-        target_uri_list = canonical_target_uri_list
-        # Use first URI for context inference and access check
-        primary_target_uri = target_uri_list[0] if target_uri_list else ""
+        retrieval_targets = resolve_retrieval_targets(target_uri, real_ctx, peer_id)
 
-        if primary_target_uri and primary_target_uri not in {"/", "viking://"}:
-            self._ensure_access(primary_target_uri, ctx)
+        for target_dir in retrieval_targets.target_directories:
+            self._ensure_access(target_dir, ctx)
 
         storage = self._get_vector_store()
         if not storage:
@@ -1248,18 +1234,16 @@ class VikingFS:
             retrieval_config=self.retrieval_config,
         )
 
-        # Infer context_type (None = search all types)
-        context_type = self._infer_context_type(primary_target_uri) if primary_target_uri else None
-
         typed_query = TypedQuery(
             query=query,
-            context_type=context_type,
+            context_type=None,
             intent="",
-            target_directories=target_uri_list if target_uri_list else None,
+            target_directories=retrieval_targets.target_directories,
         )
 
         logger.debug(
-            f"[VikingFS.find] Calling retriever.retrieve with ctx.account_id={real_ctx.account_id}, ctx.user={real_ctx.user}"
+            "[VikingFS.find] Calling retriever.retrieve with "
+            f"ctx.account_id={real_ctx.account_id}, ctx.user={real_ctx.user}"
         )
 
         result = await retriever.retrieve(
@@ -1299,6 +1283,7 @@ class VikingFS:
         filter: Optional[Dict] = None,
         ctx: Optional[RequestContext] = None,
         level: Optional[List[int]] = None,
+        peer_id: Optional[str] = None,
     ):
         """Complex search with session context.
 
@@ -1323,20 +1308,9 @@ class VikingFS:
             TypedQuery,
         )
 
-        # Normalize target_uri to list
-        target_uri_list = [target_uri] if isinstance(target_uri, str) else (target_uri or [])
         real_ctx = self._ctx_or_default(ctx)
-        canonical_target_uri_list: List[str] = []
-        for item in target_uri_list:
-            if not item or item in {"/", "viking://"}:
-                continue
-            try:
-                canonical_target_uri_list.append(canonicalize_uri(item, real_ctx))
-            except NamespaceShapeError as exc:
-                raise InvalidArgumentError(str(exc)) from exc
-        target_uri_list = canonical_target_uri_list
-        # Use first URI for context inference and access check
-        primary_target_uri = target_uri_list[0] if target_uri_list else ""
+        retrieval_targets = resolve_retrieval_targets(target_uri, real_ctx, peer_id)
+        primary_target_uri = retrieval_targets.first_explicit_directory
 
         session_summary = (
             str(session_info.get("latest_archive_overview") or "") if session_info else ""
@@ -1344,14 +1318,12 @@ class VikingFS:
         current_messages = session_info.get("current_messages") if session_info else None
 
         query_plan: Optional[QueryPlan] = None
-        if primary_target_uri and primary_target_uri not in {"/", "viking://"}:
-            self._ensure_access(primary_target_uri, ctx)
+        for target_dir in retrieval_targets.target_directories:
+            self._ensure_access(target_dir, ctx)
 
-        # When target_uri exists: read abstract, infer context_type
-        target_context_type: Optional[ContextType] = None
+        # When target_uri exists, read its abstract as optional query-planning context.
         target_abstract = ""
         if primary_target_uri:
-            target_context_type = self._infer_context_type(primary_target_uri)
             try:
                 target_abstract = await self.abstract(primary_target_uri, ctx=ctx)
             except Exception:
@@ -1364,39 +1336,22 @@ class VikingFS:
                 compression_summary=session_summary or "",
                 messages=current_messages or [],
                 current_message=query,
-                context_type=target_context_type,
                 target_abstract=target_abstract,
             )
             typed_queries = query_plan.queries
-            # Set target_directories
-            if target_uri_list:
-                for tq in typed_queries:
-                    tq.target_directories = target_uri_list
+            for tq in typed_queries:
+                tq.target_directories = retrieval_targets.target_directories
         else:
             # No session context: create query directly
-            if target_context_type:
-                # Has target_uri: only query that type
-                typed_queries = [
-                    TypedQuery(
-                        query=query,
-                        context_type=target_context_type,
-                        intent="",
-                        priority=1,
-                        target_directories=target_uri_list,
-                    )
-                ]
-            else:
-                # No target_uri: query all types
-                typed_queries = [
-                    TypedQuery(
-                        query=query,
-                        context_type=ctx_type,
-                        intent="",
-                        priority=1,
-                        target_directories=target_uri_list,
-                    )
-                    for ctx_type in [ContextType.MEMORY, ContextType.RESOURCE, ContextType.SKILL]
-                ]
+            typed_queries = [
+                TypedQuery(
+                    query=query,
+                    context_type=None,
+                    intent="",
+                    priority=1,
+                    target_directories=retrieval_targets.target_directories,
+                )
+            ]
         telemetry.set("search.typed_queries_count", len(typed_queries))
 
         # Concurrent execution
@@ -1412,7 +1367,8 @@ class VikingFS:
         async def _execute(tq: TypedQuery):
             real_ctx = self._ctx_or_default(ctx)
             logger.debug(
-                f"[VikingFS.search._execute] Calling retriever.retrieve with ctx.account_id={real_ctx.account_id}, ctx.user={real_ctx.user}"
+                "[VikingFS.search._execute] Calling retriever.retrieve with "
+                f"ctx.account_id={real_ctx.account_id}, ctx.user={real_ctx.user}"
             )
             return await retriever.retrieve(
                 tq,
@@ -1743,7 +1699,7 @@ class VikingFS:
         """Extract space segment from URI if present.
 
         URIs are WYSIWYG: viking://{scope}/{space}/...
-        For user/agent, the second segment is space unless it's a known structure dir.
+        For user, the second segment is space unless it's a known structure dir.
         For session, the second segment is always space (when 3+ parts).
         Legacy temp URIs keep the historical shape viking://temp/<temp-id> and therefore
         intentionally have no space segment.
@@ -1838,19 +1794,6 @@ class VikingFS:
                 return str(result)
             except Exception:
                 return ""
-
-    def _infer_context_type(self, uri: str):
-        """Infer context_type from URI. Returns None when ambiguous."""
-        from openviking_cli.retrieve import ContextType
-
-        classification = classify_uri(uri)
-        if classification.is_memory:
-            return ContextType.MEMORY
-        elif classification.is_skill:
-            return ContextType.SKILL
-        elif classification.parts[:1] == ("resources",) or "resources" in classification.parts:
-            return ContextType.RESOURCE
-        return None
 
     # ========== Vector Sync Helper Methods ==========
 

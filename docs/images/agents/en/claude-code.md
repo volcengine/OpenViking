@@ -70,7 +70,7 @@ Configuration priority: environment variables > `ovcli.conf` > `ov.conf` > built
 | `OPENVIKING_MEMORY_ENABLED` | (auto) | Force enable or disable |
 | `OPENVIKING_DEBUG` | `false` | Write logs to `~/.openviking/logs/cc-hooks.log` |
 
-For multi-tenant deployments, set `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, and `OPENVIKING_AGENT_ID`. See the [plugin README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#configuration) for the full environment variable list.
+For multi-tenant deployments, set `OPENVIKING_ACCOUNT` and `OPENVIKING_USER`. See the [plugin README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#configuration) for the full environment variable list.
 
 </details>
 
@@ -91,4 +91,3 @@ The plugin renders OpenViking status below the Claude Code input box: connection
 
 - [Blog: OpenViking for Claude Code / Codex](https://blog.openviking.ai/post/openviking-coding-agent/) - Why and how to add long-term memory to your coding agent
 - [Plugin README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md) - Full environment variable table, hook details, and architecture diagram
-- [Migration guide](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/MIGRATION.md) - Upgrade from the old plugin

@@ -105,7 +105,7 @@ This changelog is automatically generated from [GitHub Releases](https://github.
 - **Web Studio as the default console**: Added the `web-studio` console workspace, shipped it in Docker and pip distributions, served it at `/studio`, moved OAuth authorize UI into it, and retired the legacy console while keeping favicon compatibility routes.
 - **MCP, API, and CLI automation**: Added Watch Management across REST, `ov`, and MCP; added progressive single-entrypoint local-file upload; added `code_outline`, `code_search`, and `code_expand`; and tightened upload-only and zip `--ignore-dirs` handling.
 - **Agent and OpenClaw ecosystem**: OpenClaw setup helper now supports npm plugin installs, plugin docs align with ClawHub package metadata, `ov_dream` was added as an OpenClaw skill, and oversized OpenClaw tool results can be externalized to OpenViking.
-- **Memory and retrieval**: Upgraded trajectory extraction, added memory link support, added switchable Vaka memory templates, fixed missing tool-call counts and missing `role_id` retrieval, and parallelized hierarchical child search.
+- **Memory and retrieval**: Upgraded trajectory extraction, added memory link support, added switchable Vaka memory templates, fixed missing tool-call counts and missing message-peer retrieval, and parallelized hierarchical child search.
 - **Storage, VectorDB, and model reliability**: Async storage locks/IO and loop-isolated async clients reduce contention; fixes cover semantic lock ownership, false `mv not found`, URI remapping, S3 grep performance, VectorDB Unicode recovery, oversized byte rows, embedding error surfacing, and VLM LiteLLM native routes.
 - **Observability, docs, and deployment polish**: Added VikingBot feedback observability, centralized the metric registry, moved usage audit SQLite into system data, refreshed Helm chart defaults, updated brand assets and QR code, and documented public base URL, signed upload TTLs, Watch APIs, MCP code tools, readiness probes, and the `/studio` migration.
 
@@ -147,14 +147,14 @@ This changelog is automatically generated from [GitHub Releases](https://github.
 - **Observability**: OTLP export now supports custom `headers` for traces, logs, and metrics, enabling direct connection to backends that require extra auth or gRPC metadata.
 - **Upload**: Local directory scans and uploads now respect root and nested `.gitignore` rules, reducing noise from build artifacts and temp files.
 - **Search**: `search` and `find` now accept multiple target URIs for cross-directory and cross-repo retrieval.
-- **Multi-tenant**: OpenClaw plugin clarifies `agent_prefix` as prefix-only; OpenCode memory plugin adds tenant header forwarding.
-- **Admin**: New agent namespace discovery API, CLI command, and docs for listing existing agent namespaces under an account.
+- **Multi-tenant**: OpenClaw plugin clarifies `peer_prefix` as peer metadata only; OpenCode memory plugin adds tenant header forwarding.
+- **Admin**: Deprecated agent namespace discovery surfaces are removed.
 
 ### Upgrade Notes
 
 - OTLP backends requiring extra auth can now use `headers` across all three exporter types (gRPC metadata in gRPC mode, HTTP headers in HTTP mode).
 - Local directory uploads will now filter files per `.gitignore` by default — previously imported temp/generated files may be excluded after upgrade.
-- OpenClaw plugin `agent_prefix` is now prefix-only and no longer treated as a full agent identifier; docs migrate `agentId` → `agent_prefix`.
+- OpenClaw plugin runtime identity now maps through `peer_prefix` peer metadata instead of an OpenViking agent namespace.
 
 [Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.3.13...v0.3.14)
 
@@ -173,7 +173,7 @@ This changelog is automatically generated from [GitHub Releases](https://github.
 ### Upgrade Notes
 
 - `encryption.api_key_hashing.enabled` must now be configured explicitly (defaults to `false`). If you relied on implicit hashing, add it to your config.
-- OpenClaw plugin is remote-only (no local subprocess), `agentId` → `agent_prefix`, `recallTokenBudget` → `recallMaxInjectedChars`.
+- OpenClaw plugin is remote-only (no local subprocess), runtime agent identity moved to peer metadata, `recallTokenBudget` → `recallMaxInjectedChars`.
 
 [Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.3.12...v0.3.13)
 
@@ -205,7 +205,7 @@ This changelog is automatically generated from [GitHub Releases](https://github.
 - Adjusted the default `recallTokenBudget` and `recallMaxContentChars` to reduce the risk of overlong OpenClaw auto-recall context injection.
 - `ov add-memory` now returns `OK` for asynchronous commit workflows instead of implying the background task has already finished.
 - `ov chat` now reads authentication from `ovcli.conf` and sends the required request headers.
-- The OpenClaw plugin now aligns remote connection behavior, auth, namespace, and `role_id` handling with the server multi-tenant model.
+- The OpenClaw plugin now aligns remote connection behavior, auth, namespace, and `peer_id` handling with the server multi-tenant model.
 
 ### Fixes
 
@@ -413,7 +413,7 @@ This release focuses on stability and developer experience improvements. Key fix
 
 ### Highlights
 
-- OpenClaw plugin upgraded to 2.0 (context engine), OpenCode memory plugin added, multi-agent memory isolation via `agentId`.
+- OpenClaw plugin upgraded to 2.0 (context engine), OpenCode memory plugin added, multi-agent memory isolation via peer metadata.
 - Memory cold-storage archival with hotness scoring, chunked vectorization for long memories, `used()` tracking interface.
 - Rerank integration in hierarchical retrieval, RetrievalObserver for quality metrics.
 - Resource watch scheduling, reindex endpoint, legacy `.doc`/`.xls` parser support, path locking and crash recovery.

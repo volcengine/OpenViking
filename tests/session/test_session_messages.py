@@ -8,6 +8,7 @@ import pytest
 from openviking import AsyncOpenViking
 from openviking.message import ContextPart, TextPart, ToolPart
 from openviking.session import Session
+from openviking_cli.exceptions import InvalidArgumentError
 
 
 class TestAddMessage:
@@ -57,13 +58,33 @@ class TestAddMessage:
             tool_id="tool_123",
             tool_name="search_tool",
             tool_uri="viking://session/test/tools/tool_123",
-            skill_uri="viking://agent/skills/search",
+            skill_uri="viking://user/skills/search",
             tool_input={"query": "test"},
             tool_status="running",
         )
         msg = session.add_message("assistant", [TextPart("Executing search..."), tool_part])
 
         assert len(msg.parts) == 2
+
+    async def test_add_message_with_peer_id(self, session: Session):
+        """Test peer_id is persisted on session messages."""
+        msg = session.add_message(
+            "user",
+            [TextPart("Message from Alice")],
+            peer_id="web:visitor:alice",
+        )
+
+        assert msg.peer_id == "web:visitor:alice"
+        assert msg.to_dict()["peer_id"] == "web:visitor:alice"
+
+    async def test_add_message_rejects_peer_id_with_path_separator(self, session: Session):
+        """Test direct session usage validates peer_id path safety."""
+        with pytest.raises(InvalidArgumentError):
+            session.add_message(
+                "user",
+                [TextPart("Message from Alice")],
+                peer_id="web/visitor/alice",
+            )
 
     async def test_messages_list_updated(self, session: Session):
         """Test message list update"""
@@ -74,7 +95,7 @@ class TestAddMessage:
 
         assert len(session.messages) == initial_count + 2
 
-    async def test_batch_add_messages_preserves_role_id_created_at_and_parts(
+    async def test_batch_add_messages_preserves_peer_id_created_at_and_parts(
         self, client: AsyncOpenViking
     ):
         session_id = "batch_message_preservation_test"
@@ -85,7 +106,7 @@ class TestAddMessage:
             [
                 {
                     "role": "user",
-                    "role_id": "user-123",
+                    "peer_id": "user-123",
                     "created_at": "2026-05-01T12:00:00Z",
                     "parts": [
                         {"type": "text", "text": "Hello batch"},
@@ -99,7 +120,7 @@ class TestAddMessage:
                 },
                 {
                     "role": "assistant",
-                    "role_id": "assistant-123",
+                    "peer_id": "assistant-123",
                     "created_at": "2026-05-01T12:00:05Z",
                     "parts": [
                         {"type": "text", "text": "Executing tool"},
@@ -108,7 +129,7 @@ class TestAddMessage:
                             "tool_id": "tool_123",
                             "tool_name": "search_tool",
                             "tool_uri": f"viking://session/test/{session_id}/tools/tool_123",
-                            "skill_uri": "viking://agent/skills/search",
+                            "skill_uri": "viking://user/skills/search",
                             "tool_status": "completed",
                             "tool_output": "Found a result",
                         },
@@ -121,7 +142,7 @@ class TestAddMessage:
 
         context = await client.get_session_context(session_id)
         assert [message["role"] for message in context["messages"]] == ["user", "assistant"]
-        assert context["messages"][0]["role_id"] == "user-123"
+        assert context["messages"][0]["peer_id"] == "user-123"
         assert context["messages"][0]["created_at"] == "2026-05-01T12:00:00Z"
         assert context["messages"][0]["parts"][1] == {
             "type": "context",
@@ -129,7 +150,7 @@ class TestAddMessage:
             "context_type": "resource",
             "abstract": "Test document",
         }
-        assert context["messages"][1]["role_id"] == "assistant-123"
+        assert context["messages"][1]["peer_id"] == "assistant-123"
         assert context["messages"][1]["created_at"] == "2026-05-01T12:00:05Z"
         assert context["messages"][1]["parts"][1]["type"] == "tool"
         assert context["messages"][1]["parts"][1]["tool_status"] == "completed"

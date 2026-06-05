@@ -38,8 +38,8 @@ function approve() {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
 }
 
-function stateFile(agentId) {
-  const safe = String(agentId).replace(/[^a-zA-Z0-9_-]/g, "_");
+function stateFile(subagentId) {
+  const safe = String(subagentId).replace(/[^a-zA-Z0-9_-]/g, "_");
   return join(STATE_DIR, `${safe}.json`);
 }
 
@@ -60,11 +60,11 @@ async function main() {
   } catch { /* best effort */ }
 
   const sessionId = input.session_id;
-  const agentId = input.agent_id;
+  const subagentId = input.agent_id;
   const agentType = input.agent_type || "subagent";
   const cwd = input.cwd;
 
-  if (!sessionId || !agentId) {
+  if (!sessionId || !subagentId) {
     log("skip", { reason: "missing session_id or agent_id" });
     approve();
     return;
@@ -76,21 +76,19 @@ async function main() {
     return;
   }
 
-  // Isolated ovSessionId: append agent_id so the subagent has its own OV
-  // session distinct from the parent (cc-<ccid>__agent-<agentid>).
-  const ovSessionId = deriveOvSessionId(sessionId, `agent:${agentId}`);
-  const ovAgentId = `${cfg.agentId || "claude-code"}_${agentType}`;
+  // Isolated ovSessionId: append Claude's subagent id so the subagent has its
+  // own OV session distinct from the parent.
+  const ovSessionId = deriveOvSessionId(sessionId, `subagent:${subagentId}`);
 
   try {
     await mkdir(STATE_DIR, { recursive: true });
     await writeFile(
-      stateFile(agentId),
+      stateFile(subagentId),
       JSON.stringify({
         parentSessionId: sessionId,
-        agentId,
+        subagentId,
         agentType,
         ovSessionId,
-        ovAgentId,
         startedAt: Date.now(),
       }),
     );
@@ -98,7 +96,7 @@ async function main() {
     logError("state_write", err);
   }
 
-  log("start", { agentId, agentType, ovSessionId, ovAgentId });
+  log("start", { subagentId, agentType, ovSessionId });
   approve();
 }
 

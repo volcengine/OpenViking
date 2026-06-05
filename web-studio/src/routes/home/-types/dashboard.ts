@@ -3,8 +3,6 @@ import type { ConsoleContextCommitItem } from '@ov-server/api/v1/console'
 export type HomeT = (key: string, options?: Record<string, unknown>) => string
 
 export type {
-  ConsoleAgentOverview as AgentOverview,
-  ConsoleAgentVisit as AgentVisit,
   ConsoleContextCommitItem as ContextCommitItem,
   ConsoleContextCounts as ContextCounts,
   ConsoleDashboardSummaryResult as ConsoleDashboardSummary,

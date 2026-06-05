@@ -752,7 +752,6 @@ async fn status_box_runtime(active: Option<&Config>) -> StatusBoxRuntime {
     let client = BaseClient::new(
         config.url.clone(),
         auth.api_key,
-        config.agent_id.clone(),
         auth.account,
         auth.user,
         STATUS_BOX_PROBE_TIMEOUT_SECS,

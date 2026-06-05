@@ -96,10 +96,10 @@ openclaw openviking setup \
   --json
 ```
 
-Custom agent routing prefix (optional; only when the user explicitly requests a prefix):
+Assistant peer prefix (optional; only when the user explicitly requests assistant `peer_id`):
 
 ```bash
-openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --agent-prefix <PREFIX> --json
+openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --peer-role assistant --peer-prefix <PREFIX> --json
 ```
 
 Slot replacement retry, only after user approval:
@@ -139,7 +139,8 @@ Also inspect:
 | `health.version` | Records server version |
 | `health.compatibility` | Determines whether to warn |
 | `config.hasApiKey` | Confirms whether an API key was saved |
-| `config.agent_prefix` | Confirms configured agent prefix when present |
+| `config.peer_role` | Confirms which messages write `peer_id` |
+| `config.peer_prefix` | Confirms configured assistant peer prefix when present |
 
 ## Environment Detection
 
@@ -267,7 +268,8 @@ Core fields:
 | `mode` | Legacy compatibility field. Expected value: `remote`. |
 | `baseUrl` | OpenViking HTTP endpoint |
 | `apiKey` | OpenViking API key |
-| `agent_prefix` | Optional; prefix for OpenClaw agent IDs when set. Interactive setup accepts only letters, digits, `_`, and `-`. If unset, the plugin follows session agent IDs. |
+| `peer_role` | Controls session `peer_id` writes and recall/search `peer_id`: `none`, `assistant`, or `person`. New installs default to `none`. |
+| `peer_prefix` | Optional prefix for assistant `peer_id` values when `peer_role=assistant`. |
 | `accountId` | Required for root API keys |
 | `userId` | Required for root API keys |
 
@@ -329,7 +331,8 @@ Existing config fields are preserved during migration. The new plugin reads old 
 
 - `baseUrl`
 - `apiKey`
-- `agent_prefix`: optional; interactive setup accepts only letters, digits, `_`, and `-`
+- `peer_role`: optional; default `none`; controls session writes and recall/search `peer_id`
+- `peer_prefix`: optional when `peer_role=assistant`
 
 ## Backup Path: ov-install
 

@@ -113,15 +113,14 @@ function dedupeItems(items) {
 }
 
 // ---------------------------------------------------------------------------
-// URI space resolution (mirrors memory-server.ts normalizeTargetUri)
+// User URI space resolution
 // ---------------------------------------------------------------------------
 
-const USER_RESERVED_DIRS = new Set(["memories"]);
-const AGENT_RESERVED_DIRS = new Set(["memories", "skills", "instructions", "workspaces"]);
-const _spaceCache = {};
+const USER_RESERVED_DIRS = new Set(["memories", "skills"]);
+let _userSpaceCache = "";
 
-async function resolveScopeSpace(scope) {
-  if (_spaceCache[scope]) return _spaceCache[scope];
+async function resolveUserSpace() {
+  if (_userSpaceCache) return _userSpaceCache;
 
   let fallbackSpace = "default";
   const status = await fetchJSON("/api/v1/system/status");
@@ -129,36 +128,33 @@ async function resolveScopeSpace(scope) {
     fallbackSpace = status.result.user.trim();
   }
 
-  const reservedDirs = scope === "user" ? USER_RESERVED_DIRS : AGENT_RESERVED_DIRS;
-  const lsRes = await fetchJSON(`/api/v1/fs/ls?uri=${encodeURIComponent(`viking://${scope}`)}&output=original`);
+  const lsRes = await fetchJSON(`/api/v1/fs/ls?uri=${encodeURIComponent("viking://user")}&output=original`);
   if (lsRes.ok && Array.isArray(lsRes.result)) {
     const spaces = lsRes.result
       .filter(e => e?.isDir)
       .map(e => (typeof e.name === "string" ? e.name.trim() : ""))
-      .filter(n => n && !n.startsWith(".") && !reservedDirs.has(n));
+      .filter(n => n && !n.startsWith(".") && !USER_RESERVED_DIRS.has(n));
     if (spaces.length > 0) {
-      if (spaces.includes(fallbackSpace)) { _spaceCache[scope] = fallbackSpace; return fallbackSpace; }
-      if (scope === "user" && spaces.includes("default")) { _spaceCache[scope] = "default"; return "default"; }
-      if (spaces.length === 1) { _spaceCache[scope] = spaces[0]; return spaces[0]; }
+      if (spaces.includes(fallbackSpace)) { _userSpaceCache = fallbackSpace; return fallbackSpace; }
+      if (spaces.includes("default")) { _userSpaceCache = "default"; return "default"; }
+      if (spaces.length === 1) { _userSpaceCache = spaces[0]; return spaces[0]; }
     }
   }
-  _spaceCache[scope] = fallbackSpace;
+  _userSpaceCache = fallbackSpace;
   return fallbackSpace;
 }
 
 async function resolveTargetUri(targetUri) {
   const trimmed = targetUri.trim().replace(/\/+$/, "");
-  const m = trimmed.match(/^viking:\/\/(user|agent)(?:\/(.*))?$/);
+  const m = trimmed.match(/^viking:\/\/user(?:\/(.*))?$/);
   if (!m) return trimmed;
-  const scope = m[1];
-  const rawRest = (m[2] ?? "").trim();
+  const rawRest = (m[1] ?? "").trim();
   if (!rawRest) return trimmed;
   const parts = rawRest.split("/").filter(Boolean);
   if (parts.length === 0) return trimmed;
-  const reservedDirs = scope === "user" ? USER_RESERVED_DIRS : AGENT_RESERVED_DIRS;
-  if (!reservedDirs.has(parts[0])) return trimmed;
-  const space = await resolveScopeSpace(scope);
-  return `viking://${scope}/${space}/${parts.join("/")}`;
+  if (!USER_RESERVED_DIRS.has(parts[0])) return trimmed;
+  const space = await resolveUserSpace();
+  return `viking://user/${space}/${parts.join("/")}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -168,15 +164,16 @@ async function resolveTargetUri(targetUri) {
 
 const SOURCES = [
   { type: "memory", uri: "viking://user/memories",  bucket: "memories" },
-  { type: "memory", uri: "viking://agent/memories", bucket: "memories" },
-  { type: "skill",  uri: "viking://agent/skills",   bucket: "skills"   },
+  { type: "skill",  uri: "viking://user/skills",    bucket: "skills"   },
 ];
 
 async function searchOneSource(query, source, limit) {
   const resolvedUri = await resolveTargetUri(source.uri);
+  const body = { query, target_uri: resolvedUri, limit, score_threshold: 0 };
+  if (cfg.peerId) body.peer_id = cfg.peerId;
   const res = await fetchJSON("/api/v1/search/find", {
     method: "POST",
-    body: JSON.stringify({ query, target_uri: resolvedUri, limit, score_threshold: 0 }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) return [];
   const items = res.result?.[source.bucket] || [];

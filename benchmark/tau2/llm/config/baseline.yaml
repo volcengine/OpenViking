@@ -47,7 +47,6 @@ model:
 openviking:
   url: ${OPENVIKING_URL:-http://localhost:1933}
   account: ${OPENVIKING_ACCOUNT:-default}
-  agent_id: ${OPENVIKING_AGENT_ID:-tau2-openviking-agent}
   reuse_corpus_across_runs: true
   retrieval_top_k: 4
   prewrite_retrieval_top_k: 6

@@ -2,45 +2,45 @@ import { describe, expect, it } from "vitest";
 
 import {
   prepareRecallQuery,
-  sanitizeOpenVikingAgentIdHeader,
+  sanitizeRuntimeAgentId,
   createSessionAgentResolver,
 } from "../../index.js";
 
-describe("sanitizeOpenVikingAgentIdHeader", () => {
+describe("sanitizeRuntimeAgentId", () => {
   it("keeps clean alphanumeric+dash+underscore strings", () => {
-    expect(sanitizeOpenVikingAgentIdHeader("my-agent_v2")).toBe("my-agent_v2");
+    expect(sanitizeRuntimeAgentId("my-agent_v2")).toBe("my-agent_v2");
   });
 
   it("replaces special characters with underscore", () => {
-    expect(sanitizeOpenVikingAgentIdHeader("agent:role:v1")).toBe("agent_role_v1");
+    expect(sanitizeRuntimeAgentId("agent:role:v1")).toBe("agent_role_v1");
   });
 
   it("collapses multiple underscores", () => {
-    expect(sanitizeOpenVikingAgentIdHeader("a::b:::c")).toBe("a_b_c");
+    expect(sanitizeRuntimeAgentId("a::b:::c")).toBe("a_b_c");
   });
 
   it("strips leading/trailing underscores", () => {
-    expect(sanitizeOpenVikingAgentIdHeader("_agent_")).toBe("agent");
+    expect(sanitizeRuntimeAgentId("_agent_")).toBe("agent");
   });
 
   it("returns 'default' for empty string", () => {
-    expect(sanitizeOpenVikingAgentIdHeader("")).toBe("default");
+    expect(sanitizeRuntimeAgentId("")).toBe("default");
   });
 
   it("returns 'default' for whitespace-only", () => {
-    expect(sanitizeOpenVikingAgentIdHeader("   ")).toBe("default");
+    expect(sanitizeRuntimeAgentId("   ")).toBe("default");
   });
 
   it("returns 'ov_agent' for all-symbol input", () => {
-    expect(sanitizeOpenVikingAgentIdHeader("@#$%")).toBe("ov_agent");
+    expect(sanitizeRuntimeAgentId("@#$%")).toBe("ov_agent");
   });
 
   it("handles spaces by replacing with underscore", () => {
-    expect(sanitizeOpenVikingAgentIdHeader("my agent")).toBe("my_agent");
+    expect(sanitizeRuntimeAgentId("my agent")).toBe("my_agent");
   });
 
   it("preserves mixed case", () => {
-    expect(sanitizeOpenVikingAgentIdHeader("MyAgent")).toBe("MyAgent");
+    expect(sanitizeRuntimeAgentId("MyAgent")).toBe("MyAgent");
   });
 });
 

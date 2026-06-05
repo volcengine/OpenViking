@@ -119,7 +119,6 @@ class SQLiteUsageAuditStore:
             self._write_token_rows(conn, projection.token_rows, updated_at)
             self._write_retrieval_rows(conn, projection.retrieval_rows, updated_at)
             self._write_context_rows(conn, projection.context_rows, updated_at)
-            self._write_agent_rows(conn, projection.agent_rows, updated_at)
             self._write_audit_rows(conn, projection.audit_rows)
             self._trim_usage_rows(conn, self._usage_max_dates(projection))
             self._trim_audit_rows(conn, projection.touched_audit_accounts)
@@ -133,13 +132,13 @@ class SQLiteUsageAuditStore:
         conn.executemany(
             """
             INSERT INTO usage_token_hourly (
-                account_id, user_id, agent_id, date_utc, hour_utc,
+                account_id, user_id, date_utc, hour_utc,
                 source, token_type, provider, model_name,
                 token_count, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (
-                account_id, user_id, agent_id, date_utc, hour_utc,
+                account_id, user_id, date_utc, hour_utc,
                 source, token_type, provider, model_name
             )
             DO UPDATE SET
@@ -154,12 +153,12 @@ class SQLiteUsageAuditStore:
         conn.executemany(
             """
             INSERT INTO usage_retrieval_hourly (
-                account_id, user_id, agent_id, date_utc, hour_utc,
+                account_id, user_id, date_utc, hour_utc,
                 operation, status, request_count, result_count, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (
-                account_id, user_id, agent_id, date_utc, hour_utc, operation, status
+                account_id, user_id, date_utc, hour_utc, operation, status
             )
             DO UPDATE SET
                 request_count = request_count + excluded.request_count,
@@ -177,12 +176,12 @@ class SQLiteUsageAuditStore:
         conn.executemany(
             """
             INSERT INTO usage_context_write_bucket (
-                account_id, user_id, agent_id, date_utc, hour_utc,
+                account_id, user_id, date_utc, hour_utc,
                 operation, count, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (
-                account_id, user_id, agent_id, date_utc, hour_utc, operation
+                account_id, user_id, date_utc, hour_utc, operation
             )
             DO UPDATE SET
                 count = count + excluded.count,
@@ -192,31 +191,14 @@ class SQLiteUsageAuditStore:
         )
 
     @staticmethod
-    def _write_agent_rows(conn, rows: dict[tuple, tuple[int, str]], updated_at: str) -> None:
-        conn.executemany(
-            """
-            INSERT INTO usage_agent_activity_daily (
-                account_id, agent_id, date_utc, request_count, last_seen_at, updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT (account_id, agent_id, date_utc)
-            DO UPDATE SET
-                request_count = request_count + excluded.request_count,
-                last_seen_at = MAX(last_seen_at, excluded.last_seen_at),
-                updated_at = excluded.updated_at
-            """,
-            [(*key, count, last_seen, updated_at) for key, (count, last_seen) in rows.items()],
-        )
-
-    @staticmethod
     def _write_audit_rows(conn, rows: list[tuple]) -> None:
         conn.executemany(
             """
             INSERT INTO request_audit (
-                request_id, account_id, user_id, agent_id, method, route,
+                request_id, account_id, user_id, method, route,
                 api_type, status_code, duration_ms, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )
@@ -262,7 +244,6 @@ class SQLiteUsageAuditStore:
                 "usage_token_hourly",
                 "usage_retrieval_hourly",
                 "usage_context_write_bucket",
-                "usage_agent_activity_daily",
             ):
                 conn.execute(
                     f"DELETE FROM {table} WHERE account_id = ? AND date_utc < ?",
@@ -272,14 +253,12 @@ class SQLiteUsageAuditStore:
     @staticmethod
     def _usage_max_dates(projection: UsageAuditProjection) -> dict[str, str]:
         max_dates: dict[str, str] = {}
-        # token_rows: (account, user, agent, date_utc, hour_utc, source, ...)
-        SQLiteUsageAuditStore._merge_max_dates(max_dates, projection.token_rows, date_index=3)
-        # retrieval_rows: (account, user, agent, date_utc, hour_utc, op, status)
-        SQLiteUsageAuditStore._merge_max_dates(max_dates, projection.retrieval_rows, date_index=3)
-        # context_rows: (account, user, agent, date_utc, hour_utc, op)
-        SQLiteUsageAuditStore._merge_max_dates(max_dates, projection.context_rows, date_index=3)
-        # agent_rows: (account, agent, date_utc)
-        SQLiteUsageAuditStore._merge_max_dates(max_dates, projection.agent_rows, date_index=2)
+        # token_rows: (account, user, date_utc, hour_utc, source, ...)
+        SQLiteUsageAuditStore._merge_max_dates(max_dates, projection.token_rows, date_index=2)
+        # retrieval_rows: (account, user, date_utc, hour_utc, op, status)
+        SQLiteUsageAuditStore._merge_max_dates(max_dates, projection.retrieval_rows, date_index=2)
+        # context_rows: (account, user, date_utc, hour_utc, op)
+        SQLiteUsageAuditStore._merge_max_dates(max_dates, projection.context_rows, date_index=2)
         return max_dates
 
     @staticmethod
@@ -366,65 +345,6 @@ class SQLiteUsageAuditStore:
                 result[operation] += total
         result["total"] = sum(result.values())
         return result
-
-    async def get_agent_overview(
-        self,
-        *,
-        account_id: str,
-        user_date: str,
-        tz: tzinfo,
-        limit: int = 5,
-    ) -> dict[str, Any]:
-        async with self._lock:
-            return await asyncio.to_thread(
-                self._get_agent_overview_sync,
-                account_id,
-                user_date,
-                tz,
-                int(limit),
-            )
-
-    def _get_agent_overview_sync(
-        self, account_id: str, user_date: str, tz: tzinfo, limit: int
-    ) -> dict[str, Any]:
-        assert self._conn is not None
-        day = date.fromisoformat(user_date)
-        utc_start, utc_end = _user_day_window_utc(day, tz)
-        utc_start_iso = utc_start.isoformat()
-        utc_end_iso = utc_end.isoformat()
-        # last_seen_at is stored as a UTC ISO string by projection.py; compare
-        # lexicographically — ISO-8601 with fixed UTC offset is sort-safe.
-        total_cur = self._conn.execute(
-            """
-            SELECT COUNT(DISTINCT agent_id) AS total
-            FROM usage_agent_activity_daily
-            WHERE account_id = ?
-              AND last_seen_at >= ?
-              AND last_seen_at < ?
-            """,
-            (account_id, utc_start_iso, utc_end_iso),
-        )
-        total = int(total_cur.fetchone()["total"] or 0)
-        cur = self._conn.execute(
-            """
-            SELECT agent_id, MAX(last_seen_at) AS last_seen_at
-            FROM usage_agent_activity_daily
-            WHERE account_id = ?
-              AND last_seen_at >= ?
-              AND last_seen_at < ?
-            GROUP BY agent_id
-            ORDER BY last_seen_at DESC
-            LIMIT ?
-            """,
-            (account_id, utc_start_iso, utc_end_iso, limit),
-        )
-        return {
-            "total": total,
-            "items": [
-                {"agent_id": row["agent_id"], "last_seen_at": row["last_seen_at"]}
-                for row in cur.fetchall()
-            ],
-        }
 
     async def get_token_series(
         self,
@@ -706,7 +626,7 @@ class SQLiteUsageAuditStore:
         offset = max(page - 1, 0) * page_size
         rows = self._conn.execute(
             f"""
-            SELECT request_id, account_id, user_id, agent_id, method, route, api_type,
+            SELECT request_id, account_id, user_id, method, route, api_type,
                    status_code, duration_ms, created_at
             FROM request_audit
             WHERE {where_sql}

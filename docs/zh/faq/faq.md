@@ -45,10 +45,10 @@ viking://
 ├── resources/              # 知识库：文档、代码、网页等
 │   └── my_project/
 ├── user/                   # 用户上下文
-│   └── memories/           # 用户记忆（偏好、实体、事件）
-└── agent/                  # Agent 上下文
-    ├── skills/             # 可调用技能
-    └── memories/           # Agent 记忆（案例、模式）
+│   ├── skills/             # 可调用技能
+│   ├── memories/           # 用户记忆（偏好、实体、事件）
+│   └── peers/              # 针对稳定 peer 的一对多记忆
+└── session/                # 会话与历史归档
 ```
 
 ## 安装与配置

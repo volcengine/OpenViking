@@ -26,7 +26,7 @@ def root_ctx() -> RequestContext:
 
 @pytest.fixture
 def user_ctx() -> RequestContext:
-    return RequestContext(user=UserIdentifier("default", "alice", "default"), role=Role.USER)
+    return RequestContext(user=UserIdentifier("default", "alice"), role=Role.USER)
 
 
 @pytest.fixture

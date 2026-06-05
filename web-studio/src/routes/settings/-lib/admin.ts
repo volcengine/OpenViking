@@ -12,7 +12,6 @@ import {
 
 export type AdminConnection = {
   accountId: string
-  agentId: string
   apiKey: string
   baseUrl: string
   userId: string
@@ -21,8 +20,6 @@ export type AdminConnection = {
 export type AdminAccount = {
   accountId: string
   createdAt?: string
-  isolateAgentScopeByUser: boolean
-  isolateUserScopeByAgent: boolean
   userCount: number
 }
 
@@ -59,10 +56,6 @@ function asString(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined
 }
 
-function asBoolean(value: unknown): boolean {
-  return value === true
-}
-
 function asNumber(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0
 }
@@ -85,7 +78,6 @@ function setOptionalHeader(
 function createAdminClient(connection: AdminConnection) {
   const headers: Record<string, string> = {
     Accept: 'application/json',
-    'X-OpenViking-Agent': connection.agentId.trim() || 'web-playground',
   }
   setOptionalHeader(headers, 'X-API-Key', connection.apiKey)
   setOptionalHeader(headers, 'X-OpenViking-Account', connection.accountId)
@@ -112,8 +104,6 @@ function normalizeAccount(value: unknown): AdminAccount | null {
   return {
     accountId,
     createdAt: asString(value.created_at),
-    isolateAgentScopeByUser: asBoolean(value.isolate_agent_scope_by_user),
-    isolateUserScopeByAgent: asBoolean(value.isolate_user_scope_by_agent),
     userCount: asNumber(value.user_count),
   }
 }

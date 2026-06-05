@@ -5,8 +5,7 @@
     "headers": {
       "Authorization": "Bearer ${OPENVIKING_API_KEY:-}",
       "X-OpenViking-Account": "${OPENVIKING_ACCOUNT:-}",
-      "X-OpenViking-User": "${OPENVIKING_USER:-}",
-      "X-OpenViking-Agent": "${OPENVIKING_AGENT_ID:-}"
+      "X-OpenViking-User": "${OPENVIKING_USER:-}"
     }
   }
 }

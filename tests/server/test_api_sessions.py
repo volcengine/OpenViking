@@ -12,8 +12,7 @@ import pytest
 from fastapi import FastAPI
 from starlette.requests import Request
 
-from openviking.message import Message
-from openviking.server.api_keys import APIKeyManager
+from openviking.message import Message, TextPart
 from openviking.server.app import create_app
 from openviking.server.config import ServerConfig, ToolOutputExternalizationConfig
 from openviking.server.dependencies import set_service
@@ -34,19 +33,15 @@ def _message_request(
     *,
     content: str | None = None,
     parts: list[dict] | None = None,
-    role_id: object = _UNSET,
+    peer_id: object = _UNSET,
 ) -> dict:
     payload = {"role": role}
     if content is not None:
         payload["content"] = content
     if parts is not None:
         payload["parts"] = parts
-    if role_id is _UNSET and role == "user":
-        payload["role_id"] = DEFAULT_USER.user_id
-    elif role_id is _UNSET and role == "assistant":
-        payload["role_id"] = DEFAULT_USER.agent_id
-    elif role_id is not None:
-        payload["role_id"] = role_id
+    if peer_id is not _UNSET and peer_id is not None:
+        payload["peer_id"] = peer_id
     return payload
 
 
@@ -303,10 +298,17 @@ async def test_get_session_context_includes_incomplete_archive_messages(
     session = service.sessions.session(ctx, session_id)
     await session.load()
     pending_messages = [
-        Message.create_user("Pending user message", role_id=DEFAULT_USER.user_id),
-        Message.create_assistant(
-            "Pending assistant response",
-            role_id=DEFAULT_USER.agent_id,
+        Message(
+            id="pending-user",
+            role="user",
+            parts=[TextPart("Pending user message")],
+            peer_id=DEFAULT_USER.user_id,
+        ),
+        Message(
+            id="pending-assistant",
+            role="assistant",
+            parts=[TextPart("Pending assistant response")],
+            peer_id="assistant-default",
         ),
     ]
     await session._viking_fs.write_file(
@@ -377,28 +379,10 @@ async def test_add_message_splits_tool_result_aggregate(client: httpx.AsyncClien
     assert body["result"]["message_count"] == 2
 
 
-async def test_add_message_root_request_autofills_role_id(service, monkeypatch):
-    session_id = "root-auto-fill"
-    ctx = RequestContext(user=DEFAULT_USER, role=Role.ROOT)
-
-    response = await _call_add_message_route(
-        service,
-        monkeypatch,
-        ctx=ctx,
-        payload=_message_request("user", content="hello root", role_id=None),
-        session_id=session_id,
-    )
-
-    assert response.result["message_count"] == 1
-    session = await service.sessions.get(session_id, ctx, auto_create=False)
-    await session.load()
-    assert session.messages[-1].role_id == DEFAULT_USER.user_id
-
-
-async def test_add_message_trusted_request_allows_explicit_role_id(service, monkeypatch):
-    session_id = "trusted-explicit-role-id"
+async def test_add_message_request_persists_peer_id(service, monkeypatch):
+    session_id = "trusted-peer-id"
     ctx = RequestContext(
-        user=UserIdentifier("acct_trusted", "caller", "assistant-a"),
+        user=UserIdentifier("acct_trusted", "caller"),
         role=Role.USER,
     )
 
@@ -406,108 +390,14 @@ async def test_add_message_trusted_request_allows_explicit_role_id(service, monk
         service,
         monkeypatch,
         ctx=ctx,
-        payload=_message_request("assistant", content="hello trusted", role_id="assistant-b"),
+        payload=_message_request("assistant", content="hello trusted", peer_id="assistant-b"),
         session_id=session_id,
     )
 
     assert response.result["message_count"] == 1
     session = await service.sessions.get(session_id, ctx, auto_create=False)
     await session.load()
-    assert session.messages[-1].role_id == "assistant-b"
-
-
-async def test_add_message_admin_request_allows_registered_user_role_id(service, monkeypatch):
-    manager = APIKeyManager(root_key=TEST_ROOT_KEY, viking_fs=service.viking_fs)
-    await manager.load()
-    account_id = "acct_session_admin"
-    await manager.create_account(account_id, "admin_user")
-    await manager.register_user(account_id, "alice")
-
-    ctx = RequestContext(
-        user=UserIdentifier(account_id, "admin_user", "assistant-admin"),
-        role=Role.ADMIN,
-    )
-    session_id = "admin-explicit-role-id"
-
-    response = await _call_add_message_route(
-        service,
-        monkeypatch,
-        ctx=ctx,
-        payload=_message_request("user", content="hello admin", role_id="alice"),
-        session_id=session_id,
-    )
-
-    assert response.result["message_count"] == 1
-    session = await service.sessions.get(session_id, ctx, auto_create=False)
-    await session.load()
-    assert session.messages[-1].role_id == "alice"
-
-
-async def test_add_message_user_request_allows_explicit_role_id(service, monkeypatch):
-    session_id = "user-explicit-role-id"
-    ctx = RequestContext(
-        user=UserIdentifier("acct_session_user", "alice", "assistant-user"),
-        role=Role.USER,
-    )
-
-    response = await _call_add_message_route(
-        service,
-        monkeypatch,
-        ctx=ctx,
-        payload=_message_request("user", content="hello user", role_id="wx/user-01@abc"),
-        session_id=session_id,
-    )
-
-    assert response.result["message_count"] == 1
-    session = await service.sessions.get(session_id, ctx, auto_create=False)
-    await session.load()
-    assert session.messages[-1].role_id == "wx/user-01@abc"
-
-
-async def test_add_message_user_request_autofills_role_id(service, monkeypatch):
-    session_id = "user-auto-fill-role-id"
-    ctx = RequestContext(
-        user=UserIdentifier("acct_session_user", "alice", "assistant-user"),
-        role=Role.USER,
-    )
-
-    response = await _call_add_message_route(
-        service,
-        monkeypatch,
-        ctx=ctx,
-        payload=_message_request("assistant", content="hello user", role_id=None),
-        session_id=session_id,
-    )
-
-    assert response.result["message_count"] == 1
-    session = await service.sessions.get(session_id, ctx, auto_create=False)
-    await session.load()
-    assert session.messages[-1].role_id == "assistant-user"
-
-
-async def test_add_message_admin_request_allows_unregistered_user_role_id(service, monkeypatch):
-    manager = APIKeyManager(root_key=TEST_ROOT_KEY, viking_fs=service.viking_fs)
-    await manager.load()
-    account_id = "acct_session_invalid"
-    await manager.create_account(account_id, "admin_user")
-
-    ctx = RequestContext(
-        user=UserIdentifier(account_id, "admin_user", "assistant-admin"),
-        role=Role.ADMIN,
-    )
-
-    response = await _call_add_message_route(
-        service,
-        monkeypatch,
-        ctx=ctx,
-        payload=_message_request("user", content="hello invalid", role_id="ghost"),
-        session_id="invalid-user-role-id",
-    )
-
-    assert response.result["message_count"] == 1
-    session = await service.sessions.get("invalid-user-role-id", ctx, auto_create=False)
-    await session.load()
-    assert session.messages[-1].role_id == "ghost"
+    assert session.messages[-1].peer_id == "assistant-b"
 
 
 async def test_add_multiple_messages(client: httpx.AsyncClient):

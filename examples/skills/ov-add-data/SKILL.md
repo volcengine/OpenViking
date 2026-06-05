@@ -188,7 +188,7 @@ ov add-memory '[
 
 # OpenViking (OV) `add-skill`
 
-The `ov add-skill` command adds agent capabilities to OpenViking — supporting SKILL.md files, MCP tool definitions, and raw skill content. Skills are automatically processed and organized under the `viking://agent/skills/` namespace, making them discoverable and usable by agents.
+The `ov add-skill` command adds capabilities to OpenViking — supporting SKILL.md files, MCP tool definitions, and raw skill content. Skills are automatically processed and organized under the `viking://user/skills/` namespace, making them discoverable and usable by agents.
 
 ## When to Use
 
@@ -234,7 +234,7 @@ ov add-skill ./skills/my-skill/
 Returns the URI of the added skill, like:
 
 ```
-uri  viking://agent/skills/my-skill/
+uri  viking://user/skills/my-skill/
 ```
 
 ## SKILL.md Format

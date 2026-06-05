@@ -86,11 +86,6 @@ class _StubKeyManager:
 
         return ResolvedIdentity(role=Role.USER, account_id="api-acct", user_id="api-user")
 
-    def get_account_policy(self, account_id):
-        from openviking.server.identity import AccountNamespacePolicy
-
-        return AccountNamespacePolicy()
-
     def get_user_key_fingerprint(self, account_id: str, user_id: str) -> Optional[str]:
         if self._fps is None:
             return self._default_fp

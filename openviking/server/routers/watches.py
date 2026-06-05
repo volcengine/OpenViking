@@ -90,7 +90,7 @@ def _scheduler():
 
 
 def _identity(ctx: RequestContext):
-    return (ctx.account_id, ctx.user.user_id, ctx.role.value, ctx.user.agent_id)
+    return (ctx.account_id, ctx.user.user_id, ctx.role.value)
 
 
 async def _resolve_task(
@@ -113,11 +113,11 @@ async def _resolve_task(
         raise InvalidArgumentError("Either {task_id} or ?to_uri= is required")
 
     wm = _wm()
-    account_id, user_id, role, agent_id = _identity(ctx)
+    account_id, user_id, role = _identity(ctx)
     if task_id:
-        task = await wm.get_task(task_id, account_id, user_id, role, agent_id)
+        task = await wm.get_task(task_id, account_id, user_id, role)
     else:
-        task = await wm.get_task_by_uri(to_uri, account_id, user_id, role, agent_id)
+        task = await wm.get_task_by_uri(to_uri, account_id, user_id, role)
     # `wm.get_task*` return None for both "task does not exist" and "task
     # exists but the caller fails the permission check" (watch_manager.py
     # `_check_permission`). Collapsing both into 404 is deliberate: it avoids
@@ -155,15 +155,13 @@ async def list_or_get_watch(
     URI still 404s — the active-only filter stays consistent in both modes.
     """
     wm = _wm()
-    account_id, user_id, role, agent_id = _identity(_ctx)
+    account_id, user_id, role = _identity(_ctx)
     if to_uri:
-        task = await wm.get_task_by_uri(to_uri, account_id, user_id, role, agent_id)
+        task = await wm.get_task_by_uri(to_uri, account_id, user_id, role)
         if task is None or (active_only and not task.is_active):
             raise NotFoundError(to_uri, "watch_task")
         return Response(status="ok", result=task.to_dict())
-    tasks = await wm.get_all_tasks(
-        account_id, user_id, role, active_only=active_only, agent_id=agent_id
-    )
+    tasks = await wm.get_all_tasks(account_id, user_id, role, active_only=active_only)
     return Response(
         status="ok", result={"tasks": [t.to_dict() for t in tasks], "total": len(tasks)}
     )
@@ -203,14 +201,13 @@ async def _patch_impl(target: WatchTask, body: UpdateWatchRequest, ctx: RequestC
     it to 404 to stay consistent with the pre-check behavior.
     """
     wm = _wm()
-    account_id, user_id, role, agent_id = _identity(ctx)
+    account_id, user_id, role = _identity(ctx)
     try:
         updated = await wm.update_task(
             target.task_id,
             account_id,
             user_id,
             role,
-            agent_id=agent_id,
             watch_interval=body.watch_interval,
             is_active=body.is_active,
             reason=body.reason,
@@ -258,9 +255,9 @@ async def patch_watch_by_uri(
 
 async def _delete_impl(target: WatchTask, ctx: RequestContext):
     wm = _wm()
-    account_id, user_id, role, agent_id = _identity(ctx)
+    account_id, user_id, role = _identity(ctx)
     try:
-        ok = await wm.delete_task(target.task_id, account_id, user_id, role, agent_id)
+        ok = await wm.delete_task(target.task_id, account_id, user_id, role)
     except wm_mod.PermissionDeniedError as e:
         raise _translate_perm(e, target.to_uri or target.task_id) from e
     if not ok:

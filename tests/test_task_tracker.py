@@ -47,7 +47,7 @@ def _owner_kwargs(account_id: str = "acme", user_id: str = "alice"):
 
 def _make_ctx(account_id: str = "acme", user_id: str = "alice") -> RequestContext:
     return RequestContext(
-        user=UserIdentifier(account_id, user_id, "agent-1"),
+        user=UserIdentifier(account_id, user_id),
         role=Role.ADMIN,
     )
 

@@ -188,8 +188,12 @@ class TestGetContextForSearch:
         await _wait_for_task(result["task_id"])
 
         pending_messages = [
-            Message.create_user("Pending user message"),
-            Message.create_assistant("Pending assistant response"),
+            Message(id="pending-user", role="user", parts=[TextPart("Pending user message")]),
+            Message(
+                id="pending-assistant",
+                role="assistant",
+                parts=[TextPart("Pending assistant response")],
+            ),
         ]
         await session._viking_fs.write_file(
             uri=f"{session.uri}/history/archive_002/messages.jsonl",
@@ -217,8 +221,8 @@ class TestGetContextForSearch:
         await _wait_for_task(result["task_id"])
 
         pending_messages = [
-            Message.create_user("Pending 1"),
-            Message.create_assistant("Pending 2"),
+            Message(id="pending-1", role="user", parts=[TextPart("Pending 1")]),
+            Message(id="pending-2", role="assistant", parts=[TextPart("Pending 2")]),
         ]
         await session._viking_fs.write_file(
             uri=f"{session.uri}/history/archive_002/messages.jsonl",

@@ -37,8 +37,7 @@ curl http://localhost:1933/health   # 或者你的远程 URL
   "url": "https://your-openviking-server.example.com",
   "api_key": "<your-api-key>",
   "account": "my-team",
-  "user": "alice",
-  "agent_id": "claude-code"
+  "user": "alice"
 }
 ```
 
@@ -71,8 +70,7 @@ claude mcp add --scope user --transport http openviking \
   '${OPENVIKING_URL:-http://127.0.0.1:1933}/mcp' \
   --header 'Authorization: Bearer ${OPENVIKING_API_KEY:-}' \
   --header 'X-OpenViking-Account: ${OPENVIKING_ACCOUNT:-}' \
-  --header 'X-OpenViking-User: ${OPENVIKING_USER:-}' \
-  --header 'X-OpenViking-Agent: ${OPENVIKING_AGENT_ID:-}'
+  --header 'X-OpenViking-User: ${OPENVIKING_USER:-}'
 
 # 把插件 hooks 合并进 ~/.claude/settings.json（自动备份）
 mkdir -p ~/.claude && [ -f ~/.claude/settings.json ] || echo '{}' > ~/.claude/settings.json
@@ -147,7 +145,7 @@ claude() {
 每个插件字段按从高到低：
 
 1. **环境变量**（`OPENVIKING_*`——见下方表格）
-2. **`ovcli.conf`** — CLI 客户端配置（`~/.openviking/ovcli.conf` 或 `OPENVIKING_CLI_CONFIG_FILE`）；只承载连接字段（`url`、`api_key`、`account`、`user`、`agent_id`）
+2. **`ovcli.conf`** — CLI 客户端配置（`~/.openviking/ovcli.conf` 或 `OPENVIKING_CLI_CONFIG_FILE`）；只承载连接字段（`url`、`api_key`、`account`、`user`）
 3. **`ov.conf`** — 服务器配置（`~/.openviking/ov.conf` 或 `OPENVIKING_CONFIG_FILE`）；插件读 `server.url`、`server.root_api_key`，以及可选的遗留 `claude_code` 块（见 [遗留 `claude_code` 块](#遗留-claude_code-块在-ovconf-里)）
 4. **内置默认值**（`http://127.0.0.1:1933`，无鉴权）
 
@@ -165,7 +163,9 @@ claude() {
 | `OPENVIKING_API_KEY` / `OPENVIKING_BEARER_TOKEN` | API key；以 `Authorization: Bearer <key>` 发送                     |
 | `OPENVIKING_ACCOUNT`                             | 多租户 account（`X-OpenViking-Account` 头）                        |
 | `OPENVIKING_USER`                                | 多租户 user（`X-OpenViking-User` 头）                              |
-| `OPENVIKING_AGENT_ID`                            | Agent 身份，默认 `claude-code`（`X-OpenViking-Agent` 头）           |
+| `OPENVIKING_PEER_ID`                             | 可选的稳定 peer，用于自动召回和 session message 写入               |
+
+设置 `OPENVIKING_PEER_ID` 后，hook 会把它作为请求级 `peer_id` 发送。未显式配置 peer 时，subagent 捕获会回退到 Claude 的 `agent_id`，让不同 subagent 默认落到不同 peer memory。
 
 #### 召回调优
 
