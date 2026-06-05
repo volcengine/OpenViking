@@ -189,12 +189,14 @@ Always pass `--name` when an agent creates a config. If you omit it, `ov` genera
 
 `ov config add` is safe to run again with the same `--name` when the values are identical. It exits `0`, and `--activate` will make that saved config active again. If the same name already exists with different values, the command exits `3` and asks for `--force`.
 
+In the examples below, replace placeholders such as `<CONFIG-NAME>` and `<REMOTE-OPENVIKING-URL>` with user-approved values before running commands. Do not include the angle brackets.
+
 ### Reading Results
 
 When you use `-o json` with the non-interactive config commands, successful results are printed to stdout:
 
 ```json
-{"status":"ok","result":{"action":"add","name":"prod"}}
+{"status":"ok","result":{"action":"add","name":"<CONFIG-NAME>"}}
 ```
 
 The result object depends on the subcommand. `add` and `edit` also include fields such as `kind`, `url`, `saved_path`, `active_path`, `activated`, and `validation`, so agents should not assume that only `action` and `name` are present.
@@ -225,7 +227,7 @@ ov config list -o json
 The list output shape is:
 
 ```json
-{"status":"ok","result":[{"name":"prod","kind":"VolcEngine Cloud","url":"https://api.vikingdb.cn-beijing.volces.com/openviking","active":true}]}
+{"status":"ok","result":[{"name":"<CONFIG-NAME>","kind":"VolcEngine Cloud","url":"https://api.vikingdb.cn-beijing.volces.com/openviking","active":true}]}
 ```
 
 For an existence check, inspect `result[].name`. To decide whether a config already needs switching, inspect the matching entry's `active` flag.
@@ -233,7 +235,7 @@ For an existence check, inspect `result[].name`. To decide whether a config alre
 If a suitable saved config already exists, activate it by name:
 
 ```bash
-ov config switch prod -o json
+ov config switch <CONFIG-NAME> -o json
 ```
 
 Then run the verification commands.
@@ -243,7 +245,7 @@ Then run the verification commands.
 If the agent already holds the API key through a trusted channel, run:
 
 ```bash
-ov config add cloud --name prod --api-key-stdin --activate -o json
+ov config add cloud --name <CONFIG-NAME> --api-key-stdin --activate -o json
 ```
 
 Write only the API key bytes to stdin. Do not place the key in the shell command. This writes a VolcEngine Cloud config using the fixed endpoint `https://api.vikingdb.cn-beijing.volces.com/openviking`. The `cloud` target does not take a custom server URL.
@@ -251,7 +253,7 @@ Write only the API key bytes to stdin. Do not place the key in the shell command
 Use an environment variable only if it already exists in the shell:
 
 ```bash
-ov config add cloud --name prod --api-key-env OV_API_KEY --activate -o json
+ov config add cloud --name <CONFIG-NAME> --api-key-env <API-KEY-ENV-VAR> --activate -o json
 ```
 
 Do not pass `--account` or `--user` for standard VolcEngine Cloud setup. Use them only when the user or their OpenViking administrator provides identity override values.
@@ -263,7 +265,7 @@ Use this path only after the user chooses local self-managed.
 For a local unauthenticated server:
 
 ```bash
-ov config add self-managed --name local --url http://127.0.0.1:1933 --activate -o json
+ov config add self-managed --name <CONFIG-NAME> --url http://127.0.0.1:1933 --activate -o json
 ```
 
 If the local server is not running, guide the user to start it first. See the [Server Mode guide](03-quickstart-server.md).
@@ -273,15 +275,15 @@ If the local server is not running, guide the user to start it first. See the [S
 For a hosted self-managed server with a normal API key:
 
 ```bash
-ov config add self-managed --name hosted --url https://ov.example.com --api-key-stdin --activate -o json
+ov config add self-managed --name <CONFIG-NAME> --url <REMOTE-OPENVIKING-URL> --api-key-stdin --activate -o json
 ```
 
-Write the API key to stdin. If the key is already in the shell environment, use `--api-key-env OV_API_KEY` instead.
+Write the API key to stdin. If the key is already in the shell environment, use `--api-key-env <API-KEY-ENV-VAR>` instead.
 
 For a self-managed server where the user gives you only a root API key, include the target account and user:
 
 ```bash
-ov config add self-managed --name hosted --url https://ov.example.com --root-api-key-stdin --account "$OV_ACCOUNT" --user "$OV_USER" --activate -o json
+ov config add self-managed --name <CONFIG-NAME> --url <REMOTE-OPENVIKING-URL> --root-api-key-stdin --account <ACCOUNT-ID> --user <USER-ID> --activate -o json
 ```
 
 Write the root API key to stdin. Root keys require explicit `--account` and `--user` so normal CLI commands know which identity to use.
@@ -289,7 +291,7 @@ Write the root API key to stdin. Root keys require explicit `--account` and `--u
 For a self-managed server where the user has both a user key and a root key, store both in one config:
 
 ```bash
-ov config add self-managed --name hosted-admin --url https://ov.example.com --api-key-stdin --root-api-key-env OV_ROOT_API_KEY --account "$OV_ACCOUNT" --user "$OV_USER" --activate -o json
+ov config add self-managed --name <CONFIG-NAME> --url <REMOTE-OPENVIKING-URL> --api-key-stdin --root-api-key-env <ROOT-API-KEY-ENV-VAR> --account <ACCOUNT-ID> --user <USER-ID> --activate -o json
 ```
 
 This keeps normal commands on the user key and lets `--sudo` commands use the root key. Because one command has only one stdin stream, the second key must come from an existing environment variable. If neither key is already available in the environment, use `ov config` and guide the user through the interactive flow.
@@ -305,13 +307,13 @@ ov config list -o json
 Rename and activate a saved config:
 
 ```bash
-ov config edit prod --new-name production --activate -o json
+ov config edit <CONFIG-NAME> --new-name <NEW-CONFIG-NAME> --activate -o json
 ```
 
 Replace an API key:
 
 ```bash
-ov config edit production --api-key-stdin --activate -o json
+ov config edit <CONFIG-NAME> --api-key-stdin --activate -o json
 ```
 
 Write the replacement API key to stdin.
@@ -319,7 +321,7 @@ Write the replacement API key to stdin.
 Replace a self-managed URL:
 
 ```bash
-ov config edit local --url http://127.0.0.1:1933 --activate -o json
+ov config edit <CONFIG-NAME> --url <SELF-MANAGED-URL> --activate -o json
 ```
 
 Use `--force` only when you intentionally want to replace an existing saved config name.
@@ -329,14 +331,14 @@ Use `--force` only when you intentionally want to replace an existing saved conf
 Delete only non-active saved configs:
 
 ```bash
-ov config delete old-local -o json
+ov config delete <OLD-CONFIG-NAME> -o json
 ```
 
 If the config is active, switch to another config first:
 
 ```bash
-ov config switch prod -o json
-ov config delete old-local -o json
+ov config switch <CONFIG-NAME> -o json
+ov config delete <OLD-CONFIG-NAME> -o json
 ```
 
 ## Verify the Setup
@@ -428,7 +430,7 @@ Agents can switch by name:
 
 ```bash
 ov config list -o json
-ov config switch prod -o json
+ov config switch <CONFIG-NAME> -o json
 ```
 
 ### Non-Interactive Setup Does Not Fit

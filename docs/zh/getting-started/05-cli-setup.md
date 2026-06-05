@@ -189,12 +189,14 @@ Agent 创建配置时始终传 `--name`。如果省略名称，`ov` 会随机生
 
 当传入相同 `--name` 且配置内容完全一致时，`ov config add` 可以安全重复运行。它会以 `0` 退出，`--activate` 也会再次把该 saved config 设为 active。如果同名配置已经存在但内容不同，命令会以 `3` 退出，并要求只有在确认替换时才使用 `--force`。
 
+下面示例中的 `<CONFIG-NAME>` 和 `<REMOTE-OPENVIKING-URL>` 等占位符需要替换成用户确认过的值再运行。运行时不要保留尖括号。
+
 ### 读取结果
 
 对非交互式 config 命令使用 `-o json` 时，成功结果会输出到 stdout：
 
 ```json
-{"status":"ok","result":{"action":"add","name":"prod"}}
+{"status":"ok","result":{"action":"add","name":"<CONFIG-NAME>"}}
 ```
 
 `result` 对象会随子命令变化。`add` 和 `edit` 还会包含 `kind`、`url`、`saved_path`、`active_path`、`activated` 和 `validation` 等字段，因此 Agent 不应该假设结果里只有 `action` 和 `name`。
@@ -225,7 +227,7 @@ ov config list -o json
 列表输出形状如下：
 
 ```json
-{"status":"ok","result":[{"name":"prod","kind":"VolcEngine Cloud","url":"https://api.vikingdb.cn-beijing.volces.com/openviking","active":true}]}
+{"status":"ok","result":[{"name":"<CONFIG-NAME>","kind":"VolcEngine Cloud","url":"https://api.vikingdb.cn-beijing.volces.com/openviking","active":true}]}
 ```
 
 做存在性检查时，读取 `result[].name`。判断是否还需要切换 active config 时，读取匹配项的 `active` 标记。
@@ -233,7 +235,7 @@ ov config list -o json
 如果已经存在合适的 saved config，可以按名称激活：
 
 ```bash
-ov config switch prod -o json
+ov config switch <CONFIG-NAME> -o json
 ```
 
 然后运行验证命令。
@@ -243,7 +245,7 @@ ov config switch prod -o json
 如果 Agent 已经通过可信渠道拿到 API Key，运行：
 
 ```bash
-ov config add cloud --name prod --api-key-stdin --activate -o json
+ov config add cloud --name <CONFIG-NAME> --api-key-stdin --activate -o json
 ```
 
 只把 API Key 内容写入 stdin，不要把 key 放进 shell 命令本身。这会写入一个 VolcEngine Cloud 配置，并使用固定端点：`https://api.vikingdb.cn-beijing.volces.com/openviking`。`cloud` 目标不接受自定义服务端 URL。
@@ -251,7 +253,7 @@ ov config add cloud --name prod --api-key-stdin --activate -o json
 只有当环境变量已经存在时，才使用环境变量：
 
 ```bash
-ov config add cloud --name prod --api-key-env OV_API_KEY --activate -o json
+ov config add cloud --name <CONFIG-NAME> --api-key-env <API-KEY-ENV-VAR> --activate -o json
 ```
 
 标准 VolcEngine Cloud 配置不要传 `--account` 或 `--user`。只有当用户或 OpenViking 管理员提供身份覆盖值时，才使用它们。
@@ -263,7 +265,7 @@ ov config add cloud --name prod --api-key-env OV_API_KEY --activate -o json
 对于本地无鉴权服务：
 
 ```bash
-ov config add self-managed --name local --url http://127.0.0.1:1933 --activate -o json
+ov config add self-managed --name <CONFIG-NAME> --url http://127.0.0.1:1933 --activate -o json
 ```
 
 如果本地服务没有运行，请先引导用户启动服务端。参见[服务端模式](03-quickstart-server.md)。
@@ -273,15 +275,15 @@ ov config add self-managed --name local --url http://127.0.0.1:1933 --activate -
 对于使用普通 API Key 的远程自托管服务：
 
 ```bash
-ov config add self-managed --name hosted --url https://ov.example.com --api-key-stdin --activate -o json
+ov config add self-managed --name <CONFIG-NAME> --url <REMOTE-OPENVIKING-URL> --api-key-stdin --activate -o json
 ```
 
-把 API Key 写入 stdin。如果 key 已经存在于当前 shell 环境变量中，可以改用 `--api-key-env OV_API_KEY`。
+把 API Key 写入 stdin。如果 key 已经存在于当前 shell 环境变量中，可以改用 `--api-key-env <API-KEY-ENV-VAR>`。
 
 如果用户只提供 root API key，需要同时提供目标 account 和 user：
 
 ```bash
-ov config add self-managed --name hosted --url https://ov.example.com --root-api-key-stdin --account "$OV_ACCOUNT" --user "$OV_USER" --activate -o json
+ov config add self-managed --name <CONFIG-NAME> --url <REMOTE-OPENVIKING-URL> --root-api-key-stdin --account <ACCOUNT-ID> --user <USER-ID> --activate -o json
 ```
 
 把 root API key 写入 stdin。Root key 需要显式 `--account` 和 `--user`，这样普通 CLI 命令才知道以哪个身份执行。
@@ -289,7 +291,7 @@ ov config add self-managed --name hosted --url https://ov.example.com --root-api
 如果用户同时拥有 user key 和 root key，可以把两者放在同一个配置里：
 
 ```bash
-ov config add self-managed --name hosted-admin --url https://ov.example.com --api-key-stdin --root-api-key-env OV_ROOT_API_KEY --account "$OV_ACCOUNT" --user "$OV_USER" --activate -o json
+ov config add self-managed --name <CONFIG-NAME> --url <REMOTE-OPENVIKING-URL> --api-key-stdin --root-api-key-env <ROOT-API-KEY-ENV-VAR> --account <ACCOUNT-ID> --user <USER-ID> --activate -o json
 ```
 
 这样普通命令使用 user key，需要 `--sudo` 的命令使用 root key。因为一个命令只有一个 stdin 流，第二个 key 必须来自已经存在的环境变量。如果两个 key 都不在环境变量中，请使用 `ov config` 并引导用户完成交互式流程。
@@ -305,13 +307,13 @@ ov config list -o json
 重命名并激活 saved config：
 
 ```bash
-ov config edit prod --new-name production --activate -o json
+ov config edit <CONFIG-NAME> --new-name <NEW-CONFIG-NAME> --activate -o json
 ```
 
 替换 API Key：
 
 ```bash
-ov config edit production --api-key-stdin --activate -o json
+ov config edit <CONFIG-NAME> --api-key-stdin --activate -o json
 ```
 
 把新的 API Key 写入 stdin。
@@ -319,7 +321,7 @@ ov config edit production --api-key-stdin --activate -o json
 替换自托管 URL：
 
 ```bash
-ov config edit local --url http://127.0.0.1:1933 --activate -o json
+ov config edit <CONFIG-NAME> --url <SELF-MANAGED-URL> --activate -o json
 ```
 
 只有在你明确要覆盖已有 saved config 名称时，才使用 `--force`。
@@ -329,14 +331,14 @@ ov config edit local --url http://127.0.0.1:1933 --activate -o json
 只删除非 active 的 saved config：
 
 ```bash
-ov config delete old-local -o json
+ov config delete <OLD-CONFIG-NAME> -o json
 ```
 
 如果该配置正处于 active 状态，先切换到另一个配置：
 
 ```bash
-ov config switch prod -o json
-ov config delete old-local -o json
+ov config switch <CONFIG-NAME> -o json
+ov config delete <OLD-CONFIG-NAME> -o json
 ```
 
 ## 验证配置
@@ -428,7 +430,7 @@ Agent 可以按名称切换：
 
 ```bash
 ov config list -o json
-ov config switch prod -o json
+ov config switch <CONFIG-NAME> -o json
 ```
 
 ### 非交互式配置不适合当前情况
