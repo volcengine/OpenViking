@@ -38,6 +38,6 @@ pub use stats_wrapper::StatsWrappedFS;
 pub use types::{
     BackendItemConfig, BackendRole, BackendSyncState, BackendsConfig, ConfigParameter, ConfigValue,
     EncryptionConfig, FileInfo, GrepMatch, GrepResult, OperationItemConfig, PluginConfig,
-    RedirectEntry, RedirectMeta, RedirectPolicy, SyncLogEntry, SyncLogMeta, SyncType, TreeEntry,
-    WriteFlag,
+    RedirectEntry, RedirectMeta, RedirectPolicy, SyncLogEntry, SyncLogMeta, SyncOp, SyncType,
+    TreeEntry, WriteFlag,
 };

@@ -38,10 +38,7 @@ impl SQLFileSystem {
         // Create database backend (schema init and optimizations happen inside)
         let backend = create_backend(&config.params)?;
 
-        tracing::info!(
-            "SQLFS backend created: {}",
-            backend.driver_name(),
-        );
+        tracing::info!("SQLFS backend created: {}", backend.driver_name(),);
 
         // Create cache from config
         let cache_enabled = config
@@ -111,11 +108,7 @@ impl SQLFileSystem {
         }
 
         let normalized = Self::normalize_path(path);
-        normalized
-            .rsplit('/')
-            .next()
-            .unwrap_or("")
-            .to_string()
+        normalized.rsplit('/').next().unwrap_or("").to_string()
     }
 }
 
@@ -523,12 +516,7 @@ impl SQLFSPlugin {
                     "Database host (MySQL/TiDB)",
                 ),
                 ConfigParameter::optional("port", "int", "3306", "Database port (MySQL/TiDB)"),
-                ConfigParameter::optional(
-                    "user",
-                    "string",
-                    "root",
-                    "Database user (MySQL/TiDB)",
-                ),
+                ConfigParameter::optional("user", "string", "root", "Database user (MySQL/TiDB)"),
                 ConfigParameter::optional(
                     "password",
                     "string",
@@ -547,18 +535,8 @@ impl SQLFSPlugin {
                     "true",
                     "Enable directory listing cache",
                 ),
-                ConfigParameter::optional(
-                    "cache_max_size",
-                    "int",
-                    "1000",
-                    "Maximum cache entries",
-                ),
-                ConfigParameter::optional(
-                    "cache_ttl_seconds",
-                    "int",
-                    "5",
-                    "Cache TTL in seconds",
-                ),
+                ConfigParameter::optional("cache_max_size", "int", "1000", "Maximum cache entries"),
+                ConfigParameter::optional("cache_ttl_seconds", "int", "5", "Cache TTL in seconds"),
             ],
         }
     }
@@ -710,6 +688,16 @@ agfs ls /sqlfs/mydir
 mod tests {
     use super::*;
 
+    /// Write one test file in SQLFS.
+    async fn write_file(fs: &SQLFileSystem, path: &str, data: &[u8]) {
+        fs.write(path, data, 0, WriteFlag::Create).await.unwrap();
+    }
+
+    /// Read one test file from SQLFS.
+    async fn read_file(fs: &SQLFileSystem, path: &str) -> Vec<u8> {
+        fs.read(path, 0, 0).await.unwrap()
+    }
+
     #[tokio::test]
     async fn test_sqlfs_basic() {
         let config = PluginConfig {
@@ -750,9 +738,7 @@ mod tests {
         fs.mkdir("/testdir", 0o755).await.unwrap();
 
         // Create file in directory
-        fs.write("/testdir/file.txt", b"data", 0, WriteFlag::Create)
-            .await
-            .unwrap();
+        write_file(&fs, "/testdir/file.txt", b"data").await;
 
         // List directory
         let entries = fs.read_dir("/testdir").await.unwrap();
@@ -771,29 +757,23 @@ mod tests {
     async fn test_sqlfs_rename() {
         let fs = SQLFileSystem::default();
 
-        fs.write("/old.txt", b"data", 0, WriteFlag::Create)
-            .await
-            .unwrap();
+        write_file(&fs, "/old.txt", b"data").await;
 
         fs.rename("/old.txt", "/new.txt").await.unwrap();
 
         assert!(fs.stat("/old.txt").await.is_err());
-        let data = fs.read("/new.txt", 0, 0).await.unwrap();
-        assert_eq!(data, b"data");
+        assert_eq!(read_file(&fs, "/new.txt").await, b"data");
     }
 
     #[tokio::test]
     async fn test_sqlfs_truncate() {
         let fs = SQLFileSystem::default();
 
-        fs.write("/trunc.txt", b"hello world", 0, WriteFlag::Create)
-            .await
-            .unwrap();
+        write_file(&fs, "/trunc.txt", b"hello world").await;
 
         fs.truncate("/trunc.txt", 5).await.unwrap();
 
-        let data = fs.read("/trunc.txt", 0, 0).await.unwrap();
-        assert_eq!(data, b"hello");
+        assert_eq!(read_file(&fs, "/trunc.txt").await, b"hello");
     }
 
     #[tokio::test]
@@ -821,9 +801,7 @@ mod tests {
 
         fs.mkdir("/a", 0o755).await.unwrap();
         fs.mkdir("/a/b", 0o755).await.unwrap();
-        fs.write("/a/b/file.txt", b"nested", 0, WriteFlag::Create)
-            .await
-            .unwrap();
+        write_file(&fs, "/a/b/file.txt", b"nested").await;
 
         // List /a should only show /a/b
         let entries = fs.read_dir("/a").await.unwrap();
@@ -832,17 +810,14 @@ mod tests {
         assert!(entries[0].is_dir);
 
         // Read nested file
-        let data = fs.read("/a/b/file.txt", 0, 0).await.unwrap();
-        assert_eq!(data, b"nested");
+        assert_eq!(read_file(&fs, "/a/b/file.txt").await, b"nested");
     }
 
     #[tokio::test]
     async fn test_sqlfs_read_with_offset_and_size() {
         let fs = SQLFileSystem::default();
 
-        fs.write("/range.txt", b"hello world", 0, WriteFlag::Create)
-            .await
-            .unwrap();
+        write_file(&fs, "/range.txt", b"hello world").await;
 
         // Read with offset
         let data = fs.read("/range.txt", 6, 0).await.unwrap();
@@ -861,9 +836,7 @@ mod tests {
     async fn test_sqlfs_chmod() {
         let fs = SQLFileSystem::default();
 
-        fs.write("/perm.txt", b"data", 0, WriteFlag::Create)
-            .await
-            .unwrap();
+        write_file(&fs, "/perm.txt", b"data").await;
 
         fs.chmod("/perm.txt", 0o600).await.unwrap();
 

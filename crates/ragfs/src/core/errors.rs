@@ -4,8 +4,8 @@
 //! We use `thiserror` for structured error definitions to ensure type safety
 //! and clear error messages.
 
-use std::io;
 use serde_json;
+use std::io;
 
 /// Result type alias for RAGFS operations
 pub type Result<T> = std::result::Result<T, Error>;

@@ -8,6 +8,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+use serde::{de::DeserializeOwned, Serialize};
+
 use super::context::{FsContext, FsContextInner, FS_CTX};
 use super::errors::{Error, Result};
 use super::filesystem::FileSystem;
@@ -46,6 +48,12 @@ impl FsContextResolver for DefaultFsContextResolver {
 const REDIRECT_FILE: &str = ".redirect.json";
 const SYNC_LOG_FILE: &str = ".sync_log.json";
 
+#[derive(Clone)]
+struct DirMetaCacheEntry {
+    redirect: RedirectMeta,
+    sync_log: SyncLogMeta,
+}
+
 /// Unified metadata store for `.redirect.json` and `.sync_log.json`.
 ///
 /// All reads and writes go through `primary_backend`, inheriting its encryption
@@ -56,6 +64,8 @@ pub struct MetaStateStore {
     primary_backend: Arc<dyn FileSystem>,
     /// Per-directory locks for serialized read-modify-write
     dir_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    /// In-memory directory metadata cache to reduce repeated full JSON reads.
+    meta_cache: Mutex<HashMap<String, DirMetaCacheEntry>>,
     /// Context resolver for background tasks
     ctx_resolver: Arc<dyn FsContextResolver>,
 }
@@ -69,6 +79,7 @@ impl MetaStateStore {
         Self {
             primary_backend,
             dir_locks: Mutex::new(HashMap::new()),
+            meta_cache: Mutex::new(HashMap::new()),
             ctx_resolver,
         }
     }
@@ -82,6 +93,14 @@ impl MetaStateStore {
             .clone()
     }
 
+    /// Remove an idle directory lock from the lock map.
+    async fn cleanup_dir_lock(&self, dir: &str, lock: &Arc<Mutex<()>>) {
+        let mut locks = self.dir_locks.lock().await;
+        if Arc::strong_count(lock) <= 2 {
+            locks.remove(dir);
+        }
+    }
+
     /// Build the full path for a metadata file in a directory.
     fn meta_path(dir: &str, filename: &str) -> String {
         if dir == "/" {
@@ -91,58 +110,111 @@ impl MetaStateStore {
         }
     }
 
-    /// Read redirect metadata from a directory (returns default if not found).
-    async fn read_redirect_meta(&self, dir: &str, ctx: &FsContext) -> Result<RedirectMeta> {
-        let path = Self::meta_path(dir, REDIRECT_FILE);
-        match FS_CTX.scope(ctx.clone(), async {
-            self.primary_backend.read(&path, 0, 0).await
-        }).await {
+    /// Read one JSON metadata file, returning default for missing or empty files.
+    async fn read_meta<T>(&self, dir: &str, filename: &str, ctx: &FsContext) -> Result<T>
+    where
+        T: DeserializeOwned + Default,
+    {
+        let path = Self::meta_path(dir, filename);
+        match FS_CTX
+            .scope(ctx.clone(), async {
+                self.primary_backend.read(&path, 0, 0).await
+            })
+            .await
+        {
             Ok(data) => {
                 if data.is_empty() {
-                    Ok(RedirectMeta::default())
+                    Ok(T::default())
                 } else {
                     Ok(serde_json::from_slice(&data).unwrap_or_default())
                 }
             }
-            Err(Error::NotFound(_)) => Ok(RedirectMeta::default()),
+            Err(Error::NotFound(_)) => Ok(T::default()),
             Err(e) => Err(e),
         }
+    }
+
+    /// Read redirect metadata from a directory (returns default if not found).
+    async fn read_redirect_meta(&self, dir: &str, ctx: &FsContext) -> Result<RedirectMeta> {
+        self.read_meta(dir, REDIRECT_FILE, ctx).await
     }
 
     /// Read sync log metadata from a directory (returns default if not found).
     async fn read_sync_log_meta(&self, dir: &str, ctx: &FsContext) -> Result<SyncLogMeta> {
-        let path = Self::meta_path(dir, SYNC_LOG_FILE);
-        match FS_CTX.scope(ctx.clone(), async {
-            self.primary_backend.read(&path, 0, 0).await
-        }).await {
-            Ok(data) => {
-                if data.is_empty() {
-                    Ok(SyncLogMeta::default())
-                } else {
-                    Ok(serde_json::from_slice(&data).unwrap_or_default())
-                }
-            }
-            Err(Error::NotFound(_)) => Ok(SyncLogMeta::default()),
-            Err(e) => Err(e),
+        self.read_meta(dir, SYNC_LOG_FILE, ctx).await
+    }
+
+    /// Read both metadata files, using the directory cache when available.
+    async fn read_dir_meta_pair(
+        &self,
+        dir: &str,
+        ctx: &FsContext,
+    ) -> Result<(RedirectMeta, SyncLogMeta)> {
+        if let Some(cached) = self.meta_cache.lock().await.get(dir).cloned() {
+            return Ok((cached.redirect, cached.sync_log));
         }
+
+        let redirect = self.read_redirect_meta(dir, ctx).await?;
+        let sync_log = self.read_sync_log_meta(dir, ctx).await?;
+        self.meta_cache.lock().await.insert(
+            dir.to_string(),
+            DirMetaCacheEntry {
+                redirect: redirect.clone(),
+                sync_log: sync_log.clone(),
+            },
+        );
+        Ok((redirect, sync_log))
+    }
+
+    /// Update cached metadata for a directory.
+    async fn update_meta_cache(&self, dir: &str, redirect: RedirectMeta, sync_log: SyncLogMeta) {
+        self.meta_cache
+            .lock()
+            .await
+            .insert(dir.to_string(), DirMetaCacheEntry { redirect, sync_log });
+    }
+
+    /// Write one JSON metadata file to a directory.
+    async fn write_meta<T>(
+        &self,
+        dir: &str,
+        filename: &str,
+        meta: &T,
+        ctx: &FsContext,
+    ) -> Result<()>
+    where
+        T: Serialize,
+    {
+        let path = Self::meta_path(dir, filename);
+        let data = serde_json::to_vec(meta)?;
+        FS_CTX
+            .scope(ctx.clone(), async {
+                self.primary_backend
+                    .write(&path, &data, 0, WriteFlag::Create)
+                    .await
+                    .map(|_| ())
+            })
+            .await
     }
 
     /// Write redirect metadata to a directory.
-    async fn write_redirect_meta(&self, dir: &str, meta: &RedirectMeta, ctx: &FsContext) -> Result<()> {
-        let path = Self::meta_path(dir, REDIRECT_FILE);
-        let data = serde_json::to_vec(meta)?;
-        FS_CTX.scope(ctx.clone(), async {
-            self.primary_backend.write(&path, &data, 0, WriteFlag::Create).await.map(|_| ())
-        }).await
+    async fn write_redirect_meta(
+        &self,
+        dir: &str,
+        meta: &RedirectMeta,
+        ctx: &FsContext,
+    ) -> Result<()> {
+        self.write_meta(dir, REDIRECT_FILE, meta, ctx).await
     }
 
     /// Write sync log metadata to a directory.
-    async fn write_sync_log_meta(&self, dir: &str, meta: &SyncLogMeta, ctx: &FsContext) -> Result<()> {
-        let path = Self::meta_path(dir, SYNC_LOG_FILE);
-        let data = serde_json::to_vec(meta)?;
-        FS_CTX.scope(ctx.clone(), async {
-            self.primary_backend.write(&path, &data, 0, WriteFlag::Create).await.map(|_| ())
-        }).await
+    async fn write_sync_log_meta(
+        &self,
+        dir: &str,
+        meta: &SyncLogMeta,
+        ctx: &FsContext,
+    ) -> Result<()> {
+        self.write_meta(dir, SYNC_LOG_FILE, meta, ctx).await
     }
 
     /// Serialized read-modify-write of both `.redirect.json` and `.sync_log.json` in a directory.
@@ -156,13 +228,22 @@ impl MetaStateStore {
         let lock = self.get_dir_lock(dir).await;
         let _guard = lock.lock().await;
 
-        let mut redirect_meta = self.read_redirect_meta(dir, ctx).await?;
-        let mut sync_log_meta = self.read_sync_log_meta(dir, ctx).await?;
+        let (mut redirect_meta, mut sync_log_meta) = self.read_dir_meta_pair(dir, ctx).await?;
+        let original_redirect = redirect_meta.clone();
+        let original_sync_log = sync_log_meta.clone();
 
         op(&mut redirect_meta, &mut sync_log_meta)?;
 
-        self.write_redirect_meta(dir, &redirect_meta, ctx).await?;
-        self.write_sync_log_meta(dir, &sync_log_meta, ctx).await?;
+        if redirect_meta != original_redirect {
+            self.write_redirect_meta(dir, &redirect_meta, ctx).await?;
+        }
+        if sync_log_meta != original_sync_log {
+            self.write_sync_log_meta(dir, &sync_log_meta, ctx).await?;
+        }
+        self.update_meta_cache(dir, redirect_meta, sync_log_meta)
+            .await;
+        drop(_guard);
+        self.cleanup_dir_lock(dir, &lock).await;
 
         Ok(())
     }
@@ -199,10 +280,12 @@ impl MetaStateStore {
         let _guard1 = lock1.lock().await;
         let _guard2 = lock2.lock().await;
 
-        let mut src_redirect = self.read_redirect_meta(source_dir, ctx).await?;
-        let mut src_sync_log = self.read_sync_log_meta(source_dir, ctx).await?;
-        let mut tgt_redirect = self.read_redirect_meta(target_dir, ctx).await?;
-        let mut tgt_sync_log = self.read_sync_log_meta(target_dir, ctx).await?;
+        let (mut src_redirect, mut src_sync_log) = self.read_dir_meta_pair(source_dir, ctx).await?;
+        let (mut tgt_redirect, mut tgt_sync_log) = self.read_dir_meta_pair(target_dir, ctx).await?;
+        let original_src_redirect = src_redirect.clone();
+        let original_src_sync_log = src_sync_log.clone();
+        let original_tgt_redirect = tgt_redirect.clone();
+        let original_tgt_sync_log = tgt_sync_log.clone();
 
         op(
             &mut src_redirect,
@@ -211,26 +294,46 @@ impl MetaStateStore {
             &mut tgt_sync_log,
         )?;
 
-        self.write_redirect_meta(source_dir, &src_redirect, ctx)
-            .await?;
-        self.write_sync_log_meta(source_dir, &src_sync_log, ctx)
-            .await?;
-        self.write_redirect_meta(target_dir, &tgt_redirect, ctx)
-            .await?;
-        self.write_sync_log_meta(target_dir, &tgt_sync_log, ctx)
-            .await?;
+        if src_redirect != original_src_redirect {
+            self.write_redirect_meta(source_dir, &src_redirect, ctx)
+                .await?;
+        }
+        if src_sync_log != original_src_sync_log {
+            self.write_sync_log_meta(source_dir, &src_sync_log, ctx)
+                .await?;
+        }
+        if tgt_redirect != original_tgt_redirect {
+            self.write_redirect_meta(target_dir, &tgt_redirect, ctx)
+                .await?;
+        }
+        if tgt_sync_log != original_tgt_sync_log {
+            self.write_sync_log_meta(target_dir, &tgt_sync_log, ctx)
+                .await?;
+        }
+        self.update_meta_cache(source_dir, src_redirect, src_sync_log)
+            .await;
+        self.update_meta_cache(target_dir, tgt_redirect, tgt_sync_log)
+            .await;
+        drop(_guard2);
+        drop(_guard1);
+        self.cleanup_dir_lock(first_dir, &lock1).await;
+        self.cleanup_dir_lock(second_dir, &lock2).await;
 
         Ok(())
     }
 
     /// Read redirect metadata for a directory (public, used by read_dir to merge redirect entries).
     pub async fn get_redirect_meta(&self, dir: &str, ctx: &FsContext) -> Result<RedirectMeta> {
-        self.read_redirect_meta(dir, ctx).await
+        self.read_dir_meta_pair(dir, ctx)
+            .await
+            .map(|(redirect, _)| redirect)
     }
 
     /// Read sync log metadata for a directory (public, used by retry_loop).
     pub async fn get_sync_log_meta(&self, dir: &str, ctx: &FsContext) -> Result<SyncLogMeta> {
-        self.read_sync_log_meta(dir, ctx).await
+        self.read_dir_meta_pair(dir, ctx)
+            .await
+            .map(|(_, sync_log)| sync_log)
     }
 
     /// Get a reference to the context resolver.
@@ -268,6 +371,14 @@ impl PathSerializer {
             .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone()
     }
+
+    /// Remove an idle path lock from the queue map.
+    pub async fn cleanup_path_lock(&self, path: &str, lock: &Arc<Mutex<()>>) {
+        let mut queues = self.queues.lock().await;
+        if Arc::strong_count(lock) <= 2 {
+            queues.remove(path);
+        }
+    }
 }
 
 impl Default for PathSerializer {
@@ -295,7 +406,8 @@ pub(crate) fn file_name(path: &str) -> &str {
 
 /// Snapshot the current FsContext from the task-local, returning an error if unset.
 pub fn current_required_ctx() -> Result<FsContext> {
-    FS_CTX.try_with(|c| c.clone())
+    FS_CTX
+        .try_with(|c| c.clone())
         .map_err(|_| Error::internal("FsContext not set in current task"))
 }
 
@@ -319,7 +431,9 @@ mod tests {
     #[test]
     fn test_default_resolver() {
         let resolver = DefaultFsContextResolver;
-        let ctx = resolver.resolve("/local/tenant-1/resources/file.txt").unwrap();
+        let ctx = resolver
+            .resolve("/local/tenant-1/resources/file.txt")
+            .unwrap();
         assert_eq!(ctx.account_id(), "tenant-1");
     }
 

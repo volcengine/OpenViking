@@ -240,6 +240,53 @@ def test_generate_plugin_config_ignores_db_paths_in_memory_mode():
     assert "db_path" not in plugins["queuefs"]["config"]
 
 
+def test_generate_plugin_config_serializes_local_backup_dir(tmp_path):
+    """Local backup items must pass a concrete local_dir to the Rust localfs plugin."""
+    backup_dir = tmp_path / "backup-local"
+    config = AGFSConfig(
+        path=str(tmp_path),
+        backend="local",
+        backups={
+            "items": [
+                {
+                    "name": "local-backup",
+                    "backend": "local",
+                    "local": {"local_dir": str(backup_dir)},
+                }
+            ]
+        },
+    )
+
+    plugins = _generate_plugin_config(config, tmp_path)
+
+    backup = plugins["localfs"]["config"]["backups"]["items"][0]
+    assert backup["backend"] == "localfs"
+    assert backup["params"]["local_dir"] == str(backup_dir)
+    assert backup_dir.exists()
+
+
+def test_generate_plugin_config_passes_multiwrite_encryption_flag(tmp_path):
+    """Multi-write mount config must reflect the real server encryption state."""
+    config = AGFSConfig(
+        path=str(tmp_path),
+        backend="local",
+        backups={
+            "items": [
+                {
+                    "name": "mem-backup",
+                    "backend": "memory",
+                }
+            ]
+        },
+    )
+
+    plugins = _generate_plugin_config(config, tmp_path, server_encryption_enabled=True)
+
+    mount_config = plugins["localfs"]["config"]
+    assert mount_config["server_encryption_enabled"] is True
+    assert mount_config["primary_encryption_enabled"] is True
+
+
 class _FakeMountClient:
     def __init__(self):
         self.mount_calls = []

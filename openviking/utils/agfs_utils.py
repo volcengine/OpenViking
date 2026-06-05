@@ -106,7 +106,9 @@ def _build_queuefs_plugin_config(agfs_config: Any, data_path: Path) -> Dict[str,
     return plugin_config
 
 
-def _generate_plugin_config(agfs_config: Any, data_path: Path) -> Dict[str, Any]:
+def _generate_plugin_config(
+    agfs_config: Any, data_path: Path, server_encryption_enabled: bool = False
+) -> Dict[str, Any]:
     """Dynamically generate RAGFS plugin configuration based on backend type."""
     config = {
         "serverinfofs": {
@@ -126,9 +128,6 @@ def _generate_plugin_config(agfs_config: Any, data_path: Path) -> Dict[str, Any]
     backend = getattr(agfs_config, "backend", "local")
     s3_config = getattr(agfs_config, "s3", None)
     vikingfs_path = data_path / "viking"
-
-    # Determine encryption config (from global config, not agfs)
-    server_encryption_enabled = False  # default: no encryption
 
     # Check for multi-write configuration
     backups_config = getattr(agfs_config, "backups", None)
@@ -164,11 +163,9 @@ def _generate_plugin_config(agfs_config: Any, data_path: Path) -> Dict[str, Any]
     # Add multi-write fields if backups are configured
     if backups_config is not None:
         # Serialize backups config to dict for FFI JSON passthrough
-        mount_config["backups"] = _serialize_backups_config(backups_config)
+        mount_config["backups"] = _serialize_backups_config(backups_config, data_path)
         mount_config["server_encryption_enabled"] = server_encryption_enabled
-        mount_config["primary_encryption_enabled"] = (
-            server_encryption_enabled  # primary follows global
-        )
+        mount_config["primary_encryption_enabled"] = server_encryption_enabled
 
         # Serialize redirect policies
         if redirects_config is not None:
@@ -205,7 +202,7 @@ def _map_backend_to_plugin_name(backend: str) -> str:
     return mapping.get(backend, backend)
 
 
-def _serialize_backups_config(backups_config: Any) -> Dict[str, Any]:
+def _serialize_backups_config(backups_config: Any, data_path: Path) -> Dict[str, Any]:
     """Serialize BackupsConfig to a dict suitable for JSON passthrough via FFI."""
     result: Dict[str, Any] = {
         "sync_type": getattr(backups_config, "sync_type", "async"),
@@ -243,10 +240,17 @@ def _serialize_backups_config(backups_config: Any) -> Dict[str, Any]:
             if s3_config is not None:
                 item_dict["params"] = s3_config.model_dump(exclude_none=True)
         elif backend_type == "local":
-            # local backend requires local_dir; derive from workspace path if available.
-            # The primary backend gets local_dir from the mount path; backups may need
-            # a separate local_dir. If not explicitly set, fall back to a default.
-            pass  # local_dir is set by the Rust mount logic from the workspace path.
+            local_config = getattr(item, "local", None)
+            local_dir = None
+            if isinstance(local_config, dict):
+                local_dir = local_config.get("local_dir")
+            elif local_config is not None:
+                local_dir = getattr(local_config, "local_dir", None)
+            if local_dir is None:
+                local_dir = data_path / "viking" / "_backups" / item.name
+            local_dir_path = Path(local_dir).expanduser()
+            local_dir_path.mkdir(parents=True, exist_ok=True)
+            item_dict["params"] = {"local_dir": str(local_dir_path)}
 
         items.append(item_dict)
 
@@ -324,7 +328,12 @@ def mount_agfs_backend(agfs: Any, config: RagfsBindingConfig | Any) -> None:
     vikingfs_path.mkdir(parents=True, exist_ok=True)
 
     # 1. Mount standard plugins
-    config = _generate_plugin_config(agfs_config, data_path)
+    server_encryption_enabled = (
+        config.encryption_enabled() if isinstance(config, RagfsBindingConfig) else False
+    )
+    config = _generate_plugin_config(
+        agfs_config, data_path, server_encryption_enabled=server_encryption_enabled
+    )
 
     for plugin_name, plugin_config in config.items():
         mount_path = plugin_config["path"]

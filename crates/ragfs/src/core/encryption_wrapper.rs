@@ -97,6 +97,8 @@ impl EncryptionWrappedFS {
             || path.starts_with("/queue/")
             || path == "/serverinfo"
             || path.starts_with("/serverinfo/")
+            || path == "/.ragfs_backend_meta.json"
+            || path.ends_with("/.ragfs_backend_meta.json")
     }
 
     /// Derive the encryption account domain from a filesystem path.
@@ -310,28 +312,9 @@ mod tests {
     use crate::core::PluginConfig;
     use crate::plugins::MemFSPlugin;
 
-    async fn memfs_stack() -> Arc<MountableFS> {
-        let m = Arc::new(MountableFS::new());
-        m.register_plugin(MemFSPlugin).await;
-        m.mount(PluginConfig {
-            name: "memfs".to_string(),
-            mount_path: "/mem".to_string(),
-            params: HashMap::new(),
-            backups: None,
-            server_encryption_enabled: false,
-            primary_encryption_enabled: false,
-            primary_redirects: Vec::new(),
-        })
-        .await
-        .unwrap();
-        m
-    }
-
-    /// Build a memfs-backed stack mounted at the provided path for path-sensitive tests.
-    async fn memfs_stack_at(mount_path: &str) -> Arc<MountableFS> {
-        let m = Arc::new(MountableFS::new());
-        m.register_plugin(MemFSPlugin).await;
-        m.mount(PluginConfig {
+    /// Build a memfs plugin config for encryption wrapper tests.
+    fn memfs_config(mount_path: &str) -> PluginConfig {
+        PluginConfig {
             name: "memfs".to_string(),
             mount_path: mount_path.to_string(),
             params: HashMap::new(),
@@ -339,9 +322,19 @@ mod tests {
             server_encryption_enabled: false,
             primary_encryption_enabled: false,
             primary_redirects: Vec::new(),
-        })
-        .await
-        .unwrap();
+        }
+    }
+
+    /// Build a memfs-backed stack mounted at the default path.
+    async fn memfs_stack() -> Arc<MountableFS> {
+        memfs_stack_at("/mem").await
+    }
+
+    /// Build a memfs-backed stack mounted at the provided path for path-sensitive tests.
+    async fn memfs_stack_at(mount_path: &str) -> Arc<MountableFS> {
+        let m = Arc::new(MountableFS::new());
+        m.register_plugin(MemFSPlugin).await;
+        m.mount(memfs_config(mount_path)).await.unwrap();
         m
     }
 
@@ -496,7 +489,9 @@ mod tests {
                 enc.write("/mem/a.txt", b"first", 0, WriteFlag::Create)
                     .await
                     .unwrap();
-                let appended = enc.write("/mem/a.txt", b"second", 0, WriteFlag::Append).await;
+                let appended = enc
+                    .write("/mem/a.txt", b"second", 0, WriteFlag::Append)
+                    .await;
                 assert!(appended.is_err());
             })
             .await;

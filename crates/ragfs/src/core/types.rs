@@ -74,7 +74,11 @@ impl GrepResult {
 
     /// Add a match to the result
     pub fn add_match(&mut self, file: String, line: u64, content: String) {
-        self.matches.push(GrepMatch { file, line, content });
+        self.matches.push(GrepMatch {
+            file,
+            line,
+            content,
+        });
         self.count += 1;
     }
 
@@ -149,7 +153,7 @@ impl FileInfo {
 }
 
 /// Write operation flags
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WriteFlag {
     /// Create new file or truncate existing
     Create,
@@ -383,39 +387,145 @@ pub enum RedirectPolicy {
     },
 }
 
-/// Sync log entry for a single file path
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SyncLogEntry {
-    /// Latest monotonic sequence number
-    pub latest_seq: u64,
-    /// Last operation type
-    pub last_op: String,
-    /// Rename target (only when last_op == "rename")
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rename_to: Option<String>,
-    /// File mode (only when last_op == "chmod" or "mkdir")
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mode: Option<u32>,
-    /// Per-backend acked sequence numbers
-    pub backends: std::collections::HashMap<String, BackendSyncState>,
+/// Strongly typed multi-write operation stored in `.sync_log.json`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type")]
+pub enum SyncOp {
+    /// Create an empty file.
+    Create,
+    /// Write the captured request bytes with the original offset and flags.
+    Write {
+        /// Original write offset.
+        offset: u64,
+        /// Original write flags.
+        flags: WriteFlag,
+        /// File size used by retry/exclude policy decisions.
+        size: u64,
+        /// Captured request payload.
+        content: Vec<u8>,
+    },
+    /// Truncate to size, with a post-primary snapshot for missing lagging replicas.
+    Truncate {
+        /// Requested target size.
+        size: u64,
+        /// Post-truncate primary snapshot.
+        content: Vec<u8>,
+    },
+    /// Create a directory.
+    Mkdir {
+        /// Directory mode.
+        mode: u32,
+    },
+    /// Change file mode.
+    Chmod {
+        /// File mode.
+        mode: u32,
+    },
+    /// Remove one file.
+    Remove,
+    /// Remove a file tree.
+    RemoveAll,
+    /// Rename to another path.
+    Rename {
+        /// Rename target path.
+        to: String,
+    },
 }
 
 /// Per-backend sync state
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct BackendSyncState {
     /// Acknowledged sequence number
     pub acked_seq: u64,
+    /// Consecutive retry failures for the current operation.
+    #[serde(default)]
+    pub retry_failures: u32,
+    /// Whether this backend/path pair is quarantined for manual intervention.
+    #[serde(default)]
+    pub quarantined: bool,
+}
+
+impl BackendSyncState {
+    /// Create an acknowledged backend sync state.
+    pub fn acked(acked_seq: u64) -> Self {
+        Self {
+            acked_seq,
+            retry_failures: 0,
+            quarantined: false,
+        }
+    }
+
+    /// Mark this backend as acknowledged and clear retry state.
+    pub fn mark_acked(&mut self, acked_seq: u64) {
+        self.acked_seq = acked_seq;
+        self.retry_failures = 0;
+        self.quarantined = false;
+    }
+
+    /// Record one retry failure and quarantine after the configured threshold.
+    pub fn mark_retry_failed(&mut self, quarantine_after_failures: u32) {
+        self.retry_failures = self.retry_failures.saturating_add(1);
+        if self.retry_failures >= quarantine_after_failures {
+            self.quarantined = true;
+        }
+    }
+}
+
+/// Sync log entry for a single file path.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SyncLogEntry {
+    /// Latest monotonic sequence number.
+    pub latest_seq: u64,
+    /// Strongly typed operation payload.
+    pub op: SyncOp,
+    /// Per-backend acked sequence numbers.
+    pub backends: std::collections::HashMap<String, BackendSyncState>,
+}
+
+impl SyncLogEntry {
+    /// Create a new sync log entry for a sequenced operation.
+    pub fn new(latest_seq: u64, op: SyncOp) -> Self {
+        Self {
+            latest_seq,
+            op,
+            backends: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Return the backend sync state if present.
+    pub fn backend_state(&self, backend_name: &str) -> Option<&BackendSyncState> {
+        self.backends.get(backend_name)
+    }
+
+    /// Return the acknowledged sequence for a backend, or 0 if unknown.
+    pub fn acked_seq(&self, backend_name: &str) -> u64 {
+        self.backend_state(backend_name)
+            .map(|state| state.acked_seq)
+            .unwrap_or(0)
+    }
+
+    /// Return whether the backend is quarantined.
+    pub fn is_quarantined(&self, backend_name: &str) -> bool {
+        self.backend_state(backend_name)
+            .map(|state| state.quarantined)
+            .unwrap_or(false)
+    }
+
+    /// Return whether the backend has acknowledged the latest operation.
+    pub fn is_in_sync(&self, backend_name: &str) -> bool {
+        self.acked_seq(backend_name) >= self.latest_seq
+    }
 }
 
 /// Sync log file content
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct SyncLogMeta {
     /// File entries keyed by file name (current directory)
     pub entries: std::collections::HashMap<String, SyncLogEntry>,
 }
 
 /// Redirect metadata file content
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RedirectMeta {
     /// Schema version
     #[serde(default = "default_redirect_version")]
@@ -439,7 +549,7 @@ impl Default for RedirectMeta {
 }
 
 /// Single redirect entry
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RedirectEntry {
     /// Target backend names
     pub targets: Vec<String>,

@@ -211,7 +211,13 @@ mod tests {
                 async fn read(&self, _path: &str, _offset: u64, _size: u64) -> Result<Vec<u8>> {
                     Ok(vec![])
                 }
-                async fn write(&self, _path: &str, _data: &[u8], _offset: u64, _flags: WriteFlag) -> Result<u64> {
+                async fn write(
+                    &self,
+                    _path: &str,
+                    _data: &[u8],
+                    _offset: u64,
+                    _flags: WriteFlag,
+                ) -> Result<u64> {
                     Ok(_data.len() as u64)
                 }
                 async fn read_dir(&self, _path: &str) -> Result<Vec<FileInfo>> {

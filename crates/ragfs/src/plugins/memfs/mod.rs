@@ -65,10 +65,7 @@ impl MemFileSystem {
         let mut entries = HashMap::new();
 
         // Create root directory
-        entries.insert(
-            "/".to_string(),
-            FileEntry::new_dir(0o755),
-        );
+        entries.insert("/".to_string(), FileEntry::new_dir(0o755));
 
         Self {
             entries: Arc::new(RwLock::new(entries)),
@@ -117,11 +114,7 @@ impl MemFileSystem {
         }
 
         let normalized = Self::normalize_path(path);
-        normalized
-            .split('/')
-            .last()
-            .unwrap_or("")
-            .to_string()
+        normalized.split('/').last().unwrap_or("").to_string()
     }
 
     /// List entries in a directory

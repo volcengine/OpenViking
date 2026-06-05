@@ -17,13 +17,13 @@ use crate::crypto;
 use super::encryption_wrapper::EncryptionWrappedFS;
 use super::errors::{Error, Result};
 use super::filesystem::FileSystem;
-use super::multiwrite_wrapper::{BackendEntry, MultiWriteWrappedFS};
+use super::multiwrite_wrapper::{BackendEntry, MultiWriteWrappedFS, SyncMode};
 use super::plugin::ServicePlugin;
 use super::stats::{FilesystemStats, StatsCollector};
 use super::stats_wrapper::StatsWrappedFS;
 use super::types::{
-    BackendRole, BackendsConfig, ConfigValue, FileInfo, GrepResult,
-    PluginConfig, RedirectPolicy, TreeEntry, WriteFlag,
+    BackendRole, BackendsConfig, ConfigValue, FileInfo, GrepResult, PluginConfig, RedirectPolicy,
+    TreeEntry, WriteFlag,
 };
 
 const SHAPE_MANIFEST_PATH: &str = "/.ragfs_backend_meta.json";
@@ -88,9 +88,8 @@ pub struct MountableFS {
 impl MountableFS {
     fn expected_shape(encrypted: bool, provider_type: Option<u8>) -> Result<StorageShape> {
         if encrypted {
-            let provider_type = provider_type.ok_or_else(|| {
-                Error::config("encrypted backend shape requires provider_type")
-            })?;
+            let provider_type = provider_type
+                .ok_or_else(|| Error::config("encrypted backend shape requires provider_type"))?;
             Ok(StorageShape::Encrypted {
                 provider_type,
                 envelope_version: crypto::VERSION,
@@ -132,7 +131,10 @@ impl MountableFS {
         Ok(())
     }
 
-    async fn detect_legacy_shape(&self, raw_fs: &Arc<dyn FileSystem>) -> Result<Option<StorageShape>> {
+    async fn detect_legacy_shape(
+        &self,
+        raw_fs: &Arc<dyn FileSystem>,
+    ) -> Result<Option<StorageShape>> {
         let entries = raw_fs.tree_directory("/", true, None, None).await?;
         let mut detected: Option<StorageShape> = None;
 
@@ -203,9 +205,13 @@ impl MountableFS {
 
         let detected = self.detect_legacy_shape(raw_fs).await?;
         match detected {
-            None => self.write_shape_manifest(raw_fs, backend_type, &expected).await,
+            None => {
+                self.write_shape_manifest(raw_fs, backend_type, &expected)
+                    .await
+            }
             Some(found) if found == expected => {
-                self.write_shape_manifest(raw_fs, backend_type, &found).await
+                self.write_shape_manifest(raw_fs, backend_type, &found)
+                    .await
             }
             Some(found) => Err(Error::config(format!(
                 "backend storage shape mismatch for '{}': expected {:?}, found {:?}",
@@ -256,7 +262,11 @@ impl MountableFS {
     }
 
     /// Set the global encryption configuration for per-mount encryption wrapping.
-    pub async fn set_encryption_config(&self, root_key: Option<[u8; 32]>, provider_type: Option<u8>) {
+    pub async fn set_encryption_config(
+        &self,
+        root_key: Option<[u8; 32]>,
+        provider_type: Option<u8>,
+    ) {
         *self.encryption_root_key.write().await = root_key;
         *self.encryption_provider_type.write().await = provider_type;
     }
@@ -313,46 +323,44 @@ impl MountableFS {
         plugin.validate(&config).await?;
 
         // Branch: multi-write vs single backend
-        let (inner_fs, raw_fs): (Arc<dyn FileSystem>, Option<Arc<dyn FileSystem>>) =
-            match &config.backups {
-                None => {
-                    // Single backend: initialize plugin, optionally wrap with encryption.
-                    // Control plugins (queuefs, serverinfofs) are never encrypted.
-                    let raw = plugin.initialize(config.clone()).await?;
-                    let raw_arc: Arc<dyn FileSystem> = Arc::from(raw);
-                    let is_control_plugin = matches!(
-                        config.name.as_str(),
-                        "queuefs" | "serverinfofs"
-                    );
-                    let (enc_root_key, enc_provider_type) = self.get_encryption_config().await;
-                    if !is_control_plugin {
-                        self.ensure_backend_shape(
-                            &raw_arc,
-                            &config.name,
-                            enc_root_key.is_some() && enc_provider_type.is_some(),
-                            enc_provider_type,
-                        )
-                        .await?;
-                    }
-                    let inner: Arc<dyn FileSystem> = if is_control_plugin {
-                        raw_arc.clone()
-                    } else {
-                        match (enc_root_key, enc_provider_type) {
-                            (Some(rk), Some(pt)) => {
-                                Arc::new(EncryptionWrappedFS::new(raw_arc.clone(), rk, pt))
-                            }
-                            _ => raw_arc.clone(),
+        let (inner_fs, raw_fs): (Arc<dyn FileSystem>, Option<Arc<dyn FileSystem>>) = match &config
+            .backups
+        {
+            None => {
+                // Single backend: initialize plugin, optionally wrap with encryption.
+                // Control plugins (queuefs, serverinfofs) are never encrypted.
+                let raw = plugin.initialize(config.clone()).await?;
+                let raw_arc: Arc<dyn FileSystem> = Arc::from(raw);
+                let is_control_plugin = matches!(config.name.as_str(), "queuefs" | "serverinfofs");
+                let (enc_root_key, enc_provider_type) = self.get_encryption_config().await;
+                if !is_control_plugin {
+                    self.ensure_backend_shape(
+                        &raw_arc,
+                        &config.name,
+                        enc_root_key.is_some() && enc_provider_type.is_some(),
+                        enc_provider_type,
+                    )
+                    .await?;
+                }
+                let inner: Arc<dyn FileSystem> = if is_control_plugin {
+                    raw_arc.clone()
+                } else {
+                    match (enc_root_key, enc_provider_type) {
+                        (Some(rk), Some(pt)) => {
+                            Arc::new(EncryptionWrappedFS::new(raw_arc.clone(), rk, pt))
                         }
-                    };
-                    (inner, Some(raw_arc))
-                }
-                Some(bc) => {
-                    // Multi-write: build MultiWriteWrappedFS
-                    let mw = self.build_multi_write_fs(&config, bc).await?;
-                    let arc: Arc<dyn FileSystem> = Arc::new(mw);
-                    (arc, None)
-                }
-            };
+                        _ => raw_arc.clone(),
+                    }
+                };
+                (inner, Some(raw_arc))
+            }
+            Some(bc) => {
+                // Multi-write: build MultiWriteWrappedFS
+                let mw = self.build_multi_write_fs(&config, bc).await?;
+                let arc: Arc<dyn FileSystem> = Arc::new(mw);
+                (arc, None)
+            }
+        };
 
         // Wrap with statistics
         let wrapped_fs = StatsWrappedFS::with_arc(inner_fs);
@@ -387,9 +395,17 @@ impl MountableFS {
     ) -> Result<MultiWriteWrappedFS> {
         let (enc_root_key, enc_provider_type) = self.get_encryption_config().await;
         let global_enc_enabled = enc_root_key.is_some() && enc_provider_type.is_some();
+        if global_enc_enabled && !config.server_encryption_enabled {
+            return Err(Error::config(
+                "server_encryption_enabled must be true when global encryption is configured"
+                    .to_string(),
+            ));
+        }
 
         // 1. Initialize primary backend
-        let primary_raw = self.init_backend_plugin(&config.name, &config.params).await?;
+        let primary_raw = self
+            .init_backend_plugin(&config.name, &config.params)
+            .await?;
         self.ensure_backend_shape(
             &primary_raw,
             &config.name,
@@ -425,13 +441,11 @@ impl MountableFS {
             let backup_params = self.item_params_to_config_values(&item.params)?;
 
             // Initialize the raw backend
-            let backup_raw = self.init_backend_plugin(&item.backend, &backup_params).await?;
-            let backup_encrypted = global_enc_enabled
-                && item
-                    .encryption
-                    .as_ref()
-                    .map(|e| e.enabled)
-                    .unwrap_or(true);
+            let backup_raw = self
+                .init_backend_plugin(&item.backend, &backup_params)
+                .await?;
+            let backup_encrypted =
+                global_enc_enabled && item.encryption.as_ref().map(|e| e.enabled).unwrap_or(true);
             self.ensure_backend_shape(
                 &backup_raw,
                 &item.backend,
@@ -470,28 +484,38 @@ impl MountableFS {
                 RedirectPolicy::FileOverSizePolicy { target, .. } => target.as_ref(),
                 RedirectPolicy::FileExtensionPolicy { target, .. } => target.as_ref(),
             };
-            if let Some(target_names) = targets {
-                for name in target_names {
-                    if !backup_entries.iter().any(|be| &be.name == name) {
-                        return Err(Error::config(format!(
-                            "redirect target '{}' not found in backup entries",
-                            name
-                        )));
-                    }
+            let target_names = targets.ok_or_else(|| {
+                Error::config("redirect policy target must not be empty".to_string())
+            })?;
+            if target_names.is_empty() {
+                return Err(Error::config(
+                    "redirect policy target must not be empty".to_string(),
+                ));
+            }
+            for name in target_names {
+                if !backup_entries.iter().any(|be| &be.name == name) {
+                    return Err(Error::config(format!(
+                        "redirect target '{}' not found in backup entries",
+                        name
+                    )));
                 }
             }
         }
 
         // 4. Assemble MultiWriteWrappedFS
-        MultiWriteWrappedFS::with_backends(
-            primary_backend,
-            backup_entries,
-            config.primary_redirects.clone(),
-            &bc.sync_type,
-            bc.write_ack_count,
-            bc.write_ack_timeout_ms,
-            bc.write_concurrency,
-        )
+        let sync_mode = match bc.sync_type.as_str() {
+            "sync" => SyncMode::Sync {
+                ack_count: bc.write_ack_count.unwrap_or(usize::MAX),
+                timeout_ms: bc.write_ack_timeout_ms.unwrap_or(0),
+            },
+            _ => SyncMode::Async,
+        };
+        MultiWriteWrappedFS::builder(primary_backend)
+            .add_backups(backup_entries)
+            .with_redirects(config.primary_redirects.clone())
+            .sync_mode(sync_mode)
+            .write_concurrency(bc.write_concurrency)
+            .build()
     }
 
     /// Initialize a backend plugin by name with the given params.
@@ -505,9 +529,7 @@ impl MountableFS {
             registry
                 .get(plugin_name)
                 .cloned()
-                .ok_or_else(|| {
-                    Error::plugin(format!("Plugin '{}' not registered", plugin_name))
-                })?
+                .ok_or_else(|| Error::plugin(format!("Plugin '{}' not registered", plugin_name)))?
         };
 
         let plugin_config = PluginConfig {
@@ -938,7 +960,10 @@ mod tests {
             Ok(())
         }
 
-        async fn read(&self, _path: &str, _offset: u64, _size: u64) -> Result<Vec<u8>> {
+        async fn read(&self, path: &str, _offset: u64, _size: u64) -> Result<Vec<u8>> {
+            if path == SHAPE_MANIFEST_PATH {
+                return Err(Error::not_found(path));
+            }
             Ok(self.name.as_bytes().to_vec())
         }
 
@@ -1047,6 +1072,24 @@ mod tests {
         }
     }
 
+    /// Create a MountableFS with one registered and mounted mock plugin.
+    async fn mounted_mock(name: &str, mount_path: &str) -> MountableFS {
+        let mfs = MountableFS::new();
+        mfs.register_plugin(MockPlugin::new(name)).await;
+        mfs.mount(test_config(name, mount_path)).await.unwrap();
+        mfs
+    }
+
+    /// Create a MountableFS with two mounted mock plugins.
+    async fn mounted_two_mocks() -> MountableFS {
+        let mfs = MountableFS::new();
+        for (name, mount_path) in [("mock1", "/fs1"), ("mock2", "/fs2")] {
+            mfs.register_plugin(MockPlugin::new(name)).await;
+            mfs.mount(test_config(name, mount_path)).await.unwrap();
+        }
+        mfs
+    }
+
     #[test]
     fn test_normalize_path() {
         assert_eq!(normalize_path("/test"), "/test");
@@ -1116,12 +1159,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_filesystem_operations() {
-        let mfs = MountableFS::new();
-        mfs.register_plugin(MockPlugin::new("mock")).await;
-
-        let config = test_config("mock", "/mock");
-
-        mfs.mount(config).await.unwrap();
+        let mfs = mounted_mock("mock", "/mock").await;
 
         // Test read operation
         let data = mfs.read("/mock/test.txt", 0, 0).await.unwrap();
@@ -1141,16 +1179,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_path_routing() {
-        let mfs = MountableFS::new();
-        mfs.register_plugin(MockPlugin::new("mock1")).await;
-        mfs.register_plugin(MockPlugin::new("mock2")).await;
-
-        // Mount two filesystems
-        let config1 = test_config("mock1", "/fs1");
-        let config2 = test_config("mock2", "/fs2");
-
-        mfs.mount(config1).await.unwrap();
-        mfs.mount(config2).await.unwrap();
+        let mfs = mounted_two_mocks().await;
 
         // Test routing to different filesystems
         let data1 = mfs.read("/fs1/file.txt", 0, 0).await.unwrap();
@@ -1162,15 +1191,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_rename_across_mounts_error() {
-        let mfs = MountableFS::new();
-        mfs.register_plugin(MockPlugin::new("mock1")).await;
-        mfs.register_plugin(MockPlugin::new("mock2")).await;
-
-        let config1 = test_config("mock1", "/fs1");
-        let config2 = test_config("mock2", "/fs2");
-
-        mfs.mount(config1).await.unwrap();
-        mfs.mount(config2).await.unwrap();
+        let mfs = mounted_two_mocks().await;
 
         // Try to rename across different mounts - should fail
         let result = mfs.rename("/fs1/file.txt", "/fs2/file.txt").await;
@@ -1182,12 +1203,7 @@ mod tests {
     async fn test_concurrent_operations() {
         use tokio::task;
 
-        let mfs = Arc::new(MountableFS::new());
-        mfs.register_plugin(MockPlugin::new("mock")).await;
-
-        let config = test_config("mock", "/mock");
-
-        mfs.mount(config).await.unwrap();
+        let mfs = Arc::new(mounted_mock("mock", "/mock").await);
 
         // Spawn multiple concurrent read operations
         let mut handles = vec![];
@@ -1263,11 +1279,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_grep_routes_to_plugin() {
-        let mfs = MountableFS::new();
-        mfs.register_plugin(MockPlugin::new("mock")).await;
-
-        let config = test_config("mock", "/mock");
-        mfs.mount(config).await.unwrap();
+        let mfs = mounted_mock("mock", "/mock").await;
 
         let result = mfs
             .grep("/mock/a.txt", "foo", false, false, None, None, None)
@@ -1285,12 +1297,10 @@ mod tests {
         TreeEntry {
             path: path.to_string(),
             rel_path: rel_path.to_string(),
-            info: FileInfo {
-                name: name.to_string(),
-                size: if is_dir { 0 } else { 100 },
-                mode: if is_dir { 0o755 } else { 0o644 },
-                mod_time: std::time::UNIX_EPOCH,
-                is_dir,
+            info: if is_dir {
+                FileInfo::new_dir(name.to_string(), 0o755)
+            } else {
+                FileInfo::new_file(name.to_string(), 100, 0o644)
             },
             extra: HashMap::new(),
         }
@@ -1318,9 +1328,7 @@ mod tests {
             )],
         );
         mfs.register_plugin(plugin).await;
-        mfs.mount(test_config("rewrite", "/rewrite"))
-            .await
-            .unwrap();
+        mfs.mount(test_config("rewrite", "/rewrite")).await.unwrap();
 
         let result = mfs
             .tree_directory("/rewrite/sub", false, None, None)

@@ -331,13 +331,14 @@ class AGFSConfig(BaseModel):
             if self.redirects is not None:
                 backup_names = {item.name for item in self.backups.items}
                 for policy in self.redirects:
-                    if policy.target is not None:
-                        for target_name in policy.target:
-                            if target_name not in backup_names:
-                                raise ValueError(
-                                    f"Redirect target '{target_name}' not found in backups. "
-                                    f"Available backups: {sorted(backup_names)}"
-                                )
+                    if not policy.target:
+                        raise ValueError("Redirect target must not be empty")
+                    for target_name in policy.target:
+                        if target_name not in backup_names:
+                            raise ValueError(
+                                f"Redirect target '{target_name}' not found in backups. "
+                                f"Available backups: {sorted(backup_names)}"
+                            )
 
         return self
 
