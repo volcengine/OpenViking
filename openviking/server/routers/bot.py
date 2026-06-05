@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 
 from openviking.server.auth import get_request_context
 from openviking.server.identity import AuthMode, RequestContext
+from openviking_cli.session.user_id import validate_identifier_part
 from openviking_cli.utils.logger import get_logger
 
 router = APIRouter(prefix="", tags=["bot"])
@@ -22,6 +23,11 @@ logger = get_logger(__name__)
 # Bot API configuration - set when --with-bot is enabled
 BOT_API_URL: Optional[str] = None  # e.g., "http://localhost:18791"
 BOT_API_KEY: str = ""
+DEFAULT_BOT_AGENT_ID = "web-playground"
+DEFAULT_NAMESPACE_POLICY = {
+    "isolate_user_scope_by_agent": False,
+    "isolate_agent_scope_by_user": False,
+}
 
 
 def _create_bot_proxy_client() -> httpx.AsyncClient:
@@ -66,6 +72,21 @@ def _extract_forward_api_key(request: Request) -> str:
     return ""
 
 
+def _extract_forward_agent_id(request: Request) -> str:
+    agent_id = (
+        request.headers.get("X-OpenViking-Agent")
+        or request.headers.get("x-openviking-agent")
+        or DEFAULT_BOT_AGENT_ID
+    ).strip()
+    validation_error = validate_identifier_part(agent_id, "agent_id")
+    if validation_error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=validation_error,
+        )
+    return agent_id
+
+
 def _attach_openviking_connection(
     body: dict,
     request: Request,
@@ -95,9 +116,9 @@ def _attach_openviking_connection(
         "api_key": api_key,
         "account_id": ctx.user.account_id,
         "user_id": ctx.user.user_id,
-        "agent_id": ctx.user.agent_id,
+        "agent_id": _extract_forward_agent_id(request),
         "role": getattr(ctx.role, "value", str(ctx.role)),
-        "namespace_policy": ctx.namespace_policy.to_dict(),
+        "namespace_policy": dict(DEFAULT_NAMESPACE_POLICY),
     }
     return enriched
 
