@@ -1440,7 +1440,18 @@ class MemoryUpdater:
             content_template=schema.content_template,
             extract_context=extract_context,
         )
-        await viking_fs.write_file(uri, new_full_content, ctx=ctx)
+        try:
+            await viking_fs.write_file(uri, new_full_content, ctx=ctx)
+        except Exception as exc:
+            for apply_trace in apply_traces:
+                apply_trace["status"] = "failed"
+                apply_trace["error_type"] = type(exc).__name__
+                apply_trace["error"] = str(exc)[:500]
+            _record_apply_trace_telemetry_rows(
+                apply_traces,
+                exact_file_lock_enabled=self._use_exact_file_lock(),
+            )
+            raise
         return apply_traces
 
     def _distribute_links_to_operations(self, operations: ResolvedOperations) -> None:

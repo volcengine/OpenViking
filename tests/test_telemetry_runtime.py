@@ -275,6 +275,32 @@ def test_telemetry_summary_uses_simplified_internal_metric_keys():
     }
 
 
+def test_telemetry_summary_omits_memory_extracted_when_not_set():
+    telemetry = MemoryOperationTelemetry(
+        operation="session.commit",
+        enabled=True,
+    )
+    telemetry.count("memory.apply.trace.total", 1)
+    telemetry.count("memory.apply.trace.status.failed", 1)
+    telemetry.count("memory.apply.exact_file_lock.trace.total", 1)
+    telemetry.count("memory.apply.exact_file_lock.trace.status.failed", 1)
+
+    result = telemetry.finish().summary
+
+    assert result["memory"] == {
+        "apply": {
+            "trace": {
+                "total": 1,
+                "status": {"failed": 1},
+                "exact_file_lock": {
+                    "total": 1,
+                    "status": {"failed": 1},
+                },
+            }
+        },
+    }
+
+
 def test_init_tracer_forwards_headers_to_grpc_exporter(monkeypatch):
     captured = {}
 

@@ -240,9 +240,9 @@ class TelemetrySummaryBuilder:
             }
 
         if cls._has_metric_prefix("memory", counters, gauges):
-            memory_summary = {
-                "extracted": memories_extracted,
-            }
+            memory_summary = {}
+            if memories_extracted is not None:
+                memory_summary["extracted"] = cls._i(memories_extracted, 0)
             if cls._has_metric_prefix("memory.extract", counters, gauges):
                 memory_summary["extract"] = {
                     "duration_ms": cls._f(gauges.get("memory.extract.total.duration_ms"), 0.0),

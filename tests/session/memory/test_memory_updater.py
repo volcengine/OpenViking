@@ -1844,6 +1844,10 @@ class TestConsecutivePatchesSameURI:
         updater = MemoryUpdater(registry=registry)
         updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
         monkeypatch.setattr(
+            "openviking.session.memory.memory_updater._memory_apply_exact_file_lock_enabled",
+            lambda: True,
+        )
+        monkeypatch.setattr(
             "openviking.session.memory.memory_updater._exact_upsert_lock_context",
             lambda **kwargs: FakeExactLock(),
         )
@@ -1862,7 +1866,10 @@ class TestConsecutivePatchesSameURI:
 
         assert events == ["lock", "unlock"]
         assert mock_viking_fs.write_file.await_count == 1
-        assert "memory" not in telemetry.finish().summary
+        trace_summary = telemetry.finish().summary["memory"]["apply"]["trace"]
+        assert trace_summary["total"] == 1
+        assert trace_summary["status"]["failed"] == 1
+        assert trace_summary["exact_file_lock"]["status"]["failed"] == 1
 
     @pytest.mark.asyncio
     async def test_apply_operations_exact_existing_update_skips_stale_deleted_latest(
