@@ -256,11 +256,13 @@ export function ContextTreeNode({
   const select = useCallback(() => {
     if (entry.isDir) {
       onSelectDirectory(entry)
-      toggle()
+      if (!isOpen || isSelected) {
+        toggle()
+      }
     } else {
       onSelectFile(entry)
     }
-  }, [entry, onSelectDirectory, onSelectFile, toggle])
+  }, [entry, isOpen, isSelected, onSelectDirectory, onSelectFile, toggle])
 
   return (
     <div className="relative min-w-0">
