@@ -4,7 +4,7 @@
 ```text
 请先向用户询问 OpenViking API Key，并记为 OPENVIKING_API_KEY。
 
-请在 ~/.openviking/ovcli.conf 写入以下内容（将 ${OPENVIKING_API_KEY} 替换为用户提供的实际值）：
+请在 ~/.openviking/ovcli.conf 写入以下内容：
 {
   "url": "https://api.vikingdb.cn-beijing.volces.com/openviking",
   "api_key": "${OPENVIKING_API_KEY}"
