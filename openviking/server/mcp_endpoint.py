@@ -440,11 +440,6 @@ async def add_resource(
     watch_interval: float = 0,
     to: str = "",
     depth: int = 0,
-    max_pages: int = 100,
-    include_paths: str = "",
-    exclude_paths: str = "",
-    allow_external_links: bool = False,
-    use_playwright: bool = True,
 ) -> str:
     """Add a resource to OpenViking. Asynchronous — processing happens in the background.
 
@@ -478,7 +473,7 @@ async def add_resource(
         to: Target URI under viking://resources/ (e.g.
             "viking://resources/volcengine/OpenViking"). Leave empty to let the
             system derive a URI from the source.
-        use_playwright: Use headless browser to render JS-heavy pages (slower but more accurate for SPA).
+        depth: 爬取深度。0 代表仅抓取当前页，1 代表当前页及其直接子链接，以此类推。
     """
     from openviking.server.local_input_guard import require_remote_resource_source
 
@@ -548,11 +543,6 @@ async def add_resource(
                 watch_interval=watch_interval,
                 enforce_public_remote_targets=True,
                 depth=depth,
-                max_pages=max_pages,
-                include_paths=include_paths or None,
-                exclude_paths=exclude_paths or None,
-                allow_external_links=allow_external_links,
-                use_playwright=use_playwright,
             )
         except Exception as exc:
             return f"Error adding resource: {exc}"

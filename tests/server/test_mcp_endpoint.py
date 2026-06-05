@@ -396,7 +396,7 @@ async def test_add_resource_remote_url_is_ingested(service, monkeypatch):
 
     async def fake_add_resource(*, path, ctx, **kwargs):
         captured["path"] = path
-        captured["enforce_public_remote_targets"] = kwargs.get("enforce_public_remote_targets")
+        captured.update(kwargs)
         return {"root_uri": "viking://resources/test_remote"}
 
     monkeypatch.setattr(service.resources, "add_resource", fake_add_resource)
@@ -404,6 +404,32 @@ async def test_add_resource_remote_url_is_ingested(service, monkeypatch):
     assert "Resource added" in result
     assert captured["path"] == "https://example.com/x.md"
     assert captured["enforce_public_remote_targets"] is True
+    assert captured["depth"] == 0
+    assert "max_pages" not in captured
+    assert "include_paths" not in captured
+    assert "exclude_paths" not in captured
+    assert "allow_external_links" not in captured
+    assert "use_playwright" not in captured
+
+
+async def test_add_resource_remote_url_forwards_depth_only(service, monkeypatch):
+    captured = {}
+
+    async def fake_add_resource(*, path, ctx, **kwargs):
+        captured["path"] = path
+        captured.update(kwargs)
+        return {"root_uri": "viking://resources/test_remote_depth"}
+
+    monkeypatch.setattr(service.resources, "add_resource", fake_add_resource)
+    result = await add_resource(path="https://example.com/docs", depth=1)
+    assert "Resource added" in result
+    assert captured["path"] == "https://example.com/docs"
+    assert captured["depth"] == 1
+    assert "max_pages" not in captured
+    assert "include_paths" not in captured
+    assert "exclude_paths" not in captured
+    assert "allow_external_links" not in captured
+    assert "use_playwright" not in captured
 
 
 async def test_add_resource_temp_file_id_branch_resolves_and_ingests(
