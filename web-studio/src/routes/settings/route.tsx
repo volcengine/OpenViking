@@ -1093,9 +1093,6 @@ function SettingsRoute() {
                 </div>
                 <CardTitle>{t('connection.title')}</CardTitle>
               </div>
-              <CardDescription className="mt-1">
-                {t('connection.description')}
-              </CardDescription>
             </div>
           </div>
         </CardHeader>

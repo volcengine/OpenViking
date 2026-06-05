@@ -725,7 +725,10 @@ function JsonlToolBody({ text, toolName }: { text: string; toolName: string }) {
 function JsonlMarkdownBody({ content }: { content: string }) {
   return (
     <div className="prose prose-sm max-w-none break-words dark:prose-invert dark:prose-pre:bg-muted-foreground/20">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={markdownComponents}
+      >
         {content || 'Empty message'}
       </ReactMarkdown>
     </div>
@@ -1082,14 +1085,18 @@ export function FilePreview({
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      <div className="flex items-center justify-between border-b px-4 py-3">
+      <div className="flex min-h-14 items-center justify-between border-b px-4">
         <div className="flex min-w-0 items-center gap-2">
           <div className="min-w-0">
-            <div className="truncate text-sm font-medium">{file.name}</div>
-            <div className="text-xs text-muted-foreground">
-              {file.isDir ? 'Folder' : formatSize(file.sizeBytes ?? file.size)}{' '}
-              · {file.modTime || '-'}
+            <div className="truncate text-sm font-medium leading-5">
+              {file.name}
             </div>
+            {!file.isDir ? (
+              <div className="text-xs leading-5 text-muted-foreground">
+                {formatSize(file.sizeBytes ?? file.size)} ·{' '}
+                {file.modTime || '-'}
+              </div>
+            ) : null}
           </div>
           {editing ? (
             <div className="flex items-center gap-1">
