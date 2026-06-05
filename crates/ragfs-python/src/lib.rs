@@ -299,12 +299,19 @@ impl RAGFSBindingClient {
 impl RAGFSBindingClient {
     /// Create a new RAGFS binding client.
     ///
-    /// `config` is an optional sectioned dict (mirrors ov.conf). The `encryption` section, when
-    /// present, carries `root_key` (32 bytes) + `provider_type` (int) and causes the stack to
-    /// include an `EncryptionWrappedFS` layer. Absence of the section yields a plaintext stack.
+    /// `config_path` is a deprecated compatibility parameter kept only so legacy callers using
+    /// `RAGFSBindingClient(config_path=...)` do not fail. `config` is an optional sectioned dict
+    /// (mirrors ov.conf). The `encryption` section, when present, carries `root_key` (32 bytes) +
+    /// `provider_type` (int) and causes the stack to include an `EncryptionWrappedFS` layer.
+    /// Absence of the section yields a plaintext stack.
     #[new]
-    #[pyo3(signature = (config=None))]
-    fn new(py: Python<'_>, config: Option<HashMap<String, Py<PyAny>>>) -> PyResult<Self> {
+    #[pyo3(signature = (config_path=None, config=None))]
+    fn new(
+        py: Python<'_>,
+        config_path: Option<&str>,
+        config: Option<HashMap<String, Py<PyAny>>>,
+    ) -> PyResult<Self> {
+        let _ = config_path;
         let rt = tokio::runtime::Runtime::new()
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to create runtime: {}", e)))?;
 
@@ -690,7 +697,11 @@ impl RAGFSBindingClient {
             // Try create; if already exists, write empty to update mtime
             match top.create(&path).await {
                 Ok(_) => Ok(()),
-                Err(_) => top.write(&path, &[], 0, WriteFlag::None).await.map(|_| ()),
+                Err(_) => {
+                    let existing = top.read(&path, 0, 0).await?;
+                    top.write(&path, &existing, 0, WriteFlag::Create).await?;
+                    Ok(())
+                }
             }
         })
         .map_err(to_py_err)?;
@@ -999,12 +1010,24 @@ fn ragfs_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pyo3::types::PyDict;
 
     #[test]
     fn detach_blocking_helper_runs_without_python_objects() {
         Python::attach(|py| {
             let value: i32 = py_detach_blocking(py, || 40 + 2);
             assert_eq!(value, 42);
+        });
+    }
+
+    #[test]
+    fn constructor_accepts_legacy_config_path_keyword() {
+        Python::attach(|py| {
+            let ty = py.get_type::<RAGFSBindingClient>();
+            let kwargs = PyDict::new(py);
+            kwargs.set_item("config_path", "/tmp/legacy-ov.conf").unwrap();
+            let instance = ty.call((), Some(&kwargs));
+            assert!(instance.is_ok());
         });
     }
 }

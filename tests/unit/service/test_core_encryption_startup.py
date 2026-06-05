@@ -16,7 +16,10 @@ from openviking.utils.agfs_utils import RagfsBindingConfig
 class _FakeConfig:
     """Minimal config object exposing the service-facing to_dict API."""
 
-    storage = SimpleNamespace(agfs=SimpleNamespace(path="/tmp/ov-test", backend="local"))
+    storage = SimpleNamespace(
+        agfs=SimpleNamespace(path="/tmp/ov-test", backend="local"),
+        skip_process_lock=False,
+    )
 
     def to_dict(self) -> dict:
         return {"encryption": {"enabled": True, "provider": "local"}}
@@ -109,10 +112,34 @@ def test_ensure_data_dir_lock_acquired_once(monkeypatch, tmp_path):
 
     monkeypatch.setattr("openviking.utils.process_lock.acquire_data_dir_lock", _acquire)
     service = OpenVikingService.__new__(OpenVikingService)
-    service._config = SimpleNamespace(storage=SimpleNamespace(workspace=str(tmp_path)))
+    service._config = SimpleNamespace(
+        storage=SimpleNamespace(workspace=str(tmp_path), skip_process_lock=False)
+    )
     service._data_dir_lock_acquired = False
 
     service._ensure_data_dir_lock_acquired()
     service._ensure_data_dir_lock_acquired()
 
     assert calls == [str(tmp_path)]
+
+
+def test_ensure_data_dir_lock_respects_skip_process_lock(monkeypatch, tmp_path):
+    """Skip lock acquisition entirely when storage.skip_process_lock is enabled."""
+
+    calls = []
+
+    def _acquire(path: str) -> str:
+        calls.append(path)
+        return str(tmp_path / ".openviking.pid")
+
+    monkeypatch.setattr("openviking.utils.process_lock.acquire_data_dir_lock", _acquire)
+    service = OpenVikingService.__new__(OpenVikingService)
+    service._config = SimpleNamespace(
+        storage=SimpleNamespace(workspace=str(tmp_path), skip_process_lock=True)
+    )
+    service._data_dir_lock_acquired = False
+
+    service._ensure_data_dir_lock_acquired()
+
+    assert calls == []
+    assert service._data_dir_lock_acquired is True

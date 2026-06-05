@@ -20,6 +20,8 @@ use super::errors::{Error, Result};
 use super::filesystem::{compile_grep_regex, normalize_prefix_path, FileSystem};
 use super::types::{FileInfo, GrepResult, TreeEntry, WriteFlag};
 
+const SYSTEM_ACCOUNT_ID: &str = "_system";
+
 /// A `FileSystem` wrapper that applies envelope encryption to file content.
 pub struct EncryptionWrappedFS {
     /// Wrapped lower layer (typically `MountableFS`).
@@ -91,6 +93,32 @@ impl EncryptionWrappedFS {
             || path == "/serverinfo"
             || path.starts_with("/serverinfo/")
     }
+
+    /// Derive the encryption account domain from a filesystem path.
+    ///
+    /// `/local/{account_id}/...` paths are tenant-scoped and use that account id. Control or
+    /// non-local paths do not encode a tenant and therefore use the reserved system account.
+    fn encryption_account_domain(path: &str) -> &str {
+        let trimmed = path.trim_start_matches('/');
+        let mut parts = trimmed.split('/');
+        match (parts.next(), parts.next()) {
+            (Some("local"), Some(account_id)) if !account_id.is_empty() => account_id,
+            _ => SYSTEM_ACCOUNT_ID,
+        }
+    }
+
+    /// Reject raw path moves across different encryption account domains.
+    fn ensure_same_encryption_domain(old_path: &str, new_path: &str) -> Result<()> {
+        let old_account = Self::encryption_account_domain(old_path);
+        let new_account = Self::encryption_account_domain(new_path);
+        if old_account != new_account {
+            return Err(Error::internal(format!(
+                "cross-account rename is not supported for encrypted blobs: {:?} -> {:?}",
+                old_account, new_account
+            )));
+        }
+        Ok(())
+    }
 }
 
 /// Slice `data` by `(offset, size)` with `size == 0` meaning "to end", matching plugin read semantics.
@@ -136,6 +164,11 @@ impl FileSystem for EncryptionWrappedFS {
         if offset != 0 {
             return Err(Error::internal(
                 "encrypted write only supports whole-file write (offset must be 0)",
+            ));
+        }
+        if !matches!(flags, WriteFlag::Create | WriteFlag::Truncate) {
+            return Err(Error::internal(
+                "encrypted write requires whole-blob replacement (flags must be Create or Truncate)",
             ));
         }
         let account_id = self.require_account_id()?;
@@ -231,8 +264,9 @@ impl FileSystem for EncryptionWrappedFS {
     }
 
     async fn rename(&self, old_path: &str, new_path: &str) -> Result<()> {
-        // Pure path operation: ciphertext blob moves with the path, account_id unchanged within a
-        // tenant, so delegation is correct (no decrypt/re-encrypt needed).
+        // Pure path operation is only safe within the same encryption account domain. Crossing
+        // domains would move ciphertext under a different derived account key and make it unreadable.
+        Self::ensure_same_encryption_domain(old_path, new_path)?;
         self.inner.rename(old_path, new_path).await
     }
 
@@ -277,6 +311,20 @@ mod tests {
         m.mount(PluginConfig {
             name: "memfs".to_string(),
             mount_path: "/mem".to_string(),
+            params: HashMap::new(),
+        })
+        .await
+        .unwrap();
+        m
+    }
+
+    /// Build a memfs-backed stack mounted at the provided path for path-sensitive tests.
+    async fn memfs_stack_at(mount_path: &str) -> Arc<MountableFS> {
+        let m = Arc::new(MountableFS::new());
+        m.register_plugin(MemFSPlugin).await;
+        m.mount(PluginConfig {
+            name: "memfs".to_string(),
+            mount_path: mount_path.to_string(),
             params: HashMap::new(),
         })
         .await
@@ -424,5 +472,53 @@ mod tests {
             .scope(ctx("acct-B"), async { enc.read("/mem/a.txt", 0, 0).await })
             .await;
         assert!(bad.is_err());
+    }
+
+    #[tokio::test]
+    async fn write_rejects_append_flag() {
+        let inner = memfs_stack().await;
+        let enc = EncryptionWrappedFS::new(inner, [4u8; 32], crypto::PROVIDER_LOCAL);
+        FS_CTX
+            .scope(ctx("t"), async {
+                enc.write("/mem/a.txt", b"first", 0, WriteFlag::Create)
+                    .await
+                    .unwrap();
+                let appended = enc.write("/mem/a.txt", b"second", 0, WriteFlag::Append).await;
+                assert!(appended.is_err());
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn write_rejects_non_replacing_none_flag() {
+        let inner = memfs_stack().await;
+        let enc = EncryptionWrappedFS::new(inner, [4u8; 32], crypto::PROVIDER_LOCAL);
+        FS_CTX
+            .scope(ctx("t"), async {
+                enc.write("/mem/a.txt", b"first", 0, WriteFlag::Create)
+                    .await
+                    .unwrap();
+                let rewritten = enc.write("/mem/a.txt", b"second", 0, WriteFlag::None).await;
+                assert!(rewritten.is_err());
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn rename_rejects_cross_account_paths() {
+        let inner = memfs_stack_at("/local").await;
+        let enc = EncryptionWrappedFS::new(inner, [5u8; 32], crypto::PROVIDER_LOCAL);
+        let result = FS_CTX
+            .scope(ctx("acct-a"), async {
+                enc.mkdir("/local/acct-a", 0).await.unwrap();
+                enc.mkdir("/local/acct-b", 0).await.unwrap();
+                enc.write("/local/acct-a/file.txt", b"owned", 0, WriteFlag::Create)
+                    .await
+                    .unwrap();
+                enc.rename("/local/acct-a/file.txt", "/local/acct-b/file.txt")
+                    .await
+            })
+            .await;
+        assert!(result.is_err());
     }
 }
