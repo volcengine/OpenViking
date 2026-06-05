@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi import Path as ApiPath
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from openviking.core.namespace import canonical_agent_root
+from openviking.core.namespace import canonical_user_root
 from openviking.core.skill_loader import SkillLoader
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
@@ -68,7 +68,7 @@ class ValidateSkillRequest(BaseModel):
 
 
 def _agent_skills_root(ctx: RequestContext) -> str:
-    return f"{canonical_agent_root(ctx)}/skills"
+    return f"{canonical_user_root(ctx)}/skills"
 
 
 def _validate_skill_name(skill_name: str) -> str:

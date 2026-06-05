@@ -163,22 +163,7 @@ async def test_skills_api_update_requires_matching_name(client):
 
 
 async def test_skills_api_show_reads_source_metadata_and_hides_internal_file(client):
-    added = await _add_skill(client, "source-skill", "Source metadata skill")
-    metadata_uri = f"{added['root_uri']}/.source.json"
-
-    write_response = await client.post(
-        "/api/v1/content/write",
-        json={
-            "uri": metadata_uri,
-            "content": (
-                '{"type":"git","clone_url":"https://github.com/acme/skills.git",'
-                '"ref_name":"main","subdir":"skills/source-skill","skill_name":"source-skill"}'
-            ),
-            "mode": "replace",
-            "wait": True,
-        },
-    )
-    assert write_response.status_code == 200, write_response.text
+    await _add_skill(client, "source-skill", "Source metadata skill")
 
     show_response = await client.get(
         "/api/v1/skills/source-skill",
@@ -187,9 +172,10 @@ async def test_skills_api_show_reads_source_metadata_and_hides_internal_file(cli
     assert show_response.status_code == 200, show_response.text
     shown = show_response.json()["result"]
     assert shown["source"]["tracked"] is True
-    assert shown["source"]["type"] == "git"
-    assert shown["source"]["clone_url"] == "https://github.com/acme/skills.git"
-    assert shown["source"]["subdir"] == "skills/source-skill"
+    assert shown["source"]["type"] == "api"
+    assert shown["source"]["source"] == "inline_content"
+    assert shown["source"]["operation"] == "add"
+    assert shown["source"]["skill_name"] == "source-skill"
     assert all(file["path"] != ".source.json" for file in shown["files"])
 
 
@@ -222,10 +208,11 @@ async def test_skills_api_update_accepts_binary_auxiliary_files(client, tmp_path
         json={"temp_file_id": temp_file_id, "wait": True},
     )
     assert update_response.status_code == 200, update_response.text
+    root_uri = update_response.json()["result"]["root_uri"]
 
     download_response = await client.get(
         "/api/v1/content/download",
-        params={"uri": "viking://agent/default/skills/binary-skill/preview.bin"},
+        params={"uri": f"{root_uri}/preview.bin"},
     )
     assert download_response.status_code == 200, download_response.text
     assert download_response.content.startswith(b"\xff\xd8\xff\xe0")
