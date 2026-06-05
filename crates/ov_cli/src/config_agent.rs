@@ -169,7 +169,7 @@ pub(crate) fn switch(name: String, _ctx: &CliContext) -> AgentResult<AgentOutput
     Ok(AgentOutput::Switch(SwitchResult {
         action: "switch",
         name,
-        kind: ConfigKind::from_config(&config).label(),
+        kind: ConfigKind::from_config(&config).compact_label(),
         url: config.url,
         active_path: path_string(store.active_path()),
         activated: true,
@@ -184,7 +184,7 @@ pub(crate) fn list(_ctx: &CliContext) -> AgentResult<AgentOutput> {
         .into_iter()
         .map(|entry| ListEntry {
             name: entry.name,
-            kind: entry.kind.label(),
+            kind: entry.kind.compact_label(),
             url: entry.config.url,
             active: entry.is_active,
         })
@@ -714,7 +714,7 @@ fn add_edit_result(
     AddEditResult {
         action,
         name: name.to_string(),
-        kind: kind.label(),
+        kind: kind.compact_label(),
         url: config.url.clone(),
         saved_path: store
             .saved_config_path(name)
@@ -855,7 +855,7 @@ fn config_name_or_generate(
 
     let prefix = match kind {
         ConfigKind::OpenVikingService => "ov-service",
-        ConfigKind::Custom => "local",
+        ConfigKind::Custom => "custom",
     };
     for _ in 0..32 {
         let suffix = Uuid::new_v4().simple().to_string();
@@ -1032,10 +1032,35 @@ mod tests {
         let dir = unique_dir("name");
         fs::create_dir_all(&dir).expect("dir should exist");
         let store = ConfigStore::for_config_dir(dir);
+
         let name = config_name_or_generate(&store, None, ConfigKind::OpenVikingService)
             .expect("name should generate");
         assert!(name.starts_with("ov-service-"));
         validate_config_name(&name).expect("generated name should be valid");
+
+        let name =
+            config_name_or_generate(&store, None, ConfigKind::Custom).expect("name should generate");
+        assert!(name.starts_with("custom-"));
+        validate_config_name(&name).expect("generated name should be valid");
+    }
+
+    #[test]
+    fn agent_json_kind_uses_compact_provider_label() {
+        let dir = unique_dir("json-kind");
+        fs::create_dir_all(&dir).expect("dir should exist");
+        let store = ConfigStore::for_config_dir(dir);
+        let config = sample_config(OPENVIKING_SERVICE_URL, Some("key"));
+
+        let result = add_edit_result(
+            &store,
+            "add",
+            "serverless",
+            ConfigKind::OpenVikingService,
+            &config,
+            false,
+        );
+
+        assert_eq!(result.kind, "OpenViking Service");
     }
 
     #[test]

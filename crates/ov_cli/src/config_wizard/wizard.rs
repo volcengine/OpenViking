@@ -246,7 +246,7 @@ fn compact_kind_label(kind: ConfigKind) -> &'static str {
 
 fn provider_labels(language: Language) -> [&'static str; 2] {
     match language {
-        Language::En => ["OpenViking Service (VolcEngine Cloud)", "Custom"],
+        Language::En => [ConfigKind::OpenVikingService.label(), "Custom"],
         Language::ZhCn => ["OpenViking 服务（火山引擎云）", "自定义"],
     }
 }
@@ -3088,7 +3088,7 @@ fn prompt_add_config_name(
 pub(crate) fn allocate_config_name(store: &ConfigStore, kind: ConfigKind) -> Result<String> {
     let prefix = match kind {
         ConfigKind::OpenVikingService => "ov-service",
-        ConfigKind::Custom => "local",
+        ConfigKind::Custom => "custom",
     };
 
     for _ in 0..32 {
@@ -4411,8 +4411,8 @@ mod tests {
         let name = allocate_config_name(&store, ConfigKind::Custom)
             .expect("generated name should be available");
 
-        assert!(name.starts_with("local-"));
-        assert_eq!(name.len(), "local-".len() + 6);
+        assert!(name.starts_with("custom-"));
+        assert_eq!(name.len(), "custom-".len() + 6);
         validate_config_name(&name).expect("generated name should be valid");
     }
 
