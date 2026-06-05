@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 from typing import Any, Dict
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class MemoryConfig(BaseModel):
@@ -92,6 +92,15 @@ class MemoryConfig(BaseModel):
     )
 
     model_config = {"extra": "forbid"}
+
+    @model_validator(mode="before")
+    @classmethod
+    def _compat_agent_memory_enabled(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "agent_memory_enabled" in data:
+            data = data.copy()
+            agent_enabled = data.pop("agent_memory_enabled")
+            data.setdefault("disable_agent_memory", not agent_enabled)
+        return data
 
     @field_validator("version")
     @classmethod

@@ -213,10 +213,16 @@ def test_openviking_config_memory_disable_agent_memory(monkeypatch):
         {"memory": {"experimental_memory_switch": True}}
     )
 
+    # backward compat: old agent_memory_enabled field is converted
+    compat_enabled_config = OpenVikingConfig.from_dict({"memory": {"agent_memory_enabled": True}})
+    compat_disabled_config = OpenVikingConfig.from_dict({"memory": {"agent_memory_enabled": False}})
+
     assert default_config.memory.disable_agent_memory is False
     assert disabled_config.memory.disable_agent_memory is True
     assert experimental_config.memory.experimental_memory_switch is True
     assert experimental_config.memory.disable_agent_memory is False
+    assert compat_enabled_config.memory.disable_agent_memory is False
+    assert compat_disabled_config.memory.disable_agent_memory is True
 
     OpenVikingConfigSingleton.reset_instance()
 
