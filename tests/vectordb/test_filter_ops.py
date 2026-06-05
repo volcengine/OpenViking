@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import gc
+import json
 import random
 import shutil
 import time
@@ -138,22 +139,30 @@ class TestFilterOpsLargeFields(unittest.TestCase):
         }
         return get_or_create_local_collection(meta_data=collection_meta, path=self.path)
 
-    def test_upsert_record_with_oversized_json_field_raises(self):
+    def test_upsert_record_with_oversized_json_field_is_truncated(self):
         large_abstract = 'prefix "quoted" \\\\ path\n' + ("x" * 66000)
         uri = "viking://user/memories/large.md"
-        with self.assertRaisesRegex(
-            (RuntimeError, ValueError), "fields.*exceeds 65535 bytes"
-        ):
-            self.collection.upsert_data(
-                [
-                    {
-                        "id": 1,
-                        "embedding": [1.0, 0, 0, 0],
-                        "uri": uri,
-                        "abstract": large_abstract,
-                    }
-                ]
-            )
+        result = self.collection.upsert_data(
+            [
+                {
+                    "id": 1,
+                    "embedding": [1.0, 0, 0, 0],
+                    "uri": uri,
+                    "abstract": large_abstract,
+                }
+            ]
+        )
+
+        self.assertEqual(result.ids, [1])
+        inner = self.collection._Collection__collection
+        stored = inner.store_mgr.get_all_cands_data()[0]
+        self.assertLessEqual(len(stored.fields.encode("utf-8")), 65535)
+
+        fields = json.loads(stored.fields)
+        self.assertEqual(fields["id"], 1)
+        self.assertEqual(fields["uri"], uri)
+        self.assertLess(len(fields["abstract"]), len(large_abstract))
+        self.assertTrue(fields["abstract"].endswith("...[openviking:truncated]"))
 
 
 class TestFilterOpsComplex(unittest.TestCase):
