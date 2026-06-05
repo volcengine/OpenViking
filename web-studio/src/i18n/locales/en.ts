@@ -234,6 +234,7 @@ const en = {
     toast: {
       accountCreated: 'Account created',
       connectionSaved: 'Connection saved',
+      copyFailed: 'Copy failed',
       copied: 'Copied',
       dataKeySelected: 'User API key selected',
       keyRegenerated: 'API key regenerated',
@@ -731,6 +732,32 @@ const en = {
       placeholder: 'Enter a CLI command, e.g. /status',
       suggestionsTitle: 'Command suggestions',
       suggestionsHint: '↑↓ select · Tab complete · Enter run',
+      quickStart: {
+        title: 'Quick start',
+        addResource: {
+          title: 'Add a resource',
+          command: '/add-resource',
+          code: 'Import docs or files into viking://resources',
+        },
+        addMemory: {
+          title: 'Add memory',
+          command: 'Agent remembers from chat',
+          code: 'Send a message in the Agent panel, then commit the session',
+        },
+        find: {
+          title: 'Find related context',
+          command: '/find openviking value',
+          code: 'Search resources, memories, and skills from the current scope',
+        },
+      },
+      commandGroups: {
+        core: 'Core commands',
+        filesystem: 'Filesystem',
+        search: 'Search and summaries',
+        status: 'Status',
+        resource: 'Resource paths',
+        history: 'History',
+      },
       groupLabels: {
         resources: 'resource',
         memories: 'memory',

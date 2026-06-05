@@ -74,6 +74,20 @@ pub(crate) fn relative_depth(rel: &str) -> usize {
     }
 }
 
+/// Compile a grep pattern into a `Regex`, applying the case-insensitive `(?i)` prefix.
+///
+/// Shared by the trait's default `grep` and by `EncryptionWrappedFS::grep`, so the regex setup
+/// lives in exactly one place (no copy-paste drift between the two call sites).
+pub(crate) fn compile_grep_regex(pattern: &str, case_insensitive: bool) -> Result<Regex> {
+    let regex_pattern = if case_insensitive {
+        format!("(?i){}", pattern)
+    } else {
+        pattern.to_string()
+    };
+    Regex::new(&regex_pattern)
+        .map_err(|e| Error::invalid_operation(format!("Invalid regex pattern: {}", e)))
+}
+
 /// Core filesystem abstraction trait
 ///
 /// All filesystem plugins must implement this trait to provide file operations.
@@ -257,15 +271,7 @@ pub trait FileSystem: Send + Sync {
         exclude_path: Option<&str>,
         level_limit: Option<usize>,
     ) -> Result<GrepResult> {
-        let regex_pattern = if case_insensitive {
-            format!("(?i){}", pattern)
-        } else {
-            pattern.to_string()
-        };
-
-        let re = Regex::new(&regex_pattern).map_err(|e| {
-            super::errors::Error::invalid_operation(format!("Invalid regex pattern: {}", e))
-        })?;
+        let re = compile_grep_regex(pattern, case_insensitive)?;
 
         let mut result = GrepResult::new();
         let normalized_path = normalize_prefix_path(path);

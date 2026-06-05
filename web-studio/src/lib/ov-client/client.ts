@@ -20,7 +20,6 @@ const DEFAULT_TELEMETRY_PATHS = new Set([
 ])
 const CONTROL_PLANE_PREFIXES = ['/api/v1/admin', '/api/v1/console'] as const
 const SESSION_COMMIT_PATH = /^\/api\/v1\/sessions\/[^/]+\/commit$/
-
 function isBrowser(): boolean {
   return typeof window !== 'undefined'
 }

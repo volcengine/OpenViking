@@ -234,6 +234,7 @@ const zhCN = {
     toast: {
       accountCreated: 'Account 已创建',
       connectionSaved: '连接已保存',
+      copyFailed: '复制失败',
       copied: '已复制',
       dataKeySelected: '已选择 User API key',
       keyRegenerated: 'API key 已重新生成',
@@ -712,6 +713,32 @@ const zhCN = {
       placeholder: '输入 CLI 命令，例如 /status',
       suggestionsTitle: '命令建议',
       suggestionsHint: '↑↓ 选择 · Tab 补全 · Enter 执行',
+      quickStart: {
+        title: '快速开始',
+        addResource: {
+          title: '添加资源',
+          command: '/add-resource',
+          code: '导入文档或文件到 viking://resources',
+        },
+        addMemory: {
+          title: '添加记忆',
+          command: 'Agent 对话后自动沉淀',
+          code: '在 Agent 面板发送消息，然后提交会话',
+        },
+        find: {
+          title: '查找相关上下文',
+          command: '/find openviking 价值',
+          code: '在当前范围内搜索资源、记忆和技能',
+        },
+      },
+      commandGroups: {
+        core: '核心命令',
+        filesystem: '文件系统',
+        search: '搜索与摘要',
+        status: '状态',
+        resource: '资源路径',
+        history: '历史记录',
+      },
       groupLabels: {
         resources: '资源',
         memories: '记忆',

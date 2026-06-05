@@ -263,5 +263,5 @@ registry.register(MyAccessor())
 
 ## 相关文档
 
-- [解析系统 README](../../openviking/parse/parsers/README.md)
+- [解析系统 README](https://github.com/volcengine/OpenViking/blob/main/openviking/parse/parsers/README.md)
 - [OpenViking 整体架构](../zh/concepts/01-architecture.md)

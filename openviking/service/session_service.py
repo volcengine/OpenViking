@@ -6,13 +6,14 @@ Session Service for OpenViking.
 Provides session management operations: session, sessions, add_message, commit, delete.
 """
 
+import json
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.core.namespace import canonical_session_uri
 from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker import get_task_tracker
-from openviking.session import Session
+from openviking.session import Session, SessionMeta
 from openviking.session.memory_policy import MemoryPolicy
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import VikingFS
@@ -111,13 +112,56 @@ class SessionService:
         )
 
     @staticmethod
-    def _assert_session_owner(session: Session, ctx: RequestContext) -> None:
-        meta = session.meta
-        if (
-            meta.created_by_account_id != ctx.account_id
-            or meta.created_by_user_id != ctx.user.user_id
-        ):
-            raise NotFoundError(session.session_id, "session")
+    def _session_account_id(meta: SessionMeta) -> str:
+        return getattr(meta, "created_by_account_id", "") or getattr(meta, "account_id", "")
+
+    def _session_is_visible_in_account(self, ctx: RequestContext, meta: SessionMeta) -> bool:
+        if ctx.role == Role.ROOT:
+            return True
+
+        account_id = self._session_account_id(meta)
+        return bool(account_id and account_id == ctx.account_id)
+
+    async def _read_session_meta(self, session_id: str, ctx: RequestContext) -> SessionMeta:
+        self._ensure_initialized()
+        raw = await self._viking_fs.read_file(
+            f"{canonical_session_uri(session_id)}/.meta.json",
+            ctx=ctx,
+        )
+        data = json.loads(raw)
+        if not data.get("created_by_account_id") and data.get("account_id"):
+            data["created_by_account_id"] = data["account_id"]
+        return SessionMeta.from_dict(data)
+
+    async def _load_session_meta_for_visibility(
+        self, session_id: str, ctx: RequestContext
+    ) -> SessionMeta:
+        """Read persisted metadata, deriving legacy fields without writing side effects."""
+        try:
+            meta = await self._read_session_meta(session_id, ctx)
+        except Exception:
+            session = self.session(ctx, session_id)
+            await session.load()
+            meta = session.meta
+            if not meta.session_id:
+                meta.session_id = session_id
+        if not meta.created_by_account_id:
+            session = self.session(ctx, session_id)
+            await session.load()
+            meta = session.meta
+            if not meta.session_id:
+                meta.session_id = session_id
+        return meta
+
+    async def _assert_session_visible(self, session_id: str, ctx: RequestContext) -> None:
+        if ctx.role == Role.ROOT:
+            return
+        try:
+            meta = await self._load_session_meta_for_visibility(session_id, ctx)
+        except Exception as exc:
+            raise NotFoundError(session_id, "session") from exc
+        if not self._session_is_visible_in_account(ctx, meta):
+            raise NotFoundError(session_id, "session")
 
     async def create(
         self,
@@ -170,8 +214,9 @@ class SessionService:
                 if not auto_create:
                     raise NotFoundError(session_id, "session")
                 await session.ensure_exists()
+            else:
+                await self._assert_session_visible(session_id, ctx)
             await session.load()
-            self._assert_session_owner(session, ctx)
             self._record_lifecycle_metric("get", "ok")
             return session
         except Exception:
@@ -194,12 +239,13 @@ class SessionService:
                 name = entry.get("name", "")
                 if name in [".", ".."]:
                     continue
-                try:
-                    session = self.session(ctx, name)
-                    await session.load()
-                    self._assert_session_owner(session, ctx)
-                except Exception:
-                    continue
+                if ctx.role != Role.ROOT:
+                    try:
+                        meta = await self._load_session_meta_for_visibility(name, ctx)
+                    except Exception:
+                        continue
+                    if not self._session_is_visible_in_account(ctx, meta):
+                        continue
                 sessions.append(
                     {
                         "session_id": name,

@@ -1073,7 +1073,7 @@ print(f"Status: {task['status']}")
 }
 ```
 
-`stage` is nullable. Resource import tasks may report `queued`, `fetching`, `parsing`, `finalizing`, or `processing_queue`; other task types may leave it as `null`. Live queue counters are intentionally not part of task status; use observer queue APIs for live counts, or read `result.queue_status` after completion.
+`stage` is nullable. Git repository resource import tasks may report `queued`, `fetching`, `parsing`, `finalizing`, or `processing_queue`; other task types may leave it as `null`. Live queue counters are intentionally not part of task status; use observer queue APIs for live counts, or read `result.queue_status` after completion.
 
 **Response Example (completed)**
 

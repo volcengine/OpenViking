@@ -2,7 +2,7 @@ import asyncio
 import json
 import re
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from loguru import logger
 
@@ -13,12 +13,28 @@ from vikingbot.openviking_mount.user_apikey_manager import UserApiKeyManager
 viking_resource_prefix = "viking://resources/"
 
 
+def _is_session_key(agent_id: Optional[str]) -> bool:
+    return agent_id is not None and "__" in agent_id
+
+
 class VikingClient:
-    def __init__(self, workspace_id: Optional[str] = None):
+    def __init__(
+        self,
+        workspace_id: Optional[str] = None,
+        *,
+        agent_id: Optional[str] = None,
+        connection: Optional[Mapping[str, Any]] = None,
+    ):
+        if agent_id is None:
+            agent_id = workspace_id
+        if agent_id and "#" in agent_id:
+            agent_id = agent_id.split("#", 1)[0]
+
         config = load_config()
         openviking_config = config.ov_server
         self.openviking_config = openviking_config
-        self.workspace_id = workspace_id
+        self.workspace_id = agent_id
+        self.agent_id = agent_id
         self.ov_path = config.ov_data_path
         self.mode = openviking_config.mode
         self.api_key_type = (openviking_config.api_key_type or "root").strip().lower()
@@ -28,12 +44,27 @@ class VikingClient:
         self._apikey_manager = None
         self.admin_user_client = None
         self._user_clients = {}
+        self._namespace_policy = {
+            "isolate_user_scope_by_agent": False,
+            "isolate_agent_scope_by_user": False,
+        }
+        self._namespace_policy_loaded = False
+        self._request_connection = self._normalize_connection(connection)
+        self._request_role: str | None = None
 
         if openviking_config.mode == "local":
-            self.client = ov.AsyncHTTPClient(url=openviking_config.server_url)
+            if agent_id is None or _is_session_key(agent_id):
+                self.client = ov.AsyncHTTPClient(url=openviking_config.server_url)
+                self.agent_id = "default"
+            else:
+                self.client = ov.AsyncHTTPClient(url=openviking_config.server_url)
             self.account_id = "default"
             self.user_id = "default"
             self.admin_user_id = "default"
+            return
+
+        if self._request_connection:
+            self._configure_request_connection(agent_id)
             return
 
         self.account_id = openviking_config.account_id
@@ -56,14 +87,74 @@ class VikingClient:
                 account_id=openviking_config.account_id,
             )
 
+    @staticmethod
+    def _normalize_connection(
+        connection: Optional[Mapping[str, Any]],
+    ) -> dict[str, Any] | None:
+        if not isinstance(connection, Mapping):
+            return None
+        normalized: dict[str, Any] = {}
+        for key in ("api_key", "account_id", "user_id", "agent_id", "role", "server_url"):
+            value = connection.get(key)
+            if isinstance(value, str) and value.strip():
+                normalized[key] = value.strip()
+        policy = connection.get("namespace_policy")
+        if isinstance(policy, Mapping):
+            normalized["namespace_policy"] = {
+                "isolate_user_scope_by_agent": bool(
+                    policy.get("isolate_user_scope_by_agent", False)
+                ),
+                "isolate_agent_scope_by_user": bool(
+                    policy.get("isolate_agent_scope_by_user", False)
+                ),
+            }
+        if not normalized.get("api_key"):
+            return None
+        return normalized
+
+    def _configure_request_connection(self, agent_id: Optional[str]) -> None:
+        connection = self._request_connection or {}
+        self.mode = "remote"
+        request_role = str(connection.get("role") or "").strip().lower()
+        self._request_role = request_role or None
+        self.api_key_type = "user"
+        self.agent_id = connection.get("agent_id") or agent_id
+        self.workspace_id = self.agent_id
+        self.account_id = connection.get("account_id") or self.openviking_config.account_id
+        self.admin_user_id = connection.get("user_id") or self.openviking_config.admin_user_id
+
+        policy = connection.get("namespace_policy")
+        if isinstance(policy, dict):
+            self._namespace_policy = policy
+            self._namespace_policy_loaded = True
+
+        remote_client_kwargs = {
+            "url": connection.get("server_url") or self.openviking_config.server_url,
+            "api_key": connection["api_key"],
+            "profile_enabled": False,
+        }
+        if request_role != "user" and self.account_id:
+            remote_client_kwargs["account"] = self.account_id
+        if request_role != "user" and self.admin_user_id:
+            remote_client_kwargs["user"] = self.admin_user_id
+
+        self.client = ov.AsyncHTTPClient(**remote_client_kwargs)
+
     async def _initialize(self):
         """Initialize the client (must be called after construction)"""
         await self.client.initialize()
+        await self._load_namespace_policy()
 
     @classmethod
-    async def create(cls, workspace_id: Optional[str] = None):
+    async def create(
+        cls,
+        workspace_id: Optional[str] = None,
+        *,
+        agent_id: Optional[str] = None,
+        connection: Optional[Mapping[str, Any]] = None,
+    ):
         """Factory method to create and initialize a VikingClient instance."""
-        instance = cls(workspace_id=workspace_id)
+        instance = cls(workspace_id=workspace_id, agent_id=agent_id, connection=connection)
         await instance._initialize()
         return instance
 
@@ -93,20 +184,78 @@ class VikingClient:
         }
 
     def _is_root_key_mode(self) -> bool:
-        return self.mode == "remote" and self.api_key_type == "root"
+        return (
+            self.mode == "remote"
+            and self.api_key_type == "root"
+            and not self._has_request_connection()
+        )
 
     def _is_user_key_mode(self) -> bool:
-        return self.mode == "remote" and self.api_key_type == "user"
+        return (
+            self.mode == "remote"
+            and self.api_key_type == "user"
+            and not self._has_request_connection()
+        )
+
+    def _has_request_connection(self) -> bool:
+        return self._request_connection is not None
+
+    def should_sender_fanout(self) -> bool:
+        return self._is_root_key_mode()
 
     def _effective_user_id(self, user_id: Optional[str]) -> str:
+        if self._has_request_connection():
+            return user_id or self.admin_user_id
         if self._is_user_key_mode():
             return ""
         return user_id or self.admin_user_id
+
+    def _effective_session_user_id(self, user_id: Optional[str] = None) -> Optional[str]:
+        if self._has_request_connection():
+            return self.admin_user_id or user_id
+        return user_id or self.admin_user_id
+
+    async def _load_namespace_policy(self) -> None:
+        if self._namespace_policy_loaded:
+            return
+
+        policy = {
+            "isolate_user_scope_by_agent": False,
+            "isolate_agent_scope_by_user": False,
+        }
+        if self._has_request_connection():
+            self._namespace_policy = policy
+            self._namespace_policy_loaded = True
+            return
+
+        if self.mode == "remote" and self.account_id:
+            try:
+                accounts = await self.client.admin_list_accounts()
+                for account in accounts or []:
+                    if account.get("account_id") == self.account_id:
+                        policy = {
+                            "isolate_user_scope_by_agent": bool(
+                                account.get("isolate_user_scope_by_agent", False)
+                            ),
+                            "isolate_agent_scope_by_user": bool(
+                                account.get("isolate_agent_scope_by_user", False)
+                            ),
+                        }
+                        break
+            except Exception as e:
+                logger.warning(
+                    f"Failed to load account namespace policy for {self.account_id}: {e}"
+                )
+
+        self._namespace_policy = policy
+        self._namespace_policy_loaded = True
 
     def _user_space_fragment(self, user_id: Optional[str]) -> str:
         effective_user_id = self._effective_user_id(user_id)
         if not effective_user_id:
             return ""
+        if self._namespace_policy["isolate_user_scope_by_agent"] and self.agent_id:
+            return f"{effective_user_id}/agent/{self.agent_id}"
         return effective_user_id
 
     def _memory_target_uri(self, user_id: Optional[str]) -> str:
@@ -117,9 +266,6 @@ class VikingClient:
 
     def _skill_memory_uri(self, skill_name: str, user_id: Optional[str] = None) -> str:
         return f"{self._memory_target_uri(user_id)}skills/{skill_name}.md"
-
-    def should_sender_fanout(self) -> bool:
-        return self._is_root_key_mode()
 
     async def find(self, query: str, target_uri: Optional[str] = None):
         """搜索资源"""
@@ -225,7 +371,7 @@ class VikingClient:
 
     async def _check_user_exists(self, user_id: str) -> bool:
         """检查用户是否存在于账户中。"""
-        if self.mode == "local" or self._is_user_key_mode():
+        if self.mode == "local" or self._is_user_key_mode() or self._has_request_connection():
             return True
         if not user_id:
             return False
@@ -240,7 +386,7 @@ class VikingClient:
 
     async def _initialize_user(self, user_id: str, role: str = "user") -> bool:
         """初始化用户。"""
-        if self.mode == "local" or self._is_user_key_mode():
+        if self.mode == "local" or self._is_user_key_mode() or self._has_request_connection():
             return True
         if not user_id:
             return False
@@ -263,7 +409,12 @@ class VikingClient:
 
     async def _get_or_create_user_apikey(self, user_id: str, role: str = "user") -> Optional[str]:
         """获取或创建用户的 API key。"""
-        if self._is_user_key_mode() or not self._apikey_manager or not user_id:
+        if (
+            self._has_request_connection()
+            or self._is_user_key_mode()
+            or not self._apikey_manager
+            or not user_id
+        ):
             return None
 
         api_key = self._apikey_manager.get_apikey(user_id)
@@ -312,6 +463,7 @@ class VikingClient:
             client_kwargs = {
                 "url": self.openviking_config.server_url,
                 "api_key": user_api_key,
+                "profile_enabled": False,
             }
             if effective_user_id == self.admin_user_id:
                 client_kwargs["account"] = self.account_id
@@ -324,8 +476,12 @@ class VikingClient:
         return self.client, False
 
     async def search_memory(
-        self, query: str, user_ids: str | list[str], limit: int = 10
-    ) -> list[Any]:
+        self,
+        query: str,
+        user_ids: str | list[str],
+        limit: int = 10,
+        agent_user_id: Optional[str] = None,
+    ) -> list[Any] | dict[str, list[Any]]:
         """通过上下文消息检索用户 memory。"""
 
         def _extract_memories(result: Any) -> list[Any]:
@@ -358,6 +514,18 @@ class VikingClient:
                 limit=limit,
             )
             all_user_memories.extend(_extract_memories(user_memory))
+
+        if agent_user_id is not None:
+            agent_uri = f"viking://agent/{self.agent_id or self.admin_user_id}/memories/"
+            agent_memory = await self.client.find(
+                query=query,
+                target_uri=agent_uri,
+                limit=limit,
+            )
+            return {
+                "user_memory": all_user_memories,
+                "agent_memory": _extract_memories(agent_memory),
+            }
 
         return all_user_memories
 
@@ -415,6 +583,8 @@ class VikingClient:
         return self.admin_user_client or self.client
 
     async def _session_client_for_user(self, user_id: Optional[str] = None):
+        if self._has_request_connection():
+            return self.client
         if not user_id or self.mode == "local" or self._is_user_key_mode():
             return self._session_client(user_id)
         if user_id == self.admin_user_id and self.admin_user_client:
@@ -433,6 +603,9 @@ class VikingClient:
             client = ov.AsyncHTTPClient(
                 url=self.openviking_config.server_url,
                 api_key=api_key,
+                account=self.account_id,
+                user=user_id,
+                profile_enabled=False,
             )
             await client.initialize()
             self._user_clients[user_id] = client
@@ -615,16 +788,17 @@ class VikingClient:
         keep_recent_count: int = 0,
     ):
         """Append messages to a stable session and commit it."""
+        session_user_id = self._effective_session_user_id(user_id)
         appended = await self.append_messages(
             session_id,
             messages,
-            default_user_peer_id=user_id or self.admin_user_id,
-            session_user_id=user_id,
+            default_user_peer_id=session_user_id,
+            session_user_id=session_user_id,
         )
         commit_result = await self.commit_session(
             session_id,
             keep_recent_count=keep_recent_count,
-            user_id=user_id,
+            user_id=session_user_id,
         )
         logger.debug(
             f"Committed OpenViking session {session_id}, "

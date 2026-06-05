@@ -18,6 +18,7 @@ from openviking.server.config import ServerConfig, ToolOutputExternalizationConf
 from openviking.server.dependencies import set_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import sessions as sessions_router
+from openviking.session import SessionMeta
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
@@ -152,6 +153,42 @@ async def test_get_session(client: httpx.AsyncClient):
     body = resp.json()
     assert body["status"] == "ok"
     assert body["result"]["session_id"] == session_id
+
+
+@pytest.mark.asyncio
+async def test_legacy_session_without_meta_remains_visible_to_owner(service):
+    session_id = "legacy-no-meta"
+    owner_ctx = RequestContext(
+        user=UserIdentifier("acct-legacy", "owner"),
+        role=Role.USER,
+    )
+    session = service.sessions.session(owner_ctx, session_id)
+    await session.ensure_exists()
+    session.add_message("user", [TextPart("legacy message")], peer_id="owner")
+    await service.viking_fs.rm(f"viking://session/{session_id}/.meta.json", ctx=owner_ctx)
+
+    loaded = await service.sessions.get(session_id, owner_ctx, auto_create=False)
+    listed = await service.sessions.sessions(owner_ctx)
+
+    assert [part.text for part in loaded.messages[0].parts] == ["legacy message"]
+    assert loaded.meta.created_by_account_id == "acct-legacy"
+    assert loaded.meta.created_by_user_id == "owner"
+    assert any(item["session_id"] == session_id for item in listed)
+
+
+def test_session_visibility_is_account_scoped_for_non_root(service):
+    ctx = RequestContext(
+        user=UserIdentifier("acct-current", "owner"),
+        role=Role.USER,
+    )
+    meta = SessionMeta(created_by_user_id="owner", participant_user_ids=["owner"])
+
+    assert service.sessions._session_is_visible_in_account(ctx, meta) is False
+
+    meta.created_by_account_id = "acct-current"
+    meta.created_by_user_id = "someone-else"
+    meta.participant_user_ids = ["someone-else"]
+    assert service.sessions._session_is_visible_in_account(ctx, meta) is True
 
 
 async def test_get_session_context(client: httpx.AsyncClient):

@@ -7,6 +7,9 @@
 //! - MountableFS for routing operations to mounted plugins
 //! - Core data types (FileInfo, ConfigParameter, etc.)
 
+pub mod builder;
+pub mod context;
+pub mod encryption_wrapper;
 pub mod errors;
 pub mod filesystem;
 pub mod mountable;
@@ -16,6 +19,11 @@ pub mod stats_wrapper;
 pub mod types;
 
 // Re-export commonly used types
+pub use builder::{
+    build_default_stack, register_builtin_plugins, EncryptionConfig, RagfsConfig, RagfsStack,
+};
+pub use context::{FsContext, FsContextInner, FsContextView, FS_CTX};
+pub use encryption_wrapper::EncryptionWrappedFS;
 pub use errors::{Error, Result};
 pub use filesystem::FileSystem;
 pub use mountable::MountableFS;

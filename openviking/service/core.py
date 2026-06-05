@@ -6,12 +6,15 @@ OpenViking Service Core.
 Main service class that composes all sub-services and manages infrastructure lifecycle.
 """
 
+import asyncio
 import os
+from threading import Thread
 from typing import TYPE_CHECKING, Any, Optional
 
 from openviking.core.directories import DirectoryInitializer
 from openviking.crypto.config import bootstrap_encryption
 from openviking.privacy import UserPrivacyConfigService
+from openviking.pyagfs.exceptions import AGFSNotFoundError
 from openviking.resource.watch_scheduler import WatchScheduler
 from openviking.server.identity import RequestContext, Role
 from openviking.service.debug_service import DebugService
@@ -43,6 +46,31 @@ logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from openviking.session.compressor_v2 import SessionCompressorV2
+
+
+def _run_coro_blocking(coro: Any) -> Any:
+    """Run an async coroutine from sync startup code, even if an event loop is already running."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    result: list[Any] = []
+    error: list[BaseException] = []
+
+    def _runner() -> None:
+        """Execute the coroutine in an isolated event loop on a helper thread."""
+        try:
+            result.append(asyncio.run(coro))
+        except BaseException as exc:
+            error.append(exc)
+
+    thread = Thread(target=_runner, daemon=True)
+    thread.start()
+    thread.join()
+    if error:
+        raise error[0]
+    return result[0] if result else None
 
 
 class OpenVikingService:
@@ -85,6 +113,7 @@ class OpenVikingService:
         self._watch_scheduler: Optional[WatchScheduler] = None
         self._encryptor: Optional[Any] = None
         self._privacy_config_service: Optional[UserPrivacyConfigService] = None
+        self._data_dir_lock_acquired = False
 
         # Sub-services
         self._fs_service = FSService()
@@ -98,9 +127,21 @@ class OpenVikingService:
         # State
         self._initialized = False
 
+        # Acquire the data-dir lock before encryption bootstrap so first-run root-key creation is
+        # serialized with storage initialization across processes.
+        self._ensure_data_dir_lock_acquired()
+
+        # Resolve encryption config (root_key) BEFORE building the agfs client, so the binding
+        # stack is constructed with the encryption layer when encryption is enabled. The encryptor
+        # is built here once and reused by initialize().
+        binding_config = self._build_ragfs_binding_config()
+
         # Initialize storage
         self._init_storage(
-            config.storage, config.embedding.max_concurrent, config.vlm.max_concurrent
+            config.storage,
+            config.embedding.max_concurrent,
+            config.vlm.max_concurrent,
+            binding_config=binding_config,
         )
 
         # Initialize embedder
@@ -114,12 +155,18 @@ class OpenVikingService:
         config: StorageConfig,
         max_concurrent_embedding: int = 10,
         max_concurrent_semantic: int = 64,
+        binding_config: Any = None,
     ) -> None:
         """Initialize storage resources."""
-        from openviking.utils.agfs_utils import create_agfs_client
+        from openviking.utils.agfs_utils import RagfsBindingConfig, create_agfs_client
 
         # Create RAGFS client using utility
-        self._agfs_client = create_agfs_client(config.agfs)
+        runtime_binding_config = binding_config or RagfsBindingConfig(agfs=config.agfs)
+        self._agfs_client = create_agfs_client(runtime_binding_config)
+        self._probe_storage_shape(
+            self._agfs_client,
+            encrypted_mode=runtime_binding_config.encryption_enabled(),
+        )
 
         # Initialize QueueManager with agfs_client
         if self._agfs_client:
@@ -156,6 +203,61 @@ class OpenVikingService:
             redo_recovery_enabled=tx_cfg.redo_recovery_enabled,
         )
         set_task_tracker(config.build_task_tracker(self._agfs_client))
+
+    def _build_ragfs_binding_config(self) -> Any:
+        """Build the single runtime binding config from OpenViking storage + encryption settings."""
+        from openviking.utils.agfs_utils import RagfsBindingConfig
+
+        full_config = self._config.to_dict()
+        self._encryptor = _run_coro_blocking(bootstrap_encryption(full_config))
+        if self._encryptor is None:
+            return RagfsBindingConfig(agfs=self._config.storage.agfs)
+
+        root_key = _run_coro_blocking(self._encryptor.provider.get_root_key())
+        if not isinstance(root_key, (bytes, bytearray)) or len(root_key) != 32:
+            raise RuntimeError("encryption root_key must be exactly 32 bytes")
+
+        return RagfsBindingConfig(
+            agfs=self._config.storage.agfs,
+            root_key=bytes(root_key),
+            provider_type=self._encryptor.provider_type,
+        )
+
+    def _ensure_data_dir_lock_acquired(self) -> None:
+        """Acquire the process-level data directory lock once for this service instance."""
+        if self._data_dir_lock_acquired:
+            return
+
+        # contention (see https://github.com/volcengine/OpenViking/issues/473).
+        if not self._config.storage.skip_process_lock:
+            from openviking.utils.process_lock import acquire_data_dir_lock
+
+            acquire_data_dir_lock(self._config.storage.workspace)
+        else:
+            logger.warning(
+                "Skipping workspace process lock for '%s'; multi-process access may corrupt data",
+                self._config.storage.workspace,
+            )
+        self._data_dir_lock_acquired = True
+
+    def _probe_storage_shape(self, agfs_client: Any, encrypted_mode: bool) -> None:
+        """Fail fast if existing system metadata shape conflicts with current encryption mode."""
+        try:
+            raw = agfs_client.read_raw("/local/_system/accounts.json")
+        except AGFSNotFoundError:
+            return
+
+        is_encrypted = raw.startswith(b"OVE1")
+        if encrypted_mode and not is_encrypted:
+            raise RuntimeError(
+                "Storage shape mismatch: encryption is enabled but existing "
+                "remained data is plaintext"
+            )
+        if not encrypted_mode and is_encrypted:
+            raise RuntimeError(
+                "Storage shape mismatch: encryption is disabled but existing "
+                "remained data is encrypted"
+            )
 
     @property
     def _agfs(self) -> Any:
@@ -238,23 +340,14 @@ class OpenVikingService:
             logger.debug("Already initialized")
             return
 
-        # Acquire advisory lock on data directory to prevent multi-process
-        # contention (see https://github.com/volcengine/OpenViking/issues/473).
-        if not self._config.storage.skip_process_lock:
-            from openviking.utils.process_lock import acquire_data_dir_lock
-
-            acquire_data_dir_lock(self._config.storage.workspace)
-        else:
-            logger.warning(
-                "Skipping workspace process lock for '%s'; multi-process access may corrupt data",
-                self._config.storage.workspace,
-            )
+        self._ensure_data_dir_lock_acquired()
 
         if self._vikingdb_manager is None:
             self._init_storage(
                 self._config.storage,
                 self._config.embedding.max_concurrent,
                 self._config.vlm.max_concurrent,
+                binding_config=self._build_ragfs_binding_config(),
             )
 
         if self._embedder is None:
@@ -262,9 +355,6 @@ class OpenVikingService:
 
         config = get_openviking_config()
 
-        # Initialize encryption module
-        full_config = config.to_dict()
-        self._encryptor = await bootstrap_encryption(full_config)
         if self._encryptor:
             logger.info("Encryption module initialized")
         else:

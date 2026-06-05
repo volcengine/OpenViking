@@ -10,9 +10,8 @@ import asyncio
 import contextlib
 import inspect
 import json
-import os
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
@@ -47,7 +46,6 @@ from openviking_cli.exceptions import (
     DeadlineExceededError,
     InvalidArgumentError,
     NotInitializedError,
-    OpenVikingError,
 )
 from openviking_cli.utils import get_logger
 
@@ -132,7 +130,7 @@ class ResourceService:
         await asyncio.gather(*tasks, return_exceptions=True)
         self._background_tasks.clear()
 
-    async def enqueue_add_resource(
+    async def enqueue_git_add_resource(
         self,
         path: str,
         ctx: RequestContext,
@@ -147,10 +145,9 @@ class ResourceService:
         skip_watch_management: bool = False,
         allow_local_path_resolution: bool = True,
         enforce_public_remote_targets: bool = False,
-        source_cleanup: Optional[Callable[[bool], Awaitable[None]]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
-        """Start background resource ingestion while preserving the normal result shape."""
+        """Start background ingestion for Git repositories while reserving the target URI."""
         self._ensure_initialized()
 
         if to:
@@ -176,11 +173,7 @@ class ResourceService:
                 path = require_remote_resource_source(path)
                 kwargs.setdefault("request_validator", ensure_public_remote_target)
 
-            source_info = await self._preflight_resource_source(
-                path,
-                allow_local_path_resolution=allow_local_path_resolution,
-                request_validator=kwargs.get("request_validator"),
-            )
+            source_info = await self._preflight_git_source(path)
             source_name = kwargs.get("source_name") or source_info.source_name
             if source_name:
                 kwargs["source_name"] = source_name
@@ -230,7 +223,6 @@ class ResourceService:
                     ctx=ctx,
                     add_kwargs=add_kwargs,
                     resource_lock=resource_lock,
-                    source_cleanup=source_cleanup,
                 )
             )
             resource_lock = NO_LOCK
@@ -243,9 +235,6 @@ class ResourceService:
             }
         except Exception:
             await resource_lock.close()
-            if source_cleanup is not None:
-                with contextlib.suppress(Exception):
-                    await source_cleanup(False)
             raise
 
     async def _run_add_resource_task(
@@ -255,7 +244,6 @@ class ResourceService:
         ctx: RequestContext,
         add_kwargs: Dict[str, Any],
         resource_lock: LockLease,
-        source_cleanup: Optional[Callable[[bool], Awaitable[None]]] = None,
     ) -> None:
         from openviking.service.task_tracker import get_task_tracker
 
@@ -269,7 +257,6 @@ class ResourceService:
                 user_id=ctx.user.user_id,
             )
 
-        success = False
         try:
             await task_tracker.start(
                 task_id,
@@ -301,7 +288,6 @@ class ResourceService:
                     user_id=ctx.user.user_id,
                 )
                 return
-            success = True
             await task_tracker.complete(
                 task_id,
                 result,
@@ -325,15 +311,6 @@ class ResourceService:
             )
         finally:
             await resource_lock.close()
-            if source_cleanup is not None:
-                try:
-                    await source_cleanup(success)
-                except Exception as exc:
-                    logger.warning(
-                        "[ResourceService] Failed to cleanup async resource source for task %s: %s",
-                        task_id,
-                        exc,
-                    )
 
     async def _plan_resource_target(
         self,
@@ -394,73 +371,6 @@ class ResourceService:
                 return parsed.rsplit("/", 1)[-1]
         return _smart_stem(Path(path).name or "resource")
 
-    async def _preflight_resource_source(
-        self,
-        path: str,
-        *,
-        allow_local_path_resolution: bool,
-        request_validator: Optional[Callable[[str], None]] = None,
-    ) -> _ResourceSourceInfo:
-        if not is_remote_resource_source(path):
-            if allow_local_path_resolution and not Path(path).expanduser().exists():
-                raise InvalidArgumentError(f"Resource source does not exist: {path}")
-            return _ResourceSourceInfo(source_name=Path(path).name)
-        if is_git_repo_url(path):
-            return await self._preflight_git_source(path)
-        if path.startswith(("http://", "https://")):
-            return await self._preflight_http_source(path, request_validator=request_validator)
-        return await self._preflight_git_source(path)
-
-    async def _preflight_http_source(
-        self,
-        url: str,
-        *,
-        request_validator: Optional[Callable[[str], None]] = None,
-    ) -> _ResourceSourceInfo:
-        from openviking.parse.accessors.http_accessor import HTTPAccessor
-        from openviking.parse.base import lazy_import
-        from openviking.utils.network_guard import build_httpx_request_validation_hooks
-
-        httpx = lazy_import("httpx")
-        event_hooks = build_httpx_request_validation_hooks(request_validator)
-        client_kwargs: Dict[str, Any] = {
-            "timeout": 5.0,
-            "follow_redirects": True,
-        }
-        if event_hooks:
-            client_kwargs["event_hooks"] = event_hooks
-            client_kwargs["trust_env"] = False
-        headers = {"User-Agent": "OpenViking"}
-        if "github.com" in url and os.environ.get("GITHUB_TOKEN"):
-            headers["Authorization"] = f"token {os.environ['GITHUB_TOKEN']}"
-
-        try:
-            async with httpx.AsyncClient(**client_kwargs) as client:
-                response = await client.head(url, headers=headers)
-                if response.status_code < 400:
-                    response.raise_for_status()
-                else:
-                    await self._probe_http_get(client, url, headers)
-        except OpenVikingError:
-            raise
-        except Exception as exc:
-            raise InvalidArgumentError(f"Cannot access remote URL: {url}. {exc}") from exc
-
-        source_name = HTTPAccessor._extract_filename_from_url(url)
-        return _ResourceSourceInfo(
-            source_name=source_name,
-            source_path=source_name or url,
-        )
-
-    @staticmethod
-    async def _probe_http_get(client: Any, url: str, headers: Dict[str, str]) -> None:
-        probe_headers = dict(headers)
-        probe_headers["Range"] = "bytes=0-0"
-        async with client.stream("GET", url, headers=probe_headers) as response:
-            response.raise_for_status()
-            async for _ in response.aiter_bytes():
-                break
-
     async def _preflight_git_source(self, source: str) -> _ResourceSourceInfo:
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -510,7 +420,6 @@ class ResourceService:
         skip_watch_management: bool = False,
         allow_local_path_resolution: bool = True,
         enforce_public_remote_targets: bool = False,
-        source_cleanup: Optional[Callable[[bool], Awaitable[None]]] = None,
         resource_lock: Optional[LockLease] = None,
         stage_callback: Optional[Callable[[str], Any]] = None,
         **kwargs,
@@ -552,8 +461,8 @@ class ResourceService:
             InvalidArgumentError: If the URI scope is not 'resources'
         """
         self._ensure_initialized()
-        if not wait:
-            return await self.enqueue_add_resource(
+        if not wait and is_git_repo_url(path):
+            return await self.enqueue_git_add_resource(
                 path=path,
                 ctx=ctx,
                 to=to,
@@ -567,7 +476,6 @@ class ResourceService:
                 skip_watch_management=skip_watch_management,
                 allow_local_path_resolution=allow_local_path_resolution,
                 enforce_public_remote_targets=enforce_public_remote_targets,
-                source_cleanup=source_cleanup,
                 **kwargs,
             )
 
@@ -575,6 +483,7 @@ class ResourceService:
         telemetry = get_current_telemetry()
         telemetry_id = register_wait_telemetry(wait)
         request_wait_tracker = get_request_wait_tracker()
+        monitor_started = False
         if telemetry_id:
             request_wait_tracker.register_request(telemetry_id)
         watch_manager = self._get_watch_manager()
@@ -625,50 +534,53 @@ class ResourceService:
 
             if result.get("status") == "error":
                 return result
-            if stage_callback is not None:
-                stage_result = stage_callback("processing_queue")
-                if inspect.isawaitable(stage_result):
-                    await stage_result
-            wait_start = time.perf_counter()
-            try:
-                with telemetry.measure("resource.wait"):
-                    if telemetry_id:
-                        await request_wait_tracker.wait_for_request(
-                            telemetry_id,
-                            timeout=timeout,
-                            poll_interval=0.05,
-                        )
-                        status = request_wait_tracker.build_queue_status(telemetry_id)
-                    else:
-                        qm = get_queue_manager()
-                        status = build_queue_status_payload(await qm.wait_complete(timeout=timeout))
-            except TimeoutError as exc:
-                telemetry.set_error(
-                    "resource_service.wait_complete",
-                    "DEADLINE_EXCEEDED",
-                    str(exc),
-                )
-                raise DeadlineExceededError("queue processing", timeout) from exc
-            queue_wait_duration_ms = round((time.perf_counter() - wait_start) * 1000, 3)
-            try:
-                from openviking.metrics.datasources.resource import (
-                    ResourceIngestionEventDataSource,
-                )
+            elif wait:
+                if stage_callback is not None:
+                    stage_result = stage_callback("processing_queue")
+                    if inspect.isawaitable(stage_result):
+                        await stage_result
+                wait_start = time.perf_counter()
+                try:
+                    with telemetry.measure("resource.wait"):
+                        if telemetry_id:
+                            await request_wait_tracker.wait_for_request(
+                                telemetry_id,
+                                timeout=timeout,
+                                poll_interval=0.05,
+                            )
+                            status = request_wait_tracker.build_queue_status(telemetry_id)
+                        else:
+                            qm = get_queue_manager()
+                            status = build_queue_status_payload(
+                                await qm.wait_complete(timeout=timeout)
+                            )
+                except TimeoutError as exc:
+                    telemetry.set_error(
+                        "resource_service.wait_complete",
+                        "DEADLINE_EXCEEDED",
+                        str(exc),
+                    )
+                    raise DeadlineExceededError("queue processing", timeout) from exc
+                queue_wait_duration_ms = round((time.perf_counter() - wait_start) * 1000, 3)
+                try:
+                    from openviking.metrics.datasources.resource import (
+                        ResourceIngestionEventDataSource,
+                    )
 
-                ResourceIngestionEventDataSource.record_wait(
-                    operation="queue_processing",
-                    duration_seconds=float(queue_wait_duration_ms) / 1000.0,
-                    account_id=getattr(ctx, "account_id", None),
+                    ResourceIngestionEventDataSource.record_wait(
+                        operation="queue_processing",
+                        duration_seconds=float(queue_wait_duration_ms) / 1000.0,
+                        account_id=getattr(ctx, "account_id", None),
+                    )
+                except Exception:
+                    pass
+                result["queue_status"] = status
+                record_resource_wait_metrics(
+                    telemetry_id=telemetry_id,
+                    queue_status=status,
+                    root_uri=result.get("root_uri"),
                 )
-            except Exception:
-                pass
-            result["queue_status"] = status
-            record_resource_wait_metrics(
-                telemetry_id=telemetry_id,
-                queue_status=status,
-                root_uri=result.get("root_uri"),
-            )
-            telemetry.set("queue.wait.duration_ms", queue_wait_duration_ms)
+                telemetry.set("queue.wait.duration_ms", queue_wait_duration_ms)
             if watch_manager and not skip_watch_management:
                 with telemetry.measure("resource.watch"):
                     if watch_interval > 0:
@@ -713,6 +625,40 @@ class ResourceService:
                             logger.warning(
                                 f"[ResourceService] Failed to cancel watch task for {to}: {e}"
                             )
+            if not wait:
+                from openviking.service.task_tracker import get_task_tracker
+
+                task_tracker = get_task_tracker()
+                root_uri = result.get("root_uri", "")
+                task = await task_tracker.create(
+                    "add_resource",
+                    resource_id=root_uri,
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                )
+                result["task_id"] = task.task_id
+                if telemetry_id:
+                    monitor_started = True
+                    background = asyncio.create_task(
+                        self._monitor_queue_processing(
+                            task.task_id,
+                            telemetry_id,
+                            ctx.account_id,
+                            ctx.user.user_id,
+                        )
+                    )
+                    self._background_tasks.add(background)
+                    background.add_done_callback(self._background_tasks.discard)
+                else:
+                    await task_tracker.start(
+                        task.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
+                    )
+                    await task_tracker.complete(
+                        task.task_id,
+                        {"root_uri": root_uri},
+                        account_id=ctx.account_id,
+                        user_id=ctx.user.user_id,
+                    )
             return result
         except Exception as exc:
             telemetry.set_error(
@@ -726,8 +672,9 @@ class ResourceService:
                 "resource.request.duration_ms",
                 round((time.perf_counter() - request_start) * 1000, 3),
             )
-            get_request_wait_tracker().cleanup(telemetry_id)
-            unregister_wait_telemetry(telemetry_id)
+            if wait or not telemetry_id or not monitor_started:
+                get_request_wait_tracker().cleanup(telemetry_id)
+                unregister_wait_telemetry(telemetry_id)
 
     async def _monitor_queue_processing(
         self,

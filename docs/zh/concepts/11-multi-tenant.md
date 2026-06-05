@@ -289,6 +289,6 @@ Root key 主要用于：
 - [管理员（多租户）](../api/08-admin.md) - Admin API 参考
 - [API 概览](../api/01-overview.md) - CLI / HTTP 连接方式
 - [数据加密](./10-encryption.md) - 多租户下的静态数据加密
-- [多租户示例](../../../examples/multi_tenant/README.md) - 完整管理流程示例
-- [OpenClaw 插件](../../../examples/openclaw-plugin/README_CN.md) - OpenClaw 的接入方式
-- [Vikingbot](../../../bot/README_CN.md) - bot 的多用户接入方式
+- [多租户示例](https://github.com/volcengine/OpenViking/blob/main/examples/multi_tenant/README.md) - 完整管理流程示例
+- [OpenClaw 插件](https://github.com/volcengine/OpenViking/blob/main/examples/openclaw-plugin/README_CN.md) - OpenClaw 的接入方式
+- [Vikingbot](https://github.com/volcengine/OpenViking/blob/main/bot/README_CN.md) - bot 的多用户接入方式

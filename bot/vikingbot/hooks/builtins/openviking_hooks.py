@@ -45,8 +45,20 @@ async def get_global_client(workspace_id: str | None) -> VikingClient:
 class OpenVikingCompactHook(Hook):
     name = "openviking_compact"
 
-    async def _get_client(self, workspace_id: str) -> VikingClient:
-        return await get_global_client(workspace_id)
+    async def _get_client(
+        self,
+        workspace_id: str,
+        openviking_connection: dict[str, Any] | None = None,
+    ) -> tuple[VikingClient, bool]:
+        if openviking_connection:
+            return (
+                await VikingClient.create(
+                    workspace_id,
+                    connection=openviking_connection,
+                ),
+                True,
+            )
+        return await get_global_client(workspace_id), False
 
     async def _execute_session_context_commit(
         self,
@@ -288,6 +300,9 @@ class OpenVikingCompactHook(Hook):
         ov_config = config.ov_server
         agents_config = config.agents
         admin_user_id = ov_config.admin_user_id
+        openviking_connection = kwargs.get("openviking_connection")
+        if not isinstance(openviking_connection, dict):
+            openviking_connection = None
         force_commit = bool(kwargs.get("force_commit", False))
         keep_recent_count = int(
             kwargs.get(
@@ -301,7 +316,19 @@ class OpenVikingCompactHook(Hook):
             commit_message_threshold = int(commit_message_threshold)
 
         try:
-            client = await self._get_client(context.workspace_id)
+            if openviking_connection:
+                client_result = await self._get_client(
+                    context.workspace_id,
+                    openviking_connection=openviking_connection,
+                )
+            else:
+                client_result = await self._get_client(context.workspace_id)
+            if isinstance(client_result, tuple):
+                client, should_close_client = client_result
+            else:
+                client = client_result
+                should_close_client = False
+            admin_user_id = getattr(client, "admin_user_id", None) or admin_user_id
 
             if getattr(agents_config, "session_context_enabled", False):
                 return await self._execute_session_context_commit(
@@ -365,6 +392,9 @@ class OpenVikingCompactHook(Hook):
                 state["last_sync_error"] = str(e)
             logger.exception(f"Failed to add message to OpenViking: {e}")
             return {"success": False, "error": str(e)}
+        finally:
+            if "should_close_client" in locals() and should_close_client:
+                await client.close()
 
 
 class OpenVikingPostCallHook(Hook):

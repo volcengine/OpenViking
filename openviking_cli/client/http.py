@@ -160,7 +160,7 @@ class AsyncHTTPClient(BaseClient):
         """
         effective_user = user if user is not None else user_id
         profile_load_requested = profile_enabled is None
-        should_load_cli_config = (
+        should_load_cli_config = profile_enabled is not False and (
             url is None
             or api_key is None
             or account is None

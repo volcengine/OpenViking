@@ -64,6 +64,12 @@ lru = "0.12"
 # Regular expressions for grep
 regex = "1.10"
 
+# Encryption (envelope encryption: AES-256-GCM + HKDF-SHA256)
+aes-gcm = "0.10"
+hkdf = "0.12"
+sha2 = "0.10"
+rand = "0.8"
+
 # Stream combinators for concurrent I/O
 futures = "0.3"
 

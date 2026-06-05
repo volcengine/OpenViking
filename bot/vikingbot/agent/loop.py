@@ -46,6 +46,13 @@ if TYPE_CHECKING:
     from vikingbot.cron.service import CronService
 
 
+def _is_tool_result_success(result: Any) -> bool:
+    if result is None or isinstance(result, Exception):
+        return False
+    text = str(result).lstrip()
+    return bool(text) and not text.startswith("Error:")
+
+
 class AgentLoop:
     """
     The agent loop is the core processing engine.
@@ -258,6 +265,58 @@ class AgentLoop:
             "auto": True,
         }
 
+    async def _chat_with_stream_events(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        session_key: SessionKey,
+        publish_events: bool,
+    ) -> tuple[Any, bool, bool]:
+        """Call the provider and forward native stream deltas to the bus."""
+        streamed_content = False
+        streamed_reasoning = False
+        response = None
+
+        async for event in self.provider.chat_stream(
+            messages=messages,
+            tools=tools,
+            model=self.model,
+            session_id=session_key.safe_name(),
+        ):
+            if event.type == "content_delta":
+                if event.content:
+                    streamed_content = True
+                    if publish_events:
+                        await self.bus.publish_outbound(
+                            OutboundMessage(
+                                session_key=session_key,
+                                content=event.content,
+                                event_type=OutboundEventType.CONTENT_DELTA,
+                            )
+                        )
+            elif event.type == "reasoning_delta":
+                if event.content:
+                    streamed_reasoning = True
+                    if publish_events:
+                        await self.bus.publish_outbound(
+                            OutboundMessage(
+                                session_key=session_key,
+                                content=event.content,
+                                event_type=OutboundEventType.REASONING_DELTA,
+                            )
+                        )
+            elif event.type == "response":
+                response = event.response
+
+        if response is None:
+            response = await self.provider.chat(
+                messages=messages,
+                tools=tools,
+                model=self.model,
+                session_id=session_key.safe_name(),
+            )
+        return response, streamed_content, streamed_reasoning
+
     def _register_builtin_hooks(self):
         """Register built-in hooks."""
         hook_manager.register_path(self.config.hooks)
@@ -281,8 +340,17 @@ class AgentLoop:
             return self.sandbox_manager.to_workspace_id(session_key)
         return "shared"
 
-    async def _get_ov_client(self, session_key: SessionKey):
+    async def _get_ov_client(
+        self,
+        session_key: SessionKey,
+        openviking_connection: dict[str, Any] | None = None,
+    ):
         workspace_id = self._get_ov_workspace_id(session_key)
+        if openviking_connection:
+            from vikingbot.openviking_mount.ov_server import VikingClient
+
+            return await VikingClient.create(workspace_id, connection=openviking_connection)
+
         client = self._ov_clients.get(workspace_id)
         if client is None:
             from vikingbot.openviking_mount.ov_server import VikingClient
@@ -364,6 +432,7 @@ class AgentLoop:
         self,
         session: Session,
         provider_name: str | None = None,
+        openviking_connection: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         if not self._ov_session_context_enabled():
             return session.get_history(provider_name=provider_name)
@@ -371,9 +440,15 @@ class AgentLoop:
         agents_config = getattr(self.config, "agents", None)
         token_budget = int(getattr(agents_config, "session_context_token_budget", 12000) or 12000)
         session_id = get_openviking_session_id(session)
+        request_client = None
 
         try:
-            client = await self._get_ov_client(session.key)
+            client = await self._get_ov_client(
+                session.key,
+                openviking_connection=openviking_connection,
+            )
+            if openviking_connection:
+                request_client = client
             context_payload = await client.get_session_context(
                 session_id=session_id,
                 token_budget=token_budget,
@@ -395,6 +470,9 @@ class AgentLoop:
                 "Falling back to local session history."
             )
             return session.get_history(provider_name=provider_name)
+        finally:
+            if request_client is not None:
+                await request_client.close()
 
     async def _submit_openviking_session(
         self,
@@ -403,6 +481,7 @@ class AgentLoop:
         force_commit: bool = False,
         keep_recent_count: int | None = None,
         commit_message_threshold: int | None = None,
+        openviking_connection: dict[str, Any] | None = None,
     ) -> bool:
         if not self._ov_session_context_enabled():
             return False
@@ -417,6 +496,8 @@ class AgentLoop:
             kwargs["keep_recent_count"] = keep_recent_count
         if commit_message_threshold is not None:
             kwargs["commit_message_threshold"] = commit_message_threshold
+        if openviking_connection:
+            kwargs["openviking_connection"] = openviking_connection
 
         await hook_manager.execute_hooks(
             context=HookContext(
@@ -437,12 +518,14 @@ class AgentLoop:
         force_commit: bool = False,
         keep_recent_count: int | None = None,
         commit_message_threshold: int | None = None,
+        openviking_connection: dict[str, Any] | None = None,
     ) -> bool:
         success = await self._submit_openviking_session(
             session,
             force_commit=force_commit,
             keep_recent_count=keep_recent_count,
             commit_message_threshold=commit_message_threshold,
+            openviking_connection=openviking_connection,
         )
         if not success:
             return False
@@ -488,6 +571,7 @@ class AgentLoop:
             force_commit=True,
             keep_recent_count=int(getattr(agents_config, "commit_keep_recent_count", 10) or 0),
             commit_message_threshold=self.memory_window,
+            openviking_connection=getattr(msg, "openviking_connection", None),
         )
 
     async def _commit_openviking_session(
@@ -497,11 +581,13 @@ class AgentLoop:
         keep_recent_count: int = 0,
         clear_local_session: bool = False,
         rotate_session_id: bool = False,
+        openviking_connection: dict[str, Any] | None = None,
     ) -> bool:
         success = await self._submit_openviking_session(
             session,
             force_commit=True,
             keep_recent_count=keep_recent_count,
+            openviking_connection=openviking_connection,
         )
         if not success:
             return False
@@ -556,6 +642,7 @@ class AgentLoop:
         ov_tools_enable: bool = True,
         memory_user_ids: list[str] | None = None,
         disabled_tools: list[str] | None = None,
+        openviking_connection: dict[str, Any] | None = None,
     ) -> tuple[str | None, str | None, list[dict], dict[str, int], int]:
         """
         Run the core agent loop: call LLM, execute tools, repeat until done.
@@ -567,6 +654,7 @@ class AgentLoop:
             ov_tools_enable: Whether to enable OpenViking tools for this session
             memory_user_ids: List of user IDs for memory retrieval
             disabled_tools: Tool names to hide from the model for this request
+            openviking_connection: Request-scoped OpenViking identity for tools
 
         Returns:
             tuple of (final_content, final_reasoning_content, tools_used, token_usage, iteration)
@@ -594,14 +682,15 @@ class AgentLoop:
                     )
                 )
 
-            response = await self.provider.chat(
+            tool_definitions = self.tools.get_definitions(
+                ov_tools_enable=ov_tools_enable,
+                disabled_tools=disabled_tools,
+            )
+            response, _streamed_content, streamed_reasoning = await self._chat_with_stream_events(
                 messages=messages,
-                tools=self.tools.get_definitions(
-                    ov_tools_enable=ov_tools_enable,
-                    disabled_tools=disabled_tools,
-                ),
-                model=self.model,
-                session_id=session_key.safe_name(),
+                tools=tool_definitions,
+                session_key=session_key,
+                publish_events=publish_events,
             )
             if response.usage:
                 cur_token = response.usage
@@ -609,7 +698,7 @@ class AgentLoop:
                 token_usage["completion_tokens"] += cur_token["completion_tokens"]
                 token_usage["total_tokens"] += cur_token["total_tokens"]
 
-            if publish_events and response.reasoning_content:
+            if publish_events and response.reasoning_content and not streamed_reasoning:
                 await self.bus.publish_outbound(
                     OutboundMessage(
                         session_key=session_key,
@@ -639,7 +728,9 @@ class AgentLoop:
                                 else "shared"
                             )
                             _exp = await self.context.memory.get_viking_experience_context(
-                                query=_query, workspace_id=workspace_id
+                                query=_query,
+                                workspace_id=workspace_id,
+                                openviking_connection=openviking_connection,
                             )
                             logger.info(
                                 f"[WRITE_EXP]: write tool detected, exp_found={bool(_exp)}, query={_query[:50]}"
@@ -686,6 +777,7 @@ class AgentLoop:
                         sandbox_manager=self.sandbox_manager,
                         sender_id=sender_id,
                         memory_user_ids=memory_user_ids,
+                        openviking_connection=openviking_connection,
                     )
                     tool_execute_duration = (time.time() - tool_execute_start_time) * 1000
                     return idx, tool_call, result, tool_execute_duration
@@ -695,6 +787,16 @@ class AgentLoop:
                     execute_single_tool(idx, tool_call)
                     for idx, tool_call in enumerate(response.tool_calls)
                 ]
+                if publish_events:
+                    for tool_call in response.tool_calls:
+                        args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
+                        await self.bus.publish_outbound(
+                            OutboundMessage(
+                                session_key=session_key,
+                                content=f"{tool_call.name}({args_str})",
+                                event_type=OutboundEventType.TOOL_CALL,
+                            )
+                        )
                 results = await asyncio.gather(*tool_tasks)
 
                 # Stage 3: Process results sequentially in original order
@@ -704,13 +806,6 @@ class AgentLoop:
                     logger.info(f"[RESULT]: {str(result)[:600]}")
 
                     if publish_events:
-                        await self.bus.publish_outbound(
-                            OutboundMessage(
-                                session_key=session_key,
-                                content=f"{tool_call.name}({args_str})",
-                                event_type=OutboundEventType.TOOL_CALL,
-                            )
-                        )
                         await self.bus.publish_outbound(
                             OutboundMessage(
                                 session_key=session_key,
@@ -727,9 +822,7 @@ class AgentLoop:
                         "args": args_str,
                         "result": result,
                         "duration": tool_execute_duration,
-                        "execute_success": True
-                        if result and "Error executing" not in result
-                        else False,
+                        "execute_success": _is_tool_result_success(result),
                         "input_token": tool_call.tokens,
                         "output_token": cal_str_tokens(result, text_type="mixed"),
                     }
@@ -821,6 +914,12 @@ class AgentLoop:
             disabled_tools = msg.metadata.get("disabled_tools", []) if msg.metadata else []
             if not isinstance(disabled_tools, list):
                 disabled_tools = []
+            openviking_connection = getattr(msg, "openviking_connection", None)
+            if openviking_connection is None and msg.metadata:
+                openviking_connection = msg.metadata.get("openviking_connection")
+            if not isinstance(openviking_connection, dict):
+                openviking_connection = None
+            msg.openviking_connection = openviking_connection
             # Get profile_user_list from channel config
             profile_user_list = []
             # Try to get memory_users from message metadata first (CLI mode), then from channel config
@@ -871,6 +970,7 @@ class AgentLoop:
                         session,
                         keep_recent_count=0,
                         clear_local_session=True,
+                        openviking_connection=openviking_connection,
                     )
                     if not committed:
                         return OutboundMessage(
@@ -900,6 +1000,7 @@ class AgentLoop:
                     remembered = await self._commit_openviking_session(
                         session,
                         keep_recent_count=self.config.agents.commit_keep_recent_count,
+                        openviking_connection=openviking_connection,
                     )
                     if not remembered:
                         return OutboundMessage(
@@ -969,11 +1070,16 @@ class AgentLoop:
                 sender_name=msg.sender_name,
                 is_group_chat=is_group_chat,
                 eval=self._eval,
+                openviking_connection=openviking_connection,
             )
 
             # Build initial messages (use OpenViking session context when enabled)
             provider_name = self.config.get_provider_name(self.model) if self.config else None
-            history = await self._build_prompt_history(session, provider_name=provider_name)
+            history = await self._build_prompt_history(
+                session,
+                provider_name=provider_name,
+                openviking_connection=openviking_connection,
+            )
             messages = await message_context.build_messages(
                 history=history,
                 current_message=msg.content,
@@ -1010,6 +1116,7 @@ class AgentLoop:
                     ov_tools_enable=ov_tools_enable,
                     memory_user_ids=memory_user,
                     disabled_tools=disabled_tools,
+                    openviking_connection=openviking_connection,
                 )
 
             if auto_memory_tool:
@@ -1048,6 +1155,7 @@ class AgentLoop:
                     await self._submit_openviking_session_and_clear_if_committed(
                         session,
                         commit_message_threshold=self.memory_window,
+                        openviking_connection=openviking_connection,
                     )
             LangfuseClient.get_instance().update_generation_metadata(
                 response_id, response_completed

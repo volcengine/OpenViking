@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from fastapi import Request as FastAPIRequest
 from fastapi.responses import JSONResponse
 
+from openviking.pyagfs.exceptions import AGFSNotFoundError
 from openviking.server.api_keys import APIKeyManager
 from openviking.server.app import create_app
 from openviking.server.config import ServerConfig
@@ -33,27 +34,21 @@ class _FakeAGFS:
         self._files = {}
         self._dirs = {"/", "/local"}
 
-    def read(self, path):
+    def read(self, path, **_kwargs):
         if path not in self._files:
-            raise FileNotFoundError(path)
+            raise AGFSNotFoundError(path)
         return self._files[path]
 
-    def write(self, path, content):
+    def write(self, path, content, **_kwargs):
         self._files[path] = content
 
-    def mkdir(self, path):
+    def mkdir(self, path, **_kwargs):
         self._dirs.add(path)
 
 
 class _FakeVikingFS:
     def __init__(self):
         self.agfs = _FakeAGFS()
-
-    async def encrypt_bytes(self, account_id, content):
-        return content
-
-    async def decrypt_bytes(self, account_id, content):
-        return content
 
 
 class _FakeService:
@@ -754,11 +749,11 @@ async def test_trusted_mode_admin_cannot_register_user_in_other_account(
     assert resp.json()["error"]["code"] == "INVALID_ARGUMENT"
 
 
-async def test_trusted_mode_user_cannot_call_admin_api(
+async def test_trusted_mode_admin_api_uses_trusted_gateway_identity(
     trusted_admin_client: httpx.AsyncClient,
     trusted_admin_app,
 ):
-    """Trusted USER requests should still be denied by Admin API role checks."""
+    """Trusted admin routes use the trusted gateway identity instead of tenant user role."""
     # Set gateway-admin to ROOT role first
     manager = trusted_admin_app.state.api_key_manager
     await manager.set_role("platform", "gateway-admin", "root")
@@ -787,7 +782,10 @@ async def test_trusted_mode_user_cannot_call_admin_api(
             include_api_key=True,
         ),
     )
-    assert resp.status_code == 403
+    assert resp.status_code == 200
+    assert resp.json()["result"]["account_id"] == acct
+    assert resp.json()["result"]["user_id"] == "bob"
+    assert "user_key" not in resp.json()["result"]
 
 
 async def test_trusted_mode_requires_matching_api_key_for_admin_api(

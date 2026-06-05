@@ -181,18 +181,26 @@ class MemoryStore:
         workspace_id: str,
         sender_id: str,
         user_ids: list[str] | None = None,
+        openviking_connection: dict[str, Any] | None = None,
     ) -> str:
         client = None
         try:
             config = load_config().ov_server
-            admin_user_id = config.admin_user_id
+            admin_user_id = (
+                str(openviking_connection.get("user_id"))
+                if isinstance(openviking_connection, dict) and openviking_connection.get("user_id")
+                else config.admin_user_id
+            )
             # Use provided user_ids or fall back to sender_id
             search_user_ids = user_ids if user_ids else [sender_id]
             logger.info(f"workspace_id={workspace_id}")
             logger.info(f"user_ids={search_user_ids}")
             logger.info(f"admin_user_id={admin_user_id}")
 
-            client = await VikingClient.create()
+            client = await VikingClient.create(
+                agent_id=workspace_id,
+                connection=openviking_connection,
+            )
             result = await client.search_memory(
                 query=current_message,
                 user_ids=search_user_ids,
@@ -226,12 +234,20 @@ class MemoryStore:
                 except Exception as e:
                     logger.warning(f"Error closing VikingClient: {e}")
 
-    async def get_viking_experience_context(self, query: str, workspace_id: str) -> str:
+    async def get_viking_experience_context(
+        self,
+        query: str,
+        workspace_id: str,
+        openviking_connection: dict[str, Any] | None = None,
+    ) -> str:
         """用当前任务 query 检索 experience 记忆，注入到 system prompt。"""
         client = None
         try:
             ov_cfg = load_config().ov_server
-            client = await VikingClient.create()
+            client = await VikingClient.create(
+                agent_id=workspace_id,
+                connection=openviking_connection,
+            )
             experiences = await client.search_experiences(query, limit=ov_cfg.exp_recall_limit)
             logger.info(
                 f"[READ_EXPERIENCE_MEMORY]: found {len(experiences)} experiences, query={query[:50]}"
@@ -255,10 +271,18 @@ class MemoryStore:
                 except Exception:
                     pass
 
-    async def get_viking_user_profile(self, workspace_id: str, user_id: str) -> str:
+    async def get_viking_user_profile(
+        self,
+        workspace_id: str,
+        user_id: str,
+        openviking_connection: dict[str, Any] | None = None,
+    ) -> str:
         client = None
         try:
-            client = await VikingClient.create()
+            client = await VikingClient.create(
+                agent_id=workspace_id,
+                connection=openviking_connection,
+            )
             result = await client.read_user_profile(user_id)
             return result or ""
         except Exception as e:
@@ -271,7 +295,12 @@ class MemoryStore:
                 except Exception as e:
                     logger.warning(f"Error closing VikingClient: {e}")
 
-    async def get_viking_user_profiles(self, workspace_id: str, user_ids: list[str]) -> str:
+    async def get_viking_user_profiles(
+        self,
+        workspace_id: str,
+        user_ids: list[str],
+        openviking_connection: dict[str, Any] | None = None,
+    ) -> str:
         """Get multiple user profiles concurrently.
 
         Args:
@@ -286,7 +315,10 @@ class MemoryStore:
 
         client = None
         try:
-            client = await VikingClient.create()
+            client = await VikingClient.create(
+                agent_id=workspace_id,
+                connection=openviking_connection,
+            )
 
             async def fetch_profile(user_id: str) -> tuple[str, str]:
                 """Fetch a single user profile."""

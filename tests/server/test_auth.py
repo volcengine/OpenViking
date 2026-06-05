@@ -557,6 +557,72 @@ async def test_cross_tenant_session_get_returns_not_found(auth_client: httpx.Asy
     assert cross_get.json()["error"]["code"] == "NOT_FOUND"
 
 
+async def test_sessions_are_visible_to_users_within_account(
+    auth_client: httpx.AsyncClient, auth_app
+):
+    """Session access is account-scoped, not user-isolated within an account."""
+    manager = auth_app.state.api_key_manager
+    account_id = _uid()
+    admin_key = await manager.create_account(account_id, "admin_user")
+    alice_key = await manager.register_user(account_id, "alice")
+    bob_key = await manager.register_user(account_id, "bob")
+
+    alice_create = await auth_client.post(
+        "/api/v1/sessions",
+        json={},
+        headers={"X-API-Key": alice_key},
+    )
+    assert alice_create.status_code == 200
+    alice_session = alice_create.json()["result"]["session_id"]
+
+    bob_create = await auth_client.post(
+        "/api/v1/sessions",
+        json={},
+        headers={"X-API-Key": bob_key},
+    )
+    assert bob_create.status_code == 200
+    bob_session = bob_create.json()["result"]["session_id"]
+
+    alice_list = await auth_client.get(
+        "/api/v1/sessions",
+        headers={"X-API-Key": alice_key},
+    )
+    assert alice_list.status_code == 200
+    alice_ids = {item["session_id"] for item in alice_list.json()["result"]}
+    assert alice_session in alice_ids
+    assert bob_session in alice_ids
+
+    bob_list = await auth_client.get(
+        "/api/v1/sessions",
+        headers={"X-API-Key": bob_key},
+    )
+    assert bob_list.status_code == 200
+    bob_ids = {item["session_id"] for item in bob_list.json()["result"]}
+    assert bob_session in bob_ids
+    assert alice_session in bob_ids
+
+    admin_list = await auth_client.get(
+        "/api/v1/sessions",
+        headers={"X-API-Key": admin_key},
+    )
+    assert admin_list.status_code == 200
+    admin_ids = {item["session_id"] for item in admin_list.json()["result"]}
+    assert {alice_session, bob_session}.issubset(admin_ids)
+
+    bob_get_alice = await auth_client.get(
+        f"/api/v1/sessions/{alice_session}",
+        headers={"X-API-Key": bob_key},
+    )
+    assert bob_get_alice.status_code == 200
+
+    bob_write_alice = await auth_client.post(
+        f"/api/v1/sessions/{alice_session}/messages",
+        json={"role": "user", "content": "bob writes in same account session"},
+        headers={"X-API-Key": bob_key},
+    )
+    assert bob_write_alice.status_code == 200
+
+
 async def test_root_tenant_scoped_requests_rejected_in_api_key_mode():
     """ROOT API keys cannot access tenant-scoped data APIs in api_key mode."""
     request = _make_request("/api/v1/resources", auth_enabled=True)

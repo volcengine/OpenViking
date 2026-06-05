@@ -98,7 +98,7 @@ Set `OPENVIKING_PEER_ID` when multiple Codex peers share the same OpenViking use
 
 For **unauthenticated local OV** (`ovcli.conf` without `api_key`, or no ovcli.conf at all), `.mcp.json` is rendered *without* `bearer_token_env_var`. Codex 0.130 hard-fails MCP startup with `Environment variable ... is empty` if `bearer_token_env_var` points at an empty/unset env var, so it must be omitted entirely when there's no key.
 
-The `codex()` shell-function wrapper **re-renders this field on every codex launch** based on the currently-active `ovcli.conf` (the one `OPENVIKING_CLI_CONFIG_FILE` points at, falling back to `~/.openviking/ovcli.conf`). That means you can switch between authenticated and unauthenticated OV — e.g. to isolate a benchmark run from production memory — by just changing `OPENVIKING_CLI_CONFIG_FILE` before invoking `codex`, with no re-install needed. The wrapper also omits empty env-var assignments entirely (so `OPENVIKING_API_KEY=` is never passed to codex), keeping `env_http_headers` for identity (`X-OpenViking-Account` / `User` / `Agent`) intact.
+The `codex()` shell-function wrapper **re-renders this field on every codex launch** based on the currently-active `ovcli.conf` (the one `OPENVIKING_CLI_CONFIG_FILE` points at, falling back to `~/.openviking/ovcli.conf`). That means you can switch between authenticated and unauthenticated OV — e.g. to isolate a benchmark run from production memory — by just changing `OPENVIKING_CLI_CONFIG_FILE` before invoking `codex`, with no re-install needed. The wrapper also omits empty env-var assignments entirely (so `OPENVIKING_API_KEY=` is never passed to codex), keeping `env_http_headers` for identity (`X-OpenViking-Account` / `X-OpenViking-User`) intact.
 
 ### Tuning the plugin
 

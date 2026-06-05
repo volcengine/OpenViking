@@ -281,10 +281,10 @@ async def test_legacy_account_without_settings_loads_without_namespace_settings(
     assert settings is None
 
 
-# ---- Encryption tests ----
+# ---- Argon2id hashing tests ----
 
 
-async def test_create_account_with_encryption_enabled(manager_service):
+async def test_create_account_with_argon2id_hashing_enabled(manager_service):
     """create_account with api_key_hashing_enabled=True should create hashed keys."""
     acct = _uid()
     mgr = APIKeyManager(
@@ -307,7 +307,7 @@ async def test_create_account_with_encryption_enabled(manager_service):
     assert identity.user_id == "alice"
 
 
-async def test_register_user_with_encryption_enabled(manager_service):
+async def test_register_user_with_argon2id_hashing_enabled(manager_service):
     """register_user with api_key_hashing_enabled=True should create hashed keys."""
     acct = _uid()
     mgr = APIKeyManager(
@@ -328,7 +328,7 @@ async def test_register_user_with_encryption_enabled(manager_service):
     assert identity.user_id == "bob"
 
 
-async def test_regenerate_key_with_encryption_enabled(manager_service):
+async def test_regenerate_key_with_argon2id_hashing_enabled(manager_service):
     """regenerate_key with api_key_hashing_enabled=True should create new hashed key."""
     acct = _uid()
     mgr = APIKeyManager(
@@ -361,7 +361,7 @@ async def test_regenerate_key_with_encryption_enabled(manager_service):
     assert identity.account_id == acct
 
 
-async def test_migrate_plaintext_keys_to_encrypted(manager_service):
+async def test_migrate_plaintext_keys_to_argon2id_hashing(manager_service):
     """Keys created with api_key_hashing disabled should be migrated when api_key_hashing is enabled."""
     acct = _uid()
 
@@ -384,7 +384,7 @@ async def test_migrate_plaintext_keys_to_encrypted(manager_service):
     assert identity.user_id == "alice"
 
 
-async def test_persistence_with_encryption_enabled(manager_service):
+async def test_persistence_with_argon2id_hashing_enabled(manager_service):
     """Hashed keys should survive manager reload from AGFS."""
     mgr1 = APIKeyManager(
         root_key=ROOT_KEY, viking_fs=manager_service.viking_fs, api_key_hashing_enabled=True

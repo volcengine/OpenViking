@@ -45,7 +45,10 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from '#/components/ui/sidebar'
-import { AppConnectionProvider } from '#/hooks/use-app-connection'
+import {
+  AppConnectionProvider,
+  useAppConnection,
+} from '#/hooks/use-app-connection'
 import { cn } from '#/lib/utils'
 import {
   useSessionList,
@@ -343,6 +346,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
     select: (state) => state.location.pathname,
   })
   const { setTheme, resolvedTheme } = useTheme()
+  const { connectionRole } = useAppConnection()
   const currentLanguage = resolveLanguage(
     i18n.resolvedLanguage ?? i18n.language,
   )
@@ -350,6 +354,15 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
   const settingsActive = pathname === '/settings'
   const oauthSetupActive =
     pathname === '/oauth/setup' || pathname.startsWith('/oauth/setup/')
+  const visibleNavItems = React.useMemo(
+    () =>
+      connectionRole === 'user'
+        ? NAV_ITEMS.filter(
+            (item) => item.id !== 'home' && item.id !== 'requestLogs',
+          )
+        : NAV_ITEMS,
+    [connectionRole],
+  )
 
   function openOAuthSetup(): void {
     if (oauthSetupActive) {
@@ -388,7 +401,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
           <SidebarGroup>
             <SidebarGroupContent>
               <SidebarMenu>
-                {NAV_ITEMS.map((item) => {
+                {visibleNavItems.map((item) => {
                   const isActive =
                     pathname === item.to || pathname.startsWith(`${item.to}/`)
                   const title = t(item.titleKey, { ns: 'appShell' })

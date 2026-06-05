@@ -224,7 +224,10 @@ class TestSessionCommitUsedContext:
 
     def test_get_session_context_nonexistent(self, api_client):
         ctx_resp = api_client.get_session_context("nonexistent-session-xyz")
-        assert ctx_resp.status_code == 200
+        assert ctx_resp.status_code == 404
+        body = ctx_resp.json()
+        assert body.get("status") == "error"
+        assert body.get("error", {}).get("code") == "NOT_FOUND"
 
     def test_session_context_contains_stats(self, api_client):
         session_id = None

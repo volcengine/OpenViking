@@ -152,6 +152,38 @@ function maskApiKey(value: string | undefined): string {
   return `${value.slice(0, 10)}...${value.slice(-6)}`
 }
 
+async function copyTextToClipboard(value: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(value)
+    return
+  } catch {
+    // Clipboard API is unavailable on non-secure dev URLs such as http://10.x.x.x.
+  }
+
+  if (typeof document === 'undefined') {
+    throw new Error('Clipboard is unavailable')
+  }
+
+  const textArea = document.createElement('textarea')
+  textArea.value = value
+  textArea.setAttribute('readonly', '')
+  textArea.style.position = 'fixed'
+  textArea.style.left = '-9999px'
+  textArea.style.top = '0'
+  document.body.appendChild(textArea)
+  textArea.focus()
+  textArea.select()
+
+  try {
+    const copied = document.execCommand('copy')
+    if (!copied) {
+      throw new Error('Clipboard copy failed')
+    }
+  } finally {
+    document.body.removeChild(textArea)
+  }
+}
+
 function resolveKeyLabel(user: AdminUser): string {
   return user.apiKey ? maskApiKey(user.apiKey) : user.keyPrefix || '-'
 }
@@ -196,8 +228,12 @@ function KeyResultCard({
   }
 
   async function copyKey(): Promise<void> {
-    await navigator.clipboard.writeText(result.apiKey)
-    toast.success(t('toast.copied'))
+    try {
+      await copyTextToClipboard(result.apiKey)
+      toast.success(t('toast.copied'))
+    } catch {
+      toast.error(t('toast.copyFailed'))
+    }
   }
 
   return (
@@ -1068,8 +1104,12 @@ function SettingsRoute() {
     if (!value) {
       return
     }
-    await navigator.clipboard.writeText(value)
-    toast.success(t('toast.copied'))
+    try {
+      await copyTextToClipboard(value)
+      toast.success(t('toast.copied'))
+    } catch {
+      toast.error(t('toast.copyFailed'))
+    }
   }
 
   return (

@@ -9,6 +9,7 @@ This module provides high-level helper functions for common operations:
 from collections.abc import Iterator
 from pathlib import Path
 
+from .async_client import ensure_same_encryption_account
 from .protocols import AGFSByteStream, AGFSSyncClientProtocol
 
 
@@ -35,6 +36,8 @@ def cp(
         >>> cp(client, "/file.txt", "/backup/file.txt")  # Copy file
         >>> cp(client, "/dir", "/backup/dir", recursive=True)  # Copy directory
     """
+    ensure_same_encryption_account(src, dst)
+
     # Check if source exists and get its type
     src_info = client.stat(src)
     is_dir = src_info.get("isDir", False)
@@ -123,9 +126,20 @@ def download(
 
 
 def _copy_file(client: AGFSSyncClientProtocol, src: str, dst: str, stream: bool) -> None:
-    """Copy a single file within AGFS."""
+    """Copy a single file within AGFS.
+
+    Uses the raw byte channel (``read_raw``/``write_raw``) when available so a whole blob is moved
+    verbatim, bypassing the encryption layer (ciphertext is copied as-is, never decrypted/re-encrypted).
+    Falls back to ``cat``/``write`` for clients that do not expose the raw channel.
+    """
     # Ensure parent directory exists
     _ensure_remote_parent_dir(client, dst)
+
+    read_raw = getattr(client, "read_raw", None)
+    write_raw = getattr(client, "write_raw", None)
+    if callable(read_raw) and callable(write_raw):
+        write_raw(dst, read_raw(src))
+        return
 
     if stream:
         # The binding client returns bytes or an iterator of bytes, not an

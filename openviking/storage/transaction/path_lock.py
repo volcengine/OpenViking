@@ -3,9 +3,10 @@ import hashlib
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Optional, Tuple
+from typing import Any, Callable, Optional, Tuple
 
 from openviking.pyagfs import AGFSSyncClientProtocol, AsyncAGFSClient
+from openviking.pyagfs.async_client import fs_ctx_from_agfs_path
 from openviking.storage.transaction.lock_handle import LockOwner
 from openviking_cli.utils.logger import get_logger
 
@@ -64,6 +65,18 @@ def _log_timeout_waiting(message: str) -> None:
         _last_timeout_warning_at[message] = now
 
 
+def _call_sync_agfs_with_ctx(
+    method: Callable[..., Any], path: str, *args: Any, **kwargs: Any
+) -> Any:
+    """Call a sync AGFS method with path-derived FsContext, falling back for legacy fakes."""
+    try:
+        return method(path, *args, **kwargs, ctx=fs_ctx_from_agfs_path(path))
+    except TypeError as exc:
+        if "unexpected keyword argument 'ctx'" not in str(exc):
+            raise
+        return method(path, *args, **kwargs)
+
+
 class PathLockEngine:
     def __init__(self, agfs_client: AGFSSyncClientProtocol, lock_expire: float = 300.0):
         self._agfs = agfs_client
@@ -78,7 +91,7 @@ class PathLockEngine:
 
     def _is_existing_directory(self, path: str) -> bool:
         try:
-            stat = self._agfs.stat(path.rstrip("/") or "/")
+            stat = _call_sync_agfs_with_ctx(self._agfs.stat, path.rstrip("/") or "/")
         except Exception:
             return False
         if isinstance(stat, dict):
@@ -164,7 +177,7 @@ class PathLockEngine:
 
     def _read_token(self, lock_path: str) -> Optional[str]:
         try:
-            content = self._agfs.read(lock_path)
+            content = _call_sync_agfs_with_ctx(self._agfs.read, lock_path)
             if isinstance(content, bytes):
                 token = content.decode("utf-8").strip()
             else:

@@ -362,7 +362,7 @@ A persistent OpenViking session is created on first contact and reused for the e
 | `PreCompact`          | Before Claude Code rewrites the transcript | Commit pending messages so they become an archive before CC mutates the transcript                |
 | `SessionEnd`          | Claude Code session closes               | Final commit so the last window is archived                                                       |
 | `SubagentStart`       | Parent spawns a subagent via Task tool   | Derive an isolated OV session ID for the subagent, persist start state                            |
-| `SubagentStop`        | Subagent finishes                        | Read subagent transcript → push to isolated session with subagent-typed agent header → commit     |
+| `SubagentStop`        | Subagent finishes                        | Read subagent transcript → push to an isolated session with subagent peer identity → commit       |
 
 ### Async write path
 

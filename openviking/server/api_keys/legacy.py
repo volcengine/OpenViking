@@ -13,7 +13,7 @@ from typing import Dict, Optional
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 
-from openviking.pyagfs import AsyncAGFSClient
+from openviking.pyagfs import AGFSNotFoundError, AsyncAGFSClient
 from openviking.server.api_keys.models import AccountInfo, UserKeyEntry
 from openviking.server.identity import ResolvedIdentity, Role
 from openviking.storage.viking_fs import VikingFS
@@ -583,15 +583,9 @@ class LegacyAPIKeyManager:
             else:
                 raw = content.content if hasattr(content, "content") else b""
 
-            # Decrypt content if encryption is enabled
-            # Extract account ID from path
-            parts = path.split("/")
-            account_id = parts[2] if len(parts) >= 3 else "default"
-            raw = await self._viking_fs.decrypt_bytes(account_id, raw)
-
             text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
             return json.loads(text)
-        except Exception:
+        except AGFSNotFoundError:
             return None
 
     async def _write_json(self, path: str, data: dict) -> None:
@@ -599,12 +593,6 @@ class LegacyAPIKeyManager:
         content = json.dumps(data, ensure_ascii=False, indent=2)
         if isinstance(content, str):
             content = content.encode("utf-8")
-
-        # Encrypt content if encryption is enabled
-        # Extract account ID from path
-        parts = path.split("/")
-        account_id = parts[2] if len(parts) >= 3 else "default"
-        content = await self._viking_fs.encrypt_bytes(account_id, content)
 
         await self._ensure_parent_dirs_async(path)
         await self._async_agfs.write(path, content)

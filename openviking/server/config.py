@@ -313,7 +313,7 @@ def validate_server_config(config: ServerConfig) -> None:
       Only acceptable when binding to localhost.
     - **api_key mode**: Authenticates via root_api_key or user keys.
       Requires root_api_key to be configured.
-    - **trusted mode**: Trusts X-OpenViking-Account/User/Agent headers.
+    - **trusted mode**: Trusts X-OpenViking-Account/User headers.
       Requires root_api_key when binding to non-localhost.
 
     If auth_mode is not explicitly configured:
@@ -370,7 +370,7 @@ def validate_server_config(config: ServerConfig) -> None:
         if _is_localhost(config.host):
             logger.warning(
                 "Trusted mode without API key: authentication trusts "
-                "X-OpenViking-Account/User/Agent headers. This is allowed because "
+                "X-OpenViking-Account/User headers. This is allowed because "
                 "the server is bound to localhost (%s).",
                 config.host,
             )

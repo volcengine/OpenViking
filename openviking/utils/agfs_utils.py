@@ -6,12 +6,42 @@ RAGFS Client utilities for creating and configuring RAGFS clients.
 
 import multiprocessing
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict
 
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+@dataclass(frozen=True)
+class RagfsBindingConfig:
+    """Single binding config object for both stack construction and backend mount setup."""
+
+    agfs: Any
+    root_key: bytes | None = None
+    provider_type: int | None = None
+
+    def encryption_enabled(self) -> bool:
+        """Return whether the binding stack should include the encryption layer."""
+        return self.root_key is not None
+
+    def to_binding_dict(self) -> Dict[str, Any]:
+        """Convert the runtime config into the sectioned dict consumed by `RAGFSBindingClient`."""
+        binding_config: Dict[str, Any] = {}
+
+        if self.root_key is not None:
+            if len(self.root_key) != 32:
+                raise ValueError("root_key must be exactly 32 bytes")
+            if self.provider_type is None:
+                raise ValueError("provider_type is required when root_key is configured")
+            binding_config["encryption"] = {
+                "root_key": self.root_key,
+                "provider_type": self.provider_type,
+            }
+
+        return binding_config
 
 
 def resolve_queuefs_mount_point(config: Any = None) -> str:
@@ -135,19 +165,19 @@ def _generate_plugin_config(agfs_config: Any, data_path: Path) -> Dict[str, Any]
     return config
 
 
-def create_agfs_client(agfs_config: Any) -> Any:
+def create_agfs_client(config: RagfsBindingConfig) -> Any:
     """
     Create a RAGFS client based on the provided configuration.
 
     Args:
-        agfs_config: RAGFS configuration object.
+        config: Single runtime config object containing both backend mount settings and
+            construction-time binding sections.
 
     Returns:
         A RAGFSBindingClient instance.
     """
-    # Ensure agfs_config is not None
-    if agfs_config is None:
-        raise ValueError("agfs_config cannot be None")
+    if config is None:
+        raise ValueError("config cannot be None")
 
     # Import binding client
     from openviking.pyagfs import get_binding_client
@@ -161,26 +191,28 @@ def create_agfs_client(agfs_config: Any) -> Any:
             "to build and install the RAGFS SDK with native bindings."
         )
 
-    client = RAGFSBindingClient()
+    # Construction-time decides whether the stack includes the encryption layer.
+    client = RAGFSBindingClient(config=config.to_binding_dict())
 
     # Automatically mount backend for binding client
-    mount_agfs_backend(client, agfs_config)
+    mount_agfs_backend(client, config)
 
     return client
 
 
-def mount_agfs_backend(agfs: Any, agfs_config: Any) -> None:
+def mount_agfs_backend(agfs: Any, config: RagfsBindingConfig | Any) -> None:
     """
     Mount backend filesystem for a RAGFS client based on configuration.
 
     Args:
         agfs: RAGFS client instance.
-        agfs_config: RAGFS configuration object containing backend settings.
+        config: RagfsBindingConfig or raw AGFS backend config for direct mount tests.
     """
     # Check for the presence of a `mount` method
     if not callable(getattr(agfs, "mount", None)):
         return
 
+    agfs_config = config.agfs if isinstance(config, RagfsBindingConfig) else config
     path_str = getattr(agfs_config, "path", None)
     if path_str is None:
         raise ValueError("agfs_config.path is required for mounting backend")

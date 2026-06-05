@@ -18,7 +18,7 @@ from openviking import AsyncOpenViking
 from openviking.crypto.config import bootstrap_encryption
 from openviking.crypto.encryptor import FileEncryptor
 from openviking.crypto.providers import LocalFileProvider
-from openviking.server.api_keys import APIKeyManager
+from openviking.server.api_keys import APIKeyManager, is_new_format_key
 from openviking.service.core import OpenVikingService
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
@@ -279,9 +279,7 @@ class TestVikingFSEncryptionWithAccounts:
         await svc.initialize()
 
         # Create APIKeyManager using VikingFS to ensure system file encryption
-        api_key_manager = APIKeyManager(
-            root_key=self.ROOT_KEY, viking_fs=svc.viking_fs, encryption_enabled=True
-        )
+        api_key_manager = APIKeyManager(root_key=self.ROOT_KEY, viking_fs=svc.viking_fs)
         await api_key_manager.load()
 
         yield {"service": svc, "api_key_manager": api_key_manager, "test_data_dir": test_data_dir}
@@ -334,15 +332,19 @@ class TestVikingFSEncryptionWithAccounts:
                             continue
                         try:
                             agfs_path = svc.viking_fs._uri_to_path(entry_uri, ctx=ctx)
-                            raw_content = agfs_client.read(agfs_path)
+                            raw_content = agfs_client.read_raw(agfs_path)
                             assert raw_content.startswith(b"OVE1"), (
                                 f"File not encrypted: {entry_uri}"
                             )
                             if print_paths:
                                 print(f"[ENCRYPTED] {entry_uri}")
+                        except AssertionError:
+                            raise
                         except Exception as e:
                             if print_paths:
                                 print(f"[SKIP] Skip file {entry_uri}: {e}")
+            except AssertionError:
+                raise
             except Exception as e:
                 print(f"[WARNING] Error checking {uri}: {e}")
 
@@ -372,7 +374,7 @@ class TestVikingFSEncryptionWithAccounts:
 
         # Verify account created successfully
         assert user_key is not None
-        assert len(user_key) == 64
+        assert is_new_format_key(user_key)
 
         # RAGFS /local/... paths map to test_data_dir/viking/viking/...
         # because OpenVikingService path is test_data_dir/viking,
@@ -418,7 +420,7 @@ class TestVikingFSEncryptionWithAccounts:
 
         # Verify user registered successfully
         assert new_user_key is not None
-        assert len(new_user_key) == 64
+        assert is_new_format_key(new_user_key)
 
         # AGFS /local/... paths map to test_data_dir/viking/viking/...
         agfs_data_root = test_data_dir / "viking" / "viking"
@@ -461,7 +463,7 @@ class TestVikingFSEncryptionWithAccounts:
         # Verify encryption by reading raw file content directly via AGFS
         agfs_client = svc._agfs_client
         agfs_path = svc.viking_fs._uri_to_path(test_uri, ctx=ctx)
-        raw_content = agfs_client.read(agfs_path)
+        raw_content = agfs_client.read_raw(agfs_path)
         assert raw_content.startswith(b"OVE1"), (
             f"File not encrypted, raw content start: {raw_content[:10]}"
         )
@@ -549,7 +551,7 @@ This is a test skill for verifying encryption functionality.
         agfs_client = svc._agfs_client
         skill_md_uri = f"{skill_uri}/SKILL.md"
         agfs_path = svc.viking_fs._uri_to_path(skill_md_uri, ctx=ctx)
-        raw_content = agfs_client.read(agfs_path)
+        raw_content = agfs_client.read_raw(agfs_path)
         assert raw_content.startswith(b"OVE1"), (
             f"Skill file not encrypted, raw content start: {raw_content[:10]}"
         )
@@ -574,7 +576,7 @@ This is a test skill for verifying encryption functionality.
                 agfs_path = svc.viking_fs._uri_to_path(root_uri, ctx=ctx)
                 if agfs_client.exists(agfs_path) and not agfs_client.isdir(agfs_path):
                     # This is a file, check directly
-                    raw_content = agfs_client.read(agfs_path)
+                    raw_content = agfs_client.read_raw(agfs_path)
                     assert raw_content.startswith(b"OVE1"), f"File not encrypted: {root_uri}"
                     print(f"{prefix}✓ [ENCRYPTED] {root_uri}")
                     return
@@ -592,7 +594,7 @@ This is a test skill for verifying encryption functionality.
                 else:
                     # Check file encryption
                     agfs_path = svc.viking_fs._uri_to_path(entry["uri"], ctx=ctx)
-                    raw_content = agfs_client.read(agfs_path)
+                    raw_content = agfs_client.read_raw(agfs_path)
                     assert raw_content.startswith(b"OVE1"), f"File not encrypted: {entry['uri']}"
                     print(f"{prefix}✓ [ENCRYPTED] {entry['uri']}")
         except Exception as e:
@@ -622,7 +624,7 @@ This is a test skill for verifying encryption functionality.
 
         admin_user_key = await api_key_manager.create_account(test_account_id, test_admin_user_id)
         assert admin_user_key is not None
-        assert len(admin_user_key) == 64
+        assert is_new_format_key(admin_user_key)
 
         # 2. Verify list-accounts operation (via accessing APIKeyManager internal data)
         print("[2] Verify list-accounts operation")
@@ -636,7 +638,7 @@ This is a test skill for verifying encryption functionality.
         print(f"[3] Register test user: {test_user_id}")
         test_user_key = await api_key_manager.register_user(test_account_id, test_user_id, "user")
         assert test_user_key is not None
-        assert len(test_user_key) == 64
+        assert is_new_format_key(test_user_key)
 
         # 4. Verify list-users operation
         print("[4] Verify list-users operation")
@@ -723,12 +725,10 @@ This is a test skill for verifying encryption functionality.
 
         # grep operation
         print("  Executing grep operation...")
-        try:
-            grep_result = await svc.viking_fs.grep(resources_dir_uri, "OpenViking", ctx=ctx)
-            assert grep_result is not None
-            print("  ✓ grep operation successful")
-        except Exception as e:
-            print(f"  [WARNING] grep operation may not be supported: {e}")
+        grep_result = await svc.viking_fs.grep(resources_dir_uri, "OpenViking", ctx=ctx)
+        assert grep_result["count"] > 0
+        assert any("OpenViking" in match["content"] for match in grep_result["matches"])
+        print("  ✓ grep operation successful")
 
         # abstract operation
         print("  Executing abstract operation...")
@@ -915,12 +915,10 @@ This is a test skill for verifying encryption functionality.
 
         # grep operation
         print("  Executing grep operation...")
-        try:
-            memory_grep_result = await svc.viking_fs.grep(user_dir_uri, "dark theme", ctx=ctx)
-            assert memory_grep_result is not None
-            print("  ✓ grep operation successful")
-        except Exception as e:
-            print(f"  [WARNING] grep operation may not be supported: {e}")
+        memory_grep_result = await svc.viking_fs.grep(user_dir_uri, "dark theme", ctx=ctx)
+        assert memory_grep_result["count"] > 0
+        assert any("dark theme" in match["content"] for match in memory_grep_result["matches"])
+        print("  ✓ grep operation successful")
 
         # abstract operation
         print("  Executing abstract operation...")
@@ -979,12 +977,10 @@ This is a test skill for verifying encryption functionality.
             print("  ✓ get operation returns unencrypted content")
 
             # grep operation
-            try:
-                grep_result = await svc.viking_fs.grep(session_dir_uri, "session", ctx=ctx)
-                assert grep_result is not None
-                print("  ✓ grep operation successful")
-            except Exception as e:
-                print(f"  [WARNING] grep operation may not be supported: {e}")
+            grep_result = await svc.viking_fs.grep(session_dir_uri, "session", ctx=ctx)
+            assert grep_result["count"] > 0
+            assert any("session" in match["content"] for match in grep_result["matches"])
+            print("  ✓ grep operation successful")
 
             # abstract operation (on session directory)
             try:
@@ -1071,7 +1067,7 @@ This is a test skill for verifying encryption functionality.
         try:
             relation_file_uri = f"{dir_a_uri}/.relations.json"
             agfs_path = svc.viking_fs._uri_to_path(relation_file_uri, ctx=ctx)
-            raw_content = agfs_client.read(agfs_path)
+            raw_content = agfs_client.read_raw(agfs_path)
             assert raw_content.startswith(b"OVE1"), (
                 f"relation.json not encrypted: {relation_file_uri}"
             )
@@ -1144,7 +1140,7 @@ This is a test skill for verifying encryption functionality.
         # Verify file is encrypted on disk
         agfs_client = svc._agfs_client
         agfs_path = svc.viking_fs._uri_to_path(test_uri, ctx=ctx)
-        raw_content = agfs_client.read(agfs_path)
+        raw_content = agfs_client.read_raw(agfs_path)
         assert raw_content.startswith(b"OVE1"), "File should be encrypted"
 
         print("\n" + "=" * 80)
@@ -1192,7 +1188,7 @@ This is a test skill for verifying encryption functionality.
         # Verify file is encrypted on disk
         agfs_client = svc._agfs_client
         agfs_path = svc.viking_fs._uri_to_path(test_uri, ctx=ctx)
-        raw_content = agfs_client.read(agfs_path)
+        raw_content = agfs_client.read_raw(agfs_path)
         assert raw_content.startswith(b"OVE1"), "File should be encrypted"
 
         print("\n" + "=" * 80)
@@ -1250,9 +1246,7 @@ class TestAddResourceWithSemanticProcessing:
         await svc.initialize()
 
         # Create APIKeyManager using VikingFS to ensure system file encryption
-        api_key_manager = APIKeyManager(
-            root_key=self.ROOT_KEY, viking_fs=svc.viking_fs, encryption_enabled=True
-        )
+        api_key_manager = APIKeyManager(root_key=self.ROOT_KEY, viking_fs=svc.viking_fs)
         await api_key_manager.load()
 
         yield {
@@ -1285,12 +1279,12 @@ class TestAddResourceWithSemanticProcessing:
         print(f"[1] Create test account: {test_account_id}")
         admin_user_key = await api_key_manager.create_account(test_account_id, test_admin_user_id)
         assert admin_user_key is not None
-        assert len(admin_user_key) == 64
+        assert is_new_format_key(admin_user_key)
 
         print(f"[2] Register test user: {test_user_id}")
         test_user_key = await api_key_manager.register_user(test_account_id, test_user_id, "user")
         assert test_user_key is not None
-        assert len(test_user_key) == 64
+        assert is_new_format_key(test_user_key)
 
         from openviking.server.identity import RequestContext, Role
         from openviking_cli.session.user_id import UserIdentifier
@@ -1354,7 +1348,7 @@ This is a file in subdir2.
                             continue
                         try:
                             agfs_path = svc.viking_fs._uri_to_path(entry_uri, ctx=ctx)
-                            raw_content = agfs_client.read(agfs_path)
+                            raw_content = agfs_client.read_raw(agfs_path)
                             assert raw_content.startswith(b"OVE1"), (
                                 f"File not encrypted: {entry_uri}"
                             )
@@ -1414,7 +1408,7 @@ This is a file in subdir2.
                 try:
                     abstract_md_uri = f"{entry['uri']}/.abstract.md"
                     agfs_path = svc.viking_fs._uri_to_path(abstract_md_uri, ctx=ctx)
-                    raw_content = agfs_client.read(agfs_path)
+                    raw_content = agfs_client.read_raw(agfs_path)
                     assert raw_content.startswith(b"OVE1"), (
                         f".abstract.md not encrypted: {abstract_md_uri}"
                     )

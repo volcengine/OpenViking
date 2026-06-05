@@ -342,7 +342,7 @@ helm install openviking ./examples/k8s-helm \
   --set openviking.config.vlm.api_key="YOUR_API_KEY"
 ```
 
-For a detailed cloud deployment guide (including Volcengine TOS + VikingDB + Ark configuration), see the [Cloud Deployment Guide](../../../examples/cloud/GUIDE.md).
+For a detailed cloud deployment guide (including Volcengine TOS + VikingDB + Ark configuration), see the [Cloud Deployment Guide](https://github.com/volcengine/OpenViking/blob/main/examples/cloud/GUIDE.md).
 
 ## Health Checks
 
