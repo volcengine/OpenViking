@@ -49,9 +49,23 @@ async def _add_skill(client, name: str = "api-skill", description: str = "API sk
     return response.json()["result"]
 
 
+async def test_skills_api_list_empty_collection(client):
+    response = await client.get("/api/v1/skills")
+    assert response.status_code == 200, response.text
+    listed = response.json()["result"]
+    assert listed["skills"] == []
+    assert listed["total"] == 0
+
+
 async def test_skills_api_list_show_find_and_delete(client):
     added = await _add_skill(client, "api-skill", "API skill for list and show")
     assert added["uri"].endswith("/skills/api-skill")
+
+    privacy_response = await client.post(
+        "/api/v1/privacy-configs/skill/api-skill",
+        json={"values": {"api_key": "secret-1"}, "change_reason": "seed"},
+    )
+    assert privacy_response.status_code == 200, privacy_response.text
 
     list_response = await client.get("/api/v1/skills")
     assert list_response.status_code == 200, list_response.text
@@ -106,6 +120,33 @@ async def test_skills_api_list_show_find_and_delete(client):
     assert "overview" not in level_two
     assert "# api-skill" in level_two["content"]
 
+    default_response = await client.get("/api/v1/skills/api-skill")
+    assert default_response.status_code == 200, default_response.text
+    default_show = default_response.json()["result"]
+    assert "abstract" in default_show
+    assert "overview" in default_show
+    assert "content" in default_show
+
+    no_content_response = await client.get(
+        "/api/v1/skills/api-skill",
+        params={"include_content": False},
+    )
+    assert no_content_response.status_code == 200, no_content_response.text
+    no_content = no_content_response.json()["result"]
+    assert "abstract" in no_content
+    assert "overview" in no_content
+    assert "content" not in no_content
+
+    level_one_with_content_response = await client.get(
+        "/api/v1/skills/api-skill",
+        params={"level": 1, "include_content": True},
+    )
+    assert level_one_with_content_response.status_code == 200, level_one_with_content_response.text
+    level_one_with_content = level_one_with_content_response.json()["result"]
+    assert "abstract" not in level_one_with_content
+    assert "overview" in level_one_with_content
+    assert "content" in level_one_with_content
+
     find_response = await client.post(
         "/api/v1/skills/find",
         json={"query": "list and show", "limit": 5},
@@ -119,9 +160,13 @@ async def test_skills_api_list_show_find_and_delete(client):
     assert delete_response.status_code == 200, delete_response.text
     deleted = delete_response.json()["result"]
     assert deleted["name"] == "api-skill"
+    assert deleted["privacy_deleted"] is True
 
     missing_response = await client.get("/api/v1/skills/api-skill")
     assert missing_response.status_code == 404
+
+    missing_privacy_response = await client.get("/api/v1/privacy-configs/skill/api-skill")
+    assert missing_privacy_response.status_code == 404
 
 
 async def test_skills_api_update_requires_matching_name(client):
@@ -162,6 +207,24 @@ async def test_skills_api_update_requires_matching_name(client):
     assert shown["source"]["skill_name"] == "update-skill"
 
 
+async def test_skills_api_rejects_invalid_skill_names(client):
+    invalid_names = [
+        "team/sql-helper",
+        "bad name",
+        ".",
+        "..",
+        "a" * 65,
+    ]
+
+    for name in invalid_names:
+        response = await client.post(
+            "/api/v1/skills",
+            json={"data": _skill_md(name, "Invalid name skill"), "wait": True},
+        )
+        assert response.status_code == 400, response.text
+        assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
+
+
 async def test_skills_api_show_reads_source_metadata_and_hides_internal_file(client):
     await _add_skill(client, "source-skill", "Source metadata skill")
 
@@ -177,6 +240,37 @@ async def test_skills_api_show_reads_source_metadata_and_hides_internal_file(cli
     assert shown["source"]["operation"] == "add"
     assert shown["source"]["skill_name"] == "source-skill"
     assert all(file["path"] != ".source.json" for file in shown["files"])
+
+
+async def test_skills_api_add_accepts_source_metadata_override(client):
+    response = await client.post(
+        "/api/v1/skills",
+        json={
+            "data": _skill_md("git-source-skill", "Git source skill"),
+            "wait": True,
+            "source_metadata": {
+                "type": "git",
+                "source": "https://github.com/anthropics/skills/tree/main/skills",
+                "clone_url": "https://github.com/anthropics/skills.git",
+                "ref_name": "main",
+                "subdir": "skills/git-source-skill",
+            },
+        },
+    )
+    assert response.status_code == 200, response.text
+
+    show_response = await client.get(
+        "/api/v1/skills/git-source-skill",
+        params={"include_source": True},
+    )
+    assert show_response.status_code == 200, show_response.text
+    source = show_response.json()["result"]["source"]
+    assert source["tracked"] is True
+    assert source["type"] == "git"
+    assert source["clone_url"] == "https://github.com/anthropics/skills.git"
+    assert source["ref_name"] == "main"
+    assert source["subdir"] == "skills/git-source-skill"
+    assert source["skill_name"] == "git-source-skill"
 
 
 async def test_skills_api_update_accepts_binary_auxiliary_files(client, tmp_path):
@@ -216,6 +310,19 @@ async def test_skills_api_update_accepts_binary_auxiliary_files(client, tmp_path
     )
     assert download_response.status_code == 200, download_response.text
     assert download_response.content.startswith(b"\xff\xd8\xff\xe0")
+
+    replace_response = await client.put(
+        "/api/v1/skills/binary-skill",
+        json={"data": _skill_md("binary-skill", "Updated without auxiliary files"), "wait": True},
+    )
+    assert replace_response.status_code == 200, replace_response.text
+    replaced_root_uri = replace_response.json()["result"]["root_uri"]
+
+    stale_download_response = await client.get(
+        "/api/v1/content/download",
+        params={"uri": f"{replaced_root_uri}/preview.bin"},
+    )
+    assert stale_download_response.status_code == 404
 
 
 async def test_skills_api_validate_inline_skill(client):

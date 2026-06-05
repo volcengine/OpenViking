@@ -615,6 +615,7 @@ impl HttpClient {
         timeout: Option<f64>,
         show_progress: bool,
         verbose: bool,
+        source_metadata: Option<Value>,
     ) -> Result<serde_json::Value> {
         let path_obj = Path::new(data);
 
@@ -632,11 +633,14 @@ impl HttpClient {
                     self.upload_temp_file(zip_file.path()).await?
                 };
 
-                let body = serde_json::json!({
+                let mut body = serde_json::json!({
                     "temp_file_id": temp_file_id,
                     "wait": wait,
                     "timeout": timeout,
                 });
+                if let Some(source_metadata) = source_metadata.clone() {
+                    body["source_metadata"] = source_metadata;
+                }
                 let dynamic_timeout =
                     TimeoutConfig::for_resource_processing().calculate(zip_file.path())?;
                 self.base
@@ -650,30 +654,39 @@ impl HttpClient {
                     self.upload_temp_file(path_obj).await?
                 };
 
-                let body = serde_json::json!({
+                let mut body = serde_json::json!({
                     "temp_file_id": temp_file_id,
                     "wait": wait,
                     "timeout": timeout,
                 });
+                if let Some(source_metadata) = source_metadata.clone() {
+                    body["source_metadata"] = source_metadata;
+                }
                 let dynamic_timeout =
                     TimeoutConfig::for_resource_processing().calculate(path_obj)?;
                 self.base
                     .post_with_timeout("/api/v1/skills", &body, dynamic_timeout)
                     .await
             } else {
-                let body = serde_json::json!({
+                let mut body = serde_json::json!({
                     "data": data,
                     "wait": wait,
                     "timeout": timeout,
                 });
+                if let Some(source_metadata) = source_metadata.clone() {
+                    body["source_metadata"] = source_metadata;
+                }
                 self.post("/api/v1/skills", &body).await
             }
         } else {
-            let body = serde_json::json!({
+            let mut body = serde_json::json!({
                 "data": data,
                 "wait": wait,
                 "timeout": timeout,
             });
+            if let Some(source_metadata) = source_metadata {
+                body["source_metadata"] = source_metadata;
+            }
             self.post("/api/v1/skills", &body).await
         }
     }
@@ -781,6 +794,7 @@ impl HttpClient {
         timeout: Option<f64>,
         show_progress: bool,
         verbose: bool,
+        source_metadata: Option<Value>,
     ) -> Result<serde_json::Value> {
         let endpoint = format!("/api/v1/skills/{}", name);
         let path_obj = Path::new(data);
@@ -798,11 +812,14 @@ impl HttpClient {
                 } else {
                     self.upload_temp_file(zip_file.path()).await?
                 };
-                let body = serde_json::json!({
+                let mut body = serde_json::json!({
                     "temp_file_id": temp_file_id,
                     "wait": wait,
                     "timeout": timeout,
                 });
+                if let Some(source_metadata) = source_metadata.clone() {
+                    body["source_metadata"] = source_metadata;
+                }
                 self.put(&endpoint, &body).await
             } else if path_obj.is_file() {
                 let temp_file_id = if show_progress {
@@ -811,26 +828,35 @@ impl HttpClient {
                 } else {
                     self.upload_temp_file(path_obj).await?
                 };
-                let body = serde_json::json!({
+                let mut body = serde_json::json!({
                     "temp_file_id": temp_file_id,
                     "wait": wait,
                     "timeout": timeout,
                 });
+                if let Some(source_metadata) = source_metadata.clone() {
+                    body["source_metadata"] = source_metadata;
+                }
                 self.put(&endpoint, &body).await
             } else {
-                let body = serde_json::json!({
+                let mut body = serde_json::json!({
                     "data": data,
                     "wait": wait,
                     "timeout": timeout,
                 });
+                if let Some(source_metadata) = source_metadata.clone() {
+                    body["source_metadata"] = source_metadata;
+                }
                 self.put(&endpoint, &body).await
             }
         } else {
-            let body = serde_json::json!({
+            let mut body = serde_json::json!({
                 "data": data,
                 "wait": wait,
                 "timeout": timeout,
             });
+            if let Some(source_metadata) = source_metadata {
+                body["source_metadata"] = source_metadata;
+            }
             self.put(&endpoint, &body).await
         }
     }

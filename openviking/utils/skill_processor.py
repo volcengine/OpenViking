@@ -37,6 +37,44 @@ from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
 
+MAX_SKILL_NAME_LENGTH = 64
+
+
+def validate_skill_name(name: Any) -> str:
+    """Validate and normalize an Agent Skill name for storage/API addressing."""
+    if name is None:
+        raise InvalidArgumentError("Skill must have 'name' field", details={"field": "name"})
+    if not isinstance(name, str):
+        raise InvalidArgumentError(
+            "Skill 'name' must be a non-empty string",
+            details={"field": "name"},
+        )
+
+    normalized = name.strip()
+    if not normalized:
+        raise InvalidArgumentError(
+            "Skill 'name' must be a non-empty string",
+            details={"field": "name"},
+        )
+    if len(normalized) > MAX_SKILL_NAME_LENGTH:
+        raise InvalidArgumentError(
+            f"Skill name cannot exceed {MAX_SKILL_NAME_LENGTH} characters",
+            details={
+                "field": "name",
+                "max_length": MAX_SKILL_NAME_LENGTH,
+                "actual_length": len(normalized),
+            },
+        )
+    if not all(ch.isascii() and (ch.isalnum() or ch in {"_", "-"}) for ch in normalized):
+        raise InvalidArgumentError(
+            f"Invalid skill name: {name}",
+            details={
+                "field": "name",
+                "reason": "skill name may only contain ASCII letters, numbers, underscores, and hyphens",
+            },
+        )
+    return normalized
+
 
 class SkillProcessor:
     """
@@ -275,14 +313,7 @@ class SkillProcessor:
     @staticmethod
     def _validate_skill_dict(skill_dict: Dict[str, Any]) -> None:
         """Validate normalized skill metadata before storage/indexing."""
-        name = skill_dict.get("name")
-        if name is None:
-            raise InvalidArgumentError("Skill must have 'name' field", details={"field": "name"})
-        if not isinstance(name, str) or not name.strip():
-            raise InvalidArgumentError(
-                "Skill 'name' must be a non-empty string",
-                details={"field": "name"},
-            )
+        skill_dict["name"] = validate_skill_name(skill_dict.get("name"))
 
     @staticmethod
     def _build_skill_abstract(skill_dict: Dict[str, Any]) -> str:

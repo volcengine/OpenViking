@@ -66,7 +66,7 @@ pub async fn add_skill(
     compact: bool,
 ) -> Result<()> {
     let result = client
-        .add_skill(data, wait, timeout, show_progress, verbose)
+        .add_skill(data, wait, timeout, show_progress, verbose, None)
         .await?;
 
     if !wait && matches!(format, OutputFormat::Table) {

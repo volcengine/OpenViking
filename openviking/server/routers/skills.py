@@ -25,6 +25,7 @@ from openviking.server.skill_source_metadata import (
 from openviking.server.telemetry import run_operation
 from openviking.server.temp_upload_store import TempUploadStore
 from openviking.telemetry import TelemetryRequest
+from openviking.utils.skill_processor import validate_skill_name
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 
 router = APIRouter(prefix="/api/v1/skills", tags=["skills"])
@@ -39,6 +40,7 @@ class UpdateSkillRequest(BaseModel):
     temp_file_id: Optional[str] = None
     wait: bool = False
     timeout: Optional[float] = None
+    source_metadata: Optional[Dict[str, Any]] = None
     telemetry: TelemetryRequest = False
 
     @model_validator(mode="after")
@@ -72,15 +74,7 @@ def _agent_skills_root(ctx: RequestContext) -> str:
 
 
 def _validate_skill_name(skill_name: str) -> str:
-    name = (skill_name or "").strip()
-    if not name:
-        raise InvalidArgumentError("Skill name cannot be empty", details={"field": "name"})
-    if "/" in name or name in {".", ".."}:
-        raise InvalidArgumentError(
-            f"Invalid skill name: {skill_name}",
-            details={"field": "name", "reason": "skill name must be one URI segment"},
-        )
-    return name
+    return validate_skill_name(skill_name)
 
 
 def _skill_root_uri(ctx: RequestContext, skill_name: str) -> str:
@@ -387,13 +381,16 @@ async def list_skills(
     """List installed agent skills."""
     service = get_service()
     root_uri = _agent_skills_root(_ctx)
-    entries = await service.fs.ls(
-        root_uri,
-        ctx=_ctx,
-        output="agent",
-        abs_limit=1024,
-        node_limit=node_limit,
-    )
+    try:
+        entries = await service.fs.ls(
+            root_uri,
+            ctx=_ctx,
+            output="agent",
+            abs_limit=1024,
+            node_limit=node_limit,
+        )
+    except NotFoundError:
+        entries = []
     skills = [
         _skill_summary_from_entry(entry)
         for entry in entries
@@ -455,7 +452,7 @@ async def validate_skill(
 @router.get("/{skill_name}")
 async def get_skill(
     skill_name: str = ApiPath(..., description="Skill name"),
-    include_content: bool = False,
+    include_content: Optional[bool] = None,
     include_files: bool = True,
     include_source: bool = False,
     level: Optional[int] = None,
@@ -475,7 +472,7 @@ async def get_skill(
         result["abstract"] = abstract
     if level is None or level == 1:
         result["overview"] = await service.fs.overview(root_uri, ctx=_ctx)
-    if level is None or level == 2:
+    if level == 2 or include_content is True or (level is None and include_content is not False):
         result["content"] = await service.fs.read(_skill_md_uri(root_uri), ctx=_ctx)
     if include_files:
         entries = await _list_skill_files(service, _ctx, root_uri)
@@ -508,24 +505,29 @@ async def update_skill(
 ):
     """Replace an existing agent skill with new content."""
     service = get_service()
-    await _require_skill(service, _ctx, skill_name)
+    root_uri = await _require_skill(service, _ctx, skill_name)
 
     data = request.data
     allow_local_path_resolution = False
     resolved = None
-    source_metadata = {"type": "api", "source": "inline_content", "operation": "update"}
+    source_metadata = request.source_metadata or {
+        "type": "api",
+        "source": "inline_content",
+        "operation": "update",
+    }
     if request.temp_file_id:
         store = TempUploadStore.build(http_request.app.state.config)
         resolved = await store.resolve_for_consume(request.temp_file_id, _ctx)
         data = Path(resolved.local_path)
         allow_local_path_resolution = True
-        source_metadata = {
-            "type": "api",
-            "source": "temp_upload",
-            "operation": "update",
-            "upload_mode": resolved.mode,
-        }
-        if resolved.original_filename:
+        if request.source_metadata is None:
+            source_metadata = {
+                "type": "api",
+                "source": "temp_upload",
+                "operation": "update",
+                "upload_mode": resolved.mode,
+            }
+        if resolved.original_filename and request.source_metadata is None:
             source_metadata["original_filename"] = resolved.original_filename
 
     store = TempUploadStore.build(http_request.app.state.config) if resolved else None
@@ -538,6 +540,7 @@ async def update_skill(
                 skill_name,
                 allow_local_path_resolution=allow_local_path_resolution,
             )
+            await service.fs.rm(root_uri, ctx=_ctx, recursive=True)
             result = await service.resources.add_skill(
                 data=data,
                 ctx=_ctx,
@@ -580,7 +583,12 @@ async def delete_skill(
     service = get_service()
     root_uri = await _require_skill(service, _ctx, skill_name)
     result = await service.fs.rm(root_uri, ctx=_ctx, recursive=True)
+    privacy_deleted = False
+    privacy = service.privacy_configs
+    if privacy is not None:
+        privacy_deleted = await privacy.delete(_ctx, "skill", skill_name)
     response_result: Dict[str, Any] = {"name": skill_name, "uri": root_uri, "root_uri": root_uri}
     if isinstance(result, dict) and "estimated_deleted_count" in result:
         response_result["estimated_deleted_count"] = result["estimated_deleted_count"]
+    response_result["privacy_deleted"] = privacy_deleted
     return Response(status="ok", result=response_result)

@@ -1140,6 +1140,8 @@ impl Commands {
                             | ConfigCommands::Delete(_)
                             | ConfigCommands::List,
                     ),
+            } | Commands::Skills {
+                action: SkillCommands::Validate { .. },
             } | Commands::Version
         )
     }
@@ -1686,16 +1688,7 @@ fn is_watch_subcommand(token: &str) -> bool {
 fn is_skill_subcommand(token: &str) -> bool {
     matches!(
         token,
-        "add"
-            | "list"
-            | "ls"
-            | "find"
-            | "show"
-            | "update"
-            | "remove"
-            | "rm"
-            | "delete"
-            | "validate"
+        "add" | "list" | "ls" | "find" | "show" | "update" | "remove" | "rm" | "delete"
     )
 }
 
@@ -2623,6 +2616,10 @@ mod tests {
         assert!(!switch.command.requires_cli_config_file());
         assert!(!switch_named.command.requires_cli_config_file());
         assert!(!version.command.requires_cli_config_file());
+
+        let skills_validate = Cli::try_parse_from(["ov", "skills", "validate", "./skills/foo"])
+            .expect("skills validate should parse");
+        assert!(!skills_validate.command.requires_cli_config_file());
     }
 
     #[test]
@@ -2842,7 +2839,6 @@ mod tests {
             &["ov", "skills", "remove"],
             &["ov", "skills", "rm"],
             &["ov", "skills", "delete"],
-            &["ov", "skills", "validate"],
         ];
 
         for args in cases {
@@ -2890,6 +2886,8 @@ mod tests {
             &["ov", "config", "add", "cloud", "--api-key-stdin"],
             &["ov", "config", "edit", "prod", "--activate"],
             &["ov", "config", "setup-cli"],
+            &["ov", "skills", "validate", "./skills/foo"],
+            &["ov", "skills", "validate", "./skills/foo", "--strict"],
             &["ov", "version"],
             &["ov", "language", "en"],
             &["ov", "lang", "en"],

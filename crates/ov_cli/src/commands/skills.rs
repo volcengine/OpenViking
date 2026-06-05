@@ -67,8 +67,6 @@ struct SkillSourceRecord {
     skill_name: Option<String>,
 }
 
-const SOURCE_METADATA_FILENAME: &str = ".source.json";
-
 impl PreparedSource {
     fn path(&self) -> Option<&Path> {
         match self {
@@ -115,10 +113,17 @@ pub async fn add(
     let mut installed = Vec::new();
 
     for target in targets {
+        let source_metadata = source_record_value(target.source.as_ref())?;
         let result = client
-            .add_skill(&target.data, wait, None, show_progress, verbose)
+            .add_skill(
+                &target.data,
+                wait,
+                None,
+                show_progress,
+                verbose,
+                source_metadata,
+            )
             .await?;
-        persist_source_record(client, &result, target.source).await?;
         installed.push(result);
     }
 
@@ -223,10 +228,18 @@ pub async fn update(
     let mut updated = Vec::new();
     for name in names {
         let update_target = resolve_update_target(client, &name).await?;
+        let source_metadata = source_record_value(update_target.source.as_ref())?;
         let result = client
-            .skill_update(&name, &update_target.data, wait, None, false, false)
+            .skill_update(
+                &name,
+                &update_target.data,
+                wait,
+                None,
+                false,
+                false,
+                source_metadata,
+            )
             .await?;
-        persist_source_record(client, &result, update_target.source).await?;
         updated.push(result);
     }
     let total = updated.len();
@@ -547,12 +560,27 @@ struct ParsedSkillMd {
 }
 
 fn parse_skill_md(content: &str) -> std::result::Result<ParsedSkillMd, String> {
-    let rest = content
-        .strip_prefix("---\n")
-        .or_else(|| content.strip_prefix("---\r\n"))
+    let first_line_end = content
+        .find('\n')
         .ok_or_else(|| "SKILL.md must have YAML frontmatter".to_string())?;
-    let Some((frontmatter, body)) = split_frontmatter(rest) else {
-        return Err("SKILL.md must have closing YAML frontmatter delimiter".to_string());
+    if !is_frontmatter_delimiter(&content[..first_line_end]) {
+        return Err("SKILL.md must have YAML frontmatter".to_string());
+    }
+
+    let frontmatter_start = first_line_end + 1;
+    let mut line_start = frontmatter_start;
+    let (frontmatter, body) = loop {
+        let Some(relative_line_end) = content[line_start..].find('\n') else {
+            return Err("SKILL.md must have closing YAML frontmatter delimiter".to_string());
+        };
+        let line_end = line_start + relative_line_end;
+        if is_frontmatter_delimiter(&content[line_start..line_end]) {
+            break (
+                &content[frontmatter_start..line_start],
+                &content[line_end + 1..],
+            );
+        }
+        line_start = line_end + 1;
     };
     let meta: serde_yaml::Value = serde_yaml::from_str(frontmatter)
         .map_err(|e| format!("Invalid YAML frontmatter: {}", e))?;
@@ -565,14 +593,10 @@ fn parse_skill_md(content: &str) -> std::result::Result<ParsedSkillMd, String> {
     })
 }
 
-fn split_frontmatter(rest: &str) -> Option<(&str, &str)> {
-    if let Some(index) = rest.find("\n---\n") {
-        return Some((&rest[..index], &rest[index + "\n---\n".len()..]));
-    }
-    if let Some(index) = rest.find("\r\n---\r\n") {
-        return Some((&rest[..index], &rest[index + "\r\n---\r\n".len()..]));
-    }
-    None
+fn is_frontmatter_delimiter(line: &str) -> bool {
+    let line = line.strip_suffix('\r').unwrap_or(line);
+    line.strip_prefix("---")
+        .is_some_and(|suffix| suffix.chars().all(char::is_whitespace))
 }
 
 fn yaml_mapping_get<'a>(
@@ -1139,40 +1163,11 @@ fn prompt_update_source(name: &str) -> Result<Option<AddTarget>> {
     Ok(Some(target))
 }
 
-async fn persist_source_record(
-    client: &HttpClient,
-    result: &Value,
-    source: Option<SkillSourceRecord>,
-) -> Result<()> {
-    let Some(mut record) = source else {
-        return Ok(());
-    };
-    let name = result
-        .get("name")
-        .and_then(Value::as_str)
-        .or_else(|| record.skill_name.as_deref());
-    let Some(name) = name else {
-        return Ok(());
-    };
-    record.skill_name = Some(name.to_string());
-    let Some(root_uri) = result.get("root_uri").and_then(Value::as_str) else {
-        return Ok(());
-    };
-    let uri = format!(
-        "{}/{}",
-        root_uri.trim_end_matches('/'),
-        SOURCE_METADATA_FILENAME
-    );
-    let content = serde_json::to_string_pretty(&record)
-        .map_err(|e| Error::Parse(format!("Failed to serialize source metadata: {}", e)))?;
-    if client
-        .write(&uri, &content, "replace", true, None)
-        .await
-        .is_err()
-    {
-        client.write(&uri, &content, "create", true, None).await?;
-    }
-    Ok(())
+fn source_record_value(source: Option<&SkillSourceRecord>) -> Result<Option<Value>> {
+    source
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(|e| Error::Parse(format!("Failed to serialize source metadata: {}", e)))
 }
 
 fn normalize_skill_names(names: Vec<String>) -> Result<Vec<String>> {
@@ -1683,7 +1678,7 @@ fn output_message_result(
 mod tests {
     use super::{
         PreparedSource, SourceOrigin, filter_skill_show_level, parse_github_tree_source,
-        render_skill_show_for_table, resolve_add_targets,
+        parse_skill_md, render_skill_show_for_table, resolve_add_targets,
     };
     use serde_json::json;
     use std::path::Path;
@@ -1753,6 +1748,22 @@ mod tests {
         assert!(rendered.contains("L1 text"));
         assert!(!rendered.contains("[L2 SKILL.md]"));
         assert!(!rendered.contains("# L2 text"));
+    }
+
+    #[test]
+    fn skill_validate_parser_accepts_delimiter_trailing_whitespace() {
+        let parsed =
+            parse_skill_md("---   \nname: demo-skill\ndescription: Demo skill\n--- \n\n# Demo\n")
+                .expect("frontmatter delimiter with trailing whitespace should parse");
+
+        assert_eq!(
+            parsed
+                .meta
+                .get(serde_yaml::Value::String("name".to_string()))
+                .and_then(serde_yaml::Value::as_str),
+            Some("demo-skill")
+        );
+        assert_eq!(parsed.body, "# Demo");
     }
 
     #[test]

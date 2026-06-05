@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Resource endpoints for OpenViking HTTP Server."""
 
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, ConfigDict, model_validator
@@ -108,6 +108,7 @@ class AddSkillRequest(BaseModel):
     temp_file_id: Optional[str] = None
     wait: bool = False
     timeout: Optional[float] = None
+    source_metadata: Optional[Dict[str, Any]] = None
     telemetry: TelemetryRequest = False
 
     @model_validator(mode="after")
@@ -289,19 +290,24 @@ async def add_skill(
     data = request.data
     allow_local_path_resolution = False
     resolved = None
-    source_metadata = {"type": "api", "source": "inline_content", "operation": "add"}
+    source_metadata = request.source_metadata or {
+        "type": "api",
+        "source": "inline_content",
+        "operation": "add",
+    }
     if request.temp_file_id:
         store = TempUploadStore.build(http_request.app.state.config)
         resolved = await store.resolve_for_consume(request.temp_file_id, _ctx)
         data = resolved.local_path
         allow_local_path_resolution = True
-        source_metadata = {
-            "type": "api",
-            "source": "temp_upload",
-            "operation": "add",
-            "upload_mode": resolved.mode,
-        }
-        if resolved.original_filename:
+        if request.source_metadata is None:
+            source_metadata = {
+                "type": "api",
+                "source": "temp_upload",
+                "operation": "add",
+                "upload_mode": resolved.mode,
+            }
+        if resolved.original_filename and request.source_metadata is None:
             source_metadata["original_filename"] = resolved.original_filename
 
     store = TempUploadStore.build(http_request.app.state.config) if resolved else None
