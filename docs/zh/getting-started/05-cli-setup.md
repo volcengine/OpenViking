@@ -248,6 +248,14 @@ ov config switch <CONFIG-NAME> -o json
 ov config add cloud --name <CONFIG-NAME> --api-key-stdin --activate -o json
 ```
 
+shell pipe 形式如下：
+
+```bash
+printf '%s' "$API_KEY" | ov config add cloud --name <CONFIG-NAME> --api-key-stdin --activate -o json
+```
+
+`$API_KEY` 表示可信的运行时密钥来源，不是字面量 key。Agent 能在不把 key 写进命令文本、shell history、日志或长期 export 的环境变量时提供 key，就应使用 stdin。
+
 只把 API Key 内容写入 stdin，不要把 key 放进 shell 命令本身。这会写入一个 VolcEngine Cloud 配置，并使用固定端点：`https://api.vikingdb.cn-beijing.volces.com/openviking`。`cloud` 目标不接受自定义服务端 URL。
 
 只有当环境变量已经存在时，才使用环境变量：
@@ -276,6 +284,12 @@ ov config add self-managed --name <CONFIG-NAME> --url http://127.0.0.1:1933 --ac
 
 ```bash
 ov config add self-managed --name <CONFIG-NAME> --url <REMOTE-OPENVIKING-URL> --api-key-stdin --activate -o json
+```
+
+stdin pipe 形式如下：
+
+```bash
+printf '%s' "$API_KEY" | ov config add self-managed --name <CONFIG-NAME> --url <REMOTE-OPENVIKING-URL> --api-key-stdin --activate -o json
 ```
 
 把 API Key 写入 stdin。如果 key 已经存在于当前 shell 环境变量中，可以改用 `--api-key-env <API-KEY-ENV-VAR>`。
@@ -356,6 +370,8 @@ ov status
 检查配置时优先使用 `ov config show`，因为它会隐藏密钥。
 
 除非你理解配置文件可能包含密钥，否则不要打印原始配置文件。
+
+如果验证命令提示 OpenViking 需要显示语言，请运行 `ov language en`；如果用户希望使用中文，则运行 `ov language zh-CN`，然后重新验证。
 
 `ov status` 包含更宽泛的服务端和数据诊断。如果 `ov config validate` 和 `ov health` 通过，`ov status` 中的 warning 不一定代表 CLI 配置失败。
 

@@ -248,6 +248,14 @@ If the agent already holds the API key through a trusted channel, run:
 ov config add cloud --name <CONFIG-NAME> --api-key-stdin --activate -o json
 ```
 
+A shell pipe has this shape:
+
+```bash
+printf '%s' "$API_KEY" | ov config add cloud --name <CONFIG-NAME> --api-key-stdin --activate -o json
+```
+
+`$API_KEY` stands for a trusted runtime secret source, not the literal key. Use stdin when the agent can supply the key without putting it in the command text, shell history, logs, or a long-lived exported environment variable.
+
 Write only the API key bytes to stdin. Do not place the key in the shell command. This writes a VolcEngine Cloud config using the fixed endpoint `https://api.vikingdb.cn-beijing.volces.com/openviking`. The `cloud` target does not take a custom server URL.
 
 Use an environment variable only if it already exists in the shell:
@@ -276,6 +284,12 @@ For a hosted self-managed server with a normal API key:
 
 ```bash
 ov config add self-managed --name <CONFIG-NAME> --url <REMOTE-OPENVIKING-URL> --api-key-stdin --activate -o json
+```
+
+The stdin pipe form is:
+
+```bash
+printf '%s' "$API_KEY" | ov config add self-managed --name <CONFIG-NAME> --url <REMOTE-OPENVIKING-URL> --api-key-stdin --activate -o json
 ```
 
 Write the API key to stdin. If the key is already in the shell environment, use `--api-key-env <API-KEY-ENV-VAR>` instead.
@@ -356,6 +370,8 @@ ov status
 Use `ov config show` for inspection because it redacts secrets.
 
 Do not print the raw config file unless you understand that it may contain secrets.
+
+If a verification command says OpenViking needs a display language, run `ov language en`, or `ov language zh-CN` if the user wants Chinese, then rerun verification.
 
 `ov status` includes broader server and data diagnostics. If `ov config validate` and `ov health` pass, a warning in `ov status` does not always mean CLI setup failed.
 
