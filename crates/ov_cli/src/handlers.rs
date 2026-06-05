@@ -1107,6 +1107,7 @@ pub async fn handle_find(
     before: Option<String>,
     level: Option<Vec<i32>>,
     peer_id: Option<String>,
+    tags: Option<Vec<String>>,
     ctx: CliContext,
 ) -> Result<()> {
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
@@ -1126,6 +1127,9 @@ pub async fn handle_find(
     if let Some(ref p) = peer_id {
         params.push(format!("--peer-id {}", p));
     }
+    if let Some(ref t) = tags {
+        params.push(format!("--tags {}", t.join(",")));
+    }
     params.push(format!("\"{}\"", query));
     print_command_echo("ov find", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
@@ -1140,6 +1144,7 @@ pub async fn handle_find(
         None,
         level,
         peer_id.as_deref(),
+        tags.clone(),
         ctx.output_format,
         ctx.compact,
     )
@@ -1156,6 +1161,7 @@ pub async fn handle_search(
     before: Option<String>,
     level: Option<Vec<i32>>,
     peer_id: Option<String>,
+    tags: Option<Vec<String>>,
     ctx: CliContext,
 ) -> Result<()> {
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
@@ -1178,6 +1184,9 @@ pub async fn handle_search(
     if let Some(ref p) = peer_id {
         params.push(format!("--peer-id {}", p));
     }
+    if let Some(ref t) = tags {
+        params.push(format!("--tags {}", t.join(",")));
+    }
     params.push(format!("\"{}\"", query));
     print_command_echo("ov search", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
@@ -1193,6 +1202,7 @@ pub async fn handle_search(
         None,
         level,
         peer_id.as_deref(),
+        tags.clone(),
         ctx.output_format,
         ctx.compact,
     )

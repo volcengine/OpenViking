@@ -236,6 +236,7 @@ class SyncOpenViking:
         time_field: Optional[str] = None,
         level: Optional[List[int]] = None,
         peer_id: Optional[str] = None,
+        tags: Optional[List[str]] = None,
     ):
         """Execute complex retrieval (intent analysis, hierarchical retrieval)."""
         return run_async(
@@ -253,6 +254,7 @@ class SyncOpenViking:
                 time_field=time_field,
                 level=level,
                 peer_id=peer_id,
+                tags=tags,
             )
         )
 
@@ -269,6 +271,7 @@ class SyncOpenViking:
         time_field: Optional[str] = None,
         level: Optional[List[int]] = None,
         peer_id: Optional[str] = None,
+        tags: Optional[List[str]] = None,
     ):
         """Quick retrieval"""
         return run_async(
@@ -284,6 +287,7 @@ class SyncOpenViking:
                 time_field,
                 level,
                 peer_id=peer_id,
+                tags=tags,
             )
         )
 

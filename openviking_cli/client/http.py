@@ -689,6 +689,7 @@ class AsyncHTTPClient(BaseClient):
         filter: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
         peer_id: Optional[str] = None,
+        tags: Optional[List[str]] = None,
     ) -> FindResult:
         """Semantic search without session context."""
         telemetry = self._validate_telemetry(telemetry)
@@ -704,6 +705,8 @@ class AsyncHTTPClient(BaseClient):
         }
         if peer_id is not None:
             payload["peer_id"] = peer_id
+        if tags is not None:
+            payload["tags"] = tags
         response = await self._http.post("/api/v1/search/find", json=payload)
         response_data = self._handle_response_data(response)
         return FindResult.from_dict(response_data.get("result") or {})
@@ -720,6 +723,7 @@ class AsyncHTTPClient(BaseClient):
         filter: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
         peer_id: Optional[str] = None,
+        tags: Optional[List[str]] = None,
     ) -> FindResult:
         """Semantic search with optional session context."""
         telemetry = self._validate_telemetry(telemetry)
@@ -737,6 +741,8 @@ class AsyncHTTPClient(BaseClient):
         }
         if peer_id is not None:
             payload["peer_id"] = peer_id
+        if tags is not None:
+            payload["tags"] = tags
         response = await self._http.post("/api/v1/search/search", json=payload)
         response_data = self._handle_response_data(response)
         return FindResult.from_dict(response_data.get("result") or {})

@@ -72,6 +72,7 @@ class FindRequest(BaseModel):
 
     query: str
     target_uri: Union[str, List[str]] = ""
+    tags: Optional[List[str]] = None
     peer_id: Optional[str] = None
     limit: int = 10
     node_limit: Optional[int] = None
@@ -95,6 +96,7 @@ class SearchRequest(BaseModel):
 
     query: str
     target_uri: Union[str, List[str]] = ""
+    tags: Optional[List[str]] = None
     peer_id: Optional[str] = None
     session_id: Optional[str] = None
     limit: int = 10
@@ -157,6 +159,7 @@ async def find(
             ctx=_ctx,
             target_uri=resolved_target_uri,
             peer_id=request.peer_id,
+            tags=request.tags,
             limit=actual_limit,
             score_threshold=request.score_threshold,
             filter=effective_filter,
@@ -200,6 +203,7 @@ async def search(
             ctx=_ctx,
             target_uri=resolved_target_uri,
             peer_id=request.peer_id,
+            tags=request.tags,
             session=session,
             limit=actual_limit,
             score_threshold=request.score_threshold,

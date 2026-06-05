@@ -289,6 +289,7 @@ class SyncHTTPClient:
         filter: Optional[Dict] = None,
         telemetry: TelemetryRequest = False,
         peer_id: Optional[str] = None,
+        tags: Optional[List[str]] = None,
     ):
         """Semantic search with optional session context."""
         return run_async(
@@ -303,6 +304,7 @@ class SyncHTTPClient:
                 filter=filter,
                 telemetry=telemetry,
                 peer_id=peer_id,
+                tags=tags,
             )
         )
 
@@ -316,6 +318,7 @@ class SyncHTTPClient:
         filter: Optional[Dict] = None,
         telemetry: TelemetryRequest = False,
         peer_id: Optional[str] = None,
+        tags: Optional[List[str]] = None,
     ):
         """Semantic search without session context."""
         return run_async(
@@ -328,6 +331,7 @@ class SyncHTTPClient:
                 filter,
                 telemetry=telemetry,
                 peer_id=peer_id,
+                tags=tags,
             )
         )
 

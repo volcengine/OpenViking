@@ -251,6 +251,7 @@ class TypedQuery:
     intent: str
     priority: int = 3
     target_directories: List[str] = field(default_factory=list)
+    tags: List[str] = field(default_factory=list)
 
 
 @dataclass

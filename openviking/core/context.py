@@ -74,6 +74,7 @@ class Context:
         account_id: Optional[str] = None,
         owner_user_id: Optional[str] = None,
         owner_space: Optional[str] = None,
+        search_tags: Optional[List[str]] = None,
         id: Optional[str] = None,
     ):
         """
@@ -108,6 +109,7 @@ class Context:
             owner_user_id if owner_user_id is not None else owner_fields["owner_user_id"]
         )
         self.owner_space = owner_space or self._derive_owner_space(user)
+        self.search_tags = list(search_tags or [])
         self.vector: Optional[List[float]] = None
         self.vectorize = Vectorize(abstract)
 
@@ -179,6 +181,8 @@ class Context:
         }
         if self.level is not None:
             data["level"] = int(self.level)
+        if self.search_tags:
+            data["search_tags"] = list(self.search_tags)
 
         if self.user:
             data["user"] = self.user.to_dict()
@@ -237,6 +241,7 @@ class Context:
             account_id=data.get("account_id"),
             owner_user_id=data.get("owner_user_id"),
             owner_space=data.get("owner_space"),
+            search_tags=data.get("search_tags"),
         )
         obj.id = data.get("id", obj.id)
         obj.vector = data.get("vector")

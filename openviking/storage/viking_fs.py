@@ -41,6 +41,7 @@ from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.expr import PathScope
 from openviking.telemetry import get_current_telemetry
+from openviking.utils.search_tags import expand_query_tags
 from openviking.utils.time_utils import format_simplified, get_current_timestamp, parse_iso_datetime
 from openviking_cli.exceptions import (
     FailedPreconditionError,
@@ -1191,6 +1192,7 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
         level: Optional[List[int]] = None,
         peer_id: Optional[str] = None,
+        tags: Optional[List[str]] = None,
     ):
         """Semantic search.
 
@@ -1239,6 +1241,7 @@ class VikingFS:
             context_type=None,
             intent="",
             target_directories=retrieval_targets.target_directories,
+            tags=expand_query_tags(tags),
         )
 
         logger.debug(
@@ -1284,6 +1287,7 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
         level: Optional[List[int]] = None,
         peer_id: Optional[str] = None,
+        tags: Optional[List[str]] = None,
     ):
         """Complex search with session context.
 
@@ -1316,6 +1320,7 @@ class VikingFS:
             str(session_info.get("latest_archive_overview") or "") if session_info else ""
         )
         current_messages = session_info.get("current_messages") if session_info else None
+        expanded_tags = expand_query_tags(tags)
 
         query_plan: Optional[QueryPlan] = None
         for target_dir in retrieval_targets.target_directories:
@@ -1341,6 +1346,7 @@ class VikingFS:
             typed_queries = query_plan.queries
             for tq in typed_queries:
                 tq.target_directories = retrieval_targets.target_directories
+                tq.tags = expanded_tags
         else:
             # No session context: create query directly
             typed_queries = [
@@ -1350,6 +1356,7 @@ class VikingFS:
                     intent="",
                     priority=1,
                     target_directories=retrieval_targets.target_directories,
+                    tags=expanded_tags,
                 )
             ]
         telemetry.set("search.typed_queries_count", len(typed_queries))

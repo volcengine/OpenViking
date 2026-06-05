@@ -424,6 +424,9 @@ enum Commands {
         /// Limit memory retrieval to this peer plus the current user memory
         #[arg(long = "peer-id")]
         peer_id: Option<String>,
+        /// Filter resource retrieval by tags
+        #[arg(long = "tags", value_delimiter = ',')]
+        tags: Option<Vec<String>>,
     },
     /// [Experimental][Data] Run context-aware retrieval
     Search {
@@ -458,6 +461,9 @@ enum Commands {
         /// Limit memory retrieval to this peer plus the current user memory
         #[arg(long = "peer-id")]
         peer_id: Option<String>,
+        /// Filter resource retrieval by tags
+        #[arg(long = "tags", value_delimiter = ',')]
+        tags: Option<Vec<String>>,
     },
     /// [Data] Run content pattern search
     Grep {
@@ -2259,9 +2265,10 @@ async fn main() {
             before,
             level,
             peer_id,
+            tags,
         } => {
             handlers::handle_find(
-                query, uri, node_limit, threshold, after, before, level, peer_id, ctx,
+                query, uri, node_limit, threshold, after, before, level, peer_id, tags, ctx,
             )
             .await
         }
@@ -2275,9 +2282,20 @@ async fn main() {
             before,
             level,
             peer_id,
+            tags,
         } => {
             handlers::handle_search(
-                query, uri, session_id, node_limit, threshold, after, before, level, peer_id, ctx,
+                query,
+                uri,
+                session_id,
+                node_limit,
+                threshold,
+                after,
+                before,
+                level,
+                peer_id,
+                tags,
+                ctx,
             )
             .await
         }
@@ -2367,6 +2385,32 @@ mod tests {
         match cli.command {
             Commands::Search { peer_id, .. } => {
                 assert_eq!(peer_id.as_deref(), Some("web:visitor:alice"));
+            }
+            _ => panic!("expected search command"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_find_tags() {
+        let cli = Cli::try_parse_from(["ov", "find", "invoice", "--tags", "billing,finance"])
+            .expect("find tags should parse");
+
+        match cli.command {
+            Commands::Find { tags, .. } => {
+                assert_eq!(tags, Some(vec!["billing".to_string(), "finance".to_string()]));
+            }
+            _ => panic!("expected find command"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_search_tags() {
+        let cli = Cli::try_parse_from(["ov", "search", "invoice", "--tags", "billing,finance"])
+            .expect("search tags should parse");
+
+        match cli.command {
+            Commands::Search { tags, .. } => {
+                assert_eq!(tags, Some(vec!["billing".to_string(), "finance".to_string()]));
             }
             _ => panic!("expected search command"),
         }

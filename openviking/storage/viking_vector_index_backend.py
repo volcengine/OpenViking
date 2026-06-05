@@ -24,6 +24,7 @@ RETRIEVAL_OUTPUT_FIELDS = [
     "level",
     "context_type",
     "abstract",
+    "search_tags",
     "active_count",
     "updated_at",
 ]
@@ -32,6 +33,7 @@ LOOKUP_OUTPUT_FIELDS = [
     "uri",
     "level",
     "active_count",
+    "search_tags",
 ]
 
 MEMORY_DEDUP_OUTPUT_FIELDS = [
@@ -57,6 +59,7 @@ FETCH_BY_URI_OUTPUT_FIELDS = [
     "name",
     "description",
     "tags",
+    "search_tags",
     "abstract",
     "account_id",
     "owner_user_id",
@@ -805,6 +808,7 @@ class VikingVectorIndexBackend:
         sparse_query_vector: Optional[Dict[str, float]] = None,
         context_type: Optional[str] = None,
         target_directories: Optional[List[str]] = None,
+        search_tags: Optional[List[str]] = None,
         extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
         limit: int = 10,
         offset: int = 0,
@@ -813,6 +817,7 @@ class VikingVectorIndexBackend:
             ctx=ctx,
             context_type=context_type,
             target_directories=target_directories,
+            search_tags=search_tags,
             extra_filter=extra_filter,
         )
         return await self.search(
@@ -832,6 +837,7 @@ class VikingVectorIndexBackend:
         sparse_query_vector: Optional[Dict[str, float]] = None,
         context_type: Optional[str] = None,
         target_directories: Optional[List[str]] = None,
+        search_tags: Optional[List[str]] = None,
         extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
         limit: int = 10,
     ) -> List[Dict[str, Any]]:
@@ -843,6 +849,7 @@ class VikingVectorIndexBackend:
                 ctx=ctx,
                 context_type=context_type,
                 target_directories=target_directories,
+                search_tags=search_tags,
                 extra_filter=extra_filter,
             ),
             In("level", [0, 1, 2]),  # TODO: smj fix this
@@ -864,6 +871,7 @@ class VikingVectorIndexBackend:
         sparse_query_vector: Optional[Dict[str, float]] = None,
         context_type: Optional[str] = None,
         target_directories: Optional[List[str]] = None,
+        search_tags: Optional[List[str]] = None,
         extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
         limit: int = 10,
     ) -> List[Dict[str, Any]]:
@@ -889,6 +897,7 @@ class VikingVectorIndexBackend:
                 ctx=ctx,
                 context_type=context_type,
                 target_directories=effective_target_directories,
+                search_tags=search_tags,
                 extra_filter=extra_filter,
             ),
         )
@@ -896,6 +905,35 @@ class VikingVectorIndexBackend:
             query_vector=query_vector,
             sparse_query_vector=sparse_query_vector,
             filter=merged_filter,
+            limit=limit,
+            output_fields=RETRIEVAL_OUTPUT_FIELDS,
+            ctx=ctx,
+        )
+
+    async def search_by_tags_in_tenant(
+        self,
+        ctx: RequestContext,
+        *,
+        context_type: Optional[str] = None,
+        target_directories: Optional[List[str]] = None,
+        search_tags: Optional[List[str]] = None,
+        extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
+        limit: int = 10,
+    ) -> List[Dict[str, Any]]:
+        if not search_tags:
+            return []
+
+        scope_filter = self._build_scope_filter(
+            ctx=ctx,
+            context_type=context_type,
+            target_directories=target_directories,
+            search_tags=search_tags,
+            extra_filter=extra_filter,
+        )
+        return await self.search(
+            query_vector=None,
+            sparse_query_vector=None,
+            filter=scope_filter,
             limit=limit,
             output_fields=RETRIEVAL_OUTPUT_FIELDS,
             ctx=ctx,
@@ -1084,6 +1122,7 @@ class VikingVectorIndexBackend:
         ctx: RequestContext,
         context_type: Optional[str],
         target_directories: Optional[List[str]],
+        search_tags: Optional[List[str]],
         extra_filter: Optional[FilterExpr | Dict[str, Any]],
     ) -> Optional[FilterExpr]:
         filters: List[FilterExpr] = []
@@ -1102,6 +1141,9 @@ class VikingVectorIndexBackend:
             ]
             if uri_conds:
                 filters.append(Or(uri_conds))
+
+        if search_tags:
+            filters.append(Or([In("search_tags", [tag]) for tag in search_tags if tag]))
 
         if extra_filter:
             if isinstance(extra_filter, dict):

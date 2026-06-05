@@ -411,6 +411,7 @@ class VikingDBManagerProxy:
         sparse_query_vector: Optional[Dict[str, float]] = None,
         context_type: Optional[str] = None,
         target_directories: Optional[List[str]] = None,
+        search_tags: Optional[List[str]] = None,
         extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
         limit: int = 10,
         offset: int = 0,
@@ -421,6 +422,7 @@ class VikingDBManagerProxy:
             sparse_query_vector=sparse_query_vector,
             context_type=context_type,
             target_directories=target_directories,
+            search_tags=search_tags,
             extra_filter=extra_filter,
             limit=limit,
             offset=offset,
@@ -432,6 +434,7 @@ class VikingDBManagerProxy:
         sparse_query_vector: Optional[Dict[str, float]] = None,
         context_type: Optional[str] = None,
         target_directories: Optional[List[str]] = None,
+        search_tags: Optional[List[str]] = None,
         extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
         limit: int = 10,
     ) -> List[Dict[str, Any]]:
@@ -441,6 +444,7 @@ class VikingDBManagerProxy:
             sparse_query_vector=sparse_query_vector,
             context_type=context_type,
             target_directories=target_directories,
+            search_tags=search_tags,
             extra_filter=extra_filter,
             limit=limit,
         )
@@ -452,6 +456,7 @@ class VikingDBManagerProxy:
         sparse_query_vector: Optional[Dict[str, float]] = None,
         context_type: Optional[str] = None,
         target_directories: Optional[List[str]] = None,
+        search_tags: Optional[List[str]] = None,
         extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
         limit: int = 10,
     ) -> List[Dict[str, Any]]:
@@ -462,6 +467,25 @@ class VikingDBManagerProxy:
             sparse_query_vector=sparse_query_vector,
             context_type=context_type,
             target_directories=target_directories,
+            search_tags=search_tags,
+            extra_filter=extra_filter,
+            limit=limit,
+        )
+
+    async def search_by_tags_in_tenant(
+        self,
+        *,
+        context_type: Optional[str] = None,
+        target_directories: Optional[List[str]] = None,
+        search_tags: Optional[List[str]] = None,
+        extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
+        limit: int = 10,
+    ) -> List[Dict[str, Any]]:
+        return await self._manager.search_by_tags_in_tenant(
+            self._ctx,
+            context_type=context_type,
+            target_directories=target_directories,
+            search_tags=search_tags,
             extra_filter=extra_filter,
             limit=limit,
         )

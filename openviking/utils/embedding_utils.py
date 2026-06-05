@@ -8,7 +8,7 @@ Common logic for creating Context objects and enqueuing them to EmbeddingQueue.
 
 import os
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from openviking.core.context import Context, ContextLevel, ResourceContentType, Vectorize
 from openviking.core.namespace import context_type_for_uri, owner_space_for_uri
@@ -16,6 +16,7 @@ from openviking.server.identity import RequestContext
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.viking_fs import get_viking_fs
+from openviking.utils.search_tags import extract_context_tags, sanitize_search_tags
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.utils import VikingURI, get_logger
 from openviking_cli.utils.config import get_openviking_config
@@ -28,6 +29,7 @@ _PORTABLE_SCALAR_FIELDS = frozenset(
         "name",
         "description",
         "tags",
+        "search_tags",
         "abstract",
     }
 )
@@ -87,6 +89,26 @@ async def _get_existing_created_at(
         return _coerce_datetime(record.get("created_at"))
     except Exception:
         return None
+
+
+async def _get_existing_search_tags(
+    uri: str,
+    ctx: Optional[RequestContext],
+) -> List[str]:
+    if ctx is None:
+        return []
+    try:
+        from openviking.server.dependencies import get_service
+
+        service = get_service()
+        if not service or not service.vikingdb_manager:
+            return []
+        record = await service.vikingdb_manager.fetch_by_uri(uri, ctx=ctx)
+        if not record:
+            return []
+        return sanitize_search_tags(record.get("search_tags"))
+    except Exception:
+        return []
 
 
 async def _resolve_context_timestamps(
@@ -203,6 +225,7 @@ async def vectorize_directory_meta(
     semantic_msg_id: Optional[str] = None,
     include_overview: bool = True,
     scalar_overrides: Optional[Dict[int, Dict[str, Any]]] = None,
+    search_tags: Optional[List[str]] = None,
 ) -> None:
     """
     Vectorize directory metadata (.abstract.md and .overview.md).
@@ -237,6 +260,7 @@ async def vectorize_directory_meta(
             user=ctx.user,
             account_id=ctx.account_id,
             owner_space=owner_space,
+            search_tags=search_tags,
         )
         context_abstract.set_vectorize(Vectorize(text=abstract))
         msg_abstract = EmbeddingMsgConverter.from_context(context_abstract)
@@ -270,6 +294,7 @@ async def vectorize_directory_meta(
                 user=ctx.user,
                 account_id=ctx.account_id,
                 owner_space=owner_space,
+                search_tags=search_tags,
             )
             context_overview.set_vectorize(Vectorize(text=overview))
             msg_overview = EmbeddingMsgConverter.from_context(context_overview)
@@ -308,6 +333,7 @@ async def vectorize_file(
     use_summary: bool = False,
     preserve_existing_created_at: bool = False,
     scalar_override: Optional[Dict[str, Any]] = None,
+    search_tags: Optional[List[str]] = None,
 ) -> None:
     """
     Vectorize a single file.
@@ -347,6 +373,7 @@ async def vectorize_file(
             user=ctx.user,
             account_id=ctx.account_id,
             owner_space=owner_space_for_uri(file_path, ctx),
+            search_tags=search_tags,
         )
 
         content_type = get_resource_content_type(file_name)
@@ -431,6 +458,7 @@ async def index_resource(
 
     viking_fs = get_viking_fs()
     context_type = context_type_for_uri(uri)
+    inherited_search_tags = await _get_existing_search_tags(uri, ctx)
 
     # 1. Index Directory Metadata
     abstract_uri = f"{uri}/.abstract.md"
@@ -447,8 +475,25 @@ async def index_resource(
         content = await viking_fs.read_file(overview_uri, ctx=ctx)
         overview = content.decode("utf-8") if isinstance(content, bytes) else content
 
+    search_tags = (
+        extract_context_tags(
+            uri,
+            texts=[abstract, overview],
+            inherited_tags=inherited_search_tags,
+        )
+        if context_type == "resource"
+        else []
+    )
+
     if abstract or overview:
-        await vectorize_directory_meta(uri, abstract, overview, context_type=context_type, ctx=ctx)
+        await vectorize_directory_meta(
+            uri,
+            abstract,
+            overview,
+            context_type=context_type,
+            ctx=ctx,
+            search_tags=search_tags,
+        )
 
     # 2. Index Files
     try:
@@ -474,6 +519,7 @@ async def index_resource(
                 parent_uri=uri,
                 context_type=context_type,
                 ctx=ctx,
+                search_tags=search_tags if context_type == "resource" else None,
             )
 
     except Exception as e:

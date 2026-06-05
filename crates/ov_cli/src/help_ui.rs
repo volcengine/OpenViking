@@ -835,7 +835,7 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["find"],
         purpose: "Retrieve relevant OpenViking context semantically.",
-        usage: "ov find <query> [--uri <uri>] [--node-limit <n>]",
+        usage: "ov find <query> [--uri <uri>] [--node-limit <n>] [--tags <a,b>]",
         examples: &[
             HelpItem {
                 label: "ov find \"deployment rollback steps\"",
@@ -867,6 +867,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 label: "-L, --level <0,1,2>",
                 description: "Filter abstract, overview, or file results.",
             },
+            HelpItem {
+                label: "--tags <a,b>",
+                description: "Filter resource retrieval by tags.",
+            },
         ],
         advanced_options: &[
             HelpItem {
@@ -893,7 +897,7 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["search"],
         purpose: "Run experimental context-aware retrieval, optionally scoped to a session.",
-        usage: "ov search <query> [--session-id <id>] [--uri <uri>]",
+        usage: "ov search <query> [--session-id <id>] [--uri <uri>] [--tags <a,b>]",
         examples: &[HelpItem {
             label: "ov search \"what changed last time?\" --session-id abc123",
             description: "Search with session context.",
@@ -914,6 +918,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             HelpItem {
                 label: "-n, --node-limit <n>",
                 description: "Maximum results per search pass. Search may merge multiple passes.",
+            },
+            HelpItem {
+                label: "--tags <a,b>",
+                description: "Filter resource retrieval by tags.",
             },
         ],
         advanced_options: &[

@@ -169,6 +169,7 @@ class BaseClient(ABC):
         filter: Optional[Dict] = None,
         telemetry: TelemetryRequest = False,
         peer_id: Optional[str] = None,
+        tags: Optional[List[str]] = None,
     ) -> Any:
         """Semantic search without session context."""
         ...
@@ -184,6 +185,7 @@ class BaseClient(ABC):
         filter: Optional[Dict] = None,
         telemetry: TelemetryRequest = False,
         peer_id: Optional[str] = None,
+        tags: Optional[List[str]] = None,
     ) -> Any:
         """Semantic search with optional session context."""
         ...

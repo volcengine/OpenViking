@@ -373,6 +373,7 @@ impl HttpClient {
         time_field: Option<String>,
         level: Option<Vec<i32>>,
         peer_id: Option<String>,
+        tags: Option<Vec<String>>,
     ) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "query": query,
@@ -384,6 +385,7 @@ impl HttpClient {
             "time_field": time_field,
             "level": level,
             "peer_id": peer_id,
+            "tags": tags,
         });
         self.post("/api/v1/search/find", &body).await
     }
@@ -400,6 +402,7 @@ impl HttpClient {
         time_field: Option<String>,
         level: Option<Vec<i32>>,
         peer_id: Option<String>,
+        tags: Option<Vec<String>>,
     ) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "query": query,
@@ -412,6 +415,7 @@ impl HttpClient {
             "time_field": time_field,
             "level": level,
             "peer_id": peer_id,
+            "tags": tags,
         });
         self.post("/api/v1/search/search", &body).await
     }

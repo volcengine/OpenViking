@@ -4,7 +4,7 @@ import tempfile
 import time
 import zipfile
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode
 
 import requests
@@ -175,6 +175,7 @@ class OpenVikingAPIClient:
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
         peer_id: Optional[str] = None,
+        tags: Optional[List[str]] = None,
     ) -> requests.Response:
         endpoint = "/api/v1/search/find"
         url = self._build_url(self.server_url, endpoint)
@@ -183,6 +184,8 @@ class OpenVikingAPIClient:
             payload["target_uri"] = target_uri
         if peer_id is not None:
             payload["peer_id"] = peer_id
+        if tags is not None:
+            payload["tags"] = tags
         if score_threshold is not None:
             payload["score_threshold"] = score_threshold
         if filter:
@@ -198,6 +201,7 @@ class OpenVikingAPIClient:
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
         peer_id: Optional[str] = None,
+        tags: Optional[List[str]] = None,
     ) -> requests.Response:
         endpoint = "/api/v1/search/search"
         url = self._build_url(self.server_url, endpoint)
@@ -208,6 +212,8 @@ class OpenVikingAPIClient:
             payload["session_id"] = session_id
         if peer_id is not None:
             payload["peer_id"] = peer_id
+        if tags is not None:
+            payload["tags"] = tags
         if score_threshold is not None:
             payload["score_threshold"] = score_threshold
         if filter:

@@ -301,6 +301,7 @@ class LocalClient(BaseClient):
         time_field: Optional[str] = None,
         level: Optional[List[int]] = None,
         peer_id: Optional[str] = None,
+        tags: Optional[List[str]] = None,
     ) -> Any:
         """Semantic search without session context."""
         resolved_filter = _resolve_search_filter(filter, since, until, time_field)
@@ -312,6 +313,7 @@ class LocalClient(BaseClient):
                 ctx=self._ctx,
                 target_uri=target_uri,
                 peer_id=normalize_peer_id(peer_id),
+                tags=tags,
                 limit=limit,
                 score_threshold=score_threshold,
                 filter=resolved_filter,
@@ -337,6 +339,7 @@ class LocalClient(BaseClient):
         time_field: Optional[str] = None,
         level: Optional[List[int]] = None,
         peer_id: Optional[str] = None,
+        tags: Optional[List[str]] = None,
     ) -> Any:
         """Semantic search with optional session context."""
         resolved_filter = _resolve_search_filter(filter, since, until, time_field)
@@ -351,6 +354,7 @@ class LocalClient(BaseClient):
                 ctx=self._ctx,
                 target_uri=target_uri,
                 peer_id=normalize_peer_id(peer_id),
+                tags=tags,
                 session=session,
                 limit=limit,
                 score_threshold=score_threshold,

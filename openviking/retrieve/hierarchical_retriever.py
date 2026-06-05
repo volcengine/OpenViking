@@ -153,9 +153,20 @@ class HierarchicalRetriever:
             sparse_query_vector=sparse_query_vector,
             context_type=query.context_type.value if query.context_type else None,
             target_dirs=target_dirs,
+            search_tags=query.tags,
             scope_dsl=scope_dsl,
             limit=max(limit, self.GLOBAL_SEARCH_TOPK),
         )
+
+        if query.tags and (query.context_type in {None, ContextType.RESOURCE}):
+            tag_results = await vector_proxy.search_by_tags_in_tenant(
+                context_type=ContextType.RESOURCE.value,
+                target_directories=target_dirs,
+                search_tags=query.tags,
+                extra_filter=scope_dsl,
+                limit=max(limit, self.GLOBAL_SEARCH_TOPK),
+            )
+            global_results = self._merge_uri_results(global_results, tag_results)
 
         # Debug: Print all URIs in global_results
         if logger.isEnabledFor(logging.DEBUG):
@@ -207,6 +218,7 @@ class HierarchicalRetriever:
             score_gte=score_gte,
             context_type=query.context_type.value if query.context_type else None,
             target_dirs=target_dirs,
+            search_tags=query.tags,
             scope_dsl=scope_dsl,
             initial_candidates=initial_candidates,
             level=level,
@@ -240,6 +252,7 @@ class HierarchicalRetriever:
         sparse_query_vector: Optional[Dict[str, float]],
         context_type: Optional[str],
         target_dirs: List[str],
+        search_tags: Optional[List[str]],
         scope_dsl: Optional[Dict[str, Any]],
         limit: int,
     ) -> List[Dict[str, Any]]:
@@ -249,6 +262,7 @@ class HierarchicalRetriever:
             sparse_query_vector=sparse_query_vector,
             context_type=context_type,
             target_directories=target_dirs,
+            search_tags=search_tags,
             extra_filter=scope_dsl,
             limit=limit,
         )
@@ -257,6 +271,31 @@ class HierarchicalRetriever:
         telemetry.count("vector.scored", len(results))
         telemetry.count("vector.scanned", len(results))
         return results
+
+    @staticmethod
+    def _merge_uri_results(
+        primary: List[Dict[str, Any]],
+        secondary: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        merged: List[Dict[str, Any]] = []
+        best_by_uri: Dict[str, Dict[str, Any]] = {}
+
+        for item in [*primary, *secondary]:
+            uri = item.get("uri")
+            if not uri:
+                continue
+            previous = best_by_uri.get(uri)
+            current_score = float(item.get("_score", 0.0) or 0.0)
+            if previous is None:
+                copied = dict(item)
+                best_by_uri[uri] = copied
+                merged.append(copied)
+                continue
+            previous_score = float(previous.get("_score", 0.0) or 0.0)
+            if current_score > previous_score:
+                previous.update(item)
+
+        return merged
 
     def _rerank_scores(
         self,
@@ -372,6 +411,7 @@ class HierarchicalRetriever:
         score_gte: bool = False,
         context_type: Optional[str] = None,
         target_dirs: Optional[List[str]] = None,
+        search_tags: Optional[List[str]] = None,
         scope_dsl: Optional[Dict[str, Any]] = None,
         initial_candidates: Optional[List[Dict[str, Any]]] = None,
         level: Optional[List[int]] = None,
@@ -436,6 +476,7 @@ class HierarchicalRetriever:
                 sparse_query_vector=sparse_query_vector,  # Pass sparse vector
                 context_type=context_type,
                 target_directories=target_dirs,
+                search_tags=search_tags,
                 extra_filter=scope_dsl,
                 limit=max(limit * 2, 20),
             )
