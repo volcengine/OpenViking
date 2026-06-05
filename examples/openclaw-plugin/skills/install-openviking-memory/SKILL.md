@@ -514,6 +514,7 @@ These are the keys under `plugins.entries.openviking.config` in `openclaw.json`.
 | `captureMode` | `"semantic"` | Filter mode used by the server-side extraction pipeline: `semantic` or `keyword`. |
 | `captureMaxLength` | `24000` | Max text length per archived turn. |
 | `autoRecall` | `true` | Auto-recall and inject memories before reply. |
+| `autoRecallTimeoutMs` | `5000` | Outer timeout for the whole auto-recall flow. Increase for slow local embedding hardware. |
 | `recallLimit` | `6` | Max memories injected per recall. |
 | `recallScoreThreshold` | `0.15` | Min relevance score to inject. |
 | `recallMaxInjectedChars` | (plugin default) | Hard cap on injected character count. |

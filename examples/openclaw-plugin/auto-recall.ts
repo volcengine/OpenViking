@@ -10,7 +10,6 @@ import { quickRecallPrecheck, withTimeout } from "./process-manager.js";
 import { sanitizeUserTextForCapture } from "./text-utils.js";
 import { estimateTextTokens } from "./token-estimator.js";
 
-const AUTO_RECALL_TIMEOUT_MS = 5_000;
 const RECALL_QUERY_MAX_CHARS = 4_000;
 export const AUTO_RECALL_SOURCE_MARKER = "Source: openviking-auto-recall";
 
@@ -285,7 +284,7 @@ export async function buildAutoRecallContext(params: {
 
       return { block, memoryCount: memoryLines.length, estimatedTokens };
     })(),
-    AUTO_RECALL_TIMEOUT_MS,
+    cfg.autoRecallTimeoutMs,
     "openviking: auto-recall search timeout",
   );
 }

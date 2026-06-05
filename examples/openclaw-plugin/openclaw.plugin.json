@@ -136,6 +136,12 @@
       "label": "Auto-Recall",
       "help": "Inject relevant OpenViking memories into agent context"
     },
+    "autoRecallTimeoutMs": {
+      "label": "Auto-Recall Timeout (ms)",
+      "placeholder": "5000",
+      "advanced": true,
+      "help": "Outer time budget for the whole auto-recall flow, including search, ranking, and memory reads."
+    },
     "recallResources": {
       "label": "Recall Resources",
       "help": "Include resources (viking://resources) in auto-recall and default memory_recall search. Enables account-level shared knowledge retrieval.",
@@ -258,6 +264,11 @@
       },
       "autoRecall": {
         "type": "boolean"
+      },
+      "autoRecallTimeoutMs": {
+        "type": "number",
+        "minimum": 1000,
+        "maximum": 300000
       },
       "recallResources": {
         "type": "boolean"

@@ -22,6 +22,7 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.commitTokenThreshold).toBe(20000);
     expect(cfg.captureMode).toBe("semantic");
     expect(cfg.captureMaxLength).toBe(24000);
+    expect(cfg.autoRecallTimeoutMs).toBe(5000);
     expect(cfg.recallMaxContentChars).toBe(5000);
     expect(cfg.peer_role).toBe("none");
     expect(cfg.peer_prefix).toBe("");
@@ -137,6 +138,18 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
   it("clamps timeoutMs to minimum 1000", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({ timeoutMs: 100 });
     expect(cfg.timeoutMs).toBe(1000);
+  });
+
+  it("uses autoRecallTimeoutMs as the outer auto-recall budget", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ autoRecallTimeoutMs: 30000 });
+    expect(cfg.autoRecallTimeoutMs).toBe(30000);
+  });
+
+  it("clamps autoRecallTimeoutMs within bounds", () => {
+    const cfgLow = memoryOpenVikingConfigSchema.parse({ autoRecallTimeoutMs: 100 });
+    expect(cfgLow.autoRecallTimeoutMs).toBe(1000);
+    const cfgHigh = memoryOpenVikingConfigSchema.parse({ autoRecallTimeoutMs: 999999 });
+    expect(cfgHigh.autoRecallTimeoutMs).toBe(300000);
   });
 
   it("treats undefined/null as empty config", () => {

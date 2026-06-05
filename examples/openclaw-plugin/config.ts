@@ -16,6 +16,8 @@ export type MemoryOpenVikingConfig = {
   captureMode?: "semantic" | "keyword";
   captureMaxLength?: number;
   autoRecall?: boolean;
+  /** Outer time budget for the whole auto-recall flow, including search, ranking, and reads. */
+  autoRecallTimeoutMs?: number;
   /** Include resources in auto-recall and default memory_recall search. Default false. */
   recallResources?: boolean;
   recallLimit?: number;
@@ -50,6 +52,7 @@ const DEFAULT_TARGET_URI = "viking://user/memories";
 const DEFAULT_TIMEOUT_MS = 15000;
 const DEFAULT_CAPTURE_MODE = "semantic";
 const DEFAULT_CAPTURE_MAX_LENGTH = 24000;
+const DEFAULT_AUTO_RECALL_TIMEOUT_MS = 5000;
 const DEFAULT_RECALL_LIMIT = 6;
 const DEFAULT_RECALL_SCORE_THRESHOLD = 0.15;
 const DEFAULT_RECALL_MAX_CONTENT_CHARS = 5000;
@@ -172,6 +175,7 @@ export const memoryOpenVikingConfigSchema = {
         "captureMode",
         "captureMaxLength",
         "autoRecall",
+        "autoRecallTimeoutMs",
         "recallResources",
         "recallLimit",
         "recallScoreThreshold",
@@ -246,6 +250,10 @@ export const memoryOpenVikingConfigSchema = {
         Math.min(200_000, Math.floor(toNumber(cfg.captureMaxLength, DEFAULT_CAPTURE_MAX_LENGTH))),
       ),
       autoRecall: cfg.autoRecall !== false,
+      autoRecallTimeoutMs: Math.max(
+        1000,
+        Math.min(300_000, Math.floor(toNumber(cfg.autoRecallTimeoutMs, DEFAULT_AUTO_RECALL_TIMEOUT_MS))),
+      ),
       recallResources: cfg.recallResources === true || envFlag("OPENVIKING_RECALL_RESOURCES"),
       recallLimit: Math.max(1, Math.floor(toNumber(cfg.recallLimit, DEFAULT_RECALL_LIMIT))),
       recallScoreThreshold: Math.min(
@@ -353,6 +361,12 @@ export const memoryOpenVikingConfigSchema = {
     autoRecall: {
       label: "Auto-Recall",
       help: "Inject relevant OpenViking memories into agent context",
+    },
+    autoRecallTimeoutMs: {
+      label: "Auto-Recall Timeout (ms)",
+      placeholder: String(DEFAULT_AUTO_RECALL_TIMEOUT_MS),
+      advanced: true,
+      help: "Outer time budget for the whole auto-recall flow, including search, ranking, and memory reads.",
     },
     recallResources: {
       label: "Recall Resources",
