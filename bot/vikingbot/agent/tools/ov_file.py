@@ -273,20 +273,25 @@ class VikingSearchTool(OVFileTool):
             client = await self._get_client(tool_context)
             admin_user_id = client.admin_user_id
 
-            if not target_uri and tool_context.memory_user_ids:
-                user_ids = tool_context.memory_user_ids if client.should_sender_fanout() else [None]
+            if not target_uri and tool_context.memory_peer_ids:
                 grouped_items = {
                     "memory": [],
                     "resource": [],
                     "skill": [],
                 }
 
-                for memory_user_id in user_ids:
+                search_requests = client.build_memory_search_requests(
+                    owner_user_id=tool_context.sender_id if client.should_sender_fanout() else None,
+                    peer_ids=tool_context.memory_peer_ids,
+                )
+
+                for request in search_requests:
                     results = await client.search(
                         query,
-                        target_uri=client._memory_target_uri(memory_user_id),
+                        target_uri=request["target_uri"],
                         limit=10,
                         user_id=admin_user_id,
+                        peer_id=request.get("peer_id"),
                     )
                     filtered_items = self._filter_search_items(results, min_score=min_score)
                     for item_type, items in filtered_items.items():

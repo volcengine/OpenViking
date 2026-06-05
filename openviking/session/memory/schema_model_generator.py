@@ -78,19 +78,15 @@ class SchemaModelGenerator:
 
         Args:
             memory_type: The memory type schema
-            role_scope: Role scope to determine if user_id fields are needed
+            role_scope: Role scope to determine if peer_id fields are needed
 
         Returns:
             Dynamically created flat Pydantic model class
         """
         # Determine cache key based on role_scope
         has_peer_scope = bool(role_scope and role_scope.peer_ids)
-        if role_scope and len(role_scope.user_ids) > 1:
-            cache_key = f"{memory_type.memory_type}_multi_user"
-            model_name = f"{to_pascal_case(memory_type.memory_type)}DataMultiUser"
-        else:
-            cache_key = memory_type.memory_type
-            model_name = f"{to_pascal_case(memory_type.memory_type)}Data"
+        cache_key = memory_type.memory_type
+        model_name = f"{to_pascal_case(memory_type.memory_type)}Data"
         if has_peer_scope:
             cache_key = f"{cache_key}_peer"
             model_name = f"{model_name}Peer"
@@ -102,14 +98,9 @@ class SchemaModelGenerator:
         # Build field definitions - no memory_type field needed
         field_definitions: Dict[str, Tuple[Type[Any], Any]] = {}
 
-        # Add user_id when multiple users are in scope
-        # Skip if schema has "ranges" field (like events) - these are message-based and don't need user isolation
+        # Skip if schema has "ranges" field (like events) - these are message-based and
+        # their self/peer targets are derived from message ranges instead of explicit routing fields.
         has_ranges = any(field.name == "ranges" for field in memory_type.fields)
-        if role_scope and len(role_scope.user_ids) > 1 and not has_ranges:
-            field_definitions["user_id"] = (
-                str,
-                Field(..., description="User ID to distinguish which user's memory to write"),
-            )
         if has_peer_scope and not has_ranges:
             peer_values = ", ".join(role_scope.peer_ids)
             field_definitions["peer_id"] = (

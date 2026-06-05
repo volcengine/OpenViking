@@ -65,6 +65,7 @@ class BaseChannelConfig(BaseModel):
     enabled: bool = True
     ov_tools_enable: bool = True
     memory_user: list[str] | None = None
+    memory_peer: list[str] | None = None
 
     def channel_id(self) -> str:
         return "default"
