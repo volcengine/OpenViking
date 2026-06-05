@@ -1,8 +1,35 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-from typing import Any, Literal, Optional, cast
+from typing import Any, Literal, Optional, cast, List
 
 from pydantic import BaseModel, Field, model_validator
+
+
+class EmbeddingCredential(BaseModel):
+    """Single embedding credential configuration for multi-credential failover."""
+
+    id: Optional[str] = Field(default=None, description="Unique identifier for this credential")
+    provider: Optional[str] = Field(default=None, description="Provider type")
+    api_key: Optional[str] = Field(default=None, description="API key")
+    api_base: Optional[str] = Field(default=None, description="API base URL")
+    api_version: Optional[str] = Field(default=None, description="API version")
+    ak: Optional[str] = Field(default=None, description="Access Key ID for VikingDB API")
+    sk: Optional[str] = Field(default=None, description="Access Key Secret for VikingDB API")
+    region: Optional[str] = Field(default=None, description="Region for VikingDB API")
+    host: Optional[str] = Field(default=None, description="Host for VikingDB API")
+    extra_headers: Optional[dict[str, str]] = Field(
+        default=None, description="Extra HTTP headers"
+    )
+    encoding_format: Optional[Literal["float", "base64"]] = Field(
+        default=None, description="Wire format for embedding values"
+    )
+    model_path: Optional[str] = Field(default=None, description="Explicit local GGUF model path")
+    cache_dir: Optional[str] = Field(default=None, description="Local model cache directory")
+    enable_fusion: Optional[bool] = Field(default=None, description="Enable multimodal fusion")
+    res_level: Optional[int] = Field(default=None, description="Resolution level")
+    max_video_frames: Optional[int] = Field(default=None, description="Maximum video frames")
+
+    model_config = {"extra": "forbid"}
 
 
 class EmbeddingModelConfig(BaseModel):
@@ -92,6 +119,19 @@ class EmbeddingModelConfig(BaseModel):
     max_video_frames: Optional[int] = Field(
         default=None,
         description="Maximum video frames for DashScope multimodal models (multimodal models only).",
+    )
+
+    # New multi-credential configuration
+    credentials: List[EmbeddingCredential] = Field(
+        default_factory=list,
+        description="Ordered list of credentials for failover. Call order matches array index (0 is highest priority).",
+    )
+
+    failback_timeout_seconds: float = Field(
+        default=600.0, description="Time in seconds after which to attempt failback to primary"
+    )
+    failback_request_count: int = Field(
+        default=50, description="Number of backup requests after which to attempt failback"
     )
 
     model_config = {"extra": "forbid"}
@@ -736,30 +776,86 @@ class EmbeddingConfig(BaseModel):
         Raises:
             ValueError: If configuration is invalid or unsupported
         """
-        from openviking.models.embedder import CompositeHybridEmbedder
+        from openviking.models.embedder import CompositeHybridEmbedder, FailoverEmbedder
         from openviking.models.embedder.base import DenseEmbedderBase, SparseEmbedderBase
 
         if self.hybrid:
+            if self.hybrid.credentials:
+                return self._create_failover_embedder("hybrid", self.hybrid)
             provider = self._require_provider(self.hybrid.provider)
             return self._create_embedder(provider, "hybrid", self.hybrid)
 
         if self.dense and self.sparse:
-            dense_provider = self._require_provider(self.dense.provider)
-            dense_embedder = cast(
-                DenseEmbedderBase,
-                self._create_embedder(dense_provider, "dense", self.dense),
+            # Handle failover for both dense and sparse if credentials are configured
+            dense_embedder = self._create_single_or_failover_embedder("dense", self.dense)
+            sparse_embedder = self._create_single_or_failover_embedder("sparse", self.sparse)
+            return CompositeHybridEmbedder(
+                cast(DenseEmbedderBase, dense_embedder),
+                cast(SparseEmbedderBase, sparse_embedder),
             )
-            sparse_embedder = self._create_embedder(
-                self._require_provider(self.sparse.provider), "sparse", self.sparse
-            )
-            sparse_embedder = cast(SparseEmbedderBase, sparse_embedder)
-            return CompositeHybridEmbedder(dense_embedder, sparse_embedder)
 
         if self.dense:
-            provider = self._require_provider(self.dense.provider)
-            return self._create_embedder(provider, "dense", self.dense)
+            return self._create_single_or_failover_embedder("dense", self.dense)
 
         raise ValueError("No embedding configuration found (dense, sparse, or hybrid)")
+
+    def _create_single_or_failover_embedder(
+        self, embedder_type: str, config: "EmbeddingModelConfig"
+    ):
+        """Create either a single embedder or a FailoverEmbedder based on credentials config."""
+        if config.credentials:
+            return self._create_failover_embedder(embedder_type, config)
+        provider = self._require_provider(config.provider)
+        return self._create_embedder(provider, embedder_type, config)
+
+    def _create_failover_embedder(
+        self, embedder_type: str, config: "EmbeddingModelConfig"
+    ):
+        """Create a FailoverEmbedder with multiple credentials."""
+        from openviking.models.embedder import FailoverEmbedder
+
+        embedders = []
+        credential_ids = []
+
+        for cred in config.credentials:
+            # Create a temporary config merged from the model config and credential
+            merged_config = EmbeddingModelConfig(
+                model=config.model,
+                dimension=config.dimension,
+                batch_size=config.batch_size,
+                input=config.input,
+                query_param=config.query_param,
+                document_param=config.document_param,
+                provider=cred.provider or config.provider,
+                version=config.version,
+                ak=cred.ak or config.ak,
+                sk=cred.sk or config.sk,
+                region=cred.region or config.region,
+                host=cred.host or config.host,
+                api_key=cred.api_key,
+                api_base=cred.api_base,
+                api_version=cred.api_version,
+                extra_headers=cred.extra_headers or config.extra_headers,
+                encoding_format=cred.encoding_format or config.encoding_format,
+                model_path=cred.model_path or config.model_path,
+                cache_dir=cred.cache_dir or config.cache_dir,
+                enable_fusion=cred.enable_fusion or config.enable_fusion,
+                res_level=cred.res_level or config.res_level,
+                max_video_frames=cred.max_video_frames or config.max_video_frames,
+            )
+            provider = self._require_provider(merged_config.provider)
+            embedders.append(self._create_embedder(provider, embedder_type, merged_config))
+            credential_ids.append(cred.id or f"credential-{len(credential_ids)}")
+
+        if len(embedders) == 1:
+            return embedders[0]
+
+        return FailoverEmbedder(
+            embedders=embedders,
+            credential_ids=credential_ids,
+            failback_timeout_seconds=config.failback_timeout_seconds,
+            failback_request_count=config.failback_request_count,
+        )
 
     @property
     def dimension(self) -> int:

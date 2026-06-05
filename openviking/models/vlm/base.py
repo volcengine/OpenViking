@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from openviking.utils.model_retry import (
+    OrderedCredentialSwitcher,
+    classify_api_error,
     PrimaryBackupSwitcher,
 )
 from openviking_cli.utils import get_logger
@@ -573,3 +575,274 @@ class FailoverVLM(VLMBase):
         """Reset token usage for both primary and backup instances."""
         self.primary.reset_token_usage()
         self.backup.reset_token_usage()
+
+
+class AllCredentialsFailedError(Exception):
+    """Raised when all credentials in the chain have failed."""
+
+    def __init__(self, errors: list[tuple[str, str, Exception, int]]):
+        """Initialize the error with a list of credential failures.
+
+        Args:
+            errors: List of tuples containing (credential_id, error_class, exception, attempts)
+        """
+        self.errors = errors
+        message = "All credentials failed:\n" + "\n".join(
+            f"  - {cred_id}: {error_class} - {exc}" for cred_id, error_class, exc, attempts in errors
+        )
+        super().__init__(message)
+
+
+class MultiCredentialVLM(VLMBase):
+    """VLM wrapper that provides failover across multiple ordered credentials.
+
+    When a credential fails with quota_exceeded or permanent errors, this wrapper
+    automatically advances to the next credential in the list. After failback thresholds
+    are met, it attempts to move back to a higher-priority credential.
+
+    Credentials are tried in order (index 0 is highest priority).
+    """
+
+    def __init__(
+        self,
+        vlm_instances: List[VLMBase],
+        credential_ids: List[str],
+        failback_timeout_seconds: float = 600.0,  # 10 minutes
+        failback_request_count: int = 50,
+        total_max_retries: int = 10,
+    ):
+        """Initialize MultiCredentialVLM with multiple VLM instances.
+
+        Args:
+            vlm_instances: List of VLM instances in priority order (0 is highest)
+            credential_ids: List of credential IDs corresponding to the VLM instances
+            failback_timeout_seconds: Time after which to attempt failback
+            failback_request_count: Number of requests after which to attempt failback
+            total_max_retries: Maximum total retry attempts across all credentials
+        """
+        if not vlm_instances:
+            raise ValueError("At least one VLM instance is required")
+        if len(vlm_instances) != len(credential_ids):
+            raise ValueError("vlm_instances and credential_ids must have the same length")
+
+        # Use the first instance's config as base
+        first = vlm_instances[0]
+        config = {
+            "model": first.model,
+            "provider": first.provider,
+        }
+        super().__init__(config)
+
+        self._vlm_instances = vlm_instances
+        self._credential_ids = credential_ids
+        self._logger = logging.getLogger(__name__)
+        self._switcher = OrderedCredentialSwitcher(
+            n=len(vlm_instances),
+            failback_timeout_seconds=failback_timeout_seconds,
+            failback_request_count=failback_request_count,
+        )
+        self._total_max_retries = total_max_retries
+
+    def _get_completion_with_failover(self, method_name: str, *args, **kwargs):
+        """Execute a VLM method with multi-credential failover support.
+
+        Args:
+            method_name: Name of the method to call on VLM instances
+            *args: Positional arguments to pass to the method
+            **kwargs: Keyword arguments to pass to the method
+
+        Returns:
+            The result from the VLM method
+
+        Raises:
+            AllCredentialsFailedError if all credentials fail
+        """
+        total_attempts = 0
+        aggregated_errors = []
+
+        while True:
+            idx = self._switcher.get_active_index()
+
+            # Check if all credentials are exhausted
+            if idx >= self._switcher.n or total_attempts >= self._total_max_retries:
+                raise AllCredentialsFailedError(aggregated_errors)
+
+            credential_id = self._credential_ids[idx]
+            vlm_instance = self._vlm_instances[idx]
+
+            try:
+                method = getattr(vlm_instance, method_name)
+                result = method(*args, **kwargs)
+                self._switcher.on_success(idx)
+                return result
+            except Exception as exc:
+                error_class = classify_api_error(exc)
+                aggregated_errors.append((credential_id, error_class, exc, total_attempts))
+
+                advance = self._switcher.on_failure(idx, error_class)
+                if not advance:
+                    # fail-fast for permanent errors
+                    raise AllCredentialsFailedError(aggregated_errors) from exc
+
+                total_attempts += 1
+                self._logger.warning(
+                    f"Credential {credential_id} failed with {error_class}, advancing to next credential"
+                )
+
+    async def _get_completion_with_failover_async(self, method_name: str, *args, **kwargs):
+        """Execute an async VLM method with multi-credential failover support.
+
+        Args:
+            method_name: Name of the async method to call on VLM instances
+            *args: Positional arguments to pass to the method
+            **kwargs: Keyword arguments to pass to the method
+
+        Returns:
+            The result from the async VLM method
+
+        Raises:
+            AllCredentialsFailedError if all credentials fail
+        """
+        total_attempts = 0
+        aggregated_errors = []
+
+        while True:
+            idx = self._switcher.get_active_index()
+
+            # Check if all credentials are exhausted
+            if idx >= self._switcher.n or total_attempts >= self._total_max_retries:
+                raise AllCredentialsFailedError(aggregated_errors)
+
+            credential_id = self._credential_ids[idx]
+            vlm_instance = self._vlm_instances[idx]
+
+            try:
+                method = getattr(vlm_instance, method_name)
+                result = await method(*args, **kwargs)
+                self._switcher.on_success(idx)
+                return result
+            except Exception as exc:
+                error_class = classify_api_error(exc)
+                aggregated_errors.append((credential_id, error_class, exc, total_attempts))
+
+                advance = self._switcher.on_failure(idx, error_class)
+                if not advance:
+                    # fail-fast for permanent errors
+                    raise AllCredentialsFailedError(aggregated_errors) from exc
+
+                total_attempts += 1
+                self._logger.warning(
+                    f"Credential {credential_id} failed with {error_class}, advancing to next credential"
+                )
+
+    def get_completion(
+        self,
+        prompt: str = "",
+        thinking: bool = False,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Union[str, VLMResponse]:
+        """Get text completion with multi-credential failover support."""
+        return self._get_completion_with_failover(
+            "get_completion",
+            prompt=prompt,
+            thinking=thinking,
+            tools=tools,
+            tool_choice=tool_choice,
+            messages=messages,
+        )
+
+    async def get_completion_async(
+        self,
+        prompt: str = "",
+        thinking: bool = False,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Union[str, VLMResponse]:
+        """Get text completion asynchronously with multi-credential failover support."""
+        return await self._get_completion_with_failover_async(
+            "get_completion_async",
+            prompt=prompt,
+            thinking=thinking,
+            tools=tools,
+            tool_choice=tool_choice,
+            messages=messages,
+        )
+
+    def get_vision_completion(
+        self,
+        prompt: str = "",
+        images: Optional[List[Union[str, Path, bytes]]] = None,
+        thinking: bool = False,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Union[str, VLMResponse]:
+        """Get vision completion with multi-credential failover support."""
+        return self._get_completion_with_failover(
+            "get_vision_completion",
+            prompt=prompt,
+            images=images,
+            thinking=thinking,
+            tools=tools,
+            tool_choice=tool_choice,
+            messages=messages,
+        )
+
+    async def get_vision_completion_async(
+        self,
+        prompt: str = "",
+        images: Optional[List[Union[str, Path, bytes]]] = None,
+        thinking: bool = False,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Union[str, VLMResponse]:
+        """Get vision completion asynchronously with multi-credential failover support."""
+        return await self._get_completion_with_failover_async(
+            "get_vision_completion_async",
+            prompt=prompt,
+            images=images,
+            thinking=thinking,
+            tools=tools,
+            tool_choice=tool_choice,
+            messages=messages,
+        )
+
+    @property
+    def active_credential_index(self) -> int:
+        """Get the index of the currently active credential."""
+        return self._switcher.get_active_index()
+
+    @property
+    def active_credential_id(self) -> str:
+        """Get the ID of the currently active credential."""
+        idx = self._switcher.get_active_index()
+        if idx < len(self._credential_ids):
+            return self._credential_ids[idx]
+        return "exhausted"
+
+    @property
+    def is_exhausted(self) -> bool:
+        """Check if all credentials are exhausted."""
+        return self._switcher.is_exhausted
+
+    def get_token_usage(self) -> Dict[str, Any]:
+        """Get combined token usage from all credential instances."""
+        from openviking.models.vlm.token_usage import TokenUsageTracker
+
+        if not self._vlm_instances:
+            return {}
+
+        merged_tracker = self._vlm_instances[0]._token_tracker
+        for instance in self._vlm_instances[1:]:
+            merged_tracker = TokenUsageTracker.merge(merged_tracker, instance._token_tracker)
+
+        return merged_tracker.to_dict()
+
+    def reset_token_usage(self) -> None:
+        """Reset token usage for all credential instances."""
+        for instance in self._vlm_instances:
+            instance.reset_token_usage()

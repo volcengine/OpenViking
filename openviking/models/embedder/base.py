@@ -15,7 +15,12 @@ from openviking.utils.embedding_input import (
     resolve_embedding_max_input_tokens,
     truncate_embedding_input,
 )
-from openviking.utils.model_retry import retry_async, retry_sync
+from openviking.utils.model_retry import (
+    OrderedCredentialSwitcher,
+    classify_api_error,
+    retry_async,
+    retry_sync,
+)
 from openviking_cli.utils import get_logger
 
 T = TypeVar("T")
@@ -714,3 +719,240 @@ def exponential_backoff_retry(
                 )
 
             time.sleep(delay)
+
+
+class AllCredentialsFailedError(Exception):
+    """Raised when all credentials in the chain have failed."""
+
+    def __init__(self, errors: list[tuple[str, str, Exception, int]]):
+        """Initialize the error with a list of credential failures.
+
+        Args:
+            errors: List of tuples containing (credential_id, error_class, exception, attempts)
+        """
+        self.errors = errors
+        message = "All credentials failed:\n" + "\n".join(
+            f"  - {cred_id}: {error_class} - {exc}" for cred_id, error_class, exc, attempts in errors
+        )
+        super().__init__(message)
+
+
+class FailoverEmbedder(EmbedderBase):
+    """Embedder wrapper that provides failover across multiple ordered credentials.
+
+    When a credential fails with quota_exceeded or permanent errors, this wrapper
+    automatically advances to the next credential in the list. After failback thresholds
+    are met, it attempts to move back to a higher-priority credential.
+
+    Credentials are tried in order (index 0 is highest priority).
+    """
+
+    def __init__(
+        self,
+        embedders: List[EmbedderBase],
+        credential_ids: List[str],
+        failback_timeout_seconds: float = 600.0,
+        failback_request_count: int = 50,
+        total_max_retries: int = 10,
+    ):
+        """Initialize FailoverEmbedder with multiple embedder instances.
+
+        Args:
+            embedders: List of embedder instances in priority order (0 is highest)
+            credential_ids: List of credential IDs corresponding to the embedder instances
+            failback_timeout_seconds: Time after which to attempt failback
+            failback_request_count: Number of requests after which to attempt failback
+            total_max_retries: Maximum total retry attempts across all credentials
+        """
+        if not embedders:
+            raise ValueError("At least one embedder instance is required")
+        if len(embedders) != len(credential_ids):
+            raise ValueError("embedders and credential_ids must have the same length")
+
+        # Use the first embedder's config as base
+        first = embedders[0]
+        super().__init__(
+            model_name=first.model_name,
+            config=first.config,
+        )
+
+        self._embedders = embedders
+        self._credential_ids = credential_ids
+        self._switcher = OrderedCredentialSwitcher(
+            n=len(embedders),
+            failback_timeout_seconds=failback_timeout_seconds,
+            failback_request_count=failback_request_count,
+        )
+        self._total_max_retries = total_max_retries
+
+    def _embed_with_failover(self, method_name: str, *args, **kwargs) -> EmbedResult:
+        """Execute an embedder method with multi-credential failover support.
+
+        Args:
+            method_name: Name of the method to call on embedder instances
+            *args: Positional arguments to pass to the method
+            **kwargs: Keyword arguments to pass to the method
+
+        Returns:
+            The result from the embedder method
+
+        Raises:
+            AllCredentialsFailedError if all credentials fail
+        """
+        total_attempts = 0
+        aggregated_errors = []
+
+        while True:
+            idx = self._switcher.get_active_index()
+
+            # Check if all credentials are exhausted
+            if idx >= self._switcher.n or total_attempts >= self._total_max_retries:
+                raise AllCredentialsFailedError(aggregated_errors)
+
+            credential_id = self._credential_ids[idx]
+            embedder = self._embedders[idx]
+
+            try:
+                method = getattr(embedder, method_name)
+                result = method(*args, **kwargs)
+                self._switcher.on_success(idx)
+                return result
+            except Exception as exc:
+                error_class = classify_api_error(exc)
+                aggregated_errors.append((credential_id, error_class, exc, total_attempts))
+
+                advance = self._switcher.on_failure(idx, error_class)
+                if not advance:
+                    # fail-fast for permanent errors
+                    raise AllCredentialsFailedError(aggregated_errors) from exc
+
+                total_attempts += 1
+                logger.warning(
+                    f"Credential {credential_id} failed with {error_class}, advancing to next credential"
+                )
+
+    async def _embed_with_failover_async(self, method_name: str, *args, **kwargs) -> EmbedResult:
+        """Execute an async embedder method with multi-credential failover support.
+
+        Args:
+            method_name: Name of the async method to call on embedder instances
+            *args: Positional arguments to pass to the method
+            **kwargs: Keyword arguments to pass to the method
+
+        Returns:
+            The result from the async embedder method
+
+        Raises:
+            AllCredentialsFailedError if all credentials fail
+        """
+        total_attempts = 0
+        aggregated_errors = []
+
+        while True:
+            idx = self._switcher.get_active_index()
+
+            # Check if all credentials are exhausted
+            if idx >= self._switcher.n or total_attempts >= self._total_max_retries:
+                raise AllCredentialsFailedError(aggregated_errors)
+
+            credential_id = self._credential_ids[idx]
+            embedder = self._embedders[idx]
+
+            try:
+                method = getattr(embedder, method_name)
+                result = await method(*args, **kwargs)
+                self._switcher.on_success(idx)
+                return result
+            except Exception as exc:
+                error_class = classify_api_error(exc)
+                aggregated_errors.append((credential_id, error_class, exc, total_attempts))
+
+                advance = self._switcher.on_failure(idx, error_class)
+                if not advance:
+                    # fail-fast for permanent errors
+                    raise AllCredentialsFailedError(aggregated_errors) from exc
+
+                total_attempts += 1
+                logger.warning(
+                    f"Credential {credential_id} failed with {error_class}, advancing to next credential"
+                )
+
+    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
+        """Embed text with multi-credential failover support."""
+        return self._embed_with_failover("embed", text, is_query=is_query)
+
+    def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
+        """Batch embed with multi-credential failover support."""
+        return self._embed_with_failover("embed_batch", texts, is_query=is_query)
+
+    async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
+        """Async embed with multi-credential failover support."""
+        return await self._embed_with_failover_async("embed_async", text, is_query=is_query)
+
+    async def embed_batch_async(
+        self, texts: List[str], is_query: bool = False
+    ) -> List[EmbedResult]:
+        """Async batch embed with multi-credential failover support."""
+        return await self._embed_with_failover_async("embed_batch_async", texts, is_query=is_query)
+
+    def get_dimension(self) -> int:
+        """Get dimension from the first embedder."""
+        if hasattr(self._embedders[0], "get_dimension"):
+            return self._embedders[0].get_dimension()
+        return 2048
+
+    @property
+    def active_credential_index(self) -> int:
+        """Get the index of the currently active credential."""
+        return self._switcher.get_active_index()
+
+    @property
+    def active_credential_id(self) -> str:
+        """Get the ID of the currently active credential."""
+        idx = self._switcher.get_active_index()
+        if idx < len(self._credential_ids):
+            return self._credential_ids[idx]
+        return "exhausted"
+
+    @property
+    def is_exhausted(self) -> bool:
+        """Check if all credentials are exhausted."""
+        return self._switcher.is_exhausted
+
+    @property
+    def is_dense(self) -> bool:
+        """Check if the first embedder is dense."""
+        return self._embedders[0].is_dense
+
+    @property
+    def is_sparse(self) -> bool:
+        """Check if the first embedder is sparse."""
+        return self._embedders[0].is_sparse
+
+    @property
+    def is_hybrid(self) -> bool:
+        """Check if the first embedder is hybrid."""
+        return self._embedders[0].is_hybrid
+
+    def close(self):
+        """Close all embedder instances."""
+        for embedder in self._embedders:
+            embedder.close()
+
+    def get_token_usage(self) -> Dict[str, Any]:
+        """Get combined token usage from all credential instances."""
+        from openviking.models.vlm.token_usage import TokenUsageTracker
+
+        if not self._embedders:
+            return {}
+
+        merged_tracker = self._embedders[0]._token_tracker
+        for embedder in self._embedders[1:]:
+            merged_tracker = TokenUsageTracker.merge(merged_tracker, embedder._token_tracker)
+
+        return merged_tracker.to_dict()
+
+    def reset_token_usage(self) -> None:
+        """Reset token usage for all credential instances."""
+        for embedder in self._embedders:
+            embedder.reset_token_usage()

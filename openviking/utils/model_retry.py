@@ -335,3 +335,121 @@ class PrimaryBackupSwitcher:
         """Check if currently using backup."""
         with self._lock:
             return self._using_backup
+
+
+class OrderedCredentialSwitcher:
+    """Thread-safe ordered N-credential switcher with hierarchical failback.
+
+    Supports ordered failover across multiple credentials. When a credential fails
+    with quota_exceeded or permanent error, it advances to the next credential.
+    After failback thresholds are met, it attempts to move back to a higher-priority
+    credential (one step at a time, not all the way back to index 0).
+
+    _active_idx == _n indicates all credentials are exhausted.
+    """
+
+    def __init__(
+        self,
+        n: int,
+        failback_timeout_seconds: float = 600.0,  # 10 minutes
+        failback_request_count: int = 50,
+    ):
+        """Initialize the switcher.
+
+        Args:
+            n: Number of credentials (must be >= 1)
+            failback_timeout_seconds: Time after which to attempt failback
+            failback_request_count: Number of requests after which to attempt failback
+        """
+        if n < 1:
+            raise ValueError("Number of credentials must be >= 1")
+
+        # Configuration (read-only after construction)
+        self._n = n
+        self._failback_timeout = failback_timeout_seconds
+        self._failback_request_count = failback_request_count
+
+        # Runtime state (protected by _lock)
+        self._lock = threading.Lock()
+        self._active_idx = 0
+        self._last_switch_time: float = 0.0
+        self._active_request_count = 0
+
+    @property
+    def n(self) -> int:
+        """Get the number of credentials."""
+        return self._n
+
+    def get_active_index(self) -> int:
+        """Return the current active credential index.
+
+        Before returning, checks if failback thresholds are met. If so, moves
+        active_idx back one step (towards 0).
+        """
+        with self._lock:
+            if self._active_idx > 0:
+                timer_hit = (time.monotonic() - self._last_switch_time) >= self._failback_timeout
+                count_hit = self._active_request_count >= self._failback_request_count
+                if timer_hit or count_hit:
+                    logger.info(
+                        f"Failback condition met (timer={timer_hit}, count={count_hit}), "
+                        f"moving from credential {self._active_idx} to {self._active_idx - 1}"
+                    )
+                    self._active_idx -= 1
+                    self._last_switch_time = time.monotonic()
+                    self._active_request_count = 0
+            return self._active_idx
+
+    def on_success(self, idx: int) -> None:
+        """Record a successful call on the given credential index.
+
+        Increments the request counter for active_idx if idx matches.
+        """
+        with self._lock:
+            if idx == self._active_idx and self._active_idx > 0:
+                self._active_request_count += 1
+
+    def on_failure(self, idx: int, error_class: str) -> bool:
+        """Record a failure and decide whether to advance to the next credential.
+
+        Args:
+            idx: The credential index that failed
+            error_class: One of ERROR_CLASS_* constants
+
+        Returns:
+            True if the caller should advance to the next credential (idx += 1)
+            False if fail-fast (permanent error)
+        """
+        # Transient errors that have exhausted retries are treated as quota_exceeded
+        if error_class == ERROR_CLASS_TRANSIENT:
+            error_class = ERROR_CLASS_QUOTA_EXCEEDED
+
+        with self._lock:
+            if error_class == ERROR_CLASS_PERMANENT:
+                # 4xx auth/parameter errors: fail-fast, don't advance
+                logger.warning(f"Credential {idx} failed with permanent error, fail-fast")
+                return False
+
+            if error_class == ERROR_CLASS_QUOTA_EXCEEDED:
+                if idx == self._active_idx:
+                    self._active_idx = min(self._active_idx + 1, self._n)
+                    self._last_switch_time = time.monotonic()
+                    self._active_request_count = 0
+                    logger.warning(
+                        f"Credential {idx} failed with quota_exceeded, advancing to {self._active_idx}"
+                    )
+                return True
+
+            # Unknown error class: default to advancing (be conservative)
+            if idx == self._active_idx:
+                self._active_idx = min(self._active_idx + 1, self._n)
+                self._last_switch_time = time.monotonic()
+                self._active_request_count = 0
+            logger.warning(f"Credential {idx} failed with unknown error class: {error_class}, advancing to {self._active_idx}")
+            return True
+
+    @property
+    def is_exhausted(self) -> bool:
+        """Check if all credentials are exhausted."""
+        with self._lock:
+            return self._active_idx >= self._n

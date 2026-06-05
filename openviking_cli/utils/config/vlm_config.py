@@ -18,11 +18,33 @@ def _normalize_provider_name(name: Optional[str]) -> Optional[str]:
     return cleaned or None
 
 
+class VLMCredential(BaseModel):
+    """Single VLM credential configuration for multi-credential failover."""
+
+    id: Optional[str] = Field(default=None, description="Unique identifier for this credential")
+    provider: Optional[str] = Field(default=None, description="Provider type")
+    api_key: Optional[str] = Field(default=None, description="API key")
+    api_base: Optional[str] = Field(default=None, description="API base URL")
+    api_version: Optional[str] = Field(default=None, description="API version")
+    forward_api_key: Optional[bool] = Field(
+        default=None, description="Whether to pass api_key through to LiteLLM"
+    )
+    extra_headers: Optional[Dict[str, str]] = Field(
+        default=None, description="Extra HTTP headers"
+    )
+    extra_request_body: Optional[Dict[str, Any]] = Field(
+        default=None, description="Extra JSON body fields"
+    )
+    stream: Optional[bool] = Field(default=None, description="Enable streaming mode")
+
+    model_config = {"extra": "forbid"}
+
+
 class VLMConfig(BaseModel):
-    """VLM configuration, supports multiple provider backends."""
+    """VLM configuration, supports multiple provider backends and multi-credential failover."""
 
     backup: Optional["VLMConfig"] = Field(
-        default=None, description="Backup VLM configuration for failover"
+        default=None, description="Backup VLM configuration for failover (legacy)"
     )
     model: Optional[str] = Field(default=None, description="Model name")
     api_key: Optional[str] = Field(default=None, description="API key")
@@ -89,6 +111,19 @@ class VLMConfig(BaseModel):
         default=False, description="Enable streaming mode for OpenAI-compatible providers"
     )
 
+    # New multi-credential configuration
+    credentials: List[VLMCredential] = Field(
+        default_factory=list,
+        description="Ordered list of credentials for failover. Call order matches array index (0 is highest priority).",
+    )
+
+    failback_timeout_seconds: float = Field(
+        default=600.0, description="Time in seconds after which to attempt failback to primary"
+    )
+    failback_request_count: int = Field(
+        default=50, description="Number of backup requests after which to attempt failback"
+    )
+
     _vlm_instance: Optional[Any] = None
 
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid"}
@@ -125,32 +160,51 @@ class VLMConfig(BaseModel):
     @model_validator(mode="after")
     def validate_config(self):
         """Validate configuration completeness and consistency"""
+        # Validate recursive backup BEFORE normalizing credentials (which clears backup)
+        self._validate_no_recursive_backup()
+        
         self._migrate_legacy_config()
+        self._normalize_credentials()
 
         if self._has_any_config():
             if not self.model:
                 raise ValueError("VLM configuration requires 'model' to be set")
-            provider_name = self._resolve_provider_name()
-            if provider_name == "openai-codex":
-                has_codex_auth_available = _load_codex_auth_module().has_codex_auth_available
-
-                if not self._get_effective_api_key() and not has_codex_auth_available():
-                    raise ValueError(
-                        "VLM configuration requires Codex OAuth credentials in ~/.openviking/codex_auth.json or an importable Codex CLI auth file"
-                    )
-            elif provider_name != "litellm" and not self._get_effective_api_key():
-                raise ValueError("VLM configuration requires 'api_key' to be set")
+            # When credentials are configured, validate each credential
+            if self.credentials:
+                for i, cred in enumerate(self.credentials):
+                    provider_name = cred.provider or self.provider
+                    if provider_name == "openai-codex":
+                        has_codex_auth_available = _load_codex_auth_module().has_codex_auth_available
+                        if not cred.api_key and not has_codex_auth_available():
+                            raise ValueError(
+                                f"Credential {i} ({cred.id or 'unnamed'}): requires Codex OAuth credentials in ~/.openviking/codex_auth.json"
+                            )
+                    elif provider_name not in ("litellm", None) and not cred.api_key:
+                        # Also check providers dict for fallback
+                        if not self._get_credential_api_key(cred):
+                            raise ValueError(
+                                f"Credential {i} ({cred.id or 'unnamed'}): requires 'api_key' to be set"
+                            )
+            else:
+                # Legacy validation
+                provider_name = self._resolve_provider_name()
+                if provider_name == "openai-codex":
+                    has_codex_auth_available = _load_codex_auth_module().has_codex_auth_available
+                    if not self._get_effective_api_key() and not has_codex_auth_available():
+                        raise ValueError(
+                            "VLM configuration requires Codex OAuth credentials in ~/.openviking/codex_auth.json or an importable Codex CLI auth file"
+                        )
+                elif provider_name != "litellm" and not self._get_effective_api_key():
+                    raise ValueError("VLM configuration requires 'api_key' to be set")
         return self
 
-    @model_validator(mode="after")
-    def validate_no_recursive_backup(self):
+    def _validate_no_recursive_backup(self):
         """Prevent recursive backup configurations"""
         if self.backup is not None:
             if self.backup.backup is not None:
                 raise ValueError(
                     "Backup VLM configuration cannot have its own backup (recursive backups are not allowed)"
                 )
-        return self
 
     def _migrate_legacy_config(self):
         """Migrate legacy config to providers structure."""
@@ -183,8 +237,115 @@ class VLMConfig(BaseModel):
             if self.stream and "stream" not in self.providers[self.provider]:
                 self.providers[self.provider]["stream"] = self.stream
 
+    def _normalize_credentials(self):
+        """Normalize credentials configuration:
+        1. Migrate legacy backup config to credentials
+        2. Migrate top-level credentials to credentials list
+        3. Assign default IDs to credentials without IDs
+        4. Apply top-level defaults to credentials
+        """
+        migrated_credentials = []
+
+        # Step 1: Migrate legacy backup config
+        if self.backup is not None and self.backup._has_any_config():
+            # Primary credential from top-level
+            primary_cred = VLMCredential(
+                id="legacy-primary",
+                provider=self.provider,
+                api_key=self.api_key,
+                api_base=self.api_base,
+                api_version=self.api_version,
+                forward_api_key=self.forward_api_key,
+                extra_headers=self.extra_headers,
+                extra_request_body=self.extra_request_body,
+                stream=self.stream,
+            )
+            migrated_credentials.append(primary_cred)
+
+            # Backup credential
+            backup_cred = VLMCredential(
+                id="legacy-backup",
+                provider=self.backup.provider,
+                api_key=self.backup.api_key,
+                api_base=self.backup.api_base,
+                api_version=self.backup.api_version,
+                forward_api_key=self.backup.forward_api_key,
+                extra_headers=self.backup.extra_headers,
+                extra_request_body=self.backup.extra_request_body,
+                stream=self.backup.stream,
+            )
+            migrated_credentials.append(backup_cred)
+
+            # Clear backup to avoid double processing
+            self.backup = None
+
+        # Step 2: If no credentials from backup migration and no explicit credentials,
+        # create credentials from top-level config
+        if not migrated_credentials and not self.credentials:
+            if self._has_legacy_provider_config():
+                migrated_credentials.append(
+                    VLMCredential(
+                        id="default",
+                        provider=self.provider,
+                        api_key=self.api_key,
+                        api_base=self.api_base,
+                        api_version=self.api_version,
+                        forward_api_key=self.forward_api_key,
+                        extra_headers=self.extra_headers,
+                        extra_request_body=self.extra_request_body,
+                        stream=self.stream,
+                    )
+                )
+
+        # Step 3: Merge migrated credentials with existing credentials
+        if migrated_credentials:
+            # Only use migrated if no explicit credentials exist
+            if not self.credentials:
+                self.credentials = migrated_credentials
+
+        # Step 4: Assign default IDs and apply top-level defaults
+        for i, cred in enumerate(self.credentials):
+            if not cred.id:
+                cred.id = f"credential-{i}"
+            # Apply top-level defaults where credential doesn't specify
+            if not cred.provider:
+                cred.provider = self.provider
+            if not cred.api_key:
+                cred.api_key = self._get_credential_api_key(cred)
+            if not cred.api_base:
+                cred.api_base = self.api_base
+            if not cred.api_version:
+                cred.api_version = self.api_version
+            if cred.forward_api_key is None:
+                cred.forward_api_key = self.forward_api_key
+            if not cred.extra_headers:
+                cred.extra_headers = self.extra_headers
+            if not cred.extra_request_body:
+                cred.extra_request_body = self.extra_request_body
+            if cred.stream is None:
+                cred.stream = self.stream
+
+    def _has_legacy_provider_config(self) -> bool:
+        """Check if there's legacy provider config (not credentials-based)."""
+        return (
+            self.provider is not None
+            or self.api_key is not None
+            or self.api_base is not None
+            or self.providers
+        )
+
+    def _get_credential_api_key(self, cred: VLMCredential) -> str | None:
+        """Get effective API key for a credential, checking providers dict."""
+        if cred.api_key:
+            return cred.api_key
+        if cred.provider and cred.provider in self.providers:
+            return self.providers[cred.provider].get("api_key")
+        return None
+
     def _has_any_config(self) -> bool:
         """Check if any config is provided."""
+        if self.credentials:
+            return True
         if self.api_key or self.model or self.api_base or self.provider or self.default_provider:
             return True
         if self.providers:
@@ -193,6 +354,8 @@ class VLMConfig(BaseModel):
 
     def _get_effective_api_key(self) -> str | None:
         """Get effective API key."""
+        if self.credentials:
+            return self.credentials[0].api_key or self._get_credential_api_key(self.credentials[0])
         if self.api_key:
             return self.api_key
         config, _ = self._match_provider()
@@ -234,6 +397,22 @@ class VLMConfig(BaseModel):
             (provider_config_dict, provider_name)
         """
         del model
+        # If credentials are configured, use the first one
+        if self.credentials:
+            cred = self.credentials[0]
+            return (
+                {
+                    "api_key": cred.api_key,
+                    "api_base": cred.api_base,
+                    "api_version": cred.api_version,
+                    "forward_api_key": cred.forward_api_key,
+                    "extra_headers": cred.extra_headers,
+                    "extra_request_body": cred.extra_request_body,
+                    "stream": cred.stream,
+                },
+                cred.provider,
+            )
+
         if self.provider:
             return self._get_provider_config_by_name(self.provider) or {}, self.provider
 
@@ -255,6 +434,9 @@ class VLMConfig(BaseModel):
         return None, None
 
     def _resolve_provider_name(self) -> str | None:
+        """Resolve provider name from credentials or legacy config."""
+        if self.credentials:
+            return self.credentials[0].provider
         _, name = self._match_provider()
         return name
 
@@ -269,21 +451,66 @@ class VLMConfig(BaseModel):
         return self._match_provider(model)
 
     def get_vlm_instance(self) -> Any:
-        """Get VLM instance."""
+        """Get VLM instance with multi-credential failover support."""
         if self._vlm_instance is None:
-            config_dict = self._build_vlm_config_dict()
-            from openviking.models.vlm import FailoverVLM, VLMFactory
+            from openviking.models.vlm import FailoverVLM, MultiCredentialVLM, VLMFactory
 
-            primary = VLMFactory.create(config_dict)
+            if self.credentials:
+                # Build VLM instances for each credential
+                vlm_instances = []
+                for cred in self.credentials:
+                    config_dict = self._build_vlm_config_dict_for_credential(cred)
+                    vlm_instances.append(VLMFactory.create(config_dict))
 
-            # If backup is configured, wrap with FailoverVLM
-            if self.backup is not None and self.backup._has_any_config():
-                backup_config_dict = self.backup._build_vlm_config_dict()
-                backup = VLMFactory.create(backup_config_dict)
-                self._vlm_instance = FailoverVLM(primary, backup)
+                if len(vlm_instances) == 1:
+                    self._vlm_instance = vlm_instances[0]
+                else:
+                    self._vlm_instance = MultiCredentialVLM(
+                        vlm_instances,
+                        credential_ids=[c.id for c in self.credentials],
+                        failback_timeout_seconds=self.failback_timeout_seconds,
+                        failback_request_count=self.failback_request_count,
+                    )
             else:
-                self._vlm_instance = primary
+                # Legacy mode: single VLM with optional backup
+                config_dict = self._build_vlm_config_dict()
+                primary = VLMFactory.create(config_dict)
+
+                if self.backup is not None and self.backup._has_any_config():
+                    backup_config_dict = self.backup._build_vlm_config_dict()
+                    backup = VLMFactory.create(backup_config_dict)
+                    self._vlm_instance = FailoverVLM(primary, backup)
+                else:
+                    self._vlm_instance = primary
+
         return self._vlm_instance
+
+    def _build_vlm_config_dict_for_credential(self, credential: VLMCredential) -> Dict[str, Any]:
+        """Build VLM instance config dict for a specific credential."""
+        result = {
+            "model": self.model,
+            "temperature": self.temperature,
+            "max_retries": self.max_retries,
+            "timeout": self.timeout,
+            "provider": credential.provider,
+            "thinking": self.thinking,
+            "max_tokens": self.max_tokens,
+            "stream": credential.stream if credential.stream is not None else self.stream,
+            "api_version": credential.api_version,
+        }
+
+        if credential.api_key:
+            result["api_key"] = credential.api_key
+        if credential.forward_api_key is not None:
+            result["forward_api_key"] = credential.forward_api_key
+        if credential.api_base:
+            result["api_base"] = credential.api_base
+        if credential.extra_headers:
+            result["extra_headers"] = credential.extra_headers
+        if credential.extra_request_body:
+            result["extra_request_body"] = credential.extra_request_body
+
+        return result
 
     def _build_vlm_config_dict(self) -> Dict[str, Any]:
         """Build VLM instance config dict."""

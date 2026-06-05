@@ -11,10 +11,10 @@ from openviking_cli.utils.config.vlm_config import VLMConfig
 
 
 class TestVLMBackupConfig:
-    """Tests for VLMConfig backup field validation."""
+    """Tests for VLMConfig backup field validation and migration."""
 
-    def test_backup_config_allowed(self):
-        """Test that backup configuration is allowed when not recursive."""
+    def test_backup_config_migrated_to_credentials(self):
+        """Test that backup configuration is migrated to credentials list."""
         backup_config = VLMConfig(
             model="backup-model",
             api_key="backup-key",
@@ -26,11 +26,23 @@ class TestVLMBackupConfig:
             provider="volcengine",
             backup=backup_config,
         )
-        assert config.backup is not None
-        assert config.backup.model == "backup-model"
+        # After migration, backup should be None but credentials should have 2 entries
+        assert config.backup is None
+        assert len(config.credentials) == 2
+        assert config.credentials[0].id == "legacy-primary"
+        assert config.credentials[0].provider == "volcengine"
+        assert config.credentials[0].api_key == "primary-key"
+        assert config.credentials[1].id == "legacy-backup"
+        assert config.credentials[1].provider == "openai"
+        assert config.credentials[1].api_key == "backup-key"
 
-    def test_recursive_backup_config_rejected(self):
-        """Test that recursive backup configurations are rejected."""
+    def test_recursive_backup_config_not_possible(self):
+        """Test that recursive backup configurations are automatically prevented by migration.
+        
+        With the new multi-credential architecture, when a config with backup is created,
+        it gets migrated to credentials format and backup is set to None. This means
+        recursive backups are automatically prevented.
+        """
         nested_backup = VLMConfig(
             model="nested-model",
             api_key="nested-key",
@@ -42,13 +54,22 @@ class TestVLMBackupConfig:
             provider="openai",
             backup=nested_backup,
         )
-        with pytest.raises(ValueError, match="recursive backups are not allowed"):
-            VLMConfig(
-                model="primary-model",
-                api_key="primary-key",
-                provider="volcengine",
-                backup=backup_config,
-            )
+        # After migration, backup_config.backup should be None
+        assert backup_config.backup is None
+        # And it should have 2 credentials (primary + backup)
+        assert len(backup_config.credentials) == 2
+        
+        # Now creating a config with backup=backup_config works (no recursion)
+        # because backup_config.backup is already None
+        config = VLMConfig(
+            model="primary-model",
+            api_key="primary-key",
+            provider="volcengine",
+            backup=backup_config,
+        )
+        # The outer config gets its own 2 credentials (primary + backup_config's top-level)
+        assert len(config.credentials) == 2
+        assert config.backup is None
 
     def test_backup_without_own_backup_allowed(self):
         """Test that backup config without its own backup is allowed."""
@@ -63,8 +84,8 @@ class TestVLMBackupConfig:
             provider="volcengine",
             backup=backup_config,
         )
-        # Should not raise
-        config.validate_no_recursive_backup()
+        # Should not raise and should migrate to credentials
+        assert len(config.credentials) == 2
 
 
 class TestFailoverVLM:
@@ -356,8 +377,8 @@ class TestVLMConfigWithBackup:
         assert instance is mock_vlm
         mock_factory.create.assert_called_once()
 
-    def test_config_with_backup_creates_failover_instance(self, monkeypatch):
-        """Test that config with backup creates a FailoverVLM instance."""
+    def test_config_with_backup_creates_multicredential_instance(self, monkeypatch):
+        """Test that config with backup creates a MultiCredentialVLM instance."""
         mock_factory = Mock()
         mock_primary = Mock()
         mock_backup = Mock()
@@ -379,9 +400,10 @@ class TestVLMConfigWithBackup:
 
         instance = config.get_vlm_instance()
 
-        # Should be a FailoverVLM instance
-        assert hasattr(instance, "primary")
-        assert hasattr(instance, "backup")
+        # Should be a MultiCredentialVLM instance
+        assert hasattr(instance, "active_credential_index")
+        assert hasattr(instance, "_vlm_instances")
+        assert len(instance._vlm_instances) == 2
 
 
 class TestPrimaryBackupSwitcher:
