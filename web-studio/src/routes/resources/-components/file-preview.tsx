@@ -101,6 +101,7 @@ async function ensureLanguage(lang: string): Promise<void> {
 
 interface FilePreviewProps {
   file: VikingFsEntry | null
+  hideDirectoryHeader?: boolean
   onClose: () => void
   showCloseButton?: boolean
 }
@@ -895,6 +896,7 @@ function JsonlPreview({ content }: { content: string }) {
 
 export function FilePreview({
   file,
+  hideDirectoryHeader = false,
   onClose,
   showCloseButton = true,
 }: FilePreviewProps) {
@@ -1082,71 +1084,74 @@ export function FilePreview({
   const visibleDirectoryLevels = availableDirectoryLevels.filter((level) =>
     activeDirectoryLevels.has(level.id),
   )
+  const showHeader = !(hideDirectoryHeader && file.isDir)
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      <div className="flex min-h-14 items-center justify-between border-b px-4">
-        <div className="flex min-w-0 items-center gap-2">
-          <div className="min-w-0">
-            <div className="truncate text-sm font-medium leading-5">
-              {file.name}
-            </div>
-            {!file.isDir ? (
-              <div className="text-xs leading-5 text-muted-foreground">
-                {formatSize(file.sizeBytes ?? file.size)} ·{' '}
-                {file.modTime || '-'}
+      {showHeader ? (
+        <div className="flex min-h-14 items-center justify-between border-b px-4">
+          <div className="flex min-w-0 items-center gap-2">
+            <div className="min-w-0">
+              <div className="truncate text-sm font-medium leading-5">
+                {file.name}
               </div>
-            ) : null}
-          </div>
-          {editing ? (
-            <div className="flex items-center gap-1">
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={saving}
-                onClick={() => setEditing(false)}
-              >
-                <XCircle className="mr-1 size-3.5" />
-                {t('filePreview.cancel')}
-              </Button>
-              <Button
-                size="sm"
-                className="active:scale-[0.96] transition-transform"
-                disabled={saving}
-                onClick={handleSave}
-              >
-                {saving ? (
-                  <Loader2 className="mr-1 size-3.5 animate-spin" />
-                ) : (
-                  <Save className="mr-1 size-3.5" />
-                )}
-                {t('filePreview.save')}
-              </Button>
+              {!file.isDir ? (
+                <div className="text-xs leading-5 text-muted-foreground">
+                  {formatSize(file.sizeBytes ?? file.size)} ·{' '}
+                  {file.modTime || '-'}
+                </div>
+              ) : null}
             </div>
-          ) : (
-            canEdit && (
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setEditing(true)}
-              >
-                <Pencil className="mr-1 size-3.5" />
-                {t('filePreview.edit')}
-              </Button>
-            )
-          )}
+            {editing ? (
+              <div className="flex items-center gap-1">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={saving}
+                  onClick={() => setEditing(false)}
+                >
+                  <XCircle className="mr-1 size-3.5" />
+                  {t('filePreview.cancel')}
+                </Button>
+                <Button
+                  size="sm"
+                  className="active:scale-[0.96] transition-transform"
+                  disabled={saving}
+                  onClick={handleSave}
+                >
+                  {saving ? (
+                    <Loader2 className="mr-1 size-3.5 animate-spin" />
+                  ) : (
+                    <Save className="mr-1 size-3.5" />
+                  )}
+                  {t('filePreview.save')}
+                </Button>
+              </div>
+            ) : (
+              canEdit && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setEditing(true)}
+                >
+                  <Pencil className="mr-1 size-3.5" />
+                  {t('filePreview.edit')}
+                </Button>
+              )
+            )}
+          </div>
+          {showCloseButton ? (
+            <Button
+              size="icon"
+              variant="ghost"
+              className="size-10"
+              onClick={onClose}
+            >
+              <X className="size-4" />
+            </Button>
+          ) : null}
         </div>
-        {showCloseButton ? (
-          <Button
-            size="icon"
-            variant="ghost"
-            className="size-10"
-            onClick={onClose}
-          >
-            <X className="size-4" />
-          </Button>
-        ) : null}
-      </div>
+      ) : null}
 
       {editing && preview?.content != null ? (
         <div className="h-full min-h-0 p-2">

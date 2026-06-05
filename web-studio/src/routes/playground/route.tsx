@@ -391,7 +391,7 @@ function PlaygroundWorkbench() {
     <div className="-mx-4 -my-6 flex h-[calc(100svh-3rem)] min-h-0 flex-col bg-background md:-mx-6">
       <div
         ref={layoutRef}
-        className="flex min-h-0 flex-1 flex-col border-t bg-background lg:flex-row"
+        className="flex min-h-0 flex-1 flex-col bg-background lg:flex-row"
         style={layoutStyle}
       >
         <aside className="flex min-h-[260px] min-w-0 flex-col border-b bg-muted/20 lg:min-h-0 lg:w-[var(--playground-left-width)] lg:min-w-[var(--playground-left-width)] lg:border-b-0">
@@ -448,6 +448,7 @@ function PlaygroundWorkbench() {
           <div className="min-h-0 flex-1">
             <FilePreview
               file={selectedFile}
+              hideDirectoryHeader
               onClose={() => setSelectedFile(null)}
               showCloseButton={false}
             />
