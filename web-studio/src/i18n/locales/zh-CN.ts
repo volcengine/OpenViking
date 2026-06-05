@@ -732,6 +732,14 @@ const zhCN = {
           code: '在当前范围内搜索资源、记忆和技能',
         },
       },
+      commandGroups: {
+        core: '核心命令',
+        filesystem: '文件系统',
+        search: '搜索与摘要',
+        status: '状态',
+        resource: '资源路径',
+        history: '历史记录',
+      },
       groupLabels: {
         resources: '资源',
         memories: '记忆',

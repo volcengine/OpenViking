@@ -751,6 +751,14 @@ const en = {
           code: 'Search resources, memories, and skills from the current scope',
         },
       },
+      commandGroups: {
+        core: 'Core commands',
+        filesystem: 'Filesystem',
+        search: 'Search and summaries',
+        status: 'Status',
+        resource: 'Resource paths',
+        history: 'History',
+      },
       groupLabels: {
         resources: 'resource',
         memories: 'memory',
