@@ -16,6 +16,8 @@ After installation, activate the `claude` wrapper in your current terminal, or s
 source ~/.openviking/openviking-repo/examples/claude-code-memory-plugin/setup-helper/wrapper.sh
 ```
 
+> Launch Claude Code through a custom command? A wrapper script like `cc-custom`, or a multi-word launcher (a base command plus a sub-command) — list it at the installer's "Extra launch commands" step (or pass `OPENVIKING_CC_WRAP_EXTRA='cc-custom'`) to inject credentials there too.
+
 After using it for a while, start a new conversation and ask about something you mentioned earlier. It should remember.
 
 <details>
@@ -108,6 +110,8 @@ The plugin renders OpenViking status below the Claude Code input box: connection
 | Plugin is not active | `ov.conf` / `ovcli.conf` cannot be found | Run [Step 1: Install](#step-1-install), or set `OPENVIKING_MEMORY_ENABLED=1` plus URL/API_KEY |
 | Hooks run but recall is empty | Server is down or URL is wrong | `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` |
 | MCP tools connect to `127.0.0.1` instead of remote | Missing shell function wrapper | Confirm `type claude` returns "shell function"; see [Step 1: Install](#step-1-install) |
+| `type claude` shows a path instead of a shell function (wrapper inactive) | The rc wasn't `source`d after install, or you launched from a terminal that didn't load it | Run `source ~/.zshrc` (or `~/.bashrc` on bash), or open a new terminal |
+| Launching via an alias (e.g. `cc`) injects no credentials | The alias *name* was listed in `OPENVIKING_CC_WRAP_EXTRA` (alias names are skipped), or the alias's target command isn't wrapped | Wrap the command the alias points to, not the alias: `alias cc=claude` needs nothing; for `alias cc=claude-custom`, add `claude-custom` |
 | Remote auth returns 401 / 403 | API key is wrong or tenant headers are missing | Check `OPENVIKING_API_KEY`; for multi-tenant deployments also verify `OPENVIKING_ACCOUNT` / `OPENVIKING_USER` |
 
 ## Reference docs
