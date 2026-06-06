@@ -14,14 +14,14 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, List, Optional
 from uuid import uuid4
 
 from openviking.core.context import Context
 from openviking.message import Message
 from openviking.server.identity import RequestContext
-from openviking.session.compressor_v2 import SessionCompressorV2
-from openviking.session.memory import StreamingMemoryUpdaterConfig
+from openviking.session.memory import ExtractLoop, MemoryUpdater, StreamingMemoryUpdaterConfig
 from openviking.session.memory.dataclass import (
     ResolvedOperation,
     ResolvedOperations,
@@ -29,12 +29,16 @@ from openviking.session.memory.dataclass import (
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.memory_type_registry import create_default_registry
 from openviking.session.memory.memory_updater import ExtractContext
+from openviking.session.memory.session_extract_context_provider import (
+    SessionExtractContextProvider,
+)
 from openviking.session.memory.streaming_memory_updater import (
     MemoryUpdateRequest,
     get_streaming_memory_updater,
     make_streaming_memory_updater_key,
 )
 from openviking.session.memory.utils.json_parser import JsonUtils
+from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.train import (
     Case,
     ExperienceSetLoader,
@@ -56,6 +60,7 @@ from openviking.session.train.domain import RolloutAnalysis
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
 from openviking_cli.utils import get_logger
+from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
 
@@ -98,8 +103,7 @@ class CommitRolloutAnalyzer:
         )
 
 
-@dataclass(slots=True)
-class SessionCompressorV3(SessionCompressorV2):
+class SessionCompressorV3:
     """Session compressor with lock-free patch-merge user memory extraction."""
 
     rollout_analyzer: CommitRolloutAnalyzer | Any = field(default_factory=CommitRolloutAnalyzer)
@@ -119,12 +123,122 @@ class SessionCompressorV3(SessionCompressorV2):
         streaming_trainer_config: StreamingPolicyTrainerConfig | None = None,
         streaming_memory_updater_config: StreamingMemoryUpdaterConfig | None = None,
     ):
-        SessionCompressorV2.__init__(self, vikingdb=vikingdb, skill_processor=skill_processor)
+        self.vikingdb = vikingdb
+        self.skill_processor = skill_processor
         self.rollout_analyzer = rollout_analyzer or CommitRolloutAnalyzer()
         self.streaming_trainer_config = streaming_trainer_config or StreamingPolicyTrainerConfig()
         self.streaming_memory_updater_config = (
             streaming_memory_updater_config or StreamingMemoryUpdaterConfig()
         )
+
+    def _get_or_create_react(
+        self,
+        ctx: Optional[RequestContext] = None,
+        messages: Optional[List] = None,
+        latest_archive_overview: str = "",
+        isolation_handler: Optional[MemoryIsolationHandler] = None,
+        transaction_handle=None,
+    ) -> ExtractLoop:
+        config = get_openviking_config()
+        vlm = config.vlm.get_vlm_instance()
+        viking_fs = get_viking_fs()
+        context_provider = SessionExtractContextProvider(
+            messages=messages,
+            latest_archive_overview=latest_archive_overview,
+            isolation_handler=isolation_handler,
+            ctx=ctx,
+            viking_fs=viking_fs,
+            transaction_handle=transaction_handle,
+        )
+        return ExtractLoop(
+            vlm=vlm,
+            viking_fs=viking_fs,
+            ctx=ctx,
+            context_provider=context_provider,
+            isolation_handler=isolation_handler,
+        )
+
+    def _get_or_create_updater(self, registry, transaction_handle=None) -> MemoryUpdater:
+        return MemoryUpdater(
+            registry=registry,
+            vikingdb=self.vikingdb,
+            transaction_handle=transaction_handle,
+        )
+
+    async def _build_memory_diff(
+        self,
+        result: Any,
+        operations: ResolvedOperations,
+        viking_fs: Any,
+        ctx: RequestContext,
+        archive_uri: str = "",
+    ) -> dict[str, Any]:
+        adds: list[dict[str, Any]] = []
+        updates: list[dict[str, Any]] = []
+        deletes: list[dict[str, Any]] = []
+
+        upsert_by_uri = {}
+        for op in operations.upsert_operations:
+            for uri in op.uris:
+                upsert_by_uri[uri] = op
+        delete_by_uri = {dc.uri: dc for dc in operations.delete_file_contents}
+
+        for uri in result.written_uris:
+            op = upsert_by_uri.get(uri)
+            memory_type = op.memory_type if op else _get_memory_type_from_uri(uri)
+            old_file = op.old_memory_file_content if op else None
+            if old_file:
+                updates.append(
+                    {
+                        "uri": uri,
+                        "memory_type": memory_type,
+                        "before": old_file.content,
+                        "after": "",
+                    }
+                )
+            else:
+                adds.append({"uri": uri, "memory_type": memory_type, "after": ""})
+
+        for uri in result.edited_uris:
+            op = upsert_by_uri.get(uri)
+            memory_type = op.memory_type if op else _get_memory_type_from_uri(uri)
+            old_file = op.old_memory_file_content if op and op.old_memory_file_content else None
+            updates.append(
+                {
+                    "uri": uri,
+                    "memory_type": memory_type,
+                    "before": old_file.content if old_file else "",
+                    "after": "",
+                }
+            )
+
+        for uri in result.deleted_uris:
+            deleted = delete_by_uri.get(uri)
+            deletes.append(
+                {
+                    "uri": uri,
+                    "memory_type": (deleted.memory_type if deleted else None) or "unknown",
+                    "deleted_content": deleted.content if deleted else "",
+                }
+            )
+
+        for item in adds + updates:
+            try:
+                content = await viking_fs.read_file(uri=item["uri"], ctx=ctx)
+                item["after"] = MemoryFileUtils.read(content).content
+            except Exception:
+                pass
+
+        return {
+            "archive_uri": archive_uri,
+            "extracted_at": datetime.utcnow().isoformat() + "Z",
+            "operations": {"adds": adds, "updates": updates, "deletes": deletes},
+            "summary": {
+                "total_adds": len(adds),
+                "total_updates": len(updates),
+                "total_deletes": len(deletes),
+            },
+        }
 
     @tracer(ignore_result=True)
     async def extract_long_term_memories(
@@ -464,6 +578,14 @@ def _fallback_case_name(op: ResolvedOperation) -> str:
     if uri:
         return uri.rstrip("/").split("/")[-1].removesuffix(".md")
     return "commit_case"
+
+
+def _get_memory_type_from_uri(uri: str) -> str:
+    parts = uri.split("/")
+    for part in parts:
+        if part.endswith(".md"):
+            return part.removesuffix(".md")
+    return "unknown"
 
 
 def _experience_root_uri(ctx: RequestContext) -> str:
