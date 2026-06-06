@@ -5,17 +5,13 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from openviking_cli.utils.ollama import (
     OllamaStartResult,
-    check_ollama_running,
     detect_ollama_in_config,
     ensure_ollama_for_server,
     parse_ollama_url,
     start_ollama,
 )
-
 
 # ---------------------------------------------------------------------------
 # parse_ollama_url
@@ -53,12 +49,22 @@ def _make_config(
     vlm_provider="volcengine",
     vlm_model="doubao-seed",
     vlm_api_base=None,
+    query_planner_provider=None,
+    query_planner_model=None,
+    query_planner_api_base=None,
 ):
     """Build a minimal config-like object for detect_ollama_in_config."""
     dense = SimpleNamespace(provider=embedding_provider, api_base=embedding_api_base)
     embedding = SimpleNamespace(dense=dense)
     vlm = SimpleNamespace(provider=vlm_provider, model=vlm_model, api_base=vlm_api_base)
-    return SimpleNamespace(embedding=embedding, vlm=vlm)
+    query_planner = None
+    if query_planner_provider is not None or query_planner_model is not None:
+        query_planner = SimpleNamespace(
+            provider=query_planner_provider,
+            model=query_planner_model,
+            api_base=query_planner_api_base,
+        )
+    return SimpleNamespace(embedding=embedding, vlm=vlm, query_planner=query_planner)
 
 
 class TestDetectOllamaInConfig:
@@ -114,6 +120,48 @@ class TestDetectOllamaInConfig:
         assert uses is True
         assert host == "192.168.1.50"
         assert port == 8080
+
+    def test_query_planner_ollama_detected(self):
+        config = _make_config(
+            query_planner_provider="litellm",
+            query_planner_model="ollama/guoxuter/ov_intent_analysis_sft:v4_q8",
+            query_planner_api_base="http://127.0.0.1:11434",
+        )
+        uses, host, port = detect_ollama_in_config(config)
+        assert uses is True
+        assert host == "127.0.0.1"
+        assert port == 11434
+
+    def test_query_planner_custom_api_base(self):
+        config = _make_config(
+            query_planner_provider="litellm",
+            query_planner_model="ollama/guoxuter/ov_intent_analysis_sft:v4_q8",
+            query_planner_api_base="http://gpu-host:9999",
+        )
+        uses, host, port = detect_ollama_in_config(config)
+        assert uses is True
+        assert host == "gpu-host"
+        assert port == 9999
+
+    def test_query_planner_litellm_non_ollama_model(self):
+        config = _make_config(
+            query_planner_provider="litellm",
+            query_planner_model="anthropic/claude-3",
+        )
+        uses, _, _ = detect_ollama_in_config(config)
+        assert uses is False
+
+    def test_embedding_takes_priority_over_query_planner(self):
+        config = _make_config(
+            embedding_provider="ollama",
+            embedding_api_base="http://gpu-server:11434/v1",
+            query_planner_provider="litellm",
+            query_planner_model="ollama/guoxuter/ov_intent_analysis_sft:v4_q8",
+            query_planner_api_base="http://localhost:11434",
+        )
+        uses, host, port = detect_ollama_in_config(config)
+        assert uses is True
+        assert host == "gpu-server"  # embedding takes priority
 
 
 # ---------------------------------------------------------------------------

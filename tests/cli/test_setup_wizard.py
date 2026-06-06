@@ -13,10 +13,12 @@ from openviking_cli.setup_wizard import (
     CLOUD_PROVIDERS,
     EMBEDDING_PRESETS,
     LOCAL_GGUF_PRESETS,
+    QUERY_PLANNER_PRESETS,
     VLM_PRESETS,
     _build_cloud_config,
     _build_local_config,
     _build_ollama_config,
+    _build_query_planner_config,
     _config_path,
     _get_recommended_indices,
     _is_llamacpp_installed,
@@ -27,6 +29,7 @@ from openviking_cli.setup_wizard import (
     _prompt_required_input,
     _prompt_required_int,
     _wizard_cloud,
+    _wizard_query_planner,
     _wizard_server,
     _workspace_path,
     _write_config,
@@ -465,6 +468,75 @@ class TestConfigBuilding:
 
 
 # ---------------------------------------------------------------------------
+# Query planner
+# ---------------------------------------------------------------------------
+
+
+class TestQueryPlanner:
+    def test_build_query_planner_config_structure(self):
+        preset = QUERY_PLANNER_PRESETS[0]  # v4_q8
+        config = _build_query_planner_config(preset)
+        assert config["provider"] == "litellm"
+        assert config["model"] == preset.litellm_model
+        assert config["model"].startswith("ollama/")
+        # litellm Ollama base URL must not carry the /v1 suffix
+        assert config["api_base"] == "http://localhost:11434"
+        assert config["temperature"] == 0.0
+        assert config["extra_request_body"] == {"think": False}
+
+    def test_presets_have_litellm_models(self):
+        assert all(p.litellm_model.startswith("ollama/") for p in QUERY_PLANNER_PRESETS)
+
+    def test_wizard_enables_v4_sets_planner_without_prompt_override(self, tmp_path):
+        # Prompt selection happens at retrieval time from the configured model;
+        # the wizard must not write a prompt override or prompts.templates_dir.
+        config_dict: dict = {"embedding": {}, "vlm": {}}
+        config_path = tmp_path / "ov.conf"
+        with (
+            patch.dict(os.environ, {"OPENVIKING_CONFIG_FILE": str(config_path)}, clear=False),
+            patch("openviking_cli.setup_wizard._prompt_confirm", return_value=True),
+            patch("openviking_cli.setup_wizard._ensure_ollama", return_value=True),
+            patch("openviking_cli.setup_wizard.get_ollama_models", return_value=[]),
+            patch("openviking_cli.setup_wizard._prompt_choice", return_value=1),  # v4_q8
+            patch("openviking_cli.setup_wizard.is_model_available", return_value=True),
+            patch("builtins.print"),
+        ):
+            _wizard_query_planner(config_dict)
+
+        assert config_dict["query_planner"]["model"] == QUERY_PLANNER_PRESETS[0].litellm_model
+        assert config_dict["query_planner"]["api_base"] == "http://localhost:11434"
+        assert "prompts" not in config_dict
+        assert not (config_path.parent / "prompts").exists()
+
+    def test_wizard_v1_sets_planner_and_returns_none(self, tmp_path):
+        config_dict: dict = {"embedding": {}, "vlm": {}}
+        config_path = tmp_path / "ov.conf"
+        with (
+            patch.dict(os.environ, {"OPENVIKING_CONFIG_FILE": str(config_path)}, clear=False),
+            patch("openviking_cli.setup_wizard._prompt_confirm", return_value=True),
+            patch("openviking_cli.setup_wizard._ensure_ollama", return_value=True),
+            patch("openviking_cli.setup_wizard.get_ollama_models", return_value=[]),
+            patch("openviking_cli.setup_wizard._prompt_choice", return_value=2),  # v1_q8
+            patch("openviking_cli.setup_wizard.is_model_available", return_value=True),
+            patch("builtins.print"),
+        ):
+            _wizard_query_planner(config_dict)
+
+        assert config_dict["query_planner"]["model"] == QUERY_PLANNER_PRESETS[1].litellm_model
+        assert "prompts" not in config_dict
+
+    def test_wizard_declined_leaves_config_untouched(self, tmp_path):
+        config_dict: dict = {"embedding": {}, "vlm": {}}
+        with (
+            patch("openviking_cli.setup_wizard._prompt_confirm", return_value=False),
+            patch("builtins.print"),
+        ):
+            _wizard_query_planner(config_dict)
+        assert "query_planner" not in config_dict
+        assert "prompts" not in config_dict
+
+
+# ---------------------------------------------------------------------------
 # RAM-based recommendations
 # ---------------------------------------------------------------------------
 
@@ -547,6 +619,7 @@ class TestConfigWriting:
             patch.dict(os.environ, {"OPENVIKING_CONFIG_FILE": str(config_path)}, clear=False),
             patch("openviking_cli.setup_wizard._prompt_choice", return_value=3),
             patch("openviking_cli.setup_wizard._wizard_ollama", return_value=config),
+            patch("openviking_cli.setup_wizard._wizard_query_planner", return_value=None),
             patch(
                 "openviking_cli.setup_wizard._wizard_server",
                 return_value={"host": "127.0.0.1"},
@@ -582,6 +655,7 @@ class TestConfigWriting:
             patch.dict(os.environ, {"OPENVIKING_CONFIG_FILE": str(config_path)}, clear=False),
             patch("openviking_cli.setup_wizard._prompt_choice", return_value=3),
             patch("openviking_cli.setup_wizard._wizard_ollama", return_value=config),
+            patch("openviking_cli.setup_wizard._wizard_query_planner", return_value=None),
             patch(
                 "openviking_cli.setup_wizard._wizard_server",
                 return_value={"host": "127.0.0.1"},

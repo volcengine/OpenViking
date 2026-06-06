@@ -372,6 +372,14 @@ class VLMPreset:
     min_ram_gb: int  # Minimum recommended RAM
 
 
+@dataclass
+class QueryPlannerPreset:
+    label: str
+    ollama_model: str  # For ollama pull
+    litellm_model: str  # For config: "ollama/xxx"
+    size_hint: str
+
+
 EMBEDDING_PRESETS: list[EmbeddingPreset] = [
     EmbeddingPreset("Qwen3-Embedding 0.6B", "qwen3-embedding:0.6b", 1024, "~639 MB", 4),
     EmbeddingPreset("Qwen3-Embedding 4B", "qwen3-embedding:4b", 1024, "~2.5 GB", 8),
@@ -390,6 +398,24 @@ VLM_PRESETS: list[VLMPreset] = [
     VLMPreset("Gemma 4 E4B", "gemma4:e4b", "ollama/gemma4:e4b", "~9.6 GB", 16),
     VLMPreset("Gemma 4 26B", "gemma4:26b", "ollama/gemma4:26b", "~18 GB", 32),
     VLMPreset("Gemma 4 31B", "gemma4:31b", "ollama/gemma4:31b", "~20 GB", 48),
+]
+
+# Lightweight query-planner models (intent analysis / query planning). All run
+# locally via Ollama. Runtime prompt selection is handled by the retrieval
+# intent analyzer based on the configured model name.
+QUERY_PLANNER_PRESETS: list[QueryPlannerPreset] = [
+    QueryPlannerPreset(
+        "ov_intent_analysis_sft v4_q8",
+        "guoxuter/ov_intent_analysis_sft:v4_q8",
+        "ollama/guoxuter/ov_intent_analysis_sft:v4_q8",
+        "~0.8B, recommended",
+    ),
+    QueryPlannerPreset(
+        "ov_intent_analysis_sft v1_q8",
+        "guoxuter/ov_intent_analysis_sft:v1_q8",
+        "ollama/guoxuter/ov_intent_analysis_sft:v1_q8",
+        "~0.8B, compatible with the bundled prompt",
+    ),
 ]
 
 # Recommended defaults indexed by RAM tier
@@ -629,6 +655,24 @@ def _build_cloud_config(
             },
         },
         "vlm": vlm_config,
+    }
+
+
+def _build_query_planner_config(preset: QueryPlannerPreset) -> dict[str, Any]:
+    """Build the ``query_planner`` config block for an Ollama-served model.
+
+    Uses the litellm provider with the bare Ollama base URL (no ``/v1``) to
+    match how the wizard configures the Ollama VLM, and disables thinking for
+    lower latency on the small planner model.
+    """
+    return {
+        "provider": "litellm",
+        "model": preset.litellm_model,
+        "api_key": "no-key",
+        "api_base": "http://localhost:11434",
+        "temperature": 0.0,
+        "timeout": 60,
+        "extra_request_body": {"think": False},
     }
 
 
@@ -1090,6 +1134,48 @@ def _wizard_server() -> dict[str, Any] | None:
     return {"host": "0.0.0.0", "root_api_key": root_api_key}
 
 
+def _wizard_query_planner(config_dict: dict[str, Any]) -> None:
+    """Optionally configure a lightweight local query-planner model.
+
+    Mutates *config_dict* in place to add ``query_planner``. Prompt selection is
+    resolved at retrieval time from the configured model name.
+    """
+    print(f"\n  {_bold('Query planner (optional)')}")
+    print(f"  {_dim('A small local model that plans retrieval before search — skips')}")
+    print(f"  {_dim('lookups for small talk and emits focused queries otherwise, saving tokens.')}")
+
+    if not _prompt_confirm(
+        "Enable a lightweight local query planner via Ollama? (recommended)",
+        default=False,
+    ):
+        return
+
+    ollama_running = _ensure_ollama()
+    if not ollama_running:
+        if not _prompt_confirm(
+            "Continue without Ollama? (config will be written but the model won't be pulled)",
+            default=False,
+        ):
+            return
+
+    available_models = get_ollama_models() if ollama_running else []
+
+    options = [(p.label, p.size_hint) for p in QUERY_PLANNER_PRESETS]
+    choice = _prompt_choice("Query planner model:", options, default=1)
+    preset = QUERY_PLANNER_PRESETS[choice - 1]
+
+    if ollama_running and not is_model_available(preset.ollama_model, available_models):
+        if _prompt_confirm(f"'{preset.ollama_model}' not found locally. Pull now?"):
+            print()
+            if not ollama_pull_model(preset.ollama_model):
+                pull_hint = "Pull failed. You can pull it later: ollama pull "
+                print(f"  {_yellow(pull_hint + preset.ollama_model)}")
+            else:
+                print(f"  {_green('OK')} {preset.ollama_model} pulled successfully")
+
+    config_dict["query_planner"] = _build_query_planner_config(preset)
+
+
 def _wizard_custom() -> dict[str, Any] | None:
     """Custom configuration - point user to example config."""
     config_path = _config_path()
@@ -1163,6 +1249,8 @@ def run_init() -> int:
         print("\n  Setup cancelled.\n")
         return 0
 
+    _wizard_query_planner(config_dict)
+
     server_dict = _wizard_server()
     if server_dict is None:
         print("\n  Setup cancelled.\n")
@@ -1179,6 +1267,7 @@ def run_init() -> int:
         print("    Model path: custom local model (hidden)")
     vlm_summary = _configured_hint(bool(vlm))
     print(f"    VLM:        {vlm_summary}")
+    print(f"    Query planner: {_configured_hint(bool(config_dict.get('query_planner')))}")
     print(f"    Server:     bound to {server_dict['host']}")
     if server_dict.get("root_api_key"):
         print("    Root API key: configured (hidden)")

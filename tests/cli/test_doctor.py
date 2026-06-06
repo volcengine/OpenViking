@@ -651,6 +651,53 @@ class TestCheckOllama:
         assert "vlm-host:11436" in detail
         assert fix is None
 
+    def test_checks_query_planner_ollama_api_base(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(
+            json.dumps(
+                {
+                    "embedding": {
+                        "dense": {"provider": "openai", "model": "text-embedding-3-small"}
+                    },
+                    "vlm": {"provider": "openai", "model": "gpt-4o-mini"},
+                    "query_planner": {
+                        "provider": "litellm",
+                        "model": "ollama/guoxuter/ov_intent_analysis_sft:v4_q8",
+                        "api_base": "http://planner-host:11437",
+                    },
+                }
+            )
+        )
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            with patch(
+                "openviking_cli.utils.ollama.check_ollama_running", return_value=True
+            ) as running:
+                ok, detail, fix = check_ollama()
+        running.assert_called_once_with("planner-host", 11437)
+        assert ok
+        assert "planner-host:11437" in detail
+        assert fix is None
+
+    def test_fails_when_query_planner_ollama_is_unreachable(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(
+            json.dumps(
+                {
+                    "query_planner": {
+                        "provider": "litellm",
+                        "model": "ollama/guoxuter/ov_intent_analysis_sft:v4_q8",
+                        "api_base": "http://localhost:11434",
+                    }
+                }
+            )
+        )
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            with patch("openviking_cli.utils.ollama.check_ollama_running", return_value=False):
+                ok, detail, fix = check_ollama()
+        assert not ok
+        assert "unreachable at localhost:11434" in detail
+        assert "ollama serve" in fix
+
     def test_fails_when_configured_ollama_is_unreachable(self, tmp_path: Path):
         config = tmp_path / "ov.conf"
         config.write_text(

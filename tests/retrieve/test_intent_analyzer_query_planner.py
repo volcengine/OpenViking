@@ -8,8 +8,9 @@ from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 
 
 class RecordingModel:
-    def __init__(self, response: str):
+    def __init__(self, response: str, model: str | None = None):
         self.response = response
+        self.model = model
         self.prompts: list[str] = []
 
     async def get_completion_async(self, prompt: str):
@@ -58,6 +59,27 @@ def test_openviking_config_uses_vlm_when_query_planner_is_absent_or_empty():
     assert empty_config.get_query_planner() is empty_config.vlm
 
 
+def test_query_planner_prompt_mapping_defaults_for_unknown_models():
+    assert (
+        intent_module.resolve_intent_analysis_prompt_id(
+            SimpleNamespace(model="ollama/guoxuter/ov_intent_analysis_sft:v4_q8")
+        )
+        == "retrieval.ov_intent_analysis_sft_v4"
+    )
+    assert (
+        intent_module.resolve_intent_analysis_prompt_id(SimpleNamespace(model="ollama/qwen3.5:4b"))
+        == intent_module.DEFAULT_INTENT_ANALYSIS_PROMPT
+    )
+
+
+def test_query_planner_prompt_mapping_targets_are_bundled():
+    from openviking.prompts.manager import PromptManager
+
+    manager = PromptManager(templates_dir=PromptManager._get_bundled_templates_dir())
+    for prompt_id in intent_module.QUERY_PLANNER_PROMPT_BY_MODEL.values():
+        assert manager.load_template(prompt_id).metadata.id == prompt_id
+
+
 @pytest.mark.asyncio
 async def test_intent_analyzer_uses_query_planner_when_configured(monkeypatch):
     planner = RecordingModel(_query_plan_response("planned query"))
@@ -65,6 +87,7 @@ async def test_intent_analyzer_uses_query_planner_when_configured(monkeypatch):
     config = SimpleNamespace(get_query_planner=lambda: planner)
 
     monkeypatch.setattr(intent_module, "get_openviking_config", lambda: config)
+    monkeypatch.setattr(intent_module, "render_prompt", lambda prompt_id, variables: "prompt")
 
     result = await IntentAnalyzer().analyze(
         compression_summary="",
@@ -78,11 +101,62 @@ async def test_intent_analyzer_uses_query_planner_when_configured(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_intent_analyzer_uses_model_specific_prompt(monkeypatch):
+    planner = RecordingModel(
+        _query_plan_response("planned query"),
+        model="ollama/guoxuter/ov_intent_analysis_sft:v4_q8",
+    )
+    config = SimpleNamespace(get_query_planner=lambda: planner)
+    rendered: list[str] = []
+
+    def fake_render_prompt(prompt_id, variables):
+        rendered.append(prompt_id)
+        return "rendered prompt"
+
+    monkeypatch.setattr(intent_module, "get_openviking_config", lambda: config)
+    monkeypatch.setattr(intent_module, "render_prompt", fake_render_prompt)
+
+    result = await IntentAnalyzer().analyze(
+        compression_summary="",
+        messages=[],
+        current_message="where is my preference?",
+    )
+
+    assert result.queries[0].query == "planned query"
+    assert rendered == ["retrieval.ov_intent_analysis_sft_v4"]
+    assert planner.prompts == ["rendered prompt"]
+
+
+@pytest.mark.asyncio
+async def test_intent_analyzer_keeps_default_prompt_for_unmapped_model(monkeypatch):
+    planner = RecordingModel(_query_plan_response("planned query"), model="ollama/qwen3.5:4b")
+    config = SimpleNamespace(get_query_planner=lambda: planner)
+    rendered: list[str] = []
+
+    def fake_render_prompt(prompt_id, variables):
+        rendered.append(prompt_id)
+        return "rendered prompt"
+
+    monkeypatch.setattr(intent_module, "get_openviking_config", lambda: config)
+    monkeypatch.setattr(intent_module, "render_prompt", fake_render_prompt)
+
+    result = await IntentAnalyzer().analyze(
+        compression_summary="",
+        messages=[],
+        current_message="where is my preference?",
+    )
+
+    assert result.queries[0].query == "planned query"
+    assert rendered == [intent_module.DEFAULT_INTENT_ANALYSIS_PROMPT]
+
+
+@pytest.mark.asyncio
 async def test_intent_analyzer_falls_back_to_vlm_without_query_planner(monkeypatch):
     vlm = RecordingModel(_query_plan_response("vlm query"))
     config = SimpleNamespace(get_query_planner=lambda: vlm)
 
     monkeypatch.setattr(intent_module, "get_openviking_config", lambda: config)
+    monkeypatch.setattr(intent_module, "render_prompt", lambda prompt_id, variables: "prompt")
 
     result = await IntentAnalyzer().analyze(
         compression_summary="",
