@@ -44,10 +44,17 @@ function looksLikeMetadataJsonBlock(content: string): boolean {
 }
 
 const HEARTBEAT_RE = /\bHEARTBEAT(?:\.md|_OK)\b/;
+// 防御性过滤工具调用占位符文本（如 "[tool: exec]"）
+// 防止任何路径产生的工具调用元数据被当成用户/助手文本进入 VLM 提取
+const TOOL_PLACEHOLDER_RE = /^\s*\[tool(?::\s*|Use:\s*)[^\]]+\]\s*$/i;
 
 export function sanitizeUserTextForCapture(text: string): string {
   // 过滤 HEARTBEAT 健康检查消息
   if (HEARTBEAT_RE.test(text)) {
+    return "";
+  }
+  // 过滤工具调用占位符文本
+  if (TOOL_PLACEHOLDER_RE.test(text)) {
     return "";
   }
   // 处理 Compactor 系统消息，提取实际用户输入
@@ -448,15 +455,15 @@ export function extractNewTurnMessages(
           }
         }
         
-        // 只有找到 toolCall 时才添加占位符
+        // 只有找到 toolCall 时才添加结构化 part（不当 text，避免污染 VLM 提取）
+        // 改用 type: "toolCall" 结构化 part 替代 "[tool: name]" 文本占位符
         if (toolNames.length > 0) {
-          const toolNamesStr = toolNames.join(", ");
           result.push({
             role: "assistant",
-            parts: [{
-              type: "text",
-              text: `[tool: ${toolNamesStr}]`,
-            }],
+            parts: toolNames.map((name) => ({
+              type: "toolCall",
+              name: name,
+            })),
           });
         }
       }
