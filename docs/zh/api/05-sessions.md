@@ -32,6 +32,7 @@
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | session_id | str | 否 | None | 会话 ID。如果为 None，则创建一个自动生成 ID 的新会话 |
+| memory_policy | object | 否 | None | 会话默认的自我/对方记忆抽取策略。对象，包含可选的 `self` 和 `peer` 键，每个为 `{"enabled": <bool>}`（默认：`self.enabled=true`、`peer.enabled=false`）。可在 commit 时覆盖；非对象值会以 `InvalidArgumentError` 拒绝。 |
 
 #### 3. 使用示例
 
@@ -909,6 +910,7 @@ await client.session_used(
 |------|------|------|--------|------|
 | session_id | str | 是 | - | 要提交的会话 ID |
 | keep_recent_count | int | 否 | 0 | 提交后保留为 live 状态的最近消息数 (保持 live, 不归档)。`0` (默认) 归档全部消息。 |
+| memory_policy | object | 否 | None | 控制本次 commit 是否运行自我记忆与对方记忆抽取。对象，包含可选的 `self` 和 `peer` 键，每个为 `{"enabled": <bool>}`（默认：`self.enabled=true`、`peer.enabled=false`）。commit 级的值会覆盖会话级策略；非对象值会以 `InvalidArgumentError` 拒绝。 |
 
 #### 3. 使用示例
 
@@ -923,6 +925,12 @@ POST /api/v1/sessions/{session_id}/commit
 curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/commit \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key"
+
+# 提交并额外运行对方记忆抽取（默认关闭）
+curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/commit \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{"memory_policy": {"peer": {"enabled": true}}}'
 
 # 查询任务状态
 curl -X GET http://localhost:1933/api/v1/tasks/{task_id} \
