@@ -316,6 +316,7 @@ class SessionService:
         ctx: RequestContext,
         keep_recent_count: int = 0,
         memory_policy: Optional[Dict[str, Any]] = None,
+        force: bool = False,
     ) -> Dict[str, Any]:
         """Async commit a session.
 
@@ -326,6 +327,7 @@ class SessionService:
             session_id: Session ID to commit
             keep_recent_count: Number of most-recent messages to keep in the
                 live session after commit. ``0`` archives everything.
+            force: If ``True``, skip blocking-failed-archive check.
 
         Returns:
             Commit result with keys: session_id, status, task_id,
@@ -336,6 +338,7 @@ class SessionService:
         result = await session.commit_async(
             keep_recent_count=keep_recent_count,
             memory_policy=memory_policy,
+            force=force,
         )
         self._record_lifecycle_metric("commit", "ok" if result.get("status") else "error")
         self._record_archive_metric("ok" if result.get("archived") else "skip")

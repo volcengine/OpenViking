@@ -1052,6 +1052,7 @@ class Session:
         self,
         keep_recent_count: int = 0,
         memory_policy: Optional[Dict[str, Any]] = None,
+        force: bool = False,
     ) -> Dict[str, Any]:
         """Async commit session: archive immediately, extract memories in background.
 
@@ -1070,6 +1071,9 @@ class Session:
                 path passes ``0``.
             memory_policy: Optional per-commit extraction policy. When omitted,
                 the session default policy is used.
+            force: If ``True``, skip the blocking-failed-archive check and
+                commit anyway. Useful for recovering from transient failures
+                (e.g. VLM timeouts) that left a stale ``.failed.json`` marker.
 
         Returns a task_id for tracking Phase 2 progress.
         """
@@ -1108,11 +1112,17 @@ class Session:
 
         blocking_archive = await self._get_blocking_failed_archive_ref()
         if blocking_archive:
-            raise FailedPreconditionError(
-                f"Session {self.session_id} has unresolved failed archive "
-                f"{blocking_archive['archive_id']}; fix it before committing again.",
-                details={"archive_id": blocking_archive["archive_id"]},
-            )
+            if force:
+                logger.warning(
+                    f"Session {self.session_id} has unresolved failed archive "
+                    f"{blocking_archive['archive_id']}; force=True, skipping block"
+                )
+            else:
+                raise FailedPreconditionError(
+                    f"Session {self.session_id} has unresolved failed archive "
+                    f"{blocking_archive['archive_id']}; fix it before committing again.",
+                    details={"archive_id": blocking_archive["archive_id"]},
+                )
 
         # Use filesystem-based distributed lock so this works across workers/processes.
         session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
@@ -1227,6 +1237,7 @@ class Session:
                 first_message_id=messages_to_archive[0].id if messages_to_archive else "",
                 last_message_id=messages_to_archive[-1].id if messages_to_archive else "",
                 memory_policy=effective_memory_policy,
+                force=force,
             )
         )
 
@@ -1249,6 +1260,7 @@ class Session:
         first_message_id: str,
         last_message_id: str,
         memory_policy: Optional[Dict[str, Any]],
+        force: bool = False,
     ) -> None:
         """Phase 2: Extract memories, write relations, enqueue — runs in background."""
         import uuid
@@ -1273,23 +1285,29 @@ class Session:
 
         try:
             if not await self._wait_for_previous_archive_done(archive_index):
-                await self._write_failed_marker(
-                    archive_uri,
-                    stage="waiting_previous_done",
-                    error=(
+                if force:
+                    logger.warning(
+                        f"Previous archive archive_{archive_index - 1:03d} has unresolved failure; "
+                        f"force=True, skipping block and continuing Phase 2"
+                    )
+                else:
+                    await self._write_failed_marker(
+                        archive_uri,
+                        stage="waiting_previous_done",
+                        error=(
+                            f"Previous archive archive_{archive_index - 1:03d} failed; "
+                            "this archive cannot proceed"
+                        ),
+                        blocked_by=f"archive_{archive_index - 1:03d}",
+                    )
+                    await tracker.fail(
+                        task_id,
                         f"Previous archive archive_{archive_index - 1:03d} failed; "
-                        "this archive cannot proceed"
-                    ),
-                    blocked_by=f"archive_{archive_index - 1:03d}",
-                )
-                await tracker.fail(
-                    task_id,
-                    f"Previous archive archive_{archive_index - 1:03d} failed; "
-                    "cannot continue session commit",
-                    account_id=self.ctx.account_id,
-                    user_id=self.ctx.user.user_id,
-                )
-                return
+                        "cannot continue session commit",
+                        account_id=self.ctx.account_id,
+                        user_id=self.ctx.user.user_id,
+                    )
+                    return
 
             await tracker.start(
                 task_id,
