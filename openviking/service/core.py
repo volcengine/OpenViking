@@ -420,6 +420,7 @@ class OpenVikingService:
         )
         self._session_compressor = create_session_compressor(
             vikingdb=self._vikingdb_manager,
+            memory_version=getattr(self._config.memory, "version", None),
             skill_processor=self._skill_processor,
         )
 

@@ -3,6 +3,7 @@
 """Session management module."""
 
 from typing import TYPE_CHECKING, Optional
+
 from openviking.session.memory_archiver import (
     ArchivalCandidate,
     ArchivalResult,
@@ -24,17 +25,23 @@ def create_session_compressor(
     skill_processor=None,
 ) -> "SessionCompressorV2":
     """
-    Create the v2 session compressor.
+    Create the session compressor.
 
     Args:
         vikingdb: VikingDBManager instance
-        memory_version: Deprecated optional override. Only "v2" is supported.
+        memory_version: Optional override. "v3" enables commit-case streaming train;
+            None and "v2" keep the existing v2 behavior.
 
     Returns:
-        SessionCompressorV2 instance
+        SessionCompressorV2-compatible instance
     """
+    if memory_version == "v3":
+        logger.info("Using v3 memory compressor (v2 + commit streaming train)")
+        from openviking.session.compressor_v3 import SessionCompressorV3
+
+        return SessionCompressorV3(vikingdb=vikingdb, skill_processor=skill_processor)
     if memory_version not in (None, "v2"):
-        raise ValueError("memory.version only supports 'v2'; legacy memory v1 has been removed")
+        raise ValueError("memory.version only supports 'v2' or 'v3'")
 
     logger.info("Using v2 memory compressor (templating system)")
     from openviking.session.compressor_v2 import SessionCompressorV2

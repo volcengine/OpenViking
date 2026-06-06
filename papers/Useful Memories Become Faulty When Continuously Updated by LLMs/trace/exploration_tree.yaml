@@ -1,0 +1,57 @@
+root:
+  id: Q0
+  question: 持续更新的文本 memory bank 是否真的能让 agent 稳定自我改进，还是会因 consolidation 引入系统性退化？
+  support_level: explicit
+  source_refs:
+    - arXiv abstract
+  children:
+    - id: N1
+      type: finding
+      support_level: explicit
+      source_refs:
+        - arXiv abstract
+      question: consolidated memory 的效用是否随时间单调上升？
+      finding: 否；memory utility 可先升后降，并跌破 no-memory baseline。
+      evidence:
+        - C01
+    - id: N2
+      type: finding
+      support_level: explicit
+      source_refs:
+        - PDF snippet
+      question: 退化来自经验本身，还是来自 consolidation step？
+      finding: 证据更支持 consolidation step 是主要来源。
+      evidence:
+        - C02
+    - id: N3
+      type: finding
+      support_level: explicit
+      source_refs:
+        - arXiv abstract
+      question: raw episodic memory 是否值得保留？
+      finding: 值得；episodic-only 控制保持竞争力，且 raw trajectories 更稳健。
+      evidence:
+        - C03
+        - C04
+    - id: N4
+      type: finding
+      support_level: explicit
+      source_refs:
+        - project page
+      question: 如何更稳健地组织 consolidation？
+      finding: Static-Group 优于 Static-All 与 Stream Update。
+      evidence:
+        - C05
+    - id: N5
+      type: interpretation
+      support_level: inferred
+      source_refs:
+        - arXiv abstract
+        - project page
+      question: 对 agent memory 工程设计有什么启发？
+      finding: 应保留 raw evidence、显式 gate consolidation、优先做分组抽象，并评测长期稳定性。
+      evidence:
+        - C01
+        - C02
+        - C03
+        - C05

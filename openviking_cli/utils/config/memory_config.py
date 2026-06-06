@@ -10,7 +10,7 @@ class MemoryConfig(BaseModel):
 
     version: str = Field(
         default="v2",
-        description="Memory implementation version. Only 'v2' is supported.",
+        description="Memory implementation version. 'v2' is stable; 'v3' adds commit-case streaming train.",
     )
     custom_templates_dir: str = Field(
         default="",
@@ -96,8 +96,8 @@ class MemoryConfig(BaseModel):
     @field_validator("version")
     @classmethod
     def validate_version(cls, value: str) -> str:
-        if value != "v2":
-            raise ValueError("memory.version only supports 'v2'; legacy memory v1 has been removed")
+        if value not in {"v2", "v3"}:
+            raise ValueError("memory.version only supports 'v2' or 'v3'")
         return value
 
     @classmethod

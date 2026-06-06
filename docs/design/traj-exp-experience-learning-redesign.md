@@ -1,868 +1,956 @@
-# Trajectory / Experience 经验记忆模块重设计
+# Trajectory / Experience 经验优化 Domain Model 与接口设计
 
-> 目标：用优秀机器学习框架的术语和分层方式，重新描述并重构 OpenViking 当前 `trajectories` / `experiences` 经验记忆模块，让它从“记忆抽取与写文件”升级为“训练样本采集 → 经验策略训练 → 评估发布 → 推理服务”的闭环。
+> 本文档用于重新定义 `trajectories` / `experiences` 经验优化模块的 domain model 与核心接口。
+>
+> 本文档记录 `openviking.session.train` 新训练框架的 domain model 与核心接口。该框架与现有 trajectory/experience 抽取链路并行实现，完成后再逐步替换旧框架。
 
-## 1. 背景
+## 1. Policy
 
-当前 agent memory 主要由两类记忆组成：
+`Policy` 是从 trajectories 中优化得到的可复用执行策略接口。
 
-| 类型 | 当前含义 | 存储位置 | 更新策略 |
-| --- | --- | --- | --- |
-| `trajectories` | 从一次 agent 任务执行中抽取出的可复用操作契约 | `viking://user/<user>/memories/trajectories/` | `add_only` |
-| `experiences` | 从 trajectory 中蒸馏出的可复用执行经验 | `viking://user/<user>/memories/experiences/` | `upsert` |
-
-核心代码位置：
-
-- `openviking/session/compressor_v2.py`
-- `openviking/session/memory/agent_trajectory_context_provider.py`
-- `openviking/session/memory/agent_experience_context_provider.py`
-- `openviking/prompts/templates/memory/trajectories.yaml`
-- `openviking/prompts/templates/memory/experiences.yaml`
-
-当前流程已经具备“样本”和“蒸馏经验”的雏形，但代码与概念仍然主要围绕 memory CRUD 展开。本文建议引入 ML framework 风格的训练/推理术语，使系统边界更清晰，也为后续评估、版本管理、灰度发布和在线学习打基础。
-
-## 2. 当前实现梳理
-
-### 2.1 提交流程中的 agent memory 抽取
-
-`Session.commit()` 后台阶段会并发执行：
+在当前 `trajectories` / `experiences` 经验优化模块中，`Experience` 是 `Policy` 的具体实现，对应 experiences 目录下的单个 experience 文件：
 
 ```text
-archive summary generation
-long-term memory extraction
-agent memory extraction
+viking://user/<user>/memories/experiences/<experience_name>.md
 ```
 
-当 `config.memory.agent_memory_enabled` 开启且 memory extraction 开启时，会调用：
+### 1.1 Policy 接口
 
 ```python
-SessionCompressorV2.extract_agent_memories(...)
-```
+from dataclasses import dataclass, field
+from typing import Any, Literal, Protocol
 
-当前 agent memory extraction 是两阶段：
 
-```text
-Session messages
-  ↓
-Phase 1: trajectory extraction
-  ↓
-new trajectory files
-  ↓
-Phase 2: experience consolidation
-  ↓
-experience files + derived_from links
-```
+PolicyStatus = Literal["draft", "staging", "production", "deprecated", "archived"]
 
-### 2.2 Phase 1: trajectory extraction
 
-`AgentTrajectoryContextProvider` 负责暴露 `trajectories` schema，并从 archived conversation 中提取 trajectory。
+class Policy(Protocol):
+    """A reusable execution policy optimized from trajectories."""
 
-当前 trajectory schema 的关键字段：
+    @property
+    def name(self) -> str:
+        ...
 
-| 字段 | 作用 |
-| --- | --- |
-| `trajectory_name` | 稳定命名任务边界 |
-| `outcome` | `success` / `failure` / `partial` / `unfinished` / `unknown` |
-| `retrieval_anchor` | 专用于向量检索的语义锚点 |
-| `content` | 可复用操作契约，包含 domain、trigger、preconditions、procedure、anti-patterns 等 |
+    @property
+    def uri(self) -> str:
+        ...
 
-关键设计：
+    @property
+    def version(self) -> int:
+        ...
 
-- `operation_mode: add_only`，保留每次执行样本。
-- 文件名包含 session timestamp，降低覆盖风险。
-- `embedding_template` 使用 `trajectory_name + retrieval_anchor`，避免把完整长内容直接作为索引文本。
+    @property
+    def status(self) -> PolicyStatus:
+        ...
 
-这使 trajectory 更像 ML 里的 **training example / episode / rollout**，而不是最终推理提示。
+    @property
+    def content(self) -> str:
+        ...
 
-### 2.3 Phase 2: experience consolidation
-
-`AgentExperienceContextProvider` 针对每条新 trajectory：
-
-1. 使用 `trajectory_summary` 在 experience 目录检索 top-K candidate experiences。
-2. 读取候选 experience。
-3. 对 top candidates 加载最近的 source trajectories 作为 grounding material。
-4. LLM 输出新 experience、同名更新、`supersedes` 替换或 skip。
-5. 系统将 experience 与 trajectory 写入 `derived_from` link。
-
-当前 experience 的格式为：
-
-```md
-## Situation
-- ...
-
-## Approach
-- ...
-
-## Reflect
-- ...
-```
-
-这使 experience 更像 ML 系统中的 **distilled policy / policy card / inference hint**。
-
-### 2.4 Lineage
-
-当前系统会维护：
-
-```text
-experience --derived_from--> trajectory
-trajectory <--backlink-- experience
-```
-
-这已经是很重要的 lineage 基础：experience 不再只是孤立总结，而是可以追溯到训练样本。
-
-## 3. 当前设计的优点
-
-### 3.1 样本与策略分离
-
-当前 `trajectory` 与 `experience` 的分离是正确方向：
-
-```text
-trajectory = 一次执行样本
-experience = 从多个样本中蒸馏出的策略
-```
-
-这类似：
-
-```text
-dataset example → learned rule / policy
-```
-
-### 3.2 trajectory add-only，适合审计和回放
-
-`trajectories` 不覆盖历史，适合作为：
-
-- 训练数据
-- 回放数据
-- debug 数据
-- experience 的 provenance
-
-### 3.3 experience upsert，适合持续学习
-
-`experiences` 可以同名更新，也可以通过 `supersedes` 替换更窄的旧经验，符合在线学习和经验蒸馏的方向。
-
-### 3.4 有系统维护的 lineage
-
-`derived_from` link 为后续做质量评估、回滚、血缘追踪、经验置信度统计打下基础。
-
-## 4. 当前主要问题
-
-### 4.1 术语仍偏 memory CRUD
-
-当前名称如：
-
-```text
-extract_agent_memories
-AgentTrajectoryContextProvider
-AgentExperienceContextProvider
-apply_operations
-```
-
-这些术语更像“抽取记忆并写入文件”，没有体现“从执行轨迹训练经验策略”的学习系统语义。
-
-### 4.2 training / inference 边界不清晰
-
-当前 commit 后立即执行：
-
-```text
-extract trajectory → consolidate experience → write memory
-```
-
-这把以下阶段混在一起：
-
-- 数据采集
-- 样本构造
-- 经验训练
-- 经验发布
-- 经验推理召回
-
-缺少 ML framework 中常见的：
-
-- `Dataset`
-- `DataLoader`
-- `Trainer`
-- `Evaluator`
-- `Registry`
-- `Serving Engine`
-
-### 4.3 experience 缺少版本、状态和指标
-
-当前 experience 主要靠 `experience_name` 定位，缺少：
-
-- `experience_id`
-- `version`
-- `status`
-- `support_count`
-- `success_rate`
-- `confidence`
-- `last_trained_at`
-- `source_trajectory_count`
-
-后果：
-
-- rename / supersedes 语义比较脆弱。
-- 好经验和坏经验没有显式区分。
-- 不能灰度发布或回滚。
-- 推理时难以按质量排序。
-
-### 4.4 训练后缺少显式 eval / gate
-
-当前 LLM 生成的 experience 基本直接进入可召回状态，缺少：
-
-- 格式校验
-- 适用边界校验
-- 冲突检测
-- 过泛化检测
-- 经验质量评分
-- 基于历史 trajectory 的 replay 验证
-
-### 4.5 推理侧仍依赖通用 memory retrieval
-
-推理时主要依赖 generic memory retrieval，没有显式区分：
-
-```text
-用户偏好 memory
-事实 memory
-trajectory 样本
-experience policy
-```
-
-理想情况下，推理应优先召回 `ExperiencePolicy`，只有需要 debug / provenance / 低置信度解释时才加载 source trajectory。
-
-## 5. 推荐术语体系
-
-建议把当前 traj/exp 体系映射为 ML framework 风格的术语：
-
-| 当前概念 | 推荐术语 | 类比 ML 框架 |
-| --- | --- | --- |
-| session archive | `RunLog` / `TraceLog` | 原始训练日志 |
-| trajectory | `Episode` / `TrajectoryExample` | 训练样本、rollout |
-| trajectories directory | `ReplayBuffer` / `TrajectoryDataset` | 经验回放池 |
-| experience | `ExperiencePolicy` / `PolicyCard` | 蒸馏后的策略 |
-| experience consolidation | `ExperienceTrainer.fit()` | 训练 / 蒸馏 |
-| candidate experiences | `NearestPolicyBatch` | 训练 batch / support candidates |
-| source trajectories | `SupportSet` | 支撑样本 |
-| supersedes | `Policy Version Upgrade` | 模型版本替换 |
-| derived_from links | `LineageGraph` | 模型血缘 |
-| retrieval injection | `ExperienceServing` | 推理服务 |
-| commit extraction | `online_train_on_commit()` | 在线训练 |
-
-推荐核心命名：
-
-```text
-Trajectory       → TrajectoryExample / Episode
-Experience       → ExperiencePolicy
-Agent Extraction → Experience Learning
-Experience Recall → Experience Serving
-```
-
-## 6. 训练机制重设计
-
-### 6.1 总体训练链路
-
-```text
-RunLog
-  ↓
-EpisodeBuilder
-  ↓
-TrajectoryDataset / ReplayBuffer
-  ↓
-ExperienceTrainer
-  ↓
-ExperienceEvaluator
-  ↓
-ExperienceRegistry
-  ↓
-Production ExperiencePolicy
-```
-
-### 6.2 EpisodeBuilder
-
-对应当前 `AgentTrajectoryContextProvider`。
-
-职责：从一次 archived conversation / run log 中构造一个或多个结构化训练样本。
-
-建议接口：
-
-```python
-class EpisodeBuilder:
-    async def build(self, run_log: RunLog) -> list[TrajectoryExample]:
+    @property
+    def metadata(self) -> dict[str, Any]:
         ...
 ```
 
-建议输出结构：
-
-```json
-{
-  "trajectory_id": "traj_xxx",
-  "task_signature": "cancel_booking_with_policy_check",
-  "domain": "airline",
-  "intent": "cancel existing booking",
-  "state": "generalized state before action",
-  "actions": [
-    {
-      "tool": "search_booking",
-      "input_schema": "generalized input",
-      "observation": "generalized observation"
-    },
-    {
-      "tool": "cancel_booking",
-      "input_schema": "generalized input",
-      "observation": "generalized observation"
-    }
-  ],
-  "outcome": "success",
-  "reward": 1.0,
-  "failure_modes": [],
-  "retrieval_anchor": "positive retrieval anchor",
-  "source_session": "viking://session/...",
-  "created_at": "..."
-}
-```
-
-重点：trajectory 应从“markdown 经验”升级为“可训练样本”。
-
-### 6.3 TrajectoryDataset / ReplayBuffer
-
-对应当前 trajectory 目录。
-
-它不只是文件夹，而应该被视为训练数据集，支持：
-
-- 按 intent / domain / tool sequence 检索。
-- 按 outcome 过滤。
-- 按失败样本采样。
-- 按新鲜度采样。
-- 按 source experience 反查。
-- 为 ExperienceTrainer 提供 support set。
-
-建议抽象：
+### 1.2 Experience 数据模型
 
 ```python
-class TrajectoryDataset:
-    async def add(self, examples: list[TrajectoryExample]) -> None:
-        ...
-
-    async def sample_support_set(
-        self,
-        task_signature: str,
-        *,
-        top_k: int,
-        include_failures: bool = True,
-    ) -> list[TrajectoryExample]:
-        ...
+@dataclass
+class Experience:
+    name: str
+    uri: str
+    version: int
+    status: PolicyStatus
+    content: str
+    metadata: dict[str, Any] = field(default_factory=dict)
 ```
 
-### 6.4 ExperienceTrainer
+### 1.3 设计约定
 
-对应当前 `AgentExperienceContextProvider`。
+- `uri` 是 policy 的唯一定位符。
+- `name` 对应当前 experience 文件中的 `experience_name`。
+- `policy_id` 不作为强约束字段；如果未来需要跨 rename 的稳定身份，可放入 `metadata["stable_id"]`。
+- `metadata` 用于承载扩展信息，例如 task signature、lineage、source gradients、created_at、updated_at 等。
 
-职责：从新 trajectory 与相关历史经验中蒸馏出 experience policy candidate。
+## 2. ExperienceSet
 
-建议接口：
-
-```python
-class ExperienceTrainer:
-    async def fit(
-        self,
-        new_examples: list[TrajectoryExample],
-        support_policies: list[ExperiencePolicy],
-        support_examples: list[TrajectoryExample],
-    ) -> list[ExperiencePolicyCandidate]:
-        ...
-```
-
-训练输入建议包含：
+`ExperienceSet` 是 experiences 目录下所有 `Experience` 的集合。
 
 ```text
-new trajectory examples
-+ nearest existing policies
-+ source trajectories of those policies
-+ negative / failed trajectories
-+ current registry metadata
-```
-
-这样 experience 不是简单总结单条 trajectory，而是从数据中学习出的可复用策略。
-
-### 6.5 ExperienceEvaluator
-
-训练后不要直接发布，应增加 evaluator。
-
-建议接口：
-
-```python
-class ExperienceEvaluator:
-    async def evaluate(
-        self,
-        candidate: ExperiencePolicyCandidate,
-    ) -> EvalReport:
-        ...
-```
-
-建议 gate：
-
-#### 6.5.1 Schema Gate
-
-- 必须包含 `Situation` / `Approach` / `Reflect`。
-- heading 顺序固定。
-- 每个 section 使用 bullet。
-- `Approach` 不超过约定长度。
-
-#### 6.5.2 Atomic Scope Gate
-
-- 一个 experience 只覆盖一个 user intent。
-- 不把多个工具目标、生命周期变化或写字段来源混成一个 experience。
-
-#### 6.5.3 Specificity Gate
-
-- 防止过泛化。
-- 防止把某个具体 case 直接写成普适规则。
-
-#### 6.5.4 Privacy / Abstraction Gate
-
-- 不保留 raw id、姓名、联系方式、金额、日期、地点、路径等实例局部信息。
-- 使用抽象占位描述。
-
-#### 6.5.5 Conflict Gate
-
-- 检查是否与已有 production policy 冲突。
-- 若冲突，进入 staging 或要求 supersedes。
-
-#### 6.5.6 Lineage Gate
-
-- 至少关联一个 source trajectory。
-- 如果 supersedes 旧 policy，应继承旧 policy 的 source trajectories。
-
-#### 6.5.7 Quality Score
-
-根据以下信号计算 confidence：
-
-- 成功 trajectory 数量。
-- 失败 trajectory 数量。
-- 同类任务召回后的成功率。
-- 最近是否被用户纠正。
-- 是否有工具错误。
-
-### 6.6 ExperienceRegistry
-
-当前 experience 写入即生产。建议引入 registry 语义：
-
-```text
-candidate → staging → production → deprecated
-```
-
-experience metadata 建议：
-
-```json
-{
-  "experience_id": "exp_xxx",
-  "experience_name": "booking_duplicate_handling",
-  "version": 3,
-  "status": "production",
-  "task_signature": "booking_duplicate_handling",
-  "confidence": 0.82,
-  "support_count": 12,
-  "success_count": 10,
-  "failure_count": 2,
-  "source_trajectory_ids": ["traj_1", "traj_2"],
-  "supersedes_ids": ["exp_old"],
-  "trained_at": "...",
-  "last_served_at": "...",
-  "served_count": 42
-}
-```
-
-## 7. 推理机制重设计
-
-### 7.1 总体推理链路
-
-```text
-User Task
-  ↓
-TaskSpecParser
-  ↓
-ExperienceRetriever
-  ↓
-ExperienceReranker
-  ↓
-PromptCompiler
-  ↓
-Agent Execution
-  ↓
-RuntimeObserver
-  ↓
-New Training Example
-```
-
-### 7.2 TaskSpecParser
-
-不要直接拿用户 query 搜 memory。先解析任务规格：
-
-```json
-{
-  "domain": "travel",
-  "intent": "change existing booking",
-  "operation_family": "update_existing_object",
-  "tools_needed": ["booking_search", "booking_update"],
-  "risk_level": "state_changing"
-}
-```
-
-这一步输出的 task spec 可同时用于：
-
-- experience retrieval query。
-- rerank feature。
-- prompt compiling。
-- execution observer 对齐。
-
-### 7.3 ExperienceRetriever
-
-推理时应优先检索 `ExperiencePolicy`，而不是所有 memory 混检。
-
-推荐层级：
-
-```text
-Level 1: production ExperiencePolicy
-Level 2: related source TrajectoryExamples
-Level 3: raw session archive, only for debug / explanation
-```
-
-默认只注入 Level 1。只有以下场景才加载 trajectory：
-
-- 用户要求解释来源。
-- policy confidence 较低。
-- retrieved policies 之间冲突。
-- agent 需要 debug 历史失败样本。
-
-### 7.4 ExperienceReranker
-
-排序不应只靠向量相似度，应融合更多 policy quality signals：
-
-```text
-final_score =
-  semantic_score
-  + applicability_score
-  + confidence
-  + success_rate
-  + freshness
-  - conflict_penalty
-  - overgeneralization_penalty
-```
-
-候选特征：
-
-| 特征 | 含义 |
-| --- | --- |
-| `semantic_score` | query 与 experience 的向量相似度 |
-| `applicability_score` | task spec 与 Situation / boundary 的匹配度 |
-| `confidence` | 训练与运行反馈得到的经验置信度 |
-| `success_rate` | 该 experience 被召回后的历史成功率 |
-| `freshness` | 最近训练或使用时间 |
-| `conflict_penalty` | 与其他 policy 冲突时降权 |
-| `overgeneralization_penalty` | 过泛经验降权 |
-
-### 7.5 PromptCompiler
-
-将召回的 experience 编译成推理 prompt。
-
-示例：
-
-```md
-## Retrieved Experience Policies
-
-### Policy: booking_duplicate_handling
-- Confidence: high
-- Applies when:
-  - User asks to handle a potentially duplicated booking.
-- Do:
-  - First verify existing booking state.
-  - If duplicate is confirmed, compare object ownership and policy constraints.
-  - Only perform state-changing action after confirmation.
-- Do not:
-  - Never cancel or overwrite a booking based only on user wording.
-- Source:
-  - Derived from multiple successful trajectories.
-```
-
-注意：
-
-- 推理 prompt 注入的是 concise policy，不是长 trajectory。
-- `Approach` 应作为执行逻辑。
-- `Reflect` 应作为 guardrail。
-- source trajectory 默认只显示 summary / count，不展开原文。
-
-### 7.6 RuntimeObserver
-
-每次 experience 被召回和使用后，记录使用反馈：
-
-```json
-{
-  "experience_id": "exp_xxx",
-  "served_for_task": "...",
-  "was_used": true,
-  "outcome": "success",
-  "user_correction": false,
-  "tool_error": false
-}
-```
-
-这些反馈会进入下一轮训练，形成 online learning loop。
-
-## 8. 推荐模块划分
-
-### 8.1 学习侧模块
-
-```text
-openviking/session/experience_learning/
-  ├── engine.py              # ExperienceLearningEngine
-  ├── episode_builder.py     # EpisodeBuilder
-  ├── dataset.py             # TrajectoryDataset / ReplayBuffer
-  ├── trainer.py             # ExperienceTrainer
-  ├── evaluator.py           # ExperienceEvaluator
-  ├── registry.py            # ExperienceRegistry
-  └── lineage.py             # LineageTracker
-```
-
-核心入口：
-
-```python
-class ExperienceLearningEngine:
-    async def train_on_commit(...):
-        examples = await EpisodeBuilder(...).build(run_log)
-        await TrajectoryDataset(...).add(examples)
-
-        support = await TrajectoryDataset(...).sample_support_set(...)
-        candidates = await ExperienceTrainer(...).fit(examples, support)
-        reports = await ExperienceEvaluator(...).evaluate_many(candidates)
-        await ExperienceRegistry(...).publish_approved(candidates, reports)
-```
-
-### 8.2 推理侧模块
-
-```text
-openviking/retrieve/experience_serving/
-  ├── task_spec.py           # TaskSpecParser
-  ├── retriever.py           # ExperienceRetriever
-  ├── reranker.py            # ExperienceReranker
-  ├── compiler.py            # ExperiencePromptCompiler
-  └── observer.py            # ExperienceUsageObserver
-```
-
-核心入口：
-
-```python
-class ExperienceServingEngine:
-    async def retrieve_for_task(...):
-        task_spec = await TaskSpecParser(...).parse(messages, current_task)
-        candidates = await ExperienceRetriever(...).retrieve(task_spec)
-        ranked = await ExperienceReranker(...).rank(task_spec, candidates)
-        prompt_block = ExperiencePromptCompiler(...).compile(ranked)
-        return prompt_block
-```
-
-## 9. 数据模型建议
-
-### 9.1 TrajectoryExample
-
-可以在现有 `trajectories.yaml` 基础上逐步补充字段：
-
-```yaml
-fields:
-  - trajectory_id
-  - task_signature
-  - domain
-  - intent
-  - operation_family
-  - tool_sequence
-  - outcome
-  - reward
-  - failure_modes
-  - retrieval_anchor
-  - content
-  - source_session_uri
-  - created_at
-```
-
-兼容策略：
-
-- 初期保留现有字段。
-- 新字段作为 metadata 附加。
-- `embedding_template` 继续使用短文本：`task_signature + retrieval_anchor`。
-
-### 9.2 ExperiencePolicy
-
-可以在现有 `experiences.yaml` 基础上补充 metadata：
-
-```yaml
-fields:
-  - experience_id
-  - experience_name
-  - version
-  - status
-  - task_signature
-  - confidence
-  - support_count
-  - success_count
-  - failure_count
-  - content
-  - supersedes
-  - trained_at
-  - last_served_at
-  - served_count
-```
-
-其中 `content` 继续保持：
-
-```md
-## Situation
-...
-
-## Approach
-...
-
-## Reflect
-...
-```
-
-## 10. 最小落地路线
-
-### Step 1: 术语层重构，不动存储格式
-
-目标：让代码语义先对齐学习系统。
-
-- 新增 wrapper：
-  - `ExperienceLearningEngine`
-  - `EpisodeBuilder`
-  - `ExperienceTrainer`
-  - `LineageTracker`
-- 内部仍调用现有 provider 和 `extract_agent_memories` 逻辑。
-- 不迁移现有文件。
-
-### Step 2: 增加 registry metadata
-
-目标：让 experience 从普通 memory file 升级为可发布策略。
-
-新增 metadata：
-
-```text
-experience_id
-version
-status
-confidence
-support_count
-success_count
-failure_count
-trained_at
-source_trajectory_count
-```
-
-### Step 3: 增加 Evaluator / Gate
-
-目标：减少坏经验直接进入推理。
-
-先做 deterministic gate：
-
-- 格式检查。
-- atomic scope 检查。
-- source trajectory 检查。
-- 具体实体脱敏检查。
-- `Approach` 长度检查。
-- conflict / supersedes 检查。
-
-### Step 4: 推理侧显式 Experience Serving
-
-目标：推理阶段显式召回 `ExperiencePolicy`。
-
-新增链路：
-
-```text
-task → experience policy retrieval → rerank → prompt compile
-```
-
-并与 generic memory retrieval 区分开。
-
-### Step 5: 使用反馈闭环
-
-目标：让经验质量随使用反馈持续更新。
-
-记录：
-
-- experience 是否被召回。
-- 是否被 agent 实际使用。
-- 任务结果是否成功。
-- 是否出现用户纠正。
-- 是否出现工具错误。
-
-## 11. 与现有实现的兼容方案
-
-### 11.1 保持存储路径不变
-
-短期不修改：
-
-```text
-viking://user/<user>/memories/trajectories/
 viking://user/<user>/memories/experiences/
 ```
 
-只在代码中引入更清晰的抽象层。
+该目录中的所有 experience 文件共同构成当前用户 / agent 的经验策略集合。
 
-### 11.2 保持 schema 向后兼容
-
-新字段尽量放入 `MEMORY_FIELDS` metadata，不破坏现有 markdown 内容。
-
-### 11.3 保持 `derived_from` link
-
-现有 `derived_from` link 继续作为 lineage 的底层实现。
-
-未来可以在其上封装：
+### 2.1 数据模型
 
 ```python
-LineageTracker.link_policy_to_examples(policy_uri, trajectory_uris)
+@dataclass
+class ExperienceSet:
+    root_uri: str
+    policies: list[Experience]
+    metadata: dict[str, Any] = field(default_factory=dict)
 ```
 
-### 11.4 逐步替换命名
+### 2.2 设计约定
 
-第一阶段保留旧类，新增新类包装：
+- `root_uri` 是 experiences 目录 URI。
+- `policies` 是该目录下所有 experience 文件解析后的快照。
+- `PolicyOptimizer` 以整个 `ExperienceSet` 为优化对象，而不是只优化单个 experience 文件。
+
+## 3. Trajectory
+
+`Trajectory` 是从单个 trajectory 文件解析出的 agent 执行轨迹样本。
+
+对应当前 trajectories 目录下的单个文件：
 
 ```text
-AgentTrajectoryContextProvider → EpisodeBuilder 内部使用
-AgentExperienceContextProvider → ExperienceTrainer 内部使用
+viking://user/<user>/memories/trajectories/<trajectory_name>_<timestamp>.md
 ```
 
-这样避免大规模破坏现有测试。
+### 3.1 数据模型
 
-## 12. 推荐的最终概念模型
+```python
+@dataclass
+class Trajectory:
+    name: str
+    uri: str
+    content: str
+    outcome: str
+    retrieval_anchor: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+```
 
-一句话：
+### 3.2 设计约定
 
-> 将 `trajectory` 视为 agent 执行产生的训练样本，将 `experience` 视为从样本中蒸馏并发布的推理策略。
+- `uri` 是 trajectory 文件的唯一定位符。
+- `name` 对应当前 trajectory 文件中的 `trajectory_name`。
+- `outcome` 先沿用当前 trajectory schema 中的字符串：`success`、`failure`、`partial`、`unfinished`、`unknown`。
+- `retrieval_anchor` 沿用现有 trajectory schema，用于语义检索与分组。
+- 如果未来需要区分原始执行日志与抽取后的轨迹样本，可新增 `RawTrace`；当前 `Trajectory` 表示已抽取、可用于经验优化的轨迹样本。
 
-最终系统可以命名为：
+## 4. SemanticGradient
+
+`SemanticGradient` 是针对某个目标 `Experience` 的语义更新信号接口。
+
+它表达：
 
 ```text
-OpenViking Experience Learning System
+某个 Experience 应该如何变得更好。
 ```
 
-核心对象：
+它不直接决定最终是否创建、更新、替换、拆分、合并或删除 experience 文件；这些 policy-level 决策由 `PolicyOptimizer` 基于一批 gradients 和整个 `ExperienceSet` 统一规划。
 
-| 对象 | 含义 |
-| --- | --- |
-| `RunLog` | 原始会话日志 |
-| `TrajectoryExample` / `Episode` | 训练样本 |
-| `ReplayBuffer` | 样本池 |
-| `ExperiencePolicy` | 蒸馏后的经验策略 |
-| `ExperienceTrainer` | 训练器 |
-| `ExperienceEvaluator` | 评估器 |
-| `ExperienceRegistry` | 策略注册表 |
-| `ExperienceServing` | 推理召回与注入 |
-| `LineageGraph` | 样本到策略的血缘 |
+### 4.1 SemanticGradient 接口
 
-目标是把经验记忆模块从：
+```python
+from typing import Any, Protocol
+
+
+class SemanticGradient(Protocol):
+    """A semantic update signal for one target Experience."""
+
+    @property
+    def target_experience_name(self) -> str:
+        ...
+
+    @property
+    def target_experience_uri(self) -> str | None:
+        ...
+
+    @property
+    def base_version(self) -> int | None:
+        ...
+
+    @property
+    def rationale(self) -> str:
+        ...
+
+    @property
+    def evidence_trajectory_uris(self) -> list[str]:
+        ...
+
+    @property
+    def confidence(self) -> float:
+        ...
+
+    @property
+    def metadata(self) -> dict[str, Any]:
+        ...
+```
+
+### 4.2 PatchSemanticGradient
+
+`PatchSemanticGradient` 是 `SemanticGradient` 的一种实现，用于表达基于内容 before/after patch 的语义更新信号。
+
+```python
+@dataclass
+class ExperienceContentPatch:
+    before_content: str | None
+    after_content: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class PatchSemanticGradient:
+    target_experience_name: str
+    target_experience_uri: str | None
+    base_version: int | None
+    patch: ExperienceContentPatch
+    rationale: str
+    evidence_trajectory_uris: list[str]
+    confidence: float
+    metadata: dict[str, Any] = field(default_factory=dict)
+```
+
+`before_content` 为 `None` 表示建议创建新的 experience；非空时表示基于旧内容生成更新建议。`after_content` 是建议的新 experience 正文。
+
+### 4.3 设计约定
+
+- 单条 `SemanticGradient` 面向一个逻辑目标 `Experience`。
+- `target_experience_name` 表达逻辑目标名称。
+- `target_experience_uri` 可为空；为空时表示该 gradient 指向一个建议的新 experience 或尚未解析到真实文件的逻辑目标。
+- `base_version` 可为空；如果 gradient 基于某个已有 experience 版本生成，应填写该版本。
+- 多个 `SemanticGradient` 可能指向同一个 `Experience`，也可能并发产生相似的新 experience 目标。
+- 这些重复、冲突、拆分、合并和版本 rebase 问题由 `PolicyOptimizer` 处理。
+
+## 5. PolicyOptimizer
+
+`PolicyOptimizer` 接收一批 `SemanticGradient`，基于整个 `ExperienceSet` 生成 `PolicyUpdatePlan`。
+
+它只负责规划，不直接修改文件。
 
 ```text
-memory extraction + file upsert
+SemanticGradient[]
+  ↓
+PolicyOptimizer.plan(...)
+  ↓
+PolicyUpdatePlan
 ```
 
-升级为：
+### 5.1 PolicyOptimizer 接口
+
+```python
+from typing import Protocol
+
+
+class PolicyOptimizer(Protocol):
+    """Plans policy-set updates from semantic gradients."""
+
+    async def plan(
+        self,
+        gradients: list[SemanticGradient],
+        policy_set: ExperienceSet,
+        context: "OptimizationContext",
+    ) -> "PolicyUpdatePlan":
+        ...
+```
+
+### 5.2 职责
+
+`PolicyOptimizer` 在整个 `ExperienceSet` 层面规划更新，负责：
+
+- 合并指向同一 `Experience` 的 gradients。
+- 合并并发产生的相似新 experience 目标。
+- 处理基于过期 `base_version` 产生的 gradients。
+- 发现并标记冲突 gradients。
+- 发现臃肿 experience，并规划拆分。
+- 发现重复 experience，并规划合并。
+- 生成全局 `PolicyUpdatePlan`。
+
+### 5.3 设计约定
+
+- `PolicyOptimizer.plan(...)` 不写文件、不修改 `ExperienceSet`。
+- `PolicyOptimizer.plan(...)` 输出的是计划，不是最终文件级 diff。
+- 具体如何实施计划由 `PolicyUpdater.apply(...)` 负责。
+
+## 6. PolicyUpdatePlan
+
+`PolicyUpdatePlan` 是 `PolicyOptimizer` 对整个 `ExperienceSet` 生成的计划更新。
+
+它描述“应该如何更新 policy set”，但不负责实施。
+
+### 6.1 PolicyUpdatePlan 数据模型
+
+```python
+@dataclass
+class PolicyPlanItem:
+    kind: Literal["upsert_experience", "delete_experience", "review_required"]
+    target_experience_name: str
+    target_experience_uri: str | None
+    before_content: str | None
+    after_content: str | None
+    base_version: int | None = None
+    confidence: float | None = None
+    evidence_trajectory_uris: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class PolicyUpdatePlan:
+    items: list[PolicyPlanItem] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+```
+
+### 6.2 设计约定
+
+- `items` 是 `PolicyUpdater` 可执行的计划项，第一版支持 `upsert_experience`。
+- `metadata` 承载 optimizer 诊断信息，例如 groups、unresolved、conflicts。
+- `PolicyPlanItem.before_content` / `after_content` 对应 patch semantic gradient 的原文件内容 / 新文件内容；`before_content=None` 表示新建。
+- 本设计暂不定义独立 `PolicyUpdate` 接口。
+
+## 7. PolicyUpdater
+
+`PolicyUpdater` 负责实施 `PolicyUpdatePlan`，真正修改 `ExperienceSet` 对应的 experience 文件集合。
 
 ```text
-online experience learning + policy serving
+PolicyUpdatePlan
+  ↓
+PolicyUpdater.apply(...)
+  ↓
+ApplyResult
 ```
+
+### 7.1 PolicyUpdater 接口
+
+```python
+class PolicyUpdater(Protocol):
+    """Applies a policy update plan to an ExperienceSet."""
+
+    async def apply(
+        self,
+        plan: PolicyUpdatePlan,
+        policy_set: ExperienceSet,
+        context: "ApplyContext",
+    ) -> "ApplyResult":
+        ...
+```
+
+### 7.2 设计约定
+
+- `PolicyUpdater.apply(...)` 是真正执行更新的边界。
+- `PolicyUpdater` 可以有多种实现，例如 patch-based updater、rewrite-based updater、transactional file updater、human-approved updater。
+- `PolicyOptimizer` 与 `PolicyUpdater` 分离，保证计划可审查、可 dry-run、可评估、可事务化执行。
+
+### 7.3 ApplyResult 数据模型
+
+```python
+@dataclass
+class ApplyResult:
+    updated_policy_set: ExperienceSet
+    written_uris: list[str] = field(default_factory=list)
+    deleted_uris: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+```
+
+### 7.4 ApplyResult 设计约定
+
+- `updated_policy_set` 是 apply 后的 `ExperienceSet` 快照。
+- `written_uris` 记录新建或修改的 experience 文件。
+- `deleted_uris` 记录删除或 deprecated 的 experience 文件。
+- `errors` 记录执行失败信息。
+- `metadata` 承载扩展信息。
+
+### 7.5 调用链
+
+```python
+plan = await optimizer.plan(
+    gradients=gradients,
+    policy_set=policy_set,
+    context=optimization_context,
+)
+
+result = await updater.apply(
+    plan=plan,
+    policy_set=policy_set,
+    context=apply_context,
+)
+```
+
+## 8. Case
+
+`Case` 是一条可执行、可复现、可评估的训练/评测样例。
+
+它用于驱动 agent loop 产生 rollout / trajectory：
+
+```text
+Policy + executor execute Case
+  ↓
+Rollout
+  ↓
+Trajectory
+```
+
+### 8.1 Case 数据模型
+
+```python
+@dataclass
+class Case:
+    name: str
+    task_signature: str
+    input: dict[str, Any]
+    rubric: "Rubric"
+    metadata: dict[str, Any] = field(default_factory=dict)
+```
+
+### 8.2 设计约定
+
+- `Case` 是 case 库中的基本样例实体。
+- `task_signature` 表示该 case 代表的任务类型 / intent 聚类标识。
+- `input` 包含用户请求、初始上下文、环境配置等 agent loop 所需输入。
+- `rubric` 是该 case 的验收标准与评分规则。
+
+## 9. Rubric
+
+`Rubric` 是 `Case` 的验收标准与评分规则。
+
+它同时表达：
+
+```text
+什么叫做好 + 怎么检查是否做好
+```
+
+### 9.1 Rubric 数据模型
+
+```python
+@dataclass
+class Rubric:
+    name: str
+    description: str
+    criteria: list["RubricCriterion"]
+    metadata: dict[str, Any] = field(default_factory=dict)
+```
+
+### 9.2 RubricCriterion 数据模型
+
+```python
+@dataclass
+class RubricCriterion:
+    name: str
+    description: str
+    required: bool
+    weight: float
+    metadata: dict[str, Any] = field(default_factory=dict)
+```
+
+### 9.3 设计约定
+
+- `Rubric.description` 描述总体目标，即这个 case 什么结果算好。
+- `Rubric.criteria` 描述具体检查标准，即如何判断是否做好。
+- `required=True` 的 criterion 是 hard gate；失败时整体不通过。
+- `weight` 用于非 hard-gate criteria 的评分聚合。
+- 本设计不再保留独立 `Outcome` 概念；`Rubric` 统一承载验收目标与检查规则。
+
+## 10. Rollout
+
+`Rollout` 是某个 policy snapshot 在某个 `Case` 上执行 agent loop 后产生的一次执行记录。
+
+当前最小定义由三部分组成：
+
+```text
+Rollout = Case + messages + policy_snapshot_id
+```
+
+### 10.1 Rollout 数据模型
+
+```python
+@dataclass
+class Rollout:
+    case: Case
+    messages: list["Message"]
+    policy_snapshot_id: str
+```
+
+### 10.2 设计约定
+
+- `case` 是本次执行的训练/评测样例。
+- `messages` 是 agent loop 产生的完整消息序列，包括 user / assistant message、tool call、tool result 等。
+- `policy_snapshot_id` 指向本次执行使用的 `ExperienceSet` 快照。
+- `Rollout` 是原始执行记录；`Trajectory` 是从 `Rollout.messages` 中抽取出的可训练轨迹样本。
+
+```text
+Case + ExperienceSet snapshot
+  ↓ RolloutExecutor
+Rollout
+  ↓ RolloutAnalyzer
+Trajectory
+```
+
+## 11. RolloutAnalyzer
+
+`RolloutAnalyzer` 负责分析一次 `Rollout`，并在同一次分析中完成：
+
+- 基于 `Case.rubric` 的评估。
+- 从 `Rollout.messages` 中抽取可训练的 `Trajectory`。
+
+这样可以避免 evaluation 和 trajectory extraction 分成两次 LLM 调用导致的上下文重复、成本增加和证据不一致。
+
+### 11.1 RolloutAnalyzer 接口
+
+```python
+class RolloutAnalyzer(Protocol):
+    """Analyzes a rollout and extracts learning signals."""
+
+    async def analyze(
+        self,
+        rollout: Rollout,
+        context: "AnalysisContext",
+    ) -> "RolloutAnalysis":
+        ...
+```
+
+### 11.2 RolloutAnalysis 数据模型
+
+```python
+@dataclass
+class RolloutAnalysis:
+    evaluation: "RubricEvaluation"
+    trajectories: list[Trajectory]
+    metadata: dict[str, Any] = field(default_factory=dict)
+```
+
+### 11.3 设计约定
+
+- `evaluation` 是对该 rollout 是否满足 `Case.rubric` 的评估结果。
+- `trajectories` 是从该 rollout 中抽取出的可训练轨迹样本。
+- `RubricEvaluation` 与 `Trajectory` 是两个独立 domain model，但可以由同一次 `RolloutAnalyzer.analyze(...)` 调用产生。
+- `Rollout` 是原始执行记录；`RolloutAnalysis` 是结构化分析结果。
+
+```text
+Rollout
+  ↓ RolloutAnalyzer.analyze(...)
+RolloutAnalysis
+  ├── RubricEvaluation
+  └── Trajectory[]
+```
+
+## 12. RubricEvaluation
+
+`RubricEvaluation` 是一次 rollout 针对 `Rubric` 的结构化评估结果。
+
+### 12.1 RubricEvaluation 数据模型
+
+```python
+@dataclass
+class RubricEvaluation:
+    passed: bool
+    score: float
+    criterion_results: list["CriterionResult"]
+    feedback: list[str]
+    metadata: dict[str, Any] = field(default_factory=dict)
+```
+
+### 12.2 CriterionResult 数据模型
+
+```python
+@dataclass
+class CriterionResult:
+    criterion_name: str
+    passed: bool
+    score: float
+    feedback: list[str]
+    evidence: list[str]
+    metadata: dict[str, Any] = field(default_factory=dict)
+```
+
+### 12.3 设计约定
+
+- `passed` 表示 hard-gate criteria 是否全部通过，以及整体是否通过。
+- `score` 是 rubric 评分的聚合结果。
+- `criterion_results` 记录每条 criterion 的检查结果。
+- `feedback` 用于后续 trajectory 提取、semantic gradient 生成或人工复盘。
+
+## 13. GradientEstimator
+
+`GradientEstimator` 根据 `RolloutAnalysis` 和当前 `ExperienceSet` 估计 `SemanticGradient`。
+
+机器学习类比：
+
+```text
+sample / batch + params → gradient estimate
+```
+
+在本设计中：
+
+```text
+RolloutAnalysis + ExperienceSet → SemanticGradient[]
+```
+
+### 13.1 GradientEstimator 接口
+
+```python
+class GradientEstimator(Protocol):
+    """Estimates semantic gradients from rollout analysis."""
+
+    async def estimate(
+        self,
+        analysis: RolloutAnalysis,
+        experience_set: ExperienceSet,
+        context: "GradientContext",
+    ) -> list[SemanticGradient]:
+        ...
+```
+
+### 13.2 设计约定
+
+- `GradientEstimator` 不直接修改 `ExperienceSet`。
+- `GradientEstimator` 不生成最终文件级 update plan。
+- `GradientEstimator` 只负责从 `RolloutAnalysis` 中估计针对单个目标 `Experience` 的 `SemanticGradient`。
+- 一次 `estimate(...)` 可以产生多条 gradients；每条 gradient 面向一个逻辑目标 `Experience`。
+
+整体链路：
+
+```text
+Rollout
+  ↓ RolloutAnalyzer
+RolloutAnalysis
+  ↓ GradientEstimator
+SemanticGradient[]
+  ↓ PolicyOptimizer.plan(...)
+PolicyUpdatePlan
+  ↓ PolicyUpdater.apply(...)
+ApplyResult
+```
+
+## 14. PolicyOptimizationPipeline
+
+`PolicyOptimizationPipeline` 是经验策略优化的顶层编排接口。
+
+它将 case 执行、rollout 分析、gradient 估计、policy plan 生成和 policy 更新串联起来。
+
+### 14.1 PolicyOptimizationPipeline 接口
+
+```python
+class PolicyOptimizationPipeline(Protocol):
+    """Runs end-to-end policy optimization over a batch of cases."""
+
+    async def run(
+        self,
+        case_loader: "CaseLoader",
+        policy_set: ExperienceSet,
+        context: "PipelineContext",
+    ) -> "PipelineResult":
+        ...
+```
+
+### 14.2 PipelineResult 数据模型
+
+```python
+@dataclass
+class PipelineResult:
+    analyses: list[RolloutAnalysis]
+    gradients: list[SemanticGradient]
+    plan: PolicyUpdatePlan
+    apply_result: ApplyResult
+    iterations: list[PipelineIterationResult] = field(default_factory=list)
+    evaluation_passes: list[PipelineEvaluationResult] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class PipelineIterationResult:
+    iteration: int
+    analyses: list[RolloutAnalysis]
+    gradients: list[SemanticGradient]
+    plan: PolicyUpdatePlan
+    apply_result: ApplyResult
+    policy_snapshot_ids: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class PipelineEvaluationResult:
+    iteration: int
+    analyses: list[RolloutAnalysis]
+    policy_snapshot_ids: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+```
+
+### 14.3 端到端流程
+
+```text
+CaseLoader.batches(...)
+  ↓
+Case[]
+  ↓ RolloutExecutor
+Rollout[]
+  ↓ RolloutAnalyzer
+RolloutAnalysis[]
+  ↓ GradientEstimator
+SemanticGradient[]
+  ↓ PolicyOptimizer.plan(...)
+PolicyUpdatePlan
+  ↓ PolicyUpdater.apply(...)
+ApplyResult
+```
+
+pipeline 原生支持多轮离线迭代。每一轮都是同一套链路，只是下一轮使用上一轮
+`ApplyResult.updated_policy_set`：
+
+```text
+for iteration in range(max_iterations):
+  current_policy
+    ↓ rollout
+  Rollout[]
+    ↓ evaluate + extract trajectory
+  RolloutAnalysis[]
+    ↓ estimate gradients
+  SemanticGradient[]
+    ↓ plan/apply
+  updated_policy
+
+if final_evaluation:
+  updated_policy
+    ↓ rollout
+  Rollout[]
+    ↓ evaluate only
+  PipelineEvaluationResult
+```
+
+因此 `rollout -> evaluation -> train -> rollout -> evaluation` 不是测试里的特殊
+手写流程，而是 `PolicyOptimizationPipeline` 的一等能力。单轮训练是
+`max_iterations=1` 的特例；多轮训练通过 `PipelineContext.max_iterations` 控制。
+
+`PipelineContext` 中与迭代相关的字段：
+
+```python
+@dataclass
+class PipelineContext:
+    max_iterations: int = 1
+    final_evaluation: bool = False
+    # 其余 context 字段分别透传给 case load / snapshot / analysis /
+    # gradient / optimizer / updater 实现。
+```
+
+### 14.4 设计约定
+
+- `PolicyOptimizationPipeline` 是编排层，不应把各阶段逻辑写死在一个大函数中。
+- case 执行、rollout 分析、gradient 估计、policy plan、policy update 都应可以替换实现。
+- pipeline 以 case batch 为基本执行单位。
+- pipeline 负责 batch 内并发调度；`RolloutAnalyzer` 等单条处理接口不需要暴露 batch 方法。
+
+在每个 case batch 执行前，pipeline 应先为当前 `ExperienceSet` 创建 snapshot：
+
+```text
+ExperienceSet
+  ↓ PolicySnapshotter.snapshot(...)
+policy_snapshot_id
+  ↓ RolloutExecutor.execute(...) via ExecutionContext
+Rollout[]
+```
+- batch mode 和 incremental mode 复用同一套 pipeline 抽象；incremental 可以看作小 batch 或单 batch。
+- 第一阶段可以用同步 / 单进程实现。
+
+## 15. CaseLoader
+
+`CaseLoader` 是一次 policy optimization run 的 case 数据加载接口。
+
+它负责提供 case batch，但不负责 case 的长期存储与版本管理；长期存储可以由未来的 `CaseRepository` 承担。
+
+### 15.1 CaseLoader 接口
+
+```python
+from collections.abc import AsyncIterator
+from typing import Protocol
+
+
+class CaseLoader(Protocol):
+    """Loads case batches for policy optimization."""
+
+    async def batches(
+        self,
+        context: "CaseLoadContext",
+    ) -> AsyncIterator[list[Case]]:
+        ...
+```
+
+### 15.2 设计约定
+
+- `CaseLoader` 以 batch 形式提供 `Case`。
+- batch 大小、过滤条件、shuffle、train/eval split 等由 `CaseLoadContext` 或具体实现决定。
+- batch mode 和 incremental mode 统一通过 `CaseLoader.batches(...)` 表达。
+- incremental mode 可以返回一个小 batch 或单个 batch。
+- 第一版可以提供简单的 `ListCaseLoader`，直接包装 `list[Case]`。
+
+示例：
+
+```python
+class ListCaseLoader:
+    def __init__(self, cases: list[Case]):
+        self.cases = cases
+
+    async def batches(
+        self,
+        context: "CaseLoadContext",
+    ) -> AsyncIterator[list[Case]]:
+        yield self.cases
+```
+
+## 16. RolloutExecutor
+
+`RolloutExecutor` 给定一批 `Case` 和当前 `ExperienceSet`，执行 policy 并产生 `Rollout`。
+
+它不绑定具体 agent loop 实现；内部可以是 agent loop、simulator、replay executor 或 mock executor。
+
+### 16.1 RolloutExecutor 接口
+
+```python
+class RolloutExecutor(Protocol):
+    """Executes cases against a policy set and produces rollouts."""
+
+    async def execute(
+        self,
+        cases: list[Case],
+        policy_set: ExperienceSet,
+        context: "ExecutionContext",
+    ) -> list[Rollout]:
+        ...
+```
+
+### 16.2 设计约定
+
+- `RolloutExecutor` 输入一个 case batch 和当前 `ExperienceSet`。
+- `RolloutExecutor` 输出与该 batch 对应的一组 `Rollout`。
+- 每个 `Rollout` 应记录本次执行使用的 `policy_snapshot_id`。
+- `policy_snapshot_id` 由 `PolicyOptimizationPipeline` 通过 `PolicySnapshotter` 生成，并通过 `ExecutionContext` 传入 `RolloutExecutor`。
+- `RolloutExecutor` 不负责生成 policy snapshot。
+- `RolloutExecutor` 不负责分析 rollout，也不负责生成 trajectory 或 semantic gradient。
+
+### 16.3 ExecutionContext 数据模型
+
+```python
+@dataclass
+class ExecutionContext:
+    policy_snapshot_id: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+```
+
+### 16.4 ExecutionContext 设计约定
+
+- `policy_snapshot_id` 是本次 case batch 执行使用的 policy snapshot。
+- `metadata` 可承载 runner 配置、模型配置、环境配置、seed 等执行上下文信息。
+
+## 17. PolicySnapshotter
+
+`PolicySnapshotter` 为当前 `ExperienceSet` 创建或解析一个可复现的 `policy_snapshot_id`。
+
+该 snapshot id 用于标记 rollout 执行时使用的 policy set 版本。
+
+### 17.1 PolicySnapshotter 接口
+
+```python
+class PolicySnapshotter(Protocol):
+    """Creates a snapshot identifier for an ExperienceSet."""
+
+    async def snapshot(
+        self,
+        policy_set: ExperienceSet,
+        context: "SnapshotContext",
+    ) -> str:
+        ...
+```
+
+### 17.2 设计约定
+
+- `snapshot(...)` 返回的字符串写入 `Rollout.policy_snapshot_id`。
+- `policy_snapshot_id` 应能定位或复现 rollout 执行时使用的 `ExperienceSet`。
+- snapshot 可以实现为 content hash、version id、train run id、manifest URI 等。
+- 第一版只要求返回 `str`，不强制 snapshot 的存储格式。
+
+## 18. Context Placeholders
+
+以下 Context 类型暂作为各阶段扩展上下文占位，本文档暂不定义其内部结构：
+
+- `OptimizationContext`
+- `ApplyContext`
+- `AnalysisContext`
+- `GradientContext`
+- `PipelineContext`
+- `CaseLoadContext`
+- `SnapshotContext`
+
+### 18.1 设计约定
+
+- Context 用于承载运行时配置、依赖对象、trace id、并发参数、模型配置、环境配置等。
+- 各 Context 的字段后续按具体实现需要再定义。
+- 在 domain model 稳定前，不为 Context 提前引入过多强约束字段。
+
+## 19. Training Loop Pseudocode
+
+以下伪代码展示 `PolicyOptimizationPipeline` 如何编排已定义接口。
+
+```python
+async for cases in case_loader.batches(case_load_context):
+    snapshot_id = await snapshotter.snapshot(
+        policy_set=policy_set,
+        context=snapshot_context,
+    )
+
+    rollouts = await rollout_executor.execute(
+        cases=cases,
+        policy_set=policy_set,
+        context=ExecutionContext(policy_snapshot_id=snapshot_id),
+    )
+
+    analyses = await gather(
+        rollout_analyzer.analyze(
+            rollout=rollout,
+            context=analysis_context,
+        )
+        for rollout in rollouts
+    )
+
+    gradient_batches = await gather(
+        gradient_estimator.estimate(
+            analysis=analysis,
+            experience_set=policy_set,
+            context=gradient_context,
+        )
+        for analysis in analyses
+    )
+    gradients = [gradient for batch in gradient_batches for gradient in batch]
+
+    plan = await policy_optimizer.plan(
+        gradients=gradients,
+        policy_set=policy_set,
+        context=optimization_context,
+    )
+
+    apply_result = await policy_updater.apply(
+        plan=plan,
+        policy_set=policy_set,
+        context=apply_context,
+    )
+
+    policy_set = apply_result.updated_policy_set
+```
+
+### 19.1 设计约定
+
+- pipeline 负责 batch 内并发，例如并发分析多个 rollout、并发估计多个 gradient batch。
+- `PolicySnapshotter.snapshot(...)` 在每个 case batch 执行前调用，保证 rollout 可追溯到执行时的 policy set。
+- `PolicyOptimizer.plan(...)` 只生成计划，不修改文件。
+- `PolicyUpdater.apply(...)` 是真正修改 experiences 文件集合的边界。
+- 每个 batch apply 后，下一批 case 使用更新后的 `policy_set`。
+
+
+## 20. Initial Adapter Implementations
+
+第一阶段实现位于 `openviking/session/train`，不修改旧的 trajectory / experience 抽取链路。
+
+已实现的 adapter / helper：
+
+- `ExperienceSetLoader`：从现有 experiences 目录读取 `.md` 记忆文件，并通过 `MemoryFileUtils` 转换为 `ExperienceSet`。
+- `ContentHashPolicySnapshotter`：基于 `ExperienceSet` 内容生成确定性的 `policy_snapshot_id`。
+- `GroupingPolicyOptimizer`：将 `SemanticGradient` 按目标 experience 分组，输出包含 `PolicyPlanItem` 的 `PolicyUpdatePlan`，并在 metadata 中记录 groups / unresolved / conflicts。
+- `DryRunPolicyUpdater`：dry-run updater，不写文件；当 plan 有 items 时会模拟生成更新后的 `ExperienceSet`，便于离线审查。
+- `MemoryFilePolicyUpdater`：写回型 updater，消费 `upsert_experience` 计划项，通过 `MemoryFileUtils.write(...)` 序列化并写入 VikingFS。
+- `DefaultPolicyOptimizationPipeline`：编排 `CaseLoader`、`PolicySnapshotter`、`RolloutExecutor`、`RolloutAnalyzer`、`GradientEstimator`、`PolicyOptimizer` 和 `PolicyUpdater`。
+- `SingleTurnLLMRolloutExecutor`：最小可用的单轮 LLM rollout executor。它把 `ExperienceSet`、`Case.input` 和 `Case.rubric` 组装成 prompt，调用一次 LLM，返回包含 user / assistant 两条消息的 `Rollout`。后续完整 agent loop 只需要实现同一个 `RolloutExecutor` 接口即可替换。
+
+后续 adapter 计划：
+
+- `LegacyTrajectoryRolloutAnalyzer`：通过旧 `SessionCompressorV2.extract_agent_memories(..., allowed_memory_types={"trajectories"})` 只运行 trajectory phase，不触发旧 experience consolidation。
+- `LegacyExperienceGradientEstimator`：复用旧 experience phase 的候选检索与 prompt 思路，将旧 memory operations 转换为 `PatchSemanticGradient`。
+- 后续可继续增强 `PolicyOptimizer`，在 `PolicyPlanItem` 层做多 gradient 合并、相似新文件合并、冲突 rebase、臃肿 experience 拆分等。
