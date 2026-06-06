@@ -47,15 +47,29 @@ const HEARTBEAT_RE = /\bHEARTBEAT(?:\.md|_OK)\b/;
 // 防御性过滤工具调用占位符文本（如 "[tool: exec]"）
 // 防止任何路径产生的工具调用元数据被当成用户/助手文本进入 VLM 提取
 const TOOL_PLACEHOLDER_RE = /^\s*\[tool(?::\s*|Use:\s*)[^\]]+\]\s*$/i;
+// 防御性过滤 assistant 发出的 "思考中" 孤立占位符字符串
+// （如 [pending], [wait], [稍等]），防止被 OV 当正常 assistant 文本入库
+const PENDING_PLACEHOLDER_RE = /^\s*\[(pending|wait|稍等|思考中|thinking|busy|loading|\.\.\.)\]\s*$/i;
+// 脱敏：assistant 报告里可能字面引用 "[tool: exec]" 这类元字符串，
+// 替换为脱敏表述，防止被 VLM 提取时当成真文本写入长期记忆
+const TOOL_REF_RE = /\[tool\s*[:：]?\s*[a-zA-Z_][a-zA-Z0-9_]*\]/;
 
 export function sanitizeUserTextForCapture(text: string): string {
   // 过滤 HEARTBEAT 健康检查消息
   if (HEARTBEAT_RE.test(text)) {
     return "";
   }
-  // 过滤工具调用占位符文本
+  // 过滤工具调用占位符文本（整行匹配）
   if (TOOL_PLACEHOLDER_RE.test(text)) {
     return "";
+  }
+  // 过滤 assistant "思考中" 孤立占位符（整行匹配）
+  if (PENDING_PLACEHOLDER_RE.test(text)) {
+    return "";
+  }
+  // 脱敏：文本中包含 "[tool: xxx]" 元数据字面引用时替换为脱敏表述
+  if (TOOL_REF_RE.test(text)) {
+    text = text.replace(TOOL_REF_RE, "[工具调用元数据（已脱敏）]");
   }
   // 处理 Compactor 系统消息，提取实际用户输入
   // 格式: "System: [时间] Compacted ... Context ... [时间] 实际内容"
