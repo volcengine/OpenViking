@@ -130,7 +130,7 @@ For local development and single-process applications:
 client = OpenViking(path="./data")
 ```
 
-- Auto-starts AGFS subprocess
+- Runs the RAGFS filesystem in-process via the Rust binding (RAGFSBindingClient)
 - Uses local vector index
 - Singleton pattern
 

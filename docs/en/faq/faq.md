@@ -378,7 +378,7 @@ This strategy finds semantically matching fragments while understanding the comp
 
 | Mode | Use Case | Characteristics |
 |------|----------|-----------------|
-| **Embedded** | Local development, single-process apps | Auto-starts AGFS subprocess, uses local vector index |
+| **Embedded** | Local development, single-process apps | Runs RAGFS in-process via the Rust binding (RAGFSBindingClient), uses local vector index |
 | **Service Mode** | Production, distributed deployment | Connects to remote services, supports multi-instance concurrency, independently scalable |
 
 ```python
