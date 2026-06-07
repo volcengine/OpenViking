@@ -417,7 +417,15 @@ export class OpenVikingClient {
     return `viking://user/${identity.userId}`;
   }
 
-  private async normalizeTargetUri(targetUri: string, agentId?: string): Promise<string> {
+  private async normalizeTargetUri(
+    targetUri: string | string[],
+    agentId?: string,
+  ): Promise<string | string[]> {
+    if (Array.isArray(targetUri)) {
+      return Promise.all(
+        targetUri.map((uri) => this.normalizeTargetUri(uri, agentId) as Promise<string>),
+      );
+    }
     const trimmed = targetUri.trim().replace(/\/+$/, "");
     const match = trimmed.match(/^viking:\/\/user(?:\/(.*))?$/);
     if (!match) {
@@ -444,7 +452,7 @@ export class OpenVikingClient {
   async find(
     query: string,
     options: {
-      targetUri: string;
+      targetUri: string | string[];
       limit?: number;
       scoreThreshold?: number;
       peerId?: string;
@@ -454,7 +462,7 @@ export class OpenVikingClient {
     const normalizedTargetUri = await this.normalizeTargetUri(options.targetUri, agentId);
     const body: {
       query: string;
-      target_uri: string;
+      target_uri: string | string[];
       limit?: number;
       score_threshold?: number;
       peer_id?: string;

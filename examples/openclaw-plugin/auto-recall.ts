@@ -208,39 +208,29 @@ export async function buildAutoRecallContext(params: {
   return withTimeout(
     (async () => {
       const candidateLimit = Math.max(cfg.recallLimit * 4, 20);
-      const autoRecallPromises: Promise<FindResult>[] = [
-        client.find(queryText, {
-          targetUri: "viking://user/memories",
-          limit: candidateLimit,
-          scoreThreshold: 0,
-          peerId,
-        }, agentId),
-        client.find(queryText, {
-          targetUri: "viking://user/memories",
-          limit: candidateLimit,
-          scoreThreshold: 0,
-          peerId,
-        }, agentId),
+      const targetUris: string[] = [
+        "viking://user/memories",
+        "viking://agent/memories",
       ];
       if (cfg.recallResources) {
-        autoRecallPromises.push(
-          client.find(queryText, {
-            targetUri: "viking://resources",
+        targetUris.push("viking://resources");
+      }
+
+      let allMemories: FindResultItem[] = [];
+      try {
+        const result = await client.find(
+          queryText,
+          {
+            targetUri: targetUris,
             limit: candidateLimit,
             scoreThreshold: 0,
             peerId,
-          }, agentId),
+          },
+          agentId,
         );
-      }
-      const autoRecallSettled = await Promise.allSettled(autoRecallPromises);
-
-      const allMemories: FindResultItem[] = [];
-      for (const s of autoRecallSettled) {
-        if (s.status === "fulfilled") {
-          allMemories.push(...(s.value.memories ?? []), ...(s.value.resources ?? []));
-        } else {
-          logger.warn?.(`openviking: auto-recall search failed: ${String(s.reason)}`);
-        }
+        allMemories = [...(result.memories ?? []), ...(result.resources ?? [])];
+      } catch (err) {
+        logger.warn?.(`openviking: auto-recall search failed: ${String(err)}`);
       }
 
       const uniqueMemories = allMemories.filter((memory, index, self) =>
