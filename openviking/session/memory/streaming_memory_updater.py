@@ -238,6 +238,23 @@ class StreamingMemoryUpdater:
                 self._buffer = []
 
             try:
+                input_operations = sum(_operation_count(item.request.operations) for item in items)
+                input_patches = sum(
+                    len(getattr(item.request.operations, "upsert_operations", []) or [])
+                    for item in items
+                )
+                input_deletes = sum(
+                    len(getattr(item.request.operations, "delete_file_contents", []) or [])
+                    for item in items
+                )
+                tracer.info(
+                    "StreamingMemoryUpdater flush started "
+                    f"reason={reason} request_count={len(items)} "
+                    f"input_operations={input_operations} "
+                    f"input_patches={input_patches} "
+                    f"input_deletes={input_deletes}",
+                    console=self.config.trace_console,
+                )
                 merged_operations = await self._merge_items(items)
                 first_request = items[0].request
                 updater = MemoryUpdater(
@@ -317,6 +334,13 @@ async def merge_memory_operations(
     """Merge resolved memory operations by memory type/URI using patch context."""
 
     if operations.has_errors():
+        tracer.info(
+            "[streaming_memory_updater] merge skipped reason=operation_errors "
+            f"error_count={len(operations.errors)} "
+            f"patch_count={len(operations.upsert_operations or [])} "
+            f"delete_count={len(operations.delete_file_contents or [])}",
+            console=trace_console,
+        )
         return operations
 
     groups: dict[str, list[ResolvedOperation]] = {}
@@ -328,6 +352,16 @@ async def merge_memory_operations(
         for uri in op.uris:
             single_uri_op = clone_operation_for_uri(op, uri)
             groups.setdefault(single_uri_op.memory_type, []).append(single_uri_op)
+
+    tracer.info(
+        "[streaming_memory_updater] merge batch "
+        f"patch_count={len(operations.upsert_operations or [])} "
+        f"delete_count={len(operations.delete_file_contents or [])} "
+        f"passthrough_upserts={len(passthrough_upserts)} "
+        f"memory_type_count={len(groups)} "
+        f"memory_types={sorted(groups.keys())}",
+        console=trace_console,
+    )
 
     merged_upserts = list(passthrough_upserts)
     merged_deletes = list(operations.delete_file_contents)
@@ -345,6 +379,13 @@ async def merge_memory_operations(
             merged_upserts.extend(merged.upsert_operations)
             merged_deletes.extend(merged.delete_file_contents)
         except Exception as exc:
+            tracer.info(
+                "[streaming_memory_updater] merge fallback "
+                f"memory_type={memory_type} mode=fallback_original "
+                f"reason=llm_merge_failed patch_count={len(memory_ops)} "
+                f"target_count={len(_unique_operation_uris(memory_ops))} error={exc}",
+                console=trace_console,
+            )
             logger.warning("[streaming_memory_updater] merge failed for %s: %s", memory_type, exc)
             if strict_extract_errors:
                 raise
@@ -367,13 +408,43 @@ async def merge_one_memory_type_operations(
     registry: MemoryTypeRegistry | None = None,
     trace_console: bool = False,
 ) -> ResolvedOperations:
-    if can_fast_path_memory_operations(operations):
+    registry = registry or create_default_registry()
+    schema = registry.get(memory_type)
+    patch_count = len(operations)
+    target_uris = _unique_operation_uris(operations)
+    target_count = len(target_uris)
+    existing_file_count = sum(
+        1 for op in operations if getattr(op, "old_memory_file_content", None) is not None
+    )
+    duplicate_target_count = patch_count - target_count
+    operation_mode = (
+        getattr(schema, "operation_mode", "unknown") if schema is not None else "unknown"
+    )
+    fast_path, fast_path_reason = classify_memory_merge_mode(operations, schema=schema)
+    if fast_path:
+        tracer.info(
+            "[streaming_memory_updater] memory_type merge decision "
+            f"memory_type={memory_type} mode=no_merge "
+            f"reason={fast_path_reason} operation_mode={operation_mode} "
+            f"patch_count={patch_count} target_count={target_count} "
+            f"duplicate_target_count={duplicate_target_count} "
+            f"existing_file_count={existing_file_count}",
+            console=trace_console,
+        )
         return ResolvedOperations(
             upsert_operations=list(operations), delete_file_contents=[], errors=[]
         )
 
-    registry = registry or create_default_registry()
-    schema = registry.get(memory_type)
+    tracer.info(
+        "[streaming_memory_updater] memory_type merge decision "
+        f"memory_type={memory_type} mode=llm_merge "
+        f"reason={fast_path_reason} operation_mode={operation_mode} "
+        f"patch_count={patch_count} target_count={target_count} "
+        f"duplicate_target_count={duplicate_target_count} "
+        f"existing_file_count={existing_file_count}",
+        console=trace_console,
+    )
+
     if schema is None:
         raise ValueError(f"Memory schema not found: {memory_type}")
 
@@ -411,8 +482,10 @@ async def merge_one_memory_type_operations(
     provider.prefetch = _prefetch
     vlm = get_openviking_config().vlm.get_vlm_instance()
     tracer.info(
-        "[streaming_memory_updater] merge input "
-        f"memory_type={memory_type} original_files={original_file_uris} patch_count={len(patches)}",
+        "[streaming_memory_updater] llm merge input "
+        f"memory_type={memory_type} original_file_count={len(original_file_uris)} "
+        f"original_files={original_file_uris} patch_count={len(patches)} "
+        f"target_count={target_count}",
         console=trace_console,
     )
     orchestrator = ExtractLoop(
@@ -426,7 +499,7 @@ async def merge_one_memory_type_operations(
     merged, _ = await orchestrator.run()
     merged = merged or ResolvedOperations(upsert_operations=[], delete_file_contents=[], errors=[])
     tracer.info(
-        "[streaming_memory_updater] merge output "
+        "[streaming_memory_updater] llm merge output "
         f"memory_type={memory_type} upserts={len(merged.upsert_operations)} "
         f"deletes={len(merged.delete_file_contents)} errors={len(merged.errors)}",
         console=trace_console,
@@ -533,22 +606,51 @@ def operation_after_content(op: ResolvedOperation) -> str:
     return json.dumps(fields, ensure_ascii=False, indent=2, sort_keys=True)
 
 
-def can_fast_path_memory_operations(operations: list[ResolvedOperation]) -> bool:
+def classify_memory_merge_mode(
+    operations: list[ResolvedOperation],
+    *,
+    schema: MemoryTypeSchema | None = None,
+) -> tuple[bool, str]:
     if not operations:
-        return True
-    if all(getattr(op, "old_memory_file_content", None) is None for op in operations):
-        uris = [_first_uri(op.uris) for op in operations]
-        return len(uris) == len(set(uris))
+        return True, "empty_batch"
+
+    uris = [_first_uri(op.uris) for op in operations]
+    unique_uri_count = len(set(uris))
+    duplicate_target_count = len(uris) - unique_uri_count
+    all_new_files = all(getattr(op, "old_memory_file_content", None) is None for op in operations)
+    operation_mode = getattr(schema, "operation_mode", "") if schema is not None else ""
+
+    if operation_mode == "add_only" and all_new_files and duplicate_target_count == 0:
+        return True, "add_only_unique_new_files"
+    if operation_mode == "add_only" and duplicate_target_count > 0:
+        return False, "add_only_duplicate_targets"
+    if all_new_files and duplicate_target_count == 0:
+        return True, "unique_new_files"
     if len(operations) != 1:
-        return False
+        return False, "multi_patch_existing_or_conflict"
+
     op = operations[0]
     old_file = getattr(op, "old_memory_file_content", None)
     if old_file is None:
-        return True
+        return True, "single_new_file"
     fields = dict(getattr(op, "memory_fields", {}) or {})
     if "content" not in fields:
-        return False
-    return old_file.plain_content().strip() == str(fields.get("content") or "").strip()
+        return False, "single_existing_non_content_patch"
+    if old_file.plain_content().strip() == str(fields.get("content") or "").strip():
+        return True, "single_existing_content_unchanged"
+    return False, "single_existing_content_changed"
+
+
+def can_fast_path_memory_operations(
+    operations: list[ResolvedOperation],
+    *,
+    schema: MemoryTypeSchema | None = None,
+) -> bool:
+    return classify_memory_merge_mode(operations, schema=schema)[0]
+
+
+def _unique_operation_uris(operations: list[ResolvedOperation]) -> list[str]:
+    return list(dict.fromkeys(uri for op in operations for uri in (op.uris or []) if uri))
 
 
 def seed_patch_merge_read_contents(
