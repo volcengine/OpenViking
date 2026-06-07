@@ -1,0 +1,15 @@
+[Unit]
+Description=OpenViking Server (user service)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/openviking
+Environment=OPENVIKING_CONFIG_FILE=%h/.openviking/ov.conf
+ExecStart=/usr/bin/env openviking-server --config ${OPENVIKING_CONFIG_FILE}
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
