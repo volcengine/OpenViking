@@ -13,13 +13,7 @@ import type {
   CommitSessionResult,
   OVMessage,
 } from "./client.js";
-import {
-  defaultMemoryPolicyForPeerRole,
-  formatMessageFaithful,
-  resolveMessagePeerId,
-  resolveSearchPeerId,
-  toPeerId,
-} from "./context-engine.js";
+import { formatMessageFaithful, toRoleId } from "./context-engine.js";
 import {
   compileSessionPatterns,
   shouldBypassSession,
@@ -231,10 +225,11 @@ type OpenClawPluginApi = {
 const DEFAULT_OPENCLAW_AGENT_ID = "main";
 
 /**
- * OpenClaw ids may contain ":" (e.g. session keys), while OpenViking
- * peer/session metadata is path-friendly.
+ * OpenViking `UserIdentifier` allows only [a-zA-Z0-9_-] for agent_id
+ * (see openviking_cli/session/user_id.py). OpenClaw ids may contain ":"
+ * (e.g. session keys); never send raw colons in X-OpenViking-Agent.
  */
-export function sanitizeRuntimeAgentId(raw: string): string {
+export function sanitizeOpenVikingAgentIdHeader(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) {
     return "default";
@@ -496,7 +491,7 @@ export function createSessionAgentResolver(configAgentId: string) {
 
     const prefix = configAgentPrefix;
     const resolvedBeforeSanitize = prefix ? `${prefix}_${rawAgentId}` : rawAgentId;
-    const resolved = sanitizeRuntimeAgentId(resolvedBeforeSanitize);
+    const resolved = sanitizeOpenVikingAgentIdHeader(resolvedBeforeSanitize);
     for (const alias of collectSessionAgentAliases(ctx.sessionId, ctx.sessionKey, ctx.ovSessionId)) {
       sessionAgentIds.set(alias, resolved);
     }
@@ -525,7 +520,7 @@ export function createSessionAgentResolver(configAgentId: string) {
       branch = "session_resolved";
     } else if (sessionScopedAgentId) {
       resolvedBeforeSanitize = prefix ? `${prefix}_${sessionScopedAgentId}` : sessionScopedAgentId;
-      resolved = sanitizeRuntimeAgentId(resolvedBeforeSanitize);
+      resolved = sanitizeOpenVikingAgentIdHeader(resolvedBeforeSanitize);
       branch = "session_resolved";
     } else if (!prefix) {
       resolvedBeforeSanitize = DEFAULT_OPENCLAW_AGENT_ID;
@@ -533,7 +528,7 @@ export function createSessionAgentResolver(configAgentId: string) {
       branch = "default_no_session";
     } else {
       resolvedBeforeSanitize = `${prefix}_${DEFAULT_OPENCLAW_AGENT_ID}`;
-      resolved = sanitizeRuntimeAgentId(resolvedBeforeSanitize);
+      resolved = sanitizeOpenVikingAgentIdHeader(resolvedBeforeSanitize);
       branch = "config_only_fallback";
     }
 
@@ -597,7 +592,7 @@ const contextEnginePlugin = {
     }
 
     const bypassSessionPatterns = compileSessionPatterns(cfg.bypassSessionPatterns);
-    const rawPeerPrefix = rawCfg.peer_prefix;
+    const rawAgentId = rawCfg.agent_prefix;
     if (cfg.logFindRequests) {
       api.logger.info(
         "openviking: routing debug logging enabled (config logFindRequests, or env OPENVIKING_LOG_ROUTING=1 / OPENVIKING_DEBUG=1)",
@@ -609,20 +604,27 @@ const contextEnginePlugin = {
       }
     };
     verboseRoutingInfo(
-      `openviking: loaded plugin config peer_role="${cfg.peer_role}" peer_prefix="${cfg.peer_prefix}" ` +
-        `(raw peer_prefix=${JSON.stringify(rawPeerPrefix ?? "(missing)")}; ` +
+      `openviking: loaded plugin config agent_prefix="${cfg.agent_prefix}" ` +
+        `(raw plugins.entries.openviking.config.agent_prefix=${JSON.stringify(rawAgentId ?? "(missing)")}; ` +
         `${
-          cfg.peer_prefix
-            ? 'non-empty → assistant peer_id is <peer_prefix>_<ctx.agentId> when peer_role="assistant", or <peer_prefix>_main when ctx.agentId is unknown'
-            : 'empty → assistant peer_id follows OpenClaw ctx.agentId when peer_role="assistant", or "main" when ctx.agentId is unknown'
+          cfg.agent_prefix
+            ? 'non-empty → X-OpenViking-Agent is <agent_prefix>_<ctx.agentId> when hooks expose session agent, or <agent_prefix>_main when ctx.agentId is unknown'
+            : 'empty → X-OpenViking-Agent follows OpenClaw ctx.agentId per session, or "main" when ctx.agentId is unknown'
         })`,
+    );
+    verboseRoutingInfo(
+      `openviking: auth/namespace config ` +
+        JSON.stringify({
+          isolateUserScopeByAgent: cfg.isolateUserScopeByAgent,
+          isolateAgentScopeByUser: cfg.isolateAgentScopeByUser,
+          deprecatedAgentScopeMode: cfg.agentScopeMode,
+        }),
     );
     const routingDebugLog = cfg.logFindRequests
       ? (msg: string) => {
           api.logger.info(msg);
         }
       : undefined;
-    const defaultMemoryPolicy = defaultMemoryPolicyForPeerRole(cfg.peer_role);
     const tenantAccount = cfg.accountId;
     const tenantUser = cfg.userId;
 
@@ -630,11 +632,13 @@ const contextEnginePlugin = {
       new OpenVikingClient(
         cfg.baseUrl,
         cfg.apiKey,
-        cfg.peer_prefix,
+        cfg.agent_prefix,
         cfg.timeoutMs,
         tenantAccount,
         tenantUser,
         routingDebugLog,
+        cfg.isolateUserScopeByAgent,
+        cfg.isolateAgentScopeByUser,
       ),
     );
 
@@ -686,16 +690,6 @@ const contextEnginePlugin = {
         agentId: resolveAgentId(session.sessionId, session.sessionKey, session.ovSessionId),
       };
     };
-
-    const resolveToolSearchPeerId = (
-      ctx: unknown,
-      session: PluginSessionRouting,
-    ): string | undefined =>
-      resolveSearchPeerId({
-        peerRole: cfg.peer_role,
-        personPeerId: toPeerId(extractToolSenderId(ctx)),
-        assistantPeerId: session.agentId,
-      });
 
     const formatResourceImportText = (result: AddResourceResult): string => {
       const root = result.root_uri ? ` ${result.root_uri}` : "";
@@ -828,11 +822,7 @@ const contextEnginePlugin = {
       return lines.join("\n");
     };
 
-    const searchOpenViking = async (
-      input: OVSearchInput,
-      agentId?: string,
-      peerId?: string,
-    ) => {
+    const searchOpenViking = async (input: OVSearchInput, agentId?: string) => {
       const query = input.query.trim();
       if (!query) {
         throw new Error("query is required");
@@ -841,11 +831,11 @@ const contextEnginePlugin = {
       const client = await getClient();
       let result: FindResult;
       if (input.uri) {
-        result = await client.find(query, { targetUri: input.uri, limit, peerId }, agentId);
+        result = await client.find(query, { targetUri: input.uri, limit }, agentId);
       } else {
         const [resourcesSettled, skillsSettled] = await Promise.allSettled([
-          client.find(query, { targetUri: "viking://resources", limit, peerId }, agentId),
-          client.find(query, { targetUri: "viking://user/skills", limit, peerId }, agentId),
+          client.find(query, { targetUri: "viking://resources", limit }, agentId),
+          client.find(query, { targetUri: "viking://agent/skills", limit }, agentId),
         ]);
         const successful: FindResult[] = [];
         if (resourcesSettled.status === "fulfilled") {
@@ -877,7 +867,6 @@ const contextEnginePlugin = {
           action: "searched",
           query,
           uri: input.uri,
-          peer_id: peerId ?? null,
           memories: result.memories ?? [],
           resources: result.resources ?? [],
           skills: result.skills ?? [],
@@ -958,7 +947,7 @@ const contextEnginePlugin = {
           "Search OpenViking resources and skills. Use after importing, or when the user asks to search OpenViking resources or skills.",
         parameters: Type.Object({
           query: Type.String({ description: "Search query" }),
-          uri: Type.Optional(Type.String({ description: "Optional search URI. Defaults to resources plus user skills." })),
+          uri: Type.Optional(Type.String({ description: "Optional search URI. Defaults to resources plus agent skills." })),
           limit: Type.Optional(Type.Number({ description: "Max results per search scope. Default: 10" })),
         }),
         async execute(_toolCallId: string, params: Record<string, unknown>) {
@@ -966,12 +955,11 @@ const contextEnginePlugin = {
             return makeBypassedToolResult("ov_search");
           }
           const session = resolvePluginSessionRouting(ctx);
-          const peerId = resolveToolSearchPeerId(ctx, session);
           return searchOpenViking({
             query: String((params as { query?: unknown }).query ?? ""),
             uri: typeof params.uri === "string" ? params.uri : undefined,
             limit: typeof params.limit === "number" ? params.limit : undefined,
-          }, session.agentId, peerId);
+          }, session.agentId);
         },
       }),
       { name: "ov_search" },
@@ -1029,8 +1017,7 @@ const contextEnginePlugin = {
           }
           const session = resolvePluginSessionRouting(ctx);
           const input = parseOVSearchCommandArgs(ctx.args ?? "");
-          const peerId = resolveToolSearchPeerId(ctx, session);
-          const result = await searchOpenViking(input, session.agentId, peerId);
+          const result = await searchOpenViking(input, session.agentId);
           return { text: result.content[0]!.text, details: result.details };
         } catch (err) {
           return { text: `OpenViking search failed: ${err instanceof Error ? err.message : String(err)}` };
@@ -1061,7 +1048,6 @@ const contextEnginePlugin = {
             return makeBypassedToolResult("memory_recall");
           }
           const session = resolvePluginSessionRouting(ctx);
-          const peerId = resolveToolSearchPeerId(ctx, session);
           const { query } = params as { query: string };
           const limit =
             typeof (params as { limit?: number }).limit === "number"
@@ -1080,8 +1066,7 @@ const contextEnginePlugin = {
           const recallClient = await getClient();
           if (cfg.logFindRequests) {
             api.logger.info(
-              `openviking: memory_recall runtime_agent_id="${session.agentId}" ` +
-                `peer_id="${peerId ?? ""}" ` +
+              `openviking: memory_recall X-OpenViking-Agent="${session.agentId}" ` +
                 `(plugin defaultAgentId="${recallClient.getDefaultAgentId()}" is unused when session context is present)`,
             );
           }
@@ -1095,7 +1080,6 @@ const contextEnginePlugin = {
                 targetUri,
                 limit: requestLimit,
                 scoreThreshold: 0,
-                peerId,
               },
               session.agentId,
             );
@@ -1107,17 +1091,15 @@ const contextEnginePlugin = {
                   targetUri: "viking://user/memories",
                   limit: requestLimit,
                   scoreThreshold: 0,
-                  peerId,
                 },
                 session.agentId,
               ),
               recallClient.find(
                 query,
                 {
-                  targetUri: "viking://user/memories",
+                  targetUri: "viking://agent/memories",
                   limit: requestLimit,
                   scoreThreshold: 0,
-                  peerId,
                 },
                 session.agentId,
               ),
@@ -1130,7 +1112,6 @@ const contextEnginePlugin = {
                     targetUri: "viking://resources",
                     limit: requestLimit,
                     scoreThreshold: 0,
-                    peerId,
                   },
                   session.agentId,
                 ),
@@ -1253,32 +1234,19 @@ const contextEnginePlugin = {
               sessionId = `memory-store-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
               usedTempSession = true;
             }
-            const peerId = resolveMessagePeerId({
-              peerRole: cfg.peer_role,
-              role,
-              personPeerId: toPeerId(extractToolSenderId(ctx)),
-              assistantPeerId: session.agentId,
-            });
-            if (defaultMemoryPolicy) {
-              await c.ensureSession(
-                sessionId,
-                { memoryPolicy: defaultMemoryPolicy },
-                session.agentId,
-              );
-            }
+            const roleId = role === "user" ? toRoleId(extractToolSenderId(ctx)) : undefined;
             await c.addSessionMessage(
               sessionId,
               role,
               [{ type: "text" as const, text }],
               session.agentId,
               undefined,
-              peerId,
+              roleId,
             );
             const commitResult = await c.commitSession(sessionId, {
               wait: true,
               agentId: session.agentId,
               keepRecentCount: 0,
-              memoryPolicy: defaultMemoryPolicy,
             });
             const memoriesCount = totalCommitMemories(commitResult);
             if (commitResult.status === "failed") {
@@ -1385,7 +1353,6 @@ const contextEnginePlugin = {
             return makeBypassedToolResult("memory_forget");
           }
           const session = resolvePluginSessionRouting(ctx);
-          const peerId = resolveToolSearchPeerId(ctx, session);
           const client = await getClient();
           const uri = (params as { uri?: string }).uri;
           if (uri) {
@@ -1430,7 +1397,6 @@ const contextEnginePlugin = {
               targetUri,
               limit: requestLimit,
               scoreThreshold: 0,
-              peerId,
             },
             session.agentId,
           );
@@ -1937,7 +1903,7 @@ const contextEnginePlugin = {
     );
 
     let contextEngineRef: ContextEngineWithCommit | null = null;
-    const sessionAgentResolver = createSessionAgentResolver(cfg.peer_prefix);
+    const sessionAgentResolver = createSessionAgentResolver(cfg.agent_prefix);
     const rememberSessionAgentId = (ctx: SessionAgentLookup) => {
       sessionAgentResolver.remember(ctx);
     };
@@ -1956,8 +1922,7 @@ const contextEnginePlugin = {
             sessionId: sid || "(empty)",
             sessionKey: sk || "(empty)",
             ovSessionId: ovSid || "(empty)",
-            parsedConfigPeerPrefix: cfg.peer_prefix,
-            peerRole: cfg.peer_role,
+            parsedConfigAgentPrefix: cfg.agent_prefix,
             mappedResolvedAgentId: result.mappedResolvedAgentId,
             resolvedBeforeSanitize: result.resolvedBeforeSanitize,
             resolved: result.resolved,

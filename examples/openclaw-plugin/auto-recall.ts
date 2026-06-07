@@ -10,6 +10,7 @@ import { quickRecallPrecheck, withTimeout } from "./process-manager.js";
 import { sanitizeUserTextForCapture } from "./text-utils.js";
 import { estimateTextTokens } from "./token-estimator.js";
 
+const AUTO_RECALL_TIMEOUT_MS = 30_000; // 2026-06-07: 5s 太短，DashScope embedding 偶发 9-10s（embedder/base.py:275-280 实测），改 30s 留足时间
 const RECALL_QUERY_MAX_CHARS = 4_000;
 export const AUTO_RECALL_SOURCE_MARKER = "Source: openviking-auto-recall";
 
@@ -188,12 +189,11 @@ export async function buildAutoRecallContext(params: {
   cfg: Required<MemoryOpenVikingConfig>;
   client: OpenVikingClient;
   agentId: string;
-  peerId?: string;
   queryText: string;
   logger: Logger;
   verbose?: (message: string) => void;
 }): Promise<{ block?: string; memoryCount: number; estimatedTokens: number }> {
-  const { cfg, client, agentId, peerId, queryText, logger, verbose } = params;
+  const { cfg, client, agentId, queryText, logger, verbose } = params;
 
   if (!cfg.autoRecall || queryText.length < 5) {
     return { memoryCount: 0, estimatedTokens: 0 };
@@ -208,39 +208,21 @@ export async function buildAutoRecallContext(params: {
   return withTimeout(
     (async () => {
       const candidateLimit = Math.max(cfg.recallLimit * 4, 20);
-      const autoRecallPromises: Promise<FindResult>[] = [
-        client.find(queryText, {
-          targetUri: "viking://user/memories",
-          limit: candidateLimit,
-          scoreThreshold: 0,
-          peerId,
-        }, agentId),
-        client.find(queryText, {
-          targetUri: "viking://user/memories",
-          limit: candidateLimit,
-          scoreThreshold: 0,
-          peerId,
-        }, agentId),
-      ];
+      const targetUris: string[] = ["viking://user/memories", "viking://agent/memories"];
       if (cfg.recallResources) {
-        autoRecallPromises.push(
-          client.find(queryText, {
-            targetUri: "viking://resources",
-            limit: candidateLimit,
-            scoreThreshold: 0,
-            peerId,
-          }, agentId),
-        );
+        targetUris.push("viking://resources");
       }
-      const autoRecallSettled = await Promise.allSettled(autoRecallPromises);
 
-      const allMemories: FindResultItem[] = [];
-      for (const s of autoRecallSettled) {
-        if (s.status === "fulfilled") {
-          allMemories.push(...(s.value.memories ?? []), ...(s.value.resources ?? []));
-        } else {
-          logger.warn?.(`openviking: auto-recall search failed: ${String(s.reason)}`);
-        }
+      let allMemories: FindResultItem[] = [];
+      try {
+        const result = await client.find(queryText, {
+          targetUri: targetUris,
+          limit: candidateLimit,
+          scoreThreshold: 0,
+        }, agentId);
+        allMemories = [...(result.memories ?? []), ...(result.resources ?? [])];
+      } catch (err) {
+        logger.warn?.(`openviking: auto-recall search failed: ${String(err)}`);
       }
 
       const uniqueMemories = allMemories.filter((memory, index, self) =>
@@ -284,7 +266,7 @@ export async function buildAutoRecallContext(params: {
 
       return { block, memoryCount: memoryLines.length, estimatedTokens };
     })(),
-    cfg.autoRecallTimeoutMs,
+    AUTO_RECALL_TIMEOUT_MS,
     "openviking: auto-recall search timeout",
   );
 }
