@@ -39,12 +39,13 @@ class PatchMergeContextProvider(SessionExtractContextProvider):
         self,
         *,
         memory_type: str,
-        original_file_uris: list[str],
         patches: list[PatchMergePatch],
+        required_file_uris: list[str] | None = None,
+        original_file_uris: list[str] | None = None,
     ):
         super().__init__(messages=[])
         self.memory_type = memory_type
-        self.original_file_uris = list(original_file_uris)
+        self.required_file_uris = list(required_file_uris or original_file_uris or [])
         self.patches = list(patches)
 
     def instruction(self) -> str:
@@ -71,7 +72,8 @@ All memory content must be written in {output_language}.
     async def prefetch(self) -> list[dict[str, Any]]:
         messages: list[dict[str, Any]] = []
         call_id = 0
-        for uri in self.original_file_uris:
+        file_uris = await self._resolve_prefetch_file_uris()
+        for uri in file_uris:
             call_id = await self._append_structured_read_result(
                 messages,
                 call_id,
@@ -85,6 +87,54 @@ All memory content must be written in {output_language}.
             }
         )
         return messages
+
+    async def _resolve_prefetch_file_uris(self) -> list[str]:
+        """Resolve required files plus semantic-search candidates for this merge."""
+
+        required_uris = _dedupe_uris(self.required_file_uris)
+        max_extra_candidate_files = max(5, len(required_uris))
+        search_limit = max_extra_candidate_files * 2
+        candidate_uris = await self._search_candidate_file_uris(limit=search_limit)
+        extra_uris: list[str] = []
+        required_set = set(required_uris)
+        for uri in candidate_uris:
+            if not uri or uri in required_set or uri in extra_uris:
+                continue
+            extra_uris.append(uri)
+            if len(extra_uris) >= max_extra_candidate_files:
+                break
+        return [*required_uris, *extra_uris]
+
+    async def _search_candidate_file_uris(self, *, limit: int) -> list[str]:
+        schema = self._get_registry().get(self.memory_type)
+        if schema is None or not schema.directory:
+            return []
+        search_dirs = self._render_search_directories(schema)
+        if not search_dirs:
+            return []
+        query = _build_patch_search_query(self.patches)
+        if not query:
+            return []
+        return await self.search_files(query=query, search_uris=search_dirs, limit=limit)
+
+    def _render_search_directories(self, schema: MemoryTypeSchema) -> list[str]:
+        if self._isolation_handler:
+            return list(dict.fromkeys(self._isolation_handler.render_schema_directories(schema)))
+
+        ctx = self._ctx
+        user = getattr(ctx, "user", None)
+        user_id = (
+            getattr(ctx, "user_id", None)
+            or getattr(user, "user_id", None)
+            or _infer_user_space_from_uris(self.required_file_uris)
+            or _infer_user_space_from_uris([patch.target_uri for patch in self.patches])
+        )
+        if not user_id:
+            return []
+
+        from openviking.session.memory.utils.uri import render_template
+
+        return [render_template(schema.directory, {"user_space": user_id})]
 
 
 def _render_unified_patches(patches: list[PatchMergePatch]) -> str:
@@ -119,3 +169,40 @@ def _patch_target_path(patch: PatchMergePatch) -> str:
     target = patch.target_uri or patch.target_name
     target = str(target).strip().replace("\n", " ").replace("\r", " ")
     return target or "unknown"
+
+
+def _dedupe_uris(uris: list[str] | None) -> list[str]:
+    return list(dict.fromkeys(uri for uri in (uris or []) if uri))
+
+
+def _build_patch_search_query(patches: list[PatchMergePatch]) -> str:
+    parts: list[str] = []
+    for patch in patches:
+        if patch.target_name:
+            parts.append(str(patch.target_name))
+        if patch.target_uri:
+            parts.append(str(patch.target_uri).rstrip("/").split("/")[-1].removesuffix(".md"))
+        if patch.after_content:
+            parts.append(_truncate_query_text(patch.after_content, 1200))
+    return _truncate_query_text("\n\n".join(parts), 5000)
+
+
+def _truncate_query_text(text: Any, max_chars: int) -> str:
+    normalized = " ".join(str(text or "").split())
+    if len(normalized) <= max_chars:
+        return normalized
+    return normalized[: max_chars - 3].rstrip() + "..."
+
+
+def _infer_user_space_from_uris(uris: list[str | None]) -> str | None:
+    for uri in uris:
+        if not uri:
+            continue
+        prefix = "viking://user/"
+        if not uri.startswith(prefix):
+            continue
+        rest = uri.removeprefix(prefix)
+        user_space = rest.split("/", 1)[0]
+        if user_space and user_space != "memories":
+            return user_space
+    return None

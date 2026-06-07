@@ -56,6 +56,61 @@ async def test_patch_merge_context_provider_prefetch_reads_originals_and_renders
 
 
 @pytest.mark.asyncio
+async def test_patch_merge_context_provider_prefetch_searches_and_reads_extra_candidates():
+    schema = MemoryTypeSchema(
+        memory_type="experiences",
+        description="Experiences",
+        directory="viking://user/{{ user_space }}/memories/experiences",
+        filename_template="{{ experience_name }}.md",
+        fields=[],
+    )
+    provider = PatchMergeContextProvider(
+        memory_type="experiences",
+        required_file_uris=["viking://user/u/memories/experiences/book.md"],
+        patches=[
+            PatchMergePatch(
+                target_name="books",
+                target_uri="viking://user/u/memories/experiences/books.md",
+                before_content=None,
+                after_content="用户喜欢阅读科幻书籍，尤其是太空歌剧。",
+            )
+        ],
+    )
+    provider._registry = SimpleNamespace(get=lambda name: schema if name == "experiences" else None)
+    provider._ctx = SimpleNamespace(user=SimpleNamespace(user_id="u"))
+    provider.search_files = AsyncMock(
+        return_value=[
+            "viking://user/u/memories/experiences/book.md",
+            *[
+                f"viking://user/u/memories/experiences/candidate_{idx}.md"
+                for idx in range(10)
+            ],
+        ]
+    )
+    provider.read_file = AsyncMock(
+        return_value={
+            "memory_type": "experiences",
+            "experience_name": "candidate",
+            "content": "candidate content",
+        }
+    )
+
+    messages = await provider.prefetch()
+
+    provider.search_files.assert_awaited_once()
+    _, search_kwargs = provider.search_files.await_args
+    assert search_kwargs["search_uris"] == ["viking://user/u/memories/experiences"]
+    assert search_kwargs["limit"] == 10
+    assert provider.read_file.await_count == 6
+    read_uris = [call.args[0] for call in provider.read_file.await_args_list]
+    assert read_uris[0] == "viking://user/u/memories/experiences/book.md"
+    assert "viking://user/u/memories/experiences/candidate_0.md" in read_uris
+    assert "viking://user/u/memories/experiences/candidate_4.md" in read_uris
+    assert "viking://user/u/memories/experiences/candidate_5.md" not in read_uris
+    assert messages[-1]["content"].startswith("```diff")
+
+
+@pytest.mark.asyncio
 async def test_patch_merge_context_provider_renders_create_patch_from_dev_null():
     provider = PatchMergeContextProvider(
         memory_type="experiences",

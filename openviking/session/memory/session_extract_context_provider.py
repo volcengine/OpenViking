@@ -510,7 +510,6 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
 
         return pre_fetch_messages
 
-    @tracer("execute_tool", ignore_result=False)
     async def execute_tool(
         self,
         tool_call,
