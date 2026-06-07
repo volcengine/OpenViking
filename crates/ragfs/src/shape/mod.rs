@@ -7,6 +7,4 @@ pub mod probe;
 /// Backend shape validation helpers.
 pub mod validate;
 
-pub use manifest::{
-    BackendShapeManifest, StorageShape, SHAPE_MANIFEST_PATH, SHAPE_MANIFEST_VERSION,
-};
+pub use manifest::{StorageShape, SHAPE_MANIFEST_PATH};

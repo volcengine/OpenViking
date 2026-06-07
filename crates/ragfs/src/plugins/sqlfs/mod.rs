@@ -115,15 +115,7 @@ impl SQLFileSystem {
 impl Default for SQLFileSystem {
     fn default() -> Self {
         // Create with default SQLite in-memory database
-        let config = PluginConfig {
-            name: "sqlfs".to_string(),
-            mount_path: "/sqlfs".to_string(),
-            params: HashMap::new(),
-            backups: None,
-            server_encryption_enabled: false,
-            primary_encryption_enabled: false,
-            primary_redirects: Vec::new(),
-        };
+        let config = PluginConfig::single_backend("sqlfs", "/sqlfs", HashMap::new());
 
         Self::new(&config).expect("Failed to create default SQLFS")
     }
@@ -700,15 +692,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_sqlfs_basic() {
-        let config = PluginConfig {
-            name: "sqlfs".to_string(),
-            mount_path: "/sqlfs".to_string(),
-            params: std::collections::HashMap::new(),
-            backups: None,
-            server_encryption_enabled: false,
-            primary_encryption_enabled: false,
-            primary_redirects: Vec::new(),
-        };
+        let config =
+            PluginConfig::single_backend("sqlfs", "/sqlfs", std::collections::HashMap::new());
 
         let plugin = SQLFSPlugin::new();
         assert!(plugin.validate(&config).await.is_ok());

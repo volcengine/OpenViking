@@ -337,6 +337,35 @@ async def test_auth_on_multiple_endpoints(auth_client: httpx.AsyncClient):
     assert tenant_resp.status_code == 403
     assert tenant_resp.json()["error"]["code"] == "PERMISSION_DENIED"
 
+
+async def test_admin_sync_route_accepts_root_key(auth_client: httpx.AsyncClient, auth_service):
+    """ROOT keys should be allowed to call the system sync admin route."""
+    calls: list[str] = []
+
+    async def _fake_system_sync_status(uri: str, ctx):
+        calls.append(uri)
+        return {"path": uri, "entry_count": 1}
+
+    auth_service.fs.system_sync_status = _fake_system_sync_status
+
+    resp = await auth_client.get(
+        "/api/v1/system/sync/viking://resources",
+        headers={"X-API-Key": ROOT_KEY},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["result"] == {"path": "viking://resources", "entry_count": 1}
+    assert calls == ["viking://resources"]
+
+
+async def test_admin_sync_route_rejects_user_key(auth_client: httpx.AsyncClient, user_key: str):
+    """Regular user keys must not access the system sync admin route."""
+    resp = await auth_client.get(
+        "/api/v1/system/sync/viking://resources",
+        headers={"X-API-Key": user_key},
+    )
+    assert resp.status_code == 403
+    assert resp.json()["error"]["code"] == "PERMISSION_DENIED"
+
     tenant_resp = await auth_client.get(
         "/api/v1/fs/ls?uri=viking://",
         headers={

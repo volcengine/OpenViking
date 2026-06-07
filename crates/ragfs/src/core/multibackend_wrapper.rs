@@ -9,31 +9,32 @@
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
-use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use async_trait::async_trait;
-use rand::Rng;
 use regex::Regex;
-use serde_json::{json, Value};
+use serde_json::Value;
 use tokio::sync::{Mutex, Notify};
 
 use super::context::{FsContext, FS_CTX};
 use super::errors::{Error, Result};
-use super::filesystem::{normalize_prefix_path, FileSystem};
+use super::filesystem::{normalize_prefix_path, relative_match_file, FileSystem};
 use super::types::{
     BackendRole, BackendSyncState, FileInfo, GrepResult, OperationItemConfig, RedirectEntry,
     RedirectPolicy, SyncLogEntry, SyncOp, SyncType, TreeEntry, WriteFlag,
 };
 use crate::multibackend::meta::{
-    current_required_ctx, file_name, parent_dir, DefaultFsContextResolver, MetaStateStore,
-    PathSerializer,
+    current_required_ctx, file_name, parent_dir, DefaultFsContextResolver, FsContextResolver,
+    MetaStateStore, PathSerializer, MULTIWRITE_INTERNAL_NAMES,
 };
 
-/// Internal file names that are invisible to users.
-const INTERNAL_NAMES: &[&str] = &[".path.ovlock", ".sync_log.json", ".redirect.json"];
+mod retry;
+mod routing;
+#[cfg(test)]
+mod tests;
+
 /// Default chunk size used when copying file state from primary to backup.
 const DEFAULT_COPY_CHUNK_SIZE: usize = 8 * 1024 * 1024;
 /// Default retry loop interval.
@@ -44,27 +45,68 @@ const DEFAULT_RETRY_BACKOFF_BASE_MS: u64 = 1000;
 const DEFAULT_MAX_RETRIES_PER_ROUND: usize = 3;
 /// Default failure threshold before a target is quarantined.
 const DEFAULT_QUARANTINE_AFTER_FAILURES: u32 = 9;
-/// Default read-route probe cache TTL.
-const DEFAULT_READ_PROBE_CACHE_TTL: Duration = Duration::from_secs(2);
 /// Default wait timeout when shutting down background tasks.
 const DEFAULT_SHUTDOWN_WAIT: Duration = Duration::from_secs(5);
 
-macro_rules! clone_to_move {
-    ($($name:ident),+ $(,)?) => {
-        $(let $name = $name.clone();)+
-    };
+#[derive(Debug)]
+struct SyncFanoutTaskResult {
+    backend: String,
+    result: Result<()>,
 }
 
-type BoxedWriteFuture = Pin<Box<dyn Future<Output = Result<()>> + Send>>;
-type BoxedWriteOp = Arc<dyn Fn(Arc<dyn FileSystem>) -> BoxedWriteFuture + Send + Sync>;
+#[derive(Clone)]
+enum BackupWriteOp {
+    Replay(SyncOp),
+    WriteFile {
+        data: Arc<Vec<u8>>,
+        offset: u64,
+        flags: WriteFlag,
+    },
+    EnsureParentDirs {
+        mode: u32,
+    },
+}
 
-/// Convert a typed async write closure into the boxed form used by fanout strategies.
-fn boxed_write_op<F, Fut>(op: F) -> BoxedWriteOp
-where
-    F: Fn(Arc<dyn FileSystem>) -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = Result<()>> + Send + 'static,
-{
-    Arc::new(move |fs| Box::pin(op(fs)))
+impl BackupWriteOp {
+    /// Apply this backup-side operation under the provided request context.
+    async fn apply(
+        &self,
+        inner: &Inner,
+        backup: Arc<dyn FileSystem>,
+        path: &str,
+        ctx: &FsContext,
+    ) -> Result<()> {
+        match self {
+            Self::Replay(op) => {
+                op.replay(inner.primary().backend.clone(), backup, path, ctx)
+                    .await
+            }
+            Self::WriteFile {
+                data,
+                offset,
+                flags,
+            } => {
+                let data = Arc::clone(data);
+                let offset = *offset;
+                let flags = *flags;
+                FS_CTX
+                    .scope(ctx.clone(), async move {
+                        backup.ensure_parent_dirs(path, 0o755).await?;
+                        backup.write(path, data.as_slice(), offset, flags).await?;
+                        Ok(())
+                    })
+                    .await
+            }
+            Self::EnsureParentDirs { mode } => {
+                let mode = *mode;
+                FS_CTX
+                    .scope(ctx.clone(), async move {
+                        backup.ensure_parent_dirs(path, mode).await
+                    })
+                    .await
+            }
+        }
+    }
 }
 
 /// Cloned target data passed to fanout strategies without borrowing `Inner`.
@@ -74,15 +116,15 @@ struct FanoutTarget {
     backend: Arc<dyn FileSystem>,
 }
 
-#[derive(Clone)]
-struct ReadRouteCacheEntry {
-    backend_name: Option<String>,
-    cached_at: Instant,
+/// Effective sync work item with resolved target backend names.
+pub(crate) struct SyncWorkEntry {
+    pub(crate) file_path: String,
+    pub(crate) entry: SyncLogEntry,
+    pub(crate) targets: Vec<String>,
 }
 
 #[derive(Clone, Copy)]
 enum ReadRouteSource {
-    Cache,
     Backup,
     Primary,
     Redirect,
@@ -102,16 +144,6 @@ pub enum SyncMode {
     Async,
 }
 
-struct WriteOp<R, P> {
-    path: String,
-    size: u64,
-    primary_fn: P,
-    backup_fn: BoxedWriteOp,
-    sync_op: Option<SyncOp>,
-    redirect_eligible: bool,
-    redirect_result: Option<R>,
-}
-
 /// A backend entry within the multi-write wrapper.
 pub struct BackendEntry {
     /// Logical name (globally unique)
@@ -120,6 +152,8 @@ pub struct BackendEntry {
     pub role: BackendRole,
     /// The backend filesystem handle (may be encrypted)
     pub backend: Arc<dyn FileSystem>,
+    /// Optional raw backend handle used by primary verbatim copy fast-paths.
+    pub raw_backend: Option<Arc<dyn FileSystem>>,
     /// Operations this backend participates in (only for Backup)
     pub operations: Vec<OperationItemConfig>,
     /// Exclude policies (only for Backup)
@@ -232,7 +266,10 @@ impl SyncOp {
             SyncOp::Rename { to } => {
                 let to = to.clone();
                 FS_CTX
-                    .scope(ctx.clone(), async { backup.rename(file_path, &to).await })
+                    .scope(ctx.clone(), async {
+                        backup.ensure_parent_dirs(&to, 0o755).await?;
+                        backup.rename(file_path, &to).await
+                    })
                     .await
             }
             SyncOp::Chmod { mode } => {
@@ -245,6 +282,52 @@ impl SyncOp {
     }
 }
 
+/// Copy one file between two filesystem handles in bounded-size chunks.
+async fn copy_file_state(
+    source: Arc<dyn FileSystem>,
+    source_path: &str,
+    destination: Arc<dyn FileSystem>,
+    destination_path: &str,
+    size: u64,
+    ctx: &FsContext,
+) -> Result<()> {
+    FS_CTX
+        .scope(ctx.clone(), async {
+            destination
+                .ensure_parent_dirs(destination_path, 0o755)
+                .await?;
+            if size == 0 {
+                if destination.exists(destination_path).await {
+                    return destination.truncate(destination_path, 0).await;
+                }
+                return destination.create(destination_path).await;
+            }
+
+            let mut offset = 0u64;
+            while offset < size {
+                let chunk_len = (size - offset).min(DEFAULT_COPY_CHUNK_SIZE as u64);
+                let chunk = source.read(source_path, offset, chunk_len).await?;
+                let flag = if offset == 0 {
+                    WriteFlag::Create
+                } else {
+                    WriteFlag::None
+                };
+                destination
+                    .write(destination_path, &chunk, offset, flag)
+                    .await?;
+                offset = offset.saturating_add(chunk.len() as u64);
+                if chunk.is_empty() {
+                    return Err(Error::internal(format!(
+                        "source returned empty chunk while copying '{}' -> '{}'",
+                        source_path, destination_path
+                    )));
+                }
+            }
+            Ok(())
+        })
+        .await
+}
+
 /// Copy the current file state from primary to backup in bounded-size chunks.
 async fn copy_current_primary_state(
     primary: Arc<dyn FileSystem>,
@@ -253,37 +336,35 @@ async fn copy_current_primary_state(
     size: u64,
     ctx: &FsContext,
 ) -> Result<()> {
-    FS_CTX
-        .scope(ctx.clone(), async {
-            backup.ensure_parent_dirs(file_path, 0o755).await?;
-            if size == 0 {
-                if backup.exists(file_path).await {
-                    return backup.truncate(file_path, 0).await;
-                }
-                return backup.create(file_path).await;
-            }
+    copy_file_state(primary, file_path, backup, file_path, size, ctx).await
+}
 
-            let mut offset = 0u64;
-            while offset < size {
-                let chunk_len = (size - offset).min(DEFAULT_COPY_CHUNK_SIZE as u64);
-                let chunk = primary.read(file_path, offset, chunk_len).await?;
-                let flag = if offset == 0 {
-                    WriteFlag::Create
-                } else {
-                    WriteFlag::None
-                };
-                backup.write(file_path, &chunk, offset, flag).await?;
-                offset = offset.saturating_add(chunk.len() as u64);
-                if chunk.is_empty() {
-                    return Err(Error::internal(format!(
-                        "primary returned empty chunk while copying '{}'",
-                        file_path
-                    )));
-                }
+/// Copy one file within the primary raw backend without decrypting and re-encrypting bytes.
+async fn copy_raw_primary_state(
+    primary_raw: Arc<dyn FileSystem>,
+    source_path: &str,
+    destination_path: &str,
+    ctx: &FsContext,
+) -> Result<()> {
+    let raw_size = FS_CTX
+        .scope(ctx.clone(), async {
+            let source_info = primary_raw.stat(source_path).await?;
+            if source_info.is_dir {
+                return Err(Error::IsADirectory(source_path.to_string()));
             }
-            Ok(())
+            Ok::<u64, Error>(source_info.size)
         })
-        .await
+        .await?;
+
+    copy_file_state(
+        primary_raw.clone(),
+        source_path,
+        primary_raw,
+        destination_path,
+        raw_size,
+        ctx,
+    )
+    .await
 }
 
 /// Inner state shared via Arc for async spawn and retry_loop.
@@ -308,10 +389,6 @@ pub(crate) struct Inner {
     path_queues: PathSerializer,
     /// Directories that currently have outstanding retry work.
     pending_dirs: Mutex<HashSet<String>>,
-    /// Cached read-route resolution for hot paths.
-    read_route_cache: Mutex<HashMap<String, ReadRouteCacheEntry>>,
-    /// Read-route cache TTL.
-    read_route_cache_ttl: Duration,
     /// Retry loop interval.
     retry_interval: Duration,
     /// Base retry backoff in milliseconds.
@@ -325,7 +402,6 @@ pub(crate) struct Inner {
     /// Notifier fired when background task count reaches zero.
     idle_notify: Notify,
     /// Read route hit metrics.
-    read_cache_hits: AtomicU64,
     read_backup_hits: AtomicU64,
     read_primary_hits: AtomicU64,
     read_redirect_hits: AtomicU64,
@@ -344,6 +420,7 @@ pub struct MultiWriteWrappedFS {
 /// Builder for `MultiWriteWrappedFS`.
 pub struct MultiWriteWrappedFSBuilder {
     primary_backend: Arc<dyn FileSystem>,
+    primary_raw_backend: Option<Arc<dyn FileSystem>>,
     backup_entries: Vec<BackendEntry>,
     redirects: Vec<RedirectPolicy>,
     sync_mode: SyncMode,
@@ -352,10 +429,16 @@ pub struct MultiWriteWrappedFSBuilder {
     retry_backoff_base_ms: u64,
     max_retry_per_round: usize,
     quarantine_after_failures: u32,
-    read_route_cache_ttl: Duration,
+    ctx_resolver: Arc<dyn FsContextResolver>,
 }
 
 impl MultiWriteWrappedFSBuilder {
+    /// Attach the raw primary backend so the wrapper can do verbatim primary copies.
+    pub fn with_primary_raw_backend(mut self, primary_raw_backend: Arc<dyn FileSystem>) -> Self {
+        self.primary_raw_backend = Some(primary_raw_backend);
+        self
+    }
+
     /// Set backup backend entries on the builder.
     pub fn with_backups(mut self, backup_entries: Vec<BackendEntry>) -> Self {
         self.backup_entries = backup_entries;
@@ -404,9 +487,14 @@ impl MultiWriteWrappedFSBuilder {
         self
     }
 
-    /// Configure read-route cache TTL.
-    pub fn read_route_cache_ttl(mut self, read_route_cache_ttl: Duration) -> Self {
-        self.read_route_cache_ttl = read_route_cache_ttl;
+    /// Accept the legacy read-route cache TTL option as a no-op.
+    pub fn read_route_cache_ttl(self, _read_route_cache_ttl: Duration) -> Self {
+        self
+    }
+
+    /// Configure the context resolver used by retry and admin background paths.
+    pub fn ctx_resolver(mut self, ctx_resolver: Arc<dyn FsContextResolver>) -> Self {
+        self.ctx_resolver = ctx_resolver;
         self
     }
 
@@ -417,6 +505,7 @@ impl MultiWriteWrappedFSBuilder {
             name: "primary".to_string(),
             role: BackendRole::Primary,
             backend: self.primary_backend.clone(),
+            raw_backend: self.primary_raw_backend.clone(),
             operations: Vec::new(),
             excludes: Vec::new(),
         });
@@ -435,8 +524,7 @@ impl MultiWriteWrappedFSBuilder {
             .filter(|&n| n > 0)
             .map(|n| Arc::new(tokio::sync::Semaphore::new(n)));
 
-        let ctx_resolver = Arc::new(DefaultFsContextResolver);
-        let meta_store = MetaStateStore::new(self.primary_backend, ctx_resolver);
+        let meta_store = MetaStateStore::new(self.primary_backend, self.ctx_resolver);
 
         let inner = Arc::new(Inner {
             backends,
@@ -449,15 +537,12 @@ impl MultiWriteWrappedFSBuilder {
             meta_store,
             path_queues: PathSerializer::new(),
             pending_dirs: Mutex::new(HashSet::new()),
-            read_route_cache: Mutex::new(HashMap::new()),
-            read_route_cache_ttl: self.read_route_cache_ttl,
             retry_interval: self.retry_interval,
             retry_backoff_base_ms: self.retry_backoff_base_ms,
             max_retry_per_round: self.max_retry_per_round,
             quarantine_after_failures: self.quarantine_after_failures,
             background_tasks: AtomicUsize::new(0),
             idle_notify: Notify::new(),
-            read_cache_hits: AtomicU64::new(0),
             read_backup_hits: AtomicU64::new(0),
             read_primary_hits: AtomicU64::new(0),
             read_redirect_hits: AtomicU64::new(0),
@@ -481,6 +566,7 @@ impl MultiWriteWrappedFS {
     pub fn builder(primary_backend: Arc<dyn FileSystem>) -> MultiWriteWrappedFSBuilder {
         MultiWriteWrappedFSBuilder {
             primary_backend,
+            primary_raw_backend: None,
             backup_entries: Vec::new(),
             redirects: Vec::new(),
             sync_mode: SyncMode::Async,
@@ -489,7 +575,7 @@ impl MultiWriteWrappedFS {
             retry_backoff_base_ms: DEFAULT_RETRY_BACKOFF_BASE_MS,
             max_retry_per_round: DEFAULT_MAX_RETRIES_PER_ROUND,
             quarantine_after_failures: DEFAULT_QUARANTINE_AFTER_FAILURES,
-            read_route_cache_ttl: DEFAULT_READ_PROBE_CACHE_TTL,
+            ctx_resolver: Arc::new(DefaultFsContextResolver),
         }
     }
 }
@@ -522,6 +608,31 @@ impl Inner {
             .filter_map(|name| self.backup_by_name(name))
             .map(BackendEntry::fanout_target)
             .collect()
+    }
+
+    /// Execute one backup write synchronously so redirect visibility only appears
+    /// after at least one target has durably materialized the file contents.
+    async fn write_first_target(
+        inner: &Arc<Inner>,
+        path: &str,
+        target: &FanoutTarget,
+        ctx: &FsContext,
+        op: BackupWriteOp,
+    ) -> Result<()> {
+        let queue_key = Self::backup_queue_key(path, &target.name);
+        let fs = target.backend.clone();
+        let ack_ctx = ctx.clone();
+
+        inner
+            .path_queues
+            .with_path_lock(&queue_key, || async move {
+                op.apply(inner, fs, path, ctx).await
+            })
+            .await?;
+
+        inner
+            .update_backup_acked_seq(path, &target.name, &ack_ctx)
+            .await
     }
 
     /// Resolve effective target backend names for sync/retry work.
@@ -584,90 +695,24 @@ impl Inner {
         None
     }
 
+    /// Resolve persisted redirect targets for one already-written file path.
+    async fn redirect_targets_for_path(
+        &self,
+        path: &str,
+        ctx: &FsContext,
+    ) -> Result<Option<Vec<String>>> {
+        let dir = parent_dir(path);
+        let name = file_name(path);
+        let redirect_meta = self.meta_store.get_redirect_meta(&dir, ctx).await?;
+        Ok(redirect_meta
+            .entries
+            .get(name)
+            .map(|entry| entry.targets.clone()))
+    }
+
     /// Generate and persist the next sequence number.
     async fn next_seq(&self) -> Result<u64> {
         self.meta_store.next_seq().await
-    }
-
-    /// Invalidate one cached read-route entry after a write-side state change.
-    async fn invalidate_read_route(&self, path: &str) {
-        self.read_route_cache.lock().await.remove(path);
-    }
-
-    /// Cache a resolved read route for a short TTL window.
-    async fn cache_read_route(&self, path: &str, backend_name: Option<String>) {
-        self.read_route_cache.lock().await.insert(
-            path.to_string(),
-            ReadRouteCacheEntry {
-                backend_name,
-                cached_at: Instant::now(),
-            },
-        );
-    }
-
-    /// Read and validate a cached route if it is still fresh.
-    async fn cached_read_route(&self, path: &str) -> Option<Option<Arc<dyn FileSystem>>> {
-        let entry = self.read_route_cache.lock().await.get(path).cloned()?;
-        if entry.cached_at.elapsed() > self.read_route_cache_ttl {
-            self.read_route_cache.lock().await.remove(path);
-            return None;
-        }
-
-        match entry.backend_name {
-            Some(name) if name == self.primary().name => Some(Some(self.primary().backend.clone())),
-            Some(name) => Some(self.backup_by_name(&name).map(|be| be.backend.clone())),
-            None => Some(None),
-        }
-    }
-
-    /// Record read-route counters in one place so hot paths stay explicit.
-    fn record_read_route(&self, source: ReadRouteSource) {
-        match source {
-            ReadRouteSource::Cache => {
-                self.read_cache_hits.fetch_add(1, Ordering::Relaxed);
-            }
-            ReadRouteSource::Backup => {
-                self.read_backup_hits.fetch_add(1, Ordering::Relaxed);
-            }
-            ReadRouteSource::Primary => {
-                self.read_primary_hits.fetch_add(1, Ordering::Relaxed);
-            }
-            ReadRouteSource::Redirect => {
-                self.read_redirect_hits.fetch_add(1, Ordering::Relaxed);
-            }
-            ReadRouteSource::Miss => {
-                self.read_misses.fetch_add(1, Ordering::Relaxed);
-            }
-        }
-    }
-
-    /// Export read-route metrics for operational introspection.
-    pub(crate) fn read_route_metrics(&self) -> Value {
-        json!({
-            "cache_hits": self.read_cache_hits.load(Ordering::Relaxed),
-            "backup_hits": self.read_backup_hits.load(Ordering::Relaxed),
-            "primary_hits": self.read_primary_hits.load(Ordering::Relaxed),
-            "redirect_hits": self.read_redirect_hits.load(Ordering::Relaxed),
-            "misses": self.read_misses.load(Ordering::Relaxed),
-        })
-    }
-
-    /// Stat the first reachable redirect target and return user-visible metadata.
-    async fn redirect_file_info(
-        &self,
-        path: &str,
-        name: &str,
-        redirect_entry: &RedirectEntry,
-    ) -> FileInfo {
-        for target_name in &redirect_entry.targets {
-            if let Some(be) = self.backup_by_name(target_name) {
-                if let Ok(mut info) = be.backend.stat(path).await {
-                    info.name = name.to_string();
-                    return info;
-                }
-            }
-        }
-        FileInfo::new_file(name.to_string(), 0, 0o644)
     }
 
     /// Resolve a file size for retry-time policy decisions.
@@ -678,243 +723,171 @@ impl Inner {
         }
     }
 
-    /// Mark one directory as pending retry work.
-    async fn mark_pending_dir(&self, dir: &str) {
-        self.pending_dirs.lock().await.insert(dir.to_string());
-    }
-
-    /// Remove one directory from the retry set.
-    async fn clear_pending_dir(&self, dir: &str) {
-        self.pending_dirs.lock().await.remove(dir);
-    }
-
-    /// Snapshot the current set of pending retry directories.
-    async fn pending_dirs_snapshot(&self) -> Vec<String> {
-        self.pending_dirs.lock().await.iter().cloned().collect()
-    }
-
-    /// Recompute whether one directory still has pending retry work.
-    async fn refresh_pending_dir(&self, dir: &str, ctx: &FsContext) -> Result<()> {
-        let sync_log = self.meta_store.get_sync_log_meta(dir, ctx).await?;
-        if sync_log.entries.is_empty() {
-            self.clear_pending_dir(dir).await;
-            return Ok(());
-        }
-
-        let redirect_meta = self
-            .meta_store
-            .get_redirect_meta(dir, ctx)
-            .await
-            .unwrap_or_default();
-        let mut has_pending = false;
-        for (file_name, sync_entry) in &sync_log.entries {
-            let file_path = if dir == "/" {
-                format!("/{}", file_name)
-            } else {
-                format!("{}/{}", dir, file_name)
-            };
-            let targets =
-                self.target_backend_names(&redirect_meta, file_name, &file_path, sync_entry);
-            if targets
-                .iter()
-                .any(|target| !sync_entry.is_in_sync(target) && !sync_entry.is_quarantined(target))
-            {
-                has_pending = true;
-                break;
-            }
-        }
-
-        if has_pending {
-            self.mark_pending_dir(dir).await;
-        } else {
-            self.clear_pending_dir(dir).await;
-        }
-        Ok(())
-    }
-
-    /// Record a started background task.
-    fn background_task_started(&self) {
-        self.background_tasks.fetch_add(1, Ordering::SeqCst);
-    }
-
-    /// Record a finished background task and wake idle waiters if needed.
-    fn background_task_finished(&self) {
-        if self.background_tasks.fetch_sub(1, Ordering::SeqCst) == 1 {
-            self.idle_notify.notify_waiters();
-        }
-    }
-
-    /// Wait for all background tasks to drain.
-    async fn wait_idle(&self, timeout: Duration) -> Result<()> {
-        let deadline = Instant::now() + timeout;
-        loop {
-            if self.background_tasks.load(Ordering::SeqCst) == 0 {
-                return Ok(());
-            }
-            let now = Instant::now();
-            if now >= deadline {
-                return Err(Error::timeout(
-                    "timed out while waiting multi-write background tasks to drain",
-                ));
-            }
-            let wait = deadline.saturating_duration_since(now);
-            tokio::time::timeout(wait, self.idle_notify.notified())
-                .await
-                .map_err(|_| {
-                    Error::timeout("timed out while waiting multi-write background tasks to drain")
-                })?;
-        }
-    }
-
-    /// Resolve the read backend for a path using the fallback chain.
-    async fn resolve_read_backend(&self, path: &str) -> Option<Arc<dyn FileSystem>> {
-        let normalized = normalize_prefix_path(path);
-        if let Some(cached) = self.cached_read_route(&normalized).await {
-            self.record_read_route(ReadRouteSource::Cache);
-            return cached;
-        }
-
-        let read_backups = self.read_backups_sorted();
-        let backup_exists = futures::future::join_all(read_backups.iter().map(|backup| async {
-            (
-                backup.name.clone(),
-                backup.backend.clone(),
-                backup.backend.exists(&normalized).await,
-            )
-        }))
-        .await;
-        for (name, backend, exists) in backup_exists {
-            if exists {
-                self.cache_read_route(&normalized, Some(name)).await;
-                self.record_read_route(ReadRouteSource::Backup);
-                return Some(backend);
-            }
-        }
-
-        if self.primary().backend.exists(&normalized).await {
-            self.cache_read_route(&normalized, Some(self.primary().name.clone()))
-                .await;
-            self.record_read_route(ReadRouteSource::Primary);
-            return Some(self.primary().backend.clone());
-        }
-
-        let dir = parent_dir(&normalized);
-        let name = file_name(&normalized).to_string();
-        let ctx = current_required_ctx()
-            .or_else(|_| self.meta_store.ctx_resolver().resolve(&dir))
-            .ok()?;
-        if let Ok(redirect_meta) = self.meta_store.get_redirect_meta(&dir, &ctx).await {
-            if let Some(entry) = redirect_meta.entries.get(&name) {
-                let redirect_targets: Vec<(String, Arc<dyn FileSystem>)> = entry
-                    .targets
-                    .iter()
-                    .filter_map(|target_name| {
-                        self.backup_by_name(target_name)
-                            .map(|be| (be.name.clone(), be.backend.clone()))
-                    })
-                    .collect();
-                let redirect_exists = futures::future::join_all(redirect_targets.iter().map(
-                    |(target_name, backend)| async {
-                        (
-                            target_name.clone(),
-                            backend.clone(),
-                            backend.exists(&normalized).await,
-                        )
-                    },
-                ))
-                .await;
-                for (target_name, backend, exists) in redirect_exists {
-                    if exists {
-                        self.cache_read_route(&normalized, Some(target_name)).await;
-                        self.record_read_route(ReadRouteSource::Redirect);
-                        return Some(backend);
-                    }
-                }
-            }
-        }
-
-        self.cache_read_route(&normalized, None).await;
-        self.record_read_route(ReadRouteSource::Miss);
-        None
-    }
-
-    /// Execute the common primary-write, sync-log and backup-fanout pipeline.
-    async fn execute_write<R, P, PFut>(inner: &Arc<Self>, op: WriteOp<R, P>) -> Result<R>
+    /// Execute the primary-write, sync-log and backup-fanout pipeline.
+    async fn execute_write<R, P, PFut>(
+        inner: &Arc<Self>,
+        path: String,
+        size: u64,
+        sync_op: Option<SyncOp>,
+        backup_op: Option<BackupWriteOp>,
+        primary_fn: P,
+    ) -> Result<R>
     where
         P: FnOnce(Arc<dyn FileSystem>) -> PFut + Send,
         PFut: Future<Output = Result<R>> + Send,
     {
         let ctx = current_required_ctx()?;
-        let mut sync_op = op.sync_op;
-        inner.invalidate_read_route(&op.path).await;
+        inner.invalidate_read_route(&path).await;
 
-        if op.redirect_eligible {
-            if let Some(targets) = inner.check_redirect(&op.path, op.size) {
-                let result = op
-                    .redirect_result
-                    .ok_or_else(|| Error::internal("redirect result missing".to_string()))?;
-                let dir = parent_dir(&op.path);
-                let name = file_name(&op.path).to_string();
-                let seq = inner.next_seq().await?;
-                let targets_clone = targets.clone();
-                let entry = sync_op.take();
-                inner
-                    .meta_store
-                    .update_dir_meta(&dir, &ctx, move |redirect, sync_log| {
-                        redirect.entries.insert(
-                            name.clone(),
-                            RedirectEntry {
-                                targets: targets_clone.clone(),
-                            },
-                        );
-                        if let Some(op) = entry {
-                            sync_log.entries.insert(name, SyncLogEntry::new(seq, op));
-                        }
-                        Ok(())
-                    })
-                    .await?;
-                inner.mark_pending_dir(&dir).await;
-                let fanout_result = Inner::fanout_write_to_targets(
-                    inner,
-                    &op.path,
-                    &targets,
-                    ctx.clone(),
-                    op.backup_fn,
-                )
-                .await;
-                inner.refresh_pending_dir(&dir, &ctx).await?;
-                fanout_result?;
-                return Ok(result);
-            }
-        }
-
-        let result = FS_CTX
-            .scope(
-                ctx.clone(),
-                (op.primary_fn)(inner.primary().backend.clone()),
-            )
-            .await?;
-
-        if let Some(entry) = sync_op {
-            let dir = parent_dir(&op.path);
-            let name = file_name(&op.path).to_string();
+        let prepared_entry = if let Some(entry) = sync_op {
+            let dir = parent_dir(&path);
+            let name = file_name(&path).to_string();
             let seq = inner.next_seq().await?;
             inner
                 .meta_store
+                .update_dir_meta(&dir, &ctx, {
+                    let name = name.clone();
+                    move |_redirect, sync_log| {
+                        sync_log.entries.insert(name, SyncLogEntry::new(seq, entry));
+                        Ok(())
+                    }
+                })
+                .await?;
+            Some((dir, name, seq))
+        } else {
+            None
+        };
+
+        let result = match FS_CTX
+            .scope(ctx.clone(), primary_fn(inner.primary().backend.clone()))
+            .await
+        {
+            Ok(result) => result,
+            Err(err) => {
+                if let Some((dir, name, seq)) = prepared_entry.as_ref() {
+                    let _ = inner
+                        .meta_store
+                        .update_dir_meta(dir, &ctx, {
+                            let name = name.clone();
+                            let seq = *seq;
+                            move |_redirect, sync_log| {
+                                let should_remove =
+                                    sync_log.entries.get(&name).is_some_and(|entry| {
+                                        entry.latest_seq == seq && !entry.is_primary_committed()
+                                    });
+                                if should_remove {
+                                    sync_log.entries.remove(&name);
+                                }
+                                Ok(())
+                            }
+                        })
+                        .await;
+                }
+                return Err(err);
+            }
+        };
+
+        if let Some((dir, name, seq)) = prepared_entry {
+            inner
+                .meta_store
                 .update_dir_meta(&dir, &ctx, move |_redirect, sync_log| {
-                    sync_log.entries.insert(name, SyncLogEntry::new(seq, entry));
+                    let entry = sync_log.entries.get_mut(&name).ok_or_else(|| {
+                        Error::internal(format!(
+                            "prepared sync log entry missing while committing '{}'",
+                            name
+                        ))
+                    })?;
+                    if entry.latest_seq != seq {
+                        return Err(Error::internal(format!(
+                            "prepared sync log entry seq mismatch while committing '{}'",
+                            name
+                        )));
+                    }
+                    entry.mark_primary_committed();
                     Ok(())
                 })
                 .await?;
             inner.mark_pending_dir(&dir).await;
         }
 
-        let dir = parent_dir(&op.path);
-        let fanout_result =
-            Inner::fanout_write(inner, &op.path, op.size, ctx.clone(), op.backup_fn).await;
+        let dir = parent_dir(&path);
+        let fanout_result = if let Some(backup_op) = backup_op {
+            Inner::fanout_write(inner, &path, size, ctx.clone(), backup_op).await
+        } else {
+            Ok(())
+        };
         inner.refresh_pending_dir(&dir, &ctx).await?;
         fanout_result?;
         Ok(result)
+    }
+
+    /// Execute a write that may be redirected away from the primary backend.
+    async fn execute_write_with_redirect<P, PFut>(
+        inner: &Arc<Self>,
+        path: String,
+        size: u64,
+        sync_op: SyncOp,
+        backup_op: BackupWriteOp,
+        primary_fn: P,
+    ) -> Result<u64>
+    where
+        P: FnOnce(Arc<dyn FileSystem>) -> PFut + Send,
+        PFut: Future<Output = Result<u64>> + Send,
+    {
+        let ctx = current_required_ctx()?;
+        inner.invalidate_read_route(&path).await;
+
+        if let Some(targets) = inner.check_redirect(&path, size) {
+            let dir = parent_dir(&path);
+            let name = file_name(&path).to_string();
+            let seq = inner.next_seq().await?;
+            let resolved_targets = inner.named_targets(&targets);
+            let first_target = resolved_targets.first().cloned().ok_or_else(|| {
+                Error::internal(format!(
+                    "redirect path '{}' resolved no writable targets",
+                    path
+                ))
+            })?;
+            Inner::write_first_target(inner, &path, &first_target, &ctx, backup_op.clone()).await?;
+            let targets_clone = targets.clone();
+            let first_target_name = first_target.name.clone();
+            inner
+                .meta_store
+                .update_dir_meta(&dir, &ctx, move |redirect, sync_log| {
+                    redirect.entries.insert(
+                        name.clone(),
+                        RedirectEntry {
+                            targets: targets_clone.clone(),
+                        },
+                    );
+                    let mut committed = SyncLogEntry::committed(seq, sync_op);
+                    committed
+                        .backends
+                        .insert(first_target_name.clone(), BackendSyncState::acked(seq));
+                    sync_log.entries.insert(name, committed);
+                    Ok(())
+                })
+                .await?;
+
+            let remaining_targets: Vec<FanoutTarget> =
+                resolved_targets.into_iter().skip(1).collect();
+            if !remaining_targets.is_empty() {
+                inner.mark_pending_dir(&dir).await;
+                Inner::fanout_async(inner, &path, remaining_targets, &ctx, backup_op).await;
+            }
+            inner.refresh_pending_dir(&dir, &ctx).await?;
+            return Ok(size);
+        }
+
+        Inner::execute_write(
+            inner,
+            path,
+            size,
+            Some(sync_op),
+            Some(backup_op),
+            primary_fn,
+        )
+        .await
     }
 
     /// Fanout a write operation to all write-enabled backups.
@@ -925,7 +898,7 @@ impl Inner {
         path: &str,
         size: u64,
         ctx: FsContext,
-        op: BoxedWriteOp,
+        op: BackupWriteOp,
     ) -> Result<()> {
         Inner::fanout_targets(inner, path, inner.write_targets(path, size), ctx, op).await
     }
@@ -937,7 +910,7 @@ impl Inner {
         path: &str,
         target_names: &[String],
         ctx: FsContext,
-        op: BoxedWriteOp,
+        op: BackupWriteOp,
     ) -> Result<()> {
         Inner::fanout_targets(inner, path, inner.named_targets(target_names), ctx, op).await
     }
@@ -948,9 +921,20 @@ impl Inner {
         path: &str,
         targets: Vec<FanoutTarget>,
         ctx: FsContext,
-        op: BoxedWriteOp,
+        op: BackupWriteOp,
     ) -> Result<()> {
         if targets.is_empty() {
+            if matches!(inner.sync_type, SyncType::Sync)
+                && inner.write_ack_count > 0
+                && inner.write_backups().next().is_some()
+            {
+                return Err(Error::SyncWriteQuorum {
+                    succeeded: 0,
+                    required: inner.write_ack_count,
+                    attempted: 0,
+                    failures: Vec::new(),
+                });
+            }
             return Ok(());
         }
 
@@ -969,7 +953,7 @@ impl Inner {
         path: &str,
         targets: &[FanoutTarget],
         ctx: &FsContext,
-        op: BoxedWriteOp,
+        op: BackupWriteOp,
     ) -> Result<()> {
         let ack_count = inner.write_ack_count.min(targets.len());
         let timeout = if inner.write_ack_timeout_ms > 0 {
@@ -991,30 +975,26 @@ impl Inner {
             let ctx = ctx.clone();
             let op_clone = op.clone();
             let queue_key = Self::backup_queue_key(&path, &name);
-            let path_lock = inner.path_queues.get_path_lock(&queue_key).await;
 
             handles.push(tokio::spawn(async move {
                 // Wrap in FS_CTX.scope so encrypted backends can access account_id.
-                let exec = async {
-                    let _guard = path_lock.lock().await;
-                    if let Some(ref ctx) = ctx {
-                        FS_CTX.scope(ctx.clone(), op_clone(fs)).await
-                    } else {
-                        op_clone(fs).await
-                    }
-                };
+                let exec = inner.path_queues.with_path_lock(&queue_key, || async {
+                    op_clone
+                        .apply(&inner, fs, &path, ctx.as_ref().unwrap())
+                        .await
+                });
 
                 let result = if let Some(timeout) = timeout {
                     match tokio::time::timeout(timeout, exec).await {
                         Ok(Ok(())) => Ok(()),
-                        Ok(Err(e)) => Err(format!("{}: {}", name, e)),
-                        Err(_) => Err(format!("{}: timeout", name)),
+                        Ok(Err(e)) => Err(e),
+                        Err(_) => Err(Error::timeout(format!(
+                            "backup '{}' timed out waiting for sync acknowledgement",
+                            name
+                        ))),
                     }
                 } else {
-                    match exec.await {
-                        Ok(()) => Ok(()),
-                        Err(e) => Err(format!("{}: {}", name, e)),
-                    }
+                    exec.await
                 };
 
                 // Update acked_seq on success.
@@ -1024,25 +1004,42 @@ impl Inner {
                     }
                 }
 
-                (name, result)
+                SyncFanoutTaskResult {
+                    backend: name,
+                    result,
+                }
             }));
         }
 
         let results = futures::future::join_all(handles).await;
 
         let mut successes = 0usize;
-        let mut errors = Vec::new();
+        let mut failures = Vec::new();
 
         for result in results {
             match result {
-                Ok((_name, Ok(()))) => {
+                Ok(SyncFanoutTaskResult {
+                    backend: _,
+                    result: Ok(()),
+                }) => {
                     successes += 1;
                 }
-                Ok((_name, Err(e))) => {
-                    errors.push(e);
+                Ok(SyncFanoutTaskResult {
+                    backend,
+                    result: Err(e),
+                }) => {
+                    failures.push(super::errors::SyncWriteFailureDetail {
+                        backend,
+                        kind: e.kind_name().to_string(),
+                        message: e.to_string(),
+                    });
                 }
                 Err(e) => {
-                    errors.push(format!("join error: {}", e));
+                    failures.push(super::errors::SyncWriteFailureDetail {
+                        backend: "<spawn>".to_string(),
+                        kind: "join_error".to_string(),
+                        message: e.to_string(),
+                    });
                 }
             }
         }
@@ -1050,12 +1047,12 @@ impl Inner {
         if successes >= ack_count {
             Ok(())
         } else {
-            Err(Error::internal(format!(
-                "sync write failed: {}/{} backups succeeded. Errors: {}",
-                successes,
-                targets.len(),
-                errors.join("; ")
-            )))
+            Err(Error::SyncWriteQuorum {
+                succeeded: successes,
+                required: ack_count,
+                attempted: targets.len(),
+                failures,
+            })
         }
     }
 
@@ -1066,7 +1063,7 @@ impl Inner {
         path: &str,
         targets: Vec<FanoutTarget>,
         ctx: &FsContext,
-        op: BoxedWriteOp,
+        op: BackupWriteOp,
     ) {
         let path_owned = path.to_string();
         let sem = inner.write_sem.clone();
@@ -1080,22 +1077,23 @@ impl Inner {
             let inner = Arc::clone(inner);
             let op_clone = op.clone();
             let queue_key = Self::backup_queue_key(&path, &name);
-            let path_lock = inner.path_queues.get_path_lock(&queue_key).await;
             inner.background_task_started();
 
             tokio::spawn(async move {
                 {
                     // Per (path, backup) serialization preserves FIFO without blocking other backups.
-                    let _guard = path_lock.lock().await;
+                    let result = inner
+                        .path_queues
+                        .with_path_lock(&queue_key, || async {
+                            let _permit = if let Some(ref sem) = sem {
+                                sem.acquire().await.ok()
+                            } else {
+                                None
+                            };
 
-                    let _permit = if let Some(ref sem) = sem {
-                        sem.acquire().await.ok()
-                    } else {
-                        None
-                    };
-
-                    // Wrap in FS_CTX.scope so encrypted backends can access account_id.
-                    let result = FS_CTX.scope(ctx.clone(), op_clone(fs)).await;
+                            op_clone.apply(&inner, fs, &path, &ctx).await
+                        })
+                        .await;
 
                     // Update acked_seq on successful write.
                     if result.is_ok() {
@@ -1105,59 +1103,6 @@ impl Inner {
                 inner.background_task_finished();
             });
         }
-    }
-
-    /// Update the acked_seq for a backup in the sync log.
-    async fn update_backup_acked_seq(
-        &self,
-        path: &str,
-        backup_name: &str,
-        ctx: &FsContext,
-    ) -> Result<()> {
-        self.update_backend_state(path, backup_name, ctx, |state, latest_seq| {
-            state.mark_acked(latest_seq);
-        })
-        .await?;
-        self.refresh_pending_dir(&parent_dir(path), ctx).await
-    }
-
-    /// Record a replay failure and quarantine the target after repeated failures.
-    pub(crate) async fn record_backup_retry_failure(
-        &self,
-        path: &str,
-        backup_name: &str,
-        ctx: &FsContext,
-    ) -> Result<()> {
-        self.update_backend_state(path, backup_name, ctx, |state, _latest_seq| {
-            state.mark_retry_failed(self.quarantine_after_failures);
-        })
-        .await?;
-        self.refresh_pending_dir(&parent_dir(path), ctx).await
-    }
-
-    /// Update per-backend sync state for a file entry.
-    async fn update_backend_state<F>(
-        &self,
-        path: &str,
-        backup_name: &str,
-        ctx: &FsContext,
-        update: F,
-    ) -> Result<()>
-    where
-        F: FnOnce(&mut BackendSyncState, u64) + Send,
-    {
-        let dir = parent_dir(path);
-        let backup_name = backup_name.to_string();
-        let name = file_name(path).to_string();
-        self.meta_store
-            .update_dir_meta(&dir, ctx, move |_redirect, sync_log| {
-                if let Some(entry) = sync_log.entries.get_mut(&name) {
-                    let state = entry.backends.entry(backup_name).or_default();
-                    update(state, entry.latest_seq);
-                }
-                Ok(())
-            })
-            .await
     }
 
     /// Record rename metadata and migrate redirect state when needed.
@@ -1181,7 +1126,7 @@ impl Inner {
                 .update_dir_meta(&source_dir, ctx, move |redirect, sync_log| {
                     sync_log
                         .entries
-                        .insert(old_name.clone(), SyncLogEntry::new(seq, rename_op));
+                        .insert(old_name.clone(), SyncLogEntry::committed(seq, rename_op));
                     if let Some(redirect_entry) = redirect.entries.remove(&old_name) {
                         redirect.entries.insert(new_name, redirect_entry);
                     }
@@ -1197,7 +1142,7 @@ impl Inner {
                     move |src_redirect, src_sync_log, tgt_redirect, _tgt_sync_log| {
                         src_sync_log
                             .entries
-                            .insert(old_name.clone(), SyncLogEntry::new(seq, rename_op));
+                            .insert(old_name.clone(), SyncLogEntry::committed(seq, rename_op));
                         if let Some(redirect_entry) = src_redirect.entries.remove(&old_name) {
                             tgt_redirect.entries.insert(new_name, redirect_entry);
                         }
@@ -1207,134 +1152,18 @@ impl Inner {
                 .await
         }
     }
+}
 
-    /// Replay a single operation on a lagging backup.
-    pub(crate) async fn replay_operation(
-        &self,
-        file_path: &str,
-        backup_name: &str,
-        ctx: &FsContext,
-    ) -> Result<()> {
-        let queue_key = Self::backup_queue_key(file_path, backup_name);
-        let path_lock = self.path_queues.get_path_lock(&queue_key).await;
-        let _guard = path_lock.lock().await;
-        let dir = parent_dir(file_path);
-        let name = file_name(file_path).to_string();
-        let sync_log = self.meta_store.get_sync_log_meta(&dir, ctx).await?;
-        let entry = sync_log
-            .entries
-            .get(&name)
-            .ok_or_else(|| Error::not_found(file_path))?
-            .clone();
-        let backup = match self.backup_by_name(backup_name) {
-            Some(b) => b,
-            None => {
-                return Err(Error::internal(format!(
-                    "backup '{}' not found",
-                    backup_name
-                )))
-            }
-        };
-
-        entry
-            .op
-            .replay(
-                self.primary().backend.clone(),
-                backup.backend.clone(),
-                file_path,
-                ctx,
-            )
-            .await?;
-
-        // Update acked_seq after successful replay.
-        self.update_backup_acked_seq(file_path, backup_name, ctx)
-            .await?;
-
-        Ok(())
-    }
-
-    /// Background retry loop: periodically scans sync_log for lagging backups and replays.
-    async fn retry_loop(inner: Arc<Inner>) {
-        loop {
-            if inner.retry_cancelled.load(Ordering::SeqCst) {
-                break;
-            }
-
-            tokio::select! {
-                _ = tokio::time::sleep(inner.retry_interval) => {}
-                _ = inner.retry_shutdown.notified() => break,
-            }
-            let dirs = inner.pending_dirs_snapshot().await;
-            for dir in dirs {
-                let ctx = match inner.meta_store.ctx_resolver().resolve(&dir) {
-                    Ok(c) => c,
-                    Err(_) => continue,
-                };
-
-                let sync_log = match inner.meta_store.get_sync_log_meta(&dir, &ctx).await {
-                    Ok(s) => s,
-                    Err(_) => continue,
-                };
-
-                for (file_name, sync_entry) in &sync_log.entries {
-                    // Construct full path from dir + file name (entries key is now file name only)
-                    let file_path = if dir == "/" {
-                        format!("/{}", file_name)
-                    } else {
-                        format!("{}/{}", dir, file_name)
-                    };
-
-                    let redirect_meta = inner
-                        .meta_store
-                        .get_redirect_meta(&dir, &ctx)
-                        .await
-                        .unwrap_or_default();
-                    let target_backend_names = inner.target_backend_names(
-                        &redirect_meta,
-                        file_name,
-                        &file_path,
-                        sync_entry,
-                    );
-
-                    for backup_name in &target_backend_names {
-                        if sync_entry.is_in_sync(backup_name)
-                            || sync_entry.is_quarantined(backup_name)
-                        {
-                            continue;
-                        }
-
-                        // Retry with exponential backoff and jitter.
-                        let mut success = false;
-                        for attempt in 0..inner.max_retry_per_round {
-                            if inner.retry_cancelled.load(Ordering::SeqCst) {
-                                inner.background_task_finished();
-                                return;
-                            }
-                            if inner
-                                .replay_operation(&file_path, backup_name, &ctx)
-                                .await
-                                .is_ok()
-                            {
-                                success = true;
-                                break;
-                            }
-                            let base_ms =
-                                inner.retry_backoff_base_ms.saturating_mul(1u64 << attempt);
-                            let jitter_ms = rand::thread_rng().gen_range(0..=50);
-                            tokio::time::sleep(Duration::from_millis(base_ms + jitter_ms)).await;
-                        }
-                        if !success {
-                            let _ = inner
-                                .record_backup_retry_failure(&file_path, backup_name, &ctx)
-                                .await;
-                        }
-                    }
-                }
-                let _ = inner.refresh_pending_dir(&dir, &ctx).await;
-            }
-        }
-        inner.background_task_finished();
-    }
+/// Return true when `path` falls under `exclude_path` (including itself).
+fn is_excluded_grep_path(path: &str, exclude_path: Option<&str>) -> bool {
+    let Some(exclude_path) = exclude_path.map(normalize_prefix_path) else {
+        return false;
+    };
+    let normalized_path = normalize_prefix_path(path);
+    normalized_path == exclude_path
+        || normalized_path
+            .strip_prefix(&exclude_path)
+            .is_some_and(|suffix| suffix.starts_with('/'))
 }
 
 // ── FileSystem trait implementation ──
@@ -1355,36 +1184,101 @@ impl MultiWriteWrappedFS {
         self.inner.wait_idle(DEFAULT_SHUTDOWN_WAIT).await
     }
 
+    /// Copy one primary-resident file to a new path while preserving physical primary bytes.
+    pub async fn copy_within_primary(&self, src_path: &str, dst_path: &str) -> Result<bool> {
+        if normalize_prefix_path(src_path) == normalize_prefix_path(dst_path) {
+            return Ok(true);
+        }
+
+        let ctx = current_required_ctx()?;
+        let inner = &self.inner;
+        let source_path = src_path.to_string();
+        let destination_path = dst_path.to_string();
+
+        let source_exists_on_primary = FS_CTX
+            .scope(ctx.clone(), async {
+                inner.primary().backend.exists(&source_path).await
+            })
+            .await;
+        if !source_exists_on_primary {
+            return Ok(false);
+        }
+
+        let source_size = FS_CTX
+            .scope(ctx.clone(), async {
+                let source_info = inner.primary().backend.stat(&source_path).await?;
+                if source_info.is_dir {
+                    return Err(Error::IsADirectory(source_path.clone()));
+                }
+                Ok::<u64, Error>(source_info.size)
+            })
+            .await?;
+
+        if inner
+            .check_redirect(&destination_path, source_size)
+            .is_some()
+        {
+            return Ok(false);
+        }
+
+        let Some(primary_raw_backend) = inner.primary().raw_backend.clone() else {
+            return Ok(false);
+        };
+
+        let primary_destination = destination_path.clone();
+        Inner::execute_write(
+            inner,
+            destination_path,
+            source_size,
+            Some(SyncOp::SyncFile { size: source_size }),
+            Some(BackupWriteOp::Replay(SyncOp::SyncFile {
+                size: source_size,
+            })),
+            move |_ignored_fs| {
+                let primary_raw_backend = primary_raw_backend.clone();
+                let primary_source = source_path.clone();
+                let primary_destination = primary_destination.clone();
+                let primary_ctx = ctx.clone();
+                async move {
+                    copy_raw_primary_state(
+                        primary_raw_backend,
+                        &primary_source,
+                        &primary_destination,
+                        &primary_ctx,
+                    )
+                    .await?;
+                    Ok(())
+                }
+            },
+        )
+        .await?;
+
+        Ok(true)
+    }
+
     /// Execute one non-redirecting write-like operation through the shared multi-write pipeline.
-    async fn execute_simple_write<R, P, PFut, B, BFut>(
+    async fn execute_simple_write<R, P, PFut>(
         &self,
         path: &str,
         size: u64,
         sync_op: Option<SyncOp>,
         primary_fn: P,
-        backup_fn: B,
     ) -> Result<R>
     where
         R: Send + 'static,
         P: FnOnce(Arc<dyn FileSystem>, String) -> PFut + Send,
         PFut: Future<Output = Result<R>> + Send,
-        B: Fn(Arc<dyn FileSystem>, String) -> BFut + Send + Sync + 'static,
-        BFut: Future<Output = Result<()>> + Send + 'static,
     {
         let path_owned = path.to_string();
         let primary_path = path_owned.clone();
-        let backup_path = path_owned.clone();
+        let backup_op = sync_op.clone().map(BackupWriteOp::Replay);
         Inner::execute_write(
             &self.inner,
-            WriteOp {
-                path: path_owned,
-                size,
-                primary_fn: move |fs| primary_fn(fs, primary_path),
-                backup_fn: boxed_write_op(move |fs| backup_fn(fs, backup_path.clone())),
-                sync_op,
-                redirect_eligible: false,
-                redirect_result: None::<R>,
-            },
+            path_owned,
+            size,
+            sync_op,
+            backup_op,
+            move |fs| primary_fn(fs, primary_path),
         )
         .await
     }
@@ -1393,13 +1287,9 @@ impl MultiWriteWrappedFS {
 #[async_trait]
 impl FileSystem for MultiWriteWrappedFS {
     async fn create(&self, path: &str) -> Result<()> {
-        self.execute_simple_write(
-            path,
-            0,
-            Some(SyncOp::Create),
-            |fs, path| async move { fs.create(&path).await },
-            |fs, path| async move { fs.create(&path).await },
-        )
+        self.execute_simple_write(path, 0, Some(SyncOp::Create), |fs, path| async move {
+            fs.create(&path).await
+        })
         .await
     }
 
@@ -1409,30 +1299,21 @@ impl FileSystem for MultiWriteWrappedFS {
             0,
             Some(SyncOp::Mkdir { mode }),
             move |fs, path| async move { fs.mkdir(&path, mode).await },
-            move |fs, path| async move { fs.mkdir(&path, mode).await },
         )
         .await
     }
 
     async fn remove(&self, path: &str) -> Result<()> {
-        self.execute_simple_write(
-            path,
-            0,
-            Some(SyncOp::Remove),
-            |fs, path| async move { fs.remove(&path).await },
-            |fs, path| async move { fs.remove(&path).await },
-        )
+        self.execute_simple_write(path, 0, Some(SyncOp::Remove), |fs, path| async move {
+            fs.remove(&path).await
+        })
         .await
     }
 
     async fn remove_all(&self, path: &str) -> Result<()> {
-        self.execute_simple_write(
-            path,
-            0,
-            Some(SyncOp::RemoveAll),
-            |fs, path| async move { fs.remove_all(&path).await },
-            |fs, path| async move { fs.remove_all(&path).await },
-        )
+        self.execute_simple_write(path, 0, Some(SyncOp::RemoveAll), |fs, path| async move {
+            fs.remove_all(&path).await
+        })
         .await
     }
 
@@ -1447,30 +1328,21 @@ impl FileSystem for MultiWriteWrappedFS {
         let inner = &self.inner;
         let data_len = data.len() as u64;
         let path_owned = path.to_string();
-        let op_content = data.to_vec();
+        let backup_op = BackupWriteOp::WriteFile {
+            data: Arc::new(data.to_vec()),
+            offset,
+            flags,
+        };
         let d = data.to_vec();
         let primary_path = path_owned.clone();
-        let backup_path = path_owned.clone();
-        Inner::execute_write(
+        Inner::execute_write_with_redirect(
             inner,
-            WriteOp {
-                path: path_owned,
-                size: data_len,
-                primary_fn: move |fs: Arc<dyn FileSystem>| async move {
-                    fs.write(&primary_path, &d, offset, flags).await
-                },
-                backup_fn: boxed_write_op(move |fs| {
-                    clone_to_move!(backup_path, op_content);
-                    async move {
-                        fs.ensure_parent_dirs(&backup_path, 0o755).await?;
-                        fs.write(&backup_path, &op_content, offset, flags)
-                            .await
-                            .map(|_| ())
-                    }
-                }),
-                sync_op: Some(SyncOp::SyncFile { size: data_len }),
-                redirect_eligible: true,
-                redirect_result: Some(data_len),
+            path_owned,
+            data_len,
+            SyncOp::SyncFile { size: data_len },
+            backup_op,
+            move |fs: Arc<dyn FileSystem>| async move {
+                fs.write(&primary_path, &d, offset, flags).await
             },
         )
         .await
@@ -1480,8 +1352,8 @@ impl FileSystem for MultiWriteWrappedFS {
         let inner = &self.inner;
         let mut entries = inner.primary().backend.read_dir(path).await?;
 
-        // Filter internal names
-        entries.retain(|e| !INTERNAL_NAMES.contains(&e.name.as_str()));
+        // Filter multi-write internal names.
+        entries.retain(|e| !MULTIWRITE_INTERNAL_NAMES.contains(&e.name.as_str()));
 
         // Merge redirect entries so users can see redirected files in listings.
         let ctx =
@@ -1519,33 +1391,38 @@ impl FileSystem for MultiWriteWrappedFS {
         let inner = &self.inner;
         let old_owned = old_path.to_string();
         let new_owned = new_path.to_string();
+        let source_dir = parent_dir(&old_owned);
+        let redirect_targets = inner.redirect_targets_for_path(&old_owned, &ctx).await?;
         inner.invalidate_read_route(&old_owned).await;
         inner.invalidate_read_route(&new_owned).await;
 
-        FS_CTX
-            .scope(ctx.clone(), async {
-                inner.primary().backend.rename(&old_owned, &new_owned).await
-            })
-            .await?;
+        let primary_has_old = inner.primary().backend.exists(&old_owned).await;
+        if primary_has_old {
+            FS_CTX
+                .scope(ctx.clone(), async {
+                    inner.primary().backend.rename(&old_owned, &new_owned).await
+                })
+                .await?;
+        } else if redirect_targets.is_none() {
+            return Err(Error::NotFound(old_owned));
+        }
 
         inner
             .record_rename_meta(&old_owned, &new_owned, &ctx)
             .await?;
+        inner.mark_pending_dir(&source_dir).await;
 
-        let o = old_owned.clone();
-        let fanout_path = o.clone();
-        let n = new_owned.clone();
-        Inner::fanout_write(
-            inner,
-            &fanout_path,
-            0,
-            ctx.clone(),
-            boxed_write_op(move |fs: Arc<dyn FileSystem>| {
-                clone_to_move!(o, n);
-                async move { fs.rename(&o, &n).await }
-            }),
-        )
-        .await?;
+        let fanout_path = old_owned.clone();
+        let backup_op = BackupWriteOp::Replay(SyncOp::Rename {
+            to: new_owned.clone(),
+        });
+        if let Some(targets) = redirect_targets {
+            Inner::fanout_write_to_targets(inner, &fanout_path, &targets, ctx.clone(), backup_op)
+                .await?;
+        } else {
+            Inner::fanout_write(inner, &fanout_path, 0, ctx.clone(), backup_op).await?;
+        }
+        inner.refresh_pending_dir(&source_dir, &ctx).await?;
 
         Ok(())
     }
@@ -1556,58 +1433,30 @@ impl FileSystem for MultiWriteWrappedFS {
             0,
             Some(SyncOp::Chmod { mode }),
             move |fs, path| async move { fs.chmod(&path, mode).await },
-            move |fs, path| async move { fs.chmod(&path, mode).await },
         )
         .await
     }
 
     async fn truncate(&self, path: &str, size: u64) -> Result<()> {
-        let ctx = current_required_ctx()?;
-        let inner = &self.inner;
-        let path_owned = path.to_string();
-        let backup_path = path_owned.clone();
-        inner.invalidate_read_route(&path_owned).await;
-        FS_CTX
-            .scope(ctx.clone(), async {
-                inner.primary().backend.truncate(&path_owned, size).await
-            })
-            .await?;
-
-        let dir = parent_dir(&path_owned);
-        let name = file_name(&path_owned).to_string();
-        let seq = inner.next_seq().await?;
-        inner
-            .meta_store
-            .update_dir_meta(&dir, &ctx, move |_redirect, sync_log| {
-                sync_log
-                    .entries
-                    .insert(name, SyncLogEntry::new(seq, SyncOp::SyncFile { size }));
-                Ok(())
-            })
-            .await?;
-        inner.mark_pending_dir(&dir).await;
-
-        Inner::fanout_write(
-            inner,
-            &path_owned,
+        self.execute_simple_write(
+            path,
             size,
-            ctx.clone(),
-            boxed_write_op(move |fs| {
-                clone_to_move!(backup_path);
-                async move { fs.truncate(&backup_path, size).await }
-            }),
+            Some(SyncOp::SyncFile { size }),
+            move |fs, path| async move { fs.truncate(&path, size).await },
         )
-        .await?;
-        inner.refresh_pending_dir(&dir, &ctx).await
+        .await
     }
 
     async fn ensure_parent_dirs(&self, path: &str, mode: u32) -> Result<()> {
-        self.execute_simple_write(
-            path,
+        let path_owned = path.to_string();
+        let primary_path = path_owned.clone();
+        Inner::execute_write(
+            &self.inner,
+            path_owned,
             0,
             None,
-            move |fs, path| async move { fs.ensure_parent_dirs(&path, mode).await },
-            move |fs, path| async move { fs.ensure_parent_dirs(&path, mode).await },
+            Some(BackupWriteOp::EnsureParentDirs { mode }),
+            move |fs| async move { fs.ensure_parent_dirs(&primary_path, mode).await },
         )
         .await
     }
@@ -1641,6 +1490,13 @@ impl FileSystem for MultiWriteWrappedFS {
             )
             .await?;
 
+        // Filter out multi-write internal metadata files from grep results.
+        result.matches.retain(|m| {
+            let file_name = m.file.rsplit('/').next().unwrap_or(&m.file);
+            !MULTIWRITE_INTERNAL_NAMES.contains(&file_name)
+        });
+        result.count = result.matches.len();
+
         // For redirect files, also grep in target backends.
         let ctx = current_required_ctx()
             .or_else(|_| inner.meta_store.ctx_resolver().resolve(&path_owned))?;
@@ -1657,6 +1513,51 @@ impl FileSystem for MultiWriteWrappedFS {
         } else {
             parent_dir(&path_owned)
         };
+
+        if recursive && search_dir == path_owned {
+            let redirect_entries = self
+                .tree_directory(&path_owned, true, None, level_limit)
+                .await?;
+            for entry in redirect_entries {
+                if node_limit.is_some_and(|limit| result.count >= limit) {
+                    break;
+                }
+                if entry.info.is_dir
+                    || entry.extra.get("redirect").and_then(Value::as_bool) != Some(true)
+                {
+                    continue;
+                }
+                if is_excluded_grep_path(&entry.path, exclude_owned.as_deref()) {
+                    continue;
+                }
+                let Some(read_backend) = inner.resolve_read_backend(&entry.path).await else {
+                    continue;
+                };
+                let rel_path = relative_match_file(&path_owned, &entry.path);
+                let target_result = match read_backend
+                    .grep(
+                        &entry.path,
+                        &pattern_owned,
+                        false,
+                        case_insensitive,
+                        node_limit.map(|limit| limit.saturating_sub(result.count)),
+                        None,
+                        None,
+                    )
+                    .await
+                {
+                    Ok(found) => found,
+                    Err(_) => continue,
+                };
+                for m in target_result.matches {
+                    if node_limit.is_some_and(|limit| result.count >= limit) {
+                        break;
+                    }
+                    result.add_match(rel_path.clone(), m.line, m.content);
+                }
+            }
+            return Ok(result);
+        }
 
         if let Ok(redirect_meta) = inner.meta_store.get_redirect_meta(&search_dir, &ctx).await {
             for (name, redirect_entry) in &redirect_meta.entries {
@@ -1680,11 +1581,12 @@ impl FileSystem for MultiWriteWrappedFS {
                             )
                             .await
                         {
+                            let rel_path = relative_match_file(&path_owned, &redirect_path);
                             for m in target_result.matches {
                                 if node_limit.is_some_and(|limit| result.count >= limit) {
                                     break;
                                 }
-                                result.add_match(m.file, m.line, m.content);
+                                result.add_match(rel_path.clone(), m.line, m.content);
                             }
                         }
                     }
@@ -1712,7 +1614,7 @@ impl FileSystem for MultiWriteWrappedFS {
 
         entries.retain(|e| {
             let name = file_name(&e.path);
-            !INTERNAL_NAMES.contains(&name)
+            !MULTIWRITE_INTERNAL_NAMES.contains(&name)
         });
 
         let ctx = current_required_ctx()
@@ -1767,254 +1669,5 @@ impl FileSystem for MultiWriteWrappedFS {
         }
 
         Ok(entries)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::core::context::FsContextInner;
-    use crate::plugins::memfs::MemFileSystem;
-
-    /// Create the shared test context used by multi-write tests.
-    fn test_ctx() -> FsContext {
-        Arc::new(FsContextInner::new("acct".to_string()))
-    }
-
-    /// Create a sync multi-write filesystem with one memfs backup.
-    fn test_multiwrite_fs(redirects: Vec<RedirectPolicy>) -> MultiWriteWrappedFS {
-        let primary: Arc<dyn FileSystem> = Arc::new(MemFileSystem::new());
-        let backup: Arc<dyn FileSystem> = Arc::new(MemFileSystem::new());
-        let builder = MultiWriteWrappedFS::builder(primary)
-            .with_backups(vec![BackendEntry {
-                name: "backup1".to_string(),
-                role: BackendRole::Backup,
-                backend: backup,
-                operations: Vec::new(),
-                excludes: Vec::new(),
-            }])
-            .sync_mode(SyncMode::Sync {
-                ack_count: 1,
-                timeout_ms: 0,
-            });
-
-        if redirects.is_empty() {
-            builder
-        } else {
-            builder.with_redirects(redirects)
-        }
-        .build()
-        .unwrap()
-    }
-
-    #[test]
-    fn test_file_policy_over_size() {
-        let policy = RedirectPolicy::FileOverSizePolicy {
-            max_size_mb: 1,
-            target: Some(vec!["backup1".to_string()]),
-        };
-        assert!(policy.matches("/a/big.bin", 2 * 1024 * 1024));
-        assert!(!policy.matches("/a/small.txt", 512));
-    }
-
-    #[test]
-    fn test_file_policy_extension() {
-        let policy = RedirectPolicy::FileExtensionPolicy {
-            extensions: vec!["(pdf|ppt)".to_string()],
-            target: Some(vec!["backup1".to_string()]),
-        };
-        assert!(policy.matches("/a/doc.pdf", 0));
-        assert!(policy.matches("/a/slides.ppt", 0));
-        assert!(!policy.matches("/a/text.txt", 0));
-    }
-
-    #[tokio::test]
-    async fn test_read_dir_redirect_entries_use_target_stat() {
-        let fs = test_multiwrite_fs(vec![RedirectPolicy::FileExtensionPolicy {
-            extensions: vec!["\\.pdf$".to_string()],
-            target: Some(vec!["backup1".to_string()]),
-        }]);
-        let ctx = test_ctx();
-
-        FS_CTX
-            .scope(ctx, async {
-                fs.ensure_parent_dirs("/local/acct/docs/report.pdf", 0o755)
-                    .await?;
-                fs.write(
-                    "/local/acct/docs/report.pdf",
-                    b"pdf body",
-                    0,
-                    WriteFlag::Create,
-                )
-                .await?;
-
-                let entries = fs.read_dir("/local/acct/docs").await?;
-                let report = entries
-                    .iter()
-                    .find(|entry| entry.name == "report.pdf")
-                    .expect("redirected file should be visible in read_dir");
-                assert_eq!(report.size, 8);
-                assert_eq!(report.mode, 0o644);
-                Ok::<(), Error>(())
-            })
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_cross_dir_rename_does_not_create_target_write_log() {
-        let fs = test_multiwrite_fs(Vec::new());
-        let ctx = test_ctx();
-
-        FS_CTX
-            .scope(ctx.clone(), async {
-                fs.ensure_parent_dirs("/local/acct/src/file.txt", 0o755)
-                    .await?;
-                fs.ensure_parent_dirs("/local/acct/dst/file.txt", 0o755)
-                    .await?;
-                fs.write(
-                    "/local/acct/src/file.txt",
-                    b"rename me",
-                    0,
-                    WriteFlag::Create,
-                )
-                .await?;
-                fs.rename("/local/acct/src/file.txt", "/local/acct/dst/file.txt")
-                    .await?;
-
-                let target_log = fs
-                    .inner
-                    .meta_store
-                    .get_sync_log_meta("/local/acct/dst", &ctx)
-                    .await?;
-                assert!(
-                    !target_log.entries.contains_key("file.txt"),
-                    "target directory must not record a fake write for cross-dir rename"
-                );
-                let source_log = fs
-                    .inner
-                    .meta_store
-                    .get_sync_log_meta("/local/acct/src", &ctx)
-                    .await?;
-                let rename_entry = source_log
-                    .entries
-                    .get("file.txt")
-                    .expect("source directory should record rename command");
-                assert!(matches!(
-                    &rename_entry.op,
-                    SyncOp::Rename { to } if to == "/local/acct/dst/file.txt"
-                ));
-                Ok::<(), Error>(())
-            })
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_sync_log_write_entry_does_not_embed_large_payload() {
-        let fs = test_multiwrite_fs(Vec::new());
-        let ctx = test_ctx();
-        let payload = vec![b'x'; 256 * 1024];
-
-        FS_CTX
-            .scope(ctx.clone(), async {
-                fs.ensure_parent_dirs("/local/acct/docs/large.bin", 0o755)
-                    .await?;
-                fs.write("/local/acct/docs/large.bin", &payload, 0, WriteFlag::Create)
-                    .await?;
-
-                let sync_log = fs
-                    .inner
-                    .meta_store
-                    .get_sync_log_meta("/local/acct/docs", &ctx)
-                    .await?;
-                let encoded = serde_json::to_vec(&sync_log)?;
-                assert!(
-                    encoded.len() < 16 * 1024,
-                    "sync log should stay metadata-sized, got {} bytes",
-                    encoded.len()
-                );
-                Ok::<(), Error>(())
-            })
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_sync_log_truncate_entry_does_not_embed_snapshot() {
-        let fs = test_multiwrite_fs(Vec::new());
-        let ctx = test_ctx();
-        let payload = vec![b'y'; 256 * 1024];
-
-        FS_CTX
-            .scope(ctx.clone(), async {
-                fs.ensure_parent_dirs("/local/acct/docs/large.bin", 0o755)
-                    .await?;
-                fs.write("/local/acct/docs/large.bin", &payload, 0, WriteFlag::Create)
-                    .await?;
-                fs.truncate("/local/acct/docs/large.bin", 128).await?;
-
-                let sync_log = fs
-                    .inner
-                    .meta_store
-                    .get_sync_log_meta("/local/acct/docs", &ctx)
-                    .await?;
-                let encoded = serde_json::to_vec(&sync_log)?;
-                assert!(
-                    encoded.len() < 16 * 1024,
-                    "truncate sync log should stay metadata-sized, got {} bytes",
-                    encoded.len()
-                );
-                Ok::<(), Error>(())
-            })
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_read_route_metrics_capture_backup_and_cache_hits() {
-        let primary: Arc<dyn FileSystem> = Arc::new(MemFileSystem::new());
-        let backup: Arc<dyn FileSystem> = Arc::new(MemFileSystem::new());
-        let backup_handle = backup.clone();
-        let fs = MultiWriteWrappedFS::builder(primary)
-            .with_backups(vec![BackendEntry {
-                name: "backup1".to_string(),
-                role: BackendRole::Backup,
-                backend: backup,
-                operations: vec![OperationItemConfig {
-                    operation: "read".to_string(),
-                    priority: 1,
-                }],
-                excludes: Vec::new(),
-            }])
-            .build()
-            .unwrap();
-        let ctx = test_ctx();
-
-        FS_CTX
-            .scope(ctx, async {
-                backup_handle
-                    .ensure_parent_dirs("/local/acct/hot/cache.txt", 0o755)
-                    .await?;
-                backup_handle
-                    .write("/local/acct/hot/cache.txt", b"hot", 0, WriteFlag::Create)
-                    .await?;
-
-                assert_eq!(fs.read("/local/acct/hot/cache.txt", 0, 0).await?, b"hot");
-                assert_eq!(fs.read("/local/acct/hot/cache.txt", 0, 0).await?, b"hot");
-
-                let metrics = fs.inner.read_route_metrics();
-                assert_eq!(metrics.get("backup_hits").and_then(Value::as_u64), Some(1));
-                assert_eq!(metrics.get("cache_hits").and_then(Value::as_u64), Some(1));
-                Ok::<(), Error>(())
-            })
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_shutdown_drains_background_retry_loop() {
-        let fs = test_multiwrite_fs(Vec::new());
-        fs.shutdown().await.unwrap();
     }
 }

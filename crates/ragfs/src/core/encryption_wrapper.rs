@@ -14,6 +14,7 @@ use std::sync::{Arc, RwLock};
 use async_trait::async_trait;
 
 use crate::crypto;
+use crate::shape::SHAPE_MANIFEST_PATH;
 
 use super::context::FsContextView;
 use super::errors::{Error, Result};
@@ -97,8 +98,11 @@ impl EncryptionWrappedFS {
             || path.starts_with("/queue/")
             || path == "/serverinfo"
             || path.starts_with("/serverinfo/")
-            || path == "/.ragfs_backend_meta.json"
-            || path.ends_with("/.ragfs_backend_meta.json")
+    }
+
+    /// Return true when one path points at the backend-shape manifest.
+    fn is_shape_manifest_path(path: &str) -> bool {
+        path == SHAPE_MANIFEST_PATH || path.ends_with(SHAPE_MANIFEST_PATH)
     }
 
     /// Derive the encryption account domain from a filesystem path.
@@ -263,7 +267,11 @@ impl FileSystem for EncryptionWrappedFS {
     }
 
     async fn read_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
-        self.inner.read_dir(path).await
+        let entries = self.inner.read_dir(path).await?;
+        Ok(entries
+            .into_iter()
+            .filter(|entry| entry.name != SHAPE_MANIFEST_PATH.trim_start_matches('/'))
+            .collect())
     }
 
     async fn stat(&self, path: &str) -> Result<FileInfo> {
@@ -289,9 +297,14 @@ impl FileSystem for EncryptionWrappedFS {
         level_limit: Option<usize>,
     ) -> Result<Vec<TreeEntry>> {
         // Metadata only — no content read, so delegate to preserve plugin-native tree optimizations.
-        self.inner
+        let entries = self
+            .inner
             .tree_directory(path, show_hidden, node_limit, level_limit)
-            .await
+            .await?;
+        Ok(entries
+            .into_iter()
+            .filter(|entry| !Self::is_shape_manifest_path(&entry.path))
+            .collect())
     }
 
     async fn ensure_parent_dirs(&self, path: &str, mode: u32) -> Result<()> {
@@ -314,15 +327,7 @@ mod tests {
 
     /// Build a memfs plugin config for encryption wrapper tests.
     fn memfs_config(mount_path: &str) -> PluginConfig {
-        PluginConfig {
-            name: "memfs".to_string(),
-            mount_path: mount_path.to_string(),
-            params: HashMap::new(),
-            backups: None,
-            server_encryption_enabled: false,
-            primary_encryption_enabled: false,
-            primary_redirects: Vec::new(),
-        }
+        PluginConfig::single_backend("memfs", mount_path, HashMap::new())
     }
 
     /// Build a memfs-backed stack mounted at the default path.

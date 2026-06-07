@@ -5,9 +5,9 @@ use crate::core::filesystem::FileSystem;
 use crate::core::WriteFlag;
 use crate::crypto;
 
-use super::manifest::{
-    BackendShapeManifest, StorageShape, SHAPE_MANIFEST_PATH, SHAPE_MANIFEST_VERSION,
-};
+use super::manifest::{StorageShape, SHAPE_MANIFEST_PATH};
+
+const SYSTEM_ACCOUNT_ID: &[u8] = b"_system";
 
 fn normalize_shape_path(path: &str) -> String {
     let mut normalized = path.trim().to_string();
@@ -20,34 +20,77 @@ fn normalize_shape_path(path: &str) -> String {
     normalized
 }
 
-/// Read the persisted backend-shape manifest.
-pub async fn read_shape_manifest(
-    raw_fs: &Arc<dyn FileSystem>,
-) -> Result<Option<BackendShapeManifest>> {
+/// Read the raw guard-file bytes from the backend root.
+async fn read_shape_guard_raw(raw_fs: &Arc<dyn FileSystem>) -> Result<Option<Vec<u8>>> {
     match raw_fs.read(SHAPE_MANIFEST_PATH, 0, 0).await {
-        Ok(bytes) => {
-            let manifest: BackendShapeManifest = serde_json::from_slice(&bytes)?;
-            Ok(Some(manifest))
-        }
+        Ok(bytes) => Ok(Some(bytes)),
         Err(Error::NotFound(_)) => Ok(None),
         Err(err) => Err(err),
     }
 }
 
-/// Persist the current backend-shape manifest.
-pub async fn write_shape_manifest(
+/// Infer one file's physical storage shape from its raw bytes.
+fn shape_from_raw_bytes(path: &str, bytes: &[u8]) -> Result<StorageShape> {
+    if crypto::is_encrypted(bytes) {
+        if bytes.len() < 6 {
+            return Err(Error::config(format!(
+                "encrypted file '{}' is too short to inspect shape",
+                path
+            )));
+        }
+        Ok(StorageShape::Encrypted {
+            envelope_version: bytes[4],
+            provider_type: bytes[5],
+        })
+    } else {
+        Ok(StorageShape::Plaintext)
+    }
+}
+
+/// Encrypt one empty guard payload so its physical shape matches the backend.
+fn encrypt_shape_guard_bytes(root_key: &[u8; 32], provider_type: u8) -> Result<Vec<u8>> {
+    let account_key = crypto::hkdf_sha256(root_key, SYSTEM_ACCOUNT_ID);
+    let file_key: [u8; 32] = rand::random();
+    let key_iv: [u8; 12] = rand::random();
+    let data_iv: [u8; 12] = rand::random();
+    let ciphertext = crypto::aes_gcm_encrypt(&file_key, &data_iv, &[])?;
+    let enc_key = crypto::aes_gcm_encrypt(&account_key, &key_iv, &file_key)?;
+    Ok(crypto::build_envelope(
+        provider_type,
+        &enc_key,
+        &key_iv,
+        &data_iv,
+        &ciphertext,
+    ))
+}
+
+/// Probe the physical shape of the persisted backend-shape guard file.
+pub async fn probe_shape_guard_storage(
     raw_fs: &Arc<dyn FileSystem>,
-    backend_type: &str,
-    shape: &StorageShape,
-) -> Result<()> {
-    let manifest = BackendShapeManifest {
-        version: SHAPE_MANIFEST_VERSION,
-        backend_type: backend_type.to_string(),
-        shape: shape.clone(),
+) -> Result<Option<StorageShape>> {
+    let Some(bytes) = read_shape_guard_raw(raw_fs).await? else {
+        return Ok(None);
     };
-    let bytes = serde_json::to_vec_pretty(&manifest)?;
+    Ok(Some(shape_from_raw_bytes(SHAPE_MANIFEST_PATH, &bytes)?))
+}
+
+/// Persist the backend-shape guard file in the same physical shape as the backend.
+pub async fn write_shape_guard(
+    raw_fs: &Arc<dyn FileSystem>,
+    shape: &StorageShape,
+    root_key: Option<&[u8; 32]>,
+) -> Result<()> {
+    let payload = match shape {
+        StorageShape::Plaintext => Vec::new(),
+        StorageShape::Encrypted { provider_type, .. } => {
+            let root_key = root_key.ok_or_else(|| {
+                Error::config("encrypted backend_meta.json requires a root key to be written")
+            })?;
+            encrypt_shape_guard_bytes(root_key, *provider_type)?
+        }
+    };
     raw_fs
-        .write(SHAPE_MANIFEST_PATH, &bytes, 0, WriteFlag::Create)
+        .write(SHAPE_MANIFEST_PATH, &payload, 0, WriteFlag::Create)
         .await?;
     Ok(())
 }
@@ -68,20 +111,7 @@ pub async fn detect_legacy_shape(raw_fs: &Arc<dyn FileSystem>) -> Result<Option<
         }
 
         let header = raw_fs.read(&normalized, 0, 6).await?;
-        let current = if crypto::is_encrypted(&header) {
-            if header.len() < 6 {
-                return Err(Error::config(format!(
-                    "encrypted file '{}' is too short to inspect shape",
-                    normalized
-                )));
-            }
-            StorageShape::Encrypted {
-                envelope_version: header[4],
-                provider_type: header[5],
-            }
-        } else {
-            StorageShape::Plaintext
-        };
+        let current = shape_from_raw_bytes(&normalized, &header)?;
 
         match &detected {
             None => detected = Some(current),

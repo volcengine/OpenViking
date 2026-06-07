@@ -234,6 +234,20 @@ impl HttpClient {
         self.post("/api/v1/system/consistency", &body).await
     }
 
+    pub async fn backend_sync_status(&self, uri: &str) -> Result<serde_json::Value> {
+        let body = serde_json::json!({
+            "uri": uri,
+        });
+        self.post("/api/v1/system/backend/sync-status", &body).await
+    }
+
+    pub async fn backend_sync_retry(&self, uri: &str) -> Result<serde_json::Value> {
+        let body = serde_json::json!({
+            "uri": uri,
+        });
+        self.post("/api/v1/system/backend/sync-retry", &body).await
+    }
+
     /// Download file as raw bytes
     pub async fn get_bytes(&self, uri: &str) -> Result<Vec<u8>> {
         let url = format!("{}/api/v1/content/download", self.base.base_url);

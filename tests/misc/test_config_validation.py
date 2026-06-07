@@ -102,110 +102,104 @@ def test_agfs_s3_normalize_encoding_chars_is_forwarded_to_ragfs_plugin_config():
         print(f"   Fail: {e}")
 
 
-def test_agfs_queuefs_defaults_to_sqlite_backend():
-    config = AGFSConfig(path="/tmp/ov-test", backend="local")
+@pytest.mark.parametrize(
+    ("queuefs", "expected"),
+    [
+        (
+            None,
+            {
+                "mode": "shared",
+                "backend": "sqlite",
+                "recover_stale_sec": 0,
+                "busy_timeout_ms": 5000,
+            },
+        ),
+        (
+            {"mode": "worker", "backend": "memory"},
+            {
+                "mode": "worker",
+                "backend": "memory",
+                "recover_stale_sec": 0,
+                "busy_timeout_ms": 5000,
+            },
+        ),
+    ],
+)
+def test_agfs_queuefs_validation_accepts_supported_shapes(queuefs, expected):
+    config_kwargs = {"path": "/tmp/ov-test", "backend": "local"}
+    if queuefs is not None:
+        config_kwargs["queuefs"] = queuefs
 
-    assert config.queuefs.mode == "shared"
-    assert config.queuefs.backend == "sqlite"
-    assert config.queuefs.recover_stale_sec == 0
-    assert config.queuefs.busy_timeout_ms == 5000
+    config = AGFSConfig(**config_kwargs)
 
-
-def test_agfs_queuefs_accepts_memory_backend():
-    config = AGFSConfig(
-        path="/tmp/ov-test",
-        backend="local",
-        queuefs={"mode": "worker", "backend": "memory"},
-    )
-
-    assert config.queuefs.mode == "worker"
-    assert config.queuefs.backend == "memory"
-
-
-def test_agfs_queuefs_rejects_legacy_process_mode():
-    with pytest.raises(ValueError, match="queuefs mode"):
-        AGFSConfig(
-            path="/tmp/ov-test",
-            backend="local",
-            queuefs={"mode": "process"},
-        )
-
-
-def test_agfs_queuefs_rejects_invalid_backend():
-    with pytest.raises(ValueError, match="queuefs"):
-        AGFSConfig(
-            path="/tmp/ov-test",
-            backend="local",
-            queuefs={"backend": "bogus"},
-        )
+    assert config.queuefs.mode == expected["mode"]
+    assert config.queuefs.backend == expected["backend"]
+    assert config.queuefs.recover_stale_sec == expected["recover_stale_sec"]
+    assert config.queuefs.busy_timeout_ms == expected["busy_timeout_ms"]
 
 
-def test_agfs_queuefs_rejects_negative_timeouts():
-    with pytest.raises(ValueError, match="busy_timeout_ms"):
-        AGFSConfig(
-            path="/tmp/ov-test",
-            backend="local",
-            queuefs={"busy_timeout_ms": -1},
-        )
-
-    with pytest.raises(ValueError, match="recover_stale_sec"):
-        AGFSConfig(
-            path="/tmp/ov-test",
-            backend="local",
-            queuefs={"recover_stale_sec": -1},
-        )
+@pytest.mark.parametrize(
+    ("queuefs", "match"),
+    [
+        ({"mode": "process"}, "queuefs mode"),
+        ({"backend": "bogus"}, "queuefs"),
+        ({"busy_timeout_ms": -1}, "busy_timeout_ms"),
+        ({"recover_stale_sec": -1}, "recover_stale_sec"),
+    ],
+)
+def test_agfs_queuefs_validation_rejects_invalid_shapes(queuefs, match):
+    with pytest.raises(ValueError, match=match):
+        AGFSConfig(path="/tmp/ov-test", backend="local", queuefs=queuefs)
 
 
-def test_generate_plugin_config_uses_queuefs_memory_backend_without_db_path():
-    config = AGFSConfig(
-        path="/tmp/ov-test",
-        backend="local",
-        queuefs={"backend": "memory"},
-    )
+@pytest.mark.parametrize(
+    ("queuefs", "queue_db_path", "expected"),
+    [
+        (
+            {"backend": "memory"},
+            None,
+            {"backend": "memory", "db_path": None},
+        ),
+        (
+            {"backend": "sqlite", "db_path": "/tmp/new-queue.db"},
+            "/tmp/legacy-queue.db",
+            {"backend": "sqlite", "db_path": str(Path("/tmp/new-queue.db").resolve())},
+        ),
+        (
+            None,
+            "/tmp/legacy-queue.db",
+            {"backend": "sqlite", "db_path": str(Path("/tmp/legacy-queue.db").resolve())},
+        ),
+        (
+            None,
+            None,
+            {"backend": "sqlite", "db_path": "/tmp/ov-test/_system/queue/queue.db"},
+        ),
+        (
+            {"backend": "memory", "db_path": "/tmp/new-queue.db"},
+            "/tmp/legacy-queue.db",
+            {"backend": "memory", "db_path": None},
+        ),
+    ],
+)
+def test_generate_plugin_config_materializes_queuefs_paths(queuefs, queue_db_path, expected):
+    config_kwargs = {
+        "path": "/tmp/ov-test",
+        "backend": "local",
+        "queue_db_path": queue_db_path,
+    }
+    if queuefs is not None:
+        config_kwargs["queuefs"] = queuefs
 
+    config = AGFSConfig(**config_kwargs)
     plugins = _generate_plugin_config(config, Path("/tmp/ov-test"))
 
-    assert plugins["queuefs"]["config"]["backend"] == "memory"
-    assert "db_path" not in plugins["queuefs"]["config"]
-
-
-def test_generate_plugin_config_uses_new_queuefs_db_path_over_legacy_field():
-    config = AGFSConfig(
-        path="/tmp/ov-test",
-        backend="local",
-        queue_db_path="/tmp/legacy-queue.db",
-        queuefs={"backend": "sqlite", "db_path": "/tmp/new-queue.db"},
-    )
-
-    plugins = _generate_plugin_config(config, Path("/tmp/ov-test"))
-
-    assert plugins["queuefs"]["config"]["backend"] == "sqlite"
-    assert plugins["queuefs"]["config"]["db_path"] == str(Path("/tmp/new-queue.db").resolve())
-
-
-def test_generate_plugin_config_supports_legacy_queue_db_path():
-    config = AGFSConfig(
-        path="/tmp/ov-test",
-        backend="local",
-        queue_db_path="/tmp/legacy-queue.db",
-    )
-
-    plugins = _generate_plugin_config(config, Path("/tmp/ov-test"))
-
-    assert plugins["queuefs"]["config"]["backend"] == "sqlite"
-    assert plugins["queuefs"]["config"]["db_path"] == str(Path("/tmp/legacy-queue.db").resolve())
-
-
-def test_generate_plugin_config_uses_workspace_default_queue_db_path():
-    config = AGFSConfig(
-        path="/tmp/ov-test",
-        backend="local",
-    )
-
-    plugins = _generate_plugin_config(config, Path("/tmp/ov-test"))
-
-    assert plugins["queuefs"]["config"]["backend"] == "sqlite"
-    assert plugins["queuefs"]["config"]["db_path"] == "/tmp/ov-test/_system/queue/queue.db"
+    queuefs_config = plugins["queuefs"]["config"]
+    assert queuefs_config["backend"] == expected["backend"]
+    if expected["db_path"] is None:
+        assert "db_path" not in queuefs_config
+    else:
+        assert queuefs_config["db_path"] == expected["db_path"]
 
 
 def test_generate_plugin_config_forwards_queuefs_runtime_options():
@@ -226,43 +220,59 @@ def test_generate_plugin_config_forwards_queuefs_runtime_options():
     assert plugins["queuefs"]["config"]["busy_timeout_ms"] == 1234
 
 
-def test_generate_plugin_config_ignores_db_paths_in_memory_mode():
-    config = AGFSConfig(
-        path="/tmp/ov-test",
-        backend="local",
-        queue_db_path="/tmp/legacy-queue.db",
-        queuefs={"backend": "memory", "db_path": "/tmp/new-queue.db"},
-    )
-
-    plugins = _generate_plugin_config(config, Path("/tmp/ov-test"))
-
-    assert plugins["queuefs"]["config"]["backend"] == "memory"
-    assert "db_path" not in plugins["queuefs"]["config"]
-
-
-def test_generate_plugin_config_serializes_local_backup_dir(tmp_path):
-    """Local backup items must pass a concrete local_dir to the Rust localfs plugin."""
-    backup_dir = tmp_path / "backup-local"
-    config = AGFSConfig(
-        path=str(tmp_path),
-        backend="local",
-        backups={
-            "items": [
+def test_agfs_redirects_require_backups():
+    """Single-backend mode must reject redirect policies during config validation."""
+    with pytest.raises(ValueError, match="redirects requires backups"):
+        AGFSConfig(
+            path="/tmp/ov-test",
+            backend="local",
+            redirects=[
                 {
-                    "name": "local-backup",
-                    "backend": "local",
-                    "local": {"local_dir": str(backup_dir)},
+                    "type": "FileExtensionPolicy",
+                    "extensions": ["(md)"],
+                    "target": ["s3-backup"],
                 }
-            ]
+            ],
+        )
+
+
+def test_generate_plugin_config_rejects_redirects_without_backups(tmp_path):
+    """Runtime plugin config generation must also reject redirect-only configs."""
+    config = type(
+        "RedirectOnlyConfig",
+        (),
+        {
+            "backend": "local",
+            "s3": None,
+            "backups": None,
+            "redirects": [
+                type(
+                    "RedirectPolicy",
+                    (),
+                    {
+                        "type": "FileExtensionPolicy",
+                        "extensions": ["(md)"],
+                        "target": ["s3-backup"],
+                    },
+                )()
+            ],
+            "queuefs": type(
+                "QueueConfig",
+                (),
+                {
+                    "mode": "shared",
+                    "backend": "sqlite",
+                    "db_path": None,
+                    "recover_stale_sec": 0,
+                    "busy_timeout_ms": 5000,
+                },
+            )(),
+            "queue_db_path": None,
         },
-    )
+    )()
 
-    plugins = _generate_plugin_config(config, tmp_path)
-
-    backup = plugins["localfs"]["config"]["backups"]["items"][0]
-    assert backup["backend"] == "localfs"
-    assert backup["params"]["local_dir"] == str(backup_dir)
-    assert backup_dir.exists()
+    with pytest.raises(ValueError, match="redirects requires backups"):
+        _generate_plugin_config(config, tmp_path)
 
 
 def test_generate_plugin_config_passes_multiwrite_encryption_flag(tmp_path):
@@ -285,6 +295,76 @@ def test_generate_plugin_config_passes_multiwrite_encryption_flag(tmp_path):
     mount_config = plugins["localfs"]["config"]
     assert mount_config["server_encryption_enabled"] is True
     assert mount_config["primary_encryption_enabled"] is True
+
+
+def test_generate_plugin_config_materializes_multiwrite_backups(tmp_path):
+    """Plugin config generation should normalize backup params while preserving top-level multi-write fields."""
+    explicit_backup_dir = tmp_path / "backup-local-no-mkdir"
+    config = AGFSConfig(
+        path=str(tmp_path),
+        backend="local",
+        backups={
+            "retry_interval_ms": 1234,
+            "retry_backoff_base_ms": 55,
+            "items": [
+                {
+                    "name": "local-explicit",
+                    "backend": "local",
+                    "local": {"local_dir": str(explicit_backup_dir)},
+                },
+                {
+                    "name": "local-default",
+                    "backend": "local",
+                },
+                {
+                    "name": "s3-backup",
+                    "backend": "s3",
+                    "s3": {
+                        "bucket": "backup-bucket",
+                        "region": "cn-beijing",
+                        "access_key": "test-access-key",
+                        "secret_key": "test-secret-key",
+                        "endpoint": "https://tos.example.com",
+                        "prefix": "backup-prefix",
+                        "use_ssl": False,
+                        "use_path_style": False,
+                        "normalize_encoding_chars": "#?",
+                    },
+                },
+            ],
+        },
+    )
+
+    plugins = _generate_plugin_config(config, tmp_path)
+
+    mount_backups = plugins["localfs"]["config"]["backups"]
+    assert mount_backups["retry_interval_ms"] == 1234
+    assert mount_backups["retry_backoff_base_ms"] == 55
+
+    explicit_local, default_local, s3_backup = mount_backups["items"]
+    assert explicit_local["backend"] == "localfs"
+    assert explicit_local["params"]["local_dir"] == str(explicit_backup_dir)
+    assert not explicit_backup_dir.exists()
+
+    assert default_local["backend"] == "localfs"
+    assert default_local["params"]["local_dir"] == str(
+        tmp_path / "viking" / "_backups" / "local-default"
+    )
+
+    assert s3_backup["backend"] == "s3fs"
+    assert s3_backup["params"] == {
+        "bucket": "backup-bucket",
+        "region": "cn-beijing",
+        "access_key_id": "test-access-key",
+        "secret_access_key": "test-secret-key",
+        "endpoint": "https://tos.example.com",
+        "prefix": "backup-prefix",
+        "disable_ssl": True,
+        "use_path_style": False,
+        "directory_marker_mode": None,
+        "disable_batch_delete": False,
+        "normalize_encoding_chars": "#?",
+    }
 
 
 class _FakeMountClient:

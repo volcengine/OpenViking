@@ -880,15 +880,8 @@ mod tests {
         assert!(!plugin.readme().is_empty());
         assert_eq!(plugin.config_params().len(), 4);
 
-        let config = PluginConfig {
-            name: "queuefs".to_string(),
-            mount_path: "/queue".to_string(),
-            params: std::collections::HashMap::new(),
-            backups: None,
-            server_encryption_enabled: false,
-            primary_encryption_enabled: false,
-            primary_redirects: Vec::new(),
-        };
+        let config =
+            PluginConfig::single_backend("queuefs", "/queue", std::collections::HashMap::new());
 
         plugin.validate(&config).await.unwrap();
         let fs = plugin.initialize(config).await.unwrap();

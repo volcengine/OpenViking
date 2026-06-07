@@ -260,15 +260,7 @@ mod tests {
     async fn test_plugin_lifecycle() {
         let plugin = MockPlugin;
 
-        let config = PluginConfig {
-            name: "mock".to_string(),
-            mount_path: "/mock".to_string(),
-            params: HashMap::new(),
-            backups: None,
-            server_encryption_enabled: false,
-            primary_encryption_enabled: false,
-            primary_redirects: Vec::new(),
-        };
+        let config = PluginConfig::single_backend("mock", "/mock", HashMap::new());
 
         assert!(plugin.validate(&config).await.is_ok());
         assert!(plugin.initialize(config).await.is_ok());

@@ -45,13 +45,12 @@ def encryption_account_id_from_agfs_path(path: str) -> str:
 
 
 def ensure_same_encryption_account(src_path: str, dst_path: str) -> None:
-    """Reject raw moves/copies that would preserve ciphertext under a different account key."""
+    """Reject AGFS moves/copies across encryption-account domains."""
     src_account = encryption_account_id_from_agfs_path(src_path)
     dst_account = encryption_account_id_from_agfs_path(dst_path)
     if src_account != dst_account:
         raise ValueError(
-            "cross-account AGFS move/copy is not supported by raw path operations: "
-            f"{src_account!r} -> {dst_account!r}"
+            f"cross-account AGFS move/copy is not supported: {src_account!r} -> {dst_account!r}"
         )
 
 

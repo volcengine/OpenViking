@@ -16,6 +16,7 @@ use crate::multibackend::config::{
     item_params_to_config_values, sync_mode_from_config, validate_backup_excludes,
     validate_primary_encryption_flags, validate_redirect_targets,
 };
+use crate::multibackend::meta::MountRootFsContextResolver;
 use crate::multibackend::types::MultiBackendBuildContext;
 use crate::shape::validate::ensure_backend_shape;
 
@@ -33,15 +34,7 @@ pub async fn init_backend_plugin(
             .ok_or_else(|| Error::plugin(format!("Plugin '{}' not registered", plugin_name)))?
     };
 
-    let plugin_config = PluginConfig {
-        name: plugin_name.to_string(),
-        mount_path: String::new(),
-        params: params.clone(),
-        backups: None,
-        server_encryption_enabled: false,
-        primary_encryption_enabled: false,
-        primary_redirects: Vec::new(),
-    };
+    let plugin_config = PluginConfig::single_backend(plugin_name, String::new(), params.clone());
 
     plugin.validate(&plugin_config).await?;
     let fs = plugin.initialize(plugin_config).await?;
@@ -64,11 +57,12 @@ pub async fn build_multi_write_fs(
         &config.name,
         global_encryption_enabled,
         build_ctx.enc_provider_type,
+        build_ctx.enc_root_key,
     )
     .await?;
     let primary_backend: Arc<dyn FileSystem> = if global_encryption_enabled {
         Arc::new(EncryptionWrappedFS::new(
-            primary_raw,
+            primary_raw.clone(),
             build_ctx
                 .enc_root_key
                 .expect("global encryption validated before building primary backend"),
@@ -77,13 +71,18 @@ pub async fn build_multi_write_fs(
                 .expect("global encryption validated before building primary backend"),
         ))
     } else {
-        primary_raw
+        primary_raw.clone()
     };
 
     let mut backup_entries: Vec<BackendEntry> = Vec::new();
     let mut seen_names: HashSet<String> = HashSet::new();
 
     for item in &bc.items {
+        if item.name == "primary" {
+            return Err(Error::config(
+                "backup backend name 'primary' is reserved".to_string(),
+            ));
+        }
         if !seen_names.insert(item.name.clone()) {
             return Err(Error::config(format!(
                 "duplicate backup name '{}'",
@@ -108,6 +107,11 @@ pub async fn build_multi_write_fs(
             } else {
                 None
             },
+            if backup_encrypted {
+                build_ctx.enc_root_key
+            } else {
+                None
+            },
         )
         .await?;
 
@@ -129,6 +133,7 @@ pub async fn build_multi_write_fs(
             name: item.name.clone(),
             role: BackendRole::Backup,
             backend: backup_backend,
+            raw_backend: None,
             operations: item.operations.clone().unwrap_or_default(),
             excludes: item.excludes.clone().unwrap_or_default(),
         });
@@ -138,6 +143,7 @@ pub async fn build_multi_write_fs(
     validate_backup_excludes(bc)?;
 
     MultiWriteWrappedFS::builder(primary_backend)
+        .with_primary_raw_backend(primary_raw)
         .with_backups(backup_entries)
         .with_redirects(config.primary_redirects.clone())
         .sync_mode(sync_mode_from_config(bc))
@@ -148,8 +154,8 @@ pub async fn build_multi_write_fs(
         .retry_backoff_base_ms(bc.retry_backoff_base_ms.unwrap_or(1_000))
         .max_retry_per_round(bc.retry_max_retries_per_round.unwrap_or(3))
         .quarantine_after_failures(bc.retry_quarantine_after_failures.unwrap_or(9))
-        .read_route_cache_ttl(Duration::from_millis(
-            bc.read_probe_cache_ttl_ms.unwrap_or(2_000),
-        ))
+        .ctx_resolver(Arc::new(MountRootFsContextResolver::new(
+            &config.mount_path,
+        )))
         .build()
 }

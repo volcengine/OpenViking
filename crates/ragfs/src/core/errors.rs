@@ -10,6 +10,17 @@ use std::io;
 /// Result type alias for RAGFS operations
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Structured failure detail for one backup target in synchronous multi-write fanout.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncWriteFailureDetail {
+    /// Logical backup backend name.
+    pub backend: String,
+    /// Stable error kind for programmatic inspection.
+    pub kind: String,
+    /// Human-readable error message including the original error display text.
+    pub message: String,
+}
+
 /// Main error type for RAGFS operations
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -77,6 +88,21 @@ pub enum Error {
     #[error("operation timed out: {0}")]
     Timeout(String),
 
+    /// Multi-write synchronous fanout failed to reach the required acknowledgement quorum
+    #[error(
+        "sync write quorum failed: {succeeded}/{attempted} backups succeeded (required {required}); failures: {failures:?}"
+    )]
+    SyncWriteQuorum {
+        /// Number of backup targets that completed successfully.
+        succeeded: usize,
+        /// Minimum number of backup acknowledgements required for success.
+        required: usize,
+        /// Total number of backup targets that were attempted.
+        attempted: usize,
+        /// Structured failure details for each unsuccessful backup target.
+        failures: Vec<SyncWriteFailureDetail>,
+    },
+
     /// Required filesystem context is missing from the current task
     #[error("filesystem context missing: {0}")]
     ContextMissing(String),
@@ -136,6 +162,31 @@ impl Error {
     /// Create a Timeout error
     pub fn timeout(msg: impl Into<String>) -> Self {
         Self::Timeout(msg.into())
+    }
+
+    /// Return a stable error kind name for structured reporting.
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            Self::NotFound(_) => "not_found",
+            Self::AlreadyExists(_) => "already_exists",
+            Self::PermissionDenied(_) => "permission_denied",
+            Self::InvalidPath(_) => "invalid_path",
+            Self::NotADirectory(_) => "not_a_directory",
+            Self::IsADirectory(_) => "is_a_directory",
+            Self::DirectoryNotEmpty(_) => "directory_not_empty",
+            Self::InvalidOperation(_) => "invalid_operation",
+            Self::Io(_) => "io",
+            Self::Plugin(_) => "plugin",
+            Self::Config(_) => "config",
+            Self::MountPointNotFound(_) => "mount_point_not_found",
+            Self::MountPointExists(_) => "mount_point_exists",
+            Self::Serialization(_) => "serialization",
+            Self::Network(_) => "network",
+            Self::Timeout(_) => "timeout",
+            Self::SyncWriteQuorum { .. } => "sync_write_quorum",
+            Self::ContextMissing(_) => "context_missing",
+            Self::Internal(_) => "internal",
+        }
     }
 
     /// Create an InvalidOperation error

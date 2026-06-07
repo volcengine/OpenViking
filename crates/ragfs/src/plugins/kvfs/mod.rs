@@ -526,15 +526,7 @@ mod tests {
         let plugin = KVFSPlugin;
         assert_eq!(plugin.name(), "kvfs");
 
-        let config = PluginConfig {
-            name: "kvfs".to_string(),
-            mount_path: "/kvfs".to_string(),
-            params: HashMap::new(),
-            backups: None,
-            server_encryption_enabled: false,
-            primary_encryption_enabled: false,
-            primary_redirects: Vec::new(),
-        };
+        let config = PluginConfig::single_backend("kvfs", "/kvfs", HashMap::new());
 
         assert!(plugin.validate(&config).await.is_ok());
         assert!(plugin.initialize(config).await.is_ok());

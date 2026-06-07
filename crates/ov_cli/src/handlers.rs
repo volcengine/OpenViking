@@ -224,7 +224,7 @@ pub async fn handle_restore(
     .await
 }
 
-use crate::SystemCommands;
+use crate::{SystemBackendCommands, SystemCommands};
 
 pub async fn handle_system(cmd: SystemCommands, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
@@ -249,6 +249,16 @@ pub async fn handle_system(cmd: SystemCommands, ctx: CliContext) -> Result<()> {
             commands::system::consistency(&client, &uri, ctx.output_format, ctx.compact).await
         }
         SystemCommands::Crypto { action } => commands::crypto::handle_crypto(action).await,
+        SystemCommands::Backend { action } => match action {
+            SystemBackendCommands::SyncStatus { uri } => {
+                commands::system::backend_sync_status(&client, &uri, ctx.output_format, ctx.compact)
+                    .await
+            }
+            SystemBackendCommands::SyncRetry { uri } => {
+                commands::system::backend_sync_retry(&client, &uri, ctx.output_format, ctx.compact)
+                    .await
+            }
+        },
     }
 }
 

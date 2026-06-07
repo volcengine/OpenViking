@@ -227,8 +227,12 @@ class NewAPIKeyManager:
                 self._legacy._prefix_index[key_prefix] = []
             self._legacy._prefix_index[key_prefix].append(entry)
 
-        await self._legacy._save_accounts_json()
-        await self._legacy._save_users_json(account_id)
+        try:
+            await self._legacy._save_accounts_json()
+            await self._legacy._save_users_json(account_id)
+        except Exception:
+            await self._legacy._rollback_create_account(account_id)
+            raise
         return key
 
     async def delete_account(self, account_id: str) -> None:

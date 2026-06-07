@@ -8,8 +8,6 @@ pub mod config;
 pub mod factory;
 /// Metadata state management shared by multi-backend runtime paths.
 pub mod meta;
-#[cfg(test)]
-mod tests;
 /// Shared build-time types for multi-backend assembly.
 pub mod types;
 

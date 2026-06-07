@@ -9,10 +9,12 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_viking_uri
-from openviking.server.auth import get_request_context, resolve_identity
+from openviking.pyagfs.exceptions import AGFSInvalidOperationError, AGFSNotSupportedError
+from openviking.server.auth import get_request_context, require_role, resolve_identity
 from openviking.server.dependencies import get_service
-from openviking.server.identity import AuthMode, RequestContext
+from openviking.server.identity import AuthMode, RequestContext, Role
 from openviking.server.models import Response
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.utils import get_logger
@@ -20,6 +22,36 @@ from openviking_cli.utils import get_logger
 logger = get_logger(__name__)
 
 router = APIRouter()
+
+
+def _is_ready_check_ok(value) -> bool:
+    """Return whether one readiness check value represents a healthy state."""
+    if isinstance(value, dict):
+        status = value.get("status")
+        if status not in ("ok", "not_configured", "not_supported"):
+            return False
+        nested = value.get("checks")
+        if nested is None:
+            return True
+        return all(_is_ready_check_ok(item) for item in nested.values())
+    return value in ("ok", "not_configured", "not_supported")
+
+
+async def _probe_agfs_readiness() -> dict[str, object]:
+    """Return structured AGFS readiness, including multi-write sync health when available."""
+    viking_fs = get_viking_fs()
+    checks: dict[str, object] = {}
+
+    await viking_fs.ls("viking://", ctx=None)
+    checks["filesystem"] = "ok"
+
+    try:
+        await viking_fs.system_sync_status("viking://", ctx=None)
+        checks["multiwrite_sync"] = "ok"
+    except (AGFSInvalidOperationError, AGFSNotSupportedError):
+        checks["multiwrite_sync"] = "not_supported"
+
+    return {"status": "ok", "checks": checks}
 
 
 async def _embedding_probe(embedder) -> str:
@@ -101,13 +133,11 @@ async def readiness_check(request: Request):
 
     checks = {}
 
-    # 1. AGFS: try to list root
+    # 1. AGFS: probe filesystem access and multi-write sync health
     try:
-        viking_fs = get_viking_fs()
-        await viking_fs.ls("viking://", ctx=None)
-        checks["agfs"] = "ok"
+        checks["agfs"] = await _probe_agfs_readiness()
     except Exception as e:
-        checks["agfs"] = f"error: {e}"
+        checks["agfs"] = {"status": "error", "checks": {"filesystem": f"error: {e}"}}
 
     # 2. VectorDB: health_check()
     try:
@@ -164,7 +194,7 @@ async def readiness_check(request: Request):
     except Exception as e:
         checks["ollama"] = f"error: {e}"
 
-    all_ok = all(v in ("ok", "not_configured") for v in checks.values())
+    all_ok = all(_is_ready_check_ok(v) for v in checks.values())
     status_code = 200 if all_ok else 503
     return JSONResponse(
         status_code=status_code,
@@ -204,6 +234,12 @@ class ConsistencyRequest(BaseModel):
     uri: str
 
 
+class BackendSyncRequest(BaseModel):
+    """Request model for backend sync status and retry operations."""
+
+    uri: str
+
+
 @router.post("/api/v1/system/wait", tags=["system"])
 async def wait_processed(
     request: WaitRequest,
@@ -227,4 +263,52 @@ async def check_consistency(
         uri=uri,
         ctx=ctx,
     )
+    return Response(status="ok", result=result)
+
+
+@router.post("/api/v1/system/backend/sync-status", tags=["system"])
+async def backend_sync_status(
+    request: BackendSyncRequest,
+    ctx: RequestContext = require_role(Role.ROOT, Role.ADMIN),
+):
+    """Return multi-write backend sync status for a Viking URI subtree."""
+    service = get_service()
+    uri = validate_viking_uri(resolve_path_variables(request.uri))
+    result = await service.fs.system_sync_status(uri, ctx=ctx)
+    return Response(status="ok", result=result)
+
+
+@router.post("/api/v1/system/backend/sync-retry", tags=["system"])
+async def backend_sync_retry(
+    request: BackendSyncRequest,
+    ctx: RequestContext = require_role(Role.ROOT, Role.ADMIN),
+):
+    """Retry pending multi-write backend sync work for a Viking URI subtree."""
+    service = get_service()
+    uri = validate_viking_uri(resolve_path_variables(request.uri))
+    result = await service.fs.system_sync_retry(uri, ctx=ctx)
+    return Response(status="ok", result=result)
+
+
+@router.get("/api/v1/system/sync/{sync_path:path}", tags=["system"])
+async def admin_sync_status(
+    sync_path: str,
+    ctx: RequestContext = require_role(Role.ROOT, Role.ADMIN),
+):
+    """Return multi-write backend sync status for one URI subtree through the admin API."""
+    service = get_service()
+    uri = validate_viking_uri(resolve_path_variables(sync_path))
+    result = await service.fs.system_sync_status(uri, ctx=ctx)
+    return Response(status="ok", result=result)
+
+
+@router.post("/api/v1/system/sync/{sync_path:path}/retry", tags=["system"])
+async def admin_sync_retry(
+    sync_path: str,
+    ctx: RequestContext = require_role(Role.ROOT, Role.ADMIN),
+):
+    """Retry pending multi-write backend sync work for one URI subtree through the admin API."""
+    service = get_service()
+    uri = validate_viking_uri(resolve_path_variables(sync_path))
+    result = await service.fs.system_sync_retry(uri, ctx=ctx)
     return Response(status="ok", result=result)

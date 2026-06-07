@@ -20,6 +20,7 @@ pub mod stats_wrapper;
 pub mod types;
 
 // Re-export commonly used types
+pub use crate::multibackend::{FsContextResolver, MetaStateStore};
 pub use builder::{
     build_default_stack, register_builtin_plugins, EncryptionConfig as BuilderEncryptionConfig,
     RagfsConfig, RagfsStack,
@@ -30,7 +31,6 @@ pub use errors::{Error, Result};
 pub use filesystem::FileSystem;
 pub use mountable::MountableFS;
 pub use multibackend_wrapper::{BackendEntry, MultiWriteWrappedFS, SyncMode};
-pub use crate::multibackend::{FsContextResolver, MetaStateStore};
 pub use plugin::{HealthStatus, PluginRegistry, ServicePlugin};
 pub use stats::{FilesystemStats, FsOperation, OperationStats, OperationTimer, StatsCollector};
 pub use stats_wrapper::StatsWrappedFS;

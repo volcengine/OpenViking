@@ -104,15 +104,7 @@ mod tests {
         mount_path: &str,
         params: HashMap<String, ConfigValue>,
     ) -> PluginConfig {
-        PluginConfig {
-            name: name.to_string(),
-            mount_path: mount_path.to_string(),
-            params,
-            backups: None,
-            server_encryption_enabled: false,
-            primary_encryption_enabled: false,
-            primary_redirects: Vec::new(),
-        }
+        PluginConfig::single_backend(name, mount_path, params)
     }
 
     async fn mount_mem(stack: &RagfsStack) {
@@ -200,7 +192,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn encrypted_mount_writes_backend_shape_manifest() {
+    async fn encrypted_mount_writes_backend_shape_guard() {
         let dir = TempDir::new().unwrap();
         let stack = build_default_stack(enc_config()).await;
 
@@ -208,10 +200,17 @@ mod tests {
             .await
             .unwrap();
 
-        let manifest = fs::read_to_string(dir.path().join(".ragfs_backend_meta.json")).unwrap();
-        assert!(manifest.contains("\"mode\": \"encrypted\""));
-        assert!(manifest.contains("\"provider_type\": 1"));
-        assert!(manifest.contains("\"envelope_version\": 1"));
+        let manifest = fs::read(dir.path().join("backend_meta.json")).unwrap();
+        assert!(crypto::is_encrypted(&manifest));
+        let account_key = crypto::hkdf_sha256(&[4u8; 32], b"_system");
+        let (_provider, enc_key, key_iv, data_iv, ciphertext) =
+            crypto::parse_envelope(&manifest).unwrap();
+        let file_key =
+            crypto::aes_gcm_decrypt(&account_key, key_iv.try_into().unwrap(), enc_key).unwrap();
+        let file_key: [u8; 32] = file_key.as_slice().try_into().unwrap();
+        let plaintext =
+            crypto::aes_gcm_decrypt(&file_key, data_iv.try_into().unwrap(), ciphertext).unwrap();
+        assert!(plaintext.is_empty());
     }
 
     #[tokio::test]

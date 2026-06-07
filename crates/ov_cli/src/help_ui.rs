@@ -2096,7 +2096,7 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     },
     CommandHelpSpec {
         path: &["system"],
-        purpose: "Run server utility, health, consistency, and crypto commands.",
+        purpose: "Run server utility, health, consistency, backend sync, and crypto commands.",
         usage: "ov system <subcommand>",
         examples: &[
             HelpItem {
@@ -2106,6 +2106,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             HelpItem {
                 label: "ov system consistency viking://projects/acme",
                 description: "Check filesystem/vector consistency.",
+            },
+            HelpItem {
+                label: "ov system backend sync-status viking://projects/acme",
+                description: "Inspect multi-write backend sync lag.",
             },
         ],
         arguments: &[],
@@ -2121,6 +2125,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Check subtree consistency.",
             },
             HelpItem {
+                label: "backend <subcommand>",
+                description: "Inspect or repair multi-write backend sync state.",
+            },
+            HelpItem {
                 label: "crypto <subcommand>",
                 description: "Key management commands.",
             },
@@ -2128,6 +2136,38 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         next_steps: &[HelpItem {
             label: "ov status",
             description: "Use the standard status view.",
+        }],
+    },
+    CommandHelpSpec {
+        path: &["system", "backend"],
+        purpose: "Inspect and repair multi-write backend sync state.",
+        usage: "ov system backend <subcommand>",
+        examples: &[
+            HelpItem {
+                label: "ov system backend sync-status viking://resources",
+                description: "Show pending and acknowledged backend sync state.",
+            },
+            HelpItem {
+                label: "ov system backend sync-retry viking://resources",
+                description: "Retry lagging backend sync targets.",
+            },
+        ],
+        arguments: &[],
+        common_options: &[],
+        advanced_options: &[],
+        subcommands: &[
+            HelpItem {
+                label: "sync-status <uri>",
+                description: "Show multi-write backend sync status for a subtree.",
+            },
+            HelpItem {
+                label: "sync-retry <uri>",
+                description: "Retry pending multi-write backend sync work.",
+            },
+        ],
+        next_steps: &[HelpItem {
+            label: "ov system backend sync-status <uri>",
+            description: "Inspect the subtree again after retry.",
         }],
     },
     CommandHelpSpec {

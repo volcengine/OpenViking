@@ -28,6 +28,24 @@ def _call_with_optional_ctx(
         return method(*args, **kwargs)
 
 
+def _try_copy_within_mount_fast_path(
+    client: AGFSSyncClientProtocol,
+    src: str,
+    dst: str,
+    *,
+    fs_ctx: dict[str, str] | None = None,
+) -> bool:
+    """Attempt a same-mount verbatim copy and return whether the fast-path was used."""
+    copy_within_mount = getattr(client, "copy_within_mount", None)
+    if not callable(copy_within_mount):
+        return False
+
+    result = _call_with_optional_ctx(copy_within_mount, src, dst, ctx=fs_ctx)
+    if isinstance(result, dict):
+        return bool(result.get("performed", False))
+    return bool(result)
+
+
 def cp(
     client: AGFSSyncClientProtocol,
     src: str,
@@ -156,6 +174,9 @@ def _copy_file(
     """
     # Ensure parent directory exists
     _ensure_remote_parent_dir(client, dst, fs_ctx=fs_ctx)
+
+    if _try_copy_within_mount_fast_path(client, src, dst, fs_ctx=fs_ctx):
+        return
 
     if stream:
         # The binding client returns bytes or an iterator of bytes, not an

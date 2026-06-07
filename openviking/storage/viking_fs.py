@@ -40,6 +40,10 @@ from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.expr import PathScope
+from openviking.storage.internal_names import (
+    MULTIWRITE_PATH_LOCK_FILE,
+    STORAGE_INTERNAL_ENTRY_NAMES,
+)
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.time_utils import format_simplified, get_current_timestamp, parse_iso_datetime
 from openviking_cli.exceptions import (
@@ -588,7 +592,7 @@ class VikingFS:
 
             # Remove carried lock file from the copy (directory only)
             if is_dir:
-                carried_lock = new_path.rstrip("/") + "/.path.ovlock"
+                carried_lock = new_path.rstrip("/") + f"/{MULTIWRITE_PATH_LOCK_FILE}"
                 try:
                     await self._async_agfs.rm(carried_lock)
                 except Exception:
@@ -610,6 +614,30 @@ class VikingFS:
             # Delete source
             await self._async_agfs.rm(old_path, recursive=is_dir)
             return {}
+
+    async def system_sync_status(
+        self, uri: str, ctx: Optional[RequestContext] = None
+    ) -> Dict[str, Any]:
+        """Return multi-write sync status for one Viking URI subtree."""
+        self._ensure_access(uri, ctx)
+        real_ctx = self._ctx_or_default(ctx)
+        path = self._uri_to_path(uri, ctx=ctx)
+        return await self._async_agfs.system_sync_status(
+            path,
+            fs_ctx={"account_id": real_ctx.account_id},
+        )
+
+    async def system_sync_retry(
+        self, uri: str, ctx: Optional[RequestContext] = None
+    ) -> Dict[str, Any]:
+        """Retry multi-write sync for one Viking URI subtree."""
+        self._ensure_mutable_access(uri, ctx)
+        real_ctx = self._ctx_or_default(ctx)
+        path = self._uri_to_path(uri, ctx=ctx)
+        return await self._async_agfs.system_sync_retry(
+            path,
+            fs_ctx={"account_id": real_ctx.account_id},
+        )
 
     async def _copy_for_mv(
         self,
@@ -1486,12 +1514,12 @@ class VikingFS:
         """Check if name would appear in _ls_entries(parent_path).
 
         At account root (/local/{account}), uses LISTABLE_SCOPES whitelist.
-        At other levels, uses _INTERNAL_NAMES blacklist.
+        At other levels, uses the shared storage internal-name blacklist.
         """
         parts = [p for p in parent_path.strip("/").split("/") if p]
         if len(parts) == 2 and parts[0] == "local":
             return name in VikingURI.LISTABLE_SCOPES
-        return name not in self._INTERNAL_NAMES
+        return name not in STORAGE_INTERNAL_ENTRY_NAMES
 
     def _ancestor_is_filtered(self, entry_path: str, base_path: str) -> bool:
         """Check if any ancestor directory of entry_path would be filtered by _ls_entries.
@@ -1649,7 +1677,6 @@ class VikingFS:
         safe_parts = [self._shorten_component(p, self._MAX_FILENAME_BYTES) for p in parts]
         return f"/local/{account_id}/{'/'.join(safe_parts)}"
 
-    _INTERNAL_NAMES = {"_system", "tasks", ".path.ovlock", ".sync_log.json", ".redirect.json"}
     _ROOT_PATH = "/local"
 
     async def _ls_entries(
@@ -1658,13 +1685,13 @@ class VikingFS:
         """List directory entries, filtering out internal directories.
 
         At account root (/local/{account}), uses LISTABLE_SCOPES whitelist.
-        At other levels, uses _INTERNAL_NAMES blacklist.
+        At other levels, uses the shared storage internal-name blacklist.
         """
         entries = await self._async_agfs.ls(path)
         parts = [p for p in path.strip("/").split("/") if p]
         if len(parts) == 2 and parts[0] == "local":
             return [e for e in entries if e.get("name") in VikingURI.LISTABLE_SCOPES]
-        return [e for e in entries if e.get("name") not in self._INTERNAL_NAMES]
+        return [e for e in entries if e.get("name") not in STORAGE_INTERNAL_ENTRY_NAMES]
 
     def _path_to_uri(self, path: str, ctx: Optional[RequestContext] = None) -> str:
         """/local/{account}/... -> viking://...

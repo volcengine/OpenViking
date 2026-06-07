@@ -745,6 +745,27 @@ enum SystemCommands {
         #[command(subcommand)]
         action: commands::crypto::CryptoCommands,
     },
+    /// Backend sync inspection and repair commands
+    Backend {
+        #[command(subcommand)]
+        action: SystemBackendCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum SystemBackendCommands {
+    /// Show multi-write backend sync status for a URI subtree
+    #[command(name = "sync-status")]
+    SyncStatus {
+        /// Viking URI to inspect
+        uri: String,
+    },
+    /// Retry pending multi-write backend sync work for a URI subtree
+    #[command(name = "sync-retry")]
+    SyncRetry {
+        /// Viking URI to repair
+        uri: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1507,6 +1528,10 @@ fn known_task_command_requires_config(tokens: &[String]) -> bool {
 fn known_system_command_requires_config(tokens: &[String]) -> bool {
     match tokens.get(1).map(String::as_str) {
         Some("wait" | "status" | "health" | "consistency") => true,
+        Some("backend") => matches!(
+            tokens.get(2).map(String::as_str),
+            None | Some("sync-status" | "sync-retry")
+        ),
         Some("crypto") => matches!(tokens.get(2).map(String::as_str), None | Some("init-key")),
         _ => false,
     }
@@ -2327,7 +2352,7 @@ mod tests {
         preprocess_privacy_args,
     };
     use crate::config::{Config, DEFAULT_SELF_MANAGED_URL};
-    use crate::handlers;
+    use crate::{SystemBackendCommands, SystemCommands, handlers};
     use crate::output::OutputFormat;
     use clap::{CommandFactory, Parser};
     use std::ffi::OsString;
@@ -2369,6 +2394,23 @@ mod tests {
                 assert_eq!(peer_id.as_deref(), Some("web:visitor:alice"));
             }
             _ => panic!("expected search command"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_system_backend_sync_status() {
+        let cli = Cli::try_parse_from(["ov", "system", "backend", "sync-status", "viking://a"])
+            .expect("system backend sync-status should parse");
+
+        match cli.command {
+            Commands::System { action } => match action {
+                SystemCommands::Backend { action } => match action {
+                    SystemBackendCommands::SyncStatus { uri } => assert_eq!(uri, "viking://a"),
+                    _ => panic!("expected backend sync-status command"),
+                },
+                _ => panic!("expected system backend command"),
+            },
+            _ => panic!("expected system command"),
         }
     }
 
@@ -2501,6 +2543,7 @@ mod tests {
             &["ov", "config", "validate"],
             &["ov", "config", "show"],
             &["ov", "system", "consistency"],
+            &["ov", "system", "backend", "sync-status"],
             &["ov", "admin", "list-accounts"],
         ] {
             assert!(
@@ -2579,6 +2622,9 @@ mod tests {
             &["ov", "system", "status"],
             &["ov", "system", "health"],
             &["ov", "system", "consistency"],
+            &["ov", "system", "backend"],
+            &["ov", "system", "backend", "sync-status"],
+            &["ov", "system", "backend", "sync-retry"],
             &["ov", "system", "crypto"],
             &["ov", "system", "crypto", "init-key"],
             &["ov", "session", "new"],
@@ -2960,6 +3006,10 @@ mod tests {
             (
                 vec!["ov", "system", "consistency", "help"],
                 "ov system consistency --help",
+            ),
+            (
+                vec!["ov", "system", "backend", "sync-status", "help"],
+                "ov system backend sync-status --help",
             ),
         ] {
             let misuse = plain_help_misuse(&os_args(&args))
