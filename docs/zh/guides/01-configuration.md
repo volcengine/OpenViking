@@ -660,13 +660,21 @@ LiteLLM 的 Bedrock bearer-token API-key 鉴权，请设置 `forward_api_key=tru
 
 可选的轻量模型配置，用于检索前的意图分析和 query 规划/改写。配置结构与 `vlm` 相同，但只影响 `search()` 的意图分析和 query expansion。未配置或配置为空时，OpenViking 会回退到 `vlm`，保持向后兼容。
 
-只有在环境里已经部署好 planner 模型时才需要添加这一段配置。例如下面的 Ollama 模型需要先在本地 pull 并启动后才能使用。
+推荐优先使用本地 Ollama 模型 [`guoxuter/ov_intent_analysis_sft:v4_q8`](https://ollama.com/guoxuter/ov_intent_analysis_sft:v4_q8)。该模型基于 Qwen3.5-0.8B 进行微调，可本地部署，适合用小模型承担检索规划：在闲聊、问候或上下文已足够的场景下拒绝检索，从而减少不必要的记忆注入和 token 消耗；需要检索时，再生成面向 `skill`、`resource`、`memory` 的结构化查询。
+
+使用前请先拉取模型，并确保 Ollama 服务可访问：
+
+```bash
+ollama pull guoxuter/ov_intent_analysis_sft:v4_q8
+```
+
+然后在 OpenViking 配置中添加：
 
 ```json
 {
   "query_planner": {
     "provider": "litellm",
-    "model": "ollama/guoxuter/ov_intent_analysis_sft:v1_q8",
+    "model": "ollama/guoxuter/ov_intent_analysis_sft:v4_q8",
     "api_base": "http://127.0.0.1:11434",
     "temperature": 0.0,
     "timeout": 60,
@@ -677,7 +685,107 @@ LiteLLM 的 Bedrock bearer-token API-key 鉴权，请设置 `forward_api_key=tru
 }
 ```
 
-适合用小模型承担检索规划，同时保留更强的 `vlm` 处理语义提取、记忆提取和多模态内容。
+> `v4_q8` 输出更紧凑、推理时延更低，但需要同步将 OpenViking 的 prompt 文件替换为 v4 prompt：`openviking/prompts/templates/retrieval/intent_analysis.yaml`，以匹配该模型期望的输出格式。  
+> 如果不想修改 prompt 文件，可以继续使用兼容当前 prompt 的 `v1_q8`：`ollama/guoxuter/ov_intent_analysis_sft:v1_q8`。
+
+将 `openviking/prompts/templates/retrieval/intent_analysis.yaml` 替换为：
+
+```yaml
+metadata:
+  id: "retrieval.intent_analysis"
+  name: "Intent Analysis v4"
+  description: "v4 prompt for compact intent-analysis models that emit only queries."
+  version: "4.0.0"
+  language: "en"
+  category: "retrieval"
+
+variables:
+  - name: "compression_summary"
+    type: "string"
+    description: "Session summary"
+    default: ""
+    required: false
+
+  - name: "recent_messages"
+    type: "string"
+    description: "Recent conversation"
+    required: true
+
+  - name: "current_message"
+    type: "string"
+    description: "Current message"
+    required: true
+
+  - name: "context_type"
+    type: "string"
+    description: "Restricted context type (skill/resource/memory)"
+    default: ""
+    required: false
+
+  - name: "target_abstract"
+    type: "string"
+    description: "Abstract of target directory"
+    default: ""
+    required: false
+
+template: |
+  You are OpenViking's context query planner. Given the session context and the current message, decide what context information is missing and emit retrieval queries to fill the gap.
+
+  ## Session Context
+
+  ### Session Summary
+  {{ compression_summary }}
+
+  ### Recent Conversation
+  {{ recent_messages }}
+
+  ### Current Message
+  {{ current_message }}
+  {% if context_type %}
+
+  ## Search Scope Constraints
+
+  **Restricted Context Type**: {{ context_type }}
+  {% if target_abstract %}
+  **Target Directory Abstract**: {{ target_abstract }}
+  {% endif %}
+
+  Only emit `{{ context_type }}` queries; do not generate other types.
+  {% endif %}
+
+  External information takes priority over built-in knowledge - actively query for any missing context.
+
+  ## Context Types
+
+  - `skill` - executable capability (tool, function, API, automation). Query style: imperative starting with a verb.
+  - `resource` - knowledge artifact (doc, spec, guide, code, configuration). Query style: noun phrase.
+  - `memory` - user preference or agent execution experience.
+
+  ## Procedure
+
+  1. Classify the task: operational tasks typically need skill+resource+memory; informational tasks typically need resource+memory; conversational small talk needs no query.
+  2. Skip any context type already covered explicitly in the conversation.
+  3. For each needed type, emit 1-5 concise retrievable queries with `priority` from 1 to 5.
+
+  ## Output Format
+
+  Output a single JSON object with exactly one top-level key:
+
+  - `queries`: array of objects with:
+    - `query`: actual query text
+    - `context_type`: one of `skill`, `resource`, `memory`
+    - `priority`: integer from 1 to 5
+
+  If no query is needed, set `queries` to an empty array `[]`.
+
+  Output the JSON object directly. Do not wrap it in markdown code fences.
+
+llm_config:
+  temperature: 0.0
+```
+
+这样可以用小模型承担检索规划，降低延迟，同时保留更强的 `vlm` 处理语义提取、记忆提取和多模态内容。
+
 
 ### feishu
 

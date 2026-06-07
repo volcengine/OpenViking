@@ -97,6 +97,7 @@ Plugin config lives under `plugins.entries.openviking.config`. Setup usually wri
 | `baseUrl` | `http://127.0.0.1:1933` | OpenViking server endpoint |
 | `apiKey` | empty | OpenViking API key |
 | `peer_prefix` | empty | Optional prefix for assistant peer identity when `peer_role=assistant` |
+| `autoRecallTimeoutMs` | `5000` | Outer timeout (ms) for the whole auto-recall flow; increase for slow local embedding hardware (clamped 1000–300000) |
 
 ```bash
 openclaw config set plugins.entries.openviking.config.baseUrl http://your-server:1933
