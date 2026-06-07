@@ -125,7 +125,10 @@ export function createMemoryTools({ config, sessionManager, projectDirectory }) 
         session_id: z.string().optional().describe("Optional explicit OpenViking session ID. Omit to use the current OpenCode session mapping."),
       },
       async execute(args, context) {
-        const sessionId = args.session_id ?? (context.sessionID ? sessionManager.getMappedSessionId(context.sessionID) : undefined)
+        let sessionId = args.session_id
+        if (!sessionId && context.sessionID) {
+          sessionId = sessionManager.getMappedSessionId(context.sessionID)
+        }
         if (!sessionId) {
           return "Error: No OpenViking session is associated with the current OpenCode session. Start or resume a normal OpenCode session first, or pass session_id."
         }
