@@ -28,6 +28,7 @@ for arg in "$@"; do
         echo "  --group-chat      群聊模式，设置 peer_id/speaker，传 --memory-user"
         echo "  --auto-commit     自动提交未提交的代码变更，结果文件名带 commit id 和时间戳"
         echo "  --retry-wrong CSV 只重跑指定结果文件中的有效错题（导入相关对话+重新问答）"
+        echo "  --parallel-import-sessions N  单 sample 内并发导入 sessions；默认关闭，用于压测并发 add/merge"
         exit 0
     fi
 done
@@ -37,6 +38,7 @@ SKIP_IMPORT=false
 GROUP_CHAT=false
 AUTO_COMMIT=false
 RETRY_WRONG=""
+PARALLEL_IMPORT_SESSIONS=""
 
 if command -v python3 >/dev/null 2>&1; then
     PYTHON_BIN="python3"
@@ -111,6 +113,11 @@ for arg in "$@"; do
         PREV_ARG=""
         continue
     fi
+    if [ "$PREV_ARG" = "--parallel-import-sessions" ]; then
+        PARALLEL_IMPORT_SESSIONS="$arg"
+        PREV_ARG=""
+        continue
+    fi
     if [ "$arg" = "--skip-import" ]; then
         SKIP_IMPORT=true
     elif [ "$arg" = "--group-chat" ]; then
@@ -118,6 +125,9 @@ for arg in "$@"; do
     elif [ "$arg" = "--auto-commit" ]; then
         AUTO_COMMIT=true
     elif [ "$arg" = "--retry-wrong" ]; then
+        PREV_ARG="$arg"
+        continue
+    elif [ "$arg" = "--parallel-import-sessions" ]; then
         PREV_ARG="$arg"
         continue
     fi
@@ -132,7 +142,7 @@ for arg in "$@"; do
         SKIP_NEXT=false
         continue
     fi
-    if [ "$arg" = "--retry-wrong" ]; then
+    if [ "$arg" = "--retry-wrong" ] || [ "$arg" = "--parallel-import-sessions" ]; then
         SKIP_NEXT=true
         continue
     fi
@@ -145,6 +155,15 @@ done
 COMMON_OPTS=()
 if [ "$GROUP_CHAT" = "true" ]; then
     COMMON_OPTS+=("--group-chat")
+fi
+IMPORT_OPTS=()
+if [ -n "$PARALLEL_IMPORT_SESSIONS" ]; then
+    if ! [[ "$PARALLEL_IMPORT_SESSIONS" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Error: --parallel-import-sessions requires a positive integer" >&2
+        exit 1
+    fi
+    IMPORT_OPTS+=("--parallel-sessions" "$PARALLEL_IMPORT_SESSIONS")
+    echo "[import] 单 sample 内 session 并发已开启: $PARALLEL_IMPORT_SESSIONS"
 fi
 
 SAMPLE=${ARGS[0]}
@@ -312,7 +331,8 @@ if [ -n "$RETRY_WRONG" ]; then
         --force-ingest \
         --account "$ACCOUNT" \
         --openviking-url "$OPENVIKING_URL" \
-        "${COMMON_OPTS[@]}"
+        "${COMMON_OPTS[@]}" \
+        "${IMPORT_OPTS[@]}"
     IMPORT_PERFORMED=true
 
     echo "等待数据处理完成..."
@@ -358,7 +378,7 @@ if [ -z "$SAMPLE" ]; then
     else
         echo "[1/4] 导入数据..."
         capture_import_row_start
-        "$PYTHON_BIN" "$SCRIPT_DIR/import_to_ov.py" --input "$INPUT_FILE" --force-ingest --account "$ACCOUNT" --openviking-url "$OPENVIKING_URL" "${COMMON_OPTS[@]}"
+        "$PYTHON_BIN" "$SCRIPT_DIR/import_to_ov.py" --input "$INPUT_FILE" --force-ingest --account "$ACCOUNT" --openviking-url "$OPENVIKING_URL" "${COMMON_OPTS[@]}" "${IMPORT_OPTS[@]}"
         IMPORT_PERFORMED=true
         echo "等待 1 分钟..."
         sleep 60
@@ -434,7 +454,8 @@ if [ -n "$QUESTION_INDEX" ]; then
             --force-ingest \
             --account "$ACCOUNT" \
             --openviking-url "$OPENVIKING_URL" \
-            "${COMMON_OPTS[@]}"
+            "${COMMON_OPTS[@]}" \
+            "${IMPORT_OPTS[@]}"
         IMPORT_PERFORMED=true
 
         echo "Waiting for data processing..."
@@ -538,7 +559,8 @@ PY
             --force-ingest \
             --account "$ACCOUNT" \
             --openviking-url "$OPENVIKING_URL" \
-            "${COMMON_OPTS[@]}"
+            "${COMMON_OPTS[@]}" \
+            "${IMPORT_OPTS[@]}"
         IMPORT_PERFORMED=true
 
         echo "Waiting for data processing..."

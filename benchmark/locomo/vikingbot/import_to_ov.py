@@ -641,7 +641,8 @@ async def run_import(args: argparse.Namespace) -> None:
                 total_vlm_tokens, \
                 total_cache_tokens, \
                 total_reasoning_tokens, \
-                total_llm_output_tokens
+                total_llm_output_tokens, \
+                skipped_count
             sample_id = item["sample_id"]
             display_id = f"sample_{sample_index}"
 
@@ -659,14 +660,12 @@ async def run_import(args: argparse.Namespace) -> None:
             print(f"\n=== Sample {display_id} ({sample_id}) ===", file=sys.stderr)
             print(f"    {len(sessions)} session(s) to import", file=sys.stderr)
 
-            # 同一 sample 内串行处理所有 sessions
-            for sess in sessions:
+            async def import_one_session(sess):
                 meta = sess["meta"]
                 messages = sess["messages"]
                 session_key = meta["session_key"]
                 label = f"{session_key} ({meta['date_time']})"
 
-                # Skip already ingested sessions unless force-ingest is enabled
                 if not args.force_ingest and is_already_ingested(
                     sample_id, session_key, ingest_record, success_keys
                 ):
@@ -674,16 +673,13 @@ async def run_import(args: argparse.Namespace) -> None:
                         f"  [{label}] [SKIP] already imported (use --force-ingest to reprocess)",
                         file=sys.stderr,
                     )
-                    continue
+                    return {"status": "skipped"}
 
-                # Preview messages
                 preview = " | ".join(
                     [f"{msg['role']}: {msg['text'][:30]}..." for msg in messages[:3]]
                 )
                 print(f"  [{label}] {preview}", file=sys.stderr)
-
-                # 串行执行（等待完成后再处理下一个 session）
-                res = await process_single_session(
+                return await process_single_session(
                     messages=messages,
                     sample_id=sample_id,
                     display_id=display_id,
@@ -693,6 +689,32 @@ async def run_import(args: argparse.Namespace) -> None:
                     ingest_record=ingest_record,
                     args=args,
                 )
+
+            if args.parallel_sessions:
+                print(
+                    f"    [parallel-sessions] concurrency={args.parallel_sessions}",
+                    file=sys.stderr,
+                )
+                session_semaphore = asyncio.Semaphore(args.parallel_sessions)
+
+                async def import_one_session_with_limit(sess):
+                    async with session_semaphore:
+                        return await import_one_session(sess)
+
+                session_results = await asyncio.gather(
+                    *[import_one_session_with_limit(sess) for sess in sessions],
+                    return_exceptions=True,
+                )
+            else:
+                session_results = []
+                for sess in sessions:
+                    session_results.append(await import_one_session(sess))
+
+            for res in session_results:
+                if isinstance(res, Exception):
+                    error_count += 1
+                    print(f"  [ERROR] parallel session task failed: {res}", file=sys.stderr)
+                    continue
                 if res.get("status") == "success":
                     success_count += 1
                     total_embedding_tokens += res.get("embedding_tokens", 0)
@@ -702,6 +724,8 @@ async def run_import(args: argparse.Namespace) -> None:
                     total_llm_output_tokens += res.get("llm_output_tokens", 0)
                 elif res.get("status") == "error":
                     error_count += 1
+                elif res.get("status") == "skipped":
+                    skipped_count += 1
 
         if args.parallel_samples:
             semaphore = asyncio.Semaphore(args.parallel_samples)
@@ -889,6 +913,15 @@ def main():
         type=int,
         default=None,
         help="Max number of samples to import concurrently. Default: no limit; create one task per sample.",
+    )
+    parser.add_argument(
+        "--parallel-sessions",
+        type=int,
+        default=0,
+        help=(
+            "Max number of sessions to import concurrently inside each sample. "
+            "Default: 0, keep sessions serial. Enable this to stress concurrent commit/add paths."
+        ),
     )
     parser.add_argument(
         "--force-ingest",
