@@ -19,16 +19,16 @@ from openviking.session.train.components.trajectory_analyzer import (
     TrajectoryAnalyzerContext,
     TrajectoryRolloutAnalyzer,
 )
+from openviking.session.train.context import ExecutionContext, PipelineContext
 from openviking.session.train.domain import (
-    ApplyResult,
     Case,
     CriterionResult,
-    ExecutionContext,
     Experience,
     ExperienceSet,
     PipelineEvaluationResult,
     PipelineIterationResult,
     PipelineResult,
+    PolicyApplyResult,
     PolicyPlanItem,
     PolicyPlanItemKind,
     PolicyStatus,
@@ -46,7 +46,6 @@ from openviking.session.train.gradients import PatchSemanticGradient
 from openviking.session.train.interfaces import (
     CaseLoader,
     GradientEstimator,
-    Policy,
     PolicyOptimizationPipeline,
     PolicyOptimizer,
     PolicySnapshotter,
@@ -57,11 +56,10 @@ from openviking.session.train.interfaces import (
 )
 from openviking.session.train.loaders import ListCaseLoader
 from openviking.session.train.optimizers import (
-    GroupingPolicyOptimizer,
-    MergeAwarePolicyOptimizer,
-    MergeAwarePolicyOptimizerContext,
+    PatchMergePolicyOptimizer,
+    PatchMergePolicyOptimizerContext,
 )
-from openviking.session.train.pipeline import DefaultPolicyOptimizationPipeline, PipelineContext
+from openviking.session.train.pipeline import OfflinePolicyOptimizationPipeline
 from openviking.session.train.snapshot import ContentHashPolicySnapshotter
 from openviking.session.train.trainers import (
     BatchPolicyTrainer,
@@ -83,20 +81,19 @@ __all__ = [
     "ExperienceGradientContext",
     "TrajectoryRolloutAnalyzer",
     "TrajectoryAnalyzerContext",
-    "GroupingPolicyOptimizer",
-    "MergeAwarePolicyOptimizer",
-    "MergeAwarePolicyOptimizerContext",
+    "PatchMergePolicyOptimizer",
+    "PatchMergePolicyOptimizerContext",
     "ExperienceSetLoader",
     "DryRunPolicyUpdater",
     "MemoryFilePolicyUpdater",
     "SingleTurnLLMRolloutExecutor",
     "default_single_turn_prompt",
     "ContentHashPolicySnapshotter",
-    "ApplyResult",
+    "PolicyApplyResult",
     "Case",
     "CaseLoader",
     "CriterionResult",
-    "DefaultPolicyOptimizationPipeline",
+    "OfflinePolicyOptimizationPipeline",
     "ExecutionContext",
     "Experience",
     "ExperienceSet",
@@ -107,7 +104,6 @@ __all__ = [
     "PipelineEvaluationResult",
     "PipelineIterationResult",
     "PipelineResult",
-    "Policy",
     "PolicyPlanItem",
     "PolicyPlanItemKind",
     "PolicyOptimizationPipeline",

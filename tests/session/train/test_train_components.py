@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
@@ -16,10 +15,9 @@ from openviking.session.train import (
     Experience,
     ExperienceSet,
     ExperienceSetLoader,
-    GroupingPolicyOptimizer,
     MemoryFilePolicyUpdater,
-    MergeAwarePolicyOptimizer,
-    MergeAwarePolicyOptimizerContext,
+    PatchMergePolicyOptimizer,
+    PatchMergePolicyOptimizerContext,
     PatchSemanticGradient,
     PolicyUpdatePlan,
 )
@@ -48,16 +46,10 @@ class FakeVikingFS:
     async def write_file(self, uri: str, content: str, ctx=None):
         self.files[uri] = content
 
-
-@dataclass
-class DummyGradient:
-    target_experience_name: str
-    target_experience_uri: str | None
-    base_version: int | None
-    rationale: str
-    evidence_trajectory_uris: list[str]
-    confidence: float
-    metadata: dict[str, Any] = field(default_factory=dict)
+    async def rm(self, uri: str, recursive: bool = False, ctx=None, lock_handle=None):
+        del recursive, ctx, lock_handle
+        self.files.pop(uri, None)
+        return {"estimated_deleted_count": 1}
 
 
 def _experience_set() -> ExperienceSet:
@@ -125,6 +117,52 @@ def _patch_gradient(
     )
 
 
+def _plan_from_gradient(gradient: PatchSemanticGradient) -> PolicyUpdatePlan:
+    return PolicyUpdatePlan(
+        items=[
+            _plan_item_from_gradient(gradient),
+        ]
+    )
+
+
+def _plan_item_from_gradient(gradient: PatchSemanticGradient):
+    from openviking.session.train import PolicyPlanItem
+
+    return PolicyPlanItem(
+        kind="upsert_experience",
+        target_experience_name=gradient.target_experience_name,
+        target_experience_uri=gradient.target_experience_uri,
+        before_content=(
+            gradient.before_file.plain_content() if gradient.before_file is not None else None
+        ),
+        after_content=gradient.after_file.plain_content(),
+        base_version=gradient.base_version,
+        confidence=gradient.confidence,
+        evidence_trajectory_uris=list(gradient.evidence_trajectory_uris),
+        metadata={"rationale": gradient.rationale},
+    )
+
+
+def _delete_plan(*, uri: str, before_content: str = "content") -> PolicyUpdatePlan:
+    from openviking.session.train import PolicyPlanItem
+
+    return PolicyUpdatePlan(
+        items=[
+            PolicyPlanItem(
+                kind="delete_experience",
+                target_experience_name="booking_duplicate_handling",
+                target_experience_uri=uri,
+                before_content=before_content,
+                after_content=None,
+                base_version=1,
+                confidence=0.8,
+                evidence_trajectory_uris=["traj://1"],
+                metadata={"rationale": "delete duplicate experience"},
+            )
+        ]
+    )
+
+
 @pytest.mark.asyncio
 async def test_experience_set_loader_reads_memory_files():
     root = "viking://user/u/memories/experiences"
@@ -172,37 +210,6 @@ async def test_content_hash_snapshotter_is_deterministic():
 
 
 @pytest.mark.asyncio
-async def test_grouping_policy_optimizer_groups_gradients():
-    policy_set = _experience_set()
-    gradients = [
-        DummyGradient(
-            target_experience_name="booking_duplicate_handling",
-            target_experience_uri=policy_set.policies[0].uri,
-            base_version=1,
-            rationale="improve safety",
-            evidence_trajectory_uris=["traj://1"],
-            confidence=0.8,
-        ),
-        DummyGradient(
-            target_experience_name="new_policy",
-            target_experience_uri=None,
-            base_version=None,
-            rationale="new behavior",
-            evidence_trajectory_uris=["traj://2"],
-            confidence=0.7,
-        ),
-    ]
-
-    plan = await GroupingPolicyOptimizer().plan(gradients, policy_set)
-
-    assert plan.metadata["gradient_count"] == 2
-    assert [g["target"] for g in plan.metadata["groups"]] == [
-        "new:new_policy",
-        policy_set.policies[0].uri,
-    ]
-
-
-@pytest.mark.asyncio
 async def test_dry_run_policy_updater_does_not_mutate_policy_set():
     policy_set = _experience_set()
     plan = PolicyUpdatePlan(metadata={"hello": "world"})
@@ -218,36 +225,10 @@ async def test_dry_run_policy_updater_does_not_mutate_policy_set():
 
 
 @pytest.mark.asyncio
-async def test_grouping_policy_optimizer_creates_patch_plan_items():
-    policy_set = _experience_set()
-    gradients = [
-        _patch_gradient(
-            uri=policy_set.policies[0].uri,
-            before="content",
-            after="improved content",
-            rationale="improve safety",
-            metadata={"supersedes": []},
-        )
-    ]
-
-    plan = await GroupingPolicyOptimizer().plan(gradients, policy_set)
-
-    assert len(plan.items) == 1
-    item = plan.items[0]
-    assert item.kind == "upsert_experience"
-    assert item.target_experience_name == "booking_duplicate_handling"
-    assert item.target_experience_uri == policy_set.policies[0].uri
-    assert item.before_content == "content"
-    assert item.after_content == "improved content"
-    assert item.metadata["rationale"] == "improve safety"
-    assert plan.metadata["conflicts"] == []
-
-
-@pytest.mark.asyncio
 async def test_dry_run_policy_updater_simulates_patch_plan_items():
     policy_set = _experience_set()
     gradient = _patch_gradient(uri=policy_set.policies[0].uri, before="content", after="new content")
-    plan = await GroupingPolicyOptimizer().plan([gradient], policy_set)
+    plan = _plan_from_gradient(gradient)
 
     result = await DryRunPolicyUpdater().apply(plan, policy_set)
 
@@ -260,11 +241,26 @@ async def test_dry_run_policy_updater_simulates_patch_plan_items():
 
 
 @pytest.mark.asyncio
+async def test_dry_run_policy_updater_simulates_delete_plan_items():
+    policy_set = _experience_set()
+    plan = _delete_plan(uri=policy_set.policies[0].uri)
+
+    result = await DryRunPolicyUpdater().apply(plan, policy_set)
+
+    assert result.updated_policy_set is not policy_set
+    assert result.updated_policy_set.policies == []
+    assert result.written_uris == []
+    assert result.deleted_uris == []
+    assert result.metadata["dry_run"] is True
+    assert result.metadata["simulated"] is True
+
+
+@pytest.mark.asyncio
 async def test_memory_file_policy_updater_writes_experience_files():
     policy_set = _experience_set()
     fs = FakeVikingFS({})
     gradient = _patch_gradient(uri=policy_set.policies[0].uri, before="content", after="new content")
-    plan = await GroupingPolicyOptimizer().plan([gradient], policy_set)
+    plan = _plan_from_gradient(gradient)
 
     result = await MemoryFilePolicyUpdater(viking_fs=fs).apply(plan, policy_set)
 
@@ -278,6 +274,22 @@ async def test_memory_file_policy_updater_writes_experience_files():
 
 
 @pytest.mark.asyncio
+async def test_memory_file_policy_updater_deletes_experience_files():
+    policy_set = _experience_set()
+    uri = policy_set.policies[0].uri
+    fs = FakeVikingFS({uri: "content"})
+    plan = _delete_plan(uri=uri)
+
+    result = await MemoryFilePolicyUpdater(viking_fs=fs).apply(plan, policy_set)
+
+    assert result.errors == []
+    assert result.written_uris == []
+    assert result.deleted_uris == [uri]
+    assert result.updated_policy_set.policies == []
+    assert uri not in fs.files
+
+
+@pytest.mark.asyncio
 async def test_memory_file_policy_updater_detects_base_content_mismatch():
     policy_set = _experience_set()
     fs = FakeVikingFS({})
@@ -286,7 +298,7 @@ async def test_memory_file_policy_updater_detects_base_content_mismatch():
         before="stale content",
         after="new content",
     )
-    plan = await GroupingPolicyOptimizer().plan([gradient], policy_set)
+    plan = _plan_from_gradient(gradient)
 
     result = await MemoryFilePolicyUpdater(viking_fs=fs).apply(plan, policy_set)
 
@@ -298,7 +310,7 @@ async def test_memory_file_policy_updater_detects_base_content_mismatch():
 
 
 @pytest.mark.asyncio
-async def test_merge_aware_policy_optimizer_runs_patch_merge_extract_loop(monkeypatch):
+async def test_patch_merge_policy_optimizer_runs_patch_merge_extract_loop(monkeypatch):
     from openviking.session.memory.dataclass import (
         MemoryFile,
         ResolvedOperation,
@@ -349,13 +361,13 @@ async def test_merge_aware_policy_optimizer_runs_patch_merge_extract_loop(monkey
 
     monkeypatch.setattr("openviking.session.train.optimizers.ExtractLoop", FakeExtractLoop)
 
-    plan = await MergeAwarePolicyOptimizer(viking_fs=FakeVikingFS({}), vlm=object()).plan(
+    plan = await PatchMergePolicyOptimizer(viking_fs=FakeVikingFS({}), vlm=object()).plan(
         [gradient],
         policy_set,
-        MergeAwarePolicyOptimizerContext(request_context=fake_request_context()),
+        PatchMergePolicyOptimizerContext(request_context=fake_request_context()),
     )
 
-    assert plan.metadata["optimizer"] == "merge_aware"
+    assert plan.metadata["optimizer"] == "patch_merge"
     assert plan.items[0].kind == "upsert_experience"
     assert plan.items[0].target_experience_uri == policy_set.policies[0].uri
     assert plan.items[0].before_content == "content"
@@ -369,7 +381,7 @@ async def test_merge_aware_policy_optimizer_runs_patch_merge_extract_loop(monkey
 
 
 @pytest.mark.asyncio
-async def test_merge_aware_policy_optimizer_merges_all_patch_gradients_once(monkeypatch):
+async def test_patch_merge_policy_optimizer_merges_all_patch_gradients_once(monkeypatch):
     from openviking.session.memory.dataclass import (
         ResolvedOperation,
         ResolvedOperations,
@@ -430,10 +442,10 @@ async def test_merge_aware_policy_optimizer_merges_all_patch_gradients_once(monk
 
     monkeypatch.setattr("openviking.session.train.optimizers.ExtractLoop", FakeExtractLoop)
 
-    plan = await MergeAwarePolicyOptimizer(viking_fs=FakeVikingFS({}), vlm=object()).plan(
+    plan = await PatchMergePolicyOptimizer(viking_fs=FakeVikingFS({}), vlm=object()).plan(
         gradients,
         policy_set,
-        MergeAwarePolicyOptimizerContext(request_context=fake_request_context()),
+        PatchMergePolicyOptimizerContext(request_context=fake_request_context()),
     )
 
     assert captured["constructed"] == 1
@@ -444,7 +456,7 @@ async def test_merge_aware_policy_optimizer_merges_all_patch_gradients_once(monk
     ]
     assert len(provider.patches) == 2
     assert captured["prefetch_messages"][-1]["content"].count("## Memory Patch") == 2
-    assert plan.metadata["optimizer"] == "merge_aware"
+    assert plan.metadata["optimizer"] == "patch_merge"
     assert plan.metadata["patch_gradient_count"] == 2
     assert len(plan.items) == 1
     assert plan.items[0].target_experience_name == "重复预订处理"
@@ -452,7 +464,7 @@ async def test_merge_aware_policy_optimizer_merges_all_patch_gradients_once(monk
 
 
 @pytest.mark.asyncio
-async def test_merge_aware_policy_optimizer_runs_llm_for_single_patch(monkeypatch):
+async def test_patch_merge_policy_optimizer_runs_llm_for_single_patch(monkeypatch):
     from openviking.session.memory.dataclass import (
         MemoryFile,
         ResolvedOperation,
@@ -502,10 +514,10 @@ async def test_merge_aware_policy_optimizer_runs_llm_for_single_patch(monkeypatc
 
     monkeypatch.setattr("openviking.session.train.optimizers.ExtractLoop", FakeExtractLoop)
 
-    plan = await MergeAwarePolicyOptimizer(viking_fs=FakeVikingFS({}), vlm=object()).plan(
+    plan = await PatchMergePolicyOptimizer(viking_fs=FakeVikingFS({}), vlm=object()).plan(
         [gradient],
         policy_set,
-        MergeAwarePolicyOptimizerContext(request_context=fake_request_context()),
+        PatchMergePolicyOptimizerContext(request_context=fake_request_context()),
     )
 
     assert captured["constructed"] is True

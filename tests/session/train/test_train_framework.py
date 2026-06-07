@@ -12,13 +12,13 @@ from test_fakes import InMemoryAGFS, fake_request_context
 
 from openviking.message import Message, TextPart
 from openviking.session.train import (
-    ApplyResult,
     Case,
-    DefaultPolicyOptimizationPipeline,
     Experience,
     ExperienceSet,
     ListCaseLoader,
+    OfflinePolicyOptimizationPipeline,
     PipelineContext,
+    PolicyApplyResult,
     PolicyUpdatePlan,
     Rollout,
     RolloutAnalysis,
@@ -212,7 +212,7 @@ class DummyUpdater:
         plan: PolicyUpdatePlan,
         policy_set: ExperienceSet,
         context: Any,
-    ) -> ApplyResult:
+    ) -> PolicyApplyResult:
         updated = ExperienceSet(
             root_uri=policy_set.root_uri,
             policies=[
@@ -232,7 +232,7 @@ class DummyUpdater:
         )
         if hasattr(policy_set.viking_fs, "version") and updated.policies:
             policy_set.viking_fs.version = updated.policies[0].version
-        return ApplyResult(
+        return PolicyApplyResult(
             updated_policy_set=updated,
             written_uris=[p.uri for p in updated.policies],
         )
@@ -241,7 +241,7 @@ class DummyUpdater:
 @pytest.mark.asyncio
 async def test_default_policy_optimization_pipeline_runs_one_batch():
     snapshotter = DummySnapshotter()
-    pipeline = DefaultPolicyOptimizationPipeline(
+    pipeline = OfflinePolicyOptimizationPipeline(
         snapshotter=snapshotter,
         rollout_executor=DummyExecutor(),
         rollout_analyzer=DummyAnalyzer(),
@@ -273,7 +273,7 @@ async def test_default_policy_optimization_pipeline_runs_one_batch():
 @pytest.mark.asyncio
 async def test_default_policy_optimization_pipeline_supports_multiple_iterations_and_final_eval():
     snapshotter = DummySnapshotter()
-    pipeline = DefaultPolicyOptimizationPipeline(
+    pipeline = OfflinePolicyOptimizationPipeline(
         snapshotter=snapshotter,
         rollout_executor=DummyExecutor(),
         rollout_analyzer=DummyAnalyzer(),
@@ -305,7 +305,7 @@ async def test_policy_optimization_pipeline_trains_from_external_rollouts_withou
     snapshotter = DummySnapshotter()
     executor = DummyExecutor()
     analyzer = DummyAnalyzer()
-    pipeline = DefaultPolicyOptimizationPipeline(
+    pipeline = OfflinePolicyOptimizationPipeline(
         snapshotter=snapshotter,
         rollout_executor=executor,
         rollout_analyzer=analyzer,
@@ -347,7 +347,7 @@ async def test_policy_optimization_pipeline_trains_from_external_rollouts_withou
 
 @pytest.mark.asyncio
 async def test_policy_optimization_pipeline_realtime_rollouts_require_case():
-    pipeline = DefaultPolicyOptimizationPipeline(
+    pipeline = OfflinePolicyOptimizationPipeline(
         snapshotter=DummySnapshotter(),
         rollout_executor=DummyExecutor(),
         rollout_analyzer=DummyAnalyzer(),

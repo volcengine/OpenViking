@@ -4,26 +4,29 @@
 
 The trainers expose rollout-driven training primitives shared by offline and
 realtime collection paths.  They intentionally reuse the same downstream stages
-as ``DefaultPolicyOptimizationPipeline`` while separating trainer concerns from
+as ``OfflinePolicyOptimizationPipeline`` while separating trainer concerns from
 case rollout execution.
 """
 
 from __future__ import annotations
 
-import asyncio
 import threading
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Hashable
+from typing import Any, Hashable
 
-from openviking.session.streaming_batcher import StreamingBatcher, StreamingBatcherConfig
+from openviking.session.memory.utils.streaming_batcher import (
+    StreamingBatcher,
+    StreamingBatcherConfig,
+)
+from openviking.session.train.context import PipelineContext
 from openviking.session.train.domain import (
-    ApplyResult,
     ExperienceSet,
-    PolicyUpdatePlan,
+    PolicyApplyResult,
     Rollout,
     RolloutAnalysis,
     RolloutTrainingResult,
 )
+from openviking.session.train.engine import PolicyTrainingEngine
 from openviking.session.train.interfaces import (
     GradientEstimator,
     PolicyOptimizer,
@@ -36,9 +39,6 @@ from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 
-if TYPE_CHECKING:
-    from openviking.session.train.pipeline import PipelineContext
-
 
 @dataclass(slots=True)
 class BatchPolicyTrainer:
@@ -48,6 +48,15 @@ class BatchPolicyTrainer:
     gradient_estimator: GradientEstimator
     policy_optimizer: PolicyOptimizer
     policy_updater: PolicyUpdater
+    _engine: PolicyTrainingEngine = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._engine = PolicyTrainingEngine(
+            rollout_analyzer=self.rollout_analyzer,
+            gradient_estimator=self.gradient_estimator,
+            policy_optimizer=self.policy_optimizer,
+            policy_updater=self.policy_updater,
+        )
 
     @tracer("train.batch_policy_trainer.train_rollouts", ignore_result=True, ignore_args=True)
     async def train_rollouts(
@@ -59,13 +68,7 @@ class BatchPolicyTrainer:
         ctx = _coerce_pipeline_context(context)
         rollout_list = list(rollouts)
         _validate_rollouts_have_cases(rollout_list)
-        helper = _PolicyTrainerCore(
-            rollout_analyzer=self.rollout_analyzer,
-            gradient_estimator=self.gradient_estimator,
-            policy_optimizer=self.policy_optimizer,
-            policy_updater=self.policy_updater,
-        )
-        analyses, gradients, plan, apply_result = await helper.analyze_estimate_plan_apply(
+        analyses, gradients, plan, apply_result = await self._engine.analyze_estimate_plan_apply(
             rollouts=rollout_list,
             policy_set=policy_set,
             ctx=ctx,
@@ -132,16 +135,16 @@ class StreamingPolicyTrainer:
     policy_updater: PolicyUpdater
     context: PipelineContext | Any = None
     config: StreamingPolicyTrainerConfig = field(default_factory=StreamingPolicyTrainerConfig)
-    _core: _PolicyTrainerCore = field(init=False, repr=False)
+    _core: PolicyTrainingEngine = field(init=False, repr=False)
     _batcher: StreamingBatcher[_BufferedRolloutTraining, RolloutTrainingResult] = field(
         init=False, repr=False
     )
-    _last_apply_result: ApplyResult | None = field(init=False, default=None, repr=False)
+    _last_apply_result: PolicyApplyResult | None = field(init=False, default=None, repr=False)
     _closed: bool = field(init=False, default=False, repr=False)
 
     def __post_init__(self) -> None:
         self.context = _coerce_pipeline_context(self.context)
-        self._core = _PolicyTrainerCore(
+        self._core = PolicyTrainingEngine(
             rollout_analyzer=self.rollout_analyzer,
             gradient_estimator=self.gradient_estimator,
             policy_optimizer=self.policy_optimizer,
@@ -158,11 +161,11 @@ class StreamingPolicyTrainer:
             item_size=lambda item: len(item.gradients),
             result_metadata=lambda result: result.metadata,
         )
-        self._last_apply_result: ApplyResult | None = None
+        self._last_apply_result: PolicyApplyResult | None = None
         self._closed = False
 
     @property
-    def last_apply_result(self) -> ApplyResult | None:
+    def last_apply_result(self) -> PolicyApplyResult | None:
         return self._last_apply_result
 
     async def get_buffered_gradient_count(self) -> int:
@@ -281,79 +284,6 @@ class StreamingPolicyTrainer:
 
 
 @dataclass(slots=True)
-class _PolicyTrainerCore:
-    rollout_analyzer: RolloutAnalyzer
-    gradient_estimator: GradientEstimator
-    policy_optimizer: PolicyOptimizer
-    policy_updater: PolicyUpdater
-
-    async def analyze_estimate_plan_apply(
-        self,
-        *,
-        rollouts: list[Rollout],
-        policy_set: ExperienceSet,
-        ctx: PipelineContext,
-    ) -> tuple[list[RolloutAnalysis], list[SemanticGradient], PolicyUpdatePlan, ApplyResult]:
-        analyses = await self.analyze_rollouts(rollouts, ctx)
-        gradients = await self.estimate_gradients(analyses, policy_set, ctx)
-        plan, apply_result = await self.plan_and_apply(
-            gradients=gradients,
-            policy_set=policy_set,
-            ctx=ctx,
-        )
-        return analyses, gradients, plan, apply_result
-
-    async def analyze_rollouts(
-        self,
-        rollouts: list[Rollout],
-        ctx: PipelineContext,
-    ) -> list[RolloutAnalysis]:
-        analyses = await asyncio.gather(
-            *[self.rollout_analyzer.analyze(rollout, ctx.analysis_context) for rollout in rollouts]
-        )
-        return list(analyses)
-
-    async def estimate_gradients(
-        self,
-        analyses: list[RolloutAnalysis],
-        policy_set: ExperienceSet,
-        ctx: PipelineContext,
-    ) -> list[SemanticGradient]:
-        gradient_batches = await asyncio.gather(
-            *[
-                self.gradient_estimator.estimate(
-                    analysis,
-                    policy_set,
-                    ctx.gradient_context,
-                )
-                for analysis in analyses
-            ]
-        )
-        return [gradient for batch in gradient_batches for gradient in batch]
-
-    async def plan_and_apply(
-        self,
-        *,
-        gradients: list[SemanticGradient],
-        policy_set: ExperienceSet,
-        ctx: PipelineContext,
-    ) -> tuple[PolicyUpdatePlan, ApplyResult]:
-        async with policy_set.lock():
-            latest_policy_set = await policy_set.reload()
-            plan = await self.policy_optimizer.plan(
-                gradients,
-                latest_policy_set,
-                ctx.optimization_context,
-            )
-            apply_result = await self.policy_updater.apply(
-                plan,
-                latest_policy_set,
-                ctx.apply_context or latest_policy_set.request_context,
-            )
-        return plan, apply_result
-
-
-@dataclass(slots=True)
 class _BufferedRolloutTraining:
     gradients: list[SemanticGradient]
     analysis: RolloutAnalysis
@@ -416,8 +346,6 @@ def make_streaming_policy_trainer_key(
 
 
 def _coerce_pipeline_context(context: PipelineContext | Any = None) -> PipelineContext:
-    from openviking.session.train.pipeline import PipelineContext
-
     return context if isinstance(context, PipelineContext) else PipelineContext()
 
 

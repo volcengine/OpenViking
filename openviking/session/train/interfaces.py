@@ -7,11 +7,13 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import Any, Protocol
 
+from openviking.session.memory.dataclass import MemoryFile
+from openviking.session.train.context import ExecutionContext
 from openviking.session.train.domain import (
-    ApplyResult,
     Case,
-    ExecutionContext,
     ExperienceSet,
+    PipelineResult,
+    PolicyApplyResult,
     PolicyUpdatePlan,
     Rollout,
     RolloutAnalysis,
@@ -19,30 +21,14 @@ from openviking.session.train.domain import (
 )
 
 
-class Policy(Protocol):
-    """A reusable execution policy optimized from trajectories."""
-
-    @property
-    def name(self) -> str: ...
-
-    @property
-    def uri(self) -> str: ...
-
-    @property
-    def version(self) -> int: ...
-
-    @property
-    def status(self) -> str: ...
-
-    @property
-    def content(self) -> str: ...
-
-    @property
-    def metadata(self) -> dict[str, Any]: ...
-
-
 class SemanticGradient(Protocol):
     """A semantic update signal for one target Experience."""
+
+    @property
+    def before_file(self) -> MemoryFile | None: ...
+
+    @property
+    def after_file(self) -> MemoryFile: ...
 
     @property
     def target_experience_name(self) -> str: ...
@@ -85,7 +71,7 @@ class PolicyUpdater(Protocol):
         plan: PolicyUpdatePlan,
         policy_set: ExperienceSet,
         context: Any,
-    ) -> ApplyResult: ...
+    ) -> PolicyApplyResult: ...
 
 
 class CaseLoader(Protocol):
@@ -136,7 +122,7 @@ class PolicyOptimizationPipeline(Protocol):
         case_loader: CaseLoader,
         policy_set: ExperienceSet,
         context: Any,
-    ) -> Any: ...
+    ) -> PipelineResult: ...
 
     async def train_from_rollouts(
         self,

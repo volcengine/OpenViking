@@ -19,25 +19,15 @@ from openviking.session.train.components.trajectory_analyzer import (
     TrajectoryAnalyzerContext,
     TrajectoryRolloutAnalyzer,
 )
-from openviking.session.train.optimizers import (
-    GroupingPolicyOptimizer,
-    MergeAwarePolicyOptimizer,
-    MergeAwarePolicyOptimizerContext,
-)
-from openviking.session.train.snapshot import ContentHashPolicySnapshotter
 
 __all__ = [
     "ExperienceGradientEstimator",
     "ExperienceGradientContext",
     "TrajectoryRolloutAnalyzer",
     "TrajectoryAnalyzerContext",
-    "ContentHashPolicySnapshotter",
     "DryRunPolicyUpdater",
     "MemoryFilePolicyUpdater",
     "SingleTurnLLMRolloutExecutor",
     "default_single_turn_prompt",
     "ExperienceSetLoader",
-    "GroupingPolicyOptimizer",
-    "MergeAwarePolicyOptimizer",
-    "MergeAwarePolicyOptimizerContext",
 ]

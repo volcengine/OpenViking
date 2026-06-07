@@ -23,7 +23,7 @@ PolicyPlanItemKind = Literal["upsert_experience", "delete_experience"]
 
 @dataclass(slots=True)
 class Experience:
-    """A single experience file implementing the Policy interface."""
+    """A single experience file in an ExperienceSet."""
 
     name: str
     uri: str
@@ -219,7 +219,7 @@ class PolicyUpdatePlan:
 
 
 @dataclass(slots=True)
-class ApplyResult:
+class PolicyApplyResult:
     """Result of applying a PolicyUpdatePlan."""
 
     updated_policy_set: ExperienceSet
@@ -243,7 +243,7 @@ class PipelineIterationResult:
     analyses: list[RolloutAnalysis]
     gradients: list[Any]
     plan: PolicyUpdatePlan
-    apply_result: ApplyResult
+    apply_result: PolicyApplyResult
     policy_snapshot_ids: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -269,7 +269,7 @@ class PipelineResult:
     analyses: list[RolloutAnalysis]
     gradients: list[Any]
     plan: PolicyUpdatePlan
-    apply_result: ApplyResult
+    apply_result: PolicyApplyResult
     iterations: list[PipelineIterationResult] = field(default_factory=list)
     evaluation_passes: list[PipelineEvaluationResult] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -287,13 +287,6 @@ class RolloutTrainingResult:
     analyses: list[RolloutAnalysis]
     gradients: list[Any]
     plan: PolicyUpdatePlan
-    apply_result: ApplyResult
+    apply_result: PolicyApplyResult
     metadata: dict[str, Any] = field(default_factory=dict)
 
-
-@dataclass(slots=True)
-class ExecutionContext:
-    """Runtime context passed to RolloutExecutor."""
-
-    policy_snapshot_id: str
-    metadata: dict[str, Any] = field(default_factory=dict)

@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""GradientEstimator adapter backed by experience gradient estimation."""
+"""ExtractLoop-backed GradientEstimator component."""
 
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ class ExperienceGradientContext:
 class ExperienceGradientEstimator:
     """Estimate PatchSemanticGradients via experience ExtractLoop.
 
-    This adapter reuses AgentExperienceContextProvider and ExtractLoop but stops
+    This component reuses AgentExperienceContextProvider and ExtractLoop but stops
     before MemoryUpdater.apply_operations.  The resolved operations are converted
     into PatchSemanticGradient instances.
     """

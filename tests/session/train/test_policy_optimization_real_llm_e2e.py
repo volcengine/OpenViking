@@ -15,13 +15,13 @@ from openviking.server.config import load_server_config
 from openviking.session.train import (
     Case,
     ContentHashPolicySnapshotter,
-    DefaultPolicyOptimizationPipeline,
     ExperienceGradientContext,
     ExperienceSetLoader,
     ListCaseLoader,
     MemoryFilePolicyUpdater,
-    MergeAwarePolicyOptimizer,
-    MergeAwarePolicyOptimizerContext,
+    OfflinePolicyOptimizationPipeline,
+    PatchMergePolicyOptimizer,
+    PatchMergePolicyOptimizerContext,
     PipelineContext,
     Rubric,
     RubricCriterion,
@@ -608,7 +608,7 @@ async def _run_policy_optimization_pipeline_real_config_llm_e2e_writes_updated_e
     vlm = get_openviking_config().vlm
     _patch_experience_prefetch(monkeypatch, fs, experience_uri)
 
-    pipeline = DefaultPolicyOptimizationPipeline(
+    pipeline = OfflinePolicyOptimizationPipeline(
         snapshotter=ContentHashPolicySnapshotter(),
         rollout_executor=SingleTurnLLMRolloutExecutor(
             vlm=vlm,
@@ -624,7 +624,7 @@ async def _run_policy_optimization_pipeline_real_config_llm_e2e_writes_updated_e
             viking_fs=fs,
             vlm=vlm,
         ),
-        policy_optimizer=MergeAwarePolicyOptimizer(
+        policy_optimizer=PatchMergePolicyOptimizer(
             viking_fs=fs,
             vlm=vlm,
         ),
@@ -640,7 +640,7 @@ async def _run_policy_optimization_pipeline_real_config_llm_e2e_writes_updated_e
                 request_context=request_context,
                 messages=[],
             ),
-            optimization_context=MergeAwarePolicyOptimizerContext(request_context=request_context),
+            optimization_context=PatchMergePolicyOptimizerContext(request_context=request_context),
             apply_context=request_context,
             max_iterations=4,
             final_evaluation=True,
@@ -660,9 +660,9 @@ async def _run_policy_optimization_pipeline_real_config_llm_e2e_writes_updated_e
         uri for iteration in result.iterations for uri in iteration.apply_result.written_uris
     ]
     assert experience_uri in written_uris
-    assert result.plan.metadata["optimizer"] == "merge_aware"
+    assert result.plan.metadata["optimizer"] == "patch_merge"
     assert any(
-        iteration.plan.metadata.get("optimizer") == "merge_aware" for iteration in result.iterations
+        iteration.plan.metadata.get("optimizer") == "patch_merge" for iteration in result.iterations
     )
     assert len(result.iterations) == 4
     assert len(result.evaluation_passes) == 1

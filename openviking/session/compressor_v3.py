@@ -45,8 +45,8 @@ from openviking.session.train import (
     ExperienceGradientEstimator,
     ExperienceSetLoader,
     MemoryFilePolicyUpdater,
-    MergeAwarePolicyOptimizer,
-    MergeAwarePolicyOptimizerContext,
+    PatchMergePolicyOptimizer,
+    PatchMergePolicyOptimizerContext,
     PipelineContext,
     Rollout,
     Rubric,
@@ -365,7 +365,7 @@ class SessionCompressorV3:
                 policy_root_uri,
                 ctx=ctx,
             )
-            optimizer_context = MergeAwarePolicyOptimizerContext(request_context=ctx)
+            optimizer_context = PatchMergePolicyOptimizerContext(request_context=ctx)
             gradient_context = ExperienceGradientContext(
                 request_context=ctx,
                 messages=list(messages),
@@ -381,7 +381,7 @@ class SessionCompressorV3:
                 gradient_estimator=ExperienceGradientEstimator(
                     viking_fs=viking_fs,
                 ),
-                policy_optimizer=MergeAwarePolicyOptimizer(
+                policy_optimizer=PatchMergePolicyOptimizer(
                     viking_fs=viking_fs,
                     memory_type="experiences",
                 ),
@@ -390,7 +390,6 @@ class SessionCompressorV3:
                     analysis_context=TrajectoryAnalyzerContext(
                         request_context=ctx,
                         strict_extract_errors=strict_extract_errors,
-                        archive_uri=archive_uri,
                     ),
                     gradient_context=gradient_context,
                     optimization_context=optimizer_context,

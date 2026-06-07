@@ -4,21 +4,20 @@
 
 from __future__ import annotations
 
-import asyncio
-from dataclasses import dataclass, field
 from typing import Any
 
+from openviking.session.train.context import ExecutionContext, PipelineContext
 from openviking.session.train.domain import (
-    ApplyResult,
-    ExecutionContext,
     ExperienceSet,
     PipelineEvaluationResult,
     PipelineIterationResult,
     PipelineResult,
+    PolicyApplyResult,
     PolicyUpdatePlan,
     RolloutAnalysis,
     RolloutTrainingResult,
 )
+from openviking.session.train.engine import PolicyTrainingEngine
 from openviking.session.train.interfaces import (
     CaseLoader,
     GradientEstimator,
@@ -33,26 +32,7 @@ from openviking.session.train.trainers import BatchPolicyTrainer
 from openviking.telemetry import tracer
 
 
-@dataclass(slots=True)
-class PipelineContext:
-    """Context bundle for DefaultPolicyOptimizationPipeline.
-
-    Context payloads are intentionally opaque and can be shaped by concrete
-    implementations without changing the domain interfaces.
-    """
-
-    case_load_context: Any = None
-    snapshot_context: Any = None
-    analysis_context: Any = None
-    gradient_context: Any = None
-    optimization_context: Any = None
-    apply_context: Any = None
-    execution_metadata: dict[str, Any] = field(default_factory=dict)
-    max_iterations: int = 1
-    final_evaluation: bool = False
-
-
-class DefaultPolicyOptimizationPipeline:
+class OfflinePolicyOptimizationPipeline:
     """Composable batch-oriented iterative policy optimization pipeline.
 
     This class wires the protocol interfaces together.  It does not implement
@@ -84,6 +64,12 @@ class DefaultPolicyOptimizationPipeline:
         self.gradient_estimator = gradient_estimator
         self.policy_optimizer = policy_optimizer
         self.policy_updater = policy_updater
+        self._training_engine = PolicyTrainingEngine(
+            rollout_analyzer=rollout_analyzer,
+            gradient_estimator=gradient_estimator,
+            policy_optimizer=policy_optimizer,
+            policy_updater=policy_updater,
+        )
 
     @tracer("train.pipeline.run", ignore_result=True, ignore_args=True)
     async def run(
@@ -130,7 +116,7 @@ class DefaultPolicyOptimizationPipeline:
             last_apply_result = iteration_results[-1].apply_result
         else:
             last_plan = PolicyUpdatePlan(metadata={"empty": True})
-            last_apply_result = ApplyResult(updated_policy_set=current_policy_set)
+            last_apply_result = PolicyApplyResult(updated_policy_set=current_policy_set)
 
         first_score = _first_analysis_score(iteration_results)
         final_score = _final_analysis_score(iteration_results, evaluation_passes)
@@ -200,7 +186,7 @@ class DefaultPolicyOptimizationPipeline:
         all_analyses: list[RolloutAnalysis] = []
         all_gradients: list[SemanticGradient] = []
         last_plan: PolicyUpdatePlan | None = None
-        last_apply_result: ApplyResult | None = None
+        last_apply_result: PolicyApplyResult | None = None
         current_policy_set = policy_set
         snapshot_ids: list[str] = []
 
@@ -215,19 +201,23 @@ class DefaultPolicyOptimizationPipeline:
             snapshot_ids.append(snapshot_id)
             all_analyses.extend(analyses)
 
-            gradients = await self._estimate_gradients(analyses, current_policy_set, ctx)
-            all_gradients.extend(gradients)
-
-            last_plan, last_apply_result = await self._plan_and_apply(
-                gradients,
+            gradients = await self._training_engine.estimate_gradients(
+                analyses,
                 current_policy_set,
                 ctx,
+            )
+            all_gradients.extend(gradients)
+
+            last_plan, last_apply_result = await self._training_engine.plan_and_apply(
+                gradients=gradients,
+                policy_set=current_policy_set,
+                ctx=ctx,
             )
             current_policy_set = last_apply_result.updated_policy_set
 
         if last_plan is None or last_apply_result is None:
             last_plan = PolicyUpdatePlan(metadata={"empty": True, "iteration": iteration})
-            last_apply_result = ApplyResult(updated_policy_set=current_policy_set)
+            last_apply_result = PolicyApplyResult(updated_policy_set=current_policy_set)
 
         return PipelineIterationResult(
             iteration=iteration,
@@ -242,44 +232,6 @@ class DefaultPolicyOptimizationPipeline:
                 "gradient_count": len(all_gradients),
             },
         )
-
-    async def _estimate_gradients(
-        self,
-        analyses: list[RolloutAnalysis],
-        policy_set: ExperienceSet,
-        ctx: PipelineContext,
-    ) -> list[SemanticGradient]:
-        gradient_batches = await asyncio.gather(
-            *[
-                self.gradient_estimator.estimate(
-                    analysis,
-                    policy_set,
-                    ctx.gradient_context,
-                )
-                for analysis in analyses
-            ]
-        )
-        return [gradient for batch in gradient_batches for gradient in batch]
-
-    async def _plan_and_apply(
-        self,
-        gradients: list[SemanticGradient],
-        policy_set: ExperienceSet,
-        ctx: PipelineContext,
-    ) -> tuple[PolicyUpdatePlan, ApplyResult]:
-        async with policy_set.lock():
-            latest_policy_set = await policy_set.reload()
-            plan = await self.policy_optimizer.plan(
-                gradients,
-                latest_policy_set,
-                ctx.optimization_context,
-            )
-            apply_result = await self.policy_updater.apply(
-                plan,
-                latest_policy_set,
-                ctx.apply_context or latest_policy_set.request_context,
-            )
-        return plan, apply_result
 
     async def _run_evaluation_pass(
         self,
@@ -341,10 +293,8 @@ class DefaultPolicyOptimizationPipeline:
             policy_set,
             execution_context,
         )
-        analyses = await asyncio.gather(
-            *[self.rollout_analyzer.analyze(rollout, ctx.analysis_context) for rollout in rollouts]
-        )
-        return list(analyses), snapshot_id
+        analyses = await self._training_engine.analyze_rollouts(rollouts, ctx)
+        return analyses, snapshot_id
 
 
 def _average_score(analyses: list[RolloutAnalysis]) -> float | None:

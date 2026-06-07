@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from openviking.core.context import Context
@@ -42,8 +42,6 @@ class TrajectoryAnalyzerContext:
     request_context: RequestContext
     strict_extract_errors: bool = False
     latest_archive_overview: str = ""
-    archive_uri: str = ""
-    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

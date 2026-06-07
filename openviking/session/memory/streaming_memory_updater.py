@@ -41,7 +41,10 @@ from openviking.session.memory.patch_merge_context_provider import (
     PatchMergePatch,
 )
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
-from openviking.session.streaming_batcher import StreamingBatcher, StreamingBatcherConfig
+from openviking.session.memory.utils.streaming_batcher import (
+    StreamingBatcher,
+    StreamingBatcherConfig,
+)
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
 from openviking_cli.utils import get_logger

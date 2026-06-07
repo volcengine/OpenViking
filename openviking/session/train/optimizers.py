@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -33,104 +32,15 @@ logger = get_logger(__name__)
 
 
 @dataclass(slots=True)
-class GroupingPolicyOptimizer:
-    """Group semantic gradients into an executable patch-oriented update plan.
-
-    This conservative first optimizer does not attempt LLM-based merge/split
-    synthesis.  It groups gradients, emits diagnostics, and creates one
-    ``upsert_experience`` plan item per patch gradient.  Later optimizers can
-    replace this with conflict-aware merge and decomposition logic while keeping
-    the same PolicyUpdater boundary.
-    """
-
-    @tracer("train.policy_optimizer.grouping.plan", ignore_result=True, ignore_args=True)
-    async def plan(
-        self,
-        gradients: list[SemanticGradient],
-        policy_set: ExperienceSet,
-        context: Any = None,
-    ) -> PolicyUpdatePlan:
-        del context
-        groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
-        policy_uris = {policy.uri for policy in policy_set.policies}
-        policy_names = {policy.name for policy in policy_set.policies}
-        unresolved: list[dict[str, Any]] = []
-        conflicts: list[dict[str, Any]] = []
-        items: list[PolicyPlanItem] = []
-
-        for idx, gradient in enumerate(gradients):
-            target_uri = gradient.target_experience_uri
-            target_name = gradient.target_experience_name
-            key = target_uri or f"new:{target_name}"
-            item = _gradient_to_dict(idx, gradient)
-            groups[key].append(item)
-            if target_uri and target_uri not in policy_uris:
-                unresolved.append(
-                    {
-                        "gradient_index": idx,
-                        "target_experience_uri": target_uri,
-                        "reason": "target URI not found in ExperienceSet",
-                    }
-                )
-            elif not target_uri and target_name in policy_names:
-                unresolved.append(
-                    {
-                        "gradient_index": idx,
-                        "target_experience_name": target_name,
-                        "reason": "name exists but gradient has no target URI",
-                    }
-                )
-
-            plan_item = _gradient_to_plan_item(gradient, policy_set)
-            if plan_item is not None:
-                items.append(plan_item)
-
-        for target, target_gradients in groups.items():
-            after_contents = {
-                gradient["after_file"]["content"]
-                for gradient in target_gradients
-                if gradient.get("after_file")
-                and gradient["after_file"].get("content") is not None
-            }
-            if len(target_gradients) > 1 and len(after_contents) > 1:
-                conflicts.append(
-                    {
-                        "target": target,
-                        "gradient_count": len(target_gradients),
-                        "reason": "multiple patch gradients propose different after file content",
-                    }
-                )
-
-        return PolicyUpdatePlan(
-            items=items,
-            metadata={
-                "gradient_count": len(gradients),
-                "groups": [
-                    {
-                        "target": target,
-                        "gradient_count": len(group_items),
-                        "gradients": group_items,
-                    }
-                    for target, group_items in sorted(groups.items(), key=lambda item: item[0])
-                ],
-                "unresolved": unresolved,
-                "conflicts": conflicts,
-            },
-        )
-
-
-@dataclass(slots=True)
-class MergeAwarePolicyOptimizerContext:
-    """Context for MergeAwarePolicyOptimizer."""
+class PatchMergePolicyOptimizerContext:
+    """Context for PatchMergePolicyOptimizer."""
 
     request_context: RequestContext
     messages: list[Message] = field(default_factory=list)
-    strict_merge_errors: bool = False
-    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
-class MergeAwarePolicyOptimizer:
+class PatchMergePolicyOptimizer:
     """Merge patch gradients with ExtractLoop before producing update plan items."""
 
     viking_fs: Any = None
@@ -138,7 +48,7 @@ class MergeAwarePolicyOptimizer:
     memory_type: str = "experiences"
 
     @tracer(
-        "train.policy_optimizer.merge_aware.plan",
+        "train.policy_optimizer.patch_merge.plan",
         ignore_result=True,
         ignore_args=True,
     )
@@ -146,19 +56,17 @@ class MergeAwarePolicyOptimizer:
         self,
         gradients: list[SemanticGradient],
         policy_set: ExperienceSet,
-        context: MergeAwarePolicyOptimizerContext | Any = None,
+        context: PatchMergePolicyOptimizerContext | None = None,
     ) -> PolicyUpdatePlan:
-        if context is None or getattr(context, "request_context", None) is None:
-            raise ValueError("MergeAwarePolicyOptimizerContext.request_context is required")
+        if context is None:
+            raise ValueError("PatchMergePolicyOptimizerContext.request_context is required")
 
-        patch_gradients = [
-            gradient for gradient in gradients if getattr(gradient, "after_file", None) is not None
-        ]
+        patch_gradients = list(gradients)
         if not patch_gradients:
             return PolicyUpdatePlan(
                 items=[],
                 metadata={
-                    "optimizer": "merge_aware",
+                    "optimizer": "patch_merge",
                     "memory_type": self.memory_type,
                     "gradient_count": len(gradients),
                     "patch_gradient_count": 0,
@@ -186,7 +94,7 @@ class MergeAwarePolicyOptimizer:
         return PolicyUpdatePlan(
             items=items,
             metadata={
-                "optimizer": "merge_aware",
+                "optimizer": "patch_merge",
                 "memory_type": self.memory_type,
                 "gradient_count": len(gradients),
                 "patch_gradient_count": len(patch_gradients),
@@ -198,7 +106,7 @@ class MergeAwarePolicyOptimizer:
         )
 
     @tracer(
-        "train.policy_optimizer.merge_aware.extract_loop",
+        "train.policy_optimizer.patch_merge.extract_loop",
         ignore_result=True,
         ignore_args=True,
     )
@@ -207,13 +115,13 @@ class MergeAwarePolicyOptimizer:
         *,
         gradients: list[SemanticGradient],
         policy_set: ExperienceSet,
-        context: MergeAwarePolicyOptimizerContext,
+        context: PatchMergePolicyOptimizerContext,
     ):
         config = get_openviking_config()
         vlm = self.vlm or config.vlm.get_vlm_instance()
         viking_fs = self.viking_fs or policy_set.viking_fs
         if viking_fs is None:
-            raise RuntimeError("VikingFS is required for merge-aware policy optimization")
+            raise RuntimeError("VikingFS is required for patch-merge policy optimization")
 
         extract_context = ExtractContext(list(context.messages or []))
         provider = PatchMergeContextProvider(
@@ -270,15 +178,15 @@ def _log_merge_input(
     console: bool,
 ) -> None:
     lines = [
-        "\n========== MergeAwarePolicyOptimizer Input =========",
+        "\n========== PatchMergePolicyOptimizer Input =========",
         f"target: {target}",
         f"memory_type: {provider.memory_type}",
         f"required_file_uris: {provider.required_file_uris}",
         f"gradient_count: {len(gradients)}",
     ]
     for idx, gradient in enumerate(gradients):
-        before_file = getattr(gradient, "before_file", None)
-        after_file = getattr(gradient, "after_file", None)
+        before_file = gradient.before_file
+        after_file = gradient.after_file
         lines.extend(
             [
                 "",
@@ -316,7 +224,7 @@ def _log_merge_output(
     console: bool,
 ) -> None:
     lines = [
-        "\n========== MergeAwarePolicyOptimizer Output =========",
+        "\n========== PatchMergePolicyOptimizer Output =========",
         f"target: {target}",
         "[Resolved Operations]",
         _dump_model_or_value(operations),
@@ -377,8 +285,8 @@ def _gradient_to_dict(index: int, gradient: SemanticGradient) -> dict[str, Any]:
         "confidence": gradient.confidence,
         "metadata": dict(gradient.metadata),
     }
-    before_file = getattr(gradient, "before_file", None)
-    after_file = getattr(gradient, "after_file", None)
+    before_file = gradient.before_file
+    after_file = gradient.after_file
     if before_file is not None:
         result["before_file"] = _memory_file_to_dict(before_file)
     if after_file is not None:
@@ -395,48 +303,10 @@ def _memory_file_to_dict(file: MemoryFile) -> dict[str, Any]:
         "extra_fields": dict(file.extra_fields or {}),
     }
 
-def _gradient_to_plan_item(
-    gradient: SemanticGradient,
-    policy_set: ExperienceSet,
-) -> PolicyPlanItem | None:
-    after_file = getattr(gradient, "after_file", None)
-    if after_file is None:
-        return None
-    before_file = getattr(gradient, "before_file", None)
-    target_name = gradient.target_experience_name
-    target_uri = gradient.target_experience_uri
-    before_content = before_file.plain_content() if before_file is not None else None
-    policy_uris = {policy.uri for policy in policy_set.policies}
-    if target_uri and target_uri not in policy_uris:
-        superseded = _find_superseded_policy(_gradient_supersedes(gradient), policy_set)
-        if superseded is not None:
-            target_name = superseded.name
-            target_uri = superseded.uri
-            if before_content is None:
-                before_content = superseded.content
-    return PolicyPlanItem(
-        kind="upsert_experience",
-        target_experience_name=target_name,
-        target_experience_uri=target_uri,
-        before_content=before_content,
-        after_content=after_file.plain_content(),
-        base_version=gradient.base_version,
-        confidence=gradient.confidence,
-        evidence_trajectory_uris=list(gradient.evidence_trajectory_uris),
-        metadata={
-            "rationale": gradient.rationale,
-            "gradient_metadata": dict(gradient.metadata),
-            "after_file_metadata": dict(after_file.extra_fields or {}),
-        },
-    )
-
 def _gradient_to_merge_patch(gradient: SemanticGradient) -> PatchMergePatch:
-    after_file = getattr(gradient, "after_file", None)
-    if after_file is None:
-        raise ValueError(f"SemanticGradient has no after_file: {gradient.target_experience_name}")
     return PatchMergePatch(
-        before_file=getattr(gradient, "before_file", None),
-        after_file=after_file,
+        before_file=gradient.before_file,
+        after_file=gradient.after_file,
         metadata={
             "base_version": gradient.base_version,
             "rationale": gradient.rationale,
@@ -480,7 +350,7 @@ def _seed_read_file_contents(
         if policy.uri in provider.required_file_uris:
             provider.read_file_contents[policy.uri] = _experience_to_memory_file(policy)
     for gradient in gradients:
-        before_file = getattr(gradient, "before_file", None)
+        before_file = gradient.before_file
         target_uri = gradient.target_experience_uri
         if before_file is None or target_uri in provider.read_file_contents:
             continue
@@ -606,16 +476,14 @@ def _gradient_supersedes(gradient: SemanticGradient) -> Any:
     metadata = dict(getattr(gradient, "metadata", {}) or {})
     if metadata.get("supersedes") is not None:
         return metadata.get("supersedes")
-    after_file = getattr(gradient, "after_file", None)
-    if after_file is not None:
-        return (after_file.extra_fields or {}).get("supersedes")
-    return None
+    return (gradient.after_file.extra_fields or {}).get("supersedes")
 
 def _fallback_experience_name(op: Any) -> str:
     uri = _first_uri(getattr(op, "uris", []) or [])
     if uri:
         return uri.rstrip("/").split("/")[-1].removesuffix(".md")
     return "unknown_experience"
+
 
 def _find_superseded_policy(supersedes: Any, policy_set: ExperienceSet):
     names: list[str]

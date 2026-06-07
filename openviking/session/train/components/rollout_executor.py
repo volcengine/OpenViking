@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""RolloutExecutor adapters."""
+"""RolloutExecutor component implementations."""
 
 from __future__ import annotations
 
@@ -11,7 +11,8 @@ from typing import Any
 from uuid import uuid4
 
 from openviking.message import Message, TextPart
-from openviking.session.train.domain import Case, ExecutionContext, ExperienceSet, Rollout
+from openviking.session.train.context import ExecutionContext
+from openviking.session.train.domain import Case, ExperienceSet, Rollout
 from openviking.telemetry import tracer
 from openviking_cli.utils.config import get_openviking_config
 
@@ -23,7 +24,7 @@ class SingleTurnLLMRolloutExecutor:
     """Execute each Case with one plain LLM call.
 
     This is a minimal RolloutExecutor for offline training bootstrap.  It does
-    not run tools or a full agent loop; future agent-loop adapters can implement
+    not run tools or a full agent loop; future agent-loop components can implement
     the same RolloutExecutor interface.
     """
 

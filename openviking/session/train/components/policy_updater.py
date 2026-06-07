@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""PolicyUpdater adapters."""
+"""PolicyUpdater component implementations."""
 
 from __future__ import annotations
 
@@ -11,9 +11,9 @@ from typing import Any
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.train.domain import (
-    ApplyResult,
     Experience,
     ExperienceSet,
+    PolicyApplyResult,
     PolicyPlanItem,
     PolicyUpdatePlan,
 )
@@ -40,14 +40,14 @@ class DryRunPolicyUpdater:
         plan: PolicyUpdatePlan,
         policy_set: ExperienceSet,
         context: Any = None,
-    ) -> ApplyResult:
+    ) -> PolicyApplyResult:
         del context
         updated_policy_set = (
             _apply_items_to_snapshot(plan.items, policy_set)
             if self.simulate and plan.items
             else policy_set
         )
-        return ApplyResult(
+        return PolicyApplyResult(
             updated_policy_set=updated_policy_set,
             written_uris=[],
             metadata={
@@ -63,9 +63,10 @@ class DryRunPolicyUpdater:
 class MemoryFilePolicyUpdater:
     """PolicyUpdater that writes experience files via VikingFS.
 
-    It consumes ``upsert_experience`` items containing full after-content.  The
-    updater performs a lightweight base-content guard when ``before_content`` is
-    available to avoid blindly overwriting a diverged ExperienceSet snapshot.
+    It consumes executable ``upsert_experience`` and ``delete_experience`` plan
+    items. The updater performs a lightweight base-content guard when
+    ``before_content`` is available to avoid blindly overwriting or deleting a
+    diverged ExperienceSet snapshot.
     """
 
     viking_fs: Any = None
@@ -76,21 +77,17 @@ class MemoryFilePolicyUpdater:
         plan: PolicyUpdatePlan,
         policy_set: ExperienceSet,
         context: Any = None,
-    ) -> ApplyResult:
+    ) -> PolicyApplyResult:
         viking_fs = self.viking_fs or get_viking_fs()
         if viking_fs is None:
             raise RuntimeError("VikingFS is required to apply policy update plans")
 
         updated_policy_set = _apply_items_to_snapshot(plan.items, policy_set)
         written_uris: list[str] = []
+        deleted_uris: list[str] = []
         errors: list[str] = []
 
         for item in plan.items:
-            if item.kind != "upsert_experience":
-                continue
-            if item.after_content is None:
-                errors.append(f"missing after_content for {item.target_experience_name}")
-                continue
             uri = _target_uri(item, policy_set.root_uri)
             current = _find_policy(policy_set, uri=uri, name=item.target_experience_name)
             if (
@@ -104,6 +101,21 @@ class MemoryFilePolicyUpdater:
                     f"{item.target_experience_name}: expected gradient before_content"
                 )
                 continue
+
+            if item.kind == "delete_experience":
+                try:
+                    await viking_fs.rm(uri, ctx=context)
+                    deleted_uris.append(uri)
+                except Exception as exc:  # pragma: no cover - defensive component boundary
+                    errors.append(f"failed to delete {uri}: {exc}")
+                continue
+
+            if item.kind != "upsert_experience":
+                continue
+            if item.after_content is None:
+                errors.append(f"missing after_content for {item.target_experience_name}")
+                continue
+
             updated = _find_policy(updated_policy_set, uri=uri, name=item.target_experience_name)
             if updated is None:
                 errors.append(
@@ -127,12 +139,13 @@ class MemoryFilePolicyUpdater:
             try:
                 await viking_fs.write_file(uri, raw, ctx=context)
                 written_uris.append(uri)
-            except Exception as exc:  # pragma: no cover - defensive adapter boundary
+            except Exception as exc:  # pragma: no cover - defensive component boundary
                 errors.append(f"failed to write {uri}: {exc}")
 
-        return ApplyResult(
+        return PolicyApplyResult(
             updated_policy_set=updated_policy_set,
             written_uris=written_uris,
+            deleted_uris=deleted_uris,
             errors=errors,
             metadata={"dry_run": False, "item_count": len(plan.items)},
         )
@@ -145,9 +158,32 @@ def _apply_items_to_snapshot(
     result = list(policy_set.policies)
 
     for item in items:
+        uri = _target_uri(item, policy_set.root_uri)
+
+        if item.kind == "delete_experience":
+            existing = policies_by_uri.get(uri) or _find_policy(
+                ExperienceSet(
+                    policy_set.root_uri,
+                    result,
+                    metadata=dict(policy_set.metadata),
+                    viking_fs=policy_set.viking_fs,
+                    request_context=policy_set.request_context,
+                ),
+                uri=None,
+                name=item.target_experience_name,
+            )
+            remove_uri = existing.uri if existing is not None else uri
+            result = [
+                policy
+                for policy in result
+                if policy.uri != remove_uri and policy.name != item.target_experience_name
+            ]
+            policies_by_uri.pop(remove_uri, None)
+            policies_by_uri.pop(uri, None)
+            continue
+
         if item.kind != "upsert_experience" or item.after_content is None:
             continue
-        uri = _target_uri(item, policy_set.root_uri)
         existing = policies_by_uri.get(uri) or _find_policy(
             ExperienceSet(
                 policy_set.root_uri,
