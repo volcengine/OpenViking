@@ -299,6 +299,46 @@ class VikingClient:
             raise ValueError("peer memory target requires explicit user_id")
         return f"viking://user/{user_space}/peers/{normalized_peer_id}/memories/"
 
+    def _current_user_space_fragment(self) -> str:
+        current_user_id = getattr(self, "admin_user_id", None) or getattr(self, "user_id", None)
+        if not current_user_id:
+            return ""
+        return current_user_id
+
+    def _current_peer_memory_target_uri(self, peer_id: str) -> str:
+        user_space = self._current_user_space_fragment()
+        normalized_peer_id = self._peer_id(peer_id)
+        if not normalized_peer_id:
+            raise ValueError("peer_id is required for peer memory target")
+        if not user_space:
+            raise ValueError("peer memory target requires current user_id")
+        return f"viking://user/{user_space}/peers/{normalized_peer_id}/memories/"
+
+    def build_current_memory_target_uris(
+        self,
+        *,
+        peer_ids: Optional[List[str]] = None,
+        include_self: bool = True,
+    ) -> List[str]:
+        uris: List[str] = []
+        if include_self:
+            uris.append(self._memory_target_uri(None))
+
+        normalized_peer_ids = self._dedupe_strings(
+            [
+                safe_peer_id
+                for safe_peer_id in (self._peer_id(peer_id) for peer_id in (peer_ids or []))
+                if safe_peer_id
+            ]
+        )
+        for peer_id in normalized_peer_ids:
+            try:
+                uris.append(self._current_peer_memory_target_uri(peer_id))
+            except ValueError as exc:
+                logger.warning(f"Skip invalid current peer memory target peer_id={peer_id}: {exc}")
+
+        return self._dedupe_strings(uris)
+
     @staticmethod
     def _dedupe_strings(values: List[str]) -> List[str]:
         deduped: List[str] = []

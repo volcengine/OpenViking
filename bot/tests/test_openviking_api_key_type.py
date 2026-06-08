@@ -5,7 +5,13 @@ from types import SimpleNamespace
 import pytest
 from vikingbot.agent.context import ContextBuilder
 from vikingbot.agent.loop import _is_tool_result_success
-from vikingbot.agent.tools.ov_file import VikingGrepTool, VikingMemoryCommitTool, VikingSearchTool
+from vikingbot.agent.tools.ov_file import (
+    VikingGlobTool,
+    VikingGrepTool,
+    VikingListTool,
+    VikingMemoryCommitTool,
+    VikingSearchTool,
+)
 from vikingbot.config import loader as config_loader_module
 from vikingbot.config.schema import SessionKey
 from vikingbot.hooks.base import HookContext
@@ -1200,7 +1206,7 @@ def test_openviking_grep_schema_requires_single_string_pattern():
 
 
 @pytest.mark.asyncio
-async def test_openviking_grep_passes_admin_user_id(monkeypatch):
+async def test_openviking_grep_keeps_explicit_resource_uri(monkeypatch):
     tool = VikingGrepTool()
     calls = []
 
@@ -1231,7 +1237,7 @@ async def test_openviking_grep_passes_admin_user_id(monkeypatch):
         case_insensitive=True,
     )
 
-    assert calls == [("viking://resources/", "hello", True, "admin")]
+    assert calls == [("viking://resources/", "hello", True, None)]
     assert "Found 1 match for pattern 'hello':" in result
     assert "viking://resources/doc.md" in result
 
@@ -1245,7 +1251,7 @@ async def test_openviking_search_uses_user_namespace(monkeypatch):
     calls = []
 
     async def _search(query, target_uri=None, limit=20, user_id=None, peer_id=None):
-        calls.append((target_uri, user_id))
+        calls.append((target_uri, user_id, peer_id))
         return {"memories": [{"uri": target_uri, "abstract": "a", "score": 0.9, "is_leaf": True}]}
 
     async def _fake_get_client(_tool_context):
@@ -1258,7 +1264,7 @@ async def test_openviking_search_uses_user_namespace(monkeypatch):
     result = await tool.execute(tool_context, query="hello")
 
     assert "sender-1/memories" in result
-    assert calls == [("viking://user/sender-1/memories/", "admin")]
+    assert calls == [("viking://user/sender-1/memories/", None, None)]
 
 
 @pytest.mark.asyncio
@@ -1286,11 +1292,116 @@ async def test_openviking_search_user_key_mode_uses_current_user_namespace(monke
     )
     result = await tool.execute(tool_context, query="hello")
 
-    assert "viking://user/memories/" in result
+    assert "sender-1/memories" in result
     assert calls == [
-        ("viking://user/memories/", "admin", "sender-0"),
-        ("viking://user/memories/", "admin", "sender-1"),
-        ("viking://user/memories/", "admin", "sender-2"),
+        ("", None, "sender-0"),
+        ("viking://user/admin/peers/sender-1/memories/", None, None),
+        ("viking://user/admin/peers/sender-2/memories/", None, None),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_openviking_grep_default_memory_expands_current_peer(monkeypatch):
+    tool = VikingGrepTool()
+    calls = []
+
+    class _FakeClient:
+        def _memory_target_uri(self, _user_id=None):
+            return "viking://user/memories/"
+
+        def build_current_memory_target_uris(self, *, peer_ids=None, include_self=True):
+            uris = ["viking://user/memories/"] if include_self else []
+            uris.extend(f"viking://user/default/peers/{peer_id}/memories/" for peer_id in peer_ids or [])
+            return uris
+
+        async def grep(self, uri, pattern, case_insensitive=False, user_id=None):
+            calls.append((uri, pattern, case_insensitive, user_id))
+            return {"matches": []}
+
+    async def _fake_get_client(_tool_context):
+        return _FakeClient()
+
+    monkeypatch.setattr(tool, "_get_client", _fake_get_client)
+
+    await tool.execute(
+        SimpleNamespace(workspace_id="workspace", sender_id="sender-0"),
+        uri="viking://user/memories/",
+        pattern="hello",
+    )
+
+    assert calls == [
+        ("viking://user/memories/", "hello", False, None),
+        ("viking://user/default/peers/sender-0/memories/", "hello", False, None),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_openviking_list_default_memory_expands_current_peer(monkeypatch):
+    tool = VikingListTool()
+    calls = []
+
+    class _FakeClient:
+        def _memory_target_uri(self, _user_id=None):
+            return "viking://user/memories/"
+
+        def build_current_memory_target_uris(self, *, peer_ids=None, include_self=True):
+            uris = ["viking://user/memories/"] if include_self else []
+            uris.extend(f"viking://user/default/peers/{peer_id}/memories/" for peer_id in peer_ids or [])
+            return uris
+
+        async def list_resources(self, path=None, recursive=False):
+            calls.append((path, recursive))
+            return []
+
+    async def _fake_get_client(_tool_context):
+        return _FakeClient()
+
+    monkeypatch.setattr(tool, "_get_client", _fake_get_client)
+
+    await tool.execute(
+        SimpleNamespace(workspace_id="workspace", sender_id="sender-0"),
+        uri="viking://user/memories/",
+    )
+
+    assert calls == [
+        ("viking://user/memories/", False),
+        ("viking://user/default/peers/sender-0/memories/", False),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_openviking_glob_root_adds_current_peer_memory(monkeypatch):
+    tool = VikingGlobTool()
+    calls = []
+
+    class _FakeClient:
+        def _memory_target_uri(self, _user_id=None):
+            return "viking://user/memories/"
+
+        def build_current_memory_target_uris(self, *, peer_ids=None, include_self=True):
+            uris = ["viking://user/memories/"] if include_self else []
+            uris.extend(f"viking://user/default/peers/{peer_id}/memories/" for peer_id in peer_ids or [])
+            return uris
+
+        async def glob(self, pattern, uri="viking://"):
+            calls.append((pattern, uri))
+            return {"matches": [], "count": 0}
+
+    async def _fake_get_client(_tool_context):
+        return _FakeClient()
+
+    monkeypatch.setattr(tool, "_get_client", _fake_get_client)
+
+    await tool.execute(
+        SimpleNamespace(workspace_id="workspace", sender_id="sender-0"),
+        pattern="*.md",
+    )
+
+    assert calls == [
+        ("*.md", "viking://resources/"),
+        ("*.md", "viking://user/memories/"),
+        ("*.md", "viking://user/skills/"),
+        ("*.md", "viking://user/default/peers/sender-0/memories/"),
     ]
 
 
