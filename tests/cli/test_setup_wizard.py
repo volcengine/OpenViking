@@ -495,13 +495,12 @@ class TestQueryPlanner:
         with (
             patch.dict(os.environ, {"OPENVIKING_CONFIG_FILE": str(config_path)}, clear=False),
             patch("openviking_cli.setup_wizard._prompt_confirm", return_value=True),
-            patch("openviking_cli.setup_wizard._ensure_ollama", return_value=True),
             patch("openviking_cli.setup_wizard.get_ollama_models", return_value=[]),
             patch("openviking_cli.setup_wizard._prompt_choice", return_value=1),  # v4_q8
             patch("openviking_cli.setup_wizard.is_model_available", return_value=True),
             patch("builtins.print"),
         ):
-            _wizard_query_planner(config_dict)
+            _wizard_query_planner(config_dict, ollama_running=True)
 
         assert config_dict["query_planner"]["model"] == QUERY_PLANNER_PRESETS[0].litellm_model
         assert config_dict["query_planner"]["api_base"] == "http://localhost:11434"
@@ -514,26 +513,80 @@ class TestQueryPlanner:
         with (
             patch.dict(os.environ, {"OPENVIKING_CONFIG_FILE": str(config_path)}, clear=False),
             patch("openviking_cli.setup_wizard._prompt_confirm", return_value=True),
-            patch("openviking_cli.setup_wizard._ensure_ollama", return_value=True),
             patch("openviking_cli.setup_wizard.get_ollama_models", return_value=[]),
             patch("openviking_cli.setup_wizard._prompt_choice", return_value=2),  # v1_q8
             patch("openviking_cli.setup_wizard.is_model_available", return_value=True),
             patch("builtins.print"),
         ):
-            _wizard_query_planner(config_dict)
+            _wizard_query_planner(config_dict, ollama_running=True)
 
         assert config_dict["query_planner"]["model"] == QUERY_PLANNER_PRESETS[1].litellm_model
         assert "prompts" not in config_dict
 
     def test_wizard_declined_leaves_config_untouched(self, tmp_path):
+        # With an Ollama VLM present, the planner is offered; declining the
+        # enable prompt must leave the config untouched.
         config_dict: dict = {"embedding": {}, "vlm": {}}
         with (
             patch("openviking_cli.setup_wizard._prompt_confirm", return_value=False),
             patch("builtins.print"),
         ):
-            _wizard_query_planner(config_dict)
+            _wizard_query_planner(config_dict, ollama_running=True)
         assert "query_planner" not in config_dict
         assert "prompts" not in config_dict
+
+    def test_wizard_no_ollama_vlm_defaults_to_no_without_recommend(self, tmp_path):
+        # Cloud / non-Ollama-VLM setups (ollama_running is None) are still offered
+        # the planner, but off by default and without the recommendation tag.
+        config_dict: dict = {"embedding": {}, "vlm": {}}
+        with (
+            patch(
+                "openviking_cli.setup_wizard._prompt_confirm", return_value=False
+            ) as mock_confirm,
+            patch("openviking_cli.setup_wizard._ensure_ollama") as mock_ensure,
+            patch("builtins.print"),
+        ):
+            _wizard_query_planner(config_dict, ollama_running=None)
+
+        enable_call = mock_confirm.call_args_list[0]
+        assert enable_call.kwargs.get("default") is False
+        assert "(recommended)" not in enable_call.args[0]
+        mock_ensure.assert_not_called()  # declined before reaching install
+        assert "query_planner" not in config_dict
+
+    def test_wizard_no_ollama_vlm_opt_in_runs_install(self, tmp_path):
+        # Opting in without an Ollama VLM runs the Ollama install flow.
+        config_dict: dict = {"embedding": {}, "vlm": {}}
+        with (
+            patch("openviking_cli.setup_wizard._prompt_confirm", return_value=True),
+            patch("openviking_cli.setup_wizard._ensure_ollama", return_value=True) as mock_ensure,
+            patch("openviking_cli.setup_wizard.get_ollama_models", return_value=[]),
+            patch("openviking_cli.setup_wizard._prompt_choice", return_value=1),
+            patch("openviking_cli.setup_wizard.is_model_available", return_value=True),
+            patch("builtins.print"),
+        ):
+            _wizard_query_planner(config_dict, ollama_running=None)
+
+        mock_ensure.assert_called_once()
+        assert config_dict["query_planner"]["model"] == QUERY_PLANNER_PRESETS[0].litellm_model
+
+    def test_wizard_ollama_vlm_defaults_to_yes_with_recommend(self, tmp_path):
+        # With an Ollama VLM present (ollama_running is not None) the planner is
+        # recommended, so the enable prompt is tagged and defaults to Yes.
+        config_dict: dict = {"embedding": {}, "vlm": {}}
+        with (
+            patch("openviking_cli.setup_wizard._prompt_confirm", return_value=True) as mock_confirm,
+            patch("openviking_cli.setup_wizard.get_ollama_models", return_value=[]),
+            patch("openviking_cli.setup_wizard._prompt_choice", return_value=1),
+            patch("openviking_cli.setup_wizard.is_model_available", return_value=True),
+            patch("builtins.print"),
+        ):
+            _wizard_query_planner(config_dict, ollama_running=True)
+
+        enable_call = mock_confirm.call_args_list[0]
+        assert enable_call.kwargs.get("default") is True
+        assert "(recommended)" in enable_call.args[0]
+        assert config_dict["query_planner"]["model"] == QUERY_PLANNER_PRESETS[0].litellm_model
 
 
 # ---------------------------------------------------------------------------
@@ -618,7 +671,7 @@ class TestConfigWriting:
         with (
             patch.dict(os.environ, {"OPENVIKING_CONFIG_FILE": str(config_path)}, clear=False),
             patch("openviking_cli.setup_wizard._prompt_choice", return_value=3),
-            patch("openviking_cli.setup_wizard._wizard_ollama", return_value=config),
+            patch("openviking_cli.setup_wizard._wizard_ollama", return_value=(config, True)),
             patch("openviking_cli.setup_wizard._wizard_query_planner", return_value=None),
             patch(
                 "openviking_cli.setup_wizard._wizard_server",
@@ -654,7 +707,7 @@ class TestConfigWriting:
         with (
             patch.dict(os.environ, {"OPENVIKING_CONFIG_FILE": str(config_path)}, clear=False),
             patch("openviking_cli.setup_wizard._prompt_choice", return_value=3),
-            patch("openviking_cli.setup_wizard._wizard_ollama", return_value=config),
+            patch("openviking_cli.setup_wizard._wizard_ollama", return_value=(config, True)),
             patch("openviking_cli.setup_wizard._wizard_query_planner", return_value=None),
             patch(
                 "openviking_cli.setup_wizard._wizard_server",

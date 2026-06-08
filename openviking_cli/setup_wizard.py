@@ -731,8 +731,12 @@ def _write_config(config_dict: dict[str, Any], config_path: Path) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _wizard_ollama() -> dict[str, Any] | None:
-    """Ollama-based local model setup flow."""
+def _wizard_ollama() -> tuple[dict[str, Any] | None, bool]:
+    """Ollama-based local model setup flow.
+
+    Returns ``(config, ollama_running)`` so later steps (e.g. the query planner)
+    can reuse the Ollama state instead of re-running the install flow.
+    """
     # Ensure Ollama is installed and running
     ollama_running = _ensure_ollama()
 
@@ -741,7 +745,7 @@ def _wizard_ollama() -> dict[str, Any] | None:
             "Continue without Ollama? (config will be generated but models won't be pulled)",
             default=False,
         ):
-            return None
+            return None, ollama_running
 
     available_models = get_ollama_models() if ollama_running else []
 
@@ -807,11 +811,20 @@ def _wizard_ollama() -> dict[str, Any] | None:
             else:
                 print(f"  {_green('OK')} {vlm.ollama_model} pulled successfully")
 
-    return _build_ollama_config(embedding, vlm, _workspace_path())
+    return _build_ollama_config(embedding, vlm, _workspace_path()), ollama_running
 
 
-def _wizard_llamacpp() -> dict[str, Any] | None:
-    """llama.cpp local embedding setup flow."""
+def _wizard_llamacpp() -> tuple[dict[str, Any] | None, bool | None]:
+    """llama.cpp local embedding setup flow.
+
+    Returns ``(config, ollama_running)``. ``ollama_running`` is ``None`` when the
+    flow never touched Ollama (cloud or skipped VLM), so the query-planner step
+    knows it still has to run the install flow itself.
+    """
+    # Ollama is only involved if the user picks an Ollama VLM below; None means
+    # "not handled yet" so downstream steps can decide whether to ensure it.
+    ollama_running: bool | None = None
+
     # --- Step 1: check / install llama-cpp-python ---
     print("\n  Checking llama-cpp-python...", end=" ", flush=True)
 
@@ -830,11 +843,11 @@ def _wizard_llamacpp() -> dict[str, Any] | None:
                 if not _prompt_confirm(
                     "Continue anyway? (config will be generated)", default=False
                 ):
-                    return None
+                    return None, ollama_running
         else:
             print(f"\n  {_dim('Install later: ' + _PIP_LOCAL_EMBED)}")
             if not _prompt_confirm("Continue anyway? (config will be generated)", default=False):
-                return None
+                return None, ollama_running
 
     # --- Step 2: select embedding model ---
     model_options: list[tuple[str, str]] = []
@@ -923,7 +936,7 @@ def _wizard_llamacpp() -> dict[str, Any] | None:
         ollama_running = _ensure_ollama()
         if not ollama_running:
             if not _prompt_confirm("Continue without Ollama?", default=False):
-                return None
+                return None, ollama_running
 
         available_models = get_ollama_models() if ollama_running else []
         ram_gb = _get_system_ram_gb()
@@ -976,7 +989,7 @@ def _wizard_llamacpp() -> dict[str, Any] | None:
             vlm_api_key = _prompt_api_key("VLM API Key")
             if not vlm_api_key:
                 print(f"  {_red('API key is required')}")
-                return None
+                return None, ollama_running
             vlm_model = _prompt_required_input("Vision Model")
             vlm_api_base = provider.default_api_base
             vlm_provider = provider.provider
@@ -991,12 +1004,15 @@ def _wizard_llamacpp() -> dict[str, Any] | None:
         if vlm_api_key:
             vlm_config["api_key"] = vlm_api_key
 
-    return _build_local_config(
-        model_name=model_name,
-        dimension=dimension,
-        workspace=_workspace_path(),
-        model_path=custom_model_path,
-        vlm_config=vlm_config,
+    return (
+        _build_local_config(
+            model_name=model_name,
+            dimension=dimension,
+            workspace=_workspace_path(),
+            model_path=custom_model_path,
+            vlm_config=vlm_config,
+        ),
+        ollama_running,
     )
 
 
@@ -1134,8 +1150,14 @@ def _wizard_server() -> dict[str, Any] | None:
     return {"host": "0.0.0.0", "root_api_key": root_api_key}
 
 
-def _wizard_query_planner(config_dict: dict[str, Any]) -> None:
+def _wizard_query_planner(config_dict: dict[str, Any], ollama_running: bool | None = None) -> None:
     """Optionally configure a lightweight local query-planner model.
+
+    When this setup already uses an Ollama VLM (*ollama_running* is not
+    ``None``) the planner rides on that running Ollama at near-zero extra cost,
+    so it is recommended and enabled by default. Otherwise (Cloud / non-Ollama
+    VLM) it is still offered but off by default and without the recommendation,
+    and enabling it runs the Ollama install flow.
 
     Mutates *config_dict* in place to add ``query_planner``. Prompt selection is
     resolved at retrieval time from the configured model name.
@@ -1144,19 +1166,24 @@ def _wizard_query_planner(config_dict: dict[str, Any]) -> None:
     print(f"  {_dim('A small local model that plans retrieval before search — skips')}")
     print(f"  {_dim('lookups for small talk and emits focused queries otherwise, saving tokens.')}")
 
-    if not _prompt_confirm(
-        "Enable a lightweight local query planner via Ollama? (recommended)",
-        default=False,
-    ):
+    # Recommend it and default to yes only when an Ollama VLM is already running;
+    # cloud / non-Ollama setups would need a fresh Ollama install, so default to
+    # no and drop the recommendation.
+    has_ollama_vlm = ollama_running is not None
+    prompt = "Enable a lightweight local query planner via Ollama?"
+    if has_ollama_vlm:
+        prompt += " (recommended)"
+    if not _prompt_confirm(prompt, default=has_ollama_vlm):
         return
 
-    ollama_running = _ensure_ollama()
-    if not ollama_running:
-        if not _prompt_confirm(
-            "Continue without Ollama? (config will be written but the model won't be pulled)",
-            default=False,
-        ):
-            return
+    if ollama_running is None:
+        ollama_running = _ensure_ollama()
+        if not ollama_running:
+            if not _prompt_confirm(
+                "Continue without Ollama? (config will be written but the model won't be pulled)",
+                default=False,
+            ):
+                return
 
     available_models = get_ollama_models() if ollama_running else []
 
@@ -1234,13 +1261,17 @@ def run_init() -> int:
     )
 
     config_dict: dict[str, Any] | None = None
+    # Tracks whether Ollama was already set up by the chosen mode, so the query
+    # planner reuses that state instead of re-running the install flow. ``None``
+    # means the mode never touched Ollama (e.g. Cloud).
+    ollama_running: bool | None = None
 
     if mode == 1:
         config_dict = _wizard_cloud()
     elif mode == 2:
-        config_dict = _wizard_llamacpp()
+        config_dict, ollama_running = _wizard_llamacpp()
     elif mode == 3:
-        config_dict = _wizard_ollama()
+        config_dict, ollama_running = _wizard_ollama()
     else:
         _wizard_custom()
         return 0
@@ -1249,7 +1280,7 @@ def run_init() -> int:
         print("\n  Setup cancelled.\n")
         return 0
 
-    _wizard_query_planner(config_dict)
+    _wizard_query_planner(config_dict, ollama_running)
 
     server_dict = _wizard_server()
     if server_dict is None:
