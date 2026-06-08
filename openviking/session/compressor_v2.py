@@ -22,7 +22,10 @@ from openviking.server.identity import RequestContext
 from openviking.session.memory import ExtractLoop, MemoryUpdater
 from openviking.session.memory.dataclass import ResolvedOperations, StoredLink
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
-from openviking.session.memory.memory_updater import ExtractContext, MemoryUpdateResult, write_stored_links
+from openviking.session.memory.memory_updater import (
+    MemoryUpdateResult,
+    write_stored_links,
+)
 from openviking.session.memory.utils.json_parser import JsonUtils
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.uri import render_template
@@ -135,6 +138,7 @@ class SessionCompressorV2:
         latest_archive_overview: str = "",
         isolation_handler: Optional[MemoryIsolationHandler] = None,
         transaction_handle=None,
+        context_provider: Optional[Any] = None,
     ) -> ExtractLoop:
         """Create new ExtractLoop instance with current ctx.
 
@@ -145,19 +149,20 @@ class SessionCompressorV2:
         vlm = config.vlm.get_vlm_instance()
         viking_fs = get_viking_fs()
 
-        # Create context provider with messages (provider 负责加载 schema)
-        from openviking.session.memory.session_extract_context_provider import (
-            SessionExtractContextProvider,
-        )
+        if context_provider is None:
+            # Create context provider with messages (provider 负责加载 schema)
+            from openviking.session.memory.session_extract_context_provider import (
+                SessionExtractContextProvider,
+            )
 
-        context_provider = SessionExtractContextProvider(
-            messages=messages,
-            latest_archive_overview=latest_archive_overview,
-            isolation_handler=isolation_handler,
-            ctx=ctx,
-            viking_fs=viking_fs,
-            transaction_handle=transaction_handle,
-        )
+            context_provider = SessionExtractContextProvider(
+                messages=messages,
+                latest_archive_overview=latest_archive_overview,
+                isolation_handler=isolation_handler,
+                ctx=ctx,
+                viking_fs=viking_fs,
+                transaction_handle=transaction_handle,
+            )
 
         return ExtractLoop(
             vlm=vlm,
@@ -281,14 +286,23 @@ class SessionCompressorV2:
             logger.debug("AGFS unavailable, running memory extraction without locks")
 
         try:
-            # Create extract context from messages
-            from openviking.session.memory.memory_updater import ExtractContext
+            from openviking.session.memory.session_extract_context_provider import (
+                SessionExtractContextProvider,
+            )
 
-            extract_context = ExtractContext(messages)
-
-            # Create MemoryIsolationHandler
+            context_provider = SessionExtractContextProvider(
+                messages=messages,
+                latest_archive_overview=latest_archive_overview,
+                isolation_handler=None,
+                ctx=ctx,
+                viking_fs=viking_fs,
+                transaction_handle=transaction_handle,
+            )
+            extract_context = context_provider.get_extract_context()
             isolation_handler = MemoryIsolationHandler(ctx, extract_context)
             isolation_handler.prepare_messages()
+            context_provider._isolation_handler = isolation_handler
+
             # 获取所有记忆 schema 目录并加锁（仅在有锁管理器时）
             orchestrator = self._get_or_create_react(
                 ctx=ctx,
@@ -296,6 +310,7 @@ class SessionCompressorV2:
                 latest_archive_overview=latest_archive_overview,
                 isolation_handler=isolation_handler,
                 transaction_handle=transaction_handle,
+                context_provider=context_provider,
             )
             read_scope = isolation_handler.get_read_scope()
             if lock_manager:
@@ -671,9 +686,9 @@ class SessionCompressorV2:
         vlm = config.vlm.get_vlm_instance()
         viking_fs = get_viking_fs()
 
-        # Build isolation_handler BEFORE creating the orchestrator so that
-        # ExtractLoop.resolve_operations() can call fill_role_ids() correctly.
-        extract_context = ExtractContext(messages)
+        # Use the provider's extraction context so prompt ranges and memory
+        # rendering resolve against the same message list.
+        extract_context = provider.get_extract_context()
         isolation_handler = MemoryIsolationHandler(ctx, extract_context)
         isolation_handler.prepare_messages()
 

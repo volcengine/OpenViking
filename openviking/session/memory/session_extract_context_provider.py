@@ -8,10 +8,12 @@ Session Extract Context Provider - 会话提取 Provider 实现
 
 import json
 import os
+import re
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.core.namespace import to_agent_space, to_user_space
-from openviking.message.part import ToolPart
+from openviking.message import Message
+from openviking.message.part import TextPart, ToolPart
 from openviking.prompts.manager import PromptManager
 from openviking.server.identity import RequestContext, ToolContext
 from openviking.session.memory.core import ExtractContextProvider
@@ -41,6 +43,8 @@ _PREFETCH_SEARCH_QUERY_MAX_CHARS = 5000
 _PREFETCH_SEARCH_TEXT_PART_MAX_CHARS = 1000
 _PREFETCH_SEARCH_ASSISTANT_TEXT_PART_MAX_CHARS = 500
 _PREFETCH_SEARCH_TOOL_FIELD_MAX_CHARS = 500
+_EXTRACTION_CHUNK_MIN_CHARS = 100
+_EXTRACTION_CHUNK_BOUNDARY_RE = re.compile(r"(\n+|[。！？；.!?;]+)")
 
 
 class SessionExtractContextProvider(ExtractContextProvider):
@@ -61,6 +65,7 @@ class SessionExtractContextProvider(ExtractContextProvider):
         self._registry = None  # 延迟加载
         self._schema_directories = None
         self._extract_context = None  # 缓存 ExtractContext 实例
+        self._extraction_messages = None  # 缓存用于提取的派生消息列表
         self._isolation_handler = isolation_handler
         self._read_file_contents: Dict[str, MemoryFile] = {}
         # 读取 eager_prefetch 配置
@@ -96,8 +101,82 @@ class SessionExtractContextProvider(ExtractContextProvider):
         from openviking.session.memory.memory_updater import ExtractContext
 
         if self._extract_context is None:
-            self._extract_context = ExtractContext(self.messages or [])
+            self._extract_context = ExtractContext(self._get_extraction_messages())
         return self._extract_context
+
+    def _get_extraction_messages(self) -> List[Message]:
+        """Return messages used by memory extraction.
+
+        Long text-only messages are split into derived chunks so event `ranges`
+        can point to a narrower source span without relying on brittle text
+        matching. The original session messages are not modified.
+        """
+        if self._extraction_messages is not None:
+            return self._extraction_messages
+        if not isinstance(self.messages, list):
+            self._extraction_messages = []
+            return self._extraction_messages
+
+        extraction_messages: List[Message] = []
+        for message in self.messages:
+            extraction_messages.extend(self._split_message_for_extraction(message))
+        self._extraction_messages = extraction_messages
+        return self._extraction_messages
+
+    def _split_message_for_extraction(self, message: Message) -> List[Message]:
+        parts = getattr(message, "parts", [])
+        if not parts or not all(isinstance(part, TextPart) for part in parts):
+            return [message]
+
+        text = "".join(part.text for part in parts)
+        chunks = self._split_text_for_extraction(text)
+        if len(chunks) <= 1:
+            return [message]
+
+        return [
+            Message(
+                id=f"{message.id}#chunk_{idx}",
+                role=message.role,
+                role_id=message.role_id,
+                parts=[TextPart(chunk)],
+                created_at=message.created_at,
+            )
+            for idx, chunk in enumerate(chunks)
+        ]
+
+    def _split_text_for_extraction(self, text: str) -> List[str]:
+        units = self._split_text_units(text)
+        chunks: List[str] = []
+        current = ""
+
+        for unit in units:
+            current += unit
+            if len(current) < _EXTRACTION_CHUNK_MIN_CHARS:
+                continue
+            chunks.append(current)
+            current = ""
+
+        if current:
+            if chunks:
+                chunks[-1] += current
+            else:
+                chunks.append(current)
+        return chunks or [text]
+
+    def _split_text_units(self, text: str) -> List[str]:
+        pieces = _EXTRACTION_CHUNK_BOUNDARY_RE.split(text)
+        units: List[str] = []
+        current = ""
+        for piece in pieces:
+            if not piece:
+                continue
+            current += piece
+            if _EXTRACTION_CHUNK_BOUNDARY_RE.fullmatch(piece):
+                units.append(current)
+                current = ""
+        if current:
+            units.append(current)
+        return units or [text]
 
     def _detect_language(self) -> str:
         """检测输出语言"""
@@ -168,7 +247,8 @@ The system automatically generates URIs based on memory_type and fields. Just pr
         else:
             time_display = session_time_str
 
-        conversation = self._assemble_conversation(self.messages)
+        extraction_messages = self._get_extraction_messages()
+        conversation = self._assemble_conversation(extraction_messages)
 
         return {
             "role": "user",

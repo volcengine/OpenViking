@@ -239,13 +239,63 @@ class MessageRange:
         """Pretty print the message range with '...' separator between non-contiguous ranges."""
         result = []
         for i, msg_group in enumerate(self.elements):
-            for msg in msg_group:
-                role_id = msg.role_id if msg.role_id else msg.role
-                result.append(f"[{role_id}]: {msg.content}")
+            result.extend(self._format_contiguous_group(msg_group))
             # Add "..." separator between non-contiguous message groups
             if i < len(self.elements) - 1:
                 result.append("...")
         return "\n".join(result)
+
+    def _format_contiguous_group(self, msg_group: List[Message]) -> List[str]:
+        formatted = []
+        current_role_id = None
+        current_messages: List[Message] = []
+
+        def flush_current() -> None:
+            nonlocal current_role_id, current_messages
+            if not current_messages:
+                return
+            content = self._format_merged_content(current_messages)
+            formatted.append(f"[{current_role_id}]: {content}")
+            current_role_id = None
+            current_messages = []
+
+        for msg in msg_group:
+            role_id = msg.role_id if msg.role_id else msg.role
+            if current_role_id is not None and role_id != current_role_id:
+                flush_current()
+            current_role_id = role_id
+            current_messages.append(msg)
+
+        flush_current()
+        return formatted
+
+    def _format_merged_content(self, messages: List[Message]) -> str:
+        content = "".join((msg.content or "") for msg in messages)
+        if not messages or not self._contains_chunk_message(messages):
+            return content
+
+        first_chunk_index = self._chunk_index(messages[0])
+        if first_chunk_index is not None and first_chunk_index > 0:
+            content = "..." + content.lstrip()
+        if self._chunk_index(messages[-1]) is not None:
+            content = content.rstrip() + "..."
+        return content
+
+    @staticmethod
+    def _contains_chunk_message(messages: List[Message]) -> bool:
+        return any(MessageRange._chunk_index(msg) is not None for msg in messages)
+
+    @staticmethod
+    def _chunk_index(message: Message) -> Optional[int]:
+        message_id = getattr(message, "id", "") or ""
+        marker = "#chunk_"
+        if marker not in message_id:
+            return None
+        suffix = message_id.rsplit(marker, 1)[-1]
+        try:
+            return int(suffix)
+        except ValueError:
+            return None
 
     def _first_message_time(self) -> str | None:
         """获取第一条消息的时间（内部方法）"""
