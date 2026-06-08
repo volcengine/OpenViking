@@ -32,7 +32,7 @@ class _FakeVikingFS:
         self._tree = tree
         self.writes = []
 
-    async def ls(self, uri, ctx=None):
+    async def ls(self, uri, node_limit=None, ctx=None):
         return self._tree.get(uri, [])
 
     async def write_file(self, path, content, ctx=None):

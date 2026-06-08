@@ -63,6 +63,15 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+# Sentinel node_limit for internal callers that MUST enumerate an entire
+# directory. ``ls()`` defaults to ``node_limit=1000`` to protect agent-facing
+# context from being flooded, but internal system operations (parse merge,
+# temp->final sync, summary DAG, vectorization) must see every child or they
+# silently drop entries beyond the cap — e.g. a >1000-doc directory ingest only
+# materializes its first 1000 subdirectories. Pass this explicitly at those
+# call sites.
+LS_ALL_NODES = 2**31 - 1
+
 
 def _ensure_non_empty_search_query(query: str) -> None:
     if not query.strip():
