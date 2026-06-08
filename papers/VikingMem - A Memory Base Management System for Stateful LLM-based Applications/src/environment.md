@@ -1,0 +1,24 @@
+# 环境
+
+- **Language/runtime**: 论文称所有方法均用 Python 实现；未说明精确 Python 版本。
+- **Framework**: VikingMem production implementation backed by VikingDB；未说明精确 package/framework 版本。
+- **Hardware**:
+  - Vector database service：单节点，32 vCPUs（Intel Xeon Platinum 8582C）与 8GB memory。
+  - Embedding service：单张 NVIDIA A30 GPU（24GB VRAM），16 CPU cores 与 64GB memory。
+- **Data sources**:
+  - LOCOMO：长期对话记忆 benchmark，10 conversations，每段平均 1000+ messages。
+  - LongMemEval_s：按 Zep 评测实践使用的 subset；500 long conversations，平均约 115,000 tokens；论文称 token length 是 LOCOMO 的 346×。
+- **Key dependencies**:
+  - VikingDB vector engine，用于 event、entity 和 auxiliary keyword-linked indices。
+  - LLM APIs，用于 answer generation 与 LLM-as-a-judge evaluation。
+  - Embedding service，用于 vector representations。
+  - 论文未说明精确依赖版本。
+- **Protocols**:
+  - 由于 ingestion cost 高，每个系统只导入一次数据。
+  - 每个 query 的 answer generation 与 evaluation 重复三次并取平均。
+  - 对完整 memory extraction + answering 流程施加 24-hour time limit；超时基线不报告结果。
+  - 由于数据集主要是 fact-based queries，实验默认关闭 time-weighting。
+  - 所有比较方法在相同 prompt setup 下进行 LLM answer generation 与 evaluation。
+  - VikingMem retrieval latency 包括 VikingDB candidate generation、VikingMem-side score fusion 与 reranking。
+- **Random seeds**: Not specified in paper。
+- **Code grounding note**: PDF 包含公式与伪代码，但没有可验证实现文件。本 ARA 不创建 `src/execution/*.py`，以避免杜撰 API 或函数体。来源约束的伪代码记录在 `logic/solution/algorithm.md` 与 `evidence/proofs/equations.md`。
