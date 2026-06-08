@@ -473,6 +473,67 @@ const zhCN = {
         failed: '处理失败',
       },
     },
+    searchPalette: {
+      ariaLabel: '搜索',
+      openContainingDirectory: '打开所在目录',
+      placeholder: '搜索',
+      scope: {
+        global: '搜索范围: 全局',
+        current: '搜索范围: {{name}}',
+        resetToGlobal: '点击重置为全局搜索',
+      },
+      scopeState: {
+        validatingTitle: '正在校验搜索范围',
+        validatingPrefix: '正在检查',
+        validatingSuffix: '是否存在',
+        switchTitle: '切换搜索范围',
+        switchPrefix: '按',
+        switchMiddle: '切换到',
+        invalidTitle: '搜索范围不存在',
+        invalidPrefix: '路径',
+        invalidSuffix: '无法访问，不能切换',
+      },
+      empty: {
+        title: '搜索文件和目录',
+      },
+      browseDirHint: {
+        before: '输入',
+        after: '浏览目录结构',
+      },
+      globalScopeHint: {
+        before: '输入',
+        after: '切换搜索范围到全局',
+      },
+      error: '搜索出错',
+      emptyResults: {
+        title: '没有找到匹配的文件或目录',
+        subtitle: '试试换个关键词？',
+      },
+      footer: {
+        dirMode: {
+          select: '选择',
+          level: '层级',
+          confirm: '确定',
+          cancel: '取消',
+        },
+        resultMode: {
+          navigate: '导航',
+          open: '打开',
+          close: '关闭',
+          count: '{{count}} 个结果',
+        },
+      },
+    },
+    dirBrowser: {
+      back: '返回上一级',
+      loading: '正在加载目录',
+      filesSection: '文件',
+      error: '加载目录失败',
+      empty: {
+        title: '空目录',
+        subtitle: '这一层目前没有可继续展开的子目录',
+      },
+    },
     filePreview: {
       cancel: '取消',
       edit: '编辑',
@@ -635,6 +696,7 @@ const zhCN = {
   playground: {
     copyUri: '复制当前 URI',
     copied: '已复制 URI',
+    copyFailed: '复制失败',
     resizeContext: '调整上下文目录宽度',
     resizeAction: '调整 Terminal 和 Agent 宽度',
     readFailed: '无法读取 {{uri}}',
@@ -651,6 +713,7 @@ const zhCN = {
     explorer: {
       title: '上下文目录',
       addResource: '添加资源',
+      search: '搜索上下文',
       refresh: '刷新目录',
       namespaces: {
         user: '用户个性化记忆',
@@ -739,6 +802,8 @@ const zhCN = {
         resource: '资源路径',
         history: '历史记录',
       },
+      resourceSuggestion: '资源路径',
+      historySuggestion: '历史记录',
       groupLabels: {
         resources: '资源',
         memories: '记忆',

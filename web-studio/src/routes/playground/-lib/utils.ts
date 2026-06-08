@@ -15,7 +15,27 @@ import type { ResourceRef } from './types'
 export { cleanVikingUri }
 
 export function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
+  if (error instanceof Error) return error.message
+  if (error && typeof error === 'object') {
+    const data = error as {
+      code?: unknown
+      message?: unknown
+      statusCode?: unknown
+    }
+    const code = typeof data.code === 'string' ? data.code : ''
+    const message = typeof data.message === 'string' ? data.message : ''
+    const status =
+      typeof data.statusCode === 'number' ? `HTTP ${data.statusCode}` : ''
+    const readable = [status, code, message].filter(Boolean).join(' · ')
+    if (readable) return readable
+
+    try {
+      return JSON.stringify(error)
+    } catch {
+      return String(error)
+    }
+  }
+  return String(error)
 }
 
 export function clampNumber(value: number, min: number, max: number): number {

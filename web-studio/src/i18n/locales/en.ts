@@ -484,6 +484,68 @@ const en = {
         failed: 'Processing failed',
       },
     },
+    searchPalette: {
+      ariaLabel: 'Search',
+      openContainingDirectory: 'Open containing directory',
+      placeholder: 'Search',
+      scope: {
+        global: 'Search scope: Global',
+        current: 'Search scope: {{name}}',
+        resetToGlobal: 'Click to reset to global search',
+      },
+      scopeState: {
+        validatingTitle: 'Validating search scope',
+        validatingPrefix: 'Checking whether',
+        validatingSuffix: 'exists',
+        switchTitle: 'Switch search scope',
+        switchPrefix: 'Press',
+        switchMiddle: 'to switch to',
+        invalidTitle: 'Search scope not found',
+        invalidPrefix: 'Path',
+        invalidSuffix: 'is inaccessible and cannot be switched to',
+      },
+      empty: {
+        title: 'Search files and directories',
+      },
+      browseDirHint: {
+        before: 'Enter',
+        after: 'to browse directories',
+      },
+      globalScopeHint: {
+        before: 'Enter',
+        after: 'to switch search scope to global',
+      },
+      error: 'Search failed',
+      emptyResults: {
+        title: 'No matching files or directories found',
+        subtitle: 'Try another keyword?',
+      },
+      footer: {
+        dirMode: {
+          select: 'Select',
+          level: 'Level',
+          confirm: 'Confirm',
+          cancel: 'Cancel',
+        },
+        resultMode: {
+          navigate: 'Navigate',
+          open: 'Open',
+          close: 'Close',
+          count: '{{count}} results',
+        },
+      },
+    },
+    dirBrowser: {
+      back: 'Back',
+      loading: 'Loading directory',
+      filesSection: 'Files',
+      error: 'Failed to load directory',
+      empty: {
+        title: 'Empty directory',
+        subtitle:
+          'There are currently no subdirectories to expand at this level',
+      },
+    },
     filePreview: {
       cancel: 'Cancel',
       edit: 'Edit',
@@ -652,6 +714,7 @@ const en = {
   playground: {
     copyUri: 'Copy current URI',
     copied: 'URI copied',
+    copyFailed: 'Copy failed',
     resizeContext: 'Resize context tree width',
     resizeAction: 'Resize Terminal and Agent width',
     readFailed: 'Failed to read {{uri}}',
@@ -668,6 +731,7 @@ const en = {
     explorer: {
       title: 'Context tree',
       addResource: 'Add resource',
+      search: 'Search context',
       refresh: 'Refresh tree',
       namespaces: {
         user: 'Personalized user memories',
@@ -758,6 +822,8 @@ const en = {
         resource: 'Resource paths',
         history: 'History',
       },
+      resourceSuggestion: 'Resource path',
+      historySuggestion: 'History',
       groupLabels: {
         resources: 'resource',
         memories: 'memory',
