@@ -55,17 +55,10 @@ class UsageAuditQueryService:
         today_retrievals = await self._store.get_today_retrievals(
             account_id=ctx.account_id, user_date=today, tz=tz
         )
-        agent_overview = await self._store.get_agent_overview(
-            account_id=ctx.account_id,
-            user_date=today,
-            tz=tz,
-            limit=5,
-        )
         return {
             "context_counts": context_counts,
             "today_tokens": today_tokens,
             "today_retrievals": today_retrievals,
-            "agent_overview": agent_overview,
         }
 
     async def token_series(

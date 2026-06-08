@@ -260,10 +260,10 @@ class MessageRange:
             current_messages = []
 
         for msg in msg_group:
-            role_id = msg.role_id if msg.role_id else msg.role
-            if current_role_id is not None and role_id != current_role_id:
+            speaker = getattr(msg, "peer_id", None) or getattr(msg, "role_id", None) or msg.role
+            if current_role_id is not None and speaker != current_role_id:
                 flush_current()
-            current_role_id = role_id
+            current_role_id = speaker
             current_messages.append(msg)
 
         flush_current()

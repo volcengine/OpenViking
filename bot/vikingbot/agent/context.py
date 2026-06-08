@@ -37,6 +37,7 @@ class ContextBuilder:
         sender_name: str = None,
         is_group_chat: bool = False,
         eval: bool = False,
+        openviking_connection: dict[str, Any] | None = None,
     ):
         self.workspace = workspace
         self._templates_ensured = False
@@ -47,6 +48,7 @@ class ContextBuilder:
         self._sender_name = sender_name
         self._is_group_chat = is_group_chat
         self._eval = eval
+        self._openviking_connection = openviking_connection
         self.latest_relevant_memories: str | None = None
 
     @property
@@ -142,7 +144,9 @@ Skills with available="false" need dependencies installed first - you can try in
             # Fetch current user's profile
             start = _time.time()
             profile = await self.memory.get_viking_user_profile(
-                workspace_id=workspace_id, user_id=self._sender_id
+                workspace_id=workspace_id,
+                user_id=self._sender_id,
+                openviking_connection=self._openviking_connection,
             )
             cost = round(_time.time() - start, 2)
             logger.info(
@@ -154,7 +158,9 @@ Skills with available="false" need dependencies installed first - you can try in
             # Fetch additional profiles from profile_user_list
             if profile_user_list:
                 profiles = await self.memory.get_viking_user_profiles(
-                    workspace_id=workspace_id, user_ids=profile_user_list
+                    workspace_id=workspace_id,
+                    user_ids=profile_user_list,
+                    openviking_connection=self._openviking_connection,
                 )
                 if profiles:
                     parts.append(profiles)
@@ -169,7 +175,6 @@ Skills with available="false" need dependencies installed first - you can try in
         memory_users: list[str] | None = None,
         ov_tools_enable: bool = True,
         is_first_round: bool = True,
-        agent_id: str | None = None,
     ) -> str:
         """
         Build the system prompt from bootstrap files, memory, and skills.
@@ -203,17 +208,22 @@ Skills with available="false" need dependencies installed first - you can try in
         if ov_tools_enable:
             exp_first_round_only = load_config().ov_server.recall_exp_first_round_only
 
+            parts.append(
+                "## OpenViking Memory Retrieval\n"
+                "- For questions about the user's remembered facts, preferences, profile, or personal context, use openviking_search for the current question before saying there is no relevant record.\n"
+                "- A previous empty search result does not prove that a different follow-up question has no memory; search again when the requested fact changes."
+            )
+
             if exp_first_round_only:
-                # Alt mode: skip per-turn user+agent recall; inject exp once per session.
-                # When the caller provides an explicit agent_id (e.g. tau2 runner passing
-                # a per-domain id like "airline_v0"), use it as the experience workspace
-                # so retrieval targets viking://agent/<agent_id>/memories/experiences/.
-                exp_workspace_id = agent_id or workspace_id
+                # Alt mode: skip per-turn recall; inject experience memory once per session.
+                exp_workspace_id = workspace_id
                 self.latest_relevant_memories = None
                 if is_first_round:
                     start = _time.time()
                     exp_memory = await self.memory.get_viking_experience_context(
-                        query=current_message, workspace_id=exp_workspace_id
+                        query=current_message,
+                        workspace_id=exp_workspace_id,
+                        openviking_connection=self._openviking_connection,
                     )
                     cost = round(_time.time() - start, 2)
                     logger.info(
@@ -232,6 +242,7 @@ Skills with available="false" need dependencies installed first - you can try in
                     workspace_id=workspace_id,
                     sender_id=sender_id,
                     user_ids=search_user_ids,
+                    openviking_connection=self._openviking_connection,
                 )
                 logger.info(f"viking_memory={viking_memory}")
                 cost = round(_time.time() - start, 2)
@@ -314,7 +325,6 @@ IMPORTANT:
         ov_tools_enable: bool = True,
         profile_user_list: list[str] | None = None,
         memory_users: list[str] | None = None,
-        agent_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """
         Build the complete message list for an LLM call.
@@ -352,7 +362,6 @@ IMPORTANT:
             memory_users,
             ov_tools_enable=ov_tools_enable,
             is_first_round=not history,
-            agent_id=agent_id,
         )
         messages.append({"role": "user", "content": user_info})
 

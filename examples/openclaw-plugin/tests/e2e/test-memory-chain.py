@@ -148,7 +148,6 @@ USER_ID = f"test-chain-{uuid.uuid4().hex[:8]}"
 DISPLAY_NAME = "测试用户"
 DEFAULT_GATEWAY = "http://127.0.0.1:19789"
 DEFAULT_OPENVIKING = "http://127.0.0.1:2934"
-AGENT_ID = "main"
 
 console = Console(force_terminal=True)
 
@@ -321,17 +320,14 @@ def extract_reply_text(data: dict) -> str:
 class OpenVikingInspector:
     """OpenViking 内部状态检查器。"""
 
-    def __init__(self, base_url: str, api_key: str = "", agent_id: str = AGENT_ID):
+    def __init__(self, base_url: str, api_key: str = ""):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
-        self.agent_id = agent_id
 
     def _headers(self) -> dict:
         h: dict[str, str] = {"Content-Type": "application/json"}
         if self.api_key:
             h["X-API-Key"] = self.api_key
-        if self.agent_id:
-            h["X-OpenViking-Agent"] = self.agent_id
         return h
 
     def _get(self, path: str, timeout: int = 10) -> dict | None:
@@ -1136,7 +1132,6 @@ def run_full_test(gateway_url: str, openviking_url: str, user_id: str, delay: fl
 
 
 def main():
-    global AGENT_ID
     parser = argparse.ArgumentParser(
         description="OpenClaw 记忆链路完整测试",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1183,11 +1178,6 @@ def main():
         help="Gateway auth token (默认: 自动从 openclaw.json 发现)",
     )
     parser.add_argument(
-        "--agent-id",
-        default=AGENT_ID,
-        help=f"OpenViking agent ID (默认: {AGENT_ID})",
-    )
-    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -1202,8 +1192,6 @@ def main():
     token = args.token or discover_gateway_token()
     set_gateway_token(token)
 
-    AGENT_ID = args.agent_id
-
     console.print("[bold]OpenClaw 记忆链路测试[/bold]")
     console.print(f"[yellow]Gateway:[/yellow] {gateway_url}")
     console.print(f"[yellow]OpenViking:[/yellow] {openviking_url}")
@@ -1216,17 +1204,17 @@ def main():
     elif args.phase == "afterTurn":
         _, _, _ = run_phase_after_turn(openviking_url, user_id, args.verbose)
     elif args.phase == "commit":
-        inspector = OpenVikingInspector(openviking_url, agent_id=AGENT_ID)
+        inspector = OpenVikingInspector(openviking_url)
         sid = inspector.find_session_for_user(user_id) or user_id
         session_info = inspector.get_session(sid)
         ac = (session_info.get("commit_count", 0) > 0) if session_info else False
         run_phase_commit(openviking_url, sid, args.verbose, ac)
     elif args.phase == "assemble":
-        inspector = OpenVikingInspector(openviking_url, agent_id=AGENT_ID)
+        inspector = OpenVikingInspector(openviking_url)
         sid = inspector.find_session_for_user(user_id) or user_id
         run_phase_assemble(gateway_url, openviking_url, user_id, sid, args.delay, args.verbose)
     elif args.phase == "session-id":
-        inspector = OpenVikingInspector(openviking_url, agent_id=AGENT_ID)
+        inspector = OpenVikingInspector(openviking_url)
         sid = inspector.find_session_for_user(user_id) or user_id
         run_phase_session_id(openviking_url, user_id, sid, args.verbose)
     elif args.phase == "recall":

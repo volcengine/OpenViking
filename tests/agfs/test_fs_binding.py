@@ -28,10 +28,10 @@ if os.path.exists(AGFS_CONF.path):
 @pytest.fixture(scope="module")
 async def viking_fs_binding_instance():
     """Initialize VikingFS with binding mode."""
-    from openviking.utils.agfs_utils import create_agfs_client
+    from openviking.utils.agfs_utils import RagfsBindingConfig, create_agfs_client
 
     # Create AGFS client
-    agfs_client = create_agfs_client(AGFS_CONF)
+    agfs_client = create_agfs_client(RagfsBindingConfig(agfs=AGFS_CONF))
 
     # Initialize LockManager and VikingFS with client
     init_lock_manager(agfs=agfs_client)

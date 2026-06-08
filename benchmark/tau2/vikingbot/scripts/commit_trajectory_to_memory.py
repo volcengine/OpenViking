@@ -17,7 +17,7 @@ import json
 from pathlib import Path
 from typing import Any, Iterable
 
-from vikingbot.config.loader import load_config
+from vikingbot.config.loader import ensure_config
 from vikingbot.openviking_mount.ov_server import VikingClient
 
 
@@ -127,7 +127,7 @@ async def main_async() -> int:
     parser.add_argument(
         "--user-id",
         default=None,
-        help="User id for commit (default: ov.conf admin_user_id)",
+        help="Optional explicit user id. Normally omitted when using a user-key benchmark config.",
     )
     parser.add_argument(
         "--session-prefix",
@@ -135,9 +135,9 @@ async def main_async() -> int:
         help="Prefix to prepend to session_id",
     )
     parser.add_argument(
-        "--domain",
-        default="telecom",
-        help="Use as agent_id when creating VikingClient",
+        "--config",
+        default=None,
+        help="ov.conf path for the benchmark runtime user",
     )
     parser.add_argument(
         "--dry-run",
@@ -161,16 +161,10 @@ async def main_async() -> int:
         print(f"Input not found: {root}")
         return 1
 
-    config = load_config()
-    user_id = args.user_id or config.ov_server.admin_user_id
-    if not user_id:
-        print("Missing user_id (pass --user-id or set ov.conf admin_user_id)")
-        return 1
+    if args.config:
+        ensure_config(Path(args.config).expanduser())
 
-    client = await VikingClient.create(args.domain)
-    print(client.agent_id)
-    print(client.get_agent_space_name("default"))
-    print(client.client._agent_id)
+    client = await VikingClient.create()
     files = list(_iter_files(root, args.pattern))
     if not files:
         print("No files matched.")
@@ -181,7 +175,7 @@ async def main_async() -> int:
         _, success, msg = await _commit_single(
             client,
             path,
-            user_id=user_id,
+            user_id=args.user_id,
             session_prefix=args.session_prefix,
             dry_run=args.dry_run,
             only_wrong=args.only_wrong,

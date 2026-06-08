@@ -84,6 +84,15 @@ class FileEncryptor:
         else:
             raise ValueError(f"Unknown provider type: {type(provider)}")
 
+    @property
+    def provider_type(self) -> int:
+        """Envelope provider-type marker byte (LOCAL/VAULT/VOLCENGINE).
+
+        Public read-only accessor used to pass the marker into the Rust binding's encryption
+        config (the marker is recorded in envelope headers; it is not key material).
+        """
+        return self._provider_type
+
     async def encrypt(self, account_id: str, plaintext: bytes) -> bytes:
         """
         Encrypt file content.

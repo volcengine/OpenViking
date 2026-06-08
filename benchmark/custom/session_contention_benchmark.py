@@ -79,7 +79,6 @@ class BenchmarkConfig:
     api_key: Optional[str]
     account: Optional[str]
     user: Optional[str]
-    agent_id: Optional[str]
     timeout: float
     adapters: List[str]
     profile: str
@@ -106,11 +105,6 @@ class BenchmarkConfig:
     ov_bin: str
     seed: int
     find_limit: int
-
-
-def direct_http_agent_id(config: BenchmarkConfig) -> str:
-    """Avoid loading the user's global ovcli.conf when agent_id is unset."""
-    return config.agent_id or ""
 
 
 @dataclass
@@ -266,7 +260,6 @@ class AsyncHTTPAdapter(LoadAdapter):
             api_key=self._config.api_key,
             account=self._config.account,
             user=self._config.user,
-            agent_id=direct_http_agent_id(self._config),
             timeout=self._config.timeout,
             extra_headers={},
         )
@@ -541,7 +534,6 @@ class BenchmarkRunner:
             api_key=self.config.api_key,
             account=self.config.account,
             user=self.config.user,
-            agent_id=direct_http_agent_id(self.config),
             timeout=self.config.timeout,
             extra_headers={},
         )
@@ -573,7 +565,6 @@ class BenchmarkRunner:
             api_key=self.config.api_key,
             account=self.config.account,
             user=self.config.user,
-            agent_id=direct_http_agent_id(self.config),
             timeout=self.config.timeout,
             extra_headers={},
         )
@@ -1255,7 +1246,6 @@ def build_cli_config_payload(config: BenchmarkConfig) -> Dict[str, Any]:
         "api_key": config.api_key,
         "account": config.account,
         "user": config.user,
-        "agent_id": config.agent_id,
         "timeout": config.timeout,
         "extra_headers": None,
     }
@@ -1858,7 +1848,6 @@ def parse_args(argv: Optional[List[str]] = None) -> BenchmarkConfig:
     parser.add_argument("--api-key", default=os.getenv("OPENVIKING_API_KEY", "test-root-api-key"))
     parser.add_argument("--account", default=os.getenv("OPENVIKING_ACCOUNT", "default"))
     parser.add_argument("--user", default=os.getenv("OPENVIKING_USER", "default"))
-    parser.add_argument("--agent-id", default=os.getenv("OPENVIKING_AGENT_ID"))
     parser.add_argument("--timeout", type=float, default=60.0)
     parser.add_argument(
         "--adapters",
@@ -1921,7 +1910,6 @@ def parse_args(argv: Optional[List[str]] = None) -> BenchmarkConfig:
         api_key=args.api_key or None,
         account=args.account or None,
         user=args.user or None,
-        agent_id=args.agent_id or None,
         timeout=max(0.1, args.timeout),
         adapters=adapters,
         profile=args.profile,

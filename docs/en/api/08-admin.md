@@ -22,7 +22,7 @@ For `/api/v1/admin/*`, trusted mode also permits requests with no explicit ident
 | Create/delete workspace | Y | N | N |
 | List workspaces | Y | N | N |
 | Register/remove users | Y | Y (own account) | N |
-| List agent namespaces | Y | Y (own account) | N |
+| List agents (deprecated, returns empty list) | Y | Y (own account) | N |
 | Regenerate user key | Y | Y (own account) | N |
 | Change user role | Y | N | N |
 
@@ -82,12 +82,10 @@ Create a new workspace with its first admin user.
 |-----------|------|----------|---------|-------------|
 | account_id | str | Yes | - | Workspace ID |
 | admin_user_id | str | Yes | - | First admin user ID |
-| isolate_user_scope_by_agent | bool | No | false | Further isolate user scope by agent |
-| isolate_agent_scope_by_user | bool | No | false | Further isolate agent scope by user |
 
 **Notes:**
 - In `trusted` mode, `user_key` is omitted from the response
-- `isolate_user_scope_by_agent` and `isolate_agent_scope_by_user` are only available via HTTP API, not in Python SDK or CLI
+- Account-level namespace isolation settings are no longer supported. User memory uses user-scoped namespaces, and one-to-many external participants are represented with `peer_id`.
 
 #### 3. Usage Examples
 
@@ -103,9 +101,7 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts \
   -H "X-API-Key: <root-key>" \
   -d '{
     "account_id": "acme",
-    "admin_user_id": "alice",
-    "isolate_user_scope_by_agent": true,
-    "isolate_agent_scope_by_user": false
+    "admin_user_id": "alice"
   }'
 ```
 
@@ -135,9 +131,7 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts \
   -H "X-OpenViking-User: gateway-admin" \
   -d '{
     "account_id": "acme",
-    "admin_user_id": "alice",
-    "isolate_user_scope_by_agent": true,
-    "isolate_agent_scope_by_user": false
+    "admin_user_id": "alice"
   }'
 ```
 
@@ -182,9 +176,7 @@ ov --sudo admin create-account acme --admin alice
   "result": {
     "account_id": "acme",
     "admin_user_id": "alice",
-    "user_key": "7f3a9c1e...",
-    "isolate_user_scope_by_agent": true,
-    "isolate_agent_scope_by_user": false
+    "user_key": "7f3a9c1e..."
   },
   "time": 0.1
 }
@@ -512,74 +504,6 @@ ov --sudo admin list-users acme
 }
 ```
 
----
-
-### list_agents
-
-#### 1. API Implementation Overview
-
-List agent namespaces that exist under a workspace. This is an admin discovery API; it does not change normal `viking://agent/...` filesystem semantics.
-
-**Processing Flow:**
-1. Verify requester has ROOT privileges or is an ADMIN of the account
-2. Verify the account exists
-3. Scan the account's `viking://agent` namespace root
-4. Return sorted agent namespace entries
-
-**Code Entry Points:**
-- `openviking/server/routers/admin.py:list_agents` - HTTP route
-- `crates/ov_cli/src/client.rs:HttpClient.admin_list_agents` - CLI HTTP client
-- `crates/ov_cli/src/commands/admin.rs:list_agents` - CLI command
-
-#### 2. Interface and Parameters
-
-**Parameters**
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| account_id | str | Yes | - | Workspace ID |
-
-**Notes:**
-- ROOT can list agents in any account
-- ADMIN can only list agents in their own account
-- USER cannot call this API
-- The result lists agent namespaces that exist in storage. A new account includes the initialized `default` agent namespace.
-
-#### 3. Usage Examples
-
-**HTTP API**
-
-```
-GET /api/v1/admin/accounts/{account_id}/agents
-```
-
-```bash
-curl -X GET http://localhost:1933/api/v1/admin/accounts/acme/agents \
-  -H "X-API-Key: <root-or-admin-key>"
-```
-
-**CLI**
-
-```bash
-# Either ROOT or account ADMIN can execute
-# If using regular user's api_key who is an ADMIN of acme:
-ov admin list-agents acme
-# If using root_api_key (--sudo):
-ov --sudo admin list-agents acme
-```
-
-**Response Example**
-
-```json
-{
-  "status": "ok",
-  "result": [
-    {"agent_id": "default", "uri": "viking://agent/default"},
-    {"agent_id": "openclaw", "uri": "viking://agent/openclaw"}
-  ],
-  "time": 0.1
-}
-```
 
 ---
 

@@ -4,17 +4,16 @@
 Tests for MemoryUpdater.
 """
 
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from openviking.message import Message
 from openviking.message.part import TextPart
-from openviking.server.identity import AccountNamespacePolicy, RequestContext, Role
+from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import (
-    MemoryFile,
     MemoryField,
+    MemoryFile,
     MemoryTypeSchema,
     ResolvedOperation,
     ResolvedOperations,
@@ -162,7 +161,7 @@ class TestMemoryUpdater:
         extract_context.page_id_map.register_new_page_id(bob_uri, 100)
         isolation_handler = MagicMock()
 
-        ctx = RequestContext(user=UserIdentifier("acme", "alice", "bot"), role=Role.USER)
+        ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
 
         result = await updater.apply_operations(
             operations=operations,
@@ -201,47 +200,18 @@ class TestMemoryUpdater:
             delete_file_contents=[],
             errors=[],
         )
-        ctx = RequestContext(user=UserIdentifier("acme", "alice", "bot"), role=Role.USER)
+        ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
 
         with pytest.raises(ValueError, match="missing resolved URIs"):
             await updater.apply_operations(operations=operations, ctx=ctx)
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        ("policy", "schema_directory", "resolved_uri", "expected_directory", "memory_type"),
-        [
-            (
-                AccountNamespacePolicy(
-                    isolate_user_scope_by_agent=True,
-                    isolate_agent_scope_by_user=False,
-                ),
-                "viking://user/{{ user_space }}/memories/preferences",
-                "viking://user/alice/agent/bot/memories/preferences/theme.md",
-                "viking://user/alice/agent/bot/memories/preferences",
-                "preferences",
-            ),
-            (
-                AccountNamespacePolicy(
-                    isolate_user_scope_by_agent=False,
-                    isolate_agent_scope_by_user=True,
-                ),
-                "viking://agent/{{ agent_space }}/memories/tools",
-                "viking://agent/bot/user/alice/memories/tools/web_search.md",
-                "viking://agent/bot/user/alice/memories/tools",
-                "tools",
-            ),
-        ],
-    )
-    async def test_apply_operations_matches_overview_directories_with_namespace_policy(
-        self,
-        monkeypatch,
-        policy,
-        schema_directory,
-        resolved_uri,
-        expected_directory,
-        memory_type,
-    ):
-        """Overview generation should use policy-expanded user/agent space fragments."""
+    async def test_apply_operations_matches_overview_directory_from_resolved_user_uri(self):
+        """Overview generation should use the resolved user memory directory."""
+        memory_type = "preferences"
+        schema_directory = "viking://user/{{ user_space }}/memories/preferences"
+        resolved_uri = "viking://user/alice/memories/preferences/theme.md"
+        expected_directory = "viking://user/alice/memories/preferences"
         schema = MemoryTypeSchema(
             memory_type=memory_type,
             description=f"{memory_type} memory",
@@ -272,9 +242,8 @@ class TestMemoryUpdater:
         )
 
         ctx = RequestContext(
-            user=UserIdentifier("acme", "alice", "bot"),
+            user=UserIdentifier("acme", "alice"),
             role=Role.USER,
-            namespace_policy=policy,
         )
 
         result = await updater.apply_operations(operations=resolved, ctx=ctx)
@@ -286,15 +255,16 @@ class TestMemoryUpdater:
             ctx,
             None,
         )
+
     @pytest.mark.asyncio
     async def test_apply_operations_skips_link_updates_for_deleted_uris(self, monkeypatch):
-        deleted_uri = "viking://agent/agent_sample_3/memories/experiences/old.md"
-        written_uri = "viking://agent/agent_sample_3/memories/experiences/new.md"
+        deleted_uri = "viking://user/user_sample_3/memories/experiences/old.md"
+        written_uri = "viking://user/user_sample_3/memories/experiences/new.md"
 
         schema = MemoryTypeSchema(
             memory_type="experiences",
             description="experience memory",
-            directory="viking://agent/{{ agent_space }}/memories/experiences",
+            directory="viking://user/{{ user_space }}/memories/experiences",
             filename_template="{{ experience_name }}.md",
             fields=[],
             overview_template="overview",
@@ -307,7 +277,9 @@ class TestMemoryUpdater:
         updater.generate_overview = AsyncMock()
 
         mock_viking_fs = MagicMock()
-        mock_viking_fs.read_file = AsyncMock(side_effect=AssertionError("deleted URI should not be read"))
+        mock_viking_fs.read_file = AsyncMock(
+            side_effect=AssertionError("deleted URI should not be read")
+        )
         mock_viking_fs.write_file = AsyncMock()
         updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
 
@@ -319,7 +291,9 @@ class TestMemoryUpdater:
                     uris=[written_uri],
                 )
             ],
-            delete_file_contents=[MemoryFile(uri=deleted_uri, extra_fields={"memory_type": "experiences"})],
+            delete_file_contents=[
+                MemoryFile(uri=deleted_uri, extra_fields={"memory_type": "experiences"})
+            ],
             errors=[],
             resolved_links=[
                 StoredLink(
@@ -328,7 +302,6 @@ class TestMemoryUpdater:
                 )
             ],
         )
-
 
         async def mock_apply_upsert(resolved_op, ctx, extract_context=None):
             return None
@@ -339,7 +312,7 @@ class TestMemoryUpdater:
         updater._apply_upsert = AsyncMock(side_effect=mock_apply_upsert)
         updater._apply_delete = AsyncMock(side_effect=mock_apply_delete)
 
-        ctx = RequestContext(user=UserIdentifier("acme", "alice", "bot"), role=Role.USER)
+        ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
 
         result = await updater.apply_operations(operations=resolved, ctx=ctx)
 
@@ -349,8 +322,12 @@ class TestMemoryUpdater:
 
     @pytest.mark.asyncio
     async def test_apply_operations_routes_backlinks_to_matching_uri_only(self):
-        caroline_uri = "viking://user/Caroline/memories/events/2023/05/08/career_education_planning.md"
-        melanie_uri = "viking://user/Melanie/memories/events/2023/05/08/career_education_planning.md"
+        caroline_uri = (
+            "viking://user/Caroline/memories/events/2023/05/08/career_education_planning.md"
+        )
+        melanie_uri = (
+            "viking://user/Melanie/memories/events/2023/05/08/career_education_planning.md"
+        )
         profile_uri = "viking://user/Caroline/memories/profile.md"
 
         schema = MemoryTypeSchema(
@@ -405,7 +382,7 @@ class TestMemoryUpdater:
             ],
         )
 
-        ctx = RequestContext(user=UserIdentifier("acme", "alice", "bot"), role=Role.USER)
+        ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
 
         await updater.apply_operations(operations=operations, ctx=ctx)
 
@@ -769,7 +746,9 @@ class TestConsecutivePatchesSameURI:
         trace_info = MagicMock()
         patch_warning = MagicMock()
         monkeypatch.setattr("openviking.session.memory.memory_updater.tracer.info", trace_info)
-        monkeypatch.setattr("openviking.session.memory.merge_op.patch_handler.logger.warning", patch_warning)
+        monkeypatch.setattr(
+            "openviking.session.memory.merge_op.patch_handler.logger.warning", patch_warning
+        )
 
         op = ResolvedOperation(
             old_memory_file_content=MemoryFile(

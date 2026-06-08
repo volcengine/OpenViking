@@ -6,6 +6,7 @@
 
 use async_trait::async_trait;
 use regex::Regex;
+use std::any::Any;
 
 use super::errors::{Error, Result};
 use super::types::{FileInfo, GrepResult, TreeEntry, WriteFlag};
@@ -74,12 +75,26 @@ pub(crate) fn relative_depth(rel: &str) -> usize {
     }
 }
 
+/// Compile a grep pattern into a `Regex`, applying the case-insensitive `(?i)` prefix.
+///
+/// Shared by the trait's default `grep` and by `EncryptionWrappedFS::grep`, so the regex setup
+/// lives in exactly one place (no copy-paste drift between the two call sites).
+pub(crate) fn compile_grep_regex(pattern: &str, case_insensitive: bool) -> Result<Regex> {
+    let regex_pattern = if case_insensitive {
+        format!("(?i){}", pattern)
+    } else {
+        pattern.to_string()
+    };
+    Regex::new(&regex_pattern)
+        .map_err(|e| Error::invalid_operation(format!("Invalid regex pattern: {}", e)))
+}
+
 /// Core filesystem abstraction trait
 ///
 /// All filesystem plugins must implement this trait to provide file operations.
 /// All methods are async to support I/O-bound operations efficiently.
 #[async_trait]
-pub trait FileSystem: Send + Sync {
+pub trait FileSystem: Send + Sync + Any {
     /// Create an empty file at the specified path
     ///
     /// # Arguments
@@ -257,15 +272,7 @@ pub trait FileSystem: Send + Sync {
         exclude_path: Option<&str>,
         level_limit: Option<usize>,
     ) -> Result<GrepResult> {
-        let regex_pattern = if case_insensitive {
-            format!("(?i){}", pattern)
-        } else {
-            pattern.to_string()
-        };
-
-        let re = Regex::new(&regex_pattern).map_err(|e| {
-            super::errors::Error::invalid_operation(format!("Invalid regex pattern: {}", e))
-        })?;
+        let re = compile_grep_regex(pattern, case_insensitive)?;
 
         let mut result = GrepResult::new();
         let normalized_path = normalize_prefix_path(path);
@@ -780,11 +787,38 @@ mod tests {
         entries.iter().map(|e| e.rel_path.clone()).collect()
     }
 
+    /// Run the default tree traversal for the common `/root` test case.
+    async fn root_tree(
+        fs: &TreeFS,
+        show_hidden: bool,
+        node_limit: Option<usize>,
+        level_limit: Option<usize>,
+    ) -> Vec<TreeEntry> {
+        fs.tree_directory("/root", show_hidden, node_limit, level_limit)
+            .await
+            .unwrap()
+    }
+
+    /// Assert tree entry names in order.
+    fn assert_tree_names(entries: &[TreeEntry], expected: &[&str]) {
+        assert_eq!(tree_names(entries), strings(expected));
+    }
+
+    /// Assert tree entry relative paths in order.
+    fn assert_tree_rel_paths(entries: &[TreeEntry], expected: &[&str]) {
+        assert_eq!(tree_rel_paths(entries), strings(expected));
+    }
+
+    /// Convert string slices to owned strings for assertions.
+    fn strings(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| value.to_string()).collect()
+    }
+
     #[tokio::test]
     async fn test_tree_empty_dir() {
         let fs = TreeFS::default().with_dir_entries("/root", vec![]);
 
-        let entries = fs.tree_directory("/root", false, None, None).await.unwrap();
+        let entries = root_tree(&fs, false, None, None).await;
 
         assert!(entries.is_empty(), "empty dir returns empty vec");
     }
@@ -796,11 +830,11 @@ mod tests {
             vec![("a.txt", false), ("b.txt", false), ("c.txt", false)],
         );
 
-        let entries = fs.tree_directory("/root", false, None, None).await.unwrap();
+        let entries = root_tree(&fs, false, None, None).await;
 
         assert_eq!(entries.len(), 3);
-        assert_eq!(tree_names(&entries), vec!["a.txt", "b.txt", "c.txt"]);
-        assert_eq!(tree_rel_paths(&entries), vec!["a.txt", "b.txt", "c.txt"]);
+        assert_tree_names(&entries, &["a.txt", "b.txt", "c.txt"]);
+        assert_tree_rel_paths(&entries, &["a.txt", "b.txt", "c.txt"]);
     }
 
     #[tokio::test]
@@ -809,11 +843,11 @@ mod tests {
             .with_dir_entries("/root", vec![("a.txt", false), ("sub", true)])
             .with_dir_entries("/root/sub", vec![("b.txt", false)]);
 
-        let entries = fs.tree_directory("/root", false, None, None).await.unwrap();
+        let entries = root_tree(&fs, false, None, None).await;
 
         assert_eq!(entries.len(), 3);
-        assert_eq!(tree_names(&entries), vec!["a.txt", "sub", "b.txt"]);
-        assert_eq!(tree_rel_paths(&entries), vec!["a.txt", "sub", "sub/b.txt"]);
+        assert_tree_names(&entries, &["a.txt", "sub", "b.txt"]);
+        assert_tree_rel_paths(&entries, &["a.txt", "sub", "sub/b.txt"]);
         assert_eq!(
             tree_paths(&entries),
             vec!["/root/a.txt", "/root/sub", "/root/sub/b.txt"]
@@ -838,23 +872,17 @@ mod tests {
             ],
         );
 
-        let entries = fs
-            .tree_directory("/root", false, Some(3), None)
-            .await
-            .unwrap();
+        let entries = root_tree(&fs, false, Some(3), None).await;
 
         assert_eq!(entries.len(), 3);
-        assert_eq!(tree_names(&entries), vec!["a.txt", "b.txt", "c.txt"]);
+        assert_tree_names(&entries, &["a.txt", "b.txt", "c.txt"]);
     }
 
     #[tokio::test]
     async fn test_tree_node_limit_zero() {
         let fs = TreeFS::default().with_dir_entries("/root", vec![("a.txt", false)]);
 
-        let entries = fs
-            .tree_directory("/root", false, Some(0), None)
-            .await
-            .unwrap();
+        let entries = root_tree(&fs, false, Some(0), None).await;
 
         assert!(entries.is_empty(), "node_limit=0 returns empty");
     }
@@ -865,10 +893,7 @@ mod tests {
             .with_dir_entries("/root", vec![("a.txt", false), ("sub", true)])
             .with_dir_entries("/root/sub", vec![("b.txt", false)]);
 
-        let entries = fs
-            .tree_directory("/root", false, None, Some(0))
-            .await
-            .unwrap();
+        let entries = root_tree(&fs, false, None, Some(0)).await;
 
         assert!(
             entries.is_empty(),
@@ -882,13 +907,10 @@ mod tests {
             .with_dir_entries("/root", vec![("a.txt", false), ("sub", true)])
             .with_dir_entries("/root/sub", vec![("b.txt", false)]);
 
-        let entries = fs
-            .tree_directory("/root", false, None, Some(1))
-            .await
-            .unwrap();
+        let entries = root_tree(&fs, false, None, Some(1)).await;
 
         assert_eq!(entries.len(), 2);
-        assert_eq!(tree_names(&entries), vec!["a.txt", "sub"]);
+        assert_tree_names(&entries, &["a.txt", "sub"]);
     }
 
     #[tokio::test]
@@ -898,7 +920,7 @@ mod tests {
             .with_dir_entries("/root/sub", vec![("b.txt", false), ("deep", true)])
             .with_dir_entries("/root/sub/deep", vec![("c.txt", false)]);
 
-        let entries = fs.tree_directory("/root", false, None, None).await.unwrap();
+        let entries = root_tree(&fs, false, None, None).await;
 
         assert_eq!(entries.len(), 5);
         assert!(tree_paths(&entries).contains(&"/root/sub/deep/c.txt".to_string()));
@@ -911,7 +933,7 @@ mod tests {
             vec![("a.txt", false), (".hidden", false), ("visible", true)],
         );
 
-        let entries = fs.tree_directory("/root", false, None, None).await.unwrap();
+        let entries = root_tree(&fs, false, None, None).await;
 
         let names = tree_names(&entries);
         assert!(names.contains(&"a.txt".to_string()));
@@ -925,10 +947,10 @@ mod tests {
             .with_dir_entries("/root", vec![(".hidden_dir", true)])
             .with_dir_entries("/root/.hidden_dir", vec![("secret.txt", false)]);
 
-        let entries = fs.tree_directory("/root", false, None, None).await.unwrap();
+        let entries = root_tree(&fs, false, None, None).await;
 
         assert_eq!(entries.len(), 2);
-        assert_eq!(tree_names(&entries), vec![".hidden_dir", "secret.txt"]);
+        assert_tree_names(&entries, &[".hidden_dir", "secret.txt"]);
     }
 
     #[tokio::test]
@@ -938,7 +960,7 @@ mod tests {
             vec![("a.txt", false), (".hidden", false), (".hidden_dir", true)],
         );
 
-        let entries = fs.tree_directory("/root", true, None, None).await.unwrap();
+        let entries = root_tree(&fs, true, None, None).await;
 
         let names = tree_names(&entries);
         assert!(names.contains(&"a.txt".to_string()));
@@ -996,7 +1018,7 @@ mod tests {
             .with_dir_entries("/root/sub", vec![("b.txt", false)])
             .with_dir_entries("/root/.hidden_dir", vec![("secret.txt", false)]);
 
-        let entries = fs.tree_directory("/root", false, None, None).await.unwrap();
+        let entries = root_tree(&fs, false, None, None).await;
 
         assert_eq!(entries.len(), 5);
         let names = tree_names(&entries);

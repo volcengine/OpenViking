@@ -58,7 +58,7 @@ def main():
     print("User:   bob")
     print("Key:    [hidden]")
 
-    client = ov.SyncHTTPClient(url=url, api_key=api_key, agent_id="bob-agent")
+    client = ov.SyncHTTPClient(url=url, api_key=api_key)
     client.initialize()
 
     try:

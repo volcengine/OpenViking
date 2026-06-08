@@ -15,7 +15,7 @@ Phase 1 intentionally keeps the scope narrow:
 - Resources only. Memories, skills, sessions, and other namespaces are not exposed.
 - Text-first writes. `PUT` currently accepts UTF-8 text content only.
 - WebDAV subset only. `OPTIONS`, `PROPFIND`, `GET`, `HEAD`, `PUT`, `DELETE`, `MKCOL`, and `MOVE` are supported.
-- Semantic sidecars stay internal. Derived files such as `.abstract.md`, `.overview.md`, `.relations.json`, and `.path.ovlock` are hidden from listings and cannot be accessed directly through WebDAV.
+- Semantic sidecars and internal system files stay internal. Derived or internal files such as `.abstract.md`, `.overview.md`, `.relations.json`, `.path.ovlock`, `.redirect.json`, and `.sync_log.json` are hidden from listings and cannot be accessed directly through WebDAV.
 
 Behavior notes:
 
@@ -23,6 +23,7 @@ Behavior notes:
 - Replacing an existing file through WebDAV refreshes related semantics and vectors, same as `write()`.
 - `PUT` does not create parent collections automatically. Create missing directories with `MKCOL` first.
 - User-created dot-directories and dot-files remain visible unless they match one of the reserved internal filenames above.
+- When multi-write storage is enabled, files redirected to a backup are still exposed through the filesystem APIs as normal files; internal redirect and sync metadata never become visible to callers.
 
 ## API Reference
 

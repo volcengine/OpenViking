@@ -429,7 +429,6 @@ def _client(args: argparse.Namespace):
         url=args.openviking_url,
         api_key=None,
         user=args.openviking_user,
-        agent_id=args.openviking_agent_id,
         account=args.openviking_account,
         timeout=args.openviking_timeout,
         extra_headers={},
@@ -632,7 +631,6 @@ def _train(args: argparse.Namespace, train_results: Path, corpus_manifest: Path)
             "url": args.openviking_url,
             "account": args.openviking_account,
             "user": args.openviking_user,
-            "agent_id": args.openviking_agent_id,
             "search_uri": args.search_uri,
         },
         "train_transcript_format": args.train_transcript_format,
@@ -941,7 +939,6 @@ def main() -> int:
     parser.add_argument("--openviking-url")
     parser.add_argument("--openviking-account")
     parser.add_argument("--openviking-user")
-    parser.add_argument("--openviking-agent-id")
     parser.add_argument("--openviking-timeout", type=float, default=600.0)
     parser.add_argument("--openviking-wait-timeout", type=int, default=600)
     parser.add_argument("--search-uri")
@@ -1020,7 +1017,6 @@ def main() -> int:
                 "openviking_url",
                 "openviking_account",
                 "openviking_user",
-                "openviking_agent_id",
                 "search_uri",
             )
             if not getattr(args, name)

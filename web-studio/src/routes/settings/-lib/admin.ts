@@ -12,7 +12,6 @@ import {
 
 export type AdminConnection = {
   accountId: string
-  agentId: string
   apiKey: string
   baseUrl: string
   userId: string
@@ -21,8 +20,6 @@ export type AdminConnection = {
 export type AdminAccount = {
   accountId: string
   createdAt?: string
-  isolateAgentScopeByUser: boolean
-  isolateUserScopeByAgent: boolean
   userCount: number
 }
 
@@ -51,16 +48,33 @@ export type KeyResult = {
   userId?: string
 }
 
+export type ProbeState = 'ok' | 'error' | 'skipped'
+
+export type CapabilityProbeResult = {
+  detail?: string
+  state: ProbeState
+}
+
+export type StudioConnectionProbe = {
+  admin: CapabilityProbeResult
+  data: CapabilityProbeResult
+}
+
+export type ProbeConnectionInput = {
+  accountId: string
+  adminApiKey: string
+  apiKey: string
+  baseUrl: string
+  serverMode: 'api_key' | 'trusted' | 'dev' | 'checking' | 'offline'
+  userId: string
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
 function asString(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined
-}
-
-function asBoolean(value: unknown): boolean {
-  return value === true
 }
 
 function asNumber(value: unknown): number {
@@ -85,11 +99,8 @@ function setOptionalHeader(
 function createAdminClient(connection: AdminConnection) {
   const headers: Record<string, string> = {
     Accept: 'application/json',
-    'X-OpenViking-Agent': connection.agentId.trim() || 'web-playground',
   }
   setOptionalHeader(headers, 'X-API-Key', connection.apiKey)
-  setOptionalHeader(headers, 'X-OpenViking-Account', connection.accountId)
-  setOptionalHeader(headers, 'X-OpenViking-User', connection.userId)
 
   return createClient({
     axios: axios.create(),
@@ -97,6 +108,167 @@ function createAdminClient(connection: AdminConnection) {
     headers,
     throwOnError: true,
   })
+}
+
+function getErrorMessage(error: unknown): string {
+  if (axios.isAxiosError(error)) {
+    const data = error.response?.data
+    if (isRecord(data) && isRecord(data.error)) {
+      const message = asString(data.error.message)
+      if (message) {
+        return message
+      }
+    }
+
+    if (error.response?.status) {
+      return `HTTP ${error.response.status}`
+    }
+  }
+
+  return error instanceof Error ? error.message : String(error)
+}
+
+function createProbeClient(baseUrl: string) {
+  return axios.create({
+    baseURL: normalizeBaseUrl(baseUrl),
+    headers: {
+      Accept: 'application/json',
+    },
+  })
+}
+
+function setApiKeyHeader(
+  headers: Record<string, string>,
+  apiKey: string,
+): void {
+  setOptionalHeader(headers, 'X-API-Key', apiKey)
+}
+
+async function probeAdminAccess(
+  input: ProbeConnectionInput,
+): Promise<CapabilityProbeResult> {
+  if (input.serverMode === 'checking' || input.serverMode === 'offline') {
+    return { state: 'skipped' }
+  }
+  if (input.serverMode === 'dev') {
+    return {
+      detail: 'Admin API requires API-key or trusted mode',
+      state: 'skipped',
+    }
+  }
+
+  const controlKey = input.adminApiKey || input.apiKey
+  if (input.serverMode === 'api_key' && !controlKey) {
+    return {
+      detail: 'A root or account-admin API key is required',
+      state: 'skipped',
+    }
+  }
+
+  const client = createProbeClient(input.baseUrl)
+  const headers: Record<string, string> = {}
+  setApiKeyHeader(headers, controlKey)
+
+  try {
+    await client.get('/api/v1/admin/accounts', { headers })
+    return {
+      detail: 'Root admin control available',
+      state: 'ok',
+    }
+  } catch (accountsError) {
+    if (
+      !axios.isAxiosError(accountsError) ||
+      accountsError.response?.status !== 403 ||
+      !input.accountId
+    ) {
+      return {
+        detail: getErrorMessage(accountsError),
+        state: 'error',
+      }
+    }
+
+    try {
+      const accountId = encodeURIComponent(input.accountId)
+      await client.get(`/api/v1/admin/accounts/${accountId}/users`, {
+        headers,
+        params: {
+          limit: 1,
+        },
+      })
+      return {
+        detail: 'Account admin control available',
+        state: 'ok',
+      }
+    } catch (usersError) {
+      return {
+        detail: getErrorMessage(usersError),
+        state: 'error',
+      }
+    }
+  }
+}
+
+async function probeDataAccess(
+  input: ProbeConnectionInput,
+): Promise<CapabilityProbeResult> {
+  if (input.serverMode === 'checking' || input.serverMode === 'offline') {
+    return { state: 'skipped' }
+  }
+  if (input.serverMode === 'api_key' && !input.apiKey) {
+    return {
+      detail: 'A user or account-admin API key is required',
+      state: 'skipped',
+    }
+  }
+  if (
+    input.serverMode === 'trusted' &&
+    (!input.accountId.trim() || !input.userId.trim())
+  ) {
+    return {
+      detail: 'Trusted mode data access requires account and user',
+      state: 'skipped',
+    }
+  }
+
+  const client = createProbeClient(input.baseUrl)
+  const headers: Record<string, string> = {}
+  setApiKeyHeader(headers, input.apiKey)
+
+  if (input.serverMode === 'trusted') {
+    setOptionalHeader(headers, 'X-OpenViking-Account', input.accountId)
+    setOptionalHeader(headers, 'X-OpenViking-User', input.userId)
+  }
+
+  try {
+    await client.get('/api/v1/fs/ls', {
+      headers,
+      params: {
+        node_limit: 1,
+        output: 'agent',
+        uri: 'viking://',
+      },
+    })
+    return {
+      detail: 'Tenant data access available',
+      state: 'ok',
+    }
+  } catch (error) {
+    return {
+      detail: getErrorMessage(error),
+      state: 'error',
+    }
+  }
+}
+
+export async function probeStudioConnection(
+  input: ProbeConnectionInput,
+): Promise<StudioConnectionProbe> {
+  const [admin, data] = await Promise.all([
+    probeAdminAccess(input),
+    probeDataAccess(input),
+  ])
+
+  return { admin, data }
 }
 
 function normalizeAccount(value: unknown): AdminAccount | null {
@@ -112,8 +284,6 @@ function normalizeAccount(value: unknown): AdminAccount | null {
   return {
     accountId,
     createdAt: asString(value.created_at),
-    isolateAgentScopeByUser: asBoolean(value.isolate_agent_scope_by_user),
-    isolateUserScopeByAgent: asBoolean(value.isolate_user_scope_by_agent),
     userCount: asNumber(value.user_count),
   }
 }

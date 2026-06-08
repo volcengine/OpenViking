@@ -23,6 +23,8 @@ class EventType(str, Enum):
     TOOL_CALL = "tool_call"
     TOOL_RESULT = "tool_result"
     REASONING = "reasoning"
+    CONTENT_DELTA = "content_delta"
+    REASONING_DELTA = "reasoning_delta"
     ITERATION = "iteration"
 
 
@@ -44,6 +46,21 @@ class ChatMessage(BaseModel):
     )
 
 
+class OpenVikingConnection(BaseModel):
+    """OpenViking identity forwarded by the Studio proxy."""
+
+    api_key: Optional[str] = Field(default=None, description="API key from the active client")
+    account_id: Optional[str] = Field(default=None, description="Effective account ID")
+    user_id: Optional[str] = Field(default=None, description="Effective user ID")
+    agent_id: Optional[str] = Field(default=None, description="Effective agent ID")
+    role: Optional[str] = Field(default=None, description="Effective OpenViking role")
+    namespace_policy: Optional[Dict[str, bool]] = Field(
+        default=None,
+        description="Effective account namespace policy",
+    )
+    server_url: Optional[str] = Field(default=None, description="OpenViking server URL")
+
+
 class ChatRequest(BaseModel):
     """Request body for chat endpoint."""
 
@@ -63,6 +80,10 @@ class ChatRequest(BaseModel):
     disabled_tools: List[str] = Field(
         default_factory=list,
         description="Tool names to hide for this request",
+    )
+    openviking_connection: Optional[OpenVikingConnection] = Field(
+        default=None,
+        description="Authenticated OpenViking connection forwarded by the server proxy",
     )
 
 

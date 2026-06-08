@@ -37,23 +37,55 @@ export function readStoredNumber(
   return Number.isFinite(value) ? clampNumber(value, min, max) : fallback
 }
 
-export function readPlaygroundAgentSessionIds(): string[] {
+export function readStoredJsonArray<T>(
+  key: string,
+  validator: (value: unknown) => T | undefined,
+  limit?: number,
+  fromEnd = false,
+): T[] {
   if (typeof window === 'undefined') return []
 
   try {
-    const raw = window.localStorage.getItem(
-      PLAYGROUND_AGENT_SESSIONS_STORAGE_KEY,
-    )
-    const parsed = raw ? (JSON.parse(raw) as unknown) : []
+    const raw = window.localStorage.getItem(key)
+    const parsed: unknown = raw ? JSON.parse(raw) : []
     if (!Array.isArray(parsed)) return []
-
-    return parsed.filter(
-      (sessionId): sessionId is string =>
-        typeof sessionId === 'string' && sessionId.length > 0,
-    )
+    const values = parsed.flatMap((item) => {
+      const value = validator(item)
+      return value === undefined ? [] : [value]
+    })
+    if (limit === undefined) return values
+    return fromEnd ? values.slice(-limit) : values.slice(0, limit)
   } catch {
     return []
   }
+}
+
+export function writeStoredJson(key: string, value: unknown): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value))
+  } catch {
+    // Ignore storage failures in restricted browser contexts.
+  }
+}
+
+export function removeStoredValue(key: string): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.removeItem(key)
+  } catch {
+    // Ignore storage failures in restricted browser contexts.
+  }
+}
+
+export function readPlaygroundAgentSessionIds(): string[] {
+  return readStoredJsonArray(
+    PLAYGROUND_AGENT_SESSIONS_STORAGE_KEY,
+    (sessionId) =>
+      typeof sessionId === 'string' && sessionId.length > 0
+        ? sessionId
+        : undefined,
+  )
 }
 
 export function registerPlaygroundAgentSessionId(sessionId: string): string[] {
@@ -66,14 +98,7 @@ export function registerPlaygroundAgentSessionId(sessionId: string): string[] {
     ...readPlaygroundAgentSessionIds().filter((item) => item !== trimmed),
   ].slice(0, 50)
 
-  try {
-    window.localStorage.setItem(
-      PLAYGROUND_AGENT_SESSIONS_STORAGE_KEY,
-      JSON.stringify(next),
-    )
-  } catch {
-    // Ignore storage failures in restricted browser contexts.
-  }
+  writeStoredJson(PLAYGROUND_AGENT_SESSIONS_STORAGE_KEY, next)
 
   return next
 }

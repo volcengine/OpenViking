@@ -20,7 +20,7 @@ import time
 import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List, Dict, Any, Tuple, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import openviking as ov
 
@@ -28,6 +28,14 @@ import openviking as ov
 def _get_session_number(session_key: str) -> int:
     """Extract session number from session key."""
     return int(session_key.split("_")[1])
+
+
+def build_memory_policy(group_chat: bool) -> Dict[str, Dict[str, bool]]:
+    """Build session/commit memory policy for benchmark ingest."""
+    return {
+        "self": {"enabled": True},
+        "peer": {"enabled": bool(group_chat)},
+    }
 
 
 def parse_test_file(path: str) -> List[Dict[str, Any]]:
@@ -84,8 +92,8 @@ def build_session_messages(
     Each dict represents a session with multiple messages (user/assistant role).
 
     Args:
-        group_chat: If True (default), group-chat mode — role_id=speaker.
-                    If False, single-chat mode — no role_id/speaker on messages.
+        group_chat: If True (default), group-chat mode — peer_id=speaker.
+                    If False, single-chat mode — no peer_id/speaker on messages.
     """
     conv = item["conversation"]
     speakers = f"{conv['speaker_a']} & {conv['speaker_b']}"
@@ -269,9 +277,7 @@ def _parse_token_usage(commit_result: Dict[str, Any]) -> Dict[str, int]:
             llm_input = llm.get("input", llm.get("prompt_tokens", 0))
             llm_output = llm.get("output", llm.get("completion_tokens", 0))
             cache_tokens = llm.get("cached_tokens", llm.get("prompt_cached", 0))
-            reasoning_tokens = llm.get(
-                "reasoning_tokens", llm.get("completion_reasoning", 0)
-            )
+            reasoning_tokens = llm.get("reasoning_tokens", llm.get("completion_reasoning", 0))
             return {
                 "embedding": embed_total,
                 "vlm": llm_input,
@@ -302,9 +308,9 @@ async def viking_ingest(
     openviking_url: str,
     session_time: Optional[str] = None,
     user_id: Optional[str] = None,
-    agent_id: Optional[str] = None,
     account: str = "default",
     api_key: Optional[str] = None,
+    group_chat: bool = False,
 ) -> Dict[str, int]:
     """Save messages to OpenViking via OpenViking SDK client.
     Returns token usage dict with embedding and vlm token counts.
@@ -314,9 +320,9 @@ async def viking_ingest(
         openviking_url: OpenViking service URL
         session_time: Session time string (e.g., "9:36 am on 2 April, 2023")
         user_id: User identifier for separate userspace (e.g., "conv-26")
-        agent_id: Agent identifier for separate agentspace (e.g., "conv-26")
         account: OpenViking account identifier
         api_key: Optional API key for OpenViking client authentication
+        group_chat: Whether to enable peer-memory extraction for group-chat sessions
     """
     # 解析 session_time - 为每条消息计算递增的时间戳
     base_datetime = None
@@ -330,16 +336,16 @@ async def viking_ingest(
     client = ov.AsyncHTTPClient(
         url=openviking_url,
         user=user_id,
-        agent_id=agent_id,
         account=account,
         api_key=api_key,
         timeout=600,
     )
     await client.initialize()
+    memory_policy = build_memory_policy(group_chat)
 
     try:
         # Create session
-        create_res = await client.create_session()
+        create_res = await client.create_session(memory_policy=memory_policy)
         session_id = create_res["session_id"]
 
         # Add messages one by one with created_at
@@ -355,11 +361,15 @@ async def viking_ingest(
                 role=msg["role"],
                 parts=[{"type": "text", "text": msg["text"]}],
                 created_at=msg_created_at,
-                role_id=msg.get("speaker"),
+                peer_id=msg.get("speaker"),
             )
 
         # Commit
-        result = await client.commit_session(session_id, telemetry=True)
+        result = await client.commit_session(
+            session_id,
+            telemetry=True,
+            memory_policy=memory_policy,
+        )
 
         # Accept both "committed" and "accepted" as success - accepted means the session was archived
         if result.get("status") not in ("committed", "accepted"):
@@ -371,7 +381,7 @@ async def viking_ingest(
         if task_id:
             # 轮询任务状态直到完成
             max_attempts = 2400  # 最多等待40分钟
-            for attempt in range(max_attempts):
+            for _attempt in range(max_attempts):
                 task = await client.get_task(task_id)
                 status = task.get("status") if task else "unknown"
                 if status == "completed":
@@ -381,7 +391,9 @@ async def viking_ingest(
                     raise RuntimeError(f"Task {task_id} {status}, trace_id={trace_id}: {task}")
                 await asyncio.sleep(2)
             else:
-                raise RuntimeError(f"Task {task_id} timed out after {max_attempts} attempts, trace_id={trace_id}")
+                raise RuntimeError(
+                    f"Task {task_id} timed out after {max_attempts} attempts, trace_id={trace_id}"
+                )
         else:
             token_usage = {"embedding": 0, "vlm": 0, "total": 0}
 
@@ -418,16 +430,15 @@ async def process_single_session(
     try:
         started_at = time.perf_counter()
         user_id = str(sample_id) if args.separate_user_by_sample else ""
-        agent_id = str(sample_id) if args.separate_user_by_sample else ""
         account = args.account if args.separate_user_by_sample else ""
         result = await viking_ingest(
             messages,
             args.openviking_url,
             meta.get("date_time"),
             user_id=user_id,
-            agent_id=agent_id,
             account=account,
             api_key=args.api_key,
+            group_chat=args.group_chat,
         )
         duration_seconds = round(time.perf_counter() - started_at, 3)
         token_usage = result["token_usage"]
@@ -499,9 +510,11 @@ def parse_retry_wrong_csv(csv_path: str) -> Dict[str, set]:
     """
     with open(csv_path, "r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
-        wrong_items = [row for row in reader
-                       if row.get("is_invalid", "").lower() != "true"
-                       and row.get("result") == "WRONG"]
+        wrong_items = [
+            row
+            for row in reader
+            if row.get("is_invalid", "").lower() != "true" and row.get("result") == "WRONG"
+        ]
 
     if not wrong_items:
         print(f"[retry-wrong] No valid wrong questions found in {csv_path}", file=sys.stderr)
@@ -581,7 +594,7 @@ async def run_import(args: argparse.Namespace) -> None:
     if args.clear_ingest_record:
         ingest_record = {}
         save_ingest_record(ingest_record)
-        print(f"[INFO] All existing ingest records cleared", file=sys.stderr)
+        print("[INFO] All existing ingest records cleared", file=sys.stderr)
     else:
         ingest_record = load_ingest_record()
 
@@ -637,7 +650,14 @@ async def run_import(args: argparse.Namespace) -> None:
 
         # 为每个 sample 创建独立的处理协程
         async def process_sample(item, sample_index):
-            nonlocal success_count, error_count, total_embedding_tokens, total_vlm_tokens, total_cache_tokens, total_reasoning_tokens, total_llm_output_tokens
+            nonlocal \
+                success_count, \
+                error_count, \
+                total_embedding_tokens, \
+                total_vlm_tokens, \
+                total_cache_tokens, \
+                total_reasoning_tokens, \
+                total_llm_output_tokens
             sample_id = item["sample_id"]
             display_id = f"sample_{sample_index}"
 
@@ -648,7 +668,9 @@ async def run_import(args: argparse.Namespace) -> None:
                 if sess_nums:
                     sample_session_range = (min(sess_nums), max(sess_nums))
 
-            sessions = build_session_messages(item, sample_session_range, group_chat=args.group_chat)
+            sessions = build_session_messages(
+                item, sample_session_range, group_chat=args.group_chat
+            )
 
             print(f"\n=== Sample {display_id} ({sample_id}) ===", file=sys.stderr)
             print(f"    {len(sessions)} session(s) to import", file=sys.stderr)
@@ -709,7 +731,9 @@ async def run_import(args: argparse.Namespace) -> None:
                 for idx, item in enumerate(samples)
             ]
         else:
-            tasks = [asyncio.create_task(process_sample(item, idx)) for idx, item in enumerate(samples)]
+            tasks = [
+                asyncio.create_task(process_sample(item, idx)) for idx, item in enumerate(samples)
+            ]
 
     else:
         # Plain text format
@@ -725,7 +749,7 @@ async def run_import(args: argparse.Namespace) -> None:
                 "txt", session_key, ingest_record, success_keys
             ):
                 print(
-                    f"  [SKIP] already imported (use --force-ingest to reprocess)", file=sys.stderr
+                    "  [SKIP] already imported (use --force-ingest to reprocess)", file=sys.stderr
                 )
                 skipped_count += 1
                 continue
@@ -779,12 +803,12 @@ async def run_import(args: argparse.Namespace) -> None:
 
     # Final summary
     total_processed = success_count + error_count + skipped_count
-    print(f"\n=== Import summary ===", file=sys.stderr)
+    print("\n=== Import summary ===", file=sys.stderr)
     print(f"Total sessions: {total_processed}", file=sys.stderr)
     print(f"Successfully imported: {success_count}", file=sys.stderr)
     print(f"Failed: {error_count}", file=sys.stderr)
     print(f"Skipped (already imported): {skipped_count}", file=sys.stderr)
-    print(f"\n=== Token usage summary ===", file=sys.stderr)
+    print("\n=== Token usage summary ===", file=sys.stderr)
     print(f"Total Embedding tokens: {total_embedding_tokens}", file=sys.stderr)
     print(f"Total VLM tokens: {total_vlm_tokens}", file=sys.stderr)
     print(f"Total Cache tokens: {total_cache_tokens}", file=sys.stderr)
@@ -796,7 +820,9 @@ async def run_import(args: argparse.Namespace) -> None:
             file=sys.stderr,
         )
         print(f"Average VLM per session: {total_vlm_tokens / success_count:.1f}", file=sys.stderr)
-        print(f"Average Cache per session: {total_cache_tokens / success_count:.1f}", file=sys.stderr)
+        print(
+            f"Average Cache per session: {total_cache_tokens / success_count:.1f}", file=sys.stderr
+        )
         print(
             f"Average Reasoning per session: {total_reasoning_tokens / success_count:.1f}",
             file=sys.stderr,
@@ -805,7 +831,7 @@ async def run_import(args: argparse.Namespace) -> None:
             f"Average Completion per session: {total_llm_output_tokens / success_count:.1f}",
             file=sys.stderr,
         )
-    print(f"\nResults saved to:", file=sys.stderr)
+    print("\nResults saved to:", file=sys.stderr)
     print(f"  - Success records: {args.success_csv}", file=sys.stderr)
     print(f"  - Error logs: {args.error_log}", file=sys.stderr)
 
@@ -872,7 +898,7 @@ def main():
         "--separate-user-by-sample",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Whether to isolate OpenViking user/agent IDs by sample (default: true). Use --no-separate-user-by-sample to use empty user/agent while keeping --account unchanged.",
+        help="Whether to isolate OpenViking users by sample (default: true). Use --no-separate-user-by-sample to use an empty user while keeping --account unchanged.",
     )
     parser.add_argument(
         "--parallel-samples",
@@ -890,7 +916,7 @@ def main():
         "--group-chat",
         action="store_true",
         default=False,
-        help="Group-chat mode: set role_id/speaker on messages. Default is group-chat mode.",
+        help="Group-chat mode: set peer_id/speaker on messages. Default is group-chat mode.",
     )
     parser.add_argument(
         "--clear-ingest-record",

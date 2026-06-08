@@ -154,7 +154,7 @@ async def test_reindex_uses_request_tenant_for_exists(monkeypatch):
             return {"status": "completed", "uri": uri, "mode": mode}
 
     ctx = RequestContext(
-        user=UserIdentifier(account_id="test", user_id="alice", agent_id="default"),
+        user=UserIdentifier(account_id="test", user_id="alice"),
         role=Role.ADMIN,
     )
     request = ReindexRequest(

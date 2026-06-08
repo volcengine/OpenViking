@@ -56,6 +56,7 @@ The `find()` method performs pure vector similarity search for simple query scen
 |-----------|------|----------|---------|-------------|
 | query | str | Yes | - | Search query string |
 | target_uri | str \| List[str] | No | "" | Limit search to specific URI prefix |
+| peer_id | str | No | None | Stable interaction peer ID. When searching the default user memory scope, results include both current user memories and this peer's memories. CLI maps `--peer-id` to this field |
 | node_limit | int | No | None | Maximum number of results |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filter |
@@ -171,7 +172,7 @@ results = client.find(
 # Search only in skills
 results = client.find(
     "web search",
-    target_uri="viking://agent/skills"
+    target_uri="viking://user/skills"
 )
 
 # Search in specific project
@@ -273,6 +274,7 @@ The `search()` method adds session context understanding and intent analysis cap
 | target_uri | str \| List[str] | No | "" | Limit search to specific URI prefix |
 | session | Session | No | None | Session for context-aware search (SDK) |
 | session_id | str | No | None | Session ID for context-aware search (HTTP) |
+| peer_id | str | No | None | Stable interaction peer ID. When searching the default user memory scope, results include both current user memories and this peer's memories. CLI maps `--peer-id` to this field |
 | node_limit | int | No | None | Maximum number of results |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filter |

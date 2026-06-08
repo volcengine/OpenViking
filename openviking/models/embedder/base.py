@@ -8,7 +8,7 @@ import weakref
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from threading import Lock
-from typing import Any, Awaitable, Callable, Dict, List, Optional, TypeVar
+from typing import Any, Awaitable, Callable, Dict, List, Optional, TypeVar, Union
 
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.embedding_input import (
@@ -20,6 +20,10 @@ from openviking_cli.utils import get_logger
 
 T = TypeVar("T")
 logger = get_logger(__name__)
+
+# A multimodal embedding input is a list of content parts, e.g.
+# [{"type": "text", "text": "..."}, {"type": "image_url", "image_url": {"url": "..."}}]
+EmbeddingInput = Union[str, List[Dict[str, Any]]]
 
 
 _token_tracker_instance = None
@@ -49,14 +53,37 @@ def _get_token_tracker():
     return _token_tracker_instance
 
 
+def extract_text_from_content(content: "EmbeddingInput") -> str:
+    """Extract and join the text parts from a multimodal input.
+
+    ``content`` may be a plain string (returned as-is) or a list of content
+    parts such as ``[{"type": "text", "text": "..."}, {"type": "image_url", ...}]``.
+    Non-text parts (e.g. images) are ignored.
+    """
+    if isinstance(content, str):
+        return content
+    text_parts = [
+        part.get("text", "")
+        for part in content
+        if isinstance(part, dict) and part.get("type") == "text"
+    ]
+    return "\n".join(p for p in text_parts if p)
+
+
 async def embed_compat(
-    embedder: "EmbedderBase", text: str, *, is_query: bool = False
+    embedder: "EmbedderBase", content: "EmbeddingInput", *, is_query: bool = False
 ) -> "EmbedResult":
-    """Prepare input, then call the embedder's async-compatible entrypoint."""
+    """Prepare input, then call the embedder's async-compatible entrypoint.
+
+    Accepts either a plain text string or a multimodal input (a list of content
+    parts). ``prepare_embedding_input`` downgrades multimodal inputs to text for
+    embedders that do not support images, so all embedders can be called the same
+    way.
+    """
     from openviking.telemetry import bind_telemetry_stage
 
     stage = "embed_query" if is_query else "embed_resource"
-    embedding_input = embedder.prepare_embedding_input(text)
+    embedding_input = embedder.prepare_embedding_input(content)
     with bind_telemetry_stage(stage):
         return await embedder.embed_async(embedding_input, is_query=is_query)
 
@@ -147,24 +174,56 @@ class EmbedderBase(ABC):
         self._token_tracker = _get_token_tracker()
         self._active_call_started_at: float | None = None
 
-    def prepare_embedding_input(self, text: str) -> str:
-        """Apply this embedder's input guard before provider calls."""
-        if self.max_input_tokens is None:
-            return text
-        return truncate_embedding_input(text, self.max_input_tokens)
+    def prepare_embedding_input(self, content: "EmbeddingInput") -> "EmbeddingInput":
+        """Apply this embedder's input guard before provider calls.
 
-    def prepare_embedding_inputs(self, texts: List[str]) -> List[str]:
+        Plain text is truncated to ``max_input_tokens``. For embedders that
+        support images, multimodal inputs (a list of content parts) are kept as a
+        list. Embedders that do not support multimodal input get the
+        text parts extracted, so image parts are safely dropped.
+        """
+        if isinstance(content, list) and self.supports_multimodal:
+            if self.max_input_tokens is None:
+                return content
+            truncated_parts = []
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    part = {
+                        **part,
+                        "text": truncate_embedding_input(
+                            part.get("text", ""), self.max_input_tokens
+                        ),
+                    }
+                truncated_parts.append(part)
+            return truncated_parts
+        else:
+            content = extract_text_from_content(content)
+            if self.max_input_tokens is None:
+                return content
+            return truncate_embedding_input(content, self.max_input_tokens)
+
+    def prepare_embedding_inputs(
+        self, contents: List["EmbeddingInput"]
+    ) -> List["EmbeddingInput"]:
         """Apply this embedder's input guard to a batch."""
-        if self.max_input_tokens is None:
-            return texts
-        return [self.prepare_embedding_input(text) for text in texts]
+        return [self.prepare_embedding_input(content) for content in contents]
+
+    @property
+    def supports_multimodal(self) -> bool:
+        """Whether this embedder can consume multimodal (image) inputs directly.
+
+        Text-only embedders return False so that multimodal inputs are downgraded
+        to their text parts before being embedded.
+        """
+        return False
 
     @abstractmethod
-    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
-        """Embed single text
+    def embed(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
+        """Embed text or multimodal content.
 
         Args:
-            text: Input text
+            content: Input text, or a list of multimodal content parts such as
+                ``[{"type": "text", "text": "..."}, {"type": "image_url", "image_url": {"url": "..."}}]``
             is_query: Flag to indicate if this is a query embedding
 
         Returns:
@@ -172,17 +231,19 @@ class EmbedderBase(ABC):
         """
         pass
 
-    def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
+    def embed_batch(
+        self, contents: List["EmbeddingInput"], is_query: bool = False
+    ) -> List[EmbedResult]:
         """Batch embedding (default implementation loops, subclasses can override for optimization)
 
         Args:
-            texts: List of texts
+            contents: List of texts or multimodal content parts
             is_query: Flag to indicate if these are query embeddings
 
         Returns:
             List[EmbedResult]: List of embedding results
         """
-        return [self.embed(text, is_query=is_query) for text in texts]
+        return [self.embed(content, is_query=is_query) for content in contents]
 
     def embed_query(self, text: str) -> EmbedResult:
         """Embed query text with explicit retrieval-side semantics."""
@@ -200,22 +261,24 @@ class EmbedderBase(ABC):
         """Batch embed document texts."""
         return self.embed_batch(texts, is_query=False)
 
-    async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
-        """Async embed single text.
+    async def embed_async(
+        self, content: "EmbeddingInput", is_query: bool = False
+    ) -> EmbedResult:
+        """Async embed text or multimodal content.
 
         Subclasses should override this with a non-blocking implementation.
         The default implementation preserves compatibility for test doubles and
         third-party embedders that only implement the sync interface.
         """
-        return self.embed(text, is_query=is_query)
+        return self.embed(content, is_query=is_query)
 
     async def embed_batch_async(
-        self, texts: List[str], is_query: bool = False
+        self, contents: List["EmbeddingInput"], is_query: bool = False
     ) -> List[EmbedResult]:
         """Async batch embedding."""
         results: List[EmbedResult] = []
-        for text in texts:
-            results.append(await self.embed_async(text, is_query=is_query))
+        for content in contents:
+            results.append(await self.embed_async(content, is_query=is_query))
         return results
 
     async def embed_query_async(self, text: str) -> EmbedResult:
@@ -407,11 +470,11 @@ class DenseEmbedderBase(EmbedderBase):
     """
 
     @abstractmethod
-    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
-        """Perform dense embedding on text
+    def embed(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
+        """Perform dense embedding on text or multimodal content
 
         Args:
-            text: Input text
+            content: Input text, or a list of multimodal content parts
             is_query: Flag to indicate if this is a query embedding
 
         Returns:
@@ -440,11 +503,11 @@ class SparseEmbedderBase(EmbedderBase):
     """
 
     @abstractmethod
-    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
-        """Perform sparse embedding on text
+    def embed(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
+        """Perform sparse embedding on text or multimodal content
 
         Args:
-            text: Input text
+            content: Input text, or a list of multimodal content parts
             is_query: Flag to indicate if this is a query embedding
 
         Returns:
@@ -469,11 +532,11 @@ class HybridEmbedderBase(EmbedderBase):
     """
 
     @abstractmethod
-    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
-        """Perform hybrid embedding on text
+    def embed(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
+        """Perform hybrid embedding on text or multimodal content
 
         Args:
-            text: Input text
+            content: Input text, or a list of multimodal content parts
             is_query: Flag to indicate if this is a query embedding
 
         Returns:
@@ -520,10 +583,18 @@ class CompositeHybridEmbedder(HybridEmbedderBase):
         self.dense_embedder = dense_embedder
         self.sparse_embedder = sparse_embedder
 
-    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
+    @property
+    def supports_multimodal(self) -> bool:
+        """Supports multimodal input only if both sub-embedders do."""
+        return (
+            self.dense_embedder.supports_multimodal
+            and self.sparse_embedder.supports_multimodal
+        )
+
+    def embed(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
         """Combine results from both embedders"""
-        dense_input = self.dense_embedder.prepare_embedding_input(text)
-        sparse_input = self.sparse_embedder.prepare_embedding_input(text)
+        dense_input = self.dense_embedder.prepare_embedding_input(content)
+        sparse_input = self.sparse_embedder.prepare_embedding_input(content)
         dense_res = self.dense_embedder.embed(dense_input, is_query=is_query)
         sparse_res = self.sparse_embedder.embed(sparse_input, is_query=is_query)
 
@@ -531,10 +602,12 @@ class CompositeHybridEmbedder(HybridEmbedderBase):
             dense_vector=dense_res.dense_vector, sparse_vector=sparse_res.sparse_vector
         )
 
-    def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
+    def embed_batch(
+        self, contents: List["EmbeddingInput"], is_query: bool = False
+    ) -> List[EmbedResult]:
         """Combine batch results"""
-        dense_inputs = self.dense_embedder.prepare_embedding_inputs(texts)
-        sparse_inputs = self.sparse_embedder.prepare_embedding_inputs(texts)
+        dense_inputs = self.dense_embedder.prepare_embedding_inputs(contents)
+        sparse_inputs = self.sparse_embedder.prepare_embedding_inputs(contents)
         dense_results = self.dense_embedder.embed_batch(dense_inputs, is_query=is_query)
         sparse_results = self.sparse_embedder.embed_batch(sparse_inputs, is_query=is_query)
 
@@ -543,9 +616,11 @@ class CompositeHybridEmbedder(HybridEmbedderBase):
             for d, s in zip(dense_results, sparse_results, strict=True)
         ]
 
-    async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
-        dense_input = self.dense_embedder.prepare_embedding_input(text)
-        sparse_input = self.sparse_embedder.prepare_embedding_input(text)
+    async def embed_async(
+        self, content: "EmbeddingInput", is_query: bool = False
+    ) -> EmbedResult:
+        dense_input = self.dense_embedder.prepare_embedding_input(content)
+        sparse_input = self.sparse_embedder.prepare_embedding_input(content)
         dense_res, sparse_res = await asyncio.gather(
             self.dense_embedder.embed_async(dense_input, is_query=is_query),
             self.sparse_embedder.embed_async(sparse_input, is_query=is_query),
@@ -555,10 +630,10 @@ class CompositeHybridEmbedder(HybridEmbedderBase):
         )
 
     async def embed_batch_async(
-        self, texts: List[str], is_query: bool = False
+        self, contents: List["EmbeddingInput"], is_query: bool = False
     ) -> List[EmbedResult]:
-        dense_inputs = self.dense_embedder.prepare_embedding_inputs(texts)
-        sparse_inputs = self.sparse_embedder.prepare_embedding_inputs(texts)
+        dense_inputs = self.dense_embedder.prepare_embedding_inputs(contents)
+        sparse_inputs = self.sparse_embedder.prepare_embedding_inputs(contents)
         dense_results, sparse_results = await asyncio.gather(
             self.dense_embedder.embed_batch_async(dense_inputs, is_query=is_query),
             self.sparse_embedder.embed_batch_async(sparse_inputs, is_query=is_query),

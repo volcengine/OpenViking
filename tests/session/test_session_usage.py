@@ -30,7 +30,7 @@ class TestUsed:
         """Test recording used skill"""
         session.add_message("user", [TextPart("Test message")])
 
-        session.used(skill={"uri": "viking://agent/skills/search", "name": "search_skill"})
+        session.used(skill={"uri": "viking://user/skills/search", "name": "search_skill"})
 
         assert len(session.usage_records) > 0
 
@@ -40,7 +40,7 @@ class TestUsed:
 
         session.used(
             contexts=["viking://user/test/resources/doc.md"],
-            skill={"uri": "viking://agent/skills/analyze", "name": "analyze_skill"},
+            skill={"uri": "viking://user/skills/analyze", "name": "analyze_skill"},
         )
 
         assert len(session.usage_records) > 0

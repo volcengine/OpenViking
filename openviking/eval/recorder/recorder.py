@@ -340,13 +340,14 @@ def create_recording_agfs_client(agfs_client: Any, record_file: Optional[str] = 
 
     Usage:
         from openviking.eval.recorder import init_recorder, create_recording_agfs_client
-        from openviking.pyagfs import AGFSClient
+        from openviking.pyagfs import get_binding_client
 
         # Initialize recorder
         init_recorder(enabled=True)
 
         # Create recording client
-        base_client = AGFSClient(api_base_url="http://localhost:1833")
+        BindingClient, _ = get_binding_client()
+        base_client = BindingClient()
         recording_client = create_recording_agfs_client(base_client)
 
         # Use in VikingFS

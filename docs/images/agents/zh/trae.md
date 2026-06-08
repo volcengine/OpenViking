@@ -1,4 +1,3 @@
-
 ## 一、适用场景
 
 使用 OpenViking 实现：
@@ -12,7 +11,6 @@
 - 记忆历史决策与\&\#34;踩坑笔记\&\#34;（为什么不用 X、上次用 Y 出过什么问题）
 
 - 个人长期任务目标 / OKR / Roadmap 沉淀，Agent 在规划任务时自动对齐
-
 
 ## 二、Trae 接入 OpenViking 操作步骤
 
@@ -68,6 +66,7 @@
 接入后建议通过两个简单 query 快速验证 MCP 是否正常工作。在 Trae 对话框中依次输入：
 
 **① ****`ov ls`** — 列出 OpenViking 根目录内容，确认连接畅通、可正确返回目录结构：
+
 ```bash
 ov ls
 ```
@@ -75,14 +74,14 @@ ov ls
 ![运行 ov ls 验证连接](https://docs.openviking.net/agents/image/trae/08-ov-ls.jpg)
 
 **② ****`ov health`** — 调用 health 工具，确认 OpenViking 服务端状态与当前用户身份：
+
 ```bash
 ov health
 ```
 
 ![运行 ov health 验证服务状态](https://docs.openviking.net/agents/image/trae/09-ov-health.jpg)
 
-### 步骤：验收标准
-`ov ls` 能返回 `agent / resources / session / user` 等目录；`ov health` 返回 `service initialized` 与当前用户名，即表示接入成功。
+**验收标准**：`ov ls` 能返回 `agent / resources / session / user` 等目录；`ov health` 返回 `service initialized` 与当前用户名，即表示接入成功。
 
 
 
@@ -96,6 +95,7 @@ ov health
 |`headers\.Authorization`|是|格式 `Bearer \&lt;API Key\&gt;`，来源见第二章|
 
 ---
+
 
 ## 四、常见问题（FAQ）
 

@@ -1,8 +1,6 @@
-# SDK Integration
-
 ## Step 1: Install OpenViking
 
-Install or upgrade the Python package:
+Run the following command to install OpenViking:
 
 ```bash
 pip install openviking --upgrade --force-reinstall
@@ -10,33 +8,32 @@ pip install openviking --upgrade --force-reinstall
 
 ## Step 2: Initialize the client
 
+Refer to the standard write example from GitHub and fill in the API Key and domain automatically:
+
 ```python
 from openviking.client import SyncHTTPClient
 
 url = "https://api.vikingdb.cn-beijing.volces.com/openviking"
-api_key = "<your-api-key>"
-agent_id = "<your-agent-id>"
+api_key = "[TODO]your-api-key"
 
 client = SyncHTTPClient(
     url=url,
     api_key=api_key,
-    agent_id=agent_id,
     timeout=120.0,
 )
 client.initialize()
 ```
 
-## Step 3: Choose an API Key
+## Step 3: Add a resource
 
-Copy the API Key shown in the OpenViking console and pass it to the SDK client.
-
-## Step 4: Add a resource
+Refer to the standard resource write example from GitHub and fill in the API Key and domain automatically:
 
 ```python
-file_path = "<your-file-path>"
-resource_to = "viking://resources"
-reason = "External API documentation"
+file_path = "[TODO]your-file-path"
+resource_to = "[TODO]your-resource-path"  # e.g. viking://resources
+reason = "[TODO]your-reason"  # e.g. External API documentation
 
+# Reuse the initialized client.
 client.add_resource(
     path=file_path,
     to=resource_to,
@@ -44,11 +41,14 @@ client.add_resource(
 )
 ```
 
-## Step 5: Add memory
+## Step 4: Add memory
+
+Refer to the memory write example from GitHub and fill in the API Key and domain automatically:
 
 ```python
-text = "I am a developer"
+text = "[TODO]your-message-text"  # e.g. I am a developer
 
+# Reuse the initialized client.
 session = client.create_session()
 session_id = session["session_id"]
 client.add_message(

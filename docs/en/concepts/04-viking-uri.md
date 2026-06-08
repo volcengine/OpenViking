@@ -87,22 +87,19 @@ viking://user/memories/entities/              # Entity memories
 viking://user/memories/events/                # Event memories
 ```
 
-### Agent Data
+### User Skills and Memories
 
 ```
-viking://agent/                               # Agent root
-viking://agent/skills/                        # All skills
-viking://agent/skills/search-web              # Specific skill
-viking://agent/memories/                      # Agent memories
-viking://agent/memories/cases/                # Learned cases
-viking://agent/memories/patterns/             # Learned patterns
-viking://agent/instructions/                  # Agent instructions
+viking://user/skills/                         # Current user's skills
+viking://user/skills/search-web               # Specific skill
+viking://user/memories/                       # Current user's memories
+viking://user/memories/cases/                 # Learned cases
+viking://user/memories/patterns/              # Learned patterns
 ```
 
-The short `viking://user/...` and `viking://agent/...` forms above are
-relative to the current request identity. OpenViking expands them internally to
-explicit namespace paths such as `viking://user/{user_id}/...` and
-`viking://agent/{agent_id}/...` before storage and retrieval.
+The short `viking://user/...` form is relative to the current request identity.
+OpenViking expands it internally to explicit namespace paths such as
+`viking://user/{user_id}/...` before storage and retrieval.
 
 ### Session Data
 
@@ -205,32 +202,13 @@ viking://
 │       ├── entities/             # Each independent
 │       └── events/               # Each independent
 │
-├── agent/{agent_id}/             # Agent root when isolate_agent_scope_by_user = false
-│   ├── skills/                   # Skill definitions
-│   ├── memories/
-│   │   ├── cases/
-│   │   └── patterns/
-│   ├── workspaces/
-│   └── instructions/
-│
-├── agent/{agent_id}/user/{user_id}/   # Agent root when isolate_agent_scope_by_user = true
-│   ├── skills/
-│   ├── memories/
-│   ├── workspaces/
-│   └── instructions/
-│
 └── session/{user_space}/{session_id}/
     ├── messages/
     ├── tools/
     └── history/
 ```
 
-Agent namespace shape is controlled by per-account namespace policy:
-
-- `isolate_agent_scope_by_user = false`: `viking://agent/{agent_id}/...`
-- `isolate_agent_scope_by_user = true`: `viking://agent/{agent_id}/user/{user_id}/...`
-
-`memory.agent_scope_mode` is deprecated and ignored.
+`viking://agent/...` is deprecated and rejected by current namespace resolution.
 
 ## URI Operations
 
@@ -276,7 +254,7 @@ results = client.find(
 # Search only in skills
 results = client.find(
     "web search",
-    target_uri="viking://agent/skills/"
+    target_uri="viking://user/skills/"
 )
 ```
 
@@ -325,8 +303,8 @@ Each directory may contain special files:
 # Add resources only to resources scope
 await client.add_resource(url, to="viking://resources/project/")
 
-# Skills go to agent scope
-await client.add_skill(skill)  # Automatically to viking://agent/skills/
+# Skills go to user scope
+await client.add_skill(skill)  # Automatically to viking://user/skills/
 ```
 
 ## Related Documents

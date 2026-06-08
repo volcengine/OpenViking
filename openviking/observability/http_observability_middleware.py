@@ -685,7 +685,6 @@ def apply_http_metrics_finalize(
             account_id=final_account_id,
             request_id=root_attrs.request_id,
             user_id=root_attrs.user_id,
-            agent_id=root_attrs.agent_id,
             url_path=root_attrs.url_path,
         )
 

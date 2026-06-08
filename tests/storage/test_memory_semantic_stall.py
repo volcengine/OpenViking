@@ -15,6 +15,17 @@ from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 
 
+class _NoopLockContext:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
 def _make_msg(uri="viking://user/memories", context_type="memory", **kwargs):
     """Build a minimal SemanticMsg for testing."""
     defaults = {
@@ -25,7 +36,7 @@ def _make_msg(uri="viking://user/memories", context_type="memory", **kwargs):
         "role": "root",
         "account_id": "acc1",
         "user_id": "usr1",
-        "agent_id": "test-agent",
+        "peer_id": "test-peer",
         "telemetry_id": "",
         "target_uri": "",
         "changes": None,
@@ -198,6 +209,9 @@ async def test_memory_write_error_reports_error():
     fake_fs.ls = AsyncMock(return_value=[{"name": "file1.md", "isDir": False}])
     fake_fs.read_file = AsyncMock(return_value="some content")
     fake_fs.write_file = AsyncMock(side_effect=PermissionError("Permission denied"))
+    fake_fs._uri_to_path = MagicMock(
+        side_effect=lambda uri, ctx=None: f"/local/acc1/{uri.removeprefix('viking://')}"
+    )
 
     msg = _make_msg()
     data = _build_data(msg)
@@ -227,6 +241,7 @@ async def test_memory_write_error_reports_error():
             "openviking.storage.queuefs.semantic_processor.resolve_telemetry",
             return_value=None,
         ),
+        patch("openviking.storage.transaction.LockContext", _NoopLockContext),
         patch.object(
             processor,
             "_generate_single_file_summary",

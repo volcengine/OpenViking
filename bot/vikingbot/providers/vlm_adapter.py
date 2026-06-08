@@ -5,12 +5,21 @@ LLMProvider interface, so that bot.agents.provider / bot.agents.model
 configuration semantics are consistent with openviking server's vlm section.
 """
 
+from collections.abc import AsyncIterator
 from typing import Any
 
 from loguru import logger
 
 from vikingbot.integrations.langfuse import LangfuseClient
-from vikingbot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from vikingbot.providers.base import (
+    LLMProvider,
+    LLMResponse,
+    LLMStreamEvent,
+    ToolCallRequest,
+    build_stream_response,
+    merge_stream_tool_call_delta,
+    stream_delta_value,
+)
 from vikingbot.utils.tracing import get_current_response_id
 
 
@@ -91,6 +100,108 @@ class VLMProviderAdapter(LLMProvider):
                 finish_reason="error",
             )
 
+    async def chat_stream(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        model: str | None = None,
+        max_tokens: int = 4096,
+        temperature: float = 0.7,
+        session_id: str | None = None,
+    ) -> AsyncIterator[LLMStreamEvent]:
+        if getattr(self._vlm, "provider", None) != "volcengine":
+            async for event in super().chat_stream(
+                messages=messages,
+                tools=tools,
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                session_id=session_id,
+            ):
+                yield event
+            return
+
+        async for event in self._chat_stream_volcengine(
+            messages=messages,
+            tools=tools,
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        ):
+            yield event
+
+    async def _chat_stream_volcengine(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+        model: str | None,
+        max_tokens: int,
+        temperature: float,
+    ) -> AsyncIterator[LLMStreamEvent]:
+        kwargs: dict[str, Any] = {
+            "model": model or getattr(self._vlm, "model", None) or self._default_model,
+            "messages": messages,
+            "temperature": getattr(self._vlm, "temperature", temperature),
+            "max_tokens": getattr(self._vlm, "max_tokens", None) or max_tokens,
+            "thinking": {
+                "type": "enabled" if getattr(self._vlm, "thinking", False) else "disabled"
+            },
+            "stream": True,
+        }
+        if tools:
+            kwargs["tools"] = tools
+            kwargs["tool_choice"] = "auto"
+
+        content_parts: list[str] = []
+        reasoning_parts: list[str] = []
+        tool_calls: dict[int, dict[str, Any]] = {}
+        finish_reason = "stop"
+
+        try:
+            client = self._vlm.get_async_client()
+            response = await client.chat.completions.create(**kwargs)
+            async for chunk in response:
+                choices = getattr(chunk, "choices", None) or []
+                if not choices:
+                    continue
+                choice = choices[0]
+                if getattr(choice, "finish_reason", None):
+                    finish_reason = choice.finish_reason or finish_reason
+                delta = getattr(choice, "delta", None)
+                if delta is None:
+                    continue
+
+                reasoning_delta = stream_delta_value(delta, "reasoning_content")
+                if reasoning_delta:
+                    reasoning_parts.append(reasoning_delta)
+                    yield LLMStreamEvent(type="reasoning_delta", content=reasoning_delta)
+
+                content_delta = stream_delta_value(delta, "content")
+                if content_delta:
+                    content_parts.append(content_delta)
+                    yield LLMStreamEvent(type="content_delta", content=content_delta)
+
+                for delta_tool_call in getattr(delta, "tool_calls", None) or []:
+                    merge_stream_tool_call_delta(tool_calls, delta_tool_call)
+
+            yield LLMStreamEvent(
+                type="response",
+                response=build_stream_response(
+                    content="".join(content_parts),
+                    reasoning_content="".join(reasoning_parts),
+                    raw_tool_calls=tool_calls,
+                    finish_reason=finish_reason,
+                ),
+            )
+        except Exception as e:
+            yield LLMStreamEvent(
+                type="response",
+                response=LLMResponse(
+                    content=f"Error calling LLM in VLM Adapter stream: {str(e)}",
+                    finish_reason="error",
+                ),
+            )
+
     def _convert_response(self, result) -> LLMResponse:
         """Convert VLMResponse (or str) to LLMResponse."""
         if isinstance(result, str):
@@ -127,8 +238,7 @@ class VLMProviderAdapter(LLMProvider):
             output_text = llm_response.content or ""
             if llm_response.tool_calls:
                 output_text = (
-                    output_text
-                    or f"[Tool calls: {[tc.name for tc in llm_response.tool_calls]}]"
+                    output_text or f"[Tool calls: {[tc.name for tc in llm_response.tool_calls]}]"
                 )
 
             update_kwargs: dict[str, Any] = {

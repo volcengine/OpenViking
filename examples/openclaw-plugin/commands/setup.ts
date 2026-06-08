@@ -56,6 +56,28 @@ function readCompatRangeFromManifest(): { min: string; max: string } {
 
 const PLUGIN_VERSION = readPluginVersion();
 const { min: COMPATIBLE_SERVER_MIN, max: COMPATIBLE_SERVER_MAX } = readCompatRangeFromManifest();
+const CONFIG_KEYS_TO_PRESERVE = [
+  "targetUri",
+  "timeoutMs",
+  "autoCapture",
+  "captureMode",
+  "captureMaxLength",
+  "autoRecall",
+  "recallResources",
+  "recallLimit",
+  "recallScoreThreshold",
+  "recallMaxInjectedChars",
+  "recallMaxContentChars",
+  "recallPreferAbstract",
+  "recallTokenBudget",
+  "commitTokenThreshold",
+  "commitKeepRecentCount",
+  "bypassSessionPatterns",
+  "emitStandardDiagnostics",
+  "logFindRequests",
+] as const;
+
+type PeerRole = "none" | "assistant" | "person";
 
 type CommandProgram = {
   command: (name: string) => CommandBuilder;
@@ -81,29 +103,91 @@ function maskKey(key: string): string {
   return `${key.slice(0, 4)}...${key.slice(-4)}`;
 }
 
-function isValidAgentPrefixInput(value: string): boolean {
+function isValidPeerPrefixInput(value: string): boolean {
   const trimmed = value.trim();
   return !trimmed || /^[a-zA-Z0-9_-]+$/.test(trimmed);
 }
 
-async function askAgentPrefix(
+function normalizePeerRole(value: unknown): PeerRole | undefined {
+  if (typeof value !== "string") return undefined;
+  const role = value.trim().toLowerCase();
+  if (role === "none" || role === "assistant" || role === "person") return role;
+  return undefined;
+}
+
+function resolveExistingPeerRole(existing: Record<string, unknown> | null | undefined): PeerRole {
+  const explicit = normalizePeerRole(existing?.peer_role);
+  if (explicit) return explicit;
+  return "none";
+}
+
+function resolveExistingPeerPrefix(existing: Record<string, unknown> | null | undefined): string {
+  const value = existing?.peer_prefix;
+  if (typeof value !== "string" || !value.trim()) return "";
+  const trimmed = value.trim();
+  return trimmed === "default" ? "" : trimmed;
+}
+
+function resolveSetupPeerRole(value: unknown): PeerRole {
+  if (value === undefined) return "none";
+  const role = normalizePeerRole(value);
+  if (role) return role;
+  throw new Error('peer_role must be "none", "assistant", or "person"');
+}
+
+function preserveCurrentConfig(existing: Record<string, unknown> | null | undefined) {
+  const config: Record<string, unknown> = {};
+  if (!existing) {
+    return config;
+  }
+  for (const key of CONFIG_KEYS_TO_PRESERVE) {
+    if (key in existing) {
+      config[key] = existing[key];
+    }
+  }
+  return config;
+}
+
+async function askPeerRole(
+  zh: boolean,
+  q: (prompt: string, def?: string) => Promise<string>,
+  defaultValue: PeerRole,
+): Promise<PeerRole> {
+  while (true) {
+    const value = await q(
+      tr(zh, "Peer Role (none/assistant/person)", "Peer Role（none/assistant/person）"),
+      defaultValue,
+    );
+    const role = normalizePeerRole(value);
+    if (role) return role;
+    console.log(
+      `  ✗ ${tr(
+        zh,
+        'Peer Role must be "none", "assistant", or "person".',
+        'Peer Role 必须是 "none"、"assistant" 或 "person"。',
+      )}`,
+    );
+  }
+}
+
+async function askPeerPrefix(
   zh: boolean,
   q: (prompt: string, def?: string) => Promise<string>,
   defaultValue: string,
 ): Promise<string> {
   while (true) {
     const value = (await q(
-      tr(zh, "Agent Prefix (optional)", "Agent Prefix（可选）"),
+      tr(zh, "Peer Prefix (optional)", "Peer Prefix（可选）"),
       defaultValue,
     )).trim();
-    if (isValidAgentPrefixInput(value)) {
+    if (isValidPeerPrefixInput(value)) {
       return value;
     }
     console.log(
       `  ✗ ${tr(
         zh,
-        "Agent Prefix may only contain letters, digits, underscores, and hyphens, or be empty.",
-        "Agent Prefix 只能包含字母、数字、下划线和连字符，或留空。",
+        "Peer Prefix may only contain letters, digits, underscores, and hyphens, or be empty.",
+        "Peer Prefix 只能包含字母、数字、下划线和连字符，或留空。",
       )}`,
     );
   }
@@ -366,7 +450,8 @@ type SetupResult = {
     mode: string;
     baseUrl: string;
     apiKey?: string;
-    agent_prefix?: string;
+    peer_role?: PeerRole;
+    peer_prefix?: string;
     accountId?: string;
     userId?: string;
   };
@@ -388,7 +473,8 @@ type StatusResult = {
     mode: string;
     baseUrl: string;
     hasApiKey: boolean;
-    agent_prefix?: string;
+    peer_role: PeerRole;
+    peer_prefix?: string;
     hasAccountId: boolean;
     hasUserId: boolean;
   };
@@ -449,7 +535,8 @@ export function registerSetupCli(api: any): void {
         .option("--zh", "Chinese prompts")
         .option("--base-url <url>", "OpenViking server URL (enables non-interactive mode)")
         .option("--api-key <key>", "API key for authentication")
-        .option("--agent-prefix <prefix>", "Agent routing prefix for namespace isolation")
+        .option("--peer-role <role>", "Peer ID role: none, assistant, or person")
+        .option("--peer-prefix <prefix>", "Prefix for assistant peer_id values")
         .option("--account-id <id>", "Account ID (required for root API keys)")
         .option("--user-id <id>", "User ID (required for root API keys)")
         .option("--allow-offline", "Allow config write even if server is unreachable")
@@ -458,11 +545,11 @@ export function registerSetupCli(api: any): void {
         .action(async (...args: unknown[]) => {
           const options = (args[0] ?? {}) as Record<string, unknown>;
           const {
-            reconfigure, zh: zhOpt, baseUrl, apiKey, agentPrefix,
+            reconfigure, zh: zhOpt, baseUrl, apiKey, peerRole, peerPrefix,
             accountId, userId, allowOffline, forceSlot, json: jsonOpt,
           } = options as {
             reconfigure?: boolean; zh?: boolean; baseUrl?: string;
-            apiKey?: string; agentPrefix?: string; accountId?: string;
+            apiKey?: string; peerRole?: string; peerPrefix?: string; accountId?: string;
             userId?: string; allowOffline?: boolean; forceSlot?: boolean;
             json?: boolean;
           };
@@ -475,7 +562,8 @@ export function registerSetupCli(api: any): void {
             const result = await setupNonInteractive(configPath, {
               baseUrl: baseUrl!,
               apiKey,
-              agentPrefix,
+              peerRole,
+              peerPrefix,
               accountId,
               userId,
               allowOffline: !!allowOffline,
@@ -533,7 +621,9 @@ export function registerSetupCli(api: any): void {
               console.log(`  mode:    ${existing.mode}`);
               console.log(`  baseUrl: ${existing.baseUrl ?? DEFAULT_REMOTE_URL}`);
               if (existing.apiKey) console.log(`  apiKey:  ${maskKey(String(existing.apiKey))}`);
-              if (existing.agent_prefix) console.log(`  agent_prefix: ${existing.agent_prefix}`);
+              console.log(`  peer_role: ${resolveExistingPeerRole(existing)}`);
+              const existingPeerPrefix = resolveExistingPeerPrefix(existing);
+              if (existingPeerPrefix) console.log(`  peer_prefix: ${existingPeerPrefix}`);
               console.log("");
               console.log(tr(
                 zh,
@@ -651,10 +741,15 @@ async function runRemoteCheck(
 
 async function setupNonInteractive(
   configPath: string,
-  params: { baseUrl: string; apiKey?: string; agentPrefix?: string; accountId?: string; userId?: string; allowOffline?: boolean; forceSlot?: boolean },
+  params: { baseUrl: string; apiKey?: string; peerRole?: string; peerPrefix?: string; accountId?: string; userId?: string; allowOffline?: boolean; forceSlot?: boolean },
 ): Promise<SetupResult> {
   try {
-    const { baseUrl, apiKey, agentPrefix, accountId, userId, allowOffline, forceSlot } = params;
+    const { baseUrl, apiKey, peerPrefix, accountId, userId, allowOffline, forceSlot } = params;
+    const resolvedPeerRole = resolveSetupPeerRole(params.peerRole);
+    const resolvedPeerPrefix = (peerPrefix ?? "").trim();
+    if (!isValidPeerPrefixInput(resolvedPeerPrefix)) {
+      throw new Error("peer_prefix may only contain letters, digits, underscores, and hyphens, or be empty");
+    }
 
     // Phase 1: validate connectivity and key type BEFORE writing config
     const health = await checkServiceHealth(baseUrl, apiKey);
@@ -694,7 +789,8 @@ async function setupNonInteractive(
     // Phase 2: all checks passed (or --allow-offline), write config and activate slot
     const pluginCfg: Record<string, unknown> = { mode: "remote", baseUrl };
     if (apiKey) pluginCfg.apiKey = apiKey;
-    if (agentPrefix) pluginCfg.agent_prefix = agentPrefix;
+    pluginCfg.peer_role = resolvedPeerRole;
+    if (resolvedPeerPrefix) pluginCfg.peer_prefix = resolvedPeerPrefix;
     if (accountId) pluginCfg.accountId = accountId;
     if (userId) pluginCfg.userId = userId;
 
@@ -709,7 +805,8 @@ async function setupNonInteractive(
           mode: "remote",
           baseUrl,
           ...(apiKey ? { apiKey: maskKey(apiKey) } : {}),
-          ...(agentPrefix ? { agent_prefix: agentPrefix } : {}),
+          peer_role: resolvedPeerRole,
+          ...(resolvedPeerPrefix ? { peer_prefix: resolvedPeerPrefix } : {}),
           ...(accountId ? { accountId } : {}),
           ...(userId ? { userId } : {}),
         },
@@ -727,7 +824,8 @@ async function setupNonInteractive(
         mode: "remote",
         baseUrl,
         ...(apiKey ? { apiKey: maskKey(apiKey) } : {}),
-        ...(agentPrefix ? { agent_prefix: agentPrefix } : {}),
+        peer_role: resolvedPeerRole,
+        ...(resolvedPeerPrefix ? { peer_prefix: resolvedPeerPrefix } : {}),
         ...(accountId ? { accountId } : {}),
         ...(userId ? { userId } : {}),
       },
@@ -754,7 +852,8 @@ function printSetupResult(zh: boolean, result: SetupResult): void {
       console.log(`  mode:    ${result.config.mode}`);
       console.log(`  baseUrl: ${result.config.baseUrl}`);
       if (result.config.apiKey) console.log(`  apiKey:  ${result.config.apiKey}`);
-      if (result.config.agent_prefix) console.log(`  agent_prefix: ${result.config.agent_prefix}`);
+      console.log(`  peer_role: ${result.config.peer_role ?? "none"}`);
+      if (result.config.peer_prefix) console.log(`  peer_prefix: ${result.config.peer_prefix}`);
       if (result.config.accountId) console.log(`  accountId: ${result.config.accountId}`);
       if (result.config.userId) console.log(`  userId:  ${result.config.userId}`);
     }
@@ -798,14 +897,15 @@ async function getStatus(configPath: string): Promise<StatusResult> {
   const health = await checkServiceHealth(baseUrl, apiKey);
   const keyProbe = health.ok ? await probeApiKeyType(baseUrl, apiKey) : undefined;
 
-  const agentPrefix = existing.agent_prefix ?? existing.agentId;
+  const peerPrefix = resolveExistingPeerPrefix(existing);
   return {
     configured: true,
     config: {
       mode: String(existing.mode ?? "remote"),
       baseUrl,
       hasApiKey: !!existing.apiKey,
-      ...(agentPrefix ? { agent_prefix: String(agentPrefix) } : {}),
+      peer_role: resolveExistingPeerRole(existing),
+      ...(peerPrefix ? { peer_prefix: peerPrefix } : {}),
       hasAccountId: !!existing.accountId,
       hasUserId: !!existing.userId,
     },
@@ -869,7 +969,8 @@ function printStatus(zh: boolean, result: StatusResult): void {
     console.log(`  mode:      ${result.config.mode}`);
     console.log(`  baseUrl:   ${result.config.baseUrl}`);
     console.log(`  apiKey:    ${result.config.hasApiKey ? "set" : "not set"}`);
-    if (result.config.agent_prefix) console.log(`  agent_prefix: ${result.config.agent_prefix}`);
+    console.log(`  peer_role: ${result.config.peer_role}`);
+    if (result.config.peer_prefix) console.log(`  peer_prefix: ${result.config.peer_prefix}`);
     console.log(`  accountId: ${result.config.hasAccountId ? "set" : "not set"}`);
     console.log(`  userId:    ${result.config.hasUserId ? "set" : "not set"}`);
   }
@@ -904,7 +1005,8 @@ async function setupRemote(
     ? String(existing.baseUrl)
     : DEFAULT_REMOTE_URL;
   const defaultApiKey = existing?.apiKey ? String(existing.apiKey) : "";
-  const defaultAgentPrefix = existing?.agent_prefix ? String(existing.agent_prefix) : "";
+  const defaultPeerRole = resolveExistingPeerRole(existing);
+  const defaultPeerPrefix = resolveExistingPeerPrefix(existing);
 
   const baseUrl = await q(tr(zh, "OpenViking server URL", "OpenViking 服务器地址"), defaultUrl);
   const apiKey = await q(tr(zh, "API Key (optional)", "API Key（可选）"), defaultApiKey);
@@ -927,7 +1029,10 @@ async function setupRemote(
     }
   }
 
-  const agentPrefix = await askAgentPrefix(zh, q, defaultAgentPrefix);
+  const peerRole = await askPeerRole(zh, q, defaultPeerRole);
+  const peerPrefix = peerRole === "assistant"
+    ? await askPeerPrefix(zh, q, defaultPeerPrefix)
+    : "";
 
   console.log("");
 
@@ -948,20 +1053,19 @@ async function setupRemote(
   console.log("");
 
   const pluginCfg: Record<string, unknown> = {
-    ...(existing ?? {}),
+    ...preserveCurrentConfig(existing),
     mode: "remote",
     baseUrl,
   };
   if (apiKey) pluginCfg.apiKey = apiKey;
   else delete pluginCfg.apiKey;
-  if (agentPrefix) pluginCfg.agent_prefix = agentPrefix;
-  else delete pluginCfg.agent_prefix;
+  pluginCfg.peer_role = peerRole;
+  if (peerPrefix) pluginCfg.peer_prefix = peerPrefix;
+  else delete pluginCfg.peer_prefix;
   if (accountId) pluginCfg.accountId = accountId;
   else delete pluginCfg.accountId;
   if (userId) pluginCfg.userId = userId;
   else delete pluginCfg.userId;
-  delete pluginCfg.configPath;
-  delete pluginCfg.port;
 
   writeConfig(configPath, pluginCfg);
 
@@ -971,7 +1075,8 @@ async function setupRemote(
   console.log(`  ${tr(zh, "mode:", "模式:")}    remote`);
   console.log(`  baseUrl: ${baseUrl}`);
   if (apiKey) console.log(`  apiKey:  ${maskKey(apiKey)}`);
-  if (agentPrefix) console.log(`  agent_prefix: ${agentPrefix}`);
+  console.log(`  peer_role: ${peerRole}`);
+  if (peerPrefix) console.log(`  peer_prefix: ${peerPrefix}`);
   if (accountId) console.log(`  accountId: ${accountId}`);
   if (userId) console.log(`  userId:  ${userId}`);
   printSlotResult(zh, slotResult);
@@ -985,7 +1090,7 @@ async function setupRemote(
 
 export const __test__ = {
   isLegacyLocalMode,
-  isValidAgentPrefixInput,
+  isValidPeerPrefixInput,
   activateContextEngineSlot,
   isContextEngineSlotActive,
   getStatus,

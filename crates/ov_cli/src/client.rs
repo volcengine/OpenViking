@@ -19,7 +19,6 @@ impl HttpClient {
     pub fn new(
         base_url: impl Into<String>,
         api_key: Option<String>,
-        agent_id: Option<String>,
         account: Option<String>,
         user: Option<String>,
         timeout_secs: f64,
@@ -30,7 +29,6 @@ impl HttpClient {
             base: BaseClient::new(
                 base_url,
                 api_key,
-                agent_id,
                 account,
                 user,
                 timeout_secs,
@@ -42,10 +40,6 @@ impl HttpClient {
 
     pub fn user_id(&self) -> Option<&str> {
         self.base.user_id()
-    }
-
-    pub fn agent_id(&self) -> Option<&str> {
-        self.base.agent_id()
     }
 
     pub fn api_key(&self) -> Option<&str> {
@@ -146,7 +140,8 @@ impl HttpClient {
         verbose: bool,
         ignore_dirs: Option<&str>,
     ) -> Result<tempfile::NamedTempFile> {
-        self.create_uploader().zip_directory_with_progress(dir_path, verbose, ignore_dirs)
+        self.create_uploader()
+            .zip_directory_with_progress(dir_path, verbose, ignore_dirs)
     }
 
     async fn upload_temp_file(&self, file_path: &Path) -> Result<String> {
@@ -239,6 +234,20 @@ impl HttpClient {
         self.post("/api/v1/system/consistency", &body).await
     }
 
+    pub async fn backend_sync_status(&self, uri: &str) -> Result<serde_json::Value> {
+        let body = serde_json::json!({
+            "uri": uri,
+        });
+        self.post("/api/v1/system/backend/sync-status", &body).await
+    }
+
+    pub async fn backend_sync_retry(&self, uri: &str) -> Result<serde_json::Value> {
+        let body = serde_json::json!({
+            "uri": uri,
+        });
+        self.post("/api/v1/system/backend/sync-retry", &body).await
+    }
+
     /// Download file as raw bytes
     pub async fn get_bytes(&self, uri: &str) -> Result<Vec<u8>> {
         let url = format!("{}/api/v1/content/download", self.base.base_url);
@@ -282,7 +291,7 @@ impl HttpClient {
                 }
             };
 
-            return Err(Error::Api(error_msg));
+            return Err(Error::api(error_msg));
         }
 
         response
@@ -377,6 +386,7 @@ impl HttpClient {
         until: Option<String>,
         time_field: Option<String>,
         level: Option<Vec<i32>>,
+        peer_id: Option<String>,
     ) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "query": query,
@@ -387,6 +397,7 @@ impl HttpClient {
             "until": until,
             "time_field": time_field,
             "level": level,
+            "peer_id": peer_id,
         });
         self.post("/api/v1/search/find", &body).await
     }
@@ -402,6 +413,7 @@ impl HttpClient {
         until: Option<String>,
         time_field: Option<String>,
         level: Option<Vec<i32>>,
+        peer_id: Option<String>,
     ) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "query": query,
@@ -413,6 +425,7 @@ impl HttpClient {
             "until": until,
             "time_field": time_field,
             "level": level,
+            "peer_id": peer_id,
         });
         self.post("/api/v1/search/search", &body).await
     }
@@ -776,7 +789,7 @@ impl HttpClient {
                 }
             };
 
-            return Err(Error::Api(error_msg));
+            return Err(Error::api(error_msg));
         }
 
         let bytes = response
@@ -942,11 +955,6 @@ impl HttpClient {
             params.push(("role".to_string(), r));
         }
         self.get(&path, &params).await
-    }
-
-    pub async fn admin_list_agents(&self, account_id: &str) -> Result<Value> {
-        let path = format!("/api/v1/admin/accounts/{}/agents", account_id);
-        self.get(&path, &[]).await
     }
 
     pub async fn admin_remove_user(&self, account_id: &str, user_id: &str) -> Result<Value> {
@@ -1154,7 +1162,8 @@ impl HttpClient {
     pub async fn trigger_watch_by_uri(&self, to_uri: &str) -> Result<serde_json::Value> {
         let params = vec![("to_uri".to_string(), to_uri.to_string())];
         let empty = serde_json::json!({});
-        self.post_with_query("/api/v1/watches/trigger", &empty, &params).await
+        self.post_with_query("/api/v1/watches/trigger", &empty, &params)
+            .await
     }
 }
 
@@ -1190,7 +1199,6 @@ mod tests {
         let client = BaseClient::new(
             "http://localhost:1933",
             Some("test-key".to_string()),
-            Some("assistant-1".to_string()),
             Some("acme".to_string()),
             Some("alice".to_string()),
             5.0,

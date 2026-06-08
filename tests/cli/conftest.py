@@ -120,7 +120,113 @@ BASE_URL = os.getenv(
     "OPENVIKING_URL",
     os.getenv("SERVER_URL", "https://api.vikingdb.cn-beijing.volces.com/openviking"),
 )
-API_KEY = os.getenv("OPENVIKING_API_KEY", "")
+CONFIGURED_API_KEY = os.getenv("OPENVIKING_API_KEY", "")
+ROOT_API_KEY = os.getenv("OPENVIKING_ROOT_API_KEY", "")
+TRUSTED_IDENTITY_HEADERS = os.getenv("OPENVIKING_TRUSTED_IDENTITY_HEADERS", "").lower() in (
+    "1",
+    "true",
+    "yes",
+)
+CLI_ACCOUNT = os.getenv("OPENVIKING_ACCOUNT", "") if TRUSTED_IDENTITY_HEADERS else ""
+CLI_USER = os.getenv("OPENVIKING_USER", "") if TRUSTED_IDENTITY_HEADERS else ""
+
+
+def _admin_headers() -> dict[str, str]:
+    if not ROOT_API_KEY:
+        return {}
+    return {"Authorization": f"Bearer {ROOT_API_KEY}"}
+
+
+def _extract_user_key(users: list[object], user_id: str) -> str:
+    for user in users:
+        if isinstance(user, dict) and user.get("user_id") == user_id:
+            api_key = user.get("api_key")
+            if isinstance(api_key, str):
+                return api_key
+    return ""
+
+
+def _resolve_api_key() -> str:
+    explicit_user_key = os.getenv("OPENVIKING_CLI_TEST_API_KEY") or os.getenv(
+        "OPENVIKING_USER_API_KEY", ""
+    )
+    if explicit_user_key:
+        return explicit_user_key
+    if not ROOT_API_KEY:
+        return CONFIGURED_API_KEY
+
+    account_id = CLI_ACCOUNT or "test-account"
+    user_id = CLI_USER or "test-user"
+    try:
+        list_resp = httpx.get(
+            f"{BASE_URL}/api/v1/admin/accounts/{account_id}/users",
+            headers=_admin_headers(),
+            timeout=10.0,
+        )
+        if list_resp.status_code == 404:
+            create_resp = httpx.post(
+                f"{BASE_URL}/api/v1/admin/accounts",
+                headers=_admin_headers(),
+                json={"account_id": account_id, "admin_user_id": user_id},
+                timeout=10.0,
+            )
+            if create_resp.status_code in (200, 201):
+                user_key = create_resp.json().get("result", {}).get("user_key")
+                if isinstance(user_key, str) and user_key:
+                    return user_key
+            return CONFIGURED_API_KEY
+
+        if list_resp.status_code != 200:
+            return CONFIGURED_API_KEY
+
+        users = list_resp.json().get("result", [])
+        if isinstance(users, list):
+            user_key = _extract_user_key(users, user_id)
+            if user_key:
+                return user_key
+            user_exists = any(
+                (isinstance(user, dict) and user.get("user_id") == user_id)
+                or (isinstance(user, str) and user == user_id)
+                for user in users
+            )
+        else:
+            user_exists = False
+
+        if not user_exists:
+            register_resp = httpx.post(
+                f"{BASE_URL}/api/v1/admin/accounts/{account_id}/users",
+                headers=_admin_headers(),
+                json={"user_id": user_id, "role": "admin"},
+                timeout=10.0,
+            )
+            if register_resp.status_code in (200, 201):
+                user_key = register_resp.json().get("result", {}).get("user_key")
+                if isinstance(user_key, str) and user_key:
+                    return user_key
+            return CONFIGURED_API_KEY
+
+        httpx.put(
+            f"{BASE_URL}/api/v1/admin/accounts/{account_id}/users/{user_id}/role",
+            headers=_admin_headers(),
+            json={"role": "admin"},
+            timeout=10.0,
+        )
+        key_resp = httpx.post(
+            f"{BASE_URL}/api/v1/admin/accounts/{account_id}/users/{user_id}/key",
+            headers=_admin_headers(),
+            json={},
+            timeout=10.0,
+        )
+        if key_resp.status_code == 200:
+            user_key = key_resp.json().get("result", {}).get("user_key")
+            if isinstance(user_key, str) and user_key:
+                return user_key
+    except Exception:
+        pass
+    return CONFIGURED_API_KEY
+
+
+API_KEY = _resolve_api_key()
 
 
 def _resolve_bin():
@@ -164,13 +270,15 @@ def _write_cli_config():
     config = {
         "url": BASE_URL,
         "api_key": API_KEY,
-        "account": "test-account",
-        "user": "test-user",
         "timeout": 120.0,
         "output": "table",
         "echo_command": True,
         "upload": {},
     }
+    if CLI_ACCOUNT:
+        config["account"] = CLI_ACCOUNT
+    if CLI_USER:
+        config["user"] = CLI_USER
     with open(config_path, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
     return config_path
@@ -253,10 +361,6 @@ def _parse_cli_json(stdout):
                 except json.JSONDecodeError:
                     break
     return None
-
-
-CLI_ACCOUNT = os.getenv("OPENVIKING_ACCOUNT", "test-account")
-CLI_USER = os.getenv("OPENVIKING_USER", "test-user")
 
 
 def _inject_global_args(args):

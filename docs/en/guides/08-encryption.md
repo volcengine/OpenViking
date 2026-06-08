@@ -13,6 +13,19 @@ OpenViking provides transparent at-rest data encryption to ensure data security 
 
 See [Data Encryption](../concepts/10-encryption.md) for conceptual explanations.
 
+## Encryption in Multi-Write Storage
+
+Multi-write storage reuses the same transparent encryption model. Encryption still happens inside RAGFS, so the Python SDK, HTTP API, and CLI do not need to handle encryption or decryption directly.
+
+Rules:
+
+- When global `encryption.enabled=true`, the primary backend must be encrypted.
+- Each backup backend may control its own encryption through `encryption.enabled`.
+- Multi-write internal metadata such as `.redirect.json` and `.sync_log.json` follows the primary backend's encryption policy.
+- OpenViking does not expose and does not need public encryption APIs for operating on these internal files.
+
+See the [Multi-Write Storage Guide](./13-multi-write-storage.md) for more multi-write configuration details.
+
 ## Quick Start
 
 ### 1. Initialize Root Key (Local Mode)
@@ -476,4 +489,4 @@ If using encrypted files created with an older OpenViking version, partial reads
 
 - [Data Encryption](../concepts/10-encryption.md) - Encryption concepts
 - [Configuration Guide](./01-configuration.md) - Complete configuration reference
-- [Technical Design](../../design/multi-tenant-file-encryption-desigin.md) - Encryption technical design
+- [Multi-Tenant](../concepts/11-multi-tenant.md) - Account, user, and agent isolation model
