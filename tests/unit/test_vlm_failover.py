@@ -38,7 +38,7 @@ class TestVLMBackupConfig:
 
     def test_recursive_backup_config_not_possible(self):
         """Test that recursive backup configurations are automatically prevented by migration.
-        
+
         With the new multi-credential architecture, when a config with backup is created,
         it gets migrated to credentials format and backup is set to None. This means
         recursive backups are automatically prevented.
@@ -58,7 +58,7 @@ class TestVLMBackupConfig:
         assert backup_config.backup is None
         # And it should have 2 credentials (primary + backup)
         assert len(backup_config.credentials) == 2
-        
+
         # Now creating a config with backup=backup_config works (no recursion)
         # because backup_config.backup is already None
         config = VLMConfig(
@@ -309,9 +309,7 @@ class TestFailoverVLM:
         primary.model = "primary-model"
         primary.provider = "volcengine"
         primary.get_completion_async = AsyncMock(
-            side_effect=Exception(
-                'API Error: 429 {"error":{"code":"AccountQuotaExceeded"}}'
-            )
+            side_effect=Exception('API Error: 429 {"error":{"code":"AccountQuotaExceeded"}}')
         )
 
         backup = Mock()
@@ -334,23 +332,17 @@ class TestFailoverVLM:
         primary.model = "primary-model"
         primary.provider = "volcengine"
         primary.get_vision_completion_async = AsyncMock(
-            side_effect=Exception(
-                'API Error: 429 {"error":{"code":"AccountQuotaExceeded"}}'
-            )
+            side_effect=Exception('API Error: 429 {"error":{"code":"AccountQuotaExceeded"}}')
         )
 
         backup = Mock()
         backup.model = "backup-model"
         backup.provider = "openai"
-        backup.get_vision_completion_async = AsyncMock(
-            return_value="backup async vision response"
-        )
+        backup.get_vision_completion_async = AsyncMock(return_value="backup async vision response")
 
         failover = FailoverVLM(primary, backup)
 
-        result = await failover.get_vision_completion_async(
-            prompt="describe", images=["test.jpg"]
-        )
+        result = await failover.get_vision_completion_async(prompt="describe", images=["test.jpg"])
 
         assert result == "backup async vision response"
 
@@ -619,10 +611,12 @@ class TestFailoverVLMAutomaticFailback:
         primary = Mock()
         primary.model = "primary-model"
         primary.provider = "volcengine"
-        primary.get_completion_async = AsyncMock(side_effect=[
-            Exception("quota exceeded"),
-            "primary async is back!",
-        ])
+        primary.get_completion_async = AsyncMock(
+            side_effect=[
+                Exception("quota exceeded"),
+                "primary async is back!",
+            ]
+        )
 
         backup = Mock()
         backup.model = "backup-model"

@@ -17,9 +17,7 @@ class EmbeddingCredential(BaseModel):
     sk: Optional[str] = Field(default=None, description="Access Key Secret for VikingDB API")
     region: Optional[str] = Field(default=None, description="Region for VikingDB API")
     host: Optional[str] = Field(default=None, description="Host for VikingDB API")
-    extra_headers: Optional[dict[str, str]] = Field(
-        default=None, description="Extra HTTP headers"
-    )
+    extra_headers: Optional[dict[str, str]] = Field(default=None, description="Extra HTTP headers")
     encoding_format: Optional[Literal["float", "base64"]] = Field(
         default=None, description="Wire format for embedding values"
     )
@@ -808,9 +806,7 @@ class EmbeddingConfig(BaseModel):
         provider = self._require_provider(config.provider)
         return self._create_embedder(provider, embedder_type, config)
 
-    def _create_failover_embedder(
-        self, embedder_type: str, config: "EmbeddingModelConfig"
-    ):
+    def _create_failover_embedder(self, embedder_type: str, config: "EmbeddingModelConfig"):
         """Create a FailoverEmbedder with multiple credentials."""
         from openviking.models.embedder import FailoverEmbedder
 

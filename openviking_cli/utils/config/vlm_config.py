@@ -29,9 +29,7 @@ class VLMCredential(BaseModel):
     forward_api_key: Optional[bool] = Field(
         default=None, description="Whether to pass api_key through to LiteLLM"
     )
-    extra_headers: Optional[Dict[str, str]] = Field(
-        default=None, description="Extra HTTP headers"
-    )
+    extra_headers: Optional[Dict[str, str]] = Field(default=None, description="Extra HTTP headers")
     extra_request_body: Optional[Dict[str, Any]] = Field(
         default=None, description="Extra JSON body fields"
     )
@@ -162,7 +160,7 @@ class VLMConfig(BaseModel):
         """Validate configuration completeness and consistency"""
         # Validate recursive backup BEFORE normalizing credentials (which clears backup)
         self._validate_no_recursive_backup()
-        
+
         self._migrate_legacy_config()
         self._normalize_credentials()
 
@@ -174,7 +172,9 @@ class VLMConfig(BaseModel):
                 for i, cred in enumerate(self.credentials):
                     provider_name = cred.provider or self.provider
                     if provider_name == "openai-codex":
-                        has_codex_auth_available = _load_codex_auth_module().has_codex_auth_available
+                        has_codex_auth_available = (
+                            _load_codex_auth_module().has_codex_auth_available
+                        )
                         if not cred.api_key and not has_codex_auth_available():
                             raise ValueError(
                                 f"Credential {i} ({cred.id or 'unnamed'}): requires Codex OAuth credentials in ~/.openviking/codex_auth.json"

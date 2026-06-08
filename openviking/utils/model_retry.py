@@ -447,7 +447,9 @@ class OrderedCredentialSwitcher:
                 self._active_idx = min(self._active_idx + 1, self._n)
                 self._last_switch_time = time.monotonic()
                 self._active_request_count = 0
-                logger.warning(f"Credential {idx} failed with unknown error class: {error_class}, advancing to {self._active_idx}")
+                logger.warning(
+                    f"Credential {idx} failed with unknown error class: {error_class}, advancing to {self._active_idx}"
+                )
             return True
 
     @property
