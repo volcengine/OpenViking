@@ -58,7 +58,7 @@ env vars. Override any of these by exporting before sourcing:
 
 The tau2 **user simulator** talks to an OpenAI-compatible endpoint — set `ARK_API_KEY` (e.g.
 Doubao through volcengine ARK) before sourcing, or the simulator will fail. The user-simulator
-model is configured in [`tau2_env/tau2_environment.py`](tau2_env/tau2_environment.py).
+model is configured in [`../common/tau2_env/tau2_environment.py`](../common/tau2_env/tau2_environment.py).
 
 > Note: the sibling `llm/` harness ([`../llm/README.md`](../llm/README.md)) pins a tau2-bench ref
 > with a confirmation-aware user-simulator prompt (sierra-research/tau2-bench#297). Set
@@ -271,7 +271,7 @@ runtime identity, so each domain reads and writes `viking://user/<domain_user>/.
 - `setup_env.sh` — environment setup (PYTHONPATH, tau2 data root, simulator LLM)
 - `run_full_test.sh` — full pipeline for one epoch (run → eval → commit)
 - `run_airline_2epochs.sh` — multi-epoch example (cold start → memory-augmented epochs)
-- `tau2_env/` — tau2 environment integration (`tau2_environment.py`, `tau2_tool_provider.py`)
+- `../common/tau2_env/` — tau2 environment integration (`tau2_environment.py`, `tau2_tool_provider.py`)
 - `scripts/`
   - `provision_openviking_user.py` — create/refresh a benchmark user and write a user-key config
   - `vikingbot_tau2_runner.py` — runs a single tau2 task through the VikingBot agent loop

@@ -12,25 +12,13 @@ from openviking.message import Message, TextPart
 from openviking.session.train import Case, ExecutionContext, ExperienceSet, Rollout
 
 
-def _ensure_vikingbot_path() -> None:
-    """Make benchmark/tau2/vikingbot importable for direct script execution."""
-
-    import sys
-
-    vikingbot_root = Path(__file__).resolve().parents[1] / "vikingbot"
-    if vikingbot_root.exists() and str(vikingbot_root) not in sys.path:
-        sys.path.insert(0, str(vikingbot_root))
-
-
 def _tool_provider_cls():
-    _ensure_vikingbot_path()
-    from tau2_env.tau2_tool_provider import Tau2BenchToolProvider
+    from benchmark.tau2.common.tau2_env.tau2_tool_provider import Tau2BenchToolProvider
 
     return Tau2BenchToolProvider
 
 
 def _vikingbot_imports() -> dict[str, Any]:
-    _ensure_vikingbot_path()
     try:
         from vikingbot.agent.loop import AgentLoop
         from vikingbot.agent.tools.base import Tool

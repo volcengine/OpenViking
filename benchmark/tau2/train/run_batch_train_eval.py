@@ -15,7 +15,7 @@ if str(REPO_ROOT) not in sys.path:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run tau2 batch policy train/eval")
-    parser.add_argument("--domain", required=True, help="Tau2 domain, e.g. airline/telecom")
+    parser.add_argument("--domain", default="airline", help="Tau2 domain. Default: airline")
     parser.add_argument("--epochs", type=int, default=1, help="Training epochs (default: 1)")
     parser.add_argument(
         "--batch-size",

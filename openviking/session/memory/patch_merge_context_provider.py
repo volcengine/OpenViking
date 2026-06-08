@@ -86,6 +86,12 @@ You are given original memory files and structured memory-file field diffs. Merg
 Do not call tools. Output JSON only.
 
 All memory content must be written in {output_language}.
+
+Reconcile independent extraction patch proposals: merge duplicate/overlapping
+memories into one canonical file patch, and keep distinct memories separate.
+Normalize URI/path variants for any directory/filename field; singular/plural
+path terms are equivalent (activity/activities, pet/pets). If a loser URI is an
+existing file, put it in delete_uris; if it is only a new proposal, omit it.
 """
 
     def get_tools(self) -> list[str]:

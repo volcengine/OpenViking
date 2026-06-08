@@ -185,3 +185,21 @@ def test_patch_merge_context_provider_get_memory_schema_raises_for_missing_type(
 
     with pytest.raises(ValueError, match="Memory schema not found or disabled: missing"):
         provider.get_memory_schemas(ctx=None)
+
+
+def test_patch_merge_context_provider_instruction_mentions_path_field_normalization():
+    provider = PatchMergeContextProvider(
+        memory_type="entities",
+        required_file_uris=[],
+        patches=[],
+    )
+
+    instruction = provider.instruction()
+
+    assert "independent extraction patch proposals" in instruction
+    assert "merge duplicate/overlapping\nmemories into one canonical file patch" in instruction
+    assert "any directory/filename field" in instruction
+    assert "singular/plural\npath terms are equivalent" in instruction
+    assert "put it in delete_uris" in instruction
+    assert "activity/activities" in instruction
+    assert "pet/pets" in instruction

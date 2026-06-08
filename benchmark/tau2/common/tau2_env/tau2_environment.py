@@ -89,8 +89,8 @@ class Tau2BenchEnv:
             obs, reward, terminated, truncated, info = self.env.step(json.dumps(action))
 
         if "tool: " in obs:
-            obs = obs.lstrip("tool: ")
+            obs = obs.removeprefix("tool: ")
         if "user: " in obs:
-            obs = obs.lstrip("user: ")
+            obs = obs.removeprefix("user: ")
         self.terminated = terminated
         return obs
