@@ -32,6 +32,8 @@
 #![warn(missing_docs)]
 #![warn(clippy::all)]
 
+#[cfg(feature = "cache")]
+pub mod cache;
 pub mod core;
 pub mod plugins;
 pub mod server;
