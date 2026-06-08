@@ -25,11 +25,13 @@ class MemoryConfig(BaseModel):
         ),
     )
     v2_lock_max_retries: int = Field(
-        default=0,
+        default=300,
         ge=0,
         description=(
             "Maximum retries for SessionCompressorV2 memory lock acquisition. "
-            "0 means unlimited retries."
+            "Default 300 (~60s at the default 0.2s v2_lock_retry_interval_seconds) so a stuck "
+            "lock fails fast instead of spinning forever. Set to 0 to explicitly opt into "
+            "unlimited retries."
         ),
     )
     agent_memory_enabled: bool = Field(
