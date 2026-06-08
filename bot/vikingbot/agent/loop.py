@@ -641,6 +641,7 @@ class AgentLoop:
         sender_id: str | None = None,
         ov_tools_enable: bool = True,
         memory_user_ids: list[str] | None = None,
+        memory_peer_ids: list[str] | None = None,
         disabled_tools: list[str] | None = None,
         openviking_connection: dict[str, Any] | None = None,
     ) -> tuple[str | None, str | None, list[dict], dict[str, int], int]:
@@ -653,6 +654,7 @@ class AgentLoop:
             publish_events: Whether to publish ITERATION/REASONING/TOOL_CALL events to the bus
             ov_tools_enable: Whether to enable OpenViking tools for this session
             memory_user_ids: List of user IDs for memory retrieval
+            memory_peer_ids: List of peer IDs for memory retrieval
             disabled_tools: Tool names to hide from the model for this request
             openviking_connection: Request-scoped OpenViking identity for tools
 
@@ -777,6 +779,7 @@ class AgentLoop:
                         sandbox_manager=self.sandbox_manager,
                         sender_id=sender_id,
                         memory_user_ids=memory_user_ids,
+                        memory_peer_ids=memory_peer_ids,
                         openviking_connection=openviking_connection,
                     )
                     tool_execute_duration = (time.time() - tool_execute_start_time) * 1000
@@ -1115,6 +1118,7 @@ class AgentLoop:
                     sender_id=msg.sender_id,
                     ov_tools_enable=ov_tools_enable,
                     memory_user_ids=memory_user,
+                    memory_peer_ids=memory_user,
                     disabled_tools=disabled_tools,
                     openviking_connection=openviking_connection,
                 )

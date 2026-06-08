@@ -2,7 +2,7 @@
 
 This guide helps you install the OpenViking CLI, configure it, and verify that it can connect to OpenViking.
 
-`ov` is the client CLI. It connects to an existing OpenViking server or to VolcEngine Cloud. It does not replace server setup. If you still need to install or start a self-managed server, follow the [Quick Start](02-quickstart.md) or the [Server Mode guide](03-quickstart-server.md) first.
+`ov` is the client CLI. It connects to an existing OpenViking server or to OpenViking Service (VolcEngine Cloud). It does not replace server setup. If you still need to install or start a custom OpenViking server, follow the [Quick Start](02-quickstart.md) or the [Server Mode guide](03-quickstart-server.md) first.
 
 Use this page in either of two ways:
 
@@ -27,9 +27,9 @@ Choose the OpenViking target before running setup commands.
 
 Agents should ask the user which target they want unless it has already been specified. Existing configs, active configs, local files, default ports, and running services can inform follow-up questions, but they are not consent for the agent to choose a target, switch or replace configs, probe local services, start servers, or write data.
 
-### VolcEngine Cloud
+### OpenViking Service (VolcEngine Cloud)
 
-Choose this when you want OpenViking hosted on VolcEngine Cloud.
+Choose this when you want OpenViking hosted as a managed service on VolcEngine Cloud.
 
 - Server endpoint used by `ov`: `https://api.vikingdb.cn-beijing.volces.com/openviking`
 - Console page for API keys: https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing
@@ -37,21 +37,21 @@ Choose this when you want OpenViking hosted on VolcEngine Cloud.
 - API key is required.
 - Standard setup only needs the API key. Do not ask for `--account` or `--user` unless the user's administrator specifically provides identity override values.
 
-### Remote Self-Managed
+### Remote Custom
 
-Choose this when you connect to a self-managed OpenViking server hosted somewhere other than the current machine.
+Choose this when you connect to a custom OpenViking server hosted somewhere other than the current machine.
 
 - Server URL is provided by the user or server administrator.
 - API key may be required.
 - Root-key-only configs require `--account` and `--user`.
 
-### Local Self-Managed
+### Local Custom
 
-Choose this only when the user wants to connect to a self-managed OpenViking server on the current machine.
+Choose this only when the user wants to connect to a custom OpenViking server on the current machine.
 
 - Default local URL: `http://127.0.0.1:1933`
 - API key is usually not needed for a local unauthenticated server.
-- Agents should not probe local ports, curl local health endpoints, or start server commands unless the user chose local self-managed.
+- Agents should not probe local ports, curl local health endpoints, or start server commands unless the user chose local custom setup.
 
 ## Before You Start
 
@@ -61,8 +61,8 @@ You need:
   - Node.js and npm for the standalone `@openviking/cli` package, or
   - Python tooling if you install the full `openviking` package.
 - A reachable OpenViking target:
-  - VolcEngine Cloud, or
-  - a self-managed OpenViking server.
+  - OpenViking Service (VolcEngine Cloud), or
+  - a custom OpenViking server.
 - An API key if your target requires authentication.
 
 API keys are sensitive. Prefer entering them through the interactive `ov config` prompt when you configure `ov` yourself. Only provide API keys to an agent through a channel you intentionally trust. The agent should pass the key through stdin and must not put it in shell commands, logs, long-term memory, or raw config output. Use an environment variable only when the key is already present in the shell environment.
@@ -133,7 +133,7 @@ ov config
 Then choose:
 
 1. `Add config`
-2. `VolcEngine Cloud` or `Self-Managed`
+2. `OpenViking Service (VolcEngine Cloud)` or `Custom`
 3. A config name, or leave it empty to generate one
 4. The required URL and API key values for the target you chose above
 5. Save the config after validation
@@ -154,7 +154,7 @@ Use this path when an agent is setting up `ov` for a user. The agent should read
 
 ### Agent Checklist
 
-1. Ask which target the user wants unless it has already been specified: VolcEngine Cloud, remote self-managed, or local self-managed.
+1. Ask which target the user wants unless it has already been specified: OpenViking Service (VolcEngine Cloud), remote custom, or local custom.
 2. Do not infer the intended setup from existing configs, active configs, local files, default ports, or running services.
 3. Ask before switching configs, replacing configs, probing local services, starting servers, or writing data.
 4. Run `ov --help`, `ov config --help`, and the relevant config subcommand help before choosing commands.
@@ -174,8 +174,8 @@ Run:
 ov --help
 ov config --help
 ov config add --help
-ov config add cloud --help
-ov config add self-managed --help
+ov config add ov-service --help
+ov config add custom --help
 ov config edit --help
 ```
 
@@ -227,7 +227,7 @@ ov config list -o json
 The list output shape is:
 
 ```json
-{"status":"ok","result":[{"name":"<CONFIG-NAME>","kind":"VolcEngine Cloud","url":"https://api.vikingdb.cn-beijing.volces.com/openviking","active":true}]}
+{"status":"ok","result":[{"name":"<CONFIG-NAME>","kind":"OpenViking Service","url":"https://api.vikingdb.cn-beijing.volces.com/openviking","active":true}]}
 ```
 
 For an existence check, inspect `result[].name`. To decide whether a config already needs switching, inspect the matching entry's `active` flag.
@@ -240,72 +240,72 @@ ov config switch <CONFIG-NAME> -o json
 
 Then run the verification commands.
 
-### Add VolcEngine Cloud
+### Add OpenViking Service
 
 If the agent already holds the API key through a trusted channel, run:
 
 ```bash
-ov config add cloud --name <CONFIG-NAME> --api-key-stdin --activate -o json
+ov config add ov-service --name <CONFIG-NAME> --api-key-stdin --activate -o json
 ```
 
 A shell pipe has this shape:
 
 ```bash
-printf '%s' "$API_KEY" | ov config add cloud --name <CONFIG-NAME> --api-key-stdin --activate -o json
+printf '%s' "$API_KEY" | ov config add ov-service --name <CONFIG-NAME> --api-key-stdin --activate -o json
 ```
 
 `$API_KEY` stands for a trusted runtime secret source, not the literal key. Use stdin when the agent can supply the key without putting it in the command text, shell history, logs, or a long-lived exported environment variable.
 
-Write only the API key bytes to stdin. Do not place the key in the shell command. This writes a VolcEngine Cloud config using the fixed endpoint `https://api.vikingdb.cn-beijing.volces.com/openviking`. The `cloud` target does not take a custom server URL.
+Write only the API key bytes to stdin. Do not place the key in the shell command. This writes an OpenViking Service config using the fixed endpoint `https://api.vikingdb.cn-beijing.volces.com/openviking`. The `ov-service` target does not take a custom server URL.
 
 Use an environment variable only if it already exists in the shell:
 
 ```bash
-ov config add cloud --name <CONFIG-NAME> --api-key-env <API-KEY-ENV-VAR> --activate -o json
+ov config add ov-service --name <CONFIG-NAME> --api-key-env <API-KEY-ENV-VAR> --activate -o json
 ```
 
-Do not pass `--account` or `--user` for standard VolcEngine Cloud setup. Use them only when the user or their OpenViking administrator provides identity override values.
+Do not pass `--account` or `--user` for standard OpenViking Service setup. Use them only when the user or their OpenViking administrator provides identity override values.
 
-### Add a Local Self-Managed Server
+### Add a Local Custom Server
 
-Use this path only after the user chooses local self-managed.
+Use this path only after the user chooses local custom setup.
 
 For a local unauthenticated server:
 
 ```bash
-ov config add self-managed --name <CONFIG-NAME> --url http://127.0.0.1:1933 --activate -o json
+ov config add custom --name <CONFIG-NAME> --url http://127.0.0.1:1933 --activate -o json
 ```
 
 If the local server is not running, guide the user to start it first. See the [Server Mode guide](03-quickstart-server.md).
 
-### Add a Remote Self-Managed Server
+### Add a Remote Custom Server
 
-For a hosted self-managed server with a normal API key:
+For a hosted custom server with a normal API key:
 
 ```bash
-ov config add self-managed --name <CONFIG-NAME> --url <REMOTE-OPENVIKING-URL> --api-key-stdin --activate -o json
+ov config add custom --name <CONFIG-NAME> --url <REMOTE-OPENVIKING-URL> --api-key-stdin --activate -o json
 ```
 
 The stdin pipe form is:
 
 ```bash
-printf '%s' "$API_KEY" | ov config add self-managed --name <CONFIG-NAME> --url <REMOTE-OPENVIKING-URL> --api-key-stdin --activate -o json
+printf '%s' "$API_KEY" | ov config add custom --name <CONFIG-NAME> --url <REMOTE-OPENVIKING-URL> --api-key-stdin --activate -o json
 ```
 
 Write the API key to stdin. If the key is already in the shell environment, use `--api-key-env <API-KEY-ENV-VAR>` instead.
 
-For a self-managed server where the user gives you only a root API key, include the target account and user:
+For a custom server where the user gives you only a root API key, include the target account and user:
 
 ```bash
-ov config add self-managed --name <CONFIG-NAME> --url <REMOTE-OPENVIKING-URL> --root-api-key-stdin --account <ACCOUNT-ID> --user <USER-ID> --activate -o json
+ov config add custom --name <CONFIG-NAME> --url <REMOTE-OPENVIKING-URL> --root-api-key-stdin --account <ACCOUNT-ID> --user <USER-ID> --activate -o json
 ```
 
 Write the root API key to stdin. Root keys require explicit `--account` and `--user` so normal CLI commands know which identity to use.
 
-For a self-managed server where the user has both a user key and a root key, store both in one config:
+For a custom server where the user has both a user key and a root key, store both in one config:
 
 ```bash
-ov config add self-managed --name <CONFIG-NAME> --url <REMOTE-OPENVIKING-URL> --api-key-stdin --root-api-key-env <ROOT-API-KEY-ENV-VAR> --account <ACCOUNT-ID> --user <USER-ID> --activate -o json
+ov config add custom --name <CONFIG-NAME> --url <REMOTE-OPENVIKING-URL> --api-key-stdin --root-api-key-env <ROOT-API-KEY-ENV-VAR> --account <ACCOUNT-ID> --user <USER-ID> --activate -o json
 ```
 
 This keeps normal commands on the user key and lets `--sudo` commands use the root key. Because one command has only one stdin stream, the second key must come from an existing environment variable. If neither key is already available in the environment, use `ov config` and guide the user through the interactive flow.
@@ -332,10 +332,10 @@ ov config edit <CONFIG-NAME> --api-key-stdin --activate -o json
 
 Write the replacement API key to stdin.
 
-Replace a self-managed URL:
+Replace a custom server URL:
 
 ```bash
-ov config edit <CONFIG-NAME> --url <SELF-MANAGED-URL> --activate -o json
+ov config edit <CONFIG-NAME> --url <CUSTOM-OPENVIKING-URL> --activate -o json
 ```
 
 Use `--force` only when you intentionally want to replace an existing saved config name.
@@ -417,7 +417,7 @@ If npm reports a permission error, use your normal Node.js setup policy. Avoid `
 
 ### Local Server Is Not Running
 
-Use this only when the user chose local self-managed setup. Then verify the server:
+Use this only when the user chose local custom setup. Then verify the server:
 
 ```bash
 curl http://127.0.0.1:1933/health
@@ -427,7 +427,7 @@ If it fails, start the server before configuring `ov`. See the [Server Mode guid
 
 ### API Key Validation Fails
 
-Run `ov config` again and edit the config. For VolcEngine Cloud, confirm the key came from the OpenViking console URL above. For self-managed servers, confirm whether the server requires authentication.
+Run `ov config` again and edit the config. For OpenViking Service, confirm the key came from the OpenViking console URL above. For custom servers, confirm whether the server requires authentication.
 
 Agents should not keep retrying unknown keys. Ask the user to confirm the target type, server URL, key type, account, and user.
 

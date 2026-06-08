@@ -162,6 +162,9 @@ class PDFConfig(ParserConfig):
     font_heading_min_delta: float = 1.5  # Minimum font size delta from body text (pt)
     max_heading_levels: int = 4  # Maximum heading levels for font analysis
 
+    # Image extraction configuration
+    image_resolution: int = 300  # Rendering DPI for extracted image regions
+
     def validate(self) -> None:
         """
         Validate configuration.

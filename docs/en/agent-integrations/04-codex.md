@@ -19,6 +19,8 @@ source ~/.openviking/openviking-repo/examples/codex-memory-plugin/setup-helper/w
 codex              # First run: approve hooks once when prompted via /hooks
 ```
 
+> Launch Codex through a custom command? A wrapper script like `codex-custom`, or a multi-word launcher (a base command plus a sub-command) — list it at the installer's "Extra launch commands" step (or pass `OPENVIKING_CODEX_WRAP_EXTRA='codex-custom'`) to inject credentials there too.
+
 <details>
 <summary><b>Manual setup</b></summary>
 
@@ -70,6 +72,8 @@ Additional tuning options (e.g., `OPENVIKING_RECALL_LIMIT`, `OPENVIKING_CAPTURE_
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | `MCP server is not logged in` | `OPENVIKING_API_KEY` not in env at launch | Ensure the `codex()` shell function is sourced and `ovcli.conf` contains a valid `api_key`. |
+| `type codex` shows a path instead of a shell function (wrapper inactive) | The rc wasn't `source`d after install, or you launched from a terminal that didn't load it | Run `source ~/.zshrc` (or `~/.bashrc` on bash), or open a new terminal |
+| Launching via an alias (e.g. `cx`) injects no credentials | The alias *name* was listed in `OPENVIKING_CODEX_WRAP_EXTRA` (alias names are skipped), or the alias's target command isn't wrapped | Wrap the command the alias points to, not the alias: `alias cx=codex` needs nothing; for `alias cx=codex-custom`, add `codex-custom` |
 | `4 hooks need review` | Security review on first launch | Run `/hooks` within Codex and approve the hooks. |
 | `hook (failed) exited with code 1` | Stale placeholders in the plugin cache | Re-run the one-line installer. |
 | Recall returns nothing | Server is unreachable or the URL is incorrect | Check the endpoint: `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` |

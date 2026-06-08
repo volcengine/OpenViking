@@ -141,6 +141,7 @@ class ToolRegistry:
         sandbox_manager: SandboxManager | None = None,
         sender_id: str | None = None,
         memory_user_ids: list[str] | None = None,
+        memory_peer_ids: list[str] | None = None,
         openviking_connection: dict[str, Any] | None = None,
     ) -> str:
         """
@@ -153,6 +154,7 @@ class ToolRegistry:
             sandbox_manager: Sandbox manager for file/shell operations.
             sender_id: Sender id for the current session.
             memory_user_ids: List of user IDs for memory retrieval.
+            memory_peer_ids: List of peer IDs for memory retrieval.
             openviking_connection: Request-scoped OpenViking identity.
 
         Returns:
@@ -170,6 +172,7 @@ class ToolRegistry:
             sandbox_manager=sandbox_manager,
             sender_id=sender_id,
             memory_user_ids=memory_user_ids,
+            memory_peer_ids=memory_peer_ids,
             openviking_connection=openviking_connection,
         )
 

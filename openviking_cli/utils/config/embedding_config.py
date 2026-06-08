@@ -381,6 +381,17 @@ class EmbeddingConfig(BaseModel):
         default="content_only",
         description="Text source for file vectorization: summary_first|summary_only|content_only",
     )
+    image_vectorization: str = Field(
+        default="summary_only",
+        description=(
+            "How IMAGE files are vectorized: "
+            "'summary_only' embeds only the generated text summary (text embedding); "
+            "'image_only' sends the image itself to a multimodal embedder; "
+            "'image_and_summary' sends both the image and its text summary together. "
+            "'image_only' and 'image_and_summary' require a multimodal-capable embedder "
+            "(e.g. Volcengine with input='multimodal')."
+        ),
+    )
     max_input_tokens: int = Field(
         default=4096,
         ge=100,
@@ -415,6 +426,11 @@ class EmbeddingConfig(BaseModel):
         if self.text_source not in {"summary_first", "summary_only", "content_only"}:
             raise ValueError(
                 "embedding.text_source must be one of: summary_first, summary_only, content_only"
+            )
+        if self.image_vectorization not in {"summary_only", "image_only", "image_and_summary"}:
+            raise ValueError(
+                "embedding.image_vectorization must be one of: "
+                "summary_only, image_only, image_and_summary"
             )
         return self
 

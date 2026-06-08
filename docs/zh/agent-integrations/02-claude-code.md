@@ -18,6 +18,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/e
 source ~/.openviking/openviking-repo/examples/claude-code-memory-plugin/setup-helper/wrapper.sh
 ```
 
+> 通过自定义命令启动 Claude Code？例如包装脚本 `cc-custom`，或“基础命令 + 子命令”形式的多词启动器——在安装时的“Extra launch commands”一步填入（或运行脚本时传入 `OPENVIKING_CC_WRAP_EXTRA='cc-custom'`），即可让它们一并注入凭据。
+
 使用一段时间后，即便在全新的对话中提及过往的话题，Claude Code 也能准确回忆起来。
 
 <details>
@@ -110,6 +112,8 @@ type claude        # 期望输出：claude is a shell function
 | 插件未激活 | 未找到 `ov.conf` 或 `ovcli.conf` 配置文件 | 运行 [安装脚本](#安装)，或手动设置 `OPENVIKING_MEMORY_ENABLED=1` 配合 URL/API_KEY 使用。 |
 | Hook 已触发但召回结果为空 | 服务器未启动或 URL 配置错误 | 执行命令测试连通性：`curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` |
 | MCP 工具连接到了 `127.0.0.1` 而非远程服务器 | 缺少 `claude` 函数封装 | 检查 `type claude` 的输出是否包含 "shell function"；详情见 [手动安装](#安装) |
+| `type claude` 显示的是路径而非 shell function（wrapper 未生效） | 安装后未 `source` rc，或在未加载该 rc 的终端里启动 | 执行 `source ~/.zshrc`（bash 用 `~/.bashrc`），或新开一个终端窗口 |
+| 通过别名（如 `cc`）启动，凭据未注入 | 把别名名填进了 `OPENVIKING_CC_WRAP_EXTRA`（别名会被跳过），或别名指向的命令未被封装 | 封装别名指向的真实命令而非别名本身：`alias cc=claude` 无需配置；`alias cc=claude-custom` 则把 `claude-custom` 填入 |
 | 远程认证失败 (401 / 403) | API Key 错误或缺少租户 Header | 检查 `OPENVIKING_API_KEY` 是否正确；多租户环境下还需核对 `OPENVIKING_ACCOUNT` 和 `OPENVIKING_USER` |
 
 ## 参见

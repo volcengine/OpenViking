@@ -1570,8 +1570,8 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Open the interactive config manager.",
             },
             HelpItem {
-                label: "ov config add cloud --api-key-stdin --activate",
-                description: "Create and activate a cloud config from stdin.",
+                label: "ov config add ov-service --api-key-stdin --activate",
+                description: "Create and activate an OpenViking Service config from stdin.",
             },
             HelpItem {
                 label: "ov config list -o json",
@@ -1604,7 +1604,7 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             },
             HelpItem {
                 label: "add",
-                description: "Add a cloud or self-managed config without prompts.",
+                description: "Add an OpenViking Service or custom config without prompts.",
             },
             HelpItem {
                 label: "edit",
@@ -1736,15 +1736,15 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["config", "add"],
         purpose: "Create a saved CLI config without opening the interactive wizard.",
-        usage: "ov config add <cloud|self-managed> [options]",
+        usage: "ov config add <ov-service|custom> [options]",
         examples: &[
             HelpItem {
-                label: "printf '%s' \"$OV_KEY\" | ov config add cloud --api-key-stdin --activate",
-                description: "Create and activate a Volcengine Cloud config.",
+                label: "printf '%s' \"$OV_KEY\" | ov config add ov-service --api-key-stdin --activate",
+                description: "Create and activate an OpenViking Service config.",
             },
             HelpItem {
-                label: "ov config add self-managed --name local --url http://127.0.0.1:1933 --activate",
-                description: "Create and activate a local self-managed config.",
+                label: "ov config add custom --name local --url http://127.0.0.1:1933 --activate",
+                description: "Create and activate a local custom config.",
             },
         ],
         arguments: &[],
@@ -1752,36 +1752,36 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         advanced_options: &[],
         subcommands: &[
             HelpItem {
-                label: "cloud",
-                description: "Use the fixed Volcengine Cloud endpoint.",
+                label: "ov-service",
+                description: "Use the fixed OpenViking Service endpoint.",
             },
             HelpItem {
-                label: "self-managed",
-                description: "Use a local or hosted self-managed endpoint.",
+                label: "custom",
+                description: "Use a local or hosted custom endpoint.",
             },
         ],
         next_steps: &[
             HelpItem {
-                label: "ov config add cloud --help",
-                description: "See cloud-specific flags.",
+                label: "ov config add ov-service --help",
+                description: "See OpenViking Service flags.",
             },
             HelpItem {
-                label: "ov config add self-managed --help",
-                description: "See self-managed flags.",
+                label: "ov config add custom --help",
+                description: "See custom flags.",
             },
         ],
     },
     CommandHelpSpec {
-        path: &["config", "add", "cloud"],
-        purpose: "Create a Volcengine Cloud config without prompts.",
-        usage: "ov config add cloud [--name <name>] (--api-key-stdin|--api-key-env <env>) [--account <account> --user <user>] [--activate] [--force]",
+        path: &["config", "add", "ov-service"],
+        purpose: "Create an OpenViking Service config without prompts.",
+        usage: "ov config add ov-service [--name <name>] (--api-key-stdin|--api-key-env <env>) [--account <account> --user <user>] [--activate] [--force]",
         examples: &[
             HelpItem {
-                label: "printf '%s' \"$OV_KEY\" | ov config add cloud --name prod --api-key-stdin --activate",
+                label: "printf '%s' \"$OV_KEY\" | ov config add ov-service --name prod --api-key-stdin --activate",
                 description: "Read the API key from stdin and make the config active.",
             },
             HelpItem {
-                label: "ov config add cloud --api-key-env OV_KEY -o json",
+                label: "ov config add ov-service --api-key-env OV_KEY -o json",
                 description: "Read the API key from an environment variable and print JSON.",
             },
         ],
@@ -1831,17 +1831,17 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         ],
     },
     CommandHelpSpec {
-        path: &["config", "add", "self-managed"],
-        purpose: "Create a self-managed config without prompts.",
-        usage: "ov config add self-managed [--name <name>] [--url <url>] [--api-key-stdin|--api-key-env <env>] [--root-api-key-stdin|--root-api-key-env <env>] [--account <account>] [--user <user>] [--activate] [--force]",
+        path: &["config", "add", "custom"],
+        purpose: "Create a custom config without prompts.",
+        usage: "ov config add custom [--name <name>] [--url <url>] [--api-key-stdin|--api-key-env <env>] [--root-api-key-stdin|--root-api-key-env <env>] [--account <account>] [--user <user>] [--activate] [--force]",
         examples: &[
             HelpItem {
-                label: "ov config add self-managed --name local --url http://127.0.0.1:1933 --activate",
+                label: "ov config add custom --name local --url http://127.0.0.1:1933 --activate",
                 description: "Create a local no-key config.",
             },
             HelpItem {
-                label: "ov config add self-managed --url https://ov.example.com --api-key-env OV_KEY --activate",
-                description: "Create a hosted self-managed config with an API key.",
+                label: "ov config add custom --url https://ov.example.com --api-key-env OV_KEY --activate",
+                description: "Create a hosted custom config with an API key.",
             },
         ],
         arguments: &[],
@@ -1922,7 +1922,7 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             },
             HelpItem {
                 label: "--url <url>",
-                description: "Replace the self-managed server URL.",
+                description: "Replace the custom server URL.",
             },
             HelpItem {
                 label: "--api-key-stdin / --api-key-env <env> / --clear-api-key",
@@ -2402,8 +2402,10 @@ fn localized_command_purpose(spec: &CommandHelpSpec, language: Language) -> &str
         ["config", "switch"] => "切换到已保存的 CLI 配置。",
         ["config", "list"] => "列出已保存的 CLI 配置，并标记当前配置。",
         ["config", "add"] => "不打开交互式向导，创建已保存的 CLI 配置。",
-        ["config", "add", "cloud"] => "不打开交互式向导，创建火山引擎云配置。",
-        ["config", "add", "self-managed"] => "不打开交互式向导，创建自托管配置。",
+        ["config", "add", "ov-service"] => {
+            "不打开交互式向导，创建 OpenViking 服务（火山引擎云）配置。"
+        }
+        ["config", "add", "custom"] => "不打开交互式向导，创建自定义配置。",
         ["config", "edit"] => "不打开交互式向导，编辑已保存的 CLI 配置。",
         ["config", "delete"] => "不打开交互式向导，删除已保存的 CLI 配置。",
         ["health"] => "快速检查服务器是否可连接。",
@@ -2428,11 +2430,11 @@ fn localized_help_item_description<'a>(
         "validate" => "探测当前服务器和认证配置。",
         "switch" => "切换当前已保存配置。",
         "list" => "列出已保存的配置。",
-        "add" => "不打开提示，添加云端或自托管配置。",
+        "add" => "不打开提示，添加 OpenViking 服务或自定义配置。",
         "edit" => "不打开提示，编辑已保存配置。",
         "delete" => "不打开提示，删除已保存配置。",
-        "cloud" => "使用固定的火山引擎云端地址。",
-        "self-managed" => "使用本地或远程自托管地址。",
+        "ov-service" => "使用固定的 OpenViking 服务（火山引擎云）地址。",
+        "custom" => "使用本地或远程自定义地址。",
         "ov --help" => "查看所有命令。",
         "ov health" => "快速健康检查。",
         "ov status" => "查看详细后端状态。",
@@ -2441,8 +2443,8 @@ fn localized_help_item_description<'a>(
         "ov config list" => "查看已保存配置。",
         "ov config list -o json" => "以 JSON 返回已保存配置，便于自动化。",
         "ov config add --help" => "创建新的已保存配置。",
-        "ov config add cloud --help" => "查看云端配置专用参数。",
-        "ov config add self-managed --help" => "查看自托管配置专用参数。",
+        "ov config add ov-service --help" => "查看 OpenViking 服务配置专用参数。",
+        "ov config add custom --help" => "查看自定义配置专用参数。",
         "ov config switch <name>" => "激活已保存的配置。",
         "ov language" => "打开语言选择器。",
         "ov language zh-CN" => "将显示语言切换为简体中文。",
@@ -2651,8 +2653,13 @@ fn command_help_path(args: &[OsString]) -> Option<Vec<String>> {
     }
 
     let has_help_flag = tokens.iter().skip(1).any(|token| is_help_flag(token));
-    if has_help_flag && let Some(path) = config_help_path(&tokens) {
-        return Some(path);
+    if has_help_flag {
+        if has_invalid_config_add_provider(&tokens) {
+            return None;
+        }
+        if let Some(path) = config_help_path(&tokens) {
+            return Some(path);
+        }
     }
 
     let mut path = Vec::new();
@@ -2761,8 +2768,8 @@ fn config_help_path(tokens: &[String]) -> Option<Vec<String>> {
                     _ => return Some(path),
                 },
                 [base, add] if base == "config" && add == "add" => match token.as_str() {
-                    "cloud" | "self-managed" => path.push(token.clone()),
-                    _ => return Some(path),
+                    "ov-service" | "custom" => path.push(token.clone()),
+                    _ => return None,
                 },
                 _ => return Some(path),
             }
@@ -2772,6 +2779,60 @@ fn config_help_path(tokens: &[String]) -> Option<Vec<String>> {
     }
 
     None
+}
+
+fn has_invalid_config_add_provider(tokens: &[String]) -> bool {
+    let mut i = 1;
+    let mut saw_config = false;
+    let mut saw_add = false;
+
+    while i < tokens.len() {
+        let token = &tokens[i];
+        if is_help_flag(token) {
+            return false;
+        }
+        if token == "--sudo" || token == "--progress" || token == "--no-progress" || token == "-v" {
+            i += 1;
+            continue;
+        }
+        if consumes_value(token)
+            || matches!(
+                token.as_str(),
+                "--name"
+                    | "--new-name"
+                    | "--url"
+                    | "--api-key-env"
+                    | "--root-api-key-env"
+                    | "--account"
+                    | "--user"
+            )
+        {
+            i += if token.contains('=') { 1 } else { 2 };
+            continue;
+        }
+        if token.starts_with('-') {
+            i += 1;
+            continue;
+        }
+
+        if !saw_config {
+            saw_config = canonical_command_token(token) == "config";
+            if !saw_config {
+                return false;
+            }
+        } else if !saw_add {
+            saw_add = token == "add";
+            if !saw_add {
+                return false;
+            }
+        } else {
+            return !matches!(token.as_str(), "ov-service" | "custom");
+        }
+
+        i += 1;
+    }
+
+    false
 }
 
 fn command_spec(path: &[String]) -> Option<&'static CommandHelpSpec> {
@@ -3041,31 +3102,45 @@ mod tests {
             &render_command_help_request(&os_args(&["ov", "config", "add", "--help"]))
                 .expect("config add help should render"),
         );
-        assert!(config.contains("ov config add <cloud|self-managed>"));
-        assert!(config.contains("cloud"));
-        assert!(config.contains("self-managed"));
+        assert!(config.contains("ov config add <ov-service|custom>"));
+        assert!(config.contains("ov-service"));
+        assert!(config.contains("custom"));
 
         let cloud = strip_ansi(
-            &render_command_help_request(&os_args(&["ov", "config", "add", "cloud", "--help"]))
-                .expect("config add cloud help should render"),
+            &render_command_help_request(&os_args(&[
+                "ov",
+                "config",
+                "add",
+                "ov-service",
+                "--help",
+            ]))
+            .expect("config add ov-service help should render"),
         );
-        assert!(cloud.contains("ov config add cloud"));
+        assert!(cloud.contains("ov config add ov-service"));
         assert!(cloud.contains("--api-key-stdin"));
         assert!(cloud.contains("--api-key-env <env>"));
 
-        let self_managed = strip_ansi(
-            &render_command_help_request(&os_args(&[
+        let custom = strip_ansi(
+            &render_command_help_request(&os_args(&["ov", "config", "add", "custom", "--help"]))
+                .expect("config add custom help should render"),
+        );
+        assert!(custom.contains("ov config add custom"));
+        assert!(custom.contains("--root-api-key-stdin"));
+        assert!(!custom.contains("--use-root-key-for-normal-commands"));
+        assert!(
+            render_command_help_request(&os_args(&["ov", "config", "add", "cloud", "--help"]))
+                .is_none()
+        );
+        assert!(
+            render_command_help_request(&os_args(&[
                 "ov",
                 "config",
                 "add",
                 "self-managed",
                 "--help",
             ]))
-            .expect("config add self-managed help should render"),
+            .is_none()
         );
-        assert!(self_managed.contains("ov config add self-managed"));
-        assert!(self_managed.contains("--root-api-key-stdin"));
-        assert!(!self_managed.contains("--use-root-key-for-normal-commands"));
 
         let edit = strip_ansi(
             &render_command_help_request(&os_args(&["ov", "config", "edit", "prod", "--help"]))

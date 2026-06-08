@@ -97,6 +97,7 @@ python examples/openclaw-plugin/health_check_tools/ov-healthcheck.py
 | `baseUrl` | `http://127.0.0.1:1933` | OpenViking 服务端点 |
 | `apiKey` | 空 | OpenViking API Key |
 | `peer_prefix` | 空 | `peer_role=assistant` 时 assistant peer 身份的可选前缀 |
+| `autoRecallTimeoutMs` | `5000` | 整个 auto-recall 流程的外层超时（毫秒）；本地嵌入硬件较慢时可调大（取值范围 1000–300000） |
 
 ```bash
 openclaw config set plugins.entries.openviking.config.baseUrl http://your-server:1933

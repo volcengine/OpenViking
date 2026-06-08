@@ -156,7 +156,9 @@ class HTMLParser(BaseParser):
 
         try:
             content = self._read_file(path)
-            result = await self.parse_content(content, source_path=str(path), **kwargs)
+            result = await self.parse_content(
+                content, source_path=str(path), base_dir=path.parent, **kwargs
+            )
 
             # Add timing info
             result.parse_time = time.time() - start_time

@@ -431,7 +431,7 @@ def parse_json_with_stability(
         tracer.info("Extracted first item from list response")
 
     if not isinstance(parsed_data, dict):
-        return None, f"Expected dict after parsing, got {type(parsed_data)}"
+        return None, f"Expected dict after parsing, got {parsed_data}"
 
     # Filter to only expected fields if provided
     if expected_fields:

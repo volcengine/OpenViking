@@ -1052,14 +1052,14 @@ enum ConfigCommands {
 
 #[derive(Subcommand)]
 enum ConfigAddTarget {
-    /// Add a Volcengine Cloud config
-    Cloud(ConfigAddCloudArgs),
-    /// Add a self-managed config
-    SelfManaged(ConfigAddSelfManagedArgs),
+    /// Add an OpenViking Service config
+    OvService(ConfigAddOvServiceArgs),
+    /// Add a custom config
+    Custom(ConfigAddCustomArgs),
 }
 
 #[derive(Args, Debug, Clone)]
-struct ConfigAddCloudArgs {
+struct ConfigAddOvServiceArgs {
     /// Saved config name. Agents should pass this for idempotent retries; generated when omitted.
     #[arg(long)]
     name: Option<String>,
@@ -1084,7 +1084,7 @@ struct ConfigAddCloudArgs {
 }
 
 #[derive(Args, Debug, Clone)]
-struct ConfigAddSelfManagedArgs {
+struct ConfigAddCustomArgs {
     /// Saved config name. Agents should pass this for idempotent retries; generated when omitted.
     #[arg(long)]
     name: Option<String>,
@@ -1124,7 +1124,7 @@ struct ConfigEditArgs {
     /// Rename the saved config
     #[arg(long)]
     new_name: Option<String>,
-    /// New server URL. Volcengine Cloud configs use a fixed URL.
+    /// New server URL. OpenViking Service configs use a fixed URL.
     #[arg(long)]
     url: Option<String>,
     /// Read replacement API key from stdin
@@ -2326,7 +2326,7 @@ mod tests {
         legacy_upload_option_error, plain_help_misuse, pre_parse_requires_cli_config_file,
         preprocess_privacy_args,
     };
-    use crate::config::{Config, DEFAULT_SELF_MANAGED_URL};
+    use crate::config::{Config, DEFAULT_CUSTOM_URL};
     use crate::handlers;
     use crate::output::OutputFormat;
     use clap::{CommandFactory, Parser};
@@ -2398,52 +2398,52 @@ mod tests {
 
     #[test]
     fn config_agent_commands_parse_without_secret_value_flags() {
-        let add_cloud = Cli::try_parse_from([
+        let add_ov_service = Cli::try_parse_from([
             "ov",
             "config",
             "add",
-            "cloud",
+            "ov-service",
             "--name",
             "prod",
             "--api-key-stdin",
             "--activate",
         ])
-        .expect("cloud add should parse");
+        .expect("ov-service add should parse");
         let Commands::Config {
             action:
                 Some(ConfigCommands::Add {
-                    target: ConfigAddTarget::Cloud(cloud),
+                    target: ConfigAddTarget::OvService(ov_service),
                 }),
-        } = add_cloud.command
+        } = add_ov_service.command
         else {
-            panic!("expected cloud add command");
+            panic!("expected ov-service add command");
         };
-        assert_eq!(cloud.name.as_deref(), Some("prod"));
-        assert!(cloud.api_key_stdin);
-        assert!(cloud.activate);
+        assert_eq!(ov_service.name.as_deref(), Some("prod"));
+        assert!(ov_service.api_key_stdin);
+        assert!(ov_service.activate);
 
-        let add_self_managed = Cli::try_parse_from([
+        let add_custom = Cli::try_parse_from([
             "ov",
             "config",
             "add",
-            "self-managed",
+            "custom",
             "--url",
             "https://ov.example.com",
             "--api-key-env",
             "OV_KEY",
         ])
-        .expect("self-managed add should parse");
+        .expect("custom add should parse");
         let Commands::Config {
             action:
                 Some(ConfigCommands::Add {
-                    target: ConfigAddTarget::SelfManaged(self_managed),
+                    target: ConfigAddTarget::Custom(custom),
                 }),
-        } = add_self_managed.command
+        } = add_custom.command
         else {
-            panic!("expected self-managed add command");
+            panic!("expected custom add command");
         };
-        assert_eq!(self_managed.url.as_deref(), Some("https://ov.example.com"));
-        assert_eq!(self_managed.api_key_env.as_deref(), Some("OV_KEY"));
+        assert_eq!(custom.url.as_deref(), Some("https://ov.example.com"));
+        assert_eq!(custom.api_key_env.as_deref(), Some("OV_KEY"));
 
         let edit = Cli::try_parse_from([
             "ov",
@@ -2465,15 +2465,24 @@ mod tests {
         assert!(edit.activate);
 
         assert!(
-            Cli::try_parse_from(["ov", "config", "add", "cloud", "--api-key", "secret"]).is_err(),
+            Cli::try_parse_from(["ov", "config", "add", "ov-service", "--api-key", "secret"])
+                .is_err(),
             "plain API key flag must stay rejected"
+        );
+        assert!(
+            Cli::try_parse_from(["ov", "config", "add", "cloud", "--api-key-stdin"]).is_err(),
+            "old cloud provider subcommand must stay rejected"
+        );
+        assert!(
+            Cli::try_parse_from(["ov", "config", "add", "self-managed"]).is_err(),
+            "old self-managed provider subcommand must stay rejected"
         );
         assert!(
             Cli::try_parse_from([
                 "ov",
                 "config",
                 "add",
-                "self-managed",
+                "custom",
                 "--use-root-key-for-normal-commands",
             ])
             .is_err(),
@@ -2648,7 +2657,7 @@ mod tests {
             &["ov", "config", "switch", "prod"],
             &["ov", "config", "list"],
             &["ov", "config", "delete", "prod"],
-            &["ov", "config", "add", "cloud", "--api-key-stdin"],
+            &["ov", "config", "add", "ov-service", "--api-key-stdin"],
             &["ov", "config", "edit", "prod", "--activate"],
             &["ov", "config", "setup-cli"],
             &["ov", "version"],
@@ -2877,8 +2886,8 @@ mod tests {
     #[test]
     fn language_gate_allows_config_agent_commands_without_saved_language() {
         for args in [
-            &["ov", "config", "add", "cloud", "--api-key-stdin"][..],
-            &["ov", "config", "add", "self-managed"],
+            &["ov", "config", "add", "ov-service", "--api-key-stdin"][..],
+            &["ov", "config", "add", "custom"],
             &["ov", "config", "edit", "prod", "--activate"],
             &["ov", "config", "delete", "prod"],
             &["ov", "config", "list"],
@@ -3004,7 +3013,7 @@ mod tests {
     #[test]
     fn cli_context_overrides_identity_from_cli_flags() {
         let config = Config {
-            url: DEFAULT_SELF_MANAGED_URL.to_string(),
+            url: DEFAULT_CUSTOM_URL.to_string(),
             api_key: Some("test-key".to_string()),
             root_api_key: None,
             account: Some("from-config-account".to_string()),
@@ -3038,7 +3047,7 @@ mod tests {
     #[test]
     fn cli_context_uses_root_api_key_with_sudo() {
         let config = Config {
-            url: DEFAULT_SELF_MANAGED_URL.to_string(),
+            url: DEFAULT_CUSTOM_URL.to_string(),
             api_key: Some("user-key".to_string()),
             root_api_key: Some("root-key".to_string()),
             account: None,

@@ -303,10 +303,10 @@ fn unknown(language: Language) -> &'static str {
 
 fn kind_label(kind: ConfigKind, language: Language) -> &'static str {
     match language {
-        Language::En => kind.label(),
+        Language::En => kind.compact_label(),
         Language::ZhCn => match kind {
-            ConfigKind::VolcengineCloud => "火山引擎云",
-            ConfigKind::SelfManaged => "自托管",
+            ConfigKind::OpenVikingService => "OpenViking 服务",
+            ConfigKind::Custom => "自定义",
         },
     }
 }
@@ -825,7 +825,7 @@ mod tests {
 
         assert!(rendered.contains("OPENVIKING STATUS"));
         assert!(rendered.contains("Config"));
-        assert!(rendered.contains("Active        unknown (Self-Managed)"));
+        assert!(rendered.contains("Active        unknown (Custom)"));
         assert!(rendered.contains("Server        http://127.0.0.1:1933"));
         assert!(rendered.contains("System"));
         assert!(rendered.contains("Status        Connected (Healthy)"));
@@ -861,7 +861,7 @@ mod tests {
             .expect("status should render");
         let rendered = strip_ansi(&rendered);
 
-        assert!(rendered.contains("Active        local (Self-Managed)"));
+        assert!(rendered.contains("Active        local (Custom)"));
         assert!(rendered.contains("Pending       unknown"));
         assert!(rendered.contains("queue          healthy    unknown"));
         assert!(rendered.contains("models         unknown    unknown"));
@@ -879,7 +879,7 @@ mod tests {
 
         let plain = strip_ansi(&rendered);
         assert!(plain.contains("OPENVIKING STATUS"));
-        assert!(plain.contains("Active        local (Self-Managed)"));
+        assert!(plain.contains("Active        local (Custom)"));
         assert!(plain.contains("queue          healthy    64 pending, 9 running, 0 errors"));
         assert!(plain.contains("ov status --verbose       Show full component tables"));
     }

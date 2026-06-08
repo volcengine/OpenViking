@@ -127,6 +127,8 @@ claude() {
 
 重新 source rc（`source ~/.zshrc`，bash 用户改成 `source ~/.bashrc`）后重启 `claude`——`/mcp` 应该显示远程 URL 且认证有效。
 
+**封装其他启动命令。** 如果你通过别的命令启动 Claude Code——比如自定义包装脚本 `cc-custom`，或“基础命令 + 子命令”形式的多词启动器——安装脚本也能一并封装：在它的“Extra launch commands”提示里填写，或运行时传入 `OPENVIKING_CC_WRAP_EXTRA='cc-custom'`。该列表存在同一段 rc 标记块里（wrapper 读取为 `$OPENVIKING_CC_WRAP_EXTRA`）；对多词条目，只有前导参数匹配该子命令的调用才会注入凭据，该命令的其他用法原样放行。**填的是真实命令名，绝不是它的 shell 别名**：别名会在 wrapper 运行前先展开成目标命令，所以封装它指向的那个——`alias cc=claude` 本就走 base `claude` 封装（无需配置），而 `alias cc=claude-custom` 则把 `claude-custom` 填进去即可；别名名若被填入会被跳过。
+
 > **为什么用 function 而不是 `export`？** 全局 export 的 API Key 会被该 shell 派生的所有子进程继承——npm 脚本、构建工具、崩溃 dump、`/proc/<pid>/environ` 都会带上。函数包装把秘钥限定在 `claude` 进程树内。
 >
 > 还没有 `ovcli.conf`？先按 [部署指南 → CLI 章节](../../docs/zh/guides/03-deployment.md#cli) 创建一份。

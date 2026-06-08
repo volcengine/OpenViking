@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use crate::error::{Error, Result};
 
 const OPENVIKING_CLI_CONFIG_ENV: &str = "OPENVIKING_CLI_CONFIG_FILE";
-pub const DEFAULT_SELF_MANAGED_PORT: &str = "1933";
-pub const DEFAULT_SELF_MANAGED_URL: &str = "http://127.0.0.1:1933";
+pub const DEFAULT_CUSTOM_PORT: &str = "1933";
+pub const DEFAULT_CUSTOM_URL: &str = "http://127.0.0.1:1933";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UploadConfig {
@@ -90,7 +90,7 @@ pub(crate) struct EffectiveAuth {
 }
 
 fn default_url() -> String {
-    DEFAULT_SELF_MANAGED_URL.to_string()
+    DEFAULT_CUSTOM_URL.to_string()
 }
 
 fn default_timeout() -> f64 {
@@ -144,7 +144,7 @@ fn is_default_profile(value: &bool) -> bool {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            url: DEFAULT_SELF_MANAGED_URL.to_string(),
+            url: DEFAULT_CUSTOM_URL.to_string(),
             api_key: None,
             root_api_key: None,
             account: None,
