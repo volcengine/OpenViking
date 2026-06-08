@@ -6,6 +6,7 @@ Embedding utilities for OpenViking.
 Common logic for creating Context objects and enqueuing them to EmbeddingQueue.
 """
 
+import base64
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -194,6 +195,42 @@ def get_resource_content_type(file_name: str) -> Optional[ResourceContentType]:
     return None
 
 
+_IMAGE_MIME_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".bmp": "image/bmp",
+    ".svg": "image/svg+xml",
+    ".webp": "image/webp",
+}
+
+
+def _image_mime_type(file_name: str) -> str:
+    """Resolve the MIME type for an image file based on its extension."""
+    _, ext = os.path.splitext(file_name.lower())
+    return _IMAGE_MIME_TYPES.get(ext, "image/png")
+
+
+async def _build_image_data_uri(
+    file_path: str,
+    file_name: str,
+    viking_fs,
+    ctx: Optional[RequestContext],
+) -> Optional[str]:
+    """Read an image file and encode it as a base64 ``data:`` URI.
+
+    Returns None if the image cannot be read.
+    """
+    try:
+        content = await viking_fs.read_file_bytes(file_path, ctx=ctx)
+        encoded = base64.b64encode(content).decode("ascii")
+        return f"data:{_image_mime_type(file_name)};base64,{encoded}"
+    except Exception as e:
+        logger.warning(f"Failed to read image for multimodal vectorization {file_path}: {e}")
+        return None
+
+
 async def vectorize_directory_meta(
     uri: str,
     abstract: str,
@@ -353,6 +390,7 @@ async def vectorize_file(
         embedding_cfg = get_openviking_config().embedding
         configured_text_source = getattr(embedding_cfg, "text_source", "content_only")
         effective_text_source = "summary_only" if use_summary else configured_text_source
+        image_vectorization = getattr(embedding_cfg, "image_vectorization", "summary_only")
 
         if content_type is None:
             # Unsupported file type: fall back to summary if available
@@ -387,6 +425,23 @@ async def vectorize_file(
                             f"No summary available for {file_path}, skipping vectorization"
                         )
                         return
+        elif content_type == ResourceContentType.IMAGE and image_vectorization in {
+            "image_only",
+            "image_and_summary",
+        }:
+            # Multimodal: embed the image itself (optionally with its text summary).
+            image_uri = await _build_image_data_uri(file_path, file_name, viking_fs, ctx)
+            if image_uri:
+                text = summary if image_vectorization == "image_and_summary" else ""
+                context.set_vectorize(Vectorize(text=text, images=[image_uri]))
+            elif summary:
+                # Could not load image; fall back to summary text.
+                context.set_vectorize(Vectorize(text=summary))
+            else:
+                logger.debug(
+                    f"Skipping image {file_path} (image unreadable and no summary available)"
+                )
+                return
         elif summary:
             # For non-text files, use summary
             context.set_vectorize(Vectorize(text=summary))

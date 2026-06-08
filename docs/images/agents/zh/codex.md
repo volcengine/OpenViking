@@ -17,6 +17,8 @@ source ~/.openviking/openviking-repo/examples/codex-memory-plugin/setup-helper/w
 codex              # 首次启动需执行 /hooks 进行一次安全审批
 ```
 
+> 通过自定义命令启动 Codex？例如包装脚本 `codex-custom`，或“基础命令 + 子命令”形式的多词启动器——在安装时的“Extra launch commands”一步填入（或运行脚本时传入 `OPENVIKING_CODEX_WRAP_EXTRA='codex-custom'`），即可让它们一并注入凭据。
+
 <details>
 <summary><b>手动安装</b></summary>
 
@@ -71,6 +73,8 @@ type codex         # 期望输出：codex is a shell function
 | 现象 | 原因 | 解决方案 |
 |------|------|------|
 | `MCP server is not logged in` | 启动时 `OPENVIKING_API_KEY` 未注入环境变量 | 确认 `codex()` 函数已被 `source` 激活，且 `ovcli.conf` 中包含 `api_key` |
+| `type codex` 显示的是路径而非 shell function（wrapper 未生效） | 安装后未 `source` rc，或在未加载该 rc 的终端里启动 | 执行 `source ~/.zshrc`（bash 用 `~/.bashrc`），或新开一个终端窗口 |
+| 通过别名（如 `cx`）启动，凭据未注入 | 把别名名填进了 `OPENVIKING_CODEX_WRAP_EXTRA`（别名会被跳过），或别名指向的命令未被封装 | 封装别名指向的真实命令而非别名本身：`alias cx=codex` 无需配置；`alias cx=codex-custom` 则把 `codex-custom` 填入 |
 | `4 hooks need review` | 首次启动触发的安全审批 | 在 Codex 中输入 `/hooks` 完成审批 |
 | 审批后仍提示 `hook (failed) exited with code 1` | 缓存中的占位符未被正确替换 | 重新运行一次单行安装脚本 |
 | 召回为空 | 服务器不可达或 URL 配置错误 | 运行 `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` 检查连接状态 |

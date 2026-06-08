@@ -13,24 +13,30 @@ pub mod encryption_wrapper;
 pub mod errors;
 pub mod filesystem;
 pub mod mountable;
+pub mod multibackend_wrapper;
 pub mod plugin;
 pub mod stats;
 pub mod stats_wrapper;
 pub mod types;
 
 // Re-export commonly used types
+pub use crate::multibackend::{FsContextResolver, MetaStateStore};
 pub use builder::{
-    build_default_stack, register_builtin_plugins, EncryptionConfig, RagfsConfig, RagfsStack,
+    build_default_stack, register_builtin_plugins, EncryptionConfig as BuilderEncryptionConfig,
+    RagfsConfig, RagfsStack,
 };
 pub use context::{FsContext, FsContextInner, FsContextView, FS_CTX};
 pub use encryption_wrapper::EncryptionWrappedFS;
 pub use errors::{Error, Result};
 pub use filesystem::FileSystem;
 pub use mountable::MountableFS;
+pub use multibackend_wrapper::{BackendEntry, MultiWriteWrappedFS, SyncMode};
 pub use plugin::{HealthStatus, PluginRegistry, ServicePlugin};
 pub use stats::{FilesystemStats, FsOperation, OperationStats, OperationTimer, StatsCollector};
 pub use stats_wrapper::StatsWrappedFS;
 pub use types::{
-    ConfigParameter, ConfigValue, FileInfo, GrepMatch, GrepResult, PluginConfig, TreeEntry,
-    WriteFlag,
+    BackendItemConfig, BackendRole, BackendSyncState, BackendsConfig, ConfigParameter, ConfigValue,
+    EncryptionConfig, FileInfo, GrepMatch, GrepResult, OperationItemConfig, PluginConfig,
+    RedirectEntry, RedirectMeta, RedirectPolicy, SyncLogEntry, SyncLogMeta, SyncOp, SyncType,
+    TreeEntry, WriteFlag,
 };

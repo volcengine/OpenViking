@@ -10,14 +10,14 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
-    CliContext, ConfigAddCloudArgs, ConfigAddSelfManagedArgs, ConfigAddTarget, ConfigDeleteArgs,
+    CliContext, ConfigAddCustomArgs, ConfigAddOvServiceArgs, ConfigAddTarget, ConfigDeleteArgs,
     ConfigEditArgs,
-    config::{Config, DEFAULT_SELF_MANAGED_URL, display_config_home},
+    config::{Config, DEFAULT_CUSTOM_URL, display_config_home},
     config_wizard::{
-        ApiKeyRole, ConfigKind, ConfigStore, VOLCENGINE_CLOUD_URL, configs_equivalent,
-        normalize_self_managed_url, self_managed_allows_empty_api_key,
-        self_managed_requires_api_key, validate_account_id_value,
-        validate_candidate_config_with_role, validate_config_name, validate_user_id_value,
+        ApiKeyRole, ConfigKind, ConfigStore, OPENVIKING_SERVICE_URL, configs_equivalent,
+        custom_allows_empty_api_key, custom_requires_api_key, normalize_custom_url,
+        validate_account_id_value, validate_candidate_config_with_role, validate_config_name,
+        validate_user_id_value,
     },
     error::Error,
     output::OutputFormat,
@@ -148,8 +148,8 @@ pub(crate) enum AgentOutput {
 pub(crate) async fn add(target: ConfigAddTarget, _ctx: &CliContext) -> AgentResult<AgentOutput> {
     let store = ConfigStore::new().map_err(config_error)?;
     let result = match target {
-        ConfigAddTarget::Cloud(args) => add_cloud(&store, args).await?,
-        ConfigAddTarget::SelfManaged(args) => add_self_managed(&store, args).await?,
+        ConfigAddTarget::OvService(args) => add_ov_service(&store, args).await?,
+        ConfigAddTarget::Custom(args) => add_custom(&store, args).await?,
     };
     Ok(AgentOutput::AddEdit(result))
 }
@@ -169,7 +169,7 @@ pub(crate) fn switch(name: String, _ctx: &CliContext) -> AgentResult<AgentOutput
     Ok(AgentOutput::Switch(SwitchResult {
         action: "switch",
         name,
-        kind: ConfigKind::from_config(&config).label(),
+        kind: ConfigKind::from_config(&config).compact_label(),
         url: config.url,
         active_path: path_string(store.active_path()),
         activated: true,
@@ -184,7 +184,7 @@ pub(crate) fn list(_ctx: &CliContext) -> AgentResult<AgentOutput> {
         .into_iter()
         .map(|entry| ListEntry {
             name: entry.name,
-            kind: entry.kind.label(),
+            kind: entry.kind.compact_label(),
             url: entry.config.url,
             active: entry.is_active,
         })
@@ -308,16 +308,19 @@ pub(crate) fn print_error(error: &AgentError, ctx: &CliContext) {
     }
 }
 
-async fn add_cloud(store: &ConfigStore, args: ConfigAddCloudArgs) -> AgentResult<AddEditResult> {
-    let name = config_name_or_generate(store, args.name, ConfigKind::VolcengineCloud)?;
+async fn add_ov_service(
+    store: &ConfigStore,
+    args: ConfigAddOvServiceArgs,
+) -> AgentResult<AddEditResult> {
+    let name = config_name_or_generate(store, args.name, ConfigKind::OpenVikingService)?;
     let api_key = read_required_secret(
         secret_input(args.api_key_stdin, args.api_key_env.as_deref()),
-        "cloud API key",
+        "OpenViking Service API key",
     )?;
     validate_optional_identity(args.account.as_deref(), args.user.as_deref())?;
 
     let config = Config {
-        url: VOLCENGINE_CLOUD_URL.to_string(),
+        url: OPENVIKING_SERVICE_URL.to_string(),
         api_key: Some(api_key),
         root_api_key: None,
         account: args.account,
@@ -328,7 +331,7 @@ async fn add_cloud(store: &ConfigStore, args: ConfigAddCloudArgs) -> AgentResult
     if let Some(result) = existing_add_preflight(
         store,
         &name,
-        ConfigKind::VolcengineCloud,
+        ConfigKind::OpenVikingService,
         &config,
         args.activate,
         args.force,
@@ -336,11 +339,11 @@ async fn add_cloud(store: &ConfigStore, args: ConfigAddCloudArgs) -> AgentResult
         return Ok(result);
     }
 
-    validate_config_for_write(&config, ConfigKind::VolcengineCloud, true).await?;
+    validate_config_for_write(&config, ConfigKind::OpenVikingService, true).await?;
     save_new_config(
         store,
         &name,
-        ConfigKind::VolcengineCloud,
+        ConfigKind::OpenVikingService,
         &config,
         args.activate,
         args.force,
@@ -348,11 +351,8 @@ async fn add_cloud(store: &ConfigStore, args: ConfigAddCloudArgs) -> AgentResult
     )
 }
 
-async fn add_self_managed(
-    store: &ConfigStore,
-    args: ConfigAddSelfManagedArgs,
-) -> AgentResult<AddEditResult> {
-    let name = config_name_or_generate(store, args.name, ConfigKind::SelfManaged)?;
+async fn add_custom(store: &ConfigStore, args: ConfigAddCustomArgs) -> AgentResult<AddEditResult> {
+    let name = config_name_or_generate(store, args.name, ConfigKind::Custom)?;
     validate_optional_identity(args.account.as_deref(), args.user.as_deref())?;
     let api_key = read_optional_secret(
         secret_input(args.api_key_stdin, args.api_key_env.as_deref()),
@@ -362,14 +362,14 @@ async fn add_self_managed(
         secret_input(args.root_api_key_stdin, args.root_api_key_env.as_deref()),
         "root API key",
     )?;
-    let url = normalize_self_managed_url(args.url.as_deref().unwrap_or(DEFAULT_SELF_MANAGED_URL));
+    let url = normalize_custom_url(args.url.as_deref().unwrap_or(DEFAULT_CUSTOM_URL));
 
-    let config = build_self_managed_config(url, api_key, root_api_key, args.account, args.user)?;
+    let config = build_custom_config(url, api_key, root_api_key, args.account, args.user)?;
 
     if let Some(result) = existing_add_preflight(
         store,
         &name,
-        ConfigKind::SelfManaged,
+        ConfigKind::Custom,
         &config,
         args.activate,
         args.force,
@@ -377,12 +377,12 @@ async fn add_self_managed(
         return Ok(result);
     }
 
-    validate_config_for_write(&config, ConfigKind::SelfManaged, false).await?;
+    validate_config_for_write(&config, ConfigKind::Custom, false).await?;
 
     save_new_config(
         store,
         &name,
-        ConfigKind::SelfManaged,
+        ConfigKind::Custom,
         &config,
         args.activate,
         args.force,
@@ -410,9 +410,9 @@ async fn edit_saved_config(
     validate_config_name(&new_name).map_err(config_error)?;
     validate_optional_identity(args.account.as_deref(), args.user.as_deref())?;
 
-    if old_kind == ConfigKind::VolcengineCloud && args.url.is_some() {
+    if old_kind == ConfigKind::OpenVikingService && args.url.is_some() {
         return Err(AgentError::bad_input(
-            "Volcengine Cloud configs use a fixed server URL.",
+            "OpenViking Service configs use a fixed server URL.",
         ));
     }
 
@@ -427,7 +427,7 @@ async fn edit_saved_config(
 
     let mut edited = existing.clone();
     if let Some(url) = args.url.as_deref() {
-        edited.url = normalize_self_managed_url(url);
+        edited.url = normalize_custom_url(url);
     }
     if args.clear_api_key {
         edited.api_key = None;
@@ -462,10 +462,10 @@ async fn edit_saved_config(
     }
 
     let new_kind = ConfigKind::from_config(&edited);
-    if new_kind == ConfigKind::SelfManaged {
-        finalize_self_managed_identity(&mut edited)?;
+    if new_kind == ConfigKind::Custom {
+        finalize_custom_identity(&mut edited)?;
     }
-    validate_config_for_write(&edited, new_kind, new_kind == ConfigKind::VolcengineCloud).await?;
+    validate_config_for_write(&edited, new_kind, new_kind == ConfigKind::OpenVikingService).await?;
 
     save_edited_config(
         store,
@@ -477,20 +477,20 @@ async fn edit_saved_config(
     )
 }
 
-fn build_self_managed_config(
+fn build_custom_config(
     url: String,
     api_key: Option<String>,
     root_api_key: Option<String>,
     mut account: Option<String>,
     mut user: Option<String>,
 ) -> AgentResult<Config> {
-    if api_key.is_none() && root_api_key.is_none() && self_managed_requires_api_key(&url) {
+    if api_key.is_none() && root_api_key.is_none() && custom_requires_api_key(&url) {
         return Err(AgentError::bad_input(
-            "Remote self-managed servers require --api-key-stdin, --api-key-env, --root-api-key-stdin, or --root-api-key-env.",
+            "Remote custom servers require --api-key-stdin, --api-key-env, --root-api-key-stdin, or --root-api-key-env.",
         ));
     }
 
-    if api_key.is_none() && root_api_key.is_none() && self_managed_allows_empty_api_key(&url) {
+    if api_key.is_none() && root_api_key.is_none() && custom_allows_empty_api_key(&url) {
         account.get_or_insert_with(|| "default".to_string());
         user.get_or_insert_with(|| "default".to_string());
     }
@@ -504,12 +504,12 @@ fn build_self_managed_config(
         ..Config::default()
     };
 
-    finalize_self_managed_identity(&mut config)?;
+    finalize_custom_identity(&mut config)?;
 
     Ok(config)
 }
 
-fn finalize_self_managed_identity(config: &mut Config) -> AgentResult<()> {
+fn finalize_custom_identity(config: &mut Config) -> AgentResult<()> {
     if config.api_key.is_none() {
         config.api_key = config.root_api_key.clone();
     }
@@ -547,7 +547,7 @@ async fn validate_config_for_write(
         Err(error) => return Err(validation_error(kind, error)),
     };
 
-    if kind == ConfigKind::SelfManaged
+    if kind == ConfigKind::Custom
         && api_key_role == Some(ApiKeyRole::Root)
         && !root_as_normal(config)
     {
@@ -714,7 +714,7 @@ fn add_edit_result(
     AddEditResult {
         action,
         name: name.to_string(),
-        kind: kind.label(),
+        kind: kind.compact_label(),
         url: config.url.clone(),
         saved_path: store
             .saved_config_path(name)
@@ -854,8 +854,8 @@ fn config_name_or_generate(
     }
 
     let prefix = match kind {
-        ConfigKind::VolcengineCloud => "cloud",
-        ConfigKind::SelfManaged => "local",
+        ConfigKind::OpenVikingService => "ov-service",
+        ConfigKind::Custom => "custom",
     };
     for _ in 0..32 {
         let suffix = Uuid::new_v4().simple().to_string();
@@ -888,15 +888,15 @@ fn validation_error(kind: ConfigKind, error: Error) -> AgentError {
         Error::Api { message, .. } => AgentError::auth(format!(
             "{} {message}",
             match kind {
-                ConfigKind::VolcengineCloud => "Check the API key.",
-                ConfigKind::SelfManaged => "Check the API key, account, and user.",
+                ConfigKind::OpenVikingService => "Check the API key.",
+                ConfigKind::Custom => "Check the API key, account, and user.",
             }
         )),
         Error::Network(message) => AgentError::validation(format!(
             "{} {message}",
             match kind {
-                ConfigKind::VolcengineCloud => "Could not reach Volcengine Cloud.",
-                ConfigKind::SelfManaged => "Could not reach the self-managed server.",
+                ConfigKind::OpenVikingService => "Could not reach OpenViking Service.",
+                ConfigKind::Custom => "Could not reach the custom server.",
             }
         )),
         Error::Config(message) => AgentError::bad_input(message),
@@ -1032,10 +1032,35 @@ mod tests {
         let dir = unique_dir("name");
         fs::create_dir_all(&dir).expect("dir should exist");
         let store = ConfigStore::for_config_dir(dir);
-        let name = config_name_or_generate(&store, None, ConfigKind::VolcengineCloud)
+
+        let name = config_name_or_generate(&store, None, ConfigKind::OpenVikingService)
             .expect("name should generate");
-        assert!(name.starts_with("cloud-"));
+        assert!(name.starts_with("ov-service-"));
         validate_config_name(&name).expect("generated name should be valid");
+
+        let name =
+            config_name_or_generate(&store, None, ConfigKind::Custom).expect("name should generate");
+        assert!(name.starts_with("custom-"));
+        validate_config_name(&name).expect("generated name should be valid");
+    }
+
+    #[test]
+    fn agent_json_kind_uses_compact_provider_label() {
+        let dir = unique_dir("json-kind");
+        fs::create_dir_all(&dir).expect("dir should exist");
+        let store = ConfigStore::for_config_dir(dir);
+        let config = sample_config(OPENVIKING_SERVICE_URL, Some("key"));
+
+        let result = add_edit_result(
+            &store,
+            "add",
+            "serverless",
+            ConfigKind::OpenVikingService,
+            &config,
+            false,
+        );
+
+        assert_eq!(result.kind, "OpenViking Service");
     }
 
     #[test]
@@ -1051,7 +1076,7 @@ mod tests {
         let result = save_new_config(
             &store,
             "local",
-            ConfigKind::SelfManaged,
+            ConfigKind::Custom,
             &config,
             false,
             false,
@@ -1078,7 +1103,7 @@ mod tests {
         let error = save_new_config(
             &store,
             "local",
-            ConfigKind::SelfManaged,
+            ConfigKind::Custom,
             &sample_config("http://127.0.0.1:1933", Some("new")),
             false,
             false,
@@ -1090,15 +1115,15 @@ mod tests {
     }
 
     #[test]
-    fn self_managed_root_only_config_populates_normal_and_root_keys() {
-        let config = build_self_managed_config(
+    fn custom_root_only_config_populates_normal_and_root_keys() {
+        let config = build_custom_config(
             "http://127.0.0.1:1933".to_string(),
             None,
             Some("root-key".to_string()),
             Some("acme".to_string()),
             Some("alice".to_string()),
         )
-        .expect("root-only self-managed config should build");
+        .expect("root-only custom config should build");
 
         assert_eq!(config.api_key.as_deref(), Some("root-key"));
         assert_eq!(config.root_api_key.as_deref(), Some("root-key"));
@@ -1107,23 +1132,23 @@ mod tests {
     }
 
     #[test]
-    fn self_managed_user_and_root_keys_stay_separate() {
-        let config = build_self_managed_config(
+    fn custom_user_and_root_keys_stay_separate() {
+        let config = build_custom_config(
             "https://ov.example.com".to_string(),
             Some("user-key".to_string()),
             Some("root-key".to_string()),
             Some("acme".to_string()),
             Some("alice".to_string()),
         )
-        .expect("self-managed config with both keys should build");
+        .expect("custom config with both keys should build");
 
         assert_eq!(config.api_key.as_deref(), Some("user-key"));
         assert_eq!(config.root_api_key.as_deref(), Some("root-key"));
     }
 
     #[test]
-    fn self_managed_root_key_requires_explicit_identity() {
-        let error = build_self_managed_config(
+    fn custom_root_key_requires_explicit_identity() {
+        let error = build_custom_config(
             "http://127.0.0.1:1933".to_string(),
             None,
             Some("root-key".to_string()),
@@ -1136,25 +1161,25 @@ mod tests {
     }
 
     #[test]
-    fn self_managed_finalization_promotes_root_only_to_root_as_normal() {
+    fn custom_finalization_promotes_root_only_to_root_as_normal() {
         let mut config = sample_config("http://127.0.0.1:1933", None);
         config.root_api_key = Some("root-key".to_string());
         config.account = Some("acme".to_string());
         config.user = Some("alice".to_string());
 
-        finalize_self_managed_identity(&mut config).expect("root-only config should finalize");
+        finalize_custom_identity(&mut config).expect("root-only config should finalize");
 
         assert_eq!(config.api_key.as_deref(), Some("root-key"));
         assert_eq!(config.root_api_key.as_deref(), Some("root-key"));
     }
 
     #[test]
-    fn self_managed_finalization_rejects_root_as_normal_without_identity() {
+    fn custom_finalization_rejects_root_as_normal_without_identity() {
         let mut config = sample_config("http://127.0.0.1:1933", None);
         config.root_api_key = Some("root-key".to_string());
         config.user = Some("alice".to_string());
 
-        let error = finalize_self_managed_identity(&mut config)
+        let error = finalize_custom_identity(&mut config)
             .expect_err("root-as-normal requires explicit account and user");
 
         assert_eq!(error.exit_code(), EXIT_AUTH);
@@ -1162,7 +1187,7 @@ mod tests {
 
     #[test]
     fn add_and_edit_finalization_converge_on_root_as_normal_shape() {
-        let add_config = build_self_managed_config(
+        let add_config = build_custom_config(
             "http://127.0.0.1:1933".to_string(),
             None,
             Some("root-key".to_string()),
@@ -1175,7 +1200,7 @@ mod tests {
         edit_config.root_api_key = Some("root-key".to_string());
         edit_config.account = Some("acme".to_string());
         edit_config.user = Some("alice".to_string());
-        finalize_self_managed_identity(&mut edit_config)
+        finalize_custom_identity(&mut edit_config)
             .expect("edit path should finalize to root-as-normal config");
 
         assert_eq!(edit_config.api_key, add_config.api_key);
@@ -1247,7 +1272,7 @@ mod tests {
         let error = save_new_config(
             &store,
             "local",
-            ConfigKind::SelfManaged,
+            ConfigKind::Custom,
             &sample_config("http://127.0.0.1:1933", Some("new")),
             false,
             true,

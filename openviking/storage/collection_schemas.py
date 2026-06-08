@@ -444,9 +444,9 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     report_success = True
                     return None
 
-                # Only process string messages
-                if not isinstance(embedding_msg.message, str):
-                    logger.debug(f"Skipping non-string message type: {type(embedding_msg.message)}")
+                # Process string (text) or list (multimodal) messages
+                if not isinstance(embedding_msg.message, (str, list)):
+                    logger.debug(f"Skipping unsupported message type: {type(embedding_msg.message)}")
                     self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
                     self._record_request_success(embedding_msg)
                     report_success = True

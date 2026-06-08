@@ -184,15 +184,63 @@ case "${SHELL:-}" in
     ;;
 esac
 
+# Extra launch commands to wrap besides `claude` — e.g. a custom wrapper
+# `cc-custom`, or a multi-word launcher matched on its sub-command.
+# Persisted in the rc marker block as OPENVIKING_CC_WRAP_EXTRA; the wrapper
+# reads it and injects credentials into matching invocations only.
+heading '4b. Extra launch commands (optional)'
+# Seed from this run's env var (automation path), else the value already in
+# the rc (re-run path). The interactive prompt below can still override it.
+WRAP_EXTRA="${OPENVIKING_CC_WRAP_EXTRA:-}"
+if [ -z "$WRAP_EXTRA" ] && [ -n "$RC" ] && [ -f "$RC" ]; then
+  WRAP_EXTRA=$(awk -F"'" '/^OPENVIKING_CC_WRAP_EXTRA=/{print $2; exit}' "$RC" 2>/dev/null || true)
+fi
+info 'Inject OpenViking creds into other launch commands too? e.g. a custom'
+info 'wrapper `cc-custom`. A multi-word launcher (a base command plus a'
+info 'sub-command) is matched on that sub-command; other uses of the command'
+info 'pass through untouched.'
+if [ -n "$WRAP_EXTRA" ]; then
+  info "Currently: $WRAP_EXTRA"
+  ask 'Commands (;-separated; empty = keep, "-" = clear): '
+else
+  ask 'Commands (;-separated, e.g. "cc-custom"; empty to skip): '
+fi
+read -r WRAP_INPUT || WRAP_INPUT=""
+case "$WRAP_INPUT" in
+  "") : ;;
+  -)  WRAP_EXTRA="" ;;
+  *)  WRAP_EXTRA="$WRAP_INPUT" ;;
+esac
+# Normalize each ';'-entry: strip single quotes (keep the rc line safely
+# single-quotable), trim, collapse internal whitespace, drop empties.
+if [ -n "$WRAP_EXTRA" ]; then
+  WRAP_EXTRA=$(printf '%s' "$WRAP_EXTRA" | awk -F';' '{
+    out="";
+    for (i = 1; i <= NF; i++) {
+      s = $i; gsub(/\047/, "", s); gsub(/^[ \t]+|[ \t]+$/, "", s); gsub(/[ \t]+/, " ", s);
+      if (s != "") out = (out == "" ? s : out ";" s);
+    }
+    print out;
+  }')
+  [ -n "$WRAP_EXTRA" ] && info "Will wrap: $WRAP_EXTRA"
+fi
+
 # The user's shell rc gets a single one-line source hook pointing at the
 # wrapper source in the cloned plugin checkout. Hook content stays stable
 # across installs (only the absolute path matters), so the marker
 # replacement only triggers a legacy-cleanup pass once when upgrading from
 # a pre-split install that inlined the full wrapper into the rc.
 SOURCE_HOOK="[ -f \"$WRAPPER_SRC\" ] && . \"$WRAPPER_SRC\""
-SOURCE_BLOCK="$MARKER_BEGIN
+if [ -n "$WRAP_EXTRA" ]; then
+  SOURCE_BLOCK="$MARKER_BEGIN
+OPENVIKING_CC_WRAP_EXTRA='$WRAP_EXTRA'
 $SOURCE_HOOK
 $MARKER_END"
+else
+  SOURCE_BLOCK="$MARKER_BEGIN
+$SOURCE_HOOK
+$MARKER_END"
+fi
 
 if [ -z "$RC" ]; then
   warn 'Could not detect shell rc. Add this snippet to your rc manually:'

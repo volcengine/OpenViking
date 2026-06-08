@@ -37,11 +37,8 @@ pub trait DatabaseBackend: Send + Sync {
     fn delete_entry(&self, path: &str) -> Result<()>;
 
     /// Delete entries matching a pattern (for recursive delete)
-    fn delete_entries_by_pattern(
-        &self,
-        pattern: &str,
-        exclude_path: Option<&str>,
-    ) -> Result<usize>;
+    fn delete_entries_by_pattern(&self, pattern: &str, exclude_path: Option<&str>)
+        -> Result<usize>;
 
     /// Read file data
     fn read_file(&self, path: &str) -> Result<Option<(bool, Vec<u8>)>>;
@@ -152,7 +149,10 @@ impl DatabaseBackend for SQLiteBackend {
     }
 
     fn path_exists(&self, path: &str) -> Result<bool> {
-        let conn = self.conn.lock().map_err(|e| Error::internal(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::internal(e.to_string()))?;
         let mut stmt = conn
             .prepare_cached("SELECT COUNT(*) FROM files WHERE path = ?1")
             .map_err(|e| Error::internal(format!("prepare error: {}", e)))?;
@@ -167,7 +167,10 @@ impl DatabaseBackend for SQLiteBackend {
     }
 
     fn is_directory(&self, path: &str) -> Result<bool> {
-        let conn = self.conn.lock().map_err(|e| Error::internal(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::internal(e.to_string()))?;
         let mut stmt = conn
             .prepare_cached("SELECT is_dir FROM files WHERE path = ?1")
             .map_err(|e| Error::internal(format!("prepare error: {}", e)))?;
@@ -180,7 +183,10 @@ impl DatabaseBackend for SQLiteBackend {
     }
 
     fn create_file(&self, path: &str, mode: u32, data: &[u8]) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e| Error::internal(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::internal(e.to_string()))?;
         let now = chrono::Utc::now().timestamp();
         conn.execute(
             "INSERT INTO files (path, is_dir, mode, size, mod_time, data) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -191,7 +197,10 @@ impl DatabaseBackend for SQLiteBackend {
     }
 
     fn create_directory(&self, path: &str, mode: u32) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e| Error::internal(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::internal(e.to_string()))?;
         let now = chrono::Utc::now().timestamp();
         conn.execute(
             "INSERT INTO files (path, is_dir, mode, size, mod_time, data) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -202,7 +211,10 @@ impl DatabaseBackend for SQLiteBackend {
     }
 
     fn delete_entry(&self, path: &str) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e| Error::internal(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::internal(e.to_string()))?;
         conn.execute("DELETE FROM files WHERE path = ?1", params![path])
             .map_err(|e| Error::internal(format!("delete error: {}", e)))?;
         Ok(())
@@ -213,7 +225,10 @@ impl DatabaseBackend for SQLiteBackend {
         pattern: &str,
         exclude_path: Option<&str>,
     ) -> Result<usize> {
-        let conn = self.conn.lock().map_err(|e| Error::internal(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::internal(e.to_string()))?;
 
         let result = if let Some(exclude) = exclude_path {
             conn.execute(
@@ -230,7 +245,10 @@ impl DatabaseBackend for SQLiteBackend {
     }
 
     fn read_file(&self, path: &str) -> Result<Option<(bool, Vec<u8>)>> {
-        let conn = self.conn.lock().map_err(|e| Error::internal(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::internal(e.to_string()))?;
         let mut stmt = conn
             .prepare_cached("SELECT is_dir, data FROM files WHERE path = ?1")
             .map_err(|e| Error::internal(format!("prepare error: {}", e)))?;
@@ -247,7 +265,10 @@ impl DatabaseBackend for SQLiteBackend {
     }
 
     fn update_file(&self, path: &str, data: &[u8]) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e| Error::internal(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::internal(e.to_string()))?;
         let now = chrono::Utc::now().timestamp();
         conn.execute(
             "UPDATE files SET data = ?1, size = ?2, mod_time = ?3 WHERE path = ?4",
@@ -258,11 +279,12 @@ impl DatabaseBackend for SQLiteBackend {
     }
 
     fn get_metadata(&self, path: &str) -> Result<Option<FileMetadata>> {
-        let conn = self.conn.lock().map_err(|e| Error::internal(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::internal(e.to_string()))?;
         let mut stmt = conn
-            .prepare_cached(
-                "SELECT path, is_dir, mode, size, mod_time FROM files WHERE path = ?1",
-            )
+            .prepare_cached("SELECT path, is_dir, mode, size, mod_time FROM files WHERE path = ?1")
             .map_err(|e| Error::internal(format!("prepare error: {}", e)))?;
 
         match stmt.query_row(params![path], |row| {
@@ -282,7 +304,10 @@ impl DatabaseBackend for SQLiteBackend {
     }
 
     fn update_mode(&self, path: &str, mode: u32) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e| Error::internal(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::internal(e.to_string()))?;
         let now = chrono::Utc::now().timestamp();
         conn.execute(
             "UPDATE files SET mode = ?1, mod_time = ?2 WHERE path = ?3",
@@ -293,7 +318,10 @@ impl DatabaseBackend for SQLiteBackend {
     }
 
     fn rename_path(&self, old_path: &str, new_path: &str) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e| Error::internal(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::internal(e.to_string()))?;
         conn.execute(
             "UPDATE files SET path = ?1 WHERE path = ?2",
             params![new_path, old_path],
@@ -303,7 +331,10 @@ impl DatabaseBackend for SQLiteBackend {
     }
 
     fn rename_children(&self, old_path: &str, new_path: &str) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e| Error::internal(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::internal(e.to_string()))?;
         let old_pattern = format!("{}/%", old_path);
         let old_len = (old_path.len() + 1) as i32;
         let sql = "UPDATE files SET path = ?1 || SUBSTR(path, ?2) WHERE path LIKE ?3";
@@ -313,7 +344,10 @@ impl DatabaseBackend for SQLiteBackend {
     }
 
     fn list_directory(&self, path: &str) -> Result<Vec<FileMetadata>> {
-        let conn = self.conn.lock().map_err(|e| Error::internal(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::internal(e.to_string()))?;
 
         // Build pattern for direct children only
         // For root "/": children are like "/<name>" (no further slashes)
@@ -350,8 +384,7 @@ impl DatabaseBackend for SQLiteBackend {
             .map_err(|e| Error::internal(format!("query error: {}", e)))?;
 
         for row_result in rows {
-            let meta =
-                row_result.map_err(|e| Error::internal(format!("row error: {}", e)))?;
+            let meta = row_result.map_err(|e| Error::internal(format!("row error: {}", e)))?;
 
             // Only include direct children (no further '/' after the prefix)
             let remainder = &meta.path[prefix_len..];
@@ -364,7 +397,10 @@ impl DatabaseBackend for SQLiteBackend {
     }
 
     fn count_by_pattern(&self, pattern: &str) -> Result<i64> {
-        let conn = self.conn.lock().map_err(|e| Error::internal(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::internal(e.to_string()))?;
         let mut stmt = conn
             .prepare_cached("SELECT COUNT(*) FROM files WHERE path LIKE ?1")
             .map_err(|e| Error::internal(format!("prepare error: {}", e)))?;
@@ -451,7 +487,9 @@ mod tests {
         assert!(backend.is_directory("/testdir").unwrap());
 
         // Create a file
-        backend.create_file("/testdir/file.txt", 0o644, b"hello").unwrap();
+        backend
+            .create_file("/testdir/file.txt", 0o644, b"hello")
+            .unwrap();
         assert!(backend.path_exists("/testdir/file.txt").unwrap());
         assert!(!backend.is_directory("/testdir/file.txt").unwrap());
 

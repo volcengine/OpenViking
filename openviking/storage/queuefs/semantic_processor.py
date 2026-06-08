@@ -19,6 +19,7 @@ from openviking.parse.parsers.constants import (
     FILE_TYPE_DOCUMENTATION,
     FILE_TYPE_OTHER,
 )
+from openviking.parse.image_rewrite import rewrite_image_uris
 from openviking.parse.parsers.media.utils import (
     generate_audio_summary,
     generate_image_summary,
@@ -923,14 +924,65 @@ class SemanticProcessor(DequeueHandlerBase):
                 await viking_fs.mkdir(parent_uri.uri, exist_ok=True, ctx=ctx)
             diff.added_dirs.append(target_uri)
             await viking_fs.mv(root_uri, target_uri, ctx=ctx, lock_handle=lock_handle)
+            # The whole temp tree (including the hidden .image_mappings.json
+            # sidecar) was moved into the target; rewrite local image paths now.
+            await self._rewrite_target_image_uris(root_uri, target_uri, ctx=ctx, lock=lock)
             return diff
 
         await sync_dir(root_uri, target_uri)
+        # sync_dir skips hidden files, so the .image_mappings.json sidecar is
+        # still at the temp root. Carry it over and rewrite the synced markdown
+        # before the temp tree is deleted below.
+        await self._rewrite_target_image_uris(root_uri, target_uri, ctx=ctx, lock=lock)
         try:
             await viking_fs.delete_temp(root_uri, ctx=ctx)
         except Exception as e:
             logger.error(f"[SyncDiff] Failed to delete root directory {root_uri}: {e}")
         return diff
+
+    async def _rewrite_target_image_uris(
+        self,
+        root_uri: str,
+        target_uri: str,
+        ctx: Optional[RequestContext] = None,
+        lock: LockLease = NO_LOCK,
+    ) -> None:
+        """Rewrite local image refs in the target after a temp-to-target sync.
+
+        ``_sync_topdown_recursive`` skips hidden files, so the
+        ``.image_mappings.json`` sidecar written by the parser at the temp root
+        is not copied into the target. Carry it over (when missing) so
+        :func:`rewrite_image_uris` can resolve local image paths against the
+        images that were synced into the final target.
+        """
+        viking_fs = get_viking_fs()
+        root_prefix = root_uri.rstrip("/")
+        target_prefix = target_uri.rstrip("/")
+        mapping_name = ".image_mappings.json"
+
+        if root_prefix != target_prefix:
+            try:
+                await viking_fs.stat(f"{target_prefix}/{mapping_name}", ctx=ctx)
+                target_has_mapping = True
+            except Exception:
+                target_has_mapping = False
+
+            if not target_has_mapping:
+                try:
+                    mapping_content = await viking_fs.read_file(
+                        f"{root_prefix}/{mapping_name}", ctx=ctx
+                    )
+                    await viking_fs.write_file(
+                        f"{target_prefix}/{mapping_name}", mapping_content, ctx=ctx
+                    )
+                except Exception:
+                    # No sidecar to carry over (e.g. no local images ingested).
+                    pass
+
+        try:
+            await rewrite_image_uris(target_uri, ctx=ctx, lock_handle=lock.handle)
+        except Exception as e:
+            logger.error(f"[SyncDiff] Failed to rewrite image URIs for {target_uri}: {e}")
 
     async def _collect_children_abstracts(
         self, children_uris: List[str], ctx: Optional[RequestContext] = None

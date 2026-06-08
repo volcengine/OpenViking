@@ -25,7 +25,8 @@ class EmbeddingMsgConverter:
         Convert a Context object to EmbeddingMsg.
         """
         vectorization_text = context.get_vectorization_text()
-        if not vectorization_text:
+        vectorization_images = context.get_vectorization_images()
+        if not vectorization_text and not vectorization_images:
             return None
 
         context_data = context.to_dict()
@@ -67,8 +68,21 @@ class EmbeddingMsgConverter:
             resolved_level = int(resolved_level.value)
         context_data["level"] = int(resolved_level)
 
+        if vectorization_images:
+            # Multimodal message: combine text (if any) and image references into the
+            # multimodal embedding input format. Image-aware embedders consume this list;
+            # text-only embedders fall back to the text part.
+            parts = []
+            if vectorization_text:
+                parts.append({"type": "text", "text": vectorization_text})
+            for image_ref in vectorization_images:
+                parts.append({"type": "image_url", "image_url": {"url": image_ref}})
+            message = parts
+        else:
+            message = vectorization_text
+
         embedding_msg = EmbeddingMsg(
-            message=vectorization_text,
+            message=message,
             context_data=context_data,
             telemetry_id=get_current_telemetry().telemetry_id,
         )

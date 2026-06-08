@@ -17,7 +17,9 @@ The parser handles scenarios:
 5. Oversized sections without subsections → split by paragraphs
 """
 
+import asyncio
 import hashlib
+import io
 import os
 import re
 import time
@@ -132,6 +134,14 @@ class MarkdownParser(BaseParser):
     DEFAULT_MIN_SECTION_TOKENS = 512  # Minimum tokens to create a separate section
     MAX_MERGED_FILENAME_LENGTH = 32  # Maximum length for merged section filenames
 
+    # Image validation constants
+    IMAGE_MIN_SIDE = 14  # Minimum width/height in pixels (exclusive)
+    IMAGE_MIN_PIXELS = 196  # Minimum width * height
+    IMAGE_MAX_PIXELS = 36000000  # Maximum width * height
+    IMAGE_MIN_ASPECT_RATIO = 1 / 150  # Minimum width/height ratio
+    IMAGE_MAX_ASPECT_RATIO = 150  # Maximum width/height ratio
+    IMAGE_MAX_FILE_BYTES = 10 * 1024 * 1024  # Local file path limit: 10 MB
+
     def __init__(
         self,
         extract_frontmatter: bool = True,
@@ -204,6 +214,7 @@ class MarkdownParser(BaseParser):
         source_path: Optional[str] = None,
         instruction: str = "",
         base_dir: Optional[Path] = None,
+        allowed_media_dirs: Optional[List[Path]] = None,
         **kwargs,
     ) -> ParseResult:
         """
@@ -219,6 +230,10 @@ class MarkdownParser(BaseParser):
             source_path: Optional source file path
             instruction: Processing instruction (unused in v5.0)
             base_dir: Base directory for relative paths
+            allowed_media_dirs: Additional directories from which derived media
+                (e.g. images extracted by the PDF/DOC parser) may be read. The
+                caller is responsible for ensuring these belong to the current
+                input resource's lifecycle.
             **kwargs: Additional runtime options, incl. resource_name/source_name and
                 enable_link_rewrite/link_rewrite_root (the latter set by DirectoryParser)
 
@@ -301,6 +316,10 @@ class MarkdownParser(BaseParser):
                 source_path,
                 doc_name=self._sanitize_for_path(doc_title),
             )
+
+            # Ingest local image files, placing each image next to the
+            # markdown file that references it.
+            await self._ingest_local_images(root_dir, base_dir, allowed_media_dirs)
 
             parse_time = time.time() - start_time
             logger.info(f"[MarkdownParser] Parse completed in {parse_time:.2f}s")
@@ -469,6 +488,287 @@ class MarkdownParser(BaseParser):
                 parts.append(current.strip())
 
         return parts if parts else [content]
+
+    async def _ingest_local_images(
+        self,
+        root_dir: str,
+        base_dir: Optional[Path] = None,
+        allowed_media_dirs: Optional[List[Path]] = None,
+    ) -> None:
+        """
+        Scan every processed markdown file under ``root_dir`` and copy the local
+        images they reference into VikingFS, next to the markdown file itself.
+
+        Images are processed file by file: for each markdown file, the local
+        image references it contains are resolved and copied into the same
+        directory as that markdown file. A single ``.image_mappings.json`` file,
+        keyed by the markdown file's path relative to ``root_dir``, is written at
+        ``root_dir`` for ``rewrite_image_uris`` to consume.
+
+        Args:
+            root_dir: Root directory URI in VikingFS containing the markdown files
+            base_dir: Base directory for resolving relative paths
+            allowed_media_dirs: Additional directories from which derived media
+                may be read (passed through to ``_resolve_image_path``)
+        """
+        viking_fs = self._get_viking_fs()
+
+        # Find all processed markdown files under the root directory
+        glob_result = await viking_fs.glob("*.md", uri=root_dir)
+        md_uris = glob_result.get("matches", [])
+        if not md_uris:
+            return
+
+        root_prefix = root_dir.rstrip("/")
+
+        # mapping: rel_md_path -> {original_path_str -> unique_filename}
+        mappings: Dict[str, Dict[str, str]] = {}
+
+        for md_uri in md_uris:
+            try:
+                content = await viking_fs.read_file(md_uri)
+            except Exception:
+                logger.warning(f"[MarkdownParser] Failed to read markdown file: {md_uri}")
+                continue
+
+            # Collect all image references in this markdown file
+            images = list(self._image_pattern.finditer(content))
+            if not images:
+                continue
+
+            # Resolve local image paths, skipping remote URIs and duplicates
+            local_images = []
+            origin_images_links = []
+            seen_paths = set()
+
+            for match in images:
+                path_str = match.group(2)
+
+                # Skip remote URIs
+                if self._is_remote_uri(path_str):
+                    continue
+
+                resolved_path = self._resolve_image_path(path_str, base_dir, allowed_media_dirs)
+                if resolved_path is None:
+                    logger.warning(f"[MarkdownParser] Image file not found: {path_str}")
+                    continue
+
+                # Skip duplicates within the same markdown file
+                if resolved_path in seen_paths:
+                    continue
+                seen_paths.add(resolved_path)
+                origin_images_links.append(path_str)
+                local_images.append(resolved_path)
+
+            if not local_images:
+                continue
+
+            # Target directory is the directory containing the markdown file
+            md_dir = md_uri.rsplit("/", 1)[0]
+
+            # Copy each local image next to the markdown file, deduplicating names
+            used_names: set[str] = set()
+            file_mappings: Dict[str, str] = {}  # original_path_str -> unique_filename
+            for origin_link, resolved_path in zip(origin_images_links, local_images):
+                try:
+                    if not await asyncio.to_thread(resolved_path.exists):
+                        logger.warning(f"[MarkdownParser] Image file not found: {resolved_path}")
+                        continue
+
+                    # Read image bytes
+                    image_bytes = await asyncio.to_thread(resolved_path.read_bytes)
+
+                    # Validate pixel size and file size; skip non-compliant images
+                    if not await asyncio.to_thread(self._is_valid_image, image_bytes, resolved_path):
+                        continue
+
+                    # Get filename and deduplicate
+                    filename = resolved_path.name
+                    unique_filename = self._deduplicate_filename(filename, used_names)
+                    used_names.add(unique_filename)
+
+                    # Write next to the markdown file
+                    viking_path = f"{md_dir}/{unique_filename}"
+                    await viking_fs.write_file_bytes(viking_path, image_bytes)
+                    logger.debug(f"[MarkdownParser] Copied image to VikingFS: {viking_path}")
+
+                    # Record mapping for post-commit rewrite
+                    file_mappings[origin_link] = unique_filename
+
+                except Exception as e:
+                    logger.warning(f"[MarkdownParser] Failed to ingest image {resolved_path}: {e}")
+
+            if file_mappings:
+                rel_md_path = md_uri[len(root_prefix) + 1 :] if md_uri.startswith(root_prefix) else md_uri
+                mappings[rel_md_path] = file_mappings
+
+        # Write a single mapping file at the root directory for rewrite_image_uris
+        if mappings:
+            import json
+            await viking_fs.write_file(
+                f"{root_prefix}/.image_mappings.json",
+                json.dumps(mappings, ensure_ascii=False),
+            )
+
+    def _resolve_image_path(
+        self,
+        path_str: str,
+        base_dir: Optional[Path],
+        allowed_media_dirs: Optional[List[Path]] = None,
+    ) -> Optional[Path]:
+        """
+        Resolve a local image reference to an existing filesystem path.
+
+        Args:
+            path_str: Raw image path from the markdown reference
+            base_dir: Base directory for resolving relative paths
+            allowed_media_dirs: Additional directories that belong to the current
+                input resource's lifecycle (e.g. media extracted by the PDF/DOC
+                parser).
+
+        Returns:
+            Resolved absolute Path if the file exists and stays within an
+            allowed root, otherwise None
+        """
+        try:
+            path = Path(path_str)
+
+            # Reject absolute paths: they can point anywhere on the host
+            if path.is_absolute():
+                logger.warning(
+                    f"[MarkdownParser] Rejected absolute image path: {path_str}"
+                )
+                return None
+
+            # Build the list of allowed roots to confine resolution to.
+            allowed_roots: list[Path] = []
+            if base_dir:
+                allowed_roots.append(base_dir)
+            if allowed_media_dirs:
+                allowed_roots.extend(allowed_media_dirs)
+
+            if not allowed_roots:
+                return None
+
+            for root in allowed_roots:
+                candidate = (root / path).resolve()
+
+                # Verify the resolved candidate stays under the allowed root,
+                # rejecting traversal attempts such as ../../private.png.
+                try:
+                    candidate.relative_to(root.resolve())
+                except ValueError:
+                    logger.warning(
+                        f"[MarkdownParser] Rejected image path outside base dir: {path_str}"
+                    )
+                    continue
+
+                if candidate.exists():
+                    return candidate
+
+            return None
+        except Exception:
+            logger.warning(f"[MarkdownParser] Cannot resolve image path: {path_str}")
+            return None
+
+    def _is_valid_image(self, image_bytes: bytes, source_path: Path) -> bool:
+        """
+        Validate an image's pixel dimensions and file size.
+
+        Requirements:
+        - Width > 14px and height > 14px
+        - Width * height within [196, 36000000]
+        - Aspect ratio (width/height) within [1/150, 150]
+        - File size (local path) <= 10 MB
+
+        Args:
+            image_bytes: Raw image bytes
+            source_path: Original image path (for logging)
+
+        Returns:
+            True if the image satisfies all requirements, otherwise False
+        """
+        # File size check (local file path limit: 10 MB)
+        if len(image_bytes) > self.IMAGE_MAX_FILE_BYTES:
+            logger.warning(
+                f"[MarkdownParser] Image exceeds 10MB, skipping: {source_path}"
+            )
+            return False
+
+        # Pixel size check
+        try:
+            from PIL import Image
+
+            with Image.open(io.BytesIO(image_bytes)) as img:
+                width, height = img.size
+        except Exception as e:
+            logger.warning(
+                f"[MarkdownParser] Cannot read image dimensions, skipping {source_path}: {e}"
+            )
+            return False
+
+        if width <= self.IMAGE_MIN_SIDE or height <= self.IMAGE_MIN_SIDE:
+            logger.warning(
+                f"[MarkdownParser] Image side too small ({width}x{height}), skipping: {source_path}"
+            )
+            return False
+
+        pixels = width * height
+        if pixels < self.IMAGE_MIN_PIXELS or pixels > self.IMAGE_MAX_PIXELS:
+            logger.warning(
+                f"[MarkdownParser] Image pixel count out of range ({pixels}), skipping: {source_path}"
+            )
+            return False
+
+        aspect_ratio = width / height
+        if aspect_ratio < self.IMAGE_MIN_ASPECT_RATIO or aspect_ratio > self.IMAGE_MAX_ASPECT_RATIO:
+            logger.warning(
+                f"[MarkdownParser] Image aspect ratio out of range ({aspect_ratio:.4f}), "
+                f"skipping: {source_path}"
+            )
+            return False
+
+        return True
+
+    @staticmethod
+    def _is_remote_uri(path: str) -> bool:
+        """
+        Check if a path is a remote URI.
+
+        Args:
+            path: Path to check
+
+        Returns:
+            True if path starts with http://, https://, viking://, data:, or ftp://
+        """
+        remote_prefixes = ("http://", "https://", "viking://", "data:", "ftp://")
+        return path.startswith(remote_prefixes)
+
+    @staticmethod
+    def _deduplicate_filename(filename: str, used_names: set[str]) -> str:
+        """
+        Generate a unique filename by appending _1, _2, etc. when collision occurs.
+
+        Args:
+            filename: Original filename
+            used_names: Set of already used filenames
+
+        Returns:
+            Unique filename
+        """
+        if filename not in used_names:
+            return filename
+
+        path_obj = Path(filename)
+        stem = path_obj.stem
+        suffix = path_obj.suffix
+        counter = 1
+
+        while True:
+            new_filename = f"{stem}_{counter}{suffix}"
+            if new_filename not in used_names:
+                return new_filename
+            counter += 1
 
     def _sanitize_for_path(self, text: str, max_length: int = 50) -> str:
         safe = re.sub(

@@ -31,38 +31,8 @@ class MemoryStore:
             return 0.0
 
     @classmethod
-    def _limit_memory_groups(
-        cls,
-        result: dict[str, list[Any]],
-        limit: int,
-    ) -> dict[str, list[Any]]:
-        user_memories = result.get("user_memory", [])
-        agent_memories = result.get("agent_memory", [])
-        ranked: list[tuple[float, str, int, Any]] = []
-
-        for group, memories in (
-            ("user_memory", user_memories),
-            ("agent_memory", agent_memories),
-        ):
-            for index, memory in enumerate(memories):
-                ranked.append((cls._get_score(memory), group, index, memory))
-
-        selected = {
-            (group, index)
-            for _, group, index, _ in sorted(ranked, key=lambda item: item[0], reverse=True)[:limit]
-        }
-        return {
-            "user_memory": [
-                memory
-                for index, memory in enumerate(user_memories)
-                if ("user_memory", index) in selected
-            ],
-            "agent_memory": [
-                memory
-                for index, memory in enumerate(agent_memories)
-                if ("agent_memory", index) in selected
-            ],
-        }
+    def _limit_memories(cls, result: list[Any], limit: int) -> list[Any]:
+        return sorted(result, key=cls._get_score, reverse=True)[:limit]
 
     def read_long_term(self) -> str:
         if self.memory_file.exists():
@@ -191,10 +161,9 @@ class MemoryStore:
                 if isinstance(openviking_connection, dict) and openviking_connection.get("user_id")
                 else config.admin_user_id
             )
-            # Use provided user_ids or fall back to sender_id
-            search_user_ids = user_ids if user_ids else [sender_id]
             logger.info(f"workspace_id={workspace_id}")
-            logger.info(f"user_ids={search_user_ids}")
+            logger.info(f"sender_id={sender_id}")
+            logger.info(f"user_ids={user_ids}")
             logger.info(f"admin_user_id={admin_user_id}")
 
             client = await VikingClient.create(
@@ -203,12 +172,13 @@ class MemoryStore:
             )
             result = await client.search_memory(
                 query=current_message,
-                user_ids=search_user_ids,
+                owner_user_id=sender_id,
+                peer_ids=user_ids,
                 limit=30,
             )
             if not result:
                 return ""
-            result = self._limit_memory_groups(result, limit=10)
+            result = self._limit_memories(result, limit=10)
 
             # Log raw search results for debugging
             memory_list = []

@@ -264,14 +264,103 @@ class VikingClient:
             return f"viking://user/{user_space}/memories/"
         return "viking://user/memories/"
 
+    def _peer_memory_target_uri(self, user_id: Optional[str], peer_id: str) -> str:
+        user_space = self._user_space_fragment(user_id)
+        normalized_peer_id = str(peer_id or "").strip()
+        if not normalized_peer_id:
+            raise ValueError("peer_id is required for peer memory target")
+        if not user_space:
+            raise ValueError("peer memory target requires explicit user_id")
+        return f"viking://user/{user_space}/peers/{normalized_peer_id}/memories/"
+
+    @staticmethod
+    def _dedupe_strings(values: List[str]) -> List[str]:
+        deduped: List[str] = []
+        seen: set[str] = set()
+        for value in values:
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            deduped.append(value)
+        return deduped
+
+    def build_memory_search_requests(
+        self,
+        *,
+        user_ids: Optional[List[str]] = None,
+        owner_user_id: Optional[str] = None,
+        peer_ids: Optional[List[str]] = None,
+    ) -> List[Dict[str, Optional[str]]]:
+        requests: List[Dict[str, Optional[str]]] = []
+        normalized_user_ids = self._dedupe_strings(
+            [str(user_id).strip() for user_id in (user_ids or []) if str(user_id).strip()]
+        )
+        normalized_peer_ids = self._dedupe_strings(
+            [str(peer_id).strip() for peer_id in (peer_ids or []) if str(peer_id).strip()]
+        )
+        effective_owner_user_id = self._effective_user_id(owner_user_id) if owner_user_id else None
+
+        for user_id in normalized_user_ids:
+            requests.append({"target_uri": self._memory_target_uri(user_id), "peer_id": None})
+
+        if effective_owner_user_id and (not requests or normalized_peer_ids):
+            requests.append(
+                {"target_uri": self._memory_target_uri(effective_owner_user_id), "peer_id": None}
+            )
+
+        if effective_owner_user_id:
+            for peer_id in normalized_peer_ids:
+                try:
+                    requests.append(
+                        {
+                            "target_uri": self._peer_memory_target_uri(
+                                effective_owner_user_id, peer_id
+                            ),
+                            "peer_id": None,
+                        }
+                    )
+                except ValueError as exc:
+                    logger.warning(
+                        f"Skip invalid peer memory target owner_user_id={effective_owner_user_id}, peer_id={peer_id}: {exc}"
+                    )
+        elif normalized_peer_ids:
+            for peer_id in normalized_peer_ids:
+                requests.append({"target_uri": "viking://user/memories/", "peer_id": peer_id})
+
+        if not requests:
+            requests.append({"target_uri": self._memory_target_uri(None), "peer_id": None})
+
+        deduped: List[Dict[str, Optional[str]]] = []
+        seen: set[tuple[str, str]] = set()
+        for request in requests:
+            target_uri = str(request.get("target_uri") or "")
+            peer_id = str(request.get("peer_id") or "")
+            key = (target_uri, peer_id)
+            if not target_uri or key in seen:
+                continue
+            seen.add(key)
+            deduped.append({"target_uri": target_uri, "peer_id": request.get("peer_id")})
+        return deduped
+
     def _skill_memory_uri(self, skill_name: str, user_id: Optional[str] = None) -> str:
         return f"{self._memory_target_uri(user_id)}skills/{skill_name}.md"
 
-    async def find(self, query: str, target_uri: Optional[str] = None):
+    def should_sender_fanout(self) -> bool:
+        return self._is_root_key_mode()
+
+    async def find(
+        self,
+        query: str,
+        target_uri: Optional[str] = None,
+        peer_id: Optional[str] = None,
+    ):
         """搜索资源"""
+        kwargs: Dict[str, Any] = {}
+        if peer_id is not None:
+            kwargs["peer_id"] = peer_id
         if target_uri:
-            return await self.client.find(query, target_uri=target_uri)
-        return await self.client.find(query)
+            return await self.client.find(query, target_uri=target_uri, **kwargs)
+        return await self.client.find(query, **kwargs)
 
     async def add_resource(self, local_path: str, desc: str) -> Optional[Dict[str, Any]]:
         """添加资源到 Viking"""
@@ -328,6 +417,7 @@ class VikingClient:
         target_uri: str | list[str] | None = None,
         limit: int = 10,
         user_id: Optional[str] = None,
+        peer_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         client = self.client
         should_close = False
@@ -335,7 +425,12 @@ class VikingClient:
             client, should_close = await self._get_user_scoped_client(user_id)
 
         try:
-            result = await client.search(query, target_uri=target_uri, limit=limit)
+            result = await client.search(
+                query,
+                target_uri=target_uri,
+                limit=limit,
+                peer_id=peer_id,
+            )
         finally:
             if should_close:
                 await client.close()
@@ -478,9 +573,12 @@ class VikingClient:
     async def search_memory(
         self,
         query: str,
-        user_ids: str | list[str],
+        user_ids: str | list[str] | None = None,
         limit: int = 10,
         agent_user_id: Optional[str] = None,
+        *,
+        owner_user_id: Optional[str] = None,
+        peer_ids: Optional[list[str]] = None,
     ) -> list[Any] | dict[str, list[Any]]:
         """通过上下文消息检索用户 memory。"""
 
@@ -498,21 +596,43 @@ class VikingClient:
         if isinstance(user_ids, str):
             user_ids = [user_ids]
 
-        all_user_memories = []
+        normalized_user_ids = [str(user_id).strip() for user_id in (user_ids or []) if user_id]
+        normalized_peer_ids = [str(peer_id).strip() for peer_id in (peer_ids or []) if peer_id]
+        effective_owner_user_id = self._effective_user_id(owner_user_id) if owner_user_id else None
 
-        for user_id in user_ids:
+        user_ids_to_check = self._dedupe_strings(
+            [
+                *normalized_user_ids,
+                *( [effective_owner_user_id] if effective_owner_user_id else [] ),
+            ]
+        )
+
+        for user_id in user_ids_to_check:
             effective_user_id = self._effective_user_id(user_id)
+            if not effective_user_id:
+                continue
             user_exists = await self._check_user_exists(effective_user_id)
             if not user_exists:
                 await self._initialize_user(effective_user_id)
-                continue
 
-            uri_user_memory = self._memory_target_uri(effective_user_id)
-            user_memory = await self.client.find(
-                query=query,
-                target_uri=uri_user_memory,
-                limit=limit,
-            )
+        search_requests = self.build_memory_search_requests(
+            user_ids=normalized_user_ids,
+            owner_user_id=effective_owner_user_id,
+            peer_ids=normalized_peer_ids,
+        )
+        if not search_requests:
+            return []
+
+        all_user_memories = []
+        for request in search_requests:
+            find_kwargs: Dict[str, Any] = {
+                "query": query,
+                "target_uri": request["target_uri"],
+                "limit": limit,
+            }
+            if request.get("peer_id") is not None:
+                find_kwargs["peer_id"] = request.get("peer_id")
+            user_memory = await self.client.find(**find_kwargs)
             all_user_memories.extend(_extract_memories(user_memory))
 
         if agent_user_id is not None:

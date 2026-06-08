@@ -9,31 +9,38 @@ use url::Url;
 
 use crate::{
     base_client::BaseClient,
-    config::{Config, DEFAULT_SELF_MANAGED_PORT, default_config_path},
+    config::{Config, DEFAULT_CUSTOM_PORT, default_config_path},
     error::{Error, Result},
 };
 
-pub const VOLCENGINE_CLOUD_URL: &str = "https://api.vikingdb.cn-beijing.volces.com/openviking";
+pub const OPENVIKING_SERVICE_URL: &str = "https://api.vikingdb.cn-beijing.volces.com/openviking";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfigKind {
-    VolcengineCloud,
-    SelfManaged,
+    OpenVikingService,
+    Custom,
 }
 
 impl ConfigKind {
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Self::VolcengineCloud => "VolcEngine Cloud",
-            Self::SelfManaged => "Self-Managed",
+            Self::OpenVikingService => "OpenViking Service (VolcEngine Cloud)",
+            Self::Custom => "Custom",
+        }
+    }
+
+    pub(crate) fn compact_label(self) -> &'static str {
+        match self {
+            Self::OpenVikingService => "OpenViking Service",
+            Self::Custom => "Custom",
         }
     }
 
     pub(crate) fn from_config(config: &Config) -> Self {
-        if config.url.trim_end_matches('/') == VOLCENGINE_CLOUD_URL {
-            Self::VolcengineCloud
+        if config.url.trim_end_matches('/') == OPENVIKING_SERVICE_URL {
+            Self::OpenVikingService
         } else {
-            Self::SelfManaged
+            Self::Custom
         }
     }
 }
@@ -438,29 +445,31 @@ pub fn build_config(draft: &ConfigDraft) -> Result<Config> {
     let account = non_empty_option(draft.account.as_deref());
     let user = non_empty_option(draft.user.as_deref());
     match draft.kind {
-        ConfigKind::VolcengineCloud => {
+        ConfigKind::OpenVikingService => {
             let api_key = non_empty_option(draft.api_key.as_deref()).ok_or_else(|| {
-                Error::Config("VolcEngine Cloud configs require an API key".to_string())
+                Error::Config(
+                    "OpenViking Service (VolcEngine Cloud) configs require an API key".to_string(),
+                )
             })?;
-            config.url = VOLCENGINE_CLOUD_URL.to_string();
+            config.url = OPENVIKING_SERVICE_URL.to_string();
             config.api_key = Some(api_key);
             config.root_api_key = None;
             config.account = account;
             config.user = user;
         }
-        ConfigKind::SelfManaged => {
-            let url = normalize_self_managed_url(&draft.url);
+        ConfigKind::Custom => {
+            let url = normalize_custom_url(&draft.url);
             if url.is_empty() {
                 return Err(Error::Config(
-                    "Self-managed configs require a server URL".to_string(),
+                    "Custom configs require a server URL".to_string(),
                 ));
             }
             let root_api_key = non_empty_option(draft.root_api_key.as_deref());
             let api_key =
                 non_empty_option(draft.api_key.as_deref()).or_else(|| root_api_key.clone());
-            if api_key.is_none() && self_managed_requires_api_key(&url) {
+            if api_key.is_none() && custom_requires_api_key(&url) {
                 return Err(Error::Config(
-                    "Remote self-managed configs require an API key".to_string(),
+                    "Remote custom configs require an API key".to_string(),
                 ));
             }
             config.url = url.trim_end_matches('/').to_string();
@@ -474,12 +483,12 @@ pub fn build_config(draft: &ConfigDraft) -> Result<Config> {
     Ok(config)
 }
 
-pub(crate) fn self_managed_requires_api_key(url: &str) -> bool {
-    !self_managed_allows_empty_api_key(url)
+pub(crate) fn custom_requires_api_key(url: &str) -> bool {
+    !custom_allows_empty_api_key(url)
 }
 
-pub(crate) fn self_managed_allows_empty_api_key(url: &str) -> bool {
-    let normalized = normalize_self_managed_url(url);
+pub(crate) fn custom_allows_empty_api_key(url: &str) -> bool {
+    let normalized = normalize_custom_url(url);
     let Ok(parsed) = Url::parse(&normalized) else {
         return false;
     };
@@ -489,10 +498,10 @@ pub(crate) fn self_managed_allows_empty_api_key(url: &str) -> bool {
     )
 }
 
-pub(crate) fn normalize_self_managed_url(url: &str) -> String {
+pub(crate) fn normalize_custom_url(url: &str) -> String {
     let trimmed = url.trim().trim_end_matches('/');
     if trimmed.eq_ignore_ascii_case("::1") || trimmed.eq_ignore_ascii_case("[::1]") {
-        return format!("http://[::1]:{DEFAULT_SELF_MANAGED_PORT}");
+        return format!("http://[::1]:{DEFAULT_CUSTOM_PORT}");
     }
     if let Some(port) = trimmed.strip_prefix("[::1]:")
         && !port.trim().is_empty()
@@ -515,7 +524,7 @@ pub(crate) fn normalize_self_managed_url(url: &str) -> String {
         "localhost" | "127.0.0.1"
     ) {
         if port.trim().is_empty() {
-            format!("http://{host}:{DEFAULT_SELF_MANAGED_PORT}")
+            format!("http://{host}:{DEFAULT_CUSTOM_PORT}")
         } else {
             format!("http://{host}:{port}")
         }
@@ -609,7 +618,7 @@ fn admin_probe_regular_key_status(status: u16) -> bool {
         status,
         // 401/403 means the key works but does not have admin access.
         401 | 403
-            // Some self-managed deployments may not expose the admin endpoint.
+            // Some custom deployments may not expose the admin endpoint.
             // Treat explicit absence as regular access rather than blocking a
             // valid non-admin setup.
             | 404
@@ -639,10 +648,10 @@ fn should_run_authenticated_probe(
 
 pub(crate) fn validation_error_copy(kind: ConfigKind, _error: &Error) -> String {
     match kind {
-        ConfigKind::VolcengineCloud => {
+        ConfigKind::OpenVikingService => {
             "Validation failed. Check your API key and try again.".to_string()
         }
-        ConfigKind::SelfManaged => {
+        ConfigKind::Custom => {
             "Validation failed. Check the server URL and API key if required.".to_string()
         }
     }
@@ -696,7 +705,7 @@ fn non_empty_option(value: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ApiKeyRole, ConfigDraft, ConfigKind, ConfigStore, VOLCENGINE_CLOUD_URL,
+        ApiKeyRole, ConfigDraft, ConfigKind, ConfigStore, OPENVIKING_SERVICE_URL,
         admin_probe_ambiguous_status, admin_probe_regular_key_status, build_config,
         should_run_authenticated_probe, validate_candidate_config,
         validate_candidate_config_with_role, validate_config_name, validation_error_copy,
@@ -724,8 +733,15 @@ mod tests {
     }
 
     #[test]
-    fn cloud_provider_label_uses_product_casing() {
-        assert_eq!(ConfigKind::VolcengineCloud.label(), "VolcEngine Cloud");
+    fn openviking_service_provider_label_uses_product_casing() {
+        assert_eq!(
+            ConfigKind::OpenVikingService.label(),
+            "OpenViking Service (VolcEngine Cloud)"
+        );
+        assert_eq!(
+            ConfigKind::OpenVikingService.compact_label(),
+            "OpenViking Service"
+        );
     }
 
     fn write_config(path: &Path, config: &Config) {
@@ -815,19 +831,19 @@ mod tests {
     }
 
     #[test]
-    fn cloud_config_listing_marks_only_one_duplicate_as_active() {
-        let dir = unique_dir("duplicate-cloud-active");
+    fn openviking_service_config_listing_marks_only_one_duplicate_as_active() {
+        let dir = unique_dir("duplicate-ov-service-active");
         let store = ConfigStore::for_config_dir(dir.clone());
-        let config = sample_config(VOLCENGINE_CLOUD_URL, Some("cloud-key"));
+        let config = sample_config(OPENVIKING_SERVICE_URL, Some("service-key"));
         store
-            .save_named_config("cloud", &config)
-            .expect("cloud config should save");
+            .save_named_config("ov-service", &config)
+            .expect("ov-service config should save");
         store
-            .save_named_config("cloud-copy", &config)
-            .expect("cloud copy config should save");
+            .save_named_config("ov-service-copy", &config)
+            .expect("ov-service copy config should save");
         store
-            .activate_config("cloud")
-            .expect("cloud config should become active");
+            .activate_config("ov-service")
+            .expect("ov-service config should become active");
 
         let configs = store.list_configs().expect("configs should load");
         let active = configs
@@ -836,11 +852,15 @@ mod tests {
             .map(|entry| entry.name.as_str())
             .collect::<Vec<_>>();
 
-        assert_eq!(active, vec!["cloud"]);
-        assert!(store.is_config_name_active("cloud").expect("active check"));
+        assert_eq!(active, vec!["ov-service"]);
+        assert!(
+            store
+                .is_config_name_active("ov-service")
+                .expect("active check")
+        );
         assert!(
             !store
-                .is_config_name_active("cloud-copy")
+                .is_config_name_active("ov-service-copy")
                 .expect("copy active check")
         );
     }
@@ -856,10 +876,10 @@ mod tests {
     }
 
     #[test]
-    fn volcengine_config_uses_fixed_url_and_requires_api_key() {
+    fn openviking_service_config_uses_fixed_url_and_requires_api_key() {
         let missing_key = ConfigDraft {
-            name: "cloud".to_string(),
-            kind: ConfigKind::VolcengineCloud,
+            name: "ov-service".to_string(),
+            kind: ConfigKind::OpenVikingService,
             url: String::new(),
             api_key: None,
             root_api_key: None,
@@ -872,24 +892,24 @@ mod tests {
             api_key: Some("viking-key".to_string()),
             ..missing_key
         };
-        let config = build_config(&draft).expect("cloud config should build");
+        let config = build_config(&draft).expect("ov-service config should build");
 
-        assert_eq!(config.url, VOLCENGINE_CLOUD_URL);
+        assert_eq!(config.url, OPENVIKING_SERVICE_URL);
         assert_eq!(config.api_key.as_deref(), Some("viking-key"));
     }
 
     #[test]
-    fn self_managed_config_accepts_custom_url_and_optional_key() {
+    fn custom_config_accepts_custom_url_and_optional_key() {
         let draft = ConfigDraft {
             name: "local".to_string(),
-            kind: ConfigKind::SelfManaged,
+            kind: ConfigKind::Custom,
             url: "http://127.0.0.1:1933".to_string(),
             api_key: None,
             root_api_key: None,
             account: Some("default".to_string()),
             user: Some("default".to_string()),
         };
-        let without_key = build_config(&draft).expect("self-managed config should build");
+        let without_key = build_config(&draft).expect("custom config should build");
         assert_eq!(without_key.url, "http://127.0.0.1:1933");
         assert!(without_key.api_key.is_none());
         assert_eq!(without_key.account.as_deref(), Some("default"));
@@ -902,17 +922,17 @@ mod tests {
             user: None,
             ..draft
         })
-        .expect("self-managed config with key should build");
+        .expect("custom config with key should build");
         assert_eq!(with_key.api_key.as_deref(), Some("local-key"));
         assert!(with_key.account.is_none());
         assert!(with_key.user.is_none());
     }
 
     #[test]
-    fn remote_self_managed_config_requires_api_key() {
+    fn remote_custom_config_requires_api_key() {
         let draft = ConfigDraft {
             name: "remote".to_string(),
-            kind: ConfigKind::SelfManaged,
+            kind: ConfigKind::Custom,
             url: "https://openviking.example.com".to_string(),
             api_key: None,
             root_api_key: None,
@@ -920,13 +940,13 @@ mod tests {
             user: Some("default".to_string()),
         };
 
-        let error = build_config(&draft).expect_err("remote self-managed requires key");
+        let error = build_config(&draft).expect_err("remote custom requires key");
 
         assert!(error.to_string().contains("API key"));
     }
 
     #[test]
-    fn bare_loopback_self_managed_urls_are_local_and_get_default_port() {
+    fn bare_loopback_custom_urls_are_local_and_get_default_port() {
         for (input, expected) in [
             ("127.0.0.1", "http://127.0.0.1:1933"),
             ("localhost", "http://localhost:1933"),
@@ -937,7 +957,7 @@ mod tests {
         ] {
             let draft = ConfigDraft {
                 name: "local".to_string(),
-                kind: ConfigKind::SelfManaged,
+                kind: ConfigKind::Custom,
                 url: input.to_string(),
                 api_key: None,
                 root_api_key: None,
@@ -988,13 +1008,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn self_managed_config_with_api_key_validates_authenticated_probe() {
+    async fn custom_config_with_api_key_validates_authenticated_probe() {
         let url = spawn_auth_probe_server("good-key").await;
         let config = sample_config(&url, Some("bad-key"));
 
         let error = validate_candidate_config(&config, false)
             .await
-            .expect_err("bad self-managed API key should fail validation");
+            .expect_err("bad custom API key should fail validation");
 
         assert!(matches!(error, crate::error::Error::Api { .. }));
     }
@@ -1051,19 +1071,19 @@ mod tests {
                 .to_string(),
         );
 
-        let cloud = validation_error_copy(ConfigKind::VolcengineCloud, &error);
-        let self_managed = validation_error_copy(ConfigKind::SelfManaged, &error);
+        let cloud = validation_error_copy(ConfigKind::OpenVikingService, &error);
+        let custom = validation_error_copy(ConfigKind::Custom, &error);
 
         assert_eq!(
             cloud,
             "Validation failed. Check your API key and try again."
         );
         assert_eq!(
-            self_managed,
+            custom,
             "Validation failed. Check the server URL and API key if required."
         );
         assert!(!cloud.contains("Request ID"));
-        assert!(!self_managed.contains("AuthenticationError"));
+        assert!(!custom.contains("AuthenticationError"));
     }
 
     #[test]

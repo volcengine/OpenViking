@@ -404,7 +404,7 @@ def main():
         "--group-chat",
         action="store_true",
         default=False,
-        help="Group-chat mode: pass --memory-user to vikingbot chat. Default is group-chat mode.",
+        help="Group-chat mode: pass --memory-peer to vikingbot chat. Default is group-chat mode.",
     )
     parser.add_argument(
         "--retry-wrong",

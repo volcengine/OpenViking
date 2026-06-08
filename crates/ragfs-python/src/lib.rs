@@ -12,9 +12,10 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
+use ragfs::core::builder::EncryptionConfig;
 use ragfs::core::{
-    build_default_stack, ConfigValue, EncryptionConfig, FileInfo, FileSystem, FilesystemStats,
-    FsContext, FsContextInner, FsOperation, GrepResult, MountableFS, OperationStats, PluginConfig,
+    build_default_stack, ConfigValue, FileInfo, FileSystem, FilesystemStats, FsContext,
+    FsContextInner, FsOperation, GrepResult, MountableFS, OperationStats, PluginConfig,
     RagfsConfig, TreeEntry, WriteFlag, FS_CTX,
 };
 
@@ -72,6 +73,8 @@ fn to_py_err(e: ragfs::core::Error) -> PyErr {
         ragfs::core::Error::Serialization(_) => new_py_err("AGFSSerializationError", msg),
         ragfs::core::Error::Network(_) => new_py_err("AGFSNetworkError", msg),
         ragfs::core::Error::Timeout(_) => new_py_err("AGFSTimeoutError", msg),
+        ragfs::core::Error::SyncWriteQuorum { .. } => new_py_err("AGFSInternalError", msg),
+        ragfs::core::Error::ContextMissing(_) => new_py_err("AGFSInternalError", msg),
         ragfs::core::Error::Internal(_) => new_py_err("AGFSInternalError", msg),
     }
 }
@@ -232,23 +235,84 @@ fn days_to_ymd(days: u64) -> (u64, u64, u64) {
     (y, m, d)
 }
 
-/// Convert a Python dict to HashMap<String, ConfigValue>
+/// Convert a Python dict to HashMap<String, ConfigValue>, with recursive nesting support.
 fn py_dict_to_config(dict: &Bound<'_, PyDict>) -> PyResult<HashMap<String, ConfigValue>> {
     let mut params = HashMap::new();
     for (k, v) in dict.iter() {
         let key: String = k.extract()?;
-        let value = if let Ok(s) = v.extract::<String>() {
-            ConfigValue::String(s)
-        } else if let Ok(b) = v.extract::<bool>() {
-            ConfigValue::Bool(b)
-        } else if let Ok(i) = v.extract::<i64>() {
-            ConfigValue::Int(i)
-        } else {
-            ConfigValue::String(v.str()?.to_string())
-        };
+        let value = py_any_to_config_value(&v)?;
         params.insert(key, value);
     }
     Ok(params)
+}
+
+/// Convert a single Python value to ConfigValue, recursing into dicts/lists.
+fn py_any_to_config_value(v: &Bound<'_, PyAny>) -> PyResult<ConfigValue> {
+    if let Ok(s) = v.extract::<String>() {
+        Ok(ConfigValue::String(s))
+    } else if let Ok(b) = v.extract::<bool>() {
+        Ok(ConfigValue::Bool(b))
+    } else if let Ok(i) = v.extract::<i64>() {
+        Ok(ConfigValue::Int(i))
+    } else if let Ok(list) = v.downcast::<PyList>() {
+        let mut strings = Vec::new();
+        let mut has_nested = false;
+        for item in list.iter() {
+            if let Ok(s) = item.extract::<String>() {
+                strings.push(s);
+            } else {
+                has_nested = true;
+                break;
+            }
+        }
+        if has_nested || strings.is_empty() {
+            // Convert to serde_json::Value for complex lists
+            let json_val = py_to_json_value(v)?;
+            Ok(ConfigValue::Json(json_val))
+        } else {
+            Ok(ConfigValue::StringList(strings))
+        }
+    } else if v.is_instance_of::<PyDict>() {
+        let json_val = py_to_json_value(v)?;
+        Ok(ConfigValue::Json(json_val))
+    } else {
+        // Fallback: try string representation
+        Ok(ConfigValue::String(v.str()?.to_string()))
+    }
+}
+
+/// Convert a Python value to serde_json::Value recursively.
+fn py_to_json_value(v: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
+    if v.is_none() {
+        Ok(serde_json::Value::Null)
+    } else if let Ok(b) = v.extract::<bool>() {
+        Ok(serde_json::Value::Bool(b))
+    } else if let Ok(i) = v.extract::<i64>() {
+        Ok(serde_json::Value::Number(i.into()))
+    } else if let Ok(f) = v.extract::<f64>() {
+        if let Some(n) = serde_json::Number::from_f64(f) {
+            Ok(serde_json::Value::Number(n))
+        } else {
+            Ok(serde_json::Value::String(f.to_string()))
+        }
+    } else if let Ok(s) = v.extract::<String>() {
+        Ok(serde_json::Value::String(s))
+    } else if let Ok(list) = v.downcast::<PyList>() {
+        let mut arr = Vec::new();
+        for item in list.iter() {
+            arr.push(py_to_json_value(&item)?);
+        }
+        Ok(serde_json::Value::Array(arr))
+    } else if let Ok(dict) = v.downcast::<PyDict>() {
+        let mut map = serde_json::Map::new();
+        for (k, val) in dict.iter() {
+            let key: String = k.extract()?;
+            map.insert(key, py_to_json_value(&val)?);
+        }
+        Ok(serde_json::Value::Object(map))
+    } else {
+        Ok(serde_json::Value::String(v.str()?.to_string()))
+    }
 }
 
 /// Build an immutable `FsContext` from an optional Python `{"account_id": str}` dict.
@@ -462,42 +526,6 @@ impl RAGFSBindingClient {
         self.read(py, path, offset, size, stream, ctx)
     }
 
-    /// Read raw bytes straight from the mount layer, bypassing the encryption layer.
-    ///
-    /// Used by cp / persist whole-blob copies (ciphertext is moved verbatim, never decrypted).
-    #[pyo3(signature = (path, offset=0, size=-1))]
-    fn read_raw(
-        &self,
-        py: Python<'_>,
-        path: String,
-        offset: i64,
-        size: i64,
-    ) -> PyResult<Py<PyAny>> {
-        let mountable = self.mountable.clone();
-        let off = if offset < 0 { 0u64 } else { offset as u64 };
-        let sz = if size < 0 { 0u64 } else { size as u64 };
-        let data = py_detach_blocking(py, move || {
-            self.rt
-                .block_on(async move { mountable.read(&path, off, sz).await })
-        })
-        .map_err(to_py_err)?;
-        Python::attach(|py| Ok(PyBytes::new(py, &data).into()))
-    }
-
-    /// Write raw bytes straight to the mount layer, bypassing the encryption layer.
-    ///
-    /// Counterpart to `read_raw` for cp / persist whole-blob copies.
-    fn write_raw(&self, py: Python<'_>, path: String, data: Vec<u8>) -> PyResult<String> {
-        let mountable = self.mountable.clone();
-        let len = data.len();
-        py_detach_blocking(py, move || {
-            self.rt
-                .block_on(async move { mountable.write(&path, &data, 0, WriteFlag::Create).await })
-        })
-        .map_err(to_py_err)?;
-        Ok(format!("Written {} bytes", len))
-    }
-
     /// Write data to file.
     ///
     /// Args:
@@ -660,6 +688,28 @@ impl RAGFSBindingClient {
         Ok(m)
     }
 
+    /// Attempt a same-mount verbatim copy and report whether the fast-path was used.
+    #[pyo3(signature = (src_path, dst_path, ctx=None))]
+    fn copy_within_mount(
+        &self,
+        py: Python<'_>,
+        src_path: String,
+        dst_path: String,
+        ctx: Option<HashMap<String, String>>,
+    ) -> PyResult<HashMap<String, bool>> {
+        let fs_ctx = build_fs_context(ctx);
+        let mountable = self.mountable.clone();
+        let performed = self
+            .run_scoped(py, fs_ctx, move || async move {
+                mountable.copy_within_mount(&src_path, &dst_path).await
+            })
+            .map_err(to_py_err)?;
+
+        let mut result = HashMap::new();
+        result.insert("performed".to_string(), performed);
+        Ok(result)
+    }
+
     /// Change file permissions.
     #[pyo3(signature = (path, mode, ctx=None))]
     fn chmod(
@@ -737,7 +787,11 @@ impl RAGFSBindingClient {
     /// Args:
     ///     fstype: Filesystem type (e.g., "memfs", "sqlfs", "kvfs", "queuefs")
     ///     path: Mount path
-    ///     config: Plugin configuration as dict
+    ///     config: Plugin configuration as dict. For multi-write, include:
+    ///         - "backups": nested dict matching BackendsConfig schema
+    ///         - "server_encryption_enabled": bool
+    ///         - "primary_encryption_enabled": bool
+    ///         - "primary_redirects": list of redirect policy dicts
     #[pyo3(signature = (fstype, path, config=None))]
     fn mount(
         &self,
@@ -750,12 +804,8 @@ impl RAGFSBindingClient {
             Some(dict) => py_dict_to_config(dict)?,
             None => HashMap::new(),
         };
-
-        let plugin_config = PluginConfig {
-            name: fstype.clone(),
-            mount_path: path.clone(),
-            params,
-        };
+        let plugin_config = PluginConfig::from_raw_parts(fstype.clone(), path.clone(), params)
+            .map_err(to_py_err)?;
 
         let mountable = self.mountable.clone();
         py_detach_blocking(py, move || {
@@ -927,6 +977,58 @@ impl RAGFSBindingClient {
         })
     }
 
+    /// Query multi-write sync status under a file or directory path.
+    ///
+    /// Args:
+    ///     path: Absolute AGFS path rooted at the mounted namespace
+    ///     ctx: Optional FsContext dict (e.g. {"account_id": ...})
+    ///
+    /// Returns:
+    ///     A JSON-like dict describing pending and acknowledged backup sync state.
+    #[pyo3(signature = (path, ctx=None))]
+    fn system_sync_status(
+        &self,
+        py: Python<'_>,
+        path: String,
+        ctx: Option<HashMap<String, String>>,
+    ) -> PyResult<Py<PyAny>> {
+        let fs_ctx = build_fs_context(ctx);
+        let mountable = self.mountable.clone();
+        let result = self
+            .run_scoped(py, fs_ctx, move || async move {
+                mountable.system_sync_status(&path).await
+            })
+            .map_err(to_py_err)?;
+
+        Python::attach(|py| serde_json_to_py(py, &result))
+    }
+
+    /// Manually retry lagging multi-write backup sync operations under a path.
+    ///
+    /// Args:
+    ///     path: Absolute AGFS path rooted at the mounted namespace
+    ///     ctx: Optional FsContext dict (e.g. {"account_id": ...})
+    ///
+    /// Returns:
+    ///     A JSON-like dict summarizing retry results per target backend.
+    #[pyo3(signature = (path, ctx=None))]
+    fn system_sync_retry(
+        &self,
+        py: Python<'_>,
+        path: String,
+        ctx: Option<HashMap<String, String>>,
+    ) -> PyResult<Py<PyAny>> {
+        let fs_ctx = build_fs_context(ctx);
+        let mountable = self.mountable.clone();
+        let result = self
+            .run_scoped(py, fs_ctx, move || async move {
+                mountable.system_sync_retry(&path).await
+            })
+            .map_err(to_py_err)?;
+
+        Python::attach(|py| serde_json_to_py(py, &result))
+    }
+
     /// Calculate file digest (not yet implemented in ragfs).
     #[pyo3(signature = (path, algorithm="xxh3"))]
     fn digest(&self, path: String, algorithm: &str) -> PyResult<HashMap<String, String>> {
@@ -1025,7 +1127,9 @@ mod tests {
         Python::attach(|py| {
             let ty = py.get_type::<RAGFSBindingClient>();
             let kwargs = PyDict::new(py);
-            kwargs.set_item("config_path", "/tmp/legacy-ov.conf").unwrap();
+            kwargs
+                .set_item("config_path", "/tmp/legacy-ov.conf")
+                .unwrap();
             let instance = ty.call((), Some(&kwargs));
             assert!(instance.is_ok());
         });

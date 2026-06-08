@@ -30,6 +30,14 @@ def _get_session_number(session_key: str) -> int:
     return int(session_key.split("_")[1])
 
 
+def build_memory_policy(group_chat: bool) -> Dict[str, Dict[str, bool]]:
+    """Build session/commit memory policy for benchmark ingest."""
+    return {
+        "self": {"enabled": True},
+        "peer": {"enabled": bool(group_chat)},
+    }
+
+
 def parse_test_file(path: str) -> List[Dict[str, Any]]:
     """Parse txt test file into sessions.
 
@@ -302,6 +310,7 @@ async def viking_ingest(
     user_id: Optional[str] = None,
     account: str = "default",
     api_key: Optional[str] = None,
+    group_chat: bool = False,
 ) -> Dict[str, int]:
     """Save messages to OpenViking via OpenViking SDK client.
     Returns token usage dict with embedding and vlm token counts.
@@ -313,6 +322,7 @@ async def viking_ingest(
         user_id: User identifier for separate userspace (e.g., "conv-26")
         account: OpenViking account identifier
         api_key: Optional API key for OpenViking client authentication
+        group_chat: Whether to enable peer-memory extraction for group-chat sessions
     """
     # 解析 session_time - 为每条消息计算递增的时间戳
     base_datetime = None
@@ -331,10 +341,11 @@ async def viking_ingest(
         timeout=600,
     )
     await client.initialize()
+    memory_policy = build_memory_policy(group_chat)
 
     try:
         # Create session
-        create_res = await client.create_session()
+        create_res = await client.create_session(memory_policy=memory_policy)
         session_id = create_res["session_id"]
 
         # Add messages one by one with created_at
@@ -354,7 +365,11 @@ async def viking_ingest(
             )
 
         # Commit
-        result = await client.commit_session(session_id, telemetry=True)
+        result = await client.commit_session(
+            session_id,
+            telemetry=True,
+            memory_policy=memory_policy,
+        )
 
         # Accept both "committed" and "accepted" as success - accepted means the session was archived
         if result.get("status") not in ("committed", "accepted"):
@@ -423,6 +438,7 @@ async def process_single_session(
             user_id=user_id,
             account=account,
             api_key=args.api_key,
+            group_chat=args.group_chat,
         )
         duration_seconds = round(time.perf_counter() - started_at, 3)
         token_usage = result["token_usage"]

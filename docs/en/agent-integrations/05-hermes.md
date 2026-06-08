@@ -12,7 +12,7 @@ hermes memory setup
 
 The wizard prompts for:
 
-- **OpenViking server URL** — your self-hosted server (default `http://127.0.0.1:1933`) or Volcengine OpenViking Cloud
+- **OpenViking server URL** — your self-hosted server (default `http://127.0.0.1:1933`) or OpenViking Service (VolcEngine Cloud)
 - **API key** — leave blank for local dev mode
 - **Tenant account / user / agent IDs** — for multi-tenant deployments
 

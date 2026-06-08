@@ -2,8 +2,8 @@ mod store;
 mod wizard;
 
 pub(crate) use store::{
-    ApiKeyRole, ConfigKind, ConfigStore, VOLCENGINE_CLOUD_URL, configs_equivalent,
-    normalize_self_managed_url, self_managed_allows_empty_api_key, self_managed_requires_api_key,
+    ApiKeyRole, ConfigKind, ConfigStore, OPENVIKING_SERVICE_URL, configs_equivalent,
+    custom_allows_empty_api_key, custom_requires_api_key, normalize_custom_url,
     validate_account_id_value, validate_candidate_config_with_role, validate_config_name,
     validate_user_id_value,
 };
