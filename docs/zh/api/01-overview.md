@@ -69,7 +69,6 @@ import openviking as ov
 client = ov.SyncHTTPClient(
     url="http://localhost:1933",
     api_key="your-key",
-    agent_id="my-agent",
     timeout=120.0,
 )
 client.initialize()
@@ -88,8 +87,7 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
   "url": "http://localhost:1933",
   "api_key": "your-key",
   "account": "acme",
-  "user": "alice",
-  "agent_id": "my-agent"
+  "user": "alice"
 }
 ```
 
@@ -101,7 +99,6 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 | `api_key` | API Key | `null`（无认证） |
 | `account` | 租户级请求的默认账户请求头 | `null` |
 | `user` | 租户级请求的默认用户请求头 | `null` |
-| `agent_id` | Agent 标识符请求头 | `null` |
 | `timeout` | HTTP 请求超时时间（秒） | `60.0` |
 | `output` | 默认输出格式：`"table"` 或 `"json"` | `"table"` |
 
@@ -475,7 +472,6 @@ JSON 输出 - 错误：
 | DELETE | `/api/v1/admin/accounts/{account_id}` | 删除工作区（级联清理数据） | ROOT |
 | POST | `/api/v1/admin/accounts/{account_id}/users` | 注册用户 | ROOT/ADMIN |
 | GET | `/api/v1/admin/accounts/{account_id}/users` | 列出用户 | ROOT/ADMIN |
-| GET | `/api/v1/admin/accounts/{account_id}/agents` | 列出 agent namespace | ROOT/ADMIN |
 | DELETE | `/api/v1/admin/accounts/{account_id}/users/{user_id}` | 移除用户 | ROOT/ADMIN |
 | PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/role` | 修改用户角色 | ROOT |
 | POST | `/api/v1/admin/accounts/{account_id}/users/{user_id}/key` | 重新生成 User Key | ROOT/ADMIN |

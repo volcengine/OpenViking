@@ -8,7 +8,12 @@ from pathlib import Path
 
 import pytest
 
-from openviking.utils.agfs_utils import _generate_plugin_config, mount_agfs_backend
+from openviking.utils.agfs_utils import (
+    RagfsBindingConfig,
+    _generate_plugin_config,
+    create_agfs_client,
+    mount_agfs_backend,
+)
 from openviking_cli.utils.config.agfs_config import AGFSConfig, S3Config
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig, EmbeddingModelConfig
 from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig, VolcengineConfig
@@ -246,6 +251,18 @@ class _FakeMountClient:
         return None
 
 
+class _FakeBindingClient:
+    def __init__(self, *, config):
+        self.config = config
+        self.mount_calls = []
+
+    def mount(self, plugin_name, mount_path, config):
+        self.mount_calls.append((plugin_name, mount_path, config))
+
+    def unmount(self, _mount_path):
+        return None
+
+
 def test_mount_agfs_backend_skips_queue_sqlite_dirs_for_memory_backend(tmp_path):
     config = AGFSConfig(
         path=str(tmp_path),
@@ -279,6 +296,40 @@ def test_mount_agfs_backend_creates_queue_sqlite_dirs_for_sqlite_backend(tmp_pat
     queuefs_mount = next(call for call in client.mount_calls if call[0] == "queuefs")
     assert queuefs_mount[2]["backend"] == "sqlite"
     assert queuefs_mount[2]["db_path"] == str(queue_db_path.resolve())
+
+
+def test_ragfs_binding_config_builds_single_binding_dict_for_local_backend(tmp_path):
+    agfs_config = AGFSConfig(path=str(tmp_path), backend="local")
+
+    config = RagfsBindingConfig(
+        agfs=agfs_config,
+        root_key=b"\x01" * 32,
+        provider_type=7,
+    )
+
+    assert config.to_binding_dict() == {
+        "encryption": {
+            "root_key": b"\x01" * 32,
+            "provider_type": 7,
+        }
+    }
+
+
+def test_create_agfs_client_uses_single_binding_config_object(monkeypatch, tmp_path):
+    agfs_config = AGFSConfig(path=str(tmp_path), backend="memory")
+    fake_client = _FakeBindingClient(config={})
+
+    def _fake_get_binding_client():
+        return (lambda *, config: fake_client.__class__(config=config), None)
+
+    monkeypatch.setattr("openviking.pyagfs.get_binding_client", _fake_get_binding_client)
+
+    config = RagfsBindingConfig(agfs=agfs_config)
+    client = create_agfs_client(config)
+
+    assert isinstance(client, _FakeBindingClient)
+    assert client.config == {}
+    assert any(call[0] == "memfs" for call in client.mount_calls)
 
 
 def test_vectordb_validation():

@@ -147,7 +147,7 @@ sudo journalctl -u openviking.service -f
 ```python
 import openviking as ov
 
-client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key", agent_id="my-agent")
+client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
 results = client.find("how to use openviking")
@@ -273,6 +273,58 @@ docker compose up -d
 - Web Studio：`http://localhost:1933/studio`（与 API 同源）
 - 兼容入口：`http://localhost:1934`（Caddy 反代到 1933，仅为已有部署保留）
 
+### 多实例部署注意事项
+
+多实例部署时，通常建议注意这几项配置：
+
+- 把 `server.temp_upload.default_mode` 设为 `"shared"`，这样临时上传文件可以被其他副本消费。
+- 只有在多个实例明确共享同一个 `storage.workspace` 时，才考虑把 `storage.skip_process_lock` 设为 `true`。启用后，OpenViking 不会再检查或创建 `.openviking.pid`。
+- 对 QueueFS，建议通过 `storage.agfs.queuefs.db_path` 显式指定实例本地的 SQLite 路径。如果启用了 usage audit，建议通过 `server.observability.usage_audit.sqlite_path` 显式指定实例本地的 SQLite 路径，不要默认和共享 workspace 卷混用。
+
+示例：
+
+```json
+{
+  "server": {
+    "temp_upload": {
+      "default_mode": "shared"
+    }
+  },
+  "storage": {
+    "skip_process_lock": true
+  }
+}
+```
+
+这个示例只适用于多个实例明确共享同一个 `workspace` 的场景。如果每个实例都有自己的本地 `workspace`，不要开启 `skip_process_lock`。
+
+如果你还需要为 QueueFS 和 usage audit 显式指定本地 SQLite 路径，可以参考：
+
+```json
+{
+  "server": {
+    "temp_upload": {
+      "default_mode": "shared"
+    },
+    "observability": {
+      "usage_audit": {
+        "sqlite_path": "/var/lib/openviking-local/usage_audit.sqlite3"
+      }
+    }
+  },
+  "storage": {
+    "skip_process_lock": true,
+    "agfs": {
+      "queuefs": {
+        "db_path": "/var/lib/openviking-local/queue.db"
+      }
+    }
+  }
+}
+```
+
+这个变体适用于多个实例共享同一个 `workspace`，但 QueueFS 和 usage audit 的 SQLite 文件仍然放在各实例本地路径的场景。
+
 如需公网 HTTPS 访问，请参考 [公网访问指南](12-public-access.md)。
 
 如需自行构建镜像，请显式传入 OpenViking 版本：
@@ -288,7 +340,7 @@ helm install openviking ./examples/k8s-helm \
   --set openviking.config.vlm.api_key="YOUR_API_KEY"
 ```
 
-详细的云上部署指南（包括火山引擎 TOS + VikingDB + 方舟配置）请参考 [云上部署指南](../../../examples/cloud/GUIDE.md)。
+详细的云上部署指南（包括火山引擎 TOS + VikingDB + 方舟配置）请参考 [云上部署指南](https://github.com/volcengine/OpenViking/blob/main/examples/cloud/GUIDE.md)。
 
 ## 健康检查
 

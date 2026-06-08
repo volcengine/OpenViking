@@ -354,10 +354,6 @@ impl SQLiteQueueBackend {
                 created_at INTEGER DEFAULT (strftime('%s', 'now'))
             );
 
-            CREATE INDEX IF NOT EXISTS idx_queue_status
-                ON queue_messages(queue_name, status, id);
-            CREATE INDEX IF NOT EXISTS idx_queue_message_id
-                ON queue_messages(queue_name, message_id);
             "#,
         )
         .map_err(|e| Error::internal(format!("sqlite schema init error: {}", e)))?;
@@ -427,15 +423,6 @@ impl SQLiteQueueBackend {
         .map_err(|e| Error::internal(format!("sqlite recover stale error: {}", e)))?;
 
         Ok(changed)
-    }
-
-    fn ensure_queue_exists(conn: &Connection, queue_name: &str) -> Result<()> {
-        conn.execute(
-            "INSERT OR IGNORE INTO queue_metadata (queue_name) VALUES (?1)",
-            params![queue_name],
-        )
-        .map_err(|e| Error::internal(format!("sqlite ensure queue error: {}", e)))?;
-        Ok(())
     }
 
     fn queue_known(conn: &Connection, queue_name: &str) -> Result<bool> {
@@ -938,7 +925,7 @@ mod tests {
             params![
                 "Semantic",
                 "legacy-msg-id",
-                r#"{"id":"legacy-msg-id","data":"{\"id\":\"semantic-inner\",\"uri\":\"viking://resources/demo\",\"context_type\":\"resource\",\"status\":\"pending\",\"timestamp\":1776411350,\"recursive\":true,\"account_id\":\"default\",\"user_id\":\"default\",\"agent_id\":\"default\",\"role\":\"root\",\"skip_vectorization\":false,\"telemetry_id\":\"tm_demo\",\"target_uri\":null,\"lifecycle_lock_handle_id\":\"lock-demo\",\"is_code_repo\":false,\"changes\":null}","timestamp":"2026-04-17T15:37:39.287855+08:00"}"#,
+                r#"{"id":"legacy-msg-id","data":"{\"id\":\"semantic-inner\",\"uri\":\"viking://resources/demo\",\"context_type\":\"resource\",\"status\":\"pending\",\"timestamp\":1776411350,\"recursive\":true,\"account_id\":\"default\",\"user_id\":\"default\",\"peer_id\":\"default\",\"role\":\"root\",\"skip_vectorization\":false,\"telemetry_id\":\"tm_demo\",\"target_uri\":null,\"lifecycle_lock_handle_id\":\"lock-demo\",\"is_code_repo\":false,\"changes\":null}","timestamp":"2026-04-17T15:37:39.287855+08:00"}"#,
                 1776411459_i64,
             ],
         )
@@ -984,6 +971,28 @@ mod tests {
             SQLiteQueueBackend::open(&db_path_str, SQLiteQueueOptions::default()).unwrap();
         assert!(backend.queue_exists("legacy/semantic"));
         assert_eq!(backend.list_queues("legacy"), vec!["legacy/semantic"]);
+        drop(backend);
+
+        let conn = Connection::open(&db_path_str).unwrap();
+        let migrated_indexes = conn
+            .prepare(
+                "SELECT name FROM sqlite_master
+                 WHERE type = 'index'
+                   AND name IN ('idx_queue_message_id', 'idx_queue_status')
+                 ORDER BY name",
+            )
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(
+            migrated_indexes,
+            vec![
+                "idx_queue_message_id".to_string(),
+                "idx_queue_status".to_string()
+            ]
+        );
     }
 
     #[test]

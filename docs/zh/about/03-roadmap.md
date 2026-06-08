@@ -112,4 +112,4 @@
 
 ## 贡献
 
-我们欢迎贡献以帮助实现这些目标。请参阅 [贡献指南](contributing.md)。
+我们欢迎贡献以帮助实现这些目标。请参阅 [贡献指南](https://github.com/volcengine/OpenViking/blob/main/CONTRIBUTING_CN.md)。

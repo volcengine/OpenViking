@@ -20,8 +20,14 @@ from openviking_cli.session.user_id import UserIdentifier
 @pytest.fixture(autouse=True)
 def fake_query_embedder(service):
     class FakeEmbedder:
+        def prepare_embedding_input(self, text: str) -> str:
+            return text
+
         def embed(self, text: str, is_query: bool = False) -> EmbedResult:
             return EmbedResult(dense_vector=[0.1, 0.2, 0.3])
+
+        async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
+            return self.embed(text, is_query=is_query)
 
     service.viking_fs.query_embedder = FakeEmbedder()
 
@@ -320,7 +326,7 @@ async def test_find_with_inaccessible_target_uri_returns_permission_denied(
     try:
         resp = await client.post(
             "/api/v1/search/find",
-            json={"query": "sample", "target_uri": "viking://agent/foreign-agent", "limit": 5},
+            json={"query": "sample", "target_uri": "viking://user/foreign/memories", "limit": 5},
         )
     finally:
         app.dependency_overrides.pop(get_request_context, None)
@@ -697,6 +703,7 @@ async def test_grep_level_limit_filters_by_relative_match_path(
             "temp_file_id": root_file.name,
             "to": "viking://resources/level-limit/root_level.md",
             "reason": "test",
+            "wait": True,
         },
     )
     await client.post(
@@ -705,6 +712,7 @@ async def test_grep_level_limit_filters_by_relative_match_path(
             "temp_file_id": deep_file.name,
             "to": "viking://resources/level-limit/nested/deeper/deep_level.md",
             "reason": "test",
+            "wait": True,
         },
     )
 
@@ -736,11 +744,11 @@ async def test_grep_exclude_uri_excludes_specific_uri_range(
 
     await client.post(
         "/api/v1/resources",
-        json={"temp_file_id": include_file.name, "reason": "include"},
+        json={"temp_file_id": include_file.name, "reason": "include", "wait": True},
     )
     await client.post(
         "/api/v1/resources",
-        json={"temp_file_id": exclude_file.name, "reason": "exclude"},
+        json={"temp_file_id": exclude_file.name, "reason": "exclude", "wait": True},
     )
 
     root_uri = "viking://resources"
@@ -777,6 +785,7 @@ async def test_grep_exclude_uri_does_not_exclude_same_named_sibling_dirs(
             "temp_file_id": group_a_file.name,
             "to": "viking://resources/group_a/cache/a.md",
             "reason": "test",
+            "wait": True,
         },
     )
     await client.post(
@@ -785,6 +794,7 @@ async def test_grep_exclude_uri_does_not_exclude_same_named_sibling_dirs(
             "temp_file_id": group_b_file.name,
             "to": "viking://resources/group_b/cache/b.md",
             "reason": "test",
+            "wait": True,
         },
     )
 

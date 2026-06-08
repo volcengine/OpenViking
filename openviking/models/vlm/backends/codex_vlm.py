@@ -13,8 +13,8 @@ The complexity in this file arises from the need to shim/adapt standard Chat Com
 requests (used by OpenViking) into Responses API requests. This involves:
 1. Converting `text` and `image_url` parts into `input_text` and `input_image`.
 2. Adapting tool calls and schemas.
-3. Translating the `client.responses.stream` event stream back into a format
-   compatible with standard Chat Completion responses.
+3. Translating raw `client.responses.create(stream=True)` events back into a
+   format compatible with standard Chat Completion responses.
 """
 
 from __future__ import annotations
@@ -90,6 +90,18 @@ class CodexVLM(OpenAIVLM):
         self.api_key = credentials["api_key"]
         self.api_base = explicit_api_base or credentials["base_url"]
         return self.api_key, self.api_base
+
+    def _build_text_kwargs(self, *args, **kwargs):
+        request_kwargs = super()._build_text_kwargs(*args, **kwargs)
+        if self.stream:
+            request_kwargs["stream"] = True
+        return request_kwargs
+
+    def _build_vision_kwargs(self, *args, **kwargs):
+        request_kwargs = super()._build_vision_kwargs(*args, **kwargs)
+        if self.stream:
+            request_kwargs["stream"] = True
+        return request_kwargs
 
     def get_client(self):
         if openai is None:

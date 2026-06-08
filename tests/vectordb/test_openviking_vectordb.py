@@ -1,8 +1,10 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import json
 import shutil
 import unittest
+from unittest.mock import patch
 
 from openviking.storage.vectordb.collection.local_collection import get_or_create_local_collection
 
@@ -174,6 +176,76 @@ class TestOpenVikingVectorDB(unittest.TestCase):
                 if item["id"] not in self.deleted_ids and predicate(item)
             ]
         )
+
+    def test_search_skips_candidate_with_corrupted_fields(self):
+        """损坏 fields 的 candidate 应被跳过，查询不抛异常，且剩余结果 id/score/fields 对齐不错位。
+
+        复现根因：search_by_vector 对每条 candidate 无条件 json.loads，单条坏数据
+        （写入路径 uint16 截断产生的不完整 JSON）会让整个查询崩溃。修复后应跳过坏项、
+        同步过滤 pk/score，保持各列表对齐。
+        """
+        collection = self._create_collection()
+
+        # 4 条数据，向量第 0 位各不相同 -> 与 query 的距离唯一 -> top-k 与 score 确定
+        docs = []
+        for i in range(4):
+            vec = [0.0] * 1024
+            vec[0] = float(i + 1)
+            docs.append(
+                {
+                    "id": f"doc_{i}",
+                    "uri": f"viking://resources/t/doc_{i}.md",
+                    "type": "file",
+                    "context_type": "markdown",
+                    "vector": vec,
+                    "sparse_vector": {},
+                    "created_at": "2026-01-01T10:00:00.000001",
+                    "updated_at": "2026-01-01T12:00:00.000002",
+                    "active_count": i,
+                    "parent_uri": "viking://resources/t/",
+                    "is_leaf": True,
+                    "name": f"doc_{i}.md",
+                    "description": f"desc {i}",
+                    "tags": "t",
+                    "abstract": f"abs {i}",
+                }
+            )
+        self.assertEqual(len(collection.upsert_data(docs).ids), len(docs))
+        self._create_index(collection)
+
+        query = [0.0] * 1024
+        query[0] = 5.0  # l2 距离: doc_3=1, doc_2=2, doc_1=3, doc_0=4（唯一）
+
+        # 基准：未污染时的 id -> score 映射
+        baseline = collection.search_by_vector("idx_filters", dense_vector=query, limit=10)
+        baseline_scores = {item.id: item.score for item in baseline.data}
+        self.assertEqual(len(baseline_scores), 4)
+
+        # 在坏数据真实入口 fetch_cands_data 处，把最近的 doc_3 的 fields 改成未闭合 JSON
+        inner = collection._Collection__collection
+        real_fetch = inner.store_mgr.fetch_cands_data
+        corrupted = {}
+
+        def corrupting_fetch(label_list):
+            cands = real_fetch(label_list)
+            for c in cands:
+                if c is None:
+                    continue
+                if json.loads(c.fields).get("id") == "doc_3":
+                    corrupted["hit"] = True
+                    c.fields = '{"id": "doc_3", "uri": "viking://resources/t/doc_3'
+            return cands
+
+        with patch.object(inner.store_mgr, "fetch_cands_data", side_effect=corrupting_fetch):
+            result = collection.search_by_vector("idx_filters", dense_vector=query, limit=10)
+
+        self.assertTrue(corrupted.get("hit"), "测试未能注入损坏数据")
+        ids = sorted(item.id for item in result.data)
+        self.assertEqual(ids, ["doc_0", "doc_1", "doc_2"], "坏项应被跳过，其余有效项全部返回")
+        for item in result.data:
+            # id 与 fields 内 id 自洽、score 与基准一致 —— 任一错位都会让断言失败
+            self.assertEqual(item.id, item.fields.get("id"))
+            self.assertEqual(item.score, baseline_scores[item.id])
 
     def test_filters_update_delete_recall(self):
         collection = self._create_collection()

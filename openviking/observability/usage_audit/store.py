@@ -36,11 +36,6 @@ class UsageAuditStore(Protocol):
     ) -> dict[str, int]:
         """Return successful find/search counts for one account and date."""
 
-    async def get_agent_overview(
-        self, *, account_id: str, user_date: str, tz: tzinfo, limit: int = 5
-    ) -> dict[str, Any]:
-        """Return distinct agent count and recent agents for the viewer's day."""
-
     async def get_token_series(
         self,
         *,

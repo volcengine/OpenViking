@@ -82,6 +82,7 @@ ov grep "TODO"
 | `health` | Quick health check |
 | `status` | Show server components status |
 | `config` | Configuration management |
+| `language` | Choose CLI display language (alias: `lang`) |
 | `version` | Show CLI and server version |
 | `task` | Track async processing tasks |
 

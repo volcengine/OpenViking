@@ -15,6 +15,7 @@
 
 pub mod cache;
 pub mod client;
+mod tree;
 
 use async_trait::async_trait;
 use std::sync::{Arc, Mutex};
@@ -26,10 +27,12 @@ use futures::stream::{self, StreamExt};
 use regex::Regex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::core::filesystem::{relative_depth, relative_match_file};
 use crate::core::{
     ConfigParameter, Error, FileInfo, FileSystem, GrepMatch, GrepResult, PluginConfig, Result,
-    ServicePlugin, WriteFlag,
+    ServicePlugin, TreeEntry, WriteFlag,
 };
+use tree::build_tree_entries_from_flat_listing;
 
 /// Check whether `path` is under `exclude_path` (including itself).
 fn s3_is_excluded_path(path: &str, exclude_path: &str) -> bool {
@@ -41,44 +44,6 @@ fn s3_is_excluded_path(path: &str, exclude_path: &str) -> bool {
         || path
             .strip_prefix(exclude_path)
             .is_some_and(|suffix| suffix.starts_with('/'))
-}
-
-/// Convert an absolute/plugin path to a query-root-relative grep match path.
-fn s3_relative_match_file(query_root: &str, path: &str) -> String {
-    let base = if query_root == "/" {
-        "/".to_string()
-    } else {
-        query_root.trim_end_matches('/').to_string()
-    };
-
-    if path == base {
-        return ".".to_string();
-    }
-
-    if base == "/" {
-        return path.trim_start_matches('/').to_string();
-    }
-
-    match path.strip_prefix(&base) {
-        Some(rest) => {
-            let rel = rest.trim_start_matches('/');
-            if rel.is_empty() {
-                ".".to_string()
-            } else {
-                rel.to_string()
-            }
-        }
-        None => path.trim_start_matches('/').to_string(),
-    }
-}
-
-/// Compute depth from a query-root-relative path.
-fn s3_relative_depth(rel: &str) -> usize {
-    if rel.is_empty() || rel == "." {
-        0
-    } else {
-        rel.split('/').filter(|p| !p.is_empty()).count()
-    }
 }
 
 /// Abstract trait for reading chunks from a file during grep.
@@ -306,7 +271,7 @@ impl S3FileSystem {
     ) -> Result<Vec<GrepMatch>> {
         let normalized = Self::normalize_path(path);
         let key = self.client.build_key(&normalized);
-        let rel_file = s3_relative_match_file(base_path, path);
+        let rel_file = relative_match_file(base_path, path);
         let mut reader = S3ChunkReader {
             client: &self.client,
             key: &key,
@@ -774,8 +739,8 @@ impl FileSystem for S3FileSystem {
                 }
             }
             if let Some(limit) = level_limit {
-                let rel = s3_relative_match_file(&normalized, &normalized);
-                if s3_relative_depth(&rel) > limit {
+                let rel = relative_match_file(&normalized, &normalized);
+                if relative_depth(&rel) > limit {
                     return Ok(GrepResult::new());
                 }
             }
@@ -809,8 +774,8 @@ impl FileSystem for S3FileSystem {
             }
 
             if !recursive || level_limit.is_some() {
-                let rel = s3_relative_match_file(&normalized, &fs_path);
-                let depth = s3_relative_depth(&rel);
+                let rel = relative_match_file(&normalized, &fs_path);
+                let depth = relative_depth(&rel);
 
                 if !recursive && depth > 1 {
                     continue;
@@ -831,6 +796,42 @@ impl FileSystem for S3FileSystem {
 
         self.grep_files_concurrent(&normalized, files, &re, node_limit)
             .await
+    }
+
+    async fn tree_directory(
+        &self,
+        path: &str,
+        show_hidden: bool,
+        node_limit: Option<usize>,
+        level_limit: Option<usize>,
+    ) -> Result<Vec<TreeEntry>> {
+        let normalized = Self::normalize_path(path);
+
+        let prefix = if normalized == "/" {
+            self.client.build_key("")
+        } else {
+            format!("{}/", self.client.build_key(&normalized))
+        };
+
+        let objects = self.client.list_tree_objects(&prefix).await?;
+
+        let ordered = build_tree_entries_from_flat_listing(
+            &normalized,
+            &objects,
+            show_hidden,
+            level_limit,
+            |key| self.client.strip_prefix(key),
+        )?;
+
+        let mut result = Vec::new();
+        for entry in ordered {
+            if node_limit.is_some_and(|limit| result.len() >= limit) {
+                break;
+            }
+            result.push(entry);
+        }
+
+        Ok(result)
     }
 }
 
@@ -1242,64 +1243,64 @@ mod tests {
     }
 
     #[test]
-    fn test_s3_relative_match_file_same_path() {
-        assert_eq!(s3_relative_match_file("/foo", "/foo"), ".");
-        assert_eq!(s3_relative_match_file("/", "/"), ".");
+    fn test_relative_match_file_same_path() {
+        assert_eq!(relative_match_file("/foo", "/foo"), ".");
+        assert_eq!(relative_match_file("/", "/"), ".");
     }
 
     #[test]
-    fn test_s3_relative_match_file_root_base() {
-        assert_eq!(s3_relative_match_file("/", "/a"), "a");
-        assert_eq!(s3_relative_match_file("/", "/a/b"), "a/b");
+    fn test_relative_match_file_root_base() {
+        assert_eq!(relative_match_file("/", "/a"), "a");
+        assert_eq!(relative_match_file("/", "/a/b"), "a/b");
         assert_eq!(
-            s3_relative_match_file("/", "/deep/nested/file"),
+            relative_match_file("/", "/deep/nested/file"),
             "deep/nested/file"
         );
     }
 
     #[test]
-    fn test_s3_relative_match_file_subdirectory() {
-        assert_eq!(s3_relative_match_file("/a", "/a/b"), "b");
-        assert_eq!(s3_relative_match_file("/a", "/a/b/c"), "b/c");
-        assert_eq!(s3_relative_match_file("/dir", "/dir/file.txt"), "file.txt");
+    fn test_relative_match_file_subdirectory() {
+        assert_eq!(relative_match_file("/a", "/a/b"), "b");
+        assert_eq!(relative_match_file("/a", "/a/b/c"), "b/c");
+        assert_eq!(relative_match_file("/dir", "/dir/file.txt"), "file.txt");
     }
 
     #[test]
-    fn test_s3_relative_match_file_no_prefix_match() {
-        assert_eq!(s3_relative_match_file("/a", "/b"), "b");
-        assert_eq!(s3_relative_match_file("/x", "/y/z"), "y/z");
+    fn test_relative_match_file_no_prefix_match() {
+        assert_eq!(relative_match_file("/a", "/b"), "b");
+        assert_eq!(relative_match_file("/x", "/y/z"), "y/z");
     }
 
     #[test]
-    fn test_s3_relative_match_file_trailing_slash_base() {
-        assert_eq!(s3_relative_match_file("/foo/", "/foo/bar"), "bar");
-        assert_eq!(s3_relative_match_file("/foo/", "/foo"), ".");
+    fn test_relative_match_file_trailing_slash_base() {
+        assert_eq!(relative_match_file("/foo/", "/foo/bar"), "bar");
+        assert_eq!(relative_match_file("/foo/", "/foo"), ".");
     }
 
     #[test]
-    fn test_s3_relative_match_file_empty_remainder() {
-        assert_eq!(s3_relative_match_file("/dir", "/dir/"), ".");
+    fn test_relative_match_file_empty_remainder() {
+        assert_eq!(relative_match_file("/dir", "/dir/"), ".");
     }
 
     #[test]
-    fn test_s3_relative_match_file_leading_slash_in_rest() {
-        assert_eq!(s3_relative_match_file("/dir", "/dir//sub"), "sub");
+    fn test_relative_match_file_leading_slash_in_rest() {
+        assert_eq!(relative_match_file("/dir", "/dir//sub"), "sub");
     }
 
     #[test]
-    fn test_s3_relative_depth() {
-        assert_eq!(s3_relative_depth("."), 0);
-        assert_eq!(s3_relative_depth(""), 0);
-        assert_eq!(s3_relative_depth("a"), 1);
-        assert_eq!(s3_relative_depth("a/b"), 2);
-        assert_eq!(s3_relative_depth("a/b/c"), 3);
-        assert_eq!(s3_relative_depth("deep/nested/path/to/file"), 5);
+    fn test_relative_depth() {
+        assert_eq!(relative_depth("."), 0);
+        assert_eq!(relative_depth(""), 0);
+        assert_eq!(relative_depth("a"), 1);
+        assert_eq!(relative_depth("a/b"), 2);
+        assert_eq!(relative_depth("a/b/c"), 3);
+        assert_eq!(relative_depth("deep/nested/path/to/file"), 5);
     }
 
     #[test]
-    fn test_s3_relative_depth_filters_empty_segments() {
-        assert_eq!(s3_relative_depth("a//b"), 2);
-        assert_eq!(s3_relative_depth("///"), 0);
+    fn test_relative_depth_filters_empty_segments() {
+        assert_eq!(relative_depth("a//b"), 2);
+        assert_eq!(relative_depth("///"), 0);
     }
 
     #[test]

@@ -313,7 +313,27 @@ class LocalCollection(ICollection):
                 pk_list = [pk_list[i] for i in valid_indices]
                 scores_list = [scores_list[i] for i in valid_indices]
 
-            cands_fields = [json.loads(cand.fields) for cand in cands_list]
+            # Parse each candidate's fields defensively: a single corrupted JSON
+            # string (e.g. truncated by the storage layer's uint16 length prefix)
+            # must not fail the whole query. Skip the bad ones and keep cands_list,
+            # pk_list and scores_list aligned, mirroring the None-skip above.
+            cands_fields = []
+            json_valid_indices = []
+            for i, cand in enumerate(cands_list):
+                try:
+                    cands_fields.append(json.loads(cand.fields))
+                    json_valid_indices.append(i)
+                except (json.JSONDecodeError, TypeError) as e:
+                    logger.warning(
+                        f"Failed to parse candidate fields as JSON (label={cand.label}, "
+                        f"fields_len={len(cand.fields) if cand.fields else 0}), skipping. "
+                        f"Error: {e}"
+                    )
+
+            if len(json_valid_indices) < len(cands_list):
+                cands_list = [cands_list[i] for i in json_valid_indices]
+                pk_list = [pk_list[i] for i in json_valid_indices]
+                scores_list = [scores_list[i] for i in json_valid_indices]
 
             if self.meta.primary_key:
                 pk_list = [

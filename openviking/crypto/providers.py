@@ -808,7 +808,13 @@ def create_root_key_provider(
         mount_point = vault_config.get("mount_point", "transit")
         kv_mount_point = vault_config.get("kv_mount_point", "secret")
         kv_version = vault_config.get("kv_version", 1)
+        # 兼容 key_name（旧字段，作为 root_key_name 的回退）
+        # 注意：Pydantic model_dump 后 root_key_name/key_name 总是带有默认值，
+        #       因此必须显式区分用户是否显式传入了 key_name（不是默认值 "openviking-root"）。
         root_key_name = vault_config.get("root_key_name", "openviking-root-key")
+        key_name_val = vault_config.get("key_name", "openviking-root")
+        if root_key_name == "openviking-root-key" and key_name_val != "openviking-root":
+            root_key_name = key_name_val
         encrypted_root_key_key = vault_config.get(
             "encrypted_root_key_key", "openviking-encrypted-root-key"
         )

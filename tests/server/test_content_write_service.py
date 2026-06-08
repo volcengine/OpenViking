@@ -49,7 +49,7 @@ async def test_write_denies_foreign_user_memory_space(service):
     await service.viking_fs.write_file(memory_uri, "Owner note", ctx=owner_ctx)
 
     foreign_ctx = RequestContext(
-        user=UserIdentifier(owner_ctx.account_id, "other_user", owner_ctx.user.agent_id),
+        user=UserIdentifier(owner_ctx.account_id, "other_user"),
         role=Role.USER,
     )
 

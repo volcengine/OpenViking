@@ -41,7 +41,7 @@ class Session:
         content: Optional[str] = None,
         parts: Optional[List[Part]] = None,
         created_at: Optional[str] = None,
-        role_id: Optional[str] = None,
+        peer_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Add a message to the session.
 
@@ -50,7 +50,7 @@ class Session:
             content: Text content (simple mode)
             parts: Parts list (TextPart, ContextPart, ToolPart)
             created_at: Message creation time (ISO format string). If not provided, current time is used.
-            role_id: Optional explicit actor identity. Omit to let the server derive it.
+            peer_id: Optional stable interaction peer identity.
 
         If both content and parts are provided, parts takes precedence.
 
@@ -64,14 +64,14 @@ class Session:
                 role,
                 parts=parts_dicts,
                 created_at=created_at,
-                role_id=role_id,
+                peer_id=peer_id,
             )
         return await self._client.add_message(
             self.session_id,
             role,
             content=content,
             created_at=created_at,
-            role_id=role_id,
+            peer_id=peer_id,
         )
 
     async def batch_add_messages(
@@ -82,7 +82,7 @@ class Session:
 
         Args:
             messages: List of dicts, each with "role" and optionally "content",
-                      "parts", "created_at", "role_id".
+                      "parts", "created_at", "peer_id".
 
         Returns:
             Result dict with session_id, message_count, and added count.
@@ -92,22 +92,43 @@ class Session:
             messages=messages,
         )
 
-    async def commit(self, telemetry: TelemetryRequest = False) -> Dict[str, Any]:
+    async def commit(
+        self,
+        telemetry: TelemetryRequest = False,
+        *,
+        keep_recent_count: int = 0,
+        memory_policy: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """Commit the session (archive messages and extract memories).
 
         Returns:
             Commit result
         """
-        return await self._client.commit_session(self.session_id, telemetry=telemetry)
+        return await self._client.commit_session(
+            self.session_id,
+            telemetry=telemetry,
+            keep_recent_count=keep_recent_count,
+            memory_policy=memory_policy,
+        )
 
-    async def commit_async(self, telemetry: TelemetryRequest = False) -> Dict[str, Any]:
+    async def commit_async(
+        self,
+        telemetry: TelemetryRequest = False,
+        *,
+        keep_recent_count: int = 0,
+        memory_policy: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """Commit the session asynchronously (archive messages and extract memories).
            Used in viking bot for committing.
 
         Returns:
             Commit result
         """
-        return await self.commit(telemetry)
+        return await self.commit(
+            telemetry=telemetry,
+            keep_recent_count=keep_recent_count,
+            memory_policy=memory_policy,
+        )
 
     async def delete(self) -> None:
         """Delete the session."""

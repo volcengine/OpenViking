@@ -40,6 +40,8 @@ pub enum FsOperation {
     Grep,
     /// Ensure parent directories exist
     EnsureParentDirs,
+    /// Tree directory operation
+    TreeDir,
 }
 
 impl FsOperation {
@@ -60,6 +62,7 @@ impl FsOperation {
             FsOperation::Exists,
             FsOperation::Grep,
             FsOperation::EnsureParentDirs,
+            FsOperation::TreeDir,
         ]
     }
 
@@ -80,6 +83,7 @@ impl FsOperation {
             FsOperation::Exists => "exists",
             FsOperation::Grep => "grep",
             FsOperation::EnsureParentDirs => "ensure_parent_dirs",
+            FsOperation::TreeDir => "tree_dir",
         }
     }
 }

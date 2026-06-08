@@ -545,6 +545,61 @@ impl S3Client {
         Ok(ListResult { files, directories })
     }
 
+    /// List all objects under a prefix (flat listing, no delimiter).
+    /// Preserves directory marker objects (keys ending with '/').
+    /// Used by tree_directory for efficient flat traversal.
+    pub async fn list_tree_objects(&self, prefix: &str) -> Result<Vec<ObjectMeta>> {
+        let mut objects = Vec::new();
+        let mut continuation_token: Option<String> = None;
+
+        loop {
+            let mut req = self
+                .client
+                .list_objects_v2()
+                .bucket(&self.bucket)
+                .prefix(prefix);
+
+            if let Some(token) = &continuation_token {
+                req = req.continuation_token(token);
+            }
+
+            let resp = req
+                .send()
+                .await
+                .map_err(|e| Error::internal(format!("S3 ListObjectsV2 error: {}", e)))?;
+
+            for obj in resp.contents() {
+                let key = obj.key().unwrap_or("");
+                if key == prefix {
+                    continue;
+                }
+
+                let size = obj.size.unwrap_or(0);
+                let last_modified = obj
+                    .last_modified()
+                    .map(aws_datetime_to_systemtime)
+                    .unwrap_or(UNIX_EPOCH);
+
+                let is_dir_marker = key.ends_with('/');
+
+                objects.push(ObjectMeta {
+                    key: key.to_string(),
+                    size,
+                    last_modified,
+                    is_dir_marker,
+                });
+            }
+
+            if resp.is_truncated() == Some(true) {
+                continuation_token = resp.next_continuation_token().map(|s| s.to_string());
+            } else {
+                break;
+            }
+        }
+
+        Ok(objects)
+    }
+
     /// Copy an object
     pub async fn copy_object(&self, src_key: &str, dst_key: &str) -> Result<()> {
         let copy_source = format!("{}/{}", self.bucket, src_key);

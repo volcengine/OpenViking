@@ -2,6 +2,7 @@ import fs from "fs"
 import path from "path"
 import {
   log,
+  effectivePeerId,
   makeRequest,
   safeStringify,
   unwrapResponse,
@@ -326,10 +327,13 @@ export function createMemorySessionManager({ config, pluginRoot }) {
 
   async function addMessageToSession(ovSessionId, role, content) {
     try {
+      const body = { role, content }
+      const peerId = effectivePeerId(config)
+      if (peerId) body.peer_id = peerId
       const response = await makeRequest(config, {
         method: "POST",
         endpoint: `/api/v1/sessions/${encodeURIComponent(ovSessionId)}/messages`,
-        body: { role, content },
+        body,
         timeoutMs: 5000,
       })
       unwrapResponse(response)

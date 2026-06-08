@@ -49,7 +49,6 @@ async def health_check(request: Request):
         authorization = request.headers.get("Authorization")
         x_openviking_account = request.headers.get("X-OpenViking-Account")
         x_openviking_user = request.headers.get("X-OpenViking-User")
-        x_openviking_agent = request.headers.get("X-OpenViking-Agent")
 
         # Get effective auth mode from config
         effective_auth_mode = AuthMode.API_KEY
@@ -66,11 +65,9 @@ async def health_check(request: Request):
                     authorization=authorization,
                     x_openviking_account=x_openviking_account,
                     x_openviking_user=x_openviking_user,
-                    x_openviking_agent=x_openviking_agent,
                 )
                 result["account_id"] = str(identity.account_id)
                 result["user_id"] = str(identity.user_id)
-                result["agent_id"] = str(identity.agent_id)
                 result["role"] = identity.role.value
             except Exception as e:
                 logger.warning(f"Failed to resolve identity: {e}")
@@ -141,9 +138,7 @@ async def readiness_check(request: Request):
         ov_config = OpenVikingConfigSingleton.get_instance()
         embedder = ov_config.embedding.get_embedder()
         if embedder is not None:
-            probe_result = await asyncio.wait_for(
-                _embedding_probe(embedder), timeout=10.0
-            )
+            probe_result = await asyncio.wait_for(_embedding_probe(embedder), timeout=10.0)
             checks["embedding"] = probe_result
         else:
             checks["embedding"] = "not_configured"

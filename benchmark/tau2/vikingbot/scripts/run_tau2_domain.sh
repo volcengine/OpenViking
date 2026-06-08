@@ -4,7 +4,7 @@ set -euo pipefail
 # Run VikingBot tau2 runner for all tasks in {domain}_{train|test} split.
 # Usage:
 #   bash run_tau2_domain.sh --domain telecom --split train --epoch 0 --try-no 0 \
-#     --keep-default-tools --result-dir result --use-continue --concurrency 5
+#     --keep-default-tools --result-dir result --use-continue --config .generated/telecom_v0.ov.conf --concurrency 5
 
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,7 +18,7 @@ TRY_NO=0
 KEEP_DEFAULT_TOOLS=0
 RESULT_DIR="result"
 USE_CONTINUE=0
-AGENT_ID=""
+CONFIG=""
 CONCURRENCY=1
 
 while [[ $# -gt 0 ]]; do
@@ -37,19 +37,19 @@ while [[ $# -gt 0 ]]; do
       RESULT_DIR="$2"; shift 2 ;;
     --use-continue)
       USE_CONTINUE=1; shift 1 ;;
-    --agent-id)
-      AGENT_ID="$2"; shift 2 ;;
+    --config)
+      CONFIG="$2"; shift 2 ;;
     --concurrency)
       CONCURRENCY="$2"; shift 2 ;;
     -h|--help)
-      echo "Usage: bash run_tau2_domain.sh --domain DOMAIN --split train|test --epoch N --try-no N --keep-default-tools --result-dir DIR --use-continue --agent-id ID --concurrency N"; exit 0 ;;
+      echo "Usage: bash run_tau2_domain.sh --domain DOMAIN --split train|test --epoch N --try-no N --keep-default-tools --result-dir DIR --use-continue --config PATH --concurrency N"; exit 0 ;;
     *)
       echo "Unknown argument: $1" >&2; exit 1 ;;
   esac
 done
 
 if [[ -z "${DOMAIN}" || ( "${SPLIT}" != "train" && "${SPLIT}" != "test" ) ]]; then
-  echo "Usage: bash run_tau2_domain.sh --domain DOMAIN --split train|test --epoch N --try-no N --keep-default-tools --result-dir DIR --use-continue --agent-id ID --concurrency N" >&2
+  echo "Usage: bash run_tau2_domain.sh --domain DOMAIN --split train|test --epoch N --try-no N --keep-default-tools --result-dir DIR --use-continue --config PATH --concurrency N" >&2
   exit 1
 fi
 
@@ -85,10 +85,10 @@ echo "${DOMAIN}_${SPLIT} task count: ${TASK_COUNT}, concurrency: ${CONCURRENCY}"
 # build reusable flags
 KEEP_DEFAULT_TOOLS_FLAG=""
 CONTINUE_FLAG=""
-AGENT_ID_FLAG=""
+CONFIG_FLAG=""
 [[ "${KEEP_DEFAULT_TOOLS}" == "1" ]] && KEEP_DEFAULT_TOOLS_FLAG="--keep-default-tools"
 [[ "${USE_CONTINUE}" == "1" ]]       && CONTINUE_FLAG="--continue"
-[[ -n "${AGENT_ID}" ]]               && AGENT_ID_FLAG="--agent-id ${AGENT_ID}"
+[[ -n "${CONFIG}" ]]                 && CONFIG_FLAG="--config ${CONFIG}"
 
 # Use a tmpdir as a semaphore: each running task holds a slot file.
 SEM_DIR=$(mktemp -d)
@@ -109,7 +109,7 @@ for ((task_no=0; task_no < TASK_COUNT; task_no++)); do
     python "${RUNNER}" \
       --data-split "${DOMAIN}_${SPLIT}" \
       --task-no "${task_no}" \
-      --output "${out_path}" ${AGENT_ID_FLAG} ${KEEP_DEFAULT_TOOLS_FLAG} ${CONTINUE_FLAG} \
+      --output "${out_path}" ${CONFIG_FLAG} ${KEEP_DEFAULT_TOOLS_FLAG} ${CONTINUE_FLAG} \
       || echo "[WARN] task_no=${task_no} failed, skipping"
     rm -f "${SLOT}"
   ) &

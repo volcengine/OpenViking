@@ -1,19 +1,17 @@
 import { useEffect, useRef } from 'react'
 import type { ComponentType, CSSProperties, ReactNode } from 'react'
-import { Coins, Database, Search, Users } from 'lucide-react'
+import { Coins, Database, Search } from 'lucide-react'
 
 import { Skeleton } from '#/components/ui/skeleton'
 
 import { HOME_ACCENT_COLORS } from '../-constants/dashboard'
 import type {
-  AgentOverview,
   ContextCounts,
   HomeT,
   RetrievalCounts,
   TokenCounts,
 } from '../-types/dashboard'
-import { asNumber, formatNumber, formatTimestamp } from '../-lib/format'
-import { normalizeAgents } from '../-lib/normalize'
+import { asNumber, formatNumber } from '../-lib/format'
 import { DetailRow, Panel } from './panel'
 
 function parseDisplayNumber(value: string): number | null {
@@ -259,57 +257,6 @@ export function TodayRetrievalsPanel({
             value={formatNumber(data?.search)}
           />
         </>
-      )}
-    </MetricPanel>
-  )
-}
-
-export function AgentAccessPanel({
-  data,
-  disabled,
-  isError,
-  isLoading,
-  t,
-}: {
-  data: AgentOverview | undefined
-  disabled: boolean
-  isError: boolean
-  isLoading: boolean
-  t: HomeT
-}) {
-  const agents = normalizeAgents(data?.items)
-  const total = asNumber(data?.total)
-  return (
-    <MetricPanel
-      description={t('agentAccess.description')}
-      icon={Users}
-      isError={isError}
-      isLoading={isLoading}
-      title={t('agentAccess.title')}
-      value={isError ? t('requestFailed') : formatNumber(total)}
-    >
-      {disabled ? (
-        <p className="text-xs text-muted-foreground">{t('usageDisabled')}</p>
-      ) : agents.length === 0 ? (
-        <p className="text-xs text-muted-foreground">
-          {t('agentAccess.empty')}
-        </p>
-      ) : (
-        <div className="grid gap-2">
-          {agents.slice(0, 3).map((agent) => (
-            <div
-              key={agent.agent_id}
-              className="flex min-h-8 items-center justify-between gap-2 rounded-lg border border-[oklch(0.68_0.12_232/0.1)] bg-background/55 px-2.5 py-1.5 text-xs shadow-xs dark:border-white/10 dark:bg-white/[0.05]"
-            >
-              <span className="min-w-0 truncate font-medium">
-                {agent.agent_id}
-              </span>
-              <span className="shrink-0 tabular-nums text-muted-foreground">
-                {formatTimestamp(agent.last_seen_at || '')}
-              </span>
-            </div>
-          ))}
-        </div>
       )}
     </MetricPanel>
   )

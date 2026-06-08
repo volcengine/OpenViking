@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import sys
@@ -11,6 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from openviking_cli.doctor import (
+    _probe_embedding_provider,
     check_agfs,
     check_config,
     check_disk,
@@ -151,10 +153,17 @@ class TestCheckEmbedding:
         config = tmp_path / "ov.conf"
         config.write_text(json.dumps({}))
 
+        real_import_module = importlib.import_module
+
+        def import_module_side_effect(name: str, *args, **kwargs):
+            if name == "llama_cpp":
+                raise ImportError("No module named 'llama_cpp'")
+            return real_import_module(name, *args, **kwargs)
+
         with patch("openviking_cli.doctor._find_config", return_value=config):
             with patch(
                 "openviking_cli.doctor.importlib.import_module",
-                side_effect=ImportError("No module named 'llama_cpp'"),
+                side_effect=import_module_side_effect,
             ):
                 ok, detail, fix = check_embedding()
 
@@ -243,9 +252,41 @@ class TestCheckEmbedding:
             )
         )
         with patch("openviking_cli.doctor._find_config", return_value=config):
-            ok, detail, fix = check_embedding()
+            with patch(
+                "openviking_cli.doctor._probe_embedding_provider",
+                return_value=(True, "openai/text-embedding-3-small probe ok", None),
+            ):
+                ok, detail, fix = check_embedding()
         assert ok
         assert "openai" in detail
+        assert fix is None
+
+    def test_pass_ollama_after_provider_probe(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(
+            json.dumps(
+                {
+                    "embedding": {
+                        "dense": {
+                            "provider": "ollama",
+                            "model": "bge-m3",
+                            "api_base": "http://localhost:11434/v1",
+                            "dimension": 1024,
+                        }
+                    }
+                }
+            )
+        )
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            with patch(
+                "openviking_cli.doctor._probe_embedding_provider",
+                return_value=(True, "ollama/bge-m3 probe ok (dimension=1024)", None),
+            ) as probe:
+                ok, detail, fix = check_embedding()
+        probe.assert_called_once()
+        assert ok
+        assert "ollama/bge-m3" in detail
+        assert fix is None
 
     def test_pass_with_api_key_from_environment_variable(self, tmp_path: Path):
         config = tmp_path / "ov.conf"
@@ -264,7 +305,11 @@ class TestCheckEmbedding:
         )
         with patch("openviking_cli.doctor._find_config", return_value=config):
             with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-env-123"}, clear=False):
-                ok, detail, fix = check_embedding()
+                with patch(
+                    "openviking_cli.doctor._probe_embedding_provider",
+                    return_value=(True, "openai/text-embedding-3-small probe ok", None),
+                ):
+                    ok, detail, fix = check_embedding()
         assert ok
         assert "openai" in detail
 
@@ -297,6 +342,149 @@ class TestCheckEmbedding:
             ok, detail, fix = check_embedding()
         assert not ok
         assert "unreadable" in detail
+
+    def test_embedding_probe_fails_on_provider_error(self):
+        with patch(
+            "openviking_cli.utils.config.embedding_config.EmbeddingConfig.get_embedder",
+            return_value=object(),
+        ):
+            with patch(
+                "openviking.models.embedder.base.embed_compat",
+                side_effect=RuntimeError("model not found"),
+            ):
+                ok, detail, fix = _probe_embedding_provider(
+                    {"max_retries": 0},
+                    {
+                        "provider": "ollama",
+                        "model": "missing-model",
+                        "api_base": "http://localhost:11434/v1",
+                        "dimension": 1024,
+                    },
+                )
+
+        assert not ok
+        assert "probe failed" in detail
+        assert "model not found" in detail
+        assert "model name" in fix
+
+    def test_embedding_probe_fails_on_empty_dense_vector(self):
+        class FakeEmbedder:
+            pass
+
+        async def fake_embed_compat(*args, **kwargs):
+            return type("Result", (), {"dense_vector": []})()
+
+        with patch(
+            "openviking_cli.utils.config.embedding_config.EmbeddingConfig.get_embedder",
+            return_value=FakeEmbedder(),
+        ):
+            with patch(
+                "openviking.models.embedder.base.embed_compat",
+                side_effect=fake_embed_compat,
+            ):
+                ok, detail, fix = _probe_embedding_provider(
+                    {},
+                    {
+                        "provider": "openai",
+                        "model": "custom-embed",
+                        "api_base": "http://localhost:11434/v1",
+                        "dimension": 3,
+                    },
+                )
+
+        assert not ok
+        assert "no dense vector" in detail
+        assert "embedding.dense" in fix
+
+    def test_embedding_probe_fails_on_dimension_mismatch(self):
+        class FakeEmbedder:
+            def get_dimension(self):
+                return 2
+
+        async def fake_embed_compat(*args, **kwargs):
+            return type("Result", (), {"dense_vector": [0.1, 0.2]})()
+
+        with patch(
+            "openviking_cli.utils.config.embedding_config.EmbeddingConfig.get_embedder",
+            return_value=FakeEmbedder(),
+        ):
+            with patch(
+                "openviking.models.embedder.base.embed_compat",
+                side_effect=fake_embed_compat,
+            ):
+                ok, detail, fix = _probe_embedding_provider(
+                    {},
+                    {
+                        "provider": "openai",
+                        "model": "custom-embed",
+                        "api_base": "http://localhost:11434/v1",
+                        "dimension": 3,
+                    },
+                )
+
+        assert not ok
+        assert "dimension mismatch" in detail
+        assert "expected 3, got 2" in detail
+        assert "embedding.dense.dimension" in fix
+
+    def test_embedding_probe_uses_embedder_dimension_when_config_omits_dimension(self):
+        class FakeEmbedder:
+            def get_dimension(self):
+                return 2
+
+        async def fake_embed_compat(*args, **kwargs):
+            return type("Result", (), {"dense_vector": [0.1, 0.2]})()
+
+        with patch(
+            "openviking_cli.utils.config.embedding_config.EmbeddingConfig.get_embedder",
+            return_value=FakeEmbedder(),
+        ):
+            with patch(
+                "openviking.models.embedder.base.embed_compat",
+                side_effect=fake_embed_compat,
+            ):
+                ok, detail, fix = _probe_embedding_provider(
+                    {},
+                    {
+                        "provider": "openai",
+                        "model": "custom-embed",
+                        "api_base": "http://localhost:11434/v1",
+                    },
+                )
+
+        assert ok
+        assert "dimension=2" in detail
+        assert fix is None
+
+    def test_embedding_probe_fails_when_inferred_dimension_mismatches_probe(self):
+        class FakeEmbedder:
+            def get_dimension(self):
+                return 3
+
+        async def fake_embed_compat(*args, **kwargs):
+            return type("Result", (), {"dense_vector": [0.1, 0.2]})()
+
+        with patch(
+            "openviking_cli.utils.config.embedding_config.EmbeddingConfig.get_embedder",
+            return_value=FakeEmbedder(),
+        ):
+            with patch(
+                "openviking.models.embedder.base.embed_compat",
+                side_effect=fake_embed_compat,
+            ):
+                ok, detail, fix = _probe_embedding_provider(
+                    {},
+                    {
+                        "provider": "openai",
+                        "model": "custom-embed",
+                        "api_base": "http://localhost:11434/v1",
+                    },
+                )
+
+        assert not ok
+        assert "dimension mismatch" in detail
+        assert "expected 3, got 2" in detail
+        assert "embedding.dense.dimension" in fix
 
 
 class TestCheckVlm:
@@ -506,7 +694,11 @@ class TestRunDoctor:
             )
         )
         with patch("openviking_cli.doctor._find_config", return_value=config):
-            code = run_doctor()
+            with patch(
+                "openviking_cli.doctor._probe_embedding_provider",
+                return_value=(True, "openai/m probe ok", None),
+            ):
+                code = run_doctor()
         captured = capsys.readouterr()
         assert "OpenViking Doctor" in captured.out
         # May not be 0 if native engine is missing, but the function should complete

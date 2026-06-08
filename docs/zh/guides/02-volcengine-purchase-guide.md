@@ -60,7 +60,7 @@ OpenViking 需要以下模型服务：
 
 1. 在左侧导航栏选择 **"开通管理"**
 2. 选择 **"语言模型"** 一列
-3. 找到 **Doubao-Seed-1.8** 模型
+3. 找到 **Doubao-Seed-2.0** 模型
 4. 点击"开通"按钮
 5. 确认付费方式
 
@@ -74,7 +74,7 @@ OpenViking 需要以下模型服务：
 
 访问：[模型管理页面](https://console.volcengine.com/ark/region:ark+cn-beijing/model)
 
-1. 在左侧导航栏选择 **"开通管理"** 
+1. 在左侧导航栏选择 **"开通管理"**
 2. 选择 **"向量模型"** 一列
 3. 找到 **Doubao-Embedding-Vision** 模型
 4. 点击"开通"
@@ -279,7 +279,7 @@ Error: Connection timeout
 
 | 模型名称 | 当前版本 | 发布日期 |
 |---------|---------|---------|
-| Doubao-Seed-1.8 | `doubao-seed-2-0-pro-260215` | 2025-12-28 |
+| Doubao-Seed-2.0 | `doubao-seed-2-0-pro-260215` | 2025-12-28 |
 | Doubao-Embedding-Vision | `doubao-embedding-vision-251215` | 2025-06-15 |
 
 > 注：模型版本可能更新，请以火山方舟控制台显示为准。

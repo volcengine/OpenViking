@@ -2,14 +2,22 @@
 
 import json
 import os
-from typing import Any
+from typing import Any, AsyncIterator
 
 import litellm
 from litellm import acompletion
 from loguru import logger
 
 from vikingbot.integrations.langfuse import LangfuseClient
-from vikingbot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from vikingbot.providers.base import (
+    LLMProvider,
+    LLMResponse,
+    LLMStreamEvent,
+    ToolCallRequest,
+    build_stream_response,
+    merge_stream_tool_call_delta,
+    stream_delta_value,
+)
 from vikingbot.providers.registry import find_by_model, find_gateway
 from vikingbot.utils.helpers import cal_str_tokens
 from vikingbot.utils.tracing import get_current_response_id
@@ -335,9 +343,119 @@ class LiteLLMProvider(LLMProvider):
                     pass
             # Return error as content for graceful handling
             return LLMResponse(
-                content=f"Error calling LLM: {str(e)}",
+                content=f"Error calling LLM in LiteLLM: {str(e)}",
                 finish_reason="error",
             )
+
+    async def chat_stream(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        model: str | None = None,
+        max_tokens: int = 4096,
+        temperature: float = 0.7,
+        session_id: str | None = None,
+    ) -> AsyncIterator[LLMStreamEvent]:
+        """Send a streaming chat completion request via LiteLLM."""
+        model = self._resolve_model(model or self.default_model)
+        messages = self._handle_system_message(model, messages)
+
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "stream": True,
+        }
+        self._apply_model_overrides(model, kwargs)
+
+        if self.api_key:
+            kwargs["api_key"] = self.api_key
+        if self.api_base:
+            kwargs["api_base"] = self.api_base
+        if self.extra_headers:
+            kwargs["extra_headers"] = self.extra_headers
+        if tools:
+            kwargs["tools"] = tools
+            kwargs["tool_choice"] = "auto"
+
+        content_parts: list[str] = []
+        reasoning_parts: list[str] = []
+        tool_calls: dict[int, dict[str, Any]] = {}
+        finish_reason = "stop"
+        usage: dict[str, int] = {}
+
+        try:
+            response = await acompletion(**kwargs)
+            async for chunk in response:
+                if getattr(chunk, "usage", None):
+                    usage = self._parse_usage(chunk.usage)
+
+                choices = getattr(chunk, "choices", None) or []
+                if not choices:
+                    continue
+                choice = choices[0]
+                if getattr(choice, "finish_reason", None):
+                    finish_reason = choice.finish_reason or finish_reason
+
+                delta = getattr(choice, "delta", None)
+                if delta is None:
+                    continue
+
+                reasoning_delta = stream_delta_value(delta, "reasoning_content")
+                if reasoning_delta:
+                    reasoning_parts.append(reasoning_delta)
+                    yield LLMStreamEvent(type="reasoning_delta", content=reasoning_delta)
+
+                content_delta = stream_delta_value(delta, "content")
+                if content_delta:
+                    content_parts.append(content_delta)
+                    yield LLMStreamEvent(type="content_delta", content=content_delta)
+
+                for delta_tool_call in getattr(delta, "tool_calls", None) or []:
+                    merge_stream_tool_call_delta(tool_calls, delta_tool_call)
+
+            response_obj = build_stream_response(
+                content="".join(content_parts),
+                reasoning_content="".join(reasoning_parts),
+                raw_tool_calls=tool_calls,
+                finish_reason=finish_reason,
+                usage=usage,
+                token_counter=self._stream_tool_tokens,
+            )
+            yield LLMStreamEvent(type="response", response=response_obj)
+        except Exception as e:
+            yield LLMStreamEvent(
+                type="response",
+                response=LLMResponse(
+                    content=f"Error calling LLM in LiteLLM stream: {str(e)}",
+                    finish_reason="error",
+                ),
+            )
+
+    @staticmethod
+    def _parse_usage(raw_usage: Any) -> dict[str, int]:
+        if not raw_usage:
+            return {}
+        usage = {
+            "prompt_tokens": int(getattr(raw_usage, "prompt_tokens", 0) or 0),
+            "completion_tokens": int(getattr(raw_usage, "completion_tokens", 0) or 0),
+            "total_tokens": int(getattr(raw_usage, "total_tokens", 0) or 0),
+        }
+        details = getattr(raw_usage, "prompt_tokens_details", None)
+        cached = getattr(details, "cached_tokens", 0) if details else 0
+        if not cached:
+            cached = getattr(raw_usage, "cache_read_input_tokens", 0) or 0
+        if cached:
+            usage["cache_read_input_tokens"] = int(cached)
+        return usage
+
+    @staticmethod
+    def _stream_tool_tokens(name: str, raw_arguments: str) -> int:
+        tokens = cal_str_tokens(name, text_type="en")
+        if raw_arguments:
+            tokens += cal_str_tokens(raw_arguments, text_type="mixed")
+        return tokens
 
     def _parse_response(self, response: Any) -> LLMResponse:
         """Parse LiteLLM response into our standard format."""

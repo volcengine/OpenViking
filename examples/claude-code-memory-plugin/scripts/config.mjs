@@ -3,7 +3,7 @@
  *
  * Resolution priority (highest → lowest):
  *   1. Environment variables (OPENVIKING_*)
- *   2. ovcli.conf (CLI client config: url, api_key, account, user, agent_id) — connection only
+ *   2. ovcli.conf (CLI client config: url, api_key, account, user) — connection only
  *   3. ov.conf fields (server section + claude_code section) — legacy; new deployments should
  *      prefer env vars. Tuning fields under claude_code.* are still honored for backward compat.
  *   4. Built-in defaults
@@ -16,7 +16,7 @@
  * Env vars covered (full list):
  *   Connection / identity:
  *     OPENVIKING_URL / OPENVIKING_BASE_URL, OPENVIKING_API_KEY / OPENVIKING_BEARER_TOKEN,
- *     OPENVIKING_ACCOUNT, OPENVIKING_USER, OPENVIKING_AGENT_ID
+ *     OPENVIKING_ACCOUNT, OPENVIKING_USER, OPENVIKING_PEER_ID
  *   Recall tuning:
  *     OPENVIKING_AUTO_RECALL, OPENVIKING_RECALL_LIMIT, OPENVIKING_RECALL_TOKEN_BUDGET,
  *     OPENVIKING_RECALL_MAX_CONTENT_CHARS, OPENVIKING_RECALL_PREFER_ABSTRACT,
@@ -155,11 +155,6 @@ export function loadConfig() {
     || str(cc.apiKey, null)
     || str(server.root_api_key, "");
 
-  // agentId: env → ovcli.agent_id → cc.agentId → "claude-code"
-  const agentId = str(process.env.OPENVIKING_AGENT_ID, null)
-    || str(cliFile.agent_id, null)
-    || str(cc.agentId, "claude-code");
-
   // accountId: env → ovcli.account → cc.accountId → ""
   const accountId = str(process.env.OPENVIKING_ACCOUNT, null)
     || str(cliFile.account, null)
@@ -169,6 +164,10 @@ export function loadConfig() {
   const userId = str(process.env.OPENVIKING_USER, null)
     || str(cliFile.user, null)
     || str(cc.userId, "");
+
+  const peerId = str(process.env.OPENVIKING_PEER_ID, null)
+    || str(cc.peerId, null)
+    || str(cc.peer_id, "");
 
   // Each tuning field follows env > ovcli.conf is N/A (CLI doesn't carry tuning) >
   // ov.conf cc.* > built-in default. Env var names are flat OPENVIKING_* (no CC
@@ -204,9 +203,9 @@ export function loadConfig() {
     configPath,
     baseUrl,
     apiKey,
-    agentId,
     accountId,
     userId,
+    peerId,
     timeoutMs,
 
     // Recall

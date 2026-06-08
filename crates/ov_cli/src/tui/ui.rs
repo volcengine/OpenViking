@@ -8,10 +8,6 @@ use ratatui::{
 
 use super::app::{App, Panel};
 
-pub fn render(frame: &mut Frame, app: &App) {
-    let _ = render_with_content_area(frame, app);
-}
-
 /// Render the UI and return the content area rect for image preview
 pub fn render_with_content_area(frame: &mut Frame, app: &App) -> (Rect, Rect) {
     let chunks = Layout::default()
@@ -369,14 +365,14 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) 
 
     hints.extend_from_slice(&[
         Span::styled(
-            "d", 
+            "d",
             Style::default()
                 .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD)), 
+                .add_modifier(Modifier::BOLD)),
         Span::raw(":delete  "),
 
         Span::styled(
-            "r", 
+            "r",
             Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD)),

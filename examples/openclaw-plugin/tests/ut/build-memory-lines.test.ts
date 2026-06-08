@@ -23,10 +23,15 @@ describe("estimateTokenCount", () => {
     expect(estimateTokenCount("")).toBe(0);
   });
 
-  it("estimates tokens as ceil(chars/4)", () => {
+  it("keeps the legacy ASCII estimate close to ceil(chars/4)", () => {
     expect(estimateTokenCount("hello")).toBe(2); // ceil(5/4)
     expect(estimateTokenCount("abcd")).toBe(1); // ceil(4/4)
     expect(estimateTokenCount("abcde")).toBe(2); // ceil(5/4)
+  });
+
+  it("uses CJK-aware weighting for non-Latin text and emoji", () => {
+    expect(estimateTokenCount("\u4f60\u597d\u4e16\u754c")).toBe(6);
+    expect(estimateTokenCount("A\u4f60\ud83d\ude42")).toBe(4);
   });
 
   it("handles long text", () => {
@@ -50,6 +55,30 @@ describe("buildMemoryLines", () => {
     expect(lines).toHaveLength(2);
     expect(lines[0]).toBe("- [preferences] User prefers Python");
     expect(lines[1]).toBe("- [facts] Works at TechCorp");
+  });
+
+  it("includes uri metadata when requested", async () => {
+    const memories = [
+      makeMemory({
+        uri: "viking://user/default/memories/projects/openclaw/autorecall_filename_contract.md",
+        category: "",
+        abstract: "Filename carries semantic meaning.",
+      }),
+    ];
+    const readFn = vi.fn();
+
+    const lines = await buildMemoryLines(memories, readFn, {
+      recallPreferAbstract: true,
+      includeUri: true,
+    });
+
+    expect(lines).toEqual([
+      [
+        "- [memory]",
+        "  <uri>viking://user/default/memories/projects/openclaw/autorecall_filename_contract.md</uri>",
+        "  Filename carries semantic meaning.",
+      ].join("\n"),
+    ]);
   });
 
   it("uses abstract when recallPreferAbstract=true", async () => {
@@ -121,7 +150,7 @@ describe("buildMemoryLines", () => {
   });
 
   it("defaults category to 'memory'", async () => {
-    const memories = [makeMemory({ category: undefined })];
+    const memories = [makeMemory({ category: "" })];
     const readFn = vi.fn();
 
     const lines = await buildMemoryLines(memories, readFn, {

@@ -17,7 +17,7 @@ import yaml
 
 from openviking.core.context import Context, ContextType, Vectorize
 from openviking.core.mcp_converter import is_mcp_format, mcp_to_skill
-from openviking.core.namespace import agent_space_fragment, canonical_agent_root
+from openviking.core.namespace import canonical_user_root, user_space_fragment
 from openviking.core.skill_loader import SkillLoader
 from openviking.privacy import (
     UserPrivacyConfigService,
@@ -97,15 +97,16 @@ class SkillProcessor:
         skill_dict = await self.sanitize_skill_privacy(skill_dict, ctx)
         skill_abstract = self._build_skill_abstract(skill_dict)
 
+        skill_root_uri = f"{canonical_user_root(ctx)}/skills"
         context = Context(
-            uri=f"{canonical_agent_root(ctx)}/skills/{skill_dict['name']}",
-            parent_uri=f"{canonical_agent_root(ctx)}/skills",
+            uri=f"{skill_root_uri}/{skill_dict['name']}",
+            parent_uri=skill_root_uri,
             is_leaf=False,
             abstract=skill_abstract,
             context_type=ContextType.SKILL.value,
             user=ctx.user,
             account_id=ctx.account_id,
-            owner_space=agent_space_fragment(ctx),
+            owner_space=user_space_fragment(ctx),
             meta={
                 "name": skill_dict["name"],
                 "description": skill_dict.get("description", ""),

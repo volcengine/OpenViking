@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """
 OpenViking 记忆演示脚本 — 群聊场景
-测试两种数据隔离策略：
-1. isolate_user_scope_by_agent: 同一个 user，用不同 agent 时数据隔离
-2. isolate_agent_scope_by_user: 同一个 agent，不同 user 之间数据隔离
+测试当前 user/peer 记忆模型：
+1. 登录 user 维护自己的记忆空间
+2. peer_id 维护同一 user 下的一对多外部参与者记忆
 
 用法：
-  python test_group_chat.py                           # 默认测试 4 种模式
-  python test_group_chat.py --mode ff                 # 只测试 ff 模式
-  python test_group_chat.py --account test-ff         # 测试指定 account
+  python test_group_chat.py
+  python test_group_chat.py --account test-user-peer  # 测试指定 account
 """
 
 import argparse
@@ -50,12 +49,12 @@ console = Console()
 
 CONVERSATION_1 = [
     # alice 和 agent-a 对话
-    {"role_id": "alice", "role": "user", "content": "我的密码是123456"},
-    {"role_id": "agent-a", "role": "assistant", "content": "好的记住了"},
+    {"peer_id": "alice", "role": "user", "content": "我的密码是123456"},
+    {"peer_id": "agent-a", "role": "assistant", "content": "好的记住了"},
     # user 告诉 agent 它的身份和风格
-    {"role_id": "alice", "role": "user", "content": "你叫 Agent A，是我的技术助手，说话要简洁专业"},
+    {"peer_id": "alice", "role": "user", "content": "你叫 Agent A，是我的技术助手，说话要简洁专业"},
     {
-        "role_id": "agent-a",
+        "peer_id": "agent-a",
         "role": "assistant",
         "content": "好的，我记下了，我是 Agent A，技术助手，简洁专业",
     },
@@ -63,12 +62,12 @@ CONVERSATION_1 = [
 
 CONVERSATION_2 = [
     # alice 和 agent-b 对话
-    {"role_id": "alice", "role": "user", "content": "我最爱的颜色是蓝色"},
-    {"role_id": "agent-b", "role": "assistant", "content": "好的"},
+    {"peer_id": "alice", "role": "user", "content": "我最爱的颜色是蓝色"},
+    {"peer_id": "agent-b", "role": "assistant", "content": "好的"},
     # user 告诉另一个 agent 它的身份和风格
-    {"role_id": "alice", "role": "user", "content": "你叫 Agent B，是我的生活助手，说话要亲切详细"},
+    {"peer_id": "alice", "role": "user", "content": "你叫 Agent B，是我的生活助手，说话要亲切详细"},
     {
-        "role_id": "agent-b",
+        "peer_id": "agent-b",
         "role": "assistant",
         "content": "好的，我记下了，我是 Agent B，生活助手，亲切详细",
     },
@@ -76,8 +75,8 @@ CONVERSATION_2 = [
 
 CONVERSATION_3 = [
     # alice 和 agent-a 对话（再次告诉 agent 它的身份，覆盖之前的）
-    {"role_id": "alice", "role": "user", "content": "你叫 Agent A，是我的编程助手"},
-    {"role_id": "agent-a", "role": "assistant", "content": "好的，我是 Agent A，编程助手"},
+    {"peer_id": "alice", "role": "user", "content": "你叫 Agent A，是我的编程助手"},
+    {"peer_id": "agent-a", "role": "assistant", "content": "好的，我是 Agent A，编程助手"},
 ]
 
 
@@ -112,14 +111,14 @@ def run_ingest(client: ov.SyncHTTPClient, session_id_prefix: str):
 
         total = len(conv_data)
         for i, msg in enumerate(conv_data, 1):
-            role_id = msg.get("role_id")
-            console.print(f"    [{i}/{total}] 添加 (role_id={role_id})")
+            peer_id = msg.get("peer_id")
+            console.print(f"    [{i}/{total}] 添加 (peer_id={peer_id})")
             client.add_message(
                 session_id,
                 role=msg["role"],
                 content=msg["content"],
                 created_at=session_time_str,
-                role_id=role_id,
+                peer_id=peer_id,
             )
 
         console.print(f"    共 {total} 条消息，提交...")
@@ -175,12 +174,11 @@ def verify_isolation(url: str, api_key: str, account: str):
             api_key=api_key,
             account=account,
             user=search_user,
-            agent_id=search_agent,
             timeout=180,
         )
         sc.initialize()
 
-        results = sc.find(query, limit=5)
+        results = sc.find(query, limit=5, peer_id=search_agent)
         found = False
         if hasattr(results, "memories") and results.memories:
             for m in results.memories:
@@ -224,18 +222,14 @@ def run_test_for_account(account: str, url: str, root_key: str, wait: float) -> 
         api_key=root_key,
         account=account,
         user="admin",
-        agent_id="default",
         timeout=180,
     )
     client.initialize()
 
-    # 尝试创建账号（用 HTTP 以便设置隔离参数）
+    # 尝试创建账号
     console.print("  [yellow]检查/创建账号...[/yellow]")
-    isolate_user = "test-tf" in account or "test-tt" in account
-    isolate_agent = "test-ft" in account or "test-tt" in account
 
     try:
-        # 用 HTTP 直接调用以设置隔离参数
         with httpx.Client() as http:
             resp = http.post(
                 f"{url}/api/v1/admin/accounts",
@@ -243,14 +237,10 @@ def run_test_for_account(account: str, url: str, root_key: str, wait: float) -> 
                 json={
                     "account_id": account,
                     "admin_user_id": "admin",
-                    "isolate_user_scope_by_agent": isolate_user,
-                    "isolate_agent_scope_by_user": isolate_agent,
                 },
             )
             if resp.status_code == 200:
-                console.print(
-                    f"    - 账号 {account} 已创建 (user={isolate_user}, agent={isolate_agent})"
-                )
+                console.print(f"    - 账号 {account} 已创建")
             elif "already exists" in resp.text:
                 console.print(f"    - 账号 {account} 已存在")
             else:
@@ -311,18 +301,10 @@ def run_test_for_account(account: str, url: str, root_key: str, wait: float) -> 
 
 
 def main():
-    parser = argparse.ArgumentParser(description="群聊记忆测试 - 测试数据隔离")
+    parser = argparse.ArgumentParser(description="群聊记忆测试 - 测试 user/peer 记忆模型")
     parser.add_argument("--url", default=DEFAULT_URL, help="Server URL")
     parser.add_argument("--root-key", default="default", help="Root API Key (默认: default)")
-    parser.add_argument(
-        "--mode",
-        choices=["all", "ff", "ft", "tf", "tt"],
-        default="all",
-        help="测试模式: all=4种都测, ff/ft/tf/tt=只测指定模式",
-    )
-    parser.add_argument(
-        "--account", default=None, help="直接指定 account 名称（优先级高于 --mode）"
-    )
+    parser.add_argument("--account", default=None, help="直接指定 account 名称")
     parser.add_argument("--wait", type=float, default=5.0, help="提交后等待秒数")
     args = parser.parse_args()
 
@@ -334,14 +316,7 @@ def main():
         )
     )
 
-    # 确定要测试的账号列表
-    default_accounts = ["test-ff", "test-ft", "test-tf", "test-tt"]
-    if args.account:
-        accounts = [args.account]
-    elif args.mode == "all":
-        accounts = default_accounts
-    else:
-        accounts = [f"test-{args.mode}"]
+    accounts = [args.account or "test-user-peer"]
 
     # 逐个测试
     all_trace_ids = {}
@@ -358,11 +333,7 @@ def main():
         Panel(
             f"[bold green]测试完成![/bold green]\n\n"
             f"Trace IDs:\n{trace_info}\n\n"
-            "预期结果差异：\n"
-            "  ff: isolate_user=F, isolate_agent=F → 全部 ✓ (都不隔离)\n"
-            "  ft: isolate_user=F, isolate_agent=T → 3个 ✓ (只隔离 agent)\n"
-            "  tf: isolate_user=T, isolate_agent=F → 3个 ✓ (只隔离 user)\n"
-            "  tt: isolate_user=T, isolate_agent=T → 全部 ✓ (都隔离)",
+            "预期：当前登录 user 命中自己的记忆；peer 记忆由 peer_id 路由。",
             style="green",
             width=PANEL_WIDTH,
         )

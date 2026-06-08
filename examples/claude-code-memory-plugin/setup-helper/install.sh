@@ -184,15 +184,63 @@ case "${SHELL:-}" in
     ;;
 esac
 
+# Extra launch commands to wrap besides `claude` — e.g. a custom wrapper
+# `cc-custom`, or a multi-word launcher matched on its sub-command.
+# Persisted in the rc marker block as OPENVIKING_CC_WRAP_EXTRA; the wrapper
+# reads it and injects credentials into matching invocations only.
+heading '4b. Extra launch commands (optional)'
+# Seed from this run's env var (automation path), else the value already in
+# the rc (re-run path). The interactive prompt below can still override it.
+WRAP_EXTRA="${OPENVIKING_CC_WRAP_EXTRA:-}"
+if [ -z "$WRAP_EXTRA" ] && [ -n "$RC" ] && [ -f "$RC" ]; then
+  WRAP_EXTRA=$(awk -F"'" '/^OPENVIKING_CC_WRAP_EXTRA=/{print $2; exit}' "$RC" 2>/dev/null || true)
+fi
+info 'Inject OpenViking creds into other launch commands too? e.g. a custom'
+info 'wrapper `cc-custom`. A multi-word launcher (a base command plus a'
+info 'sub-command) is matched on that sub-command; other uses of the command'
+info 'pass through untouched.'
+if [ -n "$WRAP_EXTRA" ]; then
+  info "Currently: $WRAP_EXTRA"
+  ask 'Commands (;-separated; empty = keep, "-" = clear): '
+else
+  ask 'Commands (;-separated, e.g. "cc-custom"; empty to skip): '
+fi
+read -r WRAP_INPUT || WRAP_INPUT=""
+case "$WRAP_INPUT" in
+  "") : ;;
+  -)  WRAP_EXTRA="" ;;
+  *)  WRAP_EXTRA="$WRAP_INPUT" ;;
+esac
+# Normalize each ';'-entry: strip single quotes (keep the rc line safely
+# single-quotable), trim, collapse internal whitespace, drop empties.
+if [ -n "$WRAP_EXTRA" ]; then
+  WRAP_EXTRA=$(printf '%s' "$WRAP_EXTRA" | awk -F';' '{
+    out="";
+    for (i = 1; i <= NF; i++) {
+      s = $i; gsub(/\047/, "", s); gsub(/^[ \t]+|[ \t]+$/, "", s); gsub(/[ \t]+/, " ", s);
+      if (s != "") out = (out == "" ? s : out ";" s);
+    }
+    print out;
+  }')
+  [ -n "$WRAP_EXTRA" ] && info "Will wrap: $WRAP_EXTRA"
+fi
+
 # The user's shell rc gets a single one-line source hook pointing at the
 # wrapper source in the cloned plugin checkout. Hook content stays stable
 # across installs (only the absolute path matters), so the marker
 # replacement only triggers a legacy-cleanup pass once when upgrading from
 # a pre-split install that inlined the full wrapper into the rc.
 SOURCE_HOOK="[ -f \"$WRAPPER_SRC\" ] && . \"$WRAPPER_SRC\""
-SOURCE_BLOCK="$MARKER_BEGIN
+if [ -n "$WRAP_EXTRA" ]; then
+  SOURCE_BLOCK="$MARKER_BEGIN
+OPENVIKING_CC_WRAP_EXTRA='$WRAP_EXTRA'
 $SOURCE_HOOK
 $MARKER_END"
+else
+  SOURCE_BLOCK="$MARKER_BEGIN
+$SOURCE_HOOK
+$MARKER_END"
+fi
 
 if [ -z "$RC" ]; then
   warn 'Could not detect shell rc. Add this snippet to your rc manually:'
@@ -253,8 +301,7 @@ install_legacy() {
     '${OPENVIKING_URL:-http://127.0.0.1:1933}/mcp' \
     --header 'Authorization: Bearer ${OPENVIKING_API_KEY:-}' \
     --header 'X-OpenViking-Account: ${OPENVIKING_ACCOUNT:-}' \
-    --header 'X-OpenViking-User: ${OPENVIKING_USER:-}' \
-    --header 'X-OpenViking-Agent: ${OPENVIKING_AGENT_ID:-}' || {
+    --header 'X-OpenViking-User: ${OPENVIKING_USER:-}' || {
       err 'claude mcp add failed'
       return 1
     }
@@ -305,17 +352,40 @@ install_legacy() {
 install_modern() {
   # `--scope` intentionally omitted. Default scope is already user; passing it
   # breaks older 2.0.x builds that don't recognize the flag.
-  info 'claude plugin marketplace add'
-  ( cd "$REPO_DIR" && claude plugin marketplace add "$REPO_DIR/examples" ) || \
-    warn 'marketplace add returned non-zero (likely already added) — continuing'
-  info 'claude plugin install'
-  ( cd "$REPO_DIR" && claude plugin install claude-code-memory-plugin@openviking-plugins-local ) || {
-    warn 'plugin install failed — falling back to legacy mode'
-    install_legacy
-    return $?
-  }
-  # Belt-and-suspenders: ensure enabled even if `install` left it disabled.
-  claude plugin enable claude-code-memory-plugin@openviking-plugins-local >/dev/null 2>&1 || true
+  local mp='openviking-plugins-local'
+  local plugin='claude-code-memory-plugin@openviking-plugins-local'
+
+  # Marketplace: add when missing, else UPDATE. `marketplace add` on an existing
+  # entry is a no-op that does NOT re-read the source, so a bumped plugin version
+  # in the checkout is never picked up on re-run. Re-running the installer is the
+  # supported upgrade path, so the already-present branch must re-sync the catalog.
+  if claude plugin marketplace list 2>/dev/null | grep -qF "$mp"; then
+    info "claude plugin marketplace update ($mp)"
+    claude plugin marketplace update "$mp" || \
+      warn 'marketplace update returned non-zero — continuing'
+  else
+    info 'claude plugin marketplace add'
+    ( cd "$REPO_DIR" && claude plugin marketplace add "$REPO_DIR/examples" ) || \
+      warn 'marketplace add returned non-zero — continuing'
+  fi
+
+  # Plugin: update when already installed, else install. `plugin install` is a
+  # no-op on an existing install (it will NOT pull a newer version), so an
+  # explicit `plugin update` is required for the re-run-to-upgrade path.
+  if claude plugin list 2>/dev/null | grep -qF "$plugin"; then
+    info "claude plugin update ($plugin)"
+    ( cd "$REPO_DIR" && claude plugin update "$plugin" ) || \
+      warn 'plugin update returned non-zero — continuing'
+  else
+    info 'claude plugin install'
+    ( cd "$REPO_DIR" && claude plugin install "$plugin" ) || {
+      warn 'plugin install failed — falling back to legacy mode'
+      install_legacy
+      return $?
+    }
+  fi
+  # Belt-and-suspenders: ensure enabled even if install/update left it disabled.
+  claude plugin enable "$plugin" >/dev/null 2>&1 || true
 }
 
 # Statusline registration. CC's plugin manifest doesn't accept a statusLine

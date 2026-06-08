@@ -89,6 +89,7 @@ export OPENVIKING_USER="opencode"
   "apiKey": "",
   "account": "default",
   "user": "opencode",
+  "peerId": "",
   "enabled": true,
   "timeoutMs": 30000,
   "autoCommit": {
@@ -99,8 +100,9 @@ export OPENVIKING_USER="opencode"
 ```
 
 `account` 和 `user` 会作为 `X-OpenViking-Account` 与 `X-OpenViking-User` 租户头随每次插件 API 请求发送；留空则不会附加这些头。
+`peerId` 会作为请求级 `peer_id` 用于 memory recall/search 和 session message 写入；留空则保持现有行为。
 
-环境变量 `OPENVIKING_API_KEY`、`OPENVIKING_ACCOUNT` 和 `OPENVIKING_USER` 优先于配置文件。
+环境变量 `OPENVIKING_API_KEY`、`OPENVIKING_ACCOUNT`、`OPENVIKING_USER` 和 `OPENVIKING_PEER_ID` 优先于配置文件。
 
 ## 运行时文件
 

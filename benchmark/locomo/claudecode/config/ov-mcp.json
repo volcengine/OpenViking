@@ -4,8 +4,7 @@
       "type": "http",
       "url": "http://127.0.0.1:1933/mcp",
       "headers": {
-        "X-OpenViking-User": "${OPENVIKING_USER:-}",
-        "X-OpenViking-Agent": "${OPENVIKING_AGENT_ID:-}"
+        "X-OpenViking-User": "${OPENVIKING_USER:-}"
       }
     }
   }
