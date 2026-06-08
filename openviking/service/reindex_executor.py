@@ -48,6 +48,30 @@ logger = get_logger(__name__)
 
 REINDEX_TASK_TYPE = "admin_reindex"
 
+
+# Trailing markers VikingFS appends when a directory has no generated .abstract.md/.overview.md
+# (see openviking/storage/viking_fs.py). The rendered value is a placeholder, not semantic
+# content, and must never be embedded as an ABSTRACT (L0) / OVERVIEW (L1) vector (issue #2434).
+_ABSTRACT_NOT_READY_SUFFIX = "[Directory abstract is not ready]"
+_OVERVIEW_NOT_READY_SUFFIX = "[Directory overview is not ready]"
+
+
+def _is_not_ready_sentinel(text: str, suffix: str) -> bool:
+    """Return True if *text* is a VikingFS not-ready directory placeholder.
+
+    VikingFS renders these as a single ``# <uri>`` header followed only by the not-ready marker.
+    Match that exact shape (a ``#`` header with no substantive body before the trailing marker)
+    so the check is uri-agnostic yet never drops real directory content that merely ends with,
+    or mentions, the user-facing marker phrase.
+    """
+    if not text:
+        return False
+    head = text.rstrip()
+    if not head.endswith(suffix):
+        return False
+    head = head[: -len(suffix)].strip()
+    return head.startswith("#") and "\n" not in head
+
 _reindex_executor: "ReindexExecutor | None" = None
 
 
@@ -1150,15 +1174,17 @@ class ReindexExecutor:
 
     async def _read_directory_abstract(self, uri: str, *, ctx: RequestContext) -> str:
         try:
-            return await get_viking_fs().abstract(uri, ctx=ctx)
+            value = await get_viking_fs().abstract(uri, ctx=ctx)
         except Exception:
             return ""
+        return "" if _is_not_ready_sentinel(value, _ABSTRACT_NOT_READY_SUFFIX) else value
 
     async def _read_directory_overview(self, uri: str, *, ctx: RequestContext) -> str:
         try:
-            return await get_viking_fs().overview(uri, ctx=ctx)
+            value = await get_viking_fs().overview(uri, ctx=ctx)
         except Exception:
             return ""
+        return "" if _is_not_ready_sentinel(value, _OVERVIEW_NOT_READY_SUFFIX) else value
 
     async def _best_file_summary(self, uri: str, *, ctx: RequestContext) -> str:
         parent_uri = VikingURI(uri).parent.uri
