@@ -64,7 +64,8 @@ class BaseChannelConfig(BaseModel):
     type: Any = ChannelType.TELEGRAM  # Default for backwards compatibility
     enabled: bool = True
     ov_tools_enable: bool = True
-    memory_user: list[str] | None = None
+    memory_peer: list[str] | None = None
+    memory_user: list[str] | None = None  # Deprecated alias for memory_peer.
 
     def channel_id(self) -> str:
         return "default"
@@ -291,7 +292,8 @@ class BotChannelConfig(BaseChannelConfig):
     max_concurrent_requests: int = 100
     need_mention: bool = False
     profile_user_list: list[str] = Field(default_factory=list)
-    memory_user: str = ""
+    memory_peer: list[str] | str | None = None
+    memory_user: list[str] | str | None = None  # Deprecated alias for memory_peer.
     id: str = "default"  # Channel identifier for multi-channel support
 
     def channel_id(self) -> str:

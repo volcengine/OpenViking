@@ -181,7 +181,8 @@ bot 将连接到远程 OpenViking Server，使用前请先启动 OpenViking Serv
   - 若不配置，默认使用 `ov.conf` 中配置的 OpenViking Server 信息。
   - 如果你使用远端 OpenViking Server，可以在这里配置目标服务地址和 API Key。
     - `server_url`：OpenViking Server 基础地址，例如 `https://api.vikingdb.cn-beijing.volces.com/openviking` 或 `http://localhost:1933`。
-    - `root_api_key`：bot 调用 OpenViking Server 时使用的 API Key。尽管字段名保留为 `root_api_key`，但在 `user` key 流程下该字段同样会被使用。
+    - `api_key`：bot 调用 OpenViking Server 时使用的 API Key。`api_key_type=user` 时应填写 OpenViking User key。
+    - `root_api_key`：已废弃的兼容字段；新配置请使用 `api_key`。
     - `account_id`：默认值为 `default`，即 OpenViking 的账号 ID。同一 OpenViking account 下的所有 user 共享 resources。
     - `api_key_type`：可选 `root` 或 `user`，默认 `root`。`root` 保留原有的 root-key fanout 行为；`user` 切换 bot 走 user-key 流程调用 OpenViking 客户端。对于托管型远端 OpenViking 服务，通常推荐使用 `user`。
     - `exp_write_tools`：可选，触发经验记忆注入的工具名列表（自演化 agent memory 循环，详见 #2007）。默认 `["write_file", "edit_file"]`。注入仅在 OpenViking Server 启用 `memory.agent_memory_enabled` 时生效，否则此列表无作用。
@@ -211,7 +212,7 @@ bot 将连接到远程 OpenViking Server，使用前请先启动 OpenViking Serv
     },
     "ov_server": {
       "server_url": "https://api.vikingdb.cn-beijing.volces.com/openviking",
-      "root_api_key": "<your-openviking-user-api-key>",
+      "api_key": "<your-openviking-user-api-key>",
       "account_id": "default",
       "api_key_type": "user"
     },

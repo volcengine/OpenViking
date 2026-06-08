@@ -145,7 +145,7 @@ Skills with available="false" need dependencies installed first - you can try in
             start = _time.time()
             profile = await self.memory.get_viking_user_profile(
                 workspace_id=workspace_id,
-                user_id=None,
+                user_id=self._sender_id,
                 openviking_connection=self._openviking_connection,
             )
             cost = round(_time.time() - start, 2)
@@ -172,7 +172,7 @@ Skills with available="false" need dependencies installed first - you can try in
         session_key: SessionKey,
         current_message: str,
         sender_id: str,
-        memory_users: list[str] | None = None,
+        memory_peer_ids: list[str] | None = None,
         ov_tools_enable: bool = True,
         is_first_round: bool = True,
     ) -> str:
@@ -237,12 +237,12 @@ Skills with available="false" need dependencies installed first - you can try in
                 start = _time.time()
                 # Default recall runs under the configured/request OpenViking user.
                 # sender_id is passed separately as peer identity.
-                search_user_ids = memory_users if memory_users else None
+                search_peer_ids = memory_peer_ids if memory_peer_ids else None
                 viking_memory = await self.memory.get_viking_memory_context(
                     current_message=current_message,
                     workspace_id=workspace_id,
                     sender_id=sender_id,
-                    user_ids=search_user_ids,
+                    peer_ids=search_peer_ids,
                     openviking_connection=self._openviking_connection,
                 )
                 logger.info(f"viking_memory={viking_memory}")
@@ -325,7 +325,7 @@ IMPORTANT:
         session_key: SessionKey | None = None,
         ov_tools_enable: bool = True,
         profile_user_list: list[str] | None = None,
-        memory_users: list[str] | None = None,
+        memory_peer_ids: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """
         Build the complete message list for an LLM call.
@@ -337,7 +337,7 @@ IMPORTANT:
             session_key: Optional session key.
             ov_tools_enable: Whether to enable OpenViking tools and memory.
             profile_user_list: List of additional user IDs to fetch profiles for.
-            memory_users: Optional list of user IDs to fetch memory for.
+            memory_peer_ids: Optional list of peer IDs to fetch memory for.
 
         Returns:
             List of messages including system prompt.
@@ -360,7 +360,7 @@ IMPORTANT:
             session_key,
             current_message,
             self._sender_id,
-            memory_users,
+            memory_peer_ids,
             ov_tools_enable=ov_tools_enable,
             is_first_round=not history,
         )

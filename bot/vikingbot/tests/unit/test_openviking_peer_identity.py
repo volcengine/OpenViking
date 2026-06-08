@@ -73,11 +73,14 @@ async def test_commit_uses_current_user_key_session_and_sender_peer(monkeypatch)
         }
         return {"added": len(messages)}
 
-    async def fake_commit_session(session_id, keep_recent_count=0, user_id=None):
+    async def fake_commit_session(
+        session_id, keep_recent_count=0, user_id=None, memory_policy=None
+    ):
         calls["commit"] = {
             "session_id": session_id,
             "keep_recent_count": keep_recent_count,
             "user_id": user_id,
+            "memory_policy": memory_policy,
         }
         return {"archived": True}
 
@@ -93,6 +96,7 @@ async def test_commit_uses_current_user_key_session_and_sender_peer(monkeypatch)
     assert calls["append"]["session_user_id"] is None
     assert calls["append"]["default_user_peer_id"] == "telegram:alice"
     assert calls["commit"]["user_id"] is None
+    assert calls["commit"]["memory_policy"] is None
 
 
 @pytest.mark.asyncio
@@ -112,8 +116,10 @@ async def test_commit_keeps_root_owner_user_explicit(monkeypatch):
         }
         return {"added": len(messages)}
 
-    async def fake_commit_session(session_id, keep_recent_count=0, user_id=None):
-        calls["commit"] = {"user_id": user_id}
+    async def fake_commit_session(
+        session_id, keep_recent_count=0, user_id=None, memory_policy=None
+    ):
+        calls["commit"] = {"user_id": user_id, "memory_policy": memory_policy}
         return {"archived": True}
 
     monkeypatch.setattr(client, "append_messages", fake_append_messages)
@@ -128,3 +134,37 @@ async def test_commit_keeps_root_owner_user_explicit(monkeypatch):
     assert calls["append"]["session_user_id"] == "bot-user"
     assert calls["append"]["default_user_peer_id"] == "telegram:alice"
     assert calls["commit"]["user_id"] == "bot-user"
+    assert calls["commit"]["memory_policy"] is None
+
+
+@pytest.mark.asyncio
+async def test_commit_session_defaults_to_peer_only_memory(monkeypatch):
+    client = _client(api_key_type="user")
+    calls = {}
+
+    async def fake_ensure_session(session_id, user_id=None):
+        calls["ensure"] = {"session_id": session_id, "user_id": user_id}
+        return {"session_id": session_id}
+
+    class FakeSessionClient:
+        async def commit_session(self, session_id, keep_recent_count=0, memory_policy=None):
+            calls["commit"] = {
+                "session_id": session_id,
+                "keep_recent_count": keep_recent_count,
+                "memory_policy": memory_policy,
+            }
+            return {"archived": True}
+
+    async def fake_session_client_for_user(user_id=None):
+        calls["session_user_id"] = user_id
+        return FakeSessionClient()
+
+    monkeypatch.setattr(client, "ensure_session", fake_ensure_session)
+    monkeypatch.setattr(client, "_session_client_for_user", fake_session_client_for_user)
+
+    await client.commit_session("session-1", keep_recent_count=2)
+
+    assert calls["commit"]["memory_policy"] == {
+        "self": {"enabled": False},
+        "peer": {"enabled": True},
+    }

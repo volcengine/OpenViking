@@ -150,6 +150,7 @@ class MemoryStore:
         current_message: str,
         workspace_id: str,
         sender_id: str,
+        peer_ids: list[str] | None = None,
         user_ids: list[str] | None = None,
         openviking_connection: dict[str, Any] | None = None,
     ) -> str:
@@ -163,17 +164,19 @@ class MemoryStore:
             )
             logger.info(f"workspace_id={workspace_id}")
             logger.info(f"sender_id={sender_id}")
-            logger.info(f"user_ids={user_ids}")
+            if peer_ids is None and user_ids:
+                peer_ids = user_ids
+            logger.info(f"peer_ids={peer_ids}")
             logger.info(f"admin_user_id={admin_user_id}")
 
             client = await VikingClient.create(
                 agent_id=workspace_id,
                 connection=openviking_connection,
             )
-            peer_ids = [sender_id, *(user_ids or [])] if sender_id else (user_ids or None)
+            search_peer_ids = [sender_id, *(peer_ids or [])] if sender_id else (peer_ids or None)
             result = await client.search_memory(
                 query=current_message,
-                peer_ids=peer_ids,
+                peer_ids=search_peer_ids,
                 limit=30,
             )
             if not result:

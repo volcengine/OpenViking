@@ -5,6 +5,7 @@ import json
 from abc import ABC
 from pathlib import Path
 from typing import Any, Optional
+import uuid
 
 import httpx
 from loguru import logger
@@ -271,20 +272,21 @@ class VikingSearchTool(OVFileTool):
         client = None
         try:
             client = await self._get_client(tool_context)
-            admin_user_id = client.admin_user_id
             sender_peer_id = tool_context.sender_id
-            memory_user_ids = getattr(tool_context, "memory_user_ids", None)
             memory_peer_ids = getattr(tool_context, "memory_peer_ids", None)
+            memory_owner_user_ids = getattr(tool_context, "memory_owner_user_ids", None)
+            legacy_memory_user_ids = getattr(tool_context, "memory_user_ids", None)
+            logger.debug(f"memory_peer_ids: {memory_peer_ids}, memory_owner_user_ids: {memory_owner_user_ids}, legacy_memory_user_ids: {legacy_memory_user_ids}")
 
-            if not target_uri and (memory_user_ids or memory_peer_ids):
+            if not target_uri and (memory_owner_user_ids or memory_peer_ids or legacy_memory_user_ids):
                 grouped_items = {
                     "memory": [],
                     "resource": [],
                     "skill": [],
                 }
 
-                if memory_user_ids and client.should_sender_fanout():
-                    user_ids = memory_user_ids
+                if client.should_sender_fanout() and (memory_owner_user_ids or legacy_memory_user_ids):
+                    user_ids = memory_owner_user_ids or legacy_memory_user_ids
                     deduped_user_ids: list[str | None] = []
                     for user_id in user_ids or []:
                         if user_id in deduped_user_ids:
@@ -295,7 +297,11 @@ class VikingSearchTool(OVFileTool):
                         for user_id in deduped_user_ids
                     ]
                 else:
-                    peer_ids = [sender_peer_id, *(memory_peer_ids or []), *(memory_user_ids or [])]
+                    peer_ids = [
+                        sender_peer_id,
+                        *(memory_peer_ids or []),
+                        *(legacy_memory_user_ids or []),
+                    ]
                     search_requests = client.build_memory_search_requests(
                         peer_ids=peer_ids,
                     )
@@ -303,8 +309,7 @@ class VikingSearchTool(OVFileTool):
                 for request in search_requests:
                     search_kwargs = {
                         "target_uri": request["target_uri"],
-                        "limit": 10,
-                        "user_id": admin_user_id,
+                        "limit": 10
                     }
                     if request.get("peer_id") is not None:
                         search_kwargs["peer_id"] = request.get("peer_id")
@@ -324,9 +329,7 @@ class VikingSearchTool(OVFileTool):
             results = await client.search(
                 query,
                 target_uri=target_uri,
-                limit=10,
-                user_id=admin_user_id,
-                peer_id=sender_peer_id,
+                limit=10
             )
 
             if not results:
@@ -452,7 +455,6 @@ class VikingGrepTool(OVFileTool):
                 uri,
                 pattern,
                 case_insensitive=case_insensitive,
-                user_id=client.admin_user_id,
             )
             if isinstance(result, dict):
                 matches = result.get("matches", [])
@@ -534,7 +536,7 @@ class VikingGlobTool(OVFileTool):
         client = None
         try:
             client = await self._get_client(tool_context)
-            result = await client.glob(pattern, uri=uri or None, user_id=client.admin_user_id)
+            result = await client.glob(pattern, uri=uri or None)
 
             if isinstance(result, dict):
                 matches = result.get("matches", [])
@@ -652,7 +654,7 @@ class VikingMemoryCommitTool(OVFileTool):
             if not tool_context.sender_id:
                 return "Error: peer id is required for OpenViking memory commit."
             session_id = tool_context.session_key.safe_name()
-            result = await client.commit(session_id, messages, peer_id=tool_context.sender_id)
+            result = await client.commit(str(uuid.uuid4()), messages, peer_id=tool_context.sender_id)
             commit_result = result.get("commit", {}) if isinstance(result, dict) else {}
             archive_uri = commit_result.get("archive_uri")
             memory_diff_uri = f"{archive_uri}/memory_diff.json" if archive_uri else None

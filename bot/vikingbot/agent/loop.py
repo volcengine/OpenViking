@@ -640,8 +640,8 @@ class AgentLoop:
         publish_events: bool = True,
         sender_id: str | None = None,
         ov_tools_enable: bool = True,
-        memory_user_ids: list[str] | None = None,
         memory_peer_ids: list[str] | None = None,
+        memory_owner_user_ids: list[str] | None = None,
         disabled_tools: list[str] | None = None,
         openviking_connection: dict[str, Any] | None = None,
     ) -> tuple[str | None, str | None, list[dict], dict[str, int], int]:
@@ -653,8 +653,9 @@ class AgentLoop:
             session_key: Session key for tool execution context
             publish_events: Whether to publish ITERATION/REASONING/TOOL_CALL events to the bus
             ov_tools_enable: Whether to enable OpenViking tools for this session
-            memory_user_ids: List of user IDs for memory retrieval
             memory_peer_ids: List of peer IDs for memory retrieval
+            memory_owner_user_ids: List of explicit OpenViking user IDs for
+                legacy root-key fanout searches
             disabled_tools: Tool names to hide from the model for this request
             openviking_connection: Request-scoped OpenViking identity for tools
 
@@ -778,8 +779,8 @@ class AgentLoop:
                         session_key=session_key,
                         sandbox_manager=self.sandbox_manager,
                         sender_id=sender_id,
-                        memory_user_ids=memory_user_ids,
                         memory_peer_ids=memory_peer_ids,
+                        memory_owner_user_ids=memory_owner_user_ids,
                         openviking_connection=openviking_connection,
                     )
                     tool_execute_duration = (time.time() - tool_execute_start_time) * 1000
@@ -923,17 +924,14 @@ class AgentLoop:
             if not isinstance(openviking_connection, dict):
                 openviking_connection = None
             msg.openviking_connection = openviking_connection
-            # Get profile_user_list from channel config
             profile_user_list = []
-            # Try to get memory_users from message metadata first (CLI mode), then from channel config
-            memory_user = msg.metadata.get("memory_users", []) if msg.metadata else []
+            memory_peer_ids = self._metadata_memory_peer_ids(msg.metadata)
             channel_config = self._get_channel_config(session_key)
 
             if channel_config and ov_tools_enable:
                 profile_user_list = getattr(channel_config, "profile_user_list", [])
-                # Only override if not already set from metadata
-                if not memory_user:
-                    memory_user = getattr(channel_config, "memory_user", None) or []
+                if not memory_peer_ids:
+                    memory_peer_ids = self._channel_memory_peer_ids(channel_config)
 
             # Handle slash commands
             is_group_chat = msg.metadata.get("chat_type") == "group" if msg.metadata else False
@@ -1090,7 +1088,7 @@ class AgentLoop:
                 session_key=msg.session_key,
                 ov_tools_enable=ov_tools_enable,
                 profile_user_list=profile_user_list,
-                memory_users=memory_user,
+                memory_peer_ids=memory_peer_ids,
             )
             relevant_memories = message_context.latest_relevant_memories
             auto_memory_tool = None
@@ -1117,8 +1115,7 @@ class AgentLoop:
                     publish_events=True,
                     sender_id=msg.sender_id,
                     ov_tools_enable=ov_tools_enable,
-                    memory_user_ids=memory_user,
-                    memory_peer_ids=memory_user,
+                    memory_peer_ids=memory_peer_ids,
                     disabled_tools=disabled_tools,
                     openviking_connection=openviking_connection,
                 )
@@ -1294,6 +1291,34 @@ class AgentLoop:
         """
         return self.config.channels_config.get_channel_by_key(session_key.channel_key())
 
+    @staticmethod
+    def _normalize_id_list(value: Any) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            value = [value]
+        if not isinstance(value, list):
+            return []
+        normalized: list[str] = []
+        for item in value:
+            item_str = str(item).strip()
+            if item_str and item_str not in normalized:
+                normalized.append(item_str)
+        return normalized
+
+    def _metadata_memory_peer_ids(self, metadata: dict[str, Any] | None) -> list[str]:
+        if not isinstance(metadata, dict):
+            return []
+        return self._normalize_id_list(
+            metadata.get("memory_peers") or metadata.get("memory_users")
+        )
+
+    def _channel_memory_peer_ids(self, channel_config: Any) -> list[str]:
+        return self._normalize_id_list(
+            getattr(channel_config, "memory_peer", None)
+            or getattr(channel_config, "memory_user", None)
+        )
+
     def _get_ov_tools_enable(self, session_key: SessionKey) -> bool:
         """Get ov_tools_enable setting from channel config.
 
@@ -1347,7 +1372,7 @@ class AgentLoop:
             session_key=msg.session_key,
             publish_events=False,
             ov_tools_enable=ov_tools_enable,
-            memory_user_ids=None,
+            memory_peer_ids=None,
         )
 
         if final_content is None or (isinstance(final_content, str) and not final_content.strip()):

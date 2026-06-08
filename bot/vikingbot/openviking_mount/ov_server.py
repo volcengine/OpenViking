@@ -82,7 +82,7 @@ class VikingClient:
         remote_client_kwargs = {
             "url": openviking_config.server_url,
             "api_key": api_key,
-            "agent_id": agent_id,
+            "profile_enabled": False,
         }
         if self._is_root_key_mode():
             remote_client_kwargs["account"] = openviking_config.account_id
@@ -230,6 +230,14 @@ class VikingClient:
         return self._effective_session_user_id()
 
     @staticmethod
+    def default_memory_policy() -> Dict[str, Dict[str, bool]]:
+        """Write extracted conversation memories to peers by default for bot sessions."""
+        return {
+            "self": {"enabled": False},
+            "peer": {"enabled": True},
+        }
+
+    @staticmethod
     def _peer_id(value: Optional[str]) -> Optional[str]:
         return _safe_peer_id(str(value)) if value is not None else None
 
@@ -241,12 +249,12 @@ class VikingClient:
             "isolate_user_scope_by_agent": False,
             "isolate_agent_scope_by_user": False,
         }
-        if self._has_request_connection():
+        if self._has_request_connection() or self.mode == "local" or self._is_user_key_mode():
             self._namespace_policy = policy
             self._namespace_policy_loaded = True
             return
 
-        if self.mode == "remote" and self.account_id:
+        if self._is_root_key_mode() and self.account_id:
             try:
                 accounts = await self.client.admin_list_accounts()
                 for account in accounts or []:
@@ -929,12 +937,16 @@ class VikingClient:
         session_id: str,
         keep_recent_count: int = 0,
         user_id: Optional[str] = None,
+        memory_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         await self.ensure_session(session_id, user_id=user_id)
         client = await self._session_client_for_user(user_id)
         return await client.commit_session(
             session_id,
             keep_recent_count=keep_recent_count,
+            memory_policy=memory_policy
+            if memory_policy is not None
+            else self.default_memory_policy(),
         )
 
     async def commit(
@@ -944,6 +956,7 @@ class VikingClient:
         user_id: str = None,
         keep_recent_count: int = 0,
         peer_id: Optional[str] = None,
+        memory_policy: Optional[Dict[str, Any]] = None,
     ):
         """Append messages to a stable session and commit it."""
         session_user_id = self._effective_session_user_id(user_id)
@@ -957,6 +970,7 @@ class VikingClient:
             session_id,
             keep_recent_count=keep_recent_count,
             user_id=session_user_id,
+            memory_policy=memory_policy,
         )
         logger.debug(
             f"Committed OpenViking session {session_id}, "

@@ -150,12 +150,15 @@ def _merge_ov_server_config(bot_data: dict, ov_data: dict) -> None:
         port = ov_data.get("port", "1933")
         bot_data["server_url"] = f"http://{host}:{port}"
     api_key = bot_data.get("api_key") or ""
-    root_api_key = ov_data.get("root_api_key", "")
+    legacy_bot_api_key = bot_data.get("root_api_key") or ""
+    server_root_api_key = ov_data.get("root_api_key", "")
+    if not api_key and legacy_bot_api_key:
+        bot_data["api_key"] = legacy_bot_api_key
+        api_key = legacy_bot_api_key
     mode = bot_data["mode"] if "mode" in bot_data and bot_data["mode"] else ""
     if not mode:
-        mode = "remote" if root_api_key else "local"
+        mode = "remote" if api_key or server_root_api_key else "local"
         bot_data["mode"] = mode
-    logger.debug(f"mode: {mode}")
     if not api_key and mode == "remote":
         try:
             cli_config = load_ovcli_config()

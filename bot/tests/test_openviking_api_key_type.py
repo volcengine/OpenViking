@@ -6,6 +6,7 @@ import pytest
 from vikingbot.agent.context import ContextBuilder
 from vikingbot.agent.loop import _is_tool_result_success
 from vikingbot.agent.tools.ov_file import VikingGrepTool, VikingMemoryCommitTool, VikingSearchTool
+from vikingbot.config import loader as config_loader_module
 from vikingbot.config.schema import SessionKey
 from vikingbot.hooks.base import HookContext
 from vikingbot.hooks.builtins.openviking_hooks import OpenVikingCompactHook
@@ -48,11 +49,14 @@ class _DummyHTTPClient:
     async def batch_add_messages(self, session_id, messages):
         return {"session_id": session_id, "added": len(messages), "message_count": len(messages)}
 
-    async def commit_session(self, session_id, keep_recent_count=0, telemetry=False):
+    async def commit_session(
+        self, session_id, keep_recent_count=0, telemetry=False, memory_policy=None
+    ):
         return {
             "session_id": session_id,
             "status": "committed",
             "keep_recent_count": keep_recent_count,
+            "memory_policy": memory_policy,
         }
 
     def session(self, _session_id):
@@ -105,6 +109,7 @@ def _make_config(api_key_type: str, mode: str = "remote", **ov_overrides):
         mode=mode,
         api_key_type=api_key_type,
         server_url="http://ov.local",
+        api_key="user-key",
         root_api_key="root-key",
         account_id="acct",
         admin_user_id="admin",
@@ -130,6 +135,8 @@ def test_viking_client_init_root_mode_sets_account_and_user(monkeypatch):
     assert client.api_key_type == "root"
     assert first.kwargs["account"] == "acct"
     assert first.kwargs["user"] == "admin"
+    assert first.kwargs["profile_enabled"] is False
+    assert "agent_id" not in first.kwargs
 
 
 def test_tool_result_success_only_treats_standard_error_prefix_as_failure():
@@ -145,8 +152,59 @@ def test_viking_client_init_user_mode_does_not_set_user_or_account(monkeypatch):
 
     first = _DummyHTTPClient.instances[0]
     assert client.api_key_type == "user"
+    assert first.kwargs["profile_enabled"] is False
     assert "user" not in first.kwargs
     assert "account" not in first.kwargs
+    assert "agent_id" not in first.kwargs
+
+
+def test_ov_server_legacy_root_api_key_takes_precedence_over_ovcli(monkeypatch):
+    bot_data = {"root_api_key": "bot-user-key"}
+    ov_data = {"root_api_key": "server-root-key"}
+    monkeypatch.setattr(
+        config_loader_module,
+        "load_ovcli_config",
+        lambda: SimpleNamespace(api_key="stale-ovcli-key"),
+    )
+
+    config_loader_module._merge_ov_server_config(bot_data, ov_data)
+
+    assert bot_data["mode"] == "remote"
+    assert bot_data["api_key"] == "bot-user-key"
+
+
+def test_ov_server_api_key_implies_remote_mode(monkeypatch):
+    bot_data = {"api_key": "bot-user-key"}
+    monkeypatch.setattr(
+        config_loader_module,
+        "load_ovcli_config",
+        lambda: SimpleNamespace(api_key="stale-ovcli-key"),
+    )
+
+    config_loader_module._merge_ov_server_config(bot_data, {})
+
+    assert bot_data["mode"] == "remote"
+    assert bot_data["api_key"] == "bot-user-key"
+
+
+@pytest.mark.asyncio
+async def test_user_key_mode_skips_admin_namespace_policy_lookup(monkeypatch):
+    monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("user"))
+
+    client = VikingClient()
+
+    async def _must_not_call_admin_api():
+        raise AssertionError("user key mode must not call admin namespace policy API")
+
+    monkeypatch.setattr(client.client, "admin_list_accounts", _must_not_call_admin_api)
+
+    await client._load_namespace_policy()
+
+    assert client._namespace_policy_loaded is True
+    assert client._namespace_policy == {
+        "isolate_user_scope_by_agent": False,
+        "isolate_agent_scope_by_user": False,
+    }
 
 
 def test_viking_client_request_connection_uses_active_identity(monkeypatch):
@@ -1186,7 +1244,7 @@ async def test_openviking_search_uses_user_namespace(monkeypatch):
 
     calls = []
 
-    async def _search(query, target_uri=None, limit=20, user_id=None):
+    async def _search(query, target_uri=None, limit=20, user_id=None, peer_id=None):
         calls.append((target_uri, user_id))
         return {"memories": [{"uri": target_uri, "abstract": "a", "score": 0.9, "is_leaf": True}]}
 
@@ -1196,7 +1254,7 @@ async def test_openviking_search_uses_user_namespace(monkeypatch):
     monkeypatch.setattr(client, "search", _search)
     monkeypatch.setattr(tool, "_get_client", _fake_get_client)
 
-    tool_context = SimpleNamespace(workspace_id="workspace", memory_user_ids=["sender-1"])
+    tool_context = SimpleNamespace(workspace_id="workspace", memory_owner_user_ids=["sender-1"])
     result = await tool.execute(tool_context, query="hello")
 
     assert "sender-1/memories" in result
@@ -1211,8 +1269,8 @@ async def test_openviking_search_user_key_mode_uses_current_user_namespace(monke
 
     calls = []
 
-    async def _search(query, target_uri=None, limit=20, user_id=None):
-        calls.append((target_uri, user_id))
+    async def _search(query, target_uri=None, limit=20, user_id=None, peer_id=None):
+        calls.append((target_uri, user_id, peer_id))
         return {"memories": [{"uri": target_uri, "abstract": "a", "score": 0.9, "is_leaf": True}]}
 
     async def _fake_get_client(_tool_context):
@@ -1222,12 +1280,18 @@ async def test_openviking_search_user_key_mode_uses_current_user_namespace(monke
     monkeypatch.setattr(tool, "_get_client", _fake_get_client)
 
     tool_context = SimpleNamespace(
-        workspace_id="workspace", memory_user_ids=["sender-1", "sender-2"]
+        workspace_id="workspace",
+        sender_id="sender-0",
+        memory_peer_ids=["sender-1", "sender-2"],
     )
     result = await tool.execute(tool_context, query="hello")
 
     assert "viking://user/memories/" in result
-    assert calls == [("viking://user/memories/", "admin")]
+    assert calls == [
+        ("viking://user/memories/", "admin", "sender-0"),
+        ("viking://user/memories/", "admin", "sender-1"),
+        ("viking://user/memories/", "admin", "sender-2"),
+    ]
 
 
 def test_openviking_search_description_allows_follow_up_memory_queries():
@@ -1269,8 +1333,8 @@ async def test_openviking_memory_commit_prefers_sender_in_static_multi_user_bot(
     class _FakeClient:
         admin_user_id = "default"
 
-        async def commit(self, session_id, messages, user_id):
-            calls.append((session_id, messages, user_id))
+        async def commit(self, session_id, messages, peer_id=None):
+            calls.append((session_id, messages, peer_id))
             return {"commit": {"archived": False}}
 
     async def _fake_get_client(_tool_context):
@@ -1306,7 +1370,7 @@ async def test_openviking_request_connection_client_is_closed_after_tool_call(mo
     result = await tool.execute(
         SimpleNamespace(
             workspace_id="workspace",
-            memory_user_ids=None,
+            memory_peer_ids=None,
             openviking_connection={
                 "server_url": "http://studio.local",
                 "api_key": "user-key",

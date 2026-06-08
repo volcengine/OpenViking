@@ -620,16 +620,18 @@ def prepare_agent_channel(
     logs: bool,
     eval: bool = False,
     sender: str | None = None,
+    memory_peer: list[str] | None = None,
     memory_user: list[str] | None = None,
 ):
     """Prepare channel for agent command."""
     from vikingbot.channels.chat import ChatChannel, ChatChannelConfig
     from vikingbot.channels.single_turn import SingleTurnChannel, SingleTurnChannelConfig
 
+    memory_peers = memory_peer or memory_user
     channels = ChannelManager(bus)
     if message is not None:
         # Single message mode - use SingleTurnChannel for clean output
-        channel_config = SingleTurnChannelConfig(memory_user=memory_user)
+        channel_config = SingleTurnChannelConfig(memory_peer=memory_peers)
         channel = SingleTurnChannel(
             channel_config,
             bus,
@@ -643,7 +645,7 @@ def prepare_agent_channel(
         channels.add_channel(channel)
     else:
         # Interactive mode - use ChatChannel with thinking display
-        channel_config = ChatChannelConfig(memory_user=memory_user)
+        channel_config = ChatChannelConfig(memory_peer=memory_peers)
         channel = ChatChannel(
             channel_config,
             bus,
@@ -677,8 +679,13 @@ def chat(
     sender: str = typer.Option(
         None, "--sender", help="Sender ID, same usage as feishu channel sender"
     ),
+    memory_peer: list[str] = typer.Option(
+        None, "--memory-peer", help="Peer ID for memory retrieval (can be repeated)"
+    ),
     memory_user: list[str] = typer.Option(
-        None, "--memory-user", help="User ID for memory retrieval (can be repeated)"
+        None,
+        "--memory-user",
+        help="Deprecated alias for --memory-peer",
     ),
 ):
     """Interact with the agent directly."""
@@ -714,7 +721,16 @@ def chat(
         session_id = get_or_create_machine_id()
     cron = prepare_cron(bus, quiet=is_single_turn)
     channels = prepare_agent_channel(
-        config, bus, message, session_id, markdown, logs, eval, sender, memory_user
+        config,
+        bus,
+        message,
+        session_id,
+        markdown,
+        logs,
+        eval,
+        sender,
+        memory_peer,
+        memory_user,
     )
     agent_loop = prepare_agent_loop(
         config, bus, session_manager, cron, quiet=is_single_turn, eval=eval

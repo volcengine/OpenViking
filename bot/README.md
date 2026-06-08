@@ -178,7 +178,8 @@ All configurations are under the `bot` field in `ov.conf`, with default values f
   - If not configured, the OpenViking server information configured in `ov.conf` is used by default
   - If you use a remote OpenViking Server, configure the target service URL and API key here
     - `server_url`: OpenViking server base URL, for example `https://api.vikingdb.cn-beijing.volces.com/openviking` or `http://localhost:1933`.
-    - `root_api_key`: API key used by the bot when calling the OpenViking server. Despite the historical field name, this field is also used in the `user` key flow.
+    - `api_key`: API key used by the bot when calling the OpenViking server. With `api_key_type=user`, set this to an OpenViking user key.
+    - `root_api_key`: Deprecated compatibility field; use `api_key` for new configs.
     - `account_id`: Defaults to `default`, which is the OpenViking account ID. All users under the same OpenViking account share resources.
     - `api_key_type`: Optional `root` or `user`, default `root`. `root` keeps the original root-key fanout behavior; `user` switches the bot to the user-key flow for OpenViking client calls. For a hosted remote OpenViking service, `user` is usually the recommended choice.
     - exp_write_tools: Optional list of tool names that trigger experience-memory injection before the call (self-evolving agent memory loop, see #2007). Defaults to `["write_file", "edit_file"]`. Injection only fires when the OpenViking server has `memory.agent_memory_enabled` set; otherwise this list is harmless.
@@ -208,7 +209,7 @@ All configurations are under the `bot` field in `ov.conf`, with default values f
     },
     "ov_server": {
       "server_url": "https://api.vikingdb.cn-beijing.volces.com/openviking",
-      "root_api_key": "<your-openviking-user-api-key>",
+      "api_key": "<your-openviking-user-api-key>",
       "account_id": "default",
       "api_key_type": "user"
     },
