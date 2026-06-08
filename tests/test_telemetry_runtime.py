@@ -230,6 +230,16 @@ def test_telemetry_summary_uses_simplified_internal_metric_keys():
     summary.set("semantic_nodes.pending", 1)
     summary.set("semantic_nodes.running", 0)
     summary.set("memory.extracted", 6)
+    summary.count("memory.apply.trace.total", 3)
+    summary.count("memory.apply.trace.status.applied", 2)
+    summary.count("memory.apply.trace.status.skipped_stale_deleted", 1)
+    summary.count("memory.apply.trace.stale_detected", 1)
+    summary.count("memory.apply.trace.rewrite_attempted", 1)
+    summary.count("memory.apply.exact_file_lock.trace.total", 2)
+    summary.count("memory.apply.exact_file_lock.trace.status.applied", 1)
+    summary.count("memory.apply.exact_file_lock.trace.status.skipped_stale_deleted", 1)
+    summary.count("memory.apply.exact_file_lock.trace.stale_detected", 1)
+    summary.count("memory.apply.exact_file_lock.trace.rewrite_attempted", 1)
 
     result = summary.finish().summary
 
@@ -246,7 +256,49 @@ def test_telemetry_summary_uses_simplified_internal_metric_keys():
         "done": 3,
         "pending": 1,
     }
-    assert result["memory"] == {"extracted": 6}
+    assert result["memory"] == {
+        "extracted": 6,
+        "apply": {
+            "trace": {
+                "total": 3,
+                "status": {"applied": 2, "skipped_stale_deleted": 1},
+                "stale_detected": 1,
+                "rewrite_attempted": 1,
+                "exact_file_lock": {
+                    "total": 2,
+                    "status": {"applied": 1, "skipped_stale_deleted": 1},
+                    "stale_detected": 1,
+                    "rewrite_attempted": 1,
+                },
+            }
+        },
+    }
+
+
+def test_telemetry_summary_omits_memory_extracted_when_not_set():
+    telemetry = MemoryOperationTelemetry(
+        operation="session.commit",
+        enabled=True,
+    )
+    telemetry.count("memory.apply.trace.total", 1)
+    telemetry.count("memory.apply.trace.status.failed", 1)
+    telemetry.count("memory.apply.exact_file_lock.trace.total", 1)
+    telemetry.count("memory.apply.exact_file_lock.trace.status.failed", 1)
+
+    result = telemetry.finish().summary
+
+    assert result["memory"] == {
+        "apply": {
+            "trace": {
+                "total": 1,
+                "status": {"failed": 1},
+                "exact_file_lock": {
+                    "total": 1,
+                    "status": {"failed": 1},
+                },
+            }
+        },
+    }
 
 
 def test_init_tracer_forwards_headers_to_grpc_exporter(monkeypatch):

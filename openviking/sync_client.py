@@ -383,6 +383,21 @@ class SyncOpenViking:
         """Check filesystem/vector-index consistency for a URI subtree."""
         return run_async(self._async_client.check_consistency(uri))
 
+    def memory_graph_health(
+        self,
+        uri: str,
+        node_limit: int = 5000,
+        sample_limit: int = 20,
+    ) -> Dict[str, Any]:
+        """Inspect stored memory link/backlink graph consistency under a root URI."""
+        return run_async(
+            self._async_client.memory_graph_health(
+                uri,
+                node_limit=node_limit,
+                sample_limit=sample_limit,
+            )
+        )
+
     def close(self) -> None:
         """Close OpenViking and release resources."""
         return run_async(self._async_client.close())

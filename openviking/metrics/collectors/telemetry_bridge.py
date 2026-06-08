@@ -96,6 +96,11 @@ class TelemetryBridgeCollector(EventMetricCollector):
     MEMORY_EXTRACTED_TOTAL: ClassVar[str] = MetricCollector.metric_name(
         DOMAIN_MEMORY, "extracted", unit="total"
     )
+    # rule: <METRICS_NAMESPACE>_<DOMAIN_MEMORY>_apply_trace_total
+    # e.g.: openviking_memory_apply_trace_total
+    MEMORY_APPLY_TRACE_TOTAL: ClassVar[str] = MetricCollector.metric_name(
+        DOMAIN_MEMORY, "apply_trace", unit="total"
+    )
     # rule: <METRICS_NAMESPACE>_<DOMAIN_RESOURCE>_stage_total
     # e.g.: openviking_resource_stage_total
     RESOURCE_STAGE_TOTAL: ClassVar[str] = MetricCollector.metric_name(
@@ -259,12 +264,55 @@ class TelemetryBridgeCollector(EventMetricCollector):
                 label_names=("operation",),
                 amount=extracted,
             )
+        self._record_memory_apply_trace(registry, memory=memory, operation=operation)
 
         resource = summary.get("resource") or {}
         if resource:
             self._record_resource_stage(
                 registry, resource=resource, operation=operation, status=status
             )
+
+    def _record_memory_apply_trace(self, registry, *, memory: Mapping[str, Any], operation: str):
+        apply_summary = memory.get("apply") or {}
+        trace_summary = apply_summary.get("trace") if isinstance(apply_summary, Mapping) else {}
+        if not isinstance(trace_summary, Mapping):
+            return
+
+        status_counts = trace_summary.get("status") or {}
+        exact_summary = trace_summary.get("exact_file_lock") or {}
+        exact_status_counts = exact_summary.get("status") if isinstance(exact_summary, Mapping) else {}
+        if not isinstance(status_counts, Mapping):
+            return
+        if not isinstance(exact_status_counts, Mapping):
+            exact_status_counts = {}
+
+        statuses = sorted({str(status) for status in status_counts} | {str(status) for status in exact_status_counts})
+        for status in statuses:
+            try:
+                total = int(status_counts.get(status, 0) or 0)
+            except (TypeError, ValueError):
+                total = 0
+            try:
+                exact_total = int(exact_status_counts.get(status, 0) or 0)
+            except (TypeError, ValueError):
+                exact_total = 0
+            non_exact_total = max(total - exact_total, 0)
+            for exact_file_lock, value in (
+                ("false", non_exact_total),
+                ("true", exact_total),
+            ):
+                if value <= 0:
+                    continue
+                registry.inc_counter(
+                    self.MEMORY_APPLY_TRACE_TOTAL,
+                    labels={
+                        "operation": operation,
+                        "status": status,
+                        "exact_file_lock": exact_file_lock,
+                    },
+                    label_names=("operation", "status", "exact_file_lock"),
+                    amount=value,
+                )
 
     def _record_resource_stage(
         self, registry, *, resource: Mapping[str, Any], operation: str, status: str

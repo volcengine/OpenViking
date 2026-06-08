@@ -1,11 +1,13 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+from openviking.message import Message, TextPart
 from openviking.message.part import ToolPart
 from openviking.session.tool_skill_utils import (
     calibrate_skill_name,
     calibrate_tool_name,
     collect_skill_stats,
+    collect_tool_parts_from_messages,
     collect_tool_stats,
     normalize_name,
 )
@@ -72,3 +74,23 @@ class TestToolSkillUtils:
         stats = collect_skill_stats(tool_parts)["weather"]
         assert stats["call_count"] == 2
         assert stats["success_time"] == 1
+
+    def test_collect_tool_parts_pairs_text_markers_without_call_id_by_name(self):
+        messages = [
+            Message(
+                id="call-1",
+                role="assistant",
+                parts=[TextPart("tool-call:\nname: search_orders\narguments: {}")],
+            ),
+            Message(
+                id="response-1",
+                role="assistant",
+                parts=[TextPart("tool-response:\nname: search_orders\noutput: ok")],
+            ),
+        ]
+
+        parts = collect_tool_parts_from_messages(messages)
+
+        assert [(part.tool_name, part.tool_status) for part in parts] == [
+            ("search_orders", "completed")
+        ]

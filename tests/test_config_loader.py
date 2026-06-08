@@ -213,10 +213,48 @@ def test_openviking_config_memory_agent_memory_enabled(monkeypatch):
         {"memory": {"experimental_memory_switch": True}}
     )
 
-    assert default_config.memory.agent_memory_enabled is True
+    assert default_config.memory.agent_memory_enabled is False
     assert disabled_config.memory.agent_memory_enabled is False
     assert experimental_config.memory.experimental_memory_switch is True
     assert experimental_config.memory.agent_memory_enabled is True
+
+    OpenVikingConfigSingleton.reset_instance()
+
+
+def test_openviking_config_accepts_long_term_extraction_switch(monkeypatch):
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
+
+    from openviking_cli.utils.config.open_viking_config import (
+        OpenVikingConfig,
+        OpenVikingConfigSingleton,
+    )
+
+    default_config = OpenVikingConfig.from_dict({})
+    disabled_config = OpenVikingConfig.from_dict(
+        {"memory": {"long_term_extraction_enabled": False}}
+    )
+
+    assert default_config.memory.long_term_extraction_enabled is True
+    assert disabled_config.memory.long_term_extraction_enabled is False
+
+    OpenVikingConfigSingleton.reset_instance()
+
+
+def test_openviking_config_accepts_session_skill_extraction_switch(monkeypatch):
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
+
+    from openviking_cli.utils.config.open_viking_config import (
+        OpenVikingConfig,
+        OpenVikingConfigSingleton,
+    )
+
+    default_config = OpenVikingConfig.from_dict({})
+    enabled_config = OpenVikingConfig.from_dict(
+        {"memory": {"session_skill_extraction_enabled": True}}
+    )
+
+    assert default_config.memory.session_skill_extraction_enabled is False
+    assert enabled_config.memory.session_skill_extraction_enabled is True
 
     OpenVikingConfigSingleton.reset_instance()
 

@@ -30,12 +30,108 @@ from openviking.session.memory.utils import (
     pretty_print_messages,
 )
 from openviking.session.memory.utils.json_parser import JsonUtils
+from openviking.session.tool_skill_utils import (
+    calibrate_skill_name,
+    calibrate_tool_name,
+    collect_skill_stats,
+    collect_tool_parts_from_messages,
+    collect_tool_stats,
+    normalize_name,
+)
 from openviking.storage.viking_fs import VikingFS, get_viking_fs
 from openviking.telemetry import bind_telemetry_stage, tracer
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
+
+
+def _field_merge_op(field: Any) -> Any:
+    raw_merge_op = getattr(field, "merge_op", MergeOp.PATCH)
+    try:
+        return MergeOp(raw_merge_op)
+    except Exception:
+        return raw_merge_op
+
+
+def _schema_field_names_for_merge_op(schema: Any, merge_op: MergeOp) -> set[str]:
+    return {
+        getattr(field, "name", "")
+        for field in getattr(schema, "fields", []) or []
+        if _field_merge_op(field) == merge_op
+    }
+
+
+def _int_stat(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _apply_deterministic_tool_skill_counter_deltas(
+    *,
+    resolved_op: ResolvedOperation,
+    schema: Any,
+    tool_parts: List[Any],
+    tool_stats: Dict[str, Dict[str, Any]],
+    skill_stats: Dict[str, Dict[str, Any]],
+    consumed_counter_stats: set[tuple[str, str]],
+) -> None:
+    """Override SUM counters with transcript-local deltas for tool/skill memory."""
+    sum_fields = _schema_field_names_for_merge_op(schema, MergeOp.SUM)
+    if not sum_fields:
+        return
+
+    fields = resolved_op.memory_fields
+    if resolved_op.memory_type == "tools":
+        for field_name in ("call_count", "success_time"):
+            if field_name in sum_fields:
+                fields[field_name] = 0
+        candidate = str(fields.get("tool_name") or "")
+        canonical, _ = calibrate_tool_name(candidate, tool_parts)
+        if not canonical:
+            return
+        key = ("tools", normalize_name(canonical))
+        fields["tool_name"] = canonical
+        if key in consumed_counter_stats:
+            return
+
+        stats = tool_stats.get(canonical)
+        if not stats:
+            return
+        if "call_count" in sum_fields:
+            fields["call_count"] = _int_stat(stats.get("call_count"))
+        if "success_time" in sum_fields:
+            fields["success_time"] = _int_stat(stats.get("success_time"))
+        consumed_counter_stats.add(key)
+        return
+
+    if resolved_op.memory_type == "skills":
+        for field_name in ("total_executions", "success_count", "fail_count"):
+            if field_name in sum_fields:
+                fields[field_name] = 0
+        candidate = str(fields.get("skill_name") or "")
+        canonical, _ = calibrate_skill_name(candidate, tool_parts)
+        if not canonical:
+            return
+        key = ("skills", normalize_name(canonical))
+        fields["skill_name"] = canonical
+        if key in consumed_counter_stats:
+            return
+
+        stats = skill_stats.get(canonical)
+        if not stats:
+            return
+        call_count = _int_stat(stats.get("call_count"))
+        success_count = _int_stat(stats.get("success_time"))
+        if "total_executions" in sum_fields:
+            fields["total_executions"] = call_count
+        if "success_count" in sum_fields:
+            fields["success_count"] = success_count
+        if "fail_count" in sum_fields:
+            fields["fail_count"] = max(call_count - success_count, 0)
+        consumed_counter_stats.add(key)
 
 
 class ExtractLoop:
@@ -58,6 +154,7 @@ class ExtractLoop:
         ctx: Optional[RequestContext] = None,
         context_provider: Optional[Any] = None,  # ExtractContextProvider
         isolation_handler: MemoryIsolationHandler = None,
+        structured_string_patches_only: bool = False,
     ):
         """
         Initialize the ExtractLoop.
@@ -78,6 +175,7 @@ class ExtractLoop:
         self.context_provider = context_provider
         # Use provided isolation_handler or create one in run()
         self._isolation_handler = isolation_handler
+        self.structured_string_patches_only = structured_string_patches_only
         # Track format error retry (max 1 retry)
         self._format_retry_count = 0
 
@@ -120,6 +218,7 @@ class ExtractLoop:
         self.schema_model_generator = SchemaModelGenerator(
             schemas,
             template_context={"language": output_language},
+            structured_string_patches_only=self.structured_string_patches_only,
         )
         self.schema_model_generator.generate_all_models()
 
@@ -310,6 +409,12 @@ The final output of the model must strictly follow the JSON Schema format shown 
 
         role_scope = self._isolation_handler.get_read_scope()
         page_id_map = getattr(self._extract_context, "page_id_map", None)
+        tool_parts = collect_tool_parts_from_messages(
+            getattr(self._extract_context, "messages", []) or []
+        )
+        tool_stats = collect_tool_stats(tool_parts)
+        skill_stats = collect_skill_stats(tool_parts)
+        consumed_counter_stats: set[tuple[str, str]] = set()
 
         for schema in self.context_provider.get_memory_schemas(self.ctx):
             memory_type = schema.memory_type
@@ -343,7 +448,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
                             immutable_fields = {
                                 field.name
                                 for field in schema.fields
-                                if field.merge_op != MergeOp.PATCH
+                                if _field_merge_op(field) == MergeOp.IMMUTABLE
                             }
                             for field_name in immutable_fields:
                                 if field_name in old_content.extra_fields:
@@ -363,6 +468,14 @@ The final output of the model must strictly follow the JSON Schema format shown 
                         extract_context=self._extract_context,
                     )
 
+                _apply_deterministic_tool_skill_counter_deltas(
+                    resolved_op=resolved_op,
+                    schema=schema,
+                    tool_parts=tool_parts,
+                    tool_stats=tool_stats,
+                    skill_stats=skill_stats,
+                    consumed_counter_stats=consumed_counter_stats,
+                )
                 upsert_operations.append(resolved_op)
 
         delete_uris_raw = getattr(operations, "delete_uris", []) or []

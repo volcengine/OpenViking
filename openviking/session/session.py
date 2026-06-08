@@ -1350,6 +1350,10 @@ class Session:
                     # Summary generation, user memory and agent memory all run concurrently.
                     ov_config = get_openviking_config()
                     memory_extraction_enabled = ov_config.memory.extraction_enabled
+                    long_term_extraction_enabled = bool(
+                        memory_extraction_enabled
+                        and getattr(ov_config.memory, "long_term_extraction_enabled", True)
+                    )
                     agent_memory_enabled = ov_config.memory.agent_memory_enabled
                     config_session_skill_extraction_enabled = (
                         ov_config.memory.session_skill_extraction_enabled
@@ -1372,7 +1376,8 @@ class Session:
                     self_agent_types = agent_allowed_types if self_memory_enabled else set()
                     long_term_allowed_types = (
                         registered_memory_types & DEFAULT_LONG_TERM_MEMORY_TYPES
-                        if memory_extraction_enabled and (self_memory_enabled or allowed_peer_ids)
+                        if long_term_extraction_enabled
+                        and (self_memory_enabled or allowed_peer_ids)
                         else set()
                     )
                     has_policy_work = bool(

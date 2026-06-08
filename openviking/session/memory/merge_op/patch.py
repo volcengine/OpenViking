@@ -4,16 +4,78 @@
 Patch merge operation - SEARCH/REPLACE for strings, direct replace for others.
 """
 
-from typing import Any, Type
+import time
+from typing import Any, Optional, Type
 
 from openviking.session.memory.merge_op.base import (
     FieldType,
     MergeOp,
     MergeOpBase,
+    ReplaceValueWithBase,
     SearchReplaceBlock,
     StrPatch,
+    StrPatchWithBase,
     get_python_type_for_field,
+    text_digest,
 )
+from openviking.session.memory.merge_op.patch_handler import PatchParseError
+from openviking.telemetry import get_current_telemetry
+from openviking_cli.utils import get_logger
+
+logger = get_logger(__name__)
+
+_STALE_PATCH_REWRITE_MAX_ATTEMPTS = 1
+
+
+def _is_patch_stale(current_value: str, patch_value: StrPatchWithBase) -> bool:
+    """Return whether a runtime patch was generated against an older field value."""
+    if patch_value.base_digest:
+        return text_digest(current_value) != patch_value.base_digest
+    return patch_value.base_value is not None and current_value != patch_value.base_value
+
+
+def _stale_patch_rewrite_config() -> tuple[bool, int]:
+    try:
+        from openviking_cli.utils.config import get_openviking_config
+
+        memory_config = get_openviking_config().memory
+        return (
+            bool(getattr(memory_config, "memory_apply_exact_file_lock_enabled", False)),
+            _STALE_PATCH_REWRITE_MAX_ATTEMPTS,
+        )
+    except Exception:
+        return False, _STALE_PATCH_REWRITE_MAX_ATTEMPTS
+
+
+async def _rewrite_stale_patch(
+    *,
+    current_value: str,
+    patch_value: StrPatchWithBase,
+    error: Exception,
+) -> Optional[StrPatch]:
+    """Ask the configured LLM to rewrite a stale string patch for latest content."""
+    from openviking_cli.utils.llm import StructuredLLM
+
+    original_blocks = [
+        {"search": block.search, "replace": block.replace} for block in patch_value.blocks
+    ]
+    prompt = (
+        "Rewrite a stale SEARCH/REPLACE patch so it applies to the latest memory field.\n"
+        "Return ONLY the JSON schema requested by the caller.\n\n"
+        "Rules:\n"
+        "- Preserve the user's intended edit from the original patch.\n"
+        "- Use exact SEARCH text copied from the latest field value.\n"
+        "- Do not include line-number prefixes unless they are truly part of the field.\n"
+        "- If no safe rewrite exists, return an empty blocks list.\n\n"
+        f"Patch base value:\n{patch_value.base_value or ''}\n\n"
+        f"Latest field value:\n{current_value}\n\n"
+        f"Original patch blocks:\n{original_blocks}\n\n"
+        f"Patch error:\n{error}"
+    )
+    rewritten = await StructuredLLM().complete_model_async(prompt, StrPatch)
+    if rewritten and rewritten.blocks:
+        return rewritten
+    return None
 
 
 class PatchOp(MergeOpBase):
@@ -51,6 +113,9 @@ class PatchOp(MergeOpBase):
         # For non-string fields, just replace
         if self._field_type != FieldType.STRING:
             return patch_value
+
+        if isinstance(patch_value, ReplaceValueWithBase):
+            raise PatchParseError("ReplaceValueWithBase requires apply_async")
 
         # For string fields - check if current_value is None (no original)
         if current_value is None:
@@ -98,6 +163,73 @@ class PatchOp(MergeOpBase):
         if patch_value is None or patch_value == "":
             return current_value
         return patch_value
+
+    async def apply_async(self, current_value: Any, patch_value: Any) -> Any:
+        if self._field_type != FieldType.STRING:
+            return self.apply(current_value, patch_value)
+
+        if isinstance(patch_value, ReplaceValueWithBase):
+            from openviking.session.memory.merge_op.replace import ReplaceOp
+
+            return await ReplaceOp().apply_async(current_value, patch_value)
+
+        try:
+            return self.apply(current_value, patch_value)
+        except PatchParseError as exc:
+            enabled, max_attempts = _stale_patch_rewrite_config()
+            telemetry = get_current_telemetry()
+            if (
+                not enabled
+                or not isinstance(patch_value, StrPatchWithBase)
+                or not isinstance(current_value, str)
+                or patch_value.base_value is None
+            ):
+                raise
+            if not _is_patch_stale(current_value, patch_value):
+                raise
+            telemetry.increment("memory.apply.patch_stale.detected")
+            if patch_value.attempt_id >= max_attempts:
+                telemetry.increment("memory.apply.patch_rewrite.exhausted")
+                raise
+
+            telemetry.increment("memory.apply.patch_rewrite.attempted")
+            rewrite_start = time.perf_counter()
+            try:
+                rewritten = await _rewrite_stale_patch(
+                    current_value=current_value,
+                    patch_value=patch_value,
+                    error=exc,
+                )
+            except Exception:
+                telemetry.increment("memory.apply.patch_rewrite.failed")
+                raise
+            finally:
+                telemetry.add_duration(
+                    "memory.apply.patch_rewrite",
+                    (time.perf_counter() - rewrite_start) * 1000,
+                )
+            if rewritten is None:
+                telemetry.increment("memory.apply.patch_rewrite.failed")
+                raise
+
+            retry_patch = rewritten.with_base(
+                base_value=current_value,
+                base_digest=text_digest(current_value),
+                source_operation_id=patch_value.source_operation_id,
+                attempt_id=patch_value.attempt_id + 1,
+            )
+            logger.info(
+                "Rewrote stale memory patch: source_operation_id=%s attempt=%s",
+                patch_value.source_operation_id,
+                retry_patch.attempt_id,
+            )
+            try:
+                result = self.apply(current_value, retry_patch)
+            except Exception:
+                telemetry.increment("memory.apply.patch_rewrite.failed")
+                raise
+            telemetry.increment("memory.apply.patch_rewrite.succeeded")
+            return result
 
     def _extract_replace_when_no_original(self, patch_value: Any) -> Any:
         """

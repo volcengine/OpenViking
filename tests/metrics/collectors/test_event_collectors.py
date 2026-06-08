@@ -144,6 +144,18 @@ def test_telemetry_bridge_collector_records_basic_operation_metrics(registry, re
                         "vlm": {"llm": {"input": 3, "output": 2, "total": 5}},
                     },
                 },
+                "memory": {
+                    "apply": {
+                        "trace": {
+                            "total": 3,
+                            "status": {"applied": 2, "skipped_stale_deleted": 1},
+                            "exact_file_lock": {
+                                "total": 1,
+                                "status": {"skipped_stale_deleted": 1},
+                            },
+                        }
+                    }
+                },
             }
         },
         registry,
@@ -168,6 +180,14 @@ def test_telemetry_bridge_collector_records_basic_operation_metrics(registry, re
     )
     assert (
         'openviking_operation_tokens_total{account_id="__unknown__",operation="resource.process",stage="rerank",token_type="rerank"} 4'
+        in text
+    )
+    assert (
+        'openviking_memory_apply_trace_total{exact_file_lock="false",operation="resource.process",status="applied"} 2'
+        in text
+    )
+    assert (
+        'openviking_memory_apply_trace_total{exact_file_lock="true",operation="resource.process",status="skipped_stale_deleted"} 1'
         in text
     )
 

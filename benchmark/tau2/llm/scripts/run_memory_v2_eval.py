@@ -5,9 +5,12 @@ import argparse
 import hashlib
 import importlib
 import json
+import os
 import shutil
+import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -45,6 +48,53 @@ def _json(text: str) -> dict[str, Any]:
 def _write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _git_head_commit(repo: Path) -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    commit = result.stdout.strip()
+    return commit or None
+
+
+def _corpus_provenance(args: argparse.Namespace, train_results: Path) -> dict[str, Any]:
+    config_file = (
+        os.environ.get("OPENVIKING_CONFIG_FILE")
+        or os.environ.get("OPENVIKING_CLI_CONFIG_FILE")
+        or ""
+    )
+    config_path = Path(config_file) if config_file else None
+    config_sha256 = (
+        _file_sha256(config_path) if config_path is not None and config_path.is_file() else None
+    )
+    return {
+        "train_results_sha256": _file_sha256(train_results),
+        "tau2": {
+            "repo": str(args.tau2_repo),
+            "commit": _git_head_commit(args.tau2_repo),
+        },
+        "openviking": {
+            "repo": str(REPO_ROOT),
+            "commit": _git_head_commit(REPO_ROOT),
+            "config_file": config_file or None,
+            "config_file_sha256": config_sha256,
+        },
+    }
 
 
 def _add_tau2_to_path(tau2_repo: Path) -> None:
@@ -131,6 +181,20 @@ def _db_match(sim: dict[str, Any]) -> bool | None:
 
 def _task_success(sim: dict[str, Any]) -> bool:
     return _reward(sim) >= 1.0
+
+
+def _merge_numeric_counts(rows: list[dict[str, Any]], field: str) -> dict[str, int]:
+    totals: dict[str, int] = {}
+    for row in rows:
+        counts = row.get(field) or {}
+        if not isinstance(counts, dict):
+            continue
+        for key, value in counts.items():
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, (int, float)):
+                totals[str(key)] = totals.get(str(key), 0) + int(value)
+    return totals
 
 
 def _metrics(results_path: Path) -> dict[str, Any]:
@@ -444,13 +508,37 @@ def _wait_task(client: Any, task_id: str | None, timeout: int) -> dict[str, Any]
     last = None
     while time.time() < deadline:
         last = client.get_task(task_id)
+        if last is None:
+            raise RuntimeError(f"OpenViking task {task_id} missing while waiting")
         status = (last or {}).get("status")
         if status == "completed":
             return last or {"status": status}
-        if status in {"failed", "cancelled"}:
+        if status in {"failed", "cancelled", "error"}:
             raise RuntimeError(f"OpenViking task {task_id} {status}: {last}")
         time.sleep(2)
     raise TimeoutError(f"OpenViking task {task_id} did not finish within {timeout}s: {last}")
+
+
+def _memory_extract_skipped_from_task(task: dict[str, Any]) -> int:
+    telemetry = task.get("telemetry")
+    if not isinstance(telemetry, dict):
+        return 0
+    summary = telemetry.get("summary")
+    if not isinstance(summary, dict):
+        return 0
+    memory = summary.get("memory")
+    if not isinstance(memory, dict):
+        return 0
+    extract = memory.get("extract")
+    if not isinstance(extract, dict):
+        return 0
+    actions = extract.get("actions")
+    if not isinstance(actions, dict):
+        return 0
+    try:
+        return int(actions.get("skipped") or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _read_memory_text(client: Any, match: Any) -> tuple[str, str | None]:
@@ -461,13 +549,38 @@ def _read_memory_text(client: Any, match: Any) -> tuple[str, str | None]:
         return fallback, f"{type(exc).__name__}: {exc}"
 
 
+def _memory_graph_root_uri(search_uri: str) -> str:
+    prefix, separator, path = search_uri.partition("://")
+    if not separator:
+        raise ValueError(f"not a Viking URI: {search_uri}")
+    segments = path.split("/")
+    try:
+        memory_index = segments.index("memories")
+    except ValueError as exc:
+        raise ValueError(
+            f"search_uri does not contain a memories path segment: {search_uri}"
+        ) from exc
+    return f"{prefix}{separator}{'/'.join(segments[: memory_index + 1])}"
+
+
+def _concrete_memory_matches(memories: list[Any]) -> list[Any]:
+    concrete = []
+    for match in memories:
+        uri = str(getattr(match, "uri", "") or "")
+        if not uri.endswith(".md") or uri.endswith(".overview.md") or uri.endswith(".abstract.md"):
+            continue
+        concrete.append(match)
+    return concrete
+
+
 def _probe_corpus(args: argparse.Namespace, client: Any) -> dict[str, Any]:
     result = client.search(
         query=f"{args.domain} customer service order reservation booking cancellation exchange return update",
         target_uri=args.search_uri,
-        limit=args.retrieval_top_k,
+        limit=max(args.retrieval_top_k, 10),
     )
-    memories = list(getattr(result, "memories", []) or [])
+    raw_memories = list(getattr(result, "memories", []) or [])
+    memories = _concrete_memory_matches(raw_memories)
     reads = []
     for match in memories[: args.retrieval_top_k]:
         uri = getattr(match, "uri", "")
@@ -476,20 +589,202 @@ def _probe_corpus(args: argparse.Namespace, client: Any) -> dict[str, Any]:
             "uri": uri,
             "score": getattr(match, "score", None),
             "text_chars": len(text),
-            "non_empty": bool(str(text).strip()),
+            "readable": read_error is None,
+            "non_empty": read_error is None and bool(str(text).strip()),
         }
         if read_error:
             row["read_error"] = read_error
         reads.append(row)
     return {
         "query": f"{args.domain} customer service order reservation booking cancellation exchange return update",
+        "raw_match_count": len(raw_memories),
         "match_count": len(memories),
         "read_non_empty_count": sum(1 for row in reads if row["non_empty"]),
         "matches": reads,
     }
 
 
+def _raise_if_unhealthy_corpus_probe(probe: dict[str, Any]) -> None:
+    if int(probe.get("match_count") or 0) <= 0:
+        raise RuntimeError(
+            "OpenViking corpus scoped search probe returned no concrete memory files; "
+            "treat this corpus as invalid"
+        )
+    if int(probe.get("read_non_empty_count") or 0) <= 0:
+        raise RuntimeError(
+            "OpenViking corpus scoped search probe could not read any non-empty "
+            "concrete memory files; treat this corpus as invalid"
+        )
+
+
+def _raise_if_unhealthy_memory_graph(health: dict[str, Any]) -> None:
+    counts = health.get("memory_type_counts") or {}
+    issues: list[str] = []
+    if int(counts.get("experiences") or 0) <= 0:
+        issues.append("experiences=0")
+    if int(counts.get("trajectories") or 0) <= 0:
+        issues.append("trajectories=0")
+    issue_keys = (
+        "parse_error_count",
+        "malformed_link_count",
+        "owner_mismatch_count",
+        "broken_endpoint_count",
+        "missing_backlink_count",
+        "missing_forward_link_count",
+        "source_linkless_experience_count",
+    )
+    for key in issue_keys:
+        value = int(health.get(key) or 0)
+        if value:
+            issues.append(f"{key}={value}")
+    if health.get("healthy") is False and not issues:
+        issues.append("healthy=false")
+    if issues:
+        raise RuntimeError(
+            "OpenViking memory graph health gate failed: "
+            + ", ".join(issues[:10])
+            + "; treat this corpus as invalid"
+        )
+
+
+def _corpus_evidence_summary(manifest: dict[str, Any]) -> dict[str, Any]:
+    issues: list[str] = []
+    if int(manifest.get("committed_session_count") or 0) <= 0:
+        issues.append("committed_session_count=0")
+    if int(manifest.get("memories_extracted_total") or 0) <= 0:
+        issues.append("memories_extracted_total=0")
+    if int(manifest.get("memory_extract_skipped_total") or 0) > 0:
+        issues.append(f"memory_extract_skipped_total={manifest['memory_extract_skipped_total']}")
+
+    probe = manifest.get("corpus_probe")
+    if not isinstance(probe, dict):
+        issues.append("missing_corpus_probe")
+    else:
+        if int(probe.get("match_count") or 0) <= 0:
+            issues.append("corpus_probe.match_count=0")
+        if int(probe.get("read_non_empty_count") or 0) <= 0:
+            issues.append("corpus_probe.read_non_empty_count=0")
+
+    health = manifest.get("memory_graph_health")
+    if not isinstance(health, dict):
+        issues.append("missing_memory_graph_health")
+    else:
+        counts = health.get("memory_type_counts") or {}
+        if int(counts.get("experiences") or 0) <= 0:
+            issues.append("memory_graph.experiences=0")
+        if int(counts.get("trajectories") or 0) <= 0:
+            issues.append("memory_graph.trajectories=0")
+        for key in (
+            "parse_error_count",
+            "malformed_link_count",
+            "owner_mismatch_count",
+            "broken_endpoint_count",
+            "missing_backlink_count",
+            "missing_forward_link_count",
+            "source_linkless_experience_count",
+        ):
+            value = int(health.get(key) or 0)
+            if value:
+                issues.append(f"memory_graph.{key}={value}")
+
+    return {
+        "claim_valid": not issues,
+        "evidence_layer": "strict_corpus_gate" if not issues else "invalid_or_legacy_corpus",
+        "claim_boundary": (
+            "Corpus can be used for retrieval/eval evidence only when commit count, "
+            "memories_extracted, concrete scoped search, and graph health gates all pass."
+        ),
+        "invalid_reasons": issues,
+    }
+
+
+def _raise_if_invalid_corpus_manifest(manifest: dict[str, Any]) -> None:
+    evidence = _corpus_evidence_summary(manifest)
+    if not evidence["claim_valid"]:
+        raise RuntimeError(
+            "OpenViking corpus manifest failed evidence gate: "
+            + ", ".join(evidence["invalid_reasons"][:10])
+            + "; use --force-train or a fresh corpus identity"
+        )
+
+
+def _retrieval_trace_summary(trace_path: Path) -> dict[str, Any]:
+    event_count = 0
+    match_count_sum = 0
+    injected_event_count = 0
+    injected_count_sum = 0
+    read_non_empty_match_count = 0
+    if not trace_path.is_file():
+        return {
+            "event_count": 0,
+            "match_count_sum": 0,
+            "injected_event_count": 0,
+            "injected_count_sum": 0,
+            "read_non_empty_match_count": 0,
+        }
+    for line in trace_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        event_count += 1
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        matches = event.get("matches") or []
+        match_count = int(event.get("match_count") or len(matches) or 0)
+        injected_count = int(event.get("injected_count") or 0)
+        match_count_sum += match_count
+        injected_count_sum += injected_count
+        if injected_count > 0 or bool(event.get("injected")):
+            injected_event_count += 1
+        for match in matches:
+            if int((match or {}).get("text_chars") or 0) > 0:
+                read_non_empty_match_count += 1
+    return {
+        "event_count": event_count,
+        "match_count_sum": match_count_sum,
+        "injected_event_count": injected_event_count,
+        "injected_count_sum": injected_count_sum,
+        "read_non_empty_match_count": read_non_empty_match_count,
+    }
+
+
+def _effect_evidence_summary(
+    metrics: dict[str, Any], trace_summary: dict[str, Any]
+) -> dict[str, Any]:
+    issues: list[str] = []
+    if int(metrics.get("simulation_count") or 0) <= 0:
+        issues.append("simulation_count=0")
+    if int(trace_summary.get("event_count") or 0) <= 0:
+        issues.append("retrieval_trace.event_count=0")
+    if int(trace_summary.get("match_count_sum") or 0) <= 0:
+        issues.append("retrieval_trace.match_count_sum=0")
+    if int(trace_summary.get("injected_count_sum") or 0) <= 0:
+        issues.append("retrieval_trace.injected_count_sum=0")
+    return {
+        "claim_valid": not issues,
+        "evidence_layer": "strict_eval_with_retrieval" if not issues else "invalid_eval",
+        "claim_boundary": (
+            "Eval metrics can enter an effect table only when simulations completed "
+            "and retrieval trace shows matched and injected memories."
+        ),
+        "invalid_reasons": issues,
+    }
+
+
+def _raise_if_invalid_effect_evidence(evidence: dict[str, Any]) -> None:
+    if evidence.get("claim_valid"):
+        return
+    invalid_reasons = evidence.get("invalid_reasons") or []
+    raise RuntimeError(
+        "OpenViking eval failed effect evidence gate: "
+        + ", ".join(str(reason) for reason in invalid_reasons[:10])
+        + "; do not include this run in effect tables"
+    )
+
+
 def _train(args: argparse.Namespace, train_results: Path, corpus_manifest: Path) -> dict[str, Any]:
+    requested_commit_concurrency = int(args.corpus_session_commit_concurrency)
     if corpus_manifest.is_file() and not args.force_train:
         manifest = json.loads(corpus_manifest.read_text())
         cached_transcript_format = str(
@@ -524,6 +819,23 @@ def _train(args: argparse.Namespace, train_results: Path, corpus_manifest: Path)
                 f"{cached_skip_failed!r} != {bool(args.train_skip_failed_sessions)!r}; "
                 "use a distinct corpus_id or --force-train"
             )
+        cached_commit_concurrency = int(manifest.get("corpus_session_commit_concurrency") or 1)
+        if cached_commit_concurrency != requested_commit_concurrency:
+            raise ValueError(
+                "cached corpus_session_commit_concurrency mismatch: "
+                f"{cached_commit_concurrency!r} != {requested_commit_concurrency!r}; "
+                "use a distinct corpus_id or --force-train"
+            )
+        cached_train_sha256 = manifest.get("train_results_sha256")
+        if cached_train_sha256 and train_results.is_file():
+            actual_train_sha256 = _file_sha256(train_results)
+            if cached_train_sha256 != actual_train_sha256:
+                raise ValueError(
+                    "cached corpus train_results_sha256 mismatch: "
+                    f"{cached_train_sha256!r} != {actual_train_sha256!r}; "
+                    "use a distinct corpus_id or --force-train"
+                )
+        _raise_if_invalid_corpus_manifest(manifest)
         return manifest
 
     if train_results.is_file() and not args.force_train:
@@ -551,29 +863,31 @@ def _train(args: argparse.Namespace, train_results: Path, corpus_manifest: Path)
         data = json.loads(train_results.read_text())
         assert_tau2_results_complete(data, context=f"{args.domain} train")
 
-    client = _client(args)
-    committed = []
     system_prompt_text = ""
     if args.train_include_system_prompt:
         policy = _load_domain_policy(args.tau2_repo, args.domain)
         system_prompt_text = _build_system_prompt(policy)
     skipped_failed_sessions: list[dict[str, Any]] = []
-    try:
-        for sim in data.get("simulations") or []:
-            if args.train_skip_failed_sessions and not _task_success(sim):
-                skipped_failed_sessions.append(
-                    {
-                        "session_id": (
-                            f"tau2-{args.domain}-train-{sim.get('task_id')}-"
-                            f"trial-{sim.get('trial', 0)}"
-                        ),
-                        "task_id": sim.get("task_id"),
-                        "trial": sim.get("trial", 0),
-                        "reward": _reward(sim),
-                        "db_match": _db_match(sim),
-                    }
-                )
-                continue
+    commit_jobs: list[tuple[int, dict[str, Any]]] = []
+    for index, sim in enumerate(data.get("simulations") or []):
+        if args.train_skip_failed_sessions and not _task_success(sim):
+            skipped_failed_sessions.append(
+                {
+                    "session_id": (
+                        f"tau2-{args.domain}-train-{sim.get('task_id')}-trial-{sim.get('trial', 0)}"
+                    ),
+                    "task_id": sim.get("task_id"),
+                    "trial": sim.get("trial", 0),
+                    "reward": _reward(sim),
+                    "db_match": _db_match(sim),
+                }
+            )
+            continue
+        commit_jobs.append((index, sim))
+
+    def commit_one(index: int, sim: dict[str, Any]) -> dict[str, Any]:
+        client = _client(args)
+        try:
             session_id = (
                 f"tau2-{args.domain}-train-{sim.get('task_id')}-trial-{sim.get('trial', 0)}"
             )
@@ -603,46 +917,95 @@ def _train(args: argparse.Namespace, train_results: Path, corpus_manifest: Path)
                     )
             result = client.commit_session(sid, telemetry=True)
             task = _wait_task(client, result.get("task_id"), args.openviking_wait_timeout)
-            committed.append(
-                {
-                    "session_id": sid,
-                    "task_id": sim.get("task_id"),
-                    "trial": sim.get("trial", 0),
-                    "reward": _reward(sim),
-                    "db_match": _db_match(sim),
-                    "commit_status": result.get("status"),
-                    "openviking_task_id": result.get("task_id"),
-                    "openviking_task_status": task.get("status"),
-                }
-            )
-    finally:
-        client.close()
+            task_result = task.get("result") if isinstance(task.get("result"), dict) else {}
+            memory_extract_skipped = _memory_extract_skipped_from_task(task)
+            return {
+                "_input_index": index,
+                "session_id": sid,
+                "task_id": sim.get("task_id"),
+                "trial": sim.get("trial", 0),
+                "reward": _reward(sim),
+                "db_match": _db_match(sim),
+                "commit_status": result.get("status"),
+                "openviking_task_id": result.get("task_id"),
+                "openviking_task_status": task.get("status"),
+                "memories_extracted": task_result.get("memories_extracted") or {},
+                "memory_extract_skipped": memory_extract_skipped,
+                "session_skills_extracted": task_result.get("session_skills_extracted", 0),
+                "active_count_updated": task_result.get("active_count_updated", 0),
+            }
+        finally:
+            client.close()
+
+    committed_rows: list[dict[str, Any]] = []
+    worker_count = min(max(1, requested_commit_concurrency), len(commit_jobs) or 1)
+    if worker_count == 1:
+        committed_rows = [commit_one(index, sim) for index, sim in commit_jobs]
+    else:
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            futures = {
+                executor.submit(commit_one, index, sim): (index, sim) for index, sim in commit_jobs
+            }
+            for future in as_completed(futures):
+                committed_rows.append(future.result())
+    committed = [
+        {key: value for key, value in row.items() if key != "_input_index"}
+        for row in sorted(committed_rows, key=lambda item: int(item["_input_index"]))
+    ]
+    memories_extracted = _merge_numeric_counts(committed, "memories_extracted")
+    memories_extracted_total = sum(memories_extracted.values())
+    memory_extract_skipped_total = sum(
+        int(row.get("memory_extract_skipped") or 0) for row in committed
+    )
+    if committed and memories_extracted_total <= 0:
+        raise RuntimeError(
+            "OpenViking corpus prepare committed sessions but extracted zero memories; "
+            "treat this corpus as invalid"
+        )
 
     client = _client(args)
     try:
         corpus_probe = _probe_corpus(args, client)
+        _raise_if_unhealthy_corpus_probe(corpus_probe)
+        memory_graph_health = client.memory_graph_health(
+            _memory_graph_root_uri(args.search_uri),
+            node_limit=200000,
+            sample_limit=20,
+        )
+        _raise_if_unhealthy_memory_graph(memory_graph_health)
     finally:
         client.close()
 
+    provenance = _corpus_provenance(args, train_results)
     manifest = {
         "domain": args.domain,
         "train_results": str(train_results),
+        "train_results_sha256": provenance["train_results_sha256"],
+        "tau2": provenance["tau2"],
         "openviking": {
             "url": args.openviking_url,
             "account": args.openviking_account,
             "user": args.openviking_user,
             "search_uri": args.search_uri,
+            **provenance["openviking"],
         },
         "train_transcript_format": args.train_transcript_format,
         "train_include_system_prompt": bool(args.train_include_system_prompt),
         "train_skip_failed_sessions": bool(args.train_skip_failed_sessions),
         "train_tool_output_max_chars": args.train_tool_output_max_chars,
+        "corpus_session_commit_concurrency": requested_commit_concurrency,
+        "corpus_session_commit_worker_count": worker_count,
         "committed_sessions": committed,
         "committed_session_count": len(committed),
+        "memories_extracted": memories_extracted,
+        "memories_extracted_total": memories_extracted_total,
+        "memory_extract_skipped_total": memory_extract_skipped_total,
         "skipped_failed_sessions": skipped_failed_sessions,
         "skipped_failed_session_count": len(skipped_failed_sessions),
         "corpus_probe": corpus_probe,
+        "memory_graph_health": memory_graph_health,
     }
+    manifest["corpus_evidence"] = _corpus_evidence_summary(manifest)
     _write_json(corpus_manifest, manifest)
     return manifest
 
@@ -941,6 +1304,15 @@ def main() -> int:
     parser.add_argument("--openviking-user")
     parser.add_argument("--openviking-timeout", type=float, default=600.0)
     parser.add_argument("--openviking-wait-timeout", type=int, default=600)
+    parser.add_argument(
+        "--corpus-session-commit-concurrency",
+        type=int,
+        default=1,
+        help=(
+            "Maximum concurrent OpenViking session commits while preparing the train corpus. "
+            "Defaults to 1 to preserve the serial baseline."
+        ),
+    )
     parser.add_argument("--search-uri")
     parser.add_argument("--retrieval-top-k", type=int, default=4)
     parser.add_argument("--first-user-retrieval-top-k", type=int)
@@ -1002,6 +1374,8 @@ def main() -> int:
     normalize_litellm_env()
     if args.train_tool_output_max_chars <= 0:
         parser.error("--train-tool-output-max-chars must be positive")
+    if args.corpus_session_commit_concurrency < 1:
+        parser.error("--corpus-session-commit-concurrency must be >= 1")
     for name in (
         "memory_inject_max_chars",
         "first_user_memory_inject_max_chars",
@@ -1100,19 +1474,16 @@ def main() -> int:
 
     corpus = _train(args, train_results, corpus_manifest)
     if args.prepare_corpus_only:
-        print(
-            json.dumps(
-                {
-                    "run_label": args.run_label,
-                    "domain": args.domain,
-                    "strategy_id": args.strategy_id,
-                    "prepare_corpus_only": True,
-                    "corpus": corpus,
-                },
-                ensure_ascii=False,
-                sort_keys=True,
-            )
-        )
+        summary = {
+            "run_label": args.run_label,
+            "domain": args.domain,
+            "strategy_id": args.strategy_id,
+            "prepare_corpus_only": True,
+            "corpus": corpus,
+            "corpus_evidence": _corpus_evidence_summary(corpus),
+        }
+        _write_json(summary_path, summary)
+        print(json.dumps(summary, ensure_ascii=False, sort_keys=True))
         return 0
 
     trace_path.touch()
@@ -1139,6 +1510,9 @@ def main() -> int:
     assert_tau2_results_complete(
         json.loads(eval_results.read_text()), context=f"{args.domain} eval"
     )
+    metrics = _metrics(eval_results)
+    trace_summary = _retrieval_trace_summary(trace_path)
+    effect_evidence = _effect_evidence_summary(metrics, trace_summary)
     summary = {
         "run_label": args.run_label,
         "domain": args.domain,
@@ -1163,11 +1537,15 @@ def main() -> int:
         else None,
         "scope_prompt_file": str(args.scope_prompt_file) if args.scope_prompt_file else None,
         "corpus": corpus,
+        "corpus_evidence": _corpus_evidence_summary(corpus),
         "eval_results": str(eval_results),
         "retrieval_trace": str(trace_path),
-        "metrics": _metrics(eval_results),
+        "retrieval_trace_summary": trace_summary,
+        "metrics": metrics,
+        "effect_evidence": effect_evidence,
     }
     _write_json(summary_path, summary)
+    _raise_if_invalid_effect_evidence(effect_evidence)
     print(json.dumps(summary, ensure_ascii=False, sort_keys=True))
     return 0
 

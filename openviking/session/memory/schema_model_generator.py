@@ -44,9 +44,11 @@ class SchemaModelGenerator:
         self,
         schemas: List[MemoryTypeSchema],
         template_context: Optional[Dict[str, Any]] = None,
+        structured_string_patches_only: bool = False,
     ):
         self.schemas = schemas
         self._template_context = dict(template_context or {})
+        self._structured_string_patches_only = structured_string_patches_only
         self._model_cache: Dict[str, Type[BaseModel]] = {}
         self._flat_data_models: Dict[str, Type[BaseModel]] = {}
         self._union_model: Optional[Type[BaseModel]] = None
@@ -136,7 +138,14 @@ class SchemaModelGenerator:
                 # Mutable fields: Union[base_type, patch_type], optional
                 merge_op = MergeOpFactory.from_field(field)
                 patch_type = merge_op.get_output_schema_type(field.field_type)
-                union_type = Union[base_type, patch_type]
+                if (
+                    self._structured_string_patches_only
+                    and field.merge_op == MergeOp.PATCH
+                    and field.field_type == FieldType.STRING
+                ):
+                    union_type = patch_type
+                else:
+                    union_type = Union[base_type, patch_type]
                 desc = merge_op.get_output_schema_description(
                     self._render_description(field.description)
                 )

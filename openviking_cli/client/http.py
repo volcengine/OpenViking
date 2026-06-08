@@ -1098,6 +1098,23 @@ class AsyncHTTPClient(BaseClient):
         )
         return self._handle_response(response)
 
+    async def memory_graph_health(
+        self,
+        uri: str,
+        node_limit: int = 5000,
+        sample_limit: int = 20,
+    ) -> Dict[str, Any]:
+        """Inspect stored memory link/backlink graph consistency under a root URI."""
+        response = await self._http.get(
+            "/api/v1/stats/memory-graph",
+            params={
+                "uri": VikingURI.normalize(uri),
+                "node_limit": node_limit,
+                "sample_limit": sample_limit,
+            },
+        )
+        return self._handle_response(response)
+
     async def health(self) -> bool:
         """Check server health."""
         try:

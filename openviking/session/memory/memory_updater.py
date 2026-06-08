@@ -9,6 +9,8 @@ to the storage system.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 if TYPE_CHECKING:
@@ -23,13 +25,25 @@ from openviking.session.memory.dataclass import (
     StoredLink,
 )
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
-from openviking.session.memory.merge_op import MergeOpFactory
+from openviking.session.memory.merge_op import (
+    FieldType,
+    MergeOp,
+    MergeOpFactory,
+    SearchReplaceBlock,
+    StrPatch,
+)
+from openviking.session.memory.merge_op.base import (
+    ReplaceValueWithBase,
+    StrPatchWithBase,
+    text_digest,
+)
 from openviking.session.memory.page_id_map import PageIdMap
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.template_utils import TemplateUtils
 from openviking.session.memory.utils.uri import render_template
+from openviking.storage.transaction.lock_manager import LOCK_TIMEOUT_DEFAULT
 from openviking.storage.viking_fs import get_viking_fs
-from openviking.telemetry import tracer
+from openviking.telemetry import get_current_telemetry, tracer
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.exceptions import NotFoundError
@@ -38,11 +52,450 @@ from openviking_cli.utils import get_logger
 logger = get_logger(__name__)
 
 
+def _field_value_from_memory_file(
+    memory_file: Optional[MemoryFile],
+    field_name: str,
+) -> Any:
+    if memory_file is None:
+        return None
+    if field_name == "content":
+        return memory_file.plain_content()
+    return memory_file.extra_fields.get(field_name)
+
+
+def _merge_value_shape(value: Any) -> str:
+    if isinstance(value, ReplaceValueWithBase):
+        return "ReplaceValueWithBase"
+    if isinstance(value, StrPatchWithBase):
+        return "StrPatchWithBase"
+    if isinstance(value, StrPatch):
+        return "StrPatch"
+    if isinstance(value, dict) and isinstance(value.get("blocks"), list):
+        return "dict_blocks"
+    if value is None:
+        return "null"
+    if isinstance(value, list):
+        return "list"
+    if isinstance(value, dict):
+        return "dict"
+    return type(value).__name__
+
+
+def _field_trace_digest(value: Any) -> Optional[str]:
+    if isinstance(value, str):
+        return text_digest(value)
+    return None
+
+
+def _memory_file_digest(memory_file: Optional[MemoryFile]) -> Optional[str]:
+    if memory_file is None:
+        return None
+    extra_fields = dict(memory_file.extra_fields)
+    memory_type = memory_file.memory_type or extra_fields.pop("memory_type", None)
+    payload = {
+        "content": memory_file.plain_content(),
+        "extra_fields": extra_fields,
+        "links": memory_file.links,
+        "backlinks": memory_file.backlinks,
+        "memory_type": memory_type,
+    }
+    return hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+
+
+def _telemetry_metric_suffix(value: Any) -> str:
+    if value is None or value == "":
+        return "none"
+    raw = str(value).strip().lower()
+    normalized = "".join(
+        ch if ch.isascii() and (ch.isalnum() or ch == "_") else "_" for ch in raw
+    )
+    normalized = "_".join(part for part in normalized.split("_") if part)
+    return normalized[:80] or "none"
+
+
+def _record_apply_trace_telemetry_rows(
+    apply_traces: List[Dict[str, Any]],
+    *,
+    exact_file_lock_enabled: bool,
+) -> None:
+    if not apply_traces:
+        return
+
+    telemetry = get_current_telemetry()
+    for trace in apply_traces:
+        if not isinstance(trace, dict):
+            continue
+
+        status = _telemetry_metric_suffix(trace.get("status") or "unknown")
+        telemetry.increment("memory.apply.trace.total")
+        telemetry.increment(f"memory.apply.trace.status.{status}")
+        if exact_file_lock_enabled:
+            telemetry.increment("memory.apply.exact_file_lock.trace.total")
+            telemetry.increment(f"memory.apply.exact_file_lock.trace.status.{status}")
+
+        merge_op = _telemetry_metric_suffix(trace.get("merge_op"))
+        if merge_op != "none":
+            telemetry.increment(f"memory.apply.trace.merge_op.{merge_op}")
+
+        input_shape = _telemetry_metric_suffix(trace.get("input_shape"))
+        if input_shape != "none":
+            telemetry.increment(f"memory.apply.trace.input_shape.{input_shape}")
+
+        wrapper_shape = _telemetry_metric_suffix(trace.get("wrapper_shape"))
+        if wrapper_shape != "none":
+            telemetry.increment(f"memory.apply.trace.wrapper_shape.{wrapper_shape}")
+
+        if trace.get("base_matches_latest") is True:
+            telemetry.increment("memory.apply.trace.base_matches_latest")
+        elif trace.get("base_matches_latest") is False:
+            telemetry.increment("memory.apply.trace.base_mismatch")
+
+        if trace.get("stale_detected") is True:
+            telemetry.increment("memory.apply.trace.stale_detected")
+            if exact_file_lock_enabled:
+                telemetry.increment("memory.apply.exact_file_lock.trace.stale_detected")
+
+        rewrite_attempted = trace.get("rewrite_attempted")
+        rewrite_suffix = _telemetry_metric_suffix(rewrite_attempted)
+        if rewrite_suffix != "none":
+            telemetry.increment(f"memory.apply.trace.rewrite.{rewrite_suffix}")
+            if rewrite_attempted == "merge_op_owned":
+                telemetry.increment("memory.apply.trace.rewrite_attempted")
+                if exact_file_lock_enabled:
+                    telemetry.increment(
+                        "memory.apply.exact_file_lock.trace.rewrite_attempted"
+                    )
+
+        if trace.get("changed") is True:
+            telemetry.increment("memory.apply.trace.changed")
+        elif trace.get("changed") is False:
+            telemetry.increment("memory.apply.trace.unchanged")
+
+
+def _wrap_patch_with_read_base(
+    patch_value: Any,
+    *,
+    base_value: Any,
+    source_operation_id: str,
+    exact_file_lock_enabled: Optional[bool] = None,
+) -> Any:
+    if not _effective_exact_file_lock_enabled(exact_file_lock_enabled):
+        return patch_value
+    if isinstance(patch_value, dict) and isinstance(patch_value.get("blocks"), list):
+        try:
+            patch_value = StrPatch(
+                blocks=[
+                    block if isinstance(block, SearchReplaceBlock) else SearchReplaceBlock(**block)
+                    for block in patch_value.get("blocks") or []
+                ]
+            )
+        except Exception as exc:
+            get_current_telemetry().increment("memory.apply.patch_malformed.rejected_file_lock")
+            raise RuntimeError(
+                "malformed structured string patch under exact file-lock mode: "
+                f"source_operation_id={source_operation_id}"
+            ) from exc
+    if not isinstance(patch_value, StrPatch):
+        if patch_value is None or patch_value == "":
+            return patch_value
+        if isinstance(patch_value, str):
+            patch_text = patch_value
+        elif isinstance(patch_value, (dict, list)):
+            patch_text = json.dumps(patch_value, ensure_ascii=False)
+        else:
+            patch_text = str(patch_value)
+        if isinstance(base_value, str):
+            return ReplaceValueWithBase(
+                proposed_value=patch_text,
+                base_value=base_value,
+                base_digest=text_digest(base_value),
+                source_operation_id=source_operation_id,
+            )
+        if base_value is None:
+            return ReplaceValueWithBase(
+                proposed_value=patch_text,
+                base_value=None,
+                source_operation_id=source_operation_id,
+            )
+        return patch_value
+    if isinstance(patch_value, StrPatchWithBase):
+        return patch_value
+    if not isinstance(base_value, str):
+        return patch_value
+    return patch_value.with_base(
+        base_value=base_value,
+        base_digest=text_digest(base_value),
+        source_operation_id=source_operation_id,
+    )
+
+
+def _wrap_replace_with_read_base(
+    patch_value: Any,
+    *,
+    base_value: Any,
+    source_operation_id: str,
+) -> Any:
+    if isinstance(patch_value, ReplaceValueWithBase):
+        return patch_value
+    if base_value is None:
+        return patch_value
+    return ReplaceValueWithBase(
+        proposed_value=patch_value,
+        base_value=base_value,
+        base_digest=text_digest(base_value) if isinstance(base_value, str) else None,
+        source_operation_id=source_operation_id,
+    )
+
+
+def _wrap_merge_value_with_read_base(
+    field: Any,
+    patch_value: Any,
+    *,
+    base_value: Any,
+    source_operation_id: str,
+    exact_file_lock_enabled: Optional[bool] = None,
+) -> Any:
+    if not _effective_exact_file_lock_enabled(exact_file_lock_enabled):
+        return patch_value
+    merge_op = getattr(field, "merge_op", None)
+    if merge_op == MergeOp.PATCH:
+        return _wrap_patch_with_read_base(
+            patch_value,
+            base_value=base_value,
+            source_operation_id=source_operation_id,
+            exact_file_lock_enabled=exact_file_lock_enabled,
+        )
+    if merge_op == MergeOp.REPLACE:
+        return _wrap_replace_with_read_base(
+            patch_value,
+            base_value=base_value,
+            source_operation_id=source_operation_id,
+        )
+    return patch_value
+
+
+def _is_structured_string_patch(patch_value: Any) -> bool:
+    if isinstance(patch_value, StrPatch):
+        return True
+    return isinstance(patch_value, dict) and isinstance(patch_value.get("blocks"), list)
+
+
+def _is_unstructured_string_patch_value(patch_value: Any) -> bool:
+    return not _is_structured_string_patch(patch_value)
+
+
+def _effective_exact_file_lock_enabled(override: Optional[bool] = None) -> bool:
+    enabled = _memory_apply_exact_file_lock_enabled()
+    if override is None:
+        return enabled
+    return enabled and override
+
+
+def _raise_if_missing_exact_file_unstructured_patch_base(
+    field: Any,
+    patch_value: Any,
+    *,
+    current_value: Any,
+    base_value: Any,
+    uri: str,
+    exact_file_lock_enabled: Optional[bool] = None,
+) -> None:
+    if not _effective_exact_file_lock_enabled(exact_file_lock_enabled):
+        return
+    if getattr(field, "merge_op", None) != MergeOp.PATCH:
+        return
+    if getattr(field, "field_type", None) != FieldType.STRING:
+        return
+    if not _is_unstructured_string_patch_value(patch_value):
+        return
+    if patch_value is None or patch_value == "":
+        return
+    if current_value is None or isinstance(base_value, str):
+        return
+    get_current_telemetry().increment("memory.apply.patch_missing_base.rejected_file_lock")
+    raise RuntimeError(
+        "unstructured string patch requires read-time base under exact file-lock mode: "
+        f"uri={uri}, field={field.name}"
+    )
+
+
+def _raise_if_missing_exact_file_replace_base(
+    field: Any,
+    *,
+    current_value: Any,
+    base_value: Any,
+    uri: str,
+    exact_file_lock_enabled: Optional[bool] = None,
+) -> None:
+    if not _effective_exact_file_lock_enabled(exact_file_lock_enabled):
+        return
+    if getattr(field, "merge_op", None) != MergeOp.REPLACE:
+        return
+    if current_value is None or base_value is not None:
+        return
+    get_current_telemetry().increment("memory.apply.replace_missing_base.rejected_file_lock")
+    raise RuntimeError(
+        "replace update requires read-time base under exact file-lock mode: "
+        f"uri={uri}, field={field.name}"
+    )
+
+
+def _memory_apply_exact_file_lock_enabled() -> bool:
+    try:
+        from openviking_cli.utils.config import get_openviking_config
+
+        return bool(
+            getattr(
+                get_openviking_config().memory,
+                "memory_apply_exact_file_lock_enabled",
+                False,
+            )
+        )
+    except Exception:
+        return False
+
+
+def _exact_file_lock_context(
+    *,
+    viking_fs: Any,
+    uri: str,
+    ctx: RequestContext,
+    transaction_handle: Any,
+    purpose: str,
+    exact_file_lock_enabled: Optional[bool] = None,
+    lock_timeout: Any = LOCK_TIMEOUT_DEFAULT,
+) -> Any:
+    if not _effective_exact_file_lock_enabled(exact_file_lock_enabled):
+        return None
+    try:
+        from openviking.storage.transaction import LockContext, get_lock_manager
+
+        lock_path = viking_fs._uri_to_path(uri, ctx=ctx)
+        lock_manager = get_lock_manager()
+    except Exception as exc:
+        get_current_telemetry().increment("memory.apply.exact_file_lock.unavailable")
+        raise RuntimeError(
+            f"Exact file lock unavailable for {purpose}: uri={uri}, error={exc}"
+        ) from exc
+    get_current_telemetry().increment("memory.apply.exact_file_lock.used")
+    return LockContext(
+        lock_manager,
+        [lock_path],
+        lock_mode="exact",
+        handle=transaction_handle,
+        timeout=lock_timeout,
+    )
+
+
+def _exact_file_lock_context_for_uris(
+    *,
+    viking_fs: Any,
+    uris: List[str],
+    ctx: RequestContext,
+    transaction_handle: Any,
+    purpose: str,
+    exact_file_lock_enabled: Optional[bool] = None,
+    lock_timeout: Any = LOCK_TIMEOUT_DEFAULT,
+) -> Any:
+    if not _effective_exact_file_lock_enabled(exact_file_lock_enabled):
+        return None
+    try:
+        from openviking.storage.transaction import LockContext, get_lock_manager
+
+        lock_paths = [viking_fs._uri_to_path(uri, ctx=ctx) for uri in uris]
+        lock_manager = get_lock_manager()
+    except Exception as exc:
+        get_current_telemetry().increment("memory.apply.exact_file_lock.unavailable")
+        raise RuntimeError(
+            f"Exact file lock unavailable for {purpose}: uris={uris}, error={exc}"
+        ) from exc
+    get_current_telemetry().increment("memory.apply.exact_file_lock.used")
+    return LockContext(
+        lock_manager,
+        lock_paths,
+        lock_mode="exact",
+        handle=transaction_handle,
+        timeout=lock_timeout,
+    )
+
+
+def _exact_upsert_lock_context(
+    *,
+    viking_fs: Any,
+    uri: str,
+    ctx: RequestContext,
+    transaction_handle: Any,
+    exact_file_lock_enabled: Optional[bool] = None,
+    lock_timeout: Any = LOCK_TIMEOUT_DEFAULT,
+) -> Any:
+    return _exact_file_lock_context(
+        viking_fs=viking_fs,
+        uri=uri,
+        ctx=ctx,
+        transaction_handle=transaction_handle,
+        purpose="upsert",
+        exact_file_lock_enabled=exact_file_lock_enabled,
+        lock_timeout=lock_timeout,
+    )
+
+
+def _stored_link_key(link: Dict[str, Any]) -> tuple[str, str, Optional[str]]:
+    return (
+        str(link.get("from_uri") or ""),
+        str(link.get("to_uri") or ""),
+        link.get("match_text"),
+    )
+
+
+def _remove_links(
+    existing_links: List[Dict],
+    links_to_remove: List[Dict],
+    *,
+    deleted_uri: Optional[str] = None,
+) -> List[Dict]:
+    if deleted_uri:
+        return [
+            link
+            for link in existing_links
+            if link.get("from_uri") != deleted_uri and link.get("to_uri") != deleted_uri
+        ]
+
+    remove_keys = {_stored_link_key(link) for link in links_to_remove}
+    if not remove_keys:
+        return existing_links
+    return [link for link in existing_links if _stored_link_key(link) not in remove_keys]
+
+
+def _stored_links_from_memory_file(memory_file: MemoryFile) -> List[StoredLink]:
+    links: List[StoredLink] = []
+    for raw_link in list(memory_file.links or []) + list(memory_file.backlinks or []):
+        try:
+            links.append(StoredLink(**raw_link))
+        except Exception:
+            tracer.error(f"Skipping malformed stored link during delete cleanup: {raw_link}")
+    return links
+
+
+def _peer_uris_for_links(links: List[StoredLink], deleted_uri: str) -> set[str]:
+    peers: set[str] = set()
+    for link in links:
+        if link.from_uri != deleted_uri:
+            peers.add(link.from_uri)
+        if link.to_uri != deleted_uri:
+            peers.add(link.to_uri)
+    return peers
+
+
 async def write_stored_links(
     links: List[StoredLink],
     ctx: RequestContext,
     viking_fs: Any,
     skip_uris: Optional[set] = None,
+    lock_handle: Any = None,
+    exact_file_lock_enabled: Optional[bool] = None,
+    lock_timeout: Any = LOCK_TIMEOUT_DEFAULT,
 ) -> None:
     """Write StoredLinks to their endpoint files' links/backlinks fields.
 
@@ -62,21 +515,126 @@ async def write_stored_links(
             file_links.setdefault(link.to_uri, {"links": [], "backlinks": []})
             file_links[link.to_uri]["backlinks"].append(link)
 
+    async def _write_links_for_uri(uri: str, link_groups: Dict[str, List[StoredLink]]) -> None:
+        content = await viking_fs.read_file(uri, ctx=ctx)
+        if not content:
+            return
+        mf = MemoryFileUtils.read(content, uri=uri)
+        if link_groups["links"]:
+            mf.links = merge_links(mf.links, [l.model_dump() for l in link_groups["links"]])
+        if link_groups["backlinks"]:
+            mf.backlinks = merge_links(
+                mf.backlinks, [l.model_dump() for l in link_groups["backlinks"]]
+            )
+        await viking_fs.write_file(uri, MemoryFileUtils.write(mf), ctx=ctx)
+
     for uri, link_groups in file_links.items():
         try:
-            content = await viking_fs.read_file(uri, ctx=ctx)
-            if not content:
+            lock_context = _exact_file_lock_context(
+                viking_fs=viking_fs,
+                uri=uri,
+                ctx=ctx,
+                transaction_handle=lock_handle,
+                purpose="link",
+                exact_file_lock_enabled=exact_file_lock_enabled,
+                lock_timeout=lock_timeout,
+            )
+            if lock_context is not None:
+                async with lock_context:
+                    await _write_links_for_uri(uri, link_groups)
                 continue
-            mf = MemoryFileUtils.read(content, uri=uri)
-            if link_groups["links"]:
-                mf.links = merge_links(mf.links, [l.model_dump() for l in link_groups["links"]])
-            if link_groups["backlinks"]:
-                mf.backlinks = merge_links(
-                    mf.backlinks, [l.model_dump() for l in link_groups["backlinks"]]
-                )
-            await viking_fs.write_file(uri, MemoryFileUtils.write(mf), ctx=ctx)
+
+            await _write_links_for_uri(uri, link_groups)
         except Exception as e:
+            if lock_handle is not None or _effective_exact_file_lock_enabled(
+                exact_file_lock_enabled
+            ):
+                get_current_telemetry().increment("memory.apply.links.failed_file_lock")
+                raise RuntimeError(
+                    f"Failed to apply links under exact file-lock mode: uri={uri}, error={e}"
+                ) from e
             tracer.error(f"Failed to apply links to {uri}: {e}")
+
+
+async def remove_stored_links(
+    links: List[StoredLink],
+    ctx: RequestContext,
+    viking_fs: Any,
+    skip_uris: Optional[set] = None,
+    lock_handle: Any = None,
+    lock_endpoints: bool = True,
+    deleted_uri: Optional[str] = None,
+    exact_file_lock_enabled: Optional[bool] = None,
+    lock_timeout: Any = LOCK_TIMEOUT_DEFAULT,
+) -> None:
+    """Remove StoredLinks from endpoint files' links/backlinks fields.
+
+    This is the inverse of ``write_stored_links`` and is used before deleting a
+    memory file so peer endpoints do not retain dangling graph edges.
+    """
+    skip = skip_uris or set()
+    file_links: Dict[str, Dict[str, List[StoredLink]]] = {}
+    for link in links:
+        if link.from_uri not in skip:
+            file_links.setdefault(link.from_uri, {"links": [], "backlinks": []})
+            file_links[link.from_uri]["links"].append(link)
+        if link.to_uri not in skip:
+            file_links.setdefault(link.to_uri, {"links": [], "backlinks": []})
+            file_links[link.to_uri]["backlinks"].append(link)
+
+    async def _remove_links_for_uri(uri: str, link_groups: Dict[str, List[StoredLink]]) -> None:
+        content = await viking_fs.read_file(uri, ctx=ctx)
+        if not content:
+            return
+        mf = MemoryFileUtils.read(content, uri=uri)
+        changed = False
+        if link_groups["links"]:
+            next_links = _remove_links(
+                mf.links,
+                [link.model_dump() for link in link_groups["links"]],
+                deleted_uri=deleted_uri,
+            )
+            changed = changed or len(next_links) != len(mf.links)
+            mf.links = next_links
+        if link_groups["backlinks"]:
+            next_backlinks = _remove_links(
+                mf.backlinks,
+                [link.model_dump() for link in link_groups["backlinks"]],
+                deleted_uri=deleted_uri,
+            )
+            changed = changed or len(next_backlinks) != len(mf.backlinks)
+            mf.backlinks = next_backlinks
+        if changed:
+            await viking_fs.write_file(uri, MemoryFileUtils.write(mf), ctx=ctx)
+
+    for uri, link_groups in file_links.items():
+        try:
+            lock_context = None
+            if lock_endpoints:
+                lock_context = _exact_file_lock_context(
+                    viking_fs=viking_fs,
+                    uri=uri,
+                    ctx=ctx,
+                    transaction_handle=lock_handle,
+                    purpose="link-cleanup",
+                    exact_file_lock_enabled=exact_file_lock_enabled,
+                    lock_timeout=lock_timeout,
+                )
+            if lock_context is not None:
+                async with lock_context:
+                    await _remove_links_for_uri(uri, link_groups)
+                continue
+
+            await _remove_links_for_uri(uri, link_groups)
+        except Exception as e:
+            if lock_handle is not None or _effective_exact_file_lock_enabled(
+                exact_file_lock_enabled
+            ):
+                get_current_telemetry().increment("memory.apply.links.failed_file_lock")
+                raise RuntimeError(
+                    f"Failed to remove links under exact file-lock mode: uri={uri}, error={e}"
+                ) from e
+            tracer.error(f"Failed to remove links from {uri}: {e}")
 
 
 class ExtractContext:
@@ -125,7 +683,7 @@ class ExtractContext:
         return first_time.split("-")[2] if first_time else None
 
     def get_timestamp_from_ranges(self, ranges_str: str) -> str:
-        """根据 ranges 获取第一条消息的紧凑时间戳（YYYYMMDDHHMMSS），用于文件名去重。
+        """根据 ranges 获取第一条消息的紧凑时间戳（YYYYMMDDHHMMSSffffff），用于文件名去重。
 
         Fallback 到 datetime.now() 以保证总是返回非空字符串。
         """
@@ -133,19 +691,18 @@ class ExtractContext:
 
         msg_range = self.read_message_ranges(ranges_str) if ranges_str else None
         if msg_range:
-            for elem in msg_range.elements:
-                if isinstance(elem, str):
-                    continue
-                created_at = getattr(elem, "created_at", None)
-                if created_at:
-                    try:
-                        return datetime.fromisoformat(created_at).strftime("%Y%m%d%H%M%S")
-                    except (ValueError, TypeError):
-                        continue
-        return datetime.now().strftime("%Y%m%d%H%M%S")
+            for msg_group in msg_range.elements:
+                for msg in msg_group:
+                    created_at = getattr(msg, "created_at", None)
+                    if created_at:
+                        try:
+                            return parse_iso_datetime(created_at).strftime("%Y%m%d%H%M%S%f")
+                        except (ValueError, TypeError):
+                            continue
+        return datetime.now().strftime("%Y%m%d%H%M%S%f")
 
     def get_session_timestamp(self) -> str:
-        """取对话第一条消息的时间戳（YYYYMMDDHHMMSS），用于文件名唯一化。
+        """取对话第一条消息的时间戳（YYYYMMDDHHMMSSffffff），用于文件名唯一化。
 
         Fallback 到 datetime.now() 以保证总是返回非空字符串。
         """
@@ -155,10 +712,10 @@ class ExtractContext:
             created_at = getattr(msg, "created_at", None)
             if created_at:
                 try:
-                    return datetime.fromisoformat(created_at).strftime("%Y%m%d%H%M%S")
+                    return parse_iso_datetime(created_at).strftime("%Y%m%d%H%M%S%f")
                 except (ValueError, TypeError):
                     continue
-        return datetime.now().strftime("%Y%m%d%H%M%S")
+        return datetime.now().strftime("%Y%m%d%H%M%S%f")
 
     def get_event_content(self, ranges_str: str, summary: str, ratio_threshold: float = 0.2) -> str:
         """根据原始消息与 summary 的字符数比例，决定返回原始消息还是摘要。"""
@@ -284,6 +841,7 @@ class MemoryUpdateResult:
         self.edited_uris: List[str] = []
         self.deleted_uris: List[str] = []
         self.errors: List[Tuple[str, Exception]] = []
+        self.apply_traces: List[Dict[str, Any]] = []
 
     def add_written(self, uri: str) -> None:
         self.written_uris.append(uri)
@@ -309,6 +867,134 @@ class MemoryUpdateResult:
         )
 
 
+_SKIPPED_EXACT_APPLY_STATUSES = {
+    "skipped_stale_deleted",
+    "skipped_stale_unread_existing",
+}
+
+
+def _uri_apply_was_skipped(apply_traces: List[Dict[str, Any]], uri: str) -> bool:
+    if not apply_traces:
+        return False
+    uri_traces = [trace for trace in apply_traces if trace.get("uri") == uri]
+    return bool(uri_traces) and all(
+        trace.get("status") in _SKIPPED_EXACT_APPLY_STATUSES for trace in uri_traces
+    )
+
+
+def _stale_deleted_apply_traces(
+    *,
+    resolved_op: ResolvedOperation,
+    uri: str,
+    schema,
+    read_base_content: Optional[MemoryFile],
+    error: Exception,
+) -> List[Dict[str, Any]]:
+    traces: List[Dict[str, Any]] = []
+    for field in schema.fields:
+        if field.name not in resolved_op.memory_fields:
+            continue
+        patch_value = resolved_op.memory_fields[field.name]
+        base_value = _field_value_from_memory_file(read_base_content, field.name)
+        merge_op_name = getattr(getattr(field, "merge_op", ""), "value", None) or str(
+            getattr(field, "merge_op", "")
+        )
+        traces.append(
+            {
+                "uri": uri,
+                "memory_type": resolved_op.memory_type,
+                "field": field.name,
+                "merge_op": merge_op_name,
+                "input_shape": _merge_value_shape(patch_value),
+                "base_digest": _field_trace_digest(base_value),
+                "latest_digest": None,
+                "base_matches_latest": False if base_value is not None else None,
+                "stale_detected": True,
+                "wrapper_shape": _merge_value_shape(patch_value),
+                "rewrite_attempted": "not_applicable_latest_deleted",
+                "status": "skipped_stale_deleted",
+                "changed": False,
+                "error_type": type(error).__name__,
+                "error": str(error)[:500],
+            }
+        )
+    if not traces:
+        traces.append(
+            {
+                "uri": uri,
+                "memory_type": resolved_op.memory_type,
+                "field": None,
+                "merge_op": None,
+                "input_shape": None,
+                "base_digest": None,
+                "latest_digest": None,
+                "base_matches_latest": None,
+                "stale_detected": True,
+                "wrapper_shape": None,
+                "rewrite_attempted": "not_applicable_latest_deleted",
+                "status": "skipped_stale_deleted",
+                "changed": False,
+                "error_type": type(error).__name__,
+                "error": str(error)[:500],
+            }
+        )
+    return traces
+
+
+def _stale_unread_existing_apply_traces(
+    *,
+    resolved_op: ResolvedOperation,
+    uri: str,
+    schema,
+    latest_content: MemoryFile,
+) -> List[Dict[str, Any]]:
+    traces: List[Dict[str, Any]] = []
+    for field in schema.fields:
+        if field.name not in resolved_op.memory_fields:
+            continue
+        patch_value = resolved_op.memory_fields[field.name]
+        latest_value = _field_value_from_memory_file(latest_content, field.name)
+        merge_op_name = getattr(getattr(field, "merge_op", ""), "value", None) or str(
+            getattr(field, "merge_op", "")
+        )
+        traces.append(
+            {
+                "uri": uri,
+                "memory_type": resolved_op.memory_type,
+                "field": field.name,
+                "merge_op": merge_op_name,
+                "input_shape": _merge_value_shape(patch_value),
+                "base_digest": None,
+                "latest_digest": _field_trace_digest(latest_value),
+                "base_matches_latest": None,
+                "stale_detected": True,
+                "wrapper_shape": _merge_value_shape(patch_value),
+                "rewrite_attempted": "not_applicable_unread_existing",
+                "status": "skipped_stale_unread_existing",
+                "changed": False,
+            }
+        )
+    if not traces:
+        traces.append(
+            {
+                "uri": uri,
+                "memory_type": resolved_op.memory_type,
+                "field": None,
+                "merge_op": None,
+                "input_shape": None,
+                "base_digest": None,
+                "latest_digest": _memory_file_digest(latest_content),
+                "base_matches_latest": None,
+                "stale_detected": True,
+                "wrapper_shape": None,
+                "rewrite_attempted": "not_applicable_unread_existing",
+                "status": "skipped_stale_unread_existing",
+                "changed": False,
+            }
+        )
+    return traces
+
+
 class MemoryUpdater:
     """
     Applies MemoryOperations to storage.
@@ -318,12 +1004,20 @@ class MemoryUpdater:
     """
 
     def __init__(
-        self, registry: Optional[MemoryTypeRegistry] = None, vikingdb=None, transaction_handle=None
+        self,
+        registry: Optional[MemoryTypeRegistry] = None,
+        vikingdb=None,
+        transaction_handle=None,
+        exact_file_lock_enabled: Optional[bool] = None,
     ):
         self._viking_fs = None
         self._registry = registry
         self._vikingdb = vikingdb
         self._transaction_handle = transaction_handle
+        self._exact_file_lock_enabled = exact_file_lock_enabled
+
+    def _use_exact_file_lock(self) -> bool:
+        return _effective_exact_file_lock_enabled(self._exact_file_lock_enabled)
 
     def set_registry(self, registry: MemoryTypeRegistry) -> None:
         """Set the memory type registry for URI resolution."""
@@ -381,17 +1075,24 @@ class MemoryUpdater:
         # Apply unified operations - _apply_edit returns True if edited, False if written
         for resolved_op in operations.upsert_operations:
             try:
-                await self._apply_upsert(
+                apply_traces = await self._apply_upsert(
                     resolved_op,
                     ctx,
                     extract_context=extract_context,
                 )
+                apply_traces = apply_traces or []
+                if apply_traces:
+                    result.apply_traces.extend(apply_traces)
                 # Add all uris to result (uris is List[str])
                 if resolved_op.is_edit():
                     for uri in resolved_op.uris:
+                        if _uri_apply_was_skipped(apply_traces, uri):
+                            continue
                         result.add_edited(uri)
                 else:
                     for uri in resolved_op.uris:
+                        if _uri_apply_was_skipped(apply_traces, uri):
+                            continue
                         result.add_written(uri)
             except Exception as e:
                 tracer.error(
@@ -400,13 +1101,26 @@ class MemoryUpdater:
                 )
                 for uri in resolved_op.uris:
                     result.add_error(uri, e)
+                if self._use_exact_file_lock():
+                    raise RuntimeError(
+                        "Failed to apply operation under exact file-lock mode: "
+                        f"uris={resolved_op.uris}, error={e}"
+                    ) from e
 
         # Apply delete operations (delete_file_contents is List[MemoryFile])
         # Skip deletes whose URI was just written in the same batch — this happens when the
         # LLM issues a Replace with the same experience_name (delete old + create same-name new),
         # which is semantically an Update. Executing the delete would remove the just-written file.
         upserted_uris = set(result.written_uris + result.edited_uris)
+        processed_delete_uris: set[str] = set()
         for file_content in operations.delete_file_contents:
+            if file_content.uri in processed_delete_uris:
+                tracer.info(
+                    f"[apply_operations] skipping duplicate delete for {file_content.uri}: "
+                    "URI was already processed in the same batch"
+                )
+                continue
+            processed_delete_uris.add(file_content.uri)
             if file_content.uri in upserted_uris:
                 tracer.info(
                     f"[apply_operations] skipping delete for {file_content.uri}: "
@@ -414,11 +1128,17 @@ class MemoryUpdater:
                 )
                 continue
             try:
-                await self._apply_delete(file_content.uri, ctx)
-                result.add_deleted(file_content.uri)
+                deleted = await self._apply_delete(file_content.uri, ctx, expected=file_content)
+                if deleted:
+                    result.add_deleted(file_content.uri)
             except Exception as e:
                 tracer.error(f"Failed to delete memory {file_content.uri}", e)
                 result.add_error(file_content.uri, e)
+                if self._use_exact_file_lock():
+                    raise RuntimeError(
+                        "Failed to delete memory under exact file-lock mode: "
+                        f"uri={file_content.uri}, error={e}"
+                    ) from e
 
         # Vectorize written and edited memories
         uri_memory_type_map = {}
@@ -446,8 +1166,11 @@ class MemoryUpdater:
         # Collect directories that need overview generation
         # uri is now a string, so extract directory using os.path
         dirs = {}
+        changed_upsert_uris = set(result.written_uris + result.edited_uris)
         for operation in operations.upsert_operations:
             for uri_str in operation.uris:
+                if uri_str not in changed_upsert_uris:
+                    continue
                 dir_path = "/".join(uri_str.split("/")[:-1])
                 dirs[dir_path] = operation.memory_type
         for file_content in operations.delete_file_contents:
@@ -465,109 +1188,271 @@ class MemoryUpdater:
 
     async def _apply_upsert(
         self, resolved_op: ResolvedOperation, ctx: RequestContext, extract_context: Any = None
-    ):
+    ) -> List[Dict[str, Any]]:
         """Apply upsert operation from a flat model."""
         viking_fs = self._get_viking_fs()
 
         memory_type = resolved_op.memory_type
         schema = self._registry.get(memory_type)
+        apply_traces: List[Dict[str, Any]] = []
         # Process each URI independently
         for uri in resolved_op.uris:
-            # Always read from disk first to get the latest content,
-            # so consecutive patches to the same URI see each other's changes.
-            old_content: Optional[MemoryFile] = None
-            try:
-                content = await viking_fs.read_file(uri, ctx=ctx)
-                if content:
-                    old_content = MemoryFileUtils.read(content, uri=uri)
-            except Exception:
-                # File doesn't exist yet, that's okay
-                pass
-            # Fall back to pre-fetched content if disk read failed
-            if old_content is None:
-                old_content = resolved_op.old_memory_file_content
-
-            metadata: Dict[str, Any] = dict(resolved_op.memory_fields)
-            # Process fields defined in schema (apply merge_op)
-            for field in schema.fields:
-                if field.name in resolved_op.memory_fields:
-                    patch_value = resolved_op.memory_fields[field.name]
-                    # Get current value for this URI
-                    if old_content is None:
-                        current_value = None
-                    else:
-                        if field.name == "content":
-                            current_value = old_content.plain_content()
-                        else:
-                            current_value = old_content.extra_fields.get(field.name)
-                    # Use merge_op to process field value
-                    merge_op = MergeOpFactory.from_field(field)
-                    try:
-                        new_value = merge_op.apply(current_value, patch_value)
-                    except Exception as e:
-                        tracer.info(
-                            f"[memory_updater] Skipping field update after merge_op failure: uri={uri}, field={field.name}, error={e}"
-                        )
-                        if current_value is None:
-                            metadata.pop(field.name, None)
-                        else:
-                            metadata[field.name] = current_value
-                        continue
-                    metadata[field.name] = new_value
-
-            # Preserve system-managed metadata from the old file that is not
-            # covered by the schema. These fields are written by the system,
-            # never by the LLM, so they would be silently dropped on every
-            # Update without this copy.
-            if old_content and old_content.extra_fields:
-                schema_field_names = {f.name for f in schema.fields} | {"content", "memory_type"}
-                for key, val in old_content.extra_fields.items():
-                    if key not in schema_field_names and key not in metadata and val is not None:
-                        metadata[key] = val
-
-            # Handle links/backlinks fields: merge with existing
-            incoming_links_by_uri = getattr(resolved_op, "_incoming_links_by_uri", {})
-            incoming_backlinks_by_uri = getattr(resolved_op, "_incoming_backlinks_by_uri", {})
-            incoming_links = incoming_links_by_uri.get(uri, [])
-            incoming_backlinks = incoming_backlinks_by_uri.get(uri, [])
-            has_existing_links = old_content is not None
-            if (
-                incoming_links
-                or incoming_backlinks
-                or (has_existing_links and old_content.links)
-                or (has_existing_links and old_content.backlinks)
-            ):
-                from openviking.session.memory.merge_op.link_merge import merge_links
-
-                # Merge links
-                existing_links = old_content.links if has_existing_links else []
-                if incoming_links:
-                    merged_links = merge_links(
-                        existing_links,
-                        [link.model_dump() for link in incoming_links],
-                    )
-                    metadata["links"] = merged_links
-                elif existing_links:
-                    metadata["links"] = existing_links
-
-                # Merge backlinks
-                existing_backlinks = old_content.backlinks if has_existing_links else []
-                if incoming_backlinks:
-                    merged_backlinks = merge_links(
-                        existing_backlinks,
-                        [link.model_dump() for link in incoming_backlinks],
-                    )
-                    metadata["backlinks"] = merged_backlinks
-                elif existing_backlinks:
-                    metadata["backlinks"] = existing_backlinks
-
-            mf = MemoryFile.from_parsed(uri=uri, parsed=metadata)
-            new_full_content = MemoryFileUtils.write(
-                mf,
-                content_template=schema.content_template,
-                extract_context=extract_context,
+            lock_context = _exact_upsert_lock_context(
+                viking_fs=viking_fs,
+                uri=uri,
+                ctx=ctx,
+                transaction_handle=self._transaction_handle,
+                exact_file_lock_enabled=self._exact_file_lock_enabled,
+                lock_timeout=None,
             )
+            if lock_context is not None:
+                async with lock_context:
+                    uri_apply_traces = await self._apply_upsert_uri(
+                        resolved_op, uri, schema, ctx, extract_context=extract_context
+                    )
+                    _record_apply_trace_telemetry_rows(
+                        uri_apply_traces,
+                        exact_file_lock_enabled=self._use_exact_file_lock(),
+                    )
+                    apply_traces.extend(uri_apply_traces)
+                continue
+
+            uri_apply_traces = await self._apply_upsert_uri(
+                resolved_op, uri, schema, ctx, extract_context=extract_context
+            )
+            _record_apply_trace_telemetry_rows(
+                uri_apply_traces,
+                exact_file_lock_enabled=self._use_exact_file_lock(),
+            )
+            apply_traces.extend(uri_apply_traces)
+        return apply_traces
+
+    async def _apply_upsert_uri(
+        self,
+        resolved_op: ResolvedOperation,
+        uri: str,
+        schema,
+        ctx: RequestContext,
+        extract_context: Any = None,
+    ) -> List[Dict[str, Any]]:
+        viking_fs = self._get_viking_fs()
+        apply_traces: List[Dict[str, Any]] = []
+        read_base_content: Optional[MemoryFile] = None
+        if (
+            resolved_op.old_memory_file_content is not None
+            and resolved_op.old_memory_file_content.uri == uri
+        ):
+            read_base_content = resolved_op.old_memory_file_content
+        # Always read from disk first to get the latest content,
+        # so consecutive patches to the same URI see each other's changes.
+        old_content: Optional[MemoryFile] = None
+        try:
+            content = await viking_fs.read_file(uri, ctx=ctx)
+            if content:
+                old_content = MemoryFileUtils.read(content, uri=uri)
+        except NotFoundError as exc:
+            # Create-new files may legitimately be absent at write time.  In
+            # exact-lock mode, an update whose old snapshot disappeared is
+            # stale and should not silently resurrect the old content. Treat
+            # it as a skipped conflict so concurrent supersedes/delete wins.
+            if self._use_exact_file_lock() and resolved_op.old_memory_file_content is not None:
+                get_current_telemetry().increment("memory.apply.latest_read.missing_file_lock")
+                get_current_telemetry().increment(
+                    "memory.apply.latest_read.stale_deleted_skipped_file_lock"
+                )
+                tracer.info(
+                    "[memory_updater] Skipping stale-deleted exact file update: "
+                    f"uri={uri}, memory_type={resolved_op.memory_type}"
+                )
+                return _stale_deleted_apply_traces(
+                    resolved_op=resolved_op,
+                    uri=uri,
+                    schema=schema,
+                    read_base_content=read_base_content,
+                    error=exc,
+                )
+        except Exception as exc:
+            if self._use_exact_file_lock():
+                get_current_telemetry().increment("memory.apply.latest_read.failed_file_lock")
+                raise RuntimeError(
+                    f"latest read failed under exact file-lock mode: uri={uri}, error={exc}"
+                ) from exc
+            # Legacy tree-lock mode kept best-effort fallback behavior here.
+            pass
+        # Fall back to pre-fetched content if disk read failed
+        if old_content is None:
+            old_content = resolved_op.old_memory_file_content
+        elif self._use_exact_file_lock() and resolved_op.old_memory_file_content is None:
+            get_current_telemetry().increment(
+                "memory.apply.latest_read.stale_unread_existing_skipped_file_lock"
+            )
+            tracer.info(
+                "[memory_updater] Skipping stale unread-existing exact file update: "
+                f"uri={uri}, memory_type={resolved_op.memory_type}"
+            )
+            return _stale_unread_existing_apply_traces(
+                resolved_op=resolved_op,
+                uri=uri,
+                schema=schema,
+                latest_content=old_content,
+            )
+
+        metadata: Dict[str, Any] = dict(resolved_op.memory_fields)
+        # Process fields defined in schema (apply merge_op)
+        for field in schema.fields:
+            if field.name in resolved_op.memory_fields:
+                patch_value = resolved_op.memory_fields[field.name]
+                current_value = _field_value_from_memory_file(old_content, field.name)
+                base_value = _field_value_from_memory_file(read_base_content, field.name)
+                base_digest = _field_trace_digest(base_value)
+                latest_digest = _field_trace_digest(current_value)
+                merge_op_name = getattr(getattr(field, "merge_op", ""), "value", None) or str(
+                    getattr(field, "merge_op", "")
+                )
+                apply_trace: Dict[str, Any] = {
+                    "uri": uri,
+                    "memory_type": resolved_op.memory_type,
+                    "field": field.name,
+                    "merge_op": merge_op_name,
+                    "input_shape": _merge_value_shape(patch_value),
+                    "base_digest": base_digest,
+                    "latest_digest": latest_digest,
+                    "base_matches_latest": (
+                        base_digest == latest_digest
+                        if base_digest is not None and latest_digest is not None
+                        else None
+                    ),
+                    "stale_detected": (
+                        base_digest != latest_digest
+                        if base_digest is not None and latest_digest is not None
+                        else False
+                    ),
+                    "wrapper_shape": None,
+                    "rewrite_attempted": None,
+                    "status": "pending",
+                }
+                apply_traces.append(apply_trace)
+                _raise_if_missing_exact_file_unstructured_patch_base(
+                    field,
+                    patch_value,
+                    current_value=current_value,
+                    base_value=base_value,
+                    uri=uri,
+                    exact_file_lock_enabled=self._exact_file_lock_enabled,
+                )
+                _raise_if_missing_exact_file_replace_base(
+                    field,
+                    current_value=current_value,
+                    base_value=base_value,
+                    uri=uri,
+                    exact_file_lock_enabled=self._exact_file_lock_enabled,
+                )
+                patch_value = _wrap_merge_value_with_read_base(
+                    field,
+                    patch_value,
+                    base_value=base_value,
+                    source_operation_id=f"{uri}:{field.name}",
+                    exact_file_lock_enabled=self._exact_file_lock_enabled,
+                )
+                apply_trace["wrapper_shape"] = _merge_value_shape(patch_value)
+                if apply_trace["stale_detected"]:
+                    apply_trace["rewrite_attempted"] = "merge_op_owned"
+                # Use merge_op to process field value
+                merge_op = MergeOpFactory.from_field(field)
+                try:
+                    new_value = await merge_op.apply_async(current_value, patch_value)
+                except Exception as e:
+                    apply_trace["status"] = "failed"
+                    apply_trace["error_type"] = type(e).__name__
+                    apply_trace["error"] = str(e)[:500]
+                    if self._use_exact_file_lock():
+                        get_current_telemetry().increment("memory.apply.merge_op.failed_file_lock")
+                        _record_apply_trace_telemetry_rows(
+                            [apply_trace],
+                            exact_file_lock_enabled=True,
+                        )
+                        raise RuntimeError(
+                            f"merge_op failed under exact file-lock mode: uri={uri}, "
+                            f"field={field.name}, error={e}"
+                        ) from e
+                    tracer.info(
+                        f"[memory_updater] Skipping field update after merge_op failure: uri={uri}, field={field.name}, error={e}"
+                    )
+                    if current_value is None:
+                        metadata.pop(field.name, None)
+                    else:
+                        metadata[field.name] = current_value
+                    apply_trace["status"] = "skipped_after_error"
+                    continue
+                metadata[field.name] = new_value
+                apply_trace["status"] = "applied"
+                apply_trace["changed"] = new_value != current_value
+
+        # Preserve system-managed metadata from the old file that is not
+        # covered by the schema. These fields are written by the system,
+        # never by the LLM, so they would be silently dropped on every
+        # Update without this copy.
+        if old_content and old_content.extra_fields:
+            schema_field_names = {f.name for f in schema.fields} | {"content", "memory_type"}
+            for key, val in old_content.extra_fields.items():
+                if key not in schema_field_names and key not in metadata and val is not None:
+                    metadata[key] = val
+
+        # Handle links/backlinks fields: merge with existing
+        incoming_links_by_uri = getattr(resolved_op, "_incoming_links_by_uri", {})
+        incoming_backlinks_by_uri = getattr(resolved_op, "_incoming_backlinks_by_uri", {})
+        incoming_links = incoming_links_by_uri.get(uri, [])
+        incoming_backlinks = incoming_backlinks_by_uri.get(uri, [])
+        has_existing_links = old_content is not None
+        if (
+            incoming_links
+            or incoming_backlinks
+            or (has_existing_links and old_content.links)
+            or (has_existing_links and old_content.backlinks)
+        ):
+            from openviking.session.memory.merge_op.link_merge import merge_links
+
+            # Merge links
+            existing_links = old_content.links if has_existing_links else []
+            if incoming_links:
+                merged_links = merge_links(
+                    existing_links,
+                    [link.model_dump() for link in incoming_links],
+                )
+                metadata["links"] = merged_links
+            elif existing_links:
+                metadata["links"] = existing_links
+
+            # Merge backlinks
+            existing_backlinks = old_content.backlinks if has_existing_links else []
+            if incoming_backlinks:
+                merged_backlinks = merge_links(
+                    existing_backlinks,
+                    [link.model_dump() for link in incoming_backlinks],
+                )
+                metadata["backlinks"] = merged_backlinks
+            elif existing_backlinks:
+                metadata["backlinks"] = existing_backlinks
+
+        mf = MemoryFile.from_parsed(uri=uri, parsed=metadata)
+        new_full_content = MemoryFileUtils.write(
+            mf,
+            content_template=schema.content_template,
+            extract_context=extract_context,
+        )
+        try:
             await viking_fs.write_file(uri, new_full_content, ctx=ctx)
+        except Exception as exc:
+            for apply_trace in apply_traces:
+                apply_trace["status"] = "failed"
+                apply_trace["error_type"] = type(exc).__name__
+                apply_trace["error"] = str(exc)[:500]
+            _record_apply_trace_telemetry_rows(
+                apply_traces,
+                exact_file_lock_enabled=self._use_exact_file_lock(),
+            )
+            raise
+        return apply_traces
 
     def _distribute_links_to_operations(self, operations: ResolvedOperations) -> None:
         """Distribute resolved_links to corresponding upsert operations by URI.
@@ -610,21 +1495,128 @@ class MemoryUpdater:
             return
         upserted_uris = set(result.written_uris + result.edited_uris)
         skip = upserted_uris | (deleted_uris or set())
-        await write_stored_links(resolved_links, ctx, viking_fs, skip_uris=skip)
+        await write_stored_links(
+            resolved_links,
+            ctx,
+            viking_fs,
+            skip_uris=skip,
+            exact_file_lock_enabled=self._exact_file_lock_enabled,
+            lock_timeout=None,
+        )
 
-    async def _apply_delete(self, uri: str, ctx: RequestContext) -> None:
+    async def _apply_delete(
+        self,
+        uri: str,
+        ctx: RequestContext,
+        expected: Optional[MemoryFile] = None,
+    ) -> bool:
         """Apply delete operation (uri is already a string)."""
         viking_fs = self._get_viking_fs()
 
-        # Delete from VikingFS
-        # VikingFS automatically handles vector index cleanup
-        # Pass transaction_handle so rm() reuses the compressor's tree lock
-        # instead of trying to acquire a new lock (which would conflict).
-        try:
-            await viking_fs.rm(uri, recursive=False, ctx=ctx, lock_handle=self._transaction_handle)
-        except NotFoundError:
-            tracer.error(f"Memory not found for delete: {uri}")
-            # Idempotent - deleting non-existent file succeeds
+        async def _cleanup_deleted_file_links(
+            memory_file: MemoryFile, *, lock_endpoints: bool
+        ) -> None:
+            links = _stored_links_from_memory_file(memory_file)
+            if not links:
+                return
+            await remove_stored_links(
+                links,
+                ctx,
+                viking_fs,
+                skip_uris={uri},
+                lock_handle=self._transaction_handle,
+                lock_endpoints=lock_endpoints,
+                deleted_uri=uri,
+                exact_file_lock_enabled=self._exact_file_lock_enabled,
+                lock_timeout=None,
+            )
+
+        async def _delete_with_stale_guard(
+            *, lock_cleanup_endpoints: bool, lock_handle: Any = None
+        ) -> bool:
+            file_to_delete = expected
+            if expected is not None and self._use_exact_file_lock():
+                try:
+                    current_raw = await viking_fs.read_file(uri, ctx=ctx)
+                except NotFoundError:
+                    get_current_telemetry().increment(
+                        "memory.apply.stale_delete.already_missing_skipped"
+                    )
+                    tracer.info(
+                        f"[memory_updater] skipping stale delete: uri={uri}, "
+                        "file already missing after delete was planned"
+                    )
+                    return False
+                if not current_raw:
+                    get_current_telemetry().increment(
+                        "memory.apply.stale_delete.already_missing_skipped"
+                    )
+                    tracer.info(
+                        f"[memory_updater] skipping stale delete: uri={uri}, "
+                        "file already empty after delete was planned"
+                    )
+                    return False
+                current = MemoryFileUtils.read(current_raw, uri=uri)
+                if _memory_file_digest(current) != _memory_file_digest(expected):
+                    get_current_telemetry().increment("memory.apply.stale_delete.skipped")
+                    tracer.info(
+                        f"[memory_updater] skipping stale delete: uri={uri}, "
+                        "file changed after delete was planned"
+                    )
+                    return False
+                file_to_delete = current
+
+            try:
+                if file_to_delete is not None:
+                    await _cleanup_deleted_file_links(
+                        file_to_delete,
+                        lock_endpoints=lock_cleanup_endpoints,
+                    )
+                await viking_fs.rm(
+                    uri,
+                    recursive=False,
+                    ctx=ctx,
+                    lock_handle=lock_handle or self._transaction_handle,
+                )
+            except NotFoundError:
+                if self._use_exact_file_lock():
+                    get_current_telemetry().increment(
+                        "memory.apply.stale_delete.already_missing_skipped"
+                    )
+                    tracer.info(
+                        f"[memory_updater] skipping stale delete: uri={uri}, "
+                        "file disappeared before rm"
+                    )
+                    return False
+                tracer.error(f"Memory not found for delete: {uri}")
+                # Idempotent - deleting non-existent file succeeds
+            return True
+
+        delete_lock_uris = [uri]
+        if expected is not None:
+            delete_lock_uris.extend(
+                sorted(_peer_uris_for_links(_stored_links_from_memory_file(expected), uri))
+            )
+        lock_context = _exact_file_lock_context_for_uris(
+            viking_fs=viking_fs,
+            uris=delete_lock_uris,
+            ctx=ctx,
+            transaction_handle=self._transaction_handle,
+            purpose="delete",
+            exact_file_lock_enabled=self._exact_file_lock_enabled,
+            lock_timeout=None,
+        )
+        if lock_context is not None:
+            async with lock_context as active_handle:
+                return await _delete_with_stale_guard(
+                    lock_cleanup_endpoints=False,
+                    lock_handle=active_handle,
+                )
+
+        # Delete from VikingFS. VikingFS automatically handles vector index cleanup.
+        # Pass transaction_handle so rm() reuses the compressor's tree lock instead
+        # of trying to acquire a new lock when the caller still holds one.
+        return await _delete_with_stale_guard(lock_cleanup_endpoints=True)
 
     async def _vectorize_memories(
         self,

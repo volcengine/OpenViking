@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 from typing import Any, Dict
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class MemoryConfig(BaseModel):
@@ -32,10 +32,18 @@ class MemoryConfig(BaseModel):
             "0 means unlimited retries."
         ),
     )
-    agent_memory_enabled: bool = Field(
-        default=True,
+    memory_apply_exact_file_lock_enabled: bool = Field(
+        default=False,
         description=(
-            "Enable trajectory/experience memory extraction. When true (default), "
+            "Experimental. When enabled, memory upserts may acquire exact file locks "
+            "around read/merge/write so concurrent writers can retry stale patches "
+            "without relying on a broad schema tree lock. Disabled by default."
+        ),
+    )
+    agent_memory_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable agent-scope trajectory/experience memory extraction. When true, "
             "a two-phase pipeline runs after user-memory extraction: Phase 1 extracts "
             "execution trajectories from the conversation; Phase 2 consolidates them "
             "into higher-level experience memories."
@@ -45,7 +53,8 @@ class MemoryConfig(BaseModel):
         default=False,
         description=(
             "Experimental memory switch for experimental testing. When enabled, "
-            "experimental memory templates are loaded."
+            "experimental memory templates are loaded and agent_memory_enabled defaults "
+            "to true unless explicitly configured."
         ),
     )
     eager_prefetch: bool = Field(
@@ -69,9 +78,19 @@ class MemoryConfig(BaseModel):
         default=True,
         description=(
             "When enabled (default), memory extraction runs on session commit "
-            "to produce long-term memories. When disabled, sessions are archived "
-            "but no memory extraction is performed. Useful for read-only or "
+            "to produce memories. When disabled, sessions are archived "
+            "but no standard or agent memory extraction is performed. Useful for read-only or "
             "stateless deployments."
+        ),
+    )
+    long_term_extraction_enabled: bool = Field(
+        default=True,
+        description=(
+            "When enabled (default), session commit extracts standard long-term "
+            "memories such as user memories, tool memories, and skill memories. "
+            "Set to false to skip this standard extraction while still allowing "
+            "archive summaries, agent memory extraction, and session skill "
+            "extraction when their own switches are enabled."
         ),
     )
     session_skill_extraction_enabled: bool = Field(
@@ -92,6 +111,14 @@ class MemoryConfig(BaseModel):
     )
 
     model_config = {"extra": "forbid"}
+
+    @model_validator(mode="before")
+    @classmethod
+    def default_agent_memory_for_experimental_switch(cls, data: Any) -> Any:
+        if isinstance(data, dict) and data.get("experimental_memory_switch") is True:
+            data = data.copy()
+            data.setdefault("agent_memory_enabled", True)
+        return data
 
     @field_validator("version")
     @classmethod

@@ -74,6 +74,26 @@ def test_message_range_accepts_extended_fractional_seconds():
     assert msg_range._first_message_time_with_weekday() == "2026-04-17 (Friday)"
 
 
+def test_extract_context_session_timestamp_preserves_microseconds():
+    context = ExtractContext(
+        [
+            _message(created_at="2026-06-01T12:00:33.859218+00:00"),
+        ]
+    )
+
+    assert context.get_session_timestamp() == "20260601120033859218"
+
+
+def test_extract_context_range_timestamp_preserves_microseconds():
+    context = ExtractContext(
+        [
+            _message(created_at="2026-06-01T12:00:33.837654Z"),
+        ]
+    )
+
+    assert context.get_timestamp_from_ranges("0") == "20260601120033837654"
+
+
 def test_message_range_uses_peer_id_when_present():
     msg_range = MessageRange(
         [

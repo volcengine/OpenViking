@@ -28,7 +28,19 @@ def test_telemetry_bridge_records_operation_and_resource_metrics(registry, rende
                     },
                 },
                 "vector": {"searches": 1, "scored": 2, "passed": 2, "returned": 1, "scanned": 9},
-                "memory": {"extracted": 4},
+                "memory": {
+                    "extracted": 4,
+                    "apply": {
+                        "trace": {
+                            "total": 3,
+                            "status": {"applied": 2, "skipped_stale_deleted": 1},
+                            "exact_file_lock": {
+                                "total": 1,
+                                "status": {"skipped_stale_deleted": 1},
+                            },
+                        }
+                    },
+                },
                 "semantic_nodes": {"OK": 12},
                 "resource": {
                     "process": {
@@ -57,6 +69,14 @@ def test_telemetry_bridge_records_operation_and_resource_metrics(registry, rende
         )
         assert 'openviking_vector_searches_total{operation="resource.process"} 1' in text
         assert 'openviking_memory_extracted_total{operation="resource.process"} 4' in text
+        assert (
+            'openviking_memory_apply_trace_total{exact_file_lock="false",operation="resource.process",status="applied"} 2'
+            in text
+        )
+        assert (
+            'openviking_memory_apply_trace_total{exact_file_lock="true",operation="resource.process",status="skipped_stale_deleted"} 1'
+            in text
+        )
         assert (
             'openviking_semantic_nodes_total{status="OK"} 12' in text
             or 'openviking_semantic_nodes_total{status="OK"} 12.0' in text

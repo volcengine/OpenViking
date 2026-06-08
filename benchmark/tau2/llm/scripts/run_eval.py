@@ -101,6 +101,25 @@ def _enabled(value: Any) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _positive_int(value: Any, *, name: str) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a positive integer, got {value!r}") from exc
+    if parsed < 1:
+        raise ValueError(f"{name} must be a positive integer, got {parsed!r}")
+    return parsed
+
+
+def _corpus_session_commit_concurrency(config: dict[str, Any]) -> int:
+    openviking = config.get("openviking", {})
+    benchmark = config.get("benchmark", {})
+    value = openviking.get("corpus_session_commit_concurrency")
+    if value is None:
+        value = benchmark.get("corpus_session_commit_concurrency", 1)
+    return _positive_int(value, name="corpus_session_commit_concurrency")
+
+
 def _require_fixed_first_user(config: dict[str, Any]) -> bool:
     return _enabled(config.get("eval", {}).get("require_fixed_first_user"))
 
@@ -278,6 +297,7 @@ def _tau2_command(
         and strategy.get("train_memory_mode") == "experience_only"
     ):
         openviking = config["openviking"]
+        corpus_session_commit_concurrency = _corpus_session_commit_concurrency(config)
         corpus_id = str(strategy.get("corpus_id") or strategy["id"])
         resolved_train_num_tasks = (
             train_num_tasks if train_num_tasks is not None else strategy.get("train_num_tasks")
@@ -346,6 +366,12 @@ def _tau2_command(
             account,
             "--openviking-user",
             user,
+            "--openviking-timeout",
+            str(openviking.get("timeout_seconds", 600.0)),
+            "--openviking-wait-timeout",
+            str(openviking.get("wait_timeout_seconds", 600)),
+            "--corpus-session-commit-concurrency",
+            str(corpus_session_commit_concurrency),
             "--search-uri",
             search_uri,
             "--retrieval-top-k",
@@ -601,6 +627,9 @@ def _build_plan(
                         "train_skip_failed_sessions": _train_skip_failed_sessions(strategy),
                         "train_tool_output_max_chars": _train_tool_output_max_chars(strategy),
                         "retrieval_budget": _retrieval_budget(config, strategy),
+                        "corpus_session_commit_concurrency": _corpus_session_commit_concurrency(
+                            config
+                        ),
                         "search_memory_type": strategy.get("search_memory_type", "experiences"),
                         "adapter_status": strategy.get("adapter_status", "ready"),
                         "executable": command is not None,
@@ -725,6 +754,14 @@ def _prepare_memory_corpus(cell: dict[str, Any], repo: Path, out: Path) -> dict[
                 f"{key}: {cached_skip_failed!r} != {requested_skip_failed!r}; "
                 "use a distinct corpus_id or rebuild the corpus"
             )
+        cached_commit_concurrency = int(manifest.get("corpus_session_commit_concurrency") or 1)
+        requested_commit_concurrency = int(cell.get("corpus_session_commit_concurrency") or 1)
+        if cached_commit_concurrency != requested_commit_concurrency:
+            raise RuntimeError(
+                "cached corpus_session_commit_concurrency mismatch for "
+                f"{key}: {cached_commit_concurrency!r} != {requested_commit_concurrency!r}; "
+                "use a distinct corpus_id or rebuild the corpus"
+            )
         row = {
             "domain": cell["domain"],
             "strategy_id": cell["strategy_id"],
@@ -732,6 +769,10 @@ def _prepare_memory_corpus(cell: dict[str, Any], repo: Path, out: Path) -> dict[
             "corpus_key": key,
             "returncode": 0,
             "reused": True,
+            "corpus_session_commit_concurrency": cached_commit_concurrency,
+            "corpus_session_commit_worker_count": manifest.get(
+                "corpus_session_commit_worker_count"
+            ),
             "artifacts": {"corpus_manifest": str(manifest_path)},
         }
         write_json(out / "corpus_prepare_results" / f"{key}.json", row)
