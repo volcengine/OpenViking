@@ -264,6 +264,34 @@ class TestGetResourceContentTypeSniffing:
         assert result == ResourceContentType.TEXT
 
     @pytest.mark.asyncio
+    async def test_unknown_extension_truncated_utf8_boundary_still_sniffs_as_text(
+        self, monkeypatch
+    ):
+        payload = (b"a" * 1023) + "你".encode("utf-8")[:1]
+        self._install_dummy_fs(monkeypatch, payload)
+
+        result = await get_resource_content_type(
+            "README",
+            file_path="viking://resources/project/README",
+        )
+
+        assert result == ResourceContentType.TEXT
+
+    @pytest.mark.asyncio
+    async def test_unknown_extension_truncated_utf16_boundary_still_sniffs_as_text(
+        self, monkeypatch
+    ):
+        payload = ("a" * 510 + "😀").encode("utf-16")[:1024]
+        self._install_dummy_fs(monkeypatch, payload)
+
+        result = await get_resource_content_type(
+            "notes.data",
+            file_path="viking://resources/project/notes.data",
+        )
+
+        assert result == ResourceContentType.TEXT
+
+    @pytest.mark.asyncio
     async def test_unknown_extension_invalid_utf8_returns_none(self, monkeypatch):
         self._install_dummy_fs(monkeypatch, b"\xff\xfa\xf8\xf0")
 
@@ -432,6 +460,14 @@ class TestSniffContentTypeEdgeCases:
 
     def test_utf16_with_bom_is_text(self):
         content = "hello world".encode("utf-16")
+        assert _sniff_content_type(content) == ResourceContentType.TEXT
+
+    def test_truncated_utf8_suffix_at_sniff_boundary_is_still_text(self):
+        content = (b"a" * 1023) + "你".encode("utf-8")[:1]
+        assert _sniff_content_type(content) == ResourceContentType.TEXT
+
+    def test_truncated_utf16_suffix_at_sniff_boundary_is_still_text(self):
+        content = ("a" * 510 + "😀").encode("utf-16")[:1024]
         assert _sniff_content_type(content) == ResourceContentType.TEXT
 
     def test_direct_sniff_uses_full_content_without_internal_truncation(self):

@@ -270,20 +270,7 @@ def _sniff_content_type(content: bytes) -> Optional[ResourceContentType]:
     if media_type is not None:
         return media_type
 
-    if _is_valid_utf16_text(sample):
-        return ResourceContentType.TEXT
-
-    text_sample = _extract_text_sample(sample)
-    if text_sample is None:
-        return None
-
-    if _has_too_many_null_bytes(sample):
-        return None
-
-    if _has_suspicious_control_bytes(text_sample):
-        return None
-
-    return ResourceContentType.TEXT
+    return _sniff_text_type(sample)
 
 
 def _has_binary_magic(sample: bytes) -> bool:
@@ -345,25 +332,54 @@ def _sniff_riff_container_type(sample: bytes) -> Optional[ResourceContentType]:
     return None
 
 
-def _extract_text_sample(sample: bytes) -> Optional[bytes]:
+def _sniff_text_type(sample: bytes) -> Optional[ResourceContentType]:
+    """Detect whether the sample should be classified as text."""
+    if _is_valid_utf16_text(sample):
+        return ResourceContentType.TEXT
+
+    text_sample = _extract_utf8_text_sample(sample)
+    if text_sample is None:
+        return None
+
+    if _has_too_many_null_bytes(sample):
+        return None
+
+    if _has_suspicious_control_bytes(text_sample):
+        return None
+
+    return ResourceContentType.TEXT
+
+
+def _extract_utf8_text_sample(sample: bytes) -> Optional[bytes]:
     """Return a UTF-8-compatible sample for text validation.
 
     - UTF-8 BOM: strip BOM and continue validating as UTF-8 text.
     - No BOM: require UTF-8 decodability.
+    - When the bounded sniff sample ends in the middle of a UTF-8 code point,
+      tolerate the incomplete trailing bytes and validate the decodable prefix.
     """
     if sample.startswith(b"\xef\xbb\xbf"):
         text_sample = sample[3:]
-        try:
-            text_sample.decode("utf-8")
-        except UnicodeDecodeError:
-            return None
-        return text_sample
+        return _trim_incomplete_utf8_suffix(text_sample)
 
+    return _trim_incomplete_utf8_suffix(sample)
+
+
+def _trim_incomplete_utf8_suffix(sample: bytes) -> Optional[bytes]:
+    """Return a decodable UTF-8 prefix, tolerating a truncated tail only for bounded sniff samples."""
     try:
         sample.decode("utf-8")
-    except UnicodeDecodeError:
-        return None
-    return sample
+        return sample
+    except UnicodeDecodeError as exc:
+        if not _is_incomplete_suffix_error(exc, sample):
+            return None
+
+        trimmed = sample[: exc.start]
+        try:
+            trimmed.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+        return trimmed
 
 
 def _is_valid_utf16_text(sample: bytes) -> bool:
@@ -373,9 +389,35 @@ def _is_valid_utf16_text(sample: bytes) -> bool:
 
     try:
         sample.decode("utf-16")
-    except UnicodeDecodeError:
-        return False
+    except UnicodeDecodeError as exc:
+        return _has_valid_utf16_prefix(sample, exc)
     return True
+
+
+def _has_valid_utf16_prefix(sample: bytes, exc: UnicodeDecodeError) -> bool:
+    """Return True when a bounded sniff sample has only a truncated UTF-16 tail."""
+    if not _is_incomplete_suffix_error(exc, sample):
+        return False
+
+    for trim_size in (2, 4):
+        if len(sample) <= trim_size:
+            continue
+        trimmed = sample[:-trim_size]
+        try:
+            trimmed.decode("utf-16")
+        except UnicodeDecodeError:
+            continue
+        return True
+    return False
+
+
+def _is_incomplete_suffix_error(exc: UnicodeDecodeError, sample: bytes) -> bool:
+    """Return True for decode errors caused only by a truncated tail at sniff boundary."""
+    return (
+        len(sample) >= _SNIFF_READ_SIZE
+        and exc.reason == "unexpected end of data"
+        and exc.end == len(sample)
+    )
 
 
 def _has_too_many_null_bytes(sample: bytes) -> bool:
@@ -390,6 +432,7 @@ def _has_suspicious_control_bytes(text_sample: bytes) -> bool:
         1 for byte in text_sample if byte < 0x20 and byte not in _TEXT_CONTROL_BYTES
     )
     return bool(text_sample) and (control_count / len(text_sample)) > _SNIFF_CONTROL_CHAR_RATIO
+
 
 _IMAGE_MIME_TYPES = {
     ".png": "image/png",
