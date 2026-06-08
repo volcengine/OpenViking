@@ -191,8 +191,9 @@ class MemoryStore:
                 if isinstance(openviking_connection, dict) and openviking_connection.get("user_id")
                 else config.admin_user_id
             )
-            # Use provided user_ids or fall back to sender_id
-            search_user_ids = user_ids if user_ids else [sender_id]
+            # Default recall runs as the configured/request OpenViking user and
+            # uses sender_id as the peer identity inside that user scope.
+            search_user_ids = user_ids if user_ids else None
             logger.info(f"workspace_id={workspace_id}")
             logger.info(f"user_ids={search_user_ids}")
             logger.info(f"admin_user_id={admin_user_id}")
@@ -205,6 +206,7 @@ class MemoryStore:
                 query=current_message,
                 user_ids=search_user_ids,
                 limit=30,
+                peer_id=sender_id,
             )
             if not result:
                 return ""
@@ -274,7 +276,7 @@ class MemoryStore:
     async def get_viking_user_profile(
         self,
         workspace_id: str,
-        user_id: str,
+        user_id: str | None,
         openviking_connection: dict[str, Any] | None = None,
     ) -> str:
         client = None

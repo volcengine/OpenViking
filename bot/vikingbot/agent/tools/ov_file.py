@@ -272,6 +272,7 @@ class VikingSearchTool(OVFileTool):
         try:
             client = await self._get_client(tool_context)
             admin_user_id = client.admin_user_id
+            sender_peer_id = tool_context.sender_id
 
             if not target_uri and tool_context.memory_user_ids:
                 user_ids = tool_context.memory_user_ids if client.should_sender_fanout() else [None]
@@ -287,6 +288,7 @@ class VikingSearchTool(OVFileTool):
                         target_uri=client._memory_target_uri(memory_user_id),
                         limit=10,
                         user_id=admin_user_id,
+                        peer_id=sender_peer_id,
                     )
                     filtered_items = self._filter_search_items(results, min_score=min_score)
                     for item_type, items in filtered_items.items():
@@ -302,6 +304,7 @@ class VikingSearchTool(OVFileTool):
                 target_uri=target_uri,
                 limit=10,
                 user_id=admin_user_id,
+                peer_id=sender_peer_id,
             )
 
             if not results:
@@ -624,14 +627,10 @@ class VikingMemoryCommitTool(OVFileTool):
         client = None
         try:
             client = await self._get_client(tool_context)
-            if self._has_request_connection(tool_context):
-                commit_user_id = client.admin_user_id or tool_context.sender_id
-            else:
-                commit_user_id = tool_context.sender_id or client.admin_user_id
-            if not commit_user_id:
-                return "Error: user id is required for OpenViking memory commit."
+            if not tool_context.sender_id:
+                return "Error: peer id is required for OpenViking memory commit."
             session_id = tool_context.session_key.safe_name()
-            result = await client.commit(session_id, messages, commit_user_id)
+            result = await client.commit(session_id, messages, peer_id=tool_context.sender_id)
             commit_result = result.get("commit", {}) if isinstance(result, dict) else {}
             archive_uri = commit_result.get("archive_uri")
             memory_diff_uri = f"{archive_uri}/memory_diff.json" if archive_uri else None

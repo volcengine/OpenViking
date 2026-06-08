@@ -17,6 +17,14 @@ def _is_session_key(agent_id: Optional[str]) -> bool:
     return agent_id is not None and "__" in agent_id
 
 
+def _safe_peer_id(peer_id: Optional[str]) -> Optional[str]:
+    if not peer_id:
+        return None
+    if "/" in peer_id or "\\" in peer_id:
+        return None
+    return peer_id
+
+
 class VikingClient:
     def __init__(
         self,
@@ -70,10 +78,10 @@ class VikingClient:
         self.account_id = openviking_config.account_id
         self.admin_user_id = openviking_config.admin_user_id
 
+        api_key = openviking_config.api_key or openviking_config.root_api_key
         remote_client_kwargs = {
             "url": openviking_config.server_url,
-            "api_key": openviking_config.root_api_key,
-            "api_key": openviking_config.api_key,
+            "api_key": api_key,
             "agent_id": agent_id,
         }
         if self._is_root_key_mode():
@@ -207,15 +215,23 @@ class VikingClient:
 
     def _effective_user_id(self, user_id: Optional[str]) -> str:
         if self._has_request_connection():
-            return user_id or self.admin_user_id
+            return ""
         if self._is_user_key_mode():
             return ""
         return user_id or self.admin_user_id
 
     def _effective_session_user_id(self, user_id: Optional[str] = None) -> Optional[str]:
-        if self._has_request_connection():
-            return self.admin_user_id or user_id
+        if self._has_request_connection() or self.mode == "local" or self._is_user_key_mode():
+            return None
         return user_id or self.admin_user_id
+
+    def session_owner_user_id(self) -> Optional[str]:
+        """Return the explicit OpenViking user for session operations, when needed."""
+        return self._effective_session_user_id()
+
+    @staticmethod
+    def _peer_id(value: Optional[str]) -> Optional[str]:
+        return _safe_peer_id(str(value)) if value is not None else None
 
     async def _load_namespace_policy(self) -> None:
         if self._namespace_policy_loaded:
@@ -330,6 +346,7 @@ class VikingClient:
         target_uri: str | list[str] | None = None,
         limit: int = 10,
         user_id: Optional[str] = None,
+        peer_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         client = self.client
         should_close = False
@@ -337,7 +354,12 @@ class VikingClient:
             client, should_close = await self._get_user_scoped_client(user_id)
 
         try:
-            result = await client.search(query, target_uri=target_uri, limit=limit)
+            result = await client.search(
+                query,
+                target_uri=target_uri,
+                limit=limit,
+                peer_id=self._peer_id(peer_id),
+            )
         finally:
             if should_close:
                 await client.close()
@@ -480,9 +502,10 @@ class VikingClient:
     async def search_memory(
         self,
         query: str,
-        user_ids: str | list[str],
+        user_ids: str | list[str] | None = None,
         limit: int = 10,
         agent_user_id: Optional[str] = None,
+        peer_id: Optional[str] = None,
     ) -> list[Any] | dict[str, list[Any]]:
         """通过上下文消息检索用户 memory。"""
 
@@ -497,10 +520,13 @@ class VikingClient:
             memories = getattr(result, "memories", None)
             return memories if isinstance(memories, list) else []
 
-        if isinstance(user_ids, str):
+        if user_ids is None:
+            user_ids = [None]
+        elif isinstance(user_ids, str):
             user_ids = [user_ids]
 
         all_user_memories = []
+        safe_sender_peer_id = self._peer_id(peer_id)
 
         for user_id in user_ids:
             effective_user_id = self._effective_user_id(user_id)
@@ -514,6 +540,7 @@ class VikingClient:
                 query=query,
                 target_uri=uri_user_memory,
                 limit=limit,
+                peer_id=safe_sender_peer_id,
             )
             all_user_memories.extend(_extract_memories(user_memory))
 
@@ -614,8 +641,6 @@ class VikingClient:
         return client
 
     def _assistant_peer_id(self) -> Optional[str]:
-        if self.admin_user_id:
-            return self.admin_user_id
         return None
 
     def _normalize_session_messages(
@@ -666,7 +691,7 @@ class VikingClient:
                         )
                         if match:
                             skill_name = match.group(1).strip()
-                            skill_uri = self._skill_memory_uri(skill_name, default_user_peer_id)
+                            skill_uri = self._skill_memory_uri(skill_name)
 
                     tool_id = f"{tool_name}_{uuid.uuid4().hex[:8]}"
                     parts.append(
@@ -706,8 +731,9 @@ class VikingClient:
             elif not peer_id and ov_role == "assistant":
                 peer_id = assistant_peer_id
 
-            if peer_id:
-                payload["peer_id"] = peer_id
+            safe_message_peer_id = self._peer_id(peer_id)
+            if safe_message_peer_id:
+                payload["peer_id"] = safe_message_peer_id
 
             normalized.append(payload)
 
@@ -788,13 +814,14 @@ class VikingClient:
         messages: list[dict[str, Any]],
         user_id: str = None,
         keep_recent_count: int = 0,
+        peer_id: Optional[str] = None,
     ):
         """Append messages to a stable session and commit it."""
         session_user_id = self._effective_session_user_id(user_id)
         appended = await self.append_messages(
             session_id,
             messages,
-            default_user_peer_id=session_user_id,
+            default_user_peer_id=peer_id,
             session_user_id=session_user_id,
         )
         commit_result = await self.commit_session(

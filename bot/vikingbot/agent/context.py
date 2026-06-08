@@ -145,7 +145,7 @@ Skills with available="false" need dependencies installed first - you can try in
             start = _time.time()
             profile = await self.memory.get_viking_user_profile(
                 workspace_id=workspace_id,
-                user_id=self._sender_id,
+                user_id=None,
                 openviking_connection=self._openviking_connection,
             )
             cost = round(_time.time() - start, 2)
@@ -235,8 +235,9 @@ Skills with available="false" need dependencies installed first - you can try in
                         parts.append(f"## Relevant Agent Experience\n{exp_memory}")
             else:
                 start = _time.time()
-                # Use provided memory_users or fall back to [sender_id]
-                search_user_ids = memory_users if memory_users else [sender_id]
+                # Default recall runs under the configured/request OpenViking user.
+                # sender_id is passed separately as peer identity.
+                search_user_ids = memory_users if memory_users else None
                 viking_memory = await self.memory.get_viking_memory_context(
                     current_message=current_message,
                     workspace_id=workspace_id,
