@@ -21,13 +21,11 @@
 
 👋 加入我们的社区
 
-📱 <a href="./docs/zh/about/01-about-us.md#lark-group">飞书群</a> · <a href="./docs/zh/about/01-about-us.md#wechat-group">微信群</a> · <a href="https://discord.com/invite/eHvx8E9XF3">Discord</a> · <a href="https://x.com/openvikingai">X</a>
+📱 <a href="./docs/en/about/01-about-us.md#lark-group">飞书群</a> · <a href="./docs/en/about/01-about-us.md#wechat-group">微信群</a> · <a href="https://discord.com/invite/eHvx8E9XF3">Discord</a> · <a href="https://x.com/openvikingai">X</a>
 
 </div>
 
 ---
-
-✨ **2026年5月更新**：更新 OpenViking 在 User Memory、Agent Memory 和知识库问答三场景上的评测结果。→ 见 [评测结果](#-评测结果)。
 
 ## 概述
 
@@ -59,7 +57,9 @@
 
 ## 快速开始
 
-### 前置条件
+### 本地部署
+
+#### 前置条件
 
 在开始使用 OpenViking 之前，请确保您的环境满足以下要求：
 
@@ -69,15 +69,15 @@
 - **操作系统**：Linux、macOS、Windows
 - **网络连接**：需要稳定的网络连接（用于下载依赖和访问模型服务）
 
-### 1. 安装
+#### 1. 安装
 
-#### Python 包
+##### Python 包
 
 ```bash
 pip install openviking --upgrade --force-reinstall
 ```
 
-#### Rust CLI（可选）
+##### Rust CLI（可选）
 
 ```bash
 npm i -g @openviking/cli
@@ -89,13 +89,13 @@ npm i -g @openviking/cli
 cargo install --git https://github.com/volcengine/OpenViking ov_cli
 ```
 
-### 2. 模型准备
+#### 2. 模型准备
 
 OpenViking 需要以下模型能力：
 - **VLM 模型**：用于图像和内容理解
 - **Embedding 模型**：用于向量化和语义检索
 
-#### 支持的 VLM 提供商
+##### 支持的 VLM 提供商
 
 OpenViking 支持多种 VLM 提供商：
 
@@ -106,7 +106,7 @@ OpenViking 支持多种 VLM 提供商：
 | `azure` | Azure OpenAI 服务 | [Azure OpenAI 服务](https://portal.azure.com) |
 | `openai-codex` | 通过 ChatGPT/Codex OAuth 使用 Codex VLM | 使用 `openviking-server init` |
 
-#### 提供商特定说明
+##### 提供商特定说明
 
 <details>
 <summary><b>Volcengine (豆包)</b></summary>
@@ -224,9 +224,9 @@ openviking-server doctor
 
 </details>
 
-### 3. 环境配置
+#### 3. 环境配置
 
-#### 本地模型快速配置 (Ollama)
+##### 本地模型快速配置 (Ollama)
 
 如果你想通过 [Ollama](https://ollama.ai) 使用本地模型运行 OpenViking，交互式向导会自动完成所有配置：
 
@@ -249,7 +249,7 @@ openviking-server doctor
 
 > 如果使用云端 API（火山引擎、OpenAI、Gemini 等），请继续下方的手动配置。
 
-#### 服务器配置模板
+##### 服务器配置模板
 
 推荐的首次配置流程是：
 
@@ -278,7 +278,7 @@ openviking-server doctor
       "provider" : "<provider-type>",  // 提供商类型："volcengine"、"openai"、"azure" 等
       "api_version": "2025-01-01-preview", // （仅 azure）API 版本，可选，默认 "2025-01-01-preview"
       "dimension": 1024,               // 向量维度
-      "model"    : "<model-name>"      // Embedding 模型名称或 Azure 部署名
+      "model"    : "<model-name>"      // Embedding 模型名称或 Azure 部署名（如 doubao-embedding-vision-251215 或 text-embedding-3-large）
     },
     "max_concurrent": 10               // 最大并发 embedding 请求（默认：10）
   },
@@ -287,15 +287,15 @@ openviking-server doctor
     "api_key"  : "<your-api-key>",     // 模型服务 API Key（openai-codex 可选）
     "provider" : "<provider-type>",    // 提供商类型 (volcengine, openai, azure, openai-codex 等)
     "api_version": "2025-01-01-preview", // （仅 azure）API 版本，可选，默认 "2025-01-01-preview"
-    "model"    : "<model-name>",       // VLM 模型名称或 Azure 部署名
-    "max_concurrent": 64              // 语义处理的最大并发 LLM 调用（默认：64）
+    "model"    : "<model-name>",       // VLM 模型名称或 Azure 部署名（如 doubao-seed-2-0-pro-260215 或 gpt-4-vision-preview）
+    "max_concurrent": 100              // 语义处理的最大并发 LLM 调用（默认：100）
   }
 }
 ```
 
 > **注意**：对于 embedding 模型，支持 `volcengine`（豆包）、`openai`、`azure`、`jina`、`ollama`、`voyage`、`dashscope`、`minimax`、`cohere`、`vikingdb`、`gemini`（需 `pip install "google-genai>=1.0.0"`）、`litellm` 和 `local`。对于 VLM 模型，常见提供商包括 `volcengine`、`openai`、`openai-codex`、`kimi`、`glm`。
 
-#### 服务器配置示例
+##### 服务器配置示例
 
 👇 展开查看您的模型服务的配置示例：
 
@@ -309,7 +309,7 @@ openviking-server doctor
   },
   "log": {
     "level": "INFO",
-    "output": "stdout"
+    "output": "stdout"                 // 日志输出："stdout" 或 "file"
   },
   "embedding": {
     "dense": {
@@ -326,7 +326,7 @@ openviking-server doctor
     "api_key"  : "your-volcengine-api-key",
     "provider" : "volcengine",
     "model"    : "doubao-seed-2-0-pro-260215",
-    "max_concurrent": 64
+    "max_concurrent": 100
   }
 }
 ```
@@ -343,7 +343,7 @@ openviking-server doctor
   },
   "log": {
     "level": "INFO",
-    "output": "stdout"
+    "output": "stdout"                 // 日志输出："stdout" 或 "file"
   },
   "embedding": {
     "dense": {
@@ -360,7 +360,7 @@ openviking-server doctor
     "api_key"  : "your-openai-api-key",
     "provider" : "openai",
     "model"    : "gpt-4-vision-preview",
-    "max_concurrent": 64
+    "max_concurrent": 100
   }
 }
 ```
@@ -396,7 +396,7 @@ openviking-server doctor
     "provider" : "azure",
     "api_version": "2025-01-01-preview",
     "model"    : "gpt-4o",
-    "max_concurrent": 64
+    "max_concurrent": 100
   }
 }
 ```
@@ -408,7 +408,7 @@ openviking-server doctor
 
 </details>
 
-#### 设置服务器配置环境变量
+##### 设置服务器配置环境变量
 
 创建配置文件后，设置环境变量指向它（Linux/macOS）：
 
@@ -432,9 +432,9 @@ set "OPENVIKING_CONFIG_FILE=%USERPROFILE%\.openviking\ov.conf"
 
 > 💡 **提示**：您也可以将配置文件放在其他位置，只需在环境变量中指定正确路径。
 
-#### CLI/客户端配置示例
+##### CLI/客户端配置示例
 
-你可以通过 `ov config` 命令来以交互式方式初始化 CLI/客户端的配置。如果你有多个 openviking 服务器，你还可以通过 `ov config switch` 命令来切换到其他配置。
+你可以通过 `ov config setup-cli` 命令来以交互式方式初始化 CLI/客户端的配置。如果你有多个 openviking 服务器，你还可以通过 `ov config switch` 命令来切换到其他配置。
 
 👇 展开查看您的 CLI/客户端的配置示例：
 
@@ -471,13 +471,13 @@ set "OPENVIKING_CLI_CONFIG_FILE=%USERPROFILE%\.openviking\ovcli.conf"
 
 </details>
 
-### 4. 运行您的第一个示例
+#### 4. 运行您的第一个示例
 
 > 📝 **前置条件**：确保您已完成上一步的配置（ov.conf 和 ovcli.conf）。
 
 现在让我们运行一个完整的示例，体验 OpenViking 的核心功能。
 
-#### 启动服务器
+##### 启动服务器
 
 ```bash
 openviking-server doctor
@@ -492,7 +492,7 @@ openviking-server
 nohup openviking-server > /data/log/openviking.log 2>&1 &
 ```
 
-#### 运行 CLI
+##### 运行 CLI
 
 ```bash
 ov status
@@ -505,6 +505,10 @@ ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/zh
 ```
 
 恭喜！您已成功运行 OpenViking 🎉
+
+### 商业化接入
+
+OpenViking Personal 现已正式上线。相比开源版本，Service 版本由官方托管、开箱即用，依托 VikingDB 实现远超本地硬件的扩展能力，并提供更丰富的集成与专业支持。包含最多 50 个文件的免费试用额度，现有开源版用户可通过我们的迁移工具平滑迁移。
 
 ### VikingBot 快速开始
 
@@ -535,185 +539,32 @@ ov chat
 
 👉 **[查看：服务器部署与 ECS 设置指南](./docs/zh/getting-started/03-quickstart-server.md)**
 
----
 
-## 📊 评测结果
+## OpenClaw 上下文插件详情
 
-OpenViking 0.3.22 的核心价值主张：**在更高问答准确率的同时，消耗更低的 Token，完成任务时延更低**。以下结果覆盖三个评测维度。
+* 测试集：基于 LoCoMo10(https://github.com/snap-research/locomo) 的长程对话进行效果测试（去除无真值的 category5 后，共 1540 条 case）
+* 实验组：因用户在使用 OpenViking 时可能不关闭 OpenClaw 原生记忆，所以增加是否开关原生记忆的实验组
+* OpenViking 版本：0.1.18
+* 模型：seed-2.0-code
+* 评测脚本：https://github.com/ZaynJarvis/openclaw-eval/tree/main
 
-### 1. 用户记忆评测（User Memory）
+| 实验组 |	任务完成率 | 成本：输入 token (总计) |
+|----------|------------------|------------------|
+| OpenClaw(memory-core) |	35.65% |	24,611,530 |
+| OpenClaw + LanceDB (-memory-core) |	44.55% |	51,574,530 |
+| OpenClaw + OpenViking Plugin (-memory-core)	| 52.08% |	4,264,396 |
+| OpenClaw + OpenViking Plugin (+memory-core)	| 51.23% |	2,099,622 |
 
-**测试目标**：验证 OpenViking 作为不同 Agent 的外接记忆组件，在长对话记忆问答（LOCOMO 数据集）上的准确率、Token 效率和时延表现。
+* 实验结论：
+结合 OpenViking 后，若仍开启原生记忆，效果在原 OpenClaw 上提升 43%，输入 token 成本降低 91%；在 LanceDB 上效果提升 15%，输入 token 降低 96%。若关闭原生记忆，效果在原 OpenClaw 上提升 49%，输入 token 成本降低 83%；在 LanceDB 上效果提升 17%，输入 token 降低 92%。
 
-#### 1.1 各 Agent 基座上的 LOCOMO 测试结果
+👉 **[查看：OpenClaw 上下文插件](examples/openclaw-plugin/README_CN.md)**
 
-<table style="width: 100%; table-layout: fixed;">
-  <thead>
-    <tr>
-      <th style="text-align: center; width: 12%;">实验编号</th>
-      <th style="text-align: center; width: 30%;">方案</th>
-      <th style="text-align: center; width: 20%;">Query 平均耗时</th>
-      <th style="text-align: center; width: 14%;">问答准确率</th>
-      <th style="text-align: center; width: 24%;">Agent 总输入 Token</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td colspan="5" style="text-align: center; font-weight: bold;">OpenClaw 基座</td>
-    </tr>
-    <tr>
-      <td style="text-align: center;">1</td>
-      <td style="text-align: center;">OpenClaw + 原生 memory-core</td>
-      <td style="text-align: right; white-space: nowrap;">95.14s</td>
-      <td style="text-align: right;">24.20%</td>
-      <td style="text-align: right;">392,559,404</td>
-    </tr>
-    <tr>
-      <td style="text-align: center;">2</td>
-      <td style="text-align: center;">OpenClaw + Mem0</td>
-      <td style="text-align: right; white-space: nowrap; font-weight: bold;">37.6s</td>
-      <td style="text-align: right;">56.62%</td>
-      <td style="text-align: right;">42,118,285</td>
-    </tr>
-    <tr>
-      <td style="text-align: center;">3</td>
-      <td style="text-align: center;">OpenClaw + SuperMemory</td>
-      <td style="text-align: right; white-space: nowrap;">109.3s</td>
-      <td style="text-align: right;">42.99%</td>
-      <td style="text-align: right;">88,304,113</td>
-    </tr>
-    <tr>
-      <td style="text-align: center;">4</td>
-      <td style="text-align: center;">OpenClaw + 百炼记忆库</td>
-      <td style="text-align: right; white-space: nowrap;">41.6s</td>
-      <td style="text-align: right;">39.55%</td>
-      <td style="text-align: right;">35,206,037</td>
-    </tr>
-    <tr>
-      <td style="text-align: center; font-weight: bold;">5</td>
-      <td style="text-align: center; font-weight: bold;">OpenClaw + OpenViking</td>
-      <td style="text-align: right; white-space: nowrap; font-weight: bold;">38.8s</td>
-      <td style="text-align: right; font-weight: bold;">82.08%</td>
-      <td style="text-align: right; font-weight: bold;">37,423,456</td>
-    </tr>
-    <tr>
-      <td colspan="5" style="text-align: center; font-weight: bold;">Hermes 基座</td>
-    </tr>
-    <tr>
-      <td style="text-align: center;">6</td>
-      <td style="text-align: center;">Hermes Native Memory</td>
-      <td style="text-align: right; white-space: nowrap;">82.4s (3.57轮/query)</td>
-      <td style="text-align: right;">33.38%</td>
-      <td style="text-align: right;">79,228,398</td>
-    </tr>
-    <tr>
-      <td style="text-align: center; font-weight: bold;">7</td>
-      <td style="text-align: center; font-weight: bold;">Hermes + OpenViking</td>
-      <td style="text-align: right; white-space: nowrap; font-weight: bold;">27.9s (1.55轮/query)</td>
-      <td style="text-align: right; font-weight: bold;">82.86%</td>
-      <td style="text-align: right; font-weight: bold;">52,026,755</td>
-    </tr>
-    <tr>
-      <td colspan="5" style="text-align: center; font-weight: bold;">Claude Code 基座</td>
-    </tr>
-    <tr>
-      <td style="text-align: center;">8</td>
-      <td style="text-align: center;">Claude Code Auto-Memory</td>
-      <td style="text-align: right; white-space: nowrap;">49.1s (7.2轮/query)</td>
-      <td style="text-align: right;">57.21%</td>
-      <td style="text-align: right;">353,306,422</td>
-    </tr>
-    <tr>
-      <td style="text-align: center; font-weight: bold;">9</td>
-      <td style="text-align: center; font-weight: bold;">Claude Code + OpenViking</td>
-      <td style="text-align: right; white-space: nowrap; font-weight: bold;">20.4s (2.6轮/query)</td>
-      <td style="text-align: right; font-weight: bold;">80.32%</td>
-      <td style="text-align: right; font-weight: bold;">129,968,899</td>
-    </tr>
-  </tbody>
-</table>
+👉 **[查看：OpenCode 记忆插件示例](examples/opencode-memory-plugin/README_CN.md)**
 
-#### 1.2 关键效率提升汇总
+👉 **[查看：Claude Code 记忆插件示例](examples/claude-code-memory-plugin/README_CN.md)**
 
-| Agent | 准确率提升 | 时延降低 | Token 消耗降低 |
-|:-----:|----------:|---------:|--------------:|
-| OpenClaw | 24.20% → 82.08% (+3.39×) | -59.22% | **-91.0%** |
-| Hermes | 33.38% → 82.86% (+2.48×) | -66.10% | -34.3% |
-| Claude Code | 57.21% → 80.32% (+1.40×) | -58.45% | -63.2% |
-
----
-
-### 2. Agent 经验记忆评测（Agent Memory）
-
-**测试目标**：验证 OpenViking 抽取并召回经验记忆前后，任务执行表现和 Token 节省的效果。
-
-OpenViking 的 Agent Memory 分为两层：
-
-| 层级 | 概念 | 说明 |
-|:----:|:----:|:----:|
-| Layer 1 | **轨迹（Trajectory）** | 每次会话结束后自动提炼，记录"做了什么、怎么做的、结果如何" |
-| Layer 2 | **经验（Experience）** | 由多条相关轨迹归纳而来，跨会话可复用的策略性知识，"Situation / Approach / Reflect"三段式 |
-
-#### 2.1 经济仿真测试（ClawWork）
-
-港大数据科学实验室（HKUDS）构建的"实时经济生存 benchmark"，Agent 从 $10 起步，每次 LLM 调用自动扣费，收入来自完成专业任务（覆盖 44 个职业、220 个任务）。
-
-| 方案 | 完成 50 个任务后净收入 | 平均每小时 Token 消耗 |
-|:----:|-------------------:|------------------:|
-| LLM only | $2,269.77 | 1,030.3K/h |
-| **LLM + OpenViking** | **$3,843.74 (+69.34%)** | **872.4K/h (-22.8%)** |
-
-#### 2.2 Tau-2 对话 Agent 测试
-
-Sierra AI 发布的对话式 Agent 评测基准，覆盖 Retail 和 Airline 两个领域。
-
-| 方案 | Retail 正确率 | Airline 正确率 |
-|:----:|------------:|-------------:|
-| LLM 无记忆 | 70.94% | 54.38% |
-| **LLM + OpenViking 经验记忆** | **77.81% (+6.87pp)** | **66.25% (+11.87pp)** |
-
----
-
-### 3. 知识库问答评测（Knowledge Base QA）
-
-**测试目标**：对比 OpenViking 与其他 RAG 方案在开源 benchmark 上的准确率、Token 效率和时延表现。
-
-#### 3.1 多跳、多路 RAG 测试（HotpotQA 数据集）
-
-| 方案 | 检索范式 | Accuracy | 每 QA Token | 每 QA 耗时 |
-|:----:|:------:|---------:|-----------:|---------:|
-| Naive RAG | 向量检索 | 62.50% | 1,290 | **0.11s** |
-| HippoRAG 2 | 向量 + 知识图谱 | 61.00% | 726 | 20s |
-| LightRAG | 向量 + 知识图谱 | 89.00% | 28,443 | 75s |
-| LangChain SQL (Agent) | SQL + Agent | 78.00% | 4,776 | 132s |
-| OpenViking (top5) | 向量检索 | 72.75% | 3,154 | 0.22s |
-| **OpenViking (top20)** | **向量检索** | **91.00%** | **12,533** | **0.23s** |
-
-> 💡 **在本组对比中，OpenViking 在 HotpotQA top20 配置下取得最高准确率（91%）；同时检索延迟仅 0.23s，Token 消耗不到 LightRAG 的一半。**
-
-#### 3.2 单轮 RAG 测试（5 个开源数据集均值）
-
-| 方案 | 检索范式 | 平均 Accuracy | 建库 Token | 每 QA Token | 检索耗时 |
-|:----:|:------:|-------------:|---------:|-----------:|-------:|
-| Naive RAG | 向量检索 | 53.93% | 2,755,356 | 1,435 | **0.13s** |
-| PageIndex | 向量 + 树结构 | 36.75% | 5,609,206 | 710,480 | 84.60s |
-| HippoRAG 2 | 向量 + 知识图谱 | 44.50% | 124,963,618 | **637** | 18.83s |
-| LightRAG | 向量 + 知识图谱 | **76.00%** | 62,705,469 | 27,035 | 9.19s |
-| **OpenViking** | **向量检索** | **66.87%** | **8,671,538** | **3,060** | **0.19s** |
-
-> 测试数据集：FinanceBench、NaturalQuestions、ClapNQ、Qasper、SyllabusQA。OpenViking 以极低耗时（0.19s）取得 66.87% 的平均准确率，建库成本仅为 LightRAG 的 13.8%。
-
----
-
-## 学术背书
-
-OpenViking 开源了论文 `VikingMem` 中描述的部分核心能力，使 AI 智能体开发者可以直接使用其中的上下文数据库与记忆管理理念。
-
-> **VikingMem: A Memory Base Management System for Stateful LLM-based Applications**
-> Jiajie Fu, Junwen Chen, Mengzhao Wang, Aoxiang He, Maojia Sheng, Xiangyu Ke, Yifan Zhu, and Yunjun Gao.
-> arXiv:2605.29640, 2026。已被 VLDB 2026 接收。
->
-> 📄 [阅读 arXiv 论文](https://arxiv.org/abs/2605.29640)
+👉 **[查看：LangChain / LangGraph 集成](./docs/zh/agent-integrations/06-langchain-langgraph.md)**
 
 ## VikingBot 部署详情
 
@@ -721,7 +572,7 @@ OpenViking 有一个类似 nanobot 的机器人用于交互工作，现已可用
 
 👉 **[查看：使用 VikingBot 部署服务器](bot/README_CN.md)**
 
----
+--
 
 ## 核心概念
 
@@ -829,8 +680,8 @@ OpenViking 仍处于早期阶段，有许多改进和探索的空间。我们真
 - 为我们点亮一颗珍贵的 **Star**，给我们前进的动力。
 - 访问我们的[**官网**](https://www.openviking.ai)了解我们传达的理念，并通过[**文档**](https://www.openviking.ai/docs)在您的项目中使用它。感受它带来的变化，并给我们最真实的体验反馈。
 - 加入我们的社区，分享您的见解，帮助回答他人的问题，共同创造开放互助的技术氛围：
-  - 📱 **飞书群**：扫码加入 → [查看二维码](./docs/zh/about/01-about-us.md#lark-group)
-  - 💬 **微信群**：扫码添加助手 → [查看二维码](./docs/zh/about/01-about-us.md#wechat-group)
+  - 📱 **飞书群**：扫码加入 → [查看二维码](./docs/en/about/01-about-us.md#lark-group)
+  - 💬 **微信群**：扫码添加助手 → [查看二维码](./docs/en/about/01-about-us.md#wechat-group)
   - 🎮 **Discord**：[加入 Discord 服务器](https://discord.com/invite/eHvx8E9XF3)
   - 🐦 **X (Twitter)**：[关注我们](https://x.com/openvikingai)
 - 成为**贡献者**，无论是提交错误修复还是贡献新功能，您的每一行代码都将是 OpenViking 成长的重要基石。
@@ -851,7 +702,7 @@ OpenViking 仍处于早期阶段，有许多改进和探索的空间。我们真
 OpenViking 项目不同组件采用不同的开源协议：
 
 - **主项目**: AGPLv3 - 详情请参见 [LICENSE](./LICENSE) 文件
-- **crates/ov_cli**: Apache 2.0 - 详情请参见 [LICENSE](./crates/LICENSE) 文件
+- **crates/ov_cli**: Apache 2.0 - 详情请参见 [LICENSE](./crates/ov_cli/LICENSE) 文件
 - **examples**: Apache 2.0 - 详情请参见 [LICENSE](./examples/LICENSE) 文件
 - **third_party**: 保留各三方项目的原有协议
 
@@ -863,7 +714,7 @@ OpenViking 项目不同组件采用不同的开源协议：
 [license-shield]: https://img.shields.io/badge/license-AGPLv3-white?labelColor=black&style=flat-square
 [license-shield-link]: https://github.com/volcengine/OpenViking/blob/main/LICENSE
 [last-commit-shield]: https://img.shields.io/github/last-commit/volcengine/OpenViking?color=c4f042&labelColor=black&style=flat-square
-[last-commit-shield-link]: https://github.com/volcengine/OpenViking/commits/main
+[last-commit-shield-link]: https://github.com/volcengine/OpenViking/commcommits/main
 [github-stars-shield]: https://img.shields.io/github/stars/volcengine/OpenViking?labelColor&style=flat-square&color=ffcb47
 [github-stars-link]: https://github.com/volcengine/OpenViking
 [github-issues-shield]: https://img.shields.io/github/issues/volcengine/OpenViking?labelColor=black&style=flat-square&color=ff80eb
