@@ -14,6 +14,7 @@ class AllCredentialsFailedError(Exception):
         """
         self.errors = errors
         message = "All credentials failed:\n" + "\n".join(
-            f"  - {cred_id}: {error_class} - {exc}" for cred_id, error_class, exc, attempts in errors
+            f"  - {cred_id}: {error_class} - {exc}"
+            for cred_id, error_class, exc, attempts in errors
         )
         super().__init__(message)
