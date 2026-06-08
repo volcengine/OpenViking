@@ -208,9 +208,7 @@ class EmbedderBase(ABC):
                 return content
             return truncate_embedding_input(content, self.max_input_tokens)
 
-    def prepare_embedding_inputs(
-        self, contents: List["EmbeddingInput"]
-    ) -> List["EmbeddingInput"]:
+    def prepare_embedding_inputs(self, contents: List["EmbeddingInput"]) -> List["EmbeddingInput"]:
         """Apply this embedder's input guard to a batch."""
         return [self.prepare_embedding_input(content) for content in contents]
 
@@ -267,9 +265,7 @@ class EmbedderBase(ABC):
         """Batch embed document texts."""
         return self.embed_batch(texts, is_query=False)
 
-    async def embed_async(
-        self, content: "EmbeddingInput", is_query: bool = False
-    ) -> EmbedResult:
+    async def embed_async(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
         """Async embed text or multimodal content.
 
         Subclasses should override this with a non-blocking implementation.
@@ -592,10 +588,7 @@ class CompositeHybridEmbedder(HybridEmbedderBase):
     @property
     def supports_multimodal(self) -> bool:
         """Supports multimodal input only if both sub-embedders do."""
-        return (
-            self.dense_embedder.supports_multimodal
-            and self.sparse_embedder.supports_multimodal
-        )
+        return self.dense_embedder.supports_multimodal and self.sparse_embedder.supports_multimodal
 
     def embed(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
         """Combine results from both embedders"""
@@ -622,9 +615,7 @@ class CompositeHybridEmbedder(HybridEmbedderBase):
             for d, s in zip(dense_results, sparse_results, strict=True)
         ]
 
-    async def embed_async(
-        self, content: "EmbeddingInput", is_query: bool = False
-    ) -> EmbedResult:
+    async def embed_async(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
         dense_input = self.dense_embedder.prepare_embedding_input(content)
         sparse_input = self.sparse_embedder.prepare_embedding_input(content)
         dense_res, sparse_res = await asyncio.gather(
@@ -862,23 +853,32 @@ class FailoverEmbedder(EmbedderBase):
                     f"Credential {credential_id} failed with {error_class}, advancing to next credential"
                 )
 
-    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
-        """Embed text with multi-credential failover support."""
-        return self._embed_with_failover("embed", text, is_query=is_query)
+    @property
+    def supports_multimodal(self) -> bool:
+        """Whether all embedders support multimodal input."""
+        return all(embedder.supports_multimodal for embedder in self._embedders)
 
-    def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
+    def embed(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
+        """Embed text or multimodal content with multi-credential failover support."""
+        return self._embed_with_failover("embed", content, is_query=is_query)
+
+    def embed_batch(
+        self, contents: List["EmbeddingInput"], is_query: bool = False
+    ) -> List[EmbedResult]:
         """Batch embed with multi-credential failover support."""
-        return self._embed_with_failover("embed_batch", texts, is_query=is_query)
+        return self._embed_with_failover("embed_batch", contents, is_query=is_query)
 
-    async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
+    async def embed_async(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
         """Async embed with multi-credential failover support."""
-        return await self._embed_with_failover_async("embed_async", text, is_query=is_query)
+        return await self._embed_with_failover_async("embed_async", content, is_query=is_query)
 
     async def embed_batch_async(
-        self, texts: List[str], is_query: bool = False
+        self, contents: List["EmbeddingInput"], is_query: bool = False
     ) -> List[EmbedResult]:
         """Async batch embed with multi-credential failover support."""
-        return await self._embed_with_failover_async("embed_batch_async", texts, is_query=is_query)
+        return await self._embed_with_failover_async(
+            "embed_batch_async", contents, is_query=is_query
+        )
 
     def get_dimension(self) -> int:
         """Get dimension from the first embedder."""
