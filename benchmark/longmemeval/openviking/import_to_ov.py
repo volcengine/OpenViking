@@ -251,7 +251,7 @@ async def submit_viking_ingest(
             print(f"Warning: Failed to parse session_time: {session_time}", file=sys.stderr)
 
     async with submit_semaphore:
-        client = ov.AsyncHTTPClient(url=openviking_url, agent_id=agent_id, user=user_id)
+        client = ov.AsyncHTTPClient(url=openviking_url, user=user_id)
         await client.initialize()
         try:
             create_res = await client.create_session()
@@ -299,7 +299,7 @@ async def wait_for_viking_task(
         return {"embedding": 0, "vlm": 0, "llm_input": 0, "llm_output": 0, "total": 0}
 
     async with wait_semaphore:
-        client = ov.AsyncHTTPClient(url=openviking_url, agent_id=agent_id, user=user_id)
+        client = ov.AsyncHTTPClient(url=openviking_url, user=user_id)
         await client.initialize()
         try:
             while True:

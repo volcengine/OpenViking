@@ -359,7 +359,6 @@ async def viking_ingest(
     client = ov.AsyncHTTPClient(
         url=openviking_url,
         user=user_id,
-        agent_id=agent_id,
     )
     await client.initialize()
 

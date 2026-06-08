@@ -516,7 +516,6 @@ def run_vikingbot_chat(
     start_time = time.time()
     client = SyncHTTPClient(
         url=openviking_url,
-        agent_id=question_id,
         user=sample_id,
         timeout=timeout,
     )

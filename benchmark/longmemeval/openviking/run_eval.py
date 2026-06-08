@@ -379,7 +379,6 @@ def run_single_search_context_answer(
     start_time = time.time()
     client = SyncHTTPClient(
         url=openviking_url,
-        agent_id=session_id,
         user=sender_id,
         timeout=timeout,
     )
