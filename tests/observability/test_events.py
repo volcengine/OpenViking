@@ -30,7 +30,6 @@ def test_event_bus_fans_out_and_enriches_root_metadata():
         request_id="req-1",
         account_id="acct-1",
         user_id="user-1",
-        agent_id="agent-1",
     )
     token = bind_root_observability_context(root)
     try:
@@ -46,7 +45,6 @@ def test_event_bus_fans_out_and_enriches_root_metadata():
     assert seen_a[0].request_id == "req-1"
     assert seen_a[0].account_id == "acct-1"
     assert seen_a[0].user_id == "user-1"
-    assert seen_a[0].agent_id == "agent-1"
 
 
 def test_metric_datasource_publishes_to_shared_bus_without_metrics_init():

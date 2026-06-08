@@ -6,8 +6,7 @@ to Claude Code via `claude -p`, letting its auto-memory system extract and persi
 memories. Each session is a separate `claude -p` invocation (independent conversation).
 
 All samples share one isolated project directory so Claude Code accumulates memories
-from all sessions into a single memory store — matching how openclaw uses one agent
-namespace per user.
+from all sessions into a single memory store.
 
 Usage:
     python ingest.py

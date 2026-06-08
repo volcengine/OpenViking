@@ -66,13 +66,14 @@ class OpenVikingContextMiddleware(AgentMiddleware):
         account: str | None = None,
         user: str | None = None,
         user_id: str | None = None,
-        agent_id: str | None = None,
         path: str | None = None,
         target_uri: str | list[str] = "",
         limit: int = 5,
+        peer_id: str | None = None,
         score_threshold: float | None = None,
         token_budget: int = 128_000,
         session_id_resolver: Callable[[dict[str, Any], Any], str] | None = None,
+        peer_id_resolver: Callable[[dict[str, Any], Any], str | None] | None = None,
         capture_on_after_agent: bool = True,
         commit_on_after_agent: bool = False,
         commit_policy: OpenVikingCommitPolicy | None = None,
@@ -88,7 +89,6 @@ class OpenVikingContextMiddleware(AgentMiddleware):
             account=account,
             user=user,
             user_id=user_id,
-            agent_id=agent_id,
             path=path,
         )
         self.retriever = retriever or OpenVikingRetriever(
@@ -98,9 +98,9 @@ class OpenVikingContextMiddleware(AgentMiddleware):
             account=account,
             user=user,
             user_id=user_id,
-            agent_id=agent_id,
             path=path,
             target_uri=target_uri,
+            peer_id=peer_id,
             limit=limit,
             score_threshold=score_threshold,
             search_mode="search",
@@ -113,9 +113,9 @@ class OpenVikingContextMiddleware(AgentMiddleware):
             account=account,
             user=user,
             user_id=user_id,
-            agent_id=agent_id,
             path=path,
             target_uri=target_uri,
+            peer_id=peer_id,
             limit=limit,
             score_threshold=score_threshold,
             token_budget=token_budget,
@@ -125,13 +125,15 @@ class OpenVikingContextMiddleware(AgentMiddleware):
             recall_header=recall_header,
         )
         self.session_id_resolver = session_id_resolver
+        self.peer_id = peer_id if peer_id is not None else getattr(self.retriever, "peer_id", None)
+        self.peer_id_resolver = peer_id_resolver
         self.capture_on_after_agent = capture_on_after_agent
         self.commit_policy = commit_policy
         if commit_on_after_agent and self.commit_policy is None:
             self.commit_policy = OpenVikingCommitPolicy(mode="always")
         self.recall_header = recall_header
-        self._captured_signatures: dict[str, tuple[str, ...]] = {}
-        self._pending_context_parts: dict[str, list[dict[str, Any]]] = {}
+        self._captured_signatures: dict[tuple[str, str], tuple[str, ...]] = {}
+        self._pending_context_parts: dict[tuple[str, str], list[dict[str, Any]]] = {}
 
     def wrap_model_call(self, request: ModelRequest, handler: Callable[[ModelRequest], Any]) -> Any:
         query = get_latest_user_text(request.messages)
@@ -141,13 +143,22 @@ class OpenVikingContextMiddleware(AgentMiddleware):
             getattr(request, "state", {}) or {},
             getattr(request, "runtime", None),
         )
-        self._pending_context_parts.pop(session_id, None)
-        assembled = self.assembler.assemble(session_id=session_id, query=query)
+        peer_id = self._resolve_peer_id(
+            getattr(request, "state", {}) or {},
+            getattr(request, "runtime", None),
+        )
+        pending_key = _capture_key(session_id, peer_id)
+        self._pending_context_parts.pop(pending_key, None)
+        assembled = self.assembler.assemble(
+            session_id=session_id,
+            query=query,
+            peer_id=peer_id,
+        )
         context_block = assembled.block
         if not context_block:
             return handler(request)
         if assembled.context_parts:
-            self._pending_context_parts[session_id] = assembled.context_parts
+            self._pending_context_parts[pending_key] = assembled.context_parts
 
         system_message = request.system_message
         if system_message is None:
@@ -158,7 +169,7 @@ class OpenVikingContextMiddleware(AgentMiddleware):
         try:
             return handler(request.override(system_message=updated_system))
         except Exception:
-            self._pending_context_parts.pop(session_id, None)
+            self._pending_context_parts.pop(pending_key, None)
             raise
 
     def after_agent(self, state: dict[str, Any], runtime: Any) -> dict[str, Any] | None:
@@ -168,11 +179,13 @@ class OpenVikingContextMiddleware(AgentMiddleware):
         if not messages:
             return None
         session_id = self._resolve_session_id(state, runtime)
-        previous_signatures = self._captured_signatures.get(session_id, ())
+        peer_id = self._resolve_peer_id(state, runtime)
+        capture_key = _capture_key(session_id, peer_id)
+        previous_signatures = self._captured_signatures.get(capture_key, ())
         current_signatures = tuple(_message_signature(message) for message in messages)
 
         if current_signatures == previous_signatures:
-            self._pending_context_parts.pop(session_id, None)
+            self._pending_context_parts.pop(capture_key, None)
             return None
         start = 0
         if (
@@ -184,7 +197,7 @@ class OpenVikingContextMiddleware(AgentMiddleware):
 
         client = ensure_client(self._connection)
         added = 0
-        pending_context_parts = list(self._pending_context_parts.pop(session_id, []))
+        pending_context_parts = list(self._pending_context_parts.pop(capture_key, []))
         for message in messages[start:]:
             if OPENVIKING_CONTEXT_MARKER in _message_content(message):
                 continue
@@ -199,9 +212,10 @@ class OpenVikingContextMiddleware(AgentMiddleware):
                     session_id=session_id,
                     role=payload["role"],
                     parts=payload["parts"],
+                    peer_id=peer_id,
                 )
                 added += 1
-        self._captured_signatures[session_id] = current_signatures
+        self._captured_signatures[capture_key] = current_signatures
         if added:
             apply_commit_policy(client, session_id, self.commit_policy)
         return None
@@ -224,6 +238,24 @@ class OpenVikingContextMiddleware(AgentMiddleware):
             if resolved:
                 return resolved
         raise ValueError(_SESSION_ID_ERROR)
+
+    def _resolve_peer_id(self, state: dict[str, Any], runtime: Any) -> str | None:
+        if self.peer_id_resolver:
+            return _normalize_peer_id(self.peer_id_resolver(state, runtime))
+        candidates = [
+            state.get("peer_id"),
+            state.get("peerId"),
+            _nested_get(getattr(runtime, "context", None), "peer_id"),
+            _nested_get(getattr(runtime, "context", None), "peerId"),
+            _nested_get(getattr(runtime, "config", None), "configurable", "peer_id"),
+            _nested_get(getattr(runtime, "config", None), "configurable", "peerId"),
+            self.peer_id,
+        ]
+        for candidate in candidates:
+            resolved = _normalize_peer_id(candidate)
+            if resolved:
+                return resolved
+        return None
 
     def _ensure_session(self, client: Any, session_id: str) -> None:
         try:
@@ -250,6 +282,17 @@ def _normalize_session_id(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _normalize_peer_id(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _capture_key(session_id: str, peer_id: str | None) -> tuple[str, str]:
+    return (session_id, peer_id or "")
 
 
 def _message_role(message: Any) -> str:

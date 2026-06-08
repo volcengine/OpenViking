@@ -13,9 +13,9 @@ from typing import Dict, Optional
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 
-from openviking.pyagfs import AsyncAGFSClient
+from openviking.pyagfs import AGFSNotFoundError, AsyncAGFSClient
 from openviking.server.api_keys.models import AccountInfo, UserKeyEntry
-from openviking.server.identity import AccountNamespacePolicy, ResolvedIdentity, Role
+from openviking.server.identity import ResolvedIdentity, Role
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import (
     AlreadyExistsError,
@@ -30,7 +30,6 @@ logger = get_logger(__name__)
 
 ACCOUNTS_PATH = "/local/_system/accounts.json"
 USERS_PATH_TEMPLATE = "/local/{account_id}/_system/users.json"
-SETTINGS_PATH_TEMPLATE = "/local/{account_id}/_system/setting.json"
 
 
 # Argon2id parameters - export with LEGACY_ prefix for reuse in new.py
@@ -74,7 +73,6 @@ class LegacyAPIKeyManager:
     async def load(self) -> None:
         """Load accounts and user keys from VikingFS into memory."""
         accounts_data = await self._read_json(ACCOUNTS_PATH)
-        fresh_workspace = accounts_data is None
         if accounts_data is None:
             # First run: create default account
             now = datetime.now(timezone.utc).isoformat()
@@ -85,28 +83,11 @@ class LegacyAPIKeyManager:
             users_path = USERS_PATH_TEMPLATE.format(account_id=account_id)
             users_data = await self._read_json(users_path)
             users = users_data.get("users", {}) if users_data else {}
-            settings_path = SETTINGS_PATH_TEMPLATE.format(account_id=account_id)
-            settings_data = await self._read_json(settings_path)
-            namespace_policy, should_persist_settings, inferred_from_legacy = (
-                self._resolve_namespace_policy(
-                    settings_data,
-                    allow_legacy_inference=not fresh_workspace,
-                )
-            )
 
             self._accounts[account_id] = AccountInfo(
                 created_at=info.get("created_at", ""),
                 users=users,
-                namespace_policy=namespace_policy,
             )
-            if should_persist_settings:
-                await self._save_settings_json(account_id, settings_data=settings_data)
-                if inferred_from_legacy:
-                    logger.info(
-                        "Inferred namespace policy for legacy account %s using the historical "
-                        "default user-shared/agent-shared layout",
-                        account_id,
-                    )
 
             for user_id, user_info in users.items():
                 key_or_hash = user_info.get("key", "")
@@ -158,28 +139,6 @@ class LegacyAPIKeyManager:
             sum(len(info.users) for info in self._accounts.values()),
         )
 
-    def _resolve_namespace_policy(
-        self,
-        settings_data: Optional[dict],
-        *,
-        allow_legacy_inference: bool,
-    ) -> tuple[AccountNamespacePolicy, bool, bool]:
-        """Resolve persisted namespace policy, with one-time inference for legacy accounts."""
-        namespace_data = settings_data.get("namespace") if isinstance(settings_data, dict) else None
-        if isinstance(namespace_data, dict):
-            return AccountNamespacePolicy.from_dict(namespace_data), False, False
-
-        if allow_legacy_inference:
-            return self._infer_legacy_namespace_policy(), True, True
-        return AccountNamespacePolicy(), True, False
-
-    def _infer_legacy_namespace_policy(self) -> AccountNamespacePolicy:
-        """Map pre-policy accounts to the compatibility default namespace policy."""
-        return AccountNamespacePolicy(
-            isolate_user_scope_by_agent=False,
-            isolate_agent_scope_by_user=False,
-        )
-
     def resolve(self, api_key: str) -> ResolvedIdentity:
         """Resolve an API key to identity. Sequential matching: root key first, then user key index."""
         if not api_key:
@@ -200,7 +159,6 @@ class LegacyAPIKeyManager:
                         role=entry.role,
                         account_id=entry.account_id,
                         user_id=entry.user_id,
-                        namespace_policy=self.get_account_policy(entry.account_id),
                     )
             else:
                 # Verify plaintext key
@@ -209,7 +167,6 @@ class LegacyAPIKeyManager:
                         role=entry.role,
                         account_id=entry.account_id,
                         user_id=entry.user_id,
-                        namespace_policy=self.get_account_policy(entry.account_id),
                     )
 
         raise UnauthenticatedError("Invalid API Key")
@@ -218,8 +175,6 @@ class LegacyAPIKeyManager:
         self,
         account_id: str,
         admin_user_id: str,
-        *,
-        namespace_policy: Optional[AccountNamespacePolicy] = None,
     ) -> str:
         """Create a new account (workspace) with its first admin user.
 
@@ -238,7 +193,6 @@ class LegacyAPIKeyManager:
 
         now = datetime.now(timezone.utc).isoformat()
         key = self._generate_api_key()
-        policy = namespace_policy or AccountNamespacePolicy()
 
         if self._api_key_hashing_enabled:
             stored_key = self._hash_api_key(key)
@@ -259,7 +213,6 @@ class LegacyAPIKeyManager:
         self._accounts[account_id] = AccountInfo(
             created_at=now,
             users={admin_user_id: user_info},
-            namespace_policy=policy,
         )
 
         entry = UserKeyEntry(
@@ -278,7 +231,6 @@ class LegacyAPIKeyManager:
 
         await self._save_accounts_json()
         await self._save_users_json(account_id)
-        await self._save_settings_json(account_id)
         return key
 
     async def delete_account(self, account_id: str) -> None:
@@ -488,18 +440,9 @@ class LegacyAPIKeyManager:
                     "account_id": account_id,
                     "created_at": info.created_at,
                     "user_count": len(info.users),
-                    **info.namespace_policy.to_dict(),
                 }
             )
         return result
-
-    def get_account_policy(self, account_id: Optional[str]) -> AccountNamespacePolicy:
-        if not account_id:
-            return AccountNamespacePolicy()
-        account = self._accounts.get(account_id)
-        if account is None:
-            return AccountNamespacePolicy()
-        return account.namespace_policy
 
     def get_users(
         self,
@@ -640,15 +583,9 @@ class LegacyAPIKeyManager:
             else:
                 raw = content.content if hasattr(content, "content") else b""
 
-            # Decrypt content if encryption is enabled
-            # Extract account ID from path
-            parts = path.split("/")
-            account_id = parts[2] if len(parts) >= 3 else "default"
-            raw = await self._viking_fs.decrypt_bytes(account_id, raw)
-
             text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
             return json.loads(text)
-        except Exception:
+        except AGFSNotFoundError:
             return None
 
     async def _write_json(self, path: str, data: dict) -> None:
@@ -656,12 +593,6 @@ class LegacyAPIKeyManager:
         content = json.dumps(data, ensure_ascii=False, indent=2)
         if isinstance(content, str):
             content = content.encode("utf-8")
-
-        # Encrypt content if encryption is enabled
-        # Extract account ID from path
-        parts = path.split("/")
-        account_id = parts[2] if len(parts) >= 3 else "default"
-        content = await self._viking_fs.encrypt_bytes(account_id, content)
 
         await self._ensure_parent_dirs_async(path)
         await self._async_agfs.write(path, content)
@@ -698,18 +629,3 @@ class LegacyAPIKeyManager:
         data = {"users": account.users}
         path = USERS_PATH_TEMPLATE.format(account_id=account_id)
         await self._write_json(path, data)
-
-    async def _save_settings_json(
-        self,
-        account_id: str,
-        *,
-        settings_data: Optional[dict] = None,
-    ) -> None:
-        """Persist account namespace settings."""
-        account = self._accounts.get(account_id)
-        if account is None:
-            return
-        path = SETTINGS_PATH_TEMPLATE.format(account_id=account_id)
-        merged_settings = dict(settings_data) if isinstance(settings_data, dict) else {}
-        merged_settings["namespace"] = account.namespace_policy.to_dict()
-        await self._write_json(path, merged_settings)

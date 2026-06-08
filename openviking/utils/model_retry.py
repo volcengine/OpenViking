@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import re
 import threading
 import time
 from typing import Awaitable, Callable, TypeVar
@@ -68,6 +69,33 @@ TRANSIENT_API_ERROR_PATTERNS = (
     "connection reset",
 )
 
+# Pre-compile regex for numeric status-code patterns to avoid substring false positives
+# (e.g. "413" matching inside request IDs like "d7c9130f344..." or "req-413-abcd").
+_NUMERIC_PATTERN_RE: dict[str, re.Pattern] = {}
+
+
+def _get_numeric_pattern_re(pattern: str) -> re.Pattern:
+    if pattern not in _NUMERIC_PATTERN_RE:
+        escaped = re.escape(pattern)
+        _NUMERIC_PATTERN_RE[pattern] = re.compile(
+            rf"(?:\b(?:error\s*code|status(?:\s*code)?|http(?:\s*status)?|code)"
+            rf"\s*[:=]?\s*{escaped}(?!\w)|(?<![\w-]){escaped}(?![\w-]))"
+        )
+    return _NUMERIC_PATTERN_RE[pattern]
+
+
+def _pattern_matches(text_lower: str, text_compact: str, pattern: str) -> bool:
+    """Check if pattern matches in text, using token-aware matching for numeric patterns.
+
+    Numeric-only patterns (e.g. ``"413"``) must look like HTTP status codes, not
+    request ID fragments. Non-numeric patterns use plain substring matching as before.
+    """
+    if pattern.isdigit():
+        return bool(_get_numeric_pattern_re(pattern).search(text_lower)) or bool(
+            _get_numeric_pattern_re(pattern).search(text_compact)
+        )
+    return pattern in text_lower or pattern in text_compact
+
 
 def classify_api_error(error: Exception) -> str:
     """Classify an API error as permanent, quota_exceeded, transient, or unknown.
@@ -89,13 +117,14 @@ def classify_api_error(error: Exception) -> str:
         text_lower = text.lower()
         text_compact = text_lower.replace(" ", "")
         for pattern in INPUT_TOO_LARGE_PATTERNS:
-            if pattern in text_lower or pattern in text_compact:
+            if _pattern_matches(text_lower, text_compact, pattern):
                 return ERROR_CLASS_INPUT_TOO_LARGE
 
     for text in texts:
         text_lower = text.lower()
+        text_compact = text_lower.replace(" ", "")
         for pattern in PERMANENT_API_ERROR_PATTERNS:
-            if pattern in text_lower:
+            if _pattern_matches(text_lower, text_compact, pattern):
                 return ERROR_CLASS_PERMANENT
 
     # Check quota_exceeded *before* transient so that "429 … AccountQuotaExceeded"
@@ -108,8 +137,9 @@ def classify_api_error(error: Exception) -> str:
 
     for text in texts:
         text_lower = text.lower()
+        text_compact = text_lower.replace(" ", "")
         for pattern in TRANSIENT_API_ERROR_PATTERNS:
-            if pattern in text_lower:
+            if _pattern_matches(text_lower, text_compact, pattern):
                 return ERROR_CLASS_TRANSIENT
 
     return ERROR_CLASS_UNKNOWN

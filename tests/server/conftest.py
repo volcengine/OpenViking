@@ -7,6 +7,7 @@ import shutil
 import socket
 import threading
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -196,6 +197,12 @@ async def running_server(temp_dir: Path, monkeypatch):
     fake_embedder_cls = _install_fake_embedder(monkeypatch)
     _install_fake_vlm(monkeypatch)
 
+    @asynccontextmanager
+    async def _noop_mcp_lifespan():
+        yield
+
+    monkeypatch.setattr("openviking.server.mcp_endpoint.mcp_lifespan", _noop_mcp_lifespan)
+
     svc = OpenVikingService(
         path=str(temp_dir / "sdk_data"), user=UserIdentifier.the_default_user("sdk_test_user")
     )
@@ -231,7 +238,17 @@ async def running_server(temp_dir: Path, monkeypatch):
     else:
         raise RuntimeError("APIKeyManager did not initialize for SDK server test")
 
-    yield port, svc
+    manager = fastapi_app.state.api_key_manager
+    sdk_account_id = "sdk_test_account"
+    sdk_user_key = await manager.create_account(sdk_account_id, "sdk_test_user")
+    sdk_ctx = RequestContext(
+        user=UserIdentifier(sdk_account_id, "sdk_test_user"),
+        role=Role.ADMIN,
+    )
+    await svc.initialize_account_directories(sdk_ctx)
+    await svc.initialize_user_directories(sdk_ctx)
+
+    yield port, svc, sdk_user_key
 
     server.should_exit = True
     thread.join(timeout=5)

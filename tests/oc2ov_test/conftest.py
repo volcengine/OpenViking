@@ -141,7 +141,7 @@ def pytest_html_results_table_row(report, cells):
         "test_memory_v2_preferences": "Memory V2偏好设置记忆：对话写入编程语言/编辑器/咖啡偏好→commit→验证preferences目录下新增记忆文件",
         "test_memory_v2_entities": "Memory V2实体信息记忆：对话写入姓名/年龄/职业/公司/住址→commit→验证entities目录下新增记忆文件",
         "test_memory_v2_profile": "Memory V2用户画像记忆：对话写入技术负责人画像→commit→验证profile.md文件新增或更新",
-        "test_memory_v2_skills": "Memory V2技能记忆(Agent scope)：对话写入Docker/K8s/CI-CD技能→commit→验证agent memories/skills目录下新增记忆文件",
+        "test_memory_v2_skills": "Memory V2技能记忆：对话写入Docker/K8s/CI-CD技能→commit→验证user/skills目录下新增记忆文件",
         "test_assemble_replays_archive_summary": "assemble()历史组装验证：写入信息→commit生成archive→新session→验证archive summary被加载回放",
         "test_compact_produces_archive_on_threshold": "compact()压缩归档验证：持续对话超阈值→验证archive生成+记忆文件生成+上下文被压缩",
         "test_memory_recall_explicit_search": "memory_recall显式搜索验证：写入独特信息→commit+记忆提取→新session用模糊提示触发显式搜索→验证搜索结果",

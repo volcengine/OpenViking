@@ -4,6 +4,13 @@ export interface TextPart {
   text: string
 }
 
+/** Reasoning/thinking content part used by the chat UI during streaming. */
+export interface ReasoningPart {
+  type: 'reasoning'
+  reasoning: string
+  is_running?: boolean
+}
+
 /** Context reference part (memory / resource / skill). */
 export interface ContextPart {
   type: 'context'
@@ -27,7 +34,7 @@ export interface ToolPart {
   completion_tokens?: number
 }
 
-export type MessagePart = TextPart | ContextPart | ToolPart
+export type MessagePart = TextPart | ReasoningPart | ContextPart | ToolPart
 
 /** A single message in a session (matches backend Message.to_dict()). */
 export interface Message {

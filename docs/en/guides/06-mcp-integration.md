@@ -113,7 +113,7 @@ Once connected, OpenViking exposes 14 tools:
 
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
-| `search` | Semantic search across memories, resources, and skills | `query`, `target_uri` (optional), `limit`, `min_score` |
+| `search` | Semantic search across memories, resources, and skills | `query`, `target_uri` (optional), `peer_id` (optional), `limit`, `min_score` |
 | `read` | Read one or more `viking://` URIs | `uris` (single string or array) |
 | `list` | List entries under a `viking://` directory | `uri`, `recursive` (optional) |
 | `store` | Store messages into long-term memory (triggers extraction) | `messages` (list of `{role, content}`) |

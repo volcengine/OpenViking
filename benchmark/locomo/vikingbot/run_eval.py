@@ -1,11 +1,10 @@
 import argparse
-import json
-import subprocess
-import time
 import csv
+import json
 import os
-import re
+import subprocess
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -153,7 +152,7 @@ def load_locomo_qa(
     else:
         samples = data
 
-    for s_idx, sample in enumerate(samples):
+    for sample in samples:
         original_id = sample.get("sample_id", "")
         # Find the sample's index in the full dataset
         if sample_index is not None:
@@ -244,15 +243,17 @@ def run_vikingbot_chat(
         new_cmd = ["vikingbot", "chat"]
         if config:
             new_cmd.extend(["--config", config])
-        new_cmd.extend([
-            "-m",
-            "/new",
-            "-e",
-            "--sender",
-            sample_id,
-            "--session",
-            question_id,
-        ])
+        new_cmd.extend(
+            [
+                "-m",
+                "/new",
+                "-e",
+                "--sender",
+                sample_id,
+                "--session",
+                question_id,
+            ]
+        )
         if memory_users:
             for user in memory_users:
                 new_cmd.extend(["--memory-user", user])
@@ -273,7 +274,7 @@ def run_vikingbot_chat(
     if config:
         cmd.extend(["--config", config])
     cmd.extend(["-m", input, "-e"])
-    # 添加 --sender 作为 user_id，--session 作为 agent_id，实现访问独立 userspace
+    # 添加 --sender 作为 user_id，--session 作为会话隔离标识
     if sample_id:
         cmd.extend(["--sender", sample_id, "--session", question_id])
     # 添加 --memory-user 参数，指定检索哪些用户的记忆
@@ -298,7 +299,7 @@ def run_vikingbot_chat(
             time_cost = resp_json.get("time_cost", time_cost)
             iteration = resp_json.get("iteration", 0)
             tools_used_names = resp_json.get("tools_used_names", [])
-        except (json.JSONDecodeError, ValueError) as e:
+        except (json.JSONDecodeError, ValueError):
             response = f"[PARSE ERROR] {output}"
             token_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
             iteration = 0
@@ -336,6 +337,8 @@ def load_processed_questions(output_path: str, skip_done: bool = False) -> set[s
             if question:
                 processed_questions.add(question)
     return processed_questions
+
+
 def append_row_to_csv(output_path: str, fieldnames: list[str], row: dict) -> None:
     """追加单行结果到 CSV。"""
     file_exists = os.path.exists(output_path)
@@ -450,7 +453,9 @@ def main():
                 if row.get("result") == "WRONG":
                     retry_wrong_questions.add(row["question"])
                     retry_wrong_samples.add(row["sample_id"])
-        print(f"[retry-wrong] Found {len(retry_wrong_questions)} valid wrong questions from {args.retry_wrong}")
+        print(
+            f"[retry-wrong] Found {len(retry_wrong_questions)} valid wrong questions from {args.retry_wrong}"
+        )
         if retry_wrong_samples:
             print(f"[retry-wrong] Affected samples: {', '.join(sorted(retry_wrong_samples))}")
 
@@ -522,7 +527,6 @@ def main():
         answer = qa_item["answer"]
         question_time = qa_item.get("question_time")
         # 使用 question_id 作为 session_id，实现完全独立并行
-        sample_id = qa_item.get("sample_id")
         question_id = qa_item.get("question_id")
         speakers = qa_item.get("speakers", [])
         print(f"Processing {idx}/{total_count}: {question[:60]}...")

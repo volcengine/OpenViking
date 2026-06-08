@@ -71,7 +71,6 @@ async function fetchJSON(path, init = {}) {
     if (cfg.apiKey) headers["Authorization"] = `Bearer ${cfg.apiKey}`;
     if (cfg.accountId) headers["X-OpenViking-Account"] = cfg.accountId;
     if (cfg.userId) headers["X-OpenViking-User"] = cfg.userId;
-    if (cfg.agentId) headers["X-OpenViking-Agent"] = cfg.agentId;
     const res = await fetch(url, { ...init, headers, signal: controller.signal });
     const body = await res.json();
     if (!res.ok || body.status === "error") {
@@ -248,25 +247,23 @@ async function resolveTargetUri(targetUri) {
 async function searchScope(queryText, targetUri, limit) {
   const resolvedUri = await resolveTargetUri(targetUri);
   dim(`  target: ${targetUri} -> ${resolvedUri}`);
+  const body = { query: queryText, target_uri: resolvedUri, limit, score_threshold: 0 };
+  if (cfg.peerId) body.peer_id = cfg.peerId;
   const result = await fetchJSON("/api/v1/search/find", {
     method: "POST",
-    body: JSON.stringify({ query: queryText, target_uri: resolvedUri, limit, score_threshold: 0 }),
+    body: JSON.stringify(body),
   });
   return result?.memories || [];
 }
 
-async function searchBothScopes(queryText, limit) {
+async function searchUserScope(queryText, limit) {
   console.log(`${C.dim}Searching user scope...${C.reset}`);
   const userMems = await searchScope(queryText, "viking://user/memories", limit);
-  console.log(`${C.dim}Searching agent scope...${C.reset}`);
-  const agentMems = await searchScope(queryText, "viking://agent/memories", limit);
 
-  const all = [...userMems, ...agentMems];
   const uriSet = new Set();
   return {
     userMems,
-    agentMems,
-    combined: all.filter(m => {
+    combined: userMems.filter(m => {
       if (uriSet.has(m.uri)) return false;
       uriSet.add(m.uri);
       return true;
@@ -313,7 +310,6 @@ async function main() {
   console.log(`  recallLimit:    ${cfg.recallLimit}`);
   console.log(`  scoreThreshold: ${cfg.scoreThreshold}`);
   console.log(`  timeoutMs:      ${cfg.timeoutMs}`);
-  console.log(`  agentId:        ${cfg.agentId}`);
   console.log(`  debug:          ${cfg.debug}`);
   console.log(`  configPath:     ${C.dim}${cfg.configPath}${C.reset}`);
   console.log(`\n  Query: ${C.bold}${query}${C.reset}`);
@@ -340,12 +336,10 @@ async function main() {
   const candidateLimit = Math.max(cfg.recallLimit * 4, 20);
   dim(`  candidateLimit: ${candidateLimit}`);
 
-  const { userMems, agentMems, combined } = await searchBothScopes(query, candidateLimit);
+  const { userMems, combined } = await searchUserScope(query, candidateLimit);
 
   console.log();
   printSearchResults("User scope (viking://user/memories)", userMems);
-  console.log();
-  printSearchResults("Agent scope (viking://agent/memories)", agentMems);
   console.log();
   dim(`  Combined (deduplicated): ${combined.length} result${combined.length === 1 ? "" : "s"}`);
 

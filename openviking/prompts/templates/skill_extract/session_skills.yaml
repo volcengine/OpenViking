@@ -100,7 +100,7 @@ description: |
     - Day3：输入 “分析这道新题”
     - Day7：输入 “再分析一道题”
     - 应用结果：Day3 和 Day7 自动应用 Day1 的规则，三次输出格式、细节保持一致。
-directory: "viking://agent/{{ agent_space }}/skills"
+directory: "viking://user/{{ user_space }}/skills"
 filename_template: "{{ skill_name }}/SKILL.md"
 enabled: true
 fields:

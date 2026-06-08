@@ -6,9 +6,10 @@ import math
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from openviking.core.path_variables import resolve_path_variables
+from openviking.core.peer_id import normalize_peer_id
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
@@ -71,6 +72,7 @@ class FindRequest(BaseModel):
 
     query: str
     target_uri: Union[str, List[str]] = ""
+    peer_id: Optional[str] = None
     limit: int = 10
     node_limit: Optional[int] = None
     score_threshold: Optional[float] = None
@@ -82,12 +84,18 @@ class FindRequest(BaseModel):
     level: Optional[Union[int, str, List[int]]] = None
     telemetry: TelemetryRequest = False
 
+    @model_validator(mode="after")
+    def normalize_request_peer_id(self) -> "FindRequest":
+        self.peer_id = normalize_peer_id(self.peer_id)
+        return self
+
 
 class SearchRequest(BaseModel):
     """Request model for search with session."""
 
     query: str
     target_uri: Union[str, List[str]] = ""
+    peer_id: Optional[str] = None
     session_id: Optional[str] = None
     limit: int = 10
     node_limit: Optional[int] = None
@@ -100,6 +108,11 @@ class SearchRequest(BaseModel):
     time_field: Optional[TimeField] = None
     level: Optional[Union[int, str, List[int]]] = None
     telemetry: TelemetryRequest = False
+
+    @model_validator(mode="after")
+    def normalize_request_peer_id(self) -> "SearchRequest":
+        self.peer_id = normalize_peer_id(self.peer_id)
+        return self
 
 
 class GrepRequest(BaseModel):
@@ -143,6 +156,7 @@ async def find(
             query=request.query,
             ctx=_ctx,
             target_uri=resolved_target_uri,
+            peer_id=request.peer_id,
             limit=actual_limit,
             score_threshold=request.score_threshold,
             filter=effective_filter,
@@ -185,6 +199,7 @@ async def search(
             query=request.query,
             ctx=_ctx,
             target_uri=resolved_target_uri,
+            peer_id=request.peer_id,
             session=session,
             limit=actual_limit,
             score_threshold=request.score_threshold,

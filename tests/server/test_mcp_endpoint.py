@@ -245,23 +245,16 @@ async def test_store_batch_messages(service):
     assert "2 message" in result
 
 
-async def test_store_populates_role_id_from_ctx(service, monkeypatch):
-    """Regression: MCP store used to persist role_id=None because it skipped the
-    HTTP router's fallback resolver. With ctx.resolve_role_id, user msgs should
-    get user.user_id and assistant msgs should get user.agent_id.
-
-    We capture role_id at the add_message boundary instead of reading it back from
-    storage, because store() commits the session synchronously and committed
-    messages move out of session.messages into archive files.
-    """
+async def test_store_does_not_autofill_peer_id_from_ctx(service, monkeypatch):
+    """MCP store should not create synthetic peer_id values."""
     from openviking.session.session import Session
 
     captured: list[tuple[str, str | None]] = []
     original = Session.add_message
 
-    def _spy(self, role, parts, role_id=None, created_at=None):
-        captured.append((role, role_id))
-        return original(self, role, parts, role_id=role_id, created_at=created_at)
+    def _spy(self, role, parts, peer_id=None, created_at=None):
+        captured.append((role, peer_id))
+        return original(self, role, parts, peer_id=peer_id, created_at=created_at)
 
     monkeypatch.setattr(Session, "add_message", _spy)
 
@@ -273,8 +266,8 @@ async def test_store_populates_role_id_from_ctx(service, monkeypatch):
     )
 
     assert captured == [
-        ("user", DEFAULT_CTX.user.user_id),
-        ("assistant", DEFAULT_CTX.user.agent_id),
+        ("user", None),
+        ("assistant", None),
     ]
 
 
@@ -283,8 +276,8 @@ async def test_store_skips_empty_message_content(service, monkeypatch):
         def __init__(self):
             self.messages = []
 
-        def add_message(self, role, parts, role_id=None, created_at=None):
-            self.messages.append((role, parts, role_id, created_at))
+        def add_message(self, role, parts, peer_id=None, created_at=None):
+            self.messages.append((role, parts, peer_id, created_at))
 
     fake_session = FakeSession()
     monkeypatch.setattr(service.sessions, "get", AsyncMock(return_value=fake_session))
@@ -299,10 +292,10 @@ async def test_store_skips_empty_message_content(service, monkeypatch):
 
     assert "2 message" in result
     assert len(fake_session.messages) == 1
-    role, parts, role_id, created_at = fake_session.messages[0]
+    role, parts, peer_id, created_at = fake_session.messages[0]
     assert role == "assistant"
     assert parts[0].text == "Noted."
-    assert role_id == DEFAULT_CTX.user.agent_id
+    assert peer_id is None
     assert created_at is None
     service.sessions.commit_async.assert_awaited_once()
 
@@ -489,7 +482,6 @@ async def _seed_watch(service, to_uri="viking://resources/test/foo"):
         path="https://example.com/foo",
         account_id=DEFAULT_CTX.account_id,
         user_id=DEFAULT_CTX.user.user_id,
-        agent_id=DEFAULT_CTX.user.agent_id,
         original_role="root",
         to_uri=to_uri,
         watch_interval=1440.0,

@@ -48,7 +48,7 @@ session.used(contexts=["viking://user/memories/profile.md"])
 
 # Record used skill
 session.used(skill={
-    "uri": "viking://agent/skills/code-search",
+    "uri": "viking://user/skills/code-search",
     "input": "search config",
     "output": "found 3 files",
     "success": True
@@ -244,7 +244,7 @@ viking://user/memories/
 ├── entities/
 └── events/
 
-viking://agent/memories/
+viking://user/memories/
 ├── cases/
 ├── patterns/
 ├── tools/

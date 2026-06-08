@@ -7,7 +7,7 @@ import json
 import time
 from typing import Any, Dict, List, Optional, Protocol
 
-from openviking.pyagfs import AGFSClient, AsyncAGFSClient
+from openviking.pyagfs import AGFSSyncClientProtocol, AsyncAGFSClient
 from openviking.storage.transaction.lock_handle import LockHandle
 from openviking.storage.transaction.path_lock import PathLockEngine
 from openviking.storage.transaction.redo_log import RedoLog
@@ -37,7 +37,7 @@ class LockManager:
 
     def __init__(
         self,
-        agfs: AGFSClient,
+        agfs: AGFSSyncClientProtocol,
         lock_timeout: float = 0.0,
         lock_expire: float = 300.0,
         redo_recovery_enabled: bool = True,
@@ -469,14 +469,13 @@ class LockManager:
         session_uri = info.get("session_uri")
         account_id = info.get("account_id", "default")
         user_id = info.get("user_id", "default")
-        agent_id = info.get("agent_id", "default")
         role_str = info.get("role", "root")
 
         if not archive_uri or not session_uri:
             raise ValueError("Cannot redo session_memory: missing archive_uri or session_uri")
 
         # 1. Build request context (needed for path conversion below)
-        user = UserIdentifier(account_id=account_id, user_id=user_id, agent_id=agent_id)
+        user = UserIdentifier(account_id=account_id, user_id=user_id)
         ctx = RequestContext(user=user, role=Role(role_str))
 
         # 2. Read archived messages
@@ -523,7 +522,7 @@ class LockManager:
             context_type="memory",
             account_id=account_id,
             user_id=user_id,
-            agent_id=agent_id,
+            peer_id=user_id,
             role=role_str,
         )
 
@@ -546,7 +545,7 @@ class LockManager:
             context_type=params.get("context_type", "resource"),
             account_id=params.get("account_id", "default"),
             user_id=params.get("user_id", "default"),
-            agent_id=params.get("agent_id", "default"),
+            peer_id=params.get("peer_id", "default"),
             role=params.get("role", "root"),
         )
         semantic_queue: SemanticQueue = queue_manager.get_queue(queue_manager.SEMANTIC)  # type: ignore[assignment]
@@ -561,7 +560,7 @@ _lock_manager: Optional[LockManager] = None
 
 
 def init_lock_manager(
-    agfs: AGFSClient,
+    agfs: AGFSSyncClientProtocol,
     lock_timeout: float = 0.0,
     lock_expire: float = 300.0,
     redo_recovery_enabled: bool = True,

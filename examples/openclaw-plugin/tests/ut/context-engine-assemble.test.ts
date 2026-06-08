@@ -151,6 +151,225 @@ describe("context-engine assemble()", () => {
     expect(result.systemPromptAddition).toBeUndefined();
   });
 
+  it("passes sender peer_id to transformContext auto-recall when peer_role is person", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ status: "ok" }),
+      }),
+    );
+    try {
+      const { engine, client } = makeEngine(
+        {
+          latest_archive_overview: "",
+          pre_archive_abstracts: [],
+          messages: [],
+          estimatedTokens: 0,
+          stats: makeStats(),
+        },
+        {
+          cfgOverrides: {
+            autoRecall: true,
+            peer_role: "person",
+          },
+        },
+      );
+
+      const sourceMessages = [
+        { role: "assistant", content: [{ type: "text", text: "Previous answer." }] },
+        { role: "user", content: "what backend language should we use?" },
+      ];
+
+      await engine.assemble({
+        sessionId: "session-person-peer",
+        runtimeContext: { senderId: "wx/user-01@abc" },
+        messages: sourceMessages,
+      });
+
+      expect(client.find).toHaveBeenCalledTimes(2);
+      for (const call of client.find.mock.calls) {
+        expect(call[1]).toMatchObject({ peerId: "wx_user-01_abc" });
+      }
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("uses prompt metadata sender_id for main assemble peer auto-recall when runtimeContext is missing", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ status: "ok" }),
+      }),
+    );
+    try {
+      const { engine, client } = makeEngine(
+        new Error("should be replaced"),
+        {
+          cfgOverrides: {
+            autoRecall: true,
+            peer_role: "person",
+            recallPreferAbstract: true,
+          },
+        },
+      );
+      client.getSessionContext.mockRejectedValueOnce(
+        new Error("OpenViking request failed [NOT_FOUND]: Session not found"),
+      );
+      client.find
+        .mockResolvedValueOnce({
+          memories: [
+            {
+              uri: "viking://user/acme/peers/ou_bcc/memories/profile.md",
+              level: 2,
+              category: "profile",
+              abstract: "# 秦浩杰\n- 正在维护的项目：openviking",
+              score: 0.92,
+            },
+          ],
+          total: 1,
+        })
+        .mockResolvedValueOnce({ memories: [], total: 0 });
+
+      const prompt = [
+        "Conversation info (untrusted metadata):",
+        "```json",
+        JSON.stringify({
+          message_id: "om_1",
+          sender_id: "ou_bcc",
+          sender: "秦浩杰",
+          is_group_chat: true,
+        }),
+        "```",
+        "",
+        "Sender (untrusted metadata):",
+        "```json",
+        JSON.stringify({
+          id: "ou_bcc",
+          name: "秦浩杰",
+        }),
+        "```",
+        "",
+        "[message_id: om_1]",
+        "秦浩杰: 我是谁",
+        "",
+        "[System: mention metadata]",
+      ].join("\n");
+
+      const result = await engine.assemble({
+        sessionId: "session-main-prompt-peer",
+        sessionKey: "agent:main:feishu:group:oc_123",
+        messages: [],
+        prompt,
+      });
+
+      expect(client.find).toHaveBeenCalledTimes(2);
+      for (const call of client.find.mock.calls) {
+        expect(call[1]).toMatchObject({ peerId: "ou_bcc" });
+      }
+      expect(result.messages[0]?.role).toBe("user");
+      expect(result.messages[0]?.content).toContain("Source: openviking-auto-recall");
+      expect(result.messages[0]?.content).toContain("正在维护的项目：openviking");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("prefers runtimeContext senderId over prompt metadata for main assemble recall", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ status: "ok" }),
+      }),
+    );
+    try {
+      const { engine, client } = makeEngine(
+        {
+          latest_archive_overview: "",
+          pre_archive_abstracts: [],
+          messages: [],
+          estimatedTokens: 0,
+          stats: makeStats(),
+        },
+        {
+          cfgOverrides: {
+            autoRecall: true,
+            peer_role: "person",
+          },
+        },
+      );
+
+      await engine.assemble({
+        sessionId: "session-main-runtime-peer",
+        runtimeContext: { senderId: "trusted/runtime-user" },
+        messages: [],
+        prompt: [
+          "Conversation info (untrusted metadata):",
+          "```json",
+          JSON.stringify({ sender_id: "fake-prompt-user", sender: "Prompt User" }),
+          "```",
+          "",
+          "[message_id: om_1]",
+          "Prompt User: 我喜欢什么水果？",
+        ].join("\n"),
+      });
+
+      expect(client.find).toHaveBeenCalledTimes(2);
+      for (const call of client.find.mock.calls) {
+        expect(call[1]).toMatchObject({ peerId: "trusted_runtime-user" });
+      }
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("passes assistant peer_id to transformContext auto-recall when peer_role is assistant", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ status: "ok" }),
+      }),
+    );
+    try {
+      const { engine, client } = makeEngine(
+        {
+          latest_archive_overview: "",
+          pre_archive_abstracts: [],
+          messages: [],
+          estimatedTokens: 0,
+          stats: makeStats(),
+        },
+        {
+          cfgOverrides: {
+            autoRecall: true,
+            peer_role: "assistant",
+          },
+        },
+      );
+
+      const sourceMessages = [
+        { role: "assistant", content: [{ type: "text", text: "Previous answer." }] },
+        { role: "user", content: "what backend language should we use?" },
+      ];
+
+      await engine.assemble({
+        sessionId: "session-assistant-peer",
+        messages: sourceMessages,
+      });
+
+      expect(client.find).toHaveBeenCalledTimes(2);
+      for (const call of client.find.mock.calls) {
+        expect(call[1]).toMatchObject({ peerId: "agent:session-assistant-peer" });
+      }
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("passes through transformContext messages when the latest message is not user", async () => {
     const { engine, getClient } = makeEngine(
       {

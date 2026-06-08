@@ -215,6 +215,10 @@ class OpenAPIChannel(BaseChannel):
                 await pending.close_stream()
             elif msg.event_type == OutboundEventType.REASONING:
                 await pending.add_event("reasoning", msg.content)
+            elif msg.event_type == OutboundEventType.CONTENT_DELTA:
+                await pending.add_event("content_delta", msg.content)
+            elif msg.event_type == OutboundEventType.REASONING_DELTA:
+                await pending.add_event("reasoning_delta", msg.content)
             elif msg.event_type == OutboundEventType.TOOL_CALL:
                 await pending.add_event("tool_call", msg.content)
             elif msg.event_type == OutboundEventType.TOOL_RESULT:
@@ -242,6 +246,10 @@ class OpenAPIChannel(BaseChannel):
             await pending.close_stream()
         elif msg.event_type == OutboundEventType.REASONING:
             await pending.add_event("reasoning", msg.content)
+        elif msg.event_type == OutboundEventType.CONTENT_DELTA:
+            await pending.add_event("content_delta", msg.content)
+        elif msg.event_type == OutboundEventType.REASONING_DELTA:
+            await pending.add_event("reasoning_delta", msg.content)
         elif msg.event_type == OutboundEventType.TOOL_CALL:
             await pending.add_event("tool_call", msg.content)
         elif msg.event_type == OutboundEventType.TOOL_RESULT:
@@ -442,11 +450,31 @@ class OpenAPIChannel(BaseChannel):
         self._app.include_router(router, prefix="/bot/v1")
         logger.info("OpenAPI routes registered at root path")
 
+    def _request_user_id(self, request: ChatRequest) -> str:
+        if request.user_id:
+            return request.user_id
+        if request.openviking_connection and request.openviking_connection.user_id:
+            return request.openviking_connection.user_id
+        return "anonymous"
+
+    def _request_metadata(self, request: ChatRequest) -> dict[str, Any]:
+        disabled_tools = list(request.disabled_tools or [])
+        if "message" not in disabled_tools:
+            disabled_tools.append("message")
+        return {"disabled_tools": disabled_tools}
+
+    def _request_openviking_connection(self, request: ChatRequest) -> dict[str, Any] | None:
+        if request.openviking_connection:
+            connection = request.openviking_connection.model_dump(exclude_none=True)
+            if connection:
+                return connection
+        return None
+
     async def _handle_chat(self, request: ChatRequest) -> ChatResponse:
         """Handle a chat request."""
         # Generate or use provided session ID
         session_id = request.session_id or str(uuid.uuid4())
-        user_id = request.user_id or "anonymous"
+        user_id = self._request_user_id(request)
 
         # Create session if new
         if session_id not in self._sessions:
@@ -485,7 +513,8 @@ class OpenAPIChannel(BaseChannel):
                 session_key=session_key,
                 sender_id=user_id,
                 content=content,
-                metadata={"disabled_tools": request.disabled_tools},
+                metadata=self._request_metadata(request),
+                openviking_connection=self._request_openviking_connection(request),
             )
 
             await self.bus.publish_inbound(msg)
@@ -520,7 +549,7 @@ class OpenAPIChannel(BaseChannel):
     async def _handle_chat_stream(self, request: ChatRequest) -> StreamingResponse:
         """Handle a streaming chat request."""
         session_id = request.session_id or str(uuid.uuid4())
-        user_id = request.user_id or "anonymous"
+        user_id = self._request_user_id(request)
 
         # Create session if new
         if session_id not in self._sessions:
@@ -551,7 +580,8 @@ class OpenAPIChannel(BaseChannel):
                     session_key=session_key,
                     sender_id=user_id,
                     content=request.message,
-                    metadata={"disabled_tools": request.disabled_tools},
+                    metadata=self._request_metadata(request),
+                    openviking_connection=self._request_openviking_connection(request),
                 )
 
                 await self.bus.publish_inbound(msg)
@@ -587,7 +617,7 @@ class OpenAPIChannel(BaseChannel):
         """Handle a BotChannel chat request."""
         # Generate or use provided session ID
         session_id = request.session_id or str(uuid.uuid4())
-        user_id = request.user_id or "anonymous"
+        user_id = self._request_user_id(request)
 
         # Ensure channel has session storage
         if channel_id not in self._bot_sessions:
@@ -631,7 +661,8 @@ class OpenAPIChannel(BaseChannel):
                 sender_id=user_id,
                 content=content,
                 need_reply=request.need_reply,
-                metadata={"disabled_tools": request.disabled_tools},
+                metadata=self._request_metadata(request),
+                openviking_connection=self._request_openviking_connection(request),
             )
 
             await self.bus.publish_inbound(msg)
@@ -669,7 +700,7 @@ class OpenAPIChannel(BaseChannel):
     ) -> StreamingResponse:
         """Handle a BotChannel streaming chat request."""
         session_id = request.session_id or str(uuid.uuid4())
-        user_id = request.user_id or "anonymous"
+        user_id = self._request_user_id(request)
 
         # Ensure channel has session storage
         if channel_id not in self._bot_sessions:
@@ -704,7 +735,8 @@ class OpenAPIChannel(BaseChannel):
                     session_key=session_key,
                     sender_id=user_id,
                     content=request.message,
-                    metadata={"disabled_tools": request.disabled_tools},
+                    metadata=self._request_metadata(request),
+                    openviking_connection=self._request_openviking_connection(request),
                 )
 
                 await self.bus.publish_inbound(msg)

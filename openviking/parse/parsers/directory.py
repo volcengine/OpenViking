@@ -197,6 +197,7 @@ class DirectoryParser(BaseParser):
                         viking_fs,
                         warnings,
                         preserve_structure=preserve_structure,
+                        import_root=str(source_path),
                     )
 
                 if ok:
@@ -350,6 +351,7 @@ class DirectoryParser(BaseParser):
         viking_fs: Any,
         warnings: List[str],
         preserve_structure: bool = True,
+        import_root: Optional[str] = None,
     ) -> bool:
         """Process one file into the VikingFS directory temp.
 
@@ -370,7 +372,13 @@ class DirectoryParser(BaseParser):
 
         if parser:
             try:
-                sub_result = await parser.parse(str(src_file))
+                sub_result = await parser.parse(
+                    str(src_file),
+                    # Rewrite only makes sense when relative structure is preserved;
+                    # in flat mode link targets don't exist at their original paths.
+                    enable_link_rewrite=preserve_structure,
+                    link_rewrite_root=import_root,
+                )
                 if sub_result.temp_dir_path:
                     if preserve_structure:
                         parent = str(PurePosixPath(rel_path).parent)

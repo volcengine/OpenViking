@@ -135,7 +135,7 @@ async def test_direct_incremental_update_uses_changes_without_temp_sync(monkeypa
     monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
 
     processor = _FakeProcessor(fake_fs)
-    ctx = RequestContext(user=UserIdentifier("acc1", "user1", "agent1"), role=Role.USER)
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
     executor = SemanticDagExecutor(
         processor=processor,
         context_type="resource",

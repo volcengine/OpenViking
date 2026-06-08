@@ -5,7 +5,7 @@
 from dataclasses import dataclass, field
 from typing import Dict
 
-from openviking.server.identity import AccountNamespacePolicy, Role
+from openviking.server.identity import Role
 
 
 @dataclass
@@ -25,4 +25,3 @@ class AccountInfo:
 
     created_at: str
     users: Dict[str, dict] = field(default_factory=dict)
-    namespace_policy: AccountNamespacePolicy = field(default_factory=AccountNamespacePolicy)

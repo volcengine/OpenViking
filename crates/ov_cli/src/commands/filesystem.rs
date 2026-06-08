@@ -486,11 +486,11 @@ mod tests {
                 "abstract": "The resources directory is a centralized collection of learning and reference materials focused on cloud architecture, AWS best practices, and technical quick-reference content."
             },
             {
-                "uri": "viking://agent",
+                "uri": "viking://user/default/memories",
                 "size": 0,
                 "isDir": true,
                 "modTime": "2026-05-25",
-                "abstract": "# viking://agent [Directory abstract is not ready]"
+                "abstract": "# viking://user/default/memories [Directory abstract is not ready]"
             }
         ]);
 

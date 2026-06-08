@@ -16,7 +16,7 @@ from openviking_cli.session.user_id import UserIdentifier
 
 def _ctx() -> RequestContext:
     return RequestContext(
-        user=UserIdentifier(account_id="acct-1", user_id="user-1", agent_id="agent-1"),
+        user=UserIdentifier(account_id="acct-1", user_id="user-1"),
         role=Role.USER,
     )
 
@@ -29,9 +29,8 @@ class FakeFSService:
         self.calls.append((uri, ctx))
         return {
             "viking://resources": {"count": 2},
-            "viking://agent/agent-1/skills": {"count": 3},
+            "viking://user/user-1/skills": {"count": 3},
             "viking://user/user-1/memories": {"count": 5},
-            "viking://agent/agent-1/memories": {"count": 7},
         }[uri]
 
 
@@ -56,13 +55,12 @@ async def test_context_inventory_counts_from_stat():
 
     counts = await provider.get_counts(ctx)
 
-    assert counts == {"files": 2, "skills": 3, "memories": 12, "total": 17}
-    assert len(fs.calls) == 4
+    assert counts == {"files": 2, "skills": 3, "memories": 5, "total": 10}
+    assert len(fs.calls) == 3
     assert {uri for uri, call_ctx in fs.calls if call_ctx is ctx} == {
         "viking://resources",
-        "viking://agent/agent-1/skills",
+        "viking://user/user-1/skills",
         "viking://user/user-1/memories",
-        "viking://agent/agent-1/memories",
     }
 
 

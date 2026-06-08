@@ -72,7 +72,6 @@ def test_trace_context_filter_injects_root_observability_fields_without_span():
     root = RootSpanAttributes(http_method="GET", http_route="/demo", request_id="req-1")
     root.account_id = "acct-1"
     root.user_id = "user-1"
-    root.agent_id = "agent-1"
     token = bind_root_observability_context(root)
     try:
         passed = TraceContextFilter().filter(record)
@@ -83,7 +82,6 @@ def test_trace_context_filter_injects_root_observability_fields_without_span():
     assert record.request_id == "req-1"
     assert record.account_id == "acct-1"
     assert record.user_id == "user-1"
-    assert record.agent_id == "agent-1"
 
 
 def test_trace_context_filter_injects_operation_observability_fields_without_span():

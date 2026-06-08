@@ -9,7 +9,7 @@ import logging
 import time
 from typing import Any
 
-from openviking.core.namespace import canonical_agent_root, canonical_user_root
+from openviking.core.namespace import canonical_user_root
 from openviking.pyagfs.exceptions import AGFSNotFoundError
 from openviking.server.identity import RequestContext
 from openviking_cli.exceptions import NotFoundError
@@ -23,12 +23,12 @@ class ContextInventoryProvider:
     def __init__(self, service: Any, *, ttl_seconds: float = 10.0) -> None:
         self._service = service
         self._ttl_seconds = max(float(ttl_seconds), 0.0)
-        self._cache: dict[tuple[str, str, str], tuple[float, dict[str, int]]] = {}
+        self._cache: dict[tuple[str, str], tuple[float, dict[str, int]]] = {}
         self._lock = asyncio.Lock()
 
     async def get_counts(self, ctx: RequestContext) -> dict[str, int]:
         """Return current context counts for the caller's tenant scope."""
-        key = (ctx.account_id, ctx.user.user_id, ctx.user.agent_id)
+        key = (ctx.account_id, ctx.user.user_id)
         now = time.monotonic()
         cached = self._cache.get(key)
         if cached and now - cached[0] < self._ttl_seconds:
@@ -44,15 +44,12 @@ class ContextInventoryProvider:
 
     async def _read_counts(self, ctx: RequestContext) -> dict[str, int]:
         user_root = canonical_user_root(ctx)
-        agent_root = canonical_agent_root(ctx)
 
-        files, skills, user_memories, agent_memories = await asyncio.gather(
+        files, skills, memories = await asyncio.gather(
             self._stat_count("viking://resources", ctx=ctx),
-            self._stat_count(f"{agent_root}/skills", ctx=ctx),
+            self._stat_count(f"{user_root}/skills", ctx=ctx),
             self._stat_count(f"{user_root}/memories", ctx=ctx),
-            self._stat_count(f"{agent_root}/memories", ctx=ctx),
         )
-        memories = user_memories + agent_memories
         return {
             "files": files,
             "skills": skills,

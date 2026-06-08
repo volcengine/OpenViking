@@ -89,6 +89,7 @@ Example config:
   "apiKey": "",
   "account": "default",
   "user": "opencode",
+  "peerId": "",
   "enabled": true,
   "timeoutMs": 30000,
   "autoCommit": {
@@ -99,8 +100,9 @@ Example config:
 ```
 
 `account` and `user` are sent as `X-OpenViking-Account` and `X-OpenViking-User` tenant headers on every plugin API request; leave them empty to omit the headers.
+`peerId` is sent as request-level `peer_id` for memory recall/search and captured session messages; leave it empty to preserve existing behavior.
 
-The environment variables `OPENVIKING_API_KEY`, `OPENVIKING_ACCOUNT`, and `OPENVIKING_USER` take precedence over the config file.
+The environment variables `OPENVIKING_API_KEY`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, and `OPENVIKING_PEER_ID` take precedence over the config file.
 
 ## Runtime Files
 

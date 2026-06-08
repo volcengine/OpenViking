@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use crate::error::{Error, Result};
 
 const OPENVIKING_CLI_CONFIG_ENV: &str = "OPENVIKING_CLI_CONFIG_FILE";
-pub const DEFAULT_SELF_MANAGED_PORT: &str = "1933";
-pub const DEFAULT_SELF_MANAGED_URL: &str = "http://127.0.0.1:1933";
+pub const DEFAULT_CUSTOM_PORT: &str = "1933";
+pub const DEFAULT_CUSTOM_URL: &str = "http://127.0.0.1:1933";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UploadConfig {
@@ -45,28 +45,52 @@ pub struct Config {
     pub account: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", alias = "user_id")]
     pub user: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_id: Option<String>,
-    #[serde(default = "default_timeout", skip_serializing_if = "is_default_timeout")]
+    #[serde(
+        default = "default_timeout",
+        skip_serializing_if = "is_default_timeout"
+    )]
     pub timeout: f64,
-    #[serde(default = "default_output_format", skip_serializing_if = "is_default_output")]
+    #[serde(
+        default = "default_output_format",
+        skip_serializing_if = "is_default_output"
+    )]
     pub output: String,
-    #[serde(default = "default_echo_command", skip_serializing_if = "is_default_echo_command")]
+    #[serde(
+        default = "default_echo_command",
+        skip_serializing_if = "is_default_echo_command"
+    )]
     pub echo_command: bool,
-    #[serde(default = "default_show_progress", skip_serializing_if = "is_default_show_progress")]
+    #[serde(
+        default = "default_show_progress",
+        skip_serializing_if = "is_default_show_progress"
+    )]
     pub show_progress: bool,
-    #[serde(default = "default_verbose", skip_serializing_if = "is_default_verbose")]
+    #[serde(
+        default = "default_verbose",
+        skip_serializing_if = "is_default_verbose"
+    )]
     pub verbose: bool,
     #[serde(default, skip_serializing_if = "is_default_profile")]
     pub profile: bool,
     #[serde(default, skip_serializing_if = "UploadConfig::is_default")]
     pub upload: UploadConfig,
-    #[serde(default, alias = "extra_header", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        alias = "extra_header",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub extra_headers: Option<std::collections::HashMap<String, String>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct EffectiveAuth {
+    pub api_key: Option<String>,
+    pub account: Option<String>,
+    pub user: Option<String>,
+}
+
 fn default_url() -> String {
-    DEFAULT_SELF_MANAGED_URL.to_string()
+    DEFAULT_CUSTOM_URL.to_string()
 }
 
 fn default_timeout() -> f64 {
@@ -120,12 +144,11 @@ fn is_default_profile(value: &bool) -> bool {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            url: DEFAULT_SELF_MANAGED_URL.to_string(),
+            url: DEFAULT_CUSTOM_URL.to_string(),
             api_key: None,
             root_api_key: None,
             account: None,
             user: None,
-            agent_id: None,
             timeout: 60.0,
             output: "table".to_string(),
             echo_command: true,
@@ -227,6 +250,38 @@ impl Config {
             .map_err(|e| Error::Config(format!("Failed to write config file: {}", e)))?;
         Ok(())
     }
+
+    pub(crate) fn effective_auth(&self, sudo: bool) -> EffectiveAuth {
+        self.effective_auth_with_overrides(None, None, None, sudo)
+    }
+
+    pub(crate) fn effective_auth_with_overrides(
+        &self,
+        api_key_override: Option<String>,
+        account_override: Option<String>,
+        user_override: Option<String>,
+        sudo: bool,
+    ) -> EffectiveAuth {
+        let api_key = if sudo {
+            self.root_api_key.clone()
+        } else {
+            api_key_override.or_else(|| self.api_key.clone())
+        };
+        let account = account_override.or_else(|| self.account.clone());
+        let user = user_override.or_else(|| self.user.clone());
+
+        let send_identity = if sudo {
+            true
+        } else {
+            api_key.is_none() || api_key.as_deref() == self.root_api_key.as_deref()
+        };
+
+        EffectiveAuth {
+            api_key,
+            account: send_identity.then_some(account).flatten(),
+            user: send_identity.then_some(user).flatten(),
+        }
+    }
 }
 
 pub fn default_config_path() -> Result<PathBuf> {
@@ -300,15 +355,13 @@ mod tests {
                 "url": "http://127.0.0.1:1933",
                 "api_key": "test-key",
                 "account": "acme",
-                "user": "alice",
-                "agent_id": "assistant-1"
+                "user": "alice"
             }"#,
         )
         .expect("config should deserialize");
 
         assert_eq!(config.account.as_deref(), Some("acme"));
         assert_eq!(config.user.as_deref(), Some("alice"));
-        assert_eq!(config.agent_id.as_deref(), Some("assistant-1"));
         assert!(config.upload.ignore_dirs.is_none());
         assert!(config.upload.include.is_none());
         assert!(config.upload.exclude.is_none());
@@ -327,6 +380,72 @@ mod tests {
 
         assert_eq!(config.api_key.as_deref(), Some("user-key"));
         assert_eq!(config.root_api_key.as_deref(), Some("root-key"));
+    }
+
+    #[test]
+    fn effective_auth_omits_stale_identity_for_regular_user_key() {
+        let config = Config {
+            api_key: Some("user-key".to_string()),
+            root_api_key: Some("root-key".to_string()),
+            account: Some("stale-account".to_string()),
+            user: Some("stale-user".to_string()),
+            ..Config::default()
+        };
+
+        let auth = config.effective_auth(false);
+
+        assert_eq!(auth.api_key.as_deref(), Some("user-key"));
+        assert!(auth.account.is_none());
+        assert!(auth.user.is_none());
+    }
+
+    #[test]
+    fn effective_auth_sends_identity_for_root_as_normal() {
+        let config = Config {
+            api_key: Some("root-key".to_string()),
+            root_api_key: Some("root-key".to_string()),
+            account: Some("acme".to_string()),
+            user: Some("alice".to_string()),
+            ..Config::default()
+        };
+
+        let auth = config.effective_auth(false);
+
+        assert_eq!(auth.api_key.as_deref(), Some("root-key"));
+        assert_eq!(auth.account.as_deref(), Some("acme"));
+        assert_eq!(auth.user.as_deref(), Some("alice"));
+    }
+
+    #[test]
+    fn effective_auth_sends_identity_for_no_key_configs() {
+        let config = Config {
+            account: Some("default".to_string()),
+            user: Some("default".to_string()),
+            ..Config::default()
+        };
+
+        let auth = config.effective_auth(false);
+
+        assert!(auth.api_key.is_none());
+        assert_eq!(auth.account.as_deref(), Some("default"));
+        assert_eq!(auth.user.as_deref(), Some("default"));
+    }
+
+    #[test]
+    fn effective_auth_uses_root_key_and_identity_for_sudo() {
+        let config = Config {
+            api_key: Some("user-key".to_string()),
+            root_api_key: Some("root-key".to_string()),
+            account: Some("acme".to_string()),
+            user: Some("alice".to_string()),
+            ..Config::default()
+        };
+
+        let auth = config.effective_auth(true);
+
+        assert_eq!(auth.api_key.as_deref(), Some("root-key"));
+        assert_eq!(auth.account.as_deref(), Some("acme"));
+        assert_eq!(auth.user.as_deref(), Some("alice"));
     }
 
     #[test]

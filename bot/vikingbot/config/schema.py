@@ -519,7 +519,6 @@ class OpenVikingConfig(BaseModel):
     root_api_key: str = ""
     account_id: str = "default"
     admin_user_id: str = "default"
-    agent_id: str = ""
     exp_write_tools: list[str] = Field(default_factory=lambda: ["write_file", "edit_file"])
     # When True, switch auto-recall mode: skip the per-turn user+agent memory retrieval
     # entirely, and instead retrieve experience memory once per session (on the first

@@ -9,7 +9,7 @@ import pytest
 import pytest_asyncio
 
 from openviking.server.api_keys import APIKeyManager
-from openviking.server.identity import AccountNamespacePolicy, Role
+from openviking.server.identity import Role
 from openviking.service.core import OpenVikingService
 from openviking_cli.exceptions import AlreadyExistsError, NotFoundError, UnauthenticatedError
 from openviking_cli.session.user_id import UserIdentifier
@@ -113,7 +113,6 @@ async def test_default_account_exists(manager: APIKeyManager):
     """Default account should be created on load."""
     accounts = manager.get_accounts()
     assert any(a["account_id"] == "default" for a in accounts)
-    assert manager.get_account_policy("default") == AccountNamespacePolicy()
 
 
 # ---- User lifecycle tests ----
@@ -254,8 +253,8 @@ async def test_persistence_across_reload(manager_service):
     assert identity.role == Role.ADMIN
 
 
-async def test_legacy_account_without_settings_infers_user_and_agent_policy(manager_service):
-    """Legacy accounts default to user-shared + agent-shared and persist the inferred policy."""
+async def test_legacy_account_without_settings_loads_without_namespace_settings(manager_service):
+    """Legacy accounts no longer create account settings during load."""
     acct = _uid()
     created_at = "2026-04-16T00:00:00+00:00"
 
@@ -274,24 +273,18 @@ async def test_legacy_account_without_settings_infers_user_and_agent_policy(mana
     )
     await mgr.load()
 
-    assert mgr.get_account_policy(acct) == AccountNamespacePolicy(
-        isolate_user_scope_by_agent=False,
-        isolate_agent_scope_by_user=False,
-    )
+    identity = mgr.resolve("legacy-key-alice")
+    assert identity.account_id == acct
+    assert identity.user_id == "alice"
 
     settings = await mgr._read_json(f"/local/{acct}/_system/setting.json")
-    assert settings == {
-        "namespace": {
-            "isolate_user_scope_by_agent": False,
-            "isolate_agent_scope_by_user": False,
-        }
-    }
+    assert settings is None
 
 
-# ---- Encryption tests ----
+# ---- Argon2id hashing tests ----
 
 
-async def test_create_account_with_encryption_enabled(manager_service):
+async def test_create_account_with_argon2id_hashing_enabled(manager_service):
     """create_account with api_key_hashing_enabled=True should create hashed keys."""
     acct = _uid()
     mgr = APIKeyManager(
@@ -314,7 +307,7 @@ async def test_create_account_with_encryption_enabled(manager_service):
     assert identity.user_id == "alice"
 
 
-async def test_register_user_with_encryption_enabled(manager_service):
+async def test_register_user_with_argon2id_hashing_enabled(manager_service):
     """register_user with api_key_hashing_enabled=True should create hashed keys."""
     acct = _uid()
     mgr = APIKeyManager(
@@ -335,7 +328,7 @@ async def test_register_user_with_encryption_enabled(manager_service):
     assert identity.user_id == "bob"
 
 
-async def test_regenerate_key_with_encryption_enabled(manager_service):
+async def test_regenerate_key_with_argon2id_hashing_enabled(manager_service):
     """regenerate_key with api_key_hashing_enabled=True should create new hashed key."""
     acct = _uid()
     mgr = APIKeyManager(
@@ -368,7 +361,7 @@ async def test_regenerate_key_with_encryption_enabled(manager_service):
     assert identity.account_id == acct
 
 
-async def test_migrate_plaintext_keys_to_encrypted(manager_service):
+async def test_migrate_plaintext_keys_to_argon2id_hashing(manager_service):
     """Keys created with api_key_hashing disabled should be migrated when api_key_hashing is enabled."""
     acct = _uid()
 
@@ -391,7 +384,7 @@ async def test_migrate_plaintext_keys_to_encrypted(manager_service):
     assert identity.user_id == "alice"
 
 
-async def test_persistence_with_encryption_enabled(manager_service):
+async def test_persistence_with_argon2id_hashing_enabled(manager_service):
     """Hashed keys should survive manager reload from AGFS."""
     mgr1 = APIKeyManager(
         root_key=ROOT_KEY, viking_fs=manager_service.viking_fs, api_key_hashing_enabled=True

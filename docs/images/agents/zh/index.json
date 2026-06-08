@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-06-02",
+  "updatedAt": "2026-06-05",
   "cdnBaseUrl": "https://docs.openviking.net/",
   "accessMethods": [
     {
@@ -61,7 +61,7 @@
       "name": "Claude Code",
       "tags": ["Plugin"],
       "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/Claude-Code.png",
-      "summary": "为 Claude Code 提供跨项目、跨 session 的长期记忆，越用越聪明。安装一次，每次对话自动召回和捕获，模型不需要主动调用任何工具",
+      "summary": "为 Claude Code 添加跨项目、跨会话（session）的长期记忆功能。安装完成后，每轮对话均会自动召回相关记忆并捕获新内容，无需模型主动调用任何工具",
       "detailPath": "https://docs.openviking.net/agents/zh/claude-code.md"
     },
     {
@@ -69,7 +69,7 @@
       "name": "Codex",
       "tags": ["Plugin"],
       "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/codex.png",
-      "summary": "为 Codex 提供持久化的跨 session 记忆。安装一次——每次用户输入前自动召回，每轮结束后增量捕获，compaction 前提交给记忆抽取器",
+      "summary": "为 Codex 提供持久化的跨会话（session）记忆。一次安装，即可实现：在用户每次输入前自动召回记忆，每轮对话结束后进行增量捕获，并在上下文压缩（compaction）前将记忆提交给抽取器",
       "detailPath": "https://docs.openviking.net/agents/zh/codex.md"
     },
     {

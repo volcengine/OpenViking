@@ -191,8 +191,8 @@ export function AgentPanel({
   return (
     <>
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="border-b bg-background/70 px-4 py-3">
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <div className="flex h-14 shrink-0 items-center border-b bg-background/70 px-4">
+          <div className="flex min-w-0 flex-1 items-center gap-2 text-xs text-muted-foreground">
             <BotIcon className="size-3.5 shrink-0" />
             <span className="min-w-0 flex-1 truncate">
               {t('agent.autoRetrieve')}
@@ -270,10 +270,8 @@ export function AgentPanel({
               streaming={
                 isStreaming
                   ? {
-                      content: chat.streamingContent,
                       iteration: chat.iteration,
-                      reasoning: chat.streamingReasoning,
-                      toolCalls: chat.streamingToolCalls,
+                      parts: chat.streamingParts,
                     }
                   : undefined
               }

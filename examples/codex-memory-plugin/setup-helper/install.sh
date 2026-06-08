@@ -1,8 +1,24 @@
 #!/usr/bin/env bash
+#
+# OpenViking Memory Plugin for Codex — interactive installer.
+#
+# One-liner:
+#   bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/codex-memory-plugin/setup-helper/install.sh)
+#
+# UX mirrors the claude-code installer (colored step output + interactive
+# ovcli.conf setup). When stdin is not a TTY (e.g. `curl | bash`) the
+# interactive prompts are skipped and existing config / env vars are used.
+#
+# Env overrides:
+#   OPENVIKING_HOME, OPENVIKING_REPO_DIR, OPENVIKING_REPO_URL,
+#   OPENVIKING_REPO_REF / OPENVIKING_REPO_BRANCH, OPENVIKING_CLI_CONFIG_FILE,
+#   OPENVIKING_CODEX_WRAP_EXTRA (extra launch commands to wrap).
+
 set -euo pipefail
 
+OV_HOME="${OPENVIKING_HOME:-$HOME/.openviking}"
 REPO_URL="${OPENVIKING_REPO_URL:-https://github.com/volcengine/OpenViking.git}"
-REPO_DIR="${OPENVIKING_REPO_DIR:-$HOME/.openviking/openviking-repo}"
+REPO_DIR="${OPENVIKING_REPO_DIR:-$OV_HOME/openviking-repo}"
 # Accept both OPENVIKING_REPO_REF and OPENVIKING_REPO_BRANCH so users can
 # reuse the same env var across the claude-code and codex installers.
 REPO_REF="${OPENVIKING_REPO_REF:-${OPENVIKING_REPO_BRANCH:-main}}"
@@ -11,49 +27,172 @@ MARKETPLACE_ROOT="${OPENVIKING_CODEX_MARKETPLACE_ROOT:-$HOME/.codex/${MARKETPLAC
 PLUGIN_NAME="openviking-memory"
 PLUGIN_ID="${PLUGIN_NAME}@${MARKETPLACE_NAME}"
 CODEX_CONFIG="${CODEX_CONFIG_FILE:-$HOME/.codex/config.toml}"
-OVCLI_CONF="${OPENVIKING_CLI_CONFIG_FILE:-$HOME/.openviking/ovcli.conf}"
+OVCLI_CONF="${OPENVIKING_CLI_CONFIG_FILE:-$OV_HOME/ovcli.conf}"
 DEFAULT_MCP_URL="http://127.0.0.1:1933/mcp"
 WRAPPER_MARKER_BEGIN="# >>> openviking-codex-plugin >>>"
 WRAPPER_MARKER_END="# <<< openviking-codex-plugin <<<"
 
-need() {
-  command -v "$1" >/dev/null 2>&1 || {
-    echo "Missing required command: $1" >&2
-    exit 1
-  }
-}
+if [ -t 1 ]; then
+  CYAN=$'\033[0;36m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[1;33m'; RED=$'\033[0;31m'; BOLD=$'\033[1m'; RESET=$'\033[0m'
+else
+  CYAN=''; GREEN=''; YELLOW=''; RED=''; BOLD=''; RESET=''
+fi
+info()    { printf '%s==>%s %s\n' "$GREEN" "$RESET" "$*"; }
+warn()    { printf '%s!!%s  %s\n' "$YELLOW" "$RESET" "$*"; }
+err()     { printf '%sxx%s  %s\n' "$RED" "$RESET" "$*" >&2; }
+ask()     { printf '%s??%s  %s' "$CYAN" "$RESET" "$*"; }
+heading() { printf '\n%s%s%s\n' "$BOLD" "$*" "$RESET"; }
 
+# ----- 1. Environment check -----
+
+heading '1. Environment check'
+
+need() {
+  command -v "$1" >/dev/null 2>&1 || { err "Missing required command: $1"; exit 1; }
+}
 need codex
 need git
 need node
 
 NODE_MAJOR="$(node -p 'Number(process.versions.node.split(".")[0])')"
 if [ "$NODE_MAJOR" -lt 22 ]; then
-  echo "Node.js 22+ is required; found $(node --version)." >&2
+  err "Node.js 22+ is required; found $(node --version)."
   exit 1
 fi
+info "codex: $(codex --version 2>/dev/null || echo unknown)"
+info "node:  $(node --version)"
+
+# ----- 2. OpenViking client config -----
+
+heading "2. OpenViking client config ($OVCLI_CONF)"
+
+mkdir -p "$OV_HOME"
+chmod 700 "$OV_HOME" 2>/dev/null || true
+
+# Read a field from ovcli.conf via node (codex's stack — no jq dependency).
+ov_read_conf() {
+  [ -f "$OVCLI_CONF" ] || return 0
+  node -e '
+    try {
+      const c = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+      const v = c[process.argv[2]];
+      if (v) process.stdout.write(String(v));
+    } catch {}
+  ' "$OVCLI_CONF" "$1" 2>/dev/null || true
+}
+
+CURRENT_URL="$(ov_read_conf url)"
+CURRENT_KEY="$(ov_read_conf api_key)"
+
+if [ -t 0 ]; then
+  # A url with an empty api_key is a valid unauthenticated config, so offer
+  # reuse whenever a url exists — don't force the prompt (which would default
+  # the url back to localhost and clobber a custom server).
+  if [ -n "$CURRENT_URL" ]; then
+    info "Existing config found:"
+    info "  url     = $CURRENT_URL"
+    if [ -n "$CURRENT_KEY" ]; then
+      info "  api_key = $(printf '%s' "$CURRENT_KEY" | cut -c1-8)…"
+    else
+      info "  api_key = (none, unauthenticated)"
+    fi
+    ask 'Reuse these values? [Y/n] '
+    read -r reply || reply=""
+    case "$reply" in
+      n|N|no|No|NO) CURRENT_URL=""; CURRENT_KEY="" ;;
+    esac
+  fi
+
+  if [ -z "$CURRENT_URL" ]; then
+    printf '%sChoose where you'\''ll connect to OpenViking:%s\n' "$BOLD" "$RESET"
+    printf '  1) Self-hosted / local                          [default: http://127.0.0.1:1933]\n'
+    printf '  2) Volcengine OpenViking Cloud                  [https://api.vikingdb.cn-beijing.volces.com/openviking]\n'
+    ask '[1/2, default 1]: '
+    read -r MODE_INPUT || MODE_INPUT=""
+    case "$MODE_INPUT" in
+      2)
+        CURRENT_URL="https://api.vikingdb.cn-beijing.volces.com/openviking"
+        info "Using Volcengine OpenViking Cloud: $CURRENT_URL"
+        KEY_PROMPT="API key (required for Volcengine OpenViking Cloud): "
+        ;;
+      *)
+        DEFAULT_URL="http://127.0.0.1:1933"
+        ask "OpenViking server URL [$DEFAULT_URL]: "
+        read -r URL_INPUT || URL_INPUT=""
+        CURRENT_URL="${URL_INPUT:-$DEFAULT_URL}"
+        KEY_PROMPT="API key (leave empty for unauthenticated local mode): "
+        ;;
+    esac
+
+    ask "$KEY_PROMPT"
+    # -s: don't echo (hide secret); fall back if -s unsupported
+    if read -rs API_INPUT 2>/dev/null; then
+      printf '\n'
+    else
+      read -r API_INPUT || API_INPUT=""
+    fi
+    CURRENT_KEY="$API_INPUT"
+
+    if [ -f "$OVCLI_CONF" ]; then
+      backup="$OVCLI_CONF.bak.$(date +%s)"
+      cp "$OVCLI_CONF" "$backup"
+      info "Backed up existing config → $backup"
+    fi
+    # Merge url + api_key into any existing config so extra fields (account,
+    # user, …) the codex wrapper reads are preserved.
+    node -e '
+      const fs = require("node:fs");
+      const [, file, url, key] = process.argv;
+      let c = {};
+      try { c = JSON.parse(fs.readFileSync(file, "utf8")); } catch {}
+      c.url = url;
+      c.api_key = key;
+      fs.writeFileSync(file, JSON.stringify(c, null, 2) + "\n");
+    ' "$OVCLI_CONF" "$CURRENT_URL" "$CURRENT_KEY"
+    chmod 600 "$OVCLI_CONF"
+    info "Wrote $OVCLI_CONF (mode 0600)"
+  else
+    info "Reusing existing config."
+  fi
+else
+  if [ -n "$CURRENT_URL" ]; then
+    info "Non-interactive: using existing $OVCLI_CONF"
+  else
+    warn "Non-interactive and no $OVCLI_CONF — proceeding in unauthenticated mode."
+    warn 'Set OPENVIKING_URL / OPENVIKING_API_KEY, or re-run in a terminal, to configure auth.'
+  fi
+fi
+
+# ----- 3. OpenViking source repository -----
+
+heading "3. OpenViking source repository ($REPO_DIR)"
 
 mkdir -p "$(dirname "$REPO_DIR")" "$HOME/.codex"
 
 if [ ! -e "$REPO_DIR/.git" ]; then
   if [ -e "$REPO_DIR" ]; then
-    echo "$REPO_DIR exists but is not a git checkout." >&2
+    err "$REPO_DIR exists but is not a git checkout."
     exit 1
   fi
+  info "Cloning $REPO_URL (branch $REPO_REF, depth 1)"
   git clone --depth 1 --branch "$REPO_REF" "$REPO_URL" "$REPO_DIR"
 else
-  echo "Refreshing existing OpenViking checkout at $REPO_DIR ($REPO_REF)..."
+  info "Refreshing existing checkout ($REPO_REF)"
   git -C "$REPO_DIR" fetch --depth 1 origin "$REPO_REF"
   git -C "$REPO_DIR" reset --hard FETCH_HEAD
 fi
 
 PLUGIN_DIR="$REPO_DIR/examples/codex-memory-plugin"
 if [ ! -d "$PLUGIN_DIR/.codex-plugin" ]; then
-  echo "Codex plugin not found at $PLUGIN_DIR" >&2
+  err "Codex plugin not found at $PLUGIN_DIR"
   exit 1
 fi
 
 PLUGIN_VERSION="$(node -e 'const p=require(process.argv[1]); console.log(p.version || "0.0.0")' "$PLUGIN_DIR/.codex-plugin/plugin.json")"
+
+# ----- 4. Plugin install -----
+
+heading "4. Plugin install ($PLUGIN_ID, version $PLUGIN_VERSION)"
 
 # Resolve the OpenViking /mcp endpoint at install time. Priority:
 #   OPENVIKING_MCP_URL (env, full /mcp URL) > OPENVIKING_URL (env, base URL) >
@@ -86,6 +225,7 @@ resolve_mcp_url() {
 }
 
 MCP_URL="$(resolve_mcp_url)"
+info "MCP endpoint: $MCP_URL"
 
 mkdir -p "$MARKETPLACE_ROOT/.claude-plugin"
 rm -f "$MARKETPLACE_ROOT/$PLUGIN_NAME"
@@ -101,6 +241,7 @@ cat > "$MARKETPLACE_ROOT/.claude-plugin/marketplace.json" <<EOF
 EOF
 
 codex plugin marketplace add "$MARKETPLACE_ROOT" >/dev/null 2>&1 || true
+info "Marketplace registered: $MARKETPLACE_ROOT"
 
 node - "$CODEX_CONFIG" "$PLUGIN_ID" <<'NODE'
 const fs = require("node:fs");
@@ -176,6 +317,7 @@ text = ensureSectionLine(text, "features", "plugin_hooks", "true");
 fs.mkdirSync(require("node:path").dirname(path), { recursive: true });
 fs.writeFileSync(path, text);
 NODE
+info "Enabled plugin + features.plugin_hooks in $CODEX_CONFIG"
 
 CACHE_DIR="$HOME/.codex/plugins/cache/$MARKETPLACE_NAME/$PLUGIN_NAME/$PLUGIN_VERSION"
 mkdir -p "$(dirname "$CACHE_DIR")"
@@ -236,23 +378,25 @@ if (hasKey !== "1") {
 fs.writeFileSync(file, JSON.stringify(j, null, 2) + "\n");
 NODE
 fi
+info "Plugin cache: $CACHE_DIR"
+info "MCP auth: $([ "$HAS_API_KEY" = "1" ] && echo "Bearer (OPENVIKING_API_KEY)" || echo "none (unauthenticated)")"
 
-# ----- Shell rc wrapper -----
+# ----- 5. Shell rc wrapper -----
 #
 # The MCP server reads OPENVIKING_API_KEY (and OPENVIKING_ACCOUNT / _USER /
 # _AGENT_ID) from the process env at codex launch. Install a `codex` shell
 # function that pulls these from ovcli.conf at invocation time, so the user
 # doesn't have to `export` secrets globally.
 #
-# Source of truth: setup-helper/wrapper.sh in the plugin checkout. The
-# user's shell rc just sources that file directly — no copy step, so any
-# updates land via the next `git fetch + reset --hard` the installer
-# already runs at the top. Same pattern pyenv / nvm / fnm use, except we
-# don't even need an intermediate copy in $HOME.
+# Source of truth: setup-helper/wrapper.sh in the plugin checkout. The user's
+# shell rc just sources that file directly — no copy step, so any updates land
+# via the next `git fetch + reset --hard` the installer runs at the top.
+
+heading '5. Shell rc — codex function wrapper'
 
 WRAPPER_SRC="$PLUGIN_DIR/setup-helper/wrapper.sh"
 if [ ! -f "$WRAPPER_SRC" ]; then
-  echo "Wrapper source not found at $WRAPPER_SRC" >&2
+  err "Wrapper source not found at $WRAPPER_SRC"
   exit 1
 fi
 
@@ -266,78 +410,114 @@ case "${SHELL:-}" in
     ;;
 esac
 
-# The user's shell rc gets a single one-line source hook pointing directly
-# at the wrapper source in the cloned plugin checkout. No copy step:
-# updates to wrapper.sh propagate via the `git fetch + reset --hard` the
-# installer runs at the top, with no extra installer step required.
-#
+# Extra launch commands to wrap besides `codex` — e.g. a custom wrapper
+# `codex-custom`, or a multi-word launcher matched on its sub-command.
+# Persisted in the rc marker block as OPENVIKING_CODEX_WRAP_EXTRA; the wrapper
+# reads it and injects credentials into matching invocations only.
+# Seed from this run's env var (automation), else the rc value (re-run). The
+# interactive prompt below (TTY only) can override.
+WRAP_EXTRA="${OPENVIKING_CODEX_WRAP_EXTRA:-}"
+if [ -z "$WRAP_EXTRA" ] && [ -n "$RC" ] && [ -f "$RC" ]; then
+  WRAP_EXTRA=$(awk -F"'" '/^OPENVIKING_CODEX_WRAP_EXTRA=/{print $2; exit}' "$RC" 2>/dev/null || true)
+fi
+if [ -z "${OPENVIKING_CODEX_WRAP_EXTRA:-}" ] && [ -t 0 ]; then
+  info 'Inject OpenViking creds into other launch commands too? e.g. a custom'
+  info 'wrapper `codex-custom`. A multi-word launcher (a base command plus a'
+  info 'sub-command) is matched on that sub-command; other uses of the command'
+  info 'pass through untouched.'
+  if [ -n "$WRAP_EXTRA" ]; then
+    info "Currently: $WRAP_EXTRA"
+    ask 'Commands (;-separated; empty = keep, "-" = clear): '
+  else
+    ask 'Commands (;-separated, e.g. "codex-custom"; empty to skip): '
+  fi
+  read -r WRAP_INPUT || WRAP_INPUT=""
+  case "$WRAP_INPUT" in
+    "") : ;;
+    -)  WRAP_EXTRA="" ;;
+    *)  WRAP_EXTRA="$WRAP_INPUT" ;;
+  esac
+fi
+# Normalize each ';'-entry: strip single quotes (keep the rc line safely
+# single-quotable), trim, collapse internal whitespace, drop empties.
+if [ -n "$WRAP_EXTRA" ]; then
+  WRAP_EXTRA=$(printf '%s' "$WRAP_EXTRA" | awk -F';' '{
+    out="";
+    for (i = 1; i <= NF; i++) {
+      s = $i; gsub(/\047/, "", s); gsub(/^[ \t]+|[ \t]+$/, "", s); gsub(/[ \t]+/, " ", s);
+      if (s != "") out = (out == "" ? s : out ";" s);
+    }
+    print out;
+  }')
+  [ -n "$WRAP_EXTRA" ] && info "Will wrap: $WRAP_EXTRA"
+fi
+
 # The hook content stays stable across installs (only the absolute path
-# matters), so the marker-replacement logic only triggers the legacy
-# cleanup path once when upgrading from a pre-rc-split install that
-# inlined the full wrapper into the rc.
+# matters), so the marker-replacement logic only triggers the legacy cleanup
+# path once when upgrading from a pre-rc-split install that inlined the full
+# wrapper into the rc.
 SOURCE_HOOK="[ -f \"$WRAPPER_SRC\" ] && . \"$WRAPPER_SRC\""
-SOURCE_BLOCK="$WRAPPER_MARKER_BEGIN
+if [ -n "$WRAP_EXTRA" ]; then
+  SOURCE_BLOCK="$WRAPPER_MARKER_BEGIN
+OPENVIKING_CODEX_WRAP_EXTRA='$WRAP_EXTRA'
 $SOURCE_HOOK
 $WRAPPER_MARKER_END"
+else
+  SOURCE_BLOCK="$WRAPPER_MARKER_BEGIN
+$SOURCE_HOOK
+$WRAPPER_MARKER_END"
+fi
 
 if [ -z "$RC" ]; then
-  cat >&2 <<EOF
-
-Note: could not detect a shell rc to install the source hook into.
-Add this line to your rc manually:
-
+  warn 'Could not detect a shell rc. Add this snippet to your rc manually:'
+  warn ''
+  while IFS= read -r line; do warn "  $line"; done <<EOF
 $SOURCE_BLOCK
 EOF
 else
   touch "$RC"
   if grep -qF "$WRAPPER_MARKER_BEGIN" "$RC"; then
-    # Strip the existing marker block (whether it's the new one-liner or
-    # an old inline-wrapper block from a previous version). Both markers
-    # must be present — refuse the in-place rewrite otherwise.
+    # Strip the existing marker block (whether it's the new one-liner or an
+    # old inline-wrapper block from a previous version). Both markers must be
+    # present — refuse the in-place rewrite otherwise.
     if grep -qF "$WRAPPER_MARKER_END" "$RC"; then
-      echo "Replacing openviking source hook in $RC"
+      info "Replacing openviking source hook in $RC"
       awk -v b="$WRAPPER_MARKER_BEGIN" -v e="$WRAPPER_MARKER_END" '
         $0 == b {skip=1; next}
         $0 == e {skip=0; next}
         !skip
       ' "$RC" > "$RC.tmp" && mv "$RC.tmp" "$RC"
     else
-      cat >&2 <<EOF
-Warning: $WRAPPER_MARKER_BEGIN found in $RC but $WRAPPER_MARKER_END is missing.
-Refusing to in-place rewrite; appending a fresh source hook instead.
-Please remove the stray begin marker manually.
-EOF
+      warn "$WRAPPER_MARKER_BEGIN found in $RC but $WRAPPER_MARKER_END is missing."
+      warn 'Refusing to in-place rewrite; appending a fresh source hook instead.'
+      warn 'Please remove the stray begin marker manually.'
     fi
   else
-    echo "Appending openviking source hook to $RC"
+    info "Appending openviking source hook to $RC"
   fi
   printf '\n%s\n' "$SOURCE_BLOCK" >> "$RC"
 fi
 
 if [ ! -f "$OVCLI_CONF" ] && [ "$HAS_API_KEY" != "1" ]; then
-  cat >&2 <<EOF
-
-Note: $OVCLI_CONF was not found and no OPENVIKING_API_KEY in env.
-The plugin is installed in unauthenticated mode targeting $MCP_URL.
-To enable Bearer auth later, create ovcli.conf with an api_key (see
-https://docs.openviking.ai/zh/guides/03-deployment#cli) and re-run this
-installer — the bearer_token_env_var field will be re-added to .mcp.json.
-EOF
+  warn "$OVCLI_CONF was not found and no OPENVIKING_API_KEY in env."
+  warn "Installed in unauthenticated mode targeting $MCP_URL."
+  warn 'To enable Bearer auth later, create ovcli.conf with an api_key and re-run.'
 fi
 
-cat <<EOF
+# ----- Done -----
 
-Installed $PLUGIN_ID (version $PLUGIN_VERSION).
-Marketplace: $MARKETPLACE_ROOT
-Plugin cache: $CACHE_DIR
-MCP endpoint: $MCP_URL
-MCP auth: $([ "$HAS_API_KEY" = "1" ] && echo "Bearer (OPENVIKING_API_KEY)" || echo "none (unauthenticated)")
-
-Next:
-EOF
+heading 'Done!'
+info "Plugin:    $PLUGIN_ID (version $PLUGIN_VERSION)"
+info "Config:    $OVCLI_CONF"
+info "MCP:       $MCP_URL ($([ "$HAS_API_KEY" = "1" ] && echo "Bearer auth" || echo "unauthenticated"))"
+[ -n "$RC" ] && info "Shell rc:  $RC"
+printf '\n'
 if [ -n "$RC" ]; then
-  echo "  source $RC      # pick up the codex() wrapper"
+  printf '%s%sNext — run this in your shell to pick up the codex() wrapper:%s\n' "$BOLD" "$YELLOW" "$RESET"
+  printf '    %s%ssource %s%s\n' "$BOLD" "$CYAN" "$RC" "$RESET"
+  printf '  (or just open a new terminal window)\n\n'
 else
-  echo "  (paste the codex() snippet printed above into your shell rc, then restart your shell)"
+  printf '  (paste the snippet printed above into your shell rc, then restart your shell)\n\n'
 fi
-echo "  codex           # restart codex; review /hooks if prompted"
+info 'Then:'
+info '  codex               # start Codex; review /hooks if prompted'

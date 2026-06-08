@@ -3,9 +3,10 @@
 
 import pytest
 
+from openviking.core.namespace import canonical_user_root
 from openviking.privacy.skill_extractor import extract_skill_privacy_values
 from openviking.privacy.skill_placeholder import placeholderize_skill_content_with_blocks
-from openviking.server.identity import AccountNamespacePolicy, RequestContext, Role
+from openviking.server.identity import RequestContext, Role
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -55,7 +56,6 @@ async def test_privacy_config_service_versions(service):
 async def test_skill_read_restores_placeholder(service):
     ctx = RequestContext(user=UserIdentifier.the_default_user("privacy_restore"), role=Role.ROOT)
     await service.initialize_user_directories(ctx)
-    await service.initialize_agent_directories(ctx)
 
     await service.resources.add_skill(
         data={
@@ -67,10 +67,9 @@ async def test_skill_read_restores_placeholder(service):
         wait=False,
     )
 
-    stored = await service.viking_fs.read_file(
-        "viking://agent/skills/restore-skill/SKILL.md", ctx=ctx
-    )
-    restored = await service.fs.read("viking://agent/skills/restore-skill/SKILL.md", ctx=ctx)
+    skill_file_uri = f"{canonical_user_root(ctx)}/skills/restore-skill/SKILL.md"
+    stored = await service.viking_fs.read_file(skill_file_uri, ctx=ctx)
+    restored = await service.fs.read(skill_file_uri, ctx=ctx)
 
     assert "secret-xyz" not in stored
     assert "{{ov_privacy:skill:restore-skill:api_key}}" in stored
@@ -79,12 +78,11 @@ async def test_skill_read_restores_placeholder(service):
 
 
 @pytest.mark.asyncio
-async def test_skill_read_restores_placeholder_with_agent_segment(service):
+async def test_skill_read_restores_placeholder_with_user_shorthand(service):
     ctx = RequestContext(
-        user=UserIdentifier.the_default_user("privacy_restore_agent_segment"), role=Role.ROOT
+        user=UserIdentifier.the_default_user("privacy_restore_user_shorthand"), role=Role.ROOT
     )
     await service.initialize_user_directories(ctx)
-    await service.initialize_agent_directories(ctx)
 
     await service.resources.add_skill(
         data={
@@ -97,7 +95,7 @@ async def test_skill_read_restores_placeholder_with_agent_segment(service):
     )
 
     restored = await service.fs.read(
-        "viking://agent/default/skills/restore-skill-agent-segment/SKILL.md",
+        "viking://user/skills/restore-skill-agent-segment/SKILL.md",
         ctx=ctx,
     )
 
@@ -134,9 +132,8 @@ async def test_skill_read_appends_notice_for_unreplaced_placeholders(service):
         user=UserIdentifier.the_default_user("privacy_partial_restore"), role=Role.ROOT
     )
     await service.initialize_user_directories(ctx)
-    await service.initialize_agent_directories(ctx)
 
-    skill_uri = "viking://agent/skills/partial-restore-skill"
+    skill_uri = f"{canonical_user_root(ctx)}/skills/partial-restore-skill"
     await service.viking_fs.mkdir(skill_uri, exist_ok=True, ctx=ctx)
     await service.viking_fs.write_file(
         f"{skill_uri}/SKILL.md",
@@ -169,9 +166,8 @@ async def test_skill_read_appends_notice_for_extra_configured_keys(service):
         user=UserIdentifier.the_default_user("privacy_extra_config"), role=Role.ROOT
     )
     await service.initialize_user_directories(ctx)
-    await service.initialize_agent_directories(ctx)
 
-    skill_uri = "viking://agent/skills/extra-config-skill"
+    skill_uri = f"{canonical_user_root(ctx)}/skills/extra-config-skill"
     await service.viking_fs.mkdir(skill_uri, exist_ok=True, ctx=ctx)
     await service.viking_fs.write_file(
         f"{skill_uri}/SKILL.md",
@@ -195,11 +191,10 @@ async def test_skill_read_appends_notice_for_extra_configured_keys(service):
 
 
 @pytest.mark.asyncio
-async def test_privacy_config_service_uses_policy_aware_user_root(service):
+async def test_privacy_config_service_uses_user_root(service):
     ctx = RequestContext(
-        user=UserIdentifier("acme", "privacy_user_policy", "demo-agent"),
+        user=UserIdentifier("acme", "privacy_user_policy"),
         role=Role.USER,
-        namespace_policy=AccountNamespacePolicy(isolate_user_scope_by_agent=True),
     )
     await service.initialize_user_directories(ctx)
 

@@ -65,9 +65,9 @@ client = ov.SyncHTTPClient(url="http://localhost:1933")
 
 服务端启用认证后，需要传入 `api_key`。OpenViking 使用两层 API Key 体系，请根据场景选择：
 
-**常规数据访问：使用 `user_key`（推荐）**
+**常规数据访问：使用 `user_key` 或 `admin_key`**
 
-大多数场景应使用 `user_key`，可直接调用 `add_resource`、`find`、`ls` 等租户级 API：
+大多数场景应使用 `user_key`，也可以使用绑定到管理员用户的 `admin_key`。两者都可直接调用 `add_resource`、`find`、`ls` 等租户级 API：
 
 ```python
 import openviking as ov
@@ -75,15 +75,14 @@ import openviking as ov
 client = ov.SyncHTTPClient(
     url="http://localhost:1933",
     api_key="<user-key>",
-    agent_id="my-agent",      # 可选
 )
 ```
 
-> `user_key` 通过 Admin API 创建（参见 [认证文档](../guides/04-authentication.md)），服务端可自动识别其所属租户。
+> `user_key` / `admin_key` 通过 Admin API 创建（参见 [认证文档](../guides/04-authentication.md)），服务端可自动识别其所属租户和用户。
 
 **管理操作：使用 `root_key`**
 
-`root_key` 适用于管理操作（创建账户、系统状态等）。如需用 `root_key` 访问租户级 API，**必须**同时传入 `account` 和 `user`，否则服务端会拒绝请求：
+`root_key` 只适用于管理操作（创建账户、系统状态等）和少量 system/monitoring API。常规数据访问不要使用 `root_key`，也不要通过 `account` / `user` header 模拟某个用户；数据面应使用对应的 `user_key` 或 `admin_key`。
 
 ```python
 import openviking as ov
@@ -91,13 +90,10 @@ import openviking as ov
 client = ov.SyncHTTPClient(
     url="http://localhost:1933",
     api_key="<root-key>",
-    account="acme",           # 必须：目标租户
-    user="alice",             # 必须：目标用户
 )
 ```
 
-> ⚠️ 使用 `root_key` 调用 `add_resource`、`find` 等租户级 API 时，如果未提供 `account`/`user`，会收到：
-> `ROOT requests to tenant-scoped APIs must include X-OpenViking-Account and X-OpenViking-User headers`
+> 如果确实需要由上游网关注入 `account` / `user` 身份，应使用 `trusted` 模式；在默认 `api_key` 模式下，只有绑定了用户身份的 user/admin key 能访问自己的数据空间。
 
 更多认证细节（trusted 模式、CLI 配置等）请参见 [认证文档](../guides/04-authentication.md)。
 

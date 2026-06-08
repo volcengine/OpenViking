@@ -3,8 +3,7 @@ import { CheckIcon, CopyIcon, UserIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { resolvePublicAsset } from '#/lib/public-path'
-import type { StreamToolCall } from '#/lib/sessions/types/chat'
-import type { Message } from '#/lib/sessions/types/message'
+import type { Message, MessagePart, ToolPart } from '#/lib/sessions/types/message'
 import { MarkdownContent, ReasoningBlock, ToolCallBlock } from './message-parts'
 
 const OPENVIKING_ICON_SRC = resolvePublicAsset('favicon-32.png')
@@ -41,7 +40,8 @@ function CopyButton({ text }: { text: string }) {
 
 /** Extract all text content from a message's parts. */
 function getTextFromParts(message: Message): string {
-  return message.parts
+  const parts = Array.isArray(message.parts) ? message.parts : []
+  return parts
     .filter((p) => p.type === 'text')
     .map((p) => (p as { text: string }).text)
     .join('\n')
@@ -105,9 +105,7 @@ interface MessageListProps {
   layout?: 'default' | 'expanded'
   messages: Message[]
   streaming?: {
-    content: string
-    toolCalls: StreamToolCall[]
-    reasoning: string
+    parts?: MessagePart[]
     iteration: number
   }
   onResourceClick?: (uri: string) => void
@@ -120,10 +118,11 @@ export function MessageList({
   streaming,
 }: MessageListProps) {
   const isExpanded = layout === 'expanded'
+  const safeMessages = Array.isArray(messages) ? messages : []
   return (
     <>
-      {messages.map((msg, idx) => {
-        const prev = idx > 0 ? messages[idx - 1] : null
+      {safeMessages.map((msg, idx) => {
+        const prev = idx > 0 ? safeMessages[idx - 1] : null
         const sameRole = prev?.role === msg.role
         return msg.role === 'user' ? (
           <UserMessage
@@ -218,10 +217,18 @@ const AssistantMessage = memo(function AssistantMessage({
     >
       {!compact ? <BotAvatar compact={expanded} /> : <div className="w-6 shrink-0" />}
       <div className="relative max-w-full min-w-0 flex-1 rounded-2xl rounded-tl-sm bg-background/95 px-4 py-3 text-sm shadow-sm ring-1 ring-border/30">
-        {message.parts.map((part, i) => {
+        {(Array.isArray(message.parts) ? message.parts : []).map((part, i) => {
           switch (part.type) {
             case 'text':
               return <MarkdownContent key={i} content={part.text} />
+            case 'reasoning':
+              return (
+                <ReasoningBlock
+                  key={i}
+                  reasoning={part.reasoning}
+                  isRunning={false}
+                />
+              )
             case 'tool':
               return (
                 <ToolCallBlock
@@ -254,22 +261,19 @@ const AssistantMessage = memo(function AssistantMessage({
 // ---------------------------------------------------------------------------
 
 function StreamingAssistantMessage({
-  content,
   expanded,
-  toolCalls,
-  reasoning,
+  parts = [],
   iteration,
   onResourceClick,
 }: {
-  content: string
   expanded?: boolean
-  toolCalls: StreamToolCall[]
-  reasoning: string
+  parts?: MessagePart[]
   iteration: number
   onResourceClick?: (uri: string) => void
 }) {
   const { t } = useTranslation('sessions')
-  const hasContent = content || toolCalls.length > 0 || reasoning
+  const safeParts = Array.isArray(parts) ? parts : []
+  const hasContent = safeParts.length > 0
 
   return (
     <div className={`${expanded ? 'w-full' : 'w-full max-w-3xl'} mb-5 flex gap-2 items-start`}>
@@ -283,33 +287,60 @@ function StreamingAssistantMessage({
           </div>
         )}
 
-        <ReasoningBlock reasoning={reasoning} isRunning />
+        {safeParts.map((part, i) => renderStreamingPart(part, i, onResourceClick))}
 
-        {toolCalls.map((tc, i) => {
-          let args: Record<string, unknown> = {}
-          try {
-            args = JSON.parse(tc.arguments) as Record<string, unknown>
-          } catch {
-            if (tc.arguments) args = { raw: tc.arguments }
-          }
-          return (
-            <ToolCallBlock
-              key={i}
-              toolName={tc.name}
-              args={args}
-              result={tc.result}
-              isRunning={!tc.result}
-              onResourceClick={onResourceClick}
-            />
-          )
-        })}
-
-        {content ? (
-          <MarkdownContent content={content} isStreaming />
-        ) : !hasContent ? (
+        {!hasContent ? (
           <TypingIndicator />
         ) : null}
       </div>
     </div>
+  )
+}
+
+function renderStreamingPart(
+  part: MessagePart,
+  index: number,
+  onResourceClick?: (uri: string) => void,
+) {
+  switch (part.type) {
+    case 'reasoning':
+      return (
+        <ReasoningBlock
+          key={index}
+          reasoning={part.reasoning}
+          isRunning={part.is_running ?? true}
+        />
+      )
+    case 'tool':
+      return (
+        <StreamingToolPart
+          key={index}
+          part={part}
+          onResourceClick={onResourceClick}
+        />
+      )
+    case 'text':
+      return <MarkdownContent key={index} content={part.text} isStreaming />
+    case 'context':
+      return null
+  }
+}
+
+function StreamingToolPart({
+  part,
+  onResourceClick,
+}: {
+  part: ToolPart
+  onResourceClick?: (uri: string) => void
+}) {
+  return (
+    <ToolCallBlock
+      toolName={part.tool_name}
+      args={part.tool_input}
+      result={part.tool_output}
+      isError={part.tool_status === 'error'}
+      isRunning={part.tool_status === 'running' || part.tool_status === 'pending'}
+      onResourceClick={onResourceClick}
+    />
   )
 }

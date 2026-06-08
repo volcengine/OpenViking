@@ -247,6 +247,41 @@ describe("Tool: memory_recall (registration)", () => {
     }
   });
 
+  it("passes sender peer_id to memory_recall when peer_role is person", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      const requestUrl = new URL(url);
+      if (requestUrl.pathname === "/api/v1/system/status") {
+        return okResponse({ user: "default" });
+      }
+      if (requestUrl.pathname === "/api/v1/search/find") {
+        return okResponse({ memories: [], resources: [], skills: [], total: 0 });
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { factoryTools, api } = setupPlugin(undefined, {
+      peer_role: "person",
+    });
+    contextEnginePlugin.register(api as any);
+    const tool = factoryTools.get("memory_recall")!({
+      sessionId: "test-session",
+      requesterSenderId: "wx/user-01@abc",
+    });
+
+    await tool.execute("tc-memory-recall-peer", {
+      query: "backend preference",
+    }) as ToolResult;
+
+    const findBodies = fetchMock.mock.calls
+      .filter(([calledUrl]) => String(calledUrl).includes("/api/v1/search/find"))
+      .map((call) => JSON.parse(String((call[1] as RequestInit).body)));
+    expect(findBodies).toHaveLength(2);
+    for (const body of findBodies) {
+      expect(body.peer_id).toBe("wx_user-01_abc");
+    }
+  });
+
   it("applies recallMaxInjectedChars to explicit memory_recall output", async () => {
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       const requestUrl = new URL(url);
@@ -319,7 +354,7 @@ describe("Tool: memory_store (behavioral)", () => {
     expect(store!.description).toContain("threshold/commit dependent");
   });
 
-  it("uses requesterSenderId to populate role_id for user writes", async () => {
+  it("uses requesterSenderId to populate peer_id for user writes", async () => {
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       if (url.endsWith("/api/v1/system/status")) {
         return okResponse({ user: "default" });
@@ -338,7 +373,7 @@ describe("Tool: memory_store (behavioral)", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const { factoryTools, api } = setupPlugin();
+    const { factoryTools, api } = setupPlugin(undefined, { peer_role: "person" });
     contextEnginePlugin.register(api as any);
     const factory = factoryTools.get("memory_store");
     expect(factory).toBeDefined();
@@ -358,10 +393,105 @@ describe("Tool: memory_store (behavioral)", () => {
     const [, init] = messageCall as [string, RequestInit];
     const body = JSON.parse(String(init.body));
     expect(body.role).toBe("user");
-    expect(body.role_id).toBe("wx_user-01_abc");
+    expect(body.peer_id).toBe("wx_user-01_abc");
     expect(result.content[0]!.text).toContain("committed 1 memories");
     expect(result.details.action).toBe("stored");
     expect(result.details.memoriesCount).toBe(1);
+
+    const createCall = fetchMock.mock.calls.find(([url]) =>
+      String(url).endsWith("/api/v1/sessions"),
+    );
+    expect(createCall).toBeDefined();
+    expect(JSON.parse(String((createCall![1] as RequestInit).body))).toMatchObject({
+      memory_policy: {
+        self: { enabled: true },
+        peer: { enabled: true },
+      },
+    });
+
+    const commitCall = fetchMock.mock.calls.find(([url]) =>
+      String(url).endsWith("/commit"),
+    );
+    expect(commitCall).toBeDefined();
+    expect(JSON.parse(String((commitCall![1] as RequestInit).body))).toMatchObject({
+      memory_policy: {
+        self: { enabled: true },
+        peer: { enabled: true },
+      },
+    });
+  });
+
+  it("does not populate peer_id for user writes by default", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/api/v1/system/status")) {
+        return okResponse({ user: "default" });
+      }
+      if (url.includes("/messages")) {
+        return okResponse({ session_id: "sess-1" });
+      }
+      if (url.endsWith("/commit")) {
+        return okResponse({ status: "completed", archived: false, memories_extracted: { core: 1 } });
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { factoryTools, api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+    const tool = factoryTools.get("memory_store")!({
+      sessionId: "runtime-session",
+      sessionKey: "agent:main:main",
+      requesterSenderId: "wx/user-01@abc",
+    });
+
+    await tool.execute("tc-memory-store-default-peer", { text: "hello from tool" });
+
+    const messageCall = fetchMock.mock.calls.find(([url]) =>
+      String(url).includes("/api/v1/sessions/") && String(url).includes("/messages"),
+    );
+    expect(messageCall).toBeDefined();
+    const [, init] = messageCall as [string, RequestInit];
+    const body = JSON.parse(String(init.body));
+    expect(body.role).toBe("user");
+    expect(body.peer_id).toBeUndefined();
+  });
+
+  it("uses runtime agent as peer_id for assistant writes when peer_role is assistant", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/api/v1/system/status")) {
+        return okResponse({ user: "default" });
+      }
+      if (url.includes("/messages")) {
+        return okResponse({ session_id: "sess-1" });
+      }
+      if (url.endsWith("/commit")) {
+        return okResponse({ status: "completed", archived: false, memories_extracted: { core: 1 } });
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { factoryTools, api } = setupPlugin(undefined, { peer_role: "assistant" });
+    contextEnginePlugin.register(api as any);
+    const tool = factoryTools.get("memory_store")!({
+      sessionId: "runtime-session",
+      sessionKey: "agent:worker:main",
+      requesterSenderId: "wx/user-01@abc",
+    });
+
+    await tool.execute("tc-memory-store-assistant-peer", {
+      text: "assistant note",
+      role: "assistant",
+    });
+
+    const messageCall = fetchMock.mock.calls.find(([url]) =>
+      String(url).includes("/api/v1/sessions/") && String(url).includes("/messages"),
+    );
+    expect(messageCall).toBeDefined();
+    const [, init] = messageCall as [string, RequestInit];
+    const body = JSON.parse(String(init.body));
+    expect(body.role).toBe("assistant");
+    expect(body.peer_id).toBe("worker");
   });
 
   it("uses a temporary session by default instead of the current tool session", async () => {
@@ -821,7 +951,7 @@ describe("Tool: ov_search (behavioral)", () => {
           skills: [
             {
               context_type: "skill",
-              uri: "viking://agent/skills/install-openviking-memory",
+              uri: "viking://user/skills/install-openviking-memory",
               level: 0,
               score: 0.7,
               category: "",
@@ -854,7 +984,40 @@ describe("Tool: ov_search (behavioral)", () => {
       .filter((call) => String(call[0]).endsWith("/api/v1/search/find"))
       .map((call) => JSON.parse(String((call[1] as RequestInit).body)));
     expect(findBodies.some((body) => body.target_uri === "viking://resources")).toBe(true);
-    expect(findBodies.some((body) => String(body.target_uri).startsWith("viking://agent/") && String(body.target_uri).endsWith("/skills"))).toBe(true);
+    expect(findBodies.some((body) => String(body.target_uri).startsWith("viking://user/") && String(body.target_uri).endsWith("/skills"))).toBe(true);
+  });
+
+  it("passes assistant peer_id to ov_search when peer_role is assistant", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/api/v1/system/status")) {
+        return okResponse({ user: "default" });
+      }
+      if (url.includes("/api/v1/fs/ls")) {
+        return okResponse([]);
+      }
+      if (url.endsWith("/api/v1/search/find")) {
+        return okResponse({ memories: [], resources: [], skills: [], total: 0 });
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { factoryTools, api } = setupPlugin(undefined, { peer_role: "assistant" });
+    contextEnginePlugin.register(api as any);
+    const search = factoryTools.get("ov_search")!({
+      sessionId: "runtime-session",
+      agentId: "worker",
+    });
+
+    await search.execute("tc-ov-search-peer", { query: "OpenViking install" }) as ToolResult;
+
+    const findBodies = fetchMock.mock.calls
+      .filter((call) => String(call[0]).endsWith("/api/v1/search/find"))
+      .map((call) => JSON.parse(String((call[1] as RequestInit).body)));
+    expect(findBodies).toHaveLength(2);
+    for (const body of findBodies) {
+      expect(body.peer_id).toBe("worker");
+    }
   });
 
   it("returns partial results when one default scope search fails", async () => {
@@ -1069,31 +1232,6 @@ describe("Plugin registration", () => {
     expect(search.text).toContain("Usage: /ov-search");
   });
 
-  it("search command propagates agent identity when command ctx includes it", async () => {
-    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-      if (url.endsWith("/api/v1/search/find")) {
-        return okResponse({ memories: [], resources: [], skills: [], total: 0 });
-      }
-      return okResponse({});
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    const { commands, api } = setupPlugin();
-    contextEnginePlugin.register(api as any);
-
-    await commands.get("ov-search")!.handler({
-      args: "test query --uri viking://resources",
-      commandBody: "/ov-search",
-      agentId: "worker",
-      sessionId: "session-1",
-      sessionKey: "agent:worker:session-1",
-    });
-
-    const [, init] = fetchMock.mock.calls.find((call) => String(call[0]).endsWith("/api/v1/search/find")) as [string, RequestInit];
-    const headers = new Headers(init.headers);
-    expect(headers.get("X-OpenViking-Agent")).toBe("worker");
-  });
-
   it("search command propagates configured tenant headers", async () => {
     const fetchMock = vi.fn(async (url: string) => {
       if (url.endsWith("/api/v1/search/find")) {
@@ -1123,7 +1261,6 @@ describe("Plugin registration", () => {
     const headers = new Headers(init.headers);
     expect(headers.get("X-OpenViking-Account")).toBe("acct-shared");
     expect(headers.get("X-OpenViking-User")).toBe("alice");
-    expect(headers.get("X-OpenViking-Agent")).toBe("worker");
   });
 
   it("add_resource propagates configured tenant headers", async () => {
@@ -1189,7 +1326,7 @@ describe("Plugin registration", () => {
 
   it("add_skill posts skill imports to the skills API", async () => {
     const fetchMock = vi.fn(async () =>
-      okResponse({ uri: "viking://agent/skills/demo", name: "demo" }),
+      okResponse({ uri: "viking://user/skills/demo", name: "demo" }),
     );
     vi.stubGlobal("fetch", fetchMock);
 

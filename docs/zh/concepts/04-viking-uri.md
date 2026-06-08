@@ -86,21 +86,19 @@ viking://user/memories/entities/              # 实体记忆
 viking://user/memories/events/                # 事件记忆
 ```
 
-### Agent 数据
+### 用户技能和记忆
 
 ```
-viking://agent/                               # Agent 根目录
-viking://agent/skills/                        # 所有技能
-viking://agent/skills/search-web              # 具体技能
-viking://agent/memories/                      # Agent 记忆
-viking://agent/memories/cases/                # 学习的案例
-viking://agent/memories/patterns/             # 学习的模式
-viking://agent/instructions/                  # Agent 指令
+viking://user/skills/                         # 当前用户的技能
+viking://user/skills/search-web               # 某个技能
+viking://user/memories/                       # 当前用户的记忆
+viking://user/memories/cases/                 # 学习的案例
+viking://user/memories/patterns/              # 学习的模式
 ```
 
-上面的 `viking://user/...` 和 `viking://agent/...` 短路径会按当前请求身份解析。
-OpenViking 会在存储和检索前将它们展开为显式命名空间路径，例如
-`viking://user/{user_id}/...` 和 `viking://agent/{agent_id}/...`。
+上面的 `viking://user/...` 短路径会按当前请求身份解析。
+OpenViking 会在存储和检索前将它展开为显式命名空间路径，例如
+`viking://user/{user_id}/...`。
 
 ### 会话数据
 
@@ -203,30 +201,13 @@ viking://
 │       ├── entities/             # 每条独立
 │       └── events/               # 每条独立
 │
-├── agent/{agent_id}/             # isolate_agent_scope_by_user = false 时的 agent 根目录
-│   ├── skills/                   # 技能定义
-│   ├── memories/
-│   │   ├── cases/
-│   │   └── patterns/
-│   └── instructions/
-│
-├── agent/{agent_id}/user/{user_id}/   # isolate_agent_scope_by_user = true 时的 agent 根目录
-│   ├── skills/
-│   ├── memories/
-│   └── instructions/
-│
 └── session/{session_id}/
     ├── messages/
     ├── tools/
     └── history/
 ```
 
-其中 agent 命名空间形状由 account 级 namespace policy 决定：
-
-- `isolate_agent_scope_by_user = false`：`viking://agent/{agent_id}/...`
-- `isolate_agent_scope_by_user = true`：`viking://agent/{agent_id}/user/{user_id}/...`
-
-`memory.agent_scope_mode` 已废弃且被忽略。
+`viking://agent/...` 已废弃，当前 namespace 解析会拒绝该路径。
 
 ## URI 操作
 
@@ -272,7 +253,7 @@ results = client.find(
 # 仅在技能中搜索
 results = client.find(
     "网络搜索",
-    target_uri="viking://agent/skills/"
+    target_uri="viking://user/skills/"
 )
 ```
 
@@ -321,8 +302,8 @@ overview = await client.overview("viking://resources/docs/")
 # 资源只添加到 resources 作用域
 await client.add_resource(url, to="viking://resources/project/")
 
-# 技能添加到 agent 作用域
-await client.add_skill(skill)  # 自动到 viking://agent/skills/
+# 技能添加到 user 作用域
+await client.add_skill(skill)  # 自动到 viking://user/skills/
 ```
 
 ## 相关文档

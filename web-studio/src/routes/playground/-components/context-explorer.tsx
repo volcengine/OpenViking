@@ -2,12 +2,12 @@ import { useCallback, useEffect, useMemo, useRef } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
-  BotIcon,
   ChevronRightIcon,
   CommandIcon,
   FileTextIcon,
   FolderIcon,
   FolderTreeIcon,
+  LoaderCircleIcon,
   Loader2Icon,
   PlusIcon,
   RefreshCcwIcon,
@@ -30,15 +30,23 @@ const TREE_GUIDE_OFFSET = 8
 const TREE_CHILD_CONTENT_OFFSET = 26
 
 export function ContextExplorerHeader({
+  activeTaskCount,
+  hasActiveTasks,
   isRefreshing,
+  isRefreshingTasks,
   onAddResource,
+  onOpenProcessingTasks,
   onRefresh,
 }: {
+  activeTaskCount: number
+  hasActiveTasks: boolean
   isRefreshing: boolean
+  isRefreshingTasks: boolean
   onAddResource: () => void
+  onOpenProcessingTasks: () => void
   onRefresh: () => void
 }) {
-  const { t } = useTranslation('playground')
+  const { t } = useTranslation(['playground', 'resources'])
   return (
     <div className="border-b px-3 py-3">
       <div className="flex items-center gap-2">
@@ -48,6 +56,27 @@ export function ContextExplorerHeader({
         <div className="min-w-0 flex-1">
           <div className="text-sm font-semibold">{t('explorer.title')}</div>
         </div>
+        <Button
+          type="button"
+          size="icon-sm"
+          variant="ghost"
+          className="relative"
+          title={t('processingTasks.title', { ns: 'resources' })}
+          onClick={onOpenProcessingTasks}
+        >
+          <LoaderCircleIcon
+            className={cn(
+              'size-4',
+              (hasActiveTasks || isRefreshingTasks) &&
+                'animate-spin text-primary',
+            )}
+          />
+          {activeTaskCount > 0 ? (
+            <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold leading-none text-primary-foreground">
+              {activeTaskCount}
+            </span>
+          ) : null}
+        </Button>
         <Button
           type="button"
           size="icon-sm"
@@ -74,7 +103,7 @@ export function ContextExplorerHeader({
 }
 
 const NAMESPACES: Array<{
-  descriptionKey: 'agent' | 'resources' | 'session' | 'user'
+  descriptionKey: 'resources' | 'session' | 'user'
   icon: typeof FolderIcon
   label: string
   uri: string
@@ -90,12 +119,6 @@ const NAMESPACES: Array<{
     icon: CommandIcon,
     label: 'Session',
     uri: 'viking://session/',
-  },
-  {
-    descriptionKey: 'agent',
-    icon: BotIcon,
-    label: 'Agent',
-    uri: 'viking://agent/',
   },
   {
     descriptionKey: 'resources',
@@ -233,11 +256,13 @@ export function ContextTreeNode({
   const select = useCallback(() => {
     if (entry.isDir) {
       onSelectDirectory(entry)
-      toggle()
+      if (!isOpen || isSelected) {
+        toggle()
+      }
     } else {
       onSelectFile(entry)
     }
-  }, [entry, onSelectDirectory, onSelectFile, toggle])
+  }, [entry, isOpen, isSelected, onSelectDirectory, onSelectFile, toggle])
 
   return (
     <div className="relative min-w-0">
