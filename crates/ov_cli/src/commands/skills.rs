@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::io::{self, IsTerminal, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use tempfile::TempDir;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -743,15 +743,31 @@ fn prepare_git_source(git_source: GitSource) -> Result<PreparedSource> {
         )));
     }
     let path = if let Some(subdir) = git_source.subdir.as_ref() {
-        let path = temp_dir.path().join(&subdir);
-        if !path.exists() {
+        let normalized_subdir = normalize_git_subdir(subdir)?;
+        let repo_root = std::fs::canonicalize(temp_dir.path()).map_err(|e| {
+            Error::Client(format!(
+                "Failed to resolve cloned repository root '{}': {}",
+                temp_dir.path().display(),
+                e
+            ))
+        })?;
+        let requested_path = temp_dir.path().join(&normalized_subdir);
+        let canonical_path = std::fs::canonicalize(&requested_path).map_err(|e| {
+            Error::Client(format!(
+                "Skill path '{}' was not found in cloned repository '{}': {}",
+                normalized_subdir.display(),
+                git_source.clone_url,
+                e
+            ))
+        })?;
+        if !canonical_path.starts_with(&repo_root) {
             return Err(Error::Client(format!(
-                "Skill path '{}' was not found in cloned repository '{}'.",
-                subdir.display(),
+                "Git skill subdir '{}' escapes cloned repository '{}'.",
+                normalized_subdir.display(),
                 git_source.clone_url
             )));
         }
-        path
+        canonical_path
     } else {
         temp_dir.path().to_path_buf()
     };
@@ -760,6 +776,34 @@ fn prepare_git_source(git_source: GitSource) -> Result<PreparedSource> {
         _temp_dir: Some(temp_dir),
         origin: SourceOrigin::Git(git_source),
     })
+}
+
+fn normalize_git_subdir(subdir: &Path) -> Result<PathBuf> {
+    let mut normalized = PathBuf::new();
+    for component in subdir.components() {
+        match component {
+            Component::Normal(part) => normalized.push(part),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                return Err(Error::Parse(format!(
+                    "Git source metadata contains unsafe subdir '{}': parent directory components are not allowed.",
+                    subdir.display()
+                )));
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(Error::Parse(format!(
+                    "Git source metadata contains absolute subdir '{}', which is not allowed.",
+                    subdir.display()
+                )));
+            }
+        }
+    }
+
+    if normalized.as_os_str().is_empty() {
+        return Err(Error::Parse("Git source metadata missing subdir".to_string()));
+    }
+
+    Ok(normalized)
 }
 
 fn parse_git_source(data: &str) -> Option<GitSource> {
@@ -1152,26 +1196,19 @@ fn update_target_from_record(
             })
         }
         "local" => {
-            let path = record.path.as_deref().ok_or_else(|| {
-                Error::Parse(format!("Skill '{}' source metadata missing path", name))
-            })?;
-            let path_obj = Path::new(path);
-            if !path_obj.exists() {
-                if allow_prompt {
-                    if let Some(target) = prompt_update_source(name)? {
-                        return Ok(target);
-                    }
+            if allow_prompt {
+                if let Some(target) = prompt_update_source(name)? {
+                    return Ok(target);
                 }
                 return Err(Error::Client(format!(
-                    "Recorded source path for skill '{}' no longer exists: {}",
-                    name, path
+                    "Local source metadata for skill '{}' is not trusted. Provide a local path or git source to continue.",
+                    name
                 )));
             }
-            Ok(AddTarget {
-                data: path.to_string(),
-                source: Some(record.clone()),
-                _temp_dir: None,
-            })
+            Err(Error::Client(format!(
+                "Skill '{}' was installed from a local source, but server-recorded local paths are not trusted for non-interactive update. Re-run 'ov skills update {}' interactively to provide a local path or git source.",
+                name, name
+            )))
         }
         other => Err(Error::Parse(format!(
             "Unsupported source type '{}' for skill '{}'",
@@ -1185,10 +1222,16 @@ fn prepare_source_from_git_record(record: &SkillSourceRecord) -> Result<Prepared
         .clone_url
         .as_deref()
         .ok_or_else(|| Error::Parse("Git source metadata missing clone_url".to_string()))?;
+    let subdir = record
+        .subdir
+        .as_ref()
+        .map(PathBuf::from)
+        .map(|path| normalize_git_subdir(&path))
+        .transpose()?;
     let git_source = GitSource {
         clone_url: clone_url.to_string(),
         ref_name: record.ref_name.clone(),
-        subdir: record.subdir.as_ref().map(PathBuf::from),
+        subdir,
     };
     prepare_git_source(git_source)
 }
@@ -1739,8 +1782,8 @@ fn output_message_result(
 mod tests {
     use super::{
         PreparedSource, SkillSourceRecord, SourceOrigin, filter_skill_show_level,
-        parse_github_tree_source, parse_skill_md, render_skill_show_for_table, resolve_add_targets,
-        update_target_from_record,
+        parse_github_tree_source, parse_skill_md, prepare_source_from_git_record,
+        render_skill_show_for_table, resolve_add_targets, update_target_from_record,
     };
     use serde_json::json;
     use std::path::Path;
@@ -1877,6 +1920,59 @@ mod tests {
                 .to_string()
                 .contains("Unsupported source type 'api' for skill 'api-skill'")
         );
+    }
+
+    #[test]
+    fn update_target_rejects_local_source_record_without_prompt() {
+        let record = SkillSourceRecord {
+            source_type: "local".to_string(),
+            source: Some("/tmp/demo-skill".to_string()),
+            path: Some("/tmp/demo-skill".to_string()),
+            clone_url: None,
+            ref_name: None,
+            subdir: None,
+            skill_name: Some("local-skill".to_string()),
+        };
+
+        let error = update_target_from_record(&record, "local-skill", false)
+            .expect_err("local source should not be trusted for non-interactive update");
+        assert!(error.to_string().contains("server-recorded local paths are not trusted"));
+    }
+
+    #[test]
+    fn prepare_source_from_git_record_rejects_parent_dir_subdir() {
+        let record = SkillSourceRecord {
+            source_type: "git".to_string(),
+            source: Some("https://github.com/acme/skills/tree/main/skills/demo".to_string()),
+            path: None,
+            clone_url: Some("https://github.com/acme/skills.git".to_string()),
+            ref_name: Some("main".to_string()),
+            subdir: Some("../outside".to_string()),
+            skill_name: Some("demo".to_string()),
+        };
+
+        let error = prepare_source_from_git_record(&record)
+            .err()
+            .expect("parent dir subdir should be rejected before clone");
+        assert!(error.to_string().contains("parent directory components are not allowed"));
+    }
+
+    #[test]
+    fn prepare_source_from_git_record_rejects_absolute_subdir() {
+        let record = SkillSourceRecord {
+            source_type: "git".to_string(),
+            source: Some("https://github.com/acme/skills/tree/main/skills/demo".to_string()),
+            path: None,
+            clone_url: Some("https://github.com/acme/skills.git".to_string()),
+            ref_name: Some("main".to_string()),
+            subdir: Some("/tmp/escape".to_string()),
+            skill_name: Some("demo".to_string()),
+        };
+
+        let error = prepare_source_from_git_record(&record)
+            .err()
+            .expect("absolute subdir should be rejected before clone");
+        assert!(error.to_string().contains("absolute subdir"));
     }
 
     #[test]
