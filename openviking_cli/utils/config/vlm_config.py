@@ -23,6 +23,14 @@ class VLMCredential(BaseModel):
 
     id: Optional[str] = Field(default=None, description="Unique identifier for this credential")
     provider: Optional[str] = Field(default=None, description="Provider type")
+    model: Optional[str] = Field(
+        default=None,
+        description=(
+            "Model name (or endpoint id) for this credential. "
+            "Overrides the parent VLMConfig.model when set, allowing each credential "
+            "to point to a different deployment / endpoint."
+        ),
+    )
     api_key: Optional[str] = Field(default=None, description="API key")
     api_base: Optional[str] = Field(default=None, description="API base URL")
     api_version: Optional[str] = Field(default=None, description="API version")
@@ -252,6 +260,7 @@ class VLMConfig(BaseModel):
             primary_cred = VLMCredential(
                 id="legacy-primary",
                 provider=self.provider,
+                model=self.model,
                 api_key=self.api_key,
                 api_base=self.api_base,
                 api_version=self.api_version,
@@ -266,6 +275,7 @@ class VLMConfig(BaseModel):
             backup_cred = VLMCredential(
                 id="legacy-backup",
                 provider=self.backup.provider,
+                model=self.backup.model,
                 api_key=self.backup.api_key,
                 api_base=self.backup.api_base,
                 api_version=self.backup.api_version,
@@ -287,6 +297,7 @@ class VLMConfig(BaseModel):
                     VLMCredential(
                         id="default",
                         provider=self.provider,
+                        model=self.model,
                         api_key=self.api_key,
                         api_base=self.api_base,
                         api_version=self.api_version,
@@ -488,7 +499,7 @@ class VLMConfig(BaseModel):
     def _build_vlm_config_dict_for_credential(self, credential: VLMCredential) -> Dict[str, Any]:
         """Build VLM instance config dict for a specific credential."""
         result = {
-            "model": self.model,
+            "model": credential.model or self.model,
             "temperature": self.temperature,
             "max_retries": self.max_retries,
             "timeout": self.timeout,

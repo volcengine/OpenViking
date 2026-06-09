@@ -145,10 +145,23 @@ def _get_active_embedding_model_config(config: "OpenVikingConfig") -> Any:
 
 def _build_embedding_metadata(config: "OpenVikingConfig") -> Dict[str, Any]:
     model_cfg = _get_active_embedding_model_config(config)
+    # When credentials are used, parent-level provider/model may be empty;
+    # fall back to the first credential so the metadata signature stays stable.
+    first_cred = None
+    creds = getattr(model_cfg, "credentials", None) or []
+    if creds:
+        first_cred = creds[0]
     provider = (
-        getattr(model_cfg, "provider", None) or getattr(model_cfg, "backend", None) or ""
+        getattr(model_cfg, "provider", None)
+        or getattr(model_cfg, "backend", None)
+        or (getattr(first_cred, "provider", None) if first_cred else None)
+        or ""
     ).lower()
-    model = getattr(model_cfg, "model", None) or ""
+    model = (
+        getattr(model_cfg, "model", None)
+        or (getattr(first_cred, "model", None) if first_cred else None)
+        or ""
+    )
     dimension = config.embedding.dimension
     model_path = getattr(model_cfg, "model_path", None)
     model_identity = model

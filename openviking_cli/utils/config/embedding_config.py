@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-from typing import Any, Literal, Optional, cast, List
+from typing import Any, ClassVar, Literal, Optional, Tuple, cast, List
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -10,6 +10,14 @@ class EmbeddingCredential(BaseModel):
 
     id: Optional[str] = Field(default=None, description="Unique identifier for this credential")
     provider: Optional[str] = Field(default=None, description="Provider type")
+    model: Optional[str] = Field(
+        default=None,
+        description=(
+            "Model name (or endpoint id) for this credential. "
+            "Overrides the parent EmbeddingModelConfig.model when set, allowing "
+            "each credential to point to a different deployment / endpoint."
+        ),
+    )
     api_key: Optional[str] = Field(default=None, description="API key")
     api_base: Optional[str] = Field(default=None, description="API base URL")
     api_version: Optional[str] = Field(default=None, description="API version")
@@ -149,79 +157,126 @@ class EmbeddingModelConfig(BaseModel):
                     data[key] = value.lower()
         return data
 
+    _VALID_PROVIDERS: ClassVar[Tuple[str, ...]] = (
+        "openai",
+        "azure",
+        "volcengine",
+        "vikingdb",
+        "jina",
+        "ollama",
+        "gemini",
+        "voyage",
+        "dashscope",
+        "minimax",
+        "cohere",
+        "litellm",
+        "local",
+    )
+
+    @classmethod
+    def _validate_provider_auth(
+        cls,
+        *,
+        label: str,
+        provider: Optional[str],
+        api_key: Optional[str],
+        api_base: Optional[str],
+        ak: Optional[str],
+        sk: Optional[str],
+        region: Optional[str],
+    ) -> None:
+        """Validate provider name and provider-specific auth requirements.
+
+        Shared by both the top-level config validator (single-credential mode)
+        and the per-credential validator (multi-credential mode).
+
+        Args:
+            label: Prefix used in error messages, e.g. "Embedding" or
+                "credentials[ark-primary]".
+            provider: Provider name (already lowercased / normalized).
+            api_key, api_base, ak, sk, region: Resolved auth fields, with
+                credential values taking precedence over parent fallbacks
+                in multi-credential mode.
+        """
+        if not provider:
+            raise ValueError(f"{label}: provider is required")
+        if provider not in cls._VALID_PROVIDERS:
+            raise ValueError(
+                f"{label}: invalid provider '{provider}'. Must be one of: "
+                + ", ".join(f"'{p}'" for p in cls._VALID_PROVIDERS)
+            )
+
+        if provider == "openai":
+            # Allow missing api_key when api_base is set (e.g. local OpenAI-compatible servers)
+            if not api_key and not api_base:
+                raise ValueError(f"{label}: OpenAI provider requires 'api_key' to be set")
+        elif provider == "azure":
+            if not api_key:
+                raise ValueError(f"{label}: Azure provider requires 'api_key' to be set")
+            if not api_base:
+                raise ValueError(
+                    f"{label}: Azure provider requires 'api_base' (Azure endpoint) to be set"
+                )
+        elif provider in {
+            "volcengine",
+            "jina",
+            "gemini",
+            "voyage",
+            "minimax",
+            "cohere",
+            "dashscope",
+        }:
+            if not api_key:
+                provider_label = {
+                    "volcengine": "Volcengine",
+                    "jina": "Jina",
+                    "gemini": "Gemini",
+                    "voyage": "Voyage",
+                    "minimax": "MiniMax",
+                    "cohere": "Cohere",
+                    "dashscope": "DashScope",
+                }[provider]
+                raise ValueError(
+                    f"{label}: {provider_label} provider requires 'api_key' to be set"
+                )
+        elif provider == "vikingdb":
+            missing = [n for n, v in (("ak", ak), ("sk", sk), ("region", region)) if not v]
+            if missing:
+                raise ValueError(
+                    f"{label}: VikingDB provider requires the following fields: "
+                    f"{', '.join(missing)}"
+                )
+        # ollama / litellm / local: no auth requirement enforced here
+
     @model_validator(mode="after")
     def validate_config(self):
         """Validate configuration completeness and consistency"""
         if self.backend and not self.provider:
             self.provider = self.backend
 
-        if not self.model:
+        if not self.model and not any(c.model for c in self.credentials):
             raise ValueError("Embedding model name is required")
 
-        if not self.provider:
-            raise ValueError("Embedding provider is required")
+        # When credentials are configured, defer provider/api_key validation to
+        # per-credential checks; the parent-level provider/api_key may be left
+        # blank because each credential carries its own settings.
+        if self.credentials:
+            self._validate_credentials()
+            return self
 
-        if self.provider not in [
-            "openai",
-            "azure",
-            "volcengine",
-            "vikingdb",
-            "jina",
-            "ollama",
-            "gemini",
-            "voyage",
-            "dashscope",
-            "minimax",
-            "cohere",
-            "litellm",
-            "local",
-        ]:
-            raise ValueError(
-                f"Invalid embedding provider: '{self.provider}'. Must be one of: "
-                "'openai', 'azure', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage', 'dashscope', 'minimax', 'cohere', 'litellm', 'local'"
-            )
+        self._validate_provider_auth(
+            label="Embedding",
+            provider=self.provider,
+            api_key=self.api_key,
+            api_base=self.api_base,
+            ak=self.ak,
+            sk=self.sk,
+            region=self.region,
+        )
 
-        # Provider-specific validation
-        if self.provider == "openai":
-            # Allow missing api_key when api_base is set (e.g. local OpenAI-compatible servers)
-            if not self.api_key and not self.api_base:
-                raise ValueError("OpenAI provider requires 'api_key' to be set")
-
-        elif self.provider == "azure":
-            if not self.api_key:
-                raise ValueError("Azure provider requires 'api_key' to be set")
-            if not self.api_base:
-                raise ValueError("Azure provider requires 'api_base' (Azure endpoint) to be set")
-
-        elif self.provider == "ollama":
-            # Ollama runs locally, no API key required
-            pass
-
-        elif self.provider == "volcengine":
-            if not self.api_key:
-                raise ValueError("Volcengine provider requires 'api_key' to be set")
-
-        elif self.provider == "vikingdb":
-            missing = []
-            if not self.ak:
-                missing.append("ak")
-            if not self.sk:
-                missing.append("sk")
-            if not self.region:
-                missing.append("region")
-
-            if missing:
-                raise ValueError(
-                    f"VikingDB provider requires the following fields: {', '.join(missing)}"
-                )
-
-        elif self.provider == "jina":
-            if not self.api_key:
-                raise ValueError("Jina provider requires 'api_key' to be set")
-
-        elif self.provider == "gemini":
-            if not self.api_key:
-                raise ValueError("Gemini provider requires 'api_key' to be set")
+        # Provider-specific extras that depend on the model/input fields rather
+        # than on credentials (kept only on the parent path).
+        if self.provider == "gemini":
             _GEMINI_TASK_TYPES = {
                 "RETRIEVAL_QUERY",
                 "RETRIEVAL_DOCUMENT",
@@ -242,21 +297,7 @@ class EmbeddingModelConfig(BaseModel):
                         f"Valid task_types: {', '.join(sorted(_GEMINI_TASK_TYPES))}"
                     )
 
-        elif self.provider == "voyage":
-            if not self.api_key:
-                raise ValueError("Voyage provider requires 'api_key' to be set")
-
-        elif self.provider == "minimax":
-            if not self.api_key:
-                raise ValueError("MiniMax provider requires 'api_key' to be set")
-
-        elif self.provider == "cohere":
-            if not self.api_key:
-                raise ValueError("Cohere provider requires 'api_key' to be set")
-
         elif self.provider == "dashscope":
-            if not self.api_key:
-                raise ValueError("DashScope provider requires 'api_key' to be set")
             if self.input == "text" and (
                 self.enable_fusion is not None
                 or self.res_level is not None
@@ -280,6 +321,25 @@ class EmbeddingModelConfig(BaseModel):
             get_local_model_spec(self.model)
 
         return self
+
+    def _validate_credentials(self) -> None:
+        """Validate each credential when credentials list is non-empty.
+
+        Each credential must resolve a provider (from itself or the parent) and
+        meet that provider's required fields. The parent-level provider/api_key
+        are used as fallbacks where appropriate.
+        """
+        for idx, cred in enumerate(self.credentials):
+            cred_id = cred.id or f"credential-{idx}"
+            self._validate_provider_auth(
+                label=f"credentials[{cred_id}]",
+                provider=(cred.provider or self.provider or "").lower() or None,
+                api_key=cred.api_key or self.api_key,
+                api_base=cred.api_base or self.api_base,
+                ak=cred.ak or self.ak,
+                sk=cred.sk or self.sk,
+                region=cred.region or self.region,
+            )
 
     def get_effective_dimension(self) -> int:
         """Resolve the dimension used for schema creation and validation."""
@@ -816,7 +876,7 @@ class EmbeddingConfig(BaseModel):
         for cred in config.credentials:
             # Create a temporary config merged from the model config and credential
             merged_config = EmbeddingModelConfig(
-                model=config.model,
+                model=cred.model or config.model,
                 dimension=config.dimension,
                 batch_size=config.batch_size,
                 input=config.input,

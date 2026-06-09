@@ -32,9 +32,11 @@ class TestVLMBackupConfig:
         assert config.credentials[0].id == "legacy-primary"
         assert config.credentials[0].provider == "volcengine"
         assert config.credentials[0].api_key == "primary-key"
+        assert config.credentials[0].model == "primary-model"
         assert config.credentials[1].id == "legacy-backup"
         assert config.credentials[1].provider == "openai"
         assert config.credentials[1].api_key == "backup-key"
+        assert config.credentials[1].model == "backup-model"
 
     def test_recursive_backup_config_not_possible(self):
         """Test that recursive backup configurations are automatically prevented by migration.
@@ -86,6 +88,37 @@ class TestVLMBackupConfig:
         )
         # Should not raise and should migrate to credentials
         assert len(config.credentials) == 2
+
+    def test_per_credential_model_overrides_parent_model(self):
+        """Each credential's `model` field should override parent VLMConfig.model
+        when building the per-credential VLM config dict."""
+        from openviking_cli.utils.config.vlm_config import VLMCredential
+
+        config = VLMConfig(
+            model="parent-model",
+            credentials=[
+                VLMCredential(
+                    id="cred-a",
+                    provider="volcengine",
+                    model="endpoint-a",
+                    api_key="key-a",
+                    api_base="https://example.com/a",
+                ),
+                VLMCredential(
+                    id="cred-b",
+                    provider="volcengine",
+                    api_key="key-b",
+                    api_base="https://example.com/b",
+                ),
+            ],
+        )
+
+        dict_a = config._build_vlm_config_dict_for_credential(config.credentials[0])
+        dict_b = config._build_vlm_config_dict_for_credential(config.credentials[1])
+
+        assert dict_a["model"] == "endpoint-a"
+        # Falls back to parent model when credential.model is not set.
+        assert dict_b["model"] == "parent-model"
 
 
 class TestFailoverVLM:
