@@ -22,6 +22,7 @@ import {
   summarizeConnectionIdentity,
   useAppConnection,
 } from '#/hooks/use-app-connection'
+import { useIdentityDirectory } from '#/hooks/use-identity-directory'
 
 type Phase =
   | { kind: 'idle' }
@@ -35,7 +36,13 @@ export const Route = createFileRoute('/oauth/verify')({
 
 function VerifyPage() {
   const { t } = useTranslation(['oauth', 'common'])
-  const { connection, openConnectionSettings, serverMode } = useAppConnection()
+  const {
+    connection,
+    isConnectionRoleLoading,
+    openConnectionSettings,
+    serverMode,
+  } = useAppConnection()
+  const directory = useIdentityDirectory()
 
   const currentIdentity = React.useMemo(() => {
     const summary = summarizeConnectionIdentity(connection, serverMode)
@@ -46,6 +53,72 @@ function VerifyPage() {
     () =>
       connection.apiKey ? { mode: 'current' } : { mode: 'custom', apiKey: '' },
   )
+  // Set once the user manually picks a mode, so the default-mode effect stops
+  // overriding their choice.
+  const userTouchedRef = React.useRef(false)
+  const handleIdentityChange = React.useCallback(
+    (next: IdentityPickerValue) => {
+      userTouchedRef.current = true
+      setIdentityValue(next)
+    },
+    [],
+  )
+
+  // Default-mode selection (see consent.tsx for the rationale): root has no
+  // usable "current" identity, so default to selecting a concrete account/user
+  // once the directory is available.
+  React.useEffect(() => {
+    if (userTouchedRef.current || isConnectionRoleLoading) {
+      return
+    }
+    const desiredMode = connection.apiKey
+      ? 'current'
+      : directory.available
+        ? 'select'
+        : 'custom'
+    setIdentityValue((prev) => {
+      if (prev.mode === desiredMode) {
+        return prev
+      }
+      if (desiredMode === 'current') {
+        return { mode: 'current' }
+      }
+      if (desiredMode === 'select') {
+        return {
+          mode: 'select',
+          accountId: directory.selectedAccountId,
+          userId: directory.selectedUserId,
+          apiKey:
+            directory.resolveUserKey(
+              directory.selectedAccountId,
+              directory.selectedUserId,
+            ) ?? '',
+        }
+      }
+      return { mode: 'custom', apiKey: '' }
+    })
+  }, [connection.apiKey, directory, isConnectionRoleLoading])
+
+  // Keep the select payload in sync with the directory while in select mode.
+  React.useEffect(() => {
+    setIdentityValue((prev) => {
+      if (prev.mode !== 'select') {
+        return prev
+      }
+      const accountId = directory.selectedAccountId
+      const userId = directory.selectedUserId
+      const apiKey = directory.resolveUserKey(accountId, userId) ?? ''
+      if (
+        prev.accountId === accountId &&
+        prev.userId === userId &&
+        prev.apiKey === apiKey
+      ) {
+        return prev
+      }
+      return { mode: 'select', accountId, userId, apiKey }
+    })
+  }, [directory])
+
   const [code, setCode] = React.useState('')
   const [phase, setPhase] = React.useState<Phase>({ kind: 'idle' })
 
@@ -116,7 +189,7 @@ function VerifyPage() {
               </p>
             ) : (
               <>
-                {!connection.apiKey ? (
+                {!connection.apiKey && !directory.available ? (
                   <div className="grid gap-2 rounded-md border border-dashed p-3 text-sm">
                     <p>{t('verify.signInRequired')}</p>
                     <Button
@@ -134,9 +207,10 @@ function VerifyPage() {
 
                 <IdentityPicker
                   value={identityValue}
-                  onChange={setIdentityValue}
+                  onChange={handleIdentityChange}
                   currentApiKey={connection.apiKey}
                   currentIdentityLabel={currentIdentity}
+                  directory={directory}
                   disabled={phase.kind === 'verifying'}
                 />
 

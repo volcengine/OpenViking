@@ -603,6 +603,13 @@ const en = {
       useCurrent: 'Authorize as the current identity',
       noCurrent:
         'No identity set. Open Connection & Identity to sign in first, or use a different API key below.',
+      useSelect: 'Authorize a specific account / user',
+      selectAccountLabel: 'Account',
+      selectUserLabel: 'User',
+      selectNoKey:
+        'This user has no API key. Pick another user or regenerate a key in Connection & Identity.',
+      selectAccountAdminHint:
+        'You can authorize users in your own account only.',
       useCustom: 'Use a different API key',
       customKeyLabel: 'API key',
       customKeyPlaceholder: 'Paste an API key (not persisted)',

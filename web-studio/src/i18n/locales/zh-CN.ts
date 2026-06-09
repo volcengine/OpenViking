@@ -592,6 +592,12 @@ const zhCN = {
       useCurrent: '以当前身份授权',
       noCurrent:
         '尚未配置身份。请先在“连接与身份”中登录，或在下方临时粘贴一个 API key。',
+      useSelect: '授权指定的账号 / 用户',
+      selectAccountLabel: '账号',
+      selectUserLabel: '用户',
+      selectNoKey:
+        '该用户没有 API key，请选择其他用户，或在“连接与身份”中重新生成。',
+      selectAccountAdminHint: '你只能为本账号下的用户授权。',
       useCustom: '使用其他 API key',
       customKeyLabel: 'API key',
       customKeyPlaceholder: '粘贴一个 API key（不会持久化）',
