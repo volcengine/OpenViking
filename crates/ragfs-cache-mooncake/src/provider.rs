@@ -6,7 +6,7 @@ use futures::stream::{self, StreamExt};
 use ragfs::cache::{CacheError, CacheProvider, CacheResult, ProviderCapabilities};
 use std::collections::HashSet;
 use std::fmt;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 /// Mooncake implementation of the common RAGFS cache provider contract.
@@ -81,23 +81,31 @@ impl MooncakeProvider {
 
     async fn delete_object(&self, key: &str) -> CacheResult<()> {
         if !self.client.is_exist(key).await? {
-            self.known_keys.lock().unwrap().remove(key);
+            lock_known_keys(&self.known_keys)?.remove(key);
             return Ok(());
         }
         match self.client.remove(key).await {
             Ok(()) => {
-                self.known_keys.lock().unwrap().remove(key);
+                lock_known_keys(&self.known_keys)?.remove(key);
                 Ok(())
             }
             Err(error) => match self.client.is_exist(key).await {
                 Ok(false) => {
-                    self.known_keys.lock().unwrap().remove(key);
+                    lock_known_keys(&self.known_keys)?.remove(key);
                     Ok(())
                 }
                 Ok(true) | Err(_) => Err(error),
             },
         }
     }
+}
+
+fn lock_known_keys(
+    known_keys: &Mutex<HashSet<String>>,
+) -> CacheResult<MutexGuard<'_, HashSet<String>>> {
+    known_keys
+        .lock()
+        .map_err(|_| CacheError::Internal("Mooncake key tracker is poisoned".into()))
 }
 
 #[async_trait]
@@ -120,7 +128,7 @@ impl CacheProvider for MooncakeProvider {
 
     async fn put(&self, key: &str, value: Bytes) -> CacheResult<()> {
         self.client.put(key, &value, &self.replicate).await?;
-        self.known_keys.lock().unwrap().insert(key.to_owned());
+        lock_known_keys(&self.known_keys)?.insert(key.to_owned());
         Ok(())
     }
 
@@ -164,10 +172,7 @@ impl CacheProvider for MooncakeProvider {
     }
 
     async fn flush(&self) -> CacheResult<()> {
-        let keys = self
-            .known_keys
-            .lock()
-            .map_err(|_| CacheError::Internal("Mooncake key tracker is poisoned".into()))?
+        let keys = lock_known_keys(&self.known_keys)?
             .iter()
             .cloned()
             .collect::<Vec<_>>();
@@ -176,5 +181,29 @@ impl CacheProvider for MooncakeProvider {
 
     async fn close(&self) -> CacheResult<()> {
         self.client.close().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::panic::{self, AssertUnwindSafe};
+
+    #[test]
+    fn lock_known_keys_returns_internal_error_when_poisoned() {
+        let known_keys = Mutex::new(HashSet::new());
+
+        let _ = panic::catch_unwind(AssertUnwindSafe(|| {
+            let _guard = known_keys.lock().unwrap();
+            panic!("poison known_keys");
+        }));
+
+        let error = lock_known_keys(&known_keys).unwrap_err();
+
+        assert!(matches!(
+            error,
+            CacheError::Internal(message)
+                if message == "Mooncake key tracker is poisoned"
+        ));
     }
 }

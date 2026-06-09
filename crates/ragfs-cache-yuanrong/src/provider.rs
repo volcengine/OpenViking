@@ -5,7 +5,7 @@ use bytes::Bytes;
 use ragfs::cache::{CacheError, CacheProvider, CacheResult, ProviderCapabilities};
 use std::collections::HashSet;
 use std::fmt;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 /// Yuanrong implementation of the common RAGFS cache provider contract.
@@ -58,6 +58,14 @@ impl YuanrongProvider {
     }
 }
 
+fn lock_known_keys(
+    known_keys: &Mutex<HashSet<String>>,
+) -> CacheResult<MutexGuard<'_, HashSet<String>>> {
+    known_keys
+        .lock()
+        .map_err(|_| CacheError::Internal("Yuanrong key tracker is poisoned".into()))
+}
+
 #[async_trait]
 impl CacheProvider for YuanrongProvider {
     fn name(&self) -> &'static str {
@@ -78,13 +86,13 @@ impl CacheProvider for YuanrongProvider {
 
     async fn put(&self, key: &str, value: Bytes) -> CacheResult<()> {
         self.client.set(key, &value).await?;
-        self.known_keys.lock().unwrap().insert(key.to_owned());
+        lock_known_keys(&self.known_keys)?.insert(key.to_owned());
         Ok(())
     }
 
     async fn delete(&self, key: &str) -> CacheResult<()> {
         self.client.delete(key).await?;
-        self.known_keys.lock().unwrap().remove(key);
+        lock_known_keys(&self.known_keys)?.remove(key);
         Ok(())
     }
 
@@ -108,16 +116,13 @@ impl CacheProvider for YuanrongProvider {
             .map(|(key, value)| (key.clone(), value.to_vec()))
             .collect();
         self.client.batch_set(native_entries).await?;
-        self.known_keys
-            .lock()
-            .unwrap()
-            .extend(entries.into_iter().map(|(key, _)| key));
+        lock_known_keys(&self.known_keys)?.extend(entries.into_iter().map(|(key, _)| key));
         Ok(())
     }
 
     async fn invalidate(&self, keys: &[String]) -> CacheResult<()> {
         self.client.batch_delete(keys).await?;
-        let mut known_keys = self.known_keys.lock().unwrap();
+        let mut known_keys = lock_known_keys(&self.known_keys)?;
         for key in keys {
             known_keys.remove(key);
         }
@@ -125,10 +130,7 @@ impl CacheProvider for YuanrongProvider {
     }
 
     async fn flush(&self) -> CacheResult<()> {
-        let keys = self
-            .known_keys
-            .lock()
-            .map_err(|_| CacheError::Internal("Yuanrong key tracker is poisoned".into()))?
+        let keys = lock_known_keys(&self.known_keys)?
             .iter()
             .cloned()
             .collect::<Vec<_>>();
@@ -137,5 +139,29 @@ impl CacheProvider for YuanrongProvider {
 
     async fn close(&self) -> CacheResult<()> {
         self.client.close().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::panic::{self, AssertUnwindSafe};
+
+    #[test]
+    fn lock_known_keys_returns_internal_error_when_poisoned() {
+        let known_keys = Mutex::new(HashSet::new());
+
+        let _ = panic::catch_unwind(AssertUnwindSafe(|| {
+            let _guard = known_keys.lock().unwrap();
+            panic!("poison known_keys");
+        }));
+
+        let error = lock_known_keys(&known_keys).unwrap_err();
+
+        assert!(matches!(
+            error,
+            CacheError::Internal(message)
+                if message == "Yuanrong key tracker is poisoned"
+        ));
     }
 }
