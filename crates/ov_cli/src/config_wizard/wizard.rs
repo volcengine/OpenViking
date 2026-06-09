@@ -4421,6 +4421,10 @@ mod tests {
         let cloud = openviking_service_api_key_helper_lines();
         let local_custom = custom_api_key_helper_lines(true);
         let remote_custom = custom_api_key_helper_lines(false);
+        let local_custom_plain: Vec<String> =
+            local_custom.iter().map(|line| strip_ansi(line)).collect();
+        let remote_custom_plain: Vec<String> =
+            remote_custom.iter().map(|line| strip_ansi(line)).collect();
 
         assert_eq!(
             provider_labels(Language::En)[0],
@@ -4447,9 +4451,9 @@ mod tests {
                 .any(|line| line.contains("Usually not needed locally"))
         );
         assert!(
-            !local_custom
+            !local_custom_plain
                 .iter()
-                .chain(remote_custom.iter())
+                .chain(remote_custom_plain.iter())
                 .any(|line| line.contains(';'))
         );
     }

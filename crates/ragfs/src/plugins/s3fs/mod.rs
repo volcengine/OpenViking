@@ -1115,6 +1115,7 @@ mod tests {
             name: "s3fs".to_string(),
             mount_path: "/s3".to_string(),
             params: std::collections::HashMap::new(),
+            ..PluginConfig::default()
         };
         assert!(plugin.validate(&config).await.is_err());
 
@@ -1128,6 +1129,7 @@ mod tests {
             name: "s3fs".to_string(),
             mount_path: "/s3".to_string(),
             params,
+            ..PluginConfig::default()
         };
         assert!(plugin.validate(&config).await.is_ok());
     }
@@ -1150,6 +1152,7 @@ mod tests {
             name: "s3fs".to_string(),
             mount_path: "/s3".to_string(),
             params,
+            ..PluginConfig::default()
         };
         assert!(plugin.validate(&config).await.is_err());
 
@@ -1167,6 +1170,7 @@ mod tests {
             name: "s3fs".to_string(),
             mount_path: "/s3".to_string(),
             params,
+            ..PluginConfig::default()
         };
         assert!(plugin.validate(&config).await.is_ok());
     }
@@ -1188,6 +1192,7 @@ mod tests {
             name: "s3fs".to_string(),
             mount_path: "/s3".to_string(),
             params,
+            ..PluginConfig::default()
         };
         assert!(plugin.validate(&config).await.is_err());
 
@@ -1204,6 +1209,7 @@ mod tests {
             name: "s3fs".to_string(),
             mount_path: "/s3".to_string(),
             params,
+            ..PluginConfig::default()
         };
         assert!(plugin.validate(&config).await.is_ok());
     }

@@ -1248,6 +1248,14 @@ fn plain_help_misuse(args: &[OsString]) -> Option<PlainHelpMisuse> {
         {
             path.push(watch_subcommand.to_string());
         }
+        if command == "system"
+            && path.get(1).is_some_and(|token| token == "backend")
+            && let Some(backend_subcommand) =
+                tokens.get(2).map(|token| canonical_plain_help_token(token))
+            && backend_subcommand != "help"
+        {
+            path.push(backend_subcommand.to_string());
+        }
         return Some(PlainHelpMisuse {
             help_command: prefixed_help_command(&path),
         });
@@ -2352,8 +2360,8 @@ mod tests {
         preprocess_privacy_args,
     };
     use crate::config::{Config, DEFAULT_CUSTOM_URL};
-    use crate::{SystemBackendCommands, SystemCommands, handlers};
     use crate::output::OutputFormat;
+    use crate::{SystemBackendCommands, SystemCommands, handlers};
     use clap::{CommandFactory, Parser};
     use std::ffi::OsString;
 

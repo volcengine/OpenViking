@@ -3250,7 +3250,7 @@ mod tests {
             ("admin", "Manage accounts, users, roles, and API keys."),
             (
                 "system",
-                "Run server utility, health, consistency, and crypto commands.",
+                "Run server utility, health, consistency, backend sync, and crypto commands.",
             ),
             ("observer", "Inspect specific OpenViking server subsystems."),
         ] {
