@@ -145,6 +145,113 @@ class QueueFSConfig(BaseModel):
         return self
 
 
+class AGFSCacheProvider(str, Enum):
+    """Cache providers supported by RAGFS."""
+
+    MEMORY = "memory"
+    YUANRONG = "yuanrong"
+    MOONCAKE = "mooncake"
+
+
+class YuanrongCacheConfig(BaseModel):
+    """Configuration for Yuanrong cache provider."""
+
+    host: str = Field(default="127.0.0.1", description="Yuanrong worker host")
+    port: int = Field(default=31501, description="Yuanrong worker port")
+    connect_timeout_ms: int = Field(default=5000, description="Yuanrong connect timeout")
+    request_timeout_ms: int = Field(default=5000, description="Yuanrong request timeout")
+    sdk_concurrency: int = Field(default=4, description="Yuanrong SDK concurrency")
+
+    model_config = {"extra": "forbid"}
+
+    @model_validator(mode="after")
+    def validate_config(self):
+        if not self.host.strip():
+            raise ValueError("yuanrong host must not be empty")
+        if self.port <= 0 or self.port > 65535:
+            raise ValueError("yuanrong port must be between 1 and 65535")
+        if self.connect_timeout_ms <= 0:
+            raise ValueError("yuanrong connect_timeout_ms must be > 0")
+        if self.request_timeout_ms <= 0:
+            raise ValueError("yuanrong request_timeout_ms must be > 0")
+        if self.sdk_concurrency <= 0:
+            raise ValueError("yuanrong sdk_concurrency must be > 0")
+        return self
+
+
+class MooncakeCacheConfig(BaseModel):
+    """Configuration for Mooncake cache provider."""
+
+    local_hostname: str = Field(default="127.0.0.1", description="Mooncake local hostname")
+    metadata_server: str = Field(
+        default="http://127.0.0.1:8080/metadata",
+        description="Mooncake metadata server",
+    )
+    master_server_addr: str = Field(
+        default="127.0.0.1:50051",
+        description="Mooncake master server address",
+    )
+    protocol: str = Field(default="tcp", description="Mooncake transfer protocol")
+    device_name: str = Field(default="", description="Mooncake transport device name")
+    global_segment_size: int = Field(default=512 << 20, description="Mooncake global segment size")
+    local_buffer_size: int = Field(default=128 << 20, description="Mooncake local buffer size")
+    replica_num: int = Field(default=2, description="Mooncake replica count")
+    sdk_concurrency: int = Field(default=4, description="Mooncake SDK concurrency")
+    operation_timeout_ms: int = Field(default=5000, description="Mooncake operation timeout")
+
+    model_config = {"extra": "forbid"}
+
+    @model_validator(mode="after")
+    def validate_config(self):
+        for name in ("local_hostname", "metadata_server", "master_server_addr", "protocol"):
+            if not getattr(self, name).strip():
+                raise ValueError(f"mooncake {name} must not be empty")
+        if self.protocol not in {"tcp", "rdma", "ascend", "cxl", "nvlink", "barex"}:
+            raise ValueError("mooncake protocol is unsupported")
+        if self.global_segment_size <= 0:
+            raise ValueError("mooncake global_segment_size must be > 0")
+        if self.local_buffer_size <= 0:
+            raise ValueError("mooncake local_buffer_size must be > 0")
+        if self.replica_num <= 0:
+            raise ValueError("mooncake replica_num must be > 0")
+        if self.sdk_concurrency <= 0:
+            raise ValueError("mooncake sdk_concurrency must be > 0")
+        if self.operation_timeout_ms <= 0:
+            raise ValueError("mooncake operation_timeout_ms must be > 0")
+        return self
+
+
+class AGFSCacheConfig(BaseModel):
+    """Configuration for optional RAGFS cache layer."""
+
+    enabled: bool = Field(default=False, description="Enable RAGFS cache")
+    provider: AGFSCacheProvider = Field(
+        default=AGFSCacheProvider.MEMORY,
+        description="RAGFS cache provider",
+    )
+    namespace: str = Field(default="openviking", description="RAGFS cache namespace")
+    max_file_size_bytes: int = Field(
+        default=1024 * 1024,
+        description="Maximum full-file object size admitted to cache",
+    )
+    bypass_prefixes: list[str] = Field(
+        default_factory=list,
+        description="Path prefixes that bypass cache",
+    )
+    yuanrong: YuanrongCacheConfig = Field(default_factory=YuanrongCacheConfig)
+    mooncake: MooncakeCacheConfig = Field(default_factory=MooncakeCacheConfig)
+
+    model_config = {"extra": "forbid"}
+
+    @model_validator(mode="after")
+    def validate_config(self):
+        if not self.namespace.strip():
+            raise ValueError("cache namespace must not be empty")
+        if self.max_file_size_bytes <= 0:
+            raise ValueError("cache max_file_size_bytes must be > 0")
+        return self
+
+
 class AGFSConfig(BaseModel):
     """Configuration for RAGFS (Rust-based AGFS)."""
 
@@ -199,6 +306,11 @@ class AGFSConfig(BaseModel):
     queuefs: QueueFSConfig = Field(
         default_factory=QueueFSConfig,
         description="QueueFS configuration.",
+    )
+
+    cache: AGFSCacheConfig = Field(
+        default_factory=AGFSCacheConfig,
+        description="RAGFS cache configuration.",
     )
 
     retry_times: Any = Field(

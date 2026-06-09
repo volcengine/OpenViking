@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from openviking.utils.agfs_utils import _generate_plugin_config, mount_agfs_backend
+from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.config.agfs_config import AGFSConfig, S3Config
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig, EmbeddingModelConfig
 from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig, VolcengineConfig
@@ -104,6 +105,52 @@ def test_agfs_queuefs_defaults_to_sqlite_backend():
     assert config.queuefs.backend == "sqlite"
     assert config.queuefs.recover_stale_sec == 0
     assert config.queuefs.busy_timeout_ms == 5000
+
+
+def test_agfs_cache_defaults_to_disabled_memory_provider():
+    config = AGFSConfig(path="/tmp/ov-test", backend="local")
+
+    assert config.cache.enabled is False
+    assert config.cache.provider == "memory"
+    assert config.cache.namespace == "openviking"
+
+
+def test_agfs_cache_accepts_yuanrong_provider_config():
+    config = AGFSConfig(
+        path="/tmp/ov-test",
+        backend="local",
+        cache={
+            "enabled": True,
+            "provider": "yuanrong",
+            "namespace": "ov-test",
+            "max_file_size_bytes": 4096,
+            "bypass_prefixes": ["/queue"],
+            "yuanrong": {
+                "host": "10.0.0.1",
+                "port": 31501,
+                "connect_timeout_ms": 1000,
+                "request_timeout_ms": 2000,
+                "sdk_concurrency": 2,
+            },
+        },
+    )
+
+    assert config.cache.enabled is True
+    assert config.cache.provider == "yuanrong"
+    assert config.cache.namespace == "ov-test"
+    assert config.cache.max_file_size_bytes == 4096
+    assert config.cache.bypass_prefixes == ["/queue"]
+    assert config.cache.yuanrong.host == "10.0.0.1"
+    assert config.cache.yuanrong.sdk_concurrency == 2
+
+
+def test_agfs_cache_rejects_invalid_provider():
+    with pytest.raises(ValueError, match="provider"):
+        AGFSConfig(
+            path="/tmp/ov-test",
+            backend="local",
+            cache={"provider": "redis"},
+        )
 
 
 def test_agfs_queuefs_accepts_memory_backend():
@@ -279,6 +326,31 @@ def test_mount_agfs_backend_creates_queue_sqlite_dirs_for_sqlite_backend(tmp_pat
     queuefs_mount = next(call for call in client.mount_calls if call[0] == "queuefs")
     assert queuefs_mount[2]["backend"] == "sqlite"
     assert queuefs_mount[2]["db_path"] == str(queue_db_path.resolve())
+
+
+def test_create_agfs_client_passes_resolved_ov_conf_path(monkeypatch, tmp_path):
+    from openviking.utils import agfs_utils
+
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text('{"storage": {"agfs": {"cache": {"enabled": false}}}}')
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, str(config_path))
+
+    created = {}
+
+    class FakeRAGFSBindingClient(_FakeMountClient):
+        def __init__(self, config_arg=None):
+            super().__init__()
+            created["config_arg"] = config_arg
+
+    monkeypatch.setattr(
+        "openviking.pyagfs.get_binding_client",
+        lambda: (FakeRAGFSBindingClient, None),
+    )
+
+    client = agfs_utils.create_agfs_client(AGFSConfig(path=str(tmp_path), backend="memory"))
+
+    assert isinstance(client, FakeRAGFSBindingClient)
+    assert created["config_arg"] == str(config_path)
 
 
 def test_vectordb_validation():

@@ -3869,6 +3869,8 @@ version = "0.1.0"
 dependencies = [
  "pyo3",
  "ragfs",
+ "ragfs-cache-mooncake",
+ "ragfs-cache-yuanrong",
  "serde_json",
  "tokio",
 ]

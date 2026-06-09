@@ -9,6 +9,8 @@ import os
 from pathlib import Path
 from typing import Any, Dict
 
+from openviking_cli.utils.config.config_loader import resolve_config_path
+from openviking_cli.utils.config.consts import DEFAULT_OV_CONF, OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -161,7 +163,8 @@ def create_agfs_client(agfs_config: Any) -> Any:
             "to build and install the RAGFS SDK with native bindings."
         )
 
-    client = RAGFSBindingClient()
+    config_path = resolve_config_path(None, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)
+    client = RAGFSBindingClient(str(config_path) if config_path else None)
 
     # Automatically mount backend for binding client
     mount_agfs_backend(client, agfs_config)

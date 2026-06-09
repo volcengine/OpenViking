@@ -8,9 +8,13 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyType};
 use std::collections::HashMap;
+use std::fs;
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
+use ragfs::cache::{
+    CacheError, CacheNamespace, CachePolicy, CacheProvider, CacheResult, MemoryCacheProvider,
+};
 use ragfs::core::{
     ConfigValue, FileInfo, FileSystem, FilesystemStats, FsOperation, GrepResult, MountableFS,
     OperationStats, PluginConfig, TreeEntry, WriteFlag,
@@ -20,6 +24,350 @@ use ragfs::plugins::S3FSPlugin;
 use ragfs::plugins::{
     KVFSPlugin, LocalFSPlugin, MemFSPlugin, QueueFSPlugin, SQLFSPlugin, ServerInfoFSPlugin,
 };
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CacheProviderKind {
+    Memory,
+    Yuanrong,
+    Mooncake,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RagfsCacheConfig {
+    enabled: bool,
+    provider: CacheProviderKind,
+    namespace: String,
+    max_file_size_bytes: usize,
+    bypass_prefixes: Vec<String>,
+    yuanrong: YuanrongCacheConfig,
+    mooncake: MooncakeCacheConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct YuanrongCacheConfig {
+    host: String,
+    port: u16,
+    connect_timeout_ms: u64,
+    request_timeout_ms: u64,
+    sdk_concurrency: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MooncakeCacheConfig {
+    local_hostname: String,
+    metadata_server: String,
+    master_server_addr: String,
+    protocol: String,
+    device_name: String,
+    global_segment_size: u64,
+    local_buffer_size: u64,
+    replica_num: usize,
+    sdk_concurrency: usize,
+    operation_timeout_ms: u64,
+}
+
+impl Default for RagfsCacheConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            provider: CacheProviderKind::Memory,
+            namespace: "openviking".to_string(),
+            max_file_size_bytes: CachePolicy::default().max_file_size(),
+            bypass_prefixes: Vec::new(),
+            yuanrong: YuanrongCacheConfig::default(),
+            mooncake: MooncakeCacheConfig::default(),
+        }
+    }
+}
+
+impl Default for YuanrongCacheConfig {
+    fn default() -> Self {
+        Self {
+            host: "127.0.0.1".to_string(),
+            port: 31501,
+            connect_timeout_ms: 5_000,
+            request_timeout_ms: 5_000,
+            sdk_concurrency: 4,
+        }
+    }
+}
+
+impl Default for MooncakeCacheConfig {
+    fn default() -> Self {
+        Self {
+            local_hostname: "127.0.0.1".to_string(),
+            metadata_server: "http://127.0.0.1:8080/metadata".to_string(),
+            master_server_addr: "127.0.0.1:50051".to_string(),
+            protocol: "tcp".to_string(),
+            device_name: String::new(),
+            global_segment_size: 512 << 20,
+            local_buffer_size: 128 << 20,
+            replica_num: 2,
+            sdk_concurrency: 4,
+            operation_timeout_ms: 5_000,
+        }
+    }
+}
+
+struct CacheProviderFactory;
+
+impl CacheProviderFactory {
+    async fn create(config: &RagfsCacheConfig) -> CacheResult<Arc<dyn CacheProvider>> {
+        match config.provider {
+            CacheProviderKind::Memory => Ok(Arc::new(MemoryCacheProvider::new())),
+            CacheProviderKind::Yuanrong => create_yuanrong_provider(config).await,
+            CacheProviderKind::Mooncake => create_mooncake_provider(config).await,
+        }
+    }
+}
+
+#[cfg(feature = "yuanrong-native")]
+async fn create_yuanrong_provider(
+    config: &RagfsCacheConfig,
+) -> CacheResult<Arc<dyn CacheProvider>> {
+    use ragfs_cache_yuanrong::{YuanrongConfig, YuanrongProvider};
+
+    let provider = YuanrongProvider::connect(YuanrongConfig {
+        host: config.yuanrong.host.clone(),
+        port: config.yuanrong.port,
+        connect_timeout_ms: config.yuanrong.connect_timeout_ms,
+        request_timeout_ms: config.yuanrong.request_timeout_ms,
+        sdk_concurrency: config.yuanrong.sdk_concurrency,
+    })
+    .await?;
+    Ok(Arc::new(provider))
+}
+
+#[cfg(not(feature = "yuanrong-native"))]
+async fn create_yuanrong_provider(
+    _config: &RagfsCacheConfig,
+) -> CacheResult<Arc<dyn CacheProvider>> {
+    Err(CacheError::Unavailable(
+        "Yuanrong support requires the yuanrong-native feature".to_string(),
+    ))
+}
+
+#[cfg(feature = "mooncake-native")]
+async fn create_mooncake_provider(
+    config: &RagfsCacheConfig,
+) -> CacheResult<Arc<dyn CacheProvider>> {
+    use ragfs_cache_mooncake::{MooncakeConfig, MooncakeProvider};
+
+    let provider = MooncakeProvider::connect(MooncakeConfig {
+        local_hostname: config.mooncake.local_hostname.clone(),
+        metadata_server: config.mooncake.metadata_server.clone(),
+        master_server_addr: config.mooncake.master_server_addr.clone(),
+        protocol: config.mooncake.protocol.clone(),
+        device_name: config.mooncake.device_name.clone(),
+        global_segment_size: config.mooncake.global_segment_size,
+        local_buffer_size: config.mooncake.local_buffer_size,
+        replica_num: config.mooncake.replica_num,
+        sdk_concurrency: config.mooncake.sdk_concurrency,
+        operation_timeout_ms: config.mooncake.operation_timeout_ms,
+    })
+    .await?;
+    Ok(Arc::new(provider))
+}
+
+#[cfg(not(feature = "mooncake-native"))]
+async fn create_mooncake_provider(
+    _config: &RagfsCacheConfig,
+) -> CacheResult<Arc<dyn CacheProvider>> {
+    Err(CacheError::Unavailable(
+        "Mooncake support requires the mooncake-native feature".to_string(),
+    ))
+}
+
+fn cache_config_from_ov_conf(path: &str) -> Result<RagfsCacheConfig, String> {
+    let raw = fs::read_to_string(path)
+        .map_err(|error| format!("failed to read OpenViking config {path}: {error}"))?;
+    let json: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|error| format!("failed to parse OpenViking config {path}: {error}"))?;
+
+    let Some(cache) = json
+        .get("storage")
+        .and_then(|storage| storage.get("agfs"))
+        .and_then(|agfs| agfs.get("cache"))
+    else {
+        return Ok(RagfsCacheConfig::default());
+    };
+
+    if cache.is_null() {
+        return Ok(RagfsCacheConfig::default());
+    }
+    let cache = cache
+        .as_object()
+        .ok_or_else(|| "storage.agfs.cache must be an object".to_string())?;
+
+    let mut config = RagfsCacheConfig::default();
+    config.enabled = bool_field(cache, "enabled", config.enabled)?;
+    config.provider = provider_kind(string_field(cache, "provider", "memory")?)?;
+    config.namespace = string_field(cache, "namespace", &config.namespace)?;
+    if config.namespace.trim().is_empty() {
+        return Err("storage.agfs.cache.namespace must not be empty".to_string());
+    }
+    config.max_file_size_bytes =
+        usize_field(cache, "max_file_size_bytes", config.max_file_size_bytes)?;
+    config.bypass_prefixes = string_array_field(cache, "bypass_prefixes")?;
+
+    if let Some(yuanrong) = cache.get("yuanrong") {
+        let yuanrong = yuanrong
+            .as_object()
+            .ok_or_else(|| "storage.agfs.cache.yuanrong must be an object".to_string())?;
+        config.yuanrong.host = string_field(yuanrong, "host", &config.yuanrong.host)?;
+        config.yuanrong.port = u16_field(yuanrong, "port", config.yuanrong.port)?;
+        config.yuanrong.connect_timeout_ms = u64_field(
+            yuanrong,
+            "connect_timeout_ms",
+            config.yuanrong.connect_timeout_ms,
+        )?;
+        config.yuanrong.request_timeout_ms = u64_field(
+            yuanrong,
+            "request_timeout_ms",
+            config.yuanrong.request_timeout_ms,
+        )?;
+        config.yuanrong.sdk_concurrency =
+            usize_field(yuanrong, "sdk_concurrency", config.yuanrong.sdk_concurrency)?;
+    }
+
+    if let Some(mooncake) = cache.get("mooncake") {
+        let mooncake = mooncake
+            .as_object()
+            .ok_or_else(|| "storage.agfs.cache.mooncake must be an object".to_string())?;
+        config.mooncake.local_hostname =
+            string_field(mooncake, "local_hostname", &config.mooncake.local_hostname)?;
+        config.mooncake.metadata_server = string_field(
+            mooncake,
+            "metadata_server",
+            &config.mooncake.metadata_server,
+        )?;
+        config.mooncake.master_server_addr = string_field(
+            mooncake,
+            "master_server_addr",
+            &config.mooncake.master_server_addr,
+        )?;
+        config.mooncake.protocol = string_field(mooncake, "protocol", &config.mooncake.protocol)?;
+        config.mooncake.device_name =
+            string_field(mooncake, "device_name", &config.mooncake.device_name)?;
+        config.mooncake.global_segment_size = u64_field(
+            mooncake,
+            "global_segment_size",
+            config.mooncake.global_segment_size,
+        )?;
+        config.mooncake.local_buffer_size = u64_field(
+            mooncake,
+            "local_buffer_size",
+            config.mooncake.local_buffer_size,
+        )?;
+        config.mooncake.replica_num =
+            usize_field(mooncake, "replica_num", config.mooncake.replica_num)?;
+        config.mooncake.sdk_concurrency =
+            usize_field(mooncake, "sdk_concurrency", config.mooncake.sdk_concurrency)?;
+        config.mooncake.operation_timeout_ms = u64_field(
+            mooncake,
+            "operation_timeout_ms",
+            config.mooncake.operation_timeout_ms,
+        )?;
+    }
+
+    Ok(config)
+}
+
+fn provider_kind(value: String) -> Result<CacheProviderKind, String> {
+    match value.as_str() {
+        "memory" => Ok(CacheProviderKind::Memory),
+        "yuanrong" => Ok(CacheProviderKind::Yuanrong),
+        "mooncake" => Ok(CacheProviderKind::Mooncake),
+        other => Err(format!(
+            "unsupported storage.agfs.cache.provider: {other}; expected memory, yuanrong, or mooncake"
+        )),
+    }
+}
+
+fn bool_field(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    default: bool,
+) -> Result<bool, String> {
+    match object.get(key) {
+        Some(value) => value
+            .as_bool()
+            .ok_or_else(|| format!("{key} must be a boolean")),
+        None => Ok(default),
+    }
+}
+
+fn string_field(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    default: &str,
+) -> Result<String, String> {
+    match object.get(key) {
+        Some(value) => value
+            .as_str()
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| format!("{key} must be a string")),
+        None => Ok(default.to_string()),
+    }
+}
+
+fn u64_field(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    default: u64,
+) -> Result<u64, String> {
+    match object.get(key) {
+        Some(value) => value
+            .as_u64()
+            .filter(|value| *value > 0)
+            .ok_or_else(|| format!("{key} must be a positive integer")),
+        None => Ok(default),
+    }
+}
+
+fn u16_field(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    default: u16,
+) -> Result<u16, String> {
+    let value = u64_field(object, key, default as u64)?;
+    u16::try_from(value).map_err(|_| format!("{key} must fit in u16"))
+}
+
+fn usize_field(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    default: usize,
+) -> Result<usize, String> {
+    let value = u64_field(object, key, default as u64)?;
+    usize::try_from(value).map_err(|_| format!("{key} must fit in usize"))
+}
+
+fn string_array_field(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<Vec<String>, String> {
+    match object.get(key) {
+        Some(value) => value
+            .as_array()
+            .ok_or_else(|| format!("{key} must be an array of strings"))?
+            .iter()
+            .map(|item| {
+                item.as_str()
+                    .map(ToOwned::to_owned)
+                    .ok_or_else(|| format!("{key} must be an array of strings"))
+            })
+            .collect(),
+        None => Ok(Vec::new()),
+    }
+}
+
+fn cache_policy_from_config(config: &RagfsCacheConfig) -> CachePolicy {
+    config.bypass_prefixes.iter().fold(
+        CachePolicy::new(config.max_file_size_bytes),
+        |policy, prefix| policy.with_bypass_prefix(prefix),
+    )
+}
 
 fn py_detach_blocking<T, F>(py: Python<'_>, f: F) -> T
 where
@@ -272,12 +620,33 @@ impl RAGFSBindingClient {
     #[new]
     #[pyo3(signature = (config_path=None))]
     fn new(config_path: Option<&str>) -> PyResult<Self> {
-        let _ = config_path; // reserved for future use
-
         let rt = tokio::runtime::Runtime::new()
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to create runtime: {}", e)))?;
 
-        let fs = Arc::new(MountableFS::new());
+        let fs = match config_path {
+            Some(path) => {
+                let cache_config = cache_config_from_ov_conf(path).map_err(|error| {
+                    PyRuntimeError::new_err(format!("Invalid cache config: {error}"))
+                })?;
+                if cache_config.enabled {
+                    let provider = rt
+                        .block_on(CacheProviderFactory::create(&cache_config))
+                        .map_err(|error| {
+                            PyRuntimeError::new_err(format!(
+                                "Failed to initialize cache provider: {error}"
+                            ))
+                        })?;
+                    Arc::new(MountableFS::with_cache(
+                        provider,
+                        CacheNamespace::new(&cache_config.namespace),
+                        cache_policy_from_config(&cache_config),
+                    ))
+                } else {
+                    Arc::new(MountableFS::new())
+                }
+            }
+            None => Arc::new(MountableFS::new()),
+        };
 
         // Register all built-in plugins
         rt.block_on(async {
@@ -309,16 +678,16 @@ impl RAGFSBindingClient {
                 "version".to_string(),
                 "ragfs-python".into_pyobject(py)?.into_any().unbind(),
             );
-            let mut features = vec![
+            let features = vec![
                 "memfs",
                 "kvfs",
                 "queuefs",
                 "sqlfs",
                 "localfs",
                 "serverinfofs",
+                #[cfg(feature = "s3")]
+                "s3fs",
             ];
-            #[cfg(feature = "s3")]
-            features.push("s3fs");
             m.insert(
                 "features".to_string(),
                 features.into_pyobject(py)?.into_any().unbind(),
@@ -334,7 +703,9 @@ impl RAGFSBindingClient {
     fn ls(&self, path: String) -> PyResult<Py<PyAny>> {
         let fs = self.fs.clone();
         let entries = Python::attach(|py| {
-            py_detach_blocking(py, move || self.rt.block_on(async move { fs.read_dir(&path).await }))
+            py_detach_blocking(py, move || {
+                self.rt.block_on(async move { fs.read_dir(&path).await })
+            })
         })
         .map_err(to_py_err)?;
 
@@ -368,7 +739,10 @@ impl RAGFSBindingClient {
         let sz = if size < 0 { 0u64 } else { size as u64 };
 
         let data = Python::attach(|py| {
-            py_detach_blocking(py, move || self.rt.block_on(async move { fs.read(&path, off, sz).await }))
+            py_detach_blocking(py, move || {
+                self.rt
+                    .block_on(async move { fs.read(&path, off, sz).await })
+            })
         })
         .map_err(to_py_err)?;
 
@@ -406,7 +780,9 @@ impl RAGFSBindingClient {
     fn create(&self, path: String) -> PyResult<HashMap<String, String>> {
         let fs = self.fs.clone();
         Python::attach(|py| {
-            py_detach_blocking(py, move || self.rt.block_on(async move { fs.create(&path).await }))
+            py_detach_blocking(py, move || {
+                self.rt.block_on(async move { fs.create(&path).await })
+            })
         })
         .map_err(to_py_err)?;
 
@@ -423,7 +799,10 @@ impl RAGFSBindingClient {
 
         let fs = self.fs.clone();
         Python::attach(|py| {
-            py_detach_blocking(py, move || self.rt.block_on(async move { fs.mkdir(&path, mode_int).await }))
+            py_detach_blocking(py, move || {
+                self.rt
+                    .block_on(async move { fs.mkdir(&path, mode_int).await })
+            })
         })
         .map_err(to_py_err)?;
 
@@ -440,12 +819,18 @@ impl RAGFSBindingClient {
 
         let fs = self.fs.clone();
         Python::attach(|py| {
-            py_detach_blocking(py, move || self.rt.block_on(async move { fs.ensure_parent_dirs(&path, mode_int).await }))
+            py_detach_blocking(py, move || {
+                self.rt
+                    .block_on(async move { fs.ensure_parent_dirs(&path, mode_int).await })
+            })
         })
         .map_err(to_py_err)?;
 
         let mut m = HashMap::new();
-        m.insert("message".to_string(), "parent directories ensured".to_string());
+        m.insert(
+            "message".to_string(),
+            "parent directories ensured".to_string(),
+        );
         Ok(m)
     }
 
@@ -475,7 +860,9 @@ impl RAGFSBindingClient {
     fn stat(&self, path: String) -> PyResult<Py<PyAny>> {
         let fs = self.fs.clone();
         let info = Python::attach(|py| {
-            py_detach_blocking(py, move || self.rt.block_on(async move { fs.stat(&path).await }))
+            py_detach_blocking(py, move || {
+                self.rt.block_on(async move { fs.stat(&path).await })
+            })
         })
         .map_err(to_py_err)?;
 
@@ -505,7 +892,9 @@ impl RAGFSBindingClient {
     fn chmod(&self, path: String, mode: u32) -> PyResult<HashMap<String, String>> {
         let fs = self.fs.clone();
         Python::attach(|py| {
-            py_detach_blocking(py, move || self.rt.block_on(async move { fs.chmod(&path, mode).await }))
+            py_detach_blocking(py, move || {
+                self.rt.block_on(async move { fs.chmod(&path, mode).await })
+            })
         })
         .map_err(to_py_err)?;
 
@@ -542,7 +931,9 @@ impl RAGFSBindingClient {
     fn mounts(&self) -> PyResult<Vec<HashMap<String, String>>> {
         let fs = self.fs.clone();
         let mount_list = Python::attach(|py| {
-            py_detach_blocking(py, move || self.rt.block_on(async move { fs.list_mounts().await }))
+            py_detach_blocking(py, move || {
+                self.rt.block_on(async move { fs.list_mounts().await })
+            })
         });
 
         let result: Vec<HashMap<String, String>> = mount_list
@@ -584,7 +975,10 @@ impl RAGFSBindingClient {
 
         let fs = self.fs.clone();
         Python::attach(|py| {
-            py_detach_blocking(py, move || self.rt.block_on(async move { fs.mount(plugin_config).await }))
+            py_detach_blocking(py, move || {
+                self.rt
+                    .block_on(async move { fs.mount(plugin_config).await })
+            })
         })
         .map_err(to_py_err)?;
 
@@ -601,7 +995,10 @@ impl RAGFSBindingClient {
         let fs = self.fs.clone();
         let path_clone = path.clone();
         Python::attach(|py| {
-            py_detach_blocking(py, move || self.rt.block_on(async move { fs.unmount(&path_clone).await }))
+            py_detach_blocking(py, move || {
+                self.rt
+                    .block_on(async move { fs.unmount(&path_clone).await })
+            })
         })
         .map_err(to_py_err)?;
 
@@ -613,16 +1010,16 @@ impl RAGFSBindingClient {
     /// List all registered plugin names.
     fn list_plugins(&self) -> PyResult<Vec<String>> {
         // Return names of built-in plugins
-        let mut plugins = vec![
+        let plugins = vec![
             "memfs".to_string(),
             "kvfs".to_string(),
             "queuefs".to_string(),
             "sqlfs".to_string(),
             "localfs".to_string(),
             "serverinfofs".to_string(),
+            #[cfg(feature = "s3")]
+            "s3fs".to_string(),
         ];
-        #[cfg(feature = "s3")]
-        plugins.push("s3fs".to_string());
         Ok(plugins)
     }
 
@@ -769,7 +1166,8 @@ impl RAGFSBindingClient {
                 let fs2 = fs.clone();
                 let mount_path_clone = mount_path.clone();
                 let stats = py_detach_blocking(py, move || {
-                    self.rt.block_on(async move { fs.get_mount_stats(&mount_path_clone).await })
+                    self.rt
+                        .block_on(async move { fs.get_mount_stats(&mount_path_clone).await })
                 })
                 .map_err(to_py_err)?;
 
@@ -823,12 +1221,64 @@ fn ragfs_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn detach_blocking_helper_runs_without_python_objects() {
+        Python::initialize();
         Python::attach(|py| {
             let value: i32 = py_detach_blocking(py, || 40 + 2);
             assert_eq!(value, 42);
         });
+    }
+
+    #[tokio::test]
+    async fn cache_provider_factory_creates_memory_provider_from_ov_conf() {
+        let path = std::env::temp_dir().join(format!(
+            "openviking-cache-config-{}.json",
+            std::process::id()
+        ));
+        fs::write(
+            &path,
+            r#"{
+                "storage": {
+                    "agfs": {
+                        "cache": {
+                            "enabled": true,
+                            "provider": "memory",
+                            "namespace": "ov-test"
+                        }
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let cache_config = cache_config_from_ov_conf(path.to_str().unwrap()).unwrap();
+        let provider = CacheProviderFactory::create(&cache_config).await.unwrap();
+
+        assert!(cache_config.enabled);
+        assert_eq!(cache_config.provider, CacheProviderKind::Memory);
+        assert_eq!(cache_config.namespace, "ov-test");
+        assert_eq!(provider.name(), "memory");
+
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn missing_cache_config_defaults_to_disabled_memory_config() {
+        let path = std::env::temp_dir().join(format!(
+            "openviking-no-cache-config-{}.json",
+            std::process::id()
+        ));
+        fs::write(&path, r#"{"storage": {"agfs": {"backend": "local"}}}"#).unwrap();
+
+        let cache_config = cache_config_from_ov_conf(path.to_str().unwrap()).unwrap();
+
+        assert!(!cache_config.enabled);
+        assert_eq!(cache_config.provider, CacheProviderKind::Memory);
+        assert_eq!(cache_config.namespace, "openviking");
+
+        fs::remove_file(path).unwrap();
     }
 }
