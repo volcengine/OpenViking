@@ -48,6 +48,16 @@ describe("sanitizeUserTextForCapture", () => {
     expect(sanitizeUserTextForCapture("   ")).toBe("");
   });
 
+  it("drops legacy synthetic tool placeholders", () => {
+    expect(sanitizeUserTextForCapture("[tool: exec]")).toBe("");
+    expect(sanitizeUserTextForCapture(" [toolUse: grep] ")).toBe("");
+  });
+
+  it("preserves ordinary text that mentions a tool placeholder", () => {
+    const input = "The model echoed [tool: exec] in a previous answer.";
+    expect(sanitizeUserTextForCapture(input)).toBe(input);
+  });
+
   it("strips leading timestamp prefix", () => {
     const input = "[2026-03-29T10:00:00Z] actual content here";
     const result = sanitizeUserTextForCapture(input);
@@ -223,7 +233,7 @@ describe("extractNewTurnTexts", () => {
 });
 
 describe("extractNewTurnMessages", () => {
-  it("keeps assistant toolCall messages that have no text block", () => {
+  it("drops assistant toolCall messages that have no text block", () => {
     const messages = [
       {
         role: "assistant",
@@ -237,15 +247,10 @@ describe("extractNewTurnMessages", () => {
     const { messages: extracted, newCount } = extractNewTurnMessages(messages, 0);
 
     expect(newCount).toBe(1);
-    expect(extracted).toEqual([
-      {
-        role: "assistant",
-        parts: [{ type: "text", text: "[tool: read_file]" }],
-      },
-    ]);
+    expect(extracted).toEqual([]);
   });
 
-  it("keeps assistant toolUse messages that have no text block", () => {
+  it("drops assistant toolUse messages that have no text block", () => {
     const messages = [
       {
         role: "assistant",
@@ -259,15 +264,10 @@ describe("extractNewTurnMessages", () => {
     const { messages: extracted, newCount } = extractNewTurnMessages(messages, 0);
 
     expect(newCount).toBe(1);
-    expect(extracted).toEqual([
-      {
-        role: "assistant",
-        parts: [{ type: "text", text: "[tool: grep]" }],
-      },
-    ]);
+    expect(extracted).toEqual([]);
   });
 
-  it("keeps multiple textless assistant tool calls in one placeholder", () => {
+  it("does not synthesize placeholders for multiple textless assistant tool calls", () => {
     const messages = [
       {
         role: "assistant",
@@ -280,12 +280,7 @@ describe("extractNewTurnMessages", () => {
 
     const { messages: extracted } = extractNewTurnMessages(messages, 0);
 
-    expect(extracted).toEqual([
-      {
-        role: "assistant",
-        parts: [{ type: "text", text: "[tool: read_file, grep]" }],
-      },
-    ]);
+    expect(extracted).toEqual([]);
   });
 
   it("does not create a placeholder for textless assistant messages without tool calls", () => {

@@ -44,10 +44,15 @@ function looksLikeMetadataJsonBlock(content: string): boolean {
 }
 
 const HEARTBEAT_RE = /\bHEARTBEAT(?:\.md|_OK)\b/;
+const TOOL_PLACEHOLDER_RE = /^\s*\[tool(?::\s*|Use:\s*)[^\]]+\]\s*$/i;
 
 export function sanitizeUserTextForCapture(text: string): string {
   // 过滤 HEARTBEAT 健康检查消息
   if (HEARTBEAT_RE.test(text)) {
+    return "";
+  }
+  // Drop legacy synthetic tool placeholders before they reach memory extraction.
+  if (TOOL_PLACEHOLDER_RE.test(text)) {
     return "";
   }
   // 处理 Compactor 系统消息，提取实际用户输入
@@ -425,40 +430,6 @@ export function extractNewTurnMessages(
             text: cleanedText,
           }],
         });
-      }
-    } else {
-      /// 如果原始消息有 toolCall，提取所有工具名并生成占位符
-      if (role === "assistant" && Array.isArray(content)) {
-        const toolNames: string[] = [];
-        
-        // 收集所有 toolCall 的 tool_name
-        for (const block of content) {
-          const b = block as Record<string, unknown>;
-          const blockType = b?.type as string;
-          if (
-            blockType === "toolCall" ||
-            blockType === "toolUse" ||
-            blockType === "tool_use" ||
-            blockType === "tool_call"
-          ) {
-            const name = b?.name as string || b?.toolName as string;
-            if (name && typeof name === "string" && name.trim()) {
-              toolNames.push(name.trim());
-            }
-          }
-        }
-        
-        // 只有找到 toolCall 时才添加占位符
-        if (toolNames.length > 0) {
-          const toolNamesStr = toolNames.join(", ");
-          result.push({
-            role: "assistant",
-            parts: [{
-              type: "text",
-              text: `[tool: ${toolNamesStr}]`,
-            }],
-          });
-        }
       }
     }
   }
