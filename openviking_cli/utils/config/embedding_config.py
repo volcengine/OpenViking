@@ -495,6 +495,19 @@ class EmbeddingConfig(BaseModel):
         ge=100,
         description="Maximum estimated tokens sent to embeddings when raw text fallback is used",
     )
+    allow_metadata_override: bool = Field(
+        default=False,
+        description=(
+            "When true, allow starting up against an existing collection whose "
+            "embedding metadata (provider/model) differs from the current config, "
+            "as long as dimension is unchanged. The collection metadata will be "
+            "rewritten to the new config and a warning will be logged. "
+            "Useful when migrating an existing index to a new model deployment "
+            "(e.g. switching ARK endpoint id) while keeping previously indexed "
+            "vectors. Note: vector semantics may drift if the underlying model "
+            "actually changed; only enable when you understand the implication."
+        ),
+    )
 
     model_config = {"extra": "forbid"}
 

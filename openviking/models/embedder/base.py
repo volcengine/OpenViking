@@ -739,6 +739,13 @@ class FailoverEmbedder(EmbedderBase):
             failback_timeout_seconds: Time after which to attempt failback
             failback_request_count: Number of requests after which to attempt failback
             total_max_retries: Maximum total retry attempts across all credentials
+
+        Note:
+            With multiple credentials, permanent errors (e.g. HTTP 400/401/403) on
+            a non-final credential automatically advance to the next one, since
+            different credentials may resolve to different upstream resources
+            (e.g. ARK endpoint ids). Only the last credential's permanent error
+            raises ``AllCredentialsFailedError``.
         """
         if not embedders:
             raise ValueError("At least one embedder instance is required")

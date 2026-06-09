@@ -362,6 +362,14 @@ class OrderedCredentialSwitcher:
             n: Number of credentials (must be >= 1)
             failback_timeout_seconds: Time after which to attempt failback
             failback_request_count: Number of requests after which to attempt failback
+
+        Note:
+            When ``n > 1`` (i.e. multi-credential mode), permanent errors on a
+            non-final credential automatically advance to the next credential,
+            rather than fail-fast. Different credentials may legitimately resolve
+            to different upstream resources (e.g. ARK endpoint ids), so a 4xx on
+            one credential does not necessarily apply to the next. The last
+            credential's permanent error always fails fast.
         """
         if n < 1:
             raise ValueError("Number of credentials must be >= 1")
@@ -428,7 +436,19 @@ class OrderedCredentialSwitcher:
 
         with self._lock:
             if error_class == ERROR_CLASS_PERMANENT:
-                # 4xx auth/parameter errors: fail-fast, don't advance
+                # 4xx auth/parameter errors. In multi-credential mode (n > 1),
+                # advance to the next credential because different credentials
+                # may legitimately resolve different upstream resources (e.g.
+                # ARK endpoint ids). The last credential always fails fast.
+                if idx == self._active_idx and self._active_idx + 1 < self._n:
+                    self._active_idx += 1
+                    self._last_switch_time = time.monotonic()
+                    self._active_request_count = 0
+                    logger.warning(
+                        f"Credential {idx} failed with permanent error; "
+                        f"advancing to {self._active_idx} (multi-credential mode)"
+                    )
+                    return True
                 logger.warning(f"Credential {idx} failed with permanent error, fail-fast")
                 return False
 
