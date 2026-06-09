@@ -507,12 +507,12 @@ impl HttpClient {
                     .insert("create_parent".to_string(), serde_json::Value::Bool(true));
             }
             if let Some(resource_args) = &resource_args {
-                let body_obj = body
-                    .as_object_mut()
-                    .expect("add_resource request body must be an object");
-                for (key, value) in resource_args {
-                    body_obj.insert(key.clone(), value.clone());
-                }
+                body.as_object_mut()
+                    .expect("add_resource request body must be an object")
+                    .insert(
+                        "args".to_string(),
+                        serde_json::Value::Object(resource_args.clone()),
+                    );
             }
             body
         };

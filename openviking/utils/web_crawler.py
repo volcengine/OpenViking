@@ -182,7 +182,9 @@ class WebCrawler:
     ) -> tuple[CrawledPage, List[str]]:
         async with semaphore:
             try:
-                fetch_result: FetchResult = await self._fetcher.fetch(url)
+                fetch_result: FetchResult = await self._fetcher.fetch(
+                    url, timeout=self.config.timeout
+                )
                 if not fetch_result.is_success:
                     return (
                         CrawledPage(

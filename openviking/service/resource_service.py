@@ -429,7 +429,7 @@ class ResourceService:
         include_paths: Optional[str] = None,
         exclude_paths: Optional[str] = None,
         allow_external_links: bool = False,
-        use_playwright: bool = True,
+        use_playwright: bool = False,
         **kwargs,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking (only supports resources scope).
@@ -775,7 +775,7 @@ class ResourceService:
         reason: str,
         build_index: bool,
         summarize: bool,
-        use_playwright: bool = True,
+        use_playwright: bool = False,
         **kwargs,
     ) -> Any:
         from openviking.utils.crawl_filter import CrawlConfig
@@ -837,7 +837,7 @@ class ResourceService:
                                 with os.fdopen(fd, "w", encoding="utf-8") as f:
                                     f.write(content_to_save)
 
-                                await self.add_resource(
+                                add_result = await self.add_resource(
                                     path=temp_path,
                                     to=target_to,
                                     source_name=page.title or page.url,
@@ -851,12 +851,13 @@ class ResourceService:
                                     depth=0,
                                     **kwargs,
                                 )
+                                self._raise_if_child_add_failed(page.url, add_result)
                             finally:
                                 if os.path.exists(temp_path):
                                     os.remove(temp_path)
                         else:
                             # fallback (理论上不会发生)
-                            await self.add_resource(
+                            add_result = await self.add_resource(
                                 path=page.url,
                                 to=target_to,
                                 ctx=ctx,
@@ -868,6 +869,7 @@ class ResourceService:
                                 depth=0,
                                 **kwargs,
                             )
+                            self._raise_if_child_add_failed(page.url, add_result)
 
                         if page.depth == 0 and root_uri:
                             root_updated = True
@@ -898,6 +900,18 @@ class ResourceService:
             return crawl_result
         finally:
             await crawler.close()
+
+    @staticmethod
+    def _raise_if_child_add_failed(page_url: str, result: Dict[str, Any]) -> None:
+        if not isinstance(result, dict) or result.get("status") != "error":
+            return
+        message = (
+            result.get("error")
+            or result.get("message")
+            or result.get("detail")
+            or "unknown error"
+        )
+        raise RuntimeError(f"Child resource import failed for {page_url}: {message}")
 
     async def _monitor_queue_processing(
         self,

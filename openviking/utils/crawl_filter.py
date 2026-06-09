@@ -42,7 +42,7 @@ class CrawlConfig:
     concurrency: int = 5
     timeout: float = 10.0
     user_agent: Optional[str] = None
-    use_playwright: bool = True
+    use_playwright: bool = False
     request_validator: Optional[Callable[[str], None]] = None
 
     def __post_init__(self) -> None:
@@ -267,8 +267,6 @@ class CrawlFilter:
             normalized += "?" + "&".join(params)
         return normalized
 
-    def is_global_limit_reached(self, pages_crawled: int) -> bool:
-        return self.config.max_pages > 0 and pages_crawled >= self.config.max_pages
 
     def add_visited(self, url: str) -> None:
         self._visited.add(self.normalize_url(url))

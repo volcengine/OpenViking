@@ -15,6 +15,21 @@ from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+PLAYWRIGHT_PACKAGE_INSTALL_HINT = (
+    "Playwright rendering was explicitly requested, but the Python package is "
+    "not installed. Install it with `pip install playwright` or your project's "
+    "package manager, then install Chromium with "
+    "`python -m playwright install chromium`."
+)
+PLAYWRIGHT_CHROMIUM_INSTALL_HINT = (
+    "Playwright rendering was explicitly requested, but Chromium is not "
+    "installed or cannot be launched. Run "
+    "`python -m playwright install chromium` "
+    "(or `uv run python -m playwright install chromium` in a uv environment), "
+    "then retry. You can also omit `use_playwright:true` to use the default "
+    "static HTML fetcher."
+)
+
 
 @dataclass
 class FetchResult:
@@ -141,11 +156,18 @@ class PlaywrightFetcher(PageFetcher):
                 html="",
                 status_code=0,
                 final_url=url,
-                error="playwright not installed, run: pip install playwright && playwright install chromium",
+                error=PLAYWRIGHT_PACKAGE_INSTALL_HINT,
             )
         except Exception as e:
             logger.debug(f"[PlaywrightFetcher] Failed to fetch {url}: {e}")
-            return FetchResult(html="", status_code=0, final_url=url, error=str(e))
+            error = str(e)
+            if (
+                "Executable doesn't exist" in error
+                or "playwright install" in error
+                or "BrowserType.launch" in error
+            ):
+                error = PLAYWRIGHT_CHROMIUM_INSTALL_HINT
+            return FetchResult(html="", status_code=0, final_url=url, error=error)
         finally:
             if page:
                 try:
