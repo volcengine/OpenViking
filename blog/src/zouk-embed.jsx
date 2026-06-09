@@ -380,6 +380,98 @@ function parseInjectedMessage(content) {
   return { context, body: text.slice(match[0].length).trimStart() };
 }
 
+function splitMarkdownTableRow(line) {
+  const trimmed = String(line || '').trim();
+  if (!trimmed.includes('|')) return null;
+  let source = trimmed;
+  if (source.startsWith('|')) source = source.slice(1);
+  if (source.endsWith('|')) source = source.slice(0, -1);
+
+  const cells = [];
+  let current = '';
+  let escaped = false;
+  for (const char of source) {
+    if (escaped) {
+      current += char;
+      escaped = false;
+    } else if (char === '\\') {
+      escaped = true;
+    } else if (char === '|') {
+      cells.push(current.trim());
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  if (escaped) current += '\\';
+  cells.push(current.trim());
+  return cells.length >= 2 ? cells : null;
+}
+
+function tableDividerAlignment(cell) {
+  const value = String(cell || '').trim();
+  if (!/^:?-{3,}:?$/.test(value)) return '';
+  if (value.startsWith(':') && value.endsWith(':')) return 'center';
+  if (value.endsWith(':')) return 'right';
+  return 'left';
+}
+
+function normalizeTableCells(cells, size) {
+  return Array.from({ length: size }, (_, index) => cells[index] || '');
+}
+
+function parseMarkdownTableBlocks(content) {
+  const lines = String(content || '').split('\n');
+  const blocks = [];
+  let textLines = [];
+
+  const flushText = () => {
+    if (!textLines.length) return;
+    blocks.push({ type: 'text', text: textLines.join('\n') });
+    textLines = [];
+  };
+
+  for (let index = 0; index < lines.length;) {
+    const header = splitMarkdownTableRow(lines[index]);
+    const divider = splitMarkdownTableRow(lines[index + 1]);
+    const align = divider?.map(tableDividerAlignment) || [];
+    const isTable = Boolean(
+      header
+      && divider
+      && header.length >= 2
+      && divider.length === header.length
+      && align.every(Boolean),
+    );
+
+    if (!isTable) {
+      textLines.push(lines[index]);
+      index += 1;
+      continue;
+    }
+
+    const rows = [];
+    let nextIndex = index + 2;
+    while (nextIndex < lines.length) {
+      const row = splitMarkdownTableRow(lines[nextIndex]);
+      if (!row) break;
+      rows.push(normalizeTableCells(row, header.length));
+      nextIndex += 1;
+    }
+
+    flushText();
+    blocks.push({
+      type: 'table',
+      header: normalizeTableCells(header, header.length),
+      align,
+      rows,
+    });
+    index = nextIndex;
+  }
+
+  flushText();
+  return blocks.length ? blocks : [{ type: 'text', text: String(content || '') }];
+}
+
 function avatarLabel(name) {
   const clean = String(name || 'z').replace(/^@/, '').trim();
   return (clean[0] || 'z').toUpperCase();
@@ -442,6 +534,7 @@ function ContextPreview({ sourceUrl, referencedText, includeUrl }) {
 
 function MessageBody({ content }) {
   const parsed = parseInjectedMessage(content);
+  const blocks = useMemo(() => parseMarkdownTableBlocks(parsed.body), [parsed.body]);
   return (
     <>
       {parsed.context ? (
@@ -454,7 +547,40 @@ function MessageBody({ content }) {
           ))}
         </div>
       ) : null}
-      {parsed.body ? <div className="zouk-message-text">{parsed.body}</div> : null}
+      {parsed.body ? (
+        <div className="zouk-message-content">
+          {blocks.map((block, index) => (
+            block.type === 'table' ? (
+              <div className="zouk-message-table-wrap" key={`table-${index}`}>
+                <table className="zouk-message-table">
+                  <thead>
+                    <tr>
+                      {block.header.map((cell, cellIndex) => (
+                        <th key={`head-${cellIndex}`} style={{ textAlign: block.align[cellIndex] || 'left' }}>
+                          {cell}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {block.rows.map((row, rowIndex) => (
+                      <tr key={`row-${rowIndex}`}>
+                        {row.map((cell, cellIndex) => (
+                          <td key={`cell-${rowIndex}-${cellIndex}`} style={{ textAlign: block.align[cellIndex] || 'left' }}>
+                            {cell}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="zouk-message-text" key={`text-${index}`}>{block.text}</div>
+            )
+          ))}
+        </div>
+      ) : null}
     </>
   );
 }

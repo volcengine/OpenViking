@@ -935,7 +935,7 @@ html {
   background: var(--th-bg-2);
   color: var(--th-ink);
   font-size: 14px;
-  white-space: pre-wrap;
+  white-space: normal;
   overflow-wrap: anywhere;
 }
 
@@ -1074,7 +1074,7 @@ html {
   border-radius: 10px;
   background: color-mix(in oklab, var(--th-bg-2) 66%, transparent);
   font-size: 12px;
-  white-space: pre-wrap;
+  white-space: normal;
   overflow-wrap: anywhere;
 }
 
@@ -1123,6 +1123,58 @@ html {
 
 .zouk-message-text {
   line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.zouk-message-content {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.zouk-message-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid color-mix(in oklab, var(--th-line) 82%, transparent);
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--th-bg) 76%, transparent);
+  -webkit-overflow-scrolling: touch;
+}
+
+.zouk-message-table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  line-height: 1.35;
+  white-space: normal;
+}
+
+.zouk-message-table th,
+.zouk-message-table td {
+  min-width: 88px;
+  max-width: 180px;
+  padding: 7px 8px;
+  border-right: 1px solid color-mix(in oklab, var(--th-line) 72%, transparent);
+  border-bottom: 1px solid color-mix(in oklab, var(--th-line) 72%, transparent);
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.zouk-message-table th:last-child,
+.zouk-message-table td:last-child {
+  border-right: 0;
+}
+
+.zouk-message-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.zouk-message-table th {
+  background: color-mix(in oklab, var(--th-bg-2) 82%, transparent);
+  color: var(--th-ink);
+  font-weight: 700;
 }
 
 .zouk-reader-composer {
