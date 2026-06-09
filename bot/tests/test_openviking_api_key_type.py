@@ -12,9 +12,11 @@ from vikingbot.agent.tools.ov_file import (
     VikingMemoryCommitTool,
     VikingSearchTool,
 )
+from vikingbot.agent.tools import ov_file as ov_file_module
 from vikingbot.config import loader as config_loader_module
 from vikingbot.config.schema import SessionKey
 from vikingbot.hooks.base import HookContext
+from vikingbot.hooks.builtins import openviking_hooks as openviking_hooks_module
 from vikingbot.hooks.builtins.openviking_hooks import OpenVikingCompactHook
 from vikingbot.openviking_mount import ov_server as ov_server_module
 from vikingbot.openviking_mount.ov_server import VikingClient
@@ -1493,14 +1495,69 @@ async def test_openviking_memory_commit_prefers_sender_in_static_multi_user_bot(
         messages=[{"role": "user", "content": "remember this"}],
     )
 
-    assert json.loads(result)["status"] == "success"
+    payload = json.loads(result)
+    assert payload["status"] == "success"
     assert calls == [
         (
-            "session-1",
+            payload["memory_commit_session_id"],
             [{"role": "user", "content": "remember this"}],
             "alice",
         )
     ]
+    assert payload["session_id"] == payload["memory_commit_session_id"]
+    assert payload["source_session_id"] == "session-1"
+    assert payload["memory_commit_session_id"].startswith("session-1__memory_commit__")
+
+
+@pytest.mark.asyncio
+async def test_openviking_hook_clients_are_cached_by_workspace(monkeypatch):
+    openviking_hooks_module._global_clients.clear()
+    created_workspace_ids = []
+
+    class _FakeVikingClient:
+        @classmethod
+        async def create(cls, workspace_id=None):
+            created_workspace_ids.append(workspace_id)
+            return SimpleNamespace(workspace_id=workspace_id)
+
+    monkeypatch.setattr(openviking_hooks_module, "VikingClient", _FakeVikingClient)
+
+    ws_a_first = await openviking_hooks_module.get_global_client("workspace-a")
+    ws_a_second = await openviking_hooks_module.get_global_client("workspace-a")
+    ws_b = await openviking_hooks_module.get_global_client("workspace-b")
+
+    assert ws_a_first is ws_a_second
+    assert ws_a_first is not ws_b
+    assert created_workspace_ids == ["workspace-a", "workspace-b"]
+    openviking_hooks_module._global_clients.clear()
+
+
+@pytest.mark.asyncio
+async def test_openviking_tool_clients_are_cached_by_workspace(monkeypatch):
+    created_workspace_ids = []
+
+    class _FakeVikingClient:
+        @classmethod
+        async def create(cls, workspace_id=None, **kwargs):
+            created_workspace_ids.append(workspace_id)
+            return SimpleNamespace(workspace_id=workspace_id)
+
+    monkeypatch.setattr(ov_file_module, "VikingClient", _FakeVikingClient)
+    tool = VikingSearchTool()
+
+    ws_a_first = await tool._get_client(
+        SimpleNamespace(workspace_id="workspace-a", openviking_connection=None)
+    )
+    ws_a_second = await tool._get_client(
+        SimpleNamespace(workspace_id="workspace-a", openviking_connection=None)
+    )
+    ws_b = await tool._get_client(
+        SimpleNamespace(workspace_id="workspace-b", openviking_connection=None)
+    )
+
+    assert ws_a_first is ws_a_second
+    assert ws_a_first is not ws_b
+    assert created_workspace_ids == ["workspace-a", "workspace-b"]
 
 
 @pytest.mark.asyncio

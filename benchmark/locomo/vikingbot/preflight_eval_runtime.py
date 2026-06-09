@@ -68,6 +68,12 @@ def _resolve_openviking_url() -> str:
     if path is not None:
         try:
             data = _load_json(Path(path))
+            bot_server_url = str(
+                ((data.get("bot") or {}).get("ov_server") or {}).get("server_url") or ""
+            ).strip()
+            if bot_server_url:
+                return bot_server_url.rstrip("/")
+
             server = data.get("server") or {}
             parsed_host = str(server.get("host") or "").strip()
             parsed_port = server.get("port")

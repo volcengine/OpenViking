@@ -26,16 +26,17 @@ except Exception:
     VikingClient = None
     ov = None
 
-_global_client: Any = None
+_global_clients: dict[str, Any] = {}
 
 
 async def get_global_client(workspace_id: str | None) -> VikingClient:
     """Get or create the shared VikingClient."""
-    del workspace_id
-    global _global_client
-    if _global_client is None:
-        _global_client = await VikingClient.create()
-    return _global_client
+    cache_key = str(workspace_id or "__default__")
+    client = _global_clients.get(cache_key)
+    if client is None:
+        client = await VikingClient.create(workspace_id)
+        _global_clients[cache_key] = client
+    return client
 
 
 class OpenVikingCompactHook(Hook):

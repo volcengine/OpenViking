@@ -29,7 +29,7 @@ class OVFileTool(Tool, ABC):
                 tool_context.workspace_id,
                 connection=tool_context.openviking_connection,
             )
-        cache_key = "__default__"
+        cache_key = str(tool_context.workspace_id or "__default__")
         client = self._clients.get(cache_key)
         if client is None:
             client = await VikingClient.create(tool_context.workspace_id)
@@ -771,8 +771,10 @@ class VikingMemoryCommitTool(OVFileTool):
             client = await self._get_client(tool_context)
             if not tool_context.sender_id:
                 return "Error: peer id is required for OpenViking memory commit."
-            session_id = tool_context.session_key.safe_name()
-            result = await client.commit(str(uuid.uuid4()), messages, peer_id=tool_context.sender_id)
+            source_session_id = tool_context.session_key.safe_name()
+            session_id = f"{source_session_id}__memory_commit__{uuid.uuid4().hex}"
+            result = await client.commit(session_id, messages, peer_id=tool_context.sender_id)
+            session_id = result.get("session_id", session_id) if isinstance(result, dict) else session_id
             commit_result = result.get("commit", {}) if isinstance(result, dict) else {}
             archive_uri = commit_result.get("archive_uri")
             memory_diff_uri = f"{archive_uri}/memory_diff.json" if archive_uri else None
@@ -792,6 +794,8 @@ class VikingMemoryCommitTool(OVFileTool):
                 {
                     "status": "success",
                     "session_id": session_id,
+                    "memory_commit_session_id": session_id,
+                    "source_session_id": source_session_id,
                     "message_count": len(messages),
                     "archived": commit_result.get("archived"),
                     **changed_uris,
