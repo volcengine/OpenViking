@@ -32,7 +32,7 @@ class AuthMode(str, Enum):
 class AccountNamespacePolicy:
     """Account-level namespace isolation policy."""
 
-    isolate_user_scope_by_agent: bool = False
+    isolate_user_scope_by_agent: bool = True
     isolate_agent_scope_by_user: bool = False
 
     @classmethod
@@ -40,7 +40,7 @@ class AccountNamespacePolicy:
         if not isinstance(data, dict):
             return cls()
         return cls(
-            isolate_user_scope_by_agent=bool(data.get("isolate_user_scope_by_agent", False)),
+            isolate_user_scope_by_agent=bool(data.get("isolate_user_scope_by_agent", True)),
             isolate_agent_scope_by_user=bool(data.get("isolate_agent_scope_by_user", False)),
         )
 

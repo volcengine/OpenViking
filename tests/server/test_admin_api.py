@@ -729,7 +729,7 @@ async def test_trusted_mode_root_can_create_account(
     assert body["result"]["account_id"] == acct
     assert body["result"]["admin_user_id"] == "alice"
     assert body["result"]["isolate_user_scope_by_agent"] is True
-    assert body["result"]["isolate_agent_scope_by_user"] is True
+    assert body["result"]["isolate_agent_scope_by_user"] is False
     assert "user_key" not in body["result"]
 
 

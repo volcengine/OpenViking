@@ -174,9 +174,9 @@ class LegacyAPIKeyManager:
         return AccountNamespacePolicy(), True, False
 
     def _infer_legacy_namespace_policy(self) -> AccountNamespacePolicy:
-        """Map pre-policy accounts to the compatibility default namespace policy."""
+        """Map accounts without settings to the temporary forced namespace policy."""
         return AccountNamespacePolicy(
-            isolate_user_scope_by_agent=False,
+            isolate_user_scope_by_agent=True,
             isolate_agent_scope_by_user=False,
         )
 

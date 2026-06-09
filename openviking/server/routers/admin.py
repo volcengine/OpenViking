@@ -91,9 +91,10 @@ async def create_account(
 ):
     """Create a new account (workspace) with its first admin user."""
     manager = _get_api_key_manager(request)
+    # Temporary hard override: force namespace policy for every created account.
     policy = AccountNamespacePolicy(
-        isolate_user_scope_by_agent=body.isolate_user_scope_by_agent,
-        isolate_agent_scope_by_user=body.isolate_agent_scope_by_user,
+        isolate_user_scope_by_agent=True,
+        isolate_agent_scope_by_user=False,
     )
     user_key = await manager.create_account(
         body.account_id,
