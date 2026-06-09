@@ -268,6 +268,7 @@ class AsyncOpenViking:
         summarize: bool = False,
         watch_interval: float = 0,
         telemetry: TelemetryRequest = False,
+        args: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -283,6 +284,7 @@ class AsyncOpenViking:
             build_index: Whether to build vector index immediately (default: True).
             summarize: Whether to generate summary (default: False).
             telemetry: Whether to attach operation telemetry data to the result.
+            args: Parser-specific or import-specific extension options.
         """
         await self._ensure_initialized()
 
@@ -301,6 +303,7 @@ class AsyncOpenViking:
             summarize=summarize,
             telemetry=telemetry,
             watch_interval=watch_interval,
+            args=args,
             **kwargs,
         )
 

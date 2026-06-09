@@ -217,7 +217,7 @@ class HTMLParser(BaseParser):
         )
         # 清除 Markdown 图片 URL 后面的非标准尺寸后缀 (例如 =4881x 或 =500x300)
         markdown = re.sub(r"(!\[[^\]]*\]\([^)]+?)(?:\s+=\d*x\d*)(?=\))", r"\1", markdown)
-        
+
         # 移除空锚点，例如 <span id="..."></span> 或 <a name="..."></a>
         markdown = re.sub(r"<(span|a)\s+(?:id|name)=['\"][^'\"]*['\"]\s*>\s*</\1>", "", markdown)
 
@@ -230,7 +230,7 @@ class HTMLParser(BaseParser):
         from bs4 import BeautifulSoup
 
         soup = BeautifulSoup(html, "html.parser")
-        
+
         # Remove noisy tags completely before processing
         for el in soup(["script", "noscript", "style"]):
             el.decompose()

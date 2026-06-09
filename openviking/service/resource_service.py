@@ -65,6 +65,77 @@ class _ResourceSourceInfo:
     source_format: Optional[str] = None
 
 
+_CRAWL_ARG_FIELDS = frozenset(
+    {
+        "depth",
+        "max_pages",
+        "include_paths",
+        "exclude_paths",
+        "allow_external_links",
+        "use_playwright",
+    }
+)
+
+_CORE_ADD_RESOURCE_ARG_FIELDS = frozenset(
+    {
+        "path",
+        "ctx",
+        "to",
+        "parent",
+        "reason",
+        "instruction",
+        "wait",
+        "timeout",
+        "build_index",
+        "summarize",
+        "watch_interval",
+        "skip_watch_management",
+        "allow_local_path_resolution",
+        "enforce_public_remote_targets",
+        "strict",
+        "source_name",
+        "ignore_dirs",
+        "include",
+        "exclude",
+        "directly_upload_media",
+        "preserve_structure",
+        "create_parent",
+        "telemetry",
+        "args",
+    }
+)
+
+
+def _pop_int_arg(
+    args: Dict[str, Any],
+    key: str,
+    default: int,
+    min_value: Optional[int] = None,
+) -> int:
+    value = args.pop(key, default)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise InvalidArgumentError(f"args.{key} must be an integer.")
+    if min_value is not None and value < min_value:
+        raise InvalidArgumentError(f"args.{key} must be >= {min_value}.")
+    return value
+
+
+def _pop_bool_arg(args: Dict[str, Any], key: str, default: bool) -> bool:
+    value = args.pop(key, default)
+    if not isinstance(value, bool):
+        raise InvalidArgumentError(f"args.{key} must be a boolean.")
+    return value
+
+
+def _pop_optional_str_arg(args: Dict[str, Any], key: str) -> Optional[str]:
+    value = args.pop(key, None)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise InvalidArgumentError(f"args.{key} must be a string.")
+    return value
+
+
 class ResourceService:
     """Resource management service."""
 
@@ -424,12 +495,7 @@ class ResourceService:
         enforce_public_remote_targets: bool = False,
         resource_lock: Optional[LockLease] = None,
         stage_callback: Optional[Callable[[str], Any]] = None,
-        depth: int = 0,
-        max_pages: int = 100,
-        include_paths: Optional[str] = None,
-        exclude_paths: Optional[str] = None,
-        allow_external_links: bool = False,
-        use_playwright: bool = False,
+        args: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking (only supports resources scope).
@@ -459,6 +525,8 @@ class ResourceService:
                 avoid recursive watch task creation during scheduled execution)
             enforce_public_remote_targets: When True, reject non-public remote hosts and
                 validate each outbound HTTP request URL during fetch.
+            args: Parser-specific or import-specific extension options. Recursive web
+                crawler options such as depth/max_pages/include_paths are passed here.
             **kwargs: Extra options forwarded to the parser chain
 
         Returns:
@@ -469,6 +537,31 @@ class ResourceService:
             InvalidArgumentError: If the URI scope is not 'resources'
         """
         self._ensure_initialized()
+
+        top_level_crawl_args = sorted(key for key in kwargs if key in _CRAWL_ARG_FIELDS)
+        if top_level_crawl_args:
+            raise InvalidArgumentError(
+                "Crawler options must be passed via args, not as top-level "
+                f"add_resource arguments: {', '.join(top_level_crawl_args)}"
+            )
+
+        resource_args = dict(args or {})
+        reserved_args = sorted(
+            key for key in resource_args if key in _CORE_ADD_RESOURCE_ARG_FIELDS
+        )
+        if reserved_args:
+            raise InvalidArgumentError(
+                "args cannot include core add_resource fields: "
+                + ", ".join(reserved_args)
+            )
+        depth = _pop_int_arg(resource_args, "depth", 0)
+        max_pages = _pop_int_arg(resource_args, "max_pages", 100, min_value=1)
+        include_paths = _pop_optional_str_arg(resource_args, "include_paths")
+        exclude_paths = _pop_optional_str_arg(resource_args, "exclude_paths")
+        allow_external_links = _pop_bool_arg(resource_args, "allow_external_links", False)
+        use_playwright = _pop_bool_arg(resource_args, "use_playwright", False)
+        kwargs.update(resource_args)
+
         if not wait and is_git_repo_url(path):
             return await self.enqueue_git_add_resource(
                 path=path,
@@ -848,7 +941,7 @@ class ResourceService:
                                     reason=reason,
                                     build_index=build_index,
                                     summarize=summarize,
-                                    depth=0,
+                                    args={"depth": 0},
                                     **kwargs,
                                 )
                                 self._raise_if_child_add_failed(page.url, add_result)
@@ -866,7 +959,7 @@ class ResourceService:
                                 reason=reason,
                                 build_index=build_index,
                                 summarize=summarize,
-                                depth=0,
+                                args={"depth": 0},
                                 **kwargs,
                             )
                             self._raise_if_child_add_failed(page.url, add_result)

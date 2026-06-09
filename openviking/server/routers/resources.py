@@ -23,60 +23,6 @@ from openviking_cli.session.user_id import UserIdentifier
 
 router = APIRouter(prefix="/api/v1", tags=["resources"])
 
-_RESERVED_ADD_RESOURCE_ARG_FIELDS = frozenset(
-    {
-        "path",
-        "temp_file_id",
-        "to",
-        "parent",
-        "create_parent",
-        "reason",
-        "instruction",
-        "wait",
-        "timeout",
-        "strict",
-        "source_name",
-        "ignore_dirs",
-        "include",
-        "exclude",
-        "directly_upload_media",
-        "preserve_structure",
-        "telemetry",
-        "watch_interval",
-        "args",
-    }
-)
-
-
-def _pop_int_arg(
-    args: dict[str, Any],
-    key: str,
-    default: int,
-    min_value: Optional[int] = None,
-) -> int:
-    value = args.pop(key, default)
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise InvalidArgumentError(f"args.{key} must be an integer.")
-    if min_value is not None and value < min_value:
-        raise InvalidArgumentError(f"args.{key} must be >= {min_value}.")
-    return value
-
-
-def _pop_bool_arg(args: dict[str, Any], key: str, default: bool) -> bool:
-    value = args.pop(key, default)
-    if not isinstance(value, bool):
-        raise InvalidArgumentError(f"args.{key} must be a boolean.")
-    return value
-
-
-def _pop_optional_str_arg(args: dict[str, Any], key: str) -> Optional[str]:
-    value = args.pop(key, None)
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise InvalidArgumentError(f"args.{key} must be a string.")
-    return value
-
 
 class AddResourceRequest(BaseModel):
     """Request model for add_resource.
@@ -287,23 +233,6 @@ async def add_resource(
     if request.preserve_structure is not None:
         kwargs["preserve_structure"] = request.preserve_structure
 
-    resource_args = dict(request.args or {})
-    reserved_args = sorted(
-        key for key in resource_args if key in _RESERVED_ADD_RESOURCE_ARG_FIELDS
-    )
-    if reserved_args:
-        raise InvalidArgumentError(
-            "args cannot include core add_resource fields: "
-            + ", ".join(reserved_args)
-        )
-    depth = _pop_int_arg(resource_args, "depth", 0)
-    max_pages = _pop_int_arg(resource_args, "max_pages", 100, min_value=1)
-    include_paths = _pop_optional_str_arg(resource_args, "include_paths")
-    exclude_paths = _pop_optional_str_arg(resource_args, "exclude_paths")
-    allow_external_links = _pop_bool_arg(resource_args, "allow_external_links", False)
-    use_playwright = _pop_bool_arg(resource_args, "use_playwright", False)
-    kwargs.update(resource_args)
-
     # Resolve path variables before passing to service
     to = resolve_path_variables(request.to) if request.to else None
     parent = resolve_path_variables(request.parent) if request.parent else None
@@ -321,12 +250,7 @@ async def add_resource(
                 timeout=request.timeout,
                 allow_local_path_resolution=allow_local_path_resolution,
                 enforce_public_remote_targets=True,
-                depth=depth,
-                max_pages=max_pages,
-                include_paths=include_paths,
-                exclude_paths=exclude_paths,
-                allow_external_links=allow_external_links,
-                use_playwright=use_playwright,
+                args=request.args,
                 **kwargs,
             )
         except Exception:

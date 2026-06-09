@@ -177,6 +177,7 @@ class SyncOpenViking:
         build_index: bool = True,
         summarize: bool = False,
         telemetry: TelemetryRequest = False,
+        args: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking (resources scope only)
@@ -203,6 +204,7 @@ class SyncOpenViking:
                 build_index=build_index,
                 summarize=summarize,
                 telemetry=telemetry,
+                args=args,
                 **kwargs,
             )
         )

@@ -54,7 +54,7 @@ class WebCrawler:
         fetcher: Optional[PageFetcher] = None,
     ) -> None:
         self.config = config
-        
+
         if fetcher:
             self._fetcher = fetcher
         elif getattr(self.config, 'use_playwright', False):
@@ -72,37 +72,37 @@ class WebCrawler:
 
     def _is_empty_spa_page(self, html: str) -> bool:
         html_lower = html.lower().strip()
-        
+
         has_js_required_pattern = any(
             pattern.lower() in html_lower for pattern in self.SPA_EMPTY_PATTERNS
         )
-        
+
         if not has_js_required_pattern:
             return False
-        
+
         # 页面包含 JS 提示，但我们还需要确认它是否真的没有实际内容
         # 如果 HTML 很小（比如 < 1000 字符），那肯定是空壳
         if len(html_lower) < 1000:
             return True
-            
+
         from bs4 import BeautifulSoup
         try:
             soup = BeautifulSoup(html, "html.parser")
             body = soup.body
             if not body:
                 return True
-            
+
             # 移除 script 和 noscript 后的纯文本
             for el in body(["script", "noscript", "style"]):
                 el.decompose()
-                
+
             text_content = body.get_text(strip=True)
             if len(text_content) < 200:
                 return True
-                
+
         except Exception:
             pass
-        
+
         return False
 
     async def crawl(
@@ -236,7 +236,7 @@ class WebCrawler:
                     markdown_content = None
                     if ssr_result.docs and ssr_result.docs[0].content:
                         markdown_content = ssr_result.docs[0].content
-                    
+
                     page = CrawledPage(
                         url=canonical_url,
                         depth=depth,
