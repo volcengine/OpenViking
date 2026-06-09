@@ -51,10 +51,12 @@ class TestRewriteRelativeLinks:
         )
         assert out == "[x](../../目录甲/目录乙/目录丙/文档/)"
 
-    async def test_image_keeps_filename_only_adjusts_depth(self, tmp_path: Path):
+    async def test_image_embed_left_to_ingest(self, tmp_path: Path):
+        # Image embeds (![...]) are owned entirely by #2429's _ingest_local_images;
+        # link rewriting must leave them untouched.
         kb = self._make_tree(tmp_path)
         out = await self._rewrite(self._parser(), kb, "![p](./img/a.png)")
-        assert out == "![p](../img/a.png)"
+        assert out == "![p](./img/a.png)"
 
     async def test_external_anchor_absolute_unchanged(self, tmp_path: Path):
         kb = self._make_tree(tmp_path)
@@ -143,7 +145,7 @@ class TestRewriteRelativeLinks:
         )
         assert out == (
             "a [1](../目录甲/目录乙/目录丙/文档/) "
-            "b ![p](../img/a.png)"
+            "b ![p](./img/a.png)"  # image embed left to #2429, not rewritten
         )
 
     async def test_future_bare_file_layout_points_at_file(self, tmp_path: Path):
@@ -214,6 +216,18 @@ class FakeVikingFS:
     async def read(self, uri, offset=0, size=-1):
         return self.files.get(uri, b"")
 
+    async def read_file(self, uri):
+        data = self.files.get(uri, b"")
+        return data.decode("utf-8") if isinstance(data, bytes) else data
+
+    async def glob(self, pattern, uri="", **kw):
+        # Mirror VikingFS.glob enough for _ingest_local_images, which only ever asks
+        # for "*.md" under a root: list stored files matching the pattern's suffix.
+        suffix = pattern.lstrip("*")
+        prefix = uri.rstrip("/") + "/"
+        matches = [u for u in self.files if u.startswith(prefix) and u.endswith(suffix)]
+        return {"matches": matches}
+
     async def ls(self, uri, node_limit=None):
         prefix = uri.rstrip("/") + "/"
         children = {}
@@ -254,6 +268,34 @@ class FakeVikingFS:
 
 def _decode(v):
     return v.decode("utf-8") if isinstance(v, bytes) else v
+
+
+class TestComputeLayoutPurity:
+    """parse/write split: _compute_layout plans the VikingFS layout but writes nothing,
+    so the link-rewrite in-memory probe can reuse it without a fake FS or any side effect."""
+
+    async def test_compute_layout_plans_sections_without_touching_vikingfs(self, tmp_path: Path):
+        # A multi-section document large enough to split into several section files.
+        src = tmp_path / "big.md"
+        body = "".join(
+            f"## 第{i}章\n\n" + ("正文内容。" * 400) + "\n\n" for i in range(1, 4)
+        )
+        src.write_text(body, encoding="utf-8")
+
+        fake = FakeVikingFS()
+        with patch.object(BaseParser, "_get_viking_fs", return_value=fake):
+            parser = MarkdownParser()
+            layout = await parser._compute_layout(
+                parser._read_file(src), temp_uri="viking://temp/probe", source_path=str(src)
+            )
+
+        # The plan enumerates the section writes (raw content, before any rewrite)...
+        writes = [op for op in layout.ops if op.kind == "write"]
+        assert len(writes) >= 2, layout.ops
+        assert all(op.content for op in writes)
+        # ...yet nothing was ever written to VikingFS: planning is side-effect free.
+        assert fake.files == {}
+        assert fake.dirs == []
 
 
 class TestParseContentRewiring:
