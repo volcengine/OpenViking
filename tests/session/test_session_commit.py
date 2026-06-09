@@ -64,15 +64,14 @@ class TestCommit:
     ):
         config = MagicMock()
         config.memory.extraction_enabled = False
-        config.memory.agent_memory_enabled = False
         config.memory.session_skill_extraction_enabled = True
         monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
 
         session_with_messages._session_compressor.extract_long_term_memories = AsyncMock(
             return_value=[]
         )
-        if hasattr(session_with_messages._session_compressor, "extract_agent_memories"):
-            session_with_messages._session_compressor.extract_agent_memories = AsyncMock(
+        if hasattr(session_with_messages._session_compressor, "extract_execution_memories"):
+            session_with_messages._session_compressor.extract_execution_memories = AsyncMock(
                 return_value={
                     "contexts": [],
                     "session_skills": [{"uri": "viking://user/test/skills/code-review"}],
@@ -89,22 +88,21 @@ class TestCommit:
             "viking://user/test/skills/code-review"
         ]
         session_with_messages._session_compressor.extract_long_term_memories.assert_not_awaited()
-        session_with_messages._session_compressor.extract_agent_memories.assert_awaited_once()
+        session_with_messages._session_compressor.extract_execution_memories.assert_awaited_once()
 
     async def test_commit_skips_session_skill_extraction_when_disabled(
         self, session_with_messages: Session, monkeypatch
     ):
         config = MagicMock()
         config.memory.extraction_enabled = True
-        config.memory.agent_memory_enabled = False
         config.memory.session_skill_extraction_enabled = False
         monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
 
         session_with_messages._session_compressor.extract_long_term_memories = AsyncMock(
             return_value=[]
         )
-        if hasattr(session_with_messages._session_compressor, "extract_agent_memories"):
-            session_with_messages._session_compressor.extract_agent_memories = AsyncMock(
+        if hasattr(session_with_messages._session_compressor, "extract_execution_memories"):
+            session_with_messages._session_compressor.extract_execution_memories = AsyncMock(
                 return_value={"contexts": [], "session_skills": []}
             )
 
@@ -115,7 +113,11 @@ class TestCommit:
         assert task_result["result"]["session_skills_extracted"] == 0
         assert task_result["result"]["session_skill_uris"] == []
         session_with_messages._session_compressor.extract_long_term_memories.assert_awaited_once()
-        session_with_messages._session_compressor.extract_agent_memories.assert_not_awaited()
+        session_with_messages._session_compressor.extract_execution_memories.assert_awaited_once()
+        call_kwargs = (
+            session_with_messages._session_compressor.extract_execution_memories.call_args.kwargs
+        )
+        assert call_kwargs["include_session_skills"] is False
 
     async def test_commit_routes_peer_memory_with_single_full_context_pass(
         self,
@@ -125,13 +127,12 @@ class TestCommit:
         """Peer memory uses one full-context extraction and operation-level routing."""
         config = MagicMock()
         config.memory.extraction_enabled = True
-        config.memory.agent_memory_enabled = True
         config.memory.session_skill_extraction_enabled = True
         monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
 
         session = client.session(session_id="peer_memory_role_routing_test")
         long_term_calls: list[dict] = []
-        agent_calls: list[dict] = []
+        execution_calls: list[dict] = []
 
         async def fake_summary(messages, latest_archive_overview=""):
             del messages, latest_archive_overview
@@ -158,7 +159,7 @@ class TestCommit:
             )
             return []
 
-        async def fake_agent_extract(
+        async def fake_execution_extract(
             *,
             messages,
             allowed_memory_types,
@@ -166,7 +167,7 @@ class TestCommit:
             **kwargs,
         ):
             del kwargs
-            agent_calls.append(
+            execution_calls.append(
                 {
                     "allowed_memory_types": set(allowed_memory_types or set()),
                     "include_session_skills": include_session_skills,
@@ -178,7 +179,7 @@ class TestCommit:
         monkeypatch.setattr(session, "_generate_archive_summary_async", fake_summary)
         monkeypatch.setattr(session._session_compressor, "extract_long_term_memories", fake_extract)
         monkeypatch.setattr(
-            session._session_compressor, "extract_agent_memories", fake_agent_extract
+            session._session_compressor, "extract_execution_memories", fake_execution_extract
         )
 
         session.add_message(
@@ -195,7 +196,8 @@ class TestCommit:
         result = await session.commit_async(
             memory_policy={
                 "self": {"enabled": False},
-                "peer": {"enabled": True, "types": ["profile"]},
+                "peer": {"enabled": True},
+                "memory_types": ["profile"],
             }
         )
         task_result = await _wait_for_task(result["task_id"])
@@ -205,16 +207,7 @@ class TestCommit:
         assert long_term_calls == [
             {
                 "allowed_memory_types": {
-                    "cases",
-                    "entities",
-                    "events",
-                    "identity",
-                    "patterns",
-                    "preferences",
                     "profile",
-                    "skills",
-                    "soul",
-                    "tools",
                 },
                 "allow_self_memory": False,
                 "allowed_peer_ids": {"web:visitor:alice"},
@@ -222,7 +215,7 @@ class TestCommit:
                 "peer_ids": ["web:visitor:alice", "web:visitor:alice"],
             },
         ]
-        assert agent_calls == []
+        assert execution_calls == []
 
     async def test_commit_archives_messages(self, session_with_messages: Session):
         """Test commit archives messages"""

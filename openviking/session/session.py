@@ -19,11 +19,7 @@ from openviking.message import Message, Part
 from openviking.message.part import ContextPart, TextPart, ToolPart
 from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.server.identity import RequestContext, Role
-from openviking.session.memory_policy import (
-    DEFAULT_AGENT_MEMORY_TYPES,
-    DEFAULT_LONG_TERM_MEMORY_TYPES,
-    MemoryPolicy,
-)
+from openviking.session.memory_policy import MemoryPolicy
 from openviking.session.tool_result_store import (
     ToolResultStore,
     build_tool_result_id,
@@ -60,22 +56,25 @@ def _wm_debug(msg: str) -> None:
     logger.debug("wm_v2: %s", msg)
 
 
-def _known_memory_types() -> set[str]:
-    """Return memory types accepted by commit memory_policy."""
-    names = set(DEFAULT_LONG_TERM_MEMORY_TYPES) | set(DEFAULT_AGENT_MEMORY_TYPES)
-    try:
-        from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
+def _enabled_memory_types() -> set[str]:
+    """Return enabled memory type names registered for extraction."""
+    from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 
-        names.update(MemoryTypeRegistry().list_names())
-    except Exception:
-        logger.debug("Failed to load v2 memory type registry", exc_info=True)
-    return names
+    return {
+        memory_type
+        for schema in MemoryTypeRegistry().list_all()
+        if (memory_type := getattr(schema, "memory_type", ""))
+    }
+
+
+def _validate_memory_policy_types(policy: MemoryPolicy) -> None:
+    if policy.memory_types is None:
+        return
+    policy.validate_memory_types(_enabled_memory_types())
 
 
 def _default_memory_counts() -> Dict[str, int]:
-    counts = dict.fromkeys(sorted(DEFAULT_LONG_TERM_MEMORY_TYPES), 0)
-    counts["total"] = 0
-    return counts
+    return {"total": 0}
 
 
 def _message_peer_ids(messages: List[Message]) -> set[str]:
@@ -1083,6 +1082,7 @@ class Session:
             session_policy=self._meta.memory_policy,
             commit_policy=memory_policy,
         )
+        _validate_memory_policy_types(effective_policy)
         effective_memory_policy = effective_policy.to_dict()
         logger.info(
             f"[TRACER] session_commit started, trace_id={trace_id}, "
@@ -1347,10 +1347,9 @@ class Session:
                                 ctx=self.ctx,
                             )
 
-                    # Summary generation, user memory and agent memory all run concurrently.
+                    # Summary, long-term memory, and execution-derived memory run concurrently.
                     ov_config = get_openviking_config()
                     memory_extraction_enabled = ov_config.memory.extraction_enabled
-                    agent_memory_enabled = ov_config.memory.agent_memory_enabled
                     config_session_skill_extraction_enabled = (
                         ov_config.memory.session_skill_extraction_enabled
                     )
@@ -1363,37 +1362,42 @@ class Session:
                     session_skill_extraction_enabled = (
                         config_session_skill_extraction_enabled and self_memory_enabled
                     )
-                    registered_memory_types = _known_memory_types()
-                    agent_allowed_types = (
-                        registered_memory_types & DEFAULT_AGENT_MEMORY_TYPES
-                        if agent_memory_enabled and memory_extraction_enabled
-                        else set()
+                    memory_type_filter = effective_policy.memory_types
+                    memory_type_filter_has_work = memory_type_filter is None or bool(
+                        memory_type_filter
                     )
-                    self_agent_types = agent_allowed_types if self_memory_enabled else set()
-                    long_term_allowed_types = (
-                        registered_memory_types & DEFAULT_LONG_TERM_MEMORY_TYPES
-                        if memory_extraction_enabled and (self_memory_enabled or allowed_peer_ids)
-                        else set()
+                    execution_memory_type_enabled = memory_type_filter is None or bool(
+                        memory_type_filter & {"trajectories", "experiences"}
                     )
-                    has_policy_work = bool(
-                        long_term_allowed_types
-                        or self_agent_types
-                        or session_skill_extraction_enabled
+
+                    long_term_has_work = (
+                        memory_extraction_enabled
+                        and (self_memory_enabled or allowed_peer_ids)
+                        and memory_type_filter_has_work
                     )
+                    execution_memory_has_work = self_memory_enabled and (
+                        session_skill_extraction_enabled
+                        or (
+                            memory_extraction_enabled
+                            and execution_memory_type_enabled
+                            and memory_type_filter_has_work
+                        )
+                    )
+                    has_policy_work = bool(long_term_has_work or execution_memory_has_work)
                     if self._session_compressor and has_policy_work:
                         logger.info(
                             "Starting post-commit extraction from %s archived messages",
                             len(messages),
                         )
 
-                        has_agent_memory = hasattr(
-                            self._session_compressor, "extract_agent_memories"
+                        has_execution_memory = hasattr(
+                            self._session_compressor, "extract_execution_memories"
                         )
 
                         extraction_tasks: List[Any] = [_run_archive_summary()]
                         extraction_labels = ["archive_summary"]
 
-                        if long_term_allowed_types:
+                        if long_term_has_work:
                             extraction_tasks.append(
                                 self._session_compressor.extract_long_term_memories(
                                     messages=extraction_messages,
@@ -1402,31 +1406,29 @@ class Session:
                                     ctx=self.ctx,
                                     latest_archive_overview=latest_archive_overview,
                                     archive_uri=archive_uri,
-                                    allowed_memory_types=long_term_allowed_types,
+                                    allowed_memory_types=memory_type_filter,
                                     allow_self_memory=self_memory_enabled,
                                     allowed_peer_ids=allowed_peer_ids,
                                 )
                             )
                             extraction_labels.append("long_term")
 
-                        if has_agent_memory and (
-                            self_agent_types or session_skill_extraction_enabled
-                        ):
+                        if has_execution_memory and execution_memory_has_work:
                             try:
                                 extraction_tasks.append(
-                                    self._session_compressor.extract_agent_memories(
+                                    self._session_compressor.extract_execution_memories(
                                         messages=extraction_messages,
                                         ctx=self.ctx,
                                         latest_archive_overview=latest_archive_overview,
                                         archive_uri=archive_uri,
-                                        allowed_memory_types=self_agent_types,
+                                        allowed_memory_types=memory_type_filter,
                                         include_session_skills=session_skill_extraction_enabled,
                                     )
                                 )
-                                extraction_labels.append("agent")
+                                extraction_labels.append("execution")
                             except Exception as exc:
                                 logger.error(
-                                    "Agent memory extraction failed: %s",
+                                    "Execution memory extraction failed: %s",
                                     exc,
                                     exc_info=exc,
                                 )

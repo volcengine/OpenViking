@@ -49,6 +49,7 @@ export type OVMemoryPolicySwitch = {
 export type OVMemoryPolicy = {
   self?: OVMemoryPolicySwitch;
   peer?: OVMemoryPolicySwitch;
+  memory_types?: string[];
 };
 
 export type TaskResult = {
