@@ -12,8 +12,8 @@ const zhCN = {
       home: {
         title: '首页',
       },
-      oauthSetup: {
-        title: 'OAuth 设置',
+      crossDeviceVerify: {
+        title: 'OAuth 验证',
       },
       operations: {
         title: '运维',
@@ -99,19 +99,6 @@ const zhCN = {
         label: 'User',
         placeholder: 'default',
       },
-    },
-    oauthOtp: {
-      title: 'OAuth 客户端 OTP',
-      description:
-        '生成一个短期一次性码，让 MCP 客户端凭此以所选身份完成 OAuth 授权。',
-      generate: '生成 OTP',
-      regenerate: '重新生成',
-      copy: '复制',
-      copied: '已复制',
-      codeLabel: '一次性码',
-      expiresIn: '{{seconds}} 秒后失效',
-      expired: '已过期 —— 请重新生成。',
-      generateError: '生成 OTP 失败：{{message}}',
     },
   },
   settings: {
@@ -239,14 +226,6 @@ const zhCN = {
       dataKeySelected: '已选择 User API key',
       keyRegenerated: 'API key 已重新生成',
       userCreated: 'User 已创建',
-    },
-  },
-  oauthSetup: {
-    page: {
-      title: 'OAuth 设置',
-      intro:
-        '当你需要让 MCP 客户端（例如 Claude.ai / Claude Desktop / ChatGPT / Cursor）通过 OAuth 完成鉴权时使用本页。在这里生成一个短期 OTP，粘到 MCP 客户端，它就会用所选身份完成 OAuth 授权。',
-      docsLink: '阅读 OAuth 接入指南',
     },
   },
   home: {

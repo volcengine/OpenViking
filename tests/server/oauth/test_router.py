@@ -1,14 +1,14 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""End-to-end tests for the OAuth flow: DCR → OTP → authorize page → token → /mcp.
+"""End-to-end tests for the OAuth flow: DCR → authorize page → verify → token.
 
 The flow is:
 
 1. Caller registers a client (SDK's RegistrationHandler).
-2. Caller, holding a valid API key, requests an OTP from /api/v1/auth/otp.
-3. Caller hits /authorize, which redirects to /oauth/authorize/page?pending=...
-4. Caller submits the OTP on the authorize page; we 302 back to redirect_uri
-   with a fresh ?code=...
+2. Caller hits /authorize, which redirects to /oauth/authorize/page?pending=...
+3. The page shows a 6-character display_code; a signed-in identity confirms by
+   POSTing it to /api/v1/auth/oauth-verify, which binds the caller identity.
+4. The page polls status and 302s back to redirect_uri with a fresh ?code=...
 5. Caller exchanges the code at /token (PKCE S256) for an opaque access+refresh.
 6. Access token is opaque ovat_-prefixed and resolves through auth.py.
 """
@@ -68,7 +68,6 @@ class _StubOAuthCfg:
     access_token_ttl_seconds: int = 3600
     refresh_token_ttl_seconds: int = 86400
     auth_code_ttl_seconds: int = 300
-    otp_ttl_seconds: int = 300
 
 
 @pytest_asyncio.fixture
@@ -88,9 +87,9 @@ async def app_with_oauth(tmp_path):
 
     app = FastAPI()
     app.state.config = ServerConfig(auth_mode="api_key", root_api_key="root-test-1234567890abcd")
-    # OTP / oauth-verify routes look up the caller's API key fingerprint via
+    # The oauth-verify route looks up the caller's API key fingerprint via
     # ``api_key_manager.get_user_key_fingerprint(account_id, user_id)`` and
-    # refuse to issue OAuth state if the call returns None. Provide a tiny
+    # refuses to bind OAuth state if the call returns None. Provide a tiny
     # stub that returns a stable fingerprint for the fixture's identity.
     app.state.api_key_manager = _FpOnlyKeyManager({("acct1", "alice"): "f" * 64})
     app.state.oauth_store = store
@@ -104,8 +103,8 @@ async def app_with_oauth(tmp_path):
             status_code=ERROR_CODE_TO_HTTP_STATUS.get(exc.code, 500),
         )
 
-    # Override get_request_context so /api/v1/auth/otp can be hit without
-    # a real APIKeyManager. Returns a fixed identity.
+    # Override get_request_context so /api/v1/auth/oauth-verify can be hit
+    # without a real APIKeyManager. Returns a fixed identity.
     from openviking.server.identity import RequestContext
     from openviking_cli.session.user_id import UserIdentifier
 
@@ -219,28 +218,7 @@ async def test_dcr_registers_client(client):
 
 
 # ---------------------------------------------------------------------------
-# OTP issuance
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_otp_endpoint_returns_code(client):
-    resp = await client.post("/api/v1/auth/otp", json={})
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert len(body["otp"]) == 6
-    assert body["ttl_seconds"] == 300
-    assert body["expires_at"] > 0
-
-
-@pytest.mark.asyncio
-async def test_otp_endpoint_rejects_bad_ttl(client):
-    resp = await client.post("/api/v1/auth/otp", json={"ttl_seconds": 5})
-    assert resp.status_code in (400, 422)
-
-
-# ---------------------------------------------------------------------------
-# Authorize page + OTP submit + token exchange (full happy path)
+# Authorize page + display_code verify + token exchange (full happy path)
 # ---------------------------------------------------------------------------
 
 
@@ -505,25 +483,10 @@ async def test_refresh_token_rotation(app_with_oauth, client):
 
 
 @pytest.mark.asyncio
-async def test_otp_endpoint_rejects_caller_without_fingerprint(app_with_oauth, client):
-    """If the API-key manager has no fingerprint for the caller (e.g. ROOT or
-    trusted-mode identity), OTP issuance must refuse — there's no key whose
-    lifetime we could bind the resulting OAuth tokens to."""
-    app, _, _ = app_with_oauth
-    # Swap in an empty fingerprint map so get_user_key_fingerprint returns None
-    # for the fixture's (acct1, alice) identity.
-    app.state.api_key_manager = _FpOnlyKeyManager({})
-    resp = await client.post("/api/v1/auth/otp", json={})
-    assert resp.status_code == 400, resp.text
-    body = resp.json()
-    msg = body.get("error_description") or body.get("message") or ""
-    assert "registered API key" in msg
-
-
-@pytest.mark.asyncio
 async def test_oauth_verify_rejects_verifier_without_fingerprint(app_with_oauth, client):
-    """oauth-verify must refuse to bind OAuth state to an identity that has
-    no fingerprint — same invariant as OTP issuance."""
+    """oauth-verify must refuse to bind OAuth state to an identity that has no
+    fingerprint (e.g. ROOT or trusted-mode) — there's no key whose lifetime the
+    resulting OAuth tokens could bind to."""
     app, store, _ = app_with_oauth
     _, pending_id, _, _ = await _start_authorize(client, redirect_uri="https://x.test/cb")
     code = (await store.load_pending_authorization(pending_id))["display_code"]
@@ -565,43 +528,9 @@ async def test_dcr_downgrades_confidential_auth_to_public(app_with_oauth, client
 
 
 @pytest.mark.asyncio
-async def test_otp_rejects_oauth_issued_caller(app_with_oauth, client):
-    """A caller authenticated via an OAuth bearer (from_oauth=True) MUST
-    NOT be able to mint new OTPs — that would let a stolen access token
-    launder itself into a fresh refresh-token chain."""
-    app, _, _ = app_with_oauth
-    from openviking.server.identity import RequestContext
-    from openviking_cli.session.user_id import UserIdentifier
-
-    def _oauth_ctx() -> RequestContext:
-        return RequestContext(
-            user=UserIdentifier("acct1", "alice"),
-            role=Role.USER,
-            from_oauth=True,
-        )
-
-    app.dependency_overrides[get_request_context] = _oauth_ctx
-    try:
-        resp = await client.post("/api/v1/auth/otp", json={})
-        assert resp.status_code == 403, resp.text
-        msg = resp.json().get("error_description") or resp.json().get("message") or ""
-        assert "OAuth-issued tokens" in msg
-    finally:
-        # Reset to the fixture's default (non-OAuth) ctx for other tests.
-        def _fixed_ctx() -> RequestContext:
-            return RequestContext(
-                user=UserIdentifier("acct1", "alice"),
-                role=Role.USER,
-            )
-
-        app.dependency_overrides[get_request_context] = _fixed_ctx
-
-
-@pytest.mark.asyncio
 async def test_oauth_verify_rejects_oauth_issued_caller(app_with_oauth, client):
-    """Same gate as OTP issuance: oauth-verify with an OAuth-issued ctx
-    must be refused, otherwise short-lived bearers can launder into
-    long-lived refresh tokens."""
+    """oauth-verify with an OAuth-issued ctx (from_oauth=True) must be refused,
+    otherwise short-lived bearers can launder into long-lived refresh tokens."""
     app, store, _ = app_with_oauth
     from openviking.server.identity import RequestContext
     from openviking_cli.session.user_id import UserIdentifier

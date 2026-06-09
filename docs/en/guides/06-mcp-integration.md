@@ -86,7 +86,7 @@ Add `--scope user` to make the config global (shared across all projects).
 
 These clients only accept OAuth 2.1 — API Keys cannot be passed directly.
 OpenViking ships a native OAuth 2.1 implementation (DCR + PKCE + opaque
-tokens, backed by SQLite, with a console-driven OTP authorization page) so
+tokens, backed by SQLite, with a Studio consent screen for authorization) so
 no external proxy is needed.
 
 If you already have HTTPS configured, just connect to `https://your-server.com/mcp` — the client will walk you through the authorization flow automatically.
