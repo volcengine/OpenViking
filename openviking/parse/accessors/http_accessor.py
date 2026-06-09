@@ -158,6 +158,7 @@ class URLTypeDetector:
         url: str,
         timeout: Optional[float] = None,
         request_validator=None,
+        download_headers: Optional[Mapping[str, str]] = None,
     ) -> Tuple[URLType, Dict[str, Any]]:
         """
         Detect URL content type using IANA standards.
@@ -206,7 +207,10 @@ class URLTypeDetector:
                 client_kwargs["trust_env"] = False
 
             async with httpx.AsyncClient(**client_kwargs) as client:
-                response = await client.head(url)
+                headers = {"User-Agent": HTTPAccessor.DEFAULT_USER_AGENT}
+                if download_headers:
+                    headers.update(download_headers)
+                response = await client.head(url, headers=headers or None)
 
                 meta["status_code"] = response.status_code
                 if not (200 <= response.status_code < 300):
@@ -440,11 +444,13 @@ class HTTPAccessor(DataAccessor):
         """
         source_str = str(source)
         request_validator = kwargs.get("request_validator")
+        download_headers = kwargs.get("download_headers")
 
         # Download the URL
         temp_path, url_type, meta = await self._download_url(
             source_str,
             request_validator=request_validator,
+            download_headers=download_headers,
         )
 
         # Build metadata
@@ -486,6 +492,7 @@ class HTTPAccessor(DataAccessor):
         self,
         url: str,
         request_validator=None,
+        download_headers: Optional[Mapping[str, str]] = None,
     ) -> Tuple[str, URLType, Dict[str, Any]]:
         """
         Download URL content to a temporary file.
@@ -506,6 +513,7 @@ class HTTPAccessor(DataAccessor):
         url_type, detect_meta = await self._url_detector.detect(
             url,
             request_validator=request_validator,
+            download_headers=download_headers,
         )
 
         temp_path: Optional[str] = None
@@ -523,6 +531,8 @@ class HTTPAccessor(DataAccessor):
 
             async with httpx.AsyncClient(**client_kwargs) as client:
                 headers = {"User-Agent": self.user_agent}
+                if download_headers:
+                    headers.update(download_headers)
                 try:
                     response = await client.get(url, headers=headers)
                     response.raise_for_status()

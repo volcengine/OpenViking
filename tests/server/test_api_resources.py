@@ -185,6 +185,69 @@ async def test_add_resource_business_error_uses_error_envelope(
     assert body["error"]["message"] == "Parse error: boom"
 
 
+async def test_add_resource_forwards_only_whitelisted_download_headers(
+    client: httpx.AsyncClient,
+    service,
+    monkeypatch,
+):
+    captured = {}
+    monkeypatch.setattr(
+        "openviking.server.routers.resources.get_openviking_config",
+        lambda: type(
+            "Cfg",
+            (),
+            {
+                "resources": type(
+                    "ResourcesCfg",
+                    (),
+                    {
+                        "download": type(
+                            "DownloadCfg",
+                            (),
+                            {
+                                "forward_header_whitelist": [
+                                    "X-Tos-Signature",
+                                    "X-Tos-Date",
+                                ]
+                            },
+                        )()
+                    },
+                )()
+            },
+        )(),
+    )
+
+    async def fake_add_resource(**kwargs):
+        captured["download_headers"] = kwargs.get("download_headers")
+        return {
+            "status": "success",
+            "root_uri": "viking://resources/demo",
+        }
+
+    monkeypatch.setattr(service.resources, "add_resource", fake_add_resource)
+
+    resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "path": "https://example.com/protected.bin",
+            "reason": "header forwarding",
+            "wait": True,
+        },
+        headers={
+            "X-Tos-Signature": "sig-value",
+            "X-Tos-Date": "20260609T120000Z",
+            "Authorization": "Bearer should-not-forward",
+            "Cookie": "session=should-not-forward",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert captured["download_headers"] == {
+        "x-tos-signature": "sig-value",
+        "x-tos-date": "20260609T120000Z",
+    }
+
+
 async def test_add_skill_business_error_uses_error_envelope(
     client: httpx.AsyncClient,
     service,

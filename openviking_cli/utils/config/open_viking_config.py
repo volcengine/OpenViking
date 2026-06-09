@@ -53,11 +53,28 @@ def _get_config_warning_logger():
 class OpenVikingConfig(BaseModel):
     """Main configuration for OpenViking."""
 
+    class ResourcesDownloadConfig(BaseModel):
+        forward_header_whitelist: list[str] = Field(default_factory=list)
+
+        model_config = {"extra": "forbid"}
+
+    class ResourcesConfig(BaseModel):
+        download: "OpenVikingConfig.ResourcesDownloadConfig" = Field(
+            default_factory=lambda: OpenVikingConfig.ResourcesDownloadConfig()
+        )
+
+        model_config = {"extra": "forbid"}
+
     default_account: Optional[str] = Field(
         default="default", description="Default account identifier"
     )
     default_user: Optional[str] = Field(default="default", description="Default user identifier")
     default_agent: Optional[str] = Field(default="default", description="Default agent identifier")
+
+    resources: ResourcesConfig = Field(
+        default_factory=ResourcesConfig,
+        description="Resource ingestion and download configuration",
+    )
 
     storage: StorageConfig = Field(
         default_factory=StorageConfig, description="Storage configuration"

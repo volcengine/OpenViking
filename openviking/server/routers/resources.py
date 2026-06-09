@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 from openviking.core.path_variables import resolve_path_variables
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
+from openviking.server.header_forwarding import extract_forward_headers
 from openviking.server.identity import AccountNamespacePolicy, RequestContext, Role
 from openviking.server.local_input_guard import require_remote_resource_source
 from openviking.server.responses import response_from_result
@@ -19,6 +20,7 @@ from openviking.server.upload_token_store import UploadTokenError, upload_token_
 from openviking.telemetry import TelemetryRequest
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config import get_openviking_config
 
 router = APIRouter(prefix="/api/v1", tags=["resources"])
 
@@ -231,6 +233,12 @@ async def add_resource(
         "watch_interval": request.watch_interval,
         "create_parent": request.create_parent,
     }
+    forwarded_download_headers = extract_forward_headers(
+        http_request.headers,
+        get_openviking_config().resources.download.forward_header_whitelist,
+    )
+    if forwarded_download_headers:
+        kwargs["download_headers"] = forwarded_download_headers
     if request.preserve_structure is not None:
         kwargs["preserve_structure"] = request.preserve_structure
 

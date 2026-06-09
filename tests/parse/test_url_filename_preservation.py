@@ -327,6 +327,36 @@ class TestHTTPAccessorGetFallback:
     def test_document_default_extension_is_zip(self):
         assert URLTypeDetector().get_extension_for_type(URLType.DOWNLOAD_DOCUMENT) == ".zip"
 
+    @pytest.mark.asyncio
+    async def test_download_headers_forwarded_to_head_and_get(self, monkeypatch):
+        captured = {"head_headers": None, "get_headers": None}
+        _patch_httpx_client(
+            monkeypatch,
+            headers={"content-type": "application/pdf"},
+            content=b"%PDF-1.7 test",
+            captured=captured,
+            fail_head=False,
+        )
+
+        accessor = HTTPAccessor()
+        temp_path, url_type, meta = await accessor._download_url(
+            "https://example.com/download?id=protected",
+            download_headers={
+                "x-tos-signature": "sig-value",
+                "x-tos-date": "20260609T120000Z",
+            },
+        )
+
+        assert url_type == URLType.DOWNLOAD_PDF
+        assert temp_path.endswith(".pdf")
+        assert meta["original_filename"] == "download.pdf"
+        assert captured["head_headers"]["x-tos-signature"] == "sig-value"
+        assert captured["head_headers"]["x-tos-date"] == "20260609T120000Z"
+        assert captured["get_headers"]["x-tos-signature"] == "sig-value"
+        assert captured["get_headers"]["x-tos-date"] == "20260609T120000Z"
+        assert "User-Agent" in captured["head_headers"]
+        assert "User-Agent" in captured["get_headers"]
+
 
 def _patch_httpx_client(
     monkeypatch,
@@ -336,6 +366,7 @@ def _patch_httpx_client(
     head_headers=None,
     head_status_code: int = 200,
     fail_head: bool = True,
+    captured=None,
 ) -> None:
     """Patch httpx.AsyncClient used by HTTPAccessor for HEAD and GET."""
 
@@ -361,12 +392,16 @@ def _patch_httpx_client(
         async def __aexit__(self, *_args):
             return False
 
-        async def head(self, _url):
+        async def head(self, _url, headers=None):
+            if captured is not None:
+                captured["head_headers"] = headers
             if fail_head:
                 raise RuntimeError("SignatureDoesNotMatch")
             return FakeResponse(response_head_headers, b"", head_status_code)
 
         async def get(self, _url, headers=None):
+            if captured is not None:
+                captured["get_headers"] = headers
             return FakeResponse(response_headers, content)
 
     import httpx
