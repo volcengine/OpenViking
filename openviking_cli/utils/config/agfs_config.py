@@ -151,6 +151,7 @@ class AGFSCacheProvider(str, Enum):
     MEMORY = "memory"
     YUANRONG = "yuanrong"
     MOONCAKE = "mooncake"
+    REDIS = "redis"
 
 
 class YuanrongCacheConfig(BaseModel):
@@ -221,6 +222,48 @@ class MooncakeCacheConfig(BaseModel):
         return self
 
 
+class RedisCacheConfig(BaseModel):
+    """Configuration for Redis cache provider."""
+
+    mode: str = Field(default="standalone", description="Redis deployment mode")
+    endpoints: list[str] = Field(
+        default_factory=lambda: ["redis://127.0.0.1:6379"],
+        description="Redis endpoint URLs",
+    )
+    username: str = Field(default="", description="Redis ACL username")
+    password_env: str = Field(default="", description="Environment variable containing password")
+    pool_size: int = Field(default=32, description="Redis command concurrency")
+    connect_timeout_ms: int = Field(default=1000, description="Redis connect timeout")
+    command_timeout_ms: int = Field(default=20, description="Redis command timeout")
+    key_prefix: str = Field(default="ragfs-cache", description="Redis cache key prefix")
+    default_ttl_seconds: int = Field(default=3600, description="Redis default cache TTL")
+    read_from_replica: bool = Field(default=False, description="Read from Redis replicas")
+
+    model_config = {"extra": "forbid"}
+
+    @model_validator(mode="after")
+    def validate_config(self):
+        if self.mode != "standalone":
+            raise ValueError("redis mode must be standalone")
+        if not self.endpoints:
+            raise ValueError("redis endpoints must not be empty")
+        if any(not endpoint.strip() for endpoint in self.endpoints):
+            raise ValueError("redis endpoints must not contain empty values")
+        if self.pool_size <= 0:
+            raise ValueError("redis pool_size must be > 0")
+        if self.connect_timeout_ms <= 0:
+            raise ValueError("redis connect_timeout_ms must be > 0")
+        if self.command_timeout_ms <= 0:
+            raise ValueError("redis command_timeout_ms must be > 0")
+        if not self.key_prefix.strip():
+            raise ValueError("redis key_prefix must not be empty")
+        if self.default_ttl_seconds < 0:
+            raise ValueError("redis default_ttl_seconds must be >= 0")
+        if self.read_from_replica:
+            raise ValueError("redis read_from_replica is not supported in standalone mode")
+        return self
+
+
 class AGFSCacheConfig(BaseModel):
     """Configuration for optional RAGFS cache layer."""
 
@@ -240,6 +283,7 @@ class AGFSCacheConfig(BaseModel):
     )
     yuanrong: YuanrongCacheConfig = Field(default_factory=YuanrongCacheConfig)
     mooncake: MooncakeCacheConfig = Field(default_factory=MooncakeCacheConfig)
+    redis: RedisCacheConfig = Field(default_factory=RedisCacheConfig)
 
     model_config = {"extra": "forbid"}
 
