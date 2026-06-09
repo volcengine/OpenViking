@@ -4,21 +4,19 @@
 //! with the existing Go-based `AGFSBindingClient`. This embeds the ragfs
 //! filesystem engine directly in the Python process (no HTTP server needed).
 
-use pyo3::exceptions::PyRuntimeError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyType};
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
+use ragfs::core::builder::EncryptionConfig;
 use ragfs::core::{
-    ConfigValue, FileInfo, FileSystem, FilesystemStats, FsOperation, GrepResult, MountableFS,
-    OperationStats, PluginConfig, WriteFlag,
-};
-#[cfg(feature = "s3")]
-use ragfs::plugins::S3FSPlugin;
-use ragfs::plugins::{
-    KVFSPlugin, LocalFSPlugin, MemFSPlugin, QueueFSPlugin, SQLFSPlugin, ServerInfoFSPlugin,
+    build_default_stack, ConfigValue, FileInfo, FileSystem, FilesystemStats, FsContext,
+    FsContextInner, FsOperation, GrepResult, MountableFS, OperationStats, PluginConfig,
+    RagfsConfig, TreeEntry, WriteFlag, FS_CTX,
 };
 
 fn py_detach_blocking<T, F>(py: Python<'_>, f: F) -> T
@@ -75,6 +73,8 @@ fn to_py_err(e: ragfs::core::Error) -> PyErr {
         ragfs::core::Error::Serialization(_) => new_py_err("AGFSSerializationError", msg),
         ragfs::core::Error::Network(_) => new_py_err("AGFSNetworkError", msg),
         ragfs::core::Error::Timeout(_) => new_py_err("AGFSTimeoutError", msg),
+        ragfs::core::Error::SyncWriteQuorum { .. } => new_py_err("AGFSInternalError", msg),
+        ragfs::core::Error::ContextMissing(_) => new_py_err("AGFSInternalError", msg),
         ragfs::core::Error::Internal(_) => new_py_err("AGFSInternalError", msg),
     }
 }
@@ -98,6 +98,62 @@ fn file_info_to_py_dict(py: Python<'_>, info: &FileInfo) -> PyResult<Py<PyDict>>
 
     dict.set_item("isDir", info.is_dir)?;
     Ok(dict.into())
+}
+
+/// Convert TreeEntry to a Python dict:
+/// {"path": str, "rel_path": str, "info": dict, "extra": dict}
+fn tree_entry_to_py_dict(py: Python<'_>, entry: &TreeEntry) -> PyResult<Py<PyDict>> {
+    let dict = PyDict::new(py);
+    dict.set_item("path", &entry.path)?;
+    dict.set_item("rel_path", &entry.rel_path)?;
+    dict.set_item("info", file_info_to_py_dict(py, &entry.info)?)?;
+
+    let extra_dict = PyDict::new(py);
+    for (k, v) in &entry.extra {
+        let py_val: Py<PyAny> = serde_json_to_py(py, v)?;
+        extra_dict.set_item(k, py_val)?;
+    }
+    dict.set_item("extra", extra_dict)?;
+
+    Ok(dict.into())
+}
+
+/// Convert a serde_json::Value to a Python object.
+fn serde_json_to_py(py: Python<'_>, val: &serde_json::Value) -> PyResult<Py<PyAny>> {
+    match val {
+        serde_json::Value::Null => Ok(py.None()),
+        serde_json::Value::Bool(b) => {
+            let val: bool = *b;
+            let bound = val
+                .into_pyobject(py)
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+            Ok(bound.as_any().clone().unbind())
+        }
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Ok(i.into_pyobject(py)?.into_any().unbind())
+            } else if let Some(f) = n.as_f64() {
+                Ok(f.into_pyobject(py)?.into_any().unbind())
+            } else {
+                Ok(py.None())
+            }
+        }
+        serde_json::Value::String(s) => Ok(s.into_pyobject(py)?.into_any().unbind()),
+        serde_json::Value::Array(arr) => {
+            let list = PyList::empty(py);
+            for item in arr {
+                list.append(serde_json_to_py(py, item)?)?;
+            }
+            Ok(list.into())
+        }
+        serde_json::Value::Object(obj) => {
+            let d = PyDict::new(py);
+            for (k, v) in obj {
+                d.set_item(k, serde_json_to_py(py, v)?)?;
+            }
+            Ok(d.into())
+        }
+    }
 }
 
 /// Convert GrepResult to a Python dict matching the Go binding JSON format:
@@ -179,23 +235,97 @@ fn days_to_ymd(days: u64) -> (u64, u64, u64) {
     (y, m, d)
 }
 
-/// Convert a Python dict to HashMap<String, ConfigValue>
+/// Convert a Python dict to HashMap<String, ConfigValue>, with recursive nesting support.
 fn py_dict_to_config(dict: &Bound<'_, PyDict>) -> PyResult<HashMap<String, ConfigValue>> {
     let mut params = HashMap::new();
     for (k, v) in dict.iter() {
         let key: String = k.extract()?;
-        let value = if let Ok(s) = v.extract::<String>() {
-            ConfigValue::String(s)
-        } else if let Ok(b) = v.extract::<bool>() {
-            ConfigValue::Bool(b)
-        } else if let Ok(i) = v.extract::<i64>() {
-            ConfigValue::Int(i)
-        } else {
-            ConfigValue::String(v.str()?.to_string())
-        };
+        let value = py_any_to_config_value(&v)?;
         params.insert(key, value);
     }
     Ok(params)
+}
+
+/// Convert a single Python value to ConfigValue, recursing into dicts/lists.
+fn py_any_to_config_value(v: &Bound<'_, PyAny>) -> PyResult<ConfigValue> {
+    if let Ok(s) = v.extract::<String>() {
+        Ok(ConfigValue::String(s))
+    } else if let Ok(b) = v.extract::<bool>() {
+        Ok(ConfigValue::Bool(b))
+    } else if let Ok(i) = v.extract::<i64>() {
+        Ok(ConfigValue::Int(i))
+    } else if let Ok(list) = v.downcast::<PyList>() {
+        let mut strings = Vec::new();
+        let mut has_nested = false;
+        for item in list.iter() {
+            if let Ok(s) = item.extract::<String>() {
+                strings.push(s);
+            } else {
+                has_nested = true;
+                break;
+            }
+        }
+        if has_nested || strings.is_empty() {
+            // Convert to serde_json::Value for complex lists
+            let json_val = py_to_json_value(v)?;
+            Ok(ConfigValue::Json(json_val))
+        } else {
+            Ok(ConfigValue::StringList(strings))
+        }
+    } else if v.is_instance_of::<PyDict>() {
+        let json_val = py_to_json_value(v)?;
+        Ok(ConfigValue::Json(json_val))
+    } else {
+        // Fallback: try string representation
+        Ok(ConfigValue::String(v.str()?.to_string()))
+    }
+}
+
+/// Convert a Python value to serde_json::Value recursively.
+fn py_to_json_value(v: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
+    if v.is_none() {
+        Ok(serde_json::Value::Null)
+    } else if let Ok(b) = v.extract::<bool>() {
+        Ok(serde_json::Value::Bool(b))
+    } else if let Ok(i) = v.extract::<i64>() {
+        Ok(serde_json::Value::Number(i.into()))
+    } else if let Ok(f) = v.extract::<f64>() {
+        if let Some(n) = serde_json::Number::from_f64(f) {
+            Ok(serde_json::Value::Number(n))
+        } else {
+            Ok(serde_json::Value::String(f.to_string()))
+        }
+    } else if let Ok(s) = v.extract::<String>() {
+        Ok(serde_json::Value::String(s))
+    } else if let Ok(list) = v.downcast::<PyList>() {
+        let mut arr = Vec::new();
+        for item in list.iter() {
+            arr.push(py_to_json_value(&item)?);
+        }
+        Ok(serde_json::Value::Array(arr))
+    } else if let Ok(dict) = v.downcast::<PyDict>() {
+        let mut map = serde_json::Map::new();
+        for (k, val) in dict.iter() {
+            let key: String = k.extract()?;
+            map.insert(key, py_to_json_value(&val)?);
+        }
+        Ok(serde_json::Value::Object(map))
+    } else {
+        Ok(serde_json::Value::String(v.str()?.to_string()))
+    }
+}
+
+/// Build an immutable `FsContext` from an optional Python `{"account_id": str}` dict.
+///
+/// A context is always constructed (even when the dict is absent or lacks `account_id`), so the
+/// "every ragfs call carries a ctx" invariant holds. Missing `account_id` is represented as an
+/// empty field; `FsContextView::account_id()` treats it as absent, so encrypted content operations
+/// fail fast instead of using an accidental empty tenant key.
+fn build_fs_context(ctx: Option<HashMap<String, String>>) -> FsContext {
+    let account_id = ctx
+        .and_then(|m| m.get("account_id").cloned())
+        .unwrap_or_default();
+    Arc::new(FsContextInner::new(account_id))
 }
 
 /// RAGFS Python Binding Client.
@@ -204,38 +334,82 @@ fn py_dict_to_config(dict: &Bound<'_, PyDict>) -> PyResult<HashMap<String, Confi
 /// API-compatible with the Go-based AGFSBindingClient.
 #[pyclass]
 struct RAGFSBindingClient {
-    fs: Arc<MountableFS>,
+    /// Mount manager: mount/unmount/list/get_*_stats/register_plugin.
+    mountable: Arc<MountableFS>,
+    /// Data entry point: `Stats(Encryption(Mountable))` when encrypted, else `Stats(Mountable)`.
+    top: Arc<dyn FileSystem>,
     rt: tokio::runtime::Runtime,
+}
+
+impl RAGFSBindingClient {
+    /// Run an async filesystem op on the runtime, releasing the GIL, inside the FS_CTX scope.
+    ///
+    /// Centralizes the GIL-detach + `FS_CTX.scope` + `block_on` pattern so every data method
+    /// shares one implementation (no per-method duplication).
+    fn run_scoped<T, Fut, F>(&self, py: Python<'_>, ctx: FsContext, f: F) -> T
+    where
+        T: Send,
+        Fut: Future<Output = T>,
+        F: Send + FnOnce() -> Fut,
+    {
+        py_detach_blocking(py, move || {
+            self.rt
+                .block_on(FS_CTX.scope(ctx, async move { f().await }))
+        })
+    }
 }
 
 #[pymethods]
 impl RAGFSBindingClient {
     /// Create a new RAGFS binding client.
     ///
-    /// Initializes the filesystem engine with all built-in plugins registered.
+    /// `config_path` is a deprecated compatibility parameter kept only so legacy callers using
+    /// `RAGFSBindingClient(config_path=...)` do not fail. `config` is an optional sectioned dict
+    /// (mirrors ov.conf). The `encryption` section, when present, carries `root_key` (32 bytes) +
+    /// `provider_type` (int) and causes the stack to include an `EncryptionWrappedFS` layer.
+    /// Absence of the section yields a plaintext stack.
     #[new]
-    #[pyo3(signature = (config_path=None))]
-    fn new(config_path: Option<&str>) -> PyResult<Self> {
-        let _ = config_path; // reserved for future use
-
+    #[pyo3(signature = (config_path=None, config=None))]
+    fn new(
+        py: Python<'_>,
+        config_path: Option<&str>,
+        config: Option<HashMap<String, Py<PyAny>>>,
+    ) -> PyResult<Self> {
+        let _ = config_path;
         let rt = tokio::runtime::Runtime::new()
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to create runtime: {}", e)))?;
 
-        let fs = Arc::new(MountableFS::new());
+        // Phase A (holding GIL): parse the sectioned config into an owned RagfsConfig.
+        let mut ragfs_cfg = RagfsConfig::default();
+        if let Some(cfg) = config {
+            if let Some(enc_obj) = cfg.get("encryption") {
+                let enc: HashMap<String, Py<PyAny>> = enc_obj.extract(py)?;
+                let rk: Vec<u8> = enc
+                    .get("root_key")
+                    .ok_or_else(|| PyValueError::new_err("encryption.root_key required"))?
+                    .extract(py)?;
+                let root_key: [u8; 32] = rk
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| PyValueError::new_err("root_key must be 32 bytes"))?;
+                let provider_type: u8 = enc
+                    .get("provider_type")
+                    .ok_or_else(|| PyValueError::new_err("encryption.provider_type required"))?
+                    .extract(py)?;
+                ragfs_cfg.encryption = Some(EncryptionConfig {
+                    root_key,
+                    provider_type,
+                });
+            }
+        }
 
-        // Register all built-in plugins
-        rt.block_on(async {
-            fs.register_plugin(MemFSPlugin).await;
-            fs.register_plugin(KVFSPlugin).await;
-            fs.register_plugin(QueueFSPlugin::new()).await;
-            fs.register_plugin(SQLFSPlugin::new()).await;
-            fs.register_plugin(LocalFSPlugin::new()).await;
-            fs.register_plugin(ServerInfoFSPlugin::new()).await;
-            #[cfg(feature = "s3")]
-            fs.register_plugin(S3FSPlugin::new()).await;
-        });
-
-        Ok(Self { fs, rt })
+        // Phase B: build the stack (no encryption layer when the section is absent).
+        let stack = rt.block_on(build_default_stack(ragfs_cfg));
+        Ok(Self {
+            mountable: stack.mountable,
+            top: stack.top,
+            rt,
+        })
     }
 
     /// Check client health.
@@ -275,12 +449,18 @@ impl RAGFSBindingClient {
     ///
     /// Returns a list of file info dicts with keys:
     /// name, size, mode, modTime, isDir
-    fn ls(&self, path: String) -> PyResult<Py<PyAny>> {
-        let fs = self.fs.clone();
-        let entries = Python::attach(|py| {
-            py_detach_blocking(py, move || self.rt.block_on(async move { fs.read_dir(&path).await }))
-        })
-        .map_err(to_py_err)?;
+    #[pyo3(signature = (path, ctx=None))]
+    fn ls(
+        &self,
+        py: Python<'_>,
+        path: String,
+        ctx: Option<HashMap<String, String>>,
+    ) -> PyResult<Py<PyAny>> {
+        let fs_ctx = build_fs_context(ctx);
+        let top = self.top.clone();
+        let entries = self
+            .run_scoped(py, fs_ctx, move || async move { top.read_dir(&path).await })
+            .map_err(to_py_err)?;
 
         Python::attach(|py| {
             let list = PyList::empty(py);
@@ -299,30 +479,51 @@ impl RAGFSBindingClient {
     ///     offset: Starting position (default: 0)
     ///     size: Number of bytes to read (default: -1, read all)
     ///     stream: Not supported in binding mode
-    #[pyo3(signature = (path, offset=0, size=-1, stream=false))]
-    fn read(&self, path: String, offset: i64, size: i64, stream: bool) -> PyResult<Py<PyAny>> {
+    ///     ctx: Optional FsContext dict (e.g. {"account_id": ...})
+    #[pyo3(signature = (path, offset=0, size=-1, stream=false, ctx=None))]
+    fn read(
+        &self,
+        py: Python<'_>,
+        path: String,
+        offset: i64,
+        size: i64,
+        stream: bool,
+        ctx: Option<HashMap<String, String>>,
+    ) -> PyResult<Py<PyAny>> {
         if stream {
             return Err(PyRuntimeError::new_err(
                 "Streaming not supported in binding mode",
             ));
         }
 
-        let fs = self.fs.clone();
+        let fs_ctx = build_fs_context(ctx);
+        let top = self.top.clone();
         let off = if offset < 0 { 0u64 } else { offset as u64 };
         let sz = if size < 0 { 0u64 } else { size as u64 };
 
-        let data = Python::attach(|py| {
-            py_detach_blocking(py, move || self.rt.block_on(async move { fs.read(&path, off, sz).await }))
-        })
-        .map_err(to_py_err)?;
+        let data = self
+            .run_scoped(
+                py,
+                fs_ctx,
+                move || async move { top.read(&path, off, sz).await },
+            )
+            .map_err(to_py_err)?;
 
         Python::attach(|py| Ok(PyBytes::new(py, &data).into()))
     }
 
     /// Read file content (alias for read).
-    #[pyo3(signature = (path, offset=0, size=-1, stream=false))]
-    fn cat(&self, path: String, offset: i64, size: i64, stream: bool) -> PyResult<Py<PyAny>> {
-        self.read(path, offset, size, stream)
+    #[pyo3(signature = (path, offset=0, size=-1, stream=false, ctx=None))]
+    fn cat(
+        &self,
+        py: Python<'_>,
+        path: String,
+        offset: i64,
+        size: i64,
+        stream: bool,
+        ctx: Option<HashMap<String, String>>,
+    ) -> PyResult<Py<PyAny>> {
+        self.read(py, path, offset, size, stream, ctx)
     }
 
     /// Write data to file.
@@ -330,16 +531,22 @@ impl RAGFSBindingClient {
     /// Args:
     ///     path: File path
     ///     data: File content as bytes
-    #[pyo3(signature = (path, data, max_retries=3))]
-    fn write(&self, path: String, data: Vec<u8>, max_retries: i32) -> PyResult<String> {
+    ///     ctx: Optional FsContext dict (e.g. {"account_id": ...})
+    #[pyo3(signature = (path, data, max_retries=3, ctx=None))]
+    fn write(
+        &self,
+        py: Python<'_>,
+        path: String,
+        data: Vec<u8>,
+        max_retries: i32,
+        ctx: Option<HashMap<String, String>>,
+    ) -> PyResult<String> {
         let _ = max_retries; // not applicable for local binding
-        let fs = self.fs.clone();
+        let fs_ctx = build_fs_context(ctx);
+        let top = self.top.clone();
         let len = data.len();
-        Python::attach(|py| {
-            py_detach_blocking(py, move || {
-                self.rt
-                    .block_on(async move { fs.write(&path, &data, 0, WriteFlag::Create).await })
-            })
+        self.run_scoped(py, fs_ctx, move || async move {
+            top.write(&path, &data, 0, WriteFlag::Create).await
         })
         .map_err(to_py_err)?;
 
@@ -347,12 +554,17 @@ impl RAGFSBindingClient {
     }
 
     /// Create a new empty file.
-    fn create(&self, path: String) -> PyResult<HashMap<String, String>> {
-        let fs = self.fs.clone();
-        Python::attach(|py| {
-            py_detach_blocking(py, move || self.rt.block_on(async move { fs.create(&path).await }))
-        })
-        .map_err(to_py_err)?;
+    #[pyo3(signature = (path, ctx=None))]
+    fn create(
+        &self,
+        py: Python<'_>,
+        path: String,
+        ctx: Option<HashMap<String, String>>,
+    ) -> PyResult<HashMap<String, String>> {
+        let fs_ctx = build_fs_context(ctx);
+        let top = self.top.clone();
+        self.run_scoped(py, fs_ctx, move || async move { top.create(&path).await })
+            .map_err(to_py_err)?;
 
         let mut m = HashMap::new();
         m.insert("message".to_string(), "created".to_string());
@@ -360,14 +572,21 @@ impl RAGFSBindingClient {
     }
 
     /// Create a directory.
-    #[pyo3(signature = (path, mode="755"))]
-    fn mkdir(&self, path: String, mode: &str) -> PyResult<HashMap<String, String>> {
+    #[pyo3(signature = (path, mode="755", ctx=None))]
+    fn mkdir(
+        &self,
+        py: Python<'_>,
+        path: String,
+        mode: &str,
+        ctx: Option<HashMap<String, String>>,
+    ) -> PyResult<HashMap<String, String>> {
         let mode_int = u32::from_str_radix(mode, 8)
             .map_err(|e| PyRuntimeError::new_err(format!("Invalid mode '{}': {}", mode, e)))?;
 
-        let fs = self.fs.clone();
-        Python::attach(|py| {
-            py_detach_blocking(py, move || self.rt.block_on(async move { fs.mkdir(&path, mode_int).await }))
+        let fs_ctx = build_fs_context(ctx);
+        let top = self.top.clone();
+        self.run_scoped(py, fs_ctx, move || async move {
+            top.mkdir(&path, mode_int).await
         })
         .map_err(to_py_err)?;
 
@@ -377,36 +596,49 @@ impl RAGFSBindingClient {
     }
 
     /// Ensure all parent directories exist for the given path.
-    #[pyo3(signature = (path, mode="755"))]
-    fn ensure_parent_dirs(&self, path: String, mode: &str) -> PyResult<HashMap<String, String>> {
+    #[pyo3(signature = (path, mode="755", ctx=None))]
+    fn ensure_parent_dirs(
+        &self,
+        py: Python<'_>,
+        path: String,
+        mode: &str,
+        ctx: Option<HashMap<String, String>>,
+    ) -> PyResult<HashMap<String, String>> {
         let mode_int = u32::from_str_radix(mode, 8)
             .map_err(|e| PyRuntimeError::new_err(format!("Invalid mode '{}': {}", mode, e)))?;
 
-        let fs = self.fs.clone();
-        Python::attach(|py| {
-            py_detach_blocking(py, move || self.rt.block_on(async move { fs.ensure_parent_dirs(&path, mode_int).await }))
+        let fs_ctx = build_fs_context(ctx);
+        let top = self.top.clone();
+        self.run_scoped(py, fs_ctx, move || async move {
+            top.ensure_parent_dirs(&path, mode_int).await
         })
         .map_err(to_py_err)?;
 
         let mut m = HashMap::new();
-        m.insert("message".to_string(), "parent directories ensured".to_string());
+        m.insert(
+            "message".to_string(),
+            "parent directories ensured".to_string(),
+        );
         Ok(m)
     }
 
     /// Remove a file or directory.
-    #[pyo3(signature = (path, recursive=false))]
-    fn rm(&self, path: String, recursive: bool) -> PyResult<HashMap<String, String>> {
-        let fs = self.fs.clone();
-        Python::attach(|py| {
-            py_detach_blocking(py, move || {
-                self.rt.block_on(async move {
-                    if recursive {
-                        fs.remove_all(&path).await
-                    } else {
-                        fs.remove(&path).await
-                    }
-                })
-            })
+    #[pyo3(signature = (path, recursive=false, ctx=None))]
+    fn rm(
+        &self,
+        py: Python<'_>,
+        path: String,
+        recursive: bool,
+        ctx: Option<HashMap<String, String>>,
+    ) -> PyResult<HashMap<String, String>> {
+        let fs_ctx = build_fs_context(ctx);
+        let top = self.top.clone();
+        self.run_scoped(py, fs_ctx, move || async move {
+            if recursive {
+                top.remove_all(&path).await
+            } else {
+                top.remove(&path).await
+            }
         })
         .map_err(to_py_err)?;
 
@@ -416,12 +648,18 @@ impl RAGFSBindingClient {
     }
 
     /// Get file/directory information.
-    fn stat(&self, path: String) -> PyResult<Py<PyAny>> {
-        let fs = self.fs.clone();
-        let info = Python::attach(|py| {
-            py_detach_blocking(py, move || self.rt.block_on(async move { fs.stat(&path).await }))
-        })
-        .map_err(to_py_err)?;
+    #[pyo3(signature = (path, ctx=None))]
+    fn stat(
+        &self,
+        py: Python<'_>,
+        path: String,
+        ctx: Option<HashMap<String, String>>,
+    ) -> PyResult<Py<PyAny>> {
+        let fs_ctx = build_fs_context(ctx);
+        let top = self.top.clone();
+        let info = self
+            .run_scoped(py, fs_ctx, move || async move { top.stat(&path).await })
+            .map_err(to_py_err)?;
 
         Python::attach(|py| {
             let dict = file_info_to_py_dict(py, &info)?;
@@ -430,13 +668,18 @@ impl RAGFSBindingClient {
     }
 
     /// Rename/move a file or directory.
-    fn mv(&self, old_path: String, new_path: String) -> PyResult<HashMap<String, String>> {
-        let fs = self.fs.clone();
-        Python::attach(|py| {
-            py_detach_blocking(py, move || {
-                self.rt
-                    .block_on(async move { fs.rename(&old_path, &new_path).await })
-            })
+    #[pyo3(signature = (old_path, new_path, ctx=None))]
+    fn mv(
+        &self,
+        py: Python<'_>,
+        old_path: String,
+        new_path: String,
+        ctx: Option<HashMap<String, String>>,
+    ) -> PyResult<HashMap<String, String>> {
+        let fs_ctx = build_fs_context(ctx);
+        let top = self.top.clone();
+        self.run_scoped(py, fs_ctx, move || async move {
+            top.rename(&old_path, &new_path).await
         })
         .map_err(to_py_err)?;
 
@@ -445,12 +688,44 @@ impl RAGFSBindingClient {
         Ok(m)
     }
 
+    /// Attempt a same-mount verbatim copy and report whether the fast-path was used.
+    #[pyo3(signature = (src_path, dst_path, ctx=None))]
+    fn copy_within_mount(
+        &self,
+        py: Python<'_>,
+        src_path: String,
+        dst_path: String,
+        ctx: Option<HashMap<String, String>>,
+    ) -> PyResult<HashMap<String, bool>> {
+        let fs_ctx = build_fs_context(ctx);
+        let mountable = self.mountable.clone();
+        let performed = self
+            .run_scoped(py, fs_ctx, move || async move {
+                mountable.copy_within_mount(&src_path, &dst_path).await
+            })
+            .map_err(to_py_err)?;
+
+        let mut result = HashMap::new();
+        result.insert("performed".to_string(), performed);
+        Ok(result)
+    }
+
     /// Change file permissions.
-    fn chmod(&self, path: String, mode: u32) -> PyResult<HashMap<String, String>> {
-        let fs = self.fs.clone();
-        Python::attach(|py| {
-            py_detach_blocking(py, move || self.rt.block_on(async move { fs.chmod(&path, mode).await }))
-        })
+    #[pyo3(signature = (path, mode, ctx=None))]
+    fn chmod(
+        &self,
+        py: Python<'_>,
+        path: String,
+        mode: u32,
+        ctx: Option<HashMap<String, String>>,
+    ) -> PyResult<HashMap<String, String>> {
+        let fs_ctx = build_fs_context(ctx);
+        let top = self.top.clone();
+        self.run_scoped(
+            py,
+            fs_ctx,
+            move || async move { top.chmod(&path, mode).await },
+        )
         .map_err(to_py_err)?;
 
         let mut m = HashMap::new();
@@ -459,21 +734,25 @@ impl RAGFSBindingClient {
     }
 
     /// Touch a file (create if not exists, or update timestamp).
-    fn touch(&self, path: String) -> PyResult<HashMap<String, String>> {
-        let fs = self.fs.clone();
-        Python::attach(|py| {
-            py_detach_blocking(py, move || {
-                self.rt.block_on(async move {
-                    // Try create; if already exists, write empty to update mtime
-                    match fs.create(&path).await {
-                        Ok(_) => Ok(()),
-                        Err(_) => {
-                            // File exists, write empty bytes to update timestamp
-                            fs.write(&path, &[], 0, WriteFlag::None).await.map(|_| ())
-                        }
-                    }
-                })
-            })
+    #[pyo3(signature = (path, ctx=None))]
+    fn touch(
+        &self,
+        py: Python<'_>,
+        path: String,
+        ctx: Option<HashMap<String, String>>,
+    ) -> PyResult<HashMap<String, String>> {
+        let fs_ctx = build_fs_context(ctx);
+        let top = self.top.clone();
+        self.run_scoped(py, fs_ctx, move || async move {
+            // Try create; if already exists, write empty to update mtime
+            match top.create(&path).await {
+                Ok(_) => Ok(()),
+                Err(_) => {
+                    let existing = top.read(&path, 0, 0).await?;
+                    top.write(&path, &existing, 0, WriteFlag::Create).await?;
+                    Ok(())
+                }
+            }
         })
         .map_err(to_py_err)?;
 
@@ -483,10 +762,11 @@ impl RAGFSBindingClient {
     }
 
     /// List all mounted plugins.
-    fn mounts(&self) -> PyResult<Vec<HashMap<String, String>>> {
-        let fs = self.fs.clone();
-        let mount_list = Python::attach(|py| {
-            py_detach_blocking(py, move || self.rt.block_on(async move { fs.list_mounts().await }))
+    fn mounts(&self, py: Python<'_>) -> PyResult<Vec<HashMap<String, String>>> {
+        let mountable = self.mountable.clone();
+        let mount_list = py_detach_blocking(py, move || {
+            self.rt
+                .block_on(async move { mountable.list_mounts().await })
         });
 
         let result: Vec<HashMap<String, String>> = mount_list
@@ -507,10 +787,15 @@ impl RAGFSBindingClient {
     /// Args:
     ///     fstype: Filesystem type (e.g., "memfs", "sqlfs", "kvfs", "queuefs")
     ///     path: Mount path
-    ///     config: Plugin configuration as dict
+    ///     config: Plugin configuration as dict. For multi-write, include:
+    ///         - "backups": nested dict matching BackendsConfig schema
+    ///         - "server_encryption_enabled": bool
+    ///         - "primary_encryption_enabled": bool
+    ///         - "primary_redirects": list of redirect policy dicts
     #[pyo3(signature = (fstype, path, config=None))]
     fn mount(
         &self,
+        py: Python<'_>,
         fstype: String,
         path: String,
         config: Option<&Bound<'_, PyDict>>,
@@ -519,16 +804,13 @@ impl RAGFSBindingClient {
             Some(dict) => py_dict_to_config(dict)?,
             None => HashMap::new(),
         };
+        let plugin_config = PluginConfig::from_raw_parts(fstype.clone(), path.clone(), params)
+            .map_err(to_py_err)?;
 
-        let plugin_config = PluginConfig {
-            name: fstype.clone(),
-            mount_path: path.clone(),
-            params,
-        };
-
-        let fs = self.fs.clone();
-        Python::attach(|py| {
-            py_detach_blocking(py, move || self.rt.block_on(async move { fs.mount(plugin_config).await }))
+        let mountable = self.mountable.clone();
+        py_detach_blocking(py, move || {
+            self.rt
+                .block_on(async move { mountable.mount(plugin_config).await })
         })
         .map_err(to_py_err)?;
 
@@ -541,11 +823,12 @@ impl RAGFSBindingClient {
     }
 
     /// Unmount a plugin.
-    fn unmount(&self, path: String) -> PyResult<HashMap<String, String>> {
-        let fs = self.fs.clone();
+    fn unmount(&self, py: Python<'_>, path: String) -> PyResult<HashMap<String, String>> {
+        let mountable = self.mountable.clone();
         let path_clone = path.clone();
-        Python::attach(|py| {
-            py_detach_blocking(py, move || self.rt.block_on(async move { fs.unmount(&path_clone).await }))
+        py_detach_blocking(py, move || {
+            self.rt
+                .block_on(async move { mountable.unmount(&path_clone).await })
         })
         .map_err(to_py_err)?;
 
@@ -600,12 +883,15 @@ impl RAGFSBindingClient {
     ///     node_limit: Maximum number of matches to return (default: None, no limit)
     ///     exclude_path: Optional path prefix to exclude from search (default: None)
     ///     level_limit: Optional maximum depth relative to query root (default: None)
+    ///     ctx: Optional FsContext dict (e.g. {"account_id": ...})
     ///
     /// Returns:
     ///     A dict with "matches" (list of match dicts) and "count" (total matches)
-    #[pyo3(signature = (path, pattern, recursive=false, case_insensitive=false, stream=false, node_limit=None, exclude_path=None, level_limit=None))]
+    #[pyo3(signature = (path, pattern, recursive=false, case_insensitive=false, stream=false, node_limit=None, exclude_path=None, level_limit=None, ctx=None))]
+    #[allow(clippy::too_many_arguments)]
     fn grep(
         &self,
+        py: Python<'_>,
         path: String,
         pattern: String,
         recursive: bool,
@@ -614,6 +900,7 @@ impl RAGFSBindingClient {
         node_limit: Option<i32>,
         exclude_path: Option<String>,
         level_limit: Option<i32>,
+        ctx: Option<HashMap<String, String>>,
     ) -> PyResult<Py<PyAny>> {
         if stream {
             return Err(PyRuntimeError::new_err(
@@ -621,14 +908,14 @@ impl RAGFSBindingClient {
             ));
         }
 
-        let fs = self.fs.clone();
+        let fs_ctx = build_fs_context(ctx);
+        let top = self.top.clone();
         let limit = node_limit.map(|n| if n < 0 { 0 } else { n as usize });
         let level_limit_usize = level_limit.map(|n| if n < 0 { 0 } else { n as usize });
 
         let result = self
-            .rt
-            .block_on(async move {
-                fs.grep(
+            .run_scoped(py, fs_ctx, move || async move {
+                top.grep(
                     &path,
                     &pattern,
                     recursive,
@@ -645,6 +932,101 @@ impl RAGFSBindingClient {
             let dict = grep_result_to_py_dict(py, &result)?;
             Ok(dict.into())
         })
+    }
+
+    /// Recursively traverse a directory tree.
+    ///
+    /// Args:
+    ///     path: The root path of the traversal
+    ///     show_hidden: Whether to include hidden files (default: False)
+    ///     node_limit: Maximum number of nodes to return (default: None, no limit)
+    ///     level_limit: Maximum depth relative to query root (default: None, no limit)
+    ///     ctx: Optional FsContext dict (e.g. {"account_id": ...})
+    ///
+    /// Returns:
+    ///     A list of dicts, each with keys: path, rel_path, info, extra
+    #[pyo3(signature = (path, show_hidden=false, node_limit=None, level_limit=None, ctx=None))]
+    fn tree_directory(
+        &self,
+        py: Python<'_>,
+        path: String,
+        show_hidden: bool,
+        node_limit: Option<i32>,
+        level_limit: Option<i32>,
+        ctx: Option<HashMap<String, String>>,
+    ) -> PyResult<Py<PyAny>> {
+        let fs_ctx = build_fs_context(ctx);
+        let top = self.top.clone();
+        let limit = node_limit.map(|n| if n < 0 { 0 } else { n as usize });
+        let level_limit_usize = level_limit.map(|n| if n < 0 { 0 } else { n as usize });
+
+        let entries = self
+            .run_scoped(py, fs_ctx, move || async move {
+                top.tree_directory(&path, show_hidden, limit, level_limit_usize)
+                    .await
+            })
+            .map_err(to_py_err)?;
+
+        Python::attach(|py| {
+            let list = PyList::empty(py);
+            for entry in &entries {
+                let dict = tree_entry_to_py_dict(py, entry)?;
+                list.append(dict)?;
+            }
+            Ok(list.into())
+        })
+    }
+
+    /// Query multi-write sync status under a file or directory path.
+    ///
+    /// Args:
+    ///     path: Absolute AGFS path rooted at the mounted namespace
+    ///     ctx: Optional FsContext dict (e.g. {"account_id": ...})
+    ///
+    /// Returns:
+    ///     A JSON-like dict describing pending and acknowledged backup sync state.
+    #[pyo3(signature = (path, ctx=None))]
+    fn system_sync_status(
+        &self,
+        py: Python<'_>,
+        path: String,
+        ctx: Option<HashMap<String, String>>,
+    ) -> PyResult<Py<PyAny>> {
+        let fs_ctx = build_fs_context(ctx);
+        let mountable = self.mountable.clone();
+        let result = self
+            .run_scoped(py, fs_ctx, move || async move {
+                mountable.system_sync_status(&path).await
+            })
+            .map_err(to_py_err)?;
+
+        Python::attach(|py| serde_json_to_py(py, &result))
+    }
+
+    /// Manually retry lagging multi-write backup sync operations under a path.
+    ///
+    /// Args:
+    ///     path: Absolute AGFS path rooted at the mounted namespace
+    ///     ctx: Optional FsContext dict (e.g. {"account_id": ...})
+    ///
+    /// Returns:
+    ///     A JSON-like dict summarizing retry results per target backend.
+    #[pyo3(signature = (path, ctx=None))]
+    fn system_sync_retry(
+        &self,
+        py: Python<'_>,
+        path: String,
+        ctx: Option<HashMap<String, String>>,
+    ) -> PyResult<Py<PyAny>> {
+        let fs_ctx = build_fs_context(ctx);
+        let mountable = self.mountable.clone();
+        let result = self
+            .run_scoped(py, fs_ctx, move || async move {
+                mountable.system_sync_retry(&path).await
+            })
+            .map_err(to_py_err)?;
+
+        Python::attach(|py| serde_json_to_py(py, &result))
     }
 
     /// Calculate file digest (not yet implemented in ragfs).
@@ -664,41 +1046,44 @@ impl RAGFSBindingClient {
     /// Returns:
     ///     Statistics data as a dict.
     #[pyo3(signature = (path=None))]
-    fn get_stats(&self, path: Option<String>) -> PyResult<Py<PyAny>> {
-        let fs = self.fs.clone();
+    fn get_stats(&self, py: Python<'_>, path: Option<String>) -> PyResult<Py<PyAny>> {
+        let fs = self.mountable.clone();
 
-        Python::attach(|py| {
-            if let Some(mount_path) = path {
-                // Get stats for a specific mount
-                let fs2 = fs.clone();
-                let mount_path_clone = mount_path.clone();
-                let stats = py_detach_blocking(py, move || {
-                    self.rt.block_on(async move { fs.get_mount_stats(&mount_path_clone).await })
-                })
-                .map_err(to_py_err)?;
+        if let Some(mount_path) = path {
+            // Get stats for a specific mount
+            let fs2 = fs.clone();
+            let mount_path_clone = mount_path.clone();
+            let stats = py_detach_blocking(py, move || {
+                self.rt
+                    .block_on(async move { fs.get_mount_stats(&mount_path_clone).await })
+            })
+            .map_err(to_py_err)?;
 
-                let mounts = py_detach_blocking(py, move || {
-                    self.rt.block_on(async move { fs2.list_mounts().await })
-                });
+            let mounts = py_detach_blocking(py, move || {
+                self.rt.block_on(async move { fs2.list_mounts().await })
+            });
 
-                let plugin_name = mounts
-                    .into_iter()
-                    .find(|(p, _)| p == &mount_path)
-                    .map(|(_, plugin)| plugin)
-                    .unwrap_or_default();
+            let plugin_name = mounts
+                .into_iter()
+                .find(|(p, _)| p == &mount_path)
+                .map(|(_, plugin)| plugin)
+                .unwrap_or_default();
 
+            Python::attach(|py| {
                 let result = PyDict::new(py);
                 result.set_item("path", mount_path)?;
                 result.set_item("plugin", plugin_name)?;
                 let stats_dict = filesystem_stats_to_py_dict(py, &stats)?;
                 result.set_item("stats", stats_dict)?;
                 Ok(result.into())
-            } else {
-                // Get stats for all mounts
-                let all_stats = py_detach_blocking(py, move || {
-                    self.rt.block_on(async move { fs.get_all_stats().await })
-                });
+            })
+        } else {
+            // Get stats for all mounts
+            let all_stats = py_detach_blocking(py, move || {
+                self.rt.block_on(async move { fs.get_all_stats().await })
+            });
 
+            Python::attach(|py| {
                 let mounts_list = PyList::empty(py);
                 for (path, (plugin, stats)) in all_stats {
                     let mount_dict = PyDict::new(py);
@@ -712,8 +1097,8 @@ impl RAGFSBindingClient {
                 let result = PyDict::new(py);
                 result.set_item("mounts", mounts_list)?;
                 Ok(result.into())
-            }
-        })
+            })
+        }
     }
 }
 
@@ -727,12 +1112,26 @@ fn ragfs_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pyo3::types::PyDict;
 
     #[test]
     fn detach_blocking_helper_runs_without_python_objects() {
         Python::attach(|py| {
             let value: i32 = py_detach_blocking(py, || 40 + 2);
             assert_eq!(value, 42);
+        });
+    }
+
+    #[test]
+    fn constructor_accepts_legacy_config_path_keyword() {
+        Python::attach(|py| {
+            let ty = py.get_type::<RAGFSBindingClient>();
+            let kwargs = PyDict::new(py);
+            kwargs
+                .set_item("config_path", "/tmp/legacy-ov.conf")
+                .unwrap();
+            let instance = ty.call((), Some(&kwargs));
+            assert!(instance.is_ok());
         });
     }
 }

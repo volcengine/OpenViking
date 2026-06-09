@@ -66,7 +66,6 @@ async function fetchJSON(path, init = {}) {
     }
     if (cfg.account) headers["X-OpenViking-Account"] = cfg.account;
     if (cfg.user) headers["X-OpenViking-User"] = cfg.user;
-    if (cfg.agentId) headers["X-OpenViking-Agent"] = cfg.agentId;
     const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
     const body = await res.json().catch(() => null);
     if (!body) return null;

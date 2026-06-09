@@ -5,10 +5,10 @@
 import pytest
 
 from openviking.utils.model_retry import (
+    ERROR_CLASS_INPUT_TOO_LARGE,
     ERROR_CLASS_PERMANENT,
     ERROR_CLASS_QUOTA_EXCEEDED,
     ERROR_CLASS_TRANSIENT,
-    ERROR_CLASS_UNKNOWN,
     classify_api_error,
     is_quota_exceeded_api_error,
     retry_async,
@@ -125,3 +125,72 @@ def test_quota_exceeded_case_insensitive():
     """Quota detection is case-insensitive."""
     assert classify_api_error(RuntimeError("QUOTA LIMIT")) == ERROR_CLASS_QUOTA_EXCEEDED
     assert classify_api_error(RuntimeError("Quota Exceed")) == ERROR_CLASS_QUOTA_EXCEEDED
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "BadRequestError: 400 maximum context length is 8192 tokens",
+        "Error code: 413 - Payload Too Large",
+        (
+            "Error code: 500 - {'error': {'code': 500, 'message': "
+            "'input (8525 tokens) is too large to process. increase the physical batch size "
+            "(current batch size: 2048)', 'type': 'server_error'}}"
+        ),
+    ],
+)
+def test_classify_input_too_large_errors(message):
+    assert classify_api_error(RuntimeError(message)) == ERROR_CLASS_INPUT_TOO_LARGE
+
+
+def test_retry_sync_does_not_retry_input_too_large():
+    attempts = {"count": 0}
+
+    def _call():
+        attempts["count"] += 1
+        raise RuntimeError("expected maxLength: 50000, actual: 75000")
+
+    with pytest.raises(RuntimeError, match="expected maxLength"):
+        retry_sync(_call, max_retries=5)
+
+    assert attempts["count"] == 1
+
+
+# --- numeric pattern word-boundary tests ---
+
+
+def test_429_with_request_id_containing_413_is_transient():
+    """A 429 error whose request ID happens to contain '413' must NOT be
+    misclassified as INPUT_TOO_LARGE (the original bug)."""
+    error = RuntimeError(
+        "Volcengine hybrid embedding failed: Error code: 429 - "
+        "{'error': {'code': 'ModelAccountRpmRateLimitExceeded', "
+        "'message': 'RPM limit exceeded', 'param': '', "
+        "'type': 'TooManyRequests'}, "
+        "'request_id': '0217801248873024288fe53d7c9130f34413480585e683685bc95'}"
+    )
+    assert classify_api_error(error) == ERROR_CLASS_TRANSIENT
+
+
+def test_429_with_hyphenated_request_id_containing_413_is_transient():
+    """Numeric status codes must not match hyphen-delimited request ID fragments."""
+    error = RuntimeError(
+        "Volcengine hybrid embedding failed: Error code: 429 - "
+        "{'error': {'code': 'ModelAccountRpmRateLimitExceeded', "
+        "'message': 'RPM limit exceeded', 'type': 'TooManyRequests'}, "
+        "'request_id': 'req-413-abcd'}"
+    )
+    assert classify_api_error(error) == ERROR_CLASS_TRANSIENT
+
+
+def test_numeric_status_code_inside_longer_number_is_not_matched():
+    """Status code patterns must not match inside longer numbers
+    (e.g. '400' must not match '1400')."""
+    assert classify_api_error(RuntimeError("status: 1400 OK")) == "unknown"
+    assert classify_api_error(RuntimeError("status: 5020 OK")) == "unknown"
+
+
+def test_numeric_status_code_with_compact_error_code_context_still_matches():
+    assert classify_api_error(RuntimeError("Error code:413-Payload Too Large")) == (
+        ERROR_CLASS_INPUT_TOO_LARGE
+    )

@@ -2,6 +2,7 @@ import { tool } from "@opencode-ai/plugin"
 import { addMemaddResource } from "./memadd-local.mjs"
 import {
   log,
+  effectivePeerId,
   makeRequest,
   unwrapResponse,
   validateVikingUri,
@@ -37,6 +38,8 @@ export function createMemoryTools({ config, sessionManager, projectDirectory }) 
           if (args.target_uri) body.target_uri = args.target_uri
           if (args.score_threshold !== undefined) body.score_threshold = args.score_threshold
           if (mode === "deep" && sessionId) body.session_id = sessionId
+          const peerId = effectivePeerId(config)
+          if (peerId) body.peer_id = peerId
 
           const response = await makeRequest(config, {
             method: "POST",
@@ -122,7 +125,10 @@ export function createMemoryTools({ config, sessionManager, projectDirectory }) 
         session_id: z.string().optional().describe("Optional explicit OpenViking session ID. Omit to use the current OpenCode session mapping."),
       },
       async execute(args, context) {
-        const sessionId = args.session_id ?? (context.sessionID ? sessionManager.getMappedSessionId(context.sessionID) : undefined)
+        let sessionId = args.session_id
+        if (!sessionId && context.sessionID) {
+          sessionId = sessionManager.getMappedSessionId(context.sessionID)
+        }
         if (!sessionId) {
           return "Error: No OpenViking session is associated with the current OpenCode session. Start or resume a normal OpenCode session first, or pass session_id."
         }

@@ -25,7 +25,7 @@ COPY pyproject.toml ./
 RUN mkdir -p vikingbot
 
 # Pre-install openviking from pip (linux/amd64 has pre-built wheel)
-RUN uv pip install --system --no-cache "openviking>=0.1.18"
+RUN uv pip install --system --no-cache "openviking>=0.3.9"
 
 # Install npm sandbox runtime
 RUN npm install -g @anthropic-ai/sandbox-runtime

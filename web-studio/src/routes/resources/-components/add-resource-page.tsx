@@ -79,6 +79,7 @@ export function AddResourceForm({
   const [selectedFiles, setSelectedFiles] = useState<SelectedUploadFile[]>([])
   const [targetUri, setTargetUri] = useState('viking://resources/')
   const [strict, setStrict] = useState(false)
+  const [createParent, setCreateParent] = useState(true)
   const [directlyUploadMedia, setDirectlyUploadMedia] = useState(true)
   const [reason, setReason] = useState('')
   const [instruction, setInstruction] = useState('')
@@ -165,6 +166,7 @@ export function AddResourceForm({
     const body: Record<string, unknown> = {
       parent: targetUri.trim() || undefined,
       strict,
+      create_parent: createParent,
       telemetry: true,
       wait: false,
       directly_upload_media: directlyUploadMedia,
@@ -408,6 +410,25 @@ export function AddResourceForm({
                       }
                     />
                     <TooltipContent>{t('strict.hint')}</TooltipContent>
+                  </Tooltip>
+                </Label>
+                <Label className="flex items-center gap-2">
+                  <Checkbox
+                    checked={createParent}
+                    onCheckedChange={(checked) =>
+                      setCreateParent(Boolean(checked))
+                    }
+                  />
+                  <span>{t('createParent')}</span>
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <Info className="size-3.5 text-muted-foreground" />
+                      }
+                    />
+                    <TooltipContent>
+                      {t('createParent.hint')}
+                    </TooltipContent>
                   </Tooltip>
                 </Label>
                 <Label className="flex items-center gap-2">

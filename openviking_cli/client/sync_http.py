@@ -33,21 +33,21 @@ class SyncHTTPClient:
         url: Optional[str] = None,
         api_key: Optional[str] = None,
         user_id: Optional[str] = None,
-        agent_id: Optional[str] = None,
         account: Optional[str] = None,
         user: Optional[str] = None,
         timeout: float = 60.0,
         extra_headers: Optional[Dict[str, str]] = None,
+        profile_enabled: Optional[bool] = None,
     ):
         self._async_client = AsyncHTTPClient(
             url=url,
             api_key=api_key,
             user_id=user_id,
-            agent_id=agent_id,
             account=account,
             user=user,
             timeout=timeout,
             extra_headers=extra_headers,
+            profile_enabled=profile_enabled,
         )
         self._initialized = False
 
@@ -83,7 +83,10 @@ class SyncHTTPClient:
         return run_async(self._async_client.session_exists(session_id))
 
     def create_session(
-        self, session_id: Optional[str] = None, telemetry: TelemetryRequest = False
+        self,
+        session_id: Optional[str] = None,
+        telemetry: TelemetryRequest = False,
+        memory_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Create a new session.
 
@@ -91,7 +94,13 @@ class SyncHTTPClient:
             session_id: Optional session ID. If provided, creates a session with the given ID.
                        If None, creates a new session with auto-generated ID.
         """
-        return run_async(self._async_client.create_session(session_id, telemetry=telemetry))
+        return run_async(
+            self._async_client.create_session(
+                session_id,
+                telemetry=telemetry,
+                memory_policy=memory_policy,
+            )
+        )
 
     def list_sessions(self) -> List[Any]:
         """List all sessions."""
@@ -120,7 +129,7 @@ class SyncHTTPClient:
         content: str | None = None,
         parts: list[dict] | None = None,
         created_at: str | None = None,
-        role_id: str | None = None,
+        peer_id: str | None = None,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add a message to a session.
@@ -131,7 +140,7 @@ class SyncHTTPClient:
             content: Text content (simple mode)
             parts: Parts array (full Part support: TextPart, ContextPart, ToolPart)
             created_at: Message creation time (ISO format string)
-            role_id: Optional explicit actor identity. Omit to let the server derive it.
+            peer_id: Optional stable interaction peer identity.
 
         If both content and parts are provided, parts takes precedence.
         """
@@ -142,7 +151,32 @@ class SyncHTTPClient:
                 content,
                 parts,
                 created_at,
-                role_id,
+                peer_id,
+                telemetry,
+            )
+        )
+
+    def batch_add_messages(
+        self,
+        session_id: str,
+        messages: list[dict],
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Add multiple messages to a session in a single request.
+
+        Args:
+            session_id: Session ID
+            messages: List of message dicts, each with "role" and optionally
+                      "content", "parts", "created_at", "peer_id".
+            telemetry: Whether to attach operation telemetry data to the result.
+
+        Returns:
+            Result dict with session_id, message_count, and added count.
+        """
+        return run_async(
+            self._async_client.batch_add_messages(
+                session_id,
+                messages,
                 telemetry,
             )
         )
@@ -167,10 +201,22 @@ class SyncHTTPClient:
         )
 
     def commit_session(
-        self, session_id: str, telemetry: TelemetryRequest = False
+        self,
+        session_id: str,
+        telemetry: TelemetryRequest = False,
+        *,
+        keep_recent_count: int = 0,
+        memory_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Commit a session (archive and extract memories)."""
-        return run_async(self._async_client.commit_session(session_id, telemetry=telemetry))
+        return run_async(
+            self._async_client.commit_session(
+                session_id,
+                telemetry=telemetry,
+                keep_recent_count=keep_recent_count,
+                memory_policy=memory_policy,
+            )
+        )
 
     # ============= Resource =============
 
@@ -188,6 +234,7 @@ class SyncHTTPClient:
         include: Optional[str] = None,
         exclude: Optional[str] = None,
         directly_upload_media: bool = True,
+        watch_interval: float = 0,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
@@ -195,18 +242,19 @@ class SyncHTTPClient:
             raise ValueError("Cannot specify both 'to' and 'parent' at the same time.")
         return run_async(
             self._async_client.add_resource(
-                path,
-                to,
-                parent,
-                reason,
-                instruction,
-                wait,
-                timeout,
-                strict,
-                ignore_dirs,
-                include,
-                exclude,
-                directly_upload_media,
+                path=path,
+                to=to,
+                parent=parent,
+                reason=reason,
+                instruction=instruction,
+                wait=wait,
+                timeout=timeout,
+                strict=strict,
+                ignore_dirs=ignore_dirs,
+                include=include,
+                exclude=exclude,
+                directly_upload_media=directly_upload_media,
+                watch_interval=watch_interval,
                 telemetry=telemetry,
             )
         )
@@ -240,6 +288,7 @@ class SyncHTTPClient:
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         telemetry: TelemetryRequest = False,
+        peer_id: Optional[str] = None,
     ):
         """Semantic search with optional session context."""
         return run_async(
@@ -253,6 +302,7 @@ class SyncHTTPClient:
                 score_threshold=score_threshold,
                 filter=filter,
                 telemetry=telemetry,
+                peer_id=peer_id,
             )
         )
 
@@ -265,6 +315,7 @@ class SyncHTTPClient:
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         telemetry: TelemetryRequest = False,
+        peer_id: Optional[str] = None,
     ):
         """Semantic search without session context."""
         return run_async(
@@ -276,6 +327,7 @@ class SyncHTTPClient:
                 score_threshold,
                 filter,
                 telemetry=telemetry,
+                peer_id=peer_id,
             )
         )
 

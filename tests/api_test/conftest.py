@@ -299,37 +299,89 @@ def get_test_category(nodeid):
     return "其他"
 
 
+def _extract_user_key(users, user_id):
+    for user in users:
+        if isinstance(user, dict) and user.get("user_id") == user_id:
+            return user.get("api_key")
+    return None
+
+
+def _ensure_api_test_user_key(root_client, account_id: str, user_id: str) -> str:
+    resp = root_client.admin_list_users(account_id)
+    if resp.status_code == 404:
+        create_resp = root_client.admin_create_account(account_id, user_id)
+        if create_resp.status_code in (200, 201):
+            data = create_resp.json()
+            user_key = data.get("result", {}).get("user_key")
+            if user_key:
+                print(f"已创建测试账户和用户 {account_id}/{user_id}")
+                return user_key
+        print(f"创建测试账户失败({create_resp.status_code}): {create_resp.text[:200]}")
+        return Config.OPENVIKING_API_KEY
+
+    if resp.status_code != 200:
+        print(f"无法查询用户列表({resp.status_code}), 使用配置的 API Key: {resp.text[:200]}")
+        return Config.OPENVIKING_API_KEY
+
+    users = resp.json().get("result", [])
+    user_key = _extract_user_key(users, user_id)
+    if user_key:
+        print(f"复用测试用户 {account_id}/{user_id}")
+        return user_key
+
+    user_exists = any(
+        (isinstance(u, dict) and u.get("user_id") == user_id)
+        or (isinstance(u, str) and u == user_id)
+        for u in users
+    )
+    if not user_exists:
+        reg_resp = root_client.admin_register_user(account_id, user_id, role="admin")
+        if reg_resp.status_code in (200, 201):
+            data = reg_resp.json()
+            user_key = data.get("result", {}).get("user_key")
+            if user_key:
+                print(f"已注册测试用户 {account_id}/{user_id}")
+                return user_key
+        print(f"注册测试用户失败({reg_resp.status_code}): {reg_resp.text[:200]}")
+        return Config.OPENVIKING_API_KEY
+
+    role_resp = root_client.admin_set_role(account_id, user_id, "admin")
+    if role_resp.status_code != 200:
+        print(f"设置测试用户角色失败({role_resp.status_code}): {role_resp.text[:200]}")
+
+    key_resp = root_client.admin_regenerate_key(account_id, user_id)
+    if key_resp.status_code == 200:
+        user_key = key_resp.json().get("result", {}).get("user_key")
+        if user_key:
+            print(f"已刷新测试用户 API Key {account_id}/{user_id}")
+            return user_key
+
+    print(f"刷新测试用户 API Key 失败({key_resp.status_code}): {key_resp.text[:200]}")
+    return Config.OPENVIKING_API_KEY
+
+
 @pytest.fixture(scope="session")
 def api_client():
-    client = OpenVikingAPIClient(server_url=Config.SERVER_URL, api_key=Config.OPENVIKING_API_KEY)
-
     account_id = Config.OPENVIKING_ACCOUNT
     user_id = Config.OPENVIKING_USER
+    root_key = Config.OPENVIKING_ROOT_API_KEY
+    root_client = OpenVikingAPIClient(
+        server_url=Config.SERVER_URL,
+        api_key=root_key,
+        root_api_key=root_key,
+    )
 
     try:
-        resp = client.admin_list_users(account_id)
-        if resp.status_code == 200:
-            data = resp.json()
-            users = data.get("result", [])
-            user_exists = any(
-                (isinstance(u, dict) and u.get("user_id") == user_id)
-                or (isinstance(u, str) and u == user_id)
-                for u in users
-            )
-            if not user_exists:
-                reg_resp = client.admin_register_user(account_id, user_id, role="admin")
-                if reg_resp.status_code in (200, 201):
-                    print(f"已注册用户 {account_id}/{user_id}")
-                else:
-                    print(f"注册用户失败({reg_resp.status_code}): {reg_resp.text[:200]}")
-            else:
-                print(f"用户 {account_id}/{user_id} 已存在")
-        else:
-            print(f"无法查询用户列表({resp.status_code}), 跳过用户注册(可能为开发模式)")
+        api_key = _ensure_api_test_user_key(root_client, account_id, user_id)
     except Exception as e:
         print(f"用户注册检查异常, 跳过: {e}")
+        api_key = Config.OPENVIKING_API_KEY
 
-    return client
+    return OpenVikingAPIClient(
+        server_url=Config.SERVER_URL,
+        api_key=api_key,
+        root_api_key=root_key,
+    )
 
 
 @pytest.fixture(scope="session", autouse=True)

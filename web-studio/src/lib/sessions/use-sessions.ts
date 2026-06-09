@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   createSession,
   deleteSession,
+  fetchBotHealth,
   fetchSession,
   fetchSessionMessages,
   fetchSessions,
@@ -10,6 +11,16 @@ import {
 import type { Message } from './types/message'
 
 const SESSIONS_KEY = ['sessions'] as const
+const BOT_HEALTH_KEY = ['bot', 'health'] as const
+
+export function useBotHealth() {
+  return useQuery({
+    queryKey: BOT_HEALTH_KEY,
+    queryFn: fetchBotHealth,
+    retry: false,
+    staleTime: 15_000,
+  })
+}
 
 export function useSessionList() {
   return useQuery({

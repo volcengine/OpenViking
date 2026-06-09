@@ -16,7 +16,6 @@ Regular `export/import` handles one package root:
 
 - `viking://resources/...`
 - `viking://user/...`
-- `viking://agent/...`
 - `viking://session/...`
 
 Full migration uses the separate `backup/restore` flow. It packages public
@@ -24,11 +23,29 @@ scope roots together:
 
 - `viking://resources`
 - `viking://user`
-- `viking://agent`
 - `viking://session`
 
 Internal or runtime data such as `temp`, `queue`, `upload`, lock files, watch
 control files, and `.relations.json` are outside the OVPack migration scope.
+
+## Working with Multi-Write Storage
+
+Multi-write storage only replicates writes that happen after it is enabled. It
+does not automatically copy historical files that already existed before
+`storage.agfs.backups` was turned on.
+
+When migrating an existing environment to multi-write mode, first move the
+existing dataset with OVPack, then enable multi-write storage.
+
+Recommended flow:
+
+1. Use `ov backup` or `ov export` to export the current dataset.
+2. Restore or import the dataset into the target storage environment.
+3. Validate data and index integrity in the target environment.
+4. Configure and enable multi-write storage.
+5. Resume normal writes and let multi-write handle future incremental copies.
+
+For more details, see the [Multi-Write Storage Guide](./13-multi-write-storage.md).
 
 ## Quick Start
 
@@ -327,7 +344,7 @@ These fields are regenerated in the target environment and are not restored
 from the package:
 
 ```text
-id, uri, account_id, owner_user_id, owner_agent_id, owner_space,
+id, uri, account_id, owner_user_id, owner_space,
 created_at, updated_at, active_count
 ```
 
@@ -409,11 +426,11 @@ ov export viking://user/default/memories ./exports/user-memories.ovpack
 ov import ./exports/user-memories.ovpack viking://user/default/ --on-conflict overwrite
 ```
 
-Agent memories:
+User memories:
 
 ```bash
-ov export viking://agent/default/memories ./exports/agent-memories.ovpack
-ov import ./exports/agent-memories.ovpack viking://agent/default/ --on-conflict overwrite
+ov export viking://user/default/memories ./exports/agent-memories.ovpack
+ov import ./exports/agent-memories.ovpack viking://user/default/ --on-conflict overwrite
 ```
 
 Sessions restore file state only and do not trigger vectorization:

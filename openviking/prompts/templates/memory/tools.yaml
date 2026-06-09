@@ -12,7 +12,7 @@ description: |
   - Trivial tool calls without learning value
   - Duplicate patterns already captured
   - Tool calls with no meaningful outcome
-directory: "viking://agent/{{ agent_space }}/memories/tools"
+directory: "viking://user/{{ user_space }}/memories/tools"
 filename_template: "{{ tool_name }}.md"
 enabled: true
 content_template: |

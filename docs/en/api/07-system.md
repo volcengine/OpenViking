@@ -17,7 +17,25 @@ Basic health check endpoint. No authentication required. Returns service version
 
 #### 2. Interface and Parameters
 
-No parameters.
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| profile | string | No | - | When set to `1`, `true`, `yes`, or `on`, enables request-scoped `cProfile` and appends a `profile` field to JSON responses |
+
+**`profile` behavior**:
+- `profile` is implemented at the HTTP middleware layer and works for any OpenViking endpoint that returns JSON, not just `/health`.
+- The request flag only takes effect when the server enables `server.profile_enabled = true` in `ov.conf`; otherwise the server ignores `profile=1`.
+- `profile` only applies to the current request and is automatically disabled when the request completes, so later requests do not inherit it.
+- The middleware only injects a `profile` field into JSON responses; plain text, file, and streaming responses are left unchanged.
+- The returned value is `list[string]`, where each element is one formatted `pstats` line. This makes browser JSON viewers and line-by-line UI rendering easier.
+- The `ov` CLI displays the returned `profile`. The Python HTTP client can trigger server-side profiling via `ovcli.conf.profile = true`, but most SDK methods still return only the business `result` and do not expose the top-level `profile` field directly.
+
+**`profile` column meanings**:
+- `ncalls`: Number of calls. When shown as `total/primitive`, the first value is total calls and the second is primitive calls.
+- `tottime`: Total time spent in the function body itself, excluding time in subcalls.
+- `percall` (first): `tottime / ncalls`, the average self time per call.
+- `cumtime`: Cumulative time including the current function and all of its subcalls.
+- `percall` (second): `cumtime / primitive calls`, the average cumulative time per primitive call.
+- `filename:lineno(function)`: Function location. Regular Python code shows the trimmed module path; entries like `~:0(...)` usually represent builtin or native-extension calls.
 
 #### 3. Usage Examples
 
@@ -29,6 +47,11 @@ GET /health
 
 ```bash
 curl -X GET http://localhost:1933/health
+```
+
+```bash
+curl -G http://localhost:1933/health \
+  --data-urlencode "profile=1"
 ```
 
 **Python SDK**
@@ -49,6 +72,10 @@ print(f"Healthy: {healthy}")
 ov system health
 ```
 
+```bash
+ov --profile health
+```
+
 **Response Example**
 
 ```json
@@ -57,6 +84,27 @@ ov system health
   "healthy": true,
   "version": "0.1.x",
   "auth_mode": "api_key"
+}
+```
+
+**Response Example With `profile`**
+
+```json
+{
+  "status": "ok",
+  "healthy": true,
+  "version": "0.1.x",
+  "profile": [
+    "         325 function calls (310 primitive calls) in 0.004 seconds",
+    "",
+    "   Ordered by: cumulative time",
+    "   List reduced from 87 to 87 due to restriction <100>",
+    "",
+    "   ncalls  tottime  percall  cumtime  percall filename:lineno(function)",
+    "        1    0.000    0.000    0.003    0.003 starlette/middleware/base.py:112(call_next)",
+    "        1    0.000    0.000    0.001    0.001 openviking/server/routers/system.py:39(health_check)",
+    "        3    0.000    0.000    0.000    0.000 ~:0(<method 'read' of 'builtins.RAGFSBindingClient' objects>)"
+  ]
 }
 ```
 
@@ -330,7 +378,7 @@ This API operates on existing `viking://...` content. It does not import new fil
 
 **Authentication**
 
-- HTTP endpoint: requires root/admin access when authentication is enabled; root-key requests must include `X-OpenViking-Account`
+- HTTP endpoint: requires admin/root role when authentication is enabled. In `api_key` mode, use an admin key for tenant content; a raw root key cannot access tenant-scoped data.
 - Python embedded mode: uses the current service context
 - Python HTTP client / CLI: sends the current authenticated identity
 
@@ -349,14 +397,11 @@ The HTTP request body rejects unknown fields. `uri` may use OpenViking path vari
 - `viking://`
 - `viking://user`
 - `viking://user/<user_id>`
-- `viking://agent`
-- `viking://agent/<agent_id>`
 - `viking://resources`
 - `viking://resources/...`
 - `viking://user/<user_id>/memories/...`
-- `viking://agent/<agent_id>/memories/...`
-- `viking://agent/<agent_id>/skills`
-- `viking://agent/<agent_id>/skills/<skill_name>`
+- `viking://user/<user_id>/skills`
+- `viking://user/<user_id>/skills/<skill_name>`
 
 `viking://session/...` is not supported by `reindex()`.
 
@@ -382,7 +427,7 @@ print(result)
 
 ```python
 result = client.reindex(
-    uri="viking://agent/default/skills",
+    uri="viking://user/default/skills",
     mode="semantic_and_vectors",
     wait=False,
 )
@@ -416,7 +461,7 @@ openviking reindex viking://resources --mode vectors_only
 ```
 
 ```bash
-openviking reindex viking://agent/default/skills --mode semantic_and_vectors --wait false
+openviking reindex viking://user/default/skills --mode semantic_and_vectors --wait false
 ```
 
 **Synchronous response (`wait=true`)**
@@ -470,7 +515,7 @@ Reindex background tasks use `task_type="admin_reindex"` and `resource_id` equal
 GET /api/v1/tasks?task_type=admin_reindex&resource_id=viking://resources
 ```
 
-Task records are kept in memory and can expire or be lost on server restart.
+Task records are persisted under `/local/{account_id}/_system/tasks/{user_id}/{task_id}.json` and can be queried after restart.
 
 **Result fields**
 
@@ -478,7 +523,7 @@ Task records are kept in memory and can expire or be lost on server restart.
 |-------|-------------|
 | status | `completed` for synchronous completion, `accepted` for background execution |
 | uri | Requested URI after path-variable resolution |
-| object_type | Inferred target type, such as `resource`, `skill`, `memory`, `user_namespace`, `agent_namespace`, `skill_namespace`, or `global_namespace` |
+| object_type | Inferred target type, such as `resource`, `skill`, `memory`, `user_namespace`, `skill_namespace`, or `global_namespace` |
 | mode | Effective reindex mode |
 | scanned_records | Number of records or semantic sources considered |
 | rebuilt_records | Number of vector records successfully rebuilt |
@@ -492,7 +537,7 @@ Task records are kept in memory and can expire or be lost on server restart.
 
 - Reindex is non-destructive. It uses rebuild/upsert behavior and does not require dropping the vector collection first.
 - `viking://` reindex fans out to supported top-level namespaces and excludes `session`.
-- Namespace reindex operations such as `viking://user` or `viking://agent/default` propagate to their supported child content types.
+- Namespace reindex operations such as `viking://user` propagate to supported child content types.
 - `vectors_only` is the right mode when only the embedding model or vector index needs to be refreshed.
 - `semantic_and_vectors` is the right mode when semantic artifacts themselves must be regenerated before re-vectorization.
 - Only one reindex task can run for the same URI and owner at a time. A concurrent request for the same target returns a conflict.

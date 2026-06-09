@@ -11,6 +11,9 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any
 
+from openviking.core.peer_id import normalize_peer_id
+from openviking.utils.token_estimation import estimate_text_tokens
+
 
 class InMemoryOpenVikingClient:
     """Small OpenViking-compatible client for examples and CI smoke tests.
@@ -41,14 +44,18 @@ class InMemoryOpenVikingClient:
         limit: int = 10,
         score_threshold: float | None = None,
         filter: dict[str, Any] | None = None,
+        peer_id: str | None = None,
         **_: Any,
     ) -> dict[str, Any]:
+        normalized_peer_id = normalize_peer_id(peer_id)
         self.find_calls.append(
             {
                 "query": query,
                 "target_uri": target_uri,
                 "limit": limit,
                 "score_threshold": score_threshold,
+                "filter": filter,
+                "peer_id": normalized_peer_id,
             }
         )
         return self._search(query, target_uri, limit, score_threshold)
@@ -61,8 +68,10 @@ class InMemoryOpenVikingClient:
         limit: int = 10,
         score_threshold: float | None = None,
         filter: dict[str, Any] | None = None,
+        peer_id: str | None = None,
         **_: Any,
     ) -> dict[str, Any]:
+        normalized_peer_id = normalize_peer_id(peer_id)
         self.search_calls.append(
             {
                 "query": query,
@@ -70,6 +79,8 @@ class InMemoryOpenVikingClient:
                 "session_id": session_id,
                 "limit": limit,
                 "score_threshold": score_threshold,
+                "filter": filter,
+                "peer_id": normalized_peer_id,
             }
         )
         session_text = " ".join(
@@ -226,21 +237,49 @@ class InMemoryOpenVikingClient:
         role: str,
         content: str | None = None,
         parts: list[dict] | None = None,
+        created_at: str | None = None,
+        peer_id: str | None = None,
         **_: Any,
     ) -> dict[str, Any]:
         message_parts = list(parts or [{"type": "text", "text": content or ""}])
+        normalized_peer_id = normalize_peer_id(peer_id)
         message = {
             "id": f"msg_{uuid.uuid4().hex}",
             "role": role,
             "parts": message_parts,
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": created_at or datetime.now(timezone.utc).isoformat(),
         }
+        if normalized_peer_id is not None:
+            message["peer_id"] = normalized_peer_id
         self.sessions.setdefault(session_id, []).append(message)
-        self.pending_tokens[session_id] += max(1, len(_message_text(message)) // 4)
+        self.pending_tokens[session_id] += max(1, estimate_text_tokens(_message_text(message)))
         return {
             "session_id": session_id,
             "role": role,
             "message_count": len(self.sessions[session_id]),
+        }
+
+    def batch_add_messages(
+        self,
+        session_id: str,
+        messages: list[dict[str, Any]],
+        **_: Any,
+    ) -> dict[str, Any]:
+        added = 0
+        for message in messages:
+            self.add_message(
+                session_id=session_id,
+                role=message["role"],
+                content=message.get("content"),
+                parts=message.get("parts"),
+                created_at=message.get("created_at"),
+                peer_id=message.get("peer_id"),
+            )
+            added += 1
+        return {
+            "session_id": session_id,
+            "message_count": len(self.sessions[session_id]),
+            "added": added,
         }
 
     def get_session(self, session_id: str, auto_create: bool = False) -> dict[str, Any]:
@@ -262,8 +301,10 @@ class InMemoryOpenVikingClient:
         latest_archive = self.archives.get(session_id, [])[-1:] or []
         latest = latest_archive[0] if latest_archive else {}
         messages = list(self.sessions.get(session_id, []))
-        active_tokens = sum(max(1, len(_message_text(message)) // 4) for message in messages)
-        archive_tokens = max(0, len(str(latest.get("overview", ""))) // 4)
+        active_tokens = sum(
+            max(1, estimate_text_tokens(_message_text(message))) for message in messages
+        )
+        archive_tokens = max(0, estimate_text_tokens(str(latest.get("overview", ""))))
         return {
             "latest_archive_overview": latest.get("overview", ""),
             "pre_archive_abstracts": [
@@ -337,7 +378,7 @@ class InMemoryOpenVikingClient:
 
     def add_skill(self, data: Any, **_: Any) -> dict[str, Any]:
         name = data.get("name", "skill") if isinstance(data, dict) else "skill"
-        uri = f"viking://agent/skills/{name}.md"
+        uri = f"viking://user/skills/{name}.md"
         self.records[uri] = str(data)
         return {"status": "completed", "uri": uri, "name": name}
 

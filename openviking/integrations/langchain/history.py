@@ -25,10 +25,10 @@ except ImportError as exc:  # pragma: no cover - exercised by optional import pa
 from openviking.integrations.langchain.client import (
     OpenVikingCommitPolicy,
     OpenVikingConnection,
+    apply_commit_policy,
     call_openviking,
     ensure_client,
     extract_message_text,
-    maybe_commit_session,
 )
 
 logger = logging.getLogger(__name__)
@@ -47,7 +47,6 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
         account: str | None = None,
         user: str | None = None,
         user_id: str | None = None,
-        agent_id: str | None = None,
         path: str | None = None,
         timeout: float = 60.0,
         extra_headers: dict[str, str] | None = None,
@@ -56,8 +55,12 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
         persist_system_messages: bool = False,
         commit_policy: OpenVikingCommitPolicy | None = None,
         context_parts_provider: Callable[[str], list[dict[str, Any]]] | None = None,
+        peer_id: str | None = None,
+        peer_id_provider: Callable[[str], str | None] | None = None,
     ):
         self.session_id = session_id
+        self.peer_id = peer_id
+        self.peer_id_provider = peer_id_provider
         self.token_budget = token_budget
         # Retained for constructor compatibility. System messages are runtime
         # policy, not conversation memory, so they are never persisted.
@@ -71,7 +74,6 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
             account=account,
             user=user,
             user_id=user_id,
-            agent_id=agent_id,
             path=path,
             timeout=timeout,
             extra_headers=extra_headers,
@@ -98,12 +100,13 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
 
     def add_messages(self, messages: Sequence[BaseMessage]) -> None:
         client = self._get_client()
-        added = 0
         pending_context_parts = (
             list(self.context_parts_provider(self.session_id))
             if self.context_parts_provider
             else []
         )
+        batch = []
+        effective_peer_id = self._effective_peer_id()
         for message in messages:
             for payload in langchain_message_to_openviking(
                 message,
@@ -112,16 +115,18 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
                 if pending_context_parts and payload["role"] == "assistant":
                     payload["parts"].extend(pending_context_parts)
                     pending_context_parts = []
-                call_openviking(
-                    client,
-                    "add_message",
-                    session_id=self.session_id,
-                    role=payload["role"],
-                    parts=payload["parts"],
-                )
-                added += 1
-        if added:
-            maybe_commit_session(client, self.session_id, self.commit_policy)
+                if effective_peer_id is not None:
+                    payload["peer_id"] = effective_peer_id
+                batch.append(payload)
+
+        if batch:
+            call_openviking(
+                client,
+                "batch_add_messages",
+                session_id=self.session_id,
+                messages=batch,
+            )
+            apply_commit_policy(client, self.session_id, self.commit_policy)
 
     def clear(self) -> None:
         client = self._get_client()
@@ -139,6 +144,16 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
         except Exception:
             logger.debug("OpenViking chat history session ensure failed", exc_info=True)
             pass
+
+    def _effective_peer_id(self) -> str | None:
+        if self.peer_id_provider is None:
+            value = self.peer_id
+        else:
+            value = self.peer_id_provider(self.session_id)
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
 
 
 def langchain_message_to_openviking(

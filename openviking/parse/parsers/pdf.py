@@ -12,6 +12,8 @@ This design simplifies PDF handling by delegating structure analysis
 to the MarkdownParser after conversion.
 """
 
+import asyncio
+import io
 import re
 import time
 from collections import Counter, defaultdict
@@ -127,11 +129,16 @@ class PDFParser(BaseParser):
 
             # Step 2: Parse Markdown using MarkdownParser, pass through resource name
             md_parser = self._get_markdown_parser()
+            from openviking_cli.utils.storage import get_storage
+
+            storage = get_storage()
             result = await md_parser.parse_content(
                 markdown_content,
                 source_path=str(pdf_path),
                 resource_name=resource_name,
                 source_name=resource_name,
+                base_dir=pdf_path.parent,
+                allowed_media_dirs=[storage.media_dir],
             )
 
             # Step 3: Update metadata for PDF origin
@@ -209,25 +216,16 @@ class PDFParser(BaseParser):
     async def _convert_local(
         self, pdf_path: Path, storage=None, resource_name: Optional[str] = None
     ) -> tuple[str, Dict[str, Any]]:
-        """
-        Convert PDF to Markdown using pdfplumber.
+        # pdfplumber / pdfminer 的解析与图片/表格提取通常是 CPU/IO 密集且为同步实现，
+        # 放到线程池中执行，避免阻塞事件循环。
+        return await asyncio.to_thread(self._convert_local_sync, pdf_path, storage, resource_name)
 
-        When the PDF contains bookmarks/outlines, these are extracted and
-        injected as markdown headings at the appropriate page positions.
-        This allows MarkdownParser to build a hierarchical directory tree
-        instead of producing flat numbered files.
+    def _convert_local_sync(
+        self, pdf_path: Path, storage=None, resource_name: Optional[str] = None
+    ) -> tuple[str, Dict[str, Any]]:
+        """同步版：用 pdfplumber 将 PDF 转 Markdown。
 
-        Args:
-            pdf_path: Path to PDF file
-            storage: Optional StoragePath for saving images
-            resource_name: Resource name for organizing saved images
-
-        Returns:
-            Tuple of (markdown_content, metadata)
-
-        Raises:
-            ImportError: If pdfplumber not installed
-            Exception: If conversion fails
+        该方法会在 :meth:`_convert_local` 中通过 asyncio.to_thread 调用。
         """
         pdfplumber = lazy_import("pdfplumber")
 
@@ -344,8 +342,8 @@ class PDFParser(BaseParser):
                                         resource_name, image_obj, filename=filename
                                     )
 
-                                    # Generate relative path for markdown
-                                    rel_path = image_path.relative_to(Path.cwd())
+                                    # Generate path relative to the media root.
+                                    rel_path = image_path.relative_to(storage.media_dir)
                                     parts.append(
                                         f"<!-- Page {page_num} Image {img_idx + 1} -->\n"
                                         f"![Page {page_num} Image {img_idx + 1}]({rel_path})"
@@ -608,30 +606,38 @@ class PDFParser(BaseParser):
 
     def _extract_image_from_page(self, page, img_info: dict) -> Optional[bytes]:
         """
-        Extract image data from PDF page.
+        Extract a PDF image as valid PNG bytes.
+
+        Renders the image's bounding box on the page to a raster PNG via
+        pdfplumber's ``crop().to_image()`` instead of returning the raw decoded
+        XObject stream (which is not a valid image file and cannot be opened).
 
         Args:
             page: pdfplumber page object
             img_info: Image metadata from page.images
 
         Returns:
-            Image bytes or None if extraction fails
+            PNG-encoded image bytes or None if extraction fails
         """
         try:
-            if hasattr(page, "page_obj") and hasattr(page.page_obj, "resources"):
-                resources = page.page_obj.resources
-                if resources and "XObject" in resources:
-                    xobjects = resources["XObject"]
-                    for obj_name in xobjects:
-                        obj = xobjects[obj_name]
-                        if hasattr(obj, "resolve"):
-                            resolved = obj.resolve()
-                            if resolved.get("Subtype") and resolved["Subtype"].name == "Image":
-                                data = resolved.get("stream")
-                                if data:
-                                    return data.get_data()
+            # pdfplumber coordinates: ``top`` is measured from the top of the page.
+            bbox = (
+                max(0, img_info["x0"]),
+                max(0, img_info["top"]),
+                min(page.width, img_info["x1"]),
+                min(page.height, img_info["bottom"]),
+            )
 
-            return None
+            # Skip degenerate / zero-area boxes that cannot be cropped.
+            if bbox[2] <= bbox[0] or bbox[3] <= bbox[1]:
+                return None
+
+            cropped = page.crop(bbox)
+            page_image = cropped.to_image(resolution=self.config.image_resolution)
+
+            buffer = io.BytesIO()
+            page_image.save(buffer, format="PNG")
+            return buffer.getvalue()
 
         except Exception as e:
             logger.debug(f"Image extraction error: {e}")

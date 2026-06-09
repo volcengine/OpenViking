@@ -19,20 +19,20 @@ impl HttpClient {
     pub fn new(
         base_url: impl Into<String>,
         api_key: Option<String>,
-        agent_id: Option<String>,
         account: Option<String>,
         user: Option<String>,
         timeout_secs: f64,
+        profile_enabled: bool,
         extra_headers: Option<std::collections::HashMap<String, String>>,
     ) -> Self {
         Self {
             base: BaseClient::new(
                 base_url,
                 api_key,
-                agent_id,
                 account,
                 user,
                 timeout_secs,
+                profile_enabled,
                 extra_headers,
             ),
         }
@@ -40,10 +40,6 @@ impl HttpClient {
 
     pub fn user_id(&self) -> Option<&str> {
         self.base.user_id()
-    }
-
-    pub fn agent_id(&self) -> Option<&str> {
-        self.base.agent_id()
     }
 
     pub fn api_key(&self) -> Option<&str> {
@@ -66,7 +62,7 @@ impl HttpClient {
 
     // ============ HTTP Methods ============
 
-    pub async fn get<T: DeserializeOwned>(
+    pub async fn get<T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         params: &[(String, String)],
@@ -74,7 +70,7 @@ impl HttpClient {
         self.base.get(path, params).await
     }
 
-    pub async fn post<B: serde::Serialize, T: DeserializeOwned>(
+    pub async fn post<B: serde::Serialize, T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         body: &B,
@@ -82,7 +78,7 @@ impl HttpClient {
         self.base.post(path, body).await
     }
 
-    pub async fn put<B: serde::Serialize, T: DeserializeOwned>(
+    pub async fn put<B: serde::Serialize, T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         body: &B,
@@ -90,7 +86,7 @@ impl HttpClient {
         self.base.put(path, body).await
     }
 
-    pub async fn delete<T: DeserializeOwned>(
+    pub async fn delete<T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         params: &[(String, String)],
@@ -98,7 +94,7 @@ impl HttpClient {
         self.base.delete(path, params).await
     }
 
-    pub async fn delete_with_body<B: serde::Serialize, T: DeserializeOwned>(
+    pub async fn delete_with_body<B: serde::Serialize, T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         body: &B,
@@ -106,7 +102,7 @@ impl HttpClient {
         self.base.delete_with_body(path, body).await
     }
 
-    pub async fn patch<B: serde::Serialize, T: DeserializeOwned>(
+    pub async fn patch<B: serde::Serialize, T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         body: &B,
@@ -115,7 +111,7 @@ impl HttpClient {
         self.base.patch(path, body, params).await
     }
 
-    pub async fn post_with_query<B: serde::Serialize, T: DeserializeOwned>(
+    pub async fn post_with_query<B: serde::Serialize, T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         body: &B,
@@ -126,7 +122,7 @@ impl HttpClient {
 
     // ============ File Helper Methods ============
 
-    fn create_uploader(&self) -> FileUploader {
+    fn create_uploader(&self) -> FileUploader<'_> {
         FileUploader::new(&self.base).with_upload_mode(self.upload_mode())
     }
 
@@ -144,7 +140,8 @@ impl HttpClient {
         verbose: bool,
         ignore_dirs: Option<&str>,
     ) -> Result<tempfile::NamedTempFile> {
-        self.create_uploader().zip_directory_with_progress(dir_path, verbose, ignore_dirs)
+        self.create_uploader()
+            .zip_directory_with_progress(dir_path, verbose, ignore_dirs)
     }
 
     async fn upload_temp_file(&self, file_path: &Path) -> Result<String> {
@@ -168,12 +165,27 @@ impl HttpClient {
         self.get("/api/v1/content/read", &params).await
     }
 
+    pub async fn read_profiled(&self, uri: &str) -> Result<Value> {
+        let params = vec![("uri".to_string(), uri.to_string())];
+        self.get("/api/v1/content/read", &params).await
+    }
+
     pub async fn abstract_content(&self, uri: &str) -> Result<String> {
         let params = vec![("uri".to_string(), uri.to_string())];
         self.get("/api/v1/content/abstract", &params).await
     }
 
+    pub async fn abstract_content_profiled(&self, uri: &str) -> Result<Value> {
+        let params = vec![("uri".to_string(), uri.to_string())];
+        self.get("/api/v1/content/abstract", &params).await
+    }
+
     pub async fn overview(&self, uri: &str) -> Result<String> {
+        let params = vec![("uri".to_string(), uri.to_string())];
+        self.get("/api/v1/content/overview", &params).await
+    }
+
+    pub async fn overview_profiled(&self, uri: &str) -> Result<Value> {
         let params = vec![("uri".to_string(), uri.to_string())];
         self.get("/api/v1/content/overview", &params).await
     }
@@ -222,10 +234,27 @@ impl HttpClient {
         self.post("/api/v1/system/consistency", &body).await
     }
 
+    pub async fn backend_sync_status(&self, uri: &str) -> Result<serde_json::Value> {
+        let body = serde_json::json!({
+            "uri": uri,
+        });
+        self.post("/api/v1/system/backend/sync-status", &body).await
+    }
+
+    pub async fn backend_sync_retry(&self, uri: &str) -> Result<serde_json::Value> {
+        let body = serde_json::json!({
+            "uri": uri,
+        });
+        self.post("/api/v1/system/backend/sync-retry", &body).await
+    }
+
     /// Download file as raw bytes
     pub async fn get_bytes(&self, uri: &str) -> Result<Vec<u8>> {
         let url = format!("{}/api/v1/content/download", self.base.base_url);
-        let params = vec![("uri".to_string(), uri.to_string())];
+        let params = vec![
+            ("uri".to_string(), uri.to_string()),
+            ("profile".to_string(), "0".to_string()),
+        ];
 
         let response = self
             .base
@@ -262,7 +291,7 @@ impl HttpClient {
                 }
             };
 
-            return Err(Error::Api(error_msg));
+            return Err(Error::api(error_msg));
         }
 
         response
@@ -316,13 +345,12 @@ impl HttpClient {
         self.get("/api/v1/fs/tree", &params).await
     }
 
-    pub async fn mkdir(&self, uri: &str, description: Option<&str>) -> Result<()> {
+    pub async fn mkdir(&self, uri: &str, description: Option<&str>) -> Result<serde_json::Value> {
         let body = match description {
             Some(description) => serde_json::json!({ "uri": uri, "description": description }),
             None => serde_json::json!({ "uri": uri }),
         };
-        let _: serde_json::Value = self.post("/api/v1/fs/mkdir", &body).await?;
-        Ok(())
+        self.post("/api/v1/fs/mkdir", &body).await
     }
 
     pub async fn rm(&self, uri: &str, recursive: bool) -> Result<serde_json::Value> {
@@ -333,13 +361,12 @@ impl HttpClient {
         self.delete("/api/v1/fs", &params).await
     }
 
-    pub async fn mv(&self, from_uri: &str, to_uri: &str) -> Result<()> {
+    pub async fn mv(&self, from_uri: &str, to_uri: &str) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "from_uri": from_uri,
             "to_uri": to_uri,
         });
-        let _: serde_json::Value = self.post("/api/v1/fs/mv", &body).await?;
-        Ok(())
+        self.post("/api/v1/fs/mv", &body).await
     }
 
     pub async fn stat(&self, uri: &str) -> Result<serde_json::Value> {
@@ -359,6 +386,7 @@ impl HttpClient {
         until: Option<String>,
         time_field: Option<String>,
         level: Option<Vec<i32>>,
+        peer_id: Option<String>,
     ) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "query": query,
@@ -369,6 +397,7 @@ impl HttpClient {
             "until": until,
             "time_field": time_field,
             "level": level,
+            "peer_id": peer_id,
         });
         self.post("/api/v1/search/find", &body).await
     }
@@ -384,6 +413,7 @@ impl HttpClient {
         until: Option<String>,
         time_field: Option<String>,
         level: Option<Vec<i32>>,
+        peer_id: Option<String>,
     ) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "query": query,
@@ -395,6 +425,7 @@ impl HttpClient {
             "until": until,
             "time_field": time_field,
             "level": level,
+            "peer_id": peer_id,
         });
         self.post("/api/v1/search/search", &body).await
     }
@@ -728,6 +759,7 @@ impl HttpClient {
             .post(&url)
             .headers(self.base.build_headers())
             .json(&body)
+            .query(&[("profile", "0")])
             .send()
             .await
             .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
@@ -757,7 +789,7 @@ impl HttpClient {
                 }
             };
 
-            return Err(Error::Api(error_msg));
+            return Err(Error::api(error_msg));
         }
 
         let bytes = response
@@ -923,11 +955,6 @@ impl HttpClient {
             params.push(("role".to_string(), r));
         }
         self.get(&path, &params).await
-    }
-
-    pub async fn admin_list_agents(&self, account_id: &str) -> Result<Value> {
-        let path = format!("/api/v1/admin/accounts/{}/agents", account_id);
-        self.get(&path, &[]).await
     }
 
     pub async fn admin_remove_user(&self, account_id: &str, user_id: &str) -> Result<Value> {
@@ -1135,7 +1162,8 @@ impl HttpClient {
     pub async fn trigger_watch_by_uri(&self, to_uri: &str) -> Result<serde_json::Value> {
         let params = vec![("to_uri".to_string(), to_uri.to_string())];
         let empty = serde_json::json!({});
-        self.post_with_query("/api/v1/watches/trigger", &empty, &params).await
+        self.post_with_query("/api/v1/watches/trigger", &empty, &params)
+            .await
     }
 }
 
@@ -1171,10 +1199,10 @@ mod tests {
         let client = BaseClient::new(
             "http://localhost:1933",
             Some("test-key".to_string()),
-            Some("assistant-1".to_string()),
             Some("acme".to_string()),
             Some("alice".to_string()),
             5.0,
+            true,
             Some(extra_headers),
         );
 
@@ -1232,5 +1260,49 @@ mod tests {
             api_error_from_envelope(&body, StatusCode::INTERNAL_SERVER_ERROR),
             "[PROCESSING_ERROR] Parse error: boom"
         );
+    }
+
+    #[test]
+    fn unwrap_result_preserves_profile_for_non_object_results() {
+        let body = json!({
+            "status": "ok",
+            "result": [
+                {"id": "1"}
+            ],
+            "profile": [
+                "line one",
+                "line two"
+            ]
+        });
+
+        let result = crate::base_client::unwrap_success_envelope(body, true);
+
+        assert_eq!(
+            result,
+            json!({
+                "result": [
+                    {"id": "1"}
+                ],
+                "profile": [
+                    "line one",
+                    "line two"
+                ]
+            })
+        );
+    }
+
+    #[test]
+    fn unwrap_result_drops_profile_for_scalar_typed_results() {
+        let body = json!({
+            "status": "ok",
+            "result": "content",
+            "profile": [
+                "line one"
+            ]
+        });
+
+        let result = crate::base_client::unwrap_success_envelope(body, false);
+
+        assert_eq!(result, json!("content"));
     }
 }

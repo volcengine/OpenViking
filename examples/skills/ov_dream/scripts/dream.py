@@ -11,7 +11,6 @@ from typing import Any, Iterable
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-
 DEFAULT_BASE_URL = "http://127.0.0.1:1933"
 DEFAULT_TARGET_URI = "viking://user/default"
 LEGACY_TARGET_URI = "viking://user/memories"
@@ -39,13 +38,11 @@ class OpenVikingClient:
         self,
         base_url: str,
         api_key: str | None = None,
-        agent_id: str | None = None,
         auth_mode: str = "auto",
         timeout: int = 30,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key or os.environ.get("OPENVIKING_API_KEY", "")
-        self.agent_id = agent_id or os.environ.get("OPENVIKING_AGENT_ID") or os.environ.get("OPENVIKING_AGENT", "default")
         self.auth_mode = self._resolve_auth_mode(auth_mode)
         self.timeout = timeout
 
@@ -61,7 +58,6 @@ class OpenVikingClient:
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
         if self.auth_mode == "serverless":
-            headers["X-OpenViking-Agent"] = self.agent_id
             if self.api_key:
                 headers["Authorization"] = "Bearer " + self.api_key
         else:
@@ -69,7 +65,6 @@ class OpenVikingClient:
                 {
                     "X-OpenViking-Account": os.environ.get("OPENVIKING_ACCOUNT", "default"),
                     "X-OpenViking-User": os.environ.get("OPENVIKING_USER", "default"),
-                    "X-OpenViking-Agent": self.agent_id,
                 }
             )
             if self.api_key:
@@ -88,7 +83,9 @@ class OpenVikingClient:
             return f"viking://user/{user_space}/memories/"
         return target_uri
 
-    def _request(self, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    def _request(
+        self, method: str, path: str, payload: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         data = None if payload is None else json.dumps(payload).encode("utf-8")
         request = Request(
             f"{self.base_url}{path}",
@@ -133,7 +130,9 @@ class OpenVikingClient:
         suffix = "" if self.auth_mode == "serverless" else "?wait=true" if wait else ""
         return self._request("POST", f"/api/v1/sessions/{session_id}/commit{suffix}", payload)
 
-    def recall(self, query: str, limit: int = 5, target_uri: str = DEFAULT_TARGET_URI) -> dict[str, Any]:
+    def recall(
+        self, query: str, limit: int = 5, target_uri: str = DEFAULT_TARGET_URI
+    ) -> dict[str, Any]:
         return self._request(
             "POST",
             "/api/v1/search/find",
@@ -261,7 +260,9 @@ def get_active_session(openclaw_root: Path) -> Session | None:
     return sessions[0] if sessions else None
 
 
-def parse_messages(sessions_root: Path, session: Session, after_timestamp: str | None) -> Iterable[Message]:
+def parse_messages(
+    sessions_root: Path, session: Session, after_timestamp: str | None
+) -> Iterable[Message]:
     path = get_session_file_path(sessions_root, session)
     if not path.exists():
         return []
@@ -282,9 +283,7 @@ def parse_messages(sessions_root: Path, session: Session, after_timestamp: str |
             continue
         blocks = message.get("content", [])
         text_parts = [
-            block.get("text", "").strip()
-            for block in blocks
-            if block.get("type") == "text"
+            block.get("text", "").strip() for block in blocks if block.get("type") == "text"
         ]
         content = "\n".join(part for part in text_parts if part)
         if not content:
@@ -309,7 +308,8 @@ def sync_session(
     messages = [
         message
         for message in parse_messages(sessions_root, session, last_synced_timestamp)
-        if message.timestamp and (last_synced_timestamp is None or message.timestamp > last_synced_timestamp)
+        if message.timestamp
+        and (last_synced_timestamp is None or message.timestamp > last_synced_timestamp)
     ]
     messages.sort(key=lambda message: message.timestamp)
 
@@ -345,7 +345,9 @@ def sync_session(
     }
 
 
-def sync_active_session(client: OpenVikingClient, openclaw_root: Path, state_root: Path) -> dict[str, Any]:
+def sync_active_session(
+    client: OpenVikingClient, openclaw_root: Path, state_root: Path
+) -> dict[str, Any]:
     sessions_root = openclaw_root / "agents" / "main" / "sessions"
     active_sessions = get_active_sessions(openclaw_root)
     if not active_sessions:
@@ -397,10 +399,15 @@ def _normalize_ov_command(argv: list[str] | None) -> list[str] | None:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ov dream")
-    parser.add_argument("--base-url", default=os.environ.get("OPENVIKING_BASE_URL", DEFAULT_BASE_URL))
+    parser.add_argument(
+        "--base-url", default=os.environ.get("OPENVIKING_BASE_URL", DEFAULT_BASE_URL)
+    )
     parser.add_argument("--api-key", default=None)
-    parser.add_argument("--agent-id", default=None)
-    parser.add_argument("--auth-mode", choices=["auto", "local", "serverless"], default=os.environ.get("OPENVIKING_AUTH_MODE", "auto"))
+    parser.add_argument(
+        "--auth-mode",
+        choices=["auto", "local", "serverless"],
+        default=os.environ.get("OPENVIKING_AUTH_MODE", "auto"),
+    )
     parser.add_argument("--openclaw-root", default=str(Path.home() / ".openclaw"))
     parser.add_argument("--state-root", default=str(Path.home() / ".openclaw" / "memory"))
 
@@ -467,7 +474,6 @@ def run_dream(args: argparse.Namespace) -> int:
     client = OpenVikingClient(
         base_url=args.base_url,
         api_key=args.api_key,
-        agent_id=args.agent_id,
         auth_mode=args.auth_mode,
     )
     summary = sync_active_session(
@@ -483,7 +489,6 @@ def run_recall(args: argparse.Namespace) -> int:
     client = OpenVikingClient(
         base_url=args.base_url,
         api_key=args.api_key,
-        agent_id=args.agent_id,
         auth_mode=args.auth_mode,
     )
     result = client.recall(query=args.query, limit=args.limit)

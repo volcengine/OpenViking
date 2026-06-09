@@ -8,8 +8,8 @@ import {
 } from "./memory-ranking.js";
 import { quickRecallPrecheck, withTimeout } from "./process-manager.js";
 import { sanitizeUserTextForCapture } from "./text-utils.js";
+import { estimateTextTokens } from "./token-estimator.js";
 
-const AUTO_RECALL_TIMEOUT_MS = 5_000;
 const RECALL_QUERY_MAX_CHARS = 4_000;
 export const AUTO_RECALL_SOURCE_MARKER = "Source: openviking-auto-recall";
 
@@ -51,15 +51,43 @@ export function prepareRecallQuery(rawText: string): PreparedRecallQuery {
   };
 }
 
-/** Estimate token count using chars/4 heuristic for diagnostics. */
+/** Estimate token count using the shared CJK-aware fallback for diagnostics. */
 export function estimateTokenCount(text: string): number {
-  if (!text) return 0;
-  return Math.ceil(text.length / 4);
+  return estimateTextTokens(text);
 }
 
 export type BuildMemoryLinesOptions = {
   recallPreferAbstract: boolean;
+  includeUri?: boolean;
 };
+
+function memoryCategory(item: FindResultItem): string {
+  return item.category?.trim() || "memory";
+}
+
+function indentContent(content: string): string {
+  return content
+    .split("\n")
+    .map((line) => `  ${line}`)
+    .join("\n");
+}
+
+function formatMemoryLine(
+  item: FindResultItem,
+  content: string,
+  options: BuildMemoryLinesOptions,
+): string {
+  const category = memoryCategory(item);
+  if (!options.includeUri) {
+    return `- [${category}] ${content}`;
+  }
+
+  return [
+    `- [${category}]`,
+    `  <uri>${item.uri}</uri>`,
+    indentContent(content),
+  ].join("\n");
+}
 
 async function resolveMemoryContent(
   item: FindResultItem,
@@ -95,7 +123,7 @@ export async function buildMemoryLines(
   const lines: string[] = [];
   for (const item of memories) {
     const content = await resolveMemoryContent(item, readFn, options);
-    lines.push(`- [${item.category ?? "memory"}] ${content}`);
+    lines.push(formatMemoryLine(item, content, options));
   }
   return lines;
 }
@@ -128,7 +156,7 @@ export async function buildMemoryLinesWithBudget(
     }
 
     const content = await resolveMemoryContent(item, readFn, options);
-    const line = `- [${item.category ?? "memory"}] ${content}`;
+    const line = formatMemoryLine(item, content, options);
     const separatorChars = lines.length > 0 ? 1 : 0;
     const projectedChars = totalChars + separatorChars + line.length;
 
@@ -160,17 +188,18 @@ export async function buildAutoRecallContext(params: {
   cfg: Required<MemoryOpenVikingConfig>;
   client: OpenVikingClient;
   agentId: string;
+  peerId?: string;
   queryText: string;
   logger: Logger;
   verbose?: (message: string) => void;
 }): Promise<{ block?: string; memoryCount: number; estimatedTokens: number }> {
-  const { cfg, client, agentId, queryText, logger, verbose } = params;
+  const { cfg, client, agentId, peerId, queryText, logger, verbose } = params;
 
   if (!cfg.autoRecall || queryText.length < 5) {
     return { memoryCount: 0, estimatedTokens: 0 };
   }
 
-  const precheck = await quickRecallPrecheck(cfg.baseUrl);
+  const precheck = await quickRecallPrecheck(client, agentId);
   if (!precheck.ok) {
     verbose?.(`openviking: skipping auto-recall because precheck failed (${precheck.reason})`);
     return { memoryCount: 0, estimatedTokens: 0 };
@@ -184,11 +213,7 @@ export async function buildAutoRecallContext(params: {
           targetUri: "viking://user/memories",
           limit: candidateLimit,
           scoreThreshold: 0,
-        }, agentId),
-        client.find(queryText, {
-          targetUri: "viking://agent/memories",
-          limit: candidateLimit,
-          scoreThreshold: 0,
+          peerId,
         }, agentId),
       ];
       if (cfg.recallResources) {
@@ -197,6 +222,7 @@ export async function buildAutoRecallContext(params: {
             targetUri: "viking://resources",
             limit: candidateLimit,
             scoreThreshold: 0,
+            peerId,
           }, agentId),
         );
       }
@@ -231,6 +257,7 @@ export async function buildAutoRecallContext(params: {
         {
           recallPreferAbstract: cfg.recallPreferAbstract,
           recallMaxInjectedChars: cfg.recallMaxInjectedChars,
+          includeUri: true,
         },
       );
 
@@ -251,7 +278,7 @@ export async function buildAutoRecallContext(params: {
 
       return { block, memoryCount: memoryLines.length, estimatedTokens };
     })(),
-    AUTO_RECALL_TIMEOUT_MS,
+    cfg.autoRecallTimeoutMs,
     "openviking: auto-recall search timeout",
   );
 }

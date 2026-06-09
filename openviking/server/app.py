@@ -27,6 +27,7 @@ from openviking.server.dependencies import set_server_config, set_service
 from openviking.server.error_mapping import map_exception
 from openviking.server.identity import AuthMode, Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
+from openviking.server.profile_middleware import create_profile_http_middleware
 from openviking.server.routers import (
     admin_router,
     bot_router,
@@ -72,6 +73,55 @@ def _on_deferred_init_done(task):
         exc_info=(type(exc), exc, exc.__traceback__),
     )
     os._exit(1)
+
+
+async def _initialize_api_key_manager(
+    app: FastAPI,
+    service: OpenVikingService,
+    config: ServerConfig,
+) -> None:
+    """Initialize API key state before the app serves authenticated requests."""
+    effective_auth_mode = config.get_effective_auth_mode()
+    if config.root_api_key and config.root_api_key != "":
+        api_key_manager = APIKeyManager(
+            root_key=config.root_api_key,
+            viking_fs=service.viking_fs,
+            api_key_hashing_enabled=config.api_key_hashing_enabled,
+        )
+        await api_key_manager.load()
+        app.state.api_key_manager = api_key_manager
+        logger.info(
+            "APIKeyManager initialized with api_key_hashing_enabled=%s",
+            config.api_key_hashing_enabled,
+        )
+        if effective_auth_mode == AuthMode.TRUSTED:
+            logger.info(
+                "Trusted mode enabled: authentication trusts X-OpenViking-Account/User "
+                "headers and requires the configured server API key on each request. "
+                "Only expose this server behind a trusted network boundary or "
+                "identity-injecting gateway."
+            )
+        return
+
+    app.state.api_key_manager = None
+    if effective_auth_mode == AuthMode.TRUSTED:
+        logger.warning(
+            "Trusted mode enabled: authentication uses X-OpenViking-Account/User "
+            "headers without API keys. This is only allowed on localhost. "
+            "Only expose this server behind a trusted network boundary or "
+            "identity-injecting gateway after configuring server.root_api_key."
+        )
+
+
+async def _initialize_runtime_state(
+    app: FastAPI,
+    service: OpenVikingService,
+    config: ServerConfig,
+) -> None:
+    """Initialize service and auth dependencies before traffic is accepted."""
+    await service.initialize()
+    await _initialize_api_key_manager(app, service, config)
+    logger.info("OpenVikingService initialization complete")
 
 
 def _format_error_location(loc: object) -> str:
@@ -172,44 +222,8 @@ def create_app(
         _configure_session_tool_outputs(service)
 
     async def _deferred_init(service, app, config):
-        """Run heavy initialization in background after server starts accepting requests."""
-        await service.initialize()
-
-        # Initialize APIKeyManager after service (needs VikingFS)
-        effective_auth_mode = config.get_effective_auth_mode()
-        if config.root_api_key and config.root_api_key != "":
-            api_key_manager = APIKeyManager(
-                root_key=config.root_api_key,
-                viking_fs=service.viking_fs,
-                api_key_hashing_enabled=config.api_key_hashing_enabled,
-            )
-            await api_key_manager.load()
-            app.state.api_key_manager = api_key_manager
-            logger.info(
-                "APIKeyManager initialized with api_key_hashing_enabled=%s",
-                config.api_key_hashing_enabled,
-            )
-        elif effective_auth_mode == AuthMode.TRUSTED:
-            app.state.api_key_manager = None
-            if config.root_api_key and config.root_api_key != "":
-                logger.info(
-                    "Trusted mode enabled: authentication trusts X-OpenViking-Account/User/Agent "
-                    "headers and requires the configured server API key on each request. "
-                    "Only expose this server behind a trusted network boundary or "
-                    "identity-injecting gateway."
-                )
-            else:
-                logger.warning(
-                    "Trusted mode enabled: authentication uses X-OpenViking-Account/User/Agent "
-                    "headers without API keys. This is only allowed on localhost. "
-                    "Only expose this server behind a trusted network boundary or "
-                    "identity-injecting gateway after configuring server.root_api_key."
-                )
-        else:
-            # AuthMode.DEV - logging already handled in validate_server_config
-            app.state.api_key_manager = None
-
-        logger.info("OpenVikingService initialization complete")
+        """Retained for tests that validate deferred-init callback behavior."""
+        await _initialize_runtime_state(app, service, config)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -269,21 +283,10 @@ def create_app(
         # Start MCP session manager (must be active before /mcp requests)
         from openviking.server.mcp_endpoint import mcp_lifespan
 
-        deferred_task = None
-
         async with mcp_lifespan():
-            # Start heavy initialization as background task after yield
             if service is not None:
-                deferred_task = asyncio.create_task(_deferred_init(service, app, config))
-                deferred_task.add_done_callback(_on_deferred_init_done)
+                await _initialize_runtime_state(app, service, config)
             yield
-
-        # Wait for deferred initialization to complete before shutdown
-        if deferred_task and not deferred_task.done():
-            try:
-                await deferred_task
-            except Exception:
-                logger.exception("Deferred initialization failed")
 
         # Cleanup
         from openviking.metrics.global_api import shutdown_metrics_async
@@ -321,6 +324,7 @@ def create_app(
     )
 
     app.state.config = config
+    app.state.api_key_manager = None
     set_server_config(config)
 
     # Add CORS middleware
@@ -363,10 +367,15 @@ def create_app(
     )
 
     http_observability_middleware = create_http_observability_middleware()
+    profile_http_middleware = create_profile_http_middleware()
 
     @app.middleware("http")
     async def add_http_observability(request: Request, call_next: Callable):
         return await http_observability_middleware(request, call_next)
+
+    @app.middleware("http")
+    async def add_profile_output(request: Request, call_next: Callable):
+        return await profile_http_middleware(request, call_next)
 
     # Add request timing middleware last (so it executes first as the outermost layer)
     # This ensures X-Process-Time includes the full request duration including

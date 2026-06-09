@@ -12,6 +12,7 @@ from loguru import logger
 
 from vikingbot.agent.memory import MemoryStore
 from vikingbot.agent.skills import SkillsLoader
+from vikingbot.config.loader import load_config
 from vikingbot.config.schema import SessionKey
 from vikingbot.sandbox import SandboxManager
 from vikingbot.utils.helpers import ensure_non_empty_assistant_content
@@ -36,6 +37,7 @@ class ContextBuilder:
         sender_name: str = None,
         is_group_chat: bool = False,
         eval: bool = False,
+        openviking_connection: dict[str, Any] | None = None,
     ):
         self.workspace = workspace
         self._templates_ensured = False
@@ -46,6 +48,7 @@ class ContextBuilder:
         self._sender_name = sender_name
         self._is_group_chat = is_group_chat
         self._eval = eval
+        self._openviking_connection = openviking_connection
         self.latest_relevant_memories: str | None = None
 
     @property
@@ -141,7 +144,9 @@ Skills with available="false" need dependencies installed first - you can try in
             # Fetch current user's profile
             start = _time.time()
             profile = await self.memory.get_viking_user_profile(
-                workspace_id=workspace_id, user_id=self._sender_id
+                workspace_id=workspace_id,
+                user_id=self._sender_id,
+                openviking_connection=self._openviking_connection,
             )
             cost = round(_time.time() - start, 2)
             logger.info(
@@ -153,7 +158,9 @@ Skills with available="false" need dependencies installed first - you can try in
             # Fetch additional profiles from profile_user_list
             if profile_user_list:
                 profiles = await self.memory.get_viking_user_profiles(
-                    workspace_id=workspace_id, user_ids=profile_user_list
+                    workspace_id=workspace_id,
+                    user_ids=profile_user_list,
+                    openviking_connection=self._openviking_connection,
                 )
                 if profiles:
                     parts.append(profiles)
@@ -167,6 +174,7 @@ Skills with available="false" need dependencies installed first - you can try in
         sender_id: str,
         memory_users: list[str] | None = None,
         ov_tools_enable: bool = True,
+        is_first_round: bool = True,
     ) -> str:
         """
         Build the system prompt from bootstrap files, memory, and skills.
@@ -198,25 +206,54 @@ Skills with available="false" need dependencies installed first - you can try in
 
         # Viking agent memory (only if ov tools are enabled)
         if ov_tools_enable:
-            start = _time.time()
-            # Use provided memory_users or fall back to [sender_id]
-            search_user_ids = memory_users if memory_users else [sender_id]
-            viking_memory = await self.memory.get_viking_memory_context(
-                current_message=current_message,
-                workspace_id=workspace_id,
-                sender_id=sender_id,
-                user_ids=search_user_ids,
+            exp_first_round_only = load_config().ov_server.recall_exp_first_round_only
+
+            parts.append(
+                "## OpenViking Memory Retrieval\n"
+                "- For questions about the user's remembered facts, preferences, profile, or personal context, use openviking_search for the current question before saying there is no relevant record.\n"
+                "- A previous empty search result does not prove that a different follow-up question has no memory; search again when the requested fact changes."
             )
-            logger.info(f"viking_memory={viking_memory}")
-            cost = round(_time.time() - start, 2)
-            logger.info(
-                f"[READ_USER_MEMORY]: cost {cost}s, memory={viking_memory[:50] if viking_memory else 'None'}"
-            )
-            if viking_memory:
-                self.latest_relevant_memories = viking_memory
-                parts.append(f"## openviking_search(query=[user_query])\n{viking_memory}")
-            else:
+
+            if exp_first_round_only:
+                # Alt mode: skip per-turn recall; inject experience memory once per session.
+                exp_workspace_id = workspace_id
                 self.latest_relevant_memories = None
+                if is_first_round:
+                    start = _time.time()
+                    exp_memory = await self.memory.get_viking_experience_context(
+                        query=current_message,
+                        workspace_id=exp_workspace_id,
+                        openviking_connection=self._openviking_connection,
+                    )
+                    cost = round(_time.time() - start, 2)
+                    logger.info(
+                        f"[READ_EXP_FIRST_ROUND]: cost {cost}s, "
+                        f"exp={exp_memory[:50] if exp_memory else 'None'}"
+                    )
+                    if exp_memory:
+                        self.latest_relevant_memories = exp_memory
+                        parts.append(f"## Relevant Agent Experience\n{exp_memory}")
+            else:
+                start = _time.time()
+                # Use provided memory_users or fall back to [sender_id]
+                search_user_ids = memory_users if memory_users else [sender_id]
+                viking_memory = await self.memory.get_viking_memory_context(
+                    current_message=current_message,
+                    workspace_id=workspace_id,
+                    sender_id=sender_id,
+                    user_ids=search_user_ids,
+                    openviking_connection=self._openviking_connection,
+                )
+                logger.info(f"viking_memory={viking_memory}")
+                cost = round(_time.time() - start, 2)
+                logger.info(
+                    f"[READ_USER_MEMORY]: cost {cost}s, memory={viking_memory[:50] if viking_memory else 'None'}"
+                )
+                if viking_memory:
+                    self.latest_relevant_memories = viking_memory
+                    parts.append(f"## openviking_search(query=[user_query])\n{viking_memory}")
+                else:
+                    self.latest_relevant_memories = None
 
         parts.append(
             "Reply in the same language as the user's query, ignoring the language of the reference materials. User's query:"
@@ -324,6 +361,7 @@ IMPORTANT:
             self._sender_id,
             memory_users,
             ov_tools_enable=ov_tools_enable,
+            is_first_round=not history,
         )
         messages.append({"role": "user", "content": user_info})
 

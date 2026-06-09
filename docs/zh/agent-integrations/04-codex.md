@@ -1,176 +1,88 @@
 # Codex 记忆插件
 
-为 [Codex](https://developers.openai.com/codex) 提供长期语义记忆。每次用户输入前自动召回相关记忆，每轮对话结束后增量捕获，compaction 前提交给 OpenViking 的记忆抽取器；同时把 Codex 直接接到 OpenViking 自带的 `/mcp` endpoint，模型可以直接调用 `search` / `store` / `read` / `grep` / `glob` / `list` / `forget` / `add_resource` 等工具——**没有本地 MCP server 进程要维护**。
+本插件旨在为 [Codex](https://developers.openai.com/codex) 提供持久化的跨会话（session）记忆功能。只需安装一次，即可实现：在每次用户输入前自动召回相关记忆，在每轮对话结束后进行增量捕获，并在上下文压缩（compaction）前将完整记录提交给记忆抽取器。同时，该插件将 Codex 连接至 OpenViking 的 `/mcp` 端点，使模型能够直接调用 `search`、`store` 等工具来主动管理记忆。
 
-源码：[examples/codex-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/codex-memory-plugin)
+源码：[examples/codex-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/codex-memory-plugin) | [博客：动机与效果展示](https://blog.openviking.ai/post/openviking-coding-agent/)
 
-## 快速开始
-
-### 一行安装（推荐）
+## 安装
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/codex-memory-plugin/setup-helper/install.sh)
 ```
 
-脚本会检查 `codex`、`git`、Node.js 22+；首次运行时把 OpenViking 仓库 clone 到 `~/.openviking/openviking-repo`，已存在则自动 `git fetch + reset --hard` 到 main；注册本地 `openviking-plugins-local` marketplace、启用 `openviking-memory@openviking-plugins-local`、把 `features.plugin_hooks = true` 写入 `~/.codex/config.toml`，并预填 Codex 的 plugin 缓存让插件立即解析到。每一步幂等，反复执行安全。
+脚本将自动检查依赖项、配置 OpenViking 连接并注册插件。安装过程的每一步均支持幂等操作，可安全地重复执行。
 
-存在 `~/.openviking/ovcli.conf` 时直接读它，把 `/mcp` URL 渲染进缓存里的 `.mcp.json`；同时往你的 shell rc 追加一个 `codex()` 函数包装，每次调用 codex 时从 ovcli.conf 把 `OPENVIKING_API_KEY` / `OPENVIKING_ACCOUNT` / `OPENVIKING_USER` / `OPENVIKING_AGENT_ID` 注入到环境变量。API key 只留在 `ovcli.conf` 里，**`.mcp.json` 磁盘文件里只通过 `bearer_token_env_var` 引用变量名，永远不会包含 key 明文**。
-
-安装完成后启动 Codex：
+安装完成后，请在当前终端激活 `codex` 的封装函数（或新开一个终端窗口）：
 
 ```bash
-source ~/.zshrc    # 或 ~/.bashrc
-codex              # 首次启动进 /hooks 审批一次
+source ~/.openviking/openviking-repo/examples/codex-memory-plugin/setup-helper/wrapper.sh
+codex              # 首次启动需进入 /hooks 完成一次审批
 ```
 
-### 手动安装
+> 通过自定义命令启动 Codex？例如包装脚本 `codex-custom`，或“基础命令 + 子命令”形式的多词启动器——在安装时的“Extra launch commands”一步填入（或运行脚本时传入 `OPENVIKING_CODEX_WRAP_EXTRA='codex-custom'`），即可让它们一并注入凭据。
 
-前置：
+<details>
+<summary><b>手动安装</b></summary>
+
+前置条件：需安装 Node.js >= 22、Codex >= 0.130.0，并启用 `codex_hooks` 特性。
+
+1. **Shell 函数封装** — 在 shell 的配置文件（如 rc 文件）中追加一个 `codex()` 函数，确保每次调用时都能从 `ovcli.conf` 注入 OpenViking 相关的环境变量。完整的函数代码请参考 [插件 README](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md)。
+
+2. **插件安装** — 注册本地 marketplace 并启用插件。具体执行命令请参见 `setup-helper/install.sh`。
+
+3. **占位符渲染** — 在将 `.mcp.json` 和 `hooks.json` 复制到 Codex 缓存目录时，需将其中的占位符替换为绝对路径或具体数值。自动化安装脚本会自动完成此操作。
+
+</details>
+
+## 验证
 
 ```bash
-node --version    # >= 22
-codex --version   # >= 0.130.0
-codex features list | grep codex_hooks
+type codex         # 期望输出：codex is a shell function
 ```
 
-installer 替你做的三件事，你也可以自己手动做：
+> 若上一步输出的是一个路径而非 `shell function`，说明 wrapper 尚未生效，请先 `source` 那行 wrapper（或新开一个终端）再启动；否则 codex 启动时拿不到 `OPENVIKING_API_KEY`，会报 `MCP server is not logged in`。
 
-1. **shell 函数包装**追加到 `~/.zshrc` / `~/.bashrc`。installer 实际生成的版本（见 `setup-helper/install.sh`）还会在每次 codex 启动时**重新渲染缓存里的 `.mcp.json` bearer 字段** —— 这是切 `OPENVIKING_CLI_CONFIG_FILE`（有 / 无 key 来回换）所必需的。下面是固定 conf 场景的简化版：
+进入 Codex 后，插件将在每次用户输入前自动召回记忆。若设置环境变量 `OPENVIKING_DEBUG=1`，则会将相关事件日志写入 `~/.openviking/logs/codex-hooks.log`。
 
-   ```bash
-   codex() {
-     local _ov_conf="${OPENVIKING_CLI_CONFIG_FILE:-$HOME/.openviking/ovcli.conf}"
-     local _ov_url _ov_key _ov_account _ov_user
-     if [ -f "$_ov_conf" ] && command -v node >/dev/null 2>&1; then
-       local _ov_env
-       _ov_env=$(node -e '
-         try {
-           const c = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
-           const out = (k, v) => v ? `${k}=${JSON.stringify(String(v))}\n` : "";
-           process.stdout.write(
-             out("OV_URL", c.url) +
-             out("OV_KEY", c.api_key) +
-             out("OV_ACCOUNT", c.account) +
-             out("OV_USER", c.user)
-           );
-         } catch {}
-       ' "$_ov_conf" 2>/dev/null)
-       eval "$_ov_env"
-     fi
-     _ov_url="${OPENVIKING_URL:-${OV_URL:-}}"
-     _ov_key="${OPENVIKING_API_KEY:-${OV_KEY:-}}"
-     _ov_account="${OPENVIKING_ACCOUNT:-${OV_ACCOUNT:-}}"
-     _ov_user="${OPENVIKING_USER:-${OV_USER:-}}"
-     unset OV_URL OV_KEY OV_ACCOUNT OV_USER
-     # 空值不导出 —— Codex 看到 bearer_token_env_var 指向空 env var 会硬错。
-     local -a _env_args=()
-     [ -n "$_ov_url" ]     && _env_args+=("OPENVIKING_URL=$_ov_url")
-     [ -n "$_ov_key" ]     && _env_args+=("OPENVIKING_API_KEY=$_ov_key")
-     [ -n "$_ov_account" ] && _env_args+=("OPENVIKING_ACCOUNT=$_ov_account")
-     [ -n "$_ov_user" ]    && _env_args+=("OPENVIKING_USER=$_ov_user")
-     _env_args+=("OPENVIKING_AGENT_ID=${OPENVIKING_AGENT_ID:-codex}")
-     env "${_env_args[@]}" codex "$@"
-   }
-   ```
+## 工作原理
 
-2. **插件安装**——通过指向插件目录的本地 marketplace。`setup-helper/install.sh` 里有完整的 `codex plugin marketplace add` 调用。
+本插件深度挂载于 Codex 的生命周期之中：在每次用户输入前，它会搜索 OpenViking 并注入相关的记忆（触发 `UserPromptSubmit`）；在每轮对话结束后，会将新的对话追加至当前会话（触发 `Stop`）；在上下文压缩前，补齐并提交（commit）完整的对话记录（触发 `PreCompact`），以确保记忆抽取器能够在完整的上下文环境中运行。此外，在启动新会话时，插件还会自动清理前次运行遗留的孤儿会话（orphan session）。
 
-3. **占位符渲染**——仓库里 checked-in 的 `.mcp.json` 保留 `__OPENVIKING_MCP_URL__`，`hooks/hooks.json` 保留 `__OPENVIKING_PLUGIN_ROOT__`；这两个占位符必须在拷贝到 Codex 缓存目录 (`~/.codex/plugins/cache/...`) 时被 `sed` 替换成绝对值。installer 自动做。
+> **已知局限**：当通过 `SIGTERM`、`Ctrl+C` 或输入 `/exit` 退出 Codex 时，不会触发任何 hook（钩子）。遗留的孤儿会话将在下一次触发 `SessionStart` 时，通过闲置 TTL（生存时间，默认为 30 分钟）机制或活动窗口启发式策略进行回收清理。
 
-## 配置
+<details>
+<summary><b>配置</b></summary>
 
-每个连接 / 身份字段的优先级从高到低（环境变量永远最高）：
-
-1. **环境变量**（`OPENVIKING_*`）
-2. **`ovcli.conf`** — `~/.openviking/ovcli.conf` 或 `OPENVIKING_CLI_CONFIG_FILE`
-3. **`ov.conf`** — `~/.openviking/ov.conf` 或 `OPENVIKING_CONFIG_FILE`（只用 `server.url` / `server.root_api_key` 当连接 fallback；`codex.*` 调参块仍被读取但已废弃，见下面 [调参](#调参)）
-4. **内置默认值**（`http://127.0.0.1:1933`，无鉴权）
-
-Hook 每次触发都重新解析这条优先级链——改完 ovcli.conf 下一次 hook 立即生效。MCP server URL 在 install 时固化进 `.mcp.json`（改 URL 要重跑 installer），但 API key 通过 `bearer_token_env_var` 在 codex 启动时从 env 读，所以**轮换 API key 只需重启 codex，不必重装**。
-
-鉴权头同时发给 REST API（hook 用）和 `/mcp` endpoint（模型用）：`Authorization: Bearer <api_key>`。
-
-对于**无鉴权的本地 OV**（`ovcli.conf` 没有 `api_key`，或者根本没 ovcli.conf），`.mcp.json` 渲染时**不会**写入 `bearer_token_env_var`。Codex 0.130 一旦看到 `bearer_token_env_var` 指向空/未设置的 env var，会直接 `Environment variable ... is empty` 硬错。`codex()` shell 函数包装会在**每次 codex 启动时**根据当前 `OPENVIKING_CLI_CONFIG_FILE` 指向的 ovcli.conf 重新渲染这个字段，所以切换 conf（比如 benchmark 隔离）**不用重跑 installer**。多租户身份头通过 `env_http_headers` 始终传。
-
-### 关键环境变量
+配置优先级为：环境变量 > `ovcli.conf` > `ov.conf` > 内置默认值（默认 URL 为 `http://127.0.0.1:1933`，无鉴权）。
 
 | 环境变量 | 默认值 | 说明 |
 |---------|--------|------|
-| `OPENVIKING_URL` / `OPENVIKING_BASE_URL` | — | 完整服务器 URL（`/mcp` endpoint 在 install 时由此推导） |
-| `OPENVIKING_API_KEY` / `OPENVIKING_BEARER_TOKEN` | — | API key，通过 `Authorization: Bearer` 发送 |
-| `OPENVIKING_ACCOUNT` / `OPENVIKING_USER` / `OPENVIKING_AGENT_ID` | — | 多租户身份头 |
-| `OPENVIKING_CLI_CONFIG_FILE` | `~/.openviking/ovcli.conf` | 备用 `ovcli.conf` 路径 |
-| `OPENVIKING_CONFIG_FILE` | `~/.openviking/ov.conf` | 备用 `ov.conf` 路径 |
-| `OPENVIKING_CODEX_ACTIVE_WINDOW_MS` | `120000` | SessionStart 活动窗口阈值 |
-| `OPENVIKING_CODEX_IDLE_TTL_MS` | `1800000` | SessionStart 闲置 TTL 清理阈值 |
-| `OPENVIKING_DEBUG` | `false` | 把 hook 日志写到 `~/.openviking/logs/codex-hooks.log` |
+| `OPENVIKING_URL` / `OPENVIKING_BASE_URL` | — | 完整的服务器 URL |
+| `OPENVIKING_API_KEY` | — | API 密钥（将通过 `Authorization: Bearer` 标头发送） |
+| `OPENVIKING_CODEX_ACTIVE_WINDOW_MS` | `120000` | `SessionStart` 活动窗口阈值（毫秒） |
+| `OPENVIKING_CODEX_IDLE_TTL_MS` | `1800000` | `SessionStart` 闲置 TTL 清理阈值（毫秒） |
+| `OPENVIKING_DEBUG` | `false` | 是否将日志写入 `~/.openviking/logs/codex-hooks.log` |
 
-### 调参
+更多调参说明（如 `OPENVIKING_RECALL_LIMIT`、`OPENVIKING_CAPTURE_ASSISTANT_TURNS` 等），请参考 [插件 README](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md#tuning-the-plugin)。
 
-调参用 `OPENVIKING_*` 环境变量，写进 shell rc 即可。每次 codex 启动都生效。
-
-```sh
-# ~/.zshrc
-export OPENVIKING_RECALL_LIMIT=6
-export OPENVIKING_CAPTURE_ASSISTANT_TURNS=1
-export OPENVIKING_AUTO_COMMIT_ON_COMPACT=1
-export OPENVIKING_DEBUG=1
-```
-
-完整字段列表见 [插件 README](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md#tuning-the-plugin)。
-
-> **遗留 `codex.*` 块**：早期版本支持把调参字段放在 `~/.openviking/ov.conf` 的 `codex` 块下，仍向后兼容。但 codex 是 client 侧插件，per-machine 的调参不该住在 server-scope 的 `ov.conf` 里——新部署请用环境变量。
-
-## Hook 行为
-
-| Hook | 触发时机 | 行为 |
-|------|---------|------|
-| `SessionStart`（matcher `clear\|startup`） | 全新进程 / `/new` / `/clear` | 活动窗口启发式：如果最近 2 分钟内恰好只有一个其他 state 文件被更新，就把它 commit 掉（视为刚刚结束的 session）。尾部的闲置 TTL 清理会捕获 30 分钟以上的孤儿 state（SIGTERM / `/exit` 等）。`source=resume` 是硬 no-op。 |
-| `UserPromptSubmit` | 每次用户输入 | 走 REST `/search/find` 搜索 OpenViking → 排序 → 把 top 结果通过 `hookSpecificOutput.additionalContext` 注入到模型上下文。 |
-| `Stop` | 每轮结束 | 把新的 user/assistant turn 追加到由 Codex `session_id` 索引的长生命周期 OV session。**不**每轮 commit。 |
-| `PreCompact` | Codex 即将做摘要前 | 补齐追加 + commit，让 OV 抽取器跑在完整的 pre-compact transcript 上；commit 后清空 `ovSessionId`，下一次 `Stop` 会打开一个全新的 OV session。 |
-
-`Stop` 故意不每轮 commit——commit 会触发记忆抽取，每轮抽取会过度碎片化记忆树。完整的「哪个 hook 负责封住哪个 OV session」决策树见 [`DESIGN.md`](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/DESIGN.md)。
-
-### 已知盲区：SIGTERM / Ctrl+C / `/exit` 不触发任何 hook
-
-如果你 `/exit` 之前没跑 `/compact`，那个 codex session 对应的 OV session 会在服务端保持打开状态。两条兜底路径会回收孤儿：
-
-1. 下一次 `SessionStart`（source=startup|clear）的闲置 TTL 清理会 commit 30 分钟以上的孤儿 state。
-2. 如果你在孤儿之后立即 `/new` 或 `/clear`，活动窗口启发式会精准命中并 commit。
-
-## MCP 工具
-
-插件通过 streamable HTTP 把 Codex 接到 OpenViking 自带的 `/mcp` endpoint。工具列表、每个工具的语义、协议细节统一见 [MCP 集成指南](../guides/06-mcp-integration.md)，这里不重复。
-
-`.mcp.json` 在 install 时写入 OV server URL，用 `bearer_token_env_var: "OPENVIKING_API_KEY"` + `env_http_headers` 传多租户身份头。**API key 永远不会落到 `.mcp.json` 文件里**，是 codex 启动时由 shell 函数包装从 env 取。
+</details>
 
 ## 故障排查
 
-| 现象 | 原因 | 修复 |
+| 现象 | 可能原因 | 修复方法 |
 |------|------|------|
-| `MCP server is not logged in. Run codex mcp login` | codex 启动时 `OPENVIKING_API_KEY` 不在 env 里，OV 返回 401，Codex 回落到 OAuth | 确认 `codex()` shell 函数已 source（`type codex` 应该返回"shell function"）、且 `ovcli.conf` 里有 `api_key` |
-| `4 hooks need review before they can run` | 首次启动的安全审批 | 进入 Codex 输入 `/hooks` 批准 |
-| 审批后还是 `hook (failed) exited with code 1` | `hooks.json` 占位符没渲染，cache 是旧的 | 重新跑一次一行安装脚本 |
-| Hook 触发但召回为空 | OpenViking 服务器不可达或 URL 不对 | `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` |
-| Hook 401/403 但 MCP 工具可用，或反之 | env vs ovcli.conf 不一致 | Hook 每次都重读 ovcli.conf，MCP 只在 codex 启动读 env。改完 env 要重启 codex。 |
-
-调试日志：设 `OPENVIKING_DEBUG=1`（或老配置 `ov.conf` 里 `codex.debug=true`），会把 JSON-Lines 事件写到 `~/.openviking/logs/codex-hooks.log`。
-
-## 与 Claude Code 插件的差异
-
-| 维度 | Claude Code 插件 | Codex 插件 |
-|------|------------------|-----------|
-| Plugin root env | `CLAUDE_PLUGIN_ROOT`（CC 会展开） | `CODEX_PLUGIN_ROOT`（Codex 0.130 **不展开**；installer 渲染成绝对路径） |
-| `UserPromptSubmit` 输出 | `decision: "approve"` + `additionalContext` | 只有 `additionalContext` —— Codex 没有 `approve` 这个 decision |
-| Compaction hook | 无 | `PreCompact` —— 在上下文丢失前 commit 完整 transcript |
-| 配置区块 | `claude_code` | `codex` |
-| 默认配置文件 | `~/.openviking/ov.conf` | `~/.openviking/ovcli.conf`，回落到 `ov.conf` |
-| MCP server | 本地 stdio（CC `.mcp.json` 不支持 env-var Bearer） | streamable-HTTP，直连 OpenViking 自带 `/mcp` |
+| `MCP server is not logged in` | 启动时环境变量中缺失 `OPENVIKING_API_KEY` | 确认已 source `codex()` 函数，且 `ovcli.conf` 中配置了 `api_key` |
+| `type codex` 显示的是路径而非 shell function（wrapper 未生效） | 安装后未 `source` rc，或在未加载该 rc 的终端里启动 | 执行 `source ~/.zshrc`（bash 用 `~/.bashrc`），或新开一个终端窗口 |
+| 通过别名（如 `cx`）启动，凭据未注入 | 把别名名填进了 `OPENVIKING_CODEX_WRAP_EXTRA`（别名会被跳过），或别名指向的命令未被封装 | 封装别名指向的真实命令而非别名本身：`alias cx=codex` 无需配置；`alias cx=codex-custom` 则把 `codex-custom` 填入 |
+| `4 hooks need review` | 首次启动需要进行安全审批 | 在 Codex 终端内输入 `/hooks` 完成审批 |
+| 审批后仍提示 `hook (failed) exited with code 1` | 缓存文件中的占位符未被正确渲染 | 重新执行一次一键安装脚本 |
+| 召回结果为空 | 服务器不可达或 URL 配置错误 | 执行 `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` 检查服务器状态 |
+| Hook 报 401 但 MCP 正常可用，或反之 | 环境变量与 `ovcli.conf` 的配置不一致 | Hook 每次触发均会重新读取 `ovcli.conf`，而 MCP 仅在启动时读取环境变量。请修改配置并重启 Codex。 |
 
 ## 参见
 
-- [插件 README](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md) — 完整环境变量、Validation SOP、架构图
-- [`DESIGN.md`](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/DESIGN.md) — commit 决策树
-- [MCP 集成指南](../guides/06-mcp-integration.md) — 协议、工具列表、OpenViking 如何暴露 `/mcp`
-- [部署指南 → CLI](../guides/03-deployment.md#cli) — `ovcli.conf` 配置
+- [博客：在 Claude Code / Codex 中接入 OpenViking](https://blog.openviking.ai/post/openviking-coding-agent/) — 为什么以及如何给你的 Coding Agent 加上长期记忆
+- [插件 README](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md) — 完整的环境变量说明与架构图
+- [DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/DESIGN.md) — 提交（commit）决策树
+- [MCP 客户端](./06-mcp-clients.md) — MCP 协议、工具列表及其他客户端
+- [部署指南 → CLI](../guides/03-deployment.md#cli) — `ovcli.conf` 配置说明

@@ -17,9 +17,9 @@ def build_semantic_coalesce_key(
     uri: str,
     account_id: str = "default",
     user_id: str = "default",
-    agent_id: str = "default",
+    peer_id: str = "default",
 ) -> str:
-    return "|".join([context_type, account_id, user_id, agent_id, uri.rstrip("/")])
+    return "|".join([context_type, account_id, user_id, peer_id, uri.rstrip("/")])
 
 
 @dataclass
@@ -46,7 +46,7 @@ class SemanticMsg:
     recursive: bool = True  # Whether to recursively process subdirectories
     account_id: str = "default"
     user_id: str = "default"
-    agent_id: str = "default"
+    peer_id: str = "default"
     role: str = "root"
     # Additional flags
     skip_vectorization: bool = False
@@ -68,7 +68,7 @@ class SemanticMsg:
         recursive: bool = True,
         account_id: str = "default",
         user_id: str = "default",
-        agent_id: str = "default",
+        peer_id: str = "default",
         role: str = "root",
         skip_vectorization: bool = False,
         telemetry_id: str = "",
@@ -86,7 +86,7 @@ class SemanticMsg:
         self.recursive = recursive
         self.account_id = account_id
         self.user_id = user_id
-        self.agent_id = agent_id
+        self.peer_id = peer_id
         self.role = role
         self.skip_vectorization = skip_vectorization
         self.telemetry_id = telemetry_id
@@ -129,7 +129,7 @@ class SemanticMsg:
             recursive=data.get("recursive", True),
             account_id=data.get("account_id", "default"),
             user_id=data.get("user_id", "default"),
-            agent_id=data.get("agent_id", "default"),
+            peer_id=data.get("peer_id", "default"),
             role=data.get("role", "root"),
             skip_vectorization=data.get("skip_vectorization", False),
             telemetry_id=data.get("telemetry_id", ""),

@@ -94,8 +94,9 @@ export function useVikingFilePreview(
     () => ({
       offset: readOptions.offset ?? 0,
       limit: readOptions.limit ?? defaultReadLimit,
+      raw: readOptions.raw,
     }),
-    [readOptions.offset, readOptions.limit, defaultReadLimit],
+    [readOptions.offset, readOptions.limit, readOptions.raw, defaultReadLimit],
   )
 
   const autoRead = useMemo(
@@ -180,7 +181,7 @@ export function useInvalidateVikingFs() {
   }
 }
 
-function useDebouncedValue<T>(value: T, delay: number): T {
+export function useDebouncedValue<T>(value: T, delay: number): T {
   const [debounced, setDebounced] = useState(value)
   useEffect(() => {
     const timer = setTimeout(() => setDebounced(value), delay)

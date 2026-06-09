@@ -301,14 +301,26 @@ impl S3Client {
 
     /// Get an object's contents
     pub async fn get_object(&self, key: &str) -> Result<Vec<u8>> {
-        let resp = self
+        let resp = match self
             .client
             .get_object()
             .bucket(&self.bucket)
             .key(key)
             .send()
             .await
-            .map_err(|e| Error::internal(format!("S3 GetObject error: {}", e)))?;
+        {
+            Ok(resp) => resp,
+            Err(sdk_err) => {
+                let service_err = sdk_err.into_service_error();
+                if service_err.is_no_such_key() {
+                    return Err(Error::NotFound(key.to_string()));
+                }
+                return Err(Error::internal(format!(
+                    "S3 GetObject error: {}",
+                    service_err
+                )));
+            }
+        };
 
         let bytes = resp
             .body
@@ -320,19 +332,14 @@ impl S3Client {
     }
 
     /// Get an object's contents with range request
-    pub async fn get_object_range(
-        &self,
-        key: &str,
-        offset: u64,
-        size: u64,
-    ) -> Result<Vec<u8>> {
+    pub async fn get_object_range(&self, key: &str, offset: u64, size: u64) -> Result<Vec<u8>> {
         let range = if size == 0 {
             format!("bytes={}-", offset)
         } else {
             format!("bytes={}-{}", offset, offset + size - 1)
         };
 
-        let resp = self
+        let resp = match self
             .client
             .get_object()
             .bucket(&self.bucket)
@@ -340,7 +347,19 @@ impl S3Client {
             .range(range)
             .send()
             .await
-            .map_err(|e| Error::internal(format!("S3 GetObject range error: {}", e)))?;
+        {
+            Ok(resp) => resp,
+            Err(sdk_err) => {
+                let service_err = sdk_err.into_service_error();
+                if service_err.is_no_such_key() {
+                    return Err(Error::NotFound(key.to_string()));
+                }
+                return Err(Error::internal(format!(
+                    "S3 GetObject range error: {}",
+                    service_err
+                )));
+            }
+        };
 
         let bytes = resp
             .body
@@ -471,11 +490,7 @@ impl S3Client {
     }
 
     /// List objects with prefix and delimiter
-    pub async fn list_objects(
-        &self,
-        prefix: &str,
-        delimiter: Option<&str>,
-    ) -> Result<ListResult> {
+    pub async fn list_objects(&self, prefix: &str, delimiter: Option<&str>) -> Result<ListResult> {
         let mut files = Vec::new();
         let mut directories = Vec::new();
         let mut continuation_token: Option<String> = None;
@@ -543,6 +558,61 @@ impl S3Client {
         }
 
         Ok(ListResult { files, directories })
+    }
+
+    /// List all objects under a prefix (flat listing, no delimiter).
+    /// Preserves directory marker objects (keys ending with '/').
+    /// Used by tree_directory for efficient flat traversal.
+    pub async fn list_tree_objects(&self, prefix: &str) -> Result<Vec<ObjectMeta>> {
+        let mut objects = Vec::new();
+        let mut continuation_token: Option<String> = None;
+
+        loop {
+            let mut req = self
+                .client
+                .list_objects_v2()
+                .bucket(&self.bucket)
+                .prefix(prefix);
+
+            if let Some(token) = &continuation_token {
+                req = req.continuation_token(token);
+            }
+
+            let resp = req
+                .send()
+                .await
+                .map_err(|e| Error::internal(format!("S3 ListObjectsV2 error: {}", e)))?;
+
+            for obj in resp.contents() {
+                let key = obj.key().unwrap_or("");
+                if key == prefix {
+                    continue;
+                }
+
+                let size = obj.size.unwrap_or(0);
+                let last_modified = obj
+                    .last_modified()
+                    .map(aws_datetime_to_systemtime)
+                    .unwrap_or(UNIX_EPOCH);
+
+                let is_dir_marker = key.ends_with('/');
+
+                objects.push(ObjectMeta {
+                    key: key.to_string(),
+                    size,
+                    last_modified,
+                    is_dir_marker,
+                });
+            }
+
+            if resp.is_truncated() == Some(true) {
+                continuation_token = resp.next_continuation_token().map(|s| s.to_string());
+            } else {
+                break;
+            }
+        }
+
+        Ok(objects)
     }
 
     /// Copy an object

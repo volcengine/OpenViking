@@ -9,7 +9,7 @@ import sys
 import time
 import warnings
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import typer
 from loguru import logger
@@ -243,7 +243,12 @@ def main(
 
 
 def _make_provider(config, langfuse_client: None = None):
-    """Create LiteLLM provider from configuration."""
+    """Create LLM provider from configuration.
+
+    When bot.agents.provider is explicitly set, uses openviking's VLMFactory
+    to create the appropriate VLM backend and wraps it in VLMProviderAdapter.
+    Otherwise falls back to the legacy LiteLLMProvider.
+    """
     from vikingbot.providers.litellm_provider import LiteLLMProvider
 
     p = config.agents
@@ -256,6 +261,33 @@ def _make_provider(config, langfuse_client: None = None):
     if not model:
         raise RuntimeError("No LLM model configured. Please set it in ~/.openviking/ov.conf")
 
+    # When provider is explicitly set, use VLMFactory to get the correct
+    # backend (e.g. VolcEngineVLM for volcengine, OpenAIVLM for openai).
+    # The VLM backend handles model name resolution internally, so no
+    # manual LiteLLM prefix is needed.
+    if provider_name:
+        from openviking.models.vlm.base import VLMFactory
+        from vikingbot.providers.vlm_adapter import VLMProviderAdapter
+
+        vlm_config: dict[str, Any] = {
+            "provider": provider_name,
+            "model": model,
+        }
+        if api_key:
+            vlm_config["api_key"] = api_key
+        if api_base:
+            vlm_config["api_base"] = api_base
+        if extra_headers:
+            vlm_config["extra_headers"] = extra_headers
+
+        vlm_instance = VLMFactory.create(vlm_config)
+        return VLMProviderAdapter(
+            vlm_instance=vlm_instance,
+            default_model=model,
+            langfuse_client=langfuse_client,
+        )
+
+    # Fallback: legacy LiteLLMProvider (no explicit provider set)
     if not api_key and not model.startswith("bedrock/"):
         console.print("[yellow]Warning: No API key configured.[/yellow]")
         console.print("You can configure providers later in the Console UI.")

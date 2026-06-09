@@ -10,16 +10,8 @@ class MemoryConfig(BaseModel):
 
     version: str = Field(
         default="v2",
-        description="Memory implementation version: 'v1' (legacy) or 'v2' (new templating system)",
+        description="Memory implementation version. Only 'v2' is supported.",
     )
-    agent_scope_mode: str = Field(
-        default="user+agent",
-        description=(
-            "Deprecated and ignored. Kept only for backward compatibility with older ov.conf files. "
-            "Agent/user namespace behavior is now controlled by per-account namespace policy."
-        ),
-    )
-
     custom_templates_dir: str = Field(
         default="",
         description="Custom memory templates directory. If set, templates from this directory will be loaded in addition to built-in templates",
@@ -41,12 +33,19 @@ class MemoryConfig(BaseModel):
         ),
     )
     agent_memory_enabled: bool = Field(
-        default=False,
+        default=True,
         description=(
-            "Enable agent-scope trajectory/experience memory extraction. When true, "
+            "Enable trajectory/experience memory extraction. When true (default), "
             "a two-phase pipeline runs after user-memory extraction: Phase 1 extracts "
             "execution trajectories from the conversation; Phase 2 consolidates them "
             "into higher-level experience memories."
+        ),
+    )
+    experimental_memory_switch: bool = Field(
+        default=False,
+        description=(
+            "Experimental memory switch for experimental testing. When enabled, "
+            "experimental memory templates are loaded."
         ),
     )
     eager_prefetch: bool = Field(
@@ -75,19 +74,12 @@ class MemoryConfig(BaseModel):
             "stateless deployments."
         ),
     )
-    enable_vaka_template: bool = Field(
+    session_skill_extraction_enabled: bool = Field(
         default=False,
         description=(
-            "When enabled, use vaka-specific memory templates (entities, profile) "
-            "from the bundled vaka/ subdirectory to override default templates."
-        ),
-    )
-    enable_role_id_memory_isolate: bool = Field(
-        default=False,
-        description=(
-            "When enabled, memory extraction uses role_id from messages to determine "
-            "which user/agent the memory belongs to. When disabled (default), role_id "
-            "is ignored and the login user from the request context is used instead."
+            "When enabled, session commit also extracts reusable skills from the archived "
+            "conversation and writes them into the current user's skill directory. Disabled by "
+            "default."
         ),
     )
     link_enabled: bool = Field(
@@ -101,11 +93,11 @@ class MemoryConfig(BaseModel):
 
     model_config = {"extra": "forbid"}
 
-    @field_validator("agent_scope_mode")
+    @field_validator("version")
     @classmethod
-    def validate_agent_scope_mode(cls, value: str) -> str:
-        if value not in {"user+agent", "agent"}:
-            raise ValueError("memory.agent_scope_mode must be 'user+agent' or 'agent'")
+    def validate_version(cls, value: str) -> str:
+        if value != "v2":
+            raise ValueError("memory.version only supports 'v2'; legacy memory v1 has been removed")
         return value
 
     @classmethod

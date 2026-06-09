@@ -76,7 +76,7 @@ async def test_retrieve_honors_target_directories_scope_filter():
     target_uri = "viking://resources/foo"
     storage = DummyStorage()
     retriever = HierarchicalRetriever(storage=storage, embedder=None, rerank_config=None)
-    ctx = RequestContext(user=UserIdentifier("acc1", "user1", "agent1"), role=Role.USER)
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
 
     query = TypedQuery(
         query="test",

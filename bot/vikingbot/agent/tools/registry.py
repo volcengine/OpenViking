@@ -141,6 +141,7 @@ class ToolRegistry:
         sandbox_manager: SandboxManager | None = None,
         sender_id: str | None = None,
         memory_user_ids: list[str] | None = None,
+        openviking_connection: dict[str, Any] | None = None,
     ) -> str:
         """
         Execute a tool by name with given parameters.
@@ -152,6 +153,7 @@ class ToolRegistry:
             sandbox_manager: Sandbox manager for file/shell operations.
             sender_id: Sender id for the current session.
             memory_user_ids: List of user IDs for memory retrieval.
+            openviking_connection: Request-scoped OpenViking identity.
 
         Returns:
             Tool execution result as string.
@@ -168,6 +170,7 @@ class ToolRegistry:
             sandbox_manager=sandbox_manager,
             sender_id=sender_id,
             memory_user_ids=memory_user_ids,
+            openviking_connection=openviking_connection,
         )
 
         # Langfuse tool call tracing - automatic for all tools
@@ -199,7 +202,7 @@ class ToolRegistry:
             if tool_span is not None:
                 try:
                     execute_success = not isinstance(result, Exception) and not (
-                        isinstance(result, str) and result.startswith("Error")
+                        isinstance(result, str) and result.lstrip().startswith("Error:")
                     )
                     output_str = str(result) if result is not None else None
                     self.langfuse.end_tool_call(

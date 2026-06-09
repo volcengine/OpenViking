@@ -26,6 +26,68 @@ def _make_ref(objid):
     return SimpleNamespace(objid=objid)
 
 
+class _FakePDFStream(dict):
+    """Minimal pdfminer PDFStream-like object."""
+
+    def __init__(self, data: bytes, subtype: str = "Image"):
+        super().__init__({"Subtype": SimpleNamespace(name=subtype)})
+        self._data = data
+
+    def get_data(self):
+        return self._data
+
+
+class _FakePDFObjectRef:
+    """Minimal PDF object reference with a resolve() method."""
+
+    def __init__(self, stream):
+        self._stream = stream
+
+    def resolve(self):
+        return self._stream
+
+
+def _make_image_page(xobjects):
+    return SimpleNamespace(page_obj=SimpleNamespace(resources={"XObject": xobjects}))
+
+
+class _FakeRenderedImage:
+    """Minimal rendered image stub that writes deterministic PNG bytes."""
+
+    def __init__(self, data: bytes):
+        self._data = data
+
+    def save(self, buffer, format: str):
+        assert format == "PNG"
+        buffer.write(self._data)
+
+
+class _FakeCroppedPage:
+    """Minimal cropped page stub for image extraction tests."""
+
+    def __init__(self, rendered_image: _FakeRenderedImage):
+        self._rendered_image = rendered_image
+        self.resolution_calls = []
+
+    def to_image(self, resolution: int):
+        self.resolution_calls.append(resolution)
+        return self._rendered_image
+
+
+class _FakeImagePage:
+    """Minimal pdfplumber page stub for _extract_image_from_page tests."""
+
+    def __init__(self, *, width: int = 100, height: int = 200, image_bytes: bytes = b"png-bytes"):
+        self.width = width
+        self.height = height
+        self.crop_calls = []
+        self.cropped_page = _FakeCroppedPage(_FakeRenderedImage(image_bytes))
+
+    def crop(self, bbox):
+        self.crop_calls.append(bbox)
+        return self.cropped_page
+
+
 class _FakePage:
     """Minimal pdfplumber page stub for _convert_local tests."""
 
@@ -317,3 +379,56 @@ class TestConvertLocalBookmarks:
         assert [heading["title"] for heading in headings] == ["Heading", "Another heading"]
         assert [page.close_count for page in pages] == [2, 1, 1, 1]
         assert [page.flush_count for page in pages] == [2, 1, 1, 1]
+
+
+class TestExtractImages:
+    """Test PDF XObject image extraction."""
+
+    def setup_method(self):
+        self.parser = PDFParser()
+
+    def test_extract_image_renders_cropped_bbox_as_png(self):
+        page = _FakeImagePage(image_bytes=b"rendered-png")
+
+        image_data = self.parser._extract_image_from_page(
+            page,
+            {"x0": 10, "top": 20, "x1": 40, "bottom": 60},
+        )
+
+        assert image_data == b"rendered-png"
+        assert page.crop_calls == [(10, 20, 40, 60)]
+        assert page.cropped_page.resolution_calls == [self.parser.config.image_resolution]
+
+    def test_extract_image_clamps_bbox_to_page_bounds(self):
+        page = _FakeImagePage()
+
+        self.parser._extract_image_from_page(
+            page,
+            {"x0": -5, "top": -10, "x1": 150, "bottom": 250},
+        )
+
+        assert page.crop_calls == [(0, 0, page.width, page.height)]
+
+    def test_extract_image_returns_none_for_zero_area_bbox(self):
+        page = _FakeImagePage()
+
+        assert (
+            self.parser._extract_image_from_page(
+                page,
+                {"x0": 30, "top": 40, "x1": 30, "bottom": 60},
+            )
+            is None
+        )
+        assert page.crop_calls == []
+
+    def test_extract_image_returns_none_when_crop_fails(self):
+        page = MagicMock(width=100, height=200)
+        page.crop.side_effect = RuntimeError("crop failed")
+
+        assert (
+            self.parser._extract_image_from_page(
+                page,
+                {"x0": 10, "top": 20, "x1": 40, "bottom": 60},
+            )
+            is None
+        )

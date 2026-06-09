@@ -86,8 +86,7 @@ ov session new
     "session_id": "a1b2c3d4",
     "user": {
       "account_id": "default",
-      "user_id": "alice",
-      "agent_id": "default"
+      "user_id": "alice"
     }
   },
   "time": 0.1
@@ -258,12 +257,13 @@ ov session get a1b2c3d4
     "llm_token_usage": {
       "prompt_tokens": 5200,
       "completion_tokens": 1800,
-      "total_tokens": 7000
+      "total_tokens": 7000,
+      "cached_tokens": 1200,
+      "reasoning_tokens": 800
     },
     "user": {
       "account_id": "default",
-      "user_id": "alice",
-      "agent_id": "default"
+      "user_id": "alice"
     },
     "pending_tokens": 450
   }
@@ -568,7 +568,7 @@ Add a message to the session. Supports two modes: simple text mode and Parts mod
 | parts | List[Part] | Conditional | - | List of message parts (Required for Python SDK; Optional for HTTP API, mutually exclusive with content) |
 | content | str | Conditional | - | Message text content (HTTP API simple mode, mutually exclusive with parts) |
 | created_at | str | No | None | Optional ISO 8601 timestamp to persist on the message |
-| role_id | str | No | None | Optional explicit participant ID, server-derived if omitted |
+| peer_id | str | No | None | Optional stable interaction peer identity |
 
 > **Note**: HTTP API supports two modes:
 > 1. **Simple mode**: Use `content` string (backward compatible)
@@ -595,7 +595,7 @@ ContextPart(
 ToolPart(
     tool_id="call_123",
     tool_name="search_web",
-    skill_uri="viking://agent/skills/search-web/",
+    skill_uri="viking://user/skills/search-web/",
     tool_input={"query": "OAuth best practices"},
     tool_output="",
     tool_status="pending"  # "pending", "running", "completed", "error"
@@ -702,6 +702,101 @@ ov session add-message a1b2c3d4 --role user --content "How do I authenticate use
 
 ---
 
+### batch_add_messages()
+
+#### 1. API Implementation Introduction
+
+Add multiple messages to a session in a single request. Suitable for scenarios that require writing a large number of messages at once (e.g., importing conversation history, memory extraction), offering significantly better performance than calling `add_message()` repeatedly.
+
+**Difference from `add_message()`**:
+- `add_message()`: Add 1 message per request
+- `batch_add_messages()`: Add multiple messages per request (max 100), reducing network round trips and file I/O
+
+**Code Entry Points**:
+- `openviking/session/session.py:Session.add_messages()` - Core implementation
+- `openviking/server/routers/sessions.py:batch_add_messages()` - HTTP route
+- `openviking_cli/client/base.py:BaseClient.batch_add_messages()` - Python SDK
+- `crates/ov_cli/src/commands/session.rs:add_messages()` - CLI command
+
+#### 2. Interface and Parameter Description
+
+**Parameters**
+
+| Parameter | Type | Required | Default | Description |
+|------|------|------|--------|------|
+| session_id | str | Yes | - | Session ID |
+| messages | List[AddMessageRequest] | Yes | - | List of messages, each following the same format as `add_message()`, max 100 |
+| telemetry | bool | No | False | Whether to attach operation telemetry data |
+
+> **Note**: Each message follows the exact same format as `add_message()`, supporting both `content` (simple mode) and `parts` (Parts mode). If you need to add more than 100 messages, call in batches.
+
+#### 3. Usage Examples
+
+**HTTP API**
+
+```http
+POST /api/v1/sessions/{session_id}/messages/batch
+```
+
+```bash
+# Add multiple messages in batch
+curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/messages/batch \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "messages": [
+      {"role": "user", "content": "How do I authenticate users?"},
+      {"role": "assistant", "content": "You can use OAuth 2.0 for authentication."},
+      {"role": "user", "content": "Any specific recommendations?"}
+    ]
+  }'
+```
+
+**Python SDK**
+
+```python
+import openviking as ov
+
+client = ov.Client(base_url="http://localhost:1933", api_key="your-key")
+
+# Add messages in batch
+result = await client.batch_add_messages(
+    session_id="a1b2c3d4",
+    messages=[
+        {"role": "user", "content": "How do I authenticate users?"},
+        {"role": "assistant", "content": "You can use OAuth 2.0 for authentication."},
+        {"role": "user", "content": "Any specific recommendations?"},
+    ],
+)
+print(f"Added: {result['added']}, Total: {result['message_count']}")
+```
+
+**CLI**
+
+```bash
+# Add multiple messages to a session
+ov session add-messages a1b2c3d4 '[{"role":"user","content":"Hello"},{"role":"assistant","content":"Hi"}]'
+
+# ov add-memory also uses the batch interface internally
+ov add-memory '[{"role":"user","content":"Hello"},{"role":"assistant","content":"Hi"}]'
+```
+
+**Response Example**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "session_id": "a1b2c3d4",
+    "message_count": 5,
+    "added": 3
+  },
+  "time": 0.1
+}
+```
+
+---
+
 ### used()
 
 #### 1. API Implementation Introduction
@@ -741,7 +836,7 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
 curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
-  -d '{"skill": {"uri": "viking://agent/skills/search-web/", "input": {"query": "OAuth"}, "output": "Results...", "success": true}}'
+  -d '{"skill": {"uri": "viking://user/skills/search-web/", "input": {"query": "OAuth"}, "output": "Results...", "success": true}}'
 ```
 
 **Python SDK**
@@ -761,7 +856,7 @@ await client.session_used(
 await client.session_used(
     session_id="a1b2c3d4",
     skill={
-        "uri": "viking://agent/skills/search-web/",
+        "uri": "viking://user/skills/search-web/",
         "input": {"query": "OAuth"},
         "output": "Results...",
         "success": True
@@ -789,7 +884,7 @@ await client.session_used(
 
 #### 1. API Implementation Introduction
 
-Commit a session. Message archiving (Phase 1) completes immediately. Summary generation and memory extraction (Phase 2) run asynchronously in the background. Returns a `task_id` for polling progress.
+Commit a session. Message archiving (Phase 1) completes immediately. Summary generation and memory extraction (Phase 2) run asynchronously in the background. Returns a `task_id` for polling status.
 
 **Two-Phase Commit Flow:**
 - **Phase 1 (Synchronous)**: Snapshot current messages, clear live session, create archive directory, write original messages
@@ -813,6 +908,7 @@ Commit a session. Message archiving (Phase 1) completes immediately. Summary gen
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | session_id | str | Yes | - | Session ID to commit |
+| keep_recent_count | int | No | 0 | Number of recent live messages to retain (kept live, not archived) after commit. `0` (default) archives all messages. |
 
 #### 3. Usage Examples
 
@@ -845,7 +941,7 @@ result = await client.commit_session("a1b2c3d4")
 print(f"Status: {result['status']}")
 print(f"Task ID: {result['task_id']}")
 
-# Poll background task progress
+# Poll background task status
 task = await client.get_task(result["task_id"])
 if task["status"] == "completed":
     memories = task["result"]["memories_extracted"]
@@ -917,7 +1013,7 @@ The endpoint returns the extracted memory write results as a JSON list. The exac
 
 #### 1. API Implementation Introduction
 
-Query background task status (e.g., commit summary generation and memory extraction progress).
+Query background task status for APIs that return `task_id`, such as session commit, `add_resource`, and admin reindex.
 
 **Task Statuses:**
 - `pending`: Task waiting to execute
@@ -928,13 +1024,15 @@ Query background task status (e.g., commit summary generation and memory extract
 **Code Entries:**
 - `openviking/server/routers/tasks.py:get_task()` - HTTP route
 
+Task records are persisted in AGFS and can be queried after server restart, subject to task retention cleanup.
+
 #### 2. Interface and Parameter Description
 
 **Parameters**
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| task_id | str | Yes | - | Task ID (returned by commit) |
+| task_id | str | Yes | - | Task ID returned by a background API |
 
 #### 3. Usage Examples
 
@@ -960,18 +1058,22 @@ task = await client.get_task(task_id="uuid-xxx")
 print(f"Status: {task['status']}")
 ```
 
-**Response Example (in progress)**
+**Response Example (resource import in progress)**
 
 ```json
 {
   "status": "ok",
   "result": {
     "task_id": "uuid-xxx",
-    "task_type": "session_commit",
-    "status": "running"
+    "task_type": "add_resource",
+    "status": "running",
+    "resource_id": "viking://resources/guide",
+    "stage": "processing_queue"
   }
 }
 ```
+
+`stage` is nullable. Git repository resource import tasks may report `queued`, `fetching`, `parsing`, `finalizing`, or `processing_queue`; other task types may leave it as `null`. Live queue counters are intentionally not part of task status; use observer queue APIs for live counts, or read `result.queue_status` after completion.
 
 **Response Example (completed)**
 
@@ -1061,7 +1163,8 @@ curl -X GET "http://localhost:1933/api/v1/tasks?task_type=session_commit&status=
       "created_at": 1770000000.0,
       "updated_at": 1770000005.0,
       "result": null,
-      "error": null
+      "error": null,
+      "stage": null
     }
   ]
 }
@@ -1168,10 +1271,10 @@ An empty `memory_diff.json` (all counts zero) is written even when no memory ope
 | preferences | `user/memories/preferences/` | User preferences by topic |
 | entities | `user/memories/entities/` | Important entities (people, projects) |
 | events | `user/memories/events/` | Significant events |
-| cases | `agent/memories/cases/` | Problem-solution cases |
-| patterns | `agent/memories/patterns/` | Interaction patterns |
-| tools | `agent/memories/tools/` | Tool usage knowledge and best practices |
-| skills | `agent/memories/skills/` | Skill execution knowledge and workflow strategies |
+| trajectories | `user/memories/trajectories/` | Reusable operation contracts |
+| experiences | `user/memories/experiences/` | Reusable execution insights |
+| tools | `user/memories/tools/` | Tool usage knowledge and best practices |
+| skills | `user/memories/skills/` | Skill execution knowledge and workflow strategies |
 
 ---
 
@@ -1273,7 +1376,7 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/commit \
   -H "X-API-Key: your-key"
 # Returns: {"status": "ok", "result": {"status": "accepted", "task_id": "uuid-xxx", ...}}
 
-# Step 7: Poll background task progress (optional)
+# Step 7: Poll background task status (optional)
 curl -X GET http://localhost:1933/api/v1/tasks/uuid-xxx \
   -H "X-API-Key: your-key"
 ```

@@ -23,7 +23,9 @@ async def _drain_background_tasks(client: AsyncOpenViking):
     tracker = get_task_tracker()
     for _ in range(100):  # up to 10s
         pending = [
-            t for t in tracker.list_tasks() if t.status in (TaskStatus.PENDING, TaskStatus.RUNNING)
+            t
+            for t in await tracker.list_tasks()
+            if t.status in (TaskStatus.PENDING, TaskStatus.RUNNING)
         ]
         if not pending:
             break
@@ -70,7 +72,7 @@ async def session_with_tool_call(
         tool_id=tool_id,
         tool_name="test_tool",
         tool_uri=f"viking://session/{session.session_id}/tools/{tool_id}",
-        skill_uri="viking://agent/skills/test_skill",
+        skill_uri="viking://user/skills/test_skill",
         tool_input={"param": "value"},
         tool_status="running",
     )

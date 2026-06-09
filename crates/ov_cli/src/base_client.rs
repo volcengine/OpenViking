@@ -1,6 +1,7 @@
 use reqwest::{Client as ReqwestClient, StatusCode};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use std::any::TypeId;
 use std::fs::File;
 use std::path::Path;
 use std::str::FromStr;
@@ -74,6 +75,31 @@ pub fn api_error_from_envelope(json: &Value, status: StatusCode) -> String {
     }
 }
 
+pub fn unwrap_success_envelope(json: Value, preserve_profile: bool) -> Value {
+    let Some(result) = json.get("result") else {
+        return json;
+    };
+
+    if !preserve_profile {
+        return result.clone();
+    }
+
+    let Some(profile) = json.get("profile").filter(|profile| !profile.is_null()) else {
+        return result.clone();
+    };
+
+    if let Some(result_obj) = result.as_object() {
+        let mut merged = result_obj.clone();
+        merged.insert("profile".to_string(), profile.clone());
+        return Value::Object(merged);
+    }
+
+    let mut wrapped = serde_json::Map::new();
+    wrapped.insert("result".to_string(), result.clone());
+    wrapped.insert("profile".to_string(), profile.clone());
+    Value::Object(wrapped)
+}
+
 // ============ TimeoutConfig ============
 
 /// Dynamic timeout calculator based on file size
@@ -119,36 +145,18 @@ pub struct BaseClient {
     pub(crate) api_key: Option<String>,
     pub(crate) account: Option<String>,
     pub(crate) user: Option<String>,
-    pub(crate) agent_id: Option<String>,
+    pub(crate) profile_enabled: bool,
     pub(crate) extra_headers: Option<std::collections::HashMap<String, String>>,
 }
 
 impl BaseClient {
-    /// Create a new BaseClient with minimal configuration for health probing
-    pub fn new_simple(base_url: impl Into<String>, timeout_secs: f64) -> Self {
-        let http = ReqwestClient::builder()
-            .timeout(std::time::Duration::from_secs_f64(timeout_secs))
-            .build()
-            .expect("Failed to build HTTP client");
-
-        Self {
-            http,
-            base_url: base_url.into().trim_end_matches('/').to_string(),
-            api_key: None,
-            account: None,
-            user: None,
-            agent_id: None,
-            extra_headers: None,
-        }
-    }
-
     pub fn new(
         base_url: impl Into<String>,
         api_key: Option<String>,
-        agent_id: Option<String>,
         account: Option<String>,
         user: Option<String>,
         timeout_secs: f64,
+        profile_enabled: bool,
         extra_headers: Option<std::collections::HashMap<String, String>>,
     ) -> Self {
         let http = ReqwestClient::builder()
@@ -162,21 +170,21 @@ impl BaseClient {
             api_key,
             account,
             user,
-            agent_id,
+            profile_enabled,
             extra_headers,
         }
     }
 
-    pub fn base_url(&self) -> &str {
-        &self.base_url
+    fn append_profile_query<'a>(&self, params: &'a [(String, String)]) -> Vec<(String, String)> {
+        let mut merged = params.to_vec();
+        if self.profile_enabled && !merged.iter().any(|(k, _)| k == "profile") {
+            merged.push(("profile".to_string(), "1".to_string()));
+        }
+        merged
     }
 
     pub fn user_id(&self) -> Option<&str> {
         self.user.as_deref()
-    }
-
-    pub fn agent_id(&self) -> Option<&str> {
-        self.agent_id.as_deref()
     }
 
     pub fn api_key(&self) -> Option<&str> {
@@ -192,11 +200,6 @@ impl BaseClient {
         if let Some(api_key) = &self.api_key {
             if let Ok(value) = reqwest::header::HeaderValue::from_str(api_key) {
                 headers.insert("X-API-Key", value);
-            }
-        }
-        if let Some(agent_id) = &self.agent_id {
-            if let Ok(value) = reqwest::header::HeaderValue::from_str(agent_id) {
-                headers.insert("X-OpenViking-Agent", value);
             }
         }
         if let Some(account) = &self.account {
@@ -221,7 +224,10 @@ impl BaseClient {
         headers
     }
 
-    pub(crate) async fn handle_response<T: DeserializeOwned>(&self, response: reqwest::Response) -> Result<T> {
+    pub(crate) async fn handle_response<T: DeserializeOwned + 'static>(
+        &self,
+        response: reqwest::Response,
+    ) -> Result<T> {
         let status = response.status();
 
         if status == StatusCode::NO_CONTENT || status == StatusCode::ACCEPTED {
@@ -246,7 +252,10 @@ impl BaseClient {
         };
 
         if !status.is_success() {
-            return Err(Error::Api(api_error_from_envelope(&json, status)));
+            return Err(Error::api_with_status(
+                api_error_from_envelope(&json, status),
+                status.as_u16(),
+            ));
         }
 
         if let Some(error) = json.get("error") {
@@ -259,15 +268,15 @@ impl BaseClient {
                     .get("message")
                     .and_then(|m| m.as_str())
                     .unwrap_or("Unknown error");
-                return Err(Error::Api(format!("[{}] {}", code, message)));
+                return Err(Error::api_with_status(
+                    format!("[{}] {}", code, message),
+                    status.as_u16(),
+                ));
             }
         }
 
-        let result = if let Some(result) = json.get("result") {
-            result.clone()
-        } else {
-            json.clone()
-        };
+        let preserve_profile = TypeId::of::<T>() == TypeId::of::<Value>();
+        let result = unwrap_success_envelope(json.clone(), preserve_profile);
 
         serde_json::from_value(result).map_err(|e| {
             Error::Parse(format!(
@@ -277,7 +286,10 @@ impl BaseClient {
         })
     }
 
-    pub(crate) fn create_client_with_timeout(&self, timeout: std::time::Duration) -> Result<ReqwestClient> {
+    pub(crate) fn create_client_with_timeout(
+        &self,
+        timeout: std::time::Duration,
+    ) -> Result<ReqwestClient> {
         ReqwestClient::builder()
             .timeout(timeout)
             .build()
@@ -296,17 +308,18 @@ impl BaseClient {
             .map_err(|e| Error::Network(format!("Failed to build HTTP client: {}", e)))
     }
 
-    pub async fn get<T: DeserializeOwned>(
+    pub async fn get<T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         params: &[(String, String)],
     ) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
+        let params = self.append_profile_query(params);
         let response = self
             .http
             .get(&url)
             .headers(self.build_headers())
-            .query(params)
+            .query(&params)
             .send()
             .await
             .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
@@ -314,17 +327,23 @@ impl BaseClient {
         self.handle_response(response).await
     }
 
-    pub async fn post<B: serde::Serialize, T: DeserializeOwned>(
+    pub async fn post<B: serde::Serialize, T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         body: &B,
     ) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
-        let response = self
+        let request = self
             .http
             .post(&url)
             .headers(self.build_headers())
-            .json(body)
+            .json(body);
+        let request = if self.profile_enabled {
+            request.query(&[("profile", "1")])
+        } else {
+            request
+        };
+        let response = request
             .send()
             .await
             .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
@@ -332,7 +351,7 @@ impl BaseClient {
         self.handle_response(response).await
     }
 
-    pub async fn post_with_timeout<B: serde::Serialize, T: DeserializeOwned>(
+    pub async fn post_with_timeout<B: serde::Serialize, T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         body: &B,
@@ -341,10 +360,13 @@ impl BaseClient {
         let url = format!("{}{}", self.base_url, path);
         let client = self.create_client_with_timeout(timeout)?;
 
-        let response = client
-            .post(&url)
-            .headers(self.build_headers())
-            .json(body)
+        let request = client.post(&url).headers(self.build_headers()).json(body);
+        let request = if self.profile_enabled {
+            request.query(&[("profile", "1")])
+        } else {
+            request
+        };
+        let response = request
             .send()
             .await
             .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
@@ -352,17 +374,19 @@ impl BaseClient {
         self.handle_response(response).await
     }
 
-    pub async fn put<B: serde::Serialize, T: DeserializeOwned>(
+    pub async fn put<B: serde::Serialize, T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         body: &B,
     ) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
-        let response = self
-            .http
-            .put(&url)
-            .headers(self.build_headers())
-            .json(body)
+        let request = self.http.put(&url).headers(self.build_headers()).json(body);
+        let request = if self.profile_enabled {
+            request.query(&[("profile", "1")])
+        } else {
+            request
+        };
+        let response = request
             .send()
             .await
             .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
@@ -370,17 +394,18 @@ impl BaseClient {
         self.handle_response(response).await
     }
 
-    pub async fn delete<T: DeserializeOwned>(
+    pub async fn delete<T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         params: &[(String, String)],
     ) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
+        let params = self.append_profile_query(params);
         let response = self
             .http
             .delete(&url)
             .headers(self.build_headers())
-            .query(params)
+            .query(&params)
             .send()
             .await
             .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
@@ -388,17 +413,23 @@ impl BaseClient {
         self.handle_response(response).await
     }
 
-    pub async fn delete_with_body<B: serde::Serialize, T: DeserializeOwned>(
+    pub async fn delete_with_body<B: serde::Serialize, T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         body: &B,
     ) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
-        let response = self
+        let request = self
             .http
             .delete(&url)
             .headers(self.build_headers())
-            .json(body)
+            .json(body);
+        let request = if self.profile_enabled {
+            request.query(&[("profile", "1")])
+        } else {
+            request
+        };
+        let response = request
             .send()
             .await
             .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
@@ -406,18 +437,19 @@ impl BaseClient {
         self.handle_response(response).await
     }
 
-    pub async fn patch<B: serde::Serialize, T: DeserializeOwned>(
+    pub async fn patch<B: serde::Serialize, T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         body: &B,
         params: &[(String, String)],
     ) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
+        let params = self.append_profile_query(params);
         let response = self
             .http
             .patch(&url)
             .headers(self.build_headers())
-            .query(params)
+            .query(&params)
             .json(body)
             .send()
             .await
@@ -426,24 +458,159 @@ impl BaseClient {
         self.handle_response(response).await
     }
 
-    pub async fn post_with_query<B: serde::Serialize, T: DeserializeOwned>(
+    pub async fn post_with_query<B: serde::Serialize, T: DeserializeOwned + 'static>(
         &self,
         path: &str,
         body: &B,
         params: &[(String, String)],
     ) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
+        let params = self.append_profile_query(params);
         let response = self
             .http
             .post(&url)
             .headers(self.build_headers())
-            .query(params)
+            .query(&params)
             .json(body)
             .send()
             .await
             .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
 
         self.handle_response(response).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn unwrap_success_envelope_preserves_profile_for_value_results() {
+        let body = json!({
+            "status": "ok",
+            "result": [
+                {"id": "1"}
+            ],
+            "profile": [
+                "line one",
+                "line two"
+            ]
+        });
+
+        let result = unwrap_success_envelope(body, true);
+
+        assert_eq!(
+            result,
+            json!({
+                "result": [
+                    {"id": "1"}
+                ],
+                "profile": [
+                    "line one",
+                    "line two"
+                ]
+            })
+        );
+    }
+
+    #[test]
+    fn unwrap_success_envelope_drops_null_profile_for_value_results() {
+        let body = json!({
+            "status": "ok",
+            "result": [
+                {"id": "1"}
+            ],
+            "profile": null
+        });
+
+        let result = unwrap_success_envelope(body, true);
+
+        assert_eq!(
+            result,
+            json!([
+                {"id": "1"}
+            ])
+        );
+    }
+
+    #[test]
+    fn unwrap_success_envelope_wraps_scalar_results_when_profile_is_preserved() {
+        let body = json!({
+            "status": "ok",
+            "result": "content",
+            "profile": [
+                "line one"
+            ]
+        });
+
+        let result = unwrap_success_envelope(body, true);
+
+        assert_eq!(
+            result,
+            json!({
+                "result": "content",
+                "profile": [
+                    "line one"
+                ]
+            })
+        );
+    }
+
+    #[test]
+    fn unwrap_success_envelope_drops_profile_for_scalar_results() {
+        let body = json!({
+            "status": "ok",
+            "result": "content",
+            "profile": [
+                "line one"
+            ]
+        });
+
+        let result = unwrap_success_envelope(body, false);
+
+        assert_eq!(result, json!("content"));
+    }
+
+    #[test]
+    fn append_profile_query_adds_flag_when_enabled() {
+        let client = BaseClient::new(
+            "http://localhost:1933",
+            None,
+            None,
+            None,
+            5.0,
+            true,
+            None,
+        );
+
+        let params =
+            client.append_profile_query(&[("to_uri".to_string(), "viking://x".to_string())]);
+
+        assert_eq!(
+            params,
+            vec![
+                ("to_uri".to_string(), "viking://x".to_string()),
+                ("profile".to_string(), "1".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn append_profile_query_keeps_existing_profile_flag() {
+        let client = BaseClient::new(
+            "http://localhost:1933",
+            None,
+            None,
+            None,
+            5.0,
+            true,
+            None,
+        );
+
+        let params = client.append_profile_query(&[("profile".to_string(), "1".to_string())]);
+
+        assert_eq!(params, vec![("profile".to_string(), "1".to_string())]);
     }
 }
 
@@ -468,7 +635,11 @@ impl<'a> FileUploader<'a> {
         self
     }
 
-    pub fn zip_directory(&self, dir_path: &Path, ignore_dirs: Option<&str>) -> Result<NamedTempFile> {
+    pub fn zip_directory(
+        &self,
+        dir_path: &Path,
+        ignore_dirs: Option<&str>,
+    ) -> Result<NamedTempFile> {
         if !dir_path.is_dir() {
             return Err(Error::Network(format!(
                 "Path {} is not a directory",
@@ -597,7 +768,10 @@ impl<'a> FileUploader<'a> {
 
         if let Some(pb) = pb {
             if total_size > 0 {
-                pb.finish_with_message(format!("Compression complete: {:.2} MiB → {:.2} MiB", original_size_mb, zip_size_mb));
+                pb.finish_with_message(format!(
+                    "Compression complete: {:.2} MiB → {:.2} MiB",
+                    original_size_mb, zip_size_mb
+                ));
             } else {
                 pb.finish_with_message(format!("Compression complete: {:.2} MiB", zip_size_mb));
             }
@@ -668,15 +842,22 @@ impl<'a> FileUploader<'a> {
         let file_size = file_content.len() as u64;
 
         if verbose {
-            eprintln!("Uploading: {} ({:.2} MB)", file_name, file_size as f64 / 1024.0 / 1024.0);
+            eprintln!(
+                "Uploading: {} ({:.2} MB)",
+                file_name,
+                file_size as f64 / 1024.0 / 1024.0
+            );
         }
 
         let pb = ProgressBar::new_spinner();
-        pb.set_message(format!("Uploading {} ({:.2} MB)...", file_name, file_size as f64 / 1024.0 / 1024.0));
+        pb.set_message(format!(
+            "Uploading {} ({:.2} MB)...",
+            file_name,
+            file_size as f64 / 1024.0 / 1024.0
+        ));
         pb.enable_steady_tick(std::time::Duration::from_millis(100));
 
-        let part = reqwest::multipart::Part::bytes(file_content)
-            .file_name(file_name.to_string());
+        let part = reqwest::multipart::Part::bytes(file_content).file_name(file_name.to_string());
 
         let part = part
             .mime_str("application/octet-stream")

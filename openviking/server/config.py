@@ -162,6 +162,7 @@ class ServerConfig(BaseModel):
     workers: int = 1
     auth_mode: Optional[AuthMode] = None  # If None, auto-detect based on root_api_key
     root_api_key: Optional[str] = None
+    profile_enabled: bool = False
     cors_origins: List[str] = Field(default_factory=lambda: ["*"])
     with_bot: bool = False  # Enable Bot API proxy to Vikingbot
     bot_api_url: str = "http://localhost:18790"  # Vikingbot OpenAPIChannel URL (default port)
@@ -312,7 +313,7 @@ def validate_server_config(config: ServerConfig) -> None:
       Only acceptable when binding to localhost.
     - **api_key mode**: Authenticates via root_api_key or user keys.
       Requires root_api_key to be configured.
-    - **trusted mode**: Trusts X-OpenViking-Account/User/Agent headers.
+    - **trusted mode**: Trusts X-OpenViking-Account/User headers.
       Requires root_api_key when binding to non-localhost.
 
     If auth_mode is not explicitly configured:
@@ -369,7 +370,7 @@ def validate_server_config(config: ServerConfig) -> None:
         if _is_localhost(config.host):
             logger.warning(
                 "Trusted mode without API key: authentication trusts "
-                "X-OpenViking-Account/User/Agent headers. This is allowed because "
+                "X-OpenViking-Account/User headers. This is allowed because "
                 "the server is bound to localhost (%s).",
                 config.host,
             )

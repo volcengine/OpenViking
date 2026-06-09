@@ -175,8 +175,6 @@ class HeartbeatService:
         active_workspaces = 0
 
         for workspace_path, session_key_list in workspaces.items():
-            logger.debug(f"Heartbeat: checking workspace {workspace_path}...")
-
             content = _read_heartbeat_file(workspace_path)
 
             # Skip if HEARTBEAT.md is empty or doesn't exist
@@ -210,9 +208,6 @@ class HeartbeatService:
 
                 except Exception as e:
                     logger.exception(f"Heartbeat execution failed for {workspace_path}: {e}")
-
-        if active_workspaces == 0:
-            logger.debug("Heartbeat: no tasks in any workspace")
 
     async def trigger_now(self, session_key: SessionKey | None = None) -> str | None:
         """Manually trigger a heartbeat."""

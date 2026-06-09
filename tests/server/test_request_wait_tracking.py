@@ -177,7 +177,7 @@ async def test_add_skill_wait_uses_request_tracker(service, monkeypatch):
 
     async def _fake_process_skill(**kwargs):
         del kwargs
-        return {"status": "success", "uri": "viking://agent/skills/demo", "name": "demo"}
+        return {"status": "success", "uri": "viking://user/default/skills/demo", "name": "demo"}
 
     monkeypatch.setattr(service.resources._skill_processor, "process_skill", _fake_process_skill)
     monkeypatch.setattr(
@@ -218,7 +218,7 @@ async def test_add_skill_wait_uses_request_tracker_when_telemetry_disabled(servi
 
     async def _fake_process_skill(**kwargs):
         del kwargs
-        return {"status": "success", "uri": "viking://agent/skills/demo", "name": "demo"}
+        return {"status": "success", "uri": "viking://user/default/skills/demo", "name": "demo"}
 
     monkeypatch.setattr(service.resources._skill_processor, "process_skill", _fake_process_skill)
     monkeypatch.setattr(
@@ -239,7 +239,7 @@ async def test_add_skill_wait_uses_request_tracker_when_telemetry_disabled(servi
             timeout=9.0,
         )
 
-    assert result["root_uri"] == "viking://agent/skills/demo"
+    assert result["root_uri"] == "viking://user/default/skills/demo"
     assert result["queue_status"] == tracker.queue_status
     assert tracker.registered_requests == [telemetry.telemetry_id]
     assert tracker.wait_calls == [(telemetry.telemetry_id, 9.0)]

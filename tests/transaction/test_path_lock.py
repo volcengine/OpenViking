@@ -5,6 +5,7 @@
 import time
 from unittest.mock import AsyncMock, MagicMock
 
+from openviking.storage.transaction import path_lock as path_lock_module
 from openviking.storage.transaction.lock_handle import LockHandle
 from openviking.storage.transaction.path_lock import (
     EXACT_LOCK_FILE_PREFIX,
@@ -137,6 +138,33 @@ class TestPathLockIsLocked:
         lock = PathLockEngine(agfs, lock_expire=300.0)
         assert lock.is_locked("/local/u/foo", ignore_stale=False) is True
 
+    async def test_is_locked_async_uses_async_agfs_path(self):
+        token = _make_fencing_token("tx-1", LOCK_TYPE_TREE)
+        agfs = self._agfs_with_locks({"/local/u/.path.ovlock": token.encode("utf-8")})
+        lock = PathLockEngine(agfs)
+
+        assert await lock.is_locked_async("/local/u/foo/bar") is True
+
+    def test_is_locked_sync_passes_path_derived_ctx(self):
+        token = _make_fencing_token("tx-1", LOCK_TYPE_TREE)
+        seen: list[dict[str, str] | None] = []
+
+        class _CtxAwareAgfs:
+            def read(self, path, *, ctx=None):
+                seen.append(ctx)
+                if path == "/local/u/.path.ovlock":
+                    return token.encode("utf-8")
+                raise Exception("not found")
+
+            def stat(self, path, *, ctx=None):
+                seen.append(ctx)
+                raise Exception("not found")
+
+        lock = PathLockEngine(_CtxAwareAgfs())
+
+        assert lock.is_locked("/local/u/foo/bar") is True
+        assert {"account_id": "u"} in seen
+
 
 class TestPathLockOwnership:
     async def test_refresh_reports_refreshed_lost_and_failed_paths(self):
@@ -233,6 +261,67 @@ class TestPathLockBehavior:
 
         await lock.release(tx)
 
+    async def test_acquire_tree_existing_file_uses_parent_sidecar_lock(self, agfs_client, test_dir):
+        lock = PathLockEngine(agfs_client)
+        tx = LockHandle(id="tx-tree-file")
+        file_path = f"{test_dir}/profile.md"
+        agfs_client.write(file_path, b"# Profile\n")
+
+        ok = await lock.acquire_tree(file_path, tx, timeout=3.0)
+        assert ok is True
+
+        lock_path = _single_lock_path(tx)
+        assert lock_path.startswith(f"{test_dir}/{EXACT_LOCK_FILE_PREFIX}profile.md.")
+        assert lock_path != f"{file_path}/{LOCK_FILE_NAME}"
+        content = agfs_client.cat(lock_path)
+        token = content.decode("utf-8") if isinstance(content, bytes) else content
+        assert ":T" in token
+        assert "tx-tree-file" in token
+
+        await lock.release(tx)
+        try:
+            agfs_client.stat(lock_path)
+            raise AssertionError("file tree lock should have been removed")
+        except AssertionError:
+            raise
+        except Exception:
+            pass
+
+    async def test_acquire_tree_existing_file_sidecar_sanitizes_name(self, agfs_client, test_dir):
+        lock = PathLockEngine(agfs_client)
+        tx = LockHandle(id="tx-tree-file-special")
+        file_path = f"{test_dir}/profile with spaces \u4e2d.md"
+        agfs_client.write(file_path, b"# Profile\n")
+
+        ok = await lock.acquire_tree(file_path, tx, timeout=3.0)
+        assert ok is True
+
+        lock_path = _single_lock_path(tx)
+        assert lock_path.startswith(f"{test_dir}/{EXACT_LOCK_FILE_PREFIX}profile_with_spaces")
+        assert lock_path.endswith(lock._get_prefixed_exact_lock_path(file_path).rsplit(".", 1)[-1])
+        content = agfs_client.cat(lock_path)
+        token = content.decode("utf-8") if isinstance(content, bytes) else content
+        assert ":T" in token
+
+        await lock.release(tx)
+
+    async def test_acquire_tree_existing_file_blocks_second_owner_until_release(
+        self, agfs_client, test_dir
+    ):
+        lock = PathLockEngine(agfs_client)
+        tx1 = LockHandle(id="tx-tree-file-hold")
+        tx2 = LockHandle(id="tx-tree-file-wait")
+        file_path = f"{test_dir}/blocked.md"
+        agfs_client.write(file_path, b"# Blocked\n")
+
+        assert await lock.acquire_tree(file_path, tx1, timeout=3.0) is True
+        assert await lock.acquire_tree(file_path, tx2, timeout=0.0) is False
+
+        await lock.release(tx1)
+
+        assert await lock.acquire_tree(file_path, tx2, timeout=3.0) is True
+        await lock.release(tx2)
+
     async def test_acquire_tree_creates_missing_directory_after_conflict_check(
         self, agfs_client, test_dir
     ):
@@ -265,6 +354,33 @@ class TestPathLockBehavior:
             raise
         except Exception:
             pass
+
+        await lock.release(parent)
+
+    async def test_fail_fast_tree_conflict_warning_is_throttled(
+        self, agfs_client, test_dir, monkeypatch
+    ):
+        lock = PathLockEngine(agfs_client)
+        parent = LockHandle(id="tx-parent-tree")
+        child = LockHandle(id="tx-child-tree")
+        child_retry = LockHandle(id="tx-child-tree-retry")
+        target = f"{test_dir}/blocked-resource"
+
+        assert await lock.acquire_tree(test_dir, parent, timeout=3.0) is True
+
+        warnings = []
+        debug_logs = []
+        path_lock_module._last_timeout_warning_at.clear()
+        monkeypatch.setattr(path_lock_module.logger, "warning", warnings.append)
+        monkeypatch.setattr(path_lock_module.logger, "debug", debug_logs.append)
+
+        assert await lock.acquire_tree(target, child, timeout=0.0) is False
+        assert await lock.acquire_tree(target, child_retry, timeout=0.0) is False
+
+        timeout_warnings = [message for message in warnings if "Timeout waiting" in message]
+        assert len(timeout_warnings) == 1
+        assert "Timeout waiting for ancestor TREE lock" in timeout_warnings[0]
+        assert debug_logs == []
 
         await lock.release(parent)
 

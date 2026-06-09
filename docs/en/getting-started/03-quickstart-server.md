@@ -51,6 +51,8 @@ curl http://localhost:1933/health
 
 `openviking-server doctor` checks local configuration, model access, and auth readiness. `curl /health` only confirms that the server process is already running.
 
+Web Studio is also served at `http://localhost:1933/studio` (bundled with pip/pipx installs since v0.3.21 — no Docker required).
+
 ## Connect with Python SDK
 
 ```python
@@ -73,7 +75,6 @@ import openviking as ov
 client = ov.SyncHTTPClient(
     url="http://localhost:1933",
     api_key="<user-key>",
-    agent_id="my-agent",      # optional
 )
 ```
 
@@ -81,21 +82,22 @@ client = ov.SyncHTTPClient(
 
 **Administrative operations: use a `root_key`**
 
-`root_key` is for management operations (creating accounts, system status, etc.). To access tenant-scoped APIs with `root_key`, you **must** also pass `account` and `user`:
+`root_key` is for management operations (creating accounts, system status, etc.).
+Tenant-scoped data APIs such as `add_resource`, `find`, and sessions need a key
+that is bound to an account/user, such as a user key or admin key:
 
 ```python
 import openviking as ov
 
 client = ov.SyncHTTPClient(
     url="http://localhost:1933",
-    api_key="<root-key>",
-    account="acme",           # required: target tenant
-    user="alice",             # required: target user
+    api_key="<user-or-admin-key>",
 )
 ```
 
-> ⚠️ Using `root_key` for `add_resource`, `find`, etc. without `account`/`user` will return:
-> `ROOT requests to tenant-scoped APIs must include X-OpenViking-Account and X-OpenViking-User headers`
+> Using `root_key` for tenant-scoped data APIs in `api_key` mode returns
+> `PERMISSION_DENIED`. Use a user/admin key for data access, or trusted mode for
+> upstream identity assertion.
 
 See [Authentication](../guides/04-authentication.md) for details (trusted mode, CLI config, etc.).
 

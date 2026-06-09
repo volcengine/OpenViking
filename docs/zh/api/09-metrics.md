@@ -85,6 +85,6 @@ scrape_configs:
 ## 相关文档
 
 - [指标与 Metrics](../concepts/12-metrics.md) - 指标族、标签、feedback 指标与 PromQL 示例
-- [VikingBot 问答效果反馈观测方案设计](../../../bot/docs/vikingbot-feedback-observability-design.md) - feedback 指标与阶段性落地背景
+- [VikingBot 问答效果反馈观测方案设计](https://github.com/volcengine/OpenViking/blob/main/bot/docs/vikingbot-feedback-observability-design.md) - feedback 指标与阶段性落地背景
 - [系统与监控](07-system.md) - 健康检查、系统状态与 Observer API
 - [API 概览](01-overview.md) - 所有 API 端点共享约定

@@ -15,7 +15,7 @@ Phase 1 intentionally keeps the scope narrow:
 - Resources only. Memories, skills, sessions, and other namespaces are not exposed.
 - Text-first writes. `PUT` currently accepts UTF-8 text content only.
 - WebDAV subset only. `OPTIONS`, `PROPFIND`, `GET`, `HEAD`, `PUT`, `DELETE`, `MKCOL`, and `MOVE` are supported.
-- Semantic sidecars stay internal. Derived files such as `.abstract.md`, `.overview.md`, `.relations.json`, and `.path.ovlock` are hidden from listings and cannot be accessed directly through WebDAV.
+- Semantic sidecars and internal system files stay internal. Derived or internal files such as `.abstract.md`, `.overview.md`, `.relations.json`, `.path.ovlock`, `.redirect.json`, and `.sync_log.json` are hidden from listings and cannot be accessed directly through WebDAV.
 
 Behavior notes:
 
@@ -23,6 +23,7 @@ Behavior notes:
 - Replacing an existing file through WebDAV refreshes related semantics and vectors, same as `write()`.
 - `PUT` does not create parent collections automatically. Create missing directories with `MKCOL` first.
 - User-created dot-directories and dot-files remain visible unless they match one of the reserved internal filenames above.
+- When multi-write storage is enabled, files redirected to a backup are still exposed through the filesystem APIs as normal files; internal redirect and sync metadata never become visible to callers.
 
 ## API Reference
 
@@ -130,10 +131,11 @@ Read L2 full content.
 | uri | str | Yes | - | Viking URI |
 | offset | int | No | 0 | Starting line number (0-indexed) |
 | limit | int | No | -1 | Number of lines to read, `-1` means read to end |
+| raw | bool | No | false | Return raw stored content without memory-field cleanup. HTTP API only (Python SDK does not expose it yet). |
 
 **Notes**
 
-- `read()` accepts file URIs only. Passing an existing directory URI returns `INVALID_ARGUMENT` (`400`), not `NOT_FOUND`.
+- `read()` accepts file URIs only. Passing an existing directory URI returns `INVALID_ARGUMENT` (`400`), not `NOT_FOUND`. This error carries a structured `details` payload — `details.expected` is `"file"`, `details.actual` is `"directory"`, and `details.resource` is the offending URI (present on the HTTP path) — so clients can detect a file-vs-directory mismatch programmatically (for example, fall back to `list`) instead of string-matching the message.
 - Public URI parameters accept `resources`, `user`, `agent`, and `session` scopes. Internal scopes such as `temp` and `queue` return `INVALID_URI`.
 
 **Python SDK (Embedded / HTTP)**

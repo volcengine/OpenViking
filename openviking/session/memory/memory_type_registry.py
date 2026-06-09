@@ -9,11 +9,12 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
-from openviking.core.namespace import agent_space_fragment, user_space_fragment
+from openviking.core.namespace import user_space_fragment
 from openviking.prompts.manager import PromptManager
 from openviking.session.memory.dataclass import MemoryField, MemoryTypeSchema
 from openviking.session.memory.merge_op import MergeOp
 from openviking.session.memory.merge_op.base import FieldType
+from openviking.session.memory.utils.template_utils import TemplateUtils
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -57,12 +58,18 @@ class MemoryTypeRegistry:
             )
         logger.info(f"Loaded {loaded} memory schemas from templates: {memory_templates_dir}")
 
-        # Load vaka templates if enabled (overrides default for matching memory_types)
-        if config.memory.enable_vaka_template:
-            vaka_dir = str(Path(memory_templates_dir) / "vaka")
-            if os.path.exists(vaka_dir):
-                vaka_loaded = self.load_from_directory(vaka_dir, replace=True)
-                logger.info(f"Loaded {vaka_loaded} vaka memory schemas from: {vaka_dir}")
+        # Load experimental memory templates when the experimental memory switch is enabled.
+        if getattr(config.memory, "experimental_memory_switch", False):
+            experimental_memory_dir = str(Path(memory_templates_dir) / "experimental_memory")
+            if os.path.exists(experimental_memory_dir):
+                experimental_memory_loaded = self.load_from_directory(
+                    experimental_memory_dir, replace=True
+                )
+                logger.info(
+                    "Loaded %s experimental memory schemas from: %s",
+                    experimental_memory_loaded,
+                    experimental_memory_dir,
+                )
 
         if custom_dir:
             custom_dir_expanded = os.path.expanduser(custom_dir)
@@ -125,24 +132,22 @@ class MemoryTypeRegistry:
             return list(self._types.keys())
         return [mt.memory_type for mt in self._types.values() if mt.enabled]
 
-    def list_search_uris(self, user_space: str, agent_space: str) -> List[str]:
+    def list_search_uris(self, user_space: str) -> List[str]:
         """List all directory URIs for search scope.
 
         Args:
             user_space: User space name
-            agent_space: Agent space name
 
         Returns:
             List of directory URIs from enabled schemas
         """
-        import jinja2
-
         uris = []
         for schema in self.list_all(include_disabled=False):
             if schema.directory:
-                env = jinja2.Environment(autoescape=False)
-                template = env.from_string(schema.directory)
-                dir_path = template.render(user_space=user_space, agent_space=agent_space)
+                dir_path = TemplateUtils.render(
+                    schema.directory,
+                    {"user_space": user_space},
+                )
                 uris.append(dir_path)
         return uris
 
@@ -209,7 +214,6 @@ class MemoryTypeRegistry:
                 description=field_data.get("description", ""),
                 merge_op=MergeOp(field_data.get("merge_op", "patch")),
                 init_value=field_data.get("init_value"),
-                searchable=field_data.get("searchable", False),
             )
             fields.append(field)
 
@@ -219,6 +223,7 @@ class MemoryTypeRegistry:
             fields=fields,
             filename_template=data.get("filename_template", ""),
             content_template=data.get("content_template"),
+            embedding_template=data.get("embedding_template"),
             directory=data.get("directory", ""),
             enabled=data.get("enabled", data.get("enable", True)),
             operation_mode=data.get("operation_mode", "upsert"),
@@ -234,22 +239,18 @@ class MemoryTypeRegistry:
         Skip templates like entities.yaml where filename requires external parameters.
 
         Args:
-            ctx: Request context (must have user with user_space_name and agent_space_name)
+            ctx: Request context.
         """
-        import jinja2
-
         from openviking.storage.viking_fs import get_viking_fs
 
         logger = get_logger(__name__)
 
         user_space = user_space_fragment(ctx) if ctx and ctx.user else "default"
-        agent_space = agent_space_fragment(ctx) if ctx and ctx.user else "default"
 
         logger.info(
-            f"[MemoryTypeRegistry] Starting memory files initialization for user={user_space}, agent={agent_space}"
+            f"[MemoryTypeRegistry] Starting memory files initialization for user={user_space}"
         )
 
-        env = jinja2.Environment(autoescape=False)
         viking_fs = get_viking_fs()
 
         for schema in self.list_all(include_disabled=False):
@@ -270,13 +271,13 @@ class MemoryTypeRegistry:
 
             # Render directory and filename from schema
             try:
-                directory = env.from_string(schema.directory).render(
-                    user_space=user_space,
-                    agent_space=agent_space,
+                directory = TemplateUtils.render(
+                    schema.directory,
+                    {"user_space": user_space},
                 )
-                filename = env.from_string(schema.filename_template).render(
-                    user_space=user_space,
-                    agent_space=agent_space,
+                filename = TemplateUtils.render(
+                    schema.filename_template,
+                    {"user_space": user_space},
                 )
             except Exception:
                 continue

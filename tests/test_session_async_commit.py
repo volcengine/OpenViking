@@ -92,7 +92,7 @@ async def test_commit_endpoint_returns_accepted_with_task_id(api_client):
     if task_id:
         tracker = get_task_tracker()
         for _ in range(300):
-            task = tracker.get(task_id)
+            task = await tracker.get(task_id)
             if task and task.status in (TaskStatus.COMPLETED, TaskStatus.FAILED):
                 break
             await asyncio.sleep(0.1)

@@ -41,23 +41,15 @@ class DummyFS:
 class DummyUser:
     account_id = "default"
     user_id = "default"
-    agent_id = "default-agent"
 
     def user_space_name(self):
-        return "user/default"
-
-    def agent_space_name(self):
-        return "agent/default"
+        return "default"
 
 
 class DummyReq:
     def __init__(self):
         self.user = DummyUser()
         self.account_id = "default"
-        self.namespace_policy = types.SimpleNamespace(
-            isolate_user_scope_by_agent=False,
-            isolate_agent_scope_by_user=False,
-        )
 
 
 @pytest.mark.asyncio
@@ -91,7 +83,7 @@ async def test_vectorize_file_uses_summary_first(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_vectorize_file_truncates_content_when_content_only(monkeypatch):
+async def test_vectorize_file_preserves_content_until_embedder_input_guard(monkeypatch):
     queue = DummyQueue()
     content = " ".join(f"token-{i}" for i in range(200))
     monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
@@ -118,8 +110,7 @@ async def test_vectorize_file_truncates_content_when_content_only(monkeypatch):
 
     assert len(queue.items) == 1
     text = queue.items[0].get_vectorization_text()
-    assert text.endswith("...(truncated for embedding)")
-    assert "token-199" not in text
+    assert text == content
 
 
 @pytest.mark.asyncio

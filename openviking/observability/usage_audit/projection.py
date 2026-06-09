@@ -36,7 +36,6 @@ class UsageAuditProjection:
     token_rows: dict[tuple, int] = field(default_factory=dict)
     retrieval_rows: dict[tuple, tuple[int, int]] = field(default_factory=dict)
     context_rows: dict[tuple, int] = field(default_factory=dict)
-    agent_rows: dict[tuple, tuple[int, str]] = field(default_factory=dict)
     audit_rows: list[tuple] = field(default_factory=list)
     touched_audit_accounts: set[str] = field(default_factory=set)
 
@@ -66,24 +65,26 @@ def safe_float(value: Any, default: float = 0.0) -> float:
 
 def project_events(
     events: Sequence[ObservabilityEvent],
-    *,
-    tz,
 ) -> UsageAuditProjection:
-    """Project generic events into product usage/audit rows."""
+    """Project generic events into product usage/audit rows.
+
+    All time-keyed columns (`date`, `hour_*`) are written in UTC. The
+    user-facing timezone is applied at read time so the same store can serve
+    viewers from any region.
+    """
     token_rows: defaultdict[tuple, int] = defaultdict(int)
     retrieval_rows: defaultdict[tuple, tuple[int, int]] = defaultdict(lambda: (0, 0))
     context_rows: defaultdict[tuple, int] = defaultdict(int)
-    agent_rows: dict[tuple, tuple[int, str]] = {}
     audit_rows: list[tuple] = []
     touched_audit_accounts: set[str] = set()
 
     for event in events:
         account_id = normalize_identity(event.account_id, unknown=True)
         user_id = normalize_identity(event.user_id)
-        agent_id = normalize_identity(event.agent_id)
-        local_dt = _local_dt(event, tz)
-        event_date = local_dt.date().isoformat()
-        created_at = local_dt.isoformat()
+        utc_dt = _utc_dt(event)
+        event_date = utc_dt.date().isoformat()
+        event_hour = int(utc_dt.hour)
+        created_at = utc_dt.isoformat()
         payload = event.payload
 
         if event.event_name == "vlm.call":
@@ -91,8 +92,8 @@ def project_events(
                 token_rows,
                 account_id=account_id,
                 user_id=user_id,
-                agent_id=agent_id,
                 event_date=event_date,
+                event_hour=event_hour,
                 source="vlm",
                 provider=payload.get("provider"),
                 model_name=payload.get("model_name"),
@@ -106,8 +107,8 @@ def project_events(
                 token_rows,
                 account_id=account_id,
                 user_id=user_id,
-                agent_id=agent_id,
                 event_date=event_date,
+                event_hour=event_hour,
                 source="embedding",
                 provider=payload.get("provider"),
                 model_name=payload.get("model_name"),
@@ -121,8 +122,8 @@ def project_events(
                 token_rows,
                 account_id=account_id,
                 user_id=user_id,
-                agent_id=agent_id,
                 event_date=event_date,
+                event_hour=event_hour,
                 source="rerank",
                 provider=payload.get("provider"),
                 model_name=payload.get("model_name"),
@@ -135,30 +136,28 @@ def project_events(
             _project_http_request(
                 event,
                 event_date=event_date,
-                hour=int(local_dt.hour),
+                hour=event_hour,
                 created_at=created_at,
                 retrieval_rows=retrieval_rows,
                 context_rows=context_rows,
                 audit_rows=audit_rows,
                 touched_audit_accounts=touched_audit_accounts,
-                agent_rows=agent_rows,
             )
 
     return UsageAuditProjection(
         token_rows=dict(token_rows),
         retrieval_rows=dict(retrieval_rows),
         context_rows=dict(context_rows),
-        agent_rows=agent_rows,
         audit_rows=audit_rows,
         touched_audit_accounts=touched_audit_accounts,
     )
 
 
-def _local_dt(event: ObservabilityEvent, tz) -> datetime:
+def _utc_dt(event: ObservabilityEvent) -> datetime:
     ts = event.timestamp
     if ts.tzinfo is None:
         ts = ts.replace(tzinfo=timezone.utc)
-    return ts.astimezone(tz)
+    return ts.astimezone(timezone.utc)
 
 
 def _add_token_rows(
@@ -166,8 +165,8 @@ def _add_token_rows(
     *,
     account_id: str,
     user_id: str,
-    agent_id: str,
     event_date: str,
+    event_hour: int,
     source: str,
     provider: Any,
     model_name: Any,
@@ -182,8 +181,8 @@ def _add_token_rows(
         key = (
             account_id,
             user_id,
-            agent_id,
             event_date,
+            event_hour,
             source,
             "input",
             provider_key,
@@ -194,8 +193,8 @@ def _add_token_rows(
         key = (
             account_id,
             user_id,
-            agent_id,
             event_date,
+            event_hour,
             source,
             "output",
             provider_key,
@@ -214,7 +213,6 @@ def _project_http_request(
     context_rows: defaultdict[tuple, int],
     audit_rows: list[tuple],
     touched_audit_accounts: set[str],
-    agent_rows: dict[tuple, tuple[int, str]],
 ) -> None:
     payload = event.payload
     route = str(payload.get("route") or "")
@@ -230,20 +228,25 @@ def _project_http_request(
         unknown=True,
     )
     audit_user = normalize_identity(payload.get("user_id") or event.user_id) or None
-    audit_agent = normalize_identity(payload.get("agent_id") or event.agent_id) or None
     row_user = audit_user or ""
-    row_agent = audit_agent or ""
     status = "success" if 200 <= status_code < 400 else "error"
 
     retrieval_operation = retrieval_operation_for_http(method, route)
     if retrieval_operation:
-        key = (audit_account, row_user, row_agent, event_date, retrieval_operation, status)
+        key = (
+            audit_account,
+            row_user,
+            event_date,
+            hour,
+            retrieval_operation,
+            status,
+        )
         prev_count, prev_results = retrieval_rows[key]
         retrieval_rows[key] = (prev_count + 1, prev_results)
 
     context_operation = context_write_operation_for_http(method, route, status_code)
     if context_operation:
-        key = (audit_account, row_user, row_agent, event_date, hour, context_operation)
+        key = (audit_account, row_user, event_date, hour, context_operation)
         context_rows[key] += 1
 
     audit_rows.append(
@@ -251,7 +254,6 @@ def _project_http_request(
             payload.get("request_id") or event.request_id,
             audit_account,
             audit_user,
-            audit_agent,
             str(payload.get("method") or ""),
             route,
             str(payload.get("api_type") or derive_api_type(route)),
@@ -261,13 +263,6 @@ def _project_http_request(
         )
     )
     touched_audit_accounts.add(audit_account)
-    if audit_agent:
-        agent_key = (audit_account, audit_agent, event_date)
-        prev_count, prev_seen = agent_rows.get(agent_key, (0, ""))
-        agent_rows[agent_key] = (
-            prev_count + 1,
-            max(prev_seen, created_at) if prev_seen else created_at,
-        )
 
 
 def should_skip_audit_route(route: str) -> bool:

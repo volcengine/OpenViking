@@ -38,7 +38,7 @@ results = await client.search(
 
 ## Intent Analysis
 
-IntentAnalyzer uses LLM to analyze query intent and generate 0-5 TypedQueries.
+IntentAnalyzer uses LLM to analyze query intent and generate 0-5 TypedQueries. The model used for this stage is separately configurable via the [`query_planner`](../guides/01-configuration.md#query_planner) config, falling back to `vlm` when unset.
 
 ### Input
 
@@ -92,9 +92,9 @@ Step 5: Convert to MatchedContext
 
 | context_type | Root Directories |
 |--------------|------------------|
-| MEMORY | `viking://user/memories`, `viking://agent/memories` |
+| MEMORY | `viking://user/memories` |
 | RESOURCE | `viking://resources` |
-| SKILL | `viking://agent/skills` |
+| SKILL | `viking://user/skills` |
 
 ### Recursive Search Algorithm
 

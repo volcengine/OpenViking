@@ -6,7 +6,7 @@ Embedding utilities for OpenViking.
 Common logic for creating Context objects and enqueuing them to EmbeddingQueue.
 """
 
-import math
+import base64
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -16,13 +16,12 @@ from openviking.core.namespace import context_type_for_uri, owner_space_for_uri
 from openviking.server.identity import RequestContext
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
-from openviking.storage.viking_fs import get_viking_fs
+from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.utils import VikingURI, get_logger
 from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
-_EMBEDDING_TRUNCATION_SUFFIX = "\n...(truncated for embedding)"
 _PORTABLE_SCALAR_FIELDS = frozenset(
     {
         "type",
@@ -42,45 +41,6 @@ def _apply_scalar_overrides(embedding_msg, overrides: Optional[Dict[str, Any]]) 
         value = overrides.get(field)
         if value is not None:
             embedding_msg.context_data[field] = value
-
-
-def _estimate_embedding_input_tokens(text: str) -> int:
-    """Estimate tokens for the raw text embedding input guard."""
-    if not text:
-        return 0
-    cjk_chars = sum(
-        1
-        for char in text
-        if "\u4e00" <= char <= "\u9fff"
-        or "\u3040" <= char <= "\u30ff"
-        or "\uac00" <= char <= "\ud7af"
-    )
-    other_chars = len(text) - cjk_chars
-    return max(1, cjk_chars + math.ceil(other_chars / 4))
-
-
-def _truncate_embedding_input(
-    text: str,
-    max_tokens: int,
-    suffix: str = _EMBEDDING_TRUNCATION_SUFFIX,
-) -> str:
-    """Trim raw text before embedding using the local estimate above."""
-    if not text:
-        return text
-    if max_tokens <= 0:
-        return suffix.lstrip()
-    if _estimate_embedding_input_tokens(text) <= max_tokens:
-        return text
-
-    low = 0
-    high = len(text)
-    while low < high:
-        mid = (low + high + 1) // 2
-        if _estimate_embedding_input_tokens(text[:mid]) <= max_tokens:
-            low = mid
-        else:
-            high = mid - 1
-    return text[:low].rstrip() + suffix
 
 
 async def _decrement_embedding_tracker(semantic_msg_id: Optional[str], count: int) -> None:
@@ -233,6 +193,42 @@ def get_resource_content_type(file_name: str) -> Optional[ResourceContentType]:
         return ResourceContentType.AUDIO
 
     return None
+
+
+_IMAGE_MIME_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".bmp": "image/bmp",
+    ".svg": "image/svg+xml",
+    ".webp": "image/webp",
+}
+
+
+def _image_mime_type(file_name: str) -> str:
+    """Resolve the MIME type for an image file based on its extension."""
+    _, ext = os.path.splitext(file_name.lower())
+    return _IMAGE_MIME_TYPES.get(ext, "image/png")
+
+
+async def _build_image_data_uri(
+    file_path: str,
+    file_name: str,
+    viking_fs,
+    ctx: Optional[RequestContext],
+) -> Optional[str]:
+    """Read an image file and encode it as a base64 ``data:`` URI.
+
+    Returns None if the image cannot be read.
+    """
+    try:
+        content = await viking_fs.read_file_bytes(file_path, ctx=ctx)
+        encoded = base64.b64encode(content).decode("ascii")
+        return f"data:{_image_mime_type(file_name)};base64,{encoded}"
+    except Exception as e:
+        logger.warning(f"Failed to read image for multimodal vectorization {file_path}: {e}")
+        return None
 
 
 async def vectorize_directory_meta(
@@ -394,7 +390,7 @@ async def vectorize_file(
         embedding_cfg = get_openviking_config().embedding
         configured_text_source = getattr(embedding_cfg, "text_source", "content_only")
         effective_text_source = "summary_only" if use_summary else configured_text_source
-        max_input_tokens = int(getattr(embedding_cfg, "max_input_tokens", 4096) or 4096)
+        image_vectorization = getattr(embedding_cfg, "image_vectorization", "summary_only")
 
         if content_type is None:
             # Unsupported file type: fall back to summary if available
@@ -412,12 +408,11 @@ async def vectorize_file(
             if summary and effective_text_source in {"summary_first", "summary_only"}:
                 context.set_vectorize(Vectorize(text=summary))
             else:
-                # Read raw file content and apply configured truncation guard.
+                # Read raw file content; embedders apply their own input guard.
                 try:
                     content = await viking_fs.read_file(file_path, ctx=ctx)
                     if isinstance(content, bytes):
                         content = content.decode("utf-8", errors="replace")
-                    content = _truncate_embedding_input(content, max_input_tokens)
                     context.set_vectorize(Vectorize(text=content))
                 except Exception as e:
                     logger.warning(
@@ -430,6 +425,23 @@ async def vectorize_file(
                             f"No summary available for {file_path}, skipping vectorization"
                         )
                         return
+        elif content_type == ResourceContentType.IMAGE and image_vectorization in {
+            "image_only",
+            "image_and_summary",
+        }:
+            # Multimodal: embed the image itself (optionally with its text summary).
+            image_uri = await _build_image_data_uri(file_path, file_name, viking_fs, ctx)
+            if image_uri:
+                text = summary if image_vectorization == "image_and_summary" else ""
+                context.set_vectorize(Vectorize(text=text, images=[image_uri]))
+            elif summary:
+                # Could not load image; fall back to summary text.
+                context.set_vectorize(Vectorize(text=summary))
+            else:
+                logger.debug(
+                    f"Skipping image {file_path} (image unreadable and no summary available)"
+                )
+                return
         elif summary:
             # For non-text files, use summary
             context.set_vectorize(Vectorize(text=summary))
@@ -495,7 +507,7 @@ async def index_resource(
 
     # 2. Index Files
     try:
-        files = await viking_fs.ls(uri, ctx=ctx)
+        files = await viking_fs.ls(uri, node_limit=LS_ALL_NODES, ctx=ctx)
         for file_info in files:
             file_name = file_info["name"]
 

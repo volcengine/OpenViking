@@ -115,7 +115,7 @@ We warmly invite developers worldwide to join the OpenViking community and co-bu
 
 Scan the QR code below to join the Lark group and communicate with the core development team in real time:
 
-![Join via Lark QR](/lark-group-qrcode.png)
+![Join via Lark QR](../../images/lark-group-qrcode.png)
 
 *Note: Please ensure you have installed the [Lark client](https://www.feishu.cn/) before joining.*
 
@@ -123,7 +123,7 @@ Scan the QR code below to join the Lark group and communicate with the core deve
 
 Scan the QR code below to add the assistant on WeChat, mention "OpenViking" and you will be invited to the WeChat group:
 
-![Join via WeChat QR](/wechat-group-qrcode.png)
+![Join via WeChat QR](../../images/wechat-group-qrcode.png)
 
 **Discord**
 

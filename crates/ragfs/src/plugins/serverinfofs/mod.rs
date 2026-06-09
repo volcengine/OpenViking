@@ -49,7 +49,13 @@ impl ServerInfoFileSystem {
 }}"#,
             self.version,
             format_duration(uptime),
-            format_timestamp(UNIX_EPOCH.elapsed().unwrap_or(Duration::from_secs(0)).as_secs() - uptime_secs),
+            format_timestamp(
+                UNIX_EPOCH
+                    .elapsed()
+                    .unwrap_or(Duration::from_secs(0))
+                    .as_secs()
+                    - uptime_secs
+            ),
             env!("CARGO_PKG_RUST_VERSION")
         )
     }
@@ -128,19 +134,27 @@ VERSION: 1.0.0
 #[async_trait]
 impl FileSystem for ServerInfoFileSystem {
     async fn create(&self, _path: &str) -> Result<()> {
-        Err(Error::plugin("operation not permitted: serverinfofs is read-only".to_string()))
+        Err(Error::plugin(
+            "operation not permitted: serverinfofs is read-only".to_string(),
+        ))
     }
 
     async fn mkdir(&self, _path: &str, _mode: u32) -> Result<()> {
-        Err(Error::plugin("operation not permitted: serverinfofs is read-only".to_string()))
+        Err(Error::plugin(
+            "operation not permitted: serverinfofs is read-only".to_string(),
+        ))
     }
 
     async fn remove(&self, _path: &str) -> Result<()> {
-        Err(Error::plugin("operation not permitted: serverinfofs is read-only".to_string()))
+        Err(Error::plugin(
+            "operation not permitted: serverinfofs is read-only".to_string(),
+        ))
     }
 
     async fn remove_all(&self, _path: &str) -> Result<()> {
-        Err(Error::plugin("operation not permitted: serverinfofs is read-only".to_string()))
+        Err(Error::plugin(
+            "operation not permitted: serverinfofs is read-only".to_string(),
+        ))
     }
 
     async fn read(&self, path: &str, offset: u64, size: u64) -> Result<Vec<u8>> {
@@ -185,8 +199,16 @@ impl FileSystem for ServerInfoFileSystem {
         }
     }
 
-    async fn write(&self, _path: &str, _data: &[u8], _offset: u64, _flags: WriteFlag) -> Result<u64> {
-        Err(Error::plugin("operation not permitted: serverinfofs is read-only".to_string()))
+    async fn write(
+        &self,
+        _path: &str,
+        _data: &[u8],
+        _offset: u64,
+        _flags: WriteFlag,
+    ) -> Result<u64> {
+        Err(Error::plugin(
+            "operation not permitted: serverinfofs is read-only".to_string(),
+        ))
     }
 
     async fn read_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
@@ -205,9 +227,21 @@ impl FileSystem for ServerInfoFileSystem {
 
         Ok(vec![
             FileInfo::new("README".to_string(), readme.len() as u64, 0o444, now, false),
-            FileInfo::new("server_info".to_string(), server_info.len() as u64, 0o444, now, false),
+            FileInfo::new(
+                "server_info".to_string(),
+                server_info.len() as u64,
+                0o444,
+                now,
+                false,
+            ),
             FileInfo::new("uptime".to_string(), uptime.len() as u64, 0o444, now, false),
-            FileInfo::new("version".to_string(), version.len() as u64, 0o444, now, false),
+            FileInfo::new(
+                "version".to_string(),
+                version.len() as u64,
+                0o444,
+                now,
+                false,
+            ),
             FileInfo::new("stats".to_string(), stats.len() as u64, 0o444, now, false),
         ])
     }
@@ -234,15 +268,25 @@ impl FileSystem for ServerInfoFileSystem {
         };
 
         let name = path.strip_prefix('/').unwrap_or(path);
-        Ok(FileInfo::new(name.to_string(), data.len() as u64, 0o444, now, false))
+        Ok(FileInfo::new(
+            name.to_string(),
+            data.len() as u64,
+            0o444,
+            now,
+            false,
+        ))
     }
 
     async fn rename(&self, _old_path: &str, _new_path: &str) -> Result<()> {
-        Err(Error::plugin("operation not permitted: serverinfofs is read-only".to_string()))
+        Err(Error::plugin(
+            "operation not permitted: serverinfofs is read-only".to_string(),
+        ))
     }
 
     async fn chmod(&self, _path: &str, _mode: u32) -> Result<()> {
-        Err(Error::plugin("operation not permitted: serverinfofs is read-only".to_string()))
+        Err(Error::plugin(
+            "operation not permitted: serverinfofs is read-only".to_string(),
+        ))
     }
 }
 

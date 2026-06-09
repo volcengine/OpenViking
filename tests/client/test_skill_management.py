@@ -8,15 +8,15 @@ from types import SimpleNamespace
 
 from openviking import AsyncOpenViking
 from openviking.client import LocalClient
-from openviking.core.namespace import canonical_agent_root
+from openviking.core.namespace import canonical_user_root
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.expr import PathScope
 from openviking.telemetry import get_current_telemetry
 from openviking_cli.session.user_id import UserIdentifier
 
 
-def _agent_skills_root(client: AsyncOpenViking) -> str:
-    return f"{canonical_agent_root(client._client._ctx)}/skills"
+def _user_skills_root(client: AsyncOpenViking) -> str:
+    return f"{canonical_user_root(client._client._ctx)}/skills"
 
 
 class TestAddSkill:
@@ -55,7 +55,7 @@ Use this skill when you need to test skill functionality.
         assert "root_uri" in result
         assert "uri" in result
         assert result["root_uri"] == result["uri"]
-        assert result["uri"].startswith(f"{_agent_skills_root(client)}/")
+        assert result["uri"].startswith(f"{_user_skills_root(client)}/")
 
         abstract = await client.abstract(result["uri"])
         assert "name: test-skill" in abstract
@@ -83,7 +83,7 @@ This skill was created from a string.
         result = await client.add_skill(data=skill_content)
 
         assert "uri" in result
-        assert result["uri"].startswith(f"{_agent_skills_root(client)}/")
+        assert result["uri"].startswith(f"{_user_skills_root(client)}/")
 
         abstract = await client.abstract(result["uri"])
         assert "name: string-skill" in abstract
@@ -108,7 +108,7 @@ This skill was created from a string.
             seen["telemetry_id"] = telemetry.telemetry_id
             seen["kwargs"] = kwargs
             return {
-                "uri": "viking://agent/skills/waited-skill",
+                "uri": "viking://user/default/skills/waited-skill",
                 "queue_status": queue_status,
             }
 
@@ -128,7 +128,7 @@ This skill was created from a string.
             telemetry=False,
         )
 
-        assert result["uri"] == "viking://agent/skills/waited-skill"
+        assert result["uri"] == "viking://user/default/skills/waited-skill"
         assert result["queue_status"] == queue_status
         assert seen["enabled"] is True
         assert str(seen["telemetry_id"]).startswith("tm_")
@@ -148,7 +148,7 @@ This skill was created from a string.
         result = await client.add_skill(data=mcp_tool)
 
         assert "uri" in result
-        assert result["uri"].startswith(f"{_agent_skills_root(client)}/")
+        assert result["uri"].startswith(f"{_user_skills_root(client)}/")
 
     async def test_add_skill_from_directory(self, client: AsyncOpenViking, temp_dir: Path):
         """Test adding skill from directory"""
@@ -178,7 +178,7 @@ This skill was loaded from a directory.
         result = await client.add_skill(data=skill_dir)
 
         assert "uri" in result
-        assert result["uri"].startswith(f"{_agent_skills_root(client)}/")
+        assert result["uri"].startswith(f"{_user_skills_root(client)}/")
 
 
 class TestSkillSearch:
@@ -210,10 +210,10 @@ Use this skill to test search functionality.
 
         assert hasattr(result, "skills")
 
-    async def test_add_skill_indexes_canonical_agent_uri(
+    async def test_add_skill_indexes_canonical_user_uri(
         self, client: AsyncOpenViking, temp_dir: Path
     ):
-        """Skill vectors should be stored under the canonical agent root."""
+        """Skill vectors should be stored under the canonical user root."""
         skill_file = temp_dir / "canonical_scope_skill.md"
         skill_file.write_text(
             """---
@@ -232,8 +232,8 @@ Use this skill to test canonical URI vector indexing.
         )
 
         result = await client.add_skill(data=skill_file, wait=True)
-        canonical_uri = f"{_agent_skills_root(client)}/canonical-scope-skill"
-        short_uri = "viking://agent/skills/canonical-scope-skill"
+        canonical_uri = f"{_user_skills_root(client)}/canonical-scope-skill"
+        short_uri = "viking://user/skills/canonical-scope-skill"
 
         assert result["uri"] == canonical_uri
 

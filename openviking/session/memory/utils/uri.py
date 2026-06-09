@@ -9,20 +9,9 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, Set
 
-import jinja2
-
 from openviking.session.memory.dataclass import MemoryTypeSchema
 from openviking.session.memory.utils.model import model_to_dict
-
-
-def _render_jinja_template(template: str, context: Dict[str, Any]) -> str:
-    """Render a Jinja2 template with the given context."""
-    env = jinja2.Environment(
-        autoescape=False,
-        keep_trailing_newline=True,
-    )
-    jinja_template = env.from_string(template)
-    return jinja_template.render(**context)
+from openviking.session.memory.utils.template_utils import TemplateUtils
 
 
 def render_template(
@@ -44,24 +33,18 @@ def render_template(
     Returns:
         Rendered template string
     """
-    # 创建 Jinja2 环境，允许未定义的变量（打印警告但不报错）
-    env = jinja2.Environment(autoescape=False, undefined=jinja2.DebugUndefined)
-
-    # 创建模板变量
-    template_vars = fields.copy()
-    # 始终传入 extract_context，即使是 None，避免模板中访问时 undefined
-    template_vars["extract_context"] = extract_context
-
-    # 渲染模板
-    jinja_template = env.from_string(template)
-    return jinja_template.render(**template_vars).strip()
+    return TemplateUtils.render(
+        template,
+        fields,
+        extract_context=extract_context,
+        debug_undefined=True,
+    )
 
 
 def generate_uri(
     memory_type: MemoryTypeSchema,
     fields: Dict[str, Any],
     user_space: str = "default",
-    agent_space: str = "default",
     extract_context: Any = None,
 ) -> tuple[str, str]:
     """
@@ -71,7 +54,6 @@ def generate_uri(
         memory_type: The memory type schema with directory and filename_template
         fields: The field values to use for template replacement
         user_space: The user space to substitute for {{ user_space }}
-        agent_space: The agent space to substitute for {{ agent_space }}
         extract_context: ExtractContext instance for template rendering (same as content_template)
 
     Returns:
@@ -83,14 +65,20 @@ def generate_uri(
     # Build the URI template from directory and filename_template
 
     dir_template = memory_type.directory
-    uri_template = f"{dir_template}/{memory_type.filename_template}"
-    # Build the context for Jinja2 rendering - include user_space and agent_space
-    context = {
-        "user_space": user_space,
-        "agent_space": agent_space,
-    }
+    filename_template = memory_type.filename_template
+    if dir_template and filename_template:
+        uri_template = f"{dir_template.rstrip('/')}/{filename_template.lstrip('/')}"
+    else:
+        uri_template = dir_template or filename_template
+    context = {"user_space": user_space}
     # Add all fields to context (uri_fields with actual values)
     context.update(fields)
+    template_vars = set(re.findall(r"\{\{\s*(\w+)\s*\}\}", uri_template))
+    for var in template_vars:
+        if var not in context:
+            raise ValueError(f"Missing template variable: {var}")
+        if context[var] is None:
+            raise ValueError(f"Template variable '{var}' has None value")
     # Render using unified render_template method (same as content_template)
     uri = render_template(uri_template, context, extract_context)
     return uri
@@ -115,8 +103,7 @@ def validate_uri_template(memory_type: MemoryTypeSchema) -> bool:
         # Match Jinja2 {{ variable }} patterns
         template_vars = set(re.findall(r"\{\{\s*(\w+)\s*\}\}", memory_type.filename_template))
 
-        # {{ user_space }} and {{ agent_space }} are built-in, not from fields
-        built_in_vars = {"user_space", "agent_space"}
+        built_in_vars = {"user_space"}
         required_field_vars = template_vars - built_in_vars
 
         for var in required_field_vars:

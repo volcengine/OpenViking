@@ -22,7 +22,6 @@ async def _seed(
     to_uri="viking://resources/test/foo",
     account="default",
     user="default",
-    agent="default",
     role="user",
     interval=60.0,
     path="https://example.com/foo",
@@ -31,7 +30,6 @@ async def _seed(
         path=path,
         account_id=account,
         user_id=user,
-        agent_id=agent,
         original_role=role,
         to_uri=to_uri,
         watch_interval=interval,
@@ -166,8 +164,7 @@ async def test_dual_key_mismatch_returns_400(client: httpx.AsyncClient, watch_ma
 async def test_delete_missing_key_400(client: httpx.AsyncClient):
     """DELETE /watches without {task_id} path and without ?to_uri= must 400."""
     resp = await client.delete("/api/v1/watches")
-    # The by-uri route requires to_uri as a Query(...) so FastAPI will 422 it.
-    assert resp.status_code == 422
+    assert resp.status_code == 400
 
 
 async def test_not_found_404(client: httpx.AsyncClient):
@@ -186,7 +183,7 @@ async def test_patch_rejects_non_positive_watch_interval(client: httpx.AsyncClie
     to WatchManager.update_task, which deactivates the task and stores the
     bad cadence. A later resume (`is_active=true`) then fails inside
     update_task with ValueError → 404, misleading callers about the root
-    cause. Reject upfront with 422 instead, matching CLI/MCP semantics.
+    cause. Reject upfront through the structured 400 error mapper.
     """
     task = await _seed(watch_manager, to_uri="viking://resources/test/nonpos")
     for bad in [-1, 0, -42.5]:
@@ -194,14 +191,14 @@ async def test_patch_rejects_non_positive_watch_interval(client: httpx.AsyncClie
             f"/api/v1/watches/{task.task_id}",
             json={"watch_interval": bad},
         )
-        assert resp.status_code == 422, (
-            f"watch_interval={bad} should be 422, got {resp.status_code}: {resp.text[:200]}"
+        assert resp.status_code == 400, (
+            f"watch_interval={bad} should be 400, got {resp.status_code}: {resp.text[:200]}"
         )
 
 
 async def test_patch_rejects_unknown_field(client: httpx.AsyncClient, watch_manager):
     """UpdateWatchRequest has extra='forbid'; passing a field outside the allowed
-    set (watch_interval / is_active / reason / instruction) returns 422.
+    set (watch_interval / is_active / reason / instruction) returns 400.
 
     Note: `to_uri` is intentionally NOT exposed via PATCH. WatchManager's
     update_task supports rebinding to_uri (which is the only mutation that can
@@ -213,7 +210,7 @@ async def test_patch_rejects_unknown_field(client: httpx.AsyncClient, watch_mana
         f"/api/v1/watches/{task.task_id}",
         json={"to_uri": "viking://resources/test/other"},
     )
-    assert resp.status_code == 422
+    assert resp.status_code == 400
 
 
 async def test_trigger_by_uri(client: httpx.AsyncClient, watch_manager, monkeypatch):

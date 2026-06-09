@@ -10,7 +10,6 @@ definitions, with discriminator support for polymorphic fields.
 import re
 from typing import Annotated, Any, Dict, List, Optional, Tuple, Type, Union
 
-import jinja2
 from pydantic import BaseModel, Field, WithJsonSchema, create_model
 from pydantic.config import ConfigDict
 
@@ -18,6 +17,7 @@ from openviking.session.memory.dataclass import FaultTolerantBaseModel, MemoryTy
 from openviking.session.memory.memory_isolation_handler import RoleScope
 from openviking.session.memory.merge_op import MergeOp, MergeOpFactory
 from openviking.session.memory.merge_op.base import FieldType, get_python_type_for_field
+from openviking.session.memory.utils.template_utils import TemplateUtils
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -47,7 +47,6 @@ class SchemaModelGenerator:
     ):
         self.schemas = schemas
         self._template_context = dict(template_context or {})
-        self._template_env = jinja2.Environment(autoescape=False)
         self._model_cache: Dict[str, Type[BaseModel]] = {}
         self._flat_data_models: Dict[str, Type[BaseModel]] = {}
         self._union_model: Optional[Type[BaseModel]] = None
@@ -58,7 +57,11 @@ class SchemaModelGenerator:
             return description
         if "{{" not in description and "{%" not in description and "{#" not in description:
             return description
-        return self._template_env.from_string(description).render(**self._template_context)
+        return TemplateUtils.render(
+            description,
+            self._template_context,
+            strip=False,
+        )
 
     def _map_field_type(self, field_type: FieldType) -> Type[Any]:
         """Map YAML field type to Python type."""
@@ -75,18 +78,18 @@ class SchemaModelGenerator:
 
         Args:
             memory_type: The memory type schema
-            role_scope: Role scope to determine if user_id/agent_id fields are needed
+            role_scope: Role scope to determine if peer_id fields are needed
 
         Returns:
             Dynamically created flat Pydantic model class
         """
         # Determine cache key based on role_scope
-        if role_scope and len(role_scope.user_ids) > 1:
-            cache_key = f"{memory_type.memory_type}_multi_user"
-            model_name = f"{to_pascal_case(memory_type.memory_type)}DataMultiUser"
-        else:
-            cache_key = memory_type.memory_type
-            model_name = f"{to_pascal_case(memory_type.memory_type)}Data"
+        has_peer_scope = bool(role_scope and role_scope.peer_ids)
+        cache_key = memory_type.memory_type
+        model_name = f"{to_pascal_case(memory_type.memory_type)}Data"
+        if has_peer_scope:
+            cache_key = f"{cache_key}_peer"
+            model_name = f"{model_name}Peer"
 
         # Check cache for both single and multi-user cases
         if cache_key in self._flat_data_models:
@@ -95,18 +98,21 @@ class SchemaModelGenerator:
         # Build field definitions - no memory_type field needed
         field_definitions: Dict[str, Tuple[Type[Any], Any]] = {}
 
-        # Add user_id and agent_id fields when multiple users are in scope
-        # Skip if schema has "ranges" field (like events) - these are message-based and don't need user isolation
+        # Skip if schema has "ranges" field (like events) - these are message-based and
+        # their self/peer targets are derived from message ranges instead of explicit routing fields.
         has_ranges = any(field.name == "ranges" for field in memory_type.fields)
-        if role_scope and len(role_scope.user_ids) > 1 and not has_ranges:
-            field_definitions["user_id"] = (
-                str,
-                Field(..., description="User ID to distinguish which user's memory to write"),
-            )
-        if role_scope and len(role_scope.agent_ids) > 1 and not has_ranges:
-            field_definitions["agent_id"] = (
-                str,
-                Field(..., description="Agent ID to distinguish which agent's memory to write"),
+        if has_peer_scope and not has_ranges:
+            peer_values = ", ".join(role_scope.peer_ids)
+            field_definitions["peer_id"] = (
+                Optional[str],
+                Field(
+                    None,
+                    description=(
+                        "Stable peer identity to write peer memory for. "
+                        "Use only when the memory describes a peer instead of the current user. "
+                        f"Available peer_id values in this session: {peer_values}"
+                    ),
+                ),
             )
 
         field_definitions["page_id"] = (
@@ -243,7 +249,7 @@ class SchemaModelGenerator:
 
         for mt in enabled_memory_types:
             flat_model = self.create_flat_data_model(mt, role_scope)
-            # Always use List to support multiple users' memories (e.g., identity for different user_id/agent_id)
+            # Always use List to support multiple users' memories.
             field_definitions[mt.memory_type] = (
                 List[flat_model],  # type: ignore
                 Field(
@@ -335,6 +341,9 @@ class SchemaModelGenerator:
         StructuredMemoryOperations.is_empty = is_empty
         StructuredMemoryOperations.to_legacy_operations = to_legacy_operations
         StructuredMemoryOperations._memory_type_fields = memory_type_fields  # type: ignore
+        # Opt this model into treating a bare `[]` LLM response as an empty-ops result
+        # (every field is default_factory=list); see parse_json_with_stability Layer 3.
+        StructuredMemoryOperations._allow_empty_list_response = True  # type: ignore
 
         self._operations_model = StructuredMemoryOperations
         return self._operations_model
@@ -365,14 +374,11 @@ class SchemaPromptGenerator:
     ):
         self.schemas = schemas
         self._template_context = dict(template_context or {})
-        self._template_env = jinja2.Environment(autoescape=False)
 
     def _render_description(self, description: str) -> str:
         if not description:
             return description
-        if "{{" not in description and "{%" not in description and "{#" not in description:
-            return description
-        return self._template_env.from_string(description).render(**self._template_context)
+        return TemplateUtils.render(description, self._template_context)
 
     def generate_type_descriptions(self) -> str:
         """
@@ -400,7 +406,6 @@ class SchemaPromptGenerator:
                 # Add variable substitution info
                 lines.append("\n**Variable Substitution:**")
                 lines.append("- `{{ user_space }}` → 'default'")
-                lines.append("- `{{ agent_space }}` → 'default'")
                 if mt.fields:
                     for field in mt.fields:
                         lines.append(f"- `{{ {field.name} }}` → use value from fields")

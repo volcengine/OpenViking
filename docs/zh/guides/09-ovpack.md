@@ -13,18 +13,30 @@ checksum，保证包内容没有偏离 manifest；如果攻击者能同时篡改
 
 - `viking://resources/...`
 - `viking://user/...`
-- `viking://agent/...`
 - `viking://session/...`
 
 全量迁移使用单独的 `backup/restore`，它会把公开 scope root 一起打进备份包：
 
 - `viking://resources`
 - `viking://user`
-- `viking://agent`
 - `viking://session`
 
 `temp`、`queue`、`upload`、锁文件、watch control 文件、`.relations.json` 等内部或运行态数据
 不属于 OVPack 迁移范围。
+
+## 与多写存储配合
+
+多写存储只复制启用之后的新写入，不会自动同步启用之前已经存在的历史文件。将已有环境迁移到多写模式时，建议先用 OVPack 完成存量数据迁移，再开启 `storage.agfs.backups`。
+
+推荐流程：
+
+1. 使用 `ov backup` 或 `ov export` 导出现有内容。
+2. 在目标存储环境恢复或导入数据。
+3. 校验目标环境内容和索引状态。
+4. 配置并启用多写存储。
+5. 恢复正常写入，让后续增量由多写机制复制。
+
+更多说明见 [多写存储指南](./13-multi-write-storage.md)。
 
 ## 快速开始
 
@@ -307,7 +319,7 @@ type, context_type, level, name, description, tags, abstract
 这些字段不会从包里直接恢复，而是在目标环境重新生成：
 
 ```text
-id, uri, account_id, owner_user_id, owner_agent_id, owner_space,
+id, uri, account_id, owner_user_id, owner_space,
 created_at, updated_at, active_count
 ```
 
@@ -386,11 +398,11 @@ ov export viking://user/default/memories ./exports/user-memories.ovpack
 ov import ./exports/user-memories.ovpack viking://user/default/ --on-conflict overwrite
 ```
 
-Agent 记忆：
+用户记忆：
 
 ```bash
-ov export viking://agent/default/memories ./exports/agent-memories.ovpack
-ov import ./exports/agent-memories.ovpack viking://agent/default/ --on-conflict overwrite
+ov export viking://user/default/memories ./exports/agent-memories.ovpack
+ov import ./exports/agent-memories.ovpack viking://user/default/ --on-conflict overwrite
 ```
 
 Session 只恢复文件状态，不触发向量化：

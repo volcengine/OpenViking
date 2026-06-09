@@ -11,7 +11,11 @@ from typing import Any, Iterable, Optional
 
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.transaction.lock_handle import LockHandle
-from openviking.storage.transaction.lock_manager import LockManager, get_lock_manager
+from openviking.storage.transaction.lock_manager import (
+    LOCK_TIMEOUT_DEFAULT,
+    LockManager,
+    get_lock_manager,
+)
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -126,9 +130,9 @@ class OwnedLockLease(LockLease):
         manager: Optional[LockManager] = None,
     ) -> "OwnedLockLease":
         manager = manager or get_lock_manager()
-        handle = manager.get_handle(ref.handle_id)
+        handle = await manager.get_handle_async(ref.handle_id)
         if handle is None:
-            handle = manager.adopt_handle(ref.handle_id, ref.lock_paths)
+            handle = await manager.adopt_handle_async(ref.handle_id, ref.lock_paths)
         if handle is None:
             raise LockAcquisitionError(f"Lock handle is no longer active: {ref.handle_id}")
         return cls(manager, handle)
@@ -139,7 +143,7 @@ class OwnedLockLease(LockLease):
         manager: LockManager,
         path: str,
         *,
-        timeout: Optional[float] = None,
+        timeout: Any = LOCK_TIMEOUT_DEFAULT,
     ) -> "OwnedLockLease":
         handle = manager.create_handle()
         if await manager.acquire_tree(handle, path, timeout=timeout):
@@ -153,7 +157,7 @@ class OwnedLockLease(LockLease):
         manager: LockManager,
         paths: Iterable[str],
         *,
-        timeout: Optional[float] = None,
+        timeout: Any = LOCK_TIMEOUT_DEFAULT,
     ) -> "OwnedLockLease":
         handle = manager.create_handle()
         path_list = list(paths)

@@ -27,7 +27,7 @@ async def get_task(
 ):
     """Get the status of a single background task."""
     tracker = get_task_tracker()
-    task = tracker.get(
+    task = await tracker.get(
         task_id,
         account_id=_ctx.account_id,
         user_id=_ctx.user.user_id,
@@ -53,7 +53,7 @@ async def list_tasks(
 ):
     """List background tasks with optional filters."""
     tracker = get_task_tracker()
-    tasks = tracker.list_tasks(
+    tasks = await tracker.list_tasks(
         task_type=task_type,
         status=status,
         resource_id=resource_id,

@@ -19,6 +19,7 @@ from openviking.parse.parsers.constants import (
     FILE_TYPE_DOCUMENTATION,
     FILE_TYPE_OTHER,
 )
+from openviking.parse.image_rewrite import rewrite_image_uris
 from openviking.parse.parsers.media.utils import (
     generate_audio_summary,
     generate_image_summary,
@@ -27,6 +28,7 @@ from openviking.parse.parsers.media.utils import (
 )
 from openviking.prompts import render_prompt
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.semantic_dag import DagStats, SemanticDagExecutor
 from openviking.storage.queuefs.semantic_lock import SemanticLockScope
@@ -34,7 +36,7 @@ from openviking.storage.queuefs.semantic_msg import SemanticMsg, build_semantic_
 from openviking.storage.queuefs.semantic_queue import is_semantic_msg_stale
 from openviking.storage.queuefs.semantic_sidecar import write_semantic_sidecars
 from openviking.storage.transaction import NO_LOCK, LockLease
-from openviking.storage.viking_fs import get_viking_fs
+from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.telemetry import bind_telemetry, bind_telemetry_stage, resolve_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.span_models import create_root_span_attributes
@@ -43,7 +45,7 @@ from openviking.utils.circuit_breaker import (
     CircuitBreakerOpen,
     classify_api_error,
 )
-from openviking.utils.model_retry import ERROR_CLASS_PERMANENT
+from openviking.utils.model_retry import ERROR_CLASS_INPUT_TOO_LARGE, ERROR_CLASS_PERMANENT
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import VikingURI
 from openviking_cli.utils.config import get_openviking_config
@@ -61,6 +63,13 @@ class DiffResult:
     updated_files: List[str] = field(default_factory=list)
     added_dirs: List[str] = field(default_factory=list)
     deleted_dirs: List[str] = field(default_factory=list)
+
+    def to_changes(self) -> Dict[str, List[str]]:
+        return {
+            "added": self.added_files + self.added_dirs,
+            "modified": self.updated_files,
+            "deleted": self.deleted_files + self.deleted_dirs,
+        }
 
 
 class RequestQueueStats:
@@ -88,7 +97,7 @@ class SemanticProcessor(DequeueHandlerBase):
     _request_stats_order: List[str] = []
     _max_cached_stats = 256
 
-    def __init__(self, max_concurrent_llm: int = 100):
+    def __init__(self, max_concurrent_llm: int = 64):
         """
         Initialize SemanticProcessor.
 
@@ -96,9 +105,7 @@ class SemanticProcessor(DequeueHandlerBase):
             max_concurrent_llm: Maximum concurrent LLM calls
         """
         self.max_concurrent_llm = max_concurrent_llm
-        self._dag_executor: Optional[SemanticDagExecutor] = None
-        self._current_ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
-        self._current_msg: Optional[SemanticMsg] = None
+        self._default_ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
         self._circuit_breaker = CircuitBreaker()
 
     @classmethod
@@ -162,7 +169,7 @@ class SemanticProcessor(DequeueHandlerBase):
     def _ctx_from_semantic_msg(msg: SemanticMsg) -> RequestContext:
         role = Role(msg.role) if msg.role in {r.value for r in Role} else Role.ROOT
         return RequestContext(
-            user=UserIdentifier(msg.account_id, msg.user_id, msg.agent_id),
+            user=UserIdentifier(msg.account_id, msg.user_id),
             role=role,
         )
 
@@ -232,6 +239,25 @@ class SemanticProcessor(DequeueHandlerBase):
         else:
             logger.warning(f"No queue manager available, cannot re-enqueue: {msg.uri}")
 
+    async def _requeue_semantic_msg_after_error(
+        self,
+        msg: SemanticMsg,
+        data: Optional[Dict[str, Any]],
+        error: Exception,
+    ) -> None:
+        try:
+            await self._reenqueue_semantic_msg(msg)
+            self._merge_request_stats(msg.telemetry_id, requeue_count=1)
+            get_request_wait_tracker().record_semantic_requeue(msg.telemetry_id)
+            self.report_requeue()
+        except Exception as requeue_err:
+            logger.error(f"Failed to re-enqueue semantic message: {requeue_err}")
+            self._merge_request_stats(msg.telemetry_id, error_count=1)
+            get_request_wait_tracker().mark_semantic_failed(msg.telemetry_id, msg.id, str(error))
+            self.report_error(str(error), data)
+            return
+        self.report_success()
+
     async def _enqueue_parent_refresh(self, msg: SemanticMsg, uri: str) -> None:
         if msg.context_type not in {"resource", "skill"}:
             return
@@ -258,7 +284,7 @@ class SemanticProcessor(DequeueHandlerBase):
             recursive=False,
             account_id=msg.account_id,
             user_id=msg.user_id,
-            agent_id=msg.agent_id,
+            peer_id=msg.peer_id,
             role=msg.role,
             skip_vectorization=msg.skip_vectorization,
             changes={"modified": [uri]},
@@ -267,7 +293,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 uri=parent_uri,
                 account_id=msg.account_id,
                 user_id=msg.user_id,
-                agent_id=msg.agent_id,
+                peer_id=msg.peer_id,
             ),
         )
         await semantic_queue.enqueue(parent_msg)
@@ -326,11 +352,9 @@ class SemanticProcessor(DequeueHandlerBase):
                 )
                 root_attrs.account_id = msg.account_id
                 root_attrs.user_id = msg.user_id
-                root_attrs.agent_id = msg.agent_id
                 root_context_token = bind_root_observability_context(root_attrs)
                 try:
-                    self._current_msg = msg
-                    self._current_ctx = self._ctx_from_semantic_msg(msg)
+                    current_ctx = self._ctx_from_semantic_msg(msg)
                     logger.info(
                         f"Processing semantic generation for: {msg.uri} (recursive={msg.recursive})"
                     )
@@ -347,29 +371,42 @@ class SemanticProcessor(DequeueHandlerBase):
                             lock_transferred = True
                             await self._process_memory_directory(
                                 msg,
+                                ctx=current_ctx,
                                 lock=semantic_lock.lock,
                             )
                         else:
                             is_incremental = False
                             target_uri = msg.target_uri
+                            run_uri = msg.uri
+                            changes = msg.changes
                             viking_fs = get_viking_fs()
                             if msg.target_uri:
                                 target_exists = await viking_fs.exists(
-                                    msg.target_uri, ctx=self._current_ctx
+                                    msg.target_uri, ctx=current_ctx
                                 )
-                                # Check if target URI exists and is not the same as the source URI（避免重复处理）
                                 if msg.uri != msg.target_uri:
-                                    if msg.target_preexisting is None:
-                                        target_preexisting = target_exists
-                                    else:
-                                        target_preexisting = bool(msg.target_preexisting)
-                                else:
-                                    target_preexisting = target_exists
-                                if target_preexisting and msg.uri != msg.target_uri:
-                                    is_incremental = True
                                     logger.info(
-                                        f"Target URI exists, using incremental update: {msg.target_uri}"
+                                        "Syncing semantic source into target before processing: "
+                                        f"{msg.uri} -> {msg.target_uri}"
                                     )
+                                    diff = await self._sync_topdown_recursive(
+                                        msg.uri,
+                                        msg.target_uri,
+                                        ctx=current_ctx,
+                                        lock=semantic_lock.lock,
+                                    )
+                                    logger.info(
+                                        "[SyncDiff] Diff computed: "
+                                        f"added_files={len(diff.added_files)}, "
+                                        f"deleted_files={len(diff.deleted_files)}, "
+                                        f"updated_files={len(diff.updated_files)}, "
+                                        f"added_dirs={len(diff.added_dirs)}, "
+                                        f"deleted_dirs={len(diff.deleted_dirs)}"
+                                    )
+                                    changes = diff.to_changes()
+                                    is_incremental = True
+                                    target_uri = msg.target_uri
+                                    run_uri = msg.target_uri
                                 elif target_exists and msg.changes and msg.uri == msg.target_uri:
                                     is_incremental = True
                                     logger.info(
@@ -386,7 +423,7 @@ class SemanticProcessor(DequeueHandlerBase):
                                 processor=self,
                                 context_type=msg.context_type,
                                 max_concurrent_llm=self.max_concurrent_llm,
-                                ctx=self._current_ctx,
+                                ctx=current_ctx,
                                 incremental_update=is_incremental,
                                 target_uri=target_uri,
                                 semantic_msg_id=msg.id,
@@ -394,18 +431,16 @@ class SemanticProcessor(DequeueHandlerBase):
                                 recursive=msg.recursive,
                                 lock=semantic_lock.lock,
                                 is_code_repo=msg.is_code_repo,
-                                sync_to_target=bool(target_uri and msg.uri != target_uri),
-                                changes=msg.changes,
+                                changes=changes,
                                 skip_vectorization=msg.skip_vectorization,
                                 coalesce_key=msg.coalesce_key,
                                 coalesce_version=msg.coalesce_version,
                             )
-                            self._dag_executor = executor
                             lock_transferred = True
-                            await executor.run(msg.uri)
+                            await executor.run(run_uri)
                             self._cache_dag_stats(
                                 msg.telemetry_id,
-                                msg.uri,
+                                run_uri,
                                 executor.get_stats(),
                             )
                             if not executor.stale:
@@ -422,8 +457,32 @@ class SemanticProcessor(DequeueHandlerBase):
                     reset_root_observability_context(root_context_token)
 
         except Exception as e:
+            if isinstance(e, LockAcquisitionError):
+                logger.warning(
+                    "Lock error processing semantic message, re-enqueueing without "
+                    "tripping API circuit breaker: %s",
+                    e,
+                    exc_info=True,
+                )
+                if msg is not None:
+                    await self._requeue_semantic_msg_after_error(msg, data, e)
+                else:
+                    self.report_error(str(e), data)
+                return None
+
             error_class = classify_api_error(e)
-            if error_class == ERROR_CLASS_PERMANENT:
+            if error_class == ERROR_CLASS_INPUT_TOO_LARGE:
+                logger.error(
+                    f"Input too large processing semantic message, dropping: {e}",
+                    exc_info=True,
+                )
+                if msg is not None:
+                    self._merge_request_stats(msg.telemetry_id, error_count=1)
+                    get_request_wait_tracker().mark_semantic_failed(
+                        msg.telemetry_id, msg.id, str(e)
+                    )
+                self.report_error(str(e), data)
+            elif error_class == ERROR_CLASS_PERMANENT:
                 logger.critical(
                     f"Permanent API error processing semantic message, dropping: {e}",
                     exc_info=True,
@@ -443,39 +502,33 @@ class SemanticProcessor(DequeueHandlerBase):
                 )
                 self._circuit_breaker.record_failure(e)
                 if msg is not None:
-                    try:
-                        await self._reenqueue_semantic_msg(msg)
-                        self._merge_request_stats(msg.telemetry_id, requeue_count=1)
-                        get_request_wait_tracker().record_semantic_requeue(msg.telemetry_id)
-                        self.report_requeue()
-                    except Exception as requeue_err:
-                        logger.error(f"Failed to re-enqueue semantic message: {requeue_err}")
-                        self._merge_request_stats(msg.telemetry_id, error_count=1)
-                        get_request_wait_tracker().mark_semantic_failed(
-                            msg.telemetry_id, msg.id, str(e)
-                        )
-                        self.report_error(str(e), data)
-                        return None
-                    self.report_success()
+                    await self._requeue_semantic_msg_after_error(msg, data, e)
                 else:
                     self.report_error(str(e), data)
             return None
-        finally:
-            self._current_msg = None
-            self._current_ctx = None
 
     def get_dag_stats(self) -> Optional["DagStats"]:
-        if not self._dag_executor:
-            return None
-        return self._dag_executor.get_stats()
+        return SemanticDagExecutor.get_active_stats()
 
     async def _process_memory_directory(
-        self, msg: SemanticMsg, lock: LockLease = NO_LOCK
+        self,
+        msg: SemanticMsg,
+        ctx: Optional[RequestContext] = None,
+        lock: LockLease = NO_LOCK,
     ) -> None:
-        """Process a memory directory with special handling."""
+        """Process a memory directory with special handling.
+
+        For memory directories:
+        - Memory files are already vectorized via embedding queue
+        - Only generate abstract.md and overview.md
+        - Vectorize the generated abstract.md and overview.md
+
+        Args:
+            msg: The semantic message containing directory info and changes
+        """
         viking_fs = get_viking_fs()
         dir_uri = msg.uri
-        ctx = self._current_ctx
+        ctx = ctx or self._default_ctx
         llm_sem = asyncio.Semaphore(self.max_concurrent_llm)
         request_wait_tracker = get_request_wait_tracker()
 
@@ -485,7 +538,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
         try:
             try:
-                entries = await viking_fs.ls(dir_uri, ctx=ctx)
+                entries = await viking_fs.ls(dir_uri, node_limit=LS_ALL_NODES, ctx=ctx)
             except Exception as e:
                 raise RuntimeError(f"Failed to list memory directory {dir_uri}: {e}") from e
 
@@ -613,9 +666,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     lock=lock,
                 )
             except Exception as e:
-                raise RuntimeError(
-                    f"Failed to write abstract/overview for {dir_uri}: {e}"
-                ) from e
+                raise RuntimeError(f"Failed to write abstract/overview for {dir_uri}: {e}") from e
             if not wrote_semantics:
                 _mark_done()
                 return
@@ -698,7 +749,9 @@ class SemanticProcessor(DequeueHandlerBase):
             files: Dict[str, str] = {}
             dirs: Dict[str, str] = {}
             try:
-                entries = await viking_fs.ls(dir_uri, show_all_hidden=True, ctx=ctx)
+                entries = await viking_fs.ls(
+                    dir_uri, show_all_hidden=True, node_limit=LS_ALL_NODES, ctx=ctx
+                )
             except Exception as e:
                 logger.error(f"[SyncDiff] Failed to list {dir_uri}: {e}")
                 return files, dirs
@@ -707,7 +760,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 name = entry.get("name", "")
                 if not name or name in [".", ".."]:
                     continue
-                if name.startswith(".") and name not in [".abstract.md", ".overview.md"]:
+                if name.startswith("."):
                     continue
                 item_uri = VikingURI(dir_uri).join(name).uri
                 if entry.get("isDir", False):
@@ -719,18 +772,6 @@ class SemanticProcessor(DequeueHandlerBase):
         async def sync_dir(root_dir: str, target_dir: str) -> None:
             root_files, root_dirs = await list_children(root_dir)
             target_files, target_dirs = await list_children(target_dir)
-
-            try:
-                await viking_fs._mv_vector_store_l0_l1(
-                    root_dir,
-                    target_dir,
-                    ctx=ctx,
-                    lock_handle=lock_handle,
-                )
-            except Exception as e:
-                logger.error(
-                    f"[SyncDiff] Failed to move L0/L1 index: {root_dir} -> {target_dir}, error={e}"
-                )
 
             file_names = set(root_files.keys()) | set(target_files.keys())
             for name in sorted(file_names):
@@ -788,7 +829,7 @@ class SemanticProcessor(DequeueHandlerBase):
                             )
                             changed = False
                     if changed:
-                        diff.updated_files.append(root_file)
+                        diff.updated_files.append(target_file)
                         try:
                             await viking_fs.rm(target_file, ctx=ctx, lock_handle=lock_handle)
                         except Exception as e:
@@ -809,8 +850,8 @@ class SemanticProcessor(DequeueHandlerBase):
                     continue
 
                 if root_file and not target_file:
-                    diff.added_files.append(root_file)
                     target_file_uri = VikingURI(target_dir).join(name).uri
+                    diff.added_files.append(target_file_uri)
                     try:
                         await viking_fs.mv(
                             root_file,
@@ -860,8 +901,8 @@ class SemanticProcessor(DequeueHandlerBase):
                     continue
 
                 if root_subdir and not target_subdir:
-                    diff.added_dirs.append(root_subdir)
                     target_subdir_uri = VikingURI(target_dir).join(name).uri
+                    diff.added_dirs.append(target_subdir_uri)
                     try:
                         await viking_fs.mv(
                             root_subdir,
@@ -883,16 +924,67 @@ class SemanticProcessor(DequeueHandlerBase):
             parent_uri = VikingURI(target_uri).parent
             if parent_uri:
                 await viking_fs.mkdir(parent_uri.uri, exist_ok=True, ctx=ctx)
-            diff.added_dirs.append(root_uri)
+            diff.added_dirs.append(target_uri)
             await viking_fs.mv(root_uri, target_uri, ctx=ctx, lock_handle=lock_handle)
+            # The whole temp tree (including the hidden .image_mappings.json
+            # sidecar) was moved into the target; rewrite local image paths now.
+            await self._rewrite_target_image_uris(root_uri, target_uri, ctx=ctx, lock=lock)
             return diff
 
         await sync_dir(root_uri, target_uri)
+        # sync_dir skips hidden files, so the .image_mappings.json sidecar is
+        # still at the temp root. Carry it over and rewrite the synced markdown
+        # before the temp tree is deleted below.
+        await self._rewrite_target_image_uris(root_uri, target_uri, ctx=ctx, lock=lock)
         try:
             await viking_fs.delete_temp(root_uri, ctx=ctx)
         except Exception as e:
             logger.error(f"[SyncDiff] Failed to delete root directory {root_uri}: {e}")
         return diff
+
+    async def _rewrite_target_image_uris(
+        self,
+        root_uri: str,
+        target_uri: str,
+        ctx: Optional[RequestContext] = None,
+        lock: LockLease = NO_LOCK,
+    ) -> None:
+        """Rewrite local image refs in the target after a temp-to-target sync.
+
+        ``_sync_topdown_recursive`` skips hidden files, so the
+        ``.image_mappings.json`` sidecar written by the parser at the temp root
+        is not copied into the target. Carry it over (when missing) so
+        :func:`rewrite_image_uris` can resolve local image paths against the
+        images that were synced into the final target.
+        """
+        viking_fs = get_viking_fs()
+        root_prefix = root_uri.rstrip("/")
+        target_prefix = target_uri.rstrip("/")
+        mapping_name = ".image_mappings.json"
+
+        if root_prefix != target_prefix:
+            try:
+                await viking_fs.stat(f"{target_prefix}/{mapping_name}", ctx=ctx)
+                target_has_mapping = True
+            except Exception:
+                target_has_mapping = False
+
+            if not target_has_mapping:
+                try:
+                    mapping_content = await viking_fs.read_file(
+                        f"{root_prefix}/{mapping_name}", ctx=ctx
+                    )
+                    await viking_fs.write_file(
+                        f"{target_prefix}/{mapping_name}", mapping_content, ctx=ctx
+                    )
+                except Exception:
+                    # No sidecar to carry over (e.g. no local images ingested).
+                    pass
+
+        try:
+            await rewrite_image_uris(target_uri, ctx=ctx, lock_handle=lock.handle)
+        except Exception as e:
+            logger.error(f"[SyncDiff] Failed to rewrite image URIs for {target_uri}: {e}")
 
     async def _collect_children_abstracts(
         self, children_uris: List[str], ctx: Optional[RequestContext] = None
@@ -917,7 +1009,7 @@ class SemanticProcessor(DequeueHandlerBase):
         """Generate summary for a single text file (code, documentation, or other text)."""
         viking_fs = get_viking_fs()
         vlm = get_openviking_config().vlm
-        active_ctx = ctx or self._current_ctx
+        active_ctx = ctx or self._default_ctx
 
         content = await viking_fs.read_file(file_path, ctx=active_ctx)
         if isinstance(content, bytes):
@@ -1395,13 +1487,9 @@ class SemanticProcessor(DequeueHandlerBase):
     ) -> None:
         """Create directory Context and enqueue to EmbeddingQueue."""
 
-        if self._current_msg and getattr(self._current_msg, "skip_vectorization", False):
-            logger.info(f"Skipping vectorization for {uri} (requested via SemanticMsg)")
-            return
-
         from openviking.utils.embedding_utils import vectorize_directory_meta
 
-        active_ctx = ctx or self._current_ctx
+        active_ctx = ctx or self._default_ctx
         await vectorize_directory_meta(
             uri=uri,
             abstract=abstract,
@@ -1425,7 +1513,7 @@ class SemanticProcessor(DequeueHandlerBase):
         """Vectorize a single file using its content or summary."""
         from openviking.utils.embedding_utils import vectorize_file
 
-        active_ctx = ctx or self._current_ctx
+        active_ctx = ctx or self._default_ctx
         await vectorize_file(
             file_path=file_path,
             summary_dict=summary_dict,

@@ -2,20 +2,35 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Volcengine Embedder Implementation"""
 
+import asyncio
 from typing import Any, Dict, List, Optional
 
 import volcenginesdkarkruntime
 
 from openviking.models.embedder.base import (
     DenseEmbedderBase,
+    EmbeddingInput,
     EmbedResult,
     HybridEmbedderBase,
     SparseEmbedderBase,
+    extract_text_from_content,
     truncate_and_normalize,
 )
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
 from openviking_cli.utils.logger import default_logger as logger
+
+
+def to_multimodal_input(content: "EmbeddingInput") -> List[Dict[str, Any]]:
+    """Normalize an embedding input into the content-parts payload the Volcengine
+    multimodal embeddings API expects.
+
+    A plain string is wrapped as a single text part. A list of content parts
+    (text and/or ``image_url``) is passed through unchanged.
+    """
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}]
+    return list(content)
 
 
 def process_sparse_embedding(sparse_data: Any) -> Dict[str, float]:
@@ -113,6 +128,11 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
         except Exception:
             return 2048  # Default dimension
 
+    @property
+    def supports_multimodal(self) -> bool:
+        """Multimodal inputs are supported when using the multimodal endpoint."""
+        return self.input_type == "multimodal"
+
     def _update_telemetry_token_usage(self, response) -> None:
         usage = getattr(response, "usage", None)
         if not usage:
@@ -142,11 +162,12 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
             completion_tokens=completion_tokens,
         )
 
-    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
-        """Perform dense embedding on text
+    def embed(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
+        """Perform dense embedding on text or multimodal content
 
         Args:
-            text: Input text
+            content: Input text, or a list of multimodal content parts such as
+                ``[{"type": "text", "text": "..."}, {"type": "image_url", "image_url": {"url": "..."}}]``
             is_query: Flag to indicate if this is a query embedding
 
         Returns:
@@ -160,12 +181,13 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
             if self.input_type == "multimodal":
                 # Use multimodal embeddings API
                 response = self.client.multimodal_embeddings.create(
-                    input=[{"type": "text", "text": text}], model=self.model_name
+                    input=to_multimodal_input(content), model=self.model_name
                 )
                 self._update_telemetry_token_usage(response)
                 vector = response.data.embedding
             else:
-                # Use text embeddings API
+                # Use text embeddings API (text-only)
+                text = extract_text_from_content(content)
                 response = self.client.embeddings.create(input=text, model=self.model_name)
                 self._update_telemetry_token_usage(response)
                 vector = response.data[0].embedding
@@ -187,17 +209,20 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
             lambda: volcenginesdkarkruntime.AsyncArk(**self._ark_kwargs)
         )
 
-    async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
+    async def embed_async(
+        self, content: "EmbeddingInput", is_query: bool = False
+    ) -> EmbedResult:
         client = self._get_async_client()
 
         async def _embed_call() -> EmbedResult:
             if self.input_type == "multimodal":
                 response = await client.multimodal_embeddings.create(
-                    input=[{"type": "text", "text": text}], model=self.model_name
+                    input=to_multimodal_input(content), model=self.model_name
                 )
                 self._update_telemetry_token_usage(response)
                 vector = response.data.embedding
             else:
+                text = extract_text_from_content(content)
                 response = await client.embeddings.create(input=text, model=self.model_name)
                 self._update_telemetry_token_usage(response)
                 vector = response.data[0].embedding
@@ -213,11 +238,13 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
         except Exception as e:
             raise RuntimeError(f"Volcengine embedding failed: {str(e)}") from e
 
-    def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
+    def embed_batch(
+        self, contents: List["EmbeddingInput"], is_query: bool = False
+    ) -> List[EmbedResult]:
         """Batch embedding
 
         Args:
-            texts: List of texts
+            contents: List of texts or multimodal content parts
             is_query: Flag to indicate if these are query embeddings
 
         Returns:
@@ -226,76 +253,22 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
         Raises:
             RuntimeError: When API call fails
         """
-        if not texts:
+        if not contents:
             return []
-
-        def _call() -> List[EmbedResult]:
-            if self.input_type == "multimodal":
-                multimodal_inputs = [{"type": "text", "text": text} for text in texts]
-                response = self.client.multimodal_embeddings.create(
-                    input=multimodal_inputs, model=self.model_name
-                )
-                self._update_telemetry_token_usage(response)
-                data = response.data
-            else:
-                response = self.client.embeddings.create(input=texts, model=self.model_name)
-                self._update_telemetry_token_usage(response)
-                data = response.data
-
-            return [
-                EmbedResult(dense_vector=truncate_and_normalize(item.embedding, self.dimension))
-                for item in data
-            ]
-
-        try:
-            return self._run_with_retry(
-                _call,
-                logger=logger,
-                operation_name="Volcengine batch embedding",
-            )
-        except Exception as e:
-            logger.error(
-                f"Volcengine batch embedding failed, texts length: {len(texts)}, input_type: {self.input_type}, model_name: {self.model_name}"
-            )
-            raise RuntimeError(f"Volcengine batch embedding failed: {str(e)}") from e
+        return [self.embed(content, is_query=is_query) for content in contents]
 
     async def embed_batch_async(
-        self, texts: List[str], is_query: bool = False
+        self, contents: List["EmbeddingInput"], is_query: bool = False
     ) -> List[EmbedResult]:
-        if not texts:
+        if not contents:
             return []
 
-        client = self._get_async_client()
-
-        async def _call() -> List[EmbedResult]:
-            if self.input_type == "multimodal":
-                multimodal_inputs = [{"type": "text", "text": text} for text in texts]
-                response = await client.multimodal_embeddings.create(
-                    input=multimodal_inputs, model=self.model_name
-                )
-                self._update_telemetry_token_usage(response)
-                data = response.data
-            else:
-                response = await client.embeddings.create(input=texts, model=self.model_name)
-                self._update_telemetry_token_usage(response)
-                data = response.data
-
-            return [
-                EmbedResult(dense_vector=truncate_and_normalize(item.embedding, self.dimension))
-                for item in data
-            ]
-
-        try:
-            return await self._run_with_async_retry(
-                _call,
-                logger=logger,
-                operation_name="Volcengine async batch embedding",
+        # Embed each content individually and run them concurrently.
+        return list(
+            await asyncio.gather(
+                *(self.embed_async(content, is_query=is_query) for content in contents)
             )
-        except Exception as e:
-            logger.error(
-                f"Volcengine async batch embedding failed, texts length: {len(texts)}, input_type: {self.input_type}, model_name: {self.model_name}"
-            )
-            raise RuntimeError(f"Volcengine batch embedding failed: {str(e)}") from e
+        )
 
     def get_dimension(self) -> int:
         return self._dimension
@@ -312,6 +285,7 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
         model_name: str,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
+        input_type: str = "multimodal",
         config: Optional[Dict[str, Any]] = None,
     ):
         """Initialize Volcengine Sparse Embedder
@@ -320,6 +294,7 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
             model_name: Volcengine model name
             api_key: API key for authentication
             api_base: API base URL
+            input_type: Input type - "text" or "multimodal" (default: "multimodal")
             config: Additional configuration dict
 
         Raises:
@@ -330,6 +305,7 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
 
         self.api_key = api_key
         self.api_base = api_base
+        self.input_type = input_type
 
         if not self.api_key:
             raise ValueError("api_key is required")
@@ -370,11 +346,12 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
             completion_tokens=completion_tokens,
         )
 
-    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
-        """Perform sparse embedding on text
+    def embed(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
+        """Perform sparse embedding on text or multimodal content
 
         Args:
-            text: Input text
+            content: Input text, or a list of multimodal content parts such as
+                ``[{"type": "text", "text": "..."}, {"type": "image_url", "image_url": {"url": "..."}}]``
             is_query: Flag to indicate if this is a query embedding
 
         Returns:
@@ -387,7 +364,7 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
         def _embed_call():
             # Must use multimodal endpoint for sparse
             response = self.client.multimodal_embeddings.create(
-                input=[{"type": "text", "text": text}],
+                input=to_multimodal_input(content),
                 model=self.model_name,
                 sparse_embedding={"type": "enabled"},
             )
@@ -410,12 +387,14 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
             lambda: volcenginesdkarkruntime.AsyncArk(**self._ark_kwargs)
         )
 
-    async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
+    async def embed_async(
+        self, content: "EmbeddingInput", is_query: bool = False
+    ) -> EmbedResult:
         client = self._get_async_client()
 
         async def _embed_call() -> EmbedResult:
             response = await client.multimodal_embeddings.create(
-                input=[{"type": "text", "text": text}],
+                input=to_multimodal_input(content),
                 model=self.model_name,
                 sparse_embedding={"type": "enabled"},
             )
@@ -433,11 +412,13 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
         except Exception as e:
             raise RuntimeError(f"Volcengine sparse embedding failed: {str(e)}") from e
 
-    def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
+    def embed_batch(
+        self, contents: List["EmbeddingInput"], is_query: bool = False
+    ) -> List[EmbedResult]:
         """Batch sparse embedding
 
         Args:
-            texts: List of texts
+            contents: List of texts or multimodal content parts
             is_query: Flag to indicate if these are query embeddings
 
         Returns:
@@ -446,41 +427,28 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
         Raises:
             RuntimeError: When API call fails
         """
-        if not texts:
+        if not contents:
             return []
-        return [self.embed(text) for text in texts]
+        return [self.embed(content, is_query=is_query) for content in contents]
 
     async def embed_batch_async(
-        self, texts: List[str], is_query: bool = False
+        self, contents: List["EmbeddingInput"], is_query: bool = False
     ) -> List[EmbedResult]:
-        if not texts:
+        if not contents:
             return []
 
-        client = self._get_async_client()
-
-        async def _call() -> List[EmbedResult]:
-            response = await client.multimodal_embeddings.create(
-                input=[{"type": "text", "text": text} for text in texts],
-                model=self.model_name,
-                sparse_embedding={"type": "enabled"},
+        # The multimodal endpoint embeds a single content per call; run the items
+        # concurrently while sharing the async client.
+        return list(
+            await asyncio.gather(
+                *(self.embed_async(content, is_query=is_query) for content in contents)
             )
-            self._update_telemetry_token_usage(response)
-            data = response.data
-            return [
-                EmbedResult(
-                    sparse_vector=process_sparse_embedding(getattr(item, "sparse_embedding", None))
-                )
-                for item in data
-            ]
+        )
 
-        try:
-            return await self._run_with_async_retry(
-                _call,
-                logger=logger,
-                operation_name="Volcengine async sparse batch embedding",
-            )
-        except Exception as e:
-            raise RuntimeError(f"Volcengine sparse embedding failed: {str(e)}") from e
+    @property
+    def supports_multimodal(self) -> bool:
+        """Multimodal inputs are supported when using the multimodal endpoint."""
+        return self.input_type == "multimodal"
 
 
 class VolcengineHybridEmbedder(HybridEmbedderBase):
@@ -559,11 +527,17 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
             completion_tokens=completion_tokens,
         )
 
-    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
-        """Perform hybrid embedding on text
+    @property
+    def supports_multimodal(self) -> bool:
+        """Hybrid embeddings always use the multimodal endpoint."""
+        return True
+
+    def embed(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
+        """Perform hybrid embedding on text or multimodal content
 
         Args:
-            text: Input text
+            content: Input text, or a list of multimodal content parts such as
+                ``[{"type": "text", "text": "..."}, {"type": "image_url", "image_url": {"url": "..."}}]``
             is_query: Flag to indicate if this is a query embedding
 
         Returns:
@@ -577,7 +551,7 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
             # Always use multimodal for hybrid to get both
 
             response = self.client.multimodal_embeddings.create(
-                input=[{"type": "text", "text": text}],
+                input=to_multimodal_input(content),
                 model=self.model_name,
                 sparse_embedding={"type": "enabled"},
             )
@@ -604,12 +578,14 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
             lambda: volcenginesdkarkruntime.AsyncArk(**self._ark_kwargs)
         )
 
-    async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
+    async def embed_async(
+        self, content: "EmbeddingInput", is_query: bool = False
+    ) -> EmbedResult:
         client = self._get_async_client()
 
         async def _embed_call() -> EmbedResult:
             response = await client.multimodal_embeddings.create(
-                input=[{"type": "text", "text": text}],
+                input=to_multimodal_input(content),
                 model=self.model_name,
                 sparse_embedding={"type": "enabled"},
             )
@@ -631,11 +607,13 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
         except Exception as e:
             raise RuntimeError(f"Volcengine hybrid embedding failed: {str(e)}") from e
 
-    def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
+    def embed_batch(
+        self, contents: List["EmbeddingInput"], is_query: bool = False
+    ) -> List[EmbedResult]:
         """Batch hybrid embedding
 
         Args:
-            texts: List of texts
+            contents: List of texts or multimodal content parts
             is_query: Flag to indicate if these are query embeddings
 
         Returns:
@@ -644,42 +622,23 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
         Raises:
             RuntimeError: When API call fails
         """
-        if not texts:
+        if not contents:
             return []
-        return [self.embed(text, is_query=is_query) for text in texts]
+        return [self.embed(content, is_query=is_query) for content in contents]
 
     async def embed_batch_async(
-        self, texts: List[str], is_query: bool = False
+        self, contents: List["EmbeddingInput"], is_query: bool = False
     ) -> List[EmbedResult]:
-        if not texts:
+        if not contents:
             return []
 
-        client = self._get_async_client()
-
-        async def _call() -> List[EmbedResult]:
-            response = await client.multimodal_embeddings.create(
-                input=[{"type": "text", "text": text} for text in texts],
-                model=self.model_name,
-                sparse_embedding={"type": "enabled"},
+        # The multimodal endpoint embeds a single content per call; run the items
+        # concurrently while sharing the async client.
+        return list(
+            await asyncio.gather(
+                *(self.embed_async(content, is_query=is_query) for content in contents)
             )
-            self._update_telemetry_token_usage(response)
-            data = response.data
-            return [
-                EmbedResult(
-                    dense_vector=truncate_and_normalize(item.embedding, self.dimension),
-                    sparse_vector=process_sparse_embedding(getattr(item, "sparse_embedding", None)),
-                )
-                for item in data
-            ]
-
-        try:
-            return await self._run_with_async_retry(
-                _call,
-                logger=logger,
-                operation_name="Volcengine async hybrid batch embedding",
-            )
-        except Exception as e:
-            raise RuntimeError(f"Volcengine hybrid embedding failed: {str(e)}") from e
+        )
 
     def get_dimension(self) -> int:
         return self._dimension

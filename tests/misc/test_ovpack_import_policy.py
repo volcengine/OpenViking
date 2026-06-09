@@ -111,6 +111,12 @@ class OverviewOnlyExportVikingFS(FakeExportVikingFS):
         }
 
 
+class MissingSidecarExportVikingFS(FakeExportVikingFS):
+    def __init__(self) -> None:
+        super().__init__()
+        self.text_files = {}
+
+
 class ReservedPathExportVikingFS(FakeExportVikingFS):
     def __init__(self) -> None:
         super().__init__()
@@ -213,6 +219,33 @@ class FakeBackupVikingFS:
         return self.binary_files[uri]
 
 
+class MissingSidecarBackupVikingFS(FakeBackupVikingFS):
+    async def tree(
+        self,
+        uri: str,
+        show_all_hidden: bool = False,
+        node_limit=None,
+        level_limit=None,
+        ctx=None,
+    ):
+        if uri == "viking://user":
+            return [
+                {
+                    "rel_path": ".overview.md",
+                    "uri": "viking://user/.overview.md",
+                    "isDir": False,
+                    "size": 0,
+                }
+            ]
+        return await super().tree(
+            uri,
+            show_all_hidden=show_all_hidden,
+            node_limit=node_limit,
+            level_limit=level_limit,
+            ctx=ctx,
+        )
+
+
 class FakeRestoreVectorVikingFS(FakeVikingFS):
     async def tree(self, uri: str, node_limit=None, level_limit=None, ctx=None):
         self.tree_calls.append(uri)
@@ -308,7 +341,7 @@ class HybridIndexVectorStore(FakeVectorStore):
 
 @pytest.fixture
 def request_ctx() -> RequestContext:
-    return RequestContext(user=UserIdentifier("acct", "alice", "agent1"), role=Role.USER)
+    return RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER)
 
 
 @pytest.fixture
@@ -521,6 +554,28 @@ async def test_export_ovpack_writes_v2_manifest_with_semantic_sidecars(
 
 
 @pytest.mark.asyncio
+async def test_export_ovpack_skips_missing_semantic_sidecars(
+    temp_ovpack_path: Path,
+    request_ctx: RequestContext,
+):
+    await export_ovpack(
+        MissingSidecarExportVikingFS(),
+        "viking://resources/demo",
+        str(temp_ovpack_path),
+        ctx=request_ctx,
+    )
+
+    with zipfile.ZipFile(temp_ovpack_path, "r") as zf:
+        names = set(zf.namelist())
+        manifest = json.loads(zf.read("demo/_ovpack/manifest.json").decode("utf-8"))
+
+    manifest_paths = {entry["path"] for entry in manifest["entries"]}
+    assert "demo/files/notes.txt" in names
+    assert "demo/files/.overview.md" not in names
+    assert ".overview.md" not in manifest_paths
+
+
+@pytest.mark.asyncio
 async def test_backup_restore_contract(temp_ovpack_path: Path, request_ctx: RequestContext):
     await backup_ovpack(
         FakeBackupVikingFS(),
@@ -540,7 +595,7 @@ async def test_backup_restore_contract(temp_ovpack_path: Path, request_ctx: Requ
         "scope": "root",
         "package_type": "backup",
     }
-    assert manifest["scopes"] == ["resources", "user", "agent", "session"]
+    assert manifest["scopes"] == ["resources", "user", "session"]
 
     with pytest.raises(InvalidArgumentError, match=r"must be restored"):
         await import_ovpack(FakeVikingFS(), str(temp_ovpack_path), "viking://", request_ctx)
@@ -551,7 +606,28 @@ async def test_backup_restore_contract(temp_ovpack_path: Path, request_ctx: Requ
         "viking://resources/README.md",
         "viking://session/sess_1/.meta.json",
     ]
-    assert fake_fs.tree_calls == ["viking://resources", "viking://user", "viking://agent"]
+    assert fake_fs.tree_calls == ["viking://resources", "viking://user"]
+
+
+@pytest.mark.asyncio
+async def test_backup_skips_missing_semantic_sidecars(
+    temp_ovpack_path: Path,
+    request_ctx: RequestContext,
+):
+    await backup_ovpack(
+        MissingSidecarBackupVikingFS(),
+        str(temp_ovpack_path),
+        ctx=request_ctx,
+    )
+
+    with zipfile.ZipFile(temp_ovpack_path, "r") as zf:
+        names = set(zf.namelist())
+        manifest = json.loads(zf.read("openviking-backup/_ovpack/manifest.json").decode("utf-8"))
+
+    manifest_paths = {entry["path"] for entry in manifest["entries"]}
+    assert "openviking-backup/files/user/.overview.md" not in names
+    assert "user/.overview.md" not in manifest_paths
+    assert "user" in manifest_paths
 
 
 @pytest.mark.asyncio

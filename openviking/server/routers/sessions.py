@@ -8,7 +8,8 @@ from fastapi import APIRouter, Body, Depends, Path, Query, Request
 from pydantic import BaseModel, Field, model_validator
 
 from openviking.core.path_variables import resolve_path_variables
-from openviking.message.part import TextPart, part_from_dict
+from openviking.core.peer_id import normalize_peer_id
+from openviking.message.part import Part, TextPart, part_from_dict
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import AuthMode, RequestContext
@@ -83,7 +84,7 @@ class AddMessageRequest(BaseModel):
     """
 
     role: str
-    role_id: Optional[str] = None
+    peer_id: Optional[str] = None
     content: Optional[str] = None
     parts: Optional[List[Dict[str, Any]]] = None
     created_at: Optional[str] = None
@@ -93,7 +94,15 @@ class AddMessageRequest(BaseModel):
     def validate_content_or_parts(self) -> "AddMessageRequest":
         if self.content is None and self.parts is None:
             raise ValueError("Either 'content' or 'parts' must be provided")
+        self.peer_id = normalize_peer_id(self.peer_id)
         return self
+
+
+class BatchAddMessageRequest(BaseModel):
+    """Request model for adding multiple messages in a single request."""
+
+    messages: List[AddMessageRequest] = Field(..., max_length=100)
+    telemetry: TelemetryRequest = False
 
 
 class UsedRequest(BaseModel):
@@ -107,7 +116,26 @@ class CreateSessionRequest(BaseModel):
     """Request model for creating a session."""
 
     session_id: Optional[str] = None
+    memory_policy: Optional[Dict[str, Any]] = None
     telemetry: TelemetryRequest = False
+
+
+def _resolve_message_parts(msg_request: AddMessageRequest) -> List[Part]:
+    """Resolve parts from an AddMessageRequest, handling path variables."""
+    if msg_request.parts is not None:
+        resolved_parts = []
+        for p in msg_request.parts:
+            part_copy = dict(p)
+            if part_copy.get("type") == "context" and "uri" in part_copy:
+                part_copy["uri"] = resolve_path_variables(part_copy["uri"])
+            if part_copy.get("type") == "tool":
+                if "tool_uri" in part_copy:
+                    part_copy["tool_uri"] = resolve_path_variables(part_copy["tool_uri"])
+                if "skill_uri" in part_copy:
+                    part_copy["skill_uri"] = resolve_path_variables(part_copy["skill_uri"])
+            resolved_parts.append(part_copy)
+        return [part_from_dict(p) for p in resolved_parts]
+    return [TextPart(text=msg_request.content or "")]
 
 
 def _to_jsonable(value: Any) -> Any:
@@ -143,8 +171,11 @@ async def create_session(
 
     async def _create() -> dict[str, Any]:
         await service.initialize_user_directories(_ctx)
-        await service.initialize_agent_directories(_ctx)
-        session = await service.sessions.create(_ctx, request.session_id)
+        session = await service.sessions.create(
+            _ctx,
+            request.session_id,
+            memory_policy=request.memory_policy,
+        )
         return {
             "session_id": session.session_id,
             "user": session.user.to_dict(),
@@ -181,10 +212,7 @@ async def get_session(
     try:
         session = await service.sessions.get(session_id, _ctx, auto_create=auto_create)
     except NotFoundError:
-        return Response(
-            status="error",
-            error=ErrorInfo(code="NOT_FOUND", message=f"Session {session_id} not found"),
-        )
+        return error_response("NOT_FOUND", f"Session {session_id} not found")
     result = session.meta.to_dict()
     result["user"] = session.user.to_dict()
     result["pending_tokens"] = int(session.meta.pending_tokens or 0)
@@ -268,8 +296,7 @@ async def get_session_context(
         )
 
     service = get_service()
-    session = service.sessions.session(_ctx, session_id)
-    await session.load()
+    session = await service.sessions.get(session_id, _ctx, auto_create=False)
     result = await session.get_session_context(token_budget=token_budget)
     return Response(status="ok", result=_to_jsonable(result))
 
@@ -284,8 +311,7 @@ async def get_session_archive(
     from openviking_cli.exceptions import NotFoundError
 
     service = get_service()
-    session = service.sessions.session(_ctx, session_id)
-    await session.load()
+    session = await service.sessions.get(session_id, _ctx, auto_create=False)
     try:
         result = await session.get_session_archive(archive_id)
     except NotFoundError:
@@ -326,6 +352,7 @@ class CommitRequest(BaseModel):
             "(default 10); compact path passes 0 to archive everything."
         ),
     )
+    memory_policy: Optional[Dict[str, Any]] = None
     telemetry: TelemetryRequest = False
 
 
@@ -346,7 +373,10 @@ async def commit_session(
         operation="session.commit",
         telemetry=body.telemetry,
         fn=lambda: service.sessions.commit_async(
-            session_id, _ctx, keep_recent_count=body.keep_recent_count
+            session_id,
+            _ctx,
+            keep_recent_count=body.keep_recent_count,
+            memory_policy=body.memory_policy,
         ),
     )
     return Response(
@@ -392,32 +422,17 @@ async def add_message(
 
     async def _add() -> dict[str, Any]:
         session = await service.sessions.get(session_id, _ctx, auto_create=True)
-        role_id = _ctx.resolve_role_id(request.role, request.role_id)
+        parts = _resolve_message_parts(request)
 
-        if request.parts is not None:
-            # Resolve path variables in URIs within parts
-            resolved_parts = []
-            for p in request.parts:
-                part_copy = dict(p)
-                # Resolve uri in context parts
-                if part_copy.get("type") == "context" and "uri" in part_copy:
-                    part_copy["uri"] = resolve_path_variables(part_copy["uri"])
-                # Resolve tool_uri and skill_uri in tool parts
-                if part_copy.get("type") == "tool":
-                    if "tool_uri" in part_copy:
-                        part_copy["tool_uri"] = resolve_path_variables(part_copy["tool_uri"])
-                    if "skill_uri" in part_copy:
-                        part_copy["skill_uri"] = resolve_path_variables(part_copy["skill_uri"])
-                resolved_parts.append(part_copy)
-            parts = [part_from_dict(p) for p in resolved_parts]
-        else:
-            parts = [TextPart(text=request.content or "")]
-
-        session.add_message(
-            request.role,
-            parts,
-            role_id=role_id,
-            created_at=request.created_at,
+        session.add_messages(
+            [
+                {
+                    "role": request.role,
+                    "parts": parts,
+                    "peer_id": request.peer_id,
+                    "created_at": request.created_at,
+                }
+            ]
         )
         return {
             "session_id": session_id,
@@ -432,6 +447,47 @@ async def add_message(
     return Response(status="ok", result=execution.result, telemetry=execution.telemetry)
 
 
+@router.post("/{session_id}/messages/batch")
+async def batch_add_messages(
+    request: BatchAddMessageRequest,
+    session_id: str = Path(..., description="Session ID"),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Add multiple messages to a session in a single request.
+
+    Accepts a list of messages, each following the same format as AddMessageRequest.
+    Missing sessions are auto-created on first add.
+    """
+    service = get_service()
+
+    async def _batch_add() -> dict[str, Any]:
+        session = await service.sessions.get(session_id, _ctx, auto_create=True)
+        specs = []
+        for msg_request in request.messages:
+            parts = _resolve_message_parts(msg_request)
+            specs.append(
+                {
+                    "role": msg_request.role,
+                    "parts": parts,
+                    "peer_id": msg_request.peer_id,
+                    "created_at": msg_request.created_at,
+                }
+            )
+        msgs = session.add_messages(specs)
+        return {
+            "session_id": session_id,
+            "message_count": len(session.messages),
+            "added": len(msgs),
+        }
+
+    execution = await run_operation(
+        operation="session.batch_add_messages",
+        telemetry=request.telemetry,
+        fn=_batch_add,
+    )
+    return Response(status="ok", result=execution.result, telemetry=execution.telemetry)
+
+
 @router.post("/{session_id}/used")
 async def record_used(
     request: UsedRequest,
@@ -440,8 +496,7 @@ async def record_used(
 ):
     """Record actually used contexts and skills in a session."""
     service = get_service()
-    session = service.sessions.session(_ctx, session_id)
-    await session.load()
+    session = await service.sessions.get(session_id, _ctx, auto_create=False)
 
     # Resolve path variables in contexts
     resolved_contexts = None

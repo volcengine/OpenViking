@@ -35,16 +35,44 @@ export function parseDateKey(value: string | undefined): Date {
   return new Date(year, month - 1, day)
 }
 
-export function getLastDaysRange(days: number): {
+export function getViewerTimezone(): string {
+  // Falls back to UTC when Intl is unavailable or returns an empty string
+  // (e.g. very old Safari, jest jsdom edge cases).
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+  } catch {
+    return 'UTC'
+  }
+}
+
+function formatDateInTimezone(d: Date, timeZone: string): string {
+  // `en-CA` produces YYYY-MM-DD, which matches the backend `date` query
+  // parameter shape exactly.
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(d)
+}
+
+export function getLastDaysRange(
+  days: number,
+  timeZone?: string,
+): {
   endDate: string
   startDate: string
 } {
-  const end = new Date()
-  const start = new Date(end)
-  start.setDate(end.getDate() - days + 1)
+  const tz = timeZone ?? getViewerTimezone()
+  const now = new Date()
+  // Walk back `days - 1` UTC midnights from now and convert each instant in
+  // the viewer's tz; using millisecond arithmetic keeps the math safe across
+  // DST transitions because we never inspect a local hour.
+  const dayMs = 24 * 60 * 60 * 1000
+  const earlier = new Date(now.getTime() - (days - 1) * dayMs)
   return {
-    endDate: formatDateKey(end),
-    startDate: formatDateKey(start),
+    endDate: formatDateInTimezone(now, tz),
+    startDate: formatDateInTimezone(earlier, tz),
   }
 }
 

@@ -10,7 +10,7 @@ import sys
 import sysconfig
 from pathlib import Path
 
-from .client import AGFSClient, FileHandle
+from .async_client import AsyncAGFSClient
 from .exceptions import (
     AGFSAlreadyExistsError,
     AGFSClientError,
@@ -36,6 +36,7 @@ from .exceptions import (
     AGFSTimeoutError,
 )
 from .helpers import cp, download, upload
+from .protocols import AGFSSyncClientProtocol
 
 _logger = logging.getLogger(__name__)
 
@@ -96,9 +97,18 @@ def _find_ragfs_so():
 def _load_rust_binding():
     """Attempt to load the Rust (PyO3) binding client.
 
-    Searches openviking/lib/ for the pre-built native extension first,
-    then falls back to a pip-installed ``ragfs_python`` package.
+    Prefers the pip-installed ``ragfs_python`` package (e.g. from maturin develop),
+    then falls back to the vendored native extension in openviking/lib/.
     """
+    # Prefer pip-installed version (handles @rpath correctly)
+    try:
+        from ragfs_python import RAGFSBindingClient as _Rust
+
+        return _Rust, None
+    except ImportError:
+        pass
+
+    # Fallback: vendored .so in openviking/lib/
     try:
         so_path = _find_ragfs_so()
         if so_path:
@@ -106,13 +116,10 @@ def _load_rust_binding():
             mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(mod)
             return mod.RAGFSBindingClient, None
-
-        # Fallback: maybe ragfs_python was pip-installed (dev environment)
-        from ragfs_python import RAGFSBindingClient as _Rust
-
-        return _Rust, None
     except Exception:
-        raise ImportError("Rust binding not available")
+        pass
+
+    raise ImportError("Rust binding not available")
 
 
 def get_binding_client():
@@ -145,10 +152,10 @@ except Exception:
     BindingFileHandle = None
 
 __all__ = [
-    "AGFSClient",
+    "AsyncAGFSClient",
+    "AGFSSyncClientProtocol",
     "AGFSBindingClient",
     "RAGFSBindingClient",
-    "FileHandle",
     "BindingFileHandle",
     "get_binding_client",
     "AGFSClientError",
