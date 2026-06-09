@@ -6,7 +6,10 @@ from __future__ import annotations
 
 import logging
 import re
+from pathlib import Path
 from typing import Annotated, Any, Iterable, Literal
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 from pydantic import BeforeValidator, Field
 
@@ -417,17 +420,35 @@ def create_openviking_tools(
         is not for ordinary chat facts or ad hoc memory notes.
         """
 
-        result = call_openviking(
-            get_client(),
-            "add_resource",
-            path=path,
-            to=to,
-            parent=parent,
-            reason=reason,
-            instruction=instruction,
-            wait=wait,
-            timeout=timeout,
-        )
+        resolved_path = _resolve_resource_source(path)
+        if isinstance(resolved_path, dict):
+            return compact_json(resolved_path)
+
+        try:
+            result = call_openviking(
+                get_client(),
+                "add_resource",
+                path=str(resolved_path),
+                to=to,
+                parent=parent,
+                reason=reason,
+                instruction=instruction,
+                wait=wait,
+                timeout=timeout,
+            )
+        except Exception as exc:
+            if _is_probably_local_path(path) and "direct host filesystem paths" in str(exc):
+                return compact_json(
+                    {
+                        "error": "local_paths_not_supported_for_http_server",
+                        "path": path,
+                        "message": (
+                            "The OpenViking HTTP client could not upload this local path. "
+                            "Provide an existing local file/directory or a remote URL/repository."
+                        ),
+                    }
+                )
+            raise
         return stringify(result, max_chars=8_000)
 
     def viking_add_skill(
@@ -544,6 +565,60 @@ def _is_directory_read_error(exc: Exception) -> bool:
         and details.get("expected") == "file"
         and details.get("actual") == "directory"
     )
+
+
+def _is_probably_local_path(value: str) -> bool:
+    text = str(value or "").strip()
+    if not text or "\n" in text or "\r" in text:
+        return False
+    if _is_remote_resource_source(text):
+        return False
+    if text.startswith(("/", "./", "../", "~/", ".\\", "..\\", "~\\")):
+        return True
+    if re.match(r"^[A-Za-z]:[\\/]", text) or "\\" in text:
+        return True
+    if "/" in text:
+        first_segment = text.split("/", 1)[0]
+        return "." not in first_segment
+    return False
+
+
+def _is_remote_resource_source(value: str) -> bool:
+    text = str(value or "").strip()
+    return text.startswith(("http://", "https://", "git@", "ssh://", "git://"))
+
+
+def _resolve_resource_source(value: str) -> str | dict[str, str]:
+    text = str(value or "").strip()
+    if not text:
+        return {"error": "missing_path", "message": "path is required"}
+
+    parsed = urlparse(text)
+    if parsed.scheme == "file":
+        if parsed.netloc not in ("", "localhost"):
+            return {
+                "error": "unsupported_file_uri",
+                "path": text,
+                "message": f"Unsupported non-local file URI: {text}",
+            }
+        path = Path(url2pathname(parsed.path)).expanduser()
+    elif parsed.scheme and not re.match(r"^[A-Za-z]$", parsed.scheme):
+        return text
+    else:
+        path = Path(text).expanduser()
+
+    if path.exists():
+        return str(path)
+    if _is_probably_local_path(text):
+        return {
+            "error": "local_path_not_found",
+            "path": text,
+            "message": (
+                f"Local resource path does not exist: {text}. "
+                "Existing local files/directories can be uploaded as resources."
+            ),
+        }
+    return text
 
 
 def _format_openviking_health(status: Any) -> dict[str, Any]:
