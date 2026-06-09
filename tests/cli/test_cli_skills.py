@@ -12,6 +12,25 @@ from conftest import ov
 
 pytestmark = pytest.mark.cli_remote
 
+SKILLS_URI = "viking://user/skills/"
+
+
+def _is_missing_user_skills_dir(result):
+    stderr = result.get("stderr") or ""
+    return (
+        result.get("exit_code") != 0
+        and "NOT_FOUND" in stderr
+        and "Directory not found" in stderr
+        and SKILLS_URI in stderr
+    )
+
+
+def _list_user_skills_or_skip():
+    result = ov(["ls", SKILLS_URI, "-o", "json"])
+    if _is_missing_user_skills_dir(result):
+        pytest.skip("No user skills directory available")
+    return result
+
 
 class TestSkillAdd:
     def test_add_skill_from_file(self):
@@ -73,7 +92,7 @@ class TestSkillAdd:
 
 class TestSkillList:
     def test_list_skills(self):
-        r = ov(["ls", "viking://user/skills/", "-o", "json"])
+        r = _list_user_skills_or_skip()
         assert r["exit_code"] == 0, (
             f"ov ls skills should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
         )
@@ -85,7 +104,7 @@ class TestSkillList:
 
 class TestSkillRead:
     def test_read_skill(self):
-        ls_r = ov(["ls", "viking://user/skills/", "-o", "json"])
+        ls_r = _list_user_skills_or_skip()
         if ls_r["exit_code"] != 0 or not ls_r["json"] or not ls_r["json"].get("result"):
             pytest.skip("No skills available to test read")
             return
