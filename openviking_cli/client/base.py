@@ -157,6 +157,20 @@ class BaseClient(ABC):
         """Write text content to an existing file and refresh semantics/vectors."""
         ...
 
+    @abstractmethod
+    async def set_tags(
+        self,
+        uri: str,
+        tags: List[str],
+        mode: str = "replace",
+        recursive: bool = False,
+        wait: bool = False,
+        timeout: Optional[float] = None,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Replace explicit retrieval tags for a file or directory."""
+        ...
+
     # ============= Search =============
 
     @abstractmethod
@@ -167,6 +181,7 @@ class BaseClient(ABC):
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        tags: Optional[List[str]] = None,
         telemetry: TelemetryRequest = False,
         peer_id: Optional[str] = None,
     ) -> Any:
@@ -182,6 +197,7 @@ class BaseClient(ABC):
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        tags: Optional[List[str]] = None,
         telemetry: TelemetryRequest = False,
         peer_id: Optional[str] = None,
     ) -> Any:

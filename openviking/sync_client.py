@@ -228,6 +228,7 @@ class SyncOpenViking:
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        tags: Optional[List[str]] = None,
         telemetry: TelemetryRequest = False,
         since: Optional[str] = None,
         until: Optional[str] = None,
@@ -245,6 +246,7 @@ class SyncOpenViking:
                 limit=limit,
                 score_threshold=score_threshold,
                 filter=filter,
+                tags=tags,
                 telemetry=telemetry,
                 since=since,
                 until=until,
@@ -261,6 +263,7 @@ class SyncOpenViking:
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        tags: Optional[List[str]] = None,
         telemetry: TelemetryRequest = False,
         since: Optional[str] = None,
         until: Optional[str] = None,
@@ -276,6 +279,7 @@ class SyncOpenViking:
                 limit,
                 score_threshold,
                 filter,
+                tags,
                 telemetry,
                 since,
                 until,
@@ -312,6 +316,29 @@ class SyncOpenViking:
                 uri=uri,
                 content=content,
                 mode=mode,
+                wait=wait,
+                timeout=timeout,
+                telemetry=telemetry,
+            )
+        )
+
+    def set_tags(
+        self,
+        uri: str,
+        tags: List[str],
+        mode: str = "replace",
+        recursive: bool = False,
+        wait: bool = False,
+        timeout: Optional[float] = None,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Replace explicit retrieval tags for a file or directory."""
+        return run_async(
+            self._async_client.set_tags(
+                uri=uri,
+                tags=tags,
+                mode=mode,
+                recursive=recursive,
                 wait=wait,
                 timeout=timeout,
                 telemetry=telemetry,

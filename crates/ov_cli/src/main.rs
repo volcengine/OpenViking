@@ -493,6 +493,26 @@ enum Commands {
         #[arg(long, value_name = "seconds", help_heading = "Common options")]
         timeout: Option<f64>,
     },
+    /// [Data] Replace explicit retrieval tags for a file or directory
+    SetTags {
+        /// Viking URI
+        uri: String,
+        /// Comma-separated k=v tags, e.g. env=prod,team=search
+        #[arg(long = "tags", value_delimiter = ',')]
+        tags: Vec<String>,
+        /// Tag update mode: replace or append (append replaces existing values by key)
+        #[arg(long, default_value = "replace")]
+        mode: String,
+        /// Recursively update descendant files and semantic nodes when target is a directory
+        #[arg(long, default_value = "false")]
+        recursive: bool,
+        /// Wait for async processing to finish
+        #[arg(long, default_value = "false")]
+        wait: bool,
+        /// Optional wait timeout in seconds
+        #[arg(long)]
+        timeout: Option<f64>,
+    },
     /// [Data] Download file to local path (supports binaries/images)
     Get {
         /// Viking URI
@@ -548,6 +568,9 @@ enum Commands {
             help_heading = "Common options"
         )]
         level: Option<Vec<i32>>,
+        /// Only include results matching any of these explicit tags
+        #[arg(long = "tags", value_delimiter = ',')]
+        tags: Option<Vec<String>>,
         /// Limit memory retrieval to this peer plus the current user memory
         #[arg(long = "peer-id", value_name = "id", help_heading = "Advanced options")]
         peer_id: Option<String>,
@@ -601,6 +624,9 @@ enum Commands {
             help_heading = "Advanced options"
         )]
         level: Option<Vec<i32>>,
+        /// Only include results matching any of these explicit tags
+        #[arg(long = "tags", value_delimiter = ',')]
+        tags: Option<Vec<String>>,
         /// Limit memory retrieval to this peer plus the current user memory
         #[arg(long = "peer-id", value_name = "id", help_heading = "Advanced options")]
         peer_id: Option<String>,
@@ -2886,6 +2912,14 @@ async fn main() {
             handlers::handle_write(uri, content, from_file, effective_mode, wait, timeout, ctx)
                 .await
         }
+        Commands::SetTags {
+            uri,
+            tags,
+            mode,
+            recursive,
+            wait,
+            timeout,
+        } => handlers::handle_set_tags(uri, tags, mode, recursive, wait, timeout, ctx).await,
         Commands::Reindex { uri, mode, wait } => {
             handlers::handle_reindex(uri, mode, wait, ctx).await
         }
@@ -2898,10 +2932,11 @@ async fn main() {
             after,
             before,
             level,
+            tags,
             peer_id,
         } => {
             handlers::handle_find(
-                query, uri, node_limit, threshold, after, before, level, peer_id, ctx,
+                query, uri, node_limit, threshold, after, before, level, tags, peer_id, ctx,
             )
             .await
         }
@@ -2914,10 +2949,21 @@ async fn main() {
             after,
             before,
             level,
+            tags,
             peer_id,
         } => {
             handlers::handle_search(
-                query, uri, session_id, node_limit, threshold, after, before, level, peer_id, ctx,
+                query,
+                uri,
+                session_id,
+                node_limit,
+                threshold,
+                after,
+                before,
+                level,
+                tags,
+                peer_id,
+                ctx,
             )
             .await
         }

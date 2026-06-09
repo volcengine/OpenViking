@@ -19,6 +19,7 @@ from openviking.server.models import Response
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
 from openviking.utils.search_filters import _resolve_levels, merge_time_filter
+from openviking.utils.tags import normalize_search_tags
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 
 
@@ -48,14 +49,26 @@ def _resolve_search_filter(
     since: Optional[str],
     until: Optional[str],
     time_field: Optional[TimeField],
+    tags: Optional[List[str]],
 ) -> Optional[Dict[str, Any]]:
     try:
-        return merge_time_filter(
+        merged = merge_time_filter(
             request_filter,
             since=since,
             until=until,
             time_field=time_field,
         )
+        normalized_tags = normalize_search_tags(tags)
+        if not normalized_tags:
+            return merged
+        tag_filter: Dict[str, Any] = {
+            "op": "must",
+            "field": "search_tags",
+            "conds": normalized_tags,
+        }
+        if merged:
+            return {"op": "and", "conds": [merged, tag_filter]}
+        return tag_filter
     except ValueError as exc:
         raise InvalidArgumentError(str(exc)) from exc
 
@@ -78,6 +91,7 @@ class FindRequest(BaseModel):
     score_threshold: Optional[float] = None
     filter: Optional[Dict[str, Any]] = None
     include_provenance: bool = False
+    tags: Optional[List[str]] = None
     since: Optional[str] = None
     until: Optional[str] = None
     time_field: Optional[TimeField] = None
@@ -102,6 +116,7 @@ class SearchRequest(BaseModel):
     score_threshold: Optional[float] = None
     filter: Optional[Dict[str, Any]] = None
     include_provenance: bool = False
+    tags: Optional[List[str]] = None
 
     since: Optional[str] = None
     until: Optional[str] = None
@@ -147,6 +162,7 @@ async def find(
         request.since,
         request.until,
         request.time_field,
+        request.tags,
     )
     resolved_target_uri = _resolve_uri_or_uris(request.target_uri)
     execution = await run_operation(
@@ -187,6 +203,7 @@ async def search(
         request.since,
         request.until,
         request.time_field,
+        request.tags,
     )
     resolved_target_uri = _resolve_uri_or_uris(request.target_uri)
 

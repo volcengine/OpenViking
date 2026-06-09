@@ -677,6 +677,34 @@ class AsyncHTTPClient(BaseClient):
         response_data = self._handle_response_data(response)
         return self._attach_telemetry(response_data.get("result") or {}, response_data)
 
+    async def set_tags(
+        self,
+        uri: str,
+        tags: List[str],
+        mode: str = "replace",
+        recursive: bool = False,
+        wait: bool = False,
+        timeout: Optional[float] = None,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Replace explicit retrieval tags for a file or directory."""
+        telemetry = self._validate_telemetry(telemetry)
+        uri = VikingURI.normalize(uri)
+        response = await self._http.post(
+            "/api/v1/content/set_tags",
+            json={
+                "uri": uri,
+                "tags": tags,
+                "mode": mode,
+                "recursive": recursive,
+                "wait": wait,
+                "timeout": timeout,
+                "telemetry": telemetry,
+            },
+        )
+        response_data = self._handle_response_data(response)
+        return self._attach_telemetry(response_data.get("result") or {}, response_data)
+
     # ============= Search =============
 
     async def find(
@@ -687,6 +715,7 @@ class AsyncHTTPClient(BaseClient):
         node_limit: Optional[int] = None,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
+        tags: Optional[List[str]] = None,
         telemetry: TelemetryRequest = False,
         peer_id: Optional[str] = None,
     ) -> FindResult:
@@ -700,6 +729,7 @@ class AsyncHTTPClient(BaseClient):
             "limit": actual_limit,
             "score_threshold": score_threshold,
             "filter": filter,
+            "tags": tags,
             "telemetry": telemetry,
         }
         if peer_id is not None:
@@ -718,6 +748,7 @@ class AsyncHTTPClient(BaseClient):
         node_limit: Optional[int] = None,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
+        tags: Optional[List[str]] = None,
         telemetry: TelemetryRequest = False,
         peer_id: Optional[str] = None,
     ) -> FindResult:
@@ -733,6 +764,7 @@ class AsyncHTTPClient(BaseClient):
             "limit": actual_limit,
             "score_threshold": score_threshold,
             "filter": filter,
+            "tags": tags,
             "telemetry": telemetry,
         }
         if peer_id is not None:

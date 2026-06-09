@@ -202,6 +202,26 @@ impl HttpClient {
         self.post("/api/v1/content/write", &body).await
     }
 
+    pub async fn set_tags(
+        &self,
+        uri: &str,
+        tags: Vec<String>,
+        mode: &str,
+        recursive: bool,
+        wait: bool,
+        timeout: Option<f64>,
+    ) -> Result<serde_json::Value> {
+        let body = serde_json::json!({
+            "uri": uri,
+            "tags": tags,
+            "mode": mode,
+            "recursive": recursive,
+            "wait": wait,
+            "timeout": timeout,
+        });
+        self.post("/api/v1/content/set_tags", &body).await
+    }
+
     fn build_write_body(
         uri: &str,
         content: &str,
@@ -386,6 +406,7 @@ impl HttpClient {
         until: Option<String>,
         time_field: Option<String>,
         level: Option<Vec<i32>>,
+        tags: Option<Vec<String>>,
         peer_id: Option<String>,
     ) -> Result<serde_json::Value> {
         let body = serde_json::json!({
@@ -397,6 +418,7 @@ impl HttpClient {
             "until": until,
             "time_field": time_field,
             "level": level,
+            "tags": tags,
             "peer_id": peer_id,
         });
         self.post("/api/v1/search/find", &body).await
@@ -413,6 +435,7 @@ impl HttpClient {
         until: Option<String>,
         time_field: Option<String>,
         level: Option<Vec<i32>>,
+        tags: Option<Vec<String>>,
         peer_id: Option<String>,
     ) -> Result<serde_json::Value> {
         let body = serde_json::json!({
@@ -425,6 +448,7 @@ impl HttpClient {
             "until": until,
             "time_field": time_field,
             "level": level,
+            "tags": tags,
             "peer_id": peer_id,
         });
         self.post("/api/v1/search/search", &body).await

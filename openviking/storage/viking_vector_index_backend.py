@@ -26,6 +26,7 @@ RETRIEVAL_OUTPUT_FIELDS = [
     "abstract",
     "active_count",
     "updated_at",
+    "search_tags",
 ]
 
 LOOKUP_OUTPUT_FIELDS = [
@@ -57,6 +58,7 @@ FETCH_BY_URI_OUTPUT_FIELDS = [
     "name",
     "description",
     "tags",
+    "search_tags",
     "abstract",
     "account_id",
     "owner_user_id",
@@ -654,6 +656,40 @@ class VikingVectorIndexBackend:
     async def fetch_by_uri(self, uri: str, *, ctx: RequestContext) -> Optional[Dict[str, Any]]:
         backend = self._get_backend_for_context(ctx)
         return await backend.fetch_by_uri(uri)
+
+    async def update_search_tags(
+        self,
+        uri: str,
+        tags: List[str],
+        *,
+        mode: str,
+        ctx: RequestContext,
+    ) -> bool:
+        if mode not in {"replace", "append"}:
+            raise ValueError(f"unsupported tag mode: {mode}")
+
+        records = await self.get_context_by_uri(uri=uri, limit=1, ctx=ctx)
+        if not records:
+            return False
+        record_ids = [r["id"] for r in records if r.get("id")]
+        if not record_ids:
+            return False
+
+        full_records = await self.get(record_ids, ctx=ctx)
+        if not full_records:
+            return False
+
+        from openviking.utils.tags import merge_search_tags
+
+        updated = False
+        for record in full_records:
+            if mode == "append":
+                record["search_tags"] = merge_search_tags(record.get("search_tags"), tags)
+            else:
+                record["search_tags"] = list(tags)
+            if await self.upsert(record, ctx=ctx):
+                updated = True
+        return updated
 
     async def query(
         self,

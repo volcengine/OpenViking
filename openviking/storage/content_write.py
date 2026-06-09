@@ -18,6 +18,7 @@ from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.resource_summary import build_queue_status_payload
+from openviking.utils.tags import normalize_search_tags
 from openviking_cli.exceptions import (
     AlreadyExistsError,
     DeadlineExceededError,
@@ -102,6 +103,45 @@ class ContentWriteCoordinator:
             telemetry_id=telemetry_id,
         )
 
+    async def set_tags(
+        self,
+        *,
+        uri: str,
+        tags: list[str],
+        mode: str = "replace",
+        recursive: bool = False,
+        ctx: RequestContext,
+        wait: bool = False,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        try:
+            normalized_uri = canonicalize_uri(uri, ctx)
+        except NamespaceShapeError as exc:
+            raise InvalidArgumentError(str(exc)) from exc
+
+        self._validate_tag_mode(mode)
+        normalized_tags = normalize_search_tags(tags)
+        stat = await self._safe_stat(normalized_uri, ctx=ctx)
+        if stat.get("isDir"):
+            return await self._set_directory_tags(
+                uri=normalized_uri,
+                tags=normalized_tags,
+                mode=mode,
+                recursive=recursive,
+                ctx=ctx,
+                wait=wait,
+                timeout=timeout,
+            )
+        return await self._set_single_uri_tags(
+            uri=normalized_uri,
+            tags=normalized_tags,
+            mode=mode,
+            recursive=recursive,
+            ctx=ctx,
+            wait=wait,
+            timeout=timeout,
+        )
+
     def _build_write_result(
         self,
         *,
@@ -124,6 +164,40 @@ class ContentWriteCoordinator:
             "mode": mode,
             "written_bytes": written_bytes,
             "content_updated": True,
+            "semantic_status": semantic_status,
+            "vector_status": vector_status,
+            "queue_status": queue_status,
+        }
+
+    def _build_tags_result(
+        self,
+        *,
+        uri: str,
+        updated_uris: list[str],
+        skipped_count: int,
+        failed_count: int,
+        root_uri: str,
+        context_type: str,
+        tags: list[str],
+        mode: str,
+        wait: bool,
+        queue_status: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        semantic_status, vector_status = self._refresh_statuses(
+            wait=wait,
+            queue_status=queue_status,
+        )
+        return {
+            "uri": uri,
+            "updated_uris": updated_uris,
+            "root_uri": root_uri,
+            "context_type": context_type,
+            "tags": tags,
+            "mode": mode,
+            "success_count": len(updated_uris),
+            "skipped_count": skipped_count,
+            "failed_count": failed_count,
+            "tags_updated": True,
             "semantic_status": semantic_status,
             "vector_status": vector_status,
             "queue_status": queue_status,
@@ -248,6 +322,10 @@ class ContentWriteCoordinator:
         if mode not in {"replace", "append", "create"}:
             raise InvalidArgumentError(f"unsupported write mode: {mode}")
 
+    def _validate_tag_mode(self, mode: str) -> None:
+        if mode not in {"replace", "append"}:
+            raise InvalidArgumentError(f"unsupported tag mode: {mode}")
+
     def _validate_target_uri(self, uri: str) -> None:
         name = uri.rstrip("/").split("/")[-1]
         if name in _DERIVED_FILENAMES:
@@ -370,6 +448,7 @@ class ContentWriteCoordinator:
         ctx: RequestContext,
         change_type: str = "modified",
         target_uri: str = "",
+        recursive: bool = False,
     ) -> None:
         queue_manager = get_queue_manager()
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
@@ -378,6 +457,7 @@ class ContentWriteCoordinator:
             uri=root_uri,
             target_uri=target_uri,
             context_type=context_type,
+            recursive=recursive,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
             peer_id=ctx.user.user_id,
@@ -517,6 +597,177 @@ class ContentWriteCoordinator:
             if not released:
                 await lock_manager.release(handle)
             raise
+        finally:
+            if wait and telemetry_id:
+                get_request_wait_tracker().cleanup(telemetry_id)
+
+    async def _set_single_uri_tags(
+        self,
+        *,
+        uri: str,
+        tags: list[str],
+        mode: str,
+        recursive: bool,
+        ctx: RequestContext,
+        wait: bool,
+        timeout: Optional[float],
+    ) -> Dict[str, Any]:
+        context_type = context_type_for_uri(uri)
+        root_uri = await self._resolve_root_uri(uri, ctx=ctx)
+        updated_uri = await self._upsert_uri_tags(uri=uri, tags=tags, mode=mode, ctx=ctx)
+        if not updated_uri:
+            raise NotFoundError(uri, "vector record")
+        queue_status = await self._refresh_tags_semantics(
+            root_uri=root_uri,
+            changed_uri=updated_uri,
+            context_type=context_type,
+            ctx=ctx,
+            wait=wait,
+            timeout=timeout,
+        )
+        return self._build_tags_result(
+            uri=uri,
+            updated_uris=[updated_uri],
+            skipped_count=0,
+            failed_count=0,
+            root_uri=root_uri,
+            context_type=context_type,
+            tags=tags,
+            mode=mode,
+            wait=wait,
+            queue_status=queue_status,
+        )
+
+    async def _set_directory_tags(
+        self,
+        *,
+        uri: str,
+        tags: list[str],
+        mode: str,
+        recursive: bool,
+        ctx: RequestContext,
+        wait: bool,
+        timeout: Optional[float],
+    ) -> Dict[str, Any]:
+        updated_uris = await self._collect_directory_tag_targets(
+            uri=uri, recursive=recursive, ctx=ctx
+        )
+
+        if not updated_uris:
+            raise NotFoundError(uri, "semantic file")
+
+        applied_uris: list[str] = []
+        skipped_count = 0
+        for target_uri in updated_uris:
+            updated_uri = await self._upsert_uri_tags(uri=target_uri, tags=tags, mode=mode, ctx=ctx)
+            if updated_uri:
+                applied_uris.append(updated_uri)
+            else:
+                skipped_count += 1
+
+        context_type = context_type_for_uri(applied_uris[0] if applied_uris else updated_uris[0])
+        queue_status = await self._refresh_tags_semantics(
+            root_uri=uri,
+            changed_uri=uri if recursive or not applied_uris else applied_uris[0],
+            context_type=context_type,
+            ctx=ctx,
+            wait=wait,
+            timeout=timeout,
+            recursive=recursive,
+        )
+        return self._build_tags_result(
+            uri=uri,
+            updated_uris=applied_uris,
+            skipped_count=skipped_count,
+            failed_count=0,
+            root_uri=uri,
+            context_type=context_type,
+            tags=tags,
+            mode=mode,
+            wait=wait,
+            queue_status=queue_status,
+        )
+
+    async def _collect_directory_tag_targets(
+        self,
+        *,
+        uri: str,
+        recursive: bool,
+        ctx: RequestContext,
+    ) -> list[str]:
+        base_targets = [f"{uri.rstrip('/')}/.abstract.md", f"{uri.rstrip('/')}/.overview.md"]
+        if not recursive:
+            targets: list[str] = []
+            for child_uri in base_targets:
+                try:
+                    await self._safe_stat(child_uri, ctx=ctx)
+                except NotFoundError:
+                    continue
+                targets.append(child_uri)
+            return targets
+
+        entries = await self._viking_fs.tree(
+            uri,
+            ctx=ctx,
+            output="original",
+            show_all_hidden=True,
+        )
+        targets = [
+            entry.get("uri", "") for entry in entries if not entry.get("isDir") and entry.get("uri")
+        ]
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for target_uri in targets:
+            if is_watch_task_control_uri(target_uri):
+                continue
+            if target_uri in seen:
+                continue
+            seen.add(target_uri)
+            deduped.append(target_uri)
+        return deduped
+
+    async def _upsert_uri_tags(
+        self,
+        *,
+        uri: str,
+        tags: list[str],
+        mode: str,
+        ctx: RequestContext,
+    ) -> Optional[str]:
+        store = self._viking_fs._get_vector_store()
+        if not store:
+            raise RuntimeError("Vector store not initialized. Call OpenViking.initialize() first.")
+        updated = await store.update_search_tags(uri, tags, mode=mode, ctx=ctx)
+        if not updated:
+            return None
+        return uri
+
+    async def _refresh_tags_semantics(
+        self,
+        *,
+        root_uri: str,
+        changed_uri: str,
+        context_type: str,
+        ctx: RequestContext,
+        wait: bool,
+        timeout: Optional[float],
+        recursive: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        telemetry_id = get_current_telemetry().telemetry_id
+        if wait and telemetry_id:
+            get_request_wait_tracker().register_request(telemetry_id)
+        try:
+            await self._enqueue_semantic_refresh(
+                root_uri=root_uri,
+                changed_uri=changed_uri,
+                context_type=context_type,
+                ctx=ctx,
+                change_type="modified",
+                recursive=recursive,
+            )
+            if not wait:
+                return None
+            return await self._wait_for_request(telemetry_id=telemetry_id, timeout=timeout)
         finally:
             if wait and telemetry_id:
                 get_request_wait_tracker().cleanup(telemetry_id)
