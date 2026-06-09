@@ -22,10 +22,12 @@ mooncake-native = [
     "ragfs-cache-mooncake",
     "ragfs-cache-mooncake/mooncake-native",
 ]
+cache-redis = ["ragfs-cache-redis"]
 
 [dependencies]
 ragfs = { path = "../ragfs", features = ["cache"] }
 ragfs-cache-mooncake = { path = "../ragfs-cache-mooncake", optional = true }
+ragfs-cache-redis = { path = "../ragfs-cache-redis", optional = true }
 ragfs-cache-yuanrong = { path = "../ragfs-cache-yuanrong", optional = true }
 pyo3 = { version = "0.27", features = ["abi3", "abi3-py310"] }
 tokio = { version = "1", features = ["full"] }

@@ -28,6 +28,7 @@ enum CacheProviderKind {
     Memory,
     Yuanrong,
     Mooncake,
+    Redis,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,6 +40,7 @@ struct RagfsCacheConfig {
     bypass_prefixes: Vec<String>,
     yuanrong: YuanrongCacheConfig,
     mooncake: MooncakeCacheConfig,
+    redis: RedisCacheConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,6 +66,20 @@ struct MooncakeCacheConfig {
     operation_timeout_ms: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RedisCacheConfig {
+    mode: String,
+    endpoints: Vec<String>,
+    username: String,
+    password_env: String,
+    pool_size: usize,
+    connect_timeout_ms: u64,
+    command_timeout_ms: u64,
+    key_prefix: String,
+    default_ttl_seconds: u64,
+    read_from_replica: bool,
+}
+
 impl Default for RagfsCacheConfig {
     fn default() -> Self {
         Self {
@@ -74,6 +90,7 @@ impl Default for RagfsCacheConfig {
             bypass_prefixes: Vec::new(),
             yuanrong: YuanrongCacheConfig::default(),
             mooncake: MooncakeCacheConfig::default(),
+            redis: RedisCacheConfig::default(),
         }
     }
 }
@@ -107,6 +124,23 @@ impl Default for MooncakeCacheConfig {
     }
 }
 
+impl Default for RedisCacheConfig {
+    fn default() -> Self {
+        Self {
+            mode: "standalone".to_string(),
+            endpoints: vec!["redis://127.0.0.1:6379".to_string()],
+            username: String::new(),
+            password_env: String::new(),
+            pool_size: 32,
+            connect_timeout_ms: 1_000,
+            command_timeout_ms: 20,
+            key_prefix: "ragfs-cache".to_string(),
+            default_ttl_seconds: 3_600,
+            read_from_replica: false,
+        }
+    }
+}
+
 struct CacheProviderFactory;
 
 impl CacheProviderFactory {
@@ -115,6 +149,7 @@ impl CacheProviderFactory {
             CacheProviderKind::Memory => Ok(Arc::new(MemoryCacheProvider::new())),
             CacheProviderKind::Yuanrong => create_yuanrong_provider(config).await,
             CacheProviderKind::Mooncake => create_mooncake_provider(config).await,
+            CacheProviderKind::Redis => create_redis_provider(config).await,
         }
     }
 }
@@ -173,6 +208,33 @@ async fn create_mooncake_provider(
 ) -> CacheResult<Arc<dyn CacheProvider>> {
     Err(CacheError::Unavailable(
         "Mooncake support requires the mooncake-native feature".to_string(),
+    ))
+}
+
+#[cfg(feature = "cache-redis")]
+async fn create_redis_provider(config: &RagfsCacheConfig) -> CacheResult<Arc<dyn CacheProvider>> {
+    use ragfs_cache_redis::{RedisConfig, RedisProvider};
+
+    let provider = RedisProvider::connect(RedisConfig {
+        mode: config.redis.mode.clone(),
+        endpoints: config.redis.endpoints.clone(),
+        username: config.redis.username.clone(),
+        password_env: config.redis.password_env.clone(),
+        pool_size: config.redis.pool_size,
+        connect_timeout_ms: config.redis.connect_timeout_ms,
+        command_timeout_ms: config.redis.command_timeout_ms,
+        key_prefix: config.redis.key_prefix.clone(),
+        default_ttl_seconds: config.redis.default_ttl_seconds,
+        read_from_replica: config.redis.read_from_replica,
+    })
+    .await?;
+    Ok(Arc::new(provider))
+}
+
+#[cfg(not(feature = "cache-redis"))]
+async fn create_redis_provider(_config: &RagfsCacheConfig) -> CacheResult<Arc<dyn CacheProvider>> {
+    Err(CacheError::Unavailable(
+        "Redis support requires the cache-redis feature".to_string(),
     ))
 }
 
@@ -268,6 +330,31 @@ fn cache_config_from_ov_conf(path: &str) -> Result<RagfsCacheConfig, String> {
         )?;
     }
 
+    if let Some(redis) = cache.get("redis") {
+        let redis = redis
+            .as_object()
+            .ok_or_else(|| "storage.agfs.cache.redis must be an object".to_string())?;
+        config.redis.mode = string_field(redis, "mode", &config.redis.mode)?;
+        config.redis.endpoints =
+            string_array_field_or_default(redis, "endpoints", &config.redis.endpoints)?;
+        config.redis.username = string_field(redis, "username", &config.redis.username)?;
+        config.redis.password_env =
+            string_field(redis, "password_env", &config.redis.password_env)?;
+        config.redis.pool_size = usize_field(redis, "pool_size", config.redis.pool_size)?;
+        config.redis.connect_timeout_ms =
+            u64_field(redis, "connect_timeout_ms", config.redis.connect_timeout_ms)?;
+        config.redis.command_timeout_ms =
+            u64_field(redis, "command_timeout_ms", config.redis.command_timeout_ms)?;
+        config.redis.key_prefix = string_field(redis, "key_prefix", &config.redis.key_prefix)?;
+        config.redis.default_ttl_seconds = u64_field_allow_zero(
+            redis,
+            "default_ttl_seconds",
+            config.redis.default_ttl_seconds,
+        )?;
+        config.redis.read_from_replica =
+            bool_field(redis, "read_from_replica", config.redis.read_from_replica)?;
+    }
+
     Ok(config)
 }
 
@@ -276,8 +363,9 @@ fn provider_kind(value: String) -> Result<CacheProviderKind, String> {
         "memory" => Ok(CacheProviderKind::Memory),
         "yuanrong" => Ok(CacheProviderKind::Yuanrong),
         "mooncake" => Ok(CacheProviderKind::Mooncake),
+        "redis" => Ok(CacheProviderKind::Redis),
         other => Err(format!(
-            "unsupported storage.agfs.cache.provider: {other}; expected memory, yuanrong, or mooncake"
+            "unsupported storage.agfs.cache.provider: {other}; expected memory, yuanrong, mooncake, or redis"
         )),
     }
 }
@@ -323,6 +411,19 @@ fn u64_field(
     }
 }
 
+fn u64_field_allow_zero(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    default: u64,
+) -> Result<u64, String> {
+    match object.get(key) {
+        Some(value) => value
+            .as_u64()
+            .ok_or_else(|| format!("{key} must be a non-negative integer")),
+        None => Ok(default),
+    }
+}
+
 fn u16_field(
     object: &serde_json::Map<String, serde_json::Value>,
     key: &str,
@@ -357,6 +458,17 @@ fn string_array_field(
             })
             .collect(),
         None => Ok(Vec::new()),
+    }
+}
+
+fn string_array_field_or_default(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    default: &[String],
+) -> Result<Vec<String>, String> {
+    match object.get(key) {
+        Some(_) => string_array_field(object, key),
+        None => Ok(default.to_vec()),
     }
 }
 
@@ -1571,6 +1683,120 @@ mod tests {
         assert!(!cache_config.enabled);
         assert_eq!(cache_config.provider, CacheProviderKind::Memory);
         assert_eq!(cache_config.namespace, "openviking");
+
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn redis_cache_config_is_parsed_from_ov_conf() {
+        let path = std::env::temp_dir().join(format!(
+            "openviking-redis-cache-config-{}.json",
+            std::process::id()
+        ));
+        fs::write(
+            &path,
+            r#"{
+                "storage": {
+                    "agfs": {
+                        "cache": {
+                            "enabled": true,
+                            "provider": "redis",
+                            "namespace": "ov-test",
+                            "redis": {
+                                "mode": "standalone",
+                                "endpoints": ["redis://127.0.0.1:6379"],
+                                "pool_size": 8,
+                                "connect_timeout_ms": 1000,
+                                "command_timeout_ms": 20,
+                                "key_prefix": "ragfs-cache",
+                                "default_ttl_seconds": 3600,
+                                "read_from_replica": false
+                            }
+                        }
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let cache_config = cache_config_from_ov_conf(path.to_str().unwrap()).unwrap();
+
+        assert!(cache_config.enabled);
+        assert_eq!(cache_config.provider, CacheProviderKind::Redis);
+        assert_eq!(cache_config.redis.mode, "standalone");
+        assert_eq!(cache_config.redis.endpoints, vec!["redis://127.0.0.1:6379"]);
+        assert_eq!(cache_config.redis.pool_size, 8);
+        assert_eq!(cache_config.redis.connect_timeout_ms, 1000);
+        assert_eq!(cache_config.redis.command_timeout_ms, 20);
+        assert_eq!(cache_config.redis.key_prefix, "ragfs-cache");
+        assert_eq!(cache_config.redis.default_ttl_seconds, 3600);
+        assert!(!cache_config.redis.read_from_replica);
+
+        fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(not(feature = "cache-redis"))]
+    #[tokio::test]
+    async fn redis_provider_requires_cache_redis_feature() {
+        let config = RagfsCacheConfig {
+            enabled: true,
+            provider: CacheProviderKind::Redis,
+            ..RagfsCacheConfig::default()
+        };
+
+        let error = match CacheProviderFactory::create(&config).await {
+            Ok(provider) => panic!("unexpected provider: {}", provider.name()),
+            Err(error) => error,
+        };
+
+        assert!(matches!(
+            error,
+            CacheError::Unavailable(message)
+                if message == "Redis support requires the cache-redis feature"
+        ));
+    }
+
+    #[cfg(feature = "cache-redis")]
+    #[tokio::test]
+    async fn cache_provider_factory_creates_redis_provider_from_ov_conf() {
+        let Ok(endpoint) = std::env::var("REDIS_URL") else {
+            return;
+        };
+        let path = std::env::temp_dir().join(format!(
+            "openviking-cache-redis-factory-{}.json",
+            std::process::id()
+        ));
+        fs::write(
+            &path,
+            format!(
+                r#"{{
+                    "storage": {{
+                        "agfs": {{
+                            "cache": {{
+                                "enabled": true,
+                                "provider": "redis",
+                                "namespace": "ov-test",
+                                "redis": {{
+                                    "mode": "standalone",
+                                    "endpoints": ["{endpoint}"],
+                                    "connect_timeout_ms": 30000,
+                                    "command_timeout_ms": 1000,
+                                    "key_prefix": "ragfs-python-cache-test",
+                                    "default_ttl_seconds": 60
+                                }}
+                            }}
+                        }}
+                    }}
+                }}"#
+            ),
+        )
+        .unwrap();
+
+        let cache_config = cache_config_from_ov_conf(path.to_str().unwrap()).unwrap();
+        let provider = CacheProviderFactory::create(&cache_config).await.unwrap();
+
+        assert_eq!(provider.name(), "redis");
+        provider.close().await.unwrap();
 
         fs::remove_file(path).unwrap();
     }

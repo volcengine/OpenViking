@@ -3,6 +3,7 @@ members = [
     "crates/ov_cli",
     "crates/ragfs",
     "crates/ragfs-cache-mooncake",
+    "crates/ragfs-cache-redis",
     "crates/ragfs-cache-yuanrong",
     "crates/ragfs-cache-yuanrong-sys",
     "crates/ragfs-python",

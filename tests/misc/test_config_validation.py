@@ -190,12 +190,41 @@ def test_agfs_cache_accepts_yuanrong_provider_config():
     assert config.cache.yuanrong.sdk_concurrency == 2
 
 
+def test_agfs_cache_accepts_redis_provider_config():
+    config = AGFSConfig(
+        path="/tmp/ov-test",
+        backend="local",
+        cache={
+            "enabled": True,
+            "provider": "redis",
+            "namespace": "ov-test",
+            "redis": {
+                "mode": "standalone",
+                "endpoints": ["redis://127.0.0.1:6379"],
+                "pool_size": 8,
+                "connect_timeout_ms": 1000,
+                "command_timeout_ms": 20,
+                "key_prefix": "ragfs-cache",
+                "default_ttl_seconds": 3600,
+                "read_from_replica": False,
+            },
+        },
+    )
+
+    assert config.cache.enabled is True
+    assert config.cache.provider == "redis"
+    assert config.cache.redis.mode == "standalone"
+    assert config.cache.redis.endpoints == ["redis://127.0.0.1:6379"]
+    assert config.cache.redis.pool_size == 8
+    assert config.cache.redis.default_ttl_seconds == 3600
+
+
 def test_agfs_cache_rejects_invalid_provider():
     with pytest.raises(ValueError, match="provider"):
         AGFSConfig(
             path="/tmp/ov-test",
             backend="local",
-            cache={"provider": "redis"},
+            cache={"provider": "bogus"},
         )
 
 
