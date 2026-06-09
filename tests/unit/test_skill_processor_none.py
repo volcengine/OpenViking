@@ -81,6 +81,37 @@ class TestParseSkillNoneData:
         assert len(aux_files) == 1
         shutil.rmtree(cleanup_path, ignore_errors=True)
 
+    def test_parse_skill_accepts_single_file_with_non_standard_name(self, tmp_path):
+        processor = SkillProcessor(vikingdb=None)
+        skill_file = tmp_path / "custom-name.md"
+        skill_file.write_text(
+            "---\nname: custom-name\ndescription: Custom filename skill\n---\n\n# Skill\n",
+            encoding="utf-8",
+        )
+
+        skill_dict, aux_files, base_path, cleanup_path = processor._parse_skill(skill_file)
+
+        assert skill_dict["name"] == "custom-name"
+        assert skill_dict["source_path"].endswith("custom-name.md")
+        assert aux_files == []
+        assert base_path is None
+        assert cleanup_path is None
+
+    def test_parse_skill_prefers_source_path_hint_for_single_file(self, tmp_path):
+        processor = SkillProcessor(vikingdb=None)
+        uploaded_path = tmp_path / "upload_123.md"
+        uploaded_path.write_text(
+            "---\nname: hinted-skill\ndescription: Hint source path\n---\n\n# Skill\n",
+            encoding="utf-8",
+        )
+
+        skill_dict, _, _, _ = processor._parse_skill(
+            uploaded_path,
+            source_path_hint="hinted-skill.md",
+        )
+
+        assert skill_dict["source_path"] == "hinted-skill.md"
+
     @pytest.mark.parametrize("skill_dict", [{}, {"description": "missing name"}])
     def test_validate_skill_dict_requires_name_field(self, skill_dict):
         """Dict skill data should fail fast when required metadata is missing."""

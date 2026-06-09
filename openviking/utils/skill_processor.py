@@ -11,6 +11,7 @@ import tempfile
 import time
 import zipfile
 from copy import deepcopy
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -39,6 +40,15 @@ from openviking_cli.utils.config import get_openviking_config
 logger = get_logger(__name__)
 
 MAX_SKILL_NAME_LENGTH = 64
+
+
+@dataclass
+class SkillProcessingPreparation:
+    skill_dict: Dict[str, Any]
+    auxiliary_files: List[Path]
+    base_path: Optional[Path]
+    cleanup_path: Optional[Path]
+    privacy_values: Dict[str, str]
 
 
 def validate_skill_name(name: Any) -> str:
@@ -104,12 +114,15 @@ class SkillProcessor:
         viking_fs: VikingFS,
         ctx: RequestContext,
         allow_local_path_resolution: bool = True,
+        source_path_hint: Optional[str] = None,
+        apply_privacy: bool = True,
+        privacy_change_reason: str = "auto-extracted from add_skill",
     ) -> Dict[str, Any]:
         """
         Process and store a skill.
 
         Args:
-            data: Skill data (directory path, file path, string, or dict)
+            data: Skill data (directory, file path, string, or dict)
             viking_fs: VikingFS instance for storage
             user: Username for context
 
@@ -120,22 +133,49 @@ class SkillProcessor:
         if data is None:
             raise ValueError("Skill data cannot be None")
 
-        config = get_openviking_config()
-        telemetry = get_current_telemetry()
-
         parse_start = time.perf_counter()
-        cleanup_path: Optional[Path] = None
-        try:
-            skill_dict, auxiliary_files, base_path, cleanup_path = self._parse_skill(
-                data,
-                allow_local_path_resolution=allow_local_path_resolution,
-            )
-            self._validate_skill_dict(skill_dict)
-            telemetry.set(
-                "skill.parse.duration_ms", round((time.perf_counter() - parse_start) * 1000, 3)
-            )
+        preparation = await self.prepare_skill_processing(
+            data,
+            ctx=ctx,
+            allow_local_path_resolution=allow_local_path_resolution,
+            source_path_hint=source_path_hint,
+        )
+        telemetry = get_current_telemetry()
+        telemetry.set(
+            "skill.parse.duration_ms", round((time.perf_counter() - parse_start) * 1000, 3)
+        )
+        return await self.process_prepared_skill(
+            preparation,
+            viking_fs=viking_fs,
+            ctx=ctx,
+            apply_privacy=apply_privacy,
+            privacy_change_reason=privacy_change_reason,
+        )
 
-            skill_dict = await self.sanitize_skill_privacy(skill_dict, ctx)
+    async def process_prepared_skill(
+        self,
+        preparation: SkillProcessingPreparation,
+        viking_fs: VikingFS,
+        ctx: RequestContext,
+        *,
+        apply_privacy: bool = True,
+        privacy_change_reason: str = "auto-extracted from add_skill",
+    ) -> Dict[str, Any]:
+        config = get_openviking_config()
+        cleanup_path = preparation.cleanup_path
+        skill_dict = preparation.skill_dict
+        auxiliary_files = preparation.auxiliary_files
+        base_path = preparation.base_path
+        telemetry = get_current_telemetry()
+        try:
+            if apply_privacy:
+                skill_dict = await self.apply_skill_privacy(
+                    skill_dict,
+                    preparation.privacy_values,
+                    ctx,
+                    change_reason=privacy_change_reason,
+                    delete_if_empty=False,
+                )
             skill_abstract = self._build_skill_abstract(skill_dict)
 
             skill_root_uri = f"{canonical_user_root(ctx)}/skills"
@@ -207,10 +247,38 @@ class SkillProcessor:
             if cleanup_path:
                 shutil.rmtree(cleanup_path, ignore_errors=True)
 
+    async def prepare_skill_processing(
+        self,
+        data: Any,
+        ctx: RequestContext,
+        allow_local_path_resolution: bool = True,
+        source_path_hint: Optional[str] = None,
+    ) -> SkillProcessingPreparation:
+        skill_dict, auxiliary_files, base_path, cleanup_path = self._parse_skill(
+            data,
+            allow_local_path_resolution=allow_local_path_resolution,
+            source_path_hint=source_path_hint,
+        )
+        try:
+            self._validate_skill_dict(skill_dict)
+            skill_dict, privacy_values = await self.prepare_skill_privacy(skill_dict, ctx)
+            return SkillProcessingPreparation(
+                skill_dict=skill_dict,
+                auxiliary_files=auxiliary_files,
+                base_path=base_path,
+                cleanup_path=cleanup_path,
+                privacy_values=privacy_values,
+            )
+        except Exception:
+            if cleanup_path:
+                shutil.rmtree(cleanup_path, ignore_errors=True)
+            raise
+
     def _parse_skill(
         self,
         data: Any,
         allow_local_path_resolution: bool = True,
+        source_path_hint: Optional[str] = None,
     ) -> tuple[Dict[str, Any], List[Path], Optional[Path], Optional[Path]]:
         """Parse skill data from various formats."""
         if data is None:
@@ -245,12 +313,7 @@ class SkillProcessor:
                         if item.is_file() and item.name != "SKILL.md":
                             auxiliary_files.append(item)
                 else:
-                    # Single SKILL.md file
-                    if data.name != "SKILL.md":
-                        raise InvalidArgumentError(
-                            "Skill file must be named SKILL.md",
-                            details={"path": str(data), "expected": "SKILL.md"},
-                        )
+                    # Single skill markdown file
                     skill_dict = SkillLoader.load(str(data))
             elif isinstance(data, str):
                 # Raw SKILL.md content
@@ -264,6 +327,8 @@ class SkillProcessor:
                 raise ValueError(f"Unsupported data type: {type(data)}")
 
             skill_dict = self._normalize_skill_dict(skill_dict)
+            if source_path_hint:
+                skill_dict["source_path"] = source_path_hint
             self._validate_skill_dict(skill_dict)
             return skill_dict, auxiliary_files, base_path, cleanup_path
         except Exception:
@@ -346,16 +411,12 @@ class SkillProcessor:
 
         return yaml.safe_dump(abstract_meta, allow_unicode=True, sort_keys=False).strip()
 
-    async def sanitize_skill_privacy(
+    async def prepare_skill_privacy(
         self, skill_dict: Dict[str, Any], ctx: RequestContext
-    ) -> Dict[str, Any]:
-        return await self._sanitize_skill_privacy(skill_dict, ctx)
-
-    async def _sanitize_skill_privacy(
-        self, skill_dict: Dict[str, Any], ctx: RequestContext
-    ) -> Dict[str, Any]:
+    ) -> tuple[Dict[str, Any], Dict[str, str]]:
+        del ctx
         if not self._privacy_config_service:
-            return skill_dict
+            return skill_dict, {}
 
         content = skill_dict.get("content", "")
         extraction_result = await extract_skill_privacy_values(
@@ -364,19 +425,60 @@ class SkillProcessor:
             content=content,
         )
         if not extraction_result.values:
-            return skill_dict
+            return skill_dict, {}
 
         sanitized = deepcopy(skill_dict)
         sanitized["content"] = extraction_result.sanitized_content
-        await self._privacy_config_service.upsert(
-            ctx=ctx,
-            category="skill",
-            target_key=sanitized["name"],
-            values=extraction_result.values,
-            updated_by=ctx.user.user_id,
-            change_reason="auto-extracted from add_skill",
+        return sanitized, extraction_result.values
+
+    async def apply_skill_privacy(
+        self,
+        skill_dict: Dict[str, Any],
+        privacy_values: Dict[str, str],
+        ctx: RequestContext,
+        *,
+        change_reason: str,
+        delete_if_empty: bool,
+    ) -> Dict[str, Any]:
+        if not self._privacy_config_service:
+            return skill_dict
+
+        if privacy_values:
+            await self._privacy_config_service.upsert(
+                ctx=ctx,
+                category="skill",
+                target_key=skill_dict["name"],
+                values=privacy_values,
+                updated_by=ctx.user.user_id,
+                change_reason=change_reason,
+            )
+            return skill_dict
+
+        if delete_if_empty:
+            await self._privacy_config_service.delete(ctx, "skill", skill_dict["name"])
+        return skill_dict
+
+    async def sanitize_skill_privacy(
+        self, skill_dict: Dict[str, Any], ctx: RequestContext
+    ) -> Dict[str, Any]:
+        return await self._sanitize_skill_privacy(ctx=ctx, skill_dict=skill_dict)
+
+    async def _sanitize_skill_privacy(
+        self,
+        skill_dict: Dict[str, Any],
+        ctx: RequestContext,
+        *,
+        change_reason: str = "auto-extracted from add_skill",
+        delete_if_empty: bool = False,
+    ) -> Dict[str, Any]:
+        sanitized, privacy_values = await self.prepare_skill_privacy(skill_dict, ctx)
+        return await self.apply_skill_privacy(
+            sanitized,
+            privacy_values,
+            ctx,
+            change_reason=change_reason,
+            delete_if_empty=delete_if_empty,
         )
-        return sanitized
 
     async def _generate_overview(self, skill_dict: Dict[str, Any], config) -> str:
         """Generate L1 overview using VLM."""

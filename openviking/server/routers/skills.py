@@ -3,6 +3,7 @@
 """Agent-scope skill management endpoints for OpenViking HTTP Server."""
 
 import re
+import shutil
 import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -14,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 from openviking.core.namespace import canonical_user_root
 from openviking.core.skill_loader import SkillLoader
+from openviking.privacy.service import UserPrivacyConfigVersion
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
@@ -344,13 +346,20 @@ async def _list_skill_files(
     return entries
 
 
-def _parse_skill_data(service, data: Any, *, allow_local_path_resolution: bool) -> Dict[str, Any]:
+def _parse_skill_data(
+    service,
+    data: Any,
+    *,
+    allow_local_path_resolution: bool,
+    source_path_hint: Optional[str] = None,
+) -> Dict[str, Any]:
     skill_processor = getattr(service.resources, "_skill_processor", None)
     if skill_processor is None:
         raise RuntimeError("SkillProcessor is required for skill validation")
     skill_dict, _, _, _ = skill_processor._parse_skill(  # noqa: SLF001 - keep parser authority centralized.
         data,
         allow_local_path_resolution=allow_local_path_resolution,
+        source_path_hint=source_path_hint,
     )
     return skill_dict
 
@@ -361,9 +370,13 @@ def _validate_data_matches_name(
     skill_name: str,
     *,
     allow_local_path_resolution: bool,
+    source_path_hint: Optional[str] = None,
 ) -> Dict[str, Any]:
     parsed = _parse_skill_data(
-        service, data, allow_local_path_resolution=allow_local_path_resolution
+        service,
+        data,
+        allow_local_path_resolution=allow_local_path_resolution,
+        source_path_hint=source_path_hint,
     )
     expected_name = _validate_skill_name(skill_name)
     if parsed.get("name") != expected_name:
@@ -372,6 +385,27 @@ def _validate_data_matches_name(
             details={"expected": expected_name, "actual": parsed.get("name")},
         )
     return parsed
+
+
+async def _restore_skill_privacy(
+    service,
+    ctx: RequestContext,
+    skill_name: str,
+    previous_privacy: Optional[UserPrivacyConfigVersion],
+) -> None:
+    privacy = service.privacy_configs
+    if privacy is None:
+        return
+    if previous_privacy is None:
+        await privacy.delete(ctx, "skill", skill_name)
+        return
+    await privacy.activate_version(
+        ctx,
+        "skill",
+        skill_name,
+        previous_privacy.version,
+        updated_by=ctx.user.user_id,
+    )
 
 
 @router.get("")
@@ -531,28 +565,55 @@ async def update_skill(
         if resolved.original_filename and request.source_metadata is None:
             source_metadata["original_filename"] = resolved.original_filename
 
+    source_path_hint = resolved.original_filename if resolved else None
     store = TempUploadStore.build(http_request.app.state.config) if resolved else None
 
     async def _update() -> Dict[str, Any]:
         backup_uri = f"{_agent_skills_root(_ctx)}/.{skill_name}.update-backup-{uuid.uuid4().hex}"
         backup_created = False
+        privacy_committed = False
+        previous_privacy = None
+        preparation = None
+        privacy = service.privacy_configs
         try:
-            _validate_data_matches_name(
-                service,
+            if privacy is not None:
+                previous_privacy = await privacy.get_current(_ctx, "skill", skill_name)
+            preparation = await service.resources._skill_processor.prepare_skill_processing(  # noqa: SLF001
                 data,
-                skill_name,
+                ctx=_ctx,
                 allow_local_path_resolution=allow_local_path_resolution,
+                source_path_hint=source_path_hint,
             )
+            expected_name = _validate_skill_name(skill_name)
+            if preparation.skill_dict.get("name") != expected_name:
+                raise InvalidArgumentError(
+                    f"Skill name mismatch: path name is '{expected_name}', content name is '{preparation.skill_dict.get('name')}'",
+                    details={
+                        "expected": expected_name,
+                        "actual": preparation.skill_dict.get("name"),
+                    },
+                )
             await service.fs.mv(root_uri, backup_uri, ctx=_ctx)
             backup_created = True
             result = await service.resources.add_skill(
-                data=data,
+                data=preparation,
                 ctx=_ctx,
                 wait=request.wait,
                 timeout=request.timeout,
-                allow_local_path_resolution=allow_local_path_resolution,
+                allow_local_path_resolution=False,
+                source_path_hint=source_path_hint,
+                apply_privacy=False,
+                privacy_change_reason="auto-extracted from update_skill",
             )
             await persist_skill_source_metadata(service, _ctx, result, source_metadata)
+            await service.resources._skill_processor.apply_skill_privacy(  # noqa: SLF001
+                preparation.skill_dict,
+                preparation.privacy_values,
+                _ctx,
+                change_reason="auto-extracted from update_skill",
+                delete_if_empty=True,
+            )
+            privacy_committed = True
         except Exception:
             if backup_created:
                 try:
@@ -561,6 +622,11 @@ async def update_skill(
                     pass
                 try:
                     await service.fs.mv(backup_uri, root_uri, ctx=_ctx)
+                except Exception:
+                    pass
+            if privacy_committed:
+                try:
+                    await _restore_skill_privacy(service, _ctx, skill_name, previous_privacy)
                 except Exception:
                     pass
             if resolved and store:
@@ -574,6 +640,8 @@ async def update_skill(
             result["action"] = "update"
             return result
         finally:
+            if preparation and preparation.cleanup_path:
+                shutil.rmtree(preparation.cleanup_path, ignore_errors=True)
             if resolved:
                 await resolved.cleanup()
 

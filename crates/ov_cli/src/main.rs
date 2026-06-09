@@ -128,10 +128,6 @@ struct Cli {
     #[arg(long, global = true, hide = true)]
     user: Option<String>,
 
-    /// Agent identifier to send as X-OpenViking-Agent
-    #[arg(long = "agent-id", global = true, hide = true)]
-    agent_id: Option<String>,
-
     /// Use root API key for admin commands
     #[arg(long, global = true, hide = true)]
     sudo: bool,
@@ -3468,7 +3464,6 @@ mod tests {
             root_api_key: None,
             account: Some("from-config-account".to_string()),
             user: Some("from-config-user".to_string()),
-            agent_id: None,
             timeout: 60.0,
             output: "table".to_string(),
             echo_command: true,
@@ -3503,7 +3498,6 @@ mod tests {
             root_api_key: Some("root-key".to_string()),
             account: None,
             user: None,
-            agent_id: None,
             timeout: 60.0,
             output: "table".to_string(),
             echo_command: true,

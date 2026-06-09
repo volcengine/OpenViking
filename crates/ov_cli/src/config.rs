@@ -45,8 +45,6 @@ pub struct Config {
     pub account: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", alias = "user_id")]
     pub user: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_id: Option<String>,
     #[serde(
         default = "default_timeout",
         skip_serializing_if = "is_default_timeout"
@@ -151,7 +149,6 @@ impl Default for Config {
             root_api_key: None,
             account: None,
             user: None,
-            agent_id: None,
             timeout: 60.0,
             output: "table".to_string(),
             echo_command: true,

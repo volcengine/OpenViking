@@ -45,6 +45,33 @@ description: temp uploaded skill
     assert body["result"]["uri"].startswith("viking://user/default/skills/")
 
 
+async def test_add_skill_accepts_temp_uploaded_non_skill_filename(
+    client: httpx.AsyncClient,
+    upload_temp_dir,
+):
+    skill_file = upload_temp_dir / "upload_123.md"
+    skill_file.write_text(
+        """---
+name: uploaded-arbitrary-name
+description: temp uploaded skill
+---
+
+# Uploaded Skill
+"""
+    )
+    meta_file = upload_temp_dir / f"{skill_file.name}.ov_upload.meta"
+    meta_file.write_text('{"original_filename": "original-skill.md"}', encoding="utf-8")
+
+    resp = await client.post(
+        "/api/v1/skills",
+        json={"temp_file_id": skill_file.name, "wait": True},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["result"]["uri"].startswith("viking://user/default/skills/")
+
+
 async def test_add_skill_rejects_direct_local_path(client: httpx.AsyncClient):
     resp = await client.post(
         "/api/v1/skills",

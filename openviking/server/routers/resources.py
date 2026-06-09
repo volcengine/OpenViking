@@ -300,6 +300,7 @@ async def add_skill(
         if resolved.original_filename and request.source_metadata is None:
             source_metadata["original_filename"] = resolved.original_filename
 
+    source_path_hint = resolved.original_filename if resolved else None
     store = TempUploadStore.build(http_request.app.state.config) if resolved else None
 
     async def _add() -> dict[str, Any]:
@@ -310,6 +311,7 @@ async def add_skill(
                 wait=request.wait,
                 timeout=request.timeout,
                 allow_local_path_resolution=allow_local_path_resolution,
+                source_path_hint=source_path_hint,
             )
             await persist_skill_source_metadata(service, _ctx, result, source_metadata)
         except Exception:

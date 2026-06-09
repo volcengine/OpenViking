@@ -207,6 +207,42 @@ async def test_skills_api_update_requires_matching_name(client):
     assert shown["source"]["skill_name"] == "update-skill"
 
 
+async def test_skills_api_update_accepts_temp_uploaded_single_file_with_arbitrary_name(
+    client,
+    tmp_path,
+):
+    await _add_skill(client, "update-temp-file-skill", "Original description")
+
+    skill_file = tmp_path / "custom-update-name.md"
+    skill_file.write_text(
+        _skill_md("update-temp-file-skill", "Updated from uploaded file"),
+        encoding="utf-8",
+    )
+
+    with skill_file.open("rb") as handle:
+        upload_response = await client.post(
+            "/api/v1/resources/temp_upload",
+            files={"file": ("custom-update-name.md", handle, "text/markdown")},
+        )
+    assert upload_response.status_code == 200, upload_response.text
+    temp_file_id = upload_response.json()["result"]["temp_file_id"]
+
+    update_response = await client.put(
+        "/api/v1/skills/update-temp-file-skill",
+        json={"temp_file_id": temp_file_id, "wait": True},
+    )
+    assert update_response.status_code == 200, update_response.text
+    assert update_response.json()["result"]["action"] == "update"
+
+    show_response = await client.get(
+        "/api/v1/skills/update-temp-file-skill",
+        params={"include_content": True, "include_source": True},
+    )
+    shown = show_response.json()["result"]
+    assert shown["description"] == "Updated from uploaded file"
+    assert shown["source"]["original_filename"] == "custom-update-name.md"
+
+
 async def test_skills_api_update_rolls_back_when_replace_fails(client, monkeypatch):
     await _add_skill(client, "rollback-skill", "Original description")
 
@@ -239,6 +275,77 @@ async def test_skills_api_update_rolls_back_when_replace_fails(client, monkeypat
     shown = show_response.json()["result"]
     assert shown["description"] == "Original description"
     assert "This update should be rolled back." not in shown["content"]
+
+
+async def test_skills_api_update_removes_privacy_when_replacement_has_no_secrets(client):
+    await _add_skill(client, "privacy-update-skill", "Original description")
+
+    privacy_response = await client.post(
+        "/api/v1/privacy-configs/skill/privacy-update-skill",
+        json={"values": {"api_key": "secret-1"}, "change_reason": "seed"},
+    )
+    assert privacy_response.status_code == 200, privacy_response.text
+
+    update_response = await client.put(
+        "/api/v1/skills/privacy-update-skill",
+        json={
+            "data": _skill_md(
+                "privacy-update-skill",
+                "Updated description",
+                "No secret placeholders remain in this skill.",
+            ),
+            "wait": True,
+        },
+    )
+    assert update_response.status_code == 200, update_response.text
+
+    current_privacy_response = await client.get(
+        "/api/v1/privacy-configs/skill/privacy-update-skill"
+    )
+    assert current_privacy_response.status_code == 404
+
+    show_response = await client.get(
+        "/api/v1/skills/privacy-update-skill",
+        params={"include_content": True},
+    )
+    assert show_response.status_code == 200, show_response.text
+    shown = show_response.json()["result"]
+    assert "Configured but not referenced in content" not in shown["content"]
+
+
+async def test_skills_api_update_restores_previous_privacy_on_failure(client, monkeypatch):
+    await _add_skill(client, "rollback-privacy-skill", "Original description")
+
+    seeded_privacy = await client.post(
+        "/api/v1/privacy-configs/skill/rollback-privacy-skill",
+        json={"values": {"api_key": "secret-old"}, "change_reason": "seed"},
+    )
+    assert seeded_privacy.status_code == 200, seeded_privacy.text
+
+    async def _fail_persist(*_args, **_kwargs):
+        raise RuntimeError("source metadata write failed")
+
+    monkeypatch.setattr(
+        "openviking.server.routers.skills.persist_skill_source_metadata",
+        _fail_persist,
+    )
+
+    with pytest.raises(RuntimeError, match="source metadata write failed"):
+        await client.put(
+            "/api/v1/skills/rollback-privacy-skill",
+            json={
+                "data": _skill_md(
+                    "rollback-privacy-skill",
+                    "Updated description",
+                    'api_key: "secret-new"\n',
+                ),
+                "wait": True,
+            },
+        )
+
+    privacy_response = await client.get("/api/v1/privacy-configs/skill/rollback-privacy-skill")
+    assert privacy_response.status_code == 200, privacy_response.text
+    assert privacy_response.json()["result"]["values"]["api_key"] == "secret-old"
 
 
 async def test_skills_api_rejects_invalid_skill_names(client):
