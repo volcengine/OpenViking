@@ -1049,9 +1049,9 @@ class AgentLoop:
             await self._evaluate_previous_response_outcome(session, msg)
 
             # Consolidate memory before processing if session is too large
-            if self._ov_session_context_enabled():
+            if self._ov_session_context_enabled() and not self._eval:
                 await self._maybe_commit_openviking_before_turn(session, msg)
-            elif len(session.messages) > self.memory_window:
+            elif len(session.messages) > self.memory_window and not self._eval:
                 # Clone session for async consolidation, then immediately trim original
                 session_clone = session.clone()
                 keep_count = min(10, max(2, self.memory_window // 2))
@@ -1157,7 +1157,7 @@ class AgentLoop:
                 )
                 session.metadata.setdefault("response_facts", {})[response_id] = response_completed
                 await self.sessions.save(session)
-                if self._ov_session_context_enabled():
+                if self._ov_session_context_enabled() and not self._eval:
                     await self._submit_openviking_session_and_clear_if_committed(
                         session,
                         commit_message_threshold=self.memory_window,

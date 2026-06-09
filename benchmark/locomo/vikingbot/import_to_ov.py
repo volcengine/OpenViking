@@ -34,7 +34,7 @@ def build_memory_policy(group_chat: bool) -> Dict[str, Dict[str, bool]]:
     """Build session/commit memory policy for benchmark ingest."""
     return {
         "self": {"enabled": True},
-        "peer": {"enabled": bool(group_chat)},
+        "peer": {"enabled": True},
     }
 
 
@@ -92,10 +92,11 @@ def build_session_messages(
     Each dict represents a session with multiple messages (user/assistant role).
 
     Args:
-        group_chat: If True (default), group-chat mode — peer_id=speaker.
-                    If False, single-chat mode — no peer_id/speaker on messages.
+        group_chat: If True, use speaker names as peer_id.
+                    If False, use sample_id as peer_id and prefix speaker in text.
     """
     conv = item["conversation"]
+    sample_peer_id = item["sample_id"]
     speakers = f"{conv['speaker_a']} & {conv['speaker_b']}"
 
     session_keys = sorted(
@@ -119,11 +120,27 @@ def build_session_messages(
             speaker = msg.get("speaker", "unknown")
             text = msg.get("text", "")
             if group_chat:
-                messages.append({"role": "user", "text": text, "speaker": speaker, "index": idx})
+                messages.append(
+                    {
+                        "role": "user",
+                        "text": text,
+                        "speaker": speaker,
+                        "peer_id": speaker,
+                        "index": idx,
+                    }
+                )
             else:
-                # single-chat 模式下所有消息用统一 user_id 上传，
-                # speaker 信息需要嵌入文本以保留说话人身份
-                messages.append({"role": "user", "text": f"{speaker}: {text}", "index": idx})
+                # single-chat 模式下按 sample_id 聚合 peer，
+                # speaker 信息嵌入文本以保留说话人身份
+                messages.append(
+                    {
+                        "role": "user",
+                        "text": f"{speaker}: {text}",
+                        "speaker": speaker,
+                        "peer_id": sample_peer_id,
+                        "index": idx,
+                    }
+                )
 
         sessions.append(
             {
@@ -361,7 +378,7 @@ async def viking_ingest(
                 role=msg["role"],
                 parts=[{"type": "text", "text": msg["text"]}],
                 created_at=msg_created_at,
-                peer_id=msg.get("speaker"),
+                peer_id=msg.get("peer_id"),
             )
 
         # Commit
@@ -764,7 +781,13 @@ async def run_import(args: argparse.Namespace) -> None:
             messages = []
             for i, text in enumerate(session["messages"]):
                 messages.append(
-                    {"role": "user", "text": text.strip(), "speaker": "user", "index": i}
+                    {
+                        "role": "user",
+                        "text": text.strip(),
+                        "speaker": "user",
+                        "peer_id": "user",
+                        "index": i,
+                    }
                 )
 
             preview = " | ".join([f"{msg['role']}: {msg['text'][:30]}..." for msg in messages[:3]])
@@ -921,8 +944,8 @@ def main():
     parser.add_argument(
         "--group-chat",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Group-chat mode: set peer_id/speaker on messages (default: true).",
+        default=False,
+        help="Group-chat mode: use speaker names as peer_id (default: false).",
     )
     parser.add_argument(
         "--clear-ingest-record",

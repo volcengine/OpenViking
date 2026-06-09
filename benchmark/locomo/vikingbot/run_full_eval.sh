@@ -7,8 +7,8 @@
 #   ./run_full_eval.sh conv-26                      # 评测 sample_id conv-26 所有问题
 #   ./run_full_eval.sh 0 2                          # 评测 sample 0 的第 2 题
 #   ./run_full_eval.sh 0 --skip-import              # 跳过导入，批量评测
-#   ./run_full_eval.sh 0 2 --skip-import                 # 跳过导入，单题群聊模式（默认）
-#   ./run_full_eval.sh 0 2 --no-group-chat               # 单题非群聊模式
+#   ./run_full_eval.sh 0 2 --skip-import                 # 跳过导入，单题非群聊模式（默认）
+#   ./run_full_eval.sh 0 2 --group-chat                  # 单题群聊模式
 #   ./run_full_eval.sh --skip-import --auto-commit  # 评测全部，跳过导入，自动提交
 #   ./run_full_eval.sh --retry-wrong result/locomo_result_xxx.csv  # 只重跑错题
 
@@ -26,8 +26,8 @@ for arg in "$@"; do
         echo ""
         echo "开关参数:"
         echo "  --skip-import     跳过导入步骤，直接使用已导入的数据进行评测"
-        echo "  --group-chat      群聊模式，设置 peer_id/speaker，传 --memory-peer（默认）"
-        echo "  --no-group-chat   关闭群聊模式"
+        echo "  --group-chat      群聊模式，使用 speaker 作为 Peer，并传 --memory-peer"
+        echo "  --no-group-chat   非群聊模式（默认），使用 sample_id 作为 Peer"
         echo "  --auto-commit     自动提交未提交的代码变更，结果文件名带 commit id 和时间戳"
         echo "  --retry-wrong CSV 只重跑指定结果文件中的有效错题（导入相关对话+重新问答）"
         exit 0
@@ -36,7 +36,7 @@ done
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKIP_IMPORT=false
-GROUP_CHAT=true
+GROUP_CHAT=false
 AUTO_COMMIT=false
 RETRY_WRONG=""
 
@@ -573,7 +573,7 @@ PY
         "$INPUT_FILE" \
         --sample "$SAMPLE_ID_FOR_CMD" \
         --output "$OUTPUT_FILE" \
-        --threads 10 \
+        --threads 5 \
         --config "$OPENVIKING_CONFIG_FILE" \
         "${COMMON_OPTS[@]}"
 
