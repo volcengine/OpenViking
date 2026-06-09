@@ -28,6 +28,7 @@ from openviking.parse.base import (
 )
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.media.constants import MEDIA_EXTENSIONS
+from openviking.storage.viking_fs import LS_ALL_NODES
 from openviking_cli.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -461,7 +462,7 @@ class DirectoryParser(BaseParser):
 
         After the move the source temp is deleted.
         """
-        entries = await viking_fs.ls(src_temp_uri)
+        entries = await viking_fs.ls(src_temp_uri, node_limit=LS_ALL_NODES)
         for entry in entries:
             name = entry.get("name", "")
             if not name or name in (".", ".."):
@@ -530,7 +531,7 @@ class DirectoryParser(BaseParser):
     ) -> None:
         """Recursively move a VikingFS directory tree."""
         await viking_fs.mkdir(dst_uri, exist_ok=True)
-        entries = await viking_fs.ls(src_uri)
+        entries = await viking_fs.ls(src_uri, node_limit=LS_ALL_NODES)
         for entry in entries:
             name = entry.get("name", "")
             if not name or name in (".", ".."):

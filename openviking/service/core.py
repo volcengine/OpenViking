@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING, Any, Optional
 from openviking.core.directories import DirectoryInitializer
 from openviking.crypto.config import bootstrap_encryption
 from openviking.privacy import UserPrivacyConfigService
-from openviking.pyagfs.exceptions import AGFSNotFoundError
 from openviking.resource.watch_scheduler import WatchScheduler
 from openviking.server.identity import RequestContext, Role
 from openviking.service.debug_service import DebugService
@@ -163,10 +162,6 @@ class OpenVikingService:
         # Create RAGFS client using utility
         runtime_binding_config = binding_config or RagfsBindingConfig(agfs=config.agfs)
         self._agfs_client = create_agfs_client(runtime_binding_config)
-        self._probe_storage_shape(
-            self._agfs_client,
-            encrypted_mode=runtime_binding_config.encryption_enabled(),
-        )
 
         # Initialize QueueManager with agfs_client
         if self._agfs_client:
@@ -239,25 +234,6 @@ class OpenVikingService:
                 self._config.storage.workspace,
             )
         self._data_dir_lock_acquired = True
-
-    def _probe_storage_shape(self, agfs_client: Any, encrypted_mode: bool) -> None:
-        """Fail fast if existing system metadata shape conflicts with current encryption mode."""
-        try:
-            raw = agfs_client.read_raw("/local/_system/accounts.json")
-        except AGFSNotFoundError:
-            return
-
-        is_encrypted = raw.startswith(b"OVE1")
-        if encrypted_mode and not is_encrypted:
-            raise RuntimeError(
-                "Storage shape mismatch: encryption is enabled but existing "
-                "remained data is plaintext"
-            )
-        if not encrypted_mode and is_encrypted:
-            raise RuntimeError(
-                "Storage shape mismatch: encryption is disabled but existing "
-                "remained data is encrypted"
-            )
 
     @property
     def _agfs(self) -> Any:

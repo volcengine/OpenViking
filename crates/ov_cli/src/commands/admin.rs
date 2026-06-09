@@ -236,6 +236,26 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn strip_ansi(input: &str) -> String {
+        let mut output = String::new();
+        let mut chars = input.chars().peekable();
+
+        while let Some(ch) = chars.next() {
+            if ch == '\u{1b}' && chars.peek() == Some(&'[') {
+                chars.next();
+                for next in chars.by_ref() {
+                    if next.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            } else {
+                output.push(ch);
+            }
+        }
+
+        output
+    }
+
     #[test]
     fn user_key_notice_appears_for_table_key_generation_response() {
         let response = json!({
@@ -245,7 +265,7 @@ mod tests {
         });
 
         let lines = admin_user_key_notice_lines(&response, OutputFormat::Table, false);
-        let rendered = lines.join("\n");
+        let rendered = strip_ansi(&lines.join("\n"));
 
         assert!(rendered.contains("New user key generated. Copy and store it securely now."));
         assert!(

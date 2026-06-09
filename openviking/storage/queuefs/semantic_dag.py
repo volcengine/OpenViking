@@ -11,7 +11,7 @@ from typing import ClassVar, Dict, List, Optional, Set
 from openviking.server.identity import RequestContext
 from openviking.storage.queuefs.semantic_sidecar import write_semantic_sidecars
 from openviking.storage.transaction import NO_LOCK, LockLease
-from openviking.storage.viking_fs import get_viking_fs
+from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking_cli.utils import VikingURI
 from openviking_cli.utils.logger import get_logger
@@ -470,7 +470,7 @@ class SemanticDagExecutor:
     async def _list_dir(self, uri: str, from_hint: str) -> tuple[list[str], list[str]]:
         """List directory entries and return (child_dirs, file_paths)."""
         try:
-            entries = await self._viking_fs.ls(uri, ctx=self._ctx)
+            entries = await self._viking_fs.ls(uri, node_limit=LS_ALL_NODES, ctx=self._ctx)
         except Exception as e:
             logger.warning(
                 f"[SemanticDagExecutor] Failed to list directory {uri}: {e} from {from_hint}"

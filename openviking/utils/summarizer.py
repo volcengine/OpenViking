@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from openviking.core.namespace import context_type_for_uri
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.transaction import NO_LOCK, LockLease
-from openviking.storage.viking_fs import get_viking_fs
+from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking_cli.utils import get_logger
@@ -81,7 +81,9 @@ class Summarizer:
 
         async def list_top_children(temp_uri: str) -> List[Tuple[str, str]]:
             viking_fs = get_viking_fs()
-            entries = await viking_fs.ls(temp_uri, show_all_hidden=True, ctx=ctx)
+            entries = await viking_fs.ls(
+                temp_uri, show_all_hidden=True, node_limit=LS_ALL_NODES, ctx=ctx
+            )
             children: List[Tuple[str, str]] = []
             for entry in entries:
                 name = entry.get("name", "")

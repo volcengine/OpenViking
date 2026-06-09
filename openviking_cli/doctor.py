@@ -369,19 +369,25 @@ def check_ollama() -> tuple[bool, str, Optional[str]]:
     # Detect whether config uses Ollama
     dense = data.get("embedding", {}).get("dense", {})
     vlm = data.get("vlm", {})
+    query_planner = data.get("query_planner") or {}
     uses_embedding = dense.get("provider") == "ollama"
     uses_vlm = vlm.get("provider") == "litellm" and (vlm.get("model", "")).startswith("ollama/")
+    uses_query_planner = query_planner.get("provider") == "litellm" and (
+        query_planner.get("model", "")
+    ).startswith("ollama/")
 
-    if not uses_embedding and not uses_vlm:
+    if not uses_embedding and not uses_vlm and not uses_query_planner:
         return True, "not configured", None
 
     from openviking_cli.utils.ollama import check_ollama_running, parse_ollama_url
 
-    # Determine host/port from config
+    # Determine host/port from config (embedding -> vlm -> query_planner)
     if uses_embedding:
         host, port = parse_ollama_url(dense.get("api_base"))
-    else:
+    elif uses_vlm:
         host, port = parse_ollama_url(vlm.get("api_base"))
+    else:
+        host, port = parse_ollama_url(query_planner.get("api_base"))
 
     if check_ollama_running(host, port):
         return True, f"running at {host}:{port}", None

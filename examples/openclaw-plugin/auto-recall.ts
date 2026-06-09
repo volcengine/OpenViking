@@ -215,12 +215,6 @@ export async function buildAutoRecallContext(params: {
           scoreThreshold: 0,
           peerId,
         }, agentId),
-        client.find(queryText, {
-          targetUri: "viking://user/memories",
-          limit: candidateLimit,
-          scoreThreshold: 0,
-          peerId,
-        }, agentId),
       ];
       if (cfg.recallResources) {
         autoRecallPromises.push(

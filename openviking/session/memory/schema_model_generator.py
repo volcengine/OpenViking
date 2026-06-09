@@ -341,6 +341,9 @@ class SchemaModelGenerator:
         StructuredMemoryOperations.is_empty = is_empty
         StructuredMemoryOperations.to_legacy_operations = to_legacy_operations
         StructuredMemoryOperations._memory_type_fields = memory_type_fields  # type: ignore
+        # Opt this model into treating a bare `[]` LLM response as an empty-ops result
+        # (every field is default_factory=list); see parse_json_with_stability Layer 3.
+        StructuredMemoryOperations._allow_empty_list_response = True  # type: ignore
 
         self._operations_model = StructuredMemoryOperations
         return self._operations_model

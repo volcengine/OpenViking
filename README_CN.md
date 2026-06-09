@@ -59,7 +59,9 @@
 
 ## 快速开始
 
-### 前置条件
+### 本地部署
+
+#### 前置条件
 
 在开始使用 OpenViking 之前，请确保您的环境满足以下要求：
 
@@ -69,15 +71,15 @@
 - **操作系统**：Linux、macOS、Windows
 - **网络连接**：需要稳定的网络连接（用于下载依赖和访问模型服务）
 
-### 1. 安装
+#### 1. 安装
 
-#### Python 包
+##### Python 包
 
 ```bash
 pip install openviking --upgrade --force-reinstall
 ```
 
-#### Rust CLI（可选）
+##### Rust CLI（可选）
 
 ```bash
 npm i -g @openviking/cli
@@ -89,13 +91,13 @@ npm i -g @openviking/cli
 cargo install --git https://github.com/volcengine/OpenViking ov_cli
 ```
 
-### 2. 模型准备
+#### 2. 模型准备
 
 OpenViking 需要以下模型能力：
 - **VLM 模型**：用于图像和内容理解
 - **Embedding 模型**：用于向量化和语义检索
 
-#### 支持的 VLM 提供商
+##### 支持的 VLM 提供商
 
 OpenViking 支持多种 VLM 提供商：
 
@@ -106,7 +108,7 @@ OpenViking 支持多种 VLM 提供商：
 | `azure` | Azure OpenAI 服务 | [Azure OpenAI 服务](https://portal.azure.com) |
 | `openai-codex` | 通过 ChatGPT/Codex OAuth 使用 Codex VLM | 使用 `openviking-server init` |
 
-#### 提供商特定说明
+##### 提供商特定说明
 
 <details>
 <summary><b>Volcengine (豆包)</b></summary>
@@ -224,9 +226,9 @@ openviking-server doctor
 
 </details>
 
-### 3. 环境配置
+#### 3. 环境配置
 
-#### 本地模型快速配置 (Ollama)
+##### 本地模型快速配置 (Ollama)
 
 如果你想通过 [Ollama](https://ollama.ai) 使用本地模型运行 OpenViking，交互式向导会自动完成所有配置：
 
@@ -249,7 +251,7 @@ openviking-server doctor
 
 > 如果使用云端 API（火山引擎、OpenAI、Gemini 等），请继续下方的手动配置。
 
-#### 服务器配置模板
+##### 服务器配置模板
 
 推荐的首次配置流程是：
 
@@ -295,7 +297,7 @@ openviking-server doctor
 
 > **注意**：对于 embedding 模型，支持 `volcengine`（豆包）、`openai`、`azure`、`jina`、`ollama`、`voyage`、`dashscope`、`minimax`、`cohere`、`vikingdb`、`gemini`（需 `pip install "google-genai>=1.0.0"`）、`litellm` 和 `local`。对于 VLM 模型，常见提供商包括 `volcengine`、`openai`、`openai-codex`、`kimi`、`glm`。
 
-#### 服务器配置示例
+##### 服务器配置示例
 
 👇 展开查看您的模型服务的配置示例：
 
@@ -408,7 +410,7 @@ openviking-server doctor
 
 </details>
 
-#### 设置服务器配置环境变量
+##### 设置服务器配置环境变量
 
 创建配置文件后，设置环境变量指向它（Linux/macOS）：
 
@@ -432,7 +434,7 @@ set "OPENVIKING_CONFIG_FILE=%USERPROFILE%\.openviking\ov.conf"
 
 > 💡 **提示**：您也可以将配置文件放在其他位置，只需在环境变量中指定正确路径。
 
-#### CLI/客户端配置示例
+##### CLI/客户端配置示例
 
 你可以通过 `ov config` 命令来以交互式方式初始化 CLI/客户端的配置。如果你有多个 openviking 服务器，你还可以通过 `ov config switch` 命令来切换到其他配置。
 
@@ -471,13 +473,13 @@ set "OPENVIKING_CLI_CONFIG_FILE=%USERPROFILE%\.openviking\ovcli.conf"
 
 </details>
 
-### 4. 运行您的第一个示例
+#### 4. 运行您的第一个示例
 
 > 📝 **前置条件**：确保您已完成上一步的配置（ov.conf 和 ovcli.conf）。
 
 现在让我们运行一个完整的示例，体验 OpenViking 的核心功能。
 
-#### 启动服务器
+##### 启动服务器
 
 ```bash
 openviking-server doctor
@@ -492,7 +494,7 @@ openviking-server
 nohup openviking-server > /data/log/openviking.log 2>&1 &
 ```
 
-#### 运行 CLI
+##### 运行 CLI
 
 ```bash
 ov status
@@ -505,6 +507,10 @@ ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/zh
 ```
 
 恭喜！您已成功运行 OpenViking 🎉
+
+### 商业化接入
+
+OpenViking Personal 现已正式上线。相比开源版本，Service 版本由官方托管、开箱即用，借助 VikingDB 实现远超本地硬件的扩展能力，并提供更丰富的集成和专业的技术支持。新用户可免费试用至多 50 个文件，现有开源版用户也可通过我们的迁移工具平滑迁移。
 
 ### VikingBot 快速开始
 

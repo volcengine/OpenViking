@@ -81,6 +81,28 @@ pub async fn consistency(
     Ok(())
 }
 
+pub async fn backend_sync_status(
+    client: &HttpClient,
+    uri: &str,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    let response: serde_json::Value = client.backend_sync_status(uri).await?;
+    output_success(&response, output_format, compact);
+    Ok(())
+}
+
+pub async fn backend_sync_retry(
+    client: &HttpClient,
+    uri: &str,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    let response: serde_json::Value = client.backend_sync_retry(uri).await?;
+    output_success(&response, output_format, compact);
+    Ok(())
+}
+
 fn output_consistency_table(response: &serde_json::Value, compact: bool) {
     let summary = json!({
         "ok": response.get("ok").and_then(|v| v.as_bool()).unwrap_or(false),

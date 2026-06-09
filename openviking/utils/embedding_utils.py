@@ -16,7 +16,7 @@ from openviking.core.namespace import context_type_for_uri, owner_space_for_uri
 from openviking.server.identity import RequestContext
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
-from openviking.storage.viking_fs import get_viking_fs
+from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.utils import VikingURI, get_logger
 from openviking_cli.utils.config import get_openviking_config
@@ -507,7 +507,7 @@ async def index_resource(
 
     # 2. Index Files
     try:
-        files = await viking_fs.ls(uri, ctx=ctx)
+        files = await viking_fs.ls(uri, node_limit=LS_ALL_NODES, ctx=ctx)
         for file_info in files:
             file_name = file_info["name"]
 

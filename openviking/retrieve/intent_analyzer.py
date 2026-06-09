@@ -6,7 +6,7 @@ Intent analyzer for OpenViking retrieval.
 Analyzes session context to generate query plans.
 """
 
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from openviking.message import Message
 from openviking.prompts import render_prompt
@@ -16,6 +16,22 @@ from openviking_cli.utils.llm import parse_json_from_response
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+DEFAULT_INTENT_ANALYSIS_PROMPT = "retrieval.intent_analysis"
+
+# Model-specific query-planner prompts. Models not listed here keep using the
+# default intent-analysis prompt for backward compatibility.
+QUERY_PLANNER_PROMPT_BY_MODEL: dict[str, str] = {
+    "ollama/guoxuter/ov_intent_analysis_sft:v4_q8": "retrieval.ov_intent_analysis_sft_v4",
+}
+
+
+def resolve_intent_analysis_prompt_id(query_planner: Any) -> str:
+    """Return the prompt id expected by the configured query-planner model."""
+    model = getattr(query_planner, "model", None)
+    if not isinstance(model, str):
+        return DEFAULT_INTENT_ANALYSIS_PROMPT
+    return QUERY_PLANNER_PROMPT_BY_MODEL.get(model.strip(), DEFAULT_INTENT_ANALYSIS_PROMPT)
 
 
 class IntentAnalyzer:
@@ -52,18 +68,21 @@ class IntentAnalyzer:
             context_type: Constrained context type (only generate queries for this type)
             target_abstract: Target directory abstract for more precise queries
         """
-        # Build context prompt
+        # Call the lightweight query planner when configured; otherwise keep using VLM.
+        config = get_openviking_config()
+        query_planner = config.get_query_planner()
+
+        # Build context prompt. Some fine-tuned planner models expect a compact
+        # prompt/output contract, selected by exact model mapping above.
         prompt = self._build_context_prompt(
             compression_summary,
             messages,
             current_message,
             context_type,
             target_abstract,
+            prompt_id=resolve_intent_analysis_prompt_id(query_planner),
         )
 
-        # Call the lightweight query planner when configured; otherwise keep using VLM.
-        config = get_openviking_config()
-        query_planner = config.get_query_planner()
         response = await query_planner.get_completion_async(prompt)
 
         # Parse result
@@ -108,6 +127,7 @@ class IntentAnalyzer:
         current_message: Optional[str],
         context_type: Optional[ContextType] = None,
         target_abstract: str = "",
+        prompt_id: str = DEFAULT_INTENT_ANALYSIS_PROMPT,
     ) -> str:
         """Build prompt for intent analysis."""
         # Format compression info
@@ -124,7 +144,7 @@ class IntentAnalyzer:
         current = current_message if current_message else "None"
 
         return render_prompt(
-            "retrieval.intent_analysis",
+            prompt_id,
             {
                 "compression_summary": summary,
                 "recent_messages": recent_messages,

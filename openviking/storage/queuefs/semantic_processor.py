@@ -36,7 +36,7 @@ from openviking.storage.queuefs.semantic_msg import SemanticMsg, build_semantic_
 from openviking.storage.queuefs.semantic_queue import is_semantic_msg_stale
 from openviking.storage.queuefs.semantic_sidecar import write_semantic_sidecars
 from openviking.storage.transaction import NO_LOCK, LockLease
-from openviking.storage.viking_fs import get_viking_fs
+from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.telemetry import bind_telemetry, bind_telemetry_stage, resolve_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.span_models import create_root_span_attributes
@@ -538,7 +538,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
         try:
             try:
-                entries = await viking_fs.ls(dir_uri, ctx=ctx)
+                entries = await viking_fs.ls(dir_uri, node_limit=LS_ALL_NODES, ctx=ctx)
             except Exception as e:
                 raise RuntimeError(f"Failed to list memory directory {dir_uri}: {e}") from e
 
@@ -749,7 +749,9 @@ class SemanticProcessor(DequeueHandlerBase):
             files: Dict[str, str] = {}
             dirs: Dict[str, str] = {}
             try:
-                entries = await viking_fs.ls(dir_uri, show_all_hidden=True, ctx=ctx)
+                entries = await viking_fs.ls(
+                    dir_uri, show_all_hidden=True, node_limit=LS_ALL_NODES, ctx=ctx
+                )
             except Exception as e:
                 logger.error(f"[SyncDiff] Failed to list {dir_uri}: {e}")
                 return files, dirs

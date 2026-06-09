@@ -40,7 +40,7 @@ class _FakeVikingFS:
         rest = re.sub(r"/{2,}", "/", rest)
         return f"{scheme}://{rest}"
 
-    async def ls(self, uri, ctx=None):
+    async def ls(self, uri, node_limit=None, ctx=None):
         return self._tree.get(self._norm(uri), [])
 
     async def stat(self, uri, ctx=None):

@@ -13,7 +13,7 @@ from typing import Dict, Optional
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 
-from openviking.pyagfs import AGFSNotFoundError, AsyncAGFSClient
+from openviking.pyagfs import AGFSAlreadyExistsError, AGFSNotFoundError, AsyncAGFSClient
 from openviking.server.api_keys.models import AccountInfo, UserKeyEntry
 from openviking.server.identity import ResolvedIdentity, Role
 from openviking.storage.viking_fs import VikingFS
@@ -69,6 +69,40 @@ class LegacyAPIKeyManager:
         self._accounts: Dict[str, AccountInfo] = {}
         # Prefix index: key_prefix -> list[UserKeyEntry]
         self._prefix_index: Dict[str, list[UserKeyEntry]] = {}
+
+    def _discard_account_state(self, account_id: str) -> None:
+        """Remove an account and its key index entries from in-memory state."""
+        account = self._accounts.pop(account_id, None)
+        if account is None:
+            return
+
+        for user_id, user_info in account.users.items():
+            key_or_hash = user_info.get("key", "")
+            if not key_or_hash:
+                continue
+
+            key_prefix = user_info.get("key_prefix", "")
+            if not key_prefix:
+                key_prefix = self._get_key_prefix(key_or_hash)
+
+            if key_prefix not in self._prefix_index:
+                continue
+
+            self._prefix_index[key_prefix] = [
+                entry
+                for entry in self._prefix_index[key_prefix]
+                if not (entry.account_id == account_id and entry.user_id == user_id)
+            ]
+            if not self._prefix_index[key_prefix]:
+                del self._prefix_index[key_prefix]
+
+    async def _rollback_create_account(self, account_id: str) -> None:
+        """Best-effort rollback for partially persisted account creation."""
+        self._discard_account_state(account_id)
+        try:
+            await self._save_accounts_json()
+        except Exception:
+            logger.exception("Failed to persist rollback for account %s", account_id)
 
     async def load(self) -> None:
         """Load accounts and user keys from VikingFS into memory."""
@@ -229,8 +263,12 @@ class LegacyAPIKeyManager:
                 self._prefix_index[key_prefix] = []
             self._prefix_index[key_prefix].append(entry)
 
-        await self._save_accounts_json()
-        await self._save_users_json(account_id)
+        try:
+            await self._save_accounts_json()
+            await self._save_users_json(account_id)
+        except Exception:
+            await self._rollback_create_account(account_id)
+            raise
         return key
 
     async def delete_account(self, account_id: str) -> None:
@@ -238,25 +276,7 @@ class LegacyAPIKeyManager:
         if account_id not in self._accounts:
             raise NotFoundError(account_id, "account")
 
-        account = self._accounts.pop(account_id)
-        # Remove all keys for this account from prefix index
-        for user_info in account.users.values():
-            key_or_hash = user_info.get("key", "")
-            if key_or_hash:
-                # Get key_prefix - if not in user_info, compute from key
-                key_prefix = user_info.get("key_prefix", "")
-                if not key_prefix:
-                    key_prefix = self._get_key_prefix(key_or_hash)
-
-                if key_prefix in self._prefix_index:
-                    self._prefix_index[key_prefix] = [
-                        entry
-                        for entry in self._prefix_index[key_prefix]
-                        if entry.account_id != account_id
-                    ]
-                    # Remove prefix if index is empty
-                    if not self._prefix_index[key_prefix]:
-                        del self._prefix_index[key_prefix]
+        self._discard_account_state(account_id)
 
         await self._save_accounts_json()
 
@@ -599,18 +619,10 @@ class LegacyAPIKeyManager:
 
     async def _ensure_parent_dirs_async(self, path: str) -> None:
         """Recursively create all parent directories for a file path."""
-        # Handle direct AGFS paths
-        if path.startswith("/local/"):
-            # Extract path parts from /local/{account_id}/_system/...
-            parts = path.lstrip("/").split("/")
-            if parts:
-                # Create directory for each parent path
-                for i in range(1, len(parts)):
-                    parent = "/" + "/".join(parts[:i])
-                    try:
-                        await self._async_agfs.mkdir(parent)
-                    except Exception:
-                        pass
+        try:
+            await self._async_agfs.ensure_parent_dirs(path)
+        except AGFSAlreadyExistsError:
+            return
 
     async def _save_accounts_json(self) -> None:
         """Persist the global accounts list."""

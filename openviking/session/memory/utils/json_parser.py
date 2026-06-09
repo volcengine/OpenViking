@@ -429,6 +429,15 @@ def parse_json_with_stability(
     if isinstance(parsed_data, list) and len(parsed_data) > 0:
         parsed_data = parsed_data[0]
         tracer.info("Extracted first item from list response")
+    elif isinstance(parsed_data, list) and len(parsed_data) == 0 and getattr(
+        model_class, "_allow_empty_list_response", False
+    ):
+        # The operations model opts in (via _allow_empty_list_response) to treating a
+        # bare `[]` as a valid "no operations" outcome: every field is default_factory=list,
+        # so map [] to {} and let it validate to an empty-ops object instead of raising
+        # downstream. Every other model keeps the fail-loud "Expected dict" path below.
+        parsed_data = {}
+        tracer.info("Empty list response treated as empty object (no operations)")
 
     if not isinstance(parsed_data, dict):
         return None, f"Expected dict after parsing, got {parsed_data}"

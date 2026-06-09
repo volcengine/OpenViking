@@ -1115,6 +1115,7 @@ mod tests {
             name: "s3fs".to_string(),
             mount_path: "/s3".to_string(),
             params: std::collections::HashMap::new(),
+            ..PluginConfig::default()
         };
         assert!(plugin.validate(&config).await.is_err());
 
@@ -1128,6 +1129,7 @@ mod tests {
             name: "s3fs".to_string(),
             mount_path: "/s3".to_string(),
             params,
+            ..PluginConfig::default()
         };
         assert!(plugin.validate(&config).await.is_ok());
     }
@@ -1150,6 +1152,7 @@ mod tests {
             name: "s3fs".to_string(),
             mount_path: "/s3".to_string(),
             params,
+            ..PluginConfig::default()
         };
         assert!(plugin.validate(&config).await.is_err());
 
@@ -1167,6 +1170,7 @@ mod tests {
             name: "s3fs".to_string(),
             mount_path: "/s3".to_string(),
             params,
+            ..PluginConfig::default()
         };
         assert!(plugin.validate(&config).await.is_ok());
     }
@@ -1188,6 +1192,7 @@ mod tests {
             name: "s3fs".to_string(),
             mount_path: "/s3".to_string(),
             params,
+            ..PluginConfig::default()
         };
         assert!(plugin.validate(&config).await.is_err());
 
@@ -1204,6 +1209,7 @@ mod tests {
             name: "s3fs".to_string(),
             mount_path: "/s3".to_string(),
             params,
+            ..PluginConfig::default()
         };
         assert!(plugin.validate(&config).await.is_ok());
     }
@@ -1243,64 +1249,45 @@ mod tests {
     }
 
     #[test]
-    fn test_relative_match_file_same_path() {
-        assert_eq!(relative_match_file("/foo", "/foo"), ".");
-        assert_eq!(relative_match_file("/", "/"), ".");
+    fn test_relative_match_file_cases() {
+        for (base, path, expected) in [
+            ("/foo", "/foo", "."),
+            ("/", "/", "."),
+            ("/", "/a", "a"),
+            ("/", "/a/b", "a/b"),
+            ("/", "/deep/nested/file", "deep/nested/file"),
+            ("/a", "/a/b", "b"),
+            ("/a", "/a/b/c", "b/c"),
+            ("/dir", "/dir/file.txt", "file.txt"),
+            ("/a", "/b", "b"),
+            ("/x", "/y/z", "y/z"),
+            ("/foo/", "/foo/bar", "bar"),
+            ("/foo/", "/foo", "."),
+            ("/dir", "/dir/", "."),
+            ("/dir", "/dir//sub", "sub"),
+        ] {
+            assert_eq!(
+                relative_match_file(base, path),
+                expected,
+                "{base} -> {path}"
+            );
+        }
     }
 
     #[test]
-    fn test_relative_match_file_root_base() {
-        assert_eq!(relative_match_file("/", "/a"), "a");
-        assert_eq!(relative_match_file("/", "/a/b"), "a/b");
-        assert_eq!(
-            relative_match_file("/", "/deep/nested/file"),
-            "deep/nested/file"
-        );
-    }
-
-    #[test]
-    fn test_relative_match_file_subdirectory() {
-        assert_eq!(relative_match_file("/a", "/a/b"), "b");
-        assert_eq!(relative_match_file("/a", "/a/b/c"), "b/c");
-        assert_eq!(relative_match_file("/dir", "/dir/file.txt"), "file.txt");
-    }
-
-    #[test]
-    fn test_relative_match_file_no_prefix_match() {
-        assert_eq!(relative_match_file("/a", "/b"), "b");
-        assert_eq!(relative_match_file("/x", "/y/z"), "y/z");
-    }
-
-    #[test]
-    fn test_relative_match_file_trailing_slash_base() {
-        assert_eq!(relative_match_file("/foo/", "/foo/bar"), "bar");
-        assert_eq!(relative_match_file("/foo/", "/foo"), ".");
-    }
-
-    #[test]
-    fn test_relative_match_file_empty_remainder() {
-        assert_eq!(relative_match_file("/dir", "/dir/"), ".");
-    }
-
-    #[test]
-    fn test_relative_match_file_leading_slash_in_rest() {
-        assert_eq!(relative_match_file("/dir", "/dir//sub"), "sub");
-    }
-
-    #[test]
-    fn test_relative_depth() {
-        assert_eq!(relative_depth("."), 0);
-        assert_eq!(relative_depth(""), 0);
-        assert_eq!(relative_depth("a"), 1);
-        assert_eq!(relative_depth("a/b"), 2);
-        assert_eq!(relative_depth("a/b/c"), 3);
-        assert_eq!(relative_depth("deep/nested/path/to/file"), 5);
-    }
-
-    #[test]
-    fn test_relative_depth_filters_empty_segments() {
-        assert_eq!(relative_depth("a//b"), 2);
-        assert_eq!(relative_depth("///"), 0);
+    fn test_relative_depth_cases() {
+        for (path, expected) in [
+            (".", 0),
+            ("", 0),
+            ("a", 1),
+            ("a/b", 2),
+            ("a/b/c", 3),
+            ("deep/nested/path/to/file", 5),
+            ("a//b", 2),
+            ("///", 0),
+        ] {
+            assert_eq!(relative_depth(path), expected, "{path}");
+        }
     }
 
     #[test]
@@ -1332,6 +1319,29 @@ mod tests {
 
     fn build_re(pattern: &str) -> Regex {
         Regex::new(pattern).unwrap()
+    }
+
+    /// Run grep_stream against in-memory chunk data.
+    async fn grep_chunks(
+        data: impl AsRef<[u8]>,
+        pattern: &str,
+        chunk_size: u64,
+        max_partial: usize,
+    ) -> Result<Vec<GrepMatch>> {
+        let data = data.as_ref().to_vec();
+        let file_size = data.len() as u64;
+        let mut reader = MockChunkReader { data };
+        let re = build_re(pattern);
+        grep_stream(
+            "f",
+            file_size,
+            &re,
+            100,
+            chunk_size,
+            max_partial,
+            &mut reader,
+        )
+        .await
     }
 
     // ── Case  3: 正则无效 ──
@@ -1367,14 +1377,7 @@ mod tests {
     #[tokio::test]
     async fn test_grep_stream_exact_chunk_single() {
         let data = b"hello\nworld\n";
-        let file_size = data.len() as u64;
-        let chunk_size = file_size;
-        let mut reader = MockChunkReader {
-            data: data.to_vec(),
-        };
-        let re = build_re(".");
-
-        let matches = grep_stream("f", file_size, &re, 100, chunk_size, 1024, &mut reader)
+        let matches = grep_chunks(data, ".", data.len() as u64, 1024)
             .await
             .unwrap();
 
@@ -1390,16 +1393,7 @@ mod tests {
     #[tokio::test]
     async fn test_grep_stream_last_chunk_exact_size() {
         let data = b"line1\nline2\nline3\nline4\n";
-        let file_size = data.len() as u64; // 24
-        let chunk_size = 12u64;
-        let mut reader = MockChunkReader {
-            data: data.to_vec(),
-        };
-        let re = build_re("line");
-
-        let matches = grep_stream("f", file_size, &re, 100, chunk_size, 1024, &mut reader)
-            .await
-            .unwrap();
+        let matches = grep_chunks(data, "line", 12, 1024).await.unwrap();
 
         assert_eq!(matches.len(), 4, "all 4 lines should match");
         assert_eq!(matches[3].content, "line4");
@@ -1410,16 +1404,7 @@ mod tests {
     #[tokio::test]
     async fn test_grep_stream_cross_chunk_line() {
         let data = b"hel\nlo wo\nrld\n";
-        let file_size = data.len() as u64; // 15
-        let chunk_size = 8u64;
-        let mut reader = MockChunkReader {
-            data: data.to_vec(),
-        };
-        let re = build_re("lo");
-
-        let matches = grep_stream("f", file_size, &re, 100, chunk_size, 1024, &mut reader)
-            .await
-            .unwrap();
+        let matches = grep_chunks(data, "lo", 8, 1024).await.unwrap();
 
         assert_eq!(matches.len(), 1, "only 'lo wo' contains 'lo'");
         assert_eq!(matches[0].line, 2, "line number should be 2");
@@ -1431,16 +1416,7 @@ mod tests {
     #[tokio::test]
     async fn test_grep_stream_multi_chunk_no_newline() {
         let data = b"abcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()"; // 46 bytes, no \n
-        let file_size = data.len() as u64;
-        let chunk_size = 10u64;
-        let mut reader = MockChunkReader {
-            data: data.to_vec(),
-        };
-        let re = build_re("xyz");
-
-        let matches = grep_stream("f", file_size, &re, 100, chunk_size, 1024, &mut reader)
-            .await
-            .unwrap();
+        let matches = grep_chunks(data, "xyz", 10, 1024).await.unwrap();
 
         assert_eq!(matches.len(), 1, "one long line should match");
         assert_eq!(matches[0].line, 1);
@@ -1456,26 +1432,7 @@ mod tests {
     #[tokio::test]
     async fn test_grep_stream_line_exceeds_max_partial() {
         let content = "a".repeat(200);
-        let data = content.as_bytes();
-        let file_size = data.len() as u64; // 200
-        let chunk_size = 64u64;
-        let max_partial = 100usize;
-        let mut reader = MockChunkReader {
-            data: data.to_vec(),
-        };
-        let re = build_re("a");
-
-        let matches = grep_stream(
-            "f",
-            file_size,
-            &re,
-            100,
-            chunk_size,
-            max_partial,
-            &mut reader,
-        )
-        .await
-        .unwrap();
+        let matches = grep_chunks(content.as_bytes(), "a", 64, 100).await.unwrap();
 
         assert!(
             matches.is_empty(),
@@ -1490,14 +1447,7 @@ mod tests {
         let mut data: Vec<u8> = b"hello\nworld\n".to_vec();
         data.extend_from_slice(&[0xff, 0xfe, 0xfd]);
         data.extend_from_slice(b"\nvalid\n");
-        let file_size = data.len() as u64;
-        let chunk_size = 64u64;
-        let mut reader = MockChunkReader { data };
-        let re = build_re("world");
-
-        let matches = grep_stream("f", file_size, &re, 100, chunk_size, 1024, &mut reader)
-            .await
-            .unwrap();
+        let matches = grep_chunks(data, "world", 64, 1024).await.unwrap();
 
         assert_eq!(
             matches.len(),
@@ -1513,14 +1463,7 @@ mod tests {
         let mut data: Vec<u8> = b"first\n".to_vec();
         data.extend_from_slice(&[0xff, 0xfe, 0xfd, b'\n']);
         data.extend_from_slice(b"last\n");
-        let file_size = data.len() as u64;
-        let chunk_size = 64u64;
-        let mut reader = MockChunkReader { data };
-        let re = build_re("last");
-
-        let matches = grep_stream("f", file_size, &re, 100, chunk_size, 1024, &mut reader)
-            .await
-            .unwrap();
+        let matches = grep_chunks(data, "last", 64, 1024).await.unwrap();
 
         assert_eq!(matches.len(), 1, "should match 'last' after binary line");
         assert_eq!(matches[0].content, "last");

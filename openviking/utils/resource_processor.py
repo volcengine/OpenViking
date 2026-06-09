@@ -311,6 +311,15 @@ class ResourceProcessor:
                         source_committed = True
                 except Exception:
                     stage_status = "error"
+                    # Mirror the Phase 3 (finalize) on-error cleanup: a lock or
+                    # persist failure here would otherwise orphan the
+                    # viking://temp tree with no GC (#2478). Skip when the temp
+                    # tree was already persisted + deleted on the success path.
+                    if not source_committed and parse_result.temp_dir_path:
+                        try:
+                            await get_viking_fs().delete_temp(parse_result.temp_dir_path, ctx=ctx)
+                        except Exception:
+                            pass
                     raise
                 finally:
                     try:
