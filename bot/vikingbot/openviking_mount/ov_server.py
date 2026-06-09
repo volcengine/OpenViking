@@ -314,6 +314,12 @@ class VikingClient:
             raise ValueError("peer memory target requires current user_id")
         return f"viking://user/{user_space}/peers/{normalized_peer_id}/memories/"
 
+    def _current_peer_profile_uri(self, peer_id: str) -> str:
+        normalized_peer_id = self._peer_id(peer_id)
+        if not normalized_peer_id:
+            raise ValueError("peer_id is required for peer profile")
+        return f"viking://user/peers/{normalized_peer_id}/memories/profile.md"
+
     def build_current_memory_target_uris(
         self,
         *,
@@ -471,6 +477,9 @@ class VikingClient:
     async def read_user_profile(self, user_id: str) -> str:
         """读取用户 profile。"""
         effective_user_id = self._effective_user_id(user_id)
+        if not effective_user_id:
+            return await self.read_content(uri="viking://user/memories/profile.md", level="read")
+
         user_exists = await self._check_user_exists(effective_user_id)
 
         if not user_exists:
@@ -480,6 +489,14 @@ class VikingClient:
         uri = f"{self._memory_target_uri(effective_user_id)}profile.md"
         result = await self.read_content(uri=uri, level="read")
         return result
+
+    async def read_peer_profile(self, peer_id: str) -> str:
+        """读取当前 User 下指定 peer 的 profile。"""
+        try:
+            uri = self._current_peer_profile_uri(peer_id)
+        except ValueError:
+            return ""
+        return await self.read_content(uri=uri, level="read")
 
     async def search(
         self,

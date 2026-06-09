@@ -55,6 +55,40 @@ def test_normalize_session_messages_skips_path_like_peer_ids():
 
 
 @pytest.mark.asyncio
+async def test_read_peer_profile_uses_current_user_peer_alias(monkeypatch):
+    client = _client(api_key_type="user")
+    calls = []
+
+    async def fake_read_content(uri, level="read"):
+        calls.append((uri, level))
+        return "Alice profile"
+
+    monkeypatch.setattr(client, "read_content", fake_read_content)
+
+    profile = await client.read_peer_profile("telegram:alice")
+
+    assert profile == "Alice profile"
+    assert calls == [("viking://user/peers/telegram:alice/memories/profile.md", "read")]
+
+
+@pytest.mark.asyncio
+async def test_read_user_profile_uses_current_user_self_alias_for_user_key(monkeypatch):
+    client = _client(api_key_type="user")
+    calls = []
+
+    async def fake_read_content(uri, level="read"):
+        calls.append((uri, level))
+        return "Self profile"
+
+    monkeypatch.setattr(client, "read_content", fake_read_content)
+
+    profile = await client.read_user_profile("sender-is-peer")
+
+    assert profile == "Self profile"
+    assert calls == [("viking://user/memories/profile.md", "read")]
+
+
+@pytest.mark.asyncio
 async def test_commit_uses_current_user_key_session_and_sender_peer(monkeypatch):
     client = _client(api_key_type="user")
     calls = {}

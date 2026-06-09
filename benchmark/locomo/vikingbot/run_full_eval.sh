@@ -573,7 +573,7 @@ PY
         "$INPUT_FILE" \
         --sample "$SAMPLE_ID_FOR_CMD" \
         --output "$OUTPUT_FILE" \
-        --threads 5 \
+        --threads 10 \
         --config "$OPENVIKING_CONFIG_FILE" \
         "${COMMON_OPTS[@]}"
 
@@ -583,7 +583,7 @@ PY
     else
         echo "[3/4] Running judge..."
     fi
-    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$OUTPUT_FILE" --parallel 5
+    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$OUTPUT_FILE" --parallel 40
 
     # 输出统计结果
     if [ "$SKIP_IMPORT" = "true" ]; then

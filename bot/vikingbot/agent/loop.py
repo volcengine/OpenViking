@@ -243,7 +243,7 @@ class AgentLoop:
         await self.bus.publish_outbound(
             OutboundMessage(
                 session_key=session_key,
-                content=f"openviking_search({args_str})",
+                content=f"auto_memory_search({args_str})",
                 event_type=OutboundEventType.TOOL_CALL,
             )
         )
@@ -255,7 +255,7 @@ class AgentLoop:
             )
         )
         return {
-            "tool_name": "openviking_search",
+            "tool_name": "auto_memory_search",
             "args": args_str,
             "result": result,
             "duration": 0,
