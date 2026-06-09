@@ -402,9 +402,9 @@ def main():
     )
     parser.add_argument(
         "--group-chat",
-        action="store_true",
-        default=False,
-        help="Group-chat mode: pass --memory-peer to vikingbot chat. Default is group-chat mode.",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Group-chat mode: pass --memory-peer to vikingbot chat (default: true).",
     )
     parser.add_argument(
         "--retry-wrong",

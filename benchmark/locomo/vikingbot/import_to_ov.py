@@ -429,8 +429,14 @@ async def process_single_session(
     source_sample_id = str(sample_id)
     try:
         started_at = time.perf_counter()
-        user_id = str(sample_id) if args.separate_user_by_sample else ""
-        account = args.account if args.separate_user_by_sample else ""
+        if args.api_key:
+            # User API keys already pin account/user on the server side. Passing
+            # account/user headers would be rejected in api_key auth mode.
+            user_id = ""
+            account = ""
+        else:
+            user_id = str(sample_id) if args.separate_user_by_sample else ""
+            account = args.account if args.separate_user_by_sample else ""
         result = await viking_ingest(
             messages,
             args.openviking_url,
@@ -898,7 +904,7 @@ def main():
         "--separate-user-by-sample",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Whether to isolate OpenViking users by sample (default: true). Use --no-separate-user-by-sample to use an empty user while keeping --account unchanged.",
+        help="Whether to isolate OpenViking users by sample (default: true). Ignored when --api-key is provided because User keys pin account/user identity.",
     )
     parser.add_argument(
         "--parallel-samples",
@@ -914,9 +920,9 @@ def main():
     )
     parser.add_argument(
         "--group-chat",
-        action="store_true",
-        default=False,
-        help="Group-chat mode: set peer_id/speaker on messages. Default is group-chat mode.",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Group-chat mode: set peer_id/speaker on messages (default: true).",
     )
     parser.add_argument(
         "--clear-ingest-record",
