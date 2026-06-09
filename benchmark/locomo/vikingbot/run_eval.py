@@ -256,7 +256,7 @@ def run_vikingbot_chat(
         )
         if memory_users:
             for user in memory_users:
-                new_cmd.extend(["--memory-user", user])
+                new_cmd.extend(["--memory-peer", user])
         try:
             # print(f'new_cmd={new_cmd}')
             subprocess.run(new_cmd, capture_output=True, text=True, timeout=300)
@@ -277,10 +277,10 @@ def run_vikingbot_chat(
     # 添加 --sender 作为 user_id，--session 作为会话隔离标识
     if sample_id:
         cmd.extend(["--sender", sample_id, "--session", question_id])
-    # 添加 --memory-user 参数，指定检索哪些用户的记忆
+    # 添加 --memory-peer 参数，指定当前 User 下需要一并检索的 speaker/peer 记忆
     if memory_users:
         for user in memory_users:
-            cmd.extend(["--memory-user", user])
+            cmd.extend(["--memory-peer", user])
     start_time = time.time()
     try:
         # print(f'cmd={cmd}')

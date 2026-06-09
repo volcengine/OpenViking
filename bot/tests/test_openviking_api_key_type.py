@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 from vikingbot.agent.context import ContextBuilder
 from vikingbot.agent.loop import _is_tool_result_success
+from vikingbot.agent.memory import MemoryStore
 from vikingbot.agent.tools.ov_file import (
     VikingGlobTool,
     VikingGrepTool,
@@ -179,6 +180,24 @@ def test_ov_server_legacy_root_api_key_takes_precedence_over_ovcli(monkeypatch):
 
     assert bot_data["mode"] == "remote"
     assert bot_data["api_key"] == "bot-user-key"
+    assert bot_data["api_key_type"] == "root"
+
+
+def test_ov_server_top_level_root_api_key_backfills_legacy_root_mode(monkeypatch):
+    bot_data = {}
+    ov_data = {"root_api_key": "server-root-key"}
+    monkeypatch.setattr(
+        config_loader_module,
+        "load_ovcli_config",
+        lambda: SimpleNamespace(api_key="stale-ovcli-key"),
+    )
+
+    config_loader_module._merge_ov_server_config(bot_data, ov_data)
+
+    assert bot_data["mode"] == "remote"
+    assert bot_data["api_key"] == "server-root-key"
+    assert bot_data["root_api_key"] == "server-root-key"
+    assert bot_data["api_key_type"] == "root"
 
 
 def test_ov_server_api_key_implies_remote_mode(monkeypatch):
@@ -1242,6 +1261,60 @@ async def test_openviking_grep_keeps_explicit_resource_uri(monkeypatch):
     assert calls == [("viking://resources/", "hello", True, None)]
     assert "Found 1 match for pattern 'hello':" in result
     assert "viking://resources/doc.md" in result
+
+
+def test_openviking_tool_memory_peer_ids_exclude_legacy_memory_users():
+    tool = VikingSearchTool()
+
+    peer_ids = tool._memory_peer_ids(
+        SimpleNamespace(
+            sender_id="sender-1",
+            memory_peer_ids=["speaker-a"],
+            memory_user_ids=["legacy-user"],
+        )
+    )
+
+    assert peer_ids == ["sender-1", "speaker-a"]
+
+
+@pytest.mark.asyncio
+async def test_viking_memory_context_keeps_legacy_users_separate_from_peers(
+    monkeypatch, tmp_path
+):
+    calls = []
+
+    class _FakeClient:
+        async def search_memory(self, **kwargs):
+            calls.append(kwargs)
+            return []
+
+        async def close(self):
+            return None
+
+    async def _fake_create(**_kwargs):
+        return _FakeClient()
+
+    monkeypatch.setattr("vikingbot.agent.memory.load_config", lambda: _make_config("root"))
+    monkeypatch.setattr("vikingbot.agent.memory.VikingClient.create", _fake_create)
+
+    store = MemoryStore(tmp_path)
+
+    await store.get_viking_memory_context(
+        current_message="hello",
+        workspace_id="workspace",
+        sender_id="sender-1",
+        peer_ids=["speaker-a"],
+        user_ids=["legacy-user"],
+    )
+
+    assert calls == [
+        {
+            "query": "hello",
+            "user_ids": ["legacy-user"],
+            "peer_ids": ["sender-1", "speaker-a"],
+            "limit": 30,
+        }
+    ]
 
 
 @pytest.mark.asyncio

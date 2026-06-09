@@ -66,7 +66,6 @@ class OVFileTool(Tool, ABC):
             [
                 getattr(tool_context, "sender_id", None),
                 *(getattr(tool_context, "memory_peer_ids", None) or []),
-                *(getattr(tool_context, "memory_user_ids", None) or []),
             ]
         )
 

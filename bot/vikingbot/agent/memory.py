@@ -164,9 +164,8 @@ class MemoryStore:
             )
             logger.info(f"workspace_id={workspace_id}")
             logger.info(f"sender_id={sender_id}")
-            if peer_ids is None and user_ids:
-                peer_ids = user_ids
             logger.info(f"peer_ids={peer_ids}")
+            logger.info(f"user_ids={user_ids}")
             logger.info(f"admin_user_id={admin_user_id}")
 
             client = await VikingClient.create(
@@ -176,6 +175,7 @@ class MemoryStore:
             search_peer_ids = [sender_id, *(peer_ids or [])] if sender_id else (peer_ids or None)
             result = await client.search_memory(
                 query=current_message,
+                user_ids=user_ids,
                 peer_ids=search_peer_ids,
                 limit=30,
             )

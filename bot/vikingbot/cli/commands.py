@@ -627,11 +627,13 @@ def prepare_agent_channel(
     from vikingbot.channels.chat import ChatChannel, ChatChannelConfig
     from vikingbot.channels.single_turn import SingleTurnChannel, SingleTurnChannelConfig
 
-    memory_peers = memory_peer or memory_user
     channels = ChannelManager(bus)
     if message is not None:
         # Single message mode - use SingleTurnChannel for clean output
-        channel_config = SingleTurnChannelConfig(memory_peer=memory_peers)
+        channel_config = SingleTurnChannelConfig(
+            memory_peer=memory_peer,
+            memory_user=memory_user,
+        )
         channel = SingleTurnChannel(
             channel_config,
             bus,
@@ -645,7 +647,10 @@ def prepare_agent_channel(
         channels.add_channel(channel)
     else:
         # Interactive mode - use ChatChannel with thinking display
-        channel_config = ChatChannelConfig(memory_peer=memory_peers)
+        channel_config = ChatChannelConfig(
+            memory_peer=memory_peer,
+            memory_user=memory_user,
+        )
         channel = ChatChannel(
             channel_config,
             bus,
@@ -685,7 +690,7 @@ def chat(
     memory_user: list[str] = typer.Option(
         None,
         "--memory-user",
-        help="Deprecated alias for --memory-peer",
+        help="Deprecated legacy OpenViking user ID for root-key memory fanout",
     ),
 ):
     """Interact with the agent directly."""

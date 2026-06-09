@@ -94,6 +94,7 @@ class ContextBuilder:
         ov_tools_enable: bool = True,
         profile_user_list: list[str] | None = None,
         memory_peer_ids: list[str] | None = None,
+        memory_owner_user_ids: list[str] | None = None,
     ) -> str:
         """
         Build the system prompt from bootstrap files, memory, and skills.
@@ -103,6 +104,7 @@ class ContextBuilder:
             ov_tools_enable: Whether to enable OpenViking tools and memory.
             profile_user_list: Deprecated list of additional peer IDs to fetch profiles for.
             memory_peer_ids: Peer IDs used for memory retrieval; profiles are fetched too.
+            memory_owner_user_ids: Deprecated legacy owner-user IDs used for root-key fanout.
 
         Returns:
             Complete system prompt.
@@ -193,6 +195,7 @@ Skills with available="false" need dependencies installed first - you can try in
         current_message: str,
         sender_id: str,
         memory_peer_ids: list[str] | None = None,
+        memory_owner_user_ids: list[str] | None = None,
         ov_tools_enable: bool = True,
         is_first_round: bool = True,
     ) -> str:
@@ -263,6 +266,7 @@ Skills with available="false" need dependencies installed first - you can try in
                     workspace_id=workspace_id,
                     sender_id=sender_id,
                     peer_ids=search_peer_ids,
+                    user_ids=memory_owner_user_ids if memory_owner_user_ids else None,
                     openviking_connection=self._openviking_connection,
                 )
                 logger.info(f"viking_memory={viking_memory}")
@@ -346,6 +350,7 @@ IMPORTANT:
         ov_tools_enable: bool = True,
         profile_user_list: list[str] | None = None,
         memory_peer_ids: list[str] | None = None,
+        memory_owner_user_ids: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """
         Build the complete message list for an LLM call.
@@ -358,6 +363,7 @@ IMPORTANT:
             ov_tools_enable: Whether to enable OpenViking tools and memory.
             profile_user_list: Deprecated list of additional peer IDs to fetch profiles for.
             memory_peer_ids: Optional list of peer IDs to fetch memory for.
+            memory_owner_user_ids: Deprecated legacy owner-user IDs used for root-key fanout.
 
         Returns:
             List of messages including system prompt.
@@ -370,6 +376,7 @@ IMPORTANT:
             ov_tools_enable=ov_tools_enable,
             profile_user_list=profile_user_list,
             memory_peer_ids=memory_peer_ids,
+            memory_owner_user_ids=memory_owner_user_ids,
         )
         messages.append({"role": "system", "content": system_prompt})
         # logger.debug(f"system_prompt: {system_prompt}")
@@ -384,6 +391,7 @@ IMPORTANT:
             current_message,
             self._sender_id,
             memory_peer_ids,
+            memory_owner_user_ids,
             ov_tools_enable=ov_tools_enable,
             is_first_round=not history,
         )

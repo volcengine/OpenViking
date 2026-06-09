@@ -926,12 +926,15 @@ class AgentLoop:
             msg.openviking_connection = openviking_connection
             profile_user_list = []
             memory_peer_ids = self._metadata_memory_peer_ids(msg.metadata)
+            memory_owner_user_ids = self._metadata_memory_owner_user_ids(msg.metadata)
             channel_config = self._get_channel_config(session_key)
 
             if channel_config and ov_tools_enable:
                 profile_user_list = getattr(channel_config, "profile_user_list", [])
                 if not memory_peer_ids:
                     memory_peer_ids = self._channel_memory_peer_ids(channel_config)
+                if not memory_owner_user_ids:
+                    memory_owner_user_ids = self._channel_memory_owner_user_ids(channel_config)
 
             # Handle slash commands
             is_group_chat = msg.metadata.get("chat_type") == "group" if msg.metadata else False
@@ -1089,6 +1092,7 @@ class AgentLoop:
                 ov_tools_enable=ov_tools_enable,
                 profile_user_list=profile_user_list,
                 memory_peer_ids=memory_peer_ids,
+                memory_owner_user_ids=memory_owner_user_ids,
             )
             relevant_memories = message_context.latest_relevant_memories
             auto_memory_tool = None
@@ -1116,6 +1120,7 @@ class AgentLoop:
                     sender_id=msg.sender_id,
                     ov_tools_enable=ov_tools_enable,
                     memory_peer_ids=memory_peer_ids,
+                    memory_owner_user_ids=memory_owner_user_ids,
                     disabled_tools=disabled_tools,
                     openviking_connection=openviking_connection,
                 )
@@ -1309,15 +1314,18 @@ class AgentLoop:
     def _metadata_memory_peer_ids(self, metadata: dict[str, Any] | None) -> list[str]:
         if not isinstance(metadata, dict):
             return []
-        return self._normalize_id_list(
-            metadata.get("memory_peers") or metadata.get("memory_users")
-        )
+        return self._normalize_id_list(metadata.get("memory_peers"))
+
+    def _metadata_memory_owner_user_ids(self, metadata: dict[str, Any] | None) -> list[str]:
+        if not isinstance(metadata, dict):
+            return []
+        return self._normalize_id_list(metadata.get("memory_users"))
 
     def _channel_memory_peer_ids(self, channel_config: Any) -> list[str]:
-        return self._normalize_id_list(
-            getattr(channel_config, "memory_peer", None)
-            or getattr(channel_config, "memory_user", None)
-        )
+        return self._normalize_id_list(getattr(channel_config, "memory_peer", None))
+
+    def _channel_memory_owner_user_ids(self, channel_config: Any) -> list[str]:
+        return self._normalize_id_list(getattr(channel_config, "memory_user", None))
 
     def _get_ov_tools_enable(self, session_key: SessionKey) -> bool:
         """Get ov_tools_enable setting from channel config.

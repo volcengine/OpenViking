@@ -65,7 +65,7 @@ class BaseChannelConfig(BaseModel):
     enabled: bool = True
     ov_tools_enable: bool = True
     memory_peer: list[str] | None = None
-    memory_user: list[str] | None = None  # Deprecated alias for memory_peer.
+    memory_user: list[str] | None = None  # Deprecated legacy owner-user memory lookup.
 
     def channel_id(self) -> str:
         return "default"
@@ -293,7 +293,7 @@ class BotChannelConfig(BaseChannelConfig):
     need_mention: bool = False
     profile_user_list: list[str] = Field(default_factory=list)
     memory_peer: list[str] | str | None = None
-    memory_user: list[str] | str | None = None  # Deprecated alias for memory_peer.
+    memory_user: list[str] | str | None = None  # Deprecated legacy owner-user memory lookup.
     id: str = "default"  # Channel identifier for multi-channel support
 
     def channel_id(self) -> str:

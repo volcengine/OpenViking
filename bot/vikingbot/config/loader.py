@@ -154,7 +154,13 @@ def _merge_ov_server_config(bot_data: dict, ov_data: dict) -> None:
     server_root_api_key = ov_data.get("root_api_key", "")
     if not api_key and legacy_bot_api_key:
         bot_data["api_key"] = legacy_bot_api_key
+        bot_data["api_key_type"] = "root"
         api_key = legacy_bot_api_key
+    elif not api_key and server_root_api_key:
+        bot_data["root_api_key"] = server_root_api_key
+        bot_data["api_key"] = server_root_api_key
+        bot_data["api_key_type"] = "root"
+        api_key = server_root_api_key
     mode = bot_data["mode"] if "mode" in bot_data and bot_data["mode"] else ""
     if not mode:
         mode = "remote" if api_key or server_root_api_key else "local"
