@@ -23,6 +23,16 @@ class MockSkillProcessor:
         return {"status": "ok"}
 
 
+class HTMLResourceProcessor:
+    async def process_resource(self, **kwargs):
+        return {
+            "status": "success",
+            "root_uri": "viking://resources/example.com/docs",
+            "_html_content": "<html><a href='/child'>child</a></html>",
+            "_html_final_url": "https://www.example.com/docs/",
+        }
+
+
 @pytest.fixture
 def request_context() -> RequestContext:
     return RequestContext(
@@ -72,6 +82,36 @@ async def test_add_resource_rejects_core_fields_inside_args(
             ctx=request_context,
             args={"path": "https://evil.example"},
         )
+
+
+@pytest.mark.asyncio
+async def test_add_resource_strips_internal_html_fields_from_result(
+    request_context: RequestContext,
+    monkeypatch,
+):
+    service = ResourceService(
+        vikingdb=MagicMock(),
+        viking_fs=MagicMock(),
+        resource_processor=HTMLResourceProcessor(),
+        skill_processor=MockSkillProcessor(),
+        watch_scheduler=None,
+    )
+
+    async def fake_crawl_and_add_resources(**kwargs):
+        assert kwargs["root_url"] == "https://www.example.com/docs/"
+        return CrawlResult(total_crawled=1)
+
+    monkeypatch.setattr(service, "_crawl_and_add_resources", fake_crawl_and_add_resources)
+
+    result = await service.add_resource(
+        path="https://example.com/docs",
+        ctx=request_context,
+        args={"depth": 1},
+    )
+
+    assert "_html_content" not in result
+    assert "_html_final_url" not in result
+    assert result["_crawl_result"]["total_crawled"] == 1
 
 
 @pytest.mark.asyncio

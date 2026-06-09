@@ -11,6 +11,32 @@ from openviking.utils.page_fetcher import (
 )
 
 
+class FakePlaywrightResponse:
+    status = 200
+    headers = {"content-type": "text/html; charset=utf-8"}
+
+
+class FakePlaywrightPage:
+    url = "https://example.com/final"
+
+    async def goto(self, url, wait_until, timeout):
+        return FakePlaywrightResponse()
+
+    async def wait_for_timeout(self, timeout):
+        return None
+
+    async def content(self):
+        return "<html><body>ok</body></html>"
+
+    async def close(self):
+        return None
+
+
+class FakePlaywrightBrowser:
+    async def new_page(self):
+        return FakePlaywrightPage()
+
+
 @pytest.mark.asyncio
 async def test_playwright_fetcher_reports_missing_package(monkeypatch):
     fetcher = PlaywrightFetcher()
@@ -41,3 +67,19 @@ async def test_playwright_fetcher_reports_missing_chromium(monkeypatch):
     assert result.status_code == 0
     assert result.final_url == "https://example.com"
     assert result.error == PLAYWRIGHT_CHROMIUM_INSTALL_HINT
+
+
+@pytest.mark.asyncio
+async def test_playwright_fetcher_preserves_content_type(monkeypatch):
+    fetcher = PlaywrightFetcher()
+
+    async def fake_get_browser():
+        return FakePlaywrightBrowser()
+
+    monkeypatch.setattr(fetcher, "_get_browser", fake_get_browser)
+
+    result = await fetcher.fetch("https://example.com")
+
+    assert result.status_code == 200
+    assert result.final_url == "https://example.com/final"
+    assert result.content_type == "text/html; charset=utf-8"

@@ -151,6 +151,7 @@ class PlaywrightFetcher(PageFetcher):
                 html=html,
                 status_code=status,
                 final_url=final_url,
+                content_type=resp.headers.get("content-type", "") if resp else "",
             )
         except ImportError:
             return FetchResult(

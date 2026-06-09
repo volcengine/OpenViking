@@ -649,11 +649,14 @@ class ResourceService:
             if result.get("status") == "error":
                 return result
 
-            root_uri = result.get("root_uri")
-            crawl_parent_uri = self._get_parent_resource_uri(root_uri) or parent
-            if depth != 0 and self._should_crawl(path, result):
+            html_content = result.pop("_html_content", "")
+            html_final_url = result.pop("_html_final_url", "")
+
+            if depth != 0 and self._should_crawl(path, html_content):
                 # Crawl from the redirected final URL so relative links and dedup are correct.
-                crawl_root_url = result.get("_html_final_url") or path
+                crawl_root_url = html_final_url or path
+                root_uri = result.get("root_uri")
+                crawl_parent_uri = self._get_parent_resource_uri(root_uri) or parent
                 try:
                     crawl_result = await self._crawl_and_add_resources(
                         root_url=crawl_root_url,
@@ -825,10 +828,9 @@ class ResourceService:
                 get_request_wait_tracker().cleanup(telemetry_id)
                 unregister_wait_telemetry(telemetry_id)
 
-    def _should_crawl(self, path: str, result: Dict[str, Any]) -> bool:
+    def _should_crawl(self, path: str, html_content: str) -> bool:
         if not path or not path.startswith(("http://", "https://")):
             return False
-        html_content = result.get("_html_content", "")
         return bool(html_content)
 
     def _get_parent_resource_uri(self, uri: Optional[str]) -> Optional[str]:
