@@ -173,6 +173,7 @@ describe("context-engine assemble()", () => {
           cfgOverrides: {
             autoRecall: true,
             peer_role: "person",
+            recallResources: true,
           },
         },
       );
@@ -188,7 +189,7 @@ describe("context-engine assemble()", () => {
         messages: sourceMessages,
       });
 
-      expect(client.find).toHaveBeenCalledTimes(1);
+      expect(client.find).toHaveBeenCalledTimes(2);
       for (const call of client.find.mock.calls) {
         expect(call[1]).toMatchObject({ peerId: "wx_user-01_abc" });
       }
@@ -197,7 +198,7 @@ describe("context-engine assemble()", () => {
     }
   });
 
-  it("uses prompt metadata sender_id for main assemble peer auto-recall when runtimeContext is missing", async () => {
+  it("does not auto-recall during main assemble from prompt metadata", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
@@ -219,20 +220,6 @@ describe("context-engine assemble()", () => {
       client.getSessionContext.mockRejectedValueOnce(
         new Error("OpenViking request failed [NOT_FOUND]: Session not found"),
       );
-      client.find
-        .mockResolvedValueOnce({
-          memories: [
-            {
-              uri: "viking://user/acme/peers/ou_bcc/memories/profile.md",
-              level: 2,
-              category: "profile",
-              abstract: "# 秦浩杰\n- 正在维护的项目：openviking",
-              score: 0.92,
-            },
-          ],
-          total: 1,
-        })
-        .mockResolvedValueOnce({ memories: [], total: 0 });
 
       const prompt = [
         "Conversation info (untrusted metadata):",
@@ -258,30 +245,27 @@ describe("context-engine assemble()", () => {
         "",
         "[System: mention metadata]",
       ].join("\n");
+      const liveMessages = [{ role: "user", content: "live main assemble prompt" }];
 
       const result = await engine.assemble({
         sessionId: "session-main-prompt-peer",
         sessionKey: "agent:main:feishu:group:oc_123",
-        messages: [],
+        messages: liveMessages,
         prompt,
       });
 
-      expect(client.find).toHaveBeenCalledTimes(1);
-      for (const call of client.find.mock.calls) {
-        expect(call[1]).toMatchObject({ peerId: "ou_bcc" });
-      }
-      expect(result.messages[0]?.role).toBe("user");
-      expect(result.messages[0]?.content).toContain("Source: openviking-auto-recall");
-      expect(result.messages[0]?.content).toContain("<openviking-context>");
-      expect(result.messages[0]?.content).toContain("## Long-term Memories");
-      expect(result.messages[0]?.content).not.toContain("<relevant-memories>");
-      expect(result.messages[0]?.content).toContain("正在维护的项目：openviking");
+      expect(client.getSessionContext).toHaveBeenCalled();
+      expect(client.find).not.toHaveBeenCalled();
+      expect(result.messages).toEqual(liveMessages);
+      expect(result.messages[0]?.content).not.toContain("Source: openviking-auto-recall");
+      expect(result.messages[0]?.content).not.toContain("<openviking-context>");
+      expect(result.messages[0]?.content).not.toContain("## Long-term Memories");
     } finally {
       vi.unstubAllGlobals();
     }
   });
 
-  it("prefers runtimeContext senderId over prompt metadata for main assemble recall", async () => {
+  it("does not inject auto-recall into main assemble OV context", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
@@ -294,9 +278,19 @@ describe("context-engine assemble()", () => {
         {
           latest_archive_overview: "",
           pre_archive_abstracts: [],
-          messages: [],
-          estimatedTokens: 0,
-          stats: makeStats(),
+          messages: [
+            {
+              id: "stored-main-user",
+              role: "user",
+              created_at: "2026-04-30T00:00:00Z",
+              parts: [{ type: "text", text: "Stored OpenViking prompt." }],
+            },
+          ],
+          estimatedTokens: 12,
+          stats: {
+            ...makeStats(),
+            activeTokens: 12,
+          },
         },
         {
           cfgOverrides: {
@@ -306,10 +300,11 @@ describe("context-engine assemble()", () => {
         },
       );
 
-      await engine.assemble({
+      const liveMessages = [{ role: "user", content: "live prompt" }];
+      const result = await engine.assemble({
         sessionId: "session-main-runtime-peer",
         runtimeContext: { senderId: "trusted/runtime-user" },
-        messages: [],
+        messages: liveMessages,
         prompt: [
           "Conversation info (untrusted metadata):",
           "```json",
@@ -321,10 +316,15 @@ describe("context-engine assemble()", () => {
         ].join("\n"),
       });
 
-      expect(client.find).toHaveBeenCalledTimes(1);
-      for (const call of client.find.mock.calls) {
-        expect(call[1]).toMatchObject({ peerId: "trusted_runtime-user" });
-      }
+      expect(client.getSessionContext).toHaveBeenCalled();
+      expect(client.find).not.toHaveBeenCalled();
+      expect(result.messages[0]).toEqual({
+        role: "user",
+        content: "Stored OpenViking prompt.",
+      });
+      expect(result.messages[0]?.content).not.toContain("Source: openviking-auto-recall");
+      expect(result.messages[0]?.content).not.toContain("<openviking-context>");
+      expect(result.messages[0]?.content).not.toContain("## Long-term Memories");
     } finally {
       vi.unstubAllGlobals();
     }
@@ -351,6 +351,7 @@ describe("context-engine assemble()", () => {
           cfgOverrides: {
             autoRecall: true,
             peer_role: "assistant",
+            recallResources: true,
           },
         },
       );
@@ -365,7 +366,7 @@ describe("context-engine assemble()", () => {
         messages: sourceMessages,
       });
 
-      expect(client.find).toHaveBeenCalledTimes(1);
+      expect(client.find).toHaveBeenCalledTimes(2);
       for (const call of client.find.mock.calls) {
         expect(call[1]).toMatchObject({ peerId: "agent:session-assistant-peer" });
       }
