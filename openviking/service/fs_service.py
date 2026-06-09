@@ -8,8 +8,7 @@ Provides file system operations: ls, mkdir, rm, mv, tree, stat, read, abstract, 
 
 from typing import Any, Dict, List, Optional
 
-from openviking.core.directories import PRESET_DIRECTORIES, DirectoryDefinition
-from openviking.core.namespace import canonical_user_root, canonicalize_uri, context_type_for_uri
+from openviking.core.namespace import context_type_for_uri
 from openviking.core.uri_validation import validate_optional_viking_uri, validate_viking_uri
 from openviking.privacy import (
     UserPrivacyConfigService,
@@ -20,22 +19,10 @@ from openviking.server.identity import RequestContext
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.viking_fs import VikingFS
 from openviking.utils.embedding_utils import vectorize_directory_meta
-from openviking_cli.exceptions import NotFoundError, NotInitializedError
+from openviking_cli.exceptions import NotInitializedError
 from openviking_cli.utils import VikingURI, get_logger
 
 logger = get_logger(__name__)
-
-
-def _preset_directory_paths(definition: DirectoryDefinition, prefix: str = "") -> set[str]:
-    paths: set[str] = set()
-    for child in definition.children:
-        child_path = f"{prefix}/{child.path}".strip("/")
-        paths.add(child_path)
-        paths.update(_preset_directory_paths(child, child_path))
-    return paths
-
-
-_USER_PRESET_DIRECTORY_PATHS = _preset_directory_paths(PRESET_DIRECTORIES["user"])
 
 
 class FSService:
@@ -87,57 +74,42 @@ class FSService:
             show_all_hidden: bool = False (list all hidden files, like -a)
             node_limit: int = 1000 (maximum number of nodes to list)
         """
+        viking_fs = self._ensure_initialized()
         uri = validate_viking_uri(uri)
 
         if simple:
             # Only return URIs — skip expensive abstract fetching to save tokens
-            entries = await self._list_entries(
-                uri=uri,
+            if recursive:
+                entries = await viking_fs.tree(
+                    uri,
+                    ctx=ctx,
+                    output="original",
+                    show_all_hidden=show_all_hidden,
+                    node_limit=node_limit,
+                    level_limit=level_limit,
+                )
+            else:
+                entries = await viking_fs.ls(
+                    uri,
+                    ctx=ctx,
+                    output="original",
+                    show_all_hidden=show_all_hidden,
+                    node_limit=node_limit,
+                )
+            return [e.get("uri", "") for e in entries]
+
+        if recursive:
+            entries = await viking_fs.tree(
+                uri,
                 ctx=ctx,
-                recursive=recursive,
-                output="original",
+                output=output,
                 abs_limit=abs_limit,
                 show_all_hidden=show_all_hidden,
                 node_limit=node_limit,
                 level_limit=level_limit,
             )
-            return [e.get("uri", "") for e in entries]
-
-        return await self._list_entries(
-            uri=uri,
-            ctx=ctx,
-            recursive=recursive,
-            output=output,
-            abs_limit=abs_limit,
-            show_all_hidden=show_all_hidden,
-            node_limit=node_limit,
-            level_limit=level_limit,
-        )
-
-    async def _list_entries(
-        self,
-        uri: str,
-        ctx: RequestContext,
-        recursive: bool,
-        output: str,
-        abs_limit: int,
-        show_all_hidden: bool,
-        node_limit: int,
-        level_limit: int,
-    ) -> List[Any]:
-        viking_fs = self._ensure_initialized()
-        try:
-            if recursive:
-                return await viking_fs.tree(
-                    uri,
-                    ctx=ctx,
-                    output=output,
-                    abs_limit=abs_limit,
-                    show_all_hidden=show_all_hidden,
-                    node_limit=node_limit,
-                    level_limit=level_limit,
-                )
-            return await viking_fs.ls(
+        else:
+            entries = await viking_fs.ls(
                 uri,
                 ctx=ctx,
                 output=output,
@@ -145,19 +117,7 @@ class FSService:
                 show_all_hidden=show_all_hidden,
                 node_limit=node_limit,
             )
-        except NotFoundError:
-            if self._is_lazy_user_preset_directory(uri, ctx):
-                return []
-            raise
-
-    @staticmethod
-    def _is_lazy_user_preset_directory(uri: str, ctx: RequestContext) -> bool:
-        canonical_uri = canonicalize_uri(uri, ctx=ctx).rstrip("/")
-        user_root = canonical_user_root(ctx).rstrip("/")
-        if not canonical_uri.startswith(f"{user_root}/"):
-            return False
-        relative_path = canonical_uri[len(user_root) + 1 :]
-        return relative_path in _USER_PRESET_DIRECTORY_PATHS
+        return entries
 
     async def mkdir(
         self,

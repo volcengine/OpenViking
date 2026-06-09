@@ -72,7 +72,7 @@ class TestSkillAdd:
 
 
 class TestSkillList:
-    def test_list_skills(self):
+    def test_list_skills(self, ensure_user_skills_dir):
         r = ov(["ls", "viking://user/skills/", "-o", "json"])
         assert r["exit_code"] == 0, (
             f"ov ls skills should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
@@ -84,7 +84,7 @@ class TestSkillList:
 
 
 class TestSkillRead:
-    def test_read_skill(self):
+    def test_read_skill(self, ensure_user_skills_dir):
         ls_r = ov(["ls", "viking://user/skills/", "-o", "json"])
         if ls_r["exit_code"] != 0 or not ls_r["json"] or not ls_r["json"].get("result"):
             pytest.skip("No skills available to test read")

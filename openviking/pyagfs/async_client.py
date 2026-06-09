@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import asyncio
-import posixpath
 from collections.abc import Iterator
 from typing import Any, BinaryIO, Dict, List, Union
 
@@ -216,14 +215,6 @@ class AsyncAGFSClient:
         *,
         fs_ctx: Dict[str, str] | None = None,
     ) -> list[Dict[str, Any]]:
-        if not hasattr(self._client, "tree_directory"):
-            return await self._tree_directory_via_ls(
-                path,
-                show_hidden=show_hidden,
-                node_limit=node_limit,
-                level_limit=level_limit,
-                fs_ctx=fs_ctx,
-            )
         return await self.run(
             "tree_directory",
             path,
@@ -232,52 +223,6 @@ class AsyncAGFSClient:
             level_limit=level_limit,
             ctx=_fs_ctx_or_default(path, fs_ctx),
         )
-
-    async def _tree_directory_via_ls(
-        self,
-        path: str,
-        show_hidden: bool = False,
-        node_limit: int | None = None,
-        level_limit: int | None = None,
-        *,
-        fs_ctx: Dict[str, str] | None = None,
-    ) -> list[Dict[str, Any]]:
-        """Compatibility traversal for older bindings without tree_directory."""
-        if node_limit is not None and node_limit <= 0:
-            return []
-        if level_limit is not None and level_limit <= 0:
-            return []
-
-        root = _normalize_agfs_dir(path)
-        ctx = _fs_ctx_or_default(root, fs_ctx)
-        result: list[Dict[str, Any]] = []
-
-        async def visit(current: str, depth: int) -> None:
-            if level_limit is not None and depth >= level_limit:
-                return
-
-            entries = await self.run("ls", current, ctx=ctx)
-            for raw_entry in entries:
-                if node_limit is not None and len(result) >= node_limit:
-                    return
-
-                name = str(raw_entry.get("name") or "")
-                if not name:
-                    continue
-                if not show_hidden and name.startswith("."):
-                    continue
-
-                child_path = _join_agfs_child(current, name)
-                is_dir = bool(raw_entry.get("isDir", raw_entry.get("is_dir", False)))
-                result.append(_tree_entry_from_ls(root, child_path, raw_entry, name, is_dir))
-
-                if is_dir:
-                    await visit(child_path, depth + 1)
-                    if node_limit is not None and len(result) >= node_limit:
-                        return
-
-        await visit(root, 0)
-        return result
 
     async def system_sync_status(
         self, path: str, *, fs_ctx: Dict[str, str] | None = None
@@ -290,40 +235,3 @@ class AsyncAGFSClient:
     ) -> Dict[str, Any]:
         """Retry pending multi-write sync work for a file or directory path."""
         return await self.run("system_sync_retry", path, ctx=_fs_ctx_or_default(path, fs_ctx))
-
-
-def _normalize_agfs_dir(path: str) -> str:
-    normalized = posixpath.normpath(path or "/")
-    if not normalized.startswith("/"):
-        normalized = f"/{normalized}"
-    return normalized
-
-
-def _join_agfs_child(parent: str, name: str) -> str:
-    if parent == "/":
-        return f"/{name.strip('/')}"
-    return f"{parent.rstrip('/')}/{name.strip('/')}"
-
-
-def _tree_entry_from_ls(
-    root: str,
-    child_path: str,
-    raw_entry: Dict[str, Any],
-    name: str,
-    is_dir: bool,
-) -> Dict[str, Any]:
-    rel_path = child_path[len(root) :].lstrip("/") if child_path.startswith(root) else name
-    standard_keys = {"name", "size", "mode", "modTime", "isDir", "is_dir"}
-    extra = {key: value for key, value in raw_entry.items() if key not in standard_keys}
-    return {
-        "path": child_path,
-        "rel_path": rel_path,
-        "info": {
-            "name": name,
-            "size": raw_entry.get("size", 0),
-            "mode": raw_entry.get("mode", 0o755 if is_dir else 0o644),
-            "modTime": raw_entry.get("modTime", ""),
-            "isDir": is_dir,
-        },
-        "extra": extra,
-    }
