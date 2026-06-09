@@ -56,10 +56,10 @@ class TestOrderedCredentialSwitcher:
         assert switcher.is_exhausted
 
     def test_fail_fast_on_permanent_error(self):
-        """Test that permanent errors cause fail-fast."""
-        switcher = OrderedCredentialSwitcher(n=3)
+        """Single-credential mode: permanent error fails fast (last credential)."""
+        switcher = OrderedCredentialSwitcher(n=1)
 
-        # Permanent error should NOT advance, return False
+        # Permanent error on the only credential should fail-fast
         result = switcher.on_failure(0, ERROR_CLASS_PERMANENT)
         assert result is False
         assert switcher.get_active_index() == 0  # Should stay at current index
@@ -218,3 +218,40 @@ class TestOrderedCredentialSwitcher:
 
         with pytest.raises(ValueError, match="Number of credentials must be >= 1"):
             OrderedCredentialSwitcher(n=-1)
+
+    def test_advance_on_permanent_error_when_enabled(self):
+        """Multi-credential mode: PERMANENT advances to next credential by default."""
+        switcher = OrderedCredentialSwitcher(n=3)
+
+        # First credential's permanent error should advance, not fail-fast
+        result = switcher.on_failure(0, ERROR_CLASS_PERMANENT)
+        assert result is True
+        assert switcher.get_active_index() == 1
+
+        # Middle credential's permanent error should also advance
+        result = switcher.on_failure(1, ERROR_CLASS_PERMANENT)
+        assert result is True
+        assert switcher.get_active_index() == 2
+
+    def test_last_credential_permanent_error_still_fails_fast(self):
+        """In multi-credential mode the last credential still fails fast on PERMANENT."""
+        switcher = OrderedCredentialSwitcher(n=2)
+
+        # Advance from 0 -> 1 on permanent error
+        assert switcher.on_failure(0, ERROR_CLASS_PERMANENT) is True
+        assert switcher.get_active_index() == 1
+
+        # On the last credential (idx 1, n=2), still fail-fast
+        result = switcher.on_failure(1, ERROR_CLASS_PERMANENT)
+        assert result is False
+        # active_idx stays at 1 (not bumped to n=2/exhausted) so caller can raise normally
+        assert switcher.get_active_index() == 1
+        assert not switcher.is_exhausted
+
+    def test_single_credential_permanent_error_fails_fast(self):
+        """With only one credential, PERMANENT must fail-fast (it's the last)."""
+        switcher = OrderedCredentialSwitcher(n=1)
+
+        result = switcher.on_failure(0, ERROR_CLASS_PERMANENT)
+        assert result is False
+        assert switcher.get_active_index() == 0
