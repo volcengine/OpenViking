@@ -348,6 +348,78 @@ async def test_skills_api_update_restores_previous_privacy_on_failure(client, mo
     assert privacy_response.json()["result"]["values"]["api_key"] == "secret-old"
 
 
+async def test_skills_api_update_restores_previous_privacy_after_privacy_write(client, monkeypatch):
+    from openviking.utils.skill_processor import SkillProcessor
+
+    await _add_skill(client, "rollback-privacy-after-write-skill", "Original description")
+
+    seeded_privacy = await client.post(
+        "/api/v1/privacy-configs/skill/rollback-privacy-after-write-skill",
+        json={"values": {"api_key": "secret-old"}, "change_reason": "seed"},
+    )
+    assert seeded_privacy.status_code == 200, seeded_privacy.text
+
+    original_prepare = SkillProcessor.prepare_skill_privacy
+    original_apply = SkillProcessor.apply_skill_privacy
+
+    async def _prepare_new_privacy(self, skill_dict, ctx):
+        if skill_dict.get("name") == "rollback-privacy-after-write-skill":
+            return skill_dict, {"api_key": "secret-new"}
+        return await original_prepare(self, skill_dict, ctx)
+
+    async def _apply_then_fail(
+        self,
+        skill_dict,
+        privacy_values,
+        ctx,
+        *,
+        change_reason,
+        delete_if_empty,
+    ):
+        result = await original_apply(
+            self,
+            skill_dict,
+            privacy_values,
+            ctx,
+            change_reason=change_reason,
+            delete_if_empty=delete_if_empty,
+        )
+        if skill_dict.get("name") == "rollback-privacy-after-write-skill":
+            raise RuntimeError("privacy post-write failure")
+        return result
+
+    monkeypatch.setattr(SkillProcessor, "prepare_skill_privacy", _prepare_new_privacy)
+    monkeypatch.setattr(SkillProcessor, "apply_skill_privacy", _apply_then_fail)
+
+    with pytest.raises(RuntimeError, match="privacy post-write failure"):
+        await client.put(
+            "/api/v1/skills/rollback-privacy-after-write-skill",
+            json={
+                "data": _skill_md(
+                    "rollback-privacy-after-write-skill",
+                    "Updated description",
+                    'api_key: "secret-new"\n',
+                ),
+                "wait": True,
+            },
+        )
+
+    privacy_response = await client.get(
+        "/api/v1/privacy-configs/skill/rollback-privacy-after-write-skill"
+    )
+    assert privacy_response.status_code == 200, privacy_response.text
+    assert privacy_response.json()["result"]["values"]["api_key"] == "secret-old"
+
+    show_response = await client.get(
+        "/api/v1/skills/rollback-privacy-after-write-skill",
+        params={"include_content": True},
+    )
+    assert show_response.status_code == 200, show_response.text
+    shown = show_response.json()["result"]
+    assert shown["description"] == "Original description"
+    assert "secret-new" not in shown["content"]
+
+
 async def test_skills_api_rejects_invalid_skill_names(client):
     invalid_names = [
         "team/sql-helper",

@@ -571,7 +571,7 @@ async def update_skill(
     async def _update() -> Dict[str, Any]:
         backup_uri = f"{_agent_skills_root(_ctx)}/.{skill_name}.update-backup-{uuid.uuid4().hex}"
         backup_created = False
-        privacy_committed = False
+        privacy_update_attempted = False
         previous_privacy = None
         preparation = None
         privacy = service.privacy_configs
@@ -606,6 +606,7 @@ async def update_skill(
                 privacy_change_reason="auto-extracted from update_skill",
             )
             await persist_skill_source_metadata(service, _ctx, result, source_metadata)
+            privacy_update_attempted = True
             await service.resources._skill_processor.apply_skill_privacy(  # noqa: SLF001
                 preparation.skill_dict,
                 preparation.privacy_values,
@@ -613,7 +614,6 @@ async def update_skill(
                 change_reason="auto-extracted from update_skill",
                 delete_if_empty=True,
             )
-            privacy_committed = True
         except Exception:
             if backup_created:
                 try:
@@ -624,7 +624,7 @@ async def update_skill(
                     await service.fs.mv(backup_uri, root_uri, ctx=_ctx)
                 except Exception:
                     pass
-            if privacy_committed:
+            if privacy_update_attempted:
                 try:
                     await _restore_skill_privacy(service, _ctx, skill_name, previous_privacy)
                 except Exception:
