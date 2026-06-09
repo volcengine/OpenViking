@@ -14,6 +14,7 @@ from openviking.utils.agfs_utils import (
     create_agfs_client,
     mount_agfs_backend,
 )
+from openviking_cli.utils.config.consts import OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.config.agfs_config import AGFSConfig, S3Config
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig, EmbeddingModelConfig
 from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig, VolcengineConfig
@@ -150,6 +151,52 @@ def test_agfs_queuefs_validation_accepts_supported_shapes(queuefs, expected):
 def test_agfs_queuefs_validation_rejects_invalid_shapes(queuefs, match):
     with pytest.raises(ValueError, match=match):
         AGFSConfig(path="/tmp/ov-test", backend="local", queuefs=queuefs)
+
+
+def test_agfs_cache_defaults_to_disabled_memory_provider():
+    config = AGFSConfig(path="/tmp/ov-test", backend="local")
+
+    assert config.cache.enabled is False
+    assert config.cache.provider == "memory"
+    assert config.cache.namespace == "openviking"
+
+
+def test_agfs_cache_accepts_yuanrong_provider_config():
+    config = AGFSConfig(
+        path="/tmp/ov-test",
+        backend="local",
+        cache={
+            "enabled": True,
+            "provider": "yuanrong",
+            "namespace": "ov-test",
+            "max_file_size_bytes": 4096,
+            "bypass_prefixes": ["/queue"],
+            "yuanrong": {
+                "host": "10.0.0.1",
+                "port": 31501,
+                "connect_timeout_ms": 1000,
+                "request_timeout_ms": 2000,
+                "sdk_concurrency": 2,
+            },
+        },
+    )
+
+    assert config.cache.enabled is True
+    assert config.cache.provider == "yuanrong"
+    assert config.cache.namespace == "ov-test"
+    assert config.cache.max_file_size_bytes == 4096
+    assert config.cache.bypass_prefixes == ["/queue"]
+    assert config.cache.yuanrong.host == "10.0.0.1"
+    assert config.cache.yuanrong.sdk_concurrency == 2
+
+
+def test_agfs_cache_rejects_invalid_provider():
+    with pytest.raises(ValueError, match="provider"):
+        AGFSConfig(
+            path="/tmp/ov-test",
+            backend="local",
+            cache={"provider": "redis"},
+        )
 
 
 @pytest.mark.parametrize(
@@ -384,7 +431,8 @@ class _FailingMountClient(_FakeMountClient):
 
 
 class _FakeBindingClient:
-    def __init__(self, *, config):
+    def __init__(self, config_arg=None, *, config=None):
+        self.config_arg = config_arg
         self.config = config
         self.mount_calls = []
 
@@ -458,10 +506,9 @@ def test_ragfs_binding_config_builds_single_binding_dict_for_local_backend(tmp_p
 
 def test_create_agfs_client_uses_single_binding_config_object(monkeypatch, tmp_path):
     agfs_config = AGFSConfig(path=str(tmp_path), backend="memory")
-    fake_client = _FakeBindingClient(config={})
 
     def _fake_get_binding_client():
-        return (lambda *, config: fake_client.__class__(config=config), None)
+        return (_FakeBindingClient, None)
 
     monkeypatch.setattr("openviking.pyagfs.get_binding_client", _fake_get_binding_client)
 
@@ -471,6 +518,26 @@ def test_create_agfs_client_uses_single_binding_config_object(monkeypatch, tmp_p
     assert isinstance(client, _FakeBindingClient)
     assert client.config == {}
     assert any(call[0] == "memfs" for call in client.mount_calls)
+
+
+def test_create_agfs_client_passes_resolved_ov_conf_path(monkeypatch, tmp_path):
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text('{"storage": {"agfs": {"cache": {"enabled": false}}}}')
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, str(config_path))
+
+    class FakeRAGFSBindingClient(_FakeBindingClient):
+        pass
+
+    monkeypatch.setattr(
+        "openviking.pyagfs.get_binding_client",
+        lambda: (FakeRAGFSBindingClient, None),
+    )
+
+    config = RagfsBindingConfig(agfs=AGFSConfig(path=str(tmp_path), backend="memory"))
+    client = create_agfs_client(config)
+
+    assert isinstance(client, FakeRAGFSBindingClient)
+    assert client.config_arg == str(config_path)
 
 
 def test_vectordb_validation():

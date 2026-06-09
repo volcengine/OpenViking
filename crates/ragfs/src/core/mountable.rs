@@ -27,6 +27,8 @@ use super::plugin::ServicePlugin;
 use super::stats::{FilesystemStats, StatsCollector};
 use super::stats_wrapper::StatsWrappedFS;
 use super::types::{BackendsConfig, FileInfo, GrepResult, PluginConfig, TreeEntry, WriteFlag};
+#[cfg(feature = "cache")]
+use crate::cache::{CacheNamespace, CachePolicy, CacheProvider, CachedFileSystem};
 
 /// Information about a mounted filesystem
 #[derive(Clone)]
@@ -67,6 +69,18 @@ pub struct MountableFS {
     /// multi-write mounts use it for per-backend encryption decisions.
     encryption_root_key: RwLock<Option<[u8; 32]>>,
     encryption_provider_type: RwLock<Option<u8>>,
+
+    /// Optional cache configuration shared by mounted filesystems.
+    #[cfg(feature = "cache")]
+    cache: Option<MountCacheConfig>,
+}
+
+#[cfg(feature = "cache")]
+#[derive(Clone)]
+struct MountCacheConfig {
+    provider: Arc<dyn CacheProvider>,
+    namespace: CacheNamespace,
+    policy: CachePolicy,
 }
 
 impl MountableFS {
@@ -127,6 +141,28 @@ impl MountableFS {
             registry: Arc::new(RwLock::new(HashMap::new())),
             encryption_root_key: RwLock::new(None),
             encryption_provider_type: RwLock::new(None),
+            #[cfg(feature = "cache")]
+            cache: None,
+        }
+    }
+
+    /// Create a new MountableFS that transparently wraps mounted backends with cache.
+    #[cfg(feature = "cache")]
+    pub fn with_cache(
+        provider: Arc<dyn CacheProvider>,
+        namespace: CacheNamespace,
+        policy: CachePolicy,
+    ) -> Self {
+        Self {
+            mounts: Arc::new(RwLock::new(Trie::new())),
+            registry: Arc::new(RwLock::new(HashMap::new())),
+            encryption_root_key: RwLock::new(None),
+            encryption_provider_type: RwLock::new(None),
+            cache: Some(MountCacheConfig {
+                provider,
+                namespace,
+                policy,
+            }),
         }
     }
 
@@ -235,6 +271,9 @@ impl MountableFS {
             }
         };
 
+        #[cfg(feature = "cache")]
+        let inner_fs = self.maybe_wrap_cache(inner_fs, &normalized_path);
+
         // Wrap with statistics
         let wrapped_fs = StatsWrappedFS::with_arc(inner_fs);
         let stats_collector = wrapped_fs.stats_collector();
@@ -277,6 +316,19 @@ impl MountableFS {
             },
         )
         .await
+    }
+
+    #[cfg(feature = "cache")]
+    fn maybe_wrap_cache(&self, fs: Arc<dyn FileSystem>, mount_path: &str) -> Arc<dyn FileSystem> {
+        match &self.cache {
+            Some(cache) => Arc::new(CachedFileSystem::new(
+                Box::new(ArcFileSystem(fs)),
+                cache.provider.clone(),
+                mount_namespace(&cache.namespace, mount_path),
+                cache.policy.clone(),
+            )),
+            None => fs,
+        }
     }
 
     /// Unmount a filesystem at the specified path
@@ -493,6 +545,58 @@ impl MountableFS {
     }
 }
 
+#[cfg(feature = "cache")]
+struct ArcFileSystem(Arc<dyn FileSystem>);
+
+#[cfg(feature = "cache")]
+#[async_trait]
+impl FileSystem for ArcFileSystem {
+    async fn create(&self, path: &str) -> Result<()> {
+        self.0.create(path).await
+    }
+
+    async fn mkdir(&self, path: &str, mode: u32) -> Result<()> {
+        self.0.mkdir(path, mode).await
+    }
+
+    async fn remove(&self, path: &str) -> Result<()> {
+        self.0.remove(path).await
+    }
+
+    async fn remove_all(&self, path: &str) -> Result<()> {
+        self.0.remove_all(path).await
+    }
+
+    async fn read(&self, path: &str, offset: u64, size: u64) -> Result<Vec<u8>> {
+        self.0.read(path, offset, size).await
+    }
+
+    async fn write(&self, path: &str, data: &[u8], offset: u64, flags: WriteFlag) -> Result<u64> {
+        self.0.write(path, data, offset, flags).await
+    }
+
+    async fn read_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
+        self.0.read_dir(path).await
+    }
+
+    async fn stat(&self, path: &str) -> Result<FileInfo> {
+        self.0.stat(path).await
+    }
+
+    async fn rename(&self, old_path: &str, new_path: &str) -> Result<()> {
+        self.0.rename(old_path, new_path).await
+    }
+
+    async fn chmod(&self, path: &str, mode: u32) -> Result<()> {
+        self.0.chmod(path, mode).await
+    }
+}
+
+#[cfg(feature = "cache")]
+fn mount_namespace(base: &CacheNamespace, mount_path: &str) -> CacheNamespace {
+    CacheNamespace::new(format!("{}:{}", base.as_str(), mount_path))
+}
+
 impl Default for MountableFS {
     fn default() -> Self {
         Self::new()
@@ -695,6 +799,7 @@ mod tests {
     use crate::shape::SHAPE_MANIFEST_PATH;
     use serde_json::Value;
     use std::collections::HashMap;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     /// Helper to create a PluginConfig for tests with new fields defaulted.
     fn test_config(name: &str, mount_path: &str) -> PluginConfig {
@@ -844,6 +949,14 @@ mod tests {
         tree_entries: Option<Vec<TreeEntry>>,
     }
 
+    struct CountingPlugin {
+        reads: Arc<AtomicU64>,
+    }
+
+    struct CountingFs {
+        reads: Arc<AtomicU64>,
+    }
+
     impl MockPlugin {
         fn new(name: &str) -> Self {
             Self {
@@ -857,6 +970,81 @@ mod tests {
                 name: name.to_string(),
                 tree_entries: Some(entries),
             }
+        }
+    }
+
+    #[async_trait]
+    impl ServicePlugin for CountingPlugin {
+        fn name(&self) -> &str {
+            "counting"
+        }
+
+        fn readme(&self) -> &str {
+            "Counting plugin for cache tests"
+        }
+
+        async fn validate(&self, _config: &PluginConfig) -> Result<()> {
+            Ok(())
+        }
+
+        async fn initialize(&self, _config: PluginConfig) -> Result<Box<dyn FileSystem>> {
+            Ok(Box::new(CountingFs {
+                reads: self.reads.clone(),
+            }))
+        }
+
+        fn config_params(&self) -> &[super::super::types::ConfigParameter] {
+            &[]
+        }
+    }
+
+    #[async_trait]
+    impl FileSystem for CountingFs {
+        async fn create(&self, _path: &str) -> Result<()> {
+            Ok(())
+        }
+
+        async fn mkdir(&self, _path: &str, _mode: u32) -> Result<()> {
+            Ok(())
+        }
+
+        async fn remove(&self, _path: &str) -> Result<()> {
+            Ok(())
+        }
+
+        async fn remove_all(&self, _path: &str) -> Result<()> {
+            Ok(())
+        }
+
+        async fn read(&self, path: &str, _offset: u64, _size: u64) -> Result<Vec<u8>> {
+            self.reads.fetch_add(1, Ordering::Relaxed);
+            Ok(format!("backend:{path}").into_bytes())
+        }
+
+        async fn write(
+            &self,
+            _path: &str,
+            data: &[u8],
+            _offset: u64,
+            _flags: WriteFlag,
+        ) -> Result<u64> {
+            Ok(data.len() as u64)
+        }
+
+        async fn read_dir(&self, _path: &str) -> Result<Vec<FileInfo>> {
+            Ok(vec![])
+        }
+
+        async fn stat(&self, path: &str) -> Result<FileInfo> {
+            Ok(FileInfo::new_file(path.to_string(), 0, 0o644))
+        }
+
+        async fn rename(&self, _old_path: &str, _new_path: &str) -> Result<()> {
+            Ok(())
+        }
+
+        async fn chmod(&self, _path: &str, _mode: u32) -> Result<()> {
+            Ok(())
         }
     }
 
@@ -948,6 +1136,41 @@ mod tests {
         // Check mount list is empty
         let mounts = mfs.list_mounts().await;
         assert!(mounts.is_empty());
+    }
+
+    #[cfg(feature = "cache")]
+    #[tokio::test]
+    async fn mount_wraps_backend_with_cache_when_configured() {
+        use crate::cache::{CacheNamespace, CachePolicy, MemoryCacheProvider};
+
+        let reads = Arc::new(AtomicU64::new(0));
+        let mfs = MountableFS::with_cache(
+            Arc::new(MemoryCacheProvider::new()),
+            CacheNamespace::new("mount-test"),
+            CachePolicy::default(),
+        );
+        mfs.register_plugin(CountingPlugin {
+            reads: reads.clone(),
+        })
+        .await;
+
+        let config = PluginConfig {
+            name: "counting".to_string(),
+            mount_path: "/cached".to_string(),
+            params: HashMap::new(),
+        };
+
+        mfs.mount(config).await.unwrap();
+
+        assert_eq!(
+            mfs.read("/cached/file.txt", 0, 0).await.unwrap(),
+            b"backend:/file.txt"
+        );
+        assert_eq!(
+            mfs.read("/cached/file.txt", 0, 0).await.unwrap(),
+            b"backend:/file.txt"
+        );
+        assert_eq!(reads.load(Ordering::Relaxed), 1);
     }
 
     #[tokio::test]
