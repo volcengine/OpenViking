@@ -58,6 +58,7 @@ class WebCrawler:
         if fetcher:
             self._fetcher = fetcher
         elif getattr(self.config, 'use_playwright', False):
+            # Playwright is opt-in because it needs an extra package and browser binary.
             self._fetcher = PlaywrightFetcher(self.config.request_validator)
             logger.info("WebCrawler using PlaywrightFetcher")
         else:
@@ -80,11 +81,6 @@ class WebCrawler:
         if not has_js_required_pattern:
             return False
 
-        # 页面包含 JS 提示，但我们还需要确认它是否真的没有实际内容
-        # 如果 HTML 很小（比如 < 1000 字符），那肯定是空壳
-        if len(html_lower) < 1000:
-            return True
-
         from bs4 import BeautifulSoup
         try:
             soup = BeautifulSoup(html, "html.parser")
@@ -92,7 +88,7 @@ class WebCrawler:
             if not body:
                 return True
 
-            # 移除 script 和 noscript 后的纯文本
+            # 页面包含 JS 提示时，再基于清洗后的正文判断是否确实没有内容。
             for el in body(["script", "noscript", "style"]):
                 el.decompose()
 
@@ -193,6 +189,7 @@ class WebCrawler:
                         [],
                     )
 
+                # Use the post-redirect URL for visited checks and child link extraction.
                 canonical_url = fetch_result.final_url or url
                 if (
                     self._filter.normalize_url(canonical_url)
@@ -231,6 +228,7 @@ class WebCrawler:
                         [],
                     )
 
+                # Prefer structured SSR data when available; it is usually cleaner than DOM text.
                 ssr_result = self._ssr_extractor.extract(fetch_result.html, canonical_url)
                 if ssr_result:
                     markdown_content = None

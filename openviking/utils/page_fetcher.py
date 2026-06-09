@@ -123,6 +123,7 @@ class PlaywrightFetcher(PageFetcher):
             page = await browser.new_page()
             validation_error = None
             if self._request_validator:
+                # Browser pages may request subresources; validate those URLs too.
                 async def _validate_route(route):
                     nonlocal validation_error
                     try:
@@ -139,7 +140,7 @@ class PlaywrightFetcher(PageFetcher):
             )
             if validation_error:
                 raise validation_error
-            # 等待一会儿，让 js 执行
+            # Give client-side JavaScript a short chance to render content.
             await page.wait_for_timeout(2000)
             html = await page.content()
             status = resp.status if resp else 200

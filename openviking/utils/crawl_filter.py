@@ -199,6 +199,7 @@ class CrawlFilter:
                 stats.rejected_by_dedup += 1
                 continue
 
+            # Limit how many child links a single page can add to the crawl queue.
             if len(accepted) >= self.config.max_links_per_page:
                 stats.rejected_by_limit += 1
                 continue
@@ -258,6 +259,7 @@ class CrawlFilter:
     @staticmethod
     def normalize_url(url: str) -> str:
         parsed = urlparse(url)
+        # Normalize before dedup so minor URL formatting differences do not recrawl.
         normalized = (
             f"{parsed.scheme.lower()}://{parsed.netloc.lower()}{parsed.path}"
         )
@@ -280,6 +282,7 @@ class CrawlFilter:
         if not content_type:
             return True
 
+        # Keep only the media type part, e.g. "text/html; charset=utf-8" -> "text/html".
         ct = content_type.lower().strip().split(";")[0].strip()
 
         if ct in self.NON_HTML_CONTENT_TYPES:

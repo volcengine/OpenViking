@@ -7,8 +7,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-import pytest
-
 from openviking import AsyncOpenViking
 from openviking.client import LocalClient
 from openviking.server.identity import RequestContext, Role
@@ -108,28 +106,6 @@ class TestAddResource:
             "max_pages": 5,
             "use_playwright": True,
         }
-
-    async def test_local_client_add_resource_rejects_misplaced_extension_args(self):
-        """Local SDK should keep core args separate from extension args."""
-        client = LocalClient.__new__(LocalClient)
-        client._ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
-        client._service = SimpleNamespace(
-            resources=SimpleNamespace(add_resource=AsyncMock())
-        )
-
-        with pytest.raises(ValueError, match="Crawler options must be passed via args"):
-            await LocalClient.add_resource(
-                client,
-                path="https://example.com/docs",
-                depth=1,
-            )
-
-        with pytest.raises(ValueError, match="args cannot include core add_resource fields"):
-            await LocalClient.add_resource(
-                client,
-                path="https://example.com/docs",
-                args={"path": "https://evil.example"},
-            )
 
     async def test_add_resource_without_wait(
         self, client: AsyncOpenViking, sample_markdown_file: Path

@@ -201,6 +201,7 @@ class UnifiedResourceProcessor:
                 try:
                     suffix = str(local_resource.path).lower()
                     if suffix.endswith((".html", ".htm")) or not os.path.splitext(suffix)[1]:
+                        # Keep downloaded HTML so ResourceService can start recursive crawling.
                         result._html_content = local_resource.path.read_text(
                             encoding="utf-8", errors="replace"
                         )

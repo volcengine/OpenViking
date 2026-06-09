@@ -30,6 +30,7 @@ class SSRExtractResult:
 
 
 class SSRDataExtractor:
+    # Each SSR format has its own JSON shape, so handlers stay format-specific.
     SSR_PATTERNS: List[tuple] = [
         (
             r"window\._ROUTER_DATA\s*=\s*(\{[\s\S]*?\})\s*</script>",
@@ -70,6 +71,7 @@ class SSRDataExtractor:
     def _extract_volcengine(
         self, data: dict, base_url: str
     ) -> Optional[SSRExtractResult]:
+        # Volcengine docs embed both current doc content and doc tree in loaderData.
         loader = data.get("loaderData", {})
         child_urls: List[str] = []
         docs: List[SSRDocInfo] = []
@@ -132,6 +134,7 @@ class SSRDataExtractor:
     def _extract_nextjs(
         self, data: dict, base_url: str
     ) -> Optional[SSRExtractResult]:
+        # Next.js stores page data under props.pageProps, but field names vary by site.
         props = data.get("props", {}).get("pageProps", {})
         child_urls: List[str] = []
 

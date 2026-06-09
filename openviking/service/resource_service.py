@@ -538,6 +538,7 @@ class ResourceService:
         """
         self._ensure_initialized()
 
+        # Keep crawler options under args so every entrypoint shares this validation.
         top_level_crawl_args = sorted(key for key in kwargs if key in _CRAWL_ARG_FIELDS)
         if top_level_crawl_args:
             raise InvalidArgumentError(
@@ -651,6 +652,7 @@ class ResourceService:
             root_uri = result.get("root_uri")
             crawl_parent_uri = self._get_parent_resource_uri(root_uri) or parent
             if depth != 0 and self._should_crawl(path, result):
+                # Crawl from the redirected final URL so relative links and dedup are correct.
                 crawl_root_url = result.get("_html_final_url") or path
                 try:
                     crawl_result = await self._crawl_and_add_resources(
@@ -874,6 +876,7 @@ class ResourceService:
         from openviking.utils.crawl_filter import CrawlConfig
         from openviking.utils.web_crawler import CrawlResult, WebCrawler
 
+        # args carries path filters as comma-separated strings at API boundaries.
         include_list = [p.strip() for p in (include_paths or "").split(",") if p.strip()] or None
         exclude_list = [p.strip() for p in (exclude_paths or "").split(",") if p.strip()] or None
 
@@ -887,7 +890,7 @@ class ResourceService:
             request_validator=kwargs.get("request_validator"),
         )
 
-        # Remove keys that we will override to avoid "multiple values" error
+        # Remove keys that child imports override to avoid "multiple values" errors.
         kwargs.pop("source_name", None)
         kwargs.pop("original_source", None)
         kwargs.pop("depth", None)
@@ -919,12 +922,11 @@ class ResourceService:
                         target_parent = None if target_to else parent_uri
 
                         if page.content:
-                            # 1. 无论是 SSR 直接来的还是 HTML 退级，如果它有内容，都可以考虑清洗
                             content_to_save = page.content
                             if page.source == "ssr" and page.content_type == "text/markdown":
                                 content_to_save = HTMLParser._clean_inline_images(content_to_save)
 
-                            # 2. 将已经拿到的干净文本写入临时文件，跳过底层无脑 httpx 下载
+                            # Persist fetched content directly so child imports do not refetch.
                             fd, temp_path = tempfile.mkstemp(suffix=".md" if page.content_type == "text/markdown" else ".html")
                             try:
                                 with os.fdopen(fd, "w", encoding="utf-8") as f:

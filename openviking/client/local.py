@@ -22,43 +22,6 @@ from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import run_async
 
 
-_CRAWL_ARG_FIELDS = frozenset(
-    {
-        "depth",
-        "max_pages",
-        "include_paths",
-        "exclude_paths",
-        "allow_external_links",
-        "use_playwright",
-    }
-)
-
-_CORE_ADD_RESOURCE_ARG_FIELDS = frozenset(
-    {
-        "path",
-        "to",
-        "parent",
-        "reason",
-        "instruction",
-        "wait",
-        "timeout",
-        "build_index",
-        "summarize",
-        "telemetry",
-        "watch_interval",
-        "strict",
-        "source_name",
-        "ignore_dirs",
-        "include",
-        "exclude",
-        "directly_upload_media",
-        "preserve_structure",
-        "create_parent",
-        "args",
-    }
-)
-
-
 def _to_jsonable(value: Any) -> Any:
     """Convert internal objects into JSON-serializable values."""
     to_dict = getattr(value, "to_dict", None)
@@ -147,23 +110,6 @@ class LocalClient(BaseClient):
         if to and parent:
             raise ValueError("Cannot specify both 'to' and 'parent' at the same time.")
 
-        top_level_crawl_args = sorted(key for key in kwargs if key in _CRAWL_ARG_FIELDS)
-        if top_level_crawl_args:
-            raise ValueError(
-                "Crawler options must be passed via args, not as top-level "
-                f"LocalClient.add_resource arguments: {', '.join(top_level_crawl_args)}"
-            )
-
-        resource_args = dict(args or {})
-        reserved_args = sorted(
-            key for key in resource_args if key in _CORE_ADD_RESOURCE_ARG_FIELDS
-        )
-        if reserved_args:
-            raise ValueError(
-                "args cannot include core add_resource fields: "
-                + ", ".join(reserved_args)
-            )
-
         execution = await run_with_telemetry(
             operation="resources.add_resource",
             telemetry=telemetry,
@@ -179,7 +125,7 @@ class LocalClient(BaseClient):
                 build_index=build_index,
                 summarize=summarize,
                 watch_interval=watch_interval,
-                args=resource_args,
+                args=args,
                 **kwargs,
             ),
         )

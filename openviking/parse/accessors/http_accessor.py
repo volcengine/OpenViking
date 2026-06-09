@@ -554,6 +554,7 @@ class HTTPAccessor(DataAccessor):
                     response_headers=response.headers,
                     content=response.content,
                 )
+                # Preserve the post-redirect URL for recursive crawl roots.
                 meta["final_url"] = str(response.url)
                 url_type = meta["resolved_url_type"]
                 ext = meta["extension"]
