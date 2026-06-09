@@ -168,13 +168,12 @@ function PlaygroundWorkbench() {
     }) => {
       navigate({
         replace: true,
-        search: (prev) => ({
-          ...Object.fromEntries(
-            Object.entries({ ...prev, ...next }).filter(
-              ([, value]) => value !== undefined,
-            ),
-          ),
-        }),
+        search: (prev) => {
+          const merged: Record<string, unknown> = { ...prev, ...next }
+          return Object.fromEntries(
+            Object.entries(merged).filter(([, value]) => value !== undefined),
+          )
+        },
       })
     },
     [navigate],

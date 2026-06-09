@@ -89,6 +89,7 @@ export function FindPalette({
   const inputRef = useRef<HTMLInputElement>(null)
   const resultsRef = useRef<HTMLDivElement>(null)
   const composingRef = useRef(false)
+  const wasOpenRef = useRef(false)
 
   // Single parse entry point. No component code reads `query` structurally.
   const mode = useMemo(
@@ -189,11 +190,13 @@ export function FindPalette({
   }, [])
 
   useEffect(() => {
-    if (open) {
+    if (open && !wasOpenRef.current) {
+      setFindTargetUri(normalizeDirUri(scopeUri || PALETTE_ROOT_URI))
       reset()
       focusInput()
     }
-  }, [open, reset, focusInput])
+    wasOpenRef.current = open
+  }, [open, scopeUri, reset, focusInput])
 
   useEffect(() => {
     if (!open) return
@@ -636,9 +639,8 @@ function DirResultList({
         const EntryIcon = entry.isDir ? FolderIcon : FileIcon
 
         return (
-          <button
+          <div
             key={entry.uri}
-            type="button"
             data-active={isActive}
             className={cn(
               'animate-palette-row group relative flex w-full items-start gap-3 border-b border-border/50 px-4 py-3 text-left transition-colors last:border-b-0',
@@ -647,50 +649,48 @@ function DirResultList({
                 : 'text-foreground/80 hover:bg-muted/40',
             )}
             style={{ animationDelay: `${i * 24}ms` }}
-            onFocus={() => onActiveChange(i)}
             onMouseEnter={() => onActiveChange(i)}
-            onClick={() => onSelect(entry)}
           >
             {isActive && (
               <span className="absolute inset-y-0 left-0 w-0.5 rounded-r bg-primary" />
             )}
-            <EntryIcon
-              className={cn(
-                'mt-0.5 size-4 shrink-0',
-                entry.isDir ? 'text-blue-500/70' : 'text-muted-foreground/70',
-              )}
-            />
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-medium">{name}</div>
-              <div className="mt-0.5 truncate text-xs text-muted-foreground/80">
-                {parent}
+            <button
+              type="button"
+              className="flex min-w-0 flex-1 items-start gap-3 text-left outline-none"
+              onFocus={() => onActiveChange(i)}
+              onClick={() => onSelect(entry)}
+            >
+              <EntryIcon
+                className={cn(
+                  'mt-0.5 size-4 shrink-0',
+                  entry.isDir ? 'text-blue-500/70' : 'text-muted-foreground/70',
+                )}
+              />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-medium">{name}</div>
+                <div className="mt-0.5 truncate text-xs text-muted-foreground/80">
+                  {parent}
+                </div>
               </div>
-            </div>
+            </button>
             {entry.size && (
               <span className="shrink-0 text-xs tabular-nums text-muted-foreground/60">
                 {entry.size}
               </span>
             )}
-            <span
-              role="button"
-              tabIndex={-1}
+            <button
+              type="button"
               title={t('searchPalette.openContainingDirectory')}
-              className="shrink-0 rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground group-hover:opacity-100 data-[active=true]:opacity-100"
+              className="shrink-0 rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover:opacity-100 data-[active=true]:opacity-100"
               data-active={isActive}
               onClick={(e) => {
                 e.stopPropagation()
                 onOpenDir(entry)
               }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.stopPropagation()
-                  onOpenDir(entry)
-                }
-              }}
             >
               <FolderOpen className="size-3.5" />
-            </span>
-          </button>
+            </button>
+          </div>
         )
       })}
     </div>
