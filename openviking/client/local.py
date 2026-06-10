@@ -231,9 +231,21 @@ class LocalClient(BaseClient):
         """Create directory."""
         await self._service.fs.mkdir(uri, ctx=self._ctx, description=description)
 
-    async def rm(self, uri: str, recursive: bool = False) -> None:
+    async def rm(
+        self,
+        uri: str,
+        recursive: bool = False,
+        wait: bool = False,
+        timeout: Optional[float] = None,
+    ) -> None:
         """Remove resource."""
-        await self._service.fs.rm(uri, ctx=self._ctx, recursive=recursive)
+        await self._service.fs.rm(
+            uri,
+            ctx=self._ctx,
+            recursive=recursive,
+            wait=wait,
+            timeout=timeout,
+        )
 
     async def mv(self, from_uri: str, to_uri: str) -> None:
         """Move resource."""

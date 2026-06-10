@@ -1318,9 +1318,24 @@ pub async fn handle_mkdir(uri: String, description: Option<String>, ctx: CliCont
     .await
 }
 
-pub async fn handle_rm(uri: String, recursive: bool, ctx: CliContext) -> Result<()> {
+pub async fn handle_rm(
+    uri: String,
+    recursive: bool,
+    wait: bool,
+    timeout: Option<f64>,
+    ctx: CliContext,
+) -> Result<()> {
     let client = ctx.get_client();
-    commands::filesystem::rm(&client, &uri, recursive, ctx.output_format, ctx.compact).await
+    commands::filesystem::rm(
+        &client,
+        &uri,
+        recursive,
+        wait,
+        timeout,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
 }
 
 pub async fn handle_mv(from_uri: String, to_uri: String, ctx: CliContext) -> Result<()> {

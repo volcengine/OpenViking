@@ -35,9 +35,14 @@ async def test_write_updates_memory_file_and_parent_overview(service):
     )
 
     assert result["context_type"] == "memory"
+    assert result["semantic_status"] == "skipped"
+    assert result["vector_status"] == "complete"
+    assert result["overview_status"] == "complete"
+    assert result["queue_status"]["Embedding"]["processed"] >= 1
     assert await service.viking_fs.read_file(memory_uri, ctx=ctx) == "Updated preference"
     assert await service.viking_fs.read_file(f"{memory_dir}/.overview.md", ctx=ctx)
-    assert await service.viking_fs.read_file(f"{memory_dir}/.abstract.md", ctx=ctx)
+    with pytest.raises(NotFoundError):
+        await service.viking_fs.read_file(f"{memory_dir}/.abstract.md", ctx=ctx)
 
 
 @pytest.mark.asyncio
@@ -178,6 +183,56 @@ async def test_memory_write_ignores_resource_uri_in_inline_code(service):
     assert mf.content == content
     assert "resource_refs" not in mf.extra_fields
     assert mf.links == []
+
+
+@pytest.mark.asyncio
+async def test_memory_create_refreshes_nested_schema_overview(service):
+    ctx = RequestContext(user=service.user, role=Role.USER)
+    memory_dir = f"viking://user/{ctx.user.user_space_name()}/memories/entities/动漫角色"
+    memory_uri = f"{memory_dir}/不二周助-link-test.md"
+
+    result = await service.fs.write(
+        memory_uri,
+        content="用户保存了一张[不二周助](viking://resources/images/2026/06/10/不二周助_jpeg)的照片",
+        ctx=ctx,
+        mode="create",
+        wait=False,
+    )
+
+    overview = await service.viking_fs.read_file(f"{memory_dir}/.overview.md", ctx=ctx)
+    assert result["root_uri"] == memory_dir
+    assert "[不二周助-link-test](./不二周助-link-test.md)" in overview
+
+
+@pytest.mark.asyncio
+async def test_memory_rm_refreshes_nested_schema_overview(service):
+    ctx = RequestContext(user=service.user, role=Role.USER)
+    memory_dir = f"viking://user/{ctx.user.user_space_name()}/memories/entities/动漫角色"
+    deleted_uri = f"{memory_dir}/不二周助-delete-test.md"
+    kept_uri = f"{memory_dir}/越前龙马-keep-test.md"
+
+    await service.fs.write(
+        deleted_uri,
+        content="用户保存了一张不二周助的照片",
+        ctx=ctx,
+        mode="create",
+    )
+    await service.fs.write(
+        kept_uri,
+        content="用户保存了一张越前龙马的照片",
+        ctx=ctx,
+        mode="create",
+    )
+
+    before = await service.viking_fs.read_file(f"{memory_dir}/.overview.md", ctx=ctx)
+    assert "[不二周助-delete-test](./不二周助-delete-test.md)" in before
+    assert "[越前龙马-keep-test](./越前龙马-keep-test.md)" in before
+
+    await service.fs.rm(deleted_uri, ctx=ctx)
+
+    after = await service.viking_fs.read_file(f"{memory_dir}/.overview.md", ctx=ctx)
+    assert "不二周助-delete-test" not in after
+    assert "[越前龙马-keep-test](./越前龙马-keep-test.md)" in after
 
 
 class _FakeHandle:
@@ -438,7 +493,7 @@ async def test_resource_write_rolls_back_create_when_enqueue_fails(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_memory_write_timeout_after_enqueue_releases_write_lock(monkeypatch):
+async def test_memory_write_wait_skips_semantic_queue_and_releases_write_lock(monkeypatch):
     file_uri = "viking://user/default/memories/preferences/theme.md"
     root_uri = "viking://user/default/memories/preferences"
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
@@ -455,27 +510,33 @@ async def test_memory_write_timeout_after_enqueue_releases_write_lock(monkeypatc
         del uri, content, mode, ctx
         return None
 
-    async def _fake_enqueue_memory_refresh(**kwargs):
+    async def _fail_wait_for_request(*, telemetry_id, timeout):
+        del telemetry_id, timeout
+        raise AssertionError("memory write should not wait for semantic refresh")
+
+    async def _fake_refresh_schema_overview(**kwargs):
         del kwargs
         return None
 
-    async def _fake_wait_for_request(*, telemetry_id, timeout):
-        del telemetry_id
-        raise DeadlineExceededError("queue processing", timeout)
-
     monkeypatch.setattr(coordinator, "_write_in_place", _fake_write_in_place)
-    monkeypatch.setattr(coordinator, "_enqueue_memory_refresh", _fake_enqueue_memory_refresh)
-    monkeypatch.setattr(coordinator, "_wait_for_request", _fake_wait_for_request)
+    monkeypatch.setattr(coordinator, "_wait_for_request", _fail_wait_for_request)
+    monkeypatch.setattr(
+        "openviking.storage.content_write.MemoryUpdater.refresh_schema_overview",
+        _fake_refresh_schema_overview,
+    )
 
-    with pytest.raises(DeadlineExceededError):
-        await coordinator.write(
-            uri=file_uri,
-            content="updated",
-            ctx=ctx,
-            wait=True,
-        )
+    result = await coordinator.write(
+        uri=file_uri,
+        content="updated",
+        ctx=ctx,
+        wait=True,
+    )
 
     assert lock_manager.release_calls == ["lock-1"]
+    assert result["semantic_status"] == "skipped"
+    assert result["vector_status"] == "skipped"
+    assert result["overview_status"] == "complete"
+    assert result["queue_status"] is None
 
 
 # Create-mode test helpers
@@ -546,16 +607,11 @@ async def test_create_mode_new_file_success(monkeypatch):
         write_calls.append((uri, content))
         return content
 
-    async def _fake_enqueue_memory_refresh(**kwargs):
-        del kwargs
-        return None
-
     async def _fake_wait_for_queues(*, timeout):
         del timeout
         return None
 
     monkeypatch.setattr(coordinator, "_write_in_place", _fake_write_in_place)
-    monkeypatch.setattr(coordinator, "_enqueue_memory_refresh", _fake_enqueue_memory_refresh)
     monkeypatch.setattr(coordinator, "_wait_for_queues", _fake_wait_for_queues)
 
     result = await coordinator.write(
@@ -590,7 +646,7 @@ async def test_create_mode_canonicalizes_user_shorthand_memory_uri(monkeypatch):
         write_calls.append((uri, content))
         return content
 
-    async def _fake_enqueue_memory_refresh(**kwargs):
+    async def _fake_refresh_schema_overview(**kwargs):
         refresh_calls.append(kwargs)
         return None
 
@@ -599,8 +655,11 @@ async def test_create_mode_canonicalizes_user_shorthand_memory_uri(monkeypatch):
         return None
 
     monkeypatch.setattr(coordinator, "_write_in_place", _fake_write_in_place)
-    monkeypatch.setattr(coordinator, "_enqueue_memory_refresh", _fake_enqueue_memory_refresh)
     monkeypatch.setattr(coordinator, "_wait_for_queues", _fake_wait_for_queues)
+    monkeypatch.setattr(
+        "openviking.storage.content_write.MemoryUpdater.refresh_schema_overview",
+        _fake_refresh_schema_overview,
+    )
 
     result = await coordinator.write(
         uri=input_uri, content="new content", mode="create", ctx=ctx, wait=True
@@ -610,8 +669,7 @@ async def test_create_mode_canonicalizes_user_shorthand_memory_uri(monkeypatch):
     assert result["root_uri"] == root_uri
     assert result["context_type"] == "memory"
     assert write_calls == [(canonical_uri, "new content")]
-    assert refresh_calls[0]["root_uri"] == root_uri
-    assert refresh_calls[0]["modified_uri"] == canonical_uri
+    assert refresh_calls[0]["directory_uri"] == root_uri
 
 
 @pytest.mark.asyncio
@@ -626,16 +684,11 @@ async def test_create_mode_existing_file_raises_409(monkeypatch):
         del uri, content, mode, ctx
         return None
 
-    async def _fake_enqueue_memory_refresh(**kwargs):
-        del kwargs
-        return None
-
     async def _fake_wait_for_queues(*, timeout):
         del timeout
         return None
 
     monkeypatch.setattr(coordinator, "_write_in_place", _fake_write_in_place)
-    monkeypatch.setattr(coordinator, "_enqueue_memory_refresh", _fake_enqueue_memory_refresh)
     monkeypatch.setattr(coordinator, "_wait_for_queues", _fake_wait_for_queues)
 
     with pytest.raises(AlreadyExistsError):
@@ -654,16 +707,11 @@ async def test_create_mode_invalid_extension_raises_400(monkeypatch):
         del uri, content, mode, ctx
         return None
 
-    async def _fake_enqueue_memory_refresh(**kwargs):
-        del kwargs
-        return None
-
     async def _fake_wait_for_queues(*, timeout):
         del timeout
         return None
 
     monkeypatch.setattr(coordinator, "_write_in_place", _fake_write_in_place)
-    monkeypatch.setattr(coordinator, "_enqueue_memory_refresh", _fake_enqueue_memory_refresh)
     monkeypatch.setattr(coordinator, "_wait_for_queues", _fake_wait_for_queues)
 
     with pytest.raises(InvalidArgumentError):
@@ -688,16 +736,11 @@ async def test_create_mode_parent_dirs_auto_created(monkeypatch):
         write_calls.append((uri, content))
         return content
 
-    async def _fake_enqueue_memory_refresh(**kwargs):
-        del kwargs
-        return None
-
     async def _fake_wait_for_queues(*, timeout):
         del timeout
         return None
 
     monkeypatch.setattr(coordinator, "_write_in_place", _fake_write_in_place)
-    monkeypatch.setattr(coordinator, "_enqueue_memory_refresh", _fake_enqueue_memory_refresh)
     monkeypatch.setattr(coordinator, "_wait_for_queues", _fake_wait_for_queues)
 
     result = await coordinator.write(
@@ -732,16 +775,11 @@ async def test_create_mode_valid_extensions_pass(monkeypatch):
             del uri, mode, ctx
             return content
 
-        async def _fake_enqueue_memory_refresh(**kwargs):
-            del kwargs
-            return None
-
         async def _fake_wait_for_queues(*, timeout):
             del timeout
             return None
 
         monkeypatch.setattr(coordinator, "_write_in_place", _fake_write_in_place)
-        monkeypatch.setattr(coordinator, "_enqueue_memory_refresh", _fake_enqueue_memory_refresh)
         monkeypatch.setattr(coordinator, "_wait_for_queues", _fake_wait_for_queues)
 
         result = await coordinator.write(
@@ -767,7 +805,7 @@ async def test_create_mode_memory_scope(monkeypatch):
 
     refresh_calls = []
 
-    async def _fake_enqueue_memory_refresh(**kwargs):
+    async def _fake_refresh_schema_overview(**kwargs):
         refresh_calls.append(kwargs)
         return None
 
@@ -776,15 +814,17 @@ async def test_create_mode_memory_scope(monkeypatch):
         return None
 
     monkeypatch.setattr(coordinator, "_write_in_place", _fake_write_in_place)
-    monkeypatch.setattr(coordinator, "_enqueue_memory_refresh", _fake_enqueue_memory_refresh)
     monkeypatch.setattr(coordinator, "_wait_for_queues", _fake_wait_for_queues)
+    monkeypatch.setattr(
+        "openviking.storage.content_write.MemoryUpdater.refresh_schema_overview",
+        _fake_refresh_schema_overview,
+    )
 
     result = await coordinator.write(
         uri=file_uri, content="content", mode="create", ctx=ctx, wait=True
     )
     assert result["context_type"] == "memory"
-    assert refresh_calls[0]["root_uri"] == root_uri
-    assert refresh_calls[0]["modified_uri"] == file_uri
+    assert refresh_calls[0]["directory_uri"] == root_uri
 
 
 @pytest.mark.asyncio
@@ -838,16 +878,11 @@ async def test_create_mode_regression_replace_unchanged(monkeypatch):
         del uri, content, ctx
         return None
 
-    async def _fake_enqueue_memory_refresh(**kwargs):
-        del kwargs
-        return None
-
     async def _fake_wait_for_queues(*, timeout):
         del timeout
         return None
 
     monkeypatch.setattr(coordinator, "_write_in_place", _fake_write_in_place)
-    monkeypatch.setattr(coordinator, "_enqueue_memory_refresh", _fake_enqueue_memory_refresh)
     monkeypatch.setattr(coordinator, "_wait_for_queues", _fake_wait_for_queues)
 
     result = await coordinator.write(
@@ -874,16 +909,11 @@ async def test_create_mode_regression_append_unchanged(monkeypatch):
         del uri, content, ctx
         return None
 
-    async def _fake_enqueue_memory_refresh(**kwargs):
-        del kwargs
-        return None
-
     async def _fake_wait_for_queues(*, timeout):
         del timeout
         return None
 
     monkeypatch.setattr(coordinator, "_write_in_place", _fake_write_in_place)
-    monkeypatch.setattr(coordinator, "_enqueue_memory_refresh", _fake_enqueue_memory_refresh)
     monkeypatch.setattr(coordinator, "_wait_for_queues", _fake_wait_for_queues)
 
     result = await coordinator.write(

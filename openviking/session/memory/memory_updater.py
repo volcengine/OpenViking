@@ -33,7 +33,7 @@ from openviking.telemetry import tracer
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.exceptions import NotFoundError
-from openviking_cli.utils import get_logger
+from openviking_cli.utils import VikingURI, get_logger
 
 logger = get_logger(__name__)
 
@@ -334,6 +334,70 @@ class MemoryUpdater:
         if self._viking_fs is None:
             self._viking_fs = get_viking_fs()
         return self._viking_fs
+
+    @classmethod
+    async def refresh_schema_overview(
+        cls,
+        *,
+        viking_fs: Any,
+        directory_uri: str,
+        ctx: RequestContext,
+    ) -> None:
+        memory_type = cls.memory_type_from_uri(directory_uri)
+        if not memory_type:
+            return
+        try:
+            from openviking.session.memory.memory_type_registry import create_default_registry
+
+            updater = cls(registry=create_default_registry())
+            updater._viking_fs = viking_fs
+            await updater.generate_overview(memory_type, directory_uri, ctx)
+        except Exception:
+            logger.warning(
+                "Failed to refresh memory overview for %s",
+                directory_uri,
+                exc_info=True,
+            )
+
+    @classmethod
+    async def refresh_file_embedding(
+        cls,
+        *,
+        viking_fs: Any,
+        vikingdb: Any,
+        uri: str,
+        memory_type: Optional[str],
+        ctx: RequestContext,
+    ) -> bool:
+        if not vikingdb or not bool(getattr(vikingdb, "has_queue_manager", False)):
+            return False
+        try:
+            from openviking.session.memory.memory_type_registry import create_default_registry
+
+            result = MemoryUpdateResult()
+            result.add_written(uri)
+            updater = cls(registry=create_default_registry(), vikingdb=vikingdb)
+            updater._viking_fs = viking_fs
+            attempted = await updater._vectorize_memories(
+                result,
+                ctx,
+                uri_memory_type_map={uri: memory_type} if memory_type else {},
+            )
+            return attempted > 0
+        except Exception:
+            logger.warning("Failed to refresh memory embedding for %s", uri, exc_info=True)
+            return False
+
+    @staticmethod
+    def memory_type_from_uri(uri: str) -> Optional[str]:
+        parts = [part for part in VikingURI(uri).full_path.split("/") if part]
+        try:
+            memories_idx = parts.index("memories")
+        except ValueError:
+            return None
+        if len(parts) <= memories_idx + 1:
+            return None
+        return parts[memories_idx + 1]
 
     @tracer()
     async def apply_operations(
@@ -640,7 +704,7 @@ class MemoryUpdater:
         ctx: RequestContext,
         extract_context: Any = None,
         uri_memory_type_map: Dict[str, str] = None,
-    ) -> None:
+    ) -> int:
         """Vectorize written and edited memory files.
 
         Args:
@@ -651,11 +715,12 @@ class MemoryUpdater:
         """
         if not self._vikingdb:
             logger.debug("VikingDB not available, skipping vectorization")
-            return
+            return 0
 
         uri_memory_type_map = uri_memory_type_map or {}
         viking_fs = self._get_viking_fs()
         request_wait_tracker = get_request_wait_tracker()
+        attempted_count = 0
 
         # Collect all URIs to vectorize (skip .overview.md and .abstract.md - they are handled separately)
         # Also skip URIs that were deleted in the same batch
@@ -669,7 +734,7 @@ class MemoryUpdater:
 
         if not uris_to_vectorize:
             logger.debug("No memory files to vectorize")
-            return
+            return 0
 
         for uri in uris_to_vectorize:
             try:
@@ -736,7 +801,17 @@ class MemoryUpdater:
                         request_wait_tracker.register_embedding_root(
                             embedding_msg.telemetry_id, embedding_msg.id
                         )
-                    enqueued = await self._vikingdb.enqueue_embedding_msg(embedding_msg)
+                    attempted_count += 1
+                    try:
+                        enqueued = await self._vikingdb.enqueue_embedding_msg(embedding_msg)
+                    except Exception as e:
+                        if embedding_msg.telemetry_id:
+                            request_wait_tracker.mark_embedding_failed(
+                                embedding_msg.telemetry_id,
+                                embedding_msg.id,
+                                str(e),
+                            )
+                        raise
                     if not enqueued and embedding_msg.telemetry_id:
                         request_wait_tracker.mark_embedding_failed(
                             embedding_msg.telemetry_id,
@@ -747,6 +822,7 @@ class MemoryUpdater:
 
             except Exception as e:
                 tracer.error(f"Failed to vectorize memory {uri}: {e}")
+        return attempted_count
 
     async def generate_overview(
         self,
@@ -819,11 +895,18 @@ class MemoryUpdater:
 
                 # Extract filename from path
                 filename = file_path.split("/")[-1]
+                metadata = mf.to_metadata()
+                self._fill_overview_fallback_fields(
+                    memory_type=memory_type,
+                    directory=directory,
+                    filename=filename,
+                    metadata=metadata,
+                )
 
                 items.append(
                     {
                         "file_name": filename,
-                        "file_content": mf.to_metadata(),
+                        "file_content": metadata,
                     }
                 )
             except Exception as e:
@@ -854,3 +937,20 @@ class MemoryUpdater:
             await viking_fs.write_file(overview_path, rendered, ctx=ctx)
         except Exception as e:
             tracer.error(f"Failed to write overview {overview_path}: {e}")
+
+    @staticmethod
+    def _fill_overview_fallback_fields(
+        *,
+        memory_type: str,
+        directory: str,
+        filename: str,
+        metadata: Dict[str, Any],
+    ) -> None:
+        stem = filename.removesuffix(".md")
+        parent_name = directory.rstrip("/").split("/")[-1]
+        if memory_type == "entities":
+            metadata.setdefault("category", parent_name)
+            metadata.setdefault("name", stem)
+        elif memory_type == "preferences":
+            metadata.setdefault("user", parent_name)
+            metadata.setdefault("topic", stem)

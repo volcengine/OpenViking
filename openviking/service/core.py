@@ -416,6 +416,7 @@ class OpenVikingService:
         # Wire up sub-services
         self._fs_service.set_dependencies(
             viking_fs=self._viking_fs,
+            vikingdb=self._vikingdb_manager,
             privacy_config_service=self._privacy_config_service,
             resource_memory_link_service=self._resource_memory_link_service,
         )

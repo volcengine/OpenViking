@@ -596,13 +596,22 @@ class AsyncHTTPClient(BaseClient):
         )
         self._handle_response(response)
 
-    async def rm(self, uri: str, recursive: bool = False) -> None:
+    async def rm(
+        self,
+        uri: str,
+        recursive: bool = False,
+        wait: bool = False,
+        timeout: Optional[float] = None,
+    ) -> None:
         """Remove resource."""
         uri = VikingURI.normalize(uri)
+        params = {"uri": uri, "recursive": recursive, "wait": wait}
+        if timeout is not None:
+            params["timeout"] = timeout
         response = await self._http.request(
             "DELETE",
             "/api/v1/fs",
-            params={"uri": uri, "recursive": recursive},
+            params=params,
         )
         self._handle_response(response)
 
