@@ -4,14 +4,112 @@
 //! Supports AWS S3 and S3-compatible services (MinIO, LocalStack, TOS).
 
 use crate::core::{ConfigValue, Error, Result};
+use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::config::{BehaviorVersion, Credentials, Region};
+use aws_sdk_s3::error::ProvideErrorMetadata;
+use aws_sdk_s3::operation::{RequestId, RequestIdExt};
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::Client;
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const ENCODED_SEGMENT_PREFIX: char = '!';
 const HEX_UPPER: &[u8; 16] = b"0123456789ABCDEF";
+
+fn build_s3_error_message(
+    op: &str,
+    scope: &str,
+    raw_error: &str,
+    code: Option<&str>,
+    message: Option<&str>,
+    request_id: Option<&str>,
+    extended_request_id: Option<&str>,
+) -> String {
+    let mut output = format!("S3 {op} error: {scope}");
+
+    if let Some(code) = code {
+        let _ = write!(output, " code={code}");
+    }
+    if let Some(message) = message {
+        let _ = write!(output, " message={message}");
+    }
+    if let Some(request_id) = request_id {
+        let _ = write!(output, " request_id={request_id}");
+    }
+    if let Some(extended_request_id) = extended_request_id {
+        let _ = write!(output, " extended_request_id={extended_request_id}");
+    }
+
+    let _ = write!(output, " raw={raw_error}");
+    output
+}
+
+fn format_s3_service_error<E>(op: &str, scope: &str, err: &E) -> Error
+where
+    E: std::fmt::Display + ProvideErrorMetadata + RequestId + RequestIdExt,
+{
+    Error::internal(build_s3_error_message(
+        op,
+        scope,
+        &err.to_string(),
+        err.code(),
+        err.message(),
+        err.request_id(),
+        err.extended_request_id(),
+    ))
+}
+
+fn format_sdk_s3_error<E, R>(op: &str, scope: &str, sdk_err: &SdkError<E, R>) -> Error
+where
+    E: std::fmt::Display + ProvideErrorMetadata + RequestId + RequestIdExt,
+{
+    let raw_error = sdk_err.to_string();
+    if let Some(service_err) = sdk_err.as_service_error() {
+        Error::internal(build_s3_error_message(
+            op,
+            scope,
+            &raw_error,
+            service_err.code(),
+            service_err.message(),
+            service_err.request_id(),
+            service_err.extended_request_id(),
+        ))
+    } else {
+        Error::internal(build_s3_error_message(
+            op, scope, &raw_error, None, None, None, None,
+        ))
+    }
+}
+
+fn format_generic_s3_error(
+    op: &str,
+    bucket: &str,
+    key: &str,
+    raw_error: impl std::fmt::Display,
+) -> Error {
+    Error::internal(build_s3_error_message(
+        op,
+        &format!("bucket={bucket} key={key}"),
+        &raw_error.to_string(),
+        None,
+        None,
+        None,
+        None,
+    ))
+}
+
+fn format_bucket_s3_error(op: &str, bucket: &str, raw_error: impl std::fmt::Display) -> Error {
+    Error::internal(build_s3_error_message(
+        op,
+        &format!("bucket={bucket}"),
+        &raw_error.to_string(),
+        None,
+        None,
+        None,
+        None,
+    ))
+}
 
 fn encode_path(path: &str, normalize_encoding_chars: &str) -> String {
     if normalize_encoding_chars.is_empty() {
@@ -301,20 +399,33 @@ impl S3Client {
 
     /// Get an object's contents
     pub async fn get_object(&self, key: &str) -> Result<Vec<u8>> {
-        let resp = self
+        let resp = match self
             .client
             .get_object()
             .bucket(&self.bucket)
             .key(key)
             .send()
             .await
-            .map_err(|e| Error::internal(format!("S3 GetObject error: {}", e)))?;
+        {
+            Ok(resp) => resp,
+            Err(sdk_err) => {
+                let service_err = sdk_err.into_service_error();
+                if service_err.is_no_such_key() {
+                    return Err(Error::NotFound(key.to_string()));
+                }
+                return Err(format_s3_service_error(
+                    "GetObject",
+                    &format!("bucket={} key={}", self.bucket, key),
+                    &service_err,
+                ));
+            }
+        };
 
         let bytes = resp
             .body
             .collect()
             .await
-            .map_err(|e| Error::internal(format!("S3 read body error: {}", e)))?;
+            .map_err(|e| format_generic_s3_error("ReadBody", &self.bucket, key, e))?;
 
         Ok(bytes.to_vec())
     }
@@ -332,7 +443,7 @@ impl S3Client {
             format!("bytes={}-{}", offset, offset + size - 1)
         };
 
-        let resp = self
+        let resp = match self
             .client
             .get_object()
             .bucket(&self.bucket)
@@ -340,13 +451,26 @@ impl S3Client {
             .range(range)
             .send()
             .await
-            .map_err(|e| Error::internal(format!("S3 GetObject range error: {}", e)))?;
+        {
+            Ok(resp) => resp,
+            Err(sdk_err) => {
+                let service_err = sdk_err.into_service_error();
+                if service_err.is_no_such_key() {
+                    return Err(Error::NotFound(key.to_string()));
+                }
+                return Err(format_s3_service_error(
+                    "GetObjectRange",
+                    &format!("bucket={} key={}", self.bucket, key),
+                    &service_err,
+                ));
+            }
+        };
 
         let bytes = resp
             .body
             .collect()
             .await
-            .map_err(|e| Error::internal(format!("S3 read body error: {}", e)))?;
+            .map_err(|e| format_generic_s3_error("ReadBody", &self.bucket, key, e))?;
 
         Ok(bytes.to_vec())
     }
@@ -360,7 +484,7 @@ impl S3Client {
             .body(ByteStream::from(data))
             .send()
             .await
-            .map_err(|e| Error::internal(format!("S3 PutObject error: {}", e)))?;
+            .map_err(|e| format_sdk_s3_error("PutObject", &format!("bucket={} key={key}", self.bucket), &e))?;
 
         Ok(())
     }
@@ -373,7 +497,9 @@ impl S3Client {
             .key(key)
             .send()
             .await
-            .map_err(|e| Error::internal(format!("S3 DeleteObject error: {}", e)))?;
+            .map_err(|e| {
+                format_sdk_s3_error("DeleteObject", &format!("bucket={} key={key}", self.bucket), &e)
+            })?;
 
         Ok(())
     }
@@ -396,7 +522,13 @@ impl S3Client {
                     .key(key.as_str())
                     .send()
                     .await
-                    .map_err(|e| Error::internal(format!("S3 DeleteObject error: {}", e)))?;
+                    .map_err(|e| {
+                        format_sdk_s3_error(
+                            "DeleteObject",
+                            &format!("bucket={} key={}", self.bucket, key),
+                            &e,
+                        )
+                    })?;
             }
         } else {
             // S3 batch delete limit is 1000
@@ -414,7 +546,7 @@ impl S3Client {
                 let delete = aws_sdk_s3::types::Delete::builder()
                     .set_objects(Some(objects))
                     .build()
-                    .map_err(|e| Error::internal(format!("S3 build delete: {}", e)))?;
+                    .map_err(|e| format_bucket_s3_error("BuildDelete", &self.bucket, e))?;
 
                 self.client
                     .delete_objects()
@@ -422,7 +554,9 @@ impl S3Client {
                     .delete(delete)
                     .send()
                     .await
-                    .map_err(|e| Error::internal(format!("S3 DeleteObjects error: {}", e)))?;
+                    .map_err(|e| {
+                        format_sdk_s3_error("DeleteObjects", &format!("bucket={}", self.bucket), &e)
+                    })?;
             }
         }
 
@@ -461,10 +595,11 @@ impl S3Client {
                 if service_err.is_not_found() {
                     Ok(None)
                 } else {
-                    Err(Error::internal(format!(
-                        "S3 HeadObject error: {}",
-                        service_err
-                    )))
+                    Err(format_s3_service_error(
+                        "HeadObject",
+                        &format!("bucket={} key={}", self.bucket, key),
+                        &service_err,
+                    ))
                 }
             }
         }
@@ -498,7 +633,13 @@ impl S3Client {
             let resp = req
                 .send()
                 .await
-                .map_err(|e| Error::internal(format!("S3 ListObjectsV2 error: {}", e)))?;
+                .map_err(|e| {
+                    format_sdk_s3_error(
+                        "ListObjectsV2",
+                        &format!("bucket={} prefix={prefix}", self.bucket),
+                        &e,
+                    )
+                })?;
 
             // Process files (contents)
             for obj in resp.contents() {
@@ -566,7 +707,13 @@ impl S3Client {
             let resp = req
                 .send()
                 .await
-                .map_err(|e| Error::internal(format!("S3 ListObjectsV2 error: {}", e)))?;
+                .map_err(|e| {
+                    format_sdk_s3_error(
+                        "ListObjectsV2",
+                        &format!("bucket={} prefix={prefix}", self.bucket),
+                        &e,
+                    )
+                })?;
 
             for obj in resp.contents() {
                 let key = obj.key().unwrap_or("");
@@ -611,7 +758,16 @@ impl S3Client {
             .key(dst_key)
             .send()
             .await
-            .map_err(|e| Error::internal(format!("S3 CopyObject error: {}", e)))?;
+            .map_err(|e| {
+                format_sdk_s3_error(
+                    "CopyObject",
+                    &format!(
+                        "bucket={} src_key={} dst_key={}",
+                        self.bucket, src_key, dst_key
+                    ),
+                    &e,
+                )
+            })?;
 
         Ok(())
     }
@@ -639,7 +795,13 @@ impl S3Client {
             .max_keys(1)
             .send()
             .await
-            .map_err(|e| Error::internal(format!("S3 ListObjectsV2 error: {}", e)))?;
+            .map_err(|e| {
+                format_sdk_s3_error(
+                    "ListObjectsV2",
+                    &format!("bucket={} prefix={dir_key_slash}", self.bucket),
+                    &e,
+                )
+            })?;
 
         let has_contents = !resp.contents().is_empty();
         let has_prefixes = !resp.common_prefixes().is_empty();
@@ -666,7 +828,13 @@ impl S3Client {
                 .max_keys(1000)
                 .send()
                 .await
-                .map_err(|e| Error::internal(format!("S3 ListObjectsV2 error: {}", e)))?;
+                .map_err(|e| {
+                    format_sdk_s3_error(
+                        "ListObjectsV2",
+                        &format!("bucket={} prefix={prefix}", self.bucket),
+                        &e,
+                    )
+                })?;
 
             let contents = resp.contents();
             if contents.is_empty() {
@@ -717,6 +885,38 @@ impl S3Client {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::Error;
+    use aws_sdk_s3::error::{ErrorMetadata, ProvideErrorMetadata};
+
+    #[derive(Debug)]
+    struct FakeServiceError {
+        raw: &'static str,
+        meta: ErrorMetadata,
+    }
+
+    impl std::fmt::Display for FakeServiceError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{}", self.raw)
+        }
+    }
+
+    impl RequestId for FakeServiceError {
+        fn request_id(&self) -> Option<&str> {
+            self.meta.request_id()
+        }
+    }
+
+    impl RequestIdExt for FakeServiceError {
+        fn extended_request_id(&self) -> Option<&str> {
+            self.meta.extended_request_id()
+        }
+    }
+
+    impl ProvideErrorMetadata for FakeServiceError {
+        fn meta(&self) -> &ErrorMetadata {
+            &self.meta
+        }
+    }
 
     fn test_client(prefix: &str, normalize_encoding_chars: &str) -> S3Client {
         S3Client {
@@ -797,5 +997,57 @@ mod tests {
     #[test]
     fn test_build_key_preserves_segments_when_normalization_disabled() {
         assert_eq!(test_client("", "").build_key("/a b"), "a b");
+    }
+
+    #[test]
+    fn test_format_generic_s3_error_includes_operation_bucket_key_and_raw_error() {
+        let err = format_generic_s3_error(
+            "PutObject",
+            "test-bucket",
+            "tenant/a.txt",
+            "service error",
+        );
+
+        match err {
+            Error::Internal(message) => {
+                assert!(message.contains("S3 PutObject error"));
+                assert!(message.contains("bucket=test-bucket"));
+                assert!(message.contains("key=tenant/a.txt"));
+                assert!(message.contains("raw=service error"));
+            }
+            other => panic!("expected internal error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_format_s3_service_error_includes_metadata_fields() {
+        let service_err = FakeServiceError {
+            raw: "service error",
+            meta: ErrorMetadata::builder()
+                .code("AccessDenied")
+                .message("signature mismatch")
+                .custom("aws_request_id", "req-123")
+                .custom("s3_extended_request_id", "ext-456")
+                .build(),
+        };
+
+        let err = format_s3_service_error(
+            "PutObject",
+            "bucket=test-bucket key=tenant/a.txt",
+            &service_err,
+        );
+
+        match err {
+            Error::Internal(message) => {
+                assert!(message.contains("S3 PutObject error"));
+                assert!(message.contains("bucket=test-bucket key=tenant/a.txt"));
+                assert!(message.contains("code=AccessDenied"));
+                assert!(message.contains("message=signature mismatch"));
+                assert!(message.contains("request_id=req-123"));
+                assert!(message.contains("extended_request_id=ext-456"));
+                assert!(message.contains("raw=service error"));
+            }
+            other => panic!("expected internal error, got {other:?}"),
+        }
     }
 }
