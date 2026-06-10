@@ -257,8 +257,8 @@ async def test_agent_loop_build_prompt_history_uses_ov_context_plus_unsynced_tai
         }
     )
 
-    async def fake_get_ov_client(self, session_key):
-        del session_key
+    async def fake_get_ov_client(self, session_key, openviking_connection=None):
+        del session_key, openviking_connection
         return fake_ov_client
 
     monkeypatch.setattr(AgentLoop, "_get_ov_client", fake_get_ov_client)
@@ -310,8 +310,8 @@ async def test_agent_loop_build_prompt_history_skips_tail_when_sync_cursor_is_pa
         context_payload={"messages": [{"role": "user", "content": "OV user turn"}]}
     )
 
-    async def fake_get_ov_client(self, session_key):
-        del self, session_key
+    async def fake_get_ov_client(self, session_key, openviking_connection=None):
+        del self, session_key, openviking_connection
         return fake_ov_client
 
     monkeypatch.setattr(AgentLoop, "_get_ov_client", fake_get_ov_client)
@@ -415,8 +415,8 @@ async def test_agent_loop_commits_openviking_before_model_when_pending_tokens_re
             state["last_synced_local_index"] = len(session.messages) - 1
         return kwargs
 
-    async def fake_get_ov_client(self, session_key):
-        del self, session_key
+    async def fake_get_ov_client(self, session_key, openviking_connection=None):
+        del self, session_key, openviking_connection
 
         class _Client:
             async def get_session_context(self, session_id, token_budget):
@@ -515,8 +515,8 @@ async def test_agent_loop_commits_openviking_before_model_when_memory_window_rea
         session.metadata["openviking"]["last_commit_performed"] = bool(kwargs["force_commit"])
         return kwargs
 
-    async def fake_get_ov_client(self, session_key):
-        del self, session_key
+    async def fake_get_ov_client(self, session_key, openviking_connection=None):
+        del self, session_key, openviking_connection
 
         class _Client:
             async def get_session_context(self, session_id, token_budget):

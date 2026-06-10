@@ -187,6 +187,7 @@ All configurations are under the `bot` field in `ov.conf`, with default values f
     - `root_api_key`: Deprecated compatibility field for legacy root-key deployments; do not use it for new configs.
     - `account_id`: Defaults to `default`, which is the OpenViking account ID. All users under the same OpenViking account share resources.
     - `api_key_type`: Optional `root` or `user`, default `user`. `user` uses the OpenViking User-key flow and maps the bot sender to a peer under that User. `root` is only for legacy root-key fanout behavior and should be configured explicitly if still needed.
+      Legacy configs that put a root key in `api_key` must add `api_key_type: "root"` or move the key to `root_api_key`; otherwise `api_key` is interpreted as a User key.
     - exp_write_tools: Optional list of tool names that trigger experience-memory injection before the call (self-evolving agent memory loop, see #2007). Defaults to `["write_file", "edit_file"]`. Injection only fires when the OpenViking server has `memory.agent_memory_enabled` set; otherwise this list is harmless.
     - `recall_exp_first_round_only`: Optional. When `true`, `ContextBuilder._build_user_memory` skips per-turn user/agent experience recall and injects experiences only once on the first user turn. Defaults to `false`.
     - `exp_recall_limit`: Optional. Number of experiences to retrieve per task during recall. Defaults to `5`.

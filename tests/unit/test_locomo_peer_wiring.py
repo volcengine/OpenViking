@@ -46,9 +46,15 @@ def _sample_payload():
     }
 
 
-def test_build_memory_policy_always_enables_peer():
-    assert IMPORT_TO_OV.build_memory_policy(False)["peer"]["enabled"] is True
-    assert IMPORT_TO_OV.build_memory_policy(True)["peer"]["enabled"] is True
+def test_build_memory_policy_writes_peer_only():
+    assert IMPORT_TO_OV.build_memory_policy(False) == {
+        "self": {"enabled": False},
+        "peer": {"enabled": True},
+    }
+    assert IMPORT_TO_OV.build_memory_policy(True) == {
+        "self": {"enabled": False},
+        "peer": {"enabled": True},
+    }
 
 
 def test_build_session_messages_non_group_uses_sample_peer_and_prefixes_speaker():

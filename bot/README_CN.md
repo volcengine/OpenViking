@@ -189,6 +189,7 @@ bot 将连接到远程 OpenViking Server，使用前请先启动 OpenViking Serv
     - `root_api_key`：旧 root-key 部署的废弃兼容字段；新配置不要再使用。
     - `account_id`：默认值为 `default`，即 OpenViking 的账号 ID。同一 OpenViking account 下的所有 user 共享 resources。
     - `api_key_type`：可选 `root` 或 `user`，默认 `user`。`user` 使用 OpenViking User-key 流程，并将 bot sender 映射为该 User 下的 peer。`root` 仅用于旧 root-key fanout 行为，如仍需使用必须显式配置。
+      旧配置如果把 root key 填在 `api_key`，需要补充 `api_key_type: "root"`，或迁移到 `root_api_key`；否则 `api_key` 会按 User key 解释。
     - `exp_write_tools`：可选，触发经验记忆注入的工具名列表（自演化 agent memory 循环，详见 #2007）。默认 `["write_file", "edit_file"]`。注入仅在 OpenViking Server 启用 `memory.agent_memory_enabled` 时生效，否则此列表无作用。
     - `recall_exp_first_round_only`：可选。为 `true` 时，`ContextBuilder._build_user_memory` 跳过每轮 user/agent 经验召回，仅在首个 user turn 注入一次经验。默认 `false`。
     - `exp_recall_limit`：可选。召回时每个任务检索的经验条数。默认 `5`。
