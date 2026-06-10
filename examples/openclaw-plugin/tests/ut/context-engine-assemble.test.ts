@@ -225,7 +225,7 @@ describe("context-engine assemble()", () => {
               uri: "viking://user/acme/peers/ou_bcc/memories/profile.md",
               level: 2,
               category: "profile",
-              abstract: "# 秦浩杰\n- 正在维护的项目：openviking",
+              abstract: "# Dana Tester\n- Maintained project: project-alpha",
               score: 0.92,
             },
           ],
@@ -239,7 +239,7 @@ describe("context-engine assemble()", () => {
         JSON.stringify({
           message_id: "om_1",
           sender_id: "ou_bcc",
-          sender: "秦浩杰",
+          sender: "Dana Tester",
           is_group_chat: true,
         }),
         "```",
@@ -248,12 +248,12 @@ describe("context-engine assemble()", () => {
         "```json",
         JSON.stringify({
           id: "ou_bcc",
-          name: "秦浩杰",
+          name: "Dana Tester",
         }),
         "```",
         "",
         "[message_id: om_1]",
-        "秦浩杰: 我是谁",
+        "Dana Tester: who am I?",
         "",
         "[System: mention metadata]",
       ].join("\n");
@@ -271,7 +271,7 @@ describe("context-engine assemble()", () => {
       }
       expect(result.messages[0]?.role).toBe("user");
       expect(result.messages[0]?.content).toContain("Source: openviking-auto-recall");
-      expect(result.messages[0]?.content).toContain("正在维护的项目：openviking");
+      expect(result.messages[0]?.content).toContain("Maintained project: project-alpha");
     } finally {
       vi.unstubAllGlobals();
     }
