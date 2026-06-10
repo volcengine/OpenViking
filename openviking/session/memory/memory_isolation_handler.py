@@ -14,6 +14,8 @@ from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 
+_INTERNAL_MEMORY_TYPES = {"session_skills"}
+
 
 @dataclass
 class RoleScope:
@@ -106,6 +108,8 @@ class MemoryIsolationHandler:
 
     def allows_schema(self, memory_type_schema: MemoryTypeSchema) -> bool:
         memory_type = getattr(memory_type_schema, "memory_type", "")
+        if memory_type in _INTERNAL_MEMORY_TYPES:
+            return True
         if self.allowed_memory_types is not None and memory_type not in self.allowed_memory_types:
             return False
         return True

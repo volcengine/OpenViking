@@ -5,45 +5,51 @@ code-modification reference, so it avoids proposed or removed flows.
 
 ## Policy
 
-`memory_policy` only carries target switches:
+`memory_policy` carries target switches plus an optional global memory type
+whitelist:
 
 ```json
 {
   "self": { "enabled": true },
-  "peer": { "enabled": false }
+  "peer": { "enabled": false },
+  "memory_types": ["profile", "preferences"]
 }
 ```
 
-Legacy `types` fields are ignored. Type selection is not controlled by
-`memory_policy`.
+When `memory_types` is omitted or `null`, all enabled schemas from
+`MemoryTypeRegistry` are allowed, including custom prompt/schema types. When it
+is set, extraction is limited to those names for both self and peer writes.
 
 ## Memory Type Groups
 
 | Group | Types | Target |
 | --- | --- | --- |
-| Long-term memory | `profile`, `preferences`, `entities`, `events`, `cases`, `patterns`, `tools`, `skills`, `identity`, `soul` | Self and peer |
-| Agent memory | `trajectories`, `experiences` | Self only |
+| Long-term memory extraction | Enabled registry schemas without `agent_only` | Self and peer |
+| Execution memory extraction | Execution-derived schemas, currently `trajectories`, `experiences` | Self only |
 | Session skills | `SESSION_SKILL_MEMORY_TYPE` output | Self only |
 
-Agent memory is enabled only when `config.memory.agent_memory_enabled` is true.
-Session skill extraction also requires self memory to be enabled.
+Trajectory/experience extraction is controlled by `memory_types`: omitted or
+`null` allows both, while an explicit list must include those names. Session
+skill extraction also requires self memory to be enabled and only runs when the
+execution memory extraction phase has work.
 
 ## Commit Flow
 
 Implemented in `openviking/session/session.py`:
 
-1. Merge session-level and commit-level policy with `MemoryPolicy.merge`.
+1. Load the session-level policy from session metadata.
 2. Archive the current message batch.
 3. Hydrate tool outputs for extraction.
 4. If peer memory is enabled, collect safe `message.peer_id` values from the
    archived batch into `allowed_peer_ids`.
 5. Start archive summary generation.
-6. If long-term extraction is enabled, call
+6. If long-term memory extraction is enabled and allowed by `memory_types`, call
    `SessionCompressorV2.extract_long_term_memories` once with the full archived
    batch, `allow_self_memory`, and `allowed_peer_ids`.
-7. If self agent extraction is enabled, call
-   `SessionCompressorV2.extract_agent_memories` once with the full archived
-   batch.
+7. If trajectory/experience extraction has work, call
+   `SessionCompressorV2.extract_execution_memories` once with the full archived
+   batch. When session skill extraction is enabled, it runs inside this execution
+   phase instead of starting a separate phase by itself.
 
 The current flow does not build separate buckets such as
 `self_identity_messages`, `self_experience_messages`,

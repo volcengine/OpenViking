@@ -44,6 +44,13 @@ class UserPrivacyConfigService:
         except Exception:
             return False
 
+    async def delete(self, ctx: RequestContext, category: str, target_key: str) -> bool:
+        root_uri = self.get_config_root(ctx, category, target_key)
+        if not await self.exists(ctx, category, target_key):
+            return False
+        await self._viking_fs.rm(root_uri, recursive=True, ctx=ctx)
+        return True
+
     async def _ensure_root(self, ctx: RequestContext, category: str, target_key: str) -> None:
         root_uri = self.get_config_root(ctx, category, target_key)
         await self._viking_fs.mkdir(root_uri, exist_ok=True, ctx=ctx)

@@ -325,6 +325,29 @@
       },
       "logFindRequests": {
         "type": "boolean"
+      },
+      "agentExperience": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false,
+            "description": "Enable agent experience memory recall. Default is false for conservative rollout."
+          },
+          "recallLimit": {
+            "type": "number"
+          },
+          "scoreThreshold": {
+            "type": "number"
+          },
+          "maxInjectedChars": {
+            "type": "number"
+          },
+          "minQueryChars": {
+            "type": "number"
+          }
+        }
       }
     }
   }

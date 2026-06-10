@@ -3,14 +3,15 @@ import type { PointerEvent as ReactPointerEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   ChevronRightIcon,
+  ClipboardListIcon,
   CommandIcon,
   FileTextIcon,
   FolderIcon,
   FolderTreeIcon,
-  LoaderCircleIcon,
   Loader2Icon,
   PlusIcon,
   RefreshCcwIcon,
+  SearchIcon,
 } from 'lucide-react'
 
 import { Button } from '#/components/ui/button'
@@ -32,21 +33,27 @@ const TREE_CHILD_CONTENT_OFFSET = 26
 export function ContextExplorerHeader({
   activeTaskCount,
   hasActiveTasks,
+  hasTasks,
   isRefreshing,
   isRefreshingTasks,
   onAddResource,
   onOpenProcessingTasks,
+  onOpenSearch,
   onRefresh,
 }: {
   activeTaskCount: number
   hasActiveTasks: boolean
+  hasTasks: boolean
   isRefreshing: boolean
   isRefreshingTasks: boolean
   onAddResource: () => void
   onOpenProcessingTasks: () => void
+  onOpenSearch: () => void
   onRefresh: () => void
 }) {
   const { t } = useTranslation(['playground', 'resources'])
+  const showProcessingTasks = hasTasks || isRefreshingTasks
+
   return (
     <div className="border-b px-3 py-3">
       <div className="flex items-center gap-2">
@@ -56,26 +63,36 @@ export function ContextExplorerHeader({
         <div className="min-w-0 flex-1">
           <div className="text-sm font-semibold">{t('explorer.title')}</div>
         </div>
+        {showProcessingTasks ? (
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="ghost"
+            className="relative"
+            title={t('processingTasks.title', { ns: 'resources' })}
+            onClick={onOpenProcessingTasks}
+          >
+            <ClipboardListIcon
+              className={cn(
+                'size-4',
+                (hasActiveTasks || isRefreshingTasks) && 'text-primary',
+              )}
+            />
+            {activeTaskCount > 0 ? (
+              <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold leading-none text-primary-foreground">
+                {activeTaskCount}
+              </span>
+            ) : null}
+          </Button>
+        ) : null}
         <Button
           type="button"
           size="icon-sm"
           variant="ghost"
-          className="relative"
-          title={t('processingTasks.title', { ns: 'resources' })}
-          onClick={onOpenProcessingTasks}
+          title={t('explorer.search')}
+          onClick={onOpenSearch}
         >
-          <LoaderCircleIcon
-            className={cn(
-              'size-4',
-              (hasActiveTasks || isRefreshingTasks) &&
-                'animate-spin text-primary',
-            )}
-          />
-          {activeTaskCount > 0 ? (
-            <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold leading-none text-primary-foreground">
-              {activeTaskCount}
-            </span>
-          ) : null}
+          <SearchIcon className="size-4" />
         </Button>
         <Button
           type="button"

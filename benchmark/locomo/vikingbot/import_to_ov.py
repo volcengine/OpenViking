@@ -390,11 +390,7 @@ async def viking_ingest(
             )
 
         # Commit
-        result = await client.commit_session(
-            session_id,
-            telemetry=True,
-            memory_policy=memory_policy,
-        )
+        result = await client.commit_session(session_id, telemetry=True)
 
         # Accept both "committed" and "accepted" as success - accepted means the session was archived
         if result.get("status") not in ("committed", "accepted"):

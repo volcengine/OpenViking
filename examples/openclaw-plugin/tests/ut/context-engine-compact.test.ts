@@ -120,7 +120,7 @@ describe("context-engine commitOVSession()", () => {
     expect(client.commitSession.mock.calls[0][1]).toMatchObject({ wait: true });
   });
 
-  it("passes peer memory policy when peer_role is person", async () => {
+  it("does not pass memory policy when committing peer-role sessions", async () => {
     const { engine, client } = makeEngine(
       {
         status: "completed",
@@ -134,11 +134,8 @@ describe("context-engine commitOVSession()", () => {
 
     expect(client.commitSession.mock.calls[0][1]).toMatchObject({
       wait: true,
-      memoryPolicy: {
-        self: { enabled: true },
-        peer: { enabled: true },
-      },
     });
+    expect(client.commitSession.mock.calls[0][1]).not.toHaveProperty("memoryPolicy");
   });
 
   it("uses sessionKey-derived OV session ID for commitOVSession", async () => {
@@ -328,7 +325,7 @@ describe("context-engine compact()", () => {
     expect(client.commitSession.mock.calls[0][1]).toMatchObject({ wait: true });
   });
 
-  it("compact passes peer memory policy when peer_role is person", async () => {
+  it("compact does not pass memory policy when committing peer-role sessions", async () => {
     const { engine, client } = makeEngine(
       {
         status: "completed",
@@ -342,11 +339,8 @@ describe("context-engine compact()", () => {
 
     expect(client.commitSession.mock.calls[0][1]).toMatchObject({
       wait: true,
-      memoryPolicy: {
-        self: { enabled: true },
-        peer: { enabled: true },
-      },
     });
+    expect(client.commitSession.mock.calls[0][1]).not.toHaveProperty("memoryPolicy");
   });
 
   it("logs memory extraction count on success", async () => {

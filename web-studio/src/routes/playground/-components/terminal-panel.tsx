@@ -50,6 +50,7 @@ import type {
 import {
   cleanVikingUri,
   entryToRef,
+  getErrorMessage,
   readStoredJsonArray,
   removeStoredValue,
   searchResultToRefs,
@@ -133,7 +134,9 @@ function loadTerminalHistory(): TerminalEntry[] {
       if (
         typeof record.id !== 'string' ||
         typeof record.title !== 'string' ||
-        !['command', 'error', 'info', 'success'].includes(String(record.kind)) ||
+        !['command', 'error', 'info', 'success'].includes(
+          String(record.kind),
+        ) ||
         (record.body !== undefined && typeof record.body !== 'string')
       ) {
         return undefined
@@ -581,7 +584,7 @@ export function TerminalPanel({
         }
       } catch (error) {
         append({
-          body: error instanceof Error ? error.message : String(error),
+          body: getErrorMessage(error),
           kind: 'error',
           title: t('terminal.commandFailed'),
         })
@@ -803,7 +806,7 @@ export function TerminalPanel({
                               key={suggestion.id}
                               type="button"
                               className={cn(
-                                'flex w-full min-w-0 items-start gap-3 rounded-md px-2 py-2 text-left transition-colors',
+                                'grid w-full min-w-0 grid-cols-[minmax(5rem,12rem)_minmax(0,1fr)] items-start gap-3 rounded-md px-2 py-2 text-left transition-colors',
                                 index === activeSuggestionIndex
                                   ? 'bg-primary/10 text-foreground'
                                   : 'hover:bg-muted/60',
@@ -814,7 +817,10 @@ export function TerminalPanel({
                                 setActiveSuggestionIndex(index)
                               }
                             >
-                              <span className="w-24 shrink-0 font-mono text-xs font-semibold text-primary">
+                              <span
+                                className="min-w-0 truncate font-mono text-xs font-semibold text-primary"
+                                title={suggestion.command}
+                              >
                                 {suggestion.command}
                               </span>
                               <span className="min-w-0 flex-1">

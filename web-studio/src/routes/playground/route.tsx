@@ -20,6 +20,8 @@ import {
   ResourceUploadProvider,
   useResourceUpload,
 } from '#/routes/resources/-hooks/use-resource-upload'
+import { FindPalette } from '#/routes/resources/-components/find-palette'
+import { copyTextToClipboard } from '#/lib/clipboard'
 import {
   useInvalidateVikingFs,
   useVikingFsList,
@@ -54,6 +56,7 @@ import {
   clampNumber,
   cleanVikingUri,
   createEntryFromUri,
+  getErrorMessage,
   getAncestorUris,
   isDirectoryLevelFile,
   mergeExpanded,
@@ -111,6 +114,7 @@ function PlaygroundWorkbench() {
   const [uploadDialogOpen, setUploadDialogOpen] = useState(
     () => search.upload ?? false,
   )
+  const [findPaletteOpen, setFindPaletteOpen] = useState(false)
   const [taskDialogOpen, setTaskDialogOpen] = useState(false)
   const [openingUri, setOpeningUri] = useState<string | null>(null)
   const layoutRef = useRef<HTMLDivElement>(null)
@@ -164,10 +168,12 @@ function PlaygroundWorkbench() {
     }) => {
       navigate({
         replace: true,
-        search: (prev) => ({
-          ...prev,
-          ...next,
-        }),
+        search: (prev) => {
+          const merged: Record<string, unknown> = { ...prev, ...next }
+          return Object.fromEntries(
+            Object.entries(merged).filter(([, value]) => value !== undefined),
+          )
+        },
       })
     },
     [navigate],
@@ -249,19 +255,15 @@ function PlaygroundWorkbench() {
           : normalizeDirUri(parentUri(normalized))
 
         setCurrentUri(nextCurrentUri)
-        setSelectedFile(createEntryFromUri(normalized, fallbackIsDir))
+        setSelectedFile(null)
         setExpandedKeys((prev) =>
           mergeExpanded(prev, getAncestorUris(nextCurrentUri)),
         )
         syncSearch({
-          file: fallbackIsDir ? undefined : normalized,
+          file: undefined,
           uri: nextCurrentUri,
         })
-        toast.error(
-          error instanceof Error
-            ? error.message
-            : t('readFailed', { uri: cleaned }),
-        )
+        toast.error(getErrorMessage(error) || t('readFailed', { uri: cleaned }))
       } finally {
         setOpeningUri(null)
       }
@@ -317,6 +319,37 @@ function PlaygroundWorkbench() {
     setTaskDialogOpen(true)
     void refreshTasks()
   }, [refreshTasks])
+
+  const handleOpenSearch = useCallback(() => {
+    setFindPaletteOpen(true)
+  }, [])
+
+  const handleNavigateDirectory = useCallback(
+    (rawUri: string) => {
+      const normalized = normalizeDirUri(rawUri)
+      setCurrentUri(normalized)
+      setSelectedFile(createEntryFromUri(normalized, true))
+      setExpandedKeys((prev) =>
+        mergeExpanded(prev, getAncestorUris(normalized)),
+      )
+      syncSearch({ file: undefined, uri: normalized })
+    },
+    [syncSearch],
+  )
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        setFindPaletteOpen((open) => !open)
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [])
 
   const selectedUri = selectedFile?.uri ?? currentUri
   const displayUri =
@@ -435,10 +468,12 @@ function PlaygroundWorkbench() {
           <ContextExplorerHeader
             activeTaskCount={activeTaskCount}
             hasActiveTasks={hasActiveTasks}
+            hasTasks={tasks.length > 0}
             isRefreshing={listQuery.isFetching}
             isRefreshingTasks={isRefreshingTasks}
             onAddResource={() => setUploadDialogOpen(true)}
             onOpenProcessingTasks={handleOpenProcessingTasks}
+            onOpenSearch={handleOpenSearch}
             onRefresh={() => {
               void invalidateList(currentUri)
               void listQuery.refetch()
@@ -479,8 +514,13 @@ function PlaygroundWorkbench() {
               variant="ghost"
               title={t('copyUri')}
               onClick={() => {
-                void navigator.clipboard.writeText(selectedUri)
-                toast.success(t('copied'))
+                void copyTextToClipboard(selectedUri)
+                  .then(() => {
+                    toast.success(t('copied'))
+                  })
+                  .catch(() => {
+                    toast.error(t('copyFailed'))
+                  })
               }}
             >
               <ClipboardIcon className="size-4" />
@@ -567,6 +607,13 @@ function PlaygroundWorkbench() {
         open={taskDialogOpen}
         onOpenChange={setTaskDialogOpen}
         tasks={tasks}
+      />
+      <FindPalette
+        open={findPaletteOpen}
+        onClose={() => setFindPaletteOpen(false)}
+        onNavigate={(uri) => void revealResource(uri)}
+        onNavigateDir={handleNavigateDirectory}
+        scopeUri={currentUri}
       />
     </div>
   )

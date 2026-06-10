@@ -99,7 +99,8 @@ async fn handle_tree_key(app: &mut App, key: KeyEvent) {
                 }
 
                 // Create confirmation
-                let message = format!("Delete {}? (y/n): {}",
+                let message = format!(
+                    "Delete {}? (y/n): {}",
                     if is_dir { "directory" } else { "file" },
                     selected_uri
                 );

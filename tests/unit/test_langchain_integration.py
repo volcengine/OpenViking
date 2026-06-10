@@ -35,7 +35,7 @@ from openviking.integrations.langchain.history import (
     openviking_message_to_langchain,
 )
 from openviking.integrations.langchain.middleware import _message_signature
-from openviking.integrations.langchain.tools import _archive_grep_pattern
+from openviking.integrations.langchain.tools import _archive_grep_pattern, _resolve_resource_source
 from openviking_cli.exceptions import InvalidArgumentError
 
 
@@ -177,6 +177,74 @@ def test_create_openviking_tools_passes_peer_id_without_exposing_tool_arg():
         messages and messages[0].get("peer_id") == "peer-tools"
         for messages in client.sessions.values()
     )
+
+
+def test_add_resource_resolves_existing_local_file_for_client_upload(tmp_path):
+    class RecordingClient:
+        def __init__(self):
+            self.paths = []
+
+        def add_resource(self, path, **_kwargs):
+            self.paths.append(path)
+            return {"uri": "viking://resources/report.md"}
+
+    client = RecordingClient()
+    resource_file = tmp_path / "report.md"
+    resource_file.write_text("deployment notes", encoding="utf-8")
+    tools = {
+        tool.name: tool
+        for tool in create_openviking_tools(
+            client=client,
+            tool_names=["viking_add_resource"],
+        )
+    }
+
+    result = tools["viking_add_resource"].invoke({"path": str(resource_file)})
+
+    assert client.paths == [str(resource_file)]
+    assert "viking://resources/report.md" in result
+
+
+def test_resolve_resource_source_handles_local_and_remote_sources(tmp_path):
+    local_file = tmp_path / "resource with spaces.md"
+    local_file.write_text("notes", encoding="utf-8")
+
+    assert (
+        _resolve_resource_source("https://example.com/repo.git") == "https://example.com/repo.git"
+    )
+    assert _resolve_resource_source("git@github.com:org/repo.git") == "git@github.com:org/repo.git"
+    assert (
+        _resolve_resource_source("ssh://git@github.com/org/repo.git")
+        == "ssh://git@github.com/org/repo.git"
+    )
+    assert _resolve_resource_source("github.com/org/repo") == "github.com/org/repo"
+    assert _resolve_resource_source(f"file://{local_file}") == str(local_file)
+    assert (
+        _resolve_resource_source("file://remote-host/tmp/report.md")["error"]
+        == "unsupported_file_uri"
+    )
+
+    missing = _resolve_resource_source(str(tmp_path / "missing.md"))
+    assert missing["error"] == "local_path_not_found"
+    assert _resolve_resource_source("docs/missing.md")["error"] == "local_path_not_found"
+
+
+def test_add_resource_keeps_explicit_local_clients_supported(tmp_path):
+    client = InMemoryOpenVikingClient()
+    resource_file = tmp_path / "report.md"
+    resource_file.write_text("report", encoding="utf-8")
+    tools = {
+        tool.name: tool
+        for tool in create_openviking_tools(
+            client=client,
+            tool_names=["viking_add_resource"],
+        )
+    }
+
+    result = tools["viking_add_resource"].invoke({"path": str(resource_file)})
+
+    assert "viking://resources/report.md" in result
+    assert "viking://resources/report.md" in client.records
 
 
 def test_create_openviking_tools_profiles_control_destructive_tools():

@@ -231,7 +231,11 @@ class MemoryTypeRegistry:
             overview_template=data.get("overview_template"),
         )
 
-    async def initialize_memory_files(self, ctx: Any) -> None:
+    async def initialize_memory_files(
+        self,
+        ctx: Any,
+        allowed_memory_types: Optional[set[str]] = None,
+    ) -> None:
         """
         Initialize memory files with init_value for fields that have it.
 
@@ -240,6 +244,8 @@ class MemoryTypeRegistry:
 
         Args:
             ctx: Request context.
+            allowed_memory_types: Optional memory type whitelist. When set, only
+                initializes templates whose memory_type is included.
         """
         from openviking.storage.viking_fs import get_viking_fs
 
@@ -254,6 +260,9 @@ class MemoryTypeRegistry:
         viking_fs = get_viking_fs()
 
         for schema in self.list_all(include_disabled=False):
+            if allowed_memory_types is not None and schema.memory_type not in allowed_memory_types:
+                continue
+
             # Must be enabled, have filename_template and content_template
             if not schema.enabled or not schema.filename_template or not schema.content_template:
                 continue

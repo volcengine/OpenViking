@@ -159,7 +159,6 @@
         "version": "v2",
         "extraction_enabled": true,
         "session_skill_extraction_enabled": false,
-        // "agent_memory_enabled": true,  // set to false to disable trajectory/experience memory extraction
     },
     "log": {
         "level": "INFO",

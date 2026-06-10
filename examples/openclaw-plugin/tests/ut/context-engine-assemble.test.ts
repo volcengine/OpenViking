@@ -141,7 +141,8 @@ describe("context-engine assemble()", () => {
     expect(result.messages[0]).toBe(sourceMessages[0]);
     expect(result.messages[1]).toBe(sourceMessages[1]);
     expect(result.messages[2]?.role).toBe("user");
-    expect(result.messages[2]?.content).toMatch(/^<relevant-memories>/);
+    expect(result.messages[2]?.content).toMatch(/^<openviking-context>/);
+    expect(result.messages[2]?.content).toContain("## Long-term Memories");
     expect(result.messages[2]?.content).toContain("Source: openviking-auto-recall");
     expect(result.messages[2]?.content).toContain(
       "<uri>viking://user/default/memories/rust-pref</uri>",
@@ -172,6 +173,7 @@ describe("context-engine assemble()", () => {
           cfgOverrides: {
             autoRecall: true,
             peer_role: "person",
+            recallResources: true,
           },
         },
       );
@@ -196,7 +198,7 @@ describe("context-engine assemble()", () => {
     }
   });
 
-  it("uses prompt metadata sender_id for main assemble peer auto-recall when runtimeContext is missing", async () => {
+  it("does not auto-recall during main assemble from prompt metadata", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
@@ -218,20 +220,6 @@ describe("context-engine assemble()", () => {
       client.getSessionContext.mockRejectedValueOnce(
         new Error("OpenViking request failed [NOT_FOUND]: Session not found"),
       );
-      client.find
-        .mockResolvedValueOnce({
-          memories: [
-            {
-              uri: "viking://user/acme/peers/ou_bcc/memories/profile.md",
-              level: 2,
-              category: "profile",
-              abstract: "# 秦浩杰\n- 正在维护的项目：openviking",
-              score: 0.92,
-            },
-          ],
-          total: 1,
-        })
-        .mockResolvedValueOnce({ memories: [], total: 0 });
 
       const prompt = [
         "Conversation info (untrusted metadata):",
@@ -239,7 +227,7 @@ describe("context-engine assemble()", () => {
         JSON.stringify({
           message_id: "om_1",
           sender_id: "ou_bcc",
-          sender: "秦浩杰",
+          sender: "Dana Tester",
           is_group_chat: true,
         }),
         "```",
@@ -248,36 +236,36 @@ describe("context-engine assemble()", () => {
         "```json",
         JSON.stringify({
           id: "ou_bcc",
-          name: "秦浩杰",
+          name: "Dana Tester",
         }),
         "```",
         "",
         "[message_id: om_1]",
-        "秦浩杰: 我是谁",
+        "Dana Tester: who am I?",
         "",
         "[System: mention metadata]",
       ].join("\n");
+      const liveMessages = [{ role: "user", content: "live main assemble prompt" }];
 
       const result = await engine.assemble({
         sessionId: "session-main-prompt-peer",
         sessionKey: "agent:main:feishu:group:oc_123",
-        messages: [],
+        messages: liveMessages,
         prompt,
       });
 
-      expect(client.find).toHaveBeenCalledTimes(2);
-      for (const call of client.find.mock.calls) {
-        expect(call[1]).toMatchObject({ peerId: "ou_bcc" });
-      }
-      expect(result.messages[0]?.role).toBe("user");
-      expect(result.messages[0]?.content).toContain("Source: openviking-auto-recall");
-      expect(result.messages[0]?.content).toContain("正在维护的项目：openviking");
+      expect(client.getSessionContext).toHaveBeenCalled();
+      expect(client.find).not.toHaveBeenCalled();
+      expect(result.messages).toEqual(liveMessages);
+      expect(result.messages[0]?.content).not.toContain("Source: openviking-auto-recall");
+      expect(result.messages[0]?.content).not.toContain("<openviking-context>");
+      expect(result.messages[0]?.content).not.toContain("## Long-term Memories");
     } finally {
       vi.unstubAllGlobals();
     }
   });
 
-  it("prefers runtimeContext senderId over prompt metadata for main assemble recall", async () => {
+  it("does not inject auto-recall into main assemble OV context", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
@@ -290,9 +278,19 @@ describe("context-engine assemble()", () => {
         {
           latest_archive_overview: "",
           pre_archive_abstracts: [],
-          messages: [],
-          estimatedTokens: 0,
-          stats: makeStats(),
+          messages: [
+            {
+              id: "stored-main-user",
+              role: "user",
+              created_at: "2026-04-30T00:00:00Z",
+              parts: [{ type: "text", text: "Stored OpenViking prompt." }],
+            },
+          ],
+          estimatedTokens: 12,
+          stats: {
+            ...makeStats(),
+            activeTokens: 12,
+          },
         },
         {
           cfgOverrides: {
@@ -302,10 +300,11 @@ describe("context-engine assemble()", () => {
         },
       );
 
-      await engine.assemble({
+      const liveMessages = [{ role: "user", content: "live prompt" }];
+      const result = await engine.assemble({
         sessionId: "session-main-runtime-peer",
         runtimeContext: { senderId: "trusted/runtime-user" },
-        messages: [],
+        messages: liveMessages,
         prompt: [
           "Conversation info (untrusted metadata):",
           "```json",
@@ -317,10 +316,15 @@ describe("context-engine assemble()", () => {
         ].join("\n"),
       });
 
-      expect(client.find).toHaveBeenCalledTimes(2);
-      for (const call of client.find.mock.calls) {
-        expect(call[1]).toMatchObject({ peerId: "trusted_runtime-user" });
-      }
+      expect(client.getSessionContext).toHaveBeenCalled();
+      expect(client.find).not.toHaveBeenCalled();
+      expect(result.messages[0]).toEqual({
+        role: "user",
+        content: "Stored OpenViking prompt.",
+      });
+      expect(result.messages[0]?.content).not.toContain("Source: openviking-auto-recall");
+      expect(result.messages[0]?.content).not.toContain("<openviking-context>");
+      expect(result.messages[0]?.content).not.toContain("## Long-term Memories");
     } finally {
       vi.unstubAllGlobals();
     }
@@ -347,6 +351,7 @@ describe("context-engine assemble()", () => {
           cfgOverrides: {
             autoRecall: true,
             peer_role: "assistant",
+            recallResources: true,
           },
         },
       );
@@ -368,6 +373,236 @@ describe("context-engine assemble()", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it("keeps experience memories out of Long-term Memories and renders them in Agent Experiences", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ status: "ok" }),
+      }),
+    );
+    try {
+      const { engine, client } = makeEngine(
+        {
+          latest_archive_overview: "",
+          pre_archive_abstracts: [],
+          messages: [],
+          estimatedTokens: 0,
+          stats: makeStats(),
+        },
+        {
+          cfgOverrides: {
+            autoRecall: true,
+            recallPreferAbstract: true,
+            agentExperience: {
+              enabled: true,
+              recallLimit: 3,
+              scoreThreshold: 0.35,
+              maxInjectedChars: 6000,
+              minQueryChars: 12,
+            },
+          },
+        },
+      );
+
+      const experienceHit = {
+        uri: "viking://user/default/memories/experiences/openclaw-plugin-file-write-guard.md",
+        level: 2,
+        category: "experience",
+        abstract: "经验摘要",
+        score: 0.91,
+      };
+      const longTermHit = {
+        uri: "viking://user/default/memories/profile.md",
+        level: 2,
+        category: "profile",
+        abstract: "张明的主要技术栈是 Elixir 和 Zig。",
+        score: 0.83,
+      };
+
+      client.find
+        .mockResolvedValueOnce({
+          memories: [experienceHit],
+          total: 1,
+        })
+        .mockResolvedValueOnce({
+          memories: [longTermHit],
+          total: 1,
+        })
+        .mockResolvedValueOnce({
+          memories: [experienceHit],
+          total: 1,
+        });
+
+      client.read.mockImplementation(async (uri: string) => {
+        if (uri === experienceHit.uri) {
+          return [
+            "## Situation",
+            "- 当修改 OpenClaw 插件 afterTurn 写回逻辑时。",
+            "",
+            "## Approach",
+            "- 在写回 OV session 前剥离注入上下文块。",
+            "",
+            "## Reflect",
+            "- 避免把注入经验再次写回 transcript。",
+          ].join("\n");
+        }
+        if (uri === longTermHit.uri) {
+          return "张明的主要技术栈是 Elixir 和 Zig。";
+        }
+        return "";
+      });
+
+      const result = await engine.assemble({
+        sessionId: "session-transform-experience",
+        messages: [
+          { role: "assistant", content: [{ type: "text", text: "Previous answer." }] },
+          { role: "user", content: "修一下 OpenClaw 插件里 afterTurn 写回 session 的问题，并告诉我张明的技术栈。" },
+        ],
+      });
+
+      expect(client.find.mock.calls[0]?.[1]).toMatchObject({
+        targetUri: "viking://user/memories/experiences",
+      });
+      const injected = String(result.messages[1]?.content ?? "");
+      expect(injected).toMatch(/^<openviking-context>/);
+      expect(injected).not.toContain("<relevant-memories>");
+      expect(injected).toContain("## Agent Experiences");
+      expect(injected).toContain("### Experience: openclaw-plugin-file-write-guard");
+      expect(injected).toContain("## Long-term Memories");
+      expect(injected).toContain("张明的主要技术栈是 Elixir 和 Zig。");
+
+      const longTermSection = injected.split("## Long-term Memories")[1] ?? "";
+      expect(longTermSection).not.toContain("### Experience:");
+      expect(longTermSection).not.toContain("剥离注入上下文块");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps task gating enabled when agent experience is enabled", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ status: "ok" }),
+      }),
+    );
+    try {
+      const { engine, client } = makeEngine(
+        {
+          latest_archive_overview: "",
+          pre_archive_abstracts: [],
+          messages: [],
+          estimatedTokens: 0,
+          stats: makeStats(),
+        },
+        {
+          cfgOverrides: {
+            autoRecall: false,
+            agentExperience: {
+              enabled: true,
+            },
+          },
+        },
+      );
+
+      const result = await engine.assemble({
+        sessionId: "session-transform-experience-gated",
+        messages: [
+          { role: "assistant", content: [{ type: "text", text: "Previous answer." }] },
+          { role: "user", content: "preflight assemble 和 transformcontext assemble是什么区别" },
+        ],
+      });
+
+      expect(client.find).not.toHaveBeenCalled();
+      expect(result.messages[1]?.content).toBe("preflight assemble 和 transformcontext assemble是什么区别");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("does not recall agent experiences by default", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ status: "ok" }),
+      }),
+    );
+    try {
+      const { engine, client } = makeEngine(
+        {
+          latest_archive_overview: "",
+          pre_archive_abstracts: [],
+          messages: [],
+          estimatedTokens: 0,
+          stats: makeStats(),
+        },
+        {
+          cfgOverrides: {
+            autoRecall: false,
+          },
+        },
+      );
+
+      const result = await engine.assemble({
+        sessionId: "session-experience-default-off",
+        messages: [
+          { role: "assistant", content: [{ type: "text", text: "Previous answer." }] },
+          { role: "user", content: "修一下 OpenClaw 插件里 afterTurn 写回 session 的问题" },
+        ],
+      });
+
+      expect(client.find).not.toHaveBeenCalled();
+      expect(result.messages[1]?.content).toBe("修一下 OpenClaw 插件里 afterTurn 写回 session 的问题");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("does not inject again when latest user message already has an OpenViking context block", async () => {
+    const { engine, getClient } = makeEngine(
+      {
+        latest_archive_overview: "unused",
+        pre_archive_abstracts: [],
+        messages: [],
+        estimatedTokens: 0,
+        stats: makeStats(),
+      },
+      {
+        cfgOverrides: {
+          autoRecall: true,
+          agentExperience: {
+            enabled: true,
+          },
+        },
+      },
+    );
+    const sourceMessages = [
+      { role: "assistant", content: [{ type: "text", text: "Previous answer." }] },
+      {
+        role: "user",
+        content: [
+          "<openviking-context>",
+          "already injected OpenViking context",
+          "</openviking-context>",
+          "",
+          "修一下 OpenClaw 插件里 afterTurn 写回 session 的问题",
+        ].join("\n"),
+      },
+    ];
+
+    const result = await engine.assemble({
+      sessionId: "session-existing-openviking-context-block",
+      messages: sourceMessages,
+    });
+
+    expect(getClient).not.toHaveBeenCalled();
+    expect(result.messages).toBe(sourceMessages);
+    expect(result.estimatedTokens).toBe(roughEstimate(sourceMessages));
   });
 
   it("passes through transformContext messages when the latest message is not user", async () => {
@@ -410,6 +645,10 @@ describe("context-engine assemble()", () => {
       messages: [],
       estimatedTokens: 0,
       stats: makeStats(),
+    }, {
+      cfgOverrides: {
+        autoRecall: false,
+      },
     });
     const sourceMessages = [
       { role: "assistant", content: [{ type: "text", text: "Previous answer." }] },

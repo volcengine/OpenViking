@@ -574,15 +574,7 @@ mod tests {
 
     #[test]
     fn append_profile_query_adds_flag_when_enabled() {
-        let client = BaseClient::new(
-            "http://localhost:1933",
-            None,
-            None,
-            None,
-            5.0,
-            true,
-            None,
-        );
+        let client = BaseClient::new("http://localhost:1933", None, None, None, 5.0, true, None);
 
         let params =
             client.append_profile_query(&[("to_uri".to_string(), "viking://x".to_string())]);
@@ -598,15 +590,7 @@ mod tests {
 
     #[test]
     fn append_profile_query_keeps_existing_profile_flag() {
-        let client = BaseClient::new(
-            "http://localhost:1933",
-            None,
-            None,
-            None,
-            5.0,
-            true,
-            None,
-        );
+        let client = BaseClient::new("http://localhost:1933", None, None, None, 5.0, true, None);
 
         let params = client.append_profile_query(&[("profile".to_string(), "1".to_string())]);
 

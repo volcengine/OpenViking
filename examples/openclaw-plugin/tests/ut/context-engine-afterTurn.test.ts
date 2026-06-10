@@ -288,13 +288,13 @@ describe("context-engine afterTurn()", () => {
     expect(client.addSessionMessage.mock.calls[1][5]).toBe("test-agent");
   });
 
-  it("sanitizes <relevant-memories> from user content but not from assistant", async () => {
+  it("sanitizes injected context blocks from user content", async () => {
     const { engine, client } = makeEngine();
 
     const messages = [
       {
         role: "user",
-        content: "my question <relevant-memories>injected memory data</relevant-memories> more text",
+        content: "my question <openviking-context>injected memory data</openviking-context> more text",
       },
     ];
 
@@ -308,7 +308,7 @@ describe("context-engine afterTurn()", () => {
     expect(client.addSessionMessage).toHaveBeenCalledTimes(1);
     expect(client.addSessionMessage.mock.calls[0][1]).toBe("user");
     const storedContent = (client.addSessionMessage.mock.calls[0][2] as Array<{ text?: string }>)[0].text;
-    expect(storedContent).not.toContain("relevant-memories");
+    expect(storedContent).not.toContain("openviking-context");
     expect(storedContent).not.toContain("injected memory data");
     expect(storedContent).toContain("my question");
   });
@@ -375,11 +375,8 @@ describe("context-engine afterTurn()", () => {
     expect(client.commitSession).toHaveBeenCalledTimes(1);
     expect(client.commitSession.mock.calls[0][1]).toMatchObject({
       wait: false,
-      memoryPolicy: {
-        self: { enabled: true },
-        peer: { enabled: true },
-      },
     });
+    expect(client.commitSession.mock.calls[0][1]).not.toHaveProperty("memoryPolicy");
   });
 
   it("catches errors without throwing", async () => {
@@ -603,12 +600,12 @@ describe("context-engine afterTurn()", () => {
     expect(client.addSessionMessage.mock.calls[2][1]).toBe("assistant");
   });
 
-  it("sanitizes <relevant-memories> from assistant content", async () => {
+  it("sanitizes injected context blocks from assistant content", async () => {
     const { engine, client } = makeEngine();
 
     const messages = [
       { role: "user", content: "question" },
-      { role: "assistant", content: "Here is context <relevant-memories>data</relevant-memories> end" },
+      { role: "assistant", content: "Here is context <openviking-context>data</openviking-context> end" },
     ];
 
     await engine.afterTurn!({
@@ -620,7 +617,7 @@ describe("context-engine afterTurn()", () => {
 
     expect(client.addSessionMessage).toHaveBeenCalledTimes(2);
     const assistantParts = client.addSessionMessage.mock.calls[1][2] as Array<{ text?: string }>;
-    expect(assistantParts.map(p => p.text).join(" ")).not.toContain("relevant-memories");
+    expect(assistantParts.map(p => p.text).join(" ")).not.toContain("openviking-context");
     expect(assistantParts.map(p => p.text).join(" ")).toContain("Here is context");
   });
 
