@@ -68,15 +68,6 @@ class MemoryPolicy:
             memory_types=_parse_memory_types(data.get("memory_types")),
         )
 
-    @classmethod
-    def merge(cls, session_policy: Any = None, commit_policy: Any = None) -> "MemoryPolicy":
-        """Return the policy used by a commit."""
-        if commit_policy is not None:
-            return cls.from_dict(commit_policy)
-        if session_policy is not None:
-            return cls.from_dict(session_policy)
-        return cls.default()
-
     def validate_memory_types(self, known_memory_types: set[str]) -> None:
         if self.memory_types is None:
             return

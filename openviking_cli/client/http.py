@@ -894,7 +894,6 @@ class AsyncHTTPClient(BaseClient):
         telemetry: TelemetryRequest = False,
         *,
         keep_recent_count: int = 0,
-        memory_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Commit a session (archive and extract memories)."""
         telemetry = self._validate_telemetry(telemetry)
@@ -902,8 +901,6 @@ class AsyncHTTPClient(BaseClient):
             "keep_recent_count": keep_recent_count,
             "telemetry": telemetry,
         }
-        if memory_policy is not None:
-            payload["memory_policy"] = memory_policy
         response = await self._http.post(
             f"/api/v1/sessions/{session_id}/commit",
             json=payload,

@@ -1151,7 +1151,6 @@ export function createMemoryOpenVikingContextEngine(params: {
         wait: true,
         agentId,
         keepRecentCount: 0,
-        memoryPolicy: defaultMemoryPolicy,
       });
       const memCount = totalExtractedMemories(commitResult.memories_extracted);
       if (commitResult.status === "failed") {
@@ -1803,7 +1802,6 @@ export function createMemoryOpenVikingContextEngine(params: {
           wait: false,
           agentId,
           keepRecentCount: cfg.commitKeepRecentCount,
-          memoryPolicy: defaultMemoryPolicy,
         });
         logger.info(
           `openviking: committed session=${OVSessionId}, ` +
@@ -1901,7 +1899,6 @@ export function createMemoryOpenVikingContextEngine(params: {
           wait: true,
           agentId,
           keepRecentCount: 0,
-          memoryPolicy: defaultMemoryPolicy,
         });
         const memCount = totalExtractedMemories(commitResult.memories_extracted);
 

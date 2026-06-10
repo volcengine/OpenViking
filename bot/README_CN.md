@@ -184,7 +184,7 @@ bot 将连接到远程 OpenViking Server，使用前请先启动 OpenViking Serv
     - `root_api_key`：bot 调用 OpenViking Server 时使用的 API Key。尽管字段名保留为 `root_api_key`，但在 `user` key 流程下该字段同样会被使用。
     - `account_id`：默认值为 `default`，即 OpenViking 的账号 ID。同一 OpenViking account 下的所有 user 共享 resources。
     - `api_key_type`：可选 `root` 或 `user`，默认 `root`。`root` 保留原有的 root-key fanout 行为；`user` 切换 bot 走 user-key 流程调用 OpenViking 客户端。对于托管型远端 OpenViking 服务，通常推荐使用 `user`。
-    - `exp_write_tools`：可选，触发经验记忆注入的工具名列表（自演化 agent memory 循环，详见 #2007）。默认 `["write_file", "edit_file"]`。注入仅在 OpenViking Server 启用 `memory.agent_memory_enabled` 时生效，否则此列表无作用。
+    - `exp_write_tools`：可选，触发经验记忆注入的工具名列表（自演化 agent memory 循环，详见 #2007）。默认 `["write_file", "edit_file"]`。该配置只控制 bot 侧注入触发时机；已存储 experience 的生成由 OpenViking 记忆抽取和当前 session 的 `memory_policy.memory_types` 白名单控制。
     - `recall_exp_first_round_only`：可选。为 `true` 时，`ContextBuilder._build_user_memory` 跳过每轮 user/agent 经验召回，仅在首个 user turn 注入一次经验。默认 `false`。
     - `exp_recall_limit`：可选。召回时每个任务检索的经验条数。默认 `5`。
     - `exp_recall_max_chars`：可选。注入到上下文的格式化经验块的字符预算。默认 `2000`。

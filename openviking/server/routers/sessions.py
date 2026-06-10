@@ -5,7 +5,7 @@
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Body, Depends, Path, Query, Request
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.peer_id import normalize_peer_id
@@ -342,6 +342,8 @@ class CommitRequest(BaseModel):
     behavior.
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     keep_recent_count: int = Field(
         default=0,
         ge=0,
@@ -352,7 +354,6 @@ class CommitRequest(BaseModel):
             "(default 10); compact path passes 0 to archive everything."
         ),
     )
-    memory_policy: Optional[Dict[str, Any]] = None
     telemetry: TelemetryRequest = False
 
 
@@ -376,7 +377,6 @@ async def commit_session(
             session_id,
             _ctx,
             keep_recent_count=body.keep_recent_count,
-            memory_policy=body.memory_policy,
         ),
     )
     return Response(

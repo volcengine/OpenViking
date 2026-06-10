@@ -78,9 +78,9 @@ class TestCommit:
                 }
             )
 
-        result = await session_with_messages.commit_async(
-            memory_policy={"memory_types": ["trajectories"]}
-        )
+        session_with_messages._meta.memory_policy = {"memory_types": ["trajectories"]}
+
+        result = await session_with_messages.commit_async()
         task_result = await _wait_for_task(result["task_id"])
 
         assert task_result["status"] == "completed"
@@ -116,9 +116,9 @@ class TestCommit:
                 }
             )
 
-        result = await session_with_messages.commit_async(
-            memory_policy={"memory_types": ["profile"]}
-        )
+        session_with_messages._meta.memory_policy = {"memory_types": ["profile"]}
+
+        result = await session_with_messages.commit_async()
         task_result = await _wait_for_task(result["task_id"])
 
         assert task_result["status"] == "completed"
@@ -230,13 +230,13 @@ class TestCommit:
             peer_id="web:visitor:alice",
         )
 
-        result = await session.commit_async(
-            memory_policy={
-                "self": {"enabled": False},
-                "peer": {"enabled": True},
-                "memory_types": ["profile"],
-            }
-        )
+        session._meta.memory_policy = {
+            "self": {"enabled": False},
+            "peer": {"enabled": True},
+            "memory_types": ["profile"],
+        }
+
+        result = await session.commit_async()
         task_result = await _wait_for_task(result["task_id"])
 
         assert task_result["status"] == "completed"
@@ -334,14 +334,12 @@ class TestCommit:
                 telemetry=False,
                 *,
                 keep_recent_count=0,
-                memory_policy=None,
             ):
                 calls.append(
                     {
                         "session_id": session_id,
                         "telemetry": telemetry,
                         "keep_recent_count": keep_recent_count,
-                        "memory_policy": memory_policy,
                     }
                 )
                 return {"task_id": "task-1"}
@@ -356,7 +354,6 @@ class TestCommit:
                 "session_id": "s1",
                 "telemetry": True,
                 "keep_recent_count": 0,
-                "memory_policy": None,
             }
         ]
 
@@ -370,14 +367,12 @@ class TestCommit:
                 telemetry=False,
                 *,
                 keep_recent_count=0,
-                memory_policy=None,
             ):
                 calls.append(
                     {
                         "session_id": session_id,
                         "telemetry": telemetry,
                         "keep_recent_count": keep_recent_count,
-                        "memory_policy": memory_policy,
                     }
                 )
                 return {"task_id": "task-1"}
@@ -392,7 +387,6 @@ class TestCommit:
                 "session_id": "s1",
                 "telemetry": True,
                 "keep_recent_count": 0,
-                "memory_policy": None,
             }
         ]
 

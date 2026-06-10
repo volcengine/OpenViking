@@ -31,7 +31,7 @@ def _get_session_number(session_key: str) -> int:
 
 
 def build_memory_policy(group_chat: bool) -> Dict[str, Dict[str, bool]]:
-    """Build session/commit memory policy for benchmark ingest."""
+    """Build session memory policy for benchmark ingest."""
     return {
         "self": {"enabled": True},
         "peer": {"enabled": bool(group_chat)},
@@ -365,11 +365,7 @@ async def viking_ingest(
             )
 
         # Commit
-        result = await client.commit_session(
-            session_id,
-            telemetry=True,
-            memory_policy=memory_policy,
-        )
+        result = await client.commit_session(session_id, telemetry=True)
 
         # Accept both "committed" and "accepted" as success - accepted means the session was archived
         if result.get("status") not in ("committed", "accepted"):

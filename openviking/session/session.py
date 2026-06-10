@@ -61,11 +61,7 @@ def _enabled_memory_types() -> set[str]:
     """Return enabled memory type names registered for extraction."""
     from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 
-    return {
-        memory_type
-        for schema in MemoryTypeRegistry().list_all()
-        if (memory_type := getattr(schema, "memory_type", ""))
-    }
+    return set(MemoryTypeRegistry().list_names(include_disabled=False))
 
 
 def _validate_memory_policy_types(policy: MemoryPolicy) -> None:
@@ -1042,24 +1038,14 @@ class Session:
             return {"tool_results": []}
         return await store.list(tool_name=tool_name, limit=limit)
 
-    def commit(
-        self,
-        keep_recent_count: int = 0,
-        memory_policy: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+    def commit(self, keep_recent_count: int = 0) -> Dict[str, Any]:
         """Sync wrapper for commit_async()."""
-        return run_async(
-            self.commit_async(
-                keep_recent_count=keep_recent_count,
-                memory_policy=memory_policy,
-            )
-        )
+        return run_async(self.commit_async(keep_recent_count=keep_recent_count))
 
     @tracer("session.commit.phase1")
     async def commit_async(
         self,
         keep_recent_count: int = 0,
-        memory_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Async commit session: archive immediately, extract memories in background.
 
@@ -1076,8 +1062,6 @@ class Session:
                 behavior of archiving everything. The plugin's afterTurn path
                 typically passes its configured value (default 10); the compact
                 path passes ``0``.
-            memory_policy: Optional per-commit extraction policy. When omitted,
-                the session default policy is used.
 
         Returns a task_id for tracking Phase 2 progress.
         """
@@ -1087,10 +1071,7 @@ class Session:
 
         trace_id = tracer.get_trace_id()
         keep_recent_count = max(0, int(keep_recent_count or 0))
-        effective_policy = MemoryPolicy.merge(
-            session_policy=self._meta.memory_policy,
-            commit_policy=memory_policy,
-        )
+        effective_policy = MemoryPolicy.from_dict(self._meta.memory_policy)
         _validate_memory_policy_types(effective_policy)
         effective_memory_policy = effective_policy.to_dict()
         logger.info(

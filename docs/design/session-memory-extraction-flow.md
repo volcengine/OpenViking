@@ -37,7 +37,7 @@ execution memory extraction phase has work.
 
 Implemented in `openviking/session/session.py`:
 
-1. Merge session-level and commit-level policy with `MemoryPolicy.merge`.
+1. Load the session-level policy from session metadata.
 2. Archive the current message batch.
 3. Hydrate tool outputs for extraction.
 4. If peer memory is enabled, collect safe `message.peer_id` values from the

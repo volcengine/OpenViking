@@ -46,17 +46,6 @@ def test_memory_policy_rejects_invalid_memory_types():
     assert MemoryPolicy.from_dict({"memory_types": ["experiences"]}).memory_types == {"experiences"}
 
 
-def test_memory_policy_commit_replaces_session_policy():
-    session_policy = {"peer": {"enabled": True}, "memory_types": ["profile"]}
-    commit_policy = {"self": {"enabled": False}, "peer": {"enabled": False}}
-
-    policy = MemoryPolicy.merge(session_policy=session_policy, commit_policy=commit_policy)
-
-    assert policy.self_enabled is False
-    assert policy.peer_enabled is False
-    assert policy.memory_types is None
-
-
 async def test_initialize_memory_files_respects_memory_type_filter(monkeypatch):
     class FakeVikingFS:
         def __init__(self):
