@@ -306,10 +306,12 @@ class VikingClient:
         return current_user_id
 
     def _current_peer_memory_target_uri(self, peer_id: str) -> str:
-        user_space = self._current_user_space_fragment()
         normalized_peer_id = self._peer_id(peer_id)
         if not normalized_peer_id:
             raise ValueError("peer_id is required for peer memory target")
+        if self._is_user_key_mode() or self._has_request_connection():
+            return f"viking://user/peers/{normalized_peer_id}/memories/"
+        user_space = self._current_user_space_fragment()
         if not user_space:
             raise ValueError("peer memory target requires current user_id")
         return f"viking://user/{user_space}/peers/{normalized_peer_id}/memories/"

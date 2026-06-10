@@ -178,11 +178,13 @@ def validate_openviking_auth(config: Config) -> None:
     ov_server = config.ov_server
     if ov_server.mode == "local":
         return
-    if ov_server.api_key:
+    if ov_server.api_key or ov_server.root_api_key:
         return
 
     print(
-        "Error: No api_key，please set api_key in ovcli.conf or set bot.ov_server.api_key in ov.conf",
+        "Error: missing OpenViking API key for remote mode. "
+        "New VikingBot deployments should configure bot.ov_server.api_key with a User API key. "
+        "Legacy root-key deployments may still use bot.ov_server.root_api_key, but root_api_key is deprecated.",
         file=sys.stderr,
     )
     raise SystemExit(1)

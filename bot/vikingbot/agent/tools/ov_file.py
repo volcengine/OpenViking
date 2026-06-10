@@ -1,11 +1,12 @@
 """OpenViking file system tools: read, write, list, search resources."""
 
 import asyncio
+import itertools
 import json
+import time
 from abc import ABC
 from pathlib import Path
 from typing import Any, Optional
-import uuid
 
 import httpx
 from loguru import logger
@@ -15,6 +16,8 @@ from vikingbot.openviking_mount.ov_server import VikingClient
 
 
 class OVFileTool(Tool, ABC):
+    _memory_commit_counter = itertools.count(1)
+
     def __init__(self):
         super().__init__()
         self._clients = {}
@@ -95,6 +98,15 @@ class OVFileTool(Tool, ABC):
             include_self=False,
         )
 
+    def _current_memory_uri(self, client: VikingClient) -> str:
+        return client._memory_target_uri(None)
+
+    def _current_skill_uri(self, client: VikingClient) -> str:
+        memory_uri = self._current_memory_uri(client).rstrip("/")
+        if memory_uri.endswith("/memories"):
+            return f"{memory_uri[: -len('/memories')]}/skills/"
+        return "viking://user/skills/"
+
     def _fs_retrieval_uris(
         self,
         client: VikingClient,
@@ -107,8 +119,8 @@ class OVFileTool(Tool, ABC):
 
             target_uris = [
                 "viking://resources/",
-                "viking://user/memories/",
-                "viking://user/skills/",
+                self._current_memory_uri(client),
+                self._current_skill_uri(client),
                 *self._peer_memory_uris(client, tool_context),
             ]
             return self._dedupe_strings(target_uris)
@@ -364,8 +376,6 @@ class VikingSearchTool(OVFileTool):
         client = None
         try:
             client = await self._get_client(tool_context)
-            sender_peer_id = getattr(tool_context, "sender_id", None)
-            memory_peer_ids = getattr(tool_context, "memory_peer_ids", None)
             memory_owner_user_ids = getattr(tool_context, "memory_owner_user_ids", None)
             legacy_memory_user_ids = getattr(tool_context, "memory_user_ids", None)
 
@@ -381,10 +391,20 @@ class VikingSearchTool(OVFileTool):
                 and (memory_owner_user_ids or legacy_memory_user_ids)
             ):
                 user_ids = memory_owner_user_ids or legacy_memory_user_ids
-                search_requests = [
-                    {"target_uri": client._memory_target_uri(user_id), "peer_id": None}
-                    for user_id in self._dedupe_strings(list(user_ids or []))
-                ]
+                search_requests = [{"target_uri": "viking://resources/", "peer_id": None}]
+                for user_id in self._dedupe_strings(list(user_ids or [])):
+                    memory_uri = client._memory_target_uri(user_id)
+                    skill_uri = (
+                        f"{memory_uri.rstrip('/')[: -len('/memories')]}/skills/"
+                        if memory_uri.rstrip("/").endswith("/memories")
+                        else "viking://user/skills/"
+                    )
+                    search_requests.extend(
+                        [
+                            {"target_uri": memory_uri, "peer_id": None},
+                            {"target_uri": skill_uri, "peer_id": None},
+                        ]
+                    )
             else:
                 peer_ids = self._memory_peer_ids(tool_context)
                 if not target_uri:
@@ -771,7 +791,9 @@ class VikingMemoryCommitTool(OVFileTool):
             if not tool_context.sender_id:
                 return "Error: peer id is required for OpenViking memory commit."
             source_session_id = tool_context.session_key.safe_name()
-            session_id = f"{source_session_id}__memory_commit__{uuid.uuid4().hex}"
+            commit_seq = next(self._memory_commit_counter)
+            timestamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+            session_id = f"{source_session_id}__memory_commit__{timestamp}__{commit_seq:04d}"
             result = await client.commit(session_id, messages, peer_id=tool_context.sender_id)
             session_id = result.get("session_id", session_id) if isinstance(result, dict) else session_id
             commit_result = result.get("commit", {}) if isinstance(result, dict) else {}

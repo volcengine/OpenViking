@@ -73,6 +73,17 @@ console = Console()
 EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit", ":q"}
 
 
+def _warn_deprecated_memory_user(memory_user: list[str] | None) -> None:
+    if not memory_user:
+        return
+    typer.secho(
+        "Warning: --memory-user is deprecated and only kept for legacy root-key fanout. "
+        "Use --memory-peer for the current OpenViking User/Peer model.",
+        fg=typer.colors.YELLOW,
+        err=True,
+    )
+
+
 def get_or_create_machine_id() -> str:
     """Get a unique machine ID using py-machineid.
 
@@ -699,6 +710,7 @@ def chat(
     bus = MessageBus()
     config = ensure_config(path)
     validate_openviking_auth(config)
+    _warn_deprecated_memory_user(memory_user)
     _init_bot_data(config)
 
     logger.remove()

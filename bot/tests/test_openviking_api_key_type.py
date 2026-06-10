@@ -6,6 +6,7 @@ import pytest
 from vikingbot.agent.context import ContextBuilder
 from vikingbot.agent.loop import _is_tool_result_success
 from vikingbot.agent.memory import MemoryStore
+from vikingbot.agent.tools.base import ToolContext
 from vikingbot.agent.tools.ov_file import (
     VikingGlobTool,
     VikingGrepTool,
@@ -14,6 +15,7 @@ from vikingbot.agent.tools.ov_file import (
     VikingSearchTool,
 )
 from vikingbot.agent.tools import ov_file as ov_file_module
+from vikingbot.cli import commands as commands_module
 from vikingbot.config import loader as config_loader_module
 from vikingbot.config.schema import SessionKey
 from vikingbot.hooks.base import HookContext
@@ -167,6 +169,17 @@ def test_viking_client_init_user_mode_does_not_set_user_or_account(monkeypatch):
     assert "agent_id" not in first.kwargs
 
 
+def test_user_key_current_memory_targets_use_current_user_shorthand(monkeypatch):
+    monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("user"))
+
+    client = VikingClient()
+
+    assert client.build_current_memory_target_uris(peer_ids=["sender-1"]) == [
+        "viking://user/memories/",
+        "viking://user/peers/sender-1/memories/",
+    ]
+
+
 def test_ov_server_legacy_root_api_key_takes_precedence_over_ovcli(monkeypatch):
     bot_data = {"root_api_key": "bot-user-key"}
     ov_data = {"root_api_key": "server-root-key"}
@@ -212,6 +225,48 @@ def test_ov_server_api_key_implies_remote_mode(monkeypatch):
 
     assert bot_data["mode"] == "remote"
     assert bot_data["api_key"] == "bot-user-key"
+
+
+def test_validate_openviking_auth_allows_local_mode():
+    config = SimpleNamespace(ov_server=SimpleNamespace(mode="local", api_key="", root_api_key=""))
+
+    config_loader_module.validate_openviking_auth(config)
+
+
+def test_validate_openviking_auth_allows_api_key():
+    config = SimpleNamespace(
+        ov_server=SimpleNamespace(mode="remote", api_key="user-key", root_api_key="")
+    )
+
+    config_loader_module.validate_openviking_auth(config)
+
+
+def test_validate_openviking_auth_allows_legacy_root_api_key():
+    config = SimpleNamespace(
+        ov_server=SimpleNamespace(mode="remote", api_key="", root_api_key="root-key")
+    )
+
+    config_loader_module.validate_openviking_auth(config)
+
+
+def test_validate_openviking_auth_exits_with_migration_hint(capsys):
+    config = SimpleNamespace(ov_server=SimpleNamespace(mode="remote", api_key="", root_api_key=""))
+
+    with pytest.raises(SystemExit):
+        config_loader_module.validate_openviking_auth(config)
+
+    captured = capsys.readouterr()
+    assert "bot.ov_server.api_key" in captured.err
+    assert "User API key" in captured.err
+    assert "root_api_key is deprecated" in captured.err
+
+
+def test_memory_user_cli_option_warns_at_runtime(capsys):
+    commands_module._warn_deprecated_memory_user(["legacy-user"])
+
+    captured = capsys.readouterr()
+    assert "--memory-user is deprecated" in captured.err
+    assert "--memory-peer" in captured.err
 
 
 @pytest.mark.asyncio
@@ -261,9 +316,7 @@ def test_viking_client_request_connection_uses_active_identity(monkeypatch):
     assert client._apikey_manager is None
     assert client._namespace_policy_loaded is True
     assert client.should_sender_fanout() is False
-    assert (
-        client._memory_target_uri(None) == "viking://user/anonymous/agent/web-playground/memories/"
-    )
+    assert client._memory_target_uri(None) == "viking://user/memories/"
     assert first.kwargs == {
         "url": "http://studio.local",
         "api_key": "anonymous-key",
@@ -383,7 +436,7 @@ async def test_request_connection_search_memory_uses_request_client_only(monkeyp
     assert result == {"user_memory": [], "agent_memory": []}
     first = _DummyHTTPClient.instances[0]
     assert len(first.find_calls) == 2
-    assert first.find_calls[0][1]["target_uri"] == "viking://user/anonymous/memories/"
+    assert first.find_calls[0][1]["target_uri"] == "viking://user/memories/"
     assert first.find_calls[1][1]["target_uri"] == "viking://agent/web-playground/memories/"
 
 
@@ -1277,6 +1330,14 @@ def test_openviking_tool_memory_peer_ids_exclude_legacy_memory_users():
     assert peer_ids == ["sender-1", "speaker-a"]
 
 
+def test_tool_context_syncs_legacy_memory_user_alias():
+    from_legacy = ToolContext(memory_user_ids=["legacy-user"])
+    from_owner = ToolContext(memory_owner_user_ids=["owner-user"])
+
+    assert from_legacy.memory_owner_user_ids == ["legacy-user"]
+    assert from_owner.memory_user_ids == ["owner-user"]
+
+
 @pytest.mark.asyncio
 async def test_viking_memory_context_keeps_legacy_users_separate_from_peers(
     monkeypatch, tmp_path
@@ -1312,7 +1373,7 @@ async def test_viking_memory_context_keeps_legacy_users_separate_from_peers(
             "query": "hello",
             "user_ids": ["legacy-user"],
             "peer_ids": ["sender-1", "speaker-a"],
-            "limit": 30,
+            "limit": 10,
         }
     ]
 
@@ -1339,7 +1400,11 @@ async def test_openviking_search_uses_user_namespace(monkeypatch):
     result = await tool.execute(tool_context, query="hello")
 
     assert "sender-1/memories" in result
-    assert calls == [("viking://user/sender-1/memories/", None, None)]
+    assert calls == [
+        ("viking://resources/", None, None),
+        ("viking://user/sender-1/memories/", None, None),
+        ("viking://user/sender-1/skills/", None, None),
+    ]
 
 
 @pytest.mark.asyncio
@@ -1370,8 +1435,8 @@ async def test_openviking_search_user_key_mode_uses_current_user_namespace(monke
     assert "sender-1/memories" in result
     assert calls == [
         ("", None, "sender-0"),
-        ("viking://user/admin/peers/sender-1/memories/", None, None),
-        ("viking://user/admin/peers/sender-2/memories/", None, None),
+        ("viking://user/peers/sender-1/memories/", None, None),
+        ("viking://user/peers/sender-2/memories/", None, None),
     ]
 
 
@@ -1480,6 +1545,45 @@ async def test_openviking_glob_root_adds_current_peer_memory(monkeypatch):
     ]
 
 
+@pytest.mark.asyncio
+async def test_openviking_glob_root_uses_namespaced_self_targets_for_root_key(monkeypatch):
+    tool = VikingGlobTool()
+    calls = []
+
+    class _FakeClient:
+        def _memory_target_uri(self, _user_id=None):
+            return "viking://user/admin/memories/"
+
+        def build_current_memory_target_uris(self, *, peer_ids=None, include_self=True):
+            uris = ["viking://user/admin/memories/"] if include_self else []
+            uris.extend(
+                f"viking://user/admin/peers/{peer_id}/memories/"
+                for peer_id in peer_ids or []
+            )
+            return uris
+
+        async def glob(self, pattern, uri="viking://"):
+            calls.append((pattern, uri))
+            return {"matches": [], "count": 0}
+
+    async def _fake_get_client(_tool_context):
+        return _FakeClient()
+
+    monkeypatch.setattr(tool, "_get_client", _fake_get_client)
+
+    await tool.execute(
+        SimpleNamespace(workspace_id="workspace", sender_id="sender-0"),
+        pattern="*.md",
+    )
+
+    assert calls == [
+        ("*.md", "viking://resources/"),
+        ("*.md", "viking://user/admin/memories/"),
+        ("*.md", "viking://user/admin/skills/"),
+        ("*.md", "viking://user/admin/peers/sender-0/memories/"),
+    ]
+
+
 def test_openviking_search_description_allows_follow_up_memory_queries():
     description = VikingSearchTool().description
 
@@ -1558,28 +1662,41 @@ async def test_openviking_memory_commit_prefers_sender_in_static_multi_user_bot(
 
     monkeypatch.setattr(tool, "_get_client", _fake_get_client)
 
+    tool_context = SimpleNamespace(
+        workspace_id="workspace",
+        sender_id="alice",
+        session_key=SimpleNamespace(safe_name=lambda: "session-1"),
+        openviking_connection=None,
+    )
     result = await tool.execute(
-        SimpleNamespace(
-            workspace_id="workspace",
-            sender_id="alice",
-            session_key=SimpleNamespace(safe_name=lambda: "session-1"),
-            openviking_connection=None,
-        ),
+        tool_context,
         messages=[{"role": "user", "content": "remember this"}],
+    )
+    second_result = await tool.execute(
+        tool_context,
+        messages=[{"role": "user", "content": "remember this again"}],
     )
 
     payload = json.loads(result)
+    second_payload = json.loads(second_result)
     assert payload["status"] == "success"
-    assert calls == [
-        (
-            payload["memory_commit_session_id"],
-            [{"role": "user", "content": "remember this"}],
-            "alice",
-        )
-    ]
+    assert second_payload["status"] == "success"
+    assert calls[0] == (
+        payload["memory_commit_session_id"],
+        [{"role": "user", "content": "remember this"}],
+        "alice",
+    )
+    assert calls[1] == (
+        second_payload["memory_commit_session_id"],
+        [{"role": "user", "content": "remember this again"}],
+        "alice",
+    )
     assert payload["session_id"] == payload["memory_commit_session_id"]
     assert payload["source_session_id"] == "session-1"
     assert payload["memory_commit_session_id"].startswith("session-1__memory_commit__")
+    assert second_payload["source_session_id"] == "session-1"
+    assert second_payload["memory_commit_session_id"].startswith("session-1__memory_commit__")
+    assert second_payload["memory_commit_session_id"] != payload["memory_commit_session_id"]
 
 
 @pytest.mark.asyncio
