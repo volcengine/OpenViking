@@ -30,6 +30,7 @@ from typing import List, Optional, Union
 from openviking.parse.base import NodeType, ParseResult, ResourceNode
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.media.constants import VIDEO_EXTENSIONS
+from openviking.parse.parsers.media.naming import resolve_media_names
 from openviking_cli.utils.config.parser_config import VideoConfig
 
 
@@ -84,10 +85,11 @@ class VideoParser(BaseParser):
 
         from openviking_cli.utils.uri import VikingURI
 
-        # Sanitize original filename (replace spaces with underscores)
-        original_filename = file_path.name.replace(" ", "_")
+        # Resolve the resource name from the caller's resource_name / source_name
+        # (falling back to the temp file name) so the filename, URI and title
+        # reflect the real upload, not the internal temp id — see resolve_media_names.
+        display_stem, stem, original_filename = resolve_media_names(file_path, ext, **kwargs)
         # Root directory name: filename stem + _ + extension (without dot)
-        stem = file_path.stem.replace(" ", "_")
         ext_no_dot = ext[1:] if ext else ""
         root_dir_name = VikingURI.sanitize_segment(f"{stem}_{ext_no_dot}")
         root_dir_uri = f"{temp_uri}/{root_dir_name}"
@@ -132,7 +134,7 @@ class VideoParser(BaseParser):
         # Create ResourceNode - metadata only, no content understanding yet
         root_node = ResourceNode(
             type=NodeType.ROOT,
-            title=file_path.stem,
+            title=display_stem,
             level=0,
             detail_file=None,
             content_path=None,
@@ -144,8 +146,8 @@ class VideoParser(BaseParser):
                 "fps": fps,
                 "format": format_str.lower(),
                 "content_type": "video",
-                "source_title": file_path.stem,
-                "semantic_name": file_path.stem,
+                "source_title": display_stem,
+                "semantic_name": display_stem,
                 "original_filename": original_filename,
             },
         )

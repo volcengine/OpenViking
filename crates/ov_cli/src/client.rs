@@ -234,6 +234,20 @@ impl HttpClient {
         self.post("/api/v1/system/consistency", &body).await
     }
 
+    pub async fn backend_sync_status(&self, uri: &str) -> Result<serde_json::Value> {
+        let body = serde_json::json!({
+            "uri": uri,
+        });
+        self.post("/api/v1/system/backend/sync-status", &body).await
+    }
+
+    pub async fn backend_sync_retry(&self, uri: &str) -> Result<serde_json::Value> {
+        let body = serde_json::json!({
+            "uri": uri,
+        });
+        self.post("/api/v1/system/backend/sync-retry", &body).await
+    }
+
     /// Download file as raw bytes
     pub async fn get_bytes(&self, uri: &str) -> Result<Vec<u8>> {
         let url = format!("{}/api/v1/content/download", self.base.base_url);
@@ -615,6 +629,7 @@ impl HttpClient {
         timeout: Option<f64>,
         show_progress: bool,
         verbose: bool,
+        source_metadata: Option<Value>,
     ) -> Result<serde_json::Value> {
         let path_obj = Path::new(data);
 
@@ -632,11 +647,14 @@ impl HttpClient {
                     self.upload_temp_file(zip_file.path()).await?
                 };
 
-                let body = serde_json::json!({
+                let mut body = serde_json::json!({
                     "temp_file_id": temp_file_id,
                     "wait": wait,
                     "timeout": timeout,
                 });
+                if let Some(source_metadata) = source_metadata.clone() {
+                    body["source_metadata"] = source_metadata;
+                }
                 let dynamic_timeout =
                     TimeoutConfig::for_resource_processing().calculate(zip_file.path())?;
                 self.base
@@ -650,32 +668,216 @@ impl HttpClient {
                     self.upload_temp_file(path_obj).await?
                 };
 
-                let body = serde_json::json!({
+                let mut body = serde_json::json!({
                     "temp_file_id": temp_file_id,
                     "wait": wait,
                     "timeout": timeout,
                 });
+                if let Some(source_metadata) = source_metadata.clone() {
+                    body["source_metadata"] = source_metadata;
+                }
                 let dynamic_timeout =
                     TimeoutConfig::for_resource_processing().calculate(path_obj)?;
                 self.base
                     .post_with_timeout("/api/v1/skills", &body, dynamic_timeout)
                     .await
             } else {
-                let body = serde_json::json!({
+                let mut body = serde_json::json!({
                     "data": data,
                     "wait": wait,
                     "timeout": timeout,
                 });
+                if let Some(source_metadata) = source_metadata.clone() {
+                    body["source_metadata"] = source_metadata;
+                }
                 self.post("/api/v1/skills", &body).await
             }
         } else {
-            let body = serde_json::json!({
+            let mut body = serde_json::json!({
                 "data": data,
                 "wait": wait,
                 "timeout": timeout,
             });
+            if let Some(source_metadata) = source_metadata {
+                body["source_metadata"] = source_metadata;
+            }
             self.post("/api/v1/skills", &body).await
         }
+    }
+
+    pub async fn skills_list(&self, node_limit: i32) -> Result<serde_json::Value> {
+        let params = vec![("node_limit".to_string(), node_limit.to_string())];
+        self.get("/api/v1/skills", &params).await
+    }
+
+    pub async fn skill_show(
+        &self,
+        name: &str,
+        include_content: bool,
+        include_files: bool,
+        include_source: bool,
+        level: Option<i32>,
+    ) -> Result<serde_json::Value> {
+        let path = format!("/api/v1/skills/{}", name);
+        let mut params = vec![
+            ("include_content".to_string(), include_content.to_string()),
+            ("include_files".to_string(), include_files.to_string()),
+            ("include_source".to_string(), include_source.to_string()),
+        ];
+        if let Some(level) = level {
+            params.push(("level".to_string(), level.to_string()));
+        }
+        self.get(&path, &params).await
+    }
+
+    pub async fn skill_find(
+        &self,
+        query: &str,
+        node_limit: i32,
+        threshold: Option<f64>,
+        level: Option<Vec<i32>>,
+    ) -> Result<serde_json::Value> {
+        let body = serde_json::json!({
+            "query": query,
+            "limit": node_limit,
+            "score_threshold": threshold,
+            "level": level,
+        });
+        self.post("/api/v1/skills/find", &body).await
+    }
+
+    pub async fn skill_validate(&self, path: &str, strict: bool) -> Result<serde_json::Value> {
+        let path_obj = Path::new(path);
+        if !path_obj.exists() {
+            return Err(Error::Client(format!(
+                "Skill path '{}' does not exist.",
+                path
+            )));
+        }
+
+        let skill_file = if path_obj.is_dir() {
+            let skill_file = path_obj.join("SKILL.md");
+            if !skill_file.is_file() {
+                return Err(Error::Client(format!(
+                    "SKILL.md not found in '{}'.",
+                    path_obj.display()
+                )));
+            }
+            skill_file
+        } else if path_obj.is_file() {
+            if path_obj.file_name().and_then(|name| name.to_str()) != Some("SKILL.md") {
+                return Err(Error::Client(
+                    "Validate expects a SKILL.md file or a skill directory.".to_string(),
+                ));
+            }
+            path_obj.to_path_buf()
+        } else {
+            return Err(Error::Client(format!(
+                "Skill path '{}' is not a file or directory.",
+                path
+            )));
+        };
+
+        let content = std::fs::read_to_string(&skill_file).map_err(|e| {
+            Error::Client(format!(
+                "Failed to read skill file '{}': {}",
+                skill_file.display(),
+                e
+            ))
+        })?;
+        let skill_dir_name = skill_file
+            .parent()
+            .and_then(|parent| parent.file_name())
+            .and_then(|name| name.to_str())
+            .unwrap_or("")
+            .to_string();
+        let body = serde_json::json!({
+            "data": content,
+            "strict": strict,
+            "source_path": skill_file.to_string_lossy(),
+            "skill_dir_name": skill_dir_name,
+        });
+        self.post("/api/v1/skills/validate", &body).await
+    }
+
+    pub async fn skill_update(
+        &self,
+        name: &str,
+        data: &str,
+        wait: bool,
+        timeout: Option<f64>,
+        show_progress: bool,
+        verbose: bool,
+        source_metadata: Option<Value>,
+    ) -> Result<serde_json::Value> {
+        let endpoint = format!("/api/v1/skills/{}", name);
+        let path_obj = Path::new(data);
+
+        if path_obj.exists() {
+            if path_obj.is_dir() {
+                let zip_file = if show_progress {
+                    self.zip_directory_with_progress(path_obj, verbose, None)?
+                } else {
+                    self.zip_directory(path_obj, None)?
+                };
+                let temp_file_id = if show_progress {
+                    self.upload_temp_file_with_progress(zip_file.path(), verbose)
+                        .await?
+                } else {
+                    self.upload_temp_file(zip_file.path()).await?
+                };
+                let mut body = serde_json::json!({
+                    "temp_file_id": temp_file_id,
+                    "wait": wait,
+                    "timeout": timeout,
+                });
+                if let Some(source_metadata) = source_metadata.clone() {
+                    body["source_metadata"] = source_metadata;
+                }
+                self.put(&endpoint, &body).await
+            } else if path_obj.is_file() {
+                let temp_file_id = if show_progress {
+                    self.upload_temp_file_with_progress(path_obj, verbose)
+                        .await?
+                } else {
+                    self.upload_temp_file(path_obj).await?
+                };
+                let mut body = serde_json::json!({
+                    "temp_file_id": temp_file_id,
+                    "wait": wait,
+                    "timeout": timeout,
+                });
+                if let Some(source_metadata) = source_metadata.clone() {
+                    body["source_metadata"] = source_metadata;
+                }
+                self.put(&endpoint, &body).await
+            } else {
+                let mut body = serde_json::json!({
+                    "data": data,
+                    "wait": wait,
+                    "timeout": timeout,
+                });
+                if let Some(source_metadata) = source_metadata.clone() {
+                    body["source_metadata"] = source_metadata;
+                }
+                self.put(&endpoint, &body).await
+            }
+        } else {
+            let mut body = serde_json::json!({
+                "data": data,
+                "wait": wait,
+                "timeout": timeout,
+            });
+            if let Some(source_metadata) = source_metadata {
+                body["source_metadata"] = source_metadata;
+            }
+            self.put(&endpoint, &body).await
+        }
+    }
+
+    pub async fn skill_remove(&self, name: &str) -> Result<serde_json::Value> {
+        let path = format!("/api/v1/skills/{}", name);
+        self.delete(&path, &[]).await
     }
 
     // ============ Task Methods ============

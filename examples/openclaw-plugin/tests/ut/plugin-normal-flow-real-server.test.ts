@@ -234,8 +234,8 @@ describe("plugin normal flow with healthy backend", () => {
 
     expect(assembled.messages[0]?.role).toBe("user");
     const firstAssembledMessage = String(assembled.messages[0]?.content);
-    expect(firstAssembledMessage).toContain("Source: openviking-auto-recall");
-    expect(firstAssembledMessage).toContain("User prefers Rust for backend tasks.");
+    expect(firstAssembledMessage).not.toContain("Source: openviking-auto-recall");
+    expect(firstAssembledMessage).not.toContain("User prefers Rust for backend tasks.");
     expect(firstAssembledMessage).toContain(
       "[Session History Summary]\nEarlier work focused on backend stack choices.",
     );
@@ -243,6 +243,9 @@ describe("plugin normal flow with healthy backend", () => {
       role: "assistant",
       content: [{ type: "text", text: "Stored answer from OpenViking." }],
     });
+    expect(
+      requests.some((entry) => entry.method === "POST" && entry.path === "/api/v1/search/find"),
+    ).toBe(false);
 
     const transformed = await contextEngine.assemble({
       sessionId: "session-normal",

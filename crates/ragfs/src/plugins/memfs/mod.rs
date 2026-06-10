@@ -65,10 +65,7 @@ impl MemFileSystem {
         let mut entries = HashMap::new();
 
         // Create root directory
-        entries.insert(
-            "/".to_string(),
-            FileEntry::new_dir(0o755),
-        );
+        entries.insert("/".to_string(), FileEntry::new_dir(0o755));
 
         Self {
             entries: Arc::new(RwLock::new(entries)),
@@ -117,11 +114,7 @@ impl MemFileSystem {
         }
 
         let normalized = Self::normalize_path(path);
-        normalized
-            .split('/')
-            .last()
-            .unwrap_or("")
-            .to_string()
+        normalized.split('/').last().unwrap_or("").to_string()
     }
 
     /// List entries in a directory
@@ -643,11 +636,7 @@ mod tests {
         let plugin = MemFSPlugin;
         assert_eq!(plugin.name(), "memfs");
 
-        let config = PluginConfig {
-            name: "memfs".to_string(),
-            mount_path: "/memfs".to_string(),
-            params: HashMap::new(),
-        };
+        let config = PluginConfig::single_backend("memfs", "/memfs", HashMap::new());
 
         assert!(plugin.validate(&config).await.is_ok());
         assert!(plugin.initialize(config).await.is_ok());

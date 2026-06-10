@@ -1278,7 +1278,6 @@ const contextEnginePlugin = {
               wait: true,
               agentId: session.agentId,
               keepRecentCount: 0,
-              memoryPolicy: defaultMemoryPolicy,
             });
             const memoriesCount = totalCommitMemories(commitResult);
             if (commitResult.status === "failed") {

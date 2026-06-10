@@ -78,6 +78,9 @@ class AGFSSyncClientProtocol(Protocol):
     def mv(self, old_path: str, new_path: str) -> Dict[str, Any]:
         """Move or rename a path inside AGFS."""
 
+    def copy_within_mount(self, src_path: str, dst_path: str) -> Dict[str, Any]:
+        """Attempt a same-mount verbatim copy and report whether it was used."""
+
     def grep(self, **kwargs: Any) -> Dict[str, Any]:
         """Run a grep-like search through the AGFS backend."""
 
@@ -89,3 +92,9 @@ class AGFSSyncClientProtocol(Protocol):
         level_limit: int | None = None,
     ) -> list[Dict[str, Any]]:
         """Return a tree view for the given AGFS directory."""
+
+    def system_sync_status(self, path: str) -> Dict[str, Any]:
+        """Return multi-write sync status for a file or directory path."""
+
+    def system_sync_retry(self, path: str) -> Dict[str, Any]:
+        """Retry pending multi-write sync work for a file or directory path."""

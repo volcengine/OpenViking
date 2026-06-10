@@ -38,6 +38,8 @@ _API_KEY_ROOT_ALLOWED_PREFIXES = (
     "/api/v1/admin",
     "/api/v1/observer",
     "/api/v1/console",
+    "/api/v1/system/backend",
+    "/api/v1/system/sync",
 )
 
 

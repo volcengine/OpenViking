@@ -12,8 +12,8 @@ const en = {
       home: {
         title: 'Home',
       },
-      oauthSetup: {
-        title: 'OAuth setup',
+      crossDeviceVerify: {
+        title: 'OAuth verify',
       },
       operations: {
         title: 'Operations',
@@ -99,19 +99,6 @@ const en = {
         label: 'User',
         placeholder: 'default',
       },
-    },
-    oauthOtp: {
-      title: 'OAuth client OTP',
-      description:
-        'Generate a short-lived code that an MCP client can submit to authorize as the selected identity.',
-      generate: 'Generate OTP',
-      regenerate: 'Regenerate',
-      copy: 'Copy',
-      copied: 'Copied',
-      codeLabel: 'One-time code',
-      expiresIn: 'Expires in {{seconds}}s',
-      expired: 'Expired — generate a new code.',
-      generateError: 'Could not generate OTP: {{message}}',
     },
   },
   settings: {
@@ -239,14 +226,6 @@ const en = {
       dataKeySelected: 'User API key selected',
       keyRegenerated: 'API key regenerated',
       userCreated: 'User created',
-    },
-  },
-  oauthSetup: {
-    page: {
-      title: 'OAuth setup',
-      intro:
-        'Use this page when authenticating an MCP client via OAuth — for example Claude.ai, Claude Desktop, ChatGPT, or Cursor. Generate a short-lived OTP here, then paste it into the MCP client to bind its connection to the selected identity.',
-      docsLink: 'Read the OAuth integration guide',
     },
   },
   home: {
@@ -484,6 +463,68 @@ const en = {
         failed: 'Processing failed',
       },
     },
+    searchPalette: {
+      ariaLabel: 'Search',
+      openContainingDirectory: 'Open containing directory',
+      placeholder: 'Search',
+      scope: {
+        global: 'Search scope: Global',
+        current: 'Search scope: {{name}}',
+        resetToGlobal: 'Click to reset to global search',
+      },
+      scopeState: {
+        validatingTitle: 'Validating search scope',
+        validatingPrefix: 'Checking whether',
+        validatingSuffix: 'exists',
+        switchTitle: 'Switch search scope',
+        switchPrefix: 'Press',
+        switchMiddle: 'to switch to',
+        invalidTitle: 'Search scope not found',
+        invalidPrefix: 'Path',
+        invalidSuffix: 'is inaccessible and cannot be switched to',
+      },
+      empty: {
+        title: 'Search files and directories',
+      },
+      browseDirHint: {
+        before: 'Enter',
+        after: 'to browse directories',
+      },
+      globalScopeHint: {
+        before: 'Enter',
+        after: 'to switch search scope to global',
+      },
+      error: 'Search failed',
+      emptyResults: {
+        title: 'No matching files or directories found',
+        subtitle: 'Try another keyword?',
+      },
+      footer: {
+        dirMode: {
+          select: 'Select',
+          level: 'Level',
+          confirm: 'Confirm',
+          cancel: 'Cancel',
+        },
+        resultMode: {
+          navigate: 'Navigate',
+          open: 'Open',
+          close: 'Close',
+          count: '{{count}} results',
+        },
+      },
+    },
+    dirBrowser: {
+      back: 'Back',
+      loading: 'Loading directory',
+      filesSection: 'Files',
+      error: 'Failed to load directory',
+      empty: {
+        title: 'Empty directory',
+        subtitle:
+          'There are currently no subdirectories to expand at this level',
+      },
+    },
     filePreview: {
       cancel: 'Cancel',
       edit: 'Edit',
@@ -603,6 +644,13 @@ const en = {
       useCurrent: 'Authorize as the current identity',
       noCurrent:
         'No identity set. Open Connection & Identity to sign in first, or use a different API key below.',
+      useSelect: 'Authorize a specific account / user',
+      selectAccountLabel: 'Account',
+      selectUserLabel: 'User',
+      selectNoKey:
+        'This user has no API key. Pick another user or regenerate a key in Connection & Identity.',
+      selectAccountAdminHint:
+        'You can authorize users in your own account only.',
       useCustom: 'Use a different API key',
       customKeyLabel: 'API key',
       customKeyPlaceholder: 'Paste an API key (not persisted)',
@@ -652,6 +700,7 @@ const en = {
   playground: {
     copyUri: 'Copy current URI',
     copied: 'URI copied',
+    copyFailed: 'Copy failed',
     resizeContext: 'Resize context tree width',
     resizeAction: 'Resize Terminal and Agent width',
     readFailed: 'Failed to read {{uri}}',
@@ -668,6 +717,7 @@ const en = {
     explorer: {
       title: 'Context tree',
       addResource: 'Add resource',
+      search: 'Search context',
       refresh: 'Refresh tree',
       namespaces: {
         user: 'Personalized user memories',
@@ -758,6 +808,8 @@ const en = {
         resource: 'Resource paths',
         history: 'History',
       },
+      resourceSuggestion: 'Resource path',
+      historySuggestion: 'History',
       groupLabels: {
         resources: 'resource',
         memories: 'memory',

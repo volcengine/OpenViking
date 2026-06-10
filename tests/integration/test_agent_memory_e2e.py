@@ -17,8 +17,6 @@ Prerequisites
 -------------
 - ~/.openviking/ov.conf has:
     "memory": { "version": "v2" }
-  or to explicitly disable:
-    "memory": { "version": "v2", "agent_memory_enabled": false }
 
 Run
 ---
@@ -29,7 +27,6 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
 import time
 import uuid
 from pathlib import Path
@@ -44,7 +41,6 @@ from openviking.telemetry import tracer
 from openviking.telemetry.tracer import init_tracer_from_config
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import run_async
-from openviking_cli.utils.config import OpenVikingConfigSingleton, get_openviking_config
 
 logger = logging.getLogger(__name__)
 
@@ -220,15 +216,6 @@ def _collect_source_trajectories(client: LocalClient, exp_entries: List[dict]) -
 
 
 @pytest.fixture()
-def agent_memory_config_check():
-    """Skip if agent_memory_enabled is false."""
-    OpenVikingConfigSingleton._instance = None
-    config = get_openviking_config()
-    if not getattr(config.memory, "agent_memory_enabled", True):
-        pytest.skip("agent_memory_enabled is false in config — skipping agent memory tests")
-
-
-@pytest.fixture()
 def local_test_env() -> Iterator[Dict[str, object]]:
     local_path = Path.cwd() / ".tmp_agent_memory_e2e" / uuid.uuid4().hex[:8]
     local_path.mkdir(parents=True, exist_ok=True)
@@ -262,7 +249,6 @@ def _build_client(env: Dict[str, object], user_id: str) -> LocalClient:
 class TestAgentMemoryE2E:
     """End-to-end tests for the agent memory two-phase extraction pipeline."""
 
-    @pytest.mark.usefixtures("agent_memory_config_check")
     def test_trajectory_and_experience_extraction(
         self,
         local_test_env,

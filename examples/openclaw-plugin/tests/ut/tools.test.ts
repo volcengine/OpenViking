@@ -413,12 +413,9 @@ describe("Tool: memory_store (behavioral)", () => {
       String(url).endsWith("/commit"),
     );
     expect(commitCall).toBeDefined();
-    expect(JSON.parse(String((commitCall![1] as RequestInit).body))).toMatchObject({
-      memory_policy: {
-        self: { enabled: true },
-        peer: { enabled: true },
-      },
-    });
+    expect(JSON.parse(String((commitCall![1] as RequestInit).body))).not.toHaveProperty(
+      "memory_policy",
+    );
   });
 
   it("does not populate peer_id for user writes by default", async () => {

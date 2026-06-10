@@ -3,9 +3,17 @@
 
 from pathlib import Path
 
+import pytest_asyncio
 import yaml
 
-from openviking.session.memory.utils.content import serialize_with_metadata
+from openviking.session.memory.dataclass import MemoryFile
+from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _drain_background_tasks():
+    """Keep this pure template test independent from session client fixtures."""
+    yield
 
 
 def _tools_content_template() -> str:
@@ -21,13 +29,15 @@ def _tools_content_template() -> str:
 
 
 def test_tools_template_treats_none_counts_as_zero():
-    rendered = serialize_with_metadata(
-        {
-            "tool_name": "read_file",
-            "static_desc": "Reads files",
-            "call_count": None,
-            "success_time": None,
-        },
+    rendered = MemoryFileUtils.write(
+        MemoryFile(
+            extra_fields={
+                "tool_name": "read_file",
+                "static_desc": "Reads files",
+                "call_count": None,
+                "success_time": None,
+            }
+        ),
         content_template=_tools_content_template(),
     )
 
@@ -35,13 +45,15 @@ def test_tools_template_treats_none_counts_as_zero():
 
 
 def test_tools_template_keeps_success_rate_for_positive_counts():
-    rendered = serialize_with_metadata(
-        {
-            "tool_name": "read_file",
-            "static_desc": "Reads files",
-            "call_count": 4,
-            "success_time": 3,
-        },
+    rendered = MemoryFileUtils.write(
+        MemoryFile(
+            extra_fields={
+                "tool_name": "read_file",
+                "static_desc": "Reads files",
+                "call_count": 4,
+                "success_time": 3,
+            }
+        ),
         content_template=_tools_content_template(),
     )
 

@@ -40,7 +40,7 @@ from openviking.utils import is_git_repo_url, parse_code_hosting_url
 from openviking.utils.media_processor import _smart_stem
 from openviking.utils.network_guard import ensure_public_remote_target
 from openviking.utils.resource_processor import ResourceProcessor
-from openviking.utils.skill_processor import SkillProcessor
+from openviking.utils.skill_processor import SkillProcessingPreparation, SkillProcessor
 from openviking_cli.exceptions import (
     ConflictError,
     DeadlineExceededError,
@@ -828,6 +828,9 @@ class ResourceService:
         wait: bool = False,
         timeout: Optional[float] = None,
         allow_local_path_resolution: bool = True,
+        source_path_hint: Optional[str] = None,
+        apply_privacy: bool = True,
+        privacy_change_reason: str = "auto-extracted from add_skill",
     ) -> Dict[str, Any]:
         """Add skill to OpenViking.
 
@@ -847,12 +850,24 @@ class ResourceService:
             request_wait_tracker.register_request(telemetry_id)
 
         try:
-            result = await self._skill_processor.process_skill(
-                data=data,
-                viking_fs=self._viking_fs,
-                ctx=ctx,
-                allow_local_path_resolution=allow_local_path_resolution,
-            )
+            if isinstance(data, SkillProcessingPreparation):
+                result = await self._skill_processor.process_prepared_skill(
+                    data,
+                    viking_fs=self._viking_fs,
+                    ctx=ctx,
+                    apply_privacy=apply_privacy,
+                    privacy_change_reason=privacy_change_reason,
+                )
+            else:
+                result = await self._skill_processor.process_skill(
+                    data=data,
+                    viking_fs=self._viking_fs,
+                    ctx=ctx,
+                    allow_local_path_resolution=allow_local_path_resolution,
+                    source_path_hint=source_path_hint,
+                    apply_privacy=apply_privacy,
+                    privacy_change_reason=privacy_change_reason,
+                )
             if isinstance(result, dict) and "root_uri" not in result and result.get("uri"):
                 result["root_uri"] = result["uri"]
 

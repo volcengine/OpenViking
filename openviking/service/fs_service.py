@@ -157,7 +157,9 @@ class FSService:
         directory_uri = VikingURI(abstract_uri).parent.uri
         return directory_uri, abstract_uri
 
-    async def rm(self, uri: str, ctx: RequestContext, recursive: bool = False) -> Optional[Dict[str, Any]]:
+    async def rm(
+        self, uri: str, ctx: RequestContext, recursive: bool = False
+    ) -> Optional[Dict[str, Any]]:
         """Remove resource."""
         uri = validate_viking_uri(uri)
         viking_fs = self._ensure_initialized()
@@ -198,6 +200,18 @@ class FSService:
         viking_fs = self._ensure_initialized()
         uri = validate_viking_uri(uri)
         return await viking_fs.stat(uri, ctx=ctx)
+
+    async def system_sync_status(self, uri: str, ctx: RequestContext) -> Dict[str, Any]:
+        """Return multi-write sync status for one Viking URI subtree."""
+        viking_fs = self._ensure_initialized()
+        uri = validate_viking_uri(uri)
+        return await viking_fs.system_sync_status(uri, ctx=ctx)
+
+    async def system_sync_retry(self, uri: str, ctx: RequestContext) -> Dict[str, Any]:
+        """Retry multi-write sync work for one Viking URI subtree."""
+        viking_fs = self._ensure_initialized()
+        uri = validate_viking_uri(uri)
+        return await viking_fs.system_sync_retry(uri, ctx=ctx)
 
     async def read(self, uri: str, ctx: RequestContext, offset: int = 0, limit: int = -1) -> str:
         """Read file content."""

@@ -7,14 +7,18 @@ from typing import Any, Callable, Optional, Tuple
 
 from openviking.pyagfs import AGFSSyncClientProtocol, AsyncAGFSClient
 from openviking.pyagfs.async_client import fs_ctx_from_agfs_path
+from openviking.storage.internal_names import (
+    MULTIWRITE_EXACT_LOCK_FILE_PREFIX,
+    MULTIWRITE_PATH_LOCK_FILE,
+)
 from openviking.storage.transaction.lock_handle import LockOwner
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 # Lock file name
-LOCK_FILE_NAME = ".path.ovlock"
-EXACT_LOCK_FILE_PREFIX = ".exact.ovlock."
+LOCK_FILE_NAME = MULTIWRITE_PATH_LOCK_FILE
+EXACT_LOCK_FILE_PREFIX = MULTIWRITE_EXACT_LOCK_FILE_PREFIX
 
 # Lock type constants
 LOCK_TYPE_EXACT = "E"

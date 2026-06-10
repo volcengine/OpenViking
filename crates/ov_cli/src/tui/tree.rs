@@ -318,6 +318,9 @@ impl TreeState {
     }
 
     pub fn allow_deletion(&self, selected_uri: &str) -> bool {
-        selected_uri != "/" && !Self::ROOT_SCOPES.iter().any(|s| selected_uri == format!("viking://{}", s))
+        selected_uri != "/"
+            && !Self::ROOT_SCOPES
+                .iter()
+                .any(|s| selected_uri == format!("viking://{}", s))
     }
 }

@@ -199,7 +199,7 @@ def test_openviking_config_rejects_memory_v1(monkeypatch):
     OpenVikingConfigSingleton.reset_instance()
 
 
-def test_openviking_config_memory_agent_memory_enabled(monkeypatch):
+def test_openviking_config_ignores_deprecated_agent_memory_enabled(monkeypatch):
     monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
 
     from openviking_cli.utils.config.open_viking_config import (
@@ -207,16 +207,13 @@ def test_openviking_config_memory_agent_memory_enabled(monkeypatch):
         OpenVikingConfigSingleton,
     )
 
-    default_config = OpenVikingConfig.from_dict({})
-    disabled_config = OpenVikingConfig.from_dict({"memory": {"agent_memory_enabled": False}})
+    legacy_config = OpenVikingConfig.from_dict({"memory": {"agent_memory_enabled": False}})
     experimental_config = OpenVikingConfig.from_dict(
         {"memory": {"experimental_memory_switch": True}}
     )
 
-    assert default_config.memory.agent_memory_enabled is True
-    assert disabled_config.memory.agent_memory_enabled is False
+    assert not hasattr(legacy_config.memory, "agent_memory_enabled")
     assert experimental_config.memory.experimental_memory_switch is True
-    assert experimental_config.memory.agent_memory_enabled is True
 
     OpenVikingConfigSingleton.reset_instance()
 
@@ -380,18 +377,26 @@ def test_openviking_config_singleton_initialize_missing_message_uses_openviking_
 
 
 def test_early_logger_initialization_is_reconfigured_to_file_output(tmp_path, monkeypatch):
+    from openviking_cli.utils import logger as logger_module
     from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
-    from openviking_cli.utils.logger import get_logger
 
     logger_name = "openviking.test.early_init"
-    logger = logging.getLogger(logger_name)
-    logger.handlers.clear()
+    for name in ("openviking", "uvicorn", "uvicorn.error", "uvicorn.access", logger_name):
+        logger = logging.getLogger(name)
+        for handler in logger.handlers:
+            handler.close()
+        logger.handlers.clear()
+        logger.propagate = True
+    logger_module._shared_log_handler = None
+    logger_module._shared_log_handler_key = None
 
     OpenVikingConfigSingleton.reset_instance()
     monkeypatch.setenv("OPENVIKING_CONFIG_FILE", "/tmp/codex-no-config.json")
 
-    early_logger = get_logger(logger_name)
-    assert any(isinstance(h, logging.StreamHandler) for h in early_logger.handlers)
+    early_logger = logger_module.get_logger(logger_name)
+    openviking_root = logging.getLogger("openviking")
+    assert early_logger.handlers == []
+    assert any(isinstance(h, logging.StreamHandler) for h in openviking_root.handlers)
 
     config_path = tmp_path / "ov.conf"
     config_path.write_text(
@@ -409,9 +414,32 @@ def test_early_logger_initialization_is_reconfigured_to_file_output(tmp_path, mo
 
     try:
         OpenVikingConfigSingleton.initialize(config_path=str(config_path))
-        refreshed_logger = get_logger(logger_name)
-        assert any(isinstance(h, logging.FileHandler) for h in refreshed_logger.handlers)
-        assert not any(type(h) is logging.StreamHandler for h in refreshed_logger.handlers)
+        refreshed_logger = logger_module.get_logger(logger_name)
+        logger_module.configure_uvicorn_logging()
+        openviking_root = logging.getLogger("openviking")
+        uvicorn_root = logging.getLogger("uvicorn")
+        uvicorn_access = logging.getLogger("uvicorn.access")
+        assert refreshed_logger.handlers == []
+        assert uvicorn_access.handlers == []
+        assert any(isinstance(h, logging.FileHandler) for h in openviking_root.handlers)
+        assert not any(type(h) is logging.StreamHandler for h in openviking_root.handlers)
+        assert openviking_root.handlers == uvicorn_root.handlers
+
+        refreshed_logger.info("child-line")
+        uvicorn_access.info("access-line")
+        for handler in openviking_root.handlers:
+            handler.flush()
+
+        content = (tmp_path / "log" / "openviking.log").read_text(encoding="utf-8")
+        assert content.count("child-line") == 1
+        assert content.count("access-line") == 1
     finally:
-        refreshed_logger.handlers.clear()
+        for name in ("openviking", "uvicorn", "uvicorn.error", "uvicorn.access", logger_name):
+            logger = logging.getLogger(name)
+            for handler in logger.handlers:
+                handler.close()
+            logger.handlers.clear()
+            logger.propagate = True
+        logger_module._shared_log_handler = None
+        logger_module._shared_log_handler_key = None
         OpenVikingConfigSingleton.reset_instance()

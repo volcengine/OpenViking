@@ -793,9 +793,9 @@ impl FileSystem for LocalFileSystem {
         // Get parent directory
         if let Some(parent) = local_path.parent() {
             // Create all parent directories if they don't exist
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|e| Error::plugin(format!("failed to create parent directories: {}", e)))?;
+            tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                Error::plugin(format!("failed to create parent directories: {}", e))
+            })?;
         }
 
         Ok(())
@@ -869,6 +869,8 @@ impl FileSystem for LocalFileSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
+    use tempfile::TempDir;
 
     struct EnvVarGuard {
         key: &'static str,
@@ -893,19 +895,52 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_localfs_grep_fallback_respects_gitignore_and_hidden() {
-        use tempfile::TempDir;
-
+    /// Create a LocalFS fixture pinned to the fallback grep implementation.
+    fn fallback_localfs() -> (TempDir, LocalFileSystem) {
         let dir = TempDir::new().unwrap();
-        std::fs::write(dir.path().join(".gitignore"), "ignored.txt\n").unwrap();
-        std::fs::write(dir.path().join("a.txt"), "hello\n").unwrap();
-        std::fs::write(dir.path().join("ignored.txt"), "hello\n").unwrap();
-        std::fs::create_dir_all(dir.path().join(".hidden")).unwrap();
-        std::fs::write(dir.path().join(".hidden/secret.txt"), "hello\n").unwrap();
-
         let mut fs = LocalFileSystem::new(dir.path().to_str().unwrap()).unwrap();
         fs.has_rg = false;
+        (dir, fs)
+    }
+
+    /// Write a test file, creating parent directories when needed.
+    fn write_file(root: &Path, path: &str, content: &str) {
+        let path = root.join(path);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(path, content).unwrap();
+    }
+
+    /// Install a fake rg executable and prepend it to PATH for the current test.
+    #[cfg(unix)]
+    fn install_fake_rg(dir: &TempDir, script: &str) -> EnvVarGuard {
+        let bin_dir = dir.path().join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let rg_path = bin_dir.join("rg");
+        std::fs::write(&rg_path, script).unwrap();
+
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&rg_path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&rg_path, perms).unwrap();
+
+        let old_path = std::env::var_os("PATH").unwrap_or_default();
+        let mut new_path = std::ffi::OsString::new();
+        new_path.push(bin_dir.as_os_str());
+        new_path.push(std::ffi::OsStr::new(":"));
+        new_path.push(old_path);
+        EnvVarGuard::set("PATH", &new_path)
+    }
+
+    #[tokio::test]
+    async fn test_localfs_grep_fallback_respects_gitignore_and_hidden() {
+        let (dir, fs) = fallback_localfs();
+        write_file(dir.path(), ".gitignore", "ignored.txt\n");
+        write_file(dir.path(), "a.txt", "hello\n");
+        write_file(dir.path(), "ignored.txt", "hello\n");
+        std::fs::create_dir_all(dir.path().join(".hidden")).unwrap();
+        write_file(dir.path(), ".hidden/secret.txt", "hello\n");
 
         let result = fs
             .grep("/", "hello", true, false, None, None, None)
@@ -918,13 +953,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_localfs_grep_case_insensitive() {
-        use tempfile::TempDir;
-
-        let dir = TempDir::new().unwrap();
-        std::fs::write(dir.path().join("a.txt"), "HELLO\n").unwrap();
-
-        let mut fs = LocalFileSystem::new(dir.path().to_str().unwrap()).unwrap();
-        fs.has_rg = false;
+        let (dir, fs) = fallback_localfs();
+        write_file(dir.path(), "a.txt", "HELLO\n");
 
         let result = fs
             .grep("/", "hello", true, true, None, None, None)
@@ -936,11 +966,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_localfs_grep_missing_path_returns_not_found() {
-        use tempfile::TempDir;
-
-        let dir = TempDir::new().unwrap();
-        let mut fs = LocalFileSystem::new(dir.path().to_str().unwrap()).unwrap();
-        fs.has_rg = false;
+        let (_dir, fs) = fallback_localfs();
 
         let err = fs
             .grep("/does-not-exist", "hello", true, false, None, None, None)
@@ -951,15 +977,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_localfs_grep_does_not_inherit_parent_gitignore() {
-        use tempfile::TempDir;
-
         let dir = TempDir::new().unwrap();
         let mount_dir = dir.path().join("mount");
         std::fs::create_dir_all(&mount_dir).unwrap();
 
         // Parent .gitignore ignores the mounted directory entirely.
-        std::fs::write(dir.path().join(".gitignore"), "mount/\n").unwrap();
-        std::fs::write(mount_dir.join("a.txt"), "hello\n").unwrap();
+        write_file(dir.path(), ".gitignore", "mount/\n");
+        write_file(&mount_dir, "a.txt", "hello\n");
 
         let mut fs = LocalFileSystem::new(mount_dir.to_str().unwrap()).unwrap();
         fs.has_rg = false;
@@ -974,14 +998,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_localfs_grep_returns_query_root_relative_paths() {
-        use tempfile::TempDir;
-
-        let dir = TempDir::new().unwrap();
-        std::fs::create_dir_all(dir.path().join("sub")).unwrap();
-        std::fs::write(dir.path().join("sub/a.txt"), "hello\n").unwrap();
-
-        let mut fs = LocalFileSystem::new(dir.path().to_str().unwrap()).unwrap();
-        fs.has_rg = false;
+        let (dir, fs) = fallback_localfs();
+        write_file(dir.path(), "sub/a.txt", "hello\n");
 
         let result = fs
             .grep("/sub", "hello", true, false, None, None, None)
@@ -1001,29 +1019,12 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_localfs_grep_node_limit_zero_does_not_invoke_rg() {
-        use tempfile::TempDir;
-
         let dir = TempDir::new().unwrap();
-        std::fs::write(dir.path().join("a.txt"), "hello\n").unwrap();
+        write_file(dir.path(), "a.txt", "hello\n");
 
         // Create a fake `rg` that fails if invoked. The expected behavior is to short-circuit
         // and return empty result when node_limit=0.
-        let bin_dir = dir.path().join("bin");
-        std::fs::create_dir_all(&bin_dir).unwrap();
-        let rg_path = bin_dir.join("rg");
-        std::fs::write(&rg_path, "#!/bin/sh\nexit 2\n").unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&rg_path).unwrap().permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&rg_path, perms).unwrap();
-
-        // Prepend fake rg to PATH.
-        let old_path = std::env::var_os("PATH").unwrap_or_default();
-        let mut new_path = std::ffi::OsString::new();
-        new_path.push(bin_dir.as_os_str());
-        new_path.push(std::ffi::OsStr::new(":"));
-        new_path.push(old_path);
-        let _path_guard = EnvVarGuard::set("PATH", &new_path);
+        let _path_guard = install_fake_rg(&dir, "#!/bin/sh\nexit 2\n");
 
         let fs = LocalFileSystem::new(dir.path().to_str().unwrap()).unwrap();
         let result = fs
@@ -1036,16 +1037,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_localfs_grep_exclude_path_applies_before_node_limit() {
-        use tempfile::TempDir;
-
-        let dir = TempDir::new().unwrap();
-        std::fs::create_dir_all(dir.path().join("excluded")).unwrap();
-        std::fs::create_dir_all(dir.path().join("ok")).unwrap();
-        std::fs::write(dir.path().join("excluded/x.txt"), "hit\n").unwrap();
-        std::fs::write(dir.path().join("ok/y.txt"), "hit\n").unwrap();
-
-        let mut fs = LocalFileSystem::new(dir.path().to_str().unwrap()).unwrap();
-        fs.has_rg = false;
+        let (dir, fs) = fallback_localfs();
+        write_file(dir.path(), "excluded/x.txt", "hit\n");
+        write_file(dir.path(), "ok/y.txt", "hit\n");
 
         let out = fs
             .grep("/", "hit", true, false, Some(1), Some("/excluded"), None)
@@ -1059,17 +1053,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_localfs_grep_exclude_path_is_query_root_relative_for_nested_query_root() {
-        use tempfile::TempDir;
-
-        let dir = TempDir::new().unwrap();
+        let (dir, fs) = fallback_localfs();
         let nested_root = dir.path().join("acct/resources/docs");
-        std::fs::create_dir_all(nested_root.join("excluded")).unwrap();
-        std::fs::create_dir_all(nested_root.join("ok")).unwrap();
-        std::fs::write(nested_root.join("excluded/x.txt"), "hit\n").unwrap();
-        std::fs::write(nested_root.join("ok/y.txt"), "hit\n").unwrap();
-
-        let mut fs = LocalFileSystem::new(dir.path().to_str().unwrap()).unwrap();
-        fs.has_rg = false;
+        write_file(&nested_root, "excluded/x.txt", "hit\n");
+        write_file(&nested_root, "ok/y.txt", "hit\n");
 
         // Simulate MountableFS -> LocalFS: query root and exclude path are plugin-relative and nested.
         let out = fs
@@ -1093,37 +1080,17 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_localfs_grep_rg_fast_path_disables_parent_ignore_inheritance() {
-        use tempfile::TempDir;
-
         let dir = TempDir::new().unwrap();
-        std::fs::write(dir.path().join(".gitignore"), "mount/\n").unwrap();
+        write_file(dir.path(), ".gitignore", "mount/\n");
 
         let mount_dir = dir.path().join("mount");
-        std::fs::create_dir_all(&mount_dir).unwrap();
-        std::fs::write(mount_dir.join("a.txt"), "hello\n").unwrap();
+        write_file(&mount_dir, "a.txt", "hello\n");
 
         // Fake `rg` verifies `--no-ignore-parent` is present, then emits one JSON match.
-        let bin_dir = dir.path().join("bin");
-        std::fs::create_dir_all(&bin_dir).unwrap();
-        let rg_path = bin_dir.join("rg");
-        std::fs::write(
-            &rg_path,
-            format!(
+        let script = format!(
                 "#!/bin/sh\nfor arg in \"$@\"; do\n  if [ \"$arg\" = \"--no-ignore-parent\" ]; then\n    printf '%s\\n' '{{\"type\":\"match\",\"data\":{{\"path\":{{\"text\":\"a.txt\"}},\"line_number\":1,\"lines\":{{\"text\":\"hello\\\\n\"}}}}}}'\n    exit 0\n  fi\ndone\necho missing --no-ignore-parent 1>&2\nexit 2\n"
-            ),
-        )
-        .unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&rg_path).unwrap().permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&rg_path, perms).unwrap();
-
-        let old_path = std::env::var_os("PATH").unwrap_or_default();
-        let mut new_path = std::ffi::OsString::new();
-        new_path.push(bin_dir.as_os_str());
-        new_path.push(std::ffi::OsStr::new(":"));
-        new_path.push(old_path);
-        let _path_guard = EnvVarGuard::set("PATH", &new_path);
+            );
+        let _path_guard = install_fake_rg(&dir, &script);
 
         let fs = LocalFileSystem::new(mount_dir.to_str().unwrap()).unwrap();
         let result = fs

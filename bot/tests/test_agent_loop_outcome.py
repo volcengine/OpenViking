@@ -257,8 +257,8 @@ async def test_agent_loop_build_prompt_history_uses_ov_context_plus_unsynced_tai
         }
     )
 
-    async def fake_get_ov_client(self, session_key):
-        del session_key
+    async def fake_get_ov_client(self, session_key, openviking_connection=None):
+        del session_key, openviking_connection
         return fake_ov_client
 
     monkeypatch.setattr(AgentLoop, "_get_ov_client", fake_get_ov_client)
@@ -310,8 +310,8 @@ async def test_agent_loop_build_prompt_history_skips_tail_when_sync_cursor_is_pa
         context_payload={"messages": [{"role": "user", "content": "OV user turn"}]}
     )
 
-    async def fake_get_ov_client(self, session_key):
-        del self, session_key
+    async def fake_get_ov_client(self, session_key, openviking_connection=None):
+        del self, session_key, openviking_connection
         return fake_ov_client
 
     monkeypatch.setattr(AgentLoop, "_get_ov_client", fake_get_ov_client)
@@ -415,8 +415,8 @@ async def test_agent_loop_commits_openviking_before_model_when_pending_tokens_re
             state["last_synced_local_index"] = len(session.messages) - 1
         return kwargs
 
-    async def fake_get_ov_client(self, session_key):
-        del self, session_key
+    async def fake_get_ov_client(self, session_key, openviking_connection=None):
+        del self, session_key, openviking_connection
 
         class _Client:
             async def get_session_context(self, session_id, token_budget):
@@ -515,8 +515,8 @@ async def test_agent_loop_commits_openviking_before_model_when_memory_window_rea
         session.metadata["openviking"]["last_commit_performed"] = bool(kwargs["force_commit"])
         return kwargs
 
-    async def fake_get_ov_client(self, session_key):
-        del self, session_key
+    async def fake_get_ov_client(self, session_key, openviking_connection=None):
+        del self, session_key, openviking_connection
 
         class _Client:
             async def get_session_context(self, session_id, token_budget):
@@ -775,6 +775,14 @@ async def test_agent_loop_emits_normalized_response_completed_payload(temp_dir: 
             3,
         )
 
+    class FakeContextBuilder:
+        def __init__(self, *args, **kwargs):
+            self.latest_relevant_memories = None
+
+        async def build_messages(self, **kwargs):
+            return [{"role": "user", "content": kwargs["current_message"]}]
+
+    monkeypatch.setattr("vikingbot.agent.context.ContextBuilder", FakeContextBuilder)
     monkeypatch.setattr(AgentLoop, "_run_agent_loop", fake_run_agent_loop)
 
     bus = MessageBus()
@@ -824,3 +832,67 @@ async def test_agent_loop_emits_normalized_response_completed_payload(temp_dir: 
     session_path = temp_dir / "bot" / "sessions" / "cli__default__session-1.jsonl"
     metadata = json.loads(session_path.read_text().splitlines()[0])
     assert metadata["metadata"]["response_facts"][response.response_id] == payload
+
+
+@pytest.mark.asyncio
+async def test_auto_openviking_memory_uses_distinct_tool_name(temp_dir: Path, monkeypatch):
+    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
+    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
+    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
+
+    fake_langfuse = _FakeLangfuseClient()
+    monkeypatch.setattr(
+        "vikingbot.agent.loop.LangfuseClient.get_instance",
+        staticmethod(lambda: fake_langfuse),
+    )
+
+    class FakeContextBuilder:
+        def __init__(self, *args, **kwargs):
+            self.latest_relevant_memories = "remembered fact"
+
+        async def build_messages(self, **kwargs):
+            return [{"role": "user", "content": kwargs["current_message"]}]
+
+    async def fake_run_agent_loop(self, **kwargs):
+        return (
+            "final answer",
+            None,
+            [],
+            {"prompt_tokens": 12, "completion_tokens": 8},
+            1,
+        )
+
+    monkeypatch.setattr("vikingbot.agent.context.ContextBuilder", FakeContextBuilder)
+    monkeypatch.setattr(AgentLoop, "_run_agent_loop", fake_run_agent_loop)
+
+    bus = MessageBus()
+    config = Config(storage_workspace=str(temp_dir))
+    loop = AgentLoop(
+        bus=bus,
+        provider=_FakeProvider(),
+        workspace=temp_dir / "workspace",
+        config=config,
+    )
+
+    session_key = SessionKey(type="cli", channel_id="default", chat_id="session-1")
+    response = await loop._process_message(
+        InboundMessage(
+            session_key=session_key,
+            sender_id="user-1",
+            content="please help",
+            timestamp=datetime.fromisoformat("2026-04-30T00:05:00"),
+        )
+    )
+
+    assert response is not None
+    assert response.tools_used_names == ["auto_memory_search"]
+
+    completed_payload = None
+    while bus.outbound_size:
+        event = await bus.consume_outbound()
+        if event.event_type == OutboundEventType.RESPONSE_COMPLETED:
+            completed_payload = event.metadata["response_completed"]
+
+    assert completed_payload is not None
+    assert completed_payload["tool_count"] == 1
+    assert completed_payload["tools_used_names"] == ["auto_memory_search"]

@@ -16,6 +16,7 @@ from openviking.core.context import Context
 from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory import ExtractLoop, MemoryUpdater
+from openviking.session.memory.constants import EXECUTION_MEMORY_TYPES
 from openviking.session.memory.dataclass import ResolvedOperations, StoredLink
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.memory_updater import (
@@ -265,7 +266,10 @@ class SessionCompressorV2:
 
         registry = create_default_registry()
         if allow_self_memory:
-            await registry.initialize_memory_files(ctx)
+            await registry.initialize_memory_files(
+                ctx,
+                allowed_memory_types=allowed_memory_types,
+            )
 
         # Initialize telemetry counters before extraction.
         telemetry = get_current_telemetry()
@@ -459,7 +463,7 @@ class SessionCompressorV2:
                     logger.warning(f"Failed to release transaction lock: {e}")
 
     @tracer(ignore_result=True)
-    async def extract_agent_memories(
+    async def extract_execution_memories(
         self,
         messages: List[Message],
         ctx: Optional[RequestContext] = None,
@@ -469,22 +473,21 @@ class SessionCompressorV2:
         allowed_memory_types: Optional[set[str]] = None,
         include_session_skills: Optional[bool] = None,
     ) -> Dict[str, List[Any]]:
-        """Two-phase agent-scope extraction for trajectories, experiences, and session skills."""
+        """Extract trajectory, experience, and session-skill memories from execution context."""
         config = get_openviking_config()
-        allowed_agent_types = (
-            {"trajectories", "experiences"}
+        allowed_execution_types = (
+            set(EXECUTION_MEMORY_TYPES)
             if allowed_memory_types is None
-            else set(allowed_memory_types)
+            else set(allowed_memory_types) & EXECUTION_MEMORY_TYPES
         )
-        agent_memory_enabled = config.memory.agent_memory_enabled
-        include_trajectories = agent_memory_enabled and "trajectories" in allowed_agent_types
-        include_experiences = agent_memory_enabled and "experiences" in allowed_agent_types
+        include_trajectories = "trajectories" in allowed_execution_types
+        include_experiences = "experiences" in allowed_execution_types
         if include_session_skills is None:
             include_session_skills = bool(
                 getattr(config.memory, "session_skill_extraction_enabled", False)
             )
         empty_result: Dict[str, List[Any]] = {"contexts": [], "session_skills": []}
-        if not (include_trajectories or include_session_skills):
+        if not include_trajectories:
             return empty_result
         if not messages or not ctx:
             return empty_result
@@ -512,7 +515,7 @@ class SessionCompressorV2:
             ctx=ctx,
             strict_extract_errors=strict_extract_errors,
             phase_label="trajectory",
-            allowed_memory_types=allowed_agent_types,
+            allowed_memory_types=allowed_execution_types,
         )
         if traj_result is None:
             return empty_result
@@ -587,7 +590,7 @@ class SessionCompressorV2:
                 strict_extract_errors=strict_extract_errors,
                 phase_label=f"experience({traj_uri})",
                 post_apply=_append_sources_before_unlock,
-                allowed_memory_types=allowed_agent_types,
+                allowed_memory_types=allowed_execution_types,
             )
             if exp_result is None:
                 fallback_uris = await self._single_existing_experience_uris(

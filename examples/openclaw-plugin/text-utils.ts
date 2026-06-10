@@ -12,6 +12,7 @@ export const MEMORY_TRIGGERS = [
 
 const CJK_CHAR_REGEX = /[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff\uac00-\ud7af]/;
 const RELEVANT_MEMORIES_BLOCK_RE = /<relevant-memories>[\s\S]*?<\/relevant-memories>/gi;
+const OPENVIKING_CONTEXT_BLOCK_RE = /<openviking-context\b[^>]*>[\s\S]*?<\/openviking-context>/gi;
 const CONVERSATION_METADATA_BLOCK_RE =
   /(?:^|\n)\s*(?:Conversation info|Conversation metadata|会话信息|对话信息)\s*(?:\([^)]+\))?\s*:\s*```[\s\S]*?```/gi;
 /** Strips "Sender (untrusted metadata): ```json ... ```" so capture sends clean text to OpenViking extract. */
@@ -60,6 +61,7 @@ export function sanitizeUserTextForCapture(text: string): string {
     return "";
   }
   return text
+    .replace(OPENVIKING_CONTEXT_BLOCK_RE, " ")
     .replace(RELEVANT_MEMORIES_BLOCK_RE, " ")
     .replace(CONVERSATION_METADATA_BLOCK_RE, " ")
     .replace(SENDER_METADATA_BLOCK_RE, " ")
@@ -69,6 +71,14 @@ export function sanitizeUserTextForCapture(text: string): string {
     .replace(LEADING_TIMESTAMP_PREFIX_RE, "")
     .replace(SUBAGENT_CONTEXT_RE, "")
     .replace(/\u0000/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function stripOpenVikingContextInjection(text: string): string {
+  return text
+    .replace(OPENVIKING_CONTEXT_BLOCK_RE, " ")
+    .replace(RELEVANT_MEMORIES_BLOCK_RE, " ")
     .replace(/\s+/g, " ")
     .trim();
 }

@@ -28,6 +28,25 @@ scope roots together:
 Internal or runtime data such as `temp`, `queue`, `upload`, lock files, watch
 control files, and `.relations.json` are outside the OVPack migration scope.
 
+## Working with Multi-Write Storage
+
+Multi-write storage only replicates writes that happen after it is enabled. It
+does not automatically copy historical files that already existed before
+`storage.agfs.backups` was turned on.
+
+When migrating an existing environment to multi-write mode, first move the
+existing dataset with OVPack, then enable multi-write storage.
+
+Recommended flow:
+
+1. Use `ov backup` or `ov export` to export the current dataset.
+2. Restore or import the dataset into the target storage environment.
+3. Validate data and index integrity in the target environment.
+4. Configure and enable multi-write storage.
+5. Resume normal writes and let multi-write handle future incremental copies.
+
+For more details, see the [Multi-Write Storage Guide](./13-multi-write-storage.md).
+
 ## Quick Start
 
 ### Export and Import a Resource Directory

@@ -49,6 +49,7 @@ export type OVMemoryPolicySwitch = {
 export type OVMemoryPolicy = {
   self?: OVMemoryPolicySwitch;
   peer?: OVMemoryPolicySwitch;
+  memory_types?: string[];
 };
 
 export type TaskResult = {
@@ -834,7 +835,6 @@ export class OpenVikingClient {
        * preserves the pre-v2 "archive everything" behavior.
        */
       keepRecentCount?: number;
-      memoryPolicy?: OVMemoryPolicy;
     },
   ): Promise<CommitSessionResult> {
     const keepRecentCount =
@@ -854,9 +854,6 @@ export class OpenVikingClient {
     const body: Record<string, unknown> = {};
     if (keepRecentCount > 0) {
       body.keep_recent_count = keepRecentCount;
-    }
-    if (options?.memoryPolicy) {
-      body.memory_policy = options.memoryPolicy;
     }
     const result = await this.request<CommitSessionResult>(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`,

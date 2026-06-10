@@ -63,9 +63,17 @@ import {
   AlertDialogTitle,
 } from '#/components/ui/alert-dialog'
 import { useAppConnection } from '#/hooks/use-app-connection'
+import { copyTextToClipboard } from '#/lib/clipboard'
 import { cn } from '#/lib/utils'
 import type { ConnectionDraft } from '#/hooks/use-app-connection'
 
+import { AccountSelect, UserSelect } from '#/components/identity-select'
+import {
+  DEFAULT_ACCOUNT_ID,
+  DEFAULT_USER_ID,
+  sortedAccountIds,
+  sortedAccounts,
+} from '#/lib/admin-options'
 import {
   createAdminAccount,
   createAdminUser,
@@ -73,7 +81,7 @@ import {
   fetchAdminUsers,
   probeStudioConnection,
   regenerateAdminUserKey,
-} from './-lib/admin'
+} from '#/lib/admin'
 import type {
   AdminConnection,
   AdminAccount,
@@ -82,59 +90,16 @@ import type {
   CreateAccountInput,
   CreateUserInput,
   KeyResult,
-} from './-lib/admin'
+} from '#/lib/admin'
 
 export const Route = createFileRoute('/settings')({
   component: SettingsRoute,
 })
 
-const DEFAULT_ACCOUNT_ID = 'default'
-const DEFAULT_USER_ID = 'default'
 const USER_ROLES = ['user', 'admin'] as const
 
 type AddAccountDraft = CreateAccountInput
 type AddUserDraft = CreateUserInput
-
-function uniqueOptions(values: readonly string[], fallback: string): string[] {
-  const seen = new Set<string>()
-  const result: string[] = []
-
-  for (const rawValue of [fallback, ...values]) {
-    const value = rawValue.trim()
-    if (!value || seen.has(value)) {
-      continue
-    }
-    seen.add(value)
-    result.push(value)
-  }
-
-  return result
-}
-
-function compareAccountId(left: string, right: string): number {
-  const normalizedLeft = left.toLowerCase()
-  const normalizedRight = right.toLowerCase()
-  if (normalizedLeft < normalizedRight) {
-    return -1
-  }
-  if (normalizedLeft > normalizedRight) {
-    return 1
-  }
-  return left < right ? -1 : left > right ? 1 : 0
-}
-
-function sortedAccountIds(
-  values: readonly string[],
-  fallback: string,
-): string[] {
-  return uniqueOptions([...values, fallback], '').sort(compareAccountId)
-}
-
-function sortedAccounts(accounts: readonly AdminAccount[]): AdminAccount[] {
-  return [...accounts].sort((left, right) =>
-    compareAccountId(left.accountId, right.accountId),
-  )
-}
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -150,38 +115,6 @@ function maskApiKey(value: string | undefined): string {
   }
 
   return `${value.slice(0, 10)}...${value.slice(-6)}`
-}
-
-async function copyTextToClipboard(value: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(value)
-    return
-  } catch {
-    // Clipboard API is unavailable on non-secure dev URLs such as http://10.x.x.x.
-  }
-
-  if (typeof document === 'undefined') {
-    throw new Error('Clipboard is unavailable')
-  }
-
-  const textArea = document.createElement('textarea')
-  textArea.value = value
-  textArea.setAttribute('readonly', '')
-  textArea.style.position = 'fixed'
-  textArea.style.left = '-9999px'
-  textArea.style.top = '0'
-  document.body.appendChild(textArea)
-  textArea.focus()
-  textArea.select()
-
-  try {
-    const copied = document.execCommand('copy')
-    if (!copied) {
-      throw new Error('Clipboard copy failed')
-    }
-  } finally {
-    document.body.removeChild(textArea)
-  }
 }
 
 function resolveKeyLabel(user: AdminUser): string {
@@ -326,51 +259,6 @@ function CapabilityStatus({
   )
 }
 
-function AccountSelect({
-  accounts,
-  disabled,
-  label,
-  onChange,
-  value,
-}: {
-  accounts: readonly AdminAccount[]
-  disabled?: boolean
-  label: string
-  onChange: (value: string) => void
-  value: string
-}) {
-  const options = sortedAccountIds(
-    accounts.map((account) => account.accountId),
-    value || DEFAULT_ACCOUNT_ID,
-  )
-
-  return (
-    <Select
-      value={value || DEFAULT_ACCOUNT_ID}
-      onValueChange={(next) => {
-        if (next) {
-          onChange(next)
-        }
-      }}
-    >
-      <SelectTrigger
-        aria-label={label}
-        className="h-9 w-full"
-        disabled={disabled}
-      >
-        <SelectValue>{value || DEFAULT_ACCOUNT_ID}</SelectValue>
-      </SelectTrigger>
-      <SelectContent alignItemWithTrigger>
-        {options.map((item) => (
-          <SelectItem key={item} value={item}>
-            {item}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  )
-}
-
 function AccountFilterChips({
   accounts,
   disabled,
@@ -431,51 +319,6 @@ function AccountFilterChips({
         })}
       </div>
     </div>
-  )
-}
-
-function UserSelect({
-  disabled,
-  label,
-  onChange,
-  users,
-  value,
-}: {
-  disabled?: boolean
-  label: string
-  onChange: (value: string) => void
-  users: readonly AdminUser[]
-  value: string
-}) {
-  const options = uniqueOptions(
-    users.map((user) => user.userId),
-    value || DEFAULT_USER_ID,
-  )
-
-  return (
-    <Select
-      value={value || DEFAULT_USER_ID}
-      onValueChange={(next) => {
-        if (next) {
-          onChange(next)
-        }
-      }}
-    >
-      <SelectTrigger
-        aria-label={label}
-        className="h-9 w-full"
-        disabled={disabled}
-      >
-        <SelectValue>{value || DEFAULT_USER_ID}</SelectValue>
-      </SelectTrigger>
-      <SelectContent alignItemWithTrigger>
-        {options.map((item) => (
-          <SelectItem key={item} value={item}>
-            {item}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
   )
 }
 

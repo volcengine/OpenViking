@@ -30,6 +30,22 @@ def _get_session_number(session_key: str) -> int:
     return int(session_key.split("_")[1])
 
 
+def build_memory_policy(group_chat: bool) -> Dict[str, Dict[str, bool]]:
+    """Build session/commit memory policy for benchmark ingest.
+
+    LoCoMo eval isolates samples through peer memory. In non-group mode the
+    peer is the sample_id (for example conv-26); in group mode the peer is the
+    speaker. Do not write benchmark memories into the current User self memory,
+    otherwise all samples imported by the same User API key become visible to
+    every question.
+    """
+    del group_chat
+    return {
+        "self": {"enabled": False},
+        "peer": {"enabled": True},
+    }
+
+
 def parse_test_file(path: str) -> List[Dict[str, Any]]:
     """Parse txt test file into sessions.
 
@@ -84,10 +100,11 @@ def build_session_messages(
     Each dict represents a session with multiple messages (user/assistant role).
 
     Args:
-        group_chat: If True (default), group-chat mode — peer_id=speaker.
-                    If False, single-chat mode — no peer_id/speaker on messages.
+        group_chat: If True, use speaker names as peer_id.
+                    If False, use sample_id as peer_id and prefix speaker in text.
     """
     conv = item["conversation"]
+    sample_peer_id = item["sample_id"]
     speakers = f"{conv['speaker_a']} & {conv['speaker_b']}"
 
     session_keys = sorted(
@@ -111,11 +128,27 @@ def build_session_messages(
             speaker = msg.get("speaker", "unknown")
             text = msg.get("text", "")
             if group_chat:
-                messages.append({"role": "user", "text": text, "speaker": speaker, "index": idx})
+                messages.append(
+                    {
+                        "role": "user",
+                        "text": text,
+                        "speaker": speaker,
+                        "peer_id": speaker,
+                        "index": idx,
+                    }
+                )
             else:
-                # single-chat 模式下所有消息用统一 user_id 上传，
-                # speaker 信息需要嵌入文本以保留说话人身份
-                messages.append({"role": "user", "text": f"{speaker}: {text}", "index": idx})
+                # single-chat 模式下按 sample_id 聚合 peer，
+                # speaker 信息嵌入文本以保留说话人身份
+                messages.append(
+                    {
+                        "role": "user",
+                        "text": f"{speaker}: {text}",
+                        "speaker": speaker,
+                        "peer_id": sample_peer_id,
+                        "index": idx,
+                    }
+                )
 
         sessions.append(
             {
@@ -302,6 +335,7 @@ async def viking_ingest(
     user_id: Optional[str] = None,
     account: str = "default",
     api_key: Optional[str] = None,
+    group_chat: bool = False,
 ) -> Dict[str, int]:
     """Save messages to OpenViking via OpenViking SDK client.
     Returns token usage dict with embedding and vlm token counts.
@@ -313,6 +347,7 @@ async def viking_ingest(
         user_id: User identifier for separate userspace (e.g., "conv-26")
         account: OpenViking account identifier
         api_key: Optional API key for OpenViking client authentication
+        group_chat: Whether to enable peer-memory extraction for group-chat sessions
     """
     # 解析 session_time - 为每条消息计算递增的时间戳
     base_datetime = None
@@ -331,10 +366,11 @@ async def viking_ingest(
         timeout=600,
     )
     await client.initialize()
+    memory_policy = build_memory_policy(group_chat)
 
     try:
         # Create session
-        create_res = await client.create_session()
+        create_res = await client.create_session(memory_policy=memory_policy)
         session_id = create_res["session_id"]
 
         # Add messages one by one with created_at
@@ -350,7 +386,7 @@ async def viking_ingest(
                 role=msg["role"],
                 parts=[{"type": "text", "text": msg["text"]}],
                 created_at=msg_created_at,
-                peer_id=msg.get("speaker"),
+                peer_id=msg.get("peer_id"),
             )
 
         # Commit
@@ -414,8 +450,14 @@ async def process_single_session(
     source_sample_id = str(sample_id)
     try:
         started_at = time.perf_counter()
-        user_id = str(sample_id) if args.separate_user_by_sample else ""
-        account = args.account if args.separate_user_by_sample else ""
+        if args.api_key:
+            # User API keys already pin account/user on the server side. Passing
+            # account/user headers would be rejected in api_key auth mode.
+            user_id = ""
+            account = ""
+        else:
+            user_id = str(sample_id) if args.separate_user_by_sample else ""
+            account = args.account if args.separate_user_by_sample else ""
         result = await viking_ingest(
             messages,
             args.openviking_url,
@@ -423,6 +465,7 @@ async def process_single_session(
             user_id=user_id,
             account=account,
             api_key=args.api_key,
+            group_chat=args.group_chat,
         )
         duration_seconds = round(time.perf_counter() - started_at, 3)
         token_usage = result["token_usage"]
@@ -742,7 +785,13 @@ async def run_import(args: argparse.Namespace) -> None:
             messages = []
             for i, text in enumerate(session["messages"]):
                 messages.append(
-                    {"role": "user", "text": text.strip(), "speaker": "user", "index": i}
+                    {
+                        "role": "user",
+                        "text": text.strip(),
+                        "speaker": "user",
+                        "peer_id": "user",
+                        "index": i,
+                    }
                 )
 
             preview = " | ".join([f"{msg['role']}: {msg['text'][:30]}..." for msg in messages[:3]])
@@ -882,7 +931,7 @@ def main():
         "--separate-user-by-sample",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Whether to isolate OpenViking users by sample (default: true). Use --no-separate-user-by-sample to use an empty user while keeping --account unchanged.",
+        help="Whether to isolate OpenViking users by sample (default: true). Ignored when --api-key is provided because User keys pin account/user identity.",
     )
     parser.add_argument(
         "--parallel-samples",
@@ -898,9 +947,9 @@ def main():
     )
     parser.add_argument(
         "--group-chat",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=False,
-        help="Group-chat mode: set peer_id/speaker on messages. Default is group-chat mode.",
+        help="Group-chat mode: use speaker names as peer_id (default: false).",
     )
     parser.add_argument(
         "--clear-ingest-record",

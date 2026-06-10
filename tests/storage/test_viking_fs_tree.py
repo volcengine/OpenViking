@@ -147,10 +147,12 @@ def test_is_name_visible_at_account_root(fs, name, parent_path, expected):
         ("_system", "/local/test_account/resources", False),
         ("tasks", "/local/test_account/resources/bar", False),
         (".path.ovlock", "/local/test_account/resources", False),
+        (".sync_log.json", "/local/test_account/resources", False),
+        (".redirect.json", "/local/test_account/resources", False),
     ],
 )
 def test_is_name_visible_at_non_root(fs, name, parent_path, expected):
-    """PY-FLT-004: Non-root _INTERNAL_NAMES blacklist."""
+    """PY-FLT-004: Non-root internal-name blacklist."""
     assert fs._is_name_visible_at_path(name, parent_path) == expected
 
 
@@ -199,6 +201,18 @@ def test_is_tree_entry_visible_path_ovlock_filtered(monkeypatch, fs):
     patch_visibility(monkeypatch, fs, is_accessible=True)
     entry = make_entry("/local/test_account/resources/.path.ovlock", ".path.ovlock", is_dir=False)
     assert fs._is_tree_entry_visible(entry, "/local/test_account", _default_ctx()) is False
+
+
+def test_is_tree_entry_visible_multiwrite_meta_filtered(monkeypatch, fs):
+    """PY-FLT-012: multi-write metadata files are filtered."""
+    patch_visibility(monkeypatch, fs, is_accessible=True)
+    for hidden_name in (".sync_log.json", ".redirect.json"):
+        entry = make_entry(
+            f"/local/test_account/resources/{hidden_name}",
+            hidden_name,
+            is_dir=False,
+        )
+        assert fs._is_tree_entry_visible(entry, "/local/test_account", _default_ctx()) is False
 
 
 def test_is_tree_entry_visible_default_ctx(monkeypatch, fs):

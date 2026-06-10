@@ -40,6 +40,10 @@ from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.expr import PathScope
+from openviking.storage.internal_names import (
+    MULTIWRITE_PATH_LOCK_FILE,
+    STORAGE_INTERNAL_ENTRY_NAMES,
+)
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.time_utils import format_simplified, get_current_timestamp, parse_iso_datetime
 from openviking_cli.exceptions import (
@@ -58,6 +62,15 @@ if TYPE_CHECKING:
     from openviking_cli.utils.config import RerankConfig, RetrievalConfig
 
 logger = get_logger(__name__)
+
+# Sentinel node_limit for internal callers that MUST enumerate an entire
+# directory. ``ls()`` defaults to ``node_limit=1000`` to protect agent-facing
+# context from being flooded, but internal system operations (parse merge,
+# temp->final sync, summary DAG, vectorization) must see every child or they
+# silently drop entries beyond the cap — e.g. a >1000-doc directory ingest only
+# materializes its first 1000 subdirectories. Pass this explicitly at those
+# call sites.
+LS_ALL_NODES = 2**31 - 1
 
 
 def _ensure_non_empty_search_query(query: str) -> None:
@@ -588,7 +601,7 @@ class VikingFS:
 
             # Remove carried lock file from the copy (directory only)
             if is_dir:
-                carried_lock = new_path.rstrip("/") + "/.path.ovlock"
+                carried_lock = new_path.rstrip("/") + f"/{MULTIWRITE_PATH_LOCK_FILE}"
                 try:
                     await self._async_agfs.rm(carried_lock)
                 except Exception:
@@ -611,6 +624,30 @@ class VikingFS:
             await self._async_agfs.rm(old_path, recursive=is_dir)
             return {}
 
+    async def system_sync_status(
+        self, uri: str, ctx: Optional[RequestContext] = None
+    ) -> Dict[str, Any]:
+        """Return multi-write sync status for one Viking URI subtree."""
+        self._ensure_access(uri, ctx)
+        real_ctx = self._ctx_or_default(ctx)
+        path = self._uri_to_path(uri, ctx=ctx)
+        return await self._async_agfs.system_sync_status(
+            path,
+            fs_ctx={"account_id": real_ctx.account_id},
+        )
+
+    async def system_sync_retry(
+        self, uri: str, ctx: Optional[RequestContext] = None
+    ) -> Dict[str, Any]:
+        """Retry multi-write sync for one Viking URI subtree."""
+        self._ensure_mutable_access(uri, ctx)
+        real_ctx = self._ctx_or_default(ctx)
+        path = self._uri_to_path(uri, ctx=ctx)
+        return await self._async_agfs.system_sync_retry(
+            path,
+            fs_ctx={"account_id": real_ctx.account_id},
+        )
+
     async def _copy_for_mv(
         self,
         old_uri: str,
@@ -623,7 +660,12 @@ class VikingFS:
     ) -> None:
         """Copy source to destination for mv without deleting source."""
         if is_temp:
-            await self._async_agfs.cp(old_path, new_path, recursive=is_dir)
+            await self._async_agfs.cp(
+                old_path,
+                new_path,
+                recursive=is_dir,
+                fs_ctx={"account_id": self._ctx_or_default(ctx).account_id},
+            )
             return
 
         if is_dir:
@@ -1481,12 +1523,12 @@ class VikingFS:
         """Check if name would appear in _ls_entries(parent_path).
 
         At account root (/local/{account}), uses LISTABLE_SCOPES whitelist.
-        At other levels, uses _INTERNAL_NAMES blacklist.
+        At other levels, uses the shared storage internal-name blacklist.
         """
         parts = [p for p in parent_path.strip("/").split("/") if p]
         if len(parts) == 2 and parts[0] == "local":
             return name in VikingURI.LISTABLE_SCOPES
-        return name not in self._INTERNAL_NAMES
+        return name not in STORAGE_INTERNAL_ENTRY_NAMES
 
     def _ancestor_is_filtered(self, entry_path: str, base_path: str) -> bool:
         """Check if any ancestor directory of entry_path would be filtered by _ls_entries.
@@ -1644,7 +1686,6 @@ class VikingFS:
         safe_parts = [self._shorten_component(p, self._MAX_FILENAME_BYTES) for p in parts]
         return f"/local/{account_id}/{'/'.join(safe_parts)}"
 
-    _INTERNAL_NAMES = {"_system", "tasks", ".path.ovlock"}
     _ROOT_PATH = "/local"
 
     async def _ls_entries(
@@ -1653,13 +1694,13 @@ class VikingFS:
         """List directory entries, filtering out internal directories.
 
         At account root (/local/{account}), uses LISTABLE_SCOPES whitelist.
-        At other levels, uses _INTERNAL_NAMES blacklist.
+        At other levels, uses the shared storage internal-name blacklist.
         """
         entries = await self._async_agfs.ls(path)
         parts = [p for p in path.strip("/").split("/") if p]
         if len(parts) == 2 and parts[0] == "local":
             return [e for e in entries if e.get("name") in VikingURI.LISTABLE_SCOPES]
-        return [e for e in entries if e.get("name") not in self._INTERNAL_NAMES]
+        return [e for e in entries if e.get("name") not in STORAGE_INTERNAL_ENTRY_NAMES]
 
     def _path_to_uri(self, path: str, ctx: Optional[RequestContext] = None) -> str:
         """/local/{account}/... -> viking://...
@@ -2321,7 +2362,12 @@ class VikingFS:
         src_path = self._uri_to_path(temp_uri, ctx=ctx)
         dst_path = self._uri_to_path(target_uri, ctx=ctx)
         await self._ensure_parent_dirs(dst_path, ctx=ctx)
-        await self._async_agfs.cp(src_path, dst_path, recursive=True)
+        await self._async_agfs.cp(
+            src_path,
+            dst_path,
+            recursive=True,
+            fs_ctx={"account_id": self._ctx_or_default(ctx).account_id},
+        )
 
     async def delete_temp(self, temp_uri: str, ctx: Optional[RequestContext] = None) -> None:
         """Delete temp directory and its contents."""

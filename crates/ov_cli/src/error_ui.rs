@@ -437,6 +437,12 @@ fn system_help_command(program: &str, tokens: &[&str]) -> String {
             Some("init-key") => format!("{program} system crypto init-key --help"),
             _ => format!("{program} system crypto --help"),
         },
+        Some("backend") => match tokens.get(3).copied() {
+            Some("sync-status" | "sync-retry") => {
+                format!("{program} system backend {} --help", tokens[3])
+            }
+            _ => format!("{program} system backend --help"),
+        },
         Some("wait" | "status" | "health" | "consistency") => {
             format!("{program} system {} --help", tokens[2])
         }

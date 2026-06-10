@@ -7,7 +7,8 @@
 #   ./run_full_eval.sh conv-26                      # 评测 sample_id conv-26 所有问题
 #   ./run_full_eval.sh 0 2                          # 评测 sample 0 的第 2 题
 #   ./run_full_eval.sh 0 --skip-import              # 跳过导入，批量评测
-#   ./run_full_eval.sh 0 2 --skip-import --group-chat   # 跳过导入，单题群聊模式
+#   ./run_full_eval.sh 0 2 --skip-import                 # 跳过导入，单题非群聊模式（默认）
+#   ./run_full_eval.sh 0 2 --group-chat                  # 单题群聊模式
 #   ./run_full_eval.sh --skip-import --auto-commit  # 评测全部，跳过导入，自动提交
 #   ./run_full_eval.sh --retry-wrong result/locomo_result_xxx.csv  # 只重跑错题
 
@@ -25,7 +26,8 @@ for arg in "$@"; do
         echo ""
         echo "开关参数:"
         echo "  --skip-import     跳过导入步骤，直接使用已导入的数据进行评测"
-        echo "  --group-chat      群聊模式，设置 peer_id/speaker，传 --memory-user"
+        echo "  --group-chat      群聊模式，使用 speaker 作为 Peer，并传 --memory-peer"
+        echo "  --no-group-chat   非群聊模式（默认），使用 sample_id 作为 Peer"
         echo "  --auto-commit     自动提交未提交的代码变更，结果文件名带 commit id 和时间戳"
         echo "  --retry-wrong CSV 只重跑指定结果文件中的有效错题（导入相关对话+重新问答）"
         exit 0
@@ -85,7 +87,7 @@ PRECHECK_STATUS=0
 "$PYTHON_BIN" "$SCRIPT_DIR/preflight_eval_config.py" || PRECHECK_STATUS=$?
 if [ "$PRECHECK_STATUS" -ne 0 ]; then
     if [ "$PRECHECK_STATUS" -eq 2 ]; then
-        echo "[preflight] 已完成 root_api_key 初始化，请先重启 openviking-server，再重新执行评测脚本。" >&2
+        echo "[preflight] 已完成 OpenViking API key 初始化，请重新执行评测脚本。" >&2
     fi
     exit "$PRECHECK_STATUS"
 fi
@@ -115,6 +117,8 @@ for arg in "$@"; do
         SKIP_IMPORT=true
     elif [ "$arg" = "--group-chat" ]; then
         GROUP_CHAT=true
+    elif [ "$arg" = "--no-group-chat" ]; then
+        GROUP_CHAT=false
     elif [ "$arg" = "--auto-commit" ]; then
         AUTO_COMMIT=true
     elif [ "$arg" = "--retry-wrong" ]; then
@@ -136,7 +140,7 @@ for arg in "$@"; do
         SKIP_NEXT=true
         continue
     fi
-    if [ "$arg" != "--skip-import" ] && [ "$arg" != "--group-chat" ] && [ "$arg" != "--auto-commit" ]; then
+    if [ "$arg" != "--skip-import" ] && [ "$arg" != "--group-chat" ] && [ "$arg" != "--no-group-chat" ] && [ "$arg" != "--auto-commit" ]; then
         ARGS+=("$arg")
     fi
 done
@@ -145,6 +149,12 @@ done
 COMMON_OPTS=()
 if [ "$GROUP_CHAT" = "true" ]; then
     COMMON_OPTS+=("--group-chat")
+else
+    COMMON_OPTS+=("--no-group-chat")
+fi
+IMPORT_OPTS=()
+if [ -n "${OPENVIKING_API_KEY:-}" ]; then
+    IMPORT_OPTS+=("--api-key" "$OPENVIKING_API_KEY" "--no-separate-user-by-sample")
 fi
 
 SAMPLE=${ARGS[0]}
@@ -152,7 +162,7 @@ QUESTION_INDEX=${ARGS[1]}
 INPUT_FILE="$SCRIPT_DIR/../data/locomo10.json"
 
 # Export for inline Python usage
-export SCRIPT_DIR INPUT_FILE RETRY_WRONG ACCOUNT OPENVIKING_URL GROUP_CHAT
+export SCRIPT_DIR INPUT_FILE RETRY_WRONG ACCOUNT OPENVIKING_URL OPENVIKING_API_KEY GROUP_CHAT
 
 # auto-commit 逻辑
 if [ "$AUTO_COMMIT" = "true" ]; then
@@ -312,6 +322,7 @@ if [ -n "$RETRY_WRONG" ]; then
         --force-ingest \
         --account "$ACCOUNT" \
         --openviking-url "$OPENVIKING_URL" \
+        "${IMPORT_OPTS[@]}" \
         "${COMMON_OPTS[@]}"
     IMPORT_PERFORMED=true
 
@@ -358,7 +369,7 @@ if [ -z "$SAMPLE" ]; then
     else
         echo "[1/4] 导入数据..."
         capture_import_row_start
-        "$PYTHON_BIN" "$SCRIPT_DIR/import_to_ov.py" --input "$INPUT_FILE" --force-ingest --account "$ACCOUNT" --openviking-url "$OPENVIKING_URL" "${COMMON_OPTS[@]}"
+        "$PYTHON_BIN" "$SCRIPT_DIR/import_to_ov.py" --input "$INPUT_FILE" --force-ingest --account "$ACCOUNT" --openviking-url "$OPENVIKING_URL" "${IMPORT_OPTS[@]}" "${COMMON_OPTS[@]}"
         IMPORT_PERFORMED=true
         echo "等待 1 分钟..."
         sleep 60
@@ -434,6 +445,7 @@ if [ -n "$QUESTION_INDEX" ]; then
             --force-ingest \
             --account "$ACCOUNT" \
             --openviking-url "$OPENVIKING_URL" \
+            "${IMPORT_OPTS[@]}" \
             "${COMMON_OPTS[@]}"
         IMPORT_PERFORMED=true
 
@@ -538,6 +550,7 @@ PY
             --force-ingest \
             --account "$ACCOUNT" \
             --openviking-url "$OPENVIKING_URL" \
+            "${IMPORT_OPTS[@]}" \
             "${COMMON_OPTS[@]}"
         IMPORT_PERFORMED=true
 
@@ -570,7 +583,7 @@ PY
     else
         echo "[3/4] Running judge..."
     fi
-    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$OUTPUT_FILE" --parallel 5
+    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$OUTPUT_FILE" --parallel 40
 
     # 输出统计结果
     if [ "$SKIP_IMPORT" = "true" ]; then

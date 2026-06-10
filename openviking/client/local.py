@@ -483,7 +483,6 @@ class LocalClient(BaseClient):
         telemetry: TelemetryRequest = False,
         *,
         keep_recent_count: int = 0,
-        memory_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Commit a session (archive and extract memories)."""
         execution = await run_with_telemetry(
@@ -493,7 +492,6 @@ class LocalClient(BaseClient):
                 session_id,
                 self._ctx,
                 keep_recent_count=keep_recent_count,
-                memory_policy=memory_policy,
             ),
         )
         return attach_telemetry_payload(

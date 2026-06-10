@@ -10,10 +10,13 @@ from openviking_cli.utils.uri import VikingURI
 
 _USER_SHORTHAND_SEGMENTS = {
     "memories",
-    "skills",
-    "profile.md",
+    "peers",
+    "privacy",
     ".abstract.md",
     ".overview.md",
+    "profile.md",
+    "skills",
+    "workspaces",
 }
 _CONTENT_TYPES_BY_SCOPE = {
     "user": {"memories": "memory", "skills": "skill"},
@@ -120,6 +123,8 @@ def _content_segment_index(parts: tuple[str, ...]) -> Optional[int]:
         return None
     if parts[1] in _CONTENT_TYPES_BY_SCOPE["user"]:
         return 1
+    if len(parts) >= 4 and parts[1] == "peers" and parts[3] == "memories":
+        return 3
     if len(parts) >= 5 and parts[2] == "peers" and parts[4] == "memories":
         return 4
     if len(parts) >= 3 and parts[2] in _CONTENT_TYPES_BY_SCOPE["user"]:
@@ -274,6 +279,12 @@ def _resolve_user_uri(
 ) -> ResolvedNamespace:
     normalized = "viking://" + "/".join(parts)
     if len(parts) == 1:
+        if ctx is not None and getattr(ctx.role, "value", ctx.role) != "root":
+            return ResolvedNamespace(
+                uri=canonical_user_root(ctx),
+                scope="user",
+                owner_user_id=ctx.user.user_id,
+            )
         return ResolvedNamespace(uri="viking://user", scope="user", is_container=True)
 
     second = parts[1]
