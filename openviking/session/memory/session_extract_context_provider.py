@@ -69,6 +69,7 @@ class SessionExtractContextProvider(ExtractContextProvider):
         self._schema_directories = None
         self._extract_context = None  # 缓存 ExtractContext 实例
         self._extraction_messages = None  # 缓存用于提取的派生消息列表
+        self._extraction_chunk_meta: Dict[int, Any] = {}
         self._isolation_handler = isolation_handler
         self._read_file_contents: Dict[str, MemoryFile] = {}
         # 读取 eager_prefetch 配置
@@ -104,7 +105,10 @@ class SessionExtractContextProvider(ExtractContextProvider):
         from openviking.session.memory.memory_updater import ExtractContext
 
         if self._extract_context is None:
-            self._extract_context = ExtractContext(self._get_extraction_messages())
+            self._extract_context = ExtractContext(
+                self._get_extraction_messages(),
+                chunk_meta=self._extraction_chunk_meta,
+            )
         return self._extract_context
 
     def _get_extraction_messages(self) -> List[Message]:
@@ -118,9 +122,11 @@ class SessionExtractContextProvider(ExtractContextProvider):
             return self._extraction_messages
         if not isinstance(self.messages, list):
             self._extraction_messages = []
+            self._extraction_chunk_meta = {}
             return self._extraction_messages
 
         extraction_messages: List[Message] = []
+        self._extraction_chunk_meta = {}
         for message in self.messages:
             extraction_messages.extend(self._split_message_for_extraction(message))
         self._extraction_messages = extraction_messages
@@ -136,16 +142,24 @@ class SessionExtractContextProvider(ExtractContextProvider):
         if len(chunks) <= 1:
             return [message]
 
-        return [
-            Message(
+        from openviking.session.memory.memory_updater import ChunkMeta
+
+        chunk_messages = []
+        for idx, chunk in enumerate(chunks):
+            chunk_message = Message(
                 id=f"{message.id}#chunk_{idx}",
                 role=message.role,
                 peer_id=getattr(message, "peer_id", None),
                 parts=[TextPart(chunk)],
                 created_at=message.created_at,
             )
-            for idx, chunk in enumerate(chunks)
-        ]
+            chunk_messages.append(chunk_message)
+            self._extraction_chunk_meta[id(chunk_message)] = ChunkMeta(
+                source_message_id=message.id,
+                chunk_index=idx,
+                chunk_count=len(chunks),
+            )
+        return chunk_messages
 
     def _split_text_for_extraction(self, text: str) -> List[str]:
         return self._pack_text_units(self._split_text_units(text)) or [text]

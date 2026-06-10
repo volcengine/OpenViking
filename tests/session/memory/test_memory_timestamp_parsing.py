@@ -125,40 +125,58 @@ def test_extraction_context_chunks_long_text_and_preserves_decimal_numbers(stub_
 
 
 def test_message_range_merges_adjacent_chunks_for_same_speaker():
+    first = Message(
+        id="msg-long#chunk_0",
+        role="user",
+        parts=[TextPart(text="first chunk. ")],
+        peer_id="web:visitor:alice",
+    )
+    second = Message(
+        id="msg-long#chunk_1",
+        role="user",
+        parts=[TextPart(text="second chunk.")],
+        peer_id="web:visitor:alice",
+    )
+    msg_range = MessageRange(
+        [[first, second]],
+        chunk_meta={
+            id(first): SimpleNamespace(chunk_index=0, chunk_count=2),
+            id(second): SimpleNamespace(chunk_index=1, chunk_count=2),
+        },
+    )
+
+    assert msg_range.pretty_print() == "[web:visitor:alice]: first chunk. second chunk."
+
+
+def test_message_range_does_not_treat_original_chunk_like_id_as_chunk():
     msg_range = MessageRange(
         [
             [
                 Message(
                     id="msg-long#chunk_0",
                     role="user",
-                    parts=[TextPart(text="first chunk. ")],
-                    peer_id="web:visitor:alice",
-                ),
-                Message(
-                    id="msg-long#chunk_1",
-                    role="user",
-                    parts=[TextPart(text="second chunk.")],
+                    parts=[TextPart(text="original message id contains chunk marker")],
                     peer_id="web:visitor:alice",
                 ),
             ]
         ]
     )
 
-    assert msg_range.pretty_print() == "[web:visitor:alice]: first chunk. second chunk...."
+    assert msg_range.pretty_print() == (
+        "[web:visitor:alice]: original message id contains chunk marker"
+    )
 
 
 def test_message_range_marks_middle_chunk_as_abbreviated():
+    message = Message(
+        id="msg-long#chunk_1",
+        role="user",
+        parts=[TextPart(text="middle chunk")],
+        peer_id="web:visitor:alice",
+    )
     msg_range = MessageRange(
-        [
-            [
-                Message(
-                    id="msg-long#chunk_1",
-                    role="user",
-                    parts=[TextPart(text="middle chunk")],
-                    peer_id="web:visitor:alice",
-                )
-            ]
-        ]
+        [[message]],
+        chunk_meta={id(message): SimpleNamespace(chunk_index=1, chunk_count=3)},
     )
 
     assert msg_range.pretty_print() == "[web:visitor:alice]: ...middle chunk..."

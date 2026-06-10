@@ -9,6 +9,7 @@ to the storage system.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 if TYPE_CHECKING:
@@ -36,6 +37,15 @@ from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
+
+
+@dataclass(frozen=True)
+class ChunkMeta:
+    """Metadata for a derived extraction chunk message."""
+
+    source_message_id: str
+    chunk_index: int
+    chunk_count: int
 
 
 async def write_stored_links(
@@ -82,8 +92,9 @@ async def write_stored_links(
 class ExtractContext:
     """Extract context for template rendering."""
 
-    def __init__(self, messages: List[Message]):
+    def __init__(self, messages: List[Message], chunk_meta: Optional[Dict[int, ChunkMeta]] = None):
         self.messages = messages
+        self.chunk_meta = chunk_meta or {}
         self.page_id_map = PageIdMap()
 
     def get_first_message_time_from_ranges(self, ranges_str: str) -> str | None:
@@ -226,14 +237,19 @@ class ExtractContext:
             range_msgs = self.messages[start : end + 1]
             elements.append(range_msgs)
 
-        return MessageRange(elements)
+        return MessageRange(elements, chunk_meta=self.chunk_meta)
 
 
 class MessageRange:
     """Represents a range of messages for formatting."""
 
-    def __init__(self, elements: List[List[Message]]):
+    def __init__(
+        self,
+        elements: List[List[Message]],
+        chunk_meta: Optional[Dict[int, ChunkMeta]] = None,
+    ):
         self.elements = elements
+        self.chunk_meta = chunk_meta or {}
 
     def pretty_print(self) -> str:
         """Pretty print the message range with '...' separator between non-contiguous ranges."""
@@ -274,28 +290,19 @@ class MessageRange:
         if not messages or not self._contains_chunk_message(messages):
             return content
 
-        first_chunk_index = self._chunk_index(messages[0])
-        if first_chunk_index is not None and first_chunk_index > 0:
+        first_chunk = self._chunk_meta_for(messages[0])
+        if first_chunk is not None and first_chunk.chunk_index > 0:
             content = "..." + content.lstrip()
-        if self._chunk_index(messages[-1]) is not None:
+        last_chunk = self._chunk_meta_for(messages[-1])
+        if last_chunk is not None and last_chunk.chunk_index < last_chunk.chunk_count - 1:
             content = content.rstrip() + "..."
         return content
 
-    @staticmethod
-    def _contains_chunk_message(messages: List[Message]) -> bool:
-        return any(MessageRange._chunk_index(msg) is not None for msg in messages)
+    def _contains_chunk_message(self, messages: List[Message]) -> bool:
+        return any(self._chunk_meta_for(msg) is not None for msg in messages)
 
-    @staticmethod
-    def _chunk_index(message: Message) -> Optional[int]:
-        message_id = getattr(message, "id", "") or ""
-        marker = "#chunk_"
-        if marker not in message_id:
-            return None
-        suffix = message_id.rsplit(marker, 1)[-1]
-        try:
-            return int(suffix)
-        except ValueError:
-            return None
+    def _chunk_meta_for(self, message: Message) -> Optional[ChunkMeta]:
+        return self.chunk_meta.get(id(message))
 
     def _first_message_time(self) -> str | None:
         """获取第一条消息的时间（内部方法）"""
