@@ -119,8 +119,10 @@ class TestOrderedCredentialSwitcher:
         switcher.on_success(1)
         switcher.on_success(1)
 
-        # After 3 successes, calling get_active_index should trigger failback
-        assert switcher.get_active_index() == 0
+        # get_active_index is a pure read and must NOT trigger failback
+        assert switcher.get_active_index() == 1
+        # After 3 successes, maybe_failback should move back to index 0
+        assert switcher.maybe_failback() == 0
 
     def test_failback_on_request_count(self):
         """Test failback based on request count threshold."""
@@ -134,8 +136,8 @@ class TestOrderedCredentialSwitcher:
         switcher.on_success(1)
         switcher.on_success(1)
 
-        # Next get_active_index should move back
-        assert switcher.get_active_index() == 0
+        # Next maybe_failback should move back
+        assert switcher.maybe_failback() == 0
 
     def test_failback_on_timeout(self):
         """Test failback based on timeout threshold."""
@@ -148,8 +150,32 @@ class TestOrderedCredentialSwitcher:
         # Wait for timeout
         time.sleep(0.2)
 
-        # Next get_active_index should move back
-        assert switcher.get_active_index() == 0
+        # Next maybe_failback should move back
+        assert switcher.maybe_failback() == 0
+
+    def test_get_active_index_is_pure_read(self):
+        """get_active_index must never trigger failback, even when thresholds are met.
+
+        Observers (logging/metrics reading active_credential_id/index) must not
+        accidentally advance the failback state machine.
+        """
+        switcher = OrderedCredentialSwitcher(
+            n=3, failback_request_count=1, failback_timeout_seconds=0.05
+        )
+
+        switcher.on_failure(0, ERROR_CLASS_QUOTA_EXCEEDED)
+        assert switcher.get_active_index() == 1
+
+        # Meet BOTH thresholds (count + timeout)
+        switcher.on_success(1)
+        time.sleep(0.1)
+
+        # Repeated pure reads must stay at index 1 (no failback side effect)
+        assert switcher.get_active_index() == 1
+        assert switcher.get_active_index() == 1
+
+        # Only maybe_failback actually moves back
+        assert switcher.maybe_failback() == 0
 
     def test_hierarchical_failback_one_step(self):
         """Test that failback moves one step at a time, not all the way."""
@@ -164,12 +190,12 @@ class TestOrderedCredentialSwitcher:
         # Two successes should move back to 2
         switcher.on_success(3)
         switcher.on_success(3)
-        assert switcher.get_active_index() == 2
+        assert switcher.maybe_failback() == 2
 
         # Two more successes should move back to 1
         switcher.on_success(2)
         switcher.on_success(2)
-        assert switcher.get_active_index() == 1
+        assert switcher.maybe_failback() == 1
 
     def test_is_exhausted_when_all_credentials_used(self):
         """Test is_exhausted property."""

@@ -720,7 +720,9 @@ class FailoverEmbedder(EmbedderBase):
         aggregated_errors = []
 
         while True:
-            idx = self._switcher.get_active_index()
+            # Attempt failback to a higher-priority credential before issuing
+            # the request; pure reads elsewhere must not mutate this state.
+            idx = self._switcher.maybe_failback()
 
             # Check if all credentials are exhausted
             if idx >= self._switcher.n or total_attempts >= self._total_max_retries:
@@ -768,7 +770,9 @@ class FailoverEmbedder(EmbedderBase):
         aggregated_errors = []
 
         while True:
-            idx = self._switcher.get_active_index()
+            # Attempt failback to a higher-priority credential before issuing
+            # the request; pure reads elsewhere must not mutate this state.
+            idx = self._switcher.maybe_failback()
 
             # Check if all credentials are exhausted
             if idx >= self._switcher.n or total_attempts >= self._total_max_retries:

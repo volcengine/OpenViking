@@ -440,24 +440,37 @@ class OrderedCredentialSwitcher:
         """Get the number of credentials."""
         return self._n
 
-    def get_active_index(self) -> int:
-        """Return the current active credential index.
+    def maybe_failback(self) -> int:
+        """Attempt a one-step failback toward higher-priority credentials.
 
-        Before returning, checks if failback thresholds are met. If so, moves
-        active_idx back one step (towards 0).
+        If the active credential is not already the highest priority (index 0)
+        and a failback threshold (timeout or request count) is met, move the
+        active index back one step. This mutates state and must be called only
+        when about to issue a request, not for pure observation.
+
+        Returns the (possibly updated) active credential index.
         """
         with self._lock:
             if self._active_idx > 0:
                 timer_hit = (time.monotonic() - self._last_switch_time) >= self._failback_timeout
                 count_hit = self._active_request_count >= self._failback_request_count
                 if timer_hit or count_hit:
-                    logger.info(
-                        f"Failback condition met (timer={timer_hit}, count={count_hit}), "
-                        f"moving from credential {self._active_idx} to {self._active_idx - 1}"
-                    )
+                    previous_idx = self._active_idx
                     self._active_idx -= 1
                     self._last_switch_time = time.monotonic()
                     self._active_request_count = 0
+                    logger.info(
+                        f"Failback condition met (timer={timer_hit}, count={count_hit}), "
+                        f"switching active credential from {previous_idx} to {self._active_idx}"
+                    )
+            return self._active_idx
+
+    def get_active_index(self) -> int:
+        """Return the current active credential index (pure read, no side effects).
+
+        Use :meth:`maybe_failback` to trigger failback before issuing a request.
+        """
+        with self._lock:
             return self._active_idx
 
     def on_success(self, idx: int) -> None:
