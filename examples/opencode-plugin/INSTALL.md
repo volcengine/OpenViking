@@ -5,7 +5,7 @@ This plugin adds one unified OpenViking plugin for OpenCode:
 - Semantic retrieval for external repositories
 - Long-term memory, session synchronization, lifecycle commit, and automatic recall
 
-The older split examples remain available for now and will be deprecated in a future update. This plugin does not install `skills/openviking/SKILL.md`, and it does not require the agent to use the `ov` command. The capabilities from the former skill are exposed as OpenCode tools here.
+This is the only OpenCode plugin example maintained in this repository. It does not install `skills/openviking/SKILL.md`, and it does not require the agent to use the `ov` command. The former skill-style capabilities are exposed as OpenCode tools here.
 
 ## Prerequisites
 

@@ -5,7 +5,7 @@
 - 外部仓库语义检索
 - 长期记忆、session 同步、生命周期边界 commit、自动 recall
 
-旧示例目前仍然保留，后续会下线。这个插件不再安装 `skills/openviking/SKILL.md`，也不要求 agent 使用 `ov` 命令。原 skill 中的能力会通过 OpenCode tools 暴露。
+这是仓库中唯一继续维护的 OpenCode 插件示例。这个插件不再安装 `skills/openviking/SKILL.md`，也不要求 agent 使用 `ov` 命令。原 skill 风格的能力会通过 OpenCode tools 暴露。
 
 ## 前置条件
 

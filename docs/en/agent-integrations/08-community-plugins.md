@@ -19,18 +19,10 @@ Provides auto-capture of group/DM conversations, semantic recall before each LLM
 - Four auto-commit triggers: message count, token threshold, idle timeout, and process-exit flush
 - Backfills platform message history on first venue encounter
 
-## OpenCode plugins
+## OpenCode plugin
 
-Two OpenCode plugin variants exist with different design choices. Pick whichever matches your usage.
+OpenViking provides one unified OpenCode plugin for repository context and long-term memory workflows.
 
-### `opencode-memory-plugin` — explicit-tool variant
+Source: [examples/opencode-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/opencode-plugin)
 
-Source: [examples/opencode-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/opencode-memory-plugin)
-
-Exposes OpenViking memories as explicit OpenCode tools. The agent decides when to call them, and data is fetched on demand rather than pre-injected.
-
-### `opencode/plugin` — context-injection variant
-
-Source: [examples/opencode/plugin](https://github.com/volcengine/OpenViking/tree/main/examples/opencode/plugin)
-
-Injects indexed code repos into OpenCode's context and auto-starts the OpenViking server when needed.
+The plugin combines indexed repository context, OpenViking memory tools, session synchronization, lifecycle commit, and automatic recall through OpenCode plugin hooks. Use this plugin for both the former explicit-tool and context-injection use cases.

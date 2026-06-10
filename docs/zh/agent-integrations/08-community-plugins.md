@@ -21,16 +21,8 @@
 
 ## OpenCode 插件
 
-OpenCode 有两个设计路径不同的插件变体，请按你的使用方式自行选择。
+OpenViking 现在只保留一个面向 OpenCode 的统一插件，同时覆盖仓库上下文与长期记忆场景。
 
-### `opencode-memory-plugin` — 显式工具版本
+源码：[examples/opencode-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/opencode-plugin)
 
-源码：[examples/opencode-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/opencode-memory-plugin)
-
-通过 OpenCode 的工具机制把 OpenViking 记忆暴露为显式工具。模型决定何时调用，数据按需获取。
-
-### `opencode/plugin` — 上下文注入版本
-
-源码：[examples/opencode/plugin](https://github.com/volcengine/OpenViking/tree/main/examples/opencode/plugin)
-
-把已索引的代码仓库注入 OpenCode 上下文，并按需自动启动 OpenViking 服务器。
+这个插件通过 OpenCode plugin hooks 组合已索引仓库上下文、OpenViking 记忆工具、session 同步、生命周期 commit 与自动 recall。原来的显式工具和上下文注入两类用法都应使用这个统一插件。

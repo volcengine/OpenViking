@@ -1,13 +1,7 @@
-OpenCode has two plugin variants with different designs. Choose the one that matches how you want to use it.
+OpenViking provides one unified OpenCode plugin for repository context and long-term memory workflows.
 
-## Option 1: `opencode-memory-plugin` - Explicit tool version
+## `opencode-plugin`
 
-Source: [examples/opencode-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/opencode-memory-plugin)
+Source: [examples/opencode-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/opencode-plugin)
 
-This variant exposes OpenViking memory as explicit tools through OpenCode's tool mechanism. The model decides when to call them, and data is fetched on demand.
-
-## Option 2: `opencode/plugin` - Context injection version
-
-Source: [examples/opencode/plugin](https://github.com/volcengine/OpenViking/tree/main/examples/opencode/plugin)
-
-This variant injects indexed code repositories into OpenCode context and starts the OpenViking server automatically when needed.
+The plugin combines indexed repository context, OpenViking memory tools, session synchronization, lifecycle commit, and automatic recall through OpenCode plugin hooks.
