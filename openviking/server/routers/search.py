@@ -77,7 +77,6 @@ class FindRequest(BaseModel):
     node_limit: Optional[int] = None
     score_threshold: Optional[float] = None
     filter: Optional[Dict[str, Any]] = None
-    include_relations: bool = True
     include_provenance: bool = False
     since: Optional[str] = None
     until: Optional[str] = None
@@ -102,7 +101,6 @@ class SearchRequest(BaseModel):
     node_limit: Optional[int] = None
     score_threshold: Optional[float] = None
     filter: Optional[Dict[str, Any]] = None
-    include_relations: bool = True
     include_provenance: bool = False
 
     since: Optional[str] = None
@@ -159,7 +157,6 @@ async def find(
             ctx=_ctx,
             target_uri=resolved_target_uri,
             peer_id=request.peer_id,
-            include_relations=request.include_relations,
             limit=actual_limit,
             score_threshold=request.score_threshold,
             filter=effective_filter,
@@ -203,7 +200,6 @@ async def search(
             ctx=_ctx,
             target_uri=resolved_target_uri,
             peer_id=request.peer_id,
-            include_relations=request.include_relations,
             session=session,
             limit=actual_limit,
             score_threshold=request.score_threshold,

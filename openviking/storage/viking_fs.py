@@ -18,7 +18,6 @@ import hashlib
 import json
 import os
 import re
-import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -1234,7 +1233,6 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
         level: Optional[List[int]] = None,
         peer_id: Optional[str] = None,
-        include_relations: bool = True,
     ):
         """Semantic search.
 
@@ -1250,7 +1248,6 @@ class VikingFS:
         """
         _ensure_non_empty_search_query(query)
         telemetry = get_current_telemetry()
-        request_start = time.perf_counter()
         from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
         from openviking_cli.retrieve import (
             ContextType,
@@ -1262,8 +1259,7 @@ class VikingFS:
         retrieval_targets = resolve_retrieval_targets(target_uri, real_ctx, peer_id)
 
         for target_dir in retrieval_targets.target_directories:
-            with telemetry.measure("search.access_check"):
-                self._ensure_access(target_dir, ctx)
+            self._ensure_access(target_dir, ctx)
 
         storage = self._get_vector_store()
         if not storage:
@@ -1295,7 +1291,6 @@ class VikingFS:
         result = await retriever.retrieve(
             typed_query,
             ctx=real_ctx,
-            include_relations=include_relations,
             limit=limit,
             score_threshold=score_threshold,
             scope_dsl=filter,
@@ -1303,24 +1298,19 @@ class VikingFS:
         )
 
         # Convert QueryResult to FindResult
-        with telemetry.measure("search.result_aggregate"):
-            memories, resources, skills = [], [], []
-            for ctx in result.matched_contexts:
-                if ctx.context_type == ContextType.MEMORY:
-                    memories.append(ctx)
-                elif ctx.context_type == ContextType.RESOURCE:
-                    resources.append(ctx)
-                elif ctx.context_type == ContextType.SKILL:
-                    skills.append(ctx)
+        memories, resources, skills = [], [], []
+        for ctx in result.matched_contexts:
+            if ctx.context_type == ContextType.MEMORY:
+                memories.append(ctx)
+            elif ctx.context_type == ContextType.RESOURCE:
+                resources.append(ctx)
+            elif ctx.context_type == ContextType.SKILL:
+                skills.append(ctx)
 
-            find_result = FindResult(
-                memories=memories,
-                resources=resources,
-                skills=skills,
-            )
-        telemetry.set(
-            "search.request.duration_ms",
-            round((time.perf_counter() - request_start) * 1000, 3),
+        find_result = FindResult(
+            memories=memories,
+            resources=resources,
+            skills=skills,
         )
         telemetry.set("vector.returned", find_result.total)
         return find_result
@@ -1329,7 +1319,6 @@ class VikingFS:
         self,
         query: str,
         target_uri: Union[str, List[str]] = "",
-        include_relations: bool = True,
         session_info: Optional[Dict] = None,
         limit: int = 10,
         score_threshold: Optional[float] = None,
@@ -1352,7 +1341,6 @@ class VikingFS:
         """
         _ensure_non_empty_search_query(query)
         telemetry = get_current_telemetry()
-        request_start = time.perf_counter()
         from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
         from openviking.retrieve.intent_analyzer import IntentAnalyzer
         from openviking_cli.retrieve import (
@@ -1373,8 +1361,7 @@ class VikingFS:
 
         query_plan: Optional[QueryPlan] = None
         for target_dir in retrieval_targets.target_directories:
-            with telemetry.measure("search.access_check"):
-                self._ensure_access(target_dir, ctx)
+            self._ensure_access(target_dir, ctx)
 
         # When target_uri exists, read its abstract as optional query-planning context.
         target_abstract = ""
@@ -1430,7 +1417,6 @@ class VikingFS:
             return await retriever.retrieve(
                 tq,
                 ctx=real_ctx,
-                include_relations=include_relations,
                 limit=limit,
                 score_threshold=score_threshold,
                 scope_dsl=filter,
@@ -1440,27 +1426,22 @@ class VikingFS:
         query_results = await asyncio.gather(*[_execute(tq) for tq in typed_queries])
 
         # Aggregate results to FindResult
-        with telemetry.measure("search.result_aggregate"):
-            memories, resources, skills = [], [], []
-            for result in query_results:
-                for ctx in result.matched_contexts:
-                    if ctx.context_type == ContextType.MEMORY:
-                        memories.append(ctx)
-                    elif ctx.context_type == ContextType.RESOURCE:
-                        resources.append(ctx)
-                    elif ctx.context_type == ContextType.SKILL:
-                        skills.append(ctx)
+        memories, resources, skills = [], [], []
+        for result in query_results:
+            for ctx in result.matched_contexts:
+                if ctx.context_type == ContextType.MEMORY:
+                    memories.append(ctx)
+                elif ctx.context_type == ContextType.RESOURCE:
+                    resources.append(ctx)
+                elif ctx.context_type == ContextType.SKILL:
+                    skills.append(ctx)
 
-            find_result = FindResult(
-                memories=memories,
-                resources=resources,
-                skills=skills,
-                query_plan=query_plan,
-                query_results=query_results,
-            )
-        telemetry.set(
-            "search.request.duration_ms",
-            round((time.perf_counter() - request_start) * 1000, 3),
+        find_result = FindResult(
+            memories=memories,
+            resources=resources,
+            skills=skills,
+            query_plan=query_plan,
+            query_results=query_results,
         )
         telemetry.set("vector.returned", find_result.total)
         return find_result
@@ -2410,16 +2391,13 @@ class VikingFS:
 
     async def get_relations(self, uri: str, ctx: Optional[RequestContext] = None) -> List[str]:
         """Get all related URIs (backward compatible)."""
-        telemetry = get_current_telemetry()
-        with telemetry.measure("search.rel_read"):
-            entries = await self.get_relation_table(uri, ctx=ctx)
+        entries = await self.get_relation_table(uri, ctx=ctx)
         real_ctx = self._ctx_or_default(ctx)
-        with telemetry.measure("search.rel_filter"):
-            all_uris = []
-            for entry in entries:
-                for related in entry.uris:
-                    if self._is_accessible(related, real_ctx):
-                        all_uris.append(related)
+        all_uris = []
+        for entry in entries:
+            for related in entry.uris:
+                if self._is_accessible(related, real_ctx):
+                    all_uris.append(related)
         return all_uris
 
     async def get_relations_with_content(

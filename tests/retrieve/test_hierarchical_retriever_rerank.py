@@ -19,8 +19,14 @@ class DummyEmbedResult:
 
 
 class DummyEmbedder:
+    def prepare_embedding_input(self, text: str) -> str:
+        return text
+
     def embed(self, _query: str, is_query: bool = False) -> DummyEmbedResult:
         return DummyEmbedResult()
+
+    async def embed_async(self, text: str, is_query: bool = False) -> DummyEmbedResult:
+        return self.embed(text, is_query=is_query)
 
 
 class DummyStorage:
@@ -237,11 +243,6 @@ def _config() -> RerankConfig:
     return RerankConfig(ak="ak", sk="sk", threshold=0.1)
 
 
-@pytest.fixture(autouse=True)
-def _disable_viking_fs(monkeypatch):
-    monkeypatch.setattr("openviking.retrieve.hierarchical_retriever.get_viking_fs", lambda: None)
-
-
 def test_retriever_initializes_rerank_client(monkeypatch):
     fake_client = FakeRerankClient([0.9, 0.1])
 
@@ -325,7 +326,7 @@ async def test_retrieve_uses_rerank_scores_in_thinking_mode(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_retrieve_reranks_level_two_initial_candidates_in_thinking_mode(monkeypatch):
-    fake_client = FakeRerankClient([0.05, 0.95])
+    fake_client = FakeRerankClient([0.11, 0.95])
     monkeypatch.setattr(
         "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
         lambda config: fake_client,
@@ -478,19 +479,7 @@ async def test_retrieval_hotness_alpha_blends_when_configured(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_convert_to_matched_contexts_skips_relations_when_disabled(monkeypatch):
-    class _FailingVikingFS:
-        async def get_relations(self, *args, **kwargs):
-            pytest.fail("get_relations should not be called when include_relations is False")
-
-        async def read_batch(self, *args, **kwargs):
-            pytest.fail("read_batch should not be called when include_relations is False")
-
-    monkeypatch.setattr(
-        "openviking.retrieve.hierarchical_retriever.get_viking_fs",
-        lambda: _FailingVikingFS(),
-    )
-
+async def test_convert_to_matched_contexts_returns_empty_relations():
     retriever = HierarchicalRetriever(
         storage=DummyStorage(),
         embedder=None,
@@ -508,7 +497,6 @@ async def test_convert_to_matched_contexts_skips_relations_when_disabled(monkeyp
             }
         ],
         ctx=_ctx(),
-        include_relations=False,
     )
 
     assert result[0].relations == []

@@ -60,7 +60,6 @@ The `find()` method performs pure vector similarity search for simple query scen
 | node_limit | int | No | None | Maximum number of results |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filter |
-| include_relations | bool | No | True | Whether to include related context data in each result's `relations` field; set to `false` to skip relation enrichment |
 | since | str | No | None | Lower time bound, accepts `2h` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--after` maps to this field |
 | until | str | No | None | Upper time bound, accepts `30m` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--before` maps to this field |
 | time_field | "updated_at" \| "created_at" | No | "updated_at" | Metadata time field used by `since` / `until` |
@@ -279,7 +278,6 @@ The `search()` method adds session context understanding and intent analysis cap
 | node_limit | int | No | None | Maximum number of results |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filter |
-| include_relations | bool | No | True | Whether to include related context data in each result's `relations` field; set to `false` to skip relation enrichment |
 | since | str | No | None | Lower time bound, accepts `2h` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--after` maps to this field |
 | until | str | No | None | Upper time bound, accepts `30m` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--before` maps to this field |
 | time_field | "updated_at" \| "created_at" | No | "updated_at" | Metadata time field used by `since` / `until` |

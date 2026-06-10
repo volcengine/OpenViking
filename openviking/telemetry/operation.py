@@ -63,18 +63,10 @@ class TelemetrySummaryBuilder:
         "watch_enabled": "resource.flags.watch_enabled",
     }
     _SEARCH_DURATION_KEYS = {
-        "request": "search.request.duration_ms",
-        "access_check": "search.access_check.duration_ms",
         "target_abstract": "search.target_abstract.duration_ms",
         "intent_analysis": "search.intent_analysis.duration_ms",
         "embed_query": "search.embed_query.duration_ms",
         "vector_retrieval": "search.vector_retrieval.duration_ms",
-        "result_convert": "search.result_convert.duration_ms",
-        "rels": "search.rels.duration_ms",
-        "rel_read": "search.rel_read.duration_ms",
-        "rel_filter": "search.rel_filter.duration_ms",
-        "rel_abstracts": "search.rel_abstracts.duration_ms",
-        "result_aggregate": "search.result_aggregate.duration_ms",
     }
 
     @staticmethod

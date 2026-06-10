@@ -22,14 +22,12 @@ from openviking.retrieve.memory_lifecycle import hotness_score
 from openviking.retrieve.retrieval_stats import get_stats_collector
 from openviking.server.identity import RequestContext
 from openviking.storage import VikingDBManager, VikingDBManagerProxy
-from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.retrieve.types import (
     ContextType,
     MatchedContext,
     QueryResult,
-    RelatedContext,
     TypedQuery,
 )
 from openviking_cli.utils.config import RerankConfig, RetrievalConfig
@@ -51,8 +49,6 @@ class HierarchicalRetriever:
     DIRECTORY_DOMINANCE_RATIO = 1.2  # Directory score must exceed max child score
     GLOBAL_SEARCH_TOPK = 10  # Global retrieval count (more candidates = better rerank precision)
     MAX_PARALLEL_CHILD_SEARCHES = 4  # Limit per-request fan-out against remote vector stores
-    MAX_PARALLEL_RELATION_FETCHES = 8
-    MAX_PARALLEL_RELATION_ABSTRACT_READS = 8
     LEVEL_URI_SUFFIX = {0: ".abstract.md", 1: ".overview.md"}
 
     def __init__(
@@ -97,7 +93,6 @@ class HierarchicalRetriever:
         self,
         query: TypedQuery,
         ctx: RequestContext,
-        include_relations: bool = True,
         limit: int = 5,
         mode: str = RetrieverMode.THINKING,
         score_threshold: Optional[float] = None,
@@ -220,12 +215,10 @@ class HierarchicalRetriever:
             )
 
         # Step 6: Convert results
-        with telemetry.measure("search.result_convert"):
-            matched = await self._convert_to_matched_contexts(
-                candidates,
-                ctx=ctx,
-                include_relations=include_relations,
-            )
+        matched = await self._convert_to_matched_contexts(
+            candidates,
+            ctx=ctx,
+        )
 
         final = matched[:limit]
 
@@ -553,7 +546,6 @@ class HierarchicalRetriever:
         self,
         candidates: List[Dict[str, Any]],
         ctx: RequestContext,
-        include_relations: bool = True,
     ) -> List[MatchedContext]:
         """Convert candidate results to MatchedContext list.
 
@@ -562,55 +554,8 @@ class HierarchicalRetriever:
         is controlled by ``retrieval.hotness_alpha`` (0 disables the boost).
         """
         results = []
-        viking_fs = get_viking_fs()
-        telemetry = get_current_telemetry()
-        limited_relation_uris: List[List[str]] = [[] for _ in candidates]
-        related_abstracts_by_candidate: List[Dict[str, str]] = [{} for _ in candidates]
-
-        if include_relations and viking_fs and candidates:
-            relation_sem = asyncio.Semaphore(self.MAX_PARALLEL_RELATION_FETCHES)
-
-            async def _fetch_relations(idx: int, candidate_uri: str) -> None:
-                async with relation_sem:
-                    related_uris = await viking_fs.get_relations(candidate_uri, ctx=ctx)
-                limited_relation_uris[idx] = related_uris[: self.MAX_RELATIONS]
-
-            with telemetry.measure("search.rels"):
-                await asyncio.gather(
-                    *[
-                        _fetch_relations(idx, c.get("uri", ""))
-                        for idx, c in enumerate(candidates)
-                        if c.get("uri", "")
-                    ]
-                )
-
-            abstract_sem = asyncio.Semaphore(self.MAX_PARALLEL_RELATION_ABSTRACT_READS)
-
-            async def _fetch_relation_abstracts(idx: int, relation_uris: List[str]) -> None:
-                if not relation_uris:
-                    return
-                async with abstract_sem:
-                    related_abstracts_by_candidate[idx] = await viking_fs.read_batch(
-                        relation_uris, level="l0", ctx=ctx
-                    )
-
-            with telemetry.measure("search.rel_abstracts"):
-                await asyncio.gather(
-                    *[
-                        _fetch_relation_abstracts(idx, relation_uris)
-                        for idx, relation_uris in enumerate(limited_relation_uris)
-                        if relation_uris
-                    ]
-                )
-
-        for idx, c in enumerate(candidates):
+        for c in candidates:
             relations = []
-            relation_uris = limited_relation_uris[idx]
-            related_abstracts = related_abstracts_by_candidate[idx]
-            for uri in relation_uris:
-                abstract = related_abstracts.get(uri, "")
-                if abstract:
-                    relations.append(RelatedContext(uri=uri, abstract=abstract))
 
             semantic_score = c.get("_final_score", c.get("_score", 0.0))
             # Fix: clamp inf/nan scores from vector search (#inf-score)
