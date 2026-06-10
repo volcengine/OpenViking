@@ -3,5 +3,8 @@
   "version": "0.2.2",
   "description": "OpenViking memory plugin for Claude Code — semantic long-term memory",
   "type": "module",
+  "scripts": {
+    "test": "node --test scripts/lib/*.test.mjs"
+  },
   "private": true
 }

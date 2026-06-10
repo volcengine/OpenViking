@@ -310,6 +310,7 @@ export async function incrementRetry(filename, entry) {
   try {
     await writeFile(join(dir, tmpFilename), JSON.stringify(entry), {
       encoding: "utf-8",
+      flag: "wx",
       mode: PENDING_FILE_MODE,
     });
     await rename(join(dir, tmpFilename), join(dir, newFilename));
