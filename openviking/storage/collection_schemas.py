@@ -145,21 +145,27 @@ def _get_active_embedding_model_config(config: "OpenVikingConfig") -> Any:
 
 def _build_embedding_metadata(config: "OpenVikingConfig") -> Dict[str, Any]:
     model_cfg = _get_active_embedding_model_config(config)
-    # When credentials are used, parent-level provider/model may be empty;
-    # fall back to the first credential so the metadata signature stays stable.
+    # When credentials are configured, the first credential drives the actual
+    # provider/model used at request time (see EmbeddingConfig._effective_*),
+    # so the metadata signature must reflect the credential rather than the
+    # parent's possibly-default provider/model. Otherwise a credential-only
+    # OpenAI config would still be signed as ``provider=volcengine`` (the parent
+    # default), masking real vector-space changes.
     first_cred = None
     creds = getattr(model_cfg, "credentials", None) or []
     if creds:
         first_cred = creds[0]
+    cred_provider = getattr(first_cred, "provider", None) if first_cred else None
+    cred_model = getattr(first_cred, "model", None) if first_cred else None
     provider = (
-        getattr(model_cfg, "provider", None)
+        cred_provider
+        or getattr(model_cfg, "provider", None)
         or getattr(model_cfg, "backend", None)
-        or (getattr(first_cred, "provider", None) if first_cred else None)
         or ""
     ).lower()
     model = (
-        getattr(model_cfg, "model", None)
-        or (getattr(first_cred, "model", None) if first_cred else None)
+        cred_model
+        or getattr(model_cfg, "model", None)
         or ""
     )
     dimension = config.embedding.dimension

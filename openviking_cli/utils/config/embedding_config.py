@@ -252,6 +252,7 @@ class EmbeddingModelConfig(BaseModel):
         # blank because each credential carries its own settings.
         if self.credentials:
             self._validate_credentials()
+            self._validate_credential_dimensions()
             return self
 
         self._validate_provider_auth(
@@ -331,19 +332,150 @@ class EmbeddingModelConfig(BaseModel):
                 region=cred.region or self.region,
             )
 
+    def _validate_credential_dimensions(self) -> None:
+        """Ensure all credentials produce vectors of the same dimension.
+
+        Mixing credentials whose embedders return different vector lengths
+        causes ``dense vector dimension mismatch`` errors at write time and
+        silently breaks retrieval. We therefore reject such configurations at
+        startup. Dimensions are resolved using the same heuristics as
+        ``get_effective_dimension`` (provider + model), with the explicit
+        parent ``self.dimension`` always winning when set.
+        """
+        if len(self.credentials) <= 1:
+            return
+
+        resolved: list[tuple[str, int]] = []
+        for idx, cred in enumerate(self.credentials):
+            cred_id = cred.id or f"credential-{idx}"
+            provider = (cred.provider or self.provider or "").lower()
+            model = cred.model or self.model
+            try:
+                dim = self._resolve_dimension_for(provider, model)
+            except ValueError:
+                # Unknown dimension (e.g. ollama with no explicit dim and
+                # unknown model): skip - the per-credential validation above
+                # would have already required `dimension` if needed via
+                # parent.dimension, and resolution failures here are non-fatal
+                # because the credential may still work at runtime.
+                continue
+            if dim is None:
+                continue
+            resolved.append((cred_id, dim))
+
+        distinct = {dim for _, dim in resolved}
+        if len(distinct) > 1:
+            details = ", ".join(f"{cid}={dim}" for cid, dim in resolved)
+            raise ValueError(
+                "Embedding credentials have conflicting vector dimensions: "
+                f"{details}. All credentials must produce vectors of the same "
+                "dimension; mixing different dimensions corrupts the vector "
+                "store. Either align provider/model across credentials, or "
+                "set 'dimension' explicitly on the parent embedding config "
+                "to force a fixed schema dimension."
+            )
+
+    def _resolve_dimension_for(
+        self, provider: str, model: Optional[str]
+    ) -> Optional[int]:
+        """Resolve dimension for a (provider, model) pair using the same
+        rules as ``get_effective_dimension``. The explicit parent dimension,
+        when set, always wins."""
+        if self.dimension is not None:
+            return self.dimension
+
+        provider = (provider or "").lower()
+        if provider in {"openai", "azure"}:
+            mapping = {
+                "text-embedding-ada-002": 1536,
+                "text-embedding-3-small": 1536,
+                "text-embedding-3-large": 3072,
+            }
+            return mapping.get((model or "").lower())
+
+        if provider == "voyage":
+            from openviking.models.embedder.voyage_embedders import (
+                get_voyage_model_default_dimension,
+            )
+
+            return get_voyage_model_default_dimension(model)
+
+        if provider == "cohere":
+            from openviking.models.embedder.cohere_embedders import (
+                get_cohere_model_default_dimension,
+            )
+
+            return get_cohere_model_default_dimension(model)
+
+        if provider == "gemini":
+            from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+            return GeminiDenseEmbedder._default_dimension(model)
+
+        if provider == "local":
+            from openviking.models.embedder.local_embedders import (
+                get_local_model_default_dimension,
+            )
+
+            return get_local_model_default_dimension(model)
+
+        if provider == "dashscope":
+            try:
+                from openviking.models.embedder.dashscope_embedders import (
+                    get_dashscope_model_default_dimension,
+                )
+
+                return get_dashscope_model_default_dimension(model)
+            except ImportError:
+                return 1024
+
+        # Providers without a known dimension lookup (volcengine, jina,
+        # vikingdb, ollama for unlisted models, etc.) cannot be cross-checked
+        # here without an explicit dimension. Return None so validation skips
+        # them; same-provider credentials are typically dimension-compatible
+        # by construction, and any real mismatch will surface at write time.
+        return None
+
+    def _effective_provider(self) -> Optional[str]:
+        """Resolve the provider that actually drives this config.
+
+        When credentials are configured, the first credential's provider takes
+        precedence over the parent's (which may still hold its default value of
+        ``volcengine``). Without this fallback, credential-only configurations
+        targeting a non-default provider would silently use the parent's
+        default for dimension/metadata resolution and produce a vector-space
+        mismatch (e.g. parent volcengine -> 2048 dim while the actual OpenAI
+        embedder returns 1536).
+        """
+        if self.credentials and self.credentials[0].provider:
+            return self.credentials[0].provider
+        return self.provider
+
+    def _effective_model(self) -> Optional[str]:
+        """Resolve the model that actually drives this config.
+
+        Same rationale as ``_effective_provider``: credential-level model wins
+        when present so dimension/metadata reflect the model the embedder will
+        actually call.
+        """
+        if self.credentials and self.credentials[0].model:
+            return self.credentials[0].model
+        return self.model
+
     def get_effective_dimension(self) -> int:
         """Resolve the dimension used for schema creation and validation."""
         if self.dimension is not None:
             return self.dimension
 
-        provider = (self.provider or "").lower()
+        provider = (self._effective_provider() or "").lower()
+        effective_model = self._effective_model()
         if provider in {"openai", "azure"}:
             openai_model_dimensions = {
                 "text-embedding-ada-002": 1536,
                 "text-embedding-3-small": 1536,
                 "text-embedding-3-large": 3072,
             }
-            model_lower = (self.model or "").lower()
+            model_lower = (effective_model or "").lower()
             if model_lower in openai_model_dimensions:
                 return openai_model_dimensions[model_lower]
 
@@ -352,19 +484,19 @@ class EmbeddingModelConfig(BaseModel):
                 get_voyage_model_default_dimension,
             )
 
-            return get_voyage_model_default_dimension(self.model)
+            return get_voyage_model_default_dimension(effective_model)
 
         if provider == "cohere":
             from openviking.models.embedder.cohere_embedders import (
                 get_cohere_model_default_dimension,
             )
 
-            return get_cohere_model_default_dimension(self.model)
+            return get_cohere_model_default_dimension(effective_model)
 
         if provider == "gemini":
             from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
 
-            return GeminiDenseEmbedder._default_dimension(self.model)
+            return GeminiDenseEmbedder._default_dimension(effective_model)
 
         if provider == "ollama":
             # Common Ollama embedding models and their dimensions
@@ -386,12 +518,12 @@ class EmbeddingModelConfig(BaseModel):
                 "embeddinggemma": 768,
                 "embeddinggemma:300m": 768,
             }
-            model_lower = (self.model or "").lower()
+            model_lower = (effective_model or "").lower()
             if model_lower in ollama_model_dimensions:
                 return ollama_model_dimensions[model_lower]
             # For unknown Ollama models, require explicit dimension
             raise ValueError(
-                f"Unknown dimension for Ollama model '{self.model}'. "
+                f"Unknown dimension for Ollama model '{effective_model}'. "
                 f"Please set 'dimension' explicitly in your embedding config. "
                 f"Known models: {list(ollama_model_dimensions.keys())}"
             )
@@ -399,7 +531,7 @@ class EmbeddingModelConfig(BaseModel):
         if provider == "local":
             from openviking.models.embedder.local_embedders import get_local_model_default_dimension
 
-            return get_local_model_default_dimension(self.model)
+            return get_local_model_default_dimension(effective_model)
 
         if provider == "dashscope":
             try:
@@ -407,7 +539,7 @@ class EmbeddingModelConfig(BaseModel):
                     get_dashscope_model_default_dimension,
                 )
 
-                return get_dashscope_model_default_dimension(self.model)
+                return get_dashscope_model_default_dimension(effective_model)
             except ImportError:
                 # Fallback dimension if dashscope_embedders module doesn't exist yet
                 return 1024
@@ -891,9 +1023,9 @@ class EmbeddingConfig(BaseModel):
                 sk=cred.sk or config.sk,
                 region=cred.region or config.region,
                 host=cred.host or config.host,
-                api_key=cred.api_key,
-                api_base=cred.api_base,
-                api_version=cred.api_version,
+                api_key=cred.api_key or config.api_key,
+                api_base=cred.api_base or config.api_base,
+                api_version=cred.api_version or config.api_version,
                 extra_headers=cred.extra_headers or config.extra_headers,
                 # Model-behavior fields are shared by all credentials of the
                 # same model and live only on the parent config.

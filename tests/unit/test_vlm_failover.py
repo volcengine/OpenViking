@@ -122,6 +122,118 @@ class TestVLMBackupConfig:
         assert dict_b["model"] == "parent-model"
 
 
+class TestLegacyProvidersDictMigration:
+    """Tests for migrating legacy ``providers: {name: {...}}`` configs into credentials.
+
+    Regression coverage for: when only ``providers`` was set (without top-level
+    ``provider``/``api_key``), ``_normalize_credentials`` previously produced a
+    credential with provider=None and api_key=None, which made ``is_available()``
+    return False even though the config was valid in the legacy code path.
+    """
+
+    def test_providers_only_single_provider_migrates_provider_and_api_key(self):
+        """``providers={openai: {api_key: sk}}`` should yield a usable default credential."""
+        cfg = VLMConfig(
+            model="gpt-4o-mini",
+            providers={"openai": {"api_key": "sk-test", "api_base": "https://api.example.com"}},
+        )
+
+        assert len(cfg.credentials) == 1
+        cred = cfg.credentials[0]
+        assert cred.id == "default"
+        assert cred.provider == "openai"
+        assert cred.api_key == "sk-test"
+        assert cred.api_base == "https://api.example.com"
+        assert cred.model == "gpt-4o-mini"
+
+        # is_available() must return True - this was the original blocking bug
+        assert cfg.is_available() is True
+
+    def test_providers_only_default_provider_picks_correct_one(self):
+        """When ``default_provider`` is set, the matching providers entry is used."""
+        cfg = VLMConfig(
+            model="gpt-4o-mini",
+            default_provider="openai",
+            providers={
+                "openai": {"api_key": "sk-openai"},
+                "azure": {"api_key": "sk-azure", "api_base": "https://azure.example.com"},
+            },
+        )
+
+        assert len(cfg.credentials) == 1
+        cred = cfg.credentials[0]
+        assert cred.provider == "openai"
+        assert cred.api_key == "sk-openai"
+        assert cfg.is_available() is True
+
+    def test_top_level_provider_with_providers_dict_merges_correctly(self):
+        """``provider=openai`` plus ``providers={openai: {api_key: ...}}`` works."""
+        cfg = VLMConfig(
+            model="gpt-4o",
+            provider="openai",
+            providers={"openai": {"api_key": "sk-merged"}},
+        )
+
+        assert len(cfg.credentials) == 1
+        cred = cfg.credentials[0]
+        assert cred.provider == "openai"
+        assert cred.api_key == "sk-merged"
+        assert cfg.is_available() is True
+
+    def test_legacy_top_level_api_key_still_works(self):
+        """Pure top-level legacy config (provider + api_key) keeps working."""
+        cfg = VLMConfig(
+            model="gpt-4o",
+            provider="openai",
+            api_key="sk-top-level",
+        )
+
+        assert len(cfg.credentials) == 1
+        cred = cfg.credentials[0]
+        assert cred.provider == "openai"
+        assert cred.api_key == "sk-top-level"
+        assert cfg.is_available() is True
+
+    def test_providers_only_propagates_extra_fields(self):
+        """extra_headers / extra_request_body / api_version / stream all propagate."""
+        cfg = VLMConfig(
+            model="gpt-4o",
+            providers={
+                "openai": {
+                    "api_key": "sk",
+                    "api_base": "https://api.example.com",
+                    "api_version": "2024-01-01",
+                    "extra_headers": {"X-Trace": "1"},
+                    "extra_request_body": {"foo": "bar"},
+                    "stream": True,
+                }
+            },
+        )
+
+        cred = cfg.credentials[0]
+        assert cred.provider == "openai"
+        assert cred.api_key == "sk"
+        assert cred.api_base == "https://api.example.com"
+        assert cred.api_version == "2024-01-01"
+        assert cred.extra_headers == {"X-Trace": "1"}
+        assert cred.extra_request_body == {"foo": "bar"}
+        assert cred.stream is True
+
+    def test_explicit_credentials_take_precedence_over_legacy(self):
+        """When ``credentials`` is set, legacy providers dict is not migrated again."""
+        cfg = VLMConfig(
+            model="gpt-4o",
+            credentials=[
+                {"id": "explicit", "provider": "openai", "api_key": "sk-explicit"},
+            ],
+            providers={"openai": {"api_key": "sk-legacy"}},
+        )
+
+        assert len(cfg.credentials) == 1
+        assert cfg.credentials[0].id == "explicit"
+        assert cfg.credentials[0].api_key == "sk-explicit"
+
+
 class TestFailoverVLM:
     """Tests for FailoverVLM wrapper."""
 

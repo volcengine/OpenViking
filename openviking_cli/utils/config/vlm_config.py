@@ -290,21 +290,38 @@ class VLMConfig(BaseModel):
             self.backup = None
 
         # Step 2: If no credentials from backup migration and no explicit credentials,
-        # create credentials from top-level config
+        # create credentials from top-level config. We resolve the effective provider
+        # config first (via _match_provider) so legacy ``providers: {openai: {...}}``
+        # configurations - where the api_key/api_base live inside the providers dict
+        # rather than at the top level - are migrated correctly. Otherwise the
+        # generated credential would be missing provider/api_key and is_available()
+        # would return False.
         if not migrated_credentials and not self.credentials:
             if self._has_legacy_provider_config():
+                provider_cfg, provider_name = self._match_provider()
+                provider_cfg = provider_cfg or {}
                 migrated_credentials.append(
                     VLMCredential(
                         id="default",
-                        provider=self.provider,
+                        provider=provider_name or self.provider,
                         model=self.model,
-                        api_key=self.api_key,
-                        api_base=self.api_base,
-                        api_version=self.api_version,
-                        forward_api_key=self.forward_api_key,
-                        extra_headers=self.extra_headers,
-                        extra_request_body=self.extra_request_body,
-                        stream=self.stream,
+                        api_key=provider_cfg.get("api_key") or self.api_key,
+                        api_base=provider_cfg.get("api_base") or self.api_base,
+                        api_version=provider_cfg.get("api_version") or self.api_version,
+                        forward_api_key=(
+                            provider_cfg.get("forward_api_key")
+                            if provider_cfg.get("forward_api_key") is not None
+                            else self.forward_api_key
+                        ),
+                        extra_headers=provider_cfg.get("extra_headers") or self.extra_headers,
+                        extra_request_body=(
+                            provider_cfg.get("extra_request_body") or self.extra_request_body
+                        ),
+                        stream=(
+                            provider_cfg.get("stream")
+                            if provider_cfg.get("stream") is not None
+                            else self.stream
+                        ),
                     )
                 )
 
