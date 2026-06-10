@@ -896,10 +896,20 @@ class FailoverEmbedder(EmbedderBase):
         )
 
     def get_dimension(self) -> int:
-        """Get dimension from the first embedder."""
-        if hasattr(self._embedders[0], "get_dimension"):
-            return self._embedders[0].get_dimension()
-        return 2048
+        """Get the dense dimension from the first embedder.
+
+        Raises:
+            AttributeError: if the wrapped embedders are sparse; sparse
+                embedders have no fixed dense dimension, so a dimension should
+                never be requested from them.
+        """
+        first = self._embedders[0]
+        if not hasattr(first, "get_dimension"):
+            raise AttributeError(
+                f"{type(first).__name__} has no get_dimension "
+                "(sparse embedders have no fixed dimension)"
+            )
+        return first.get_dimension()
 
     @property
     def active_credential_index(self) -> int:
