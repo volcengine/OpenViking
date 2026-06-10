@@ -9,6 +9,8 @@ import {
   summarizeInjectionMemories,
   summarizeExtractedMemories,
   pickMemoriesForInjection,
+  isResourceMemory,
+  passesRecallScoreThreshold,
 } from "../../memory-ranking.js";
 import type { FindResultItem } from "../../client.js";
 
@@ -254,5 +256,41 @@ describe("pickMemoriesForInjection", () => {
     ];
     const result = pickMemoriesForInjection(items, 1, "When did the user deploy?");
     expect(result[0]!.uri).toBe("event");
+  });
+
+  it("uses Cyrillic query terms for lexical overlap", () => {
+    const items = [
+      mem({ uri: "generic", category: "facts", score: 0.76, abstract: "OpenViking diagnostics" }),
+      mem({
+        uri: "badminton",
+        category: "facts",
+        score: 0.7,
+        abstract: "Решил играть в бадминтон по календарю",
+      }),
+    ];
+    const result = pickMemoriesForInjection(items, 1, "что я решил про бадминтон и календарь");
+    expect(result[0]!.uri).toBe("badminton");
+  });
+});
+
+describe("recall score thresholds", () => {
+  it("detects shared resource memories by URI", () => {
+    expect(isResourceMemory(mem({ uri: "viking://resources/second-brain/note.md" }))).toBe(true);
+    expect(isResourceMemory(mem({ uri: "viking://user/default/memories/note.md" }))).toBe(false);
+  });
+
+  it("requires a stronger score for shared resource memories", () => {
+    expect(
+      passesRecallScoreThreshold(
+        mem({ uri: "viking://resources/second-brain/noisy.md", score: 0.55 }),
+        0.5,
+      ),
+    ).toBe(false);
+    expect(
+      passesRecallScoreThreshold(
+        mem({ uri: "viking://user/default/memories/useful.md", score: 0.55 }),
+        0.5,
+      ),
+    ).toBe(true);
   });
 });

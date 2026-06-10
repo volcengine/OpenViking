@@ -152,6 +152,53 @@ describe("context-engine assemble()", () => {
     expect(result.systemPromptAddition).toBeUndefined();
   });
 
+  it("skips low-score resources during transformContext auto-recall", async () => {
+    const { engine, client } = makeEngine(
+      {
+        latest_archive_overview: "unused",
+        pre_archive_abstracts: [],
+        messages: [],
+        estimatedTokens: 0,
+        stats: makeStats(),
+      },
+      {
+        cfgOverrides: {
+          autoRecall: true,
+          recallResources: true,
+          recallScoreThreshold: 0.5,
+          recallPreferAbstract: true,
+        },
+      },
+    );
+    client.find
+      .mockResolvedValueOnce({ memories: [], total: 0 })
+      .mockResolvedValueOnce({
+        resources: [
+          {
+            uri: "viking://resources/second-brain/noisy-transcript.md",
+            level: 2,
+            category: "",
+            abstract: "A loose raw transcript with unrelated meeting chatter.",
+            score: 0.55,
+          },
+        ],
+        total: 1,
+      });
+
+    const sourceMessages = [
+      { role: "assistant", content: [{ type: "text", text: "Previous answer." }] },
+      { role: "user", content: "Посмотри что там было и подскажи" },
+    ];
+
+    const result = await engine.assemble({
+      sessionId: "session-low-score-resource",
+      messages: sourceMessages,
+    });
+
+    expect(result.messages).toBe(sourceMessages);
+    expect(client.find).toHaveBeenCalledTimes(2);
+  });
+
   it("passes sender peer_id to transformContext auto-recall when peer_role is person", async () => {
     vi.stubGlobal(
       "fetch",
