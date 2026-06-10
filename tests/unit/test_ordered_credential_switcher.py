@@ -305,3 +305,43 @@ class TestOrderedCredentialSwitcher:
         result = switcher.on_failure(0, ERROR_CLASS_AUTH)
         assert result is False
         assert switcher.get_active_index() == 0
+
+    def test_is_fail_fast_classification(self):
+        """Request-level errors are fail-fast; credential/quota/transient are not."""
+        assert OrderedCredentialSwitcher.is_fail_fast(ERROR_CLASS_PERMANENT) is True
+        assert OrderedCredentialSwitcher.is_fail_fast(ERROR_CLASS_INPUT_TOO_LARGE) is True
+        assert OrderedCredentialSwitcher.is_fail_fast(ERROR_CLASS_CONTENT_SAFETY) is True
+        assert OrderedCredentialSwitcher.is_fail_fast(ERROR_CLASS_AUTH) is False
+        assert OrderedCredentialSwitcher.is_fail_fast(ERROR_CLASS_QUOTA_EXCEEDED) is False
+        assert OrderedCredentialSwitcher.is_fail_fast(ERROR_CLASS_TRANSIENT) is False
+        assert OrderedCredentialSwitcher.is_fail_fast(ERROR_CLASS_UNKNOWN) is False
+
+    def test_commit_success_same_index_increments_failback_counter(self):
+        """commit_success on the active (non-zero) index advances failback counter."""
+        switcher = OrderedCredentialSwitcher(n=3, failback_request_count=2)
+
+        switcher.on_failure(0, ERROR_CLASS_QUOTA_EXCEEDED)  # active -> 1
+        assert switcher.get_active_index() == 1
+
+        switcher.commit_success(1)
+        switcher.commit_success(1)
+        # Two successes at the active index satisfy the failback threshold.
+        assert switcher.maybe_failback() == 0
+
+    def test_commit_success_different_index_fast_failover(self):
+        """commit_success on a different index commits it as the new active one."""
+        switcher = OrderedCredentialSwitcher(n=3)
+
+        # active starts at 0; a later credential (idx 2) served the request.
+        switcher.commit_success(2)
+        assert switcher.get_active_index() == 2
+
+    def test_commit_success_at_index_zero_no_counter(self):
+        """commit_success at index 0 keeps active at 0 and does not count."""
+        switcher = OrderedCredentialSwitcher(n=3, failback_request_count=1)
+
+        switcher.commit_success(0)
+        switcher.commit_success(0)
+        assert switcher.get_active_index() == 0
+        # Still at 0, nothing to fail back to.
+        assert switcher.maybe_failback() == 0
