@@ -608,8 +608,16 @@ class MemoryUpdater:
         viking_fs = self._get_viking_fs()
         if not viking_fs:
             return
+        from openviking.core.namespace import context_type_for_uri
+
         upserted_uris = set(result.written_uris + result.edited_uris)
-        skip = upserted_uris | (deleted_uris or set())
+        non_memory_endpoints = {
+            uri
+            for link in resolved_links
+            for uri in (link.from_uri, link.to_uri)
+            if context_type_for_uri(uri) != "memory"
+        }
+        skip = upserted_uris | (deleted_uris or set()) | non_memory_endpoints
         await write_stored_links(resolved_links, ctx, viking_fs, skip_uris=skip)
 
     async def _apply_delete(self, uri: str, ctx: RequestContext) -> None:
@@ -669,7 +677,9 @@ class MemoryUpdater:
                 content = await viking_fs.read_file(uri, ctx=ctx) or ""
 
                 mf = MemoryFileUtils.read(content, uri=uri)
-                abstract = mf.plain_content()
+                from openviking.session.memory.utils.link_renderer import LinkRenderer
+
+                abstract = LinkRenderer.strip_all_links(mf.content or "")
                 embedding_text = abstract
 
                 memory_type = uri_memory_type_map.get(uri)

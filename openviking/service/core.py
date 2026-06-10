@@ -20,6 +20,7 @@ from openviking.service.debug_service import DebugService
 from openviking.service.fs_service import FSService
 from openviking.service.pack_service import PackService
 from openviking.service.relation_service import RelationService
+from openviking.service.resource_memory_link_service import ResourceMemoryLinkService
 from openviking.service.resource_service import ResourceService
 from openviking.service.search_service import SearchService
 from openviking.service.session_service import SessionService
@@ -119,6 +120,7 @@ class OpenVikingService:
         self._relation_service = RelationService()
         self._pack_service = PackService()
         self._search_service = SearchService()
+        self._resource_memory_link_service = ResourceMemoryLinkService()
         self._resource_service = ResourceService()
         self._session_service = SessionService()
         self._debug_service = DebugService()
@@ -415,6 +417,11 @@ class OpenVikingService:
         self._fs_service.set_dependencies(
             viking_fs=self._viking_fs,
             privacy_config_service=self._privacy_config_service,
+            resource_memory_link_service=self._resource_memory_link_service,
+        )
+        self._resource_memory_link_service.set_dependencies(
+            vikingdb=self._vikingdb_manager,
+            viking_fs=self._viking_fs,
         )
         self._relation_service.set_viking_fs(self._viking_fs)
         self._pack_service.set_dependencies(
@@ -428,6 +435,7 @@ class OpenVikingService:
             resource_processor=self._resource_processor,
             skill_processor=self._skill_processor,
             watch_scheduler=self._watch_scheduler,
+            resource_memory_link_service=self._resource_memory_link_service,
         )
         self._session_service.set_dependencies(
             vikingdb=self._vikingdb_manager,

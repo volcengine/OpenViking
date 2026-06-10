@@ -121,7 +121,8 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 3. 调用对应 Parser 解析内容
 4. 构建目录树并写入 AGFS
 5. `wait=true` 时等待语义处理完成；`wait=false` 时返回 `task_id` 用于队列跟踪
-6. 如指定 `--watch-interval`，设置定时更新任务
+6. 如果 `reason` 非空，基于 `reason` 和资源 URI 触发一次独立的 memory linking，生成或更新合适的用户记忆
+7. 如指定 `--watch-interval`，设置定时更新任务
 
 **代码入口**：
 - `openviking/client/local.py:LocalClient.add_resource` - SDK 入口（嵌入式）
@@ -141,7 +142,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 | to | string | 否 | - | 目标 Viking URI（精确位置）。与 `parent` 互斥 |
 | parent | string | 否 | - | 父级 Viking URI（资源放入此目录下）。与 `to` 互斥 |
 | create_parent | bool | 否 | False | 如果父目录不存在，自动创建父目录（服务端标志） |
-| reason | string | 否 | "" | 添加资源的原因（用于文档化和相关性提升，实验特性） |
+| reason | string | 否 | "" | 添加资源的原因。非空时会基于该原因和资源 URI 生成或更新用户记忆，并在记忆中记录对资源的引用 |
 | instruction | string | 否 | "" | 语义提取的处理指令（实验特性） |
 | wait | bool | 否 | False | 是否等待语义处理和向量化完成才返回 |
 | timeout | float | 否 | None | 超时时间（秒），仅 `wait=true` 时生效 |
@@ -158,6 +159,9 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 - `to` 和 `parent` 不能同时使用；如果使用 `parent` 且希望父目录不存在时自动创建，请传 `create_parent=true`。指定 `to` 且目标已存在时，触发增量更新。
 - `path` 和 `temp_file_id` 不能同时指定，上传本地文件需要先通过 [temp_upload](#temp_upload) 上传获取 `temp_file_id`，在 SDK 和 CLI 中已经封装好。
 - 只有 Git 仓库来源在 `wait=false` 时使用完整后台导入；OpenViking 会先完成仓库 preflight 和目标规划，再返回 `task_id`。
+- `reason` 触发的记忆生成不会读取或展开资源正文，只使用 `reason`、`viking://resources/...` URI 和可用的资源名称。系统会选择合适的既有用户记忆类型（如 `profile`、`entities`、`events`、`preferences`），不会强制写入固定记忆类型。
+- 资源文件本身不会写入额外注释或 metadata 文件。资源与记忆的关联只保存在记忆文件的 `MEMORY_FIELDS.resource_refs` / `links` 中。
+- 删除 `viking://resources/...` 时，系统会在删除前扫描当前用户记忆中的 `resource_refs`，清理对应资源 URI 和由该 `reason` 引入的内容，并重新刷新相关记忆的语义索引。
 - 其他来源在 `wait=false` 时会在响应前完成来源解析、目标解析和 AGFS 写入，仅 semantic 与 embedding 队列继续异步处理。
 - `watch_interval > 0` 时，如果指定了 `to`，监控任务绑定该目标；如果未指定 `to`，监控任务绑定本次导入返回的 `root_uri`。如果无法得到稳定 `root_uri`，请求会报错并要求显式传 `to`。
 - 本地目录输入会遵循 `.gitignore`（根目录和子目录，标准 Git 语义）；`ignore_dirs`、`include`、`exclude` 会在此基础上进一步过滤。
@@ -350,6 +354,7 @@ task_id      uuid-xxx
 | `errors` | array | 处理过程中的错误列表 |
 | `warnings` | array | （可选）处理过程中的警告列表（仅在 `strict=False` 时可能出现） |
 | `queue_status` | object | （可选，仅当 `wait=true` 时）队列处理状态，包含 `pending`、`processing`、`completed` 计数 |
+| `memory_linking` | object | （可选，仅当 `reason` 触发记忆生成时）本次资源 URI 与用户记忆的关联结果 |
 
 对于 `wait=false` 的 Git 仓库来源，后台任务的 `task_type="add_resource"`，`resource_id` 等于返回的 `root_uri`。运行中的任务记录可能包含 `stage`；完成后的任务 `result` 会包含带有 semantic 和 embedding 汇总的 `queue_status`。
 

@@ -392,6 +392,75 @@ class TestMemoryUpdater:
         assert [link["to_uri"] for link in caroline["backlinks"]] == [caroline_uri]
         assert melanie.get("backlinks", []) == []
 
+    @pytest.mark.asyncio
+    async def test_apply_operations_does_not_write_backlinks_to_resource_targets(self):
+        memory_uri = "viking://user/alice/memories/entities/wang.md"
+        resource_uri = "viking://resources/id_card.pdf"
+
+        schema = MemoryTypeSchema(
+            memory_type="entities",
+            description="entity memory",
+            directory="viking://user/{{ user_space }}/memories/entities",
+            filename_template="{{ name }}.md",
+            fields=[],
+            overview_template="overview",
+        )
+        registry = MagicMock()
+        registry.get.return_value = schema
+
+        store = {}
+        mock_viking_fs = MagicMock()
+
+        async def mock_read_file(uri, **kwargs):
+            if uri == resource_uri:
+                raise AssertionError("resource target should not be read as a memory file")
+            return store.get(uri)
+
+        async def mock_write_file(uri, content, **kwargs):
+            if uri == resource_uri:
+                raise AssertionError("resource target should not be written as a memory file")
+            store[uri] = content
+
+        mock_viking_fs.read_file = mock_read_file
+        mock_viking_fs.write_file = mock_write_file
+
+        updater = MemoryUpdater(registry=registry)
+        updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
+        updater._vectorize_memories = AsyncMock()
+        updater.generate_overview = AsyncMock()
+
+        operations = ResolvedOperations(
+            upsert_operations=[
+                ResolvedOperation(
+                    memory_fields={
+                        "name": "王大锤",
+                        "content": "王大锤的身份证资料见资源。",
+                    },
+                    memory_type="entities",
+                    uris=[memory_uri],
+                    page_id=100,
+                )
+            ],
+            delete_file_contents=[],
+            errors=[],
+            resolved_links=[
+                StoredLink(
+                    from_uri=memory_uri,
+                    to_uri=resource_uri,
+                    link_type="references_resource",
+                    match_text="资源",
+                )
+            ],
+        )
+
+        ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
+
+        await updater.apply_operations(operations=operations, ctx=ctx)
+
+        memory = parse_memory_file_with_fields(store[memory_uri])
+        assert memory["links"][0]["to_uri"] == resource_uri
+        assert resource_uri not in store
+
 
 # The TestApplyWriteWithContentInFields tests are outdated because WriteOp no longer exists
 # The _apply_write method now accepts any flat model (dict or Pydantic model) that

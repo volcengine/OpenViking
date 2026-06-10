@@ -6,7 +6,7 @@ File System Service for OpenViking.
 Provides file system operations: ls, mkdir, rm, mv, tree, stat, read, abstract, overview, grep, glob.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.core.namespace import context_type_for_uri
 from openviking.core.uri_validation import validate_optional_viking_uri, validate_viking_uri
@@ -24,6 +24,9 @@ from openviking_cli.utils import VikingURI, get_logger
 
 logger = get_logger(__name__)
 
+if TYPE_CHECKING:
+    from openviking.service.resource_memory_link_service import ResourceMemoryLinkService
+
 
 class FSService:
     """File system operations service."""
@@ -32,18 +35,22 @@ class FSService:
         self,
         viking_fs: Optional[VikingFS] = None,
         privacy_config_service: Optional[UserPrivacyConfigService] = None,
+        resource_memory_link_service: Optional["ResourceMemoryLinkService"] = None,
     ):
         self._viking_fs = viking_fs
         self._privacy_config_service = privacy_config_service
+        self._resource_memory_link_service = resource_memory_link_service
 
     def set_dependencies(
         self,
         viking_fs: VikingFS,
         privacy_config_service: Optional[UserPrivacyConfigService] = None,
+        resource_memory_link_service: Optional["ResourceMemoryLinkService"] = None,
     ) -> None:
         """Set service dependencies (for deferred initialization)."""
         self._viking_fs = viking_fs
         self._privacy_config_service = privacy_config_service
+        self._resource_memory_link_service = resource_memory_link_service
 
     def _ensure_initialized(self) -> VikingFS:
         """Ensure VikingFS is initialized."""
@@ -163,7 +170,17 @@ class FSService:
         """Remove resource."""
         uri = validate_viking_uri(uri)
         viking_fs = self._ensure_initialized()
-        return await viking_fs.rm(uri, recursive=recursive, ctx=ctx)
+        cleanup_result: Optional[Dict[str, Any]] = None
+        if self._resource_memory_link_service and context_type_for_uri(uri) == "resource":
+            cleanup_result = await self._resource_memory_link_service.before_resource_delete(
+                ctx=ctx,
+                resource_uri=uri,
+                recursive=recursive,
+            )
+        result = await viking_fs.rm(uri, recursive=recursive, ctx=ctx)
+        if cleanup_result is not None and isinstance(result, dict):
+            result["memory_cleanup"] = cleanup_result
+        return result
 
     async def mv(self, from_uri: str, to_uri: str, ctx: RequestContext) -> None:
         """Move resource."""

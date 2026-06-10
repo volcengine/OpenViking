@@ -339,6 +339,11 @@ class TestStripLinks:
         result = LinkRenderer.strip_links(content)
         assert result == content
 
+    def test_strip_all_links_removes_viking_uri_targets_for_embedding(self):
+        content = "用户上传了一张[越前龙马](viking://resources/images/yueqian_jpeg)的照片。"
+        result = LinkRenderer.strip_all_links(content)
+        assert result == "用户上传了一张越前龙马的照片。"
+
 
 class TestRoundTrip:
     def test_render_then_strip(self):

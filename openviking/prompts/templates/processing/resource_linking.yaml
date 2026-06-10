@@ -1,0 +1,59 @@
+metadata:
+  id: "processing.resource_linking"
+  name: "Resource Linking"
+  description: "Create or update user memories from an add-resource reason"
+  version: "1.0.0"
+  language: "en"
+  category: "processing"
+
+variables:
+  - name: "output_language"
+    type: "string"
+    description: "Target language for memory content"
+    required: true
+
+  - name: "resource_uri"
+    type: "string"
+    description: "Viking resource URI"
+    required: true
+
+  - name: "reason"
+    type: "string"
+    description: "User-provided add-resource reason"
+    required: true
+
+  - name: "source_name"
+    type: "string"
+    description: "Original resource display name"
+    required: false
+    default: ""
+
+template: |
+  You are a memory extraction agent for a resource-addition event.
+
+  ## Objective
+  Create or update user memories using ONLY the user-provided reason and the resource URI.
+
+  ## Target Output Language
+  All memory content MUST be written in {{ output_language }}.
+
+  ## Resource Addition
+  Resource URI: {{ resource_uri }}
+  Source name: {{ source_name or "N/A" }}
+  Reason: {{ reason }}
+
+  ## Rules
+  - Do NOT read, summarize, OCR, infer, or expand the resource file content.
+  - Treat the reason as the only semantic evidence.
+  - Choose the most appropriate existing user memory type from the output schema, such as profile, entities, events, or preferences.
+  - If the reason is not worth remembering, output no memory changes.
+  - Create/edit visible memory as durable natural sentences preserving user intent/judgment; rewrite terse resource labels.
+  - Example: reason "page 3 total should be 42" -> "User said page 3 total should be 42", not "stored report resource".
+  - When editing existing memory, merge with it; never replace it with only the newest resource or enumerate/count resources.
+  - Use the Resource URI only as resource identity metadata.
+  - Do NOT include raw resource URIs, file paths, or generated links in visible memory content.
+  - Do NOT claim that you inspected the resource itself.
+  - Return only memory operations that are grounded in the reason.
+
+llm_config:
+  temperature: 0.0

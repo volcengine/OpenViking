@@ -173,6 +173,8 @@ async def rm(
     response_result = {"uri": uri}
     if isinstance(result, dict) and "estimated_deleted_count" in result:
         response_result["estimated_deleted_count"] = result["estimated_deleted_count"]
+    if isinstance(result, dict) and "memory_cleanup" in result:
+        response_result["memory_cleanup"] = result["memory_cleanup"]
     return Response(status="ok", result=response_result)
 
 

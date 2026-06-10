@@ -5,7 +5,9 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Optional
+import re
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Sequence
 
 from openviking.core.namespace import NamespaceShapeError, canonicalize_uri, context_type_for_uri
 from openviking.resource.watch_storage import is_watch_task_control_uri
@@ -33,6 +35,14 @@ _DERIVED_FILENAMES = frozenset({".abstract.md", ".overview.md", ".relations.json
 _CREATE_ALLOWED_EXTENSIONS = frozenset(
     {".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".py", ".js", ".ts"}
 )
+_CONTENT_WRITE_RESOURCE_REF_SOURCE = "content.write"
+_MARKDOWN_RESOURCE_LINK_RE = re.compile(r"\[([^\]\n]+)\]\((viking://resources/[^)\s]+)\)")
+_RESOURCE_URI_RE = re.compile(r"viking://resources/[^\s<>\]\)\"']+")
+_CODE_BLOCK_RE = re.compile(r"```.*?```", re.DOTALL)
+_INLINE_CODE_RE = re.compile(r"`[^`\n]+`")
+_TRAILING_URI_PUNCTUATION = ".,;:!?，。；：！？"
+_SENTENCE_BOUNDARIES = "。！？.!?\n"
+_MAX_LINKIFIED_SENTENCE_CHARS = 160
 
 
 class ContentWriteCoordinator:
@@ -344,12 +354,19 @@ class ContentWriteCoordinator:
         mode: str,
         ctx: RequestContext,
     ) -> None:
-        if mode == "replace" and context_type_for_uri(uri) == "memory":
-            existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
-            mf = MemoryFileUtils.read(existing_raw, uri=uri)
-            mf.content = content
-            content = MemoryFileUtils.write(mf)
-            await self._viking_fs.write_file(uri, content, ctx=ctx)
+        if context_type_for_uri(uri) == "memory":
+            if mode == "replace":
+                existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
+                mf = MemoryFileUtils.read(existing_raw, uri=uri)
+                mf.content = content
+            elif mode == "append":
+                existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
+                mf = MemoryFileUtils.read(existing_raw, uri=uri)
+                mf.content = mf.content + content
+            else:
+                mf = MemoryFileUtils.read(content, uri=uri)
+            self._sync_memory_resource_refs(mf)
+            await self._viking_fs.write_file(uri, MemoryFileUtils.write(mf), ctx=ctx)
             return
 
         if mode == "append":
@@ -360,6 +377,179 @@ class ContentWriteCoordinator:
             await self._viking_fs.write_file(uri, updated_raw, ctx=ctx)
             return
         await self._viking_fs.write_file(uri, content, ctx=ctx)
+
+    def _sync_memory_resource_refs(self, mf) -> None:
+        code_spans = self._protected_code_spans(mf.content)
+        markdown_refs, markdown_spans = self._extract_markdown_resource_refs(
+            mf.content,
+            code_spans,
+        )
+        mf.content, bare_refs = self._linkify_bare_resource_uris(
+            mf.content,
+            code_spans + markdown_spans,
+        )
+        self._merge_content_write_resource_refs(mf, markdown_refs + bare_refs)
+
+    @staticmethod
+    def _protected_code_spans(content: str) -> List[tuple[int, int]]:
+        spans = [(match.start(), match.end()) for match in _CODE_BLOCK_RE.finditer(content or "")]
+        spans.extend((match.start(), match.end()) for match in _INLINE_CODE_RE.finditer(content or ""))
+        return spans
+
+    @classmethod
+    def _extract_markdown_resource_refs(
+        cls,
+        content: str,
+        protected_spans: Sequence[tuple[int, int]],
+    ) -> tuple[List[Dict[str, Any]], List[tuple[int, int]]]:
+        refs: List[Dict[str, Any]] = []
+        link_spans: List[tuple[int, int]] = []
+        for match in _MARKDOWN_RESOURCE_LINK_RE.finditer(content or ""):
+            if cls._overlaps_spans(match.start(), match.end(), protected_spans):
+                continue
+            label = match.group(1).strip()
+            resource_uri = cls._trim_resource_uri(match.group(2).strip())
+            link_spans.append((match.start(), match.end()))
+            refs.append(
+                {
+                    "resource_uri": resource_uri,
+                    "match_text": label or None,
+                }
+            )
+        return refs, link_spans
+
+    @classmethod
+    def _linkify_bare_resource_uris(
+        cls,
+        content: str,
+        protected_spans: Sequence[tuple[int, int]],
+    ) -> tuple[str, List[Dict[str, Any]]]:
+        refs: List[Dict[str, Any]] = []
+        updated = content or ""
+        covered_start = len(updated) + 1
+
+        matches = list(_RESOURCE_URI_RE.finditer(updated))
+        for match in reversed(matches):
+            resource_uri = cls._trim_resource_uri(match.group(0))
+            if not resource_uri:
+                continue
+            start = match.start()
+            end = start + len(resource_uri)
+            if cls._overlaps_spans(start, end, protected_spans):
+                continue
+
+            refs.append({"resource_uri": resource_uri})
+            sentence_span = cls._previous_sentence_span(updated, start)
+            if not sentence_span:
+                continue
+            sentence_start, sentence_end = sentence_span
+            if end > covered_start:
+                continue
+            anchor = updated[sentence_start:sentence_end]
+            if "viking://resources/" in anchor or "](" in anchor:
+                continue
+            refs[-1]["match_text"] = anchor
+            replacement = f"[{anchor}]({resource_uri})"
+            updated = updated[:sentence_start] + replacement + updated[end:]
+            covered_start = sentence_start
+
+        refs.reverse()
+        return updated, refs
+
+    @staticmethod
+    def _previous_sentence_span(content: str, uri_start: int) -> Optional[tuple[int, int]]:
+        sentence_end = uri_start
+        while sentence_end > 0 and content[sentence_end - 1].isspace():
+            sentence_end -= 1
+        if sentence_end <= 0:
+            return None
+
+        boundary_search_end = sentence_end
+        if content[sentence_end - 1] in _SENTENCE_BOUNDARIES:
+            boundary_search_end = sentence_end - 1
+        sentence_start = 0
+        for idx in range(boundary_search_end - 1, -1, -1):
+            if content[idx] in _SENTENCE_BOUNDARIES:
+                sentence_start = idx + 1
+                break
+        while sentence_start < sentence_end and content[sentence_start].isspace():
+            sentence_start += 1
+
+        anchor = content[sentence_start:sentence_end]
+        if not anchor or len(anchor) > _MAX_LINKIFIED_SENTENCE_CHARS:
+            return None
+        return sentence_start, sentence_end
+
+    @staticmethod
+    def _trim_resource_uri(resource_uri: str) -> str:
+        return (resource_uri or "").rstrip(_TRAILING_URI_PUNCTUATION)
+
+    @staticmethod
+    def _overlaps_spans(
+        start: int,
+        end: int,
+        protected_spans: Sequence[tuple[int, int]],
+    ) -> bool:
+        return any(start < span_end and end > span_start for span_start, span_end in protected_spans)
+
+    @classmethod
+    def _merge_content_write_resource_refs(cls, mf, refs: Sequence[Dict[str, Any]]) -> None:
+        visible_refs: Dict[str, Dict[str, Any]] = {}
+        for ref in refs:
+            resource_uri = ref.get("resource_uri")
+            if not isinstance(resource_uri, str) or not resource_uri:
+                continue
+            existing = visible_refs.setdefault(resource_uri, {"resource_uri": resource_uri})
+            match_text = ref.get("match_text")
+            if match_text and not existing.get("match_text"):
+                existing["match_text"] = match_text
+
+        existing_refs = cls._coerce_resource_refs(mf.extra_fields.get("resource_refs"))
+        merged: List[Dict[str, Any]] = []
+        seen_resource_uris: set[str] = set()
+        created_at = datetime.now(timezone.utc).isoformat()
+        for existing_ref in existing_refs:
+            resource_uri = existing_ref.get("resource_uri")
+            if not isinstance(resource_uri, str) or not resource_uri:
+                merged.append(existing_ref)
+                continue
+            visible_ref = visible_refs.get(resource_uri)
+            if (
+                existing_ref.get("source") == _CONTENT_WRITE_RESOURCE_REF_SOURCE
+                and visible_ref is None
+            ):
+                continue
+            if visible_ref and existing_ref.get("source") == _CONTENT_WRITE_RESOURCE_REF_SOURCE:
+                if visible_ref.get("match_text"):
+                    existing_ref["match_text"] = visible_ref["match_text"]
+                existing_ref.setdefault("created_at", created_at)
+            merged.append(existing_ref)
+            seen_resource_uris.add(resource_uri)
+
+        for resource_uri, visible_ref in visible_refs.items():
+            if resource_uri in seen_resource_uris:
+                continue
+            ref = {
+                "resource_uri": resource_uri,
+                "source": _CONTENT_WRITE_RESOURCE_REF_SOURCE,
+                "created_at": created_at,
+            }
+            if visible_ref.get("match_text"):
+                ref["match_text"] = visible_ref["match_text"]
+            merged.append(ref)
+
+        if merged:
+            mf.extra_fields["resource_refs"] = merged
+        else:
+            mf.extra_fields.pop("resource_refs", None)
+
+    @staticmethod
+    def _coerce_resource_refs(value: Any) -> List[Dict[str, Any]]:
+        if isinstance(value, list):
+            return [dict(item) for item in value if isinstance(item, dict)]
+        if isinstance(value, dict):
+            return [dict(value)]
+        return []
 
     async def _enqueue_semantic_refresh(
         self,

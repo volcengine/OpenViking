@@ -52,6 +52,7 @@ from openviking_cli.utils import get_logger
 if TYPE_CHECKING:
     from openviking.resource.watch_manager import WatchManager
     from openviking.resource.watch_scheduler import WatchScheduler
+    from openviking.service.resource_memory_link_service import ResourceMemoryLinkService
 
 logger = get_logger(__name__)
 
@@ -73,12 +74,14 @@ class ResourceService:
         resource_processor: Optional[ResourceProcessor] = None,
         skill_processor: Optional[SkillProcessor] = None,
         watch_scheduler: Optional["WatchScheduler"] = None,
+        resource_memory_link_service: Optional["ResourceMemoryLinkService"] = None,
     ):
         self._vikingdb = vikingdb
         self._viking_fs = viking_fs
         self._resource_processor = resource_processor
         self._skill_processor = skill_processor
         self._watch_scheduler = watch_scheduler
+        self._resource_memory_link_service = resource_memory_link_service
         self._background_tasks: set[asyncio.Task[Any]] = set()
 
     def set_dependencies(
@@ -88,6 +91,7 @@ class ResourceService:
         resource_processor: ResourceProcessor,
         skill_processor: SkillProcessor,
         watch_scheduler: Optional["WatchScheduler"] = None,
+        resource_memory_link_service: Optional["ResourceMemoryLinkService"] = None,
     ) -> None:
         """Set dependencies (for deferred initialization)."""
         self._vikingdb = vikingdb
@@ -95,6 +99,7 @@ class ResourceService:
         self._resource_processor = resource_processor
         self._skill_processor = skill_processor
         self._watch_scheduler = watch_scheduler
+        self._resource_memory_link_service = resource_memory_link_service
 
     def _get_watch_manager(self) -> Optional["WatchManager"]:
         if not self._watch_scheduler:
@@ -625,6 +630,12 @@ class ResourceService:
                             logger.warning(
                                 f"[ResourceService] Failed to cancel watch task for {to}: {e}"
                             )
+            await self._link_resource_reason_memory(
+                result=result,
+                ctx=ctx,
+                reason=reason,
+                source_name=kwargs.get("source_name"),
+            )
             if not wait:
                 from openviking.service.task_tracker import get_task_tracker
 
@@ -675,6 +686,33 @@ class ResourceService:
             if wait or not telemetry_id or not monitor_started:
                 get_request_wait_tracker().cleanup(telemetry_id)
                 unregister_wait_telemetry(telemetry_id)
+
+    async def _link_resource_reason_memory(
+        self,
+        *,
+        result: Dict[str, Any],
+        ctx: RequestContext,
+        reason: str,
+        source_name: Optional[str],
+    ) -> None:
+        if not self._resource_memory_link_service:
+            return
+        if not (reason or "").strip():
+            return
+        root_uri = result.get("root_uri")
+        if not root_uri:
+            return
+        try:
+            link_result = await self._resource_memory_link_service.on_resource_added(
+                ctx=ctx,
+                resource_uri=root_uri,
+                reason=reason,
+                source_name=source_name,
+            )
+            result["memory_linking"] = link_result
+        except Exception as exc:
+            logger.warning("[ResourceService] Failed to link resource reason memory: %s", exc)
+            result.setdefault("warnings", []).append(f"Memory linking failed: {exc}")
 
     async def _monitor_queue_processing(
         self,
