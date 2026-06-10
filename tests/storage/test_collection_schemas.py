@@ -17,7 +17,6 @@ from openviking.storage.collection_schemas import (
     _build_embedding_metadata,
     init_context_collection,
 )
-from openviking.storage.errors import EmbeddingRebuildRequiredError
 from openviking.storage.expr import Eq
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.viking_vector_index_backend import _SingleAccountBackend

@@ -141,10 +141,10 @@ openclaw openviking setup \
 openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --force-slot --json
 ```
 
-如需自定义 agent 路由前缀（可选；多数用户留空即可）：
+如需给 assistant message 写入带前缀的 `peer_id`（可选；多数用户保持默认 `none` 即可）：
 
 ```bash
-openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --agent-prefix <PREFIX> --json
+openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --peer-role assistant --peer-prefix <PREFIX> --json
 ```
 
 ### 3. 重启 OpenClaw Gateway
@@ -205,7 +205,8 @@ plugins.entries.openviking.config
 | `mode` | `remote` | 兼容旧配置的字段。当前只支持 remote。 |
 | `baseUrl` | `http://127.0.0.1:1933` | OpenViking HTTP 地址 |
 | `apiKey` | 空 | OpenViking API key |
-| `agent_prefix` | 空 | OpenClaw agent ID 的可选前缀；若没有 agent ID，插件使用 `main`。交互式配置只接受字母、数字、`_` 和 `-`。 |
+| `peer_role` | `none` | 控制 session message 和 recall/search 请求是否写 `peer_id`：`none`、`assistant` 或 `person`。 |
+| `peer_prefix` | 空 | `peer_role=assistant` 时 assistant `peer_id` 的可选前缀。 |
 | `accountId` | 空 | 使用 root API key 时需要 |
 | `userId` | 空 | 使用 root API key 时需要 |
 
@@ -229,14 +230,16 @@ openclaw config get plugins.entries.openviking.config
 | --- | --- | --- |
 | `baseUrl` | `http://127.0.0.1:1933` | 远端 OpenViking 服务地址 |
 | `apiKey` | 空 | 远端 OpenViking API Key；服务端未开启认证时可不填 |
-| `agent_prefix` | 空 | OpenClaw agent ID 的可选前缀；如果拿不到 agent ID，插件使用 `main`。交互式配置只接受字母、数字、`_` 和 `-` |
+| `peer_role` | `none` | 控制 session message 和 recall/search 请求是否写 `peer_id`：`none`、`assistant` 或 `person` |
+| `peer_prefix` | 空 | `peer_role=assistant` 时 assistant `peer_id` 的可选前缀 |
 
 常见设置：
 
 ```bash
 openclaw config set plugins.entries.openviking.config.baseUrl http://your-server:1933
 openclaw config set plugins.entries.openviking.config.apiKey your-api-key
-openclaw config set plugins.entries.openviking.config.agent_prefix your-prefix
+openclaw config set plugins.entries.openviking.config.peer_role assistant
+openclaw config set plugins.entries.openviking.config.peer_prefix your-prefix
 ```
 
 ## 升级
@@ -289,7 +292,8 @@ ov-install
 | `--current-version` | 查看 helper 记录的当前版本 |
 | `--base-url URL` | OpenViking 服务器地址（启用非交互模式） |
 | `--api-key KEY` | OpenViking API key |
-| `--agent-prefix PREFIX` | Agent 路由前缀 |
+| `--peer-role ROLE` | Peer role：`none`、`assistant` 或 `person` |
+| `--peer-prefix PREFIX` | assistant `peer_id` 的前缀 |
 | `--update` | 更新 helper 管理的安装 |
 
 面向用户的安装，请先使用 `openclaw plugins install clawhub:@openviking/openclaw-plugin`。只有作为备用路径时才选择 `ov-install`。
@@ -315,7 +319,7 @@ openclaw gateway restart
 openclaw openviking status --json
 ```
 
-已有的配置字段（`baseUrl`、`apiKey`、`agentId` 等）会保留。新版本在运行时兼容读取旧字段名，无需手动修改配置。
+已有的配置字段（`baseUrl`、`apiKey`、`peer_role`、`peer_prefix` 等）会保留。
 
 ### 旧插件 ID（memory-openviking，版本 < 0.3.x）
 

@@ -5,7 +5,7 @@
 import json
 from typing import Any, Dict, List
 
-from openviking.pyagfs import AGFSClient, AsyncAGFSClient
+from openviking.pyagfs import AGFSSyncClientProtocol, AsyncAGFSClient
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -20,7 +20,7 @@ class RedoLog:
     On startup, scan for leftover markers and redo.
     """
 
-    def __init__(self, agfs: AGFSClient):
+    def __init__(self, agfs: AGFSSyncClientProtocol):
         self._async_agfs = AsyncAGFSClient(agfs)
 
     def _task_path(self, task_id: str) -> str:

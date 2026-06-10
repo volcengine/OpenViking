@@ -5,13 +5,10 @@ import json
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
-from openviking.pyagfs import AsyncAGFSClient
+from openviking.pyagfs import AGFSSyncClientProtocol, AsyncAGFSClient
 from openviking_cli.utils.logger import get_logger
-
-if TYPE_CHECKING:
-    from openviking.pyagfs import AGFSClient
 
 logger = get_logger(__name__)
 
@@ -106,7 +103,7 @@ class NamedQueue:
 
     def __init__(
         self,
-        agfs: "AGFSClient",
+        agfs: AGFSSyncClientProtocol,
         mount_point: str,
         name: str,
         enqueue_hook: Optional[EnqueueHookBase] = None,

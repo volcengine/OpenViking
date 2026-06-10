@@ -11,6 +11,9 @@ source "${SCRIPT_DIR}/setup_env.sh"
 CONCURRENCY=5
 DOMAIN=airline
 RESULT_DIR=result
+CONFIG="${TAU2_VIKINGBOT_CONFIG:-}"
+CONFIG_FLAG=""
+[[ -n "${CONFIG}" ]] && CONFIG_FLAG="--config ${CONFIG}"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "${LOG_FILE}"; }
 
@@ -22,7 +25,8 @@ bash "${SCRIPT_DIR}/run_full_test.sh" \
   --domain "${DOMAIN}" \
   --epoch 0 \
   --concurrency "${CONCURRENCY}" \
-  --result-dir "${RESULT_DIR}"
+  --result-dir "${RESULT_DIR}" \
+  ${CONFIG_FLAG}
 log ">>> Epoch 0 done"
 
 # Wait for OpenViking server to finish async memory processing
@@ -37,7 +41,8 @@ bash "${SCRIPT_DIR}/run_full_test.sh" \
   --domain "${DOMAIN}" \
   --epoch 1 \
   --concurrency "${CONCURRENCY}" \
-  --result-dir "${RESULT_DIR}"
+  --result-dir "${RESULT_DIR}" \
+  ${CONFIG_FLAG}
 log ">>> Epoch 1 done"
 
 log "===== All done. Results in: ${SCRIPT_DIR}/${RESULT_DIR} ====="

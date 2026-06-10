@@ -240,8 +240,8 @@ class MessageRange:
         result = []
         for i, msg_group in enumerate(self.elements):
             for msg in msg_group:
-                role_id = msg.role_id if msg.role_id else msg.role
-                result.append(f"[{role_id}]: {msg.content}")
+                speaker = msg.peer_id or msg.role
+                result.append(f"[{speaker}]: {msg.content}")
             # Add "..." separator between non-contiguous message groups
             if i < len(self.elements) - 1:
                 result.append("...")

@@ -115,11 +115,11 @@ def viking_fs():
 @pytest.mark.asyncio
 async def test_temp_scope_isolated_between_users_in_same_account(viking_fs):
     owner_ctx = RequestContext(
-        user=UserIdentifier(account_id="acct1", user_id="alice", agent_id="agent1"),
+        user=UserIdentifier(account_id="acct1", user_id="alice"),
         role=Role.USER,
     )
     other_ctx = RequestContext(
-        user=UserIdentifier(account_id="acct1", user_id="bob", agent_id="agent2"),
+        user=UserIdentifier(account_id="acct1", user_id="bob"),
         role=Role.USER,
     )
 
@@ -141,11 +141,11 @@ async def test_temp_scope_isolated_between_users_in_same_account(viking_fs):
 @pytest.mark.asyncio
 async def test_temp_scope_user_id_matching_legacy_pattern_stays_isolated(viking_fs):
     owner_ctx = RequestContext(
-        user=UserIdentifier(account_id="acct1", user_id="04011234_abcdef", agent_id="agent1"),
+        user=UserIdentifier(account_id="acct1", user_id="04011234_abcdef"),
         role=Role.USER,
     )
     other_ctx = RequestContext(
-        user=UserIdentifier(account_id="acct1", user_id="bob", agent_id="agent2"),
+        user=UserIdentifier(account_id="acct1", user_id="bob"),
         role=Role.USER,
     )
 
@@ -163,11 +163,11 @@ async def test_temp_scope_user_id_matching_legacy_pattern_stays_isolated(viking_
 @pytest.mark.asyncio
 async def test_temp_root_listing_only_shows_callers_own_entries(viking_fs):
     alice_ctx = RequestContext(
-        user=UserIdentifier(account_id="acct1", user_id="alice", agent_id="agent1"),
+        user=UserIdentifier(account_id="acct1", user_id="alice"),
         role=Role.USER,
     )
     bob_ctx = RequestContext(
-        user=UserIdentifier(account_id="acct1", user_id="bob", agent_id="agent2"),
+        user=UserIdentifier(account_id="acct1", user_id="bob"),
         role=Role.USER,
     )
 
@@ -196,7 +196,7 @@ async def test_temp_root_listing_only_shows_callers_own_entries(viking_fs):
 @pytest.mark.asyncio
 async def test_temp_root_destructive_operations_are_blocked_for_non_root_users(viking_fs):
     alice_ctx = RequestContext(
-        user=UserIdentifier(account_id="acct1", user_id="alice", agent_id="agent1"),
+        user=UserIdentifier(account_id="acct1", user_id="alice"),
         role=Role.USER,
     )
 
@@ -210,11 +210,11 @@ async def test_temp_root_destructive_operations_are_blocked_for_non_root_users(v
 @pytest.mark.asyncio
 async def test_legacy_temp_trees_remain_accessible_for_same_account_users(viking_fs):
     alice_ctx = RequestContext(
-        user=UserIdentifier(account_id="acct1", user_id="alice", agent_id="agent1"),
+        user=UserIdentifier(account_id="acct1", user_id="alice"),
         role=Role.USER,
     )
     bob_ctx = RequestContext(
-        user=UserIdentifier(account_id="acct1", user_id="bob", agent_id="agent2"),
+        user=UserIdentifier(account_id="acct1", user_id="bob"),
         role=Role.USER,
     )
 
@@ -234,7 +234,7 @@ async def test_legacy_temp_trees_remain_accessible_for_same_account_users(viking
 
 def test_create_temp_uri_uses_user_scope_segment(viking_fs):
     ctx = RequestContext(
-        user=UserIdentifier(account_id="acct1", user_id="alice", agent_id="agent1"),
+        user=UserIdentifier(account_id="acct1", user_id="alice"),
         role=Role.USER,
     )
 
@@ -253,11 +253,11 @@ def test_create_temp_uri_without_context_preserves_legacy_shape(viking_fs):
 @pytest.mark.asyncio
 async def test_legacy_temp_uri_remains_accessible_to_same_account_users(viking_fs):
     alice_ctx = RequestContext(
-        user=UserIdentifier(account_id="acct1", user_id="alice", agent_id="agent1"),
+        user=UserIdentifier(account_id="acct1", user_id="alice"),
         role=Role.USER,
     )
     bob_ctx = RequestContext(
-        user=UserIdentifier(account_id="acct1", user_id="bob", agent_id="agent2"),
+        user=UserIdentifier(account_id="acct1", user_id="bob"),
         role=Role.USER,
     )
 
@@ -273,11 +273,11 @@ async def test_legacy_temp_uri_remains_accessible_to_same_account_users(viking_f
 @pytest.mark.asyncio
 async def test_non_root_cannot_delete_temp_root_recursively(viking_fs):
     alice_ctx = RequestContext(
-        user=UserIdentifier(account_id="acct1", user_id="alice", agent_id="agent1"),
+        user=UserIdentifier(account_id="acct1", user_id="alice"),
         role=Role.USER,
     )
     bob_ctx = RequestContext(
-        user=UserIdentifier(account_id="acct1", user_id="bob", agent_id="agent2"),
+        user=UserIdentifier(account_id="acct1", user_id="bob"),
         role=Role.USER,
     )
 

@@ -10,7 +10,7 @@ Mounted on the FastAPI app at /mcp. The MCP session manager lifecycle is
 tied to the FastAPI app lifespan (not a sub-app lifespan) so the task group
 is always initialized before requests arrive.
 
-Identity headers (X-OpenViking-Account, X-OpenViking-User, X-OpenViking-Agent)
+Identity headers (X-OpenViking-Account, X-OpenViking-User)
 are extracted from HTTP request scope and propagated via contextvars.
 """
 
@@ -145,7 +145,6 @@ class _IdentityASGIMiddleware:
                 authorization=request.headers.get("authorization"),
                 x_openviking_account=request.headers.get("x-openviking-account"),
                 x_openviking_user=request.headers.get("x-openviking-user"),
-                x_openviking_agent=request.headers.get("x-openviking-agent"),
             )
         except (UnauthenticatedError, PermissionDeniedError, InvalidArgumentError) as exc:
             status = (
@@ -175,10 +174,8 @@ class _IdentityASGIMiddleware:
             user=UserIdentifier(
                 identity.account_id or "default",
                 identity.user_id or "default",
-                identity.agent_id or "default",
             ),
             role=identity.role,
-            namespace_policy=identity.namespace_policy,
         )
         url_info = {
             "x_forwarded_proto": request.headers.get("x-forwarded-proto"),
@@ -214,6 +211,7 @@ async def find(
     limit: int = 10,
     min_score: float = 0.35,
     level: Optional[List[int]] = None,
+    peer_id: Optional[str] = None,
 ) -> str:
     """Fast semantic retrieval without session context. Returns ranked memories, resources, and skills with URI, abstract, and score."""
     service = get_service()
@@ -221,6 +219,7 @@ async def find(
         query=query,
         ctx=_get_ctx(),
         target_uri=target_uri,
+        peer_id=peer_id,
         limit=limit,
         score_threshold=min_score,
         level=level,
@@ -236,6 +235,7 @@ async def search(
     limit: int = 10,
     min_score: float = 0.35,
     level: Optional[List[int]] = None,
+    peer_id: Optional[str] = None,
 ) -> str:
     """Deep semantic retrieval with optional session context and intent analysis. Returns ranked memories, resources, and skills with URI, abstract, and score."""
     service = get_service()
@@ -248,6 +248,7 @@ async def search(
         query=query,
         ctx=ctx,
         target_uri=target_uri,
+        peer_id=peer_id,
         session=session,
         limit=limit,
         score_threshold=min_score,
@@ -366,7 +367,6 @@ async def remember(messages: list[StoreMessage]) -> str:
             session.add_message(
                 msg.role,
                 [TextPart(text=msg.content)],
-                role_id=ctx.resolve_role_id(msg.role),
             )
     await service.sessions.commit_async(session_id, ctx)
     return f"Stored {len(messages)} message(s) and committed for memory extraction."
@@ -432,16 +432,6 @@ def _resolve_public_base_url() -> tuple[str, str]:
     return "http://127.0.0.1:1933", "listen"
 
 
-_WATCH_REQUIRES_TO_HINT = (
-    "watch_interval > 0 requires `to` to be specified (the stable target URI to refresh into). "
-    "Pick a deterministic URI under viking://resources/. For example:\n"
-    "  - https://github.com/<org>/<repo>  -> to='viking://resources/<org>/<repo>'\n"
-    "  - https://example.com/docs/api     -> to='viking://resources/example.com/docs/api'\n"
-    "Tip: call add_resource without watch_interval first, observe the returned URI, "
-    "then call again with watch_interval=<minutes> and to=<that URI>."
-)
-
-
 @mcp.tool()
 async def add_resource(
     path: str = "",
@@ -455,8 +445,9 @@ async def add_resource(
     Three ways to invoke:
 
     1. Remote URL: pass ``path`` set to an http(s)://, git@, ssh://, or git:// URL.
-       Returns a success message immediately. Supports ``watch_interval`` + ``to`` for
-       auto-refresh subscriptions.
+       Returns a success message immediately. Supports ``watch_interval`` for
+       auto-refresh subscriptions; pass ``to`` to choose the exact target URI, or
+       omit it to bind the watch to the URI created by this add.
 
     2. Local file: pass ``path`` set to a local filesystem path (e.g. ``/tmp/foo.pdf``).
        The response is NOT a success message — it's a multi-step upload instruction.
@@ -475,12 +466,12 @@ async def add_resource(
         watch_interval: Auto-refresh cadence in minutes. 0 (default) = no watch.
             >0 = periodically re-fetch the resource at that cadence (full re-ingest
             each time). Prefer >=1440 (24h) unless the source genuinely changes
-            faster — every refresh re-embeds the entire resource. Requires ``to``.
+            faster — every refresh re-embeds the entire resource. When ``to`` is
+            omitted, the watch binds to the URI created by this add.
             Only applies to remote-URL invocations.
         to: Target URI under viking://resources/ (e.g.
-            "viking://resources/volcengine/OpenViking"). Required when
-            watch_interval > 0. Leave empty for one-shot adds — the system will
-            auto-derive a URI from the source.
+            "viking://resources/volcengine/OpenViking"). Leave empty to let the
+            system derive a URI from the source.
     """
     from openviking.server.local_input_guard import require_remote_resource_source
 
@@ -539,8 +530,6 @@ async def add_resource(
 
     # Branch 3: remote URL — same flow as before
     if is_remote_resource_source(path):
-        if watch_interval > 0 and not to:
-            return f"Error: {_WATCH_REQUIRES_TO_HINT}"
         try:
             path = require_remote_resource_source(path)
             result = await service.resources.add_resource(
@@ -576,7 +565,6 @@ async def add_resource(
     token, expires_at = upload_token_store.issue(
         ctx.user.account_id,
         ctx.user.user_id,
-        ctx.user.agent_id,
         ttl_seconds=ttl_seconds,
     )
     base_url, url_source = _resolve_public_base_url()
@@ -624,7 +612,7 @@ async def add_resource(
 
 @mcp.tool()
 async def list_watches() -> str:
-    """List watch tasks (auto-refresh subscriptions) visible to the current agent.
+    """List watch tasks (auto-refresh subscriptions) visible to the current user.
 
     Each line shows: target URI, refresh interval (minutes), active/paused status,
     and the next scheduled execution time. Returns "No watch tasks." when empty.
@@ -645,7 +633,6 @@ async def list_watches() -> str:
         ctx.user.user_id,
         ctx.role.value,
         active_only=False,
-        agent_id=ctx.user.agent_id,
     )
     if not tasks:
         return "No watch tasks."
@@ -681,7 +668,6 @@ async def cancel_watch(to_uri: str) -> str:
         ctx.account_id,
         ctx.user.user_id,
         ctx.role.value,
-        ctx.user.agent_id,
     )
     if task is None:
         return f"No watch task found for {to_uri}"
@@ -697,7 +683,6 @@ async def cancel_watch(to_uri: str) -> str:
             ctx.account_id,
             ctx.user.user_id,
             ctx.role.value,
-            ctx.user.agent_id,
         )
     except _wm_mod.PermissionDeniedError:
         return f"Permission denied for {to_uri}"

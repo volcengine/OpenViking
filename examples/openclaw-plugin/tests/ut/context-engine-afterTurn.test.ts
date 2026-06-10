@@ -35,6 +35,7 @@ function makeEngine(opts?: {
     : vi.fn().mockResolvedValue(undefined);
 
   const client = {
+    ensureSession: vi.fn().mockResolvedValue(true),
     addSessionMessage,
     commitSession: vi.fn().mockResolvedValue({
       status: "accepted",
@@ -70,6 +71,7 @@ function makeEngine(opts?: {
   return {
     engine,
     client: client as unknown as {
+      ensureSession: ReturnType<typeof vi.fn>;
       addSessionMessage: ReturnType<typeof vi.fn>;
       commitSession: ReturnType<typeof vi.fn>;
       getSession: ReturnType<typeof vi.fn>;
@@ -221,7 +223,7 @@ describe("context-engine afterTurn()", () => {
     );
   });
 
-  it("passes sanitized senderId as role_id", async () => {
+  it("does not pass peer_id by default", async () => {
     const { engine, client } = makeEngine();
 
     await engine.afterTurn!({
@@ -233,16 +235,66 @@ describe("context-engine afterTurn()", () => {
     });
 
     expect(client.addSessionMessage).toHaveBeenCalledTimes(1);
-    expect(client.addSessionMessage.mock.calls[0][5]).toBe("telegram_12345");
+    expect(client.addSessionMessage.mock.calls[0][5]).toBeUndefined();
   });
 
-  it("sanitizes <relevant-memories> from user content but not from assistant", async () => {
+  it("passes sanitized senderId as peer_id when peer_role is person", async () => {
+    const { engine, client } = makeEngine({
+      cfgOverrides: { peer_role: "person" },
+    });
+
+    await engine.afterTurn!({
+      sessionId: "s1",
+      sessionFile: "",
+      messages: [{ role: "user", content: "hello world" }],
+      prePromptMessageCount: 0,
+      runtimeContext: { senderId: "telegram:12345" },
+    });
+
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(1);
+    expect(client.addSessionMessage.mock.calls[0][5]).toBe("telegram_12345");
+    expect(client.ensureSession).toHaveBeenCalledWith(
+      "s1",
+      {
+        memoryPolicy: {
+          self: { enabled: true },
+          peer: { enabled: true },
+        },
+      },
+      "test-agent",
+    );
+  });
+
+  it("passes runtime agent as peer_id only for assistant messages when peer_role is assistant", async () => {
+    const { engine, client } = makeEngine({
+      cfgOverrides: { peer_role: "assistant" },
+    });
+
+    await engine.afterTurn!({
+      sessionId: "s1",
+      sessionFile: "",
+      messages: [
+        { role: "user", content: "hello world" },
+        { role: "assistant", content: "hi there" },
+      ],
+      prePromptMessageCount: 0,
+      runtimeContext: { senderId: "telegram:12345" },
+    });
+
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(2);
+    expect(client.addSessionMessage.mock.calls[0][1]).toBe("user");
+    expect(client.addSessionMessage.mock.calls[0][5]).toBeUndefined();
+    expect(client.addSessionMessage.mock.calls[1][1]).toBe("assistant");
+    expect(client.addSessionMessage.mock.calls[1][5]).toBe("test-agent");
+  });
+
+  it("sanitizes injected context blocks from user content", async () => {
     const { engine, client } = makeEngine();
 
     const messages = [
       {
         role: "user",
-        content: "my question <relevant-memories>injected memory data</relevant-memories> more text",
+        content: "my question <openviking-context>injected memory data</openviking-context> more text",
       },
     ];
 
@@ -256,7 +308,7 @@ describe("context-engine afterTurn()", () => {
     expect(client.addSessionMessage).toHaveBeenCalledTimes(1);
     expect(client.addSessionMessage.mock.calls[0][1]).toBe("user");
     const storedContent = (client.addSessionMessage.mock.calls[0][2] as Array<{ text?: string }>)[0].text;
-    expect(storedContent).not.toContain("relevant-memories");
+    expect(storedContent).not.toContain("openviking-context");
     expect(storedContent).not.toContain("injected memory data");
     expect(storedContent).toContain("my question");
   });
@@ -303,6 +355,28 @@ describe("context-engine afterTurn()", () => {
     expect(client.commitSession).toHaveBeenCalledTimes(1);
     const commitCall = client.commitSession.mock.calls[0];
     expect(commitCall[1]).toMatchObject({ wait: false });
+  });
+
+  it("passes peer memory policy to commit when peer_role is person", async () => {
+    const { engine, client } = makeEngine({
+      commitTokenThreshold: 100,
+      getSession: { pending_tokens: 5000 },
+      cfgOverrides: { peer_role: "person" },
+    });
+
+    await engine.afterTurn!({
+      sessionId: "s1",
+      sessionFile: "",
+      messages: [{ role: "user", content: "remember my table tennis preference" }],
+      prePromptMessageCount: 0,
+      runtimeContext: { senderId: "openclaw-tui" },
+    });
+
+    expect(client.commitSession).toHaveBeenCalledTimes(1);
+    expect(client.commitSession.mock.calls[0][1]).toMatchObject({
+      wait: false,
+    });
+    expect(client.commitSession.mock.calls[0][1]).not.toHaveProperty("memoryPolicy");
   });
 
   it("catches errors without throwing", async () => {
@@ -526,12 +600,12 @@ describe("context-engine afterTurn()", () => {
     expect(client.addSessionMessage.mock.calls[2][1]).toBe("assistant");
   });
 
-  it("sanitizes <relevant-memories> from assistant content", async () => {
+  it("sanitizes injected context blocks from assistant content", async () => {
     const { engine, client } = makeEngine();
 
     const messages = [
       { role: "user", content: "question" },
-      { role: "assistant", content: "Here is context <relevant-memories>data</relevant-memories> end" },
+      { role: "assistant", content: "Here is context <openviking-context>data</openviking-context> end" },
     ];
 
     await engine.afterTurn!({
@@ -543,7 +617,7 @@ describe("context-engine afterTurn()", () => {
 
     expect(client.addSessionMessage).toHaveBeenCalledTimes(2);
     const assistantParts = client.addSessionMessage.mock.calls[1][2] as Array<{ text?: string }>;
-    expect(assistantParts.map(p => p.text).join(" ")).not.toContain("relevant-memories");
+    expect(assistantParts.map(p => p.text).join(" ")).not.toContain("openviking-context");
     expect(assistantParts.map(p => p.text).join(" ")).toContain("Here is context");
   });
 

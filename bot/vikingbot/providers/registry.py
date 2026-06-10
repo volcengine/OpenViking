@@ -242,14 +242,15 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     ),
     # MiniMax: needs "minimax/" prefix for LiteLLM routing.
     # Uses OpenAI-compatible API at api.minimax.io/v1.
-    # Recommended models: MiniMax-M2.7 (default), MiniMax-M2.7-highspeed (faster).
+    # Recommended models: MiniMax-M3 (default, flagship), MiniMax-M2.7 (alternative),
+    # MiniMax-M2.7-highspeed (faster).
     # Note: MiniMax does not support system messages; they are merged into the first user message.
     ProviderSpec(
         name="minimax",
         keywords=("minimax",),
         env_key="MINIMAX_API_KEY",
         display_name="MiniMax",
-        litellm_prefix="minimax",  # MiniMax-M2.7 → minimax/MiniMax-M2.7
+        litellm_prefix="minimax",  # MiniMax-M3 → minimax/MiniMax-M3
         skip_prefixes=("minimax/", "openrouter/"),
         env_extras=(),
         is_gateway=False,

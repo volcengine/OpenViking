@@ -5,7 +5,6 @@ Tests for JSON stable parsing utilities.
 """
 
 import json
-import logging
 from typing import List, Optional
 from unittest.mock import patch
 
@@ -179,6 +178,35 @@ class TestParseJsonWithStability:
         data, error = parse_json_with_stability(content, model_class=self.TestModel)
         assert error is None
         assert data.reasonning == "test"
+
+    def test_handles_empty_list_for_operations_model(self):
+        """A bare [] from the operations model (opted in via _allow_empty_list_response)
+        is a valid 'no operations' outcome: mapped to an empty object, not an error."""
+
+        class OperationsLike(BaseModel):
+            reasonning: str = ""
+            tags: List[str] = Field(default_factory=list)
+
+        OperationsLike._allow_empty_list_response = True
+
+        data, error = parse_json_with_stability("[]", model_class=OperationsLike)
+        assert error is None
+        assert data.tags == []
+
+    def test_empty_list_fails_loud_without_opt_in(self):
+        """A bare [] for any model that has NOT opted in stays fail-loud, even if it
+        happens to expose an is_empty() convenience method."""
+
+        class HasIsEmptyButNotOptedIn(BaseModel):
+            tags: List[str] = Field(default_factory=list)
+
+            def is_empty(self) -> bool:
+                return not self.tags
+
+        for model in (self.TestModel, HasIsEmptyButNotOptedIn):
+            data, error = parse_json_with_stability("[]", model_class=model)
+            assert data is None
+            assert error is not None
 
     def test_filters_extra_fields(self):
         """Test extra fields are filtered when expected_fields is provided."""
@@ -363,7 +391,9 @@ class TestMemoryOperationsIntegration:
             }
         )
 
-        with patch("openviking.session.memory.utils.json_parser.logger.exception") as mock_exception:
+        with patch(
+            "openviking.session.memory.utils.json_parser.logger.exception"
+        ) as mock_exception:
             data, error = parse_json_with_stability(content, model_class=PreferenceOperations)
 
         assert error is None

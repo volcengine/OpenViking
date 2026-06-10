@@ -18,9 +18,8 @@ const DEFAULT_TELEMETRY_PATHS = new Set([
   '/api/v1/search/search',
   '/api/v1/resources',
 ])
+const CONTROL_PLANE_PREFIXES = ['/api/v1/admin', '/api/v1/console'] as const
 const SESSION_COMMIT_PATH = /^\/api\/v1\/sessions\/[^/]+\/commit$/
-const WEB_STUDIO_AGENT_ID = 'web-studio'
-
 function isBrowser(): boolean {
   return typeof window !== 'undefined'
 }
@@ -119,6 +118,11 @@ function shouldInjectTelemetry(
   )
 }
 
+function shouldUseAdminApiKey(config: InternalAxiosRequestConfig): boolean {
+  const pathname = resolvePathname(config.url)
+  return CONTROL_PLANE_PREFIXES.some((prefix) => pathname.startsWith(prefix))
+}
+
 function maybeInjectTelemetry(
   config: InternalAxiosRequestConfig,
   defaultTelemetry: boolean,
@@ -153,11 +157,12 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
   }
 
   let connection: OvConnectionState = {
+    adminApiKey: options.connection?.adminApiKey ?? '',
     apiKey:
       options.connection?.apiKey ??
       readSessionStorage(runtimeOptions.apiKeyStorageKey),
     accountId: options.connection?.accountId ?? '',
-    agentId: options.connection?.agentId ?? WEB_STUDIO_AGENT_ID,
+    identityHeaders: options.connection?.identityHeaders ?? false,
     userId: options.connection?.userId ?? '',
   }
 
@@ -177,10 +182,18 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
       headers.set(key, value)
     }
 
-    setOptionalHeader(headers, 'X-API-Key', connection.apiKey)
-    setOptionalHeader(headers, 'X-OpenViking-Account', connection.accountId)
-    setOptionalHeader(headers, 'X-OpenViking-User', connection.userId)
-    headers.set('X-OpenViking-Agent', connection.agentId || WEB_STUDIO_AGENT_ID)
+    const apiKey =
+      shouldUseAdminApiKey(config) && connection.adminApiKey
+        ? connection.adminApiKey
+        : connection.apiKey
+    setOptionalHeader(headers, 'X-API-Key', apiKey)
+    if (connection.identityHeaders) {
+      setOptionalHeader(headers, 'X-OpenViking-Account', connection.accountId)
+      setOptionalHeader(headers, 'X-OpenViking-User', connection.userId)
+    } else {
+      headers.delete('X-OpenViking-Account')
+      headers.delete('X-OpenViking-User')
+    }
 
     config.headers = headers
     maybeInjectTelemetry(config, runtimeOptions.defaultTelemetry)
@@ -251,9 +264,10 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
 
   function clearConnection(): OvConnectionState {
     connection = {
+      adminApiKey: '',
       apiKey: '',
       accountId: '',
-      agentId: WEB_STUDIO_AGENT_ID,
+      identityHeaders: false,
       userId: '',
     }
     persistApiKey()

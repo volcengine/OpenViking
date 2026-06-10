@@ -176,12 +176,12 @@
    hide internal scrollbars — iOS/Atlas pattern is overlay scroll only
    on active gesture, not a persistent track. */
 @media (max-width: 767px) {
-  .web-studio-resource-fs ::-webkit-scrollbar {
+  .web-playground-resource-fs ::-webkit-scrollbar {
     width: 0;
     height: 0;
     background: transparent;
   }
-  .web-studio-resource-fs * {
+  .web-playground-resource-fs * {
     scrollbar-width: none;
   }
 }
@@ -193,13 +193,11 @@
    page-level scrollbar, and the inner panes already overlay-scroll on
    gesture. */
 @media (display-mode: standalone) {
-  body:has(.web-studio-resource-fs)
+  body:has(.web-playground-resource-fs)
     [data-slot='scroll-area-scrollbar'][data-orientation='vertical'] {
     display: none;
   }
 }
-
-/* ---- FindPalette animations ---- */
 
 @keyframes home-panel-in {
   from {
@@ -214,60 +212,6 @@
 
 .animate-home-panel-in {
   animation: home-panel-in 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
-}
-
-@keyframes palette-backdrop-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-@keyframes palette-in {
-  from {
-    opacity: 0;
-    transform: translateY(-12px) scale(0.97);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
-@keyframes palette-slide-right {
-  from {
-    opacity: 0;
-    transform: translateX(8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
-}
-
-@keyframes palette-row-in {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.animate-palette-backdrop {
-  animation: palette-backdrop-in 0.18s cubic-bezier(0.16, 1, 0.3, 1) both;
-}
-
-.animate-palette-in {
-  animation: palette-in 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
-}
-
-.animate-palette-preview {
-  animation: palette-slide-right 0.18s cubic-bezier(0.16, 1, 0.3, 1) both;
-}
-
-.animate-palette-row {
-  animation: palette-row-in 0.2s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 .scrollbar-fade {

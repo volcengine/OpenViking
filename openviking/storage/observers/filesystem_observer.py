@@ -4,7 +4,7 @@ FilesystemObserver: Filesystem observability tool.
 Provides methods to observe and report filesystem operation statistics.
 """
 
-from typing import Dict, Optional
+from typing import Optional
 
 from openviking.storage.observers.base_observer import BaseObserver
 from openviking_cli.utils import run_async
@@ -38,6 +38,7 @@ class FilesystemObserver(BaseObserver):
         Lazy import to avoid circular dependencies.
         """
         from openviking.server.dependencies import get_service
+
         service = get_service()
         return service.debug.observer
 
@@ -95,13 +96,15 @@ class FilesystemObserver(BaseObserver):
                     max_us = op_stats.get("max_time_us", 0)
 
                     if count > 0:
-                        table_data.append({
-                            "Operation": op_name,
-                            "Count": count,
-                            "Avg (ms)": f"{avg_us / 1000:.3f}",
-                            "Min (ms)": f"{min_us / 1000:.3f}",
-                            "Max (ms)": f"{max_us / 1000:.3f}",
-                        })
+                        table_data.append(
+                            {
+                                "Operation": op_name,
+                                "Count": count,
+                                "Avg (ms)": f"{avg_us / 1000:.3f}",
+                                "Min (ms)": f"{min_us / 1000:.3f}",
+                                "Max (ms)": f"{max_us / 1000:.3f}",
+                            }
+                        )
 
             if table_data:
                 result.append(tabulate(table_data, headers="keys", tablefmt="pretty"))

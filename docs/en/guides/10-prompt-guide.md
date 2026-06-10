@@ -186,7 +186,7 @@ This category is mainly used to support retrieval or indexing workflows with rel
 
 ### Memory
 
-These YAML files define the structure of different memory types. They are not single-inference prompts. Together, they determine how user memories and agent memories are stored, updated, and used by later retrieval.
+These YAML files define the structure of different memory types. They are not single-inference prompts. Together, they determine how user and peer memories are stored, updated, and used by later retrieval.
 
 - `cases`
   - Effective stage: case-memory persistence and update stage

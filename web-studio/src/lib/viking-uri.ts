@@ -57,7 +57,7 @@ export function joinUri(baseUri: string, child: string): string {
 /**
  * Matches `viking://` URIs inside arbitrary text. Stops at whitespace, quotes,
  * brackets and the punctuation that commonly trails a URI in prose. Shared so
- * the sessions view and the studio playground extract URIs identically.
+ * the sessions view and the playground extract URIs identically.
  */
 export const VIKING_URI_RE = /viking:\/\/[^\s,，。；;'"`<>()\]}\\]+/g
 
@@ -66,6 +66,11 @@ export const VIKING_URI_RE = /viking:\/\/[^\s,，。；;'"`<>()\]}\\]+/g
  * URI) and strip trailing punctuation that bleeds in from surrounding prose.
  */
 export function cleanVikingUri(value: string): string {
+  const trimmed = value.trim()
+  if (trimmed.toLowerCase().startsWith('viking://')) {
+    return trimmed.replace(/[\\，。；;,.]+$/u, '')
+  }
+
   const match = value.match(VIKING_URI_RE)
-  return (match?.[0] ?? value).trim().replace(/[\\，。；;,.]+$/u, '')
+  return (match?.[0] ?? trimmed).trim().replace(/[\\，。；;,.]+$/u, '')
 }

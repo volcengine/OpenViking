@@ -2,7 +2,6 @@ import re
 from typing import Dict, List, Optional
 
 from openviking.core.namespace import uri_parts
-from openviking.session.memory.dataclass import StoredLink
 
 
 class LinkRenderer:

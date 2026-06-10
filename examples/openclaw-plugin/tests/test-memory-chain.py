@@ -57,8 +57,6 @@ USER_ID = f"test-chain-{uuid.uuid4().hex[:8]}"
 DISPLAY_NAME = "测试用户"
 DEFAULT_GATEWAY = "http://127.0.0.1:18790"
 DEFAULT_OPENVIKING = "http://127.0.0.1:8000"
-AGENT_ID = "openclaw"
-
 console = Console()
 
 # ── 测试结果收集 ──────────────────────────────────────────────────────────
@@ -151,17 +149,14 @@ def extract_reply_text(data: dict) -> str:
 class OpenVikingInspector:
     """OpenViking 内部状态检查器。"""
 
-    def __init__(self, base_url: str, api_key: str = "", agent_id: str = AGENT_ID):
+    def __init__(self, base_url: str, api_key: str = ""):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
-        self.agent_id = agent_id
 
     def _headers(self) -> dict:
         h: dict[str, str] = {"Content-Type": "application/json"}
         if self.api_key:
             h["X-API-Key"] = self.api_key
-        if self.agent_id:
-            h["X-OpenViking-Agent"] = self.agent_id
         return h
 
     def _get(self, path: str, timeout: int = 10) -> dict | None:

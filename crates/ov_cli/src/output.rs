@@ -1,5 +1,5 @@
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::theme;
@@ -58,29 +58,6 @@ fn compact_success_value<T: Serialize>(result: T) -> Value {
     }
 
     json!({ "status": "ok", "result": result, "profile": profile })
-}
-
-#[allow(dead_code)]
-pub fn output_error(code: &str, message: &str, format: OutputFormat, compact: bool) {
-    if matches!(format, OutputFormat::Json) && compact {
-        eprintln!(
-            "{}",
-            json!({
-                "ok": false,
-                "error": {
-                    "code": code,
-                    "message": message
-                }
-            })
-        );
-    } else {
-        eprintln!(
-            "{}[{}]: {}",
-            theme::error("ERROR").bold(),
-            theme::error(code),
-            theme::body(message)
-        );
-    }
 }
 
 fn print_table<T: Serialize>(result: T, compact: bool) {
@@ -384,10 +361,7 @@ pub fn render_profiled_scalar_result(value: &serde_json::Value) -> Option<String
     Some(append_profile_section(result.to_string(), obj))
 }
 
-pub fn append_profile_to_rendered(
-    rendered: String,
-    value: &serde_json::Value,
-) -> String {
+pub fn append_profile_to_rendered(rendered: String, value: &serde_json::Value) -> String {
     let Some(obj) = value.as_object() else {
         return rendered;
     };
@@ -913,11 +887,35 @@ fn style_table_value(value: &str, is_uri: bool) -> String {
         return theme::sky_value(value).bold().to_string();
     }
 
+    match table_value_tone(trimmed) {
+        TableValueTone::Success => theme::success(value).bold().to_string(),
+        TableValueTone::Warning => theme::warning(value).bold().to_string(),
+        TableValueTone::Error => theme::error(value).bold().to_string(),
+        TableValueTone::Muted => theme::muted(value).to_string(),
+        TableValueTone::Body => theme::body(value).to_string(),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TableValueTone {
+    Success,
+    Warning,
+    Error,
+    Muted,
+    Body,
+}
+
+fn table_value_tone(trimmed: &str) -> TableValueTone {
     match trimmed.to_ascii_lowercase().as_str() {
-        "healthy" | "ok" | "true" | "success" => theme::success(value).bold().to_string(),
-        "unhealthy" | "failed" | "error" | "false" => theme::error(value).bold().to_string(),
-        "unknown" | "null" | "(empty)" => theme::muted(value).to_string(),
-        _ => theme::body(value).to_string(),
+        "healthy" | "ok" | "true" | "success" | "completed" | "done" | "connected" => {
+            TableValueTone::Success
+        }
+        "running" | "in_progress" | "in-progress" | "pending" | "queued" | "processing"
+        | "checking" | "warning" => TableValueTone::Warning,
+        "unhealthy" | "failed" | "error" | "false" | "cancelled" | "canceled" | "timeout"
+        | "timed_out" | "unreachable" => TableValueTone::Error,
+        "unknown" | "null" | "(empty)" => TableValueTone::Muted,
+        _ => TableValueTone::Body,
     }
 }
 
@@ -988,6 +986,7 @@ fn truncate_string(s: &str, is_unbounded: bool, max_width: usize) -> (String, bo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use colored::Colorize;
     use serde_json::json;
 
     #[test]
@@ -1028,6 +1027,43 @@ mod tests {
         let (rendered, skip_padding) = truncate_string(&long_abstract, true, 10);
         assert_eq!(rendered, long_abstract);
         assert!(skip_padding);
+    }
+
+    #[test]
+    fn task_status_values_map_to_severity_tones() {
+        assert_eq!(table_value_tone("completed"), TableValueTone::Success);
+        assert_eq!(table_value_tone("done"), TableValueTone::Success);
+        assert_eq!(table_value_tone("connected"), TableValueTone::Success);
+
+        assert_eq!(table_value_tone("running"), TableValueTone::Warning);
+        assert_eq!(table_value_tone("pending"), TableValueTone::Warning);
+        assert_eq!(table_value_tone("queued"), TableValueTone::Warning);
+        assert_eq!(table_value_tone("processing"), TableValueTone::Warning);
+
+        assert_eq!(table_value_tone("failed"), TableValueTone::Error);
+        assert_eq!(table_value_tone("cancelled"), TableValueTone::Error);
+        assert_eq!(table_value_tone("unreachable"), TableValueTone::Error);
+
+        assert_eq!(table_value_tone("unknown"), TableValueTone::Muted);
+        assert_eq!(table_value_tone("task-1"), TableValueTone::Body);
+    }
+
+    #[test]
+    fn rendered_status_column_uses_severity_colors() {
+        let rows = vec![json!({
+            "task_id": "task-1",
+            "status": "running"
+        })];
+
+        colored::control::set_override(true);
+        let rendered = format_array_to_table(&rows, true).expect("table should render");
+        let expected = theme::warning("running").bold().to_string();
+        colored::control::unset_override();
+
+        assert!(
+            rendered.contains(&expected),
+            "rendered table should color the running status: {rendered:?}"
+        );
     }
 
     #[test]
@@ -1203,17 +1239,7 @@ mod tests {
 
         assert_eq!(
             rendered,
-            Some(
-                [
-                    "content",
-                    "",
-                    "profile",
-                    "line one",
-                    "line two",
-                    "",
-                ]
-                .join("\n")
-            )
+            Some(["content", "", "profile", "line one", "line two", "",].join("\n"))
         );
     }
 }

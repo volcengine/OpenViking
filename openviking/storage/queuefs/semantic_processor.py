@@ -12,6 +12,7 @@ from openviking.observability.context import (
     bind_root_observability_context,
     reset_root_observability_context,
 )
+from openviking.parse.image_rewrite import rewrite_image_uris
 from openviking.parse.parsers.constants import (
     CODE_EXTENSIONS,
     DOCUMENTATION_EXTENSIONS,
@@ -35,7 +36,7 @@ from openviking.storage.queuefs.semantic_msg import SemanticMsg, build_semantic_
 from openviking.storage.queuefs.semantic_queue import is_semantic_msg_stale
 from openviking.storage.queuefs.semantic_sidecar import write_semantic_sidecars
 from openviking.storage.transaction import NO_LOCK, LockLease
-from openviking.storage.viking_fs import get_viking_fs
+from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.telemetry import bind_telemetry, bind_telemetry_stage, resolve_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.span_models import create_root_span_attributes
@@ -168,7 +169,7 @@ class SemanticProcessor(DequeueHandlerBase):
     def _ctx_from_semantic_msg(msg: SemanticMsg) -> RequestContext:
         role = Role(msg.role) if msg.role in {r.value for r in Role} else Role.ROOT
         return RequestContext(
-            user=UserIdentifier(msg.account_id, msg.user_id, msg.agent_id),
+            user=UserIdentifier(msg.account_id, msg.user_id),
             role=role,
         )
 
@@ -283,7 +284,7 @@ class SemanticProcessor(DequeueHandlerBase):
             recursive=False,
             account_id=msg.account_id,
             user_id=msg.user_id,
-            agent_id=msg.agent_id,
+            peer_id=msg.peer_id,
             role=msg.role,
             skip_vectorization=msg.skip_vectorization,
             changes={"modified": [uri]},
@@ -292,7 +293,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 uri=parent_uri,
                 account_id=msg.account_id,
                 user_id=msg.user_id,
-                agent_id=msg.agent_id,
+                peer_id=msg.peer_id,
             ),
         )
         await semantic_queue.enqueue(parent_msg)
@@ -351,7 +352,6 @@ class SemanticProcessor(DequeueHandlerBase):
                 )
                 root_attrs.account_id = msg.account_id
                 root_attrs.user_id = msg.user_id
-                root_attrs.agent_id = msg.agent_id
                 root_context_token = bind_root_observability_context(root_attrs)
                 try:
                     current_ctx = self._ctx_from_semantic_msg(msg)
@@ -538,7 +538,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
         try:
             try:
-                entries = await viking_fs.ls(dir_uri, ctx=ctx)
+                entries = await viking_fs.ls(dir_uri, node_limit=LS_ALL_NODES, ctx=ctx)
             except Exception as e:
                 raise RuntimeError(f"Failed to list memory directory {dir_uri}: {e}") from e
 
@@ -749,7 +749,9 @@ class SemanticProcessor(DequeueHandlerBase):
             files: Dict[str, str] = {}
             dirs: Dict[str, str] = {}
             try:
-                entries = await viking_fs.ls(dir_uri, show_all_hidden=True, ctx=ctx)
+                entries = await viking_fs.ls(
+                    dir_uri, show_all_hidden=True, node_limit=LS_ALL_NODES, ctx=ctx
+                )
             except Exception as e:
                 logger.error(f"[SyncDiff] Failed to list {dir_uri}: {e}")
                 return files, dirs
@@ -924,14 +926,65 @@ class SemanticProcessor(DequeueHandlerBase):
                 await viking_fs.mkdir(parent_uri.uri, exist_ok=True, ctx=ctx)
             diff.added_dirs.append(target_uri)
             await viking_fs.mv(root_uri, target_uri, ctx=ctx, lock_handle=lock_handle)
+            # The whole temp tree (including the hidden .image_mappings.json
+            # sidecar) was moved into the target; rewrite local image paths now.
+            await self._rewrite_target_image_uris(root_uri, target_uri, ctx=ctx, lock=lock)
             return diff
 
         await sync_dir(root_uri, target_uri)
+        # sync_dir skips hidden files, so the .image_mappings.json sidecar is
+        # still at the temp root. Carry it over and rewrite the synced markdown
+        # before the temp tree is deleted below.
+        await self._rewrite_target_image_uris(root_uri, target_uri, ctx=ctx, lock=lock)
         try:
             await viking_fs.delete_temp(root_uri, ctx=ctx)
         except Exception as e:
             logger.error(f"[SyncDiff] Failed to delete root directory {root_uri}: {e}")
         return diff
+
+    async def _rewrite_target_image_uris(
+        self,
+        root_uri: str,
+        target_uri: str,
+        ctx: Optional[RequestContext] = None,
+        lock: LockLease = NO_LOCK,
+    ) -> None:
+        """Rewrite local image refs in the target after a temp-to-target sync.
+
+        ``_sync_topdown_recursive`` skips hidden files, so the
+        ``.image_mappings.json`` sidecar written by the parser at the temp root
+        is not copied into the target. Carry it over (when missing) so
+        :func:`rewrite_image_uris` can resolve local image paths against the
+        images that were synced into the final target.
+        """
+        viking_fs = get_viking_fs()
+        root_prefix = root_uri.rstrip("/")
+        target_prefix = target_uri.rstrip("/")
+        mapping_name = ".image_mappings.json"
+
+        if root_prefix != target_prefix:
+            try:
+                await viking_fs.stat(f"{target_prefix}/{mapping_name}", ctx=ctx)
+                target_has_mapping = True
+            except Exception:
+                target_has_mapping = False
+
+            if not target_has_mapping:
+                try:
+                    mapping_content = await viking_fs.read_file(
+                        f"{root_prefix}/{mapping_name}", ctx=ctx
+                    )
+                    await viking_fs.write_file(
+                        f"{target_prefix}/{mapping_name}", mapping_content, ctx=ctx
+                    )
+                except Exception:
+                    # No sidecar to carry over (e.g. no local images ingested).
+                    pass
+
+        try:
+            await rewrite_image_uris(target_uri, ctx=ctx, lock_handle=lock.handle)
+        except Exception as e:
+            logger.error(f"[SyncDiff] Failed to rewrite image URIs for {target_uri}: {e}")
 
     async def _collect_children_abstracts(
         self, children_uris: List[str], ctx: Optional[RequestContext] = None

@@ -491,7 +491,7 @@ class OpenGaussCollection(ICollection):
 
     def _ensure_columns_for_record(self, record: Dict[str, Any]) -> None:
         existing = set(self._all_columns())
-        for field_name, value in record.items():
+        for field_name in record:
             if field_name in existing:
                 continue
             if field_name == "id":
@@ -550,7 +550,7 @@ class OpenGaussCollection(ICollection):
     def _row_to_payload(
         self, row: Sequence[Any], columns: Sequence[str]
     ) -> Tuple[Any, Dict[str, Any]]:
-        record = dict(zip(columns, row))
+        record = dict(zip(columns, row, strict=False))
         record_id = record.pop("id", "")
         record.pop(self._dense_vector_name, None)
         sparse = record.pop(self._sparse_vector_name, None)
@@ -944,7 +944,7 @@ class OpenGaussCollection(ICollection):
         )
         if not rows:
             return SearchResult()
-        row_payload = dict(zip(columns, rows[0]))
+        row_payload = dict(zip(columns, rows[0], strict=False))
         dense_vector = row_payload.get(self._dense_vector_name)
         sparse_raw = row_payload.get(self._sparse_vector_name)
         sparse_vector = None
@@ -1086,7 +1086,9 @@ class OpenGaussCollection(ICollection):
     def _upsert_row(self, columns: List[str], values: List[Any]) -> None:
         id_index = columns.index("id")
         update_columns = [column for column in columns if column != "id"]
-        update_values = [value for column, value in zip(columns, values) if column != "id"]
+        update_values = [
+            value for column, value in zip(columns, values, strict=False) if column != "id"
+        ]
         set_parts = [
             f"{_quote_ident(column)} = {'%s::vector' if column == self._dense_vector_name else '%s'}"
             for column in update_columns

@@ -48,7 +48,7 @@ def _build_env(
     api_url: Optional[str],
     ov_config: Optional[str],
     ov_cli_config: Optional[str],
-    ov_agent_id: Optional[str],
+    ov_user_id: Optional[str],
 ) -> dict:
     env = os.environ.copy()
     env["HOME"] = home_dir
@@ -64,9 +64,8 @@ def _build_env(
         env["OPENVIKING_DEBUG"] = "1"
     if ov_cli_config:
         env["OPENVIKING_CLI_CONFIG_FILE"] = ov_cli_config
-    if ov_agent_id:
-        env["OPENVIKING_AGENT_ID"] = ov_agent_id
-        env["OPENVIKING_USER"] = ov_agent_id
+    if ov_user_id:
+        env["OPENVIKING_USER"] = ov_user_id
     env["OPENVIKING_WRITE_PATH_ASYNC"] = "0"
     env.pop("OPENVIKING_URL", None)
     env.pop("OPENVIKING_BASE_URL", None)
@@ -393,9 +392,9 @@ def main():
     os.makedirs(os.path.join(args.home, ".claude"), exist_ok=True)
 
     record = load_ingest_record(args.record) if not args.force else {}
-    ov_agent_id = args.ov_shared_id if (args.ov_shared_id and args.ov_shared_id != "") else None
+    ov_user_id = args.ov_shared_id if (args.ov_shared_id and args.ov_shared_id != "") else None
     env = _build_env(
-        args.home, api_key, auth_token, api_url, args.ov_config, args.ov_cli_config, ov_agent_id
+        args.home, api_key, auth_token, api_url, args.ov_config, args.ov_cli_config, ov_user_id
     )
 
     work = []

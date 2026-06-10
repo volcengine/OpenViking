@@ -143,7 +143,7 @@ sudo journalctl -u openviking.service -f
 ```python
 import openviking as ov
 
-client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key", agent_id="my-agent")
+client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
 results = client.find("how to use openviking")
@@ -275,6 +275,58 @@ After startup, you can access:
 - Web Studio: `http://localhost:1933/studio` (same origin as the API)
 - Legacy entry point: `http://localhost:1934` (Caddy reverse proxy to 1933, kept for existing deployments)
 
+### Multi-instance notes
+
+For multi-instance deployments, prefer these settings:
+
+- Set `server.temp_upload.default_mode` to `"shared"` so uploaded temporary files can be consumed by a different replica.
+- Only set `storage.skip_process_lock` to `true` when multiple instances intentionally share the same `storage.workspace`. When enabled, OpenViking will no longer check or create `.openviking.pid`.
+- For QueueFS, prefer an explicit per-instance local SQLite path via `storage.agfs.queuefs.db_path`. If usage audit is enabled, prefer an explicit per-instance local SQLite path via `server.observability.usage_audit.sqlite_path` instead of mixing these files into a shared workspace volume.
+
+Example:
+
+```json
+{
+  "server": {
+    "temp_upload": {
+      "default_mode": "shared"
+    }
+  },
+  "storage": {
+    "skip_process_lock": true
+  }
+}
+```
+
+This example only applies when multiple instances intentionally share the same `workspace`. If each instance has its own local `workspace`, do not enable `skip_process_lock`.
+
+Example with explicit local SQLite paths for QueueFS and usage audit:
+
+```json
+{
+  "server": {
+    "temp_upload": {
+      "default_mode": "shared"
+    },
+    "observability": {
+      "usage_audit": {
+        "sqlite_path": "/var/lib/openviking-local/usage_audit.sqlite3"
+      }
+    }
+  },
+  "storage": {
+    "skip_process_lock": true,
+    "agfs": {
+      "queuefs": {
+        "db_path": "/var/lib/openviking-local/queue.db"
+      }
+    }
+  }
+}
+```
+
+This variant is useful when multiple instances share the same `workspace`, but QueueFS and usage audit SQLite files still need per-instance local paths.
+
 For public HTTPS access, see the [Public Access Guide](12-public-access.md).
 
 To build the image yourself, pass an explicit OpenViking version:
@@ -290,7 +342,7 @@ helm install openviking ./examples/k8s-helm \
   --set openviking.config.vlm.api_key="YOUR_API_KEY"
 ```
 
-For a detailed cloud deployment guide (including Volcengine TOS + VikingDB + Ark configuration), see the [Cloud Deployment Guide](../../../examples/cloud/GUIDE.md).
+For a detailed cloud deployment guide (including Volcengine TOS + VikingDB + Ark configuration), see the [Cloud Deployment Guide](https://github.com/volcengine/OpenViking/blob/main/examples/cloud/GUIDE.md).
 
 ## Health Checks
 

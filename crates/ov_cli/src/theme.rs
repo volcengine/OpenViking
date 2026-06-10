@@ -1,3 +1,5 @@
+use std::env;
+
 use colored::{ColoredString, Colorize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -6,6 +8,14 @@ pub(crate) struct Rgb(pub(crate) u8, pub(crate) u8, pub(crate) u8);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ThemeColor {
     TrueColor(Rgb),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ColorLevel {
+    NoColor,
+    Ansi16,
+    Ansi256,
+    TrueColor,
 }
 
 impl ThemeColor {
@@ -80,6 +90,155 @@ pub(crate) fn colorize(text: impl Into<String>, color: ThemeColor) -> ColoredStr
     match color {
         ThemeColor::TrueColor(Rgb(red, green, blue)) => text.truecolor(red, green, blue),
     }
+}
+
+pub(crate) fn terminal_color_level() -> ColorLevel {
+    if !colored::control::SHOULD_COLORIZE.should_colorize() {
+        return ColorLevel::NoColor;
+    }
+
+    terminal_color_level_from_env(
+        env::var("COLORTERM").ok().as_deref(),
+        env::var("TERM").ok().as_deref(),
+        env::var("TERM_PROGRAM").ok().as_deref(),
+    )
+}
+
+pub(crate) fn terminal_color_level_from_env(
+    colorterm: Option<&str>,
+    term: Option<&str>,
+    term_program: Option<&str>,
+) -> ColorLevel {
+    if colorterm
+        .map(|value| value.eq_ignore_ascii_case("truecolor") || value.eq_ignore_ascii_case("24bit"))
+        .unwrap_or(false)
+        || term
+            .map(|value| {
+                let value = value.to_ascii_lowercase();
+                value.contains("truecolor") || value.contains("24bit") || value.contains("direct")
+            })
+            .unwrap_or(false)
+        || term_program
+            .map(|value| {
+                matches!(
+                    value.to_ascii_lowercase().as_str(),
+                    "iterm.app" | "wezterm" | "vscode" | "windows_terminal"
+                )
+            })
+            .unwrap_or(false)
+    {
+        return ColorLevel::TrueColor;
+    }
+
+    if term
+        .map(|value| value.to_ascii_lowercase().contains("256color"))
+        .unwrap_or(false)
+        || term_program
+            .map(|value| value.eq_ignore_ascii_case("Apple_Terminal"))
+            .unwrap_or(false)
+    {
+        return ColorLevel::Ansi256;
+    }
+
+    ColorLevel::Ansi16
+}
+
+pub(crate) fn style_rgb(text: impl AsRef<str>, rgb: Rgb, bold: bool) -> String {
+    style_rgb_for_level(text, rgb, bold, terminal_color_level())
+}
+
+pub(crate) fn style_rgb_for_level(
+    text: impl AsRef<str>,
+    rgb: Rgb,
+    bold: bool,
+    level: ColorLevel,
+) -> String {
+    let text = text.as_ref();
+    match level {
+        ColorLevel::NoColor => text.to_string(),
+        ColorLevel::TrueColor => {
+            let Rgb(red, green, blue) = rgb;
+            ansi_style(text, &format!("38;2;{red};{green};{blue}"), bold)
+        }
+        ColorLevel::Ansi256 => {
+            ansi_style(text, &format!("38;5;{}", ansi256_index_for_rgb(rgb)), bold)
+        }
+        ColorLevel::Ansi16 => ansi_style(text, &ansi16_fg_code_for_rgb(rgb).to_string(), bold),
+    }
+}
+
+fn ansi_style(text: &str, fg_code: &str, bold: bool) -> String {
+    if bold {
+        format!("\u{1b}[1;{fg_code}m{text}\u{1b}[0m")
+    } else {
+        format!("\u{1b}[{fg_code}m{text}\u{1b}[0m")
+    }
+}
+
+pub(crate) fn ansi256_index_for_rgb(rgb: Rgb) -> u8 {
+    let Rgb(red, green, blue) = rgb;
+
+    if red.abs_diff(green) <= 10 && green.abs_diff(blue) <= 10 {
+        let average = (u16::from(red) + u16::from(green) + u16::from(blue)) / 3;
+        if average < 8 {
+            return 16;
+        }
+        if average > 238 {
+            return 231;
+        }
+        return 232 + ((average - 8) / 10) as u8;
+    }
+
+    let red = ansi256_cube_component(red);
+    let green = ansi256_cube_component(green);
+    let blue = ansi256_cube_component(blue);
+
+    16 + 36 * red + 6 * green + blue
+}
+
+fn ansi256_cube_component(value: u8) -> u8 {
+    if value < 48 {
+        0
+    } else if value < 115 {
+        1
+    } else {
+        ((value - 35) / 40).min(5)
+    }
+}
+
+fn ansi16_fg_code_for_rgb(rgb: Rgb) -> u8 {
+    const ANSI16: [(u8, Rgb); 16] = [
+        (30, Rgb(0, 0, 0)),
+        (31, Rgb(128, 0, 0)),
+        (32, Rgb(0, 128, 0)),
+        (33, Rgb(128, 128, 0)),
+        (34, Rgb(0, 0, 128)),
+        (35, Rgb(128, 0, 128)),
+        (36, Rgb(0, 128, 128)),
+        (37, Rgb(192, 192, 192)),
+        (90, Rgb(128, 128, 128)),
+        (91, Rgb(255, 0, 0)),
+        (92, Rgb(0, 255, 0)),
+        (93, Rgb(255, 255, 0)),
+        (94, Rgb(0, 0, 255)),
+        (95, Rgb(255, 0, 255)),
+        (96, Rgb(0, 255, 255)),
+        (97, Rgb(255, 255, 255)),
+    ];
+
+    ANSI16
+        .iter()
+        .min_by_key(|(_, candidate)| rgb_distance_squared(rgb, *candidate))
+        .map(|(code, _)| *code)
+        .unwrap_or(37)
+}
+
+fn rgb_distance_squared(left: Rgb, right: Rgb) -> u32 {
+    let red = i32::from(left.0) - i32::from(right.0);
+    let green = i32::from(left.1) - i32::from(right.1);
+    let blue = i32::from(left.2) - i32::from(right.2);
+
+    (red * red + green * green + blue * blue) as u32
 }
 
 pub(crate) fn brand_title(text: impl Into<String>) -> ColoredString {
@@ -179,7 +338,10 @@ fn relative_luminance(color: Rgb) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{CliTheme, Rgb, ThemeColor, active_theme, palette, relative_luminance};
+    use super::{
+        CliTheme, ColorLevel, Rgb, ThemeColor, active_theme, ansi256_index_for_rgb, palette,
+        relative_luminance, style_rgb_for_level, terminal_color_level_from_env,
+    };
 
     const PALE_PEARL: Rgb = Rgb(234, 253, 247);
     const WHITE: Rgb = Rgb(255, 255, 255);
@@ -188,6 +350,38 @@ mod tests {
     #[test]
     fn active_theme_uses_the_single_palette() {
         assert_eq!(active_theme(), palette());
+    }
+
+    #[test]
+    fn apple_terminal_uses_ansi256_instead_of_truecolor() {
+        assert_eq!(
+            terminal_color_level_from_env(None, Some("xterm-256color"), Some("Apple_Terminal")),
+            ColorLevel::Ansi256
+        );
+        assert_eq!(
+            terminal_color_level_from_env(
+                Some("truecolor"),
+                Some("xterm-256color"),
+                Some("Apple_Terminal")
+            ),
+            ColorLevel::TrueColor
+        );
+    }
+
+    #[test]
+    fn ansi256_mapping_keeps_dark_teal_out_of_black_and_gray() {
+        let index = ansi256_index_for_rgb(Rgb(5, 86, 80));
+
+        assert_eq!(index, 23);
+        assert!(!matches!(index, 0 | 8 | 232..=255));
+    }
+
+    #[test]
+    fn rgb_styling_uses_fixed_ansi256_when_truecolor_is_unavailable() {
+        let styled = style_rgb_for_level("X", Rgb(5, 86, 80), true, ColorLevel::Ansi256);
+
+        assert_eq!(styled, "\u{1b}[1;38;5;23mX\u{1b}[0m");
+        assert!(!styled.contains("38;2"));
     }
 
     fn functional_colors(palette: CliTheme) -> [(&'static str, ThemeColor); 13] {

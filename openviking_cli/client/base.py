@@ -168,6 +168,7 @@ class BaseClient(ABC):
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         telemetry: TelemetryRequest = False,
+        peer_id: Optional[str] = None,
     ) -> Any:
         """Semantic search without session context."""
         ...
@@ -182,6 +183,7 @@ class BaseClient(ABC):
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         telemetry: TelemetryRequest = False,
+        peer_id: Optional[str] = None,
     ) -> Any:
         """Semantic search with optional session context."""
         ...
@@ -226,7 +228,10 @@ class BaseClient(ABC):
 
     @abstractmethod
     async def create_session(
-        self, session_id: Optional[str] = None, telemetry: TelemetryRequest = False
+        self,
+        session_id: Optional[str] = None,
+        telemetry: TelemetryRequest = False,
+        memory_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Create a new session.
 
@@ -234,6 +239,7 @@ class BaseClient(ABC):
             session_id: Optional session ID. If provided, creates a session with the given ID.
                        If None, creates a new session with auto-generated ID.
             telemetry: Whether to attach operation telemetry data to the result.
+            memory_policy: Optional default memory extraction policy.
         """
         ...
 
@@ -289,7 +295,7 @@ class BaseClient(ABC):
         content: str | None = None,
         parts: list[dict] | None = None,
         created_at: str | None = None,
-        role_id: str | None = None,
+        peer_id: str | None = None,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add a message to a session.
@@ -300,7 +306,7 @@ class BaseClient(ABC):
             content: Text content (simple mode)
             parts: Parts array (full Part support: TextPart, ContextPart, ToolPart)
             created_at: Message creation time (ISO format string)
-            role_id: Optional explicit actor identity. Omit to let the server derive it.
+            peer_id: Optional stable interaction peer identity.
             telemetry: Whether to attach operation telemetry data to the result.
 
         If both content and parts are provided, parts takes precedence.
@@ -319,7 +325,7 @@ class BaseClient(ABC):
         Args:
             session_id: Session ID
             messages: List of message dicts, each with "role" and optionally
-                      "content", "parts", "created_at", "role_id".
+                      "content", "parts", "created_at", "peer_id".
             telemetry: Whether to attach operation telemetry data to the result.
 
         Returns:

@@ -12,6 +12,7 @@ from loguru import logger
 
 from vikingbot.agent.memory import MemoryStore
 from vikingbot.agent.skills import SkillsLoader
+from vikingbot.config.loader import load_config
 from vikingbot.config.schema import SessionKey
 from vikingbot.sandbox import SandboxManager
 from vikingbot.utils.helpers import ensure_non_empty_assistant_content
@@ -36,6 +37,7 @@ class ContextBuilder:
         sender_name: str = None,
         is_group_chat: bool = False,
         eval: bool = False,
+        openviking_connection: dict[str, Any] | None = None,
     ):
         self.workspace = workspace
         self._templates_ensured = False
@@ -46,6 +48,7 @@ class ContextBuilder:
         self._sender_name = sender_name
         self._is_group_chat = is_group_chat
         self._eval = eval
+        self._openviking_connection = openviking_connection
         self.latest_relevant_memories: str | None = None
 
     @property
@@ -75,11 +78,23 @@ class ContextBuilder:
             return self.sandbox_manager.to_workspace_id(session_key)
         return session_key.safe_name()
 
+    @staticmethod
+    def _dedupe_ids(values: list[str] | None, *, exclude: set[str] | None = None) -> list[str]:
+        exclude = exclude or set()
+        normalized: list[str] = []
+        for value in values or []:
+            value_str = str(value).strip()
+            if value_str and value_str not in exclude and value_str not in normalized:
+                normalized.append(value_str)
+        return normalized
+
     async def build_system_prompt(
         self,
         session_key: SessionKey,
         ov_tools_enable: bool = True,
         profile_user_list: list[str] | None = None,
+        memory_peer_ids: list[str] | None = None,
+        memory_owner_user_ids: list[str] | None = None,
     ) -> str:
         """
         Build the system prompt from bootstrap files, memory, and skills.
@@ -87,7 +102,9 @@ class ContextBuilder:
         Args:
             session_key: Session key for the context.
             ov_tools_enable: Whether to enable OpenViking tools and memory.
-            profile_user_list: List of additional user IDs to fetch profiles for.
+            profile_user_list: Deprecated list of additional peer IDs to fetch profiles for.
+            memory_peer_ids: Peer IDs used for memory retrieval; profiles are fetched too.
+            memory_owner_user_ids: Deprecated legacy owner-user IDs used for root-key fanout.
 
         Returns:
             Complete system prompt.
@@ -136,24 +153,36 @@ Skills with available="false" need dependencies installed first - you can try in
 
 {skills_summary}""")
 
-        # Viking user profile (only if ov tools are enabled)
+        # Viking peer profile (only if ov tools are enabled). In the current
+        # OpenViking identity model, the bot API key owns the User, and the
+        # message sender is represented as a peer under that User.
         if ov_tools_enable:
-            # Fetch current user's profile
+            # Fetch current sender's peer profile
             start = _time.time()
-            profile = await self.memory.get_viking_user_profile(
-                workspace_id=workspace_id, user_id=self._sender_id
+            profile = await self.memory.get_viking_peer_profile(
+                workspace_id=workspace_id,
+                peer_id=self._sender_id,
+                openviking_connection=self._openviking_connection,
             )
             cost = round(_time.time() - start, 2)
             logger.info(
-                f"[READ_USER_PROFILE]: cost {cost}s, profile={profile[:50] if profile else 'None'}"
+                f"[READ_PEER_PROFILE]: cost {cost}s, profile={profile[:50] if profile else 'None'}"
             )
             if profile:
-                parts.append(f"## Current user's information\n{profile}")
+                parts.append(f"## Current sender's information\n{profile}")
 
-            # Fetch additional profiles from profile_user_list
-            if profile_user_list:
-                profiles = await self.memory.get_viking_user_profiles(
-                    workspace_id=workspace_id, user_ids=profile_user_list
+            # Fetch additional peer profiles from profile_user_list and from the
+            # peers used for memory retrieval. The profile_user_list config name
+            # is retained for compatibility with older deployments.
+            additional_peer_ids = self._dedupe_ids(
+                [*(profile_user_list or []), *(memory_peer_ids or [])],
+                exclude={self._sender_id} if self._sender_id else set(),
+            )
+            if additional_peer_ids:
+                profiles = await self.memory.get_viking_peer_profiles(
+                    workspace_id=workspace_id,
+                    peer_ids=additional_peer_ids,
+                    openviking_connection=self._openviking_connection,
                 )
                 if profiles:
                     parts.append(profiles)
@@ -165,8 +194,10 @@ Skills with available="false" need dependencies installed first - you can try in
         session_key: SessionKey,
         current_message: str,
         sender_id: str,
-        memory_users: list[str] | None = None,
+        memory_peer_ids: list[str] | None = None,
+        memory_owner_user_ids: list[str] | None = None,
         ov_tools_enable: bool = True,
+        is_first_round: bool = True,
     ) -> str:
         """
         Build the system prompt from bootstrap files, memory, and skills.
@@ -198,25 +229,56 @@ Skills with available="false" need dependencies installed first - you can try in
 
         # Viking agent memory (only if ov tools are enabled)
         if ov_tools_enable:
-            start = _time.time()
-            # Use provided memory_users or fall back to [sender_id]
-            search_user_ids = memory_users if memory_users else [sender_id]
-            viking_memory = await self.memory.get_viking_memory_context(
-                current_message=current_message,
-                workspace_id=workspace_id,
-                sender_id=sender_id,
-                user_ids=search_user_ids,
+            exp_first_round_only = load_config().ov_server.recall_exp_first_round_only
+
+            parts.append(
+                "## OpenViking Memory Retrieval\n"
+                "- For questions about the user's remembered facts, preferences, profile, or personal context, use openviking_search for the current question before saying there is no relevant record.\n"
+                "- A previous empty search result does not prove that a different follow-up question has no memory; search again when the requested fact changes."
             )
-            logger.info(f"viking_memory={viking_memory}")
-            cost = round(_time.time() - start, 2)
-            logger.info(
-                f"[READ_USER_MEMORY]: cost {cost}s, memory={viking_memory[:50] if viking_memory else 'None'}"
-            )
-            if viking_memory:
-                self.latest_relevant_memories = viking_memory
-                parts.append(f"## openviking_search(query=[user_query])\n{viking_memory}")
-            else:
+
+            if exp_first_round_only:
+                # Alt mode: skip per-turn recall; inject experience memory once per session.
+                exp_workspace_id = workspace_id
                 self.latest_relevant_memories = None
+                if is_first_round:
+                    start = _time.time()
+                    exp_memory = await self.memory.get_viking_experience_context(
+                        query=current_message,
+                        workspace_id=exp_workspace_id,
+                        openviking_connection=self._openviking_connection,
+                    )
+                    cost = round(_time.time() - start, 2)
+                    logger.info(
+                        f"[READ_EXP_FIRST_ROUND]: cost {cost}s, "
+                        f"exp={exp_memory[:50] if exp_memory else 'None'}"
+                    )
+                    if exp_memory:
+                        self.latest_relevant_memories = exp_memory
+                        parts.append(f"## Relevant Agent Experience\n{exp_memory}")
+            else:
+                start = _time.time()
+                # Default recall runs under the configured/request OpenViking user.
+                # sender_id is passed separately as peer identity.
+                search_peer_ids = memory_peer_ids if memory_peer_ids else None
+                viking_memory = await self.memory.get_viking_memory_context(
+                    current_message=current_message,
+                    workspace_id=workspace_id,
+                    sender_id=sender_id,
+                    peer_ids=search_peer_ids,
+                    user_ids=memory_owner_user_ids if memory_owner_user_ids else None,
+                    openviking_connection=self._openviking_connection,
+                )
+                logger.info(f"viking_memory={viking_memory}")
+                cost = round(_time.time() - start, 2)
+                logger.info(
+                    f"[READ_USER_MEMORY]: cost {cost}s, memory={viking_memory[:50] if viking_memory else 'None'}"
+                )
+                if viking_memory:
+                    self.latest_relevant_memories = viking_memory
+                    parts.append(f"## openviking_search(query=[user_query])\n{viking_memory}")
+                else:
+                    self.latest_relevant_memories = None
 
         parts.append(
             "Reply in the same language as the user's query, ignoring the language of the reference materials. User's query:"
@@ -287,7 +349,8 @@ IMPORTANT:
         session_key: SessionKey | None = None,
         ov_tools_enable: bool = True,
         profile_user_list: list[str] | None = None,
-        memory_users: list[str] | None = None,
+        memory_peer_ids: list[str] | None = None,
+        memory_owner_user_ids: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """
         Build the complete message list for an LLM call.
@@ -298,8 +361,9 @@ IMPORTANT:
             media: Optional list of local file paths for images/media.
             session_key: Optional session key.
             ov_tools_enable: Whether to enable OpenViking tools and memory.
-            profile_user_list: List of additional user IDs to fetch profiles for.
-            memory_users: Optional list of user IDs to fetch memory for.
+            profile_user_list: Deprecated list of additional peer IDs to fetch profiles for.
+            memory_peer_ids: Optional list of peer IDs to fetch memory for.
+            memory_owner_user_ids: Deprecated legacy owner-user IDs used for root-key fanout.
 
         Returns:
             List of messages including system prompt.
@@ -308,7 +372,11 @@ IMPORTANT:
 
         # System prompt
         system_prompt = await self.build_system_prompt(
-            session_key, ov_tools_enable=ov_tools_enable, profile_user_list=profile_user_list
+            session_key,
+            ov_tools_enable=ov_tools_enable,
+            profile_user_list=profile_user_list,
+            memory_peer_ids=memory_peer_ids,
+            memory_owner_user_ids=memory_owner_user_ids,
         )
         messages.append({"role": "system", "content": system_prompt})
         # logger.debug(f"system_prompt: {system_prompt}")
@@ -322,8 +390,10 @@ IMPORTANT:
             session_key,
             current_message,
             self._sender_id,
-            memory_users,
+            memory_peer_ids,
+            memory_owner_user_ids,
             ov_tools_enable=ov_tools_enable,
+            is_first_round=not history,
         )
         messages.append({"role": "user", "content": user_info})
 

@@ -12,8 +12,8 @@ const en = {
       home: {
         title: 'Home',
       },
-      oauthSetup: {
-        title: 'OAuth setup',
+      crossDeviceVerify: {
+        title: 'OAuth verify',
       },
       operations: {
         title: 'Operations',
@@ -21,16 +21,13 @@ const en = {
       requestLogs: {
         title: 'Request Logs',
       },
-      resources: {
-        title: 'Context Management',
-      },
       retrieval: {
         title: 'Retrieval',
       },
       sessions: {
         title: 'Sessions',
       },
-      studio: {
+      playground: {
         title: 'Playground',
       },
     },
@@ -80,13 +77,13 @@ const en = {
         label: 'Account',
         placeholder: 'default',
       },
-      agentId: {
-        label: 'Agent',
-        placeholder: 'web-studio',
-      },
       apiKey: {
         label: 'API Key',
         placeholder: 'Enter X-API-Key or Bearer token',
+      },
+      adminApiKey: {
+        label: 'Admin API key',
+        placeholder: 'Root or account-admin key',
       },
       baseUrl: {
         label: 'Service URL',
@@ -95,23 +92,13 @@ const en = {
       credentials: {
         title: 'Identity & Credentials',
       },
+      dataApiKey: {
+        label: 'User API key',
+      },
       userId: {
         label: 'User',
         placeholder: 'default',
       },
-    },
-    oauthOtp: {
-      title: 'OAuth client OTP',
-      description:
-        'Generate a short-lived code that an MCP client can submit to authorize as the selected identity.',
-      generate: 'Generate OTP',
-      regenerate: 'Regenerate',
-      copy: 'Copy',
-      copied: 'Copied',
-      codeLabel: 'One-time code',
-      expiresIn: 'Expires in {{seconds}}s',
-      expired: 'Expired — generate a new code.',
-      generateError: 'Could not generate OTP: {{message}}',
     },
   },
   settings: {
@@ -124,13 +111,16 @@ const en = {
       regenerate: 'Regenerate',
       save: 'Save',
       use: 'Use',
+      useForData: 'Use as user key',
     },
     connection: {
+      accountListLimited:
+        'This key cannot list all accounts, but it can still manage the selected account if it has account-admin access.',
       adminError: 'Could not load admin identities: {{message}}',
       description:
-        'Select the account and user that Studio should send with OpenViking requests.',
+        'Use a user API key for tenant data APIs and an optional root or account-admin key for control APIs.',
       noKey:
-        'Enter an API key with admin access to load account and user choices.',
+        'Enter a root or account-admin API key to load account and user choices.',
       title: 'Connection settings',
     },
     dialogs: {
@@ -155,16 +145,28 @@ const en = {
         'Use a root or account admin API key to list users, copy keys, add identities, or regenerate credentials.',
       adminTitle: 'Admin access required',
       usersDescription: 'Create a user to mint the first API key.',
-      usersTitle: 'No users in this account',
+      usersTitle: 'No users in the selected accounts',
     },
     fields: {
       account: 'Account',
       adminUser: 'Admin user',
-      agent: 'Agent',
+      adminApiKey: 'Admin API key',
       apiKey: 'API key',
       baseUrl: 'Server URL',
+      dataApiKey: 'User API key',
+      userApiKey: 'User API key',
       role: 'Role',
       user: 'User',
+    },
+    health: {
+      admin: 'Admin control',
+      data: 'Data access',
+      state: {
+        checking: 'Checking',
+        error: 'Error',
+        ok: 'OK',
+        skipped: 'Not checked',
+      },
     },
     keyResult: {
       description:
@@ -174,21 +176,23 @@ const en = {
     },
     loading: 'Loading identities...',
     management: {
-      accountFilter: 'Managed account',
+      accountFilter: 'Accounts',
       description:
-        'Review users and credentials for one account, then add users or rotate keys from the web UI.',
+        'Review users and credentials for selected accounts, then add users or rotate keys from the web UI.',
       title: 'User management',
     },
     page: {
       description:
-        'Configure the active OpenViking identity and manage accounts, users, and API keys from Studio.',
+        'Configure the active OpenViking Studio identity and manage accounts, users, and API keys.',
       title: 'Connection & Identity',
     },
     placeholders: {
       account: 'team-account',
-      agent: 'web-studio',
+      adminApiKey: 'Root or account-admin key',
       apiKey: 'Enter X-API-Key or Bearer token',
       baseUrl: 'http://127.0.0.1:1933',
+      devModeApiKey: '[dev mode, no api key required]',
+      userApiKey: 'User API key',
       user: 'default',
     },
     roles: {
@@ -217,26 +221,14 @@ const en = {
     toast: {
       accountCreated: 'Account created',
       connectionSaved: 'Connection saved',
+      copyFailed: 'Copy failed',
       copied: 'Copied',
+      dataKeySelected: 'User API key selected',
       keyRegenerated: 'API key regenerated',
       userCreated: 'User created',
     },
   },
-  oauthSetup: {
-    page: {
-      title: 'OAuth setup',
-      intro:
-        'Use this page when authenticating an MCP client via OAuth — for example Claude.ai, Claude Desktop, ChatGPT, or Cursor. Generate a short-lived OTP here, then paste it into the MCP client to bind its connection to the selected identity.',
-      docsLink: 'Read the OAuth integration guide',
-    },
-  },
   home: {
-    agentAccess: {
-      description:
-        'Deduplicates agents that accessed OpenViking today and shows the latest visit time.',
-      empty: 'No agent visits today',
-      title: 'Agent Visits',
-    },
     contextCommits: {
       description:
         'Groups resource, skill, session message, and session commit writes into 4-hour buckets. Hover a cell for details.',
@@ -271,46 +263,11 @@ const en = {
     },
     contextData: {
       description:
-        'Includes files, skills, user memories, and agent memories to show the current context resource scale.',
+        'Includes files, skills, and user memories to show the current context resource scale.',
       files: 'Files',
       memories: 'Memories',
       skills: 'Skills',
       title: 'Context Data Volume',
-    },
-    menuIntro: {
-      description:
-        'The left navigation is collapsible. Primary entries include overview, context management, recursive retrieval, request logs, settings, GitHub, and docs.',
-      items: {
-        github: {
-          description: 'Open the OpenViking source repository.',
-          title: 'GitHub',
-        },
-        overview: {
-          description: 'Review context scale and usage overview.',
-          title: 'Overview',
-        },
-        playground: {
-          description: 'Open the docs site and Playground entry.',
-          title: 'Playground',
-        },
-        requestLogs: {
-          description: 'Inspect Studio requests, status, and latency.',
-          title: 'Request Logs',
-        },
-        resources: {
-          description: 'Manage files, skills, and context directories.',
-          title: 'Context Management',
-        },
-        retrieval: {
-          description: 'Run semantic retrieval with find() and search().',
-          title: 'Recursive Retrieval',
-        },
-        settings: {
-          description: 'Configure service URL, identity, and API key.',
-          title: 'Settings',
-        },
-      },
-      title: 'Overview + Menu Guide',
     },
     page: {
       description:
@@ -370,7 +327,7 @@ const en = {
       description: 'Failed to load audited request logs from the server.',
       title: 'Request failed',
     },
-    eyebrow: 'Studio telemetry',
+    eyebrow: 'Playground telemetry',
     filters: {
       all: 'All logs',
       apiTypePlaceholder: 'API type',
@@ -491,30 +448,6 @@ const en = {
     },
   },
   resources: {
-    page: {
-      placeholder: 'Resources workspace is under construction.',
-    },
-    toolbar: {
-      parent: 'Go to Parent',
-      refresh: 'Refresh Directory',
-      search: 'Search ⌘K',
-      processingTasks: 'File Processing Tasks',
-      upload: 'Upload',
-    },
-    emptyState: {
-      title: 'Your context space is empty',
-      upload: 'Upload File',
-    },
-    uploadDialog: {
-      title: 'Upload',
-      description:
-        'Add a local file or remote resource to the context resource library.',
-    },
-    processingNotice: {
-      prefix: 'Files are being processed.',
-      action: 'File Processing Tasks',
-      suffix: 'shows progress and results.',
-    },
     processingTasks: {
       title: 'File Processing Tasks',
       empty: 'No processing tasks',
@@ -592,9 +525,6 @@ const en = {
           'There are currently no subdirectories to expand at this level',
       },
     },
-    fileList: {
-      empty: 'This directory is empty',
-    },
     filePreview: {
       cancel: 'Cancel',
       edit: 'Edit',
@@ -609,21 +539,6 @@ const en = {
       markdownSource: 'Source',
       save: 'Save',
       unsupportedBinary: 'Binary files do not support text preview.',
-    },
-    fileTree: {
-      collapse: 'Collapse',
-      expand: 'Expand',
-      loading: 'Loading...',
-    },
-    findResults: {
-      collapse: 'Collapse',
-      expandDetails: 'Expand details',
-      groups: {
-        memories: 'Memories',
-        resources: 'Resources',
-        skills: 'Skills',
-      },
-      noResults: 'No matching results',
     },
   },
   retrieval: {
@@ -710,6 +625,7 @@ const en = {
       toolCall: 'Tool call',
       toolInput: 'Input',
       toolResult: 'Result',
+      loadMoreRefs: 'Load {{count}} more ({{remaining}} remaining)',
       toolStatus: {
         completed: 'Completed',
         failed: 'Failed',
@@ -728,6 +644,13 @@ const en = {
       useCurrent: 'Authorize as the current identity',
       noCurrent:
         'No identity set. Open Connection & Identity to sign in first, or use a different API key below.',
+      useSelect: 'Authorize a specific account / user',
+      selectAccountLabel: 'Account',
+      selectUserLabel: 'User',
+      selectNoKey:
+        'This user has no API key. Pick another user or regenerate a key in Connection & Identity.',
+      selectAccountAdminHint:
+        'You can authorize users in your own account only.',
       useCustom: 'Use a different API key',
       customKeyLabel: 'API key',
       customKeyPlaceholder: 'Paste an API key (not persisted)',
@@ -746,7 +669,7 @@ const en = {
       scopesNone: '(none)',
       signInRequired:
         'Sign in to OpenViking Studio (Connection & Identity) or paste an API key below to authorize this client.',
-      openConnectionDialog: 'Open Connection & Identity',
+      openConnectionSettings: 'Open Connection & Identity',
       authorize: 'Authorize',
       deny: 'Deny',
       useAnotherDevice: 'Use another device →',
@@ -774,9 +697,10 @@ const en = {
         'Sign in to OpenViking Studio (Connection & Identity) or paste an API key below to verify.',
     },
   },
-  studio: {
+  playground: {
     copyUri: 'Copy current URI',
     copied: 'URI copied',
+    copyFailed: 'Copy failed',
     resizeContext: 'Resize context tree width',
     resizeAction: 'Resize Terminal and Agent width',
     readFailed: 'Failed to read {{uri}}',
@@ -793,11 +717,11 @@ const en = {
     explorer: {
       title: 'Context tree',
       addResource: 'Add resource',
+      search: 'Search context',
       refresh: 'Refresh tree',
       namespaces: {
         user: 'Personalized user memories',
         session: 'Raw sessions between the user and the Agent',
-        agent: "The Agent's capabilities, tools and experience",
         resources: 'External resources the Agent can reference',
       },
     },
@@ -805,7 +729,7 @@ const en = {
       autoRetrieve: 'The Agent retrieves on its own from messages and tools',
       history: 'Session history',
       newSession: 'New session',
-      creating: 'Creating Studio session...',
+      creating: 'Creating Playground session...',
       detectingBot: 'Detecting bot mode...',
       createFailed: 'Failed to create session: {{error}}',
       retry: 'Retry',
@@ -816,8 +740,8 @@ const en = {
       loadingSessions: 'Loading sessions...',
       noSessions: 'No session history yet',
       createTimeout:
-        'Creating the Studio session timed out. Check your connection settings and try again.',
-      newSessionTitle: 'New Studio session',
+        'Creating the Playground session timed out. Check your connection settings and try again.',
+      newSessionTitle: 'New Playground session',
       botPrompt: {
         title: 'Please enable bot mode',
         description:
@@ -858,6 +782,34 @@ const en = {
       placeholder: 'Enter a CLI command, e.g. /status',
       suggestionsTitle: 'Command suggestions',
       suggestionsHint: '↑↓ select · Tab complete · Enter run',
+      quickStart: {
+        title: 'Quick start',
+        addResource: {
+          title: 'Add a resource',
+          command: '/add-resource',
+          code: 'Import docs or files into viking://resources',
+        },
+        addMemory: {
+          title: 'Add memory',
+          command: 'Agent remembers from chat',
+          code: 'Send a message in the Agent panel, then commit the session',
+        },
+        find: {
+          title: 'Find related context',
+          command: '/find openviking value',
+          code: 'Search resources, memories, and skills from the current scope',
+        },
+      },
+      commandGroups: {
+        core: 'Core commands',
+        filesystem: 'Filesystem',
+        search: 'Search and summaries',
+        status: 'Status',
+        resource: 'Resource paths',
+        history: 'History',
+      },
+      resourceSuggestion: 'Resource path',
+      historySuggestion: 'History',
       groupLabels: {
         resources: 'resource',
         memories: 'memory',

@@ -8,7 +8,10 @@ fn parse_kv_pairs(pairs: &[String]) -> Result<HashMap<String, String>> {
     let mut parsed: HashMap<String, String> = HashMap::new();
     for pair in pairs {
         let (key, value) = pair.split_once('=').ok_or_else(|| {
-            Error::Client(format!("Invalid --key format: {} (expected key=value)", pair))
+            Error::Client(format!(
+                "Invalid --key format: {} (expected key=value)",
+                pair
+            ))
         })?;
         let key = key.trim();
         if key.is_empty() {
@@ -63,13 +66,13 @@ fn to_kv_row(key: &str, value: &Value) -> Value {
 fn to_kv_rows(map: &Map<String, Value>) -> Vec<Value> {
     let mut items: Vec<(&String, &Value)> = map.iter().collect();
     items.sort_by(|(a, _), (b, _)| a.cmp(b));
-    items
-        .into_iter()
-        .map(|(k, v)| to_kv_row(k, v))
-        .collect()
+    items.into_iter().map(|(k, v)| to_kv_row(k, v)).collect()
 }
 
-fn split_kv_rows_by_keys(map: &Map<String, Value>, selected_keys: &HashSet<String>) -> (Vec<Value>, Vec<Value>) {
+fn split_kv_rows_by_keys(
+    map: &Map<String, Value>,
+    selected_keys: &HashSet<String>,
+) -> (Vec<Value>, Vec<Value>) {
     let mut items: Vec<(&String, &Value)> = map.iter().collect();
     items.sort_by(|(a, _), (b, _)| a.cmp(b));
 
@@ -183,11 +186,18 @@ fn output_version_like_tables(result: &Value, _compact: bool) -> Result<()> {
         .ok_or_else(|| Error::Parse("Expected values object in response".to_string()))?;
 
     let rendered = render_meta_current_tables(&meta, &values);
-    println!("{}", crate::output::append_profile_to_rendered(rendered, result));
+    println!(
+        "{}",
+        crate::output::append_profile_to_rendered(rendered, result)
+    );
     Ok(())
 }
 
-pub async fn categories(client: &HttpClient, output_format: OutputFormat, compact: bool) -> Result<()> {
+pub async fn categories(
+    client: &HttpClient,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
     let result = client.privacy_list_categories().await?;
     output_success(&result, output_format, compact);
     Ok(())
@@ -225,7 +235,10 @@ pub async fn get_current(
             .ok_or_else(|| Error::Parse("Expected current.values object in response".to_string()))?
             .clone();
         let rendered = render_meta_current_tables(&meta, &values);
-        println!("{}", crate::output::append_profile_to_rendered(rendered, &result));
+        println!(
+            "{}",
+            crate::output::append_profile_to_rendered(rendered, &result)
+        );
         return Ok(());
     }
 
@@ -253,7 +266,9 @@ pub async fn get_version(
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let result = client.privacy_get_version(category, target_key, version).await?;
+    let result = client
+        .privacy_get_version(category, target_key, version)
+        .await?;
     if matches!(output_format, OutputFormat::Table) {
         return output_version_like_tables(&result, compact);
     }
@@ -270,7 +285,9 @@ pub async fn activate(
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let result = client.privacy_activate(category, target_key, version).await?;
+    let result = client
+        .privacy_activate(category, target_key, version)
+        .await?;
     if matches!(output_format, OutputFormat::Table) {
         return output_version_like_tables(&result, compact);
     }
@@ -308,7 +325,9 @@ pub async fn upsert(
             .and_then(|v| v.get("values"))
             .and_then(Value::as_object)
             .ok_or_else(|| {
-                Error::Parse("privacy get current response missing current.values object".to_string())
+                Error::Parse(
+                    "privacy get current response missing current.values object".to_string(),
+                )
             })?
             .clone();
 
@@ -334,7 +353,9 @@ pub async fn upsert(
         let parsed: Value = serde_json::from_str(raw)
             .map_err(|e| Error::Client(format!("Invalid JSON for --labels-json: {}", e)))?;
         if !parsed.is_object() {
-            return Err(Error::Client("--labels-json must be a JSON object".to_string()));
+            return Err(Error::Client(
+                "--labels-json must be a JSON object".to_string(),
+            ));
         }
         Some(parsed)
     } else {
@@ -349,7 +370,9 @@ pub async fn upsert(
         payload["labels"] = labels;
     }
 
-    let result = client.privacy_upsert(category, target_key, &payload).await?;
+    let result = client
+        .privacy_upsert(category, target_key, &payload)
+        .await?;
     if matches!(output_format, OutputFormat::Table) {
         let values = result
             .get("values")
@@ -362,7 +385,10 @@ pub async fn upsert(
             render_section_table("updated", updated_rows),
             render_section_table("unchanged", unchanged_rows)
         );
-        println!("{}", crate::output::append_profile_to_rendered(rendered, &result));
+        println!(
+            "{}",
+            crate::output::append_profile_to_rendered(rendered, &result)
+        );
         return Ok(());
     }
 
@@ -388,10 +414,7 @@ mod tests {
             ]
         });
 
-        let mut meta = result
-            .as_object()
-            .expect("object")
-            .clone();
+        let mut meta = result.as_object().expect("object").clone();
         let values = meta
             .remove("values")
             .and_then(|v| v.as_object().cloned())
@@ -401,10 +424,7 @@ mod tests {
             render_kv_ascii_table(&to_kv_rows(&meta)),
             render_kv_ascii_table(&to_kv_rows(&values))
         );
-        let final_rendered = crate::output::append_profile_to_rendered(
-            rendered,
-            &result,
-        );
+        let final_rendered = crate::output::append_profile_to_rendered(rendered, &result);
 
         assert!(final_rendered.contains("profile\nprivacy took 3ms\n"));
     }

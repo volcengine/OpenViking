@@ -12,13 +12,13 @@ import pytest
 from fastapi import FastAPI
 from starlette.requests import Request
 
-from openviking.message import Message
-from openviking.server.api_keys import APIKeyManager
+from openviking.message import Message, TextPart
 from openviking.server.app import create_app
 from openviking.server.config import ServerConfig, ToolOutputExternalizationConfig
 from openviking.server.dependencies import set_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import sessions as sessions_router
+from openviking.session import SessionMeta
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
@@ -34,19 +34,15 @@ def _message_request(
     *,
     content: str | None = None,
     parts: list[dict] | None = None,
-    role_id: object = _UNSET,
+    peer_id: object = _UNSET,
 ) -> dict:
     payload = {"role": role}
     if content is not None:
         payload["content"] = content
     if parts is not None:
         payload["parts"] = parts
-    if role_id is _UNSET and role == "user":
-        payload["role_id"] = DEFAULT_USER.user_id
-    elif role_id is _UNSET and role == "assistant":
-        payload["role_id"] = DEFAULT_USER.agent_id
-    elif role_id is not None:
-        payload["role_id"] = role_id
+    if peer_id is not _UNSET and peer_id is not None:
+        payload["peer_id"] = peer_id
     return payload
 
 
@@ -58,7 +54,7 @@ def _configure_test_env(monkeypatch, tmp_path):
             {
                 "storage": {
                     "workspace": str(tmp_path / "workspace"),
-                    "agfs": {"backend": "local", "mode": "binding-client"},
+                    "agfs": {"backend": "local"},
                     "vectordb": {"backend": "local"},
                 },
                 "embedding": {
@@ -157,6 +153,42 @@ async def test_get_session(client: httpx.AsyncClient):
     body = resp.json()
     assert body["status"] == "ok"
     assert body["result"]["session_id"] == session_id
+
+
+@pytest.mark.asyncio
+async def test_legacy_session_without_meta_remains_visible_to_owner(service):
+    session_id = "legacy-no-meta"
+    owner_ctx = RequestContext(
+        user=UserIdentifier("acct-legacy", "owner"),
+        role=Role.USER,
+    )
+    session = service.sessions.session(owner_ctx, session_id)
+    await session.ensure_exists()
+    session.add_message("user", [TextPart("legacy message")], peer_id="owner")
+    await service.viking_fs.rm(f"viking://session/{session_id}/.meta.json", ctx=owner_ctx)
+
+    loaded = await service.sessions.get(session_id, owner_ctx, auto_create=False)
+    listed = await service.sessions.sessions(owner_ctx)
+
+    assert [part.text for part in loaded.messages[0].parts] == ["legacy message"]
+    assert loaded.meta.created_by_account_id == "acct-legacy"
+    assert loaded.meta.created_by_user_id == "owner"
+    assert any(item["session_id"] == session_id for item in listed)
+
+
+def test_session_visibility_is_account_scoped_for_non_root(service):
+    ctx = RequestContext(
+        user=UserIdentifier("acct-current", "owner"),
+        role=Role.USER,
+    )
+    meta = SessionMeta(created_by_user_id="owner", participant_user_ids=["owner"])
+
+    assert service.sessions._session_is_visible_in_account(ctx, meta) is False
+
+    meta.created_by_account_id = "acct-current"
+    meta.created_by_user_id = "someone-else"
+    meta.participant_user_ids = ["someone-else"]
+    assert service.sessions._session_is_visible_in_account(ctx, meta) is True
 
 
 async def test_get_session_context(client: httpx.AsyncClient):
@@ -303,10 +335,17 @@ async def test_get_session_context_includes_incomplete_archive_messages(
     session = service.sessions.session(ctx, session_id)
     await session.load()
     pending_messages = [
-        Message.create_user("Pending user message", role_id=DEFAULT_USER.user_id),
-        Message.create_assistant(
-            "Pending assistant response",
-            role_id=DEFAULT_USER.agent_id,
+        Message(
+            id="pending-user",
+            role="user",
+            parts=[TextPart("Pending user message")],
+            peer_id=DEFAULT_USER.user_id,
+        ),
+        Message(
+            id="pending-assistant",
+            role="assistant",
+            parts=[TextPart("Pending assistant response")],
+            peer_id="assistant-default",
         ),
     ]
     await session._viking_fs.write_file(
@@ -377,28 +416,10 @@ async def test_add_message_splits_tool_result_aggregate(client: httpx.AsyncClien
     assert body["result"]["message_count"] == 2
 
 
-async def test_add_message_root_request_autofills_role_id(service, monkeypatch):
-    session_id = "root-auto-fill"
-    ctx = RequestContext(user=DEFAULT_USER, role=Role.ROOT)
-
-    response = await _call_add_message_route(
-        service,
-        monkeypatch,
-        ctx=ctx,
-        payload=_message_request("user", content="hello root", role_id=None),
-        session_id=session_id,
-    )
-
-    assert response.result["message_count"] == 1
-    session = await service.sessions.get(session_id, ctx, auto_create=False)
-    await session.load()
-    assert session.messages[-1].role_id == DEFAULT_USER.user_id
-
-
-async def test_add_message_trusted_request_allows_explicit_role_id(service, monkeypatch):
-    session_id = "trusted-explicit-role-id"
+async def test_add_message_request_persists_peer_id(service, monkeypatch):
+    session_id = "trusted-peer-id"
     ctx = RequestContext(
-        user=UserIdentifier("acct_trusted", "caller", "assistant-a"),
+        user=UserIdentifier("acct_trusted", "caller"),
         role=Role.USER,
     )
 
@@ -406,108 +427,14 @@ async def test_add_message_trusted_request_allows_explicit_role_id(service, monk
         service,
         monkeypatch,
         ctx=ctx,
-        payload=_message_request("assistant", content="hello trusted", role_id="assistant-b"),
+        payload=_message_request("assistant", content="hello trusted", peer_id="assistant-b"),
         session_id=session_id,
     )
 
     assert response.result["message_count"] == 1
     session = await service.sessions.get(session_id, ctx, auto_create=False)
     await session.load()
-    assert session.messages[-1].role_id == "assistant-b"
-
-
-async def test_add_message_admin_request_allows_registered_user_role_id(service, monkeypatch):
-    manager = APIKeyManager(root_key=TEST_ROOT_KEY, viking_fs=service.viking_fs)
-    await manager.load()
-    account_id = "acct_session_admin"
-    await manager.create_account(account_id, "admin_user")
-    await manager.register_user(account_id, "alice")
-
-    ctx = RequestContext(
-        user=UserIdentifier(account_id, "admin_user", "assistant-admin"),
-        role=Role.ADMIN,
-    )
-    session_id = "admin-explicit-role-id"
-
-    response = await _call_add_message_route(
-        service,
-        monkeypatch,
-        ctx=ctx,
-        payload=_message_request("user", content="hello admin", role_id="alice"),
-        session_id=session_id,
-    )
-
-    assert response.result["message_count"] == 1
-    session = await service.sessions.get(session_id, ctx, auto_create=False)
-    await session.load()
-    assert session.messages[-1].role_id == "alice"
-
-
-async def test_add_message_user_request_allows_explicit_role_id(service, monkeypatch):
-    session_id = "user-explicit-role-id"
-    ctx = RequestContext(
-        user=UserIdentifier("acct_session_user", "alice", "assistant-user"),
-        role=Role.USER,
-    )
-
-    response = await _call_add_message_route(
-        service,
-        monkeypatch,
-        ctx=ctx,
-        payload=_message_request("user", content="hello user", role_id="wx/user-01@abc"),
-        session_id=session_id,
-    )
-
-    assert response.result["message_count"] == 1
-    session = await service.sessions.get(session_id, ctx, auto_create=False)
-    await session.load()
-    assert session.messages[-1].role_id == "wx/user-01@abc"
-
-
-async def test_add_message_user_request_autofills_role_id(service, monkeypatch):
-    session_id = "user-auto-fill-role-id"
-    ctx = RequestContext(
-        user=UserIdentifier("acct_session_user", "alice", "assistant-user"),
-        role=Role.USER,
-    )
-
-    response = await _call_add_message_route(
-        service,
-        monkeypatch,
-        ctx=ctx,
-        payload=_message_request("assistant", content="hello user", role_id=None),
-        session_id=session_id,
-    )
-
-    assert response.result["message_count"] == 1
-    session = await service.sessions.get(session_id, ctx, auto_create=False)
-    await session.load()
-    assert session.messages[-1].role_id == "assistant-user"
-
-
-async def test_add_message_admin_request_allows_unregistered_user_role_id(service, monkeypatch):
-    manager = APIKeyManager(root_key=TEST_ROOT_KEY, viking_fs=service.viking_fs)
-    await manager.load()
-    account_id = "acct_session_invalid"
-    await manager.create_account(account_id, "admin_user")
-
-    ctx = RequestContext(
-        user=UserIdentifier(account_id, "admin_user", "assistant-admin"),
-        role=Role.ADMIN,
-    )
-
-    response = await _call_add_message_route(
-        service,
-        monkeypatch,
-        ctx=ctx,
-        payload=_message_request("user", content="hello invalid", role_id="ghost"),
-        session_id="invalid-user-role-id",
-    )
-
-    assert response.result["message_count"] == 1
-    session = await service.sessions.get("invalid-user-role-id", ctx, auto_create=False)
-    await session.load()
-    assert session.messages[-1].role_id == "ghost"
+    assert session.messages[-1].peer_id == "assistant-b"
 
 
 async def test_add_multiple_messages(client: httpx.AsyncClient):

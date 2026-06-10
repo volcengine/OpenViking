@@ -60,7 +60,7 @@ class TestResourceEdgeCases:
                 f.write("scope test")
 
             resp = api_client.add_resource(
-                path=test_file, to="viking://agent/skills/invalid", wait=False
+                path=test_file, to="viking://user/skills/invalid", wait=False
             )
             assert resp.status_code == 400, (
                 f"adding resource to non-resources scope should return 400, got {resp.status_code}: {resp.text[:200]}"

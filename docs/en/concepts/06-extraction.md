@@ -73,7 +73,7 @@ TreeBuilder moves temp directory to AGFS and queues semantic processing.
 ```python
 building_tree = tree_builder.finalize_from_temp(
     temp_dir_path="viking://temp/abc123",
-    scope="resources",  # resources/user/agent
+    scope="resources",  # resources/user
 )
 ```
 
@@ -91,7 +91,6 @@ building_tree = tree_builder.finalize_from_temp(
 |-------|----------|
 | resources | `viking://resources` |
 | user | `viking://user` |
-| agent | `viking://agent` |
 
 ## SemanticQueue
 
@@ -194,8 +193,8 @@ openviking/parse/parsers/code/ast/
 | Phase | Resource | Memory | Skill |
 |-------|----------|--------|-------|
 | **Parser** | Common flow | Common flow | Common flow |
-| **Base URI** | `viking://resources` | `viking://user/memories` | `viking://agent/skills` |
-| **TreeBuilder scope** | resources | user/agent | agent |
+| **Base URI** | `viking://resources` | `viking://user/memories` | `viking://user/skills` |
+| **TreeBuilder scope** | resources | user | user |
 | **SemanticMsg type** | resource | memory | skill |
 
 ### Resource Extraction
@@ -219,7 +218,7 @@ await client.add_skill({
     "content": "# search-web\\n..."
 })
 
-# Flow: Direct write to viking://agent/skills/{name}/ → SemanticQueue
+# Flow: Direct write to viking://user/skills/{name}/ → SemanticQueue
 ```
 
 ### Memory Extraction

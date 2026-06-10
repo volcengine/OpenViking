@@ -67,11 +67,7 @@ impl KVFileSystem {
 
     /// List all keys with a given prefix
     fn list_keys_with_prefix(&self, store: &HashMap<String, KVEntry>, prefix: &str) -> Vec<String> {
-        let search_prefix = if prefix == "/" {
-            ""
-        } else {
-            prefix
-        };
+        let search_prefix = if prefix == "/" { "" } else { prefix };
 
         store
             .keys()
@@ -450,41 +446,41 @@ KVFS has no configuration parameters.
 mod tests {
     use super::*;
 
+    /// Write one key in KVFS tests.
+    async fn write_key(fs: &KVFileSystem, path: &str, data: &[u8]) {
+        fs.write(path, data, 0, WriteFlag::Create).await.unwrap();
+    }
+
+    /// Read one key in KVFS tests.
+    async fn read_key(fs: &KVFileSystem, path: &str) -> Vec<u8> {
+        fs.read(path, 0, 0).await.unwrap()
+    }
+
     #[tokio::test]
     async fn test_kvfs_basic_operations() {
         let fs = KVFileSystem::new();
 
         // Create and write
-        fs.write("/key1", b"value1", 0, WriteFlag::Create)
-            .await
-            .unwrap();
+        write_key(&fs, "/key1", b"value1").await;
 
         // Read
-        let data = fs.read("/key1", 0, 0).await.unwrap();
-        assert_eq!(data, b"value1");
+        assert_eq!(read_key(&fs, "/key1").await, b"value1");
 
         // Update
         fs.write("/key1", b"value2", 0, WriteFlag::Truncate)
             .await
             .unwrap();
 
-        let data = fs.read("/key1", 0, 0).await.unwrap();
-        assert_eq!(data, b"value2");
+        assert_eq!(read_key(&fs, "/key1").await, b"value2");
     }
 
     #[tokio::test]
     async fn test_kvfs_list_keys() {
         let fs = KVFileSystem::new();
 
-        fs.write("/key1", b"val1", 0, WriteFlag::Create)
-            .await
-            .unwrap();
-        fs.write("/key2", b"val2", 0, WriteFlag::Create)
-            .await
-            .unwrap();
-        fs.write("/key3", b"val3", 0, WriteFlag::Create)
-            .await
-            .unwrap();
+        write_key(&fs, "/key1", b"val1").await;
+        write_key(&fs, "/key2", b"val2").await;
+        write_key(&fs, "/key3", b"val3").await;
 
         let entries = fs.read_dir("/").await.unwrap();
         assert_eq!(entries.len(), 3);
@@ -497,12 +493,8 @@ mod tests {
         // Create parent "directory" first
         fs.mkdir("/user", 0o755).await.unwrap();
 
-        fs.write("/user/123", b"alice", 0, WriteFlag::Create)
-            .await
-            .unwrap();
-        fs.write("/user/456", b"bob", 0, WriteFlag::Create)
-            .await
-            .unwrap();
+        write_key(&fs, "/user/123", b"alice").await;
+        write_key(&fs, "/user/456", b"bob").await;
 
         let entries = fs.read_dir("/user").await.unwrap();
         assert_eq!(entries.len(), 2);
@@ -512,9 +504,7 @@ mod tests {
     async fn test_kvfs_delete() {
         let fs = KVFileSystem::new();
 
-        fs.write("/key1", b"value1", 0, WriteFlag::Create)
-            .await
-            .unwrap();
+        write_key(&fs, "/key1", b"value1").await;
         fs.remove("/key1").await.unwrap();
 
         assert!(fs.read("/key1", 0, 0).await.is_err());
@@ -524,14 +514,11 @@ mod tests {
     async fn test_kvfs_rename() {
         let fs = KVFileSystem::new();
 
-        fs.write("/oldkey", b"data", 0, WriteFlag::Create)
-            .await
-            .unwrap();
+        write_key(&fs, "/oldkey", b"data").await;
         fs.rename("/oldkey", "/newkey").await.unwrap();
 
         assert!(fs.read("/oldkey", 0, 0).await.is_err());
-        let data = fs.read("/newkey", 0, 0).await.unwrap();
-        assert_eq!(data, b"data");
+        assert_eq!(read_key(&fs, "/newkey").await, b"data");
     }
 
     #[tokio::test]
@@ -539,11 +526,7 @@ mod tests {
         let plugin = KVFSPlugin;
         assert_eq!(plugin.name(), "kvfs");
 
-        let config = PluginConfig {
-            name: "kvfs".to_string(),
-            mount_path: "/kvfs".to_string(),
-            params: HashMap::new(),
-        };
+        let config = PluginConfig::single_backend("kvfs", "/kvfs", HashMap::new());
 
         assert!(plugin.validate(&config).await.is_ok());
         assert!(plugin.initialize(config).await.is_ok());

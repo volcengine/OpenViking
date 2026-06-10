@@ -5,5 +5,5 @@ export const Route = createFileRoute('/')({
 })
 
 function IndexRoute() {
-  return <Navigate replace to="/home" />
+  return <Navigate replace to="/playground" />
 }

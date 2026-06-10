@@ -145,6 +145,26 @@ class TestPathLockIsLocked:
 
         assert await lock.is_locked_async("/local/u/foo/bar") is True
 
+    def test_is_locked_sync_passes_path_derived_ctx(self):
+        token = _make_fencing_token("tx-1", LOCK_TYPE_TREE)
+        seen: list[dict[str, str] | None] = []
+
+        class _CtxAwareAgfs:
+            def read(self, path, *, ctx=None):
+                seen.append(ctx)
+                if path == "/local/u/.path.ovlock":
+                    return token.encode("utf-8")
+                raise Exception("not found")
+
+            def stat(self, path, *, ctx=None):
+                seen.append(ctx)
+                raise Exception("not found")
+
+        lock = PathLockEngine(_CtxAwareAgfs())
+
+        assert lock.is_locked("/local/u/foo/bar") is True
+        assert {"account_id": "u"} in seen
+
 
 class TestPathLockOwnership:
     async def test_refresh_reports_refreshed_lost_and_failed_paths(self):

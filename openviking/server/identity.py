@@ -28,29 +28,6 @@ class AuthMode(str, Enum):
     DEV = "dev"
 
 
-@dataclass(frozen=True)
-class AccountNamespacePolicy:
-    """Account-level namespace isolation policy."""
-
-    isolate_user_scope_by_agent: bool = False
-    isolate_agent_scope_by_user: bool = False
-
-    @classmethod
-    def from_dict(cls, data: Optional[dict]) -> "AccountNamespacePolicy":
-        if not isinstance(data, dict):
-            return cls()
-        return cls(
-            isolate_user_scope_by_agent=bool(data.get("isolate_user_scope_by_agent", False)),
-            isolate_agent_scope_by_user=bool(data.get("isolate_agent_scope_by_user", False)),
-        )
-
-    def to_dict(self) -> dict:
-        return {
-            "isolate_user_scope_by_agent": self.isolate_user_scope_by_agent,
-            "isolate_agent_scope_by_user": self.isolate_agent_scope_by_user,
-        }
-
-
 @dataclass
 class ResolvedIdentity:
     """Output of auth middleware: raw identity resolved from API Key."""
@@ -58,8 +35,6 @@ class ResolvedIdentity:
     role: Role
     account_id: Optional[str] = None
     user_id: Optional[str] = None
-    agent_id: Optional[str] = None
-    namespace_policy: AccountNamespacePolicy = field(default_factory=AccountNamespacePolicy)
     # True when this identity was minted from an OAuth-issued bearer token;
     # downstream checks (e.g. ROOT-requires-explicit-tenant headers) can skip
     # rules that target raw API-key auth, since OAuth claims already pin
@@ -73,7 +48,6 @@ class RequestContext:
 
     user: UserIdentifier
     role: Role
-    namespace_policy: AccountNamespacePolicy = field(default_factory=AccountNamespacePolicy)
     # Mirrors ResolvedIdentity.from_oauth. Routes that mint OAuth state
     # (OTP issuance, oauth-verify) reject callers with from_oauth=True to
     # prevent a stolen access token from laundering itself into a long-lived
@@ -83,25 +57,6 @@ class RequestContext:
     @property
     def account_id(self) -> str:
         return self.user.account_id
-
-    def resolve_role_id(self, message_role: str, override: Optional[str] = None) -> Optional[str]:
-        """Resolve the role_id for a message, with fallback to ctx identity.
-
-        `message_role` is the message-level role ("user" / "assistant"), distinct
-        from `RequestContext.role` (the authz role).
-
-        - If `override` is truthy, returns it as-is (caller-supplied wins).
-        - For message_role="user", falls back to `user.user_id`.
-        - For message_role="assistant", falls back to `user.agent_id`.
-        - Any other message_role returns None when no override is given.
-        """
-        if override:
-            return override
-        if message_role == "user":
-            return self.user.user_id
-        if message_role == "assistant":
-            return self.user.agent_id
-        return None
 
 
 @dataclass
@@ -126,7 +81,3 @@ class ToolContext:
     @property
     def account_id(self) -> str:
         return self.request_ctx.user.account_id
-
-    @property
-    def namespace_policy(self) -> AccountNamespacePolicy:
-        return self.request_ctx.namespace_policy

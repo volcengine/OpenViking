@@ -55,6 +55,25 @@ function displayName(uri: string): { name: string; parent: string } {
   return { name, parent }
 }
 
+function errorDescription(error: unknown): string {
+  if (!error) return ''
+  if (error instanceof Error) return error.message
+  if (typeof error === 'object') {
+    const data = error as {
+      code?: unknown
+      message?: unknown
+      statusCode?: unknown
+    }
+    const code = typeof data.code === 'string' ? data.code : ''
+    const message = typeof data.message === 'string' ? data.message : ''
+    const status =
+      typeof data.statusCode === 'number' ? `HTTP ${data.statusCode}` : ''
+    const readable = [status, code, message].filter(Boolean).join(' · ')
+    if (readable) return readable
+  }
+  return String(error)
+}
+
 export function FindPalette({
   open,
   onClose,
@@ -70,6 +89,7 @@ export function FindPalette({
   const inputRef = useRef<HTMLInputElement>(null)
   const resultsRef = useRef<HTMLDivElement>(null)
   const composingRef = useRef(false)
+  const wasOpenRef = useRef(false)
 
   // Single parse entry point. No component code reads `query` structurally.
   const mode = useMemo(
@@ -131,9 +151,15 @@ export function FindPalette({
     return idleEntries
   }, [mode.kind, dirItems, hasResults, filteredEntries, idleEntries])
 
-  const { index: activeIndex, setIndex, moveUp, moveDown, reset } =
-    useListNavigation(visibleEntries.length)
-  const activeEntry = activeIndex >= 0 ? (visibleEntries[activeIndex] ?? null) : null
+  const {
+    index: activeIndex,
+    setIndex,
+    moveUp,
+    moveDown,
+    reset,
+  } = useListNavigation(visibleEntries.length)
+  const activeEntry =
+    activeIndex >= 0 ? (visibleEntries[activeIndex] ?? null) : null
 
   // Preview stat only for search / idle file cursor. dirBrowse renders its own
   // preview inside DirBrowser. Debounced so arrow-scanning doesn't storm stat.
@@ -164,11 +190,13 @@ export function FindPalette({
   }, [])
 
   useEffect(() => {
-    if (open) {
+    if (open && !wasOpenRef.current) {
+      setFindTargetUri(normalizeDirUri(scopeUri || PALETTE_ROOT_URI))
       reset()
       focusInput()
     }
-  }, [open, reset, focusInput])
+    wasOpenRef.current = open
+  }, [open, scopeUri, reset, focusInput])
 
   useEffect(() => {
     if (!open) return
@@ -421,6 +449,7 @@ export function FindPalette({
                       className="h-full"
                       items={idleEntries}
                       activeIndex={activeIndex}
+                      onActiveChange={setIndex}
                       onSelect={(entry) => {
                         if (entry.isDir) {
                           confirmDirScope(entry.uri)
@@ -468,9 +497,12 @@ export function FindPalette({
                 ) : treeQuery.error ? (
                   <div
                     role="alert"
-                    className="px-4 py-6 text-center text-xs text-destructive"
+                    className="flex flex-col items-center gap-1 px-4 py-6 text-center text-xs text-destructive"
                   >
-                    {t('searchPalette.error')}
+                    <span>{t('searchPalette.error')}</span>
+                    <span className="max-w-[32rem] text-muted-foreground">
+                      {errorDescription(treeQuery.error)}
+                    </span>
                   </div>
                 ) : !hasResults ? (
                   <div className="flex flex-col items-center gap-2 px-4 py-12 text-center">
@@ -487,6 +519,7 @@ export function FindPalette({
                     className="h-full"
                     items={filteredEntries}
                     activeIndex={activeIndex}
+                    onActiveChange={setIndex}
                     onSelect={(entry) => {
                       onNavigate(entry.uri)
                       onClose()
@@ -577,12 +610,14 @@ function DirResultList({
   className,
   items,
   activeIndex,
+  onActiveChange,
   onSelect,
   onOpenDir,
 }: {
   className?: string
   items: VikingFsEntry[]
   activeIndex: number
+  onActiveChange: (index: number) => void
   onSelect: (entry: VikingFsEntry) => void
   onOpenDir: (entry: VikingFsEntry) => void
 }) {
@@ -604,9 +639,8 @@ function DirResultList({
         const EntryIcon = entry.isDir ? FolderIcon : FileIcon
 
         return (
-          <button
+          <div
             key={entry.uri}
-            type="button"
             data-active={isActive}
             className={cn(
               'animate-palette-row group relative flex w-full items-start gap-3 border-b border-border/50 px-4 py-3 text-left transition-colors last:border-b-0',
@@ -615,51 +649,50 @@ function DirResultList({
                 : 'text-foreground/80 hover:bg-muted/40',
             )}
             style={{ animationDelay: `${i * 24}ms` }}
-            onClick={() => onSelect(entry)}
+            onMouseEnter={() => onActiveChange(i)}
           >
             {isActive && (
               <span className="absolute inset-y-0 left-0 w-0.5 rounded-r bg-primary" />
             )}
-            <EntryIcon
-              className={cn(
-                'mt-0.5 size-4 shrink-0',
-                entry.isDir ? 'text-blue-500/70' : 'text-muted-foreground/70',
-              )}
-            />
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-medium">{name}</div>
-              <div className="mt-0.5 truncate text-xs text-muted-foreground/80">
-                {parent}
+            <button
+              type="button"
+              className="flex min-w-0 flex-1 items-start gap-3 text-left outline-none"
+              onFocus={() => onActiveChange(i)}
+              onClick={() => onSelect(entry)}
+            >
+              <EntryIcon
+                className={cn(
+                  'mt-0.5 size-4 shrink-0',
+                  entry.isDir ? 'text-blue-500/70' : 'text-muted-foreground/70',
+                )}
+              />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-medium">{name}</div>
+                <div className="mt-0.5 truncate text-xs text-muted-foreground/80">
+                  {parent}
+                </div>
               </div>
-            </div>
+            </button>
             {entry.size && (
               <span className="shrink-0 text-xs tabular-nums text-muted-foreground/60">
                 {entry.size}
               </span>
             )}
-            <span
-              role="button"
-              tabIndex={-1}
+            <button
+              type="button"
               title={t('searchPalette.openContainingDirectory')}
-              className="shrink-0 rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground group-hover:opacity-100 data-[active=true]:opacity-100"
+              className="shrink-0 rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover:opacity-100 data-[active=true]:opacity-100"
               data-active={isActive}
               onClick={(e) => {
                 e.stopPropagation()
                 onOpenDir(entry)
               }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.stopPropagation()
-                  onOpenDir(entry)
-                }
-              }}
             >
               <FolderOpen className="size-3.5" />
-            </span>
-          </button>
+            </button>
+          </div>
         )
       })}
     </div>
   )
 }
-

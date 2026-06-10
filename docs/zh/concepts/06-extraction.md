@@ -72,7 +72,7 @@ TreeBuilder 负责将临时目录移动到 AGFS，并入队语义处理。
 ```python
 building_tree = tree_builder.finalize_from_temp(
     temp_dir_path="viking://temp/abc123",
-    scope="resources",  # resources/user/agent
+    scope="resources",  # resources/user
 )
 ```
 
@@ -90,7 +90,6 @@ building_tree = tree_builder.finalize_from_temp(
 |-------|----------|
 | resources | `viking://resources` |
 | user | `viking://user` |
-| agent | `viking://agent` |
 
 ## SemanticQueue（语义队列）
 
@@ -193,8 +192,8 @@ openviking/parse/parsers/code/ast/
 | 环节 | Resource | Memory | Skill |
 |------|----------|--------|-------|
 | **Parser** | 通用流程 | 通用流程 | 通用流程 |
-| **基础 URI** | `viking://resources` | `viking://user/memories` | `viking://agent/skills` |
-| **TreeBuilder scope** | resources | user/agent | agent |
+| **基础 URI** | `viking://resources` | `viking://user/memories` | `viking://user/skills` |
+| **TreeBuilder scope** | resources | user | user |
 | **SemanticMsg type** | resource | memory | skill |
 
 ### 资源提取
@@ -218,7 +217,7 @@ await client.add_skill({
     "content": "# search-web\\n..."
 })
 
-# 流程: 直接写入 viking://agent/skills/{name}/ → SemanticQueue
+# 流程: 直接写入 viking://user/skills/{name}/ → SemanticQueue
 ```
 
 ### 记忆提取

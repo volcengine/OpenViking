@@ -289,7 +289,6 @@ async def _upsert_vector_snapshot_record(
         "active_count": 0,
         "account_id": ctx.account_id,
         "owner_user_id": owner_fields.get("owner_user_id"),
-        "owner_agent_id": owner_fields.get("owner_agent_id"),
         "vector": dense_vector,
     }
     if not payload.get("abstract"):

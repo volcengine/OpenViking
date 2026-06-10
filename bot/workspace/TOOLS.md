@@ -27,9 +27,10 @@ List all resources at a specified path.
 
 ### ⚠️ CRITICAL: Commit Memories and Events
 ```
-openviking_memory_commit(session_id: str, messages: list) -> str
+openviking_memory_commit(messages: list[{"role": "user" | "assistant", "content": str}]) -> str
 ```
 **All user's important conversations, information, and memories MUST be committed to OpenViking** for future retrieval and context understanding.
+Do not pass a session_id; the tool creates a separate memory-commit session automatically. The returned string is JSON containing fields such as `status`, `memory_commit_session_id`, `source_session_id`, changed memory URIs, and commit task status.
 
 ---
 

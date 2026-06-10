@@ -47,9 +47,21 @@ class WordParser(BaseParser):
         if path.exists():
             import docx
 
-            markdown_content = await asyncio.to_thread(self._convert_to_markdown, path, docx)
+            from openviking_cli.utils.storage import get_storage
+
+            storage = get_storage()
+            resource_name = kwargs.get("resource_name") or kwargs.get("source_name") or path.stem
+
+            markdown_content = await asyncio.to_thread(
+                self._convert_to_markdown, path, docx, resource_name, storage
+            )
             result = await self._md_parser.parse_content(
-                markdown_content, source_path=str(path), instruction=instruction, **kwargs
+                markdown_content,
+                source_path=str(path),
+                instruction=instruction,
+                base_dir=path.parent,
+                allowed_media_dirs=[storage.media_dir],
+                **kwargs,
             )
         else:
             result = await self._md_parser.parse_content(
@@ -68,17 +80,22 @@ class WordParser(BaseParser):
         result.parser_name = "WordParser"
         return result
 
-    def _convert_to_markdown(self, path: Path, docx) -> str:
+    def _convert_to_markdown(self, path: Path, docx, resource_name=None, storage=None) -> str:
         """Convert Word document to Markdown string.
 
         Iterates the document body in order so that tables appear in their
-        original position rather than being appended at the end.
+        original position rather than being appended at the end. Embedded
+        images are extracted to local storage and referenced inline so the
+        MarkdownParser can ingest them into VikingFS.
         """
         doc = docx.Document(path)
         markdown_parts = []
 
         # Map XML table elements to python-docx Table objects for O(1) lookup
         table_by_element = {table._tbl: table for table in doc.tables}
+
+        # Track extracted images to deduplicate and number sequentially
+        image_counter = [0]
 
         # Walk the document body in order to preserve table positions
         from docx.oxml.ns import qn
@@ -89,6 +106,15 @@ class WordParser(BaseParser):
                 from docx.text.paragraph import Paragraph
 
                 paragraph = Paragraph(child, doc)
+
+                # Extract any embedded images in this paragraph first so they
+                # keep their original document position.
+                image_md = self._convert_paragraph_images(
+                    paragraph, doc, qn, resource_name, storage, image_counter
+                )
+                if image_md:
+                    markdown_parts.append(image_md)
+
                 if not paragraph.text.strip():
                     continue
 
@@ -107,6 +133,48 @@ class WordParser(BaseParser):
                     markdown_parts.append(self._convert_table(table_by_element[child]))
 
         return "\n\n".join(markdown_parts)
+
+    def _convert_paragraph_images(
+        self, paragraph, doc, qn, resource_name, storage, image_counter
+    ) -> str:
+        """Extract embedded images from a paragraph and return markdown references.
+
+        Images in .docx are stored as relationship parts (``word/media/*``)
+        referenced by ``r:embed`` ids inside ``w:drawing`` elements. We pull the
+        binary blob for each and persist it via the shared storage helper so the
+        MarkdownParser's image ingestion can pick it up.
+        """
+        if storage is None:
+            return ""
+
+        parts = []
+        # Each <a:blip r:embed="rId"> inside the paragraph references an image part
+        for blip in paragraph._p.findall(".//" + qn("a:blip")):
+            rid = blip.get(qn("r:embed"))
+            if not rid:
+                continue
+            try:
+                image_part = doc.part.related_parts[rid]
+                image_bytes = image_part.blob
+            except Exception as e:
+                logger.warning(f"[WordParser] Failed to read embedded image {rid}: {e}")
+                continue
+
+            try:
+                extension = Path(image_part.partname).suffix or ".png"
+                image_counter[0] += 1
+                filename = f"image{image_counter[0]}"
+                image_path = storage.save_image(
+                    resource_name, image_bytes, filename=filename, extension=extension
+                )
+                # Reference relative to the media root so the MarkdownParser can
+                # resolve it within the resource's media lifecycle (never cwd).
+                rel_path = image_path.relative_to(storage.media_dir)
+                parts.append(f"![{filename}]({rel_path})")
+            except Exception as e:
+                logger.warning(f"[WordParser] Failed to save embedded image {rid}: {e}")
+
+        return "\n\n".join(parts)
 
     def _extract_heading_level(self, style_name: str) -> int:
         """Extract heading level from style name."""

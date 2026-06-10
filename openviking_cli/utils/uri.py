@@ -20,14 +20,13 @@ class VikingURI:
     Scopes:
     - resources: Independent resource scope (viking://resources/{project}/...)
     - user: User scope (viking://user/...)
-    - agent: Agent scope (viking://agent/...)
     - session: Session scope (viking://session/{session_id}/...)
     - queue: Queue scope (viking://queue/...)
 
     Examples:
     - viking://resources/my_project/docs/api
     - viking://user/memories/preferences/code_style
-    - viking://agent/skills/pdf
+    - viking://user/skills/pdf
     - viking://session/session123/messages
     """
 
@@ -36,7 +35,6 @@ class VikingURI:
     LISTABLE_SCOPES = {
         "resources",
         "user",
-        "agent",
         "session",
     }
     PUBLIC_SCOPES = frozenset(LISTABLE_SCOPES)
@@ -189,7 +187,7 @@ class VikingURI:
         Build a Viking URI from components.
 
         Args:
-            scope: Scope (resources, user, agent, session, queue, temp)
+            scope: Scope (resources, user, session, queue, temp)
             *path_parts: Additional path components
 
         Returns:

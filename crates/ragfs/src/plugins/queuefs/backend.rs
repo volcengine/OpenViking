@@ -9,10 +9,9 @@ use rusqlite::{params, types::ValueRef, Connection, Row};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
-use std::time::{Duration, UNIX_EPOCH};
 use std::time::SystemTime;
+use std::time::{Duration, UNIX_EPOCH};
 use uuid::Uuid;
-
 
 /// A message in the queue
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -220,7 +219,10 @@ impl MemoryBackend {
 impl QueueBackend for MemoryBackend {
     fn create_queue(&mut self, name: &str) -> Result<()> {
         if self.queues.contains_key(name) {
-            return Err(Error::AlreadyExists(format!("queue '{}' already exists", name)));
+            return Err(Error::AlreadyExists(format!(
+                "queue '{}' already exists",
+                name
+            )));
         }
         self.queues.insert(name.to_string(), Queue::new());
         Ok(())
@@ -250,9 +252,10 @@ impl QueueBackend for MemoryBackend {
     }
 
     fn enqueue(&mut self, queue_name: &str, msg: Message) -> Result<()> {
-        let queue = self.queues.get_mut(queue_name).ok_or_else(|| {
-            Error::NotFound(format!("queue '{}' not found", queue_name))
-        })?;
+        let queue = self
+            .queues
+            .get_mut(queue_name)
+            .ok_or_else(|| Error::NotFound(format!("queue '{}' not found", queue_name)))?;
 
         queue.last_enqueue_time = SystemTime::now();
         queue.messages.push_back(msg);
@@ -260,50 +263,56 @@ impl QueueBackend for MemoryBackend {
     }
 
     fn dequeue(&mut self, queue_name: &str) -> Result<Option<Message>> {
-        let queue = self.queues.get_mut(queue_name).ok_or_else(|| {
-            Error::NotFound(format!("queue '{}' not found", queue_name))
-        })?;
+        let queue = self
+            .queues
+            .get_mut(queue_name)
+            .ok_or_else(|| Error::NotFound(format!("queue '{}' not found", queue_name)))?;
 
         Ok(queue.messages.pop_front())
     }
 
     fn peek(&self, queue_name: &str) -> Result<Option<Message>> {
-        let queue = self.queues.get(queue_name).ok_or_else(|| {
-            Error::NotFound(format!("queue '{}' not found", queue_name))
-        })?;
+        let queue = self
+            .queues
+            .get(queue_name)
+            .ok_or_else(|| Error::NotFound(format!("queue '{}' not found", queue_name)))?;
 
         Ok(queue.messages.front().cloned())
     }
 
     fn size(&self, queue_name: &str) -> Result<usize> {
-        let queue = self.queues.get(queue_name).ok_or_else(|| {
-            Error::NotFound(format!("queue '{}' not found", queue_name))
-        })?;
+        let queue = self
+            .queues
+            .get(queue_name)
+            .ok_or_else(|| Error::NotFound(format!("queue '{}' not found", queue_name)))?;
 
         Ok(queue.messages.len())
     }
 
     fn clear(&mut self, queue_name: &str) -> Result<()> {
-        let queue = self.queues.get_mut(queue_name).ok_or_else(|| {
-            Error::NotFound(format!("queue '{}' not found", queue_name))
-        })?;
+        let queue = self
+            .queues
+            .get_mut(queue_name)
+            .ok_or_else(|| Error::NotFound(format!("queue '{}' not found", queue_name)))?;
 
         queue.messages.clear();
         Ok(())
     }
 
     fn get_last_enqueue_time(&self, queue_name: &str) -> Result<SystemTime> {
-        let queue = self.queues.get(queue_name).ok_or_else(|| {
-            Error::NotFound(format!("queue '{}' not found", queue_name))
-        })?;
+        let queue = self
+            .queues
+            .get(queue_name)
+            .ok_or_else(|| Error::NotFound(format!("queue '{}' not found", queue_name)))?;
 
         Ok(queue.last_enqueue_time)
     }
 
     fn ack(&mut self, queue_name: &str, msg_id: &str) -> Result<bool> {
-        let queue = self.queues.get_mut(queue_name).ok_or_else(|| {
-            Error::NotFound(format!("queue '{}' not found", queue_name))
-        })?;
+        let queue = self
+            .queues
+            .get_mut(queue_name)
+            .ok_or_else(|| Error::NotFound(format!("queue '{}' not found", queue_name)))?;
 
         // Find and remove message by ID
         let original_len = queue.messages.len();
@@ -397,7 +406,12 @@ impl SQLiteQueueBackend {
              WHERE queue_name IS NOT NULL AND queue_name != ''",
             [],
         )
-        .map_err(|e| Error::internal(format!("sqlite migration backfill queue metadata error: {}", e)))?;
+        .map_err(|e| {
+            Error::internal(format!(
+                "sqlite migration backfill queue metadata error: {}",
+                e
+            ))
+        })?;
 
         Ok(())
     }
@@ -472,7 +486,10 @@ impl QueueBackend for SQLiteQueueBackend {
             )
             .map_err(|e| Error::internal(format!("sqlite create queue error: {}", e)))?;
         if changed == 0 {
-            return Err(Error::AlreadyExists(format!("queue '{}' already exists", name)));
+            return Err(Error::AlreadyExists(format!(
+                "queue '{}' already exists",
+                name
+            )));
         }
         Ok(())
     }
@@ -518,10 +535,11 @@ impl QueueBackend for SQLiteQueueBackend {
         };
 
         if prefix.is_empty() {
-            let mut stmt = match conn.prepare("SELECT queue_name FROM queue_metadata ORDER BY queue_name") {
-                Ok(stmt) => stmt,
-                Err(_) => return Vec::new(),
-            };
+            let mut stmt =
+                match conn.prepare("SELECT queue_name FROM queue_metadata ORDER BY queue_name") {
+                    Ok(stmt) => stmt,
+                    Err(_) => return Vec::new(),
+                };
             let rows = match stmt.query_map([], |row| row.get::<_, String>(0)) {
                 Ok(rows) => rows,
                 Err(_) => return Vec::new(),
@@ -585,7 +603,12 @@ impl QueueBackend for SQLiteQueueBackend {
         let (id, raw_data) = match row {
             Ok(row) => row,
             Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
-            Err(e) => return Err(Error::internal(format!("sqlite dequeue query error: {}", e))),
+            Err(e) => {
+                return Err(Error::internal(format!(
+                    "sqlite dequeue query error: {}",
+                    e
+                )))
+            }
         };
 
         tx.execute(
@@ -711,6 +734,24 @@ impl QueueBackend for SQLiteQueueBackend {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+    use tempfile::TempDir;
+
+    /// Create an in-memory backend with a test queue.
+    fn memory_backend_with_queue(queue: &str) -> MemoryBackend {
+        let mut backend = MemoryBackend::new();
+        backend.create_queue(queue).unwrap();
+        backend
+    }
+
+    /// Create a SQLite backend backed by a temporary database file.
+    fn sqlite_backend() -> (TempDir, String, SQLiteQueueBackend) {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("queue.db");
+        let db_path_str = db_path.to_str().unwrap().to_string();
+        let backend =
+            SQLiteQueueBackend::open(&db_path_str, SQLiteQueueOptions::default()).unwrap();
+        (dir, db_path_str, backend)
+    }
 
     #[test]
     fn test_create_queue() {
@@ -726,9 +767,7 @@ mod tests {
 
     #[test]
     fn test_remove_queue() {
-        let mut backend = MemoryBackend::new();
-
-        backend.create_queue("test").unwrap();
+        let mut backend = memory_backend_with_queue("test");
         backend.remove_queue("test").unwrap();
         assert!(!backend.queue_exists("test"));
 
@@ -755,8 +794,7 @@ mod tests {
 
     #[test]
     fn test_enqueue_dequeue() {
-        let mut backend = MemoryBackend::new();
-        backend.create_queue("test").unwrap();
+        let mut backend = memory_backend_with_queue("test");
 
         let msg1 = Message::new(b"message 1".to_vec());
         let msg2 = Message::new(b"message 2".to_vec());
@@ -778,8 +816,7 @@ mod tests {
 
     #[test]
     fn test_peek() {
-        let mut backend = MemoryBackend::new();
-        backend.create_queue("test").unwrap();
+        let mut backend = memory_backend_with_queue("test");
 
         let msg = Message::new(b"test message".to_vec());
         backend.enqueue("test", msg.clone()).unwrap();
@@ -796,11 +833,14 @@ mod tests {
 
     #[test]
     fn test_clear() {
-        let mut backend = MemoryBackend::new();
-        backend.create_queue("test").unwrap();
+        let mut backend = memory_backend_with_queue("test");
 
-        backend.enqueue("test", Message::new(b"msg1".to_vec())).unwrap();
-        backend.enqueue("test", Message::new(b"msg2".to_vec())).unwrap();
+        backend
+            .enqueue("test", Message::new(b"msg1".to_vec()))
+            .unwrap();
+        backend
+            .enqueue("test", Message::new(b"msg2".to_vec()))
+            .unwrap();
 
         assert_eq!(backend.size("test").unwrap(), 2);
 
@@ -814,8 +854,12 @@ mod tests {
         backend.create_queue("queue1").unwrap();
         backend.create_queue("queue2").unwrap();
 
-        backend.enqueue("queue1", Message::new(b"msg1".to_vec())).unwrap();
-        backend.enqueue("queue2", Message::new(b"msg2".to_vec())).unwrap();
+        backend
+            .enqueue("queue1", Message::new(b"msg1".to_vec()))
+            .unwrap();
+        backend
+            .enqueue("queue2", Message::new(b"msg2".to_vec()))
+            .unwrap();
 
         assert_eq!(backend.size("queue1").unwrap(), 1);
         assert_eq!(backend.size("queue2").unwrap(), 1);
@@ -831,7 +875,9 @@ mod tests {
     fn test_operations_on_nonexistent_queue() {
         let mut backend = MemoryBackend::new();
 
-        assert!(backend.enqueue("nonexistent", Message::new(b"data".to_vec())).is_err());
+        assert!(backend
+            .enqueue("nonexistent", Message::new(b"data".to_vec()))
+            .is_err());
         assert!(backend.dequeue("nonexistent").is_err());
         assert!(backend.peek("nonexistent").is_err());
         assert!(backend.size("nonexistent").is_err());
@@ -840,11 +886,7 @@ mod tests {
 
     #[test]
     fn test_sqlite_backend_basic_flow() {
-        let dir = tempdir().unwrap();
-        let db_path = dir.path().join("queue.db");
-        let mut backend =
-            SQLiteQueueBackend::open(db_path.to_str().unwrap(), SQLiteQueueOptions::default())
-                .unwrap();
+        let (_dir, _db_path, mut backend) = sqlite_backend();
 
         backend.create_queue("test").unwrap();
         let msg1 = Message::new(b"message 1".to_vec());
@@ -865,15 +907,13 @@ mod tests {
 
     #[test]
     fn test_sqlite_backend_preserves_non_utf8_payload_bytes() {
-        let dir = tempdir().unwrap();
-        let db_path = dir.path().join("queue.db");
-        let mut backend =
-            SQLiteQueueBackend::open(db_path.to_str().unwrap(), SQLiteQueueOptions::default())
-                .unwrap();
+        let (_dir, _db_path, mut backend) = sqlite_backend();
 
         backend.create_queue("test").unwrap();
         let payload = vec![0xff, 0x00, 0x80, b'a'];
-        backend.enqueue("test", Message::new(payload.clone())).unwrap();
+        backend
+            .enqueue("test", Message::new(payload.clone()))
+            .unwrap();
 
         let peeked = backend.peek("test").unwrap().unwrap();
         assert_eq!(peeked.data, payload);
@@ -884,9 +924,7 @@ mod tests {
 
     #[test]
     fn test_sqlite_backend_recover_stale() {
-        let dir = tempdir().unwrap();
-        let db_path = dir.path().join("queue.db");
-        let db_path_str = db_path.to_str().unwrap().to_string();
+        let (_dir, db_path_str, _backend) = sqlite_backend();
 
         let msg_id = {
             let mut backend =
@@ -909,12 +947,8 @@ mod tests {
 
     #[test]
     fn test_sqlite_backend_dequeue_legacy_go_row() {
-        let dir = tempdir().unwrap();
-        let db_path = dir.path().join("queue.db");
-        let db_path_str = db_path.to_str().unwrap().to_string();
+        let (_dir, db_path_str, mut backend) = sqlite_backend();
 
-        let mut backend =
-            SQLiteQueueBackend::open(&db_path_str, SQLiteQueueOptions::default()).unwrap();
         backend.create_queue("Semantic").unwrap();
         drop(backend);
 
@@ -925,7 +959,7 @@ mod tests {
             params![
                 "Semantic",
                 "legacy-msg-id",
-                r#"{"id":"legacy-msg-id","data":"{\"id\":\"semantic-inner\",\"uri\":\"viking://resources/demo\",\"context_type\":\"resource\",\"status\":\"pending\",\"timestamp\":1776411350,\"recursive\":true,\"account_id\":\"default\",\"user_id\":\"default\",\"agent_id\":\"default\",\"role\":\"root\",\"skip_vectorization\":false,\"telemetry_id\":\"tm_demo\",\"target_uri\":null,\"lifecycle_lock_handle_id\":\"lock-demo\",\"is_code_repo\":false,\"changes\":null}","timestamp":"2026-04-17T15:37:39.287855+08:00"}"#,
+                r#"{"id":"legacy-msg-id","data":"{\"id\":\"semantic-inner\",\"uri\":\"viking://resources/demo\",\"context_type\":\"resource\",\"status\":\"pending\",\"timestamp\":1776411350,\"recursive\":true,\"account_id\":\"default\",\"user_id\":\"default\",\"peer_id\":\"default\",\"role\":\"root\",\"skip_vectorization\":false,\"telemetry_id\":\"tm_demo\",\"target_uri\":null,\"lifecycle_lock_handle_id\":\"lock-demo\",\"is_code_repo\":false,\"changes\":null}","timestamp":"2026-04-17T15:37:39.287855+08:00"}"#,
                 1776411459_i64,
             ],
         )
@@ -997,13 +1031,11 @@ mod tests {
 
     #[test]
     fn test_sqlite_backend_operations_on_nonexistent_queue() {
-        let dir = tempdir().unwrap();
-        let db_path = dir.path().join("queue.db");
-        let mut backend =
-            SQLiteQueueBackend::open(db_path.to_str().unwrap(), SQLiteQueueOptions::default())
-                .unwrap();
+        let (_dir, _db_path, mut backend) = sqlite_backend();
 
-        assert!(backend.enqueue("nonexistent", Message::new(b"data".to_vec())).is_err());
+        assert!(backend
+            .enqueue("nonexistent", Message::new(b"data".to_vec()))
+            .is_err());
         assert!(backend.dequeue("nonexistent").is_err());
         assert!(backend.peek("nonexistent").is_err());
         assert!(backend.size("nonexistent").is_err());

@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from .context import get_current_telemetry
 from .operation import OperationTelemetry
@@ -64,6 +64,44 @@ def build_queue_status_payload(status: Dict[str, Any]) -> Dict[str, Dict[str, An
         }
         for name, s in status.items()
     }
+
+
+def summarize_queue_errors(queue_status: Dict[str, Any] | None) -> List[str]:
+    """Return human-readable summaries for queue groups with recorded errors."""
+    if not queue_status:
+        return []
+
+    summaries: List[str] = []
+    for name, status in queue_status.items():
+        if isinstance(status, dict):
+            raw_error_count = status.get("error_count", 0)
+            raw_errors = status.get("errors") or []
+        else:
+            raw_error_count = getattr(status, "error_count", 0)
+            raw_errors = getattr(status, "errors", []) or []
+
+        try:
+            error_count = int(raw_error_count or 0)
+        except (TypeError, ValueError):
+            error_count = 0
+        if error_count <= 0:
+            continue
+
+        messages: List[str] = []
+        for error in raw_errors[:3]:
+            if isinstance(error, dict):
+                message = error.get("message")
+            else:
+                message = getattr(error, "message", None) or str(error)
+            if message:
+                messages.append(str(message))
+
+        summary = f"{name} error_count={error_count}"
+        if messages:
+            summary = f"{summary}: {', '.join(messages)}"
+        summaries.append(summary)
+
+    return summaries
 
 
 def _resolve_queue_group(
@@ -140,5 +178,6 @@ __all__ = [
     "build_queue_status_payload",
     "record_resource_wait_metrics",
     "register_wait_telemetry",
+    "summarize_queue_errors",
     "unregister_wait_telemetry",
 ]

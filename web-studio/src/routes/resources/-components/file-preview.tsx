@@ -11,6 +11,7 @@ import { Button } from '#/components/ui/button'
 import { ScrollArea } from '#/components/ui/scroll-area'
 import { client } from '#/gen/ov-client/client.gen'
 import { getContentDownload, ovClient } from '#/lib/ov-client'
+import { fileNameFromUri } from '#/lib/viking-uri'
 import type { GetContentDownloadData } from '#/gen/ov-client/types.gen'
 import type { ContentDownloadQuery } from '@ov-server/api/v1/content'
 
@@ -101,6 +102,7 @@ async function ensureLanguage(lang: string): Promise<void> {
 
 interface FilePreviewProps {
   file: VikingFsEntry | null
+  hideDirectoryHeader?: boolean
   onClose: () => void
   showCloseButton?: boolean
 }
@@ -132,7 +134,7 @@ const DIRECTORY_LEVEL_META: Array<{
 ]
 
 const JSONL_MESSAGE_PREVIEW_LIMIT = 720
-const JSONL_TOOLCALL_STORAGE_KEY = 'web-studio-jsonl-toolcall'
+const JSONL_TOOLCALL_STORAGE_KEY = 'openviking.playground.jsonlToolCall'
 
 type JsonlRecord = {
   error: Error | null
@@ -273,22 +275,132 @@ function resolveRelativeVikingUri(
   return `${resolved}${suffix}`
 }
 
-function resolveMarkdownAssetUrl(assetPath: string, fileUri: string): string {
+type MarkdownAssetTarget =
+  | { kind: 'external'; value: string }
+  | { kind: 'raw'; value: string }
+  | { kind: 'viking'; value: string }
+
+function safeDecodeUri(value: string): string {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return value
+  }
+}
+
+function resolveMarkdownAssetTarget(
+  assetPath: string,
+  fileUri: string,
+): MarkdownAssetTarget {
   const trimmed = assetPath.trim()
   if (!trimmed || trimmed.startsWith('#')) {
-    return trimmed
+    return { kind: 'raw', value: trimmed }
   }
 
   if (/^(https?:|data:|blob:|mailto:|tel:)/i.test(trimmed)) {
-    return trimmed
+    return { kind: 'external', value: trimmed }
   }
 
-  if (trimmed.startsWith(vikingPrefix)) {
-    return toDownloadUrl(trimmed)
+  // react-markdown percent-encodes the URL it passes via `src`/`href`
+  // (e.g. Chinese characters become %E4%BA%92). Decode it back to the literal
+  // form so the API client's query serializer encodes it exactly once and we
+  // avoid a double-encoded URI that the backend rejects with HTTP 400.
+  const decoded = safeDecodeUri(trimmed)
+
+  const vikingUri = decoded.startsWith(vikingPrefix)
+    ? decoded
+    : resolveRelativeVikingUri(fileUri, decoded)
+  return { kind: 'viking', value: vikingUri }
+}
+
+function resolveMarkdownAssetUrl(assetPath: string, fileUri: string): string {
+  const target = resolveMarkdownAssetTarget(assetPath, fileUri)
+  if (target.kind === 'viking') {
+    return toDownloadUrl(target.value)
+  }
+  return target.value
+}
+
+function MarkdownImage({
+  src,
+  alt,
+  fileUri,
+}: {
+  src?: string
+  alt?: string
+  fileUri: string
+}) {
+  const target = useMemo(
+    () => (src ? resolveMarkdownAssetTarget(String(src), fileUri) : null),
+    [src, fileUri],
+  )
+  const [objectUrl, setObjectUrl] = useState<string | null>(null)
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => {
+    if (!target || target.kind !== 'viking') {
+      return
+    }
+
+    let alive = true
+    let created: string | null = null
+    setObjectUrl(null)
+    setFailed(false)
+
+    const run = async () => {
+      try {
+        const response = await getContentDownload({
+          query: { uri: target.value },
+          responseType: 'blob',
+          throwOnError: true,
+        })
+        if (!alive) return
+        const blob = response.data as Blob
+        if (blob.size === 0) {
+          throw new Error('empty blob')
+        }
+        created = URL.createObjectURL(blob)
+        setObjectUrl(created)
+      } catch {
+        if (alive) setFailed(true)
+      }
+    }
+
+    void run()
+    return () => {
+      alive = false
+      if (created) {
+        URL.revokeObjectURL(created)
+      }
+    }
+  }, [target])
+
+  const resolvedSrc =
+    target?.kind === 'viking'
+      ? objectUrl || ''
+      : target
+        ? target.value
+        : String(src || '')
+
+  if (target?.kind === 'viking' && !resolvedSrc) {
+    if (failed) {
+      return (
+        <span className="text-xs text-muted-foreground">
+          [{alt || fileNameFromUri(target.value)}]
+        </span>
+      )
+    }
+    return null
   }
 
-  const vikingUri = resolveRelativeVikingUri(fileUri, trimmed)
-  return toDownloadUrl(vikingUri)
+  return (
+    <img
+      src={resolvedSrc}
+      alt={alt || ''}
+      loading="lazy"
+      className="max-w-full rounded-md outline outline-1 -outline-offset-1 outline-black/10 dark:outline-white/10"
+    />
+  )
 }
 
 function detectCodeLanguage(filename: string): string | null {
@@ -619,7 +731,7 @@ function getJsonlMessage(record: JsonlRecord): JsonlMessage {
     kind,
     label: toolResult ? 'tool-result' : role,
     lineNo: index + 1,
-    roleId: String(parsed.role_id ?? source.role_id ?? ''),
+    roleId: String(parsed.peer_id ?? source.peer_id ?? ''),
     text,
     time: String(
       parsed.timestamp ?? parsed.created_at ?? source.created_at ?? '',
@@ -725,7 +837,10 @@ function JsonlToolBody({ text, toolName }: { text: string; toolName: string }) {
 function JsonlMarkdownBody({ content }: { content: string }) {
   return (
     <div className="prose prose-sm max-w-none break-words dark:prose-invert dark:prose-pre:bg-muted-foreground/20">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={markdownComponents}
+      >
         {content || 'Empty message'}
       </ReactMarkdown>
     </div>
@@ -892,6 +1007,7 @@ function JsonlPreview({ content }: { content: string }) {
 
 export function FilePreview({
   file,
+  hideDirectoryHeader = false,
   onClose,
   showCloseButton = true,
 }: FilePreviewProps) {
@@ -1079,67 +1195,74 @@ export function FilePreview({
   const visibleDirectoryLevels = availableDirectoryLevels.filter((level) =>
     activeDirectoryLevels.has(level.id),
   )
+  const showHeader = !(hideDirectoryHeader && file.isDir)
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      <div className="flex items-center justify-between border-b px-4 py-3">
-        <div className="flex min-w-0 items-center gap-2">
-          <div className="min-w-0">
-            <div className="truncate text-sm font-medium">{file.name}</div>
-            <div className="text-xs text-muted-foreground">
-              {file.isDir ? 'Folder' : formatSize(file.sizeBytes ?? file.size)}{' '}
-              · {file.modTime || '-'}
+      {showHeader ? (
+        <div className="flex min-h-14 items-center justify-between border-b px-4">
+          <div className="flex min-w-0 items-center gap-2">
+            <div className="min-w-0">
+              <div className="truncate text-sm font-medium leading-5">
+                {file.name}
+              </div>
+              {!file.isDir ? (
+                <div className="text-xs leading-5 text-muted-foreground">
+                  {formatSize(file.sizeBytes ?? file.size)} ·{' '}
+                  {file.modTime || '-'}
+                </div>
+              ) : null}
             </div>
+            {editing ? (
+              <div className="flex items-center gap-1">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={saving}
+                  onClick={() => setEditing(false)}
+                >
+                  <XCircle className="mr-1 size-3.5" />
+                  {t('filePreview.cancel')}
+                </Button>
+                <Button
+                  size="sm"
+                  className="active:scale-[0.96] transition-transform"
+                  disabled={saving}
+                  onClick={handleSave}
+                >
+                  {saving ? (
+                    <Loader2 className="mr-1 size-3.5 animate-spin" />
+                  ) : (
+                    <Save className="mr-1 size-3.5" />
+                  )}
+                  {t('filePreview.save')}
+                </Button>
+              </div>
+            ) : (
+              canEdit && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setEditing(true)}
+                >
+                  <Pencil className="mr-1 size-3.5" />
+                  {t('filePreview.edit')}
+                </Button>
+              )
+            )}
           </div>
-          {editing ? (
-            <div className="flex items-center gap-1">
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={saving}
-                onClick={() => setEditing(false)}
-              >
-                <XCircle className="mr-1 size-3.5" />
-                {t('filePreview.cancel')}
-              </Button>
-              <Button
-                size="sm"
-                className="active:scale-[0.96] transition-transform"
-                disabled={saving}
-                onClick={handleSave}
-              >
-                {saving ? (
-                  <Loader2 className="mr-1 size-3.5 animate-spin" />
-                ) : (
-                  <Save className="mr-1 size-3.5" />
-                )}
-                {t('filePreview.save')}
-              </Button>
-            </div>
-          ) : (
-            canEdit && (
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setEditing(true)}
-              >
-                <Pencil className="mr-1 size-3.5" />
-                {t('filePreview.edit')}
-              </Button>
-            )
-          )}
+          {showCloseButton ? (
+            <Button
+              size="icon"
+              variant="ghost"
+              className="size-10"
+              onClick={onClose}
+            >
+              <X className="size-4" />
+            </Button>
+          ) : null}
         </div>
-        {showCloseButton ? (
-          <Button
-            size="icon"
-            variant="ghost"
-            className="size-10"
-            onClick={onClose}
-          >
-            <X className="size-4" />
-          </Button>
-        ) : null}
-      </div>
+      ) : null}
 
       {editing && preview?.content != null ? (
         <div className="h-full min-h-0 p-2">
@@ -1327,21 +1450,16 @@ export function FilePreview({
               <article className="prose prose-sm max-w-none break-words dark:prose-invert dark:prose-pre:bg-muted-foreground/20">
                 <ReactMarkdown
                   remarkPlugins={[remarkGfm]}
+                  urlTransform={(url) => url}
                   components={{
                     ...markdownComponents,
-                    img: ({ src, alt }) => {
-                      const resolvedSrc = src
-                        ? resolveMarkdownAssetUrl(String(src), file.uri)
-                        : String(src || '')
-                      return (
-                        <img
-                          src={resolvedSrc}
-                          alt={alt || ''}
-                          loading="lazy"
-                          className="max-w-full rounded-md outline outline-1 -outline-offset-1 outline-black/10 dark:outline-white/10"
-                        />
-                      )
-                    },
+                    img: ({ src, alt }) => (
+                      <MarkdownImage
+                        src={src ? String(src) : undefined}
+                        alt={alt}
+                        fileUri={file.uri}
+                      />
+                    ),
                     a: ({ href, children }) => {
                       const resolvedHref = href
                         ? resolveMarkdownAssetUrl(String(href), file.uri)

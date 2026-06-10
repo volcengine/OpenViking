@@ -14,9 +14,6 @@ metadata) is delegated to the official ``mcp.server.auth`` SDK (mounted from
   pending OAuth authorization. Accepts either ``pending_id`` (Studio
   consent path) or ``code`` (the 6-character display_code typed on a
   cross-device fallback page).
-- ``POST /api/v1/auth/otp`` — short-code issuance, authenticated with the
-  caller's existing API key. The OTP is bound to that API key's identity
-  (account / user / role) so it can be redeemed on the authorize page.
 - ``GET /oauth/authorize/page`` — server-rendered cross-device fallback.
   Default ``provider.authorize()`` redirects to ``/studio/oauth/consent``
   instead; this HTML page is reached only when the user clicks "Use
@@ -37,7 +34,6 @@ from pydantic import AnyHttpUrl, BaseModel, Field
 
 from openviking.server.auth import get_request_context
 from openviking.server.identity import RequestContext
-from openviking.server.oauth.otp import generate_otp
 from openviking.server.oauth.provider import OpenVikingOAuthProvider
 from openviking.server.oauth.storage import OAuthStore
 from openviking_cli.exceptions import (
@@ -505,78 +501,4 @@ async def oauth_verify(
             "client_id": record["client_id"],
             "client_name": client.client_name if client else None,
         }
-    )
-
-
-# ---------------------------------------------------------------------------
-# POST /api/v1/auth/otp
-# ---------------------------------------------------------------------------
-
-
-class OTPRequest(BaseModel):
-    ttl_seconds: Optional[int] = Field(
-        default=None, ge=60, le=600, description="Override OTP lifetime (60-600 seconds)"
-    )
-
-
-class OTPResponse(BaseModel):
-    otp: str
-    expires_at: int
-    ttl_seconds: int
-
-
-@router.post("/api/v1/auth/otp", response_model=OTPResponse)
-async def issue_otp(
-    request: Request,
-    body: Optional[OTPRequest] = None,
-    ctx: RequestContext = Depends(get_request_context),
-) -> JSONResponse:
-    """Issue a one-time passcode bound to the caller's identity.
-
-    The caller must already be authenticated with an API key (or other
-    bearer accepted by ``resolve_identity``); the resulting OTP carries
-    that account / user / role triple, so any OAuth client that submits
-    the OTP on the authorize page is granted that identity.
-    """
-    store, provider = _get_store_and_provider(request)
-
-    # Same gate as oauth_verify: an OAuth-issued bearer cannot mint a new
-    # OTP and re-launch the authorization flow. See router note on
-    # /api/v1/auth/oauth-verify.
-    if ctx.from_oauth:
-        raise PermissionDeniedError(
-            "OAuth-issued tokens cannot issue OTPs. "
-            "Use your API key or sign in to OpenViking Studio."
-        )
-
-    cfg = getattr(request.app.state, "oauth_config", None)
-    default_ttl = getattr(cfg, "otp_ttl_seconds", 300) if cfg else 300
-    ttl = body.ttl_seconds if body and body.ttl_seconds else default_ttl
-    if ttl < 60 or ttl > 600:
-        raise InvalidArgumentError("ttl_seconds must be between 60 and 600")
-
-    # See oauth_verify for the rationale: an OTP that can't be tied back to
-    # a real, current API key cannot uphold the lifecycle-binding invariant.
-    api_key_manager = getattr(request.app.state, "api_key_manager", None)
-    caller_fp: Optional[str] = None
-    if api_key_manager is not None and hasattr(api_key_manager, "get_user_key_fingerprint"):
-        caller_fp = api_key_manager.get_user_key_fingerprint(ctx.user.account_id, ctx.user.user_id)
-    if not caller_fp:
-        raise InvalidArgumentError(
-            "OTP issuance requires a caller with a registered API key "
-            "(ROOT or trusted-mode identities cannot issue OAuth OTPs)."
-        )
-
-    otp = generate_otp()
-    expires_at = await store.insert_otp(
-        otp_plain=otp,
-        account_id=ctx.user.account_id,
-        user_id=ctx.user.user_id,
-        role=ctx.role.value,
-        authorizing_key_fp=caller_fp,
-        ttl_seconds=ttl,
-    )
-    return JSONResponse(
-        {"otp": otp, "expires_at": expires_at, "ttl_seconds": ttl},
-        headers={"Cache-Control": "no-store"},
     )

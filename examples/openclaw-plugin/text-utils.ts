@@ -12,6 +12,7 @@ export const MEMORY_TRIGGERS = [
 
 const CJK_CHAR_REGEX = /[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff\uac00-\ud7af]/;
 const RELEVANT_MEMORIES_BLOCK_RE = /<relevant-memories>[\s\S]*?<\/relevant-memories>/gi;
+const OPENVIKING_CONTEXT_BLOCK_RE = /<openviking-context\b[^>]*>[\s\S]*?<\/openviking-context>/gi;
 const CONVERSATION_METADATA_BLOCK_RE =
   /(?:^|\n)\s*(?:Conversation info|Conversation metadata|会话信息|对话信息)\s*(?:\([^)]+\))?\s*:\s*```[\s\S]*?```/gi;
 /** Strips "Sender (untrusted metadata): ```json ... ```" so capture sends clean text to OpenViking extract. */
@@ -44,10 +45,15 @@ function looksLikeMetadataJsonBlock(content: string): boolean {
 }
 
 const HEARTBEAT_RE = /\bHEARTBEAT(?:\.md|_OK)\b/;
+const TOOL_PLACEHOLDER_RE = /^\s*\[tool(?::\s*|Use:\s*)[^\]]+\]\s*$/i;
 
 export function sanitizeUserTextForCapture(text: string): string {
   // 过滤 HEARTBEAT 健康检查消息
   if (HEARTBEAT_RE.test(text)) {
+    return "";
+  }
+  // Drop legacy synthetic tool placeholders before they reach memory extraction.
+  if (TOOL_PLACEHOLDER_RE.test(text)) {
     return "";
   }
   // 处理 Compactor 系统消息，提取实际用户输入
@@ -60,6 +66,7 @@ export function sanitizeUserTextForCapture(text: string): string {
     return "";
   }
   return text
+    .replace(OPENVIKING_CONTEXT_BLOCK_RE, " ")
     .replace(RELEVANT_MEMORIES_BLOCK_RE, " ")
     .replace(CONVERSATION_METADATA_BLOCK_RE, " ")
     .replace(SENDER_METADATA_BLOCK_RE, " ")
@@ -69,6 +76,14 @@ export function sanitizeUserTextForCapture(text: string): string {
     .replace(LEADING_TIMESTAMP_PREFIX_RE, "")
     .replace(SUBAGENT_CONTEXT_RE, "")
     .replace(/\u0000/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function stripOpenVikingContextInjection(text: string): string {
+  return text
+    .replace(OPENVIKING_CONTEXT_BLOCK_RE, " ")
+    .replace(RELEVANT_MEMORIES_BLOCK_RE, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -425,40 +440,6 @@ export function extractNewTurnMessages(
             text: cleanedText,
           }],
         });
-      }
-    } else {
-      /// 如果原始消息有 toolCall，提取所有工具名并生成占位符
-      if (role === "assistant" && Array.isArray(content)) {
-        const toolNames: string[] = [];
-        
-        // 收集所有 toolCall 的 tool_name
-        for (const block of content) {
-          const b = block as Record<string, unknown>;
-          const blockType = b?.type as string;
-          if (
-            blockType === "toolCall" ||
-            blockType === "toolUse" ||
-            blockType === "tool_use" ||
-            blockType === "tool_call"
-          ) {
-            const name = b?.name as string || b?.toolName as string;
-            if (name && typeof name === "string" && name.trim()) {
-              toolNames.push(name.trim());
-            }
-          }
-        }
-        
-        // 只有找到 toolCall 时才添加占位符
-        if (toolNames.length > 0) {
-          const toolNamesStr = toolNames.join(", ");
-          result.push({
-            role: "assistant",
-            parts: [{
-              type: "text",
-              text: `[tool: ${toolNamesStr}]`,
-            }],
-          });
-        }
       }
     }
   }

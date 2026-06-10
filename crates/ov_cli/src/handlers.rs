@@ -3,6 +3,7 @@ use crate::PrivacyCommands;
 use crate::client;
 use crate::commands;
 use crate::config::merge_csv_options;
+use crate::config_agent;
 use crate::error::{Error, Result};
 use crate::theme;
 use crate::tui;
@@ -35,26 +36,9 @@ pub async fn handle_add_resource(
         let unescaped_path = path.replace("\\ ", " ");
         let path_obj = Path::new(&unescaped_path);
         if !path_obj.exists() {
-            eprintln!("Error: Path '{}' does not exist.", path);
-
-            // Check if there might be unquoted spaces
-            use std::env;
-            let args: Vec<String> = env::args().collect();
-
-            if let Some(add_resource_pos) =
-                args.iter().position(|s| s == "add-resource" || s == "add")
-            {
-                if args.len() > add_resource_pos + 2 {
-                    let extra_args = &args[add_resource_pos + 2..];
-                    let suggested_path = format!("{} {}", path, extra_args.join(" "));
-                    eprintln!(
-                        "\nIt looks like you may have forgotten to quote a path with spaces."
-                    );
-                    eprintln!("Suggested command: ov add-resource \"{}\"", suggested_path);
-                }
-            }
-
-            std::process::exit(1);
+            return Err(Error::Client(format!(
+                "Local path does not exist: {path}. If the path contains spaces, wrap it in quotes."
+            )));
         }
         path = unescaped_path;
     }
@@ -72,10 +56,9 @@ pub async fn handle_add_resource(
     }
 
     if exclusive_count > 1 {
-        eprintln!(
-            "Error: Cannot specify more than one of --to, --parent, or --parent-auto-create at the same time."
-        );
-        std::process::exit(1);
+        return Err(Error::Client(
+            "Specify only one of --to, --parent, or --parent-auto-create.".to_string(),
+        ));
     }
 
     let strict = strict_mode;
@@ -91,12 +74,12 @@ pub async fn handle_add_resource(
     } else {
         ctx.config.timeout
     };
+    let auth = ctx.config.effective_auth(ctx.sudo);
     let client = client::HttpClient::new(
         &ctx.config.url,
-        ctx.config.api_key.clone(),
-        ctx.config.agent_id.clone(),
-        ctx.config.account.clone(),
-        ctx.config.user.clone(),
+        auth.api_key,
+        auth.account,
+        auth.user,
         effective_timeout,
         ctx.profile.unwrap_or(ctx.config.profile),
         ctx.config.extra_headers.clone(),
@@ -241,7 +224,7 @@ pub async fn handle_restore(
     .await
 }
 
-use crate::SystemCommands;
+use crate::{SystemBackendCommands, SystemCommands};
 
 pub async fn handle_system(cmd: SystemCommands, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
@@ -266,6 +249,16 @@ pub async fn handle_system(cmd: SystemCommands, ctx: CliContext) -> Result<()> {
             commands::system::consistency(&client, &uri, ctx.output_format, ctx.compact).await
         }
         SystemCommands::Crypto { action } => commands::crypto::handle_crypto(action).await,
+        SystemCommands::Backend { action } => match action {
+            SystemBackendCommands::SyncStatus { uri } => {
+                commands::system::backend_sync_status(&client, &uri, ctx.output_format, ctx.compact)
+                    .await
+            }
+            SystemBackendCommands::SyncRetry { uri } => {
+                commands::system::backend_sync_retry(&client, &uri, ctx.output_format, ctx.compact)
+                    .await
+            }
+        },
     }
 }
 
@@ -347,12 +340,14 @@ pub async fn handle_session(cmd: SessionCommands, ctx: CliContext) -> Result<()>
             session_id,
             role,
             content,
+            peer_id,
         } => {
             commands::session::add_message(
                 &client,
                 &session_id,
                 &role,
                 &content,
+                peer_id.as_deref(),
                 ctx.output_format,
                 ctx.compact,
             )
@@ -434,9 +429,6 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
                 ctx.compact,
             )
             .await
-        }
-        AdminCommands::ListAgents { account_id } => {
-            commands::admin::list_agents(&client, &account_id, ctx.output_format, ctx.compact).await
         }
         AdminCommands::RemoveUser {
             account_id,
@@ -588,7 +580,7 @@ use crate::output;
 
 // Config commands intentionally edit the persisted ovcli.conf files. Runtime
 // overrides carried in CliContext should not change what gets shown or saved.
-pub async fn handle_config(cmd: Option<ConfigCommands>, _ctx: CliContext) -> Result<()> {
+pub async fn handle_config(cmd: Option<ConfigCommands>, ctx: CliContext) -> Result<()> {
     match cmd {
         Some(ConfigCommands::Show) => {
             let config = Config::load()?;
@@ -624,15 +616,47 @@ pub async fn handle_config(cmd: Option<ConfigCommands>, _ctx: CliContext) -> Res
                 }
             }
         }
-        Some(ConfigCommands::Switch) => handle_config_switch().await,
+        Some(ConfigCommands::Switch { name: None }) => handle_config_switch().await,
+        Some(ConfigCommands::Switch { name: Some(name) }) => {
+            handle_config_agent_result(config_agent::switch(name, &ctx), &ctx)
+        }
+        Some(ConfigCommands::List) => handle_config_agent_result(config_agent::list(&ctx), &ctx),
+        Some(ConfigCommands::Delete(args)) => {
+            handle_config_agent_result(config_agent::delete(args, &ctx), &ctx)
+        }
+        Some(ConfigCommands::Add { target }) => {
+            let result = config_agent::add(target, &ctx).await;
+            handle_config_agent_result(result, &ctx)
+        }
+        Some(ConfigCommands::Edit(args)) => {
+            let result = config_agent::edit(args, &ctx).await;
+            handle_config_agent_result(result, &ctx)
+        }
         None => config_wizard::run_config_wizard().await,
+    }
+}
+
+fn handle_config_agent_result(
+    result: std::result::Result<config_agent::AgentOutput, config_agent::AgentError>,
+    ctx: &CliContext,
+) -> Result<()> {
+    match result {
+        Ok(output) => {
+            config_agent::print_success(output, ctx);
+            Ok(())
+        }
+        Err(error) => {
+            let exit_code = error.exit_code();
+            config_agent::print_error(&error, ctx);
+            std::process::exit(exit_code);
+        }
     }
 }
 
 pub async fn handle_language(value: Option<String>) -> Result<()> {
     let language = match value {
         Some(value) => Language::from_code(&value).ok_or_else(|| {
-            Error::Config(format!(
+            Error::Language(format!(
                 "Unsupported language '{value}'. Use 'en' or 'zh-CN'."
             ))
         })?,
@@ -708,10 +732,19 @@ fn language_no_change(language: Language) -> &'static str {
 /// Interactive configuration switcher
 async fn handle_config_switch() -> Result<()> {
     let store = ConfigStore::new()?;
-    let configs = store.list_configs()?;
+    let report = store.list_configs_report()?;
+    let invalid_config_names: Vec<String> = report
+        .invalid_configs
+        .iter()
+        .map(|config| config.name.clone())
+        .collect();
+    let configs = report.configs;
 
     if configs.is_empty() {
-        print!("{}", config_command_ui::render_no_saved_configs());
+        print!(
+            "{}",
+            config_command_ui::render_no_saved_configs(&invalid_config_names)
+        );
         return Ok(());
     }
 
@@ -721,6 +754,7 @@ async fn handle_config_switch() -> Result<()> {
         config_command_ui::render_switch_header(
             active.map(|config| config.name.as_str()),
             active.map(|config| config.kind),
+            &invalid_config_names,
         )
     );
 
@@ -1082,6 +1116,7 @@ pub async fn handle_find(
     after: Option<String>,
     before: Option<String>,
     level: Option<Vec<i32>>,
+    peer_id: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
@@ -1098,6 +1133,9 @@ pub async fn handle_find(
                 .join(",")
         ));
     }
+    if let Some(ref p) = peer_id {
+        params.push(format!("--peer-id {}", p));
+    }
     params.push(format!("\"{}\"", query));
     print_command_echo("ov find", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
@@ -1111,6 +1149,7 @@ pub async fn handle_find(
         before.as_deref(),
         None,
         level,
+        peer_id.as_deref(),
         ctx.output_format,
         ctx.compact,
     )
@@ -1126,6 +1165,7 @@ pub async fn handle_search(
     after: Option<String>,
     before: Option<String>,
     level: Option<Vec<i32>>,
+    peer_id: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
@@ -1145,6 +1185,9 @@ pub async fn handle_search(
                 .join(",")
         ));
     }
+    if let Some(ref p) = peer_id {
+        params.push(format!("--peer-id {}", p));
+    }
     params.push(format!("\"{}\"", query));
     print_command_echo("ov search", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
@@ -1159,6 +1202,7 @@ pub async fn handle_search(
         before.as_deref(),
         None,
         level,
+        peer_id.as_deref(),
         ctx.output_format,
         ctx.compact,
     )
@@ -1301,16 +1345,9 @@ pub async fn handle_grep(
 ) -> Result<()> {
     // Prevent grep from root directory to avoid excessive server load and timeouts
     if uri == "viking://" || uri == "viking:///" {
-        eprintln!(
-            "Error: Cannot grep from root directory 'viking://'.\n\
-             Grep from root would search across all scopes (resources, user, agent, session, queue, temp),\n\
-             which may cause server timeout or excessive load.\n\
-             Please specify a more specific scope, e.g.:\n\
-               ov grep --uri=viking://resources '{}'\n\
-               ov grep --uri=viking://user '{}'",
-            pattern, pattern
-        );
-        std::process::exit(1);
+        return Err(Error::Client(format!(
+            "Cannot grep from root directory 'viking://'. Use a more specific scope, for example `ov grep --uri=viking://resources {pattern}`."
+        )));
     }
 
     let mut params = vec![
@@ -1348,7 +1385,7 @@ pub async fn handle_glob(
     node_limit: i32,
     ctx: CliContext,
 ) -> Result<()> {
-    let params = vec![
+    let params = [
         format!("--uri={}", uri),
         format!("-n {}", node_limit),
         format!("\"{}\"", pattern),
@@ -1391,16 +1428,7 @@ pub async fn handle_tui(uri: String, ctx: CliContext) -> Result<()> {
                 println!("Warning: Server reports unhealthy status");
             }
         }
-        Err(e) => {
-            println!("Error: Failed to connect to server at {}", ctx.config.url);
-            println!("{}", e);
-            println!("\nPlease check:");
-            println!("  1. The server is running");
-            println!("  2. The URL is correct");
-            println!("  3. Your API key is valid (if required)");
-            println!("\nRun `ov config` to reconfigure if needed.");
-            std::process::exit(1);
-        }
+        Err(e) => return Err(e),
     }
 
     tui::run_tui(client, &uri).await

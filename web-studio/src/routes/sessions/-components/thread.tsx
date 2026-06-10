@@ -57,9 +57,7 @@ export function Thread({ sessionId }: ThreadProps) {
     })
   }, [
     chat.messages.length,
-    chat.streamingContent,
-    chat.streamingToolCalls,
-    chat.streamingReasoning,
+    chat.streamingParts,
   ])
 
   const [showBackground, setShowBackground] = useState(false)
@@ -116,9 +114,7 @@ export function Thread({ sessionId }: ThreadProps) {
             streaming={
               isStreaming
                 ? {
-                    content: chat.streamingContent,
-                    toolCalls: chat.streamingToolCalls,
-                    reasoning: chat.streamingReasoning,
+                    parts: chat.streamingParts,
                     iteration: chat.iteration,
                   }
                 : undefined

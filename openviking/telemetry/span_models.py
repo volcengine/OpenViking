@@ -66,9 +66,6 @@ class RootSpanAttributes:
     user_id: Optional[str] = None
     """User identifier."""
 
-    agent_id: Optional[str] = None
-    """Agent identifier."""
-
     def to_otel_attributes(self) -> Dict[str, Any]:
         """Convert the model into an OpenTelemetry span attribute mapping."""
         attrs = {
@@ -95,8 +92,6 @@ class RootSpanAttributes:
             attrs["account_id"] = self.account_id
         if self.user_id is not None:
             attrs["user_id"] = self.user_id
-        if self.agent_id is not None:
-            attrs["agent_id"] = self.agent_id
 
         return attrs
 
@@ -113,8 +108,6 @@ class RootSpanAttributes:
             fields["account_id"] = self.account_id
         if self.user_id is not None:
             fields["user_id"] = self.user_id
-        if self.agent_id is not None:
-            fields["agent_id"] = self.agent_id
         return fields
 
     def to_dict(self) -> Dict[str, Any]:
@@ -334,7 +327,6 @@ def update_root_span_identity(
     request_state: Any,
     account_id: Optional[str] = None,
     user_id: Optional[str] = None,
-    agent_id: Optional[str] = None,
 ) -> bool:
     """
     Update identity fields on `RootSpanAttributes` and mirror them into the current span.
@@ -356,8 +348,6 @@ def update_root_span_identity(
             root_attrs.account_id = account_id
         if user_id is not None:
             root_attrs.user_id = user_id
-        if agent_id is not None:
-            root_attrs.agent_id = agent_id
 
         # Best-effort sync into the active OTel span, if one exists.
         try:

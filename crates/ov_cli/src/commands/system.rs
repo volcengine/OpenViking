@@ -50,13 +50,14 @@ pub async fn diagnostic_status(
                 status_ui::render_status(&response, config, meta.active_name.as_deref(),)?
             );
         }
-        Err(_) => {
+        Err(error) => {
             print!(
                 "{}",
                 status_ui::render_unreachable_status(
                     config,
                     meta.active_name.as_deref(),
                     meta.saved_count,
+                    Some(&error),
                 )
             );
         }
@@ -77,6 +78,28 @@ pub async fn consistency(
     } else {
         output_success(&response, output_format, compact);
     }
+    Ok(())
+}
+
+pub async fn backend_sync_status(
+    client: &HttpClient,
+    uri: &str,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    let response: serde_json::Value = client.backend_sync_status(uri).await?;
+    output_success(&response, output_format, compact);
+    Ok(())
+}
+
+pub async fn backend_sync_retry(
+    client: &HttpClient,
+    uri: &str,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    let response: serde_json::Value = client.backend_sync_retry(uri).await?;
+    output_success(&response, output_format, compact);
     Ok(())
 }
 
