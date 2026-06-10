@@ -950,17 +950,16 @@ class FailoverEmbedder(EmbedderBase):
             embedder.close()
 
     def get_token_usage(self) -> Dict[str, Any]:
-        """Get combined token usage from all credential instances."""
-        from openviking.models.vlm.token_usage import TokenUsageTracker
+        """Get combined token usage across credential instances.
 
+        Embedders share a process-wide singleton token tracker (see
+        ``_get_token_tracker``), so every wrapped embedder reports the same
+        usage. Return a single instance's usage directly; merging would
+        double-count.
+        """
         if not self._embedders:
             return {}
-
-        merged_tracker = self._embedders[0]._token_tracker
-        for embedder in self._embedders[1:]:
-            merged_tracker = TokenUsageTracker.merge(merged_tracker, embedder._token_tracker)
-
-        return merged_tracker.to_dict()
+        return self._embedders[0].get_token_usage()
 
     def reset_token_usage(self) -> None:
         """Reset token usage for all credential instances."""

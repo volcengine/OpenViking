@@ -263,6 +263,11 @@ class VLMBase(ABC):
                     e,
                 )
 
+    @property
+    def token_tracker(self):
+        """Public accessor for this instance's token usage tracker."""
+        return self._token_tracker
+
     def get_token_usage(self) -> Dict[str, Any]:
         """Get token usage
 
@@ -568,7 +573,7 @@ class FailoverVLM(VLMBase):
         from openviking.models.vlm.token_usage import TokenUsageTracker
 
         merged_tracker = TokenUsageTracker.merge(
-            self.primary._token_tracker, self.backup._token_tracker
+            self.primary.token_tracker, self.backup.token_tracker
         )
         return merged_tracker.to_dict()
 
@@ -826,9 +831,9 @@ class MultiCredentialVLM(VLMBase):
         if not self._vlm_instances:
             return {}
 
-        merged_tracker = self._vlm_instances[0]._token_tracker
+        merged_tracker = self._vlm_instances[0].token_tracker
         for instance in self._vlm_instances[1:]:
-            merged_tracker = TokenUsageTracker.merge(merged_tracker, instance._token_tracker)
+            merged_tracker = TokenUsageTracker.merge(merged_tracker, instance.token_tracker)
 
         return merged_tracker.to_dict()
 
