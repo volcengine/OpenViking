@@ -1,11 +1,15 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Tests for FailoverEmbedder behavior when permanent errors occur.
+"""Tests for FailoverEmbedder behavior when credential-level errors occur.
 
-In multi-credential mode, FailoverEmbedder advances on permanent errors
-(HTTP 400/401/403) by default, since different credentials may resolve to
-different upstream resources (e.g. ARK endpoint ids per credential). The
-last credential's permanent error still raises AllCredentialsFailedError.
+In multi-credential mode, FailoverEmbedder advances on auth errors (HTTP
+401/403) by default, since another credential may carry a valid key /
+permission / balance. The last credential's auth error re-raises the original
+exception.
+
+Request-level errors (e.g. HTTP 400 parameter errors) fail fast and re-raise
+immediately without trying other credentials, since the same request fails on
+every credential of the same model.
 """
 
 from typing import List
@@ -13,7 +17,6 @@ from typing import List
 import pytest
 
 from openviking.models.embedder.base import EmbedderBase, EmbedResult, FailoverEmbedder
-from openviking.utils.exceptions import AllCredentialsFailedError
 
 
 class _StubEmbedder(EmbedderBase):
@@ -52,16 +55,23 @@ class _StubEmbedder(EmbedderBase):
 
 
 def _make_400_error() -> Exception:
-    """Construct an exception whose message matches PERMANENT_API_ERROR_PATTERNS ('400')."""
+    """Construct a request-level 400 parameter error (PERMANENT, fail-fast)."""
     return RuntimeError(
         "Error code: 400 - {'error': {'message': "
         "'The parameter `model` specified in the request are not valid'}}"
     )
 
 
-def test_permanent_error_on_primary_advances_to_backup():
-    """In multi-credential mode a 400 on primary advances to backup automatically."""
-    primary = _StubEmbedder("primary", error=_make_400_error())
+def _make_401_error() -> Exception:
+    """Construct a credential-level 401 auth error (AUTH, advances in multi-credential)."""
+    return RuntimeError(
+        "Error code: 401 - {'error': {'message': 'Incorrect API key provided'}}"
+    )
+
+
+def test_auth_error_on_primary_advances_to_backup():
+    """In multi-credential mode a 401 on primary advances to backup automatically."""
+    primary = _StubEmbedder("primary", error=_make_401_error())
     backup = _StubEmbedder("backup")
 
     fe = FailoverEmbedder(
@@ -76,27 +86,44 @@ def test_permanent_error_on_primary_advances_to_backup():
     assert result.dense_vector == [0.0, 0.0, 0.0, 0.0]
 
 
-def test_permanent_error_on_all_credentials_raises():
-    """All credentials returning permanent errors still surface AllCredentialsFailedError."""
-    primary = _StubEmbedder("primary", error=_make_400_error())
-    backup = _StubEmbedder("backup", error=_make_400_error())
+def test_auth_error_on_all_credentials_reraises_original():
+    """All credentials returning auth errors re-raise the original exception (last fails fast)."""
+    primary = _StubEmbedder("primary", error=_make_401_error())
+    backup = _StubEmbedder("backup", error=_make_401_error())
 
     fe = FailoverEmbedder(
         embedders=[primary, backup],
         credential_ids=["primary", "backup"],
     )
 
-    with pytest.raises(AllCredentialsFailedError):
+    with pytest.raises(RuntimeError, match="401"):
         fe.embed("hello")
 
     assert primary.calls == 1
     assert backup.calls == 1
 
 
+def test_permanent_400_fails_fast_without_trying_backup():
+    """A request-level 400 fails fast: backup must NOT be tried, original is re-raised."""
+    primary = _StubEmbedder("primary", error=_make_400_error())
+    backup = _StubEmbedder("backup")
+
+    fe = FailoverEmbedder(
+        embedders=[primary, backup],
+        credential_ids=["primary", "backup"],
+    )
+
+    with pytest.raises(RuntimeError, match="400"):
+        fe.embed("hello")
+
+    assert primary.calls == 1
+    assert backup.calls == 0
+
+
 def test_three_credentials_advance_through_chain():
-    """Across 3 credentials, two PERMANENT errors should land on credential #3."""
-    cred0 = _StubEmbedder("cred0", error=_make_400_error())
-    cred1 = _StubEmbedder("cred1", error=_make_400_error())
+    """Across 3 credentials, two AUTH errors should land on credential #3."""
+    cred0 = _StubEmbedder("cred0", error=_make_401_error())
+    cred1 = _StubEmbedder("cred1", error=_make_401_error())
     cred2 = _StubEmbedder("cred2")
 
     fe = FailoverEmbedder(

@@ -15,7 +15,9 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
 # Error classification categories returned by classify_api_error()
-ERROR_CLASS_PERMANENT = "permanent"
+ERROR_CLASS_PERMANENT = "permanent"  # request-level 4xx (e.g. 400 invalid parameter)
+ERROR_CLASS_AUTH = "auth"  # credential-level 401/403 (key invalid / no permission / overdue)
+ERROR_CLASS_CONTENT_SAFETY = "content_safety"  # request content rejected by moderation
 ERROR_CLASS_INPUT_TOO_LARGE = "input_too_large"
 ERROR_CLASS_QUOTA_EXCEEDED = "quota_exceeded"
 ERROR_CLASS_TRANSIENT = "transient"
@@ -38,13 +40,29 @@ INPUT_TOO_LARGE_PATTERNS = (
     "expected maxlength",
 )
 
-PERMANENT_API_ERROR_PATTERNS = (
-    "400",
+PERMANENT_API_ERROR_PATTERNS = ("400",)
+
+# Credential-level errors: in multi-credential mode these advance to the next
+# credential (another key may be valid / have permission / have balance); with a
+# single credential or on the last credential they fail fast.
+AUTH_API_ERROR_PATTERNS = (
     "401",
     "403",
     "forbidden",
     "unauthorized",
     "accountoverdue",
+)
+
+# Content moderation rejections. Same request content fails on every credential
+# of the same model, so these fail fast (no point switching credentials).
+CONTENT_SAFETY_PATTERNS = (
+    "content policy",
+    "content_filter",
+    "contentfilter",
+    "moderation",
+    "sensitive content",
+    "内容安全",
+    "敏感",
 )
 
 QUOTA_EXCEEDED_PATTERNS = (
@@ -100,12 +118,18 @@ def _pattern_matches(text_lower: str, text_compact: str, pattern: str) -> bool:
 
 
 def classify_api_error(error: Exception) -> str:
-    """Classify an API error as permanent, quota_exceeded, transient, or unknown.
+    """Classify an API error into one of the ERROR_CLASS_* categories.
 
-    ``quota_exceeded`` is checked before ``transient`` because quota errors
-    typically include "429" / "TooManyRequests" which would otherwise match
-    the transient category.  Quota errors should not be retried; the caller
-    should fail over to a backup model instead.
+    Order matters:
+    - ``content_safety`` is checked before ``permanent`` so a moderation
+      rejection that happens to embed "400" in its message is not misclassified.
+    - ``auth`` (401/403) is separated from ``permanent`` (400): auth errors are
+      credential-level and may be resolved by switching credentials, whereas a
+      400 is a request-level error that fails on every credential of the same
+      model.
+    - ``quota_exceeded`` is checked before ``transient`` because quota errors
+      typically include "429" / "TooManyRequests" which would otherwise match
+      the transient category.
     """
     for exc in (error, getattr(error, "__cause__", None)):
         if exc is not None and isinstance(exc, _PERMANENT_IO_ERRORS):
@@ -122,12 +146,28 @@ def classify_api_error(error: Exception) -> str:
             if _pattern_matches(text_lower, text_compact, pattern):
                 return ERROR_CLASS_INPUT_TOO_LARGE
 
+    # Content safety before permanent so a moderation message containing "400"
+    # is not misclassified as a permanent parameter error.
+    for text in texts:
+        text_lower = text.lower()
+        text_compact = text_lower.replace(" ", "")
+        for pattern in CONTENT_SAFETY_PATTERNS:
+            if _pattern_matches(text_lower, text_compact, pattern):
+                return ERROR_CLASS_CONTENT_SAFETY
+
     for text in texts:
         text_lower = text.lower()
         text_compact = text_lower.replace(" ", "")
         for pattern in PERMANENT_API_ERROR_PATTERNS:
             if _pattern_matches(text_lower, text_compact, pattern):
                 return ERROR_CLASS_PERMANENT
+
+    for text in texts:
+        text_lower = text.lower()
+        text_compact = text_lower.replace(" ", "")
+        for pattern in AUTH_API_ERROR_PATTERNS:
+            if _pattern_matches(text_lower, text_compact, pattern):
+                return ERROR_CLASS_AUTH
 
     # Check quota_exceeded *before* transient so that "429 … AccountQuotaExceeded"
     # is classified as quota_exceeded, not transient.
@@ -312,10 +352,15 @@ class PrimaryBackupSwitcher:
     def record_primary_failure(self, error: Exception) -> bool:
         """Record a primary failure. Returns True if should switch to backup.
 
-        Switches to backup immediately for ERROR_CLASS_PERMANENT or ERROR_CLASS_QUOTA_EXCEEDED.
+        Switches to backup immediately for ERROR_CLASS_PERMANENT,
+        ERROR_CLASS_AUTH or ERROR_CLASS_QUOTA_EXCEEDED.
         """
         error_class = classify_api_error(error)
-        if error_class in (ERROR_CLASS_PERMANENT, ERROR_CLASS_QUOTA_EXCEEDED):
+        if error_class in (
+            ERROR_CLASS_PERMANENT,
+            ERROR_CLASS_AUTH,
+            ERROR_CLASS_QUOTA_EXCEEDED,
+        ):
             with self._lock:
                 if not self._using_backup:
                     logger.warning(f"Primary failed with {error_class}, switching to backup")
@@ -364,12 +409,17 @@ class OrderedCredentialSwitcher:
             failback_request_count: Number of requests after which to attempt failback
 
         Note:
-            When ``n > 1`` (i.e. multi-credential mode), permanent errors on a
-            non-final credential automatically advance to the next credential,
-            rather than fail-fast. Different credentials may legitimately resolve
-            to different upstream resources (e.g. ARK endpoint ids), so a 4xx on
-            one credential does not necessarily apply to the next. The last
-            credential's permanent error always fails fast.
+            Failure handling is driven by the error class (see
+            ``classify_api_error``):
+
+            - request-level errors (``permanent`` 400 / ``input_too_large`` /
+              ``content_safety``) fail fast: the same request fails on every
+              credential of the same model, so switching is useless.
+            - credential-level ``auth`` errors (401/403) advance to the next
+              credential in multi-credential mode; the last (or single)
+              credential fails fast.
+            - ``quota_exceeded`` (and ``transient`` once its retries are
+              exhausted) and ``unknown`` advance to the next credential.
         """
         if n < 1:
             raise ValueError("Number of credentials must be >= 1")
@@ -428,28 +478,40 @@ class OrderedCredentialSwitcher:
 
         Returns:
             True if the caller should advance to the next credential (idx += 1)
-            False if fail-fast (permanent error)
+            False if fail-fast (caller should re-raise the original exception)
         """
         # Transient errors that have exhausted retries are treated as quota_exceeded
         if error_class == ERROR_CLASS_TRANSIENT:
             error_class = ERROR_CLASS_QUOTA_EXCEEDED
 
         with self._lock:
-            if error_class == ERROR_CLASS_PERMANENT:
-                # 4xx auth/parameter errors. In multi-credential mode (n > 1),
-                # advance to the next credential because different credentials
-                # may legitimately resolve different upstream resources (e.g.
-                # ARK endpoint ids). The last credential always fails fast.
+            # Request-level errors fail fast: the same request fails on every
+            # credential of the same model, so switching credentials is useless.
+            if error_class in (
+                ERROR_CLASS_PERMANENT,
+                ERROR_CLASS_INPUT_TOO_LARGE,
+                ERROR_CLASS_CONTENT_SAFETY,
+            ):
+                logger.warning(
+                    f"Credential {idx} failed with {error_class} (request-level), fail-fast"
+                )
+                return False
+
+            if error_class == ERROR_CLASS_AUTH:
+                # Credential-level error (key invalid / no permission / overdue).
+                # In multi-credential mode, advance to the next credential since
+                # another credential may have a valid key / permission / balance.
+                # The last credential (or single-credential mode) fails fast.
                 if idx == self._active_idx and self._active_idx + 1 < self._n:
                     self._active_idx += 1
                     self._last_switch_time = time.monotonic()
                     self._active_request_count = 0
                     logger.warning(
-                        f"Credential {idx} failed with permanent error; "
+                        f"Credential {idx} failed with auth error; "
                         f"advancing to {self._active_idx} (multi-credential mode)"
                     )
                     return True
-                logger.warning(f"Credential {idx} failed with permanent error, fail-fast")
+                logger.warning(f"Credential {idx} failed with auth error, fail-fast")
                 return False
 
             if error_class == ERROR_CLASS_QUOTA_EXCEEDED:

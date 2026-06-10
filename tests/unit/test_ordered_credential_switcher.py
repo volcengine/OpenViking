@@ -8,6 +8,9 @@ import time
 import pytest
 
 from openviking.utils.model_retry import (
+    ERROR_CLASS_AUTH,
+    ERROR_CLASS_CONTENT_SAFETY,
+    ERROR_CLASS_INPUT_TOO_LARGE,
     ERROR_CLASS_PERMANENT,
     ERROR_CLASS_QUOTA_EXCEEDED,
     ERROR_CLASS_TRANSIENT,
@@ -56,13 +59,34 @@ class TestOrderedCredentialSwitcher:
         assert switcher.is_exhausted
 
     def test_fail_fast_on_permanent_error(self):
-        """Single-credential mode: permanent error fails fast (last credential)."""
-        switcher = OrderedCredentialSwitcher(n=1)
+        """PERMANENT (400 parameter error) always fails fast, even with multiple credentials.
 
-        # Permanent error on the only credential should fail-fast
+        A 400 is request-level: the same request fails on every credential of
+        the same model, so switching is useless.
+        """
+        switcher = OrderedCredentialSwitcher(n=3)
+
         result = switcher.on_failure(0, ERROR_CLASS_PERMANENT)
         assert result is False
         assert switcher.get_active_index() == 0  # Should stay at current index
+        assert not switcher.is_exhausted
+
+    def test_fail_fast_on_input_too_large(self):
+        """INPUT_TOO_LARGE fails fast: same oversized input fails on every credential."""
+        switcher = OrderedCredentialSwitcher(n=3)
+
+        result = switcher.on_failure(0, ERROR_CLASS_INPUT_TOO_LARGE)
+        assert result is False
+        assert switcher.get_active_index() == 0
+        assert not switcher.is_exhausted
+
+    def test_fail_fast_on_content_safety(self):
+        """CONTENT_SAFETY fails fast: moderation rejects the content on every credential."""
+        switcher = OrderedCredentialSwitcher(n=3)
+
+        result = switcher.on_failure(0, ERROR_CLASS_CONTENT_SAFETY)
+        assert result is False
+        assert switcher.get_active_index() == 0
         assert not switcher.is_exhausted
 
     def test_transient_error_treated_as_quota(self):
@@ -219,39 +243,39 @@ class TestOrderedCredentialSwitcher:
         with pytest.raises(ValueError, match="Number of credentials must be >= 1"):
             OrderedCredentialSwitcher(n=-1)
 
-    def test_advance_on_permanent_error_when_enabled(self):
-        """Multi-credential mode: PERMANENT advances to next credential by default."""
+    def test_advance_on_auth_error_when_multi_credential(self):
+        """Multi-credential mode: AUTH (401/403) advances to next credential by default."""
         switcher = OrderedCredentialSwitcher(n=3)
 
-        # First credential's permanent error should advance, not fail-fast
-        result = switcher.on_failure(0, ERROR_CLASS_PERMANENT)
+        # First credential's auth error should advance, not fail-fast
+        result = switcher.on_failure(0, ERROR_CLASS_AUTH)
         assert result is True
         assert switcher.get_active_index() == 1
 
-        # Middle credential's permanent error should also advance
-        result = switcher.on_failure(1, ERROR_CLASS_PERMANENT)
+        # Middle credential's auth error should also advance
+        result = switcher.on_failure(1, ERROR_CLASS_AUTH)
         assert result is True
         assert switcher.get_active_index() == 2
 
-    def test_last_credential_permanent_error_still_fails_fast(self):
-        """In multi-credential mode the last credential still fails fast on PERMANENT."""
+    def test_last_credential_auth_error_still_fails_fast(self):
+        """In multi-credential mode the last credential still fails fast on AUTH."""
         switcher = OrderedCredentialSwitcher(n=2)
 
-        # Advance from 0 -> 1 on permanent error
-        assert switcher.on_failure(0, ERROR_CLASS_PERMANENT) is True
+        # Advance from 0 -> 1 on auth error
+        assert switcher.on_failure(0, ERROR_CLASS_AUTH) is True
         assert switcher.get_active_index() == 1
 
         # On the last credential (idx 1, n=2), still fail-fast
-        result = switcher.on_failure(1, ERROR_CLASS_PERMANENT)
+        result = switcher.on_failure(1, ERROR_CLASS_AUTH)
         assert result is False
         # active_idx stays at 1 (not bumped to n=2/exhausted) so caller can raise normally
         assert switcher.get_active_index() == 1
         assert not switcher.is_exhausted
 
-    def test_single_credential_permanent_error_fails_fast(self):
-        """With only one credential, PERMANENT must fail-fast (it's the last)."""
+    def test_single_credential_auth_error_fails_fast(self):
+        """With only one credential, AUTH must fail-fast (it's the last)."""
         switcher = OrderedCredentialSwitcher(n=1)
 
-        result = switcher.on_failure(0, ERROR_CLASS_PERMANENT)
+        result = switcher.on_failure(0, ERROR_CLASS_AUTH)
         assert result is False
         assert switcher.get_active_index() == 0
