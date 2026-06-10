@@ -204,7 +204,9 @@ def build_single_search_context_prompt(
     return prompt
 
 
-def build_single_search_prompt_search_results(contexts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def build_single_search_prompt_search_results(
+    contexts: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     return [
         {
             "memory": str(context.get("content", "")),
@@ -394,7 +396,7 @@ def run_single_search_context_answer(
             search_result,
             limit=single_search_context_limit,
         )
-        
+
         retrieved_uris = [context["uri"] for context in contexts]
 
         for context in contexts:

@@ -18,7 +18,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import openviking as ov
 
-
 LONGMEMEVAL_TIME_FORMAT = "%Y/%m/%d (%a) %H:%M"
 
 
@@ -157,7 +156,9 @@ def write_error_record(
         f.write(f"[{timestamp}] ERROR [{sample_id}/{session}]: {error}\n")
 
 
-def load_ingest_record(record_path: str = "./result/.longmemeval_ingest_record.json") -> Dict[str, Any]:
+def load_ingest_record(
+    record_path: str = "./result/.longmemeval_ingest_record.json",
+) -> Dict[str, Any]:
     try:
         with open(record_path, "r", encoding="utf-8") as f:
             return json.load(f)

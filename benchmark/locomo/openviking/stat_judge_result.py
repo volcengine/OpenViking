@@ -5,7 +5,6 @@ import os
 import sys
 from collections import defaultdict
 
-
 CATEGORY_NAMES = {
     "1": "multi-hop",
     "2": "temporal",
@@ -178,7 +177,7 @@ def main():
         f"Accuracy: {accuracy:.2%}",
         f"\nAverage time cost: {avg_time:.2f}s",
         f"\nAverage iteration: {total_iteration / valid_rows if valid_rows > 0 else 0.0:.2f}",
-        f"\nToken usage:",
+        "\nToken usage:",
         f"  Total prompt tokens: {total_prompt_tokens}",
         f"  Total memory prompt tokens: {total_memory_prompt_tokens}",
         f"  Total memory chars: {total_memory_chars}",
@@ -231,7 +230,7 @@ def main():
                 f"Valid accuracy: {valid_only_accuracy:.2%}",
                 f"\nAverage time cost: {valid_only_avg_time:.2f}s",
                 f"\nAverage iteration: {valid_only_total_iteration / valid_only_rows if valid_only_rows > 0 else 0.0:.2f}",
-                f"\nToken usage:",
+                "\nToken usage:",
                 f"  Total prompt tokens: {valid_only_total_prompt_tokens}",
                 f"  Total memory prompt tokens: {valid_only_total_memory_prompt_tokens}",
                 f"  Total memory chars: {valid_only_total_memory_chars}",

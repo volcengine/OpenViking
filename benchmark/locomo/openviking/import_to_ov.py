@@ -147,11 +147,17 @@ def build_session_messages(
     return sessions
 
 
-def chunk_messages(messages: List[Dict[str, Any]], chunk_size: int = LOCOMO_SESSION_CHUNK_SIZE) -> List[List[Dict[str, Any]]]:
+def chunk_messages(
+    messages: List[Dict[str, Any]], chunk_size: int = LOCOMO_SESSION_CHUNK_SIZE
+) -> List[List[Dict[str, Any]]]:
     """Split a session message list into smaller contiguous chunks."""
     if chunk_size <= 0:
         raise ValueError("chunk_size must be positive")
-    return [messages[i : i + chunk_size] for i in range(0, len(messages), chunk_size) if messages[i : i + chunk_size]]
+    return [
+        messages[i : i + chunk_size]
+        for i in range(0, len(messages), chunk_size)
+        if messages[i : i + chunk_size]
+    ]
 
 
 def _normalize_image_urls(value: Any) -> List[str]:
@@ -394,7 +400,7 @@ async def viking_ingest(
         if task_id:
             # 轮询任务状态直到完成
             max_attempts = 1200  # 最多等待20分钟
-            for attempt in range(max_attempts):
+            for _attempt in range(max_attempts):
                 task = await client.get_task(task_id)
                 status = task.get("status") if task else "unknown"
                 if status == "completed":
@@ -555,7 +561,7 @@ async def run_import(args: argparse.Namespace) -> None:
     if args.clear_ingest_record:
         ingest_record = {}
         save_ingest_record(ingest_record)
-        print(f"[INFO] All existing ingest records cleared", file=sys.stderr)
+        print("[INFO] All existing ingest records cleared", file=sys.stderr)
     else:
         ingest_record = load_ingest_record()
 
@@ -649,7 +655,7 @@ async def run_import(args: argparse.Namespace) -> None:
                 "txt", session_key, ingest_record, success_keys
             ):
                 print(
-                    f"  [SKIP] already imported (use --force-ingest to reprocess)", file=sys.stderr
+                    "  [SKIP] already imported (use --force-ingest to reprocess)", file=sys.stderr
                 )
                 skipped_count += 1
                 continue
@@ -696,12 +702,12 @@ async def run_import(args: argparse.Namespace) -> None:
 
     # Final summary
     total_processed = success_count + error_count + skipped_count
-    print(f"\n=== Import summary ===", file=sys.stderr)
+    print("\n=== Import summary ===", file=sys.stderr)
     print(f"Total sessions: {total_processed}", file=sys.stderr)
     print(f"Successfully imported: {success_count}", file=sys.stderr)
     print(f"Failed: {error_count}", file=sys.stderr)
     print(f"Skipped (already imported): {skipped_count}", file=sys.stderr)
-    print(f"\n=== Token usage summary ===", file=sys.stderr)
+    print("\n=== Token usage summary ===", file=sys.stderr)
     print(f"Total Embedding tokens: {total_embedding_tokens}", file=sys.stderr)
     print(f"Total VLM tokens: {total_vlm_tokens}", file=sys.stderr)
     if success_count > 0:
@@ -710,7 +716,7 @@ async def run_import(args: argparse.Namespace) -> None:
             file=sys.stderr,
         )
         print(f"Average VLM per session: {total_vlm_tokens // success_count}", file=sys.stderr)
-    print(f"\nResults saved to:", file=sys.stderr)
+    print("\nResults saved to:", file=sys.stderr)
     print(f"  - Success records: {args.success_csv}", file=sys.stderr)
     print(f"  - Error logs: {args.error_log}", file=sys.stderr)
 

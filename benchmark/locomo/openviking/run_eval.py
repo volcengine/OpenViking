@@ -1,9 +1,9 @@
 import argparse
-import json
-import time
 import csv
+import json
 import os
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -339,7 +339,9 @@ def build_single_search_context_prompt(
     )
 
 
-def build_single_search_prompt_search_results(contexts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def build_single_search_prompt_search_results(
+    contexts: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     return [
         {
             "memory": str(context.get("content", "")),
@@ -426,8 +428,10 @@ def rerank_single_search_contexts(
         return contexts, [], f"{type(exc).__name__}: {exc}"
 
     if not scores or len(scores) != len(contexts):
-        return contexts, [], (
-            f"invalid_score_count: expected {len(contexts)}, got {len(scores) if scores else 0}"
+        return (
+            contexts,
+            [],
+            (f"invalid_score_count: expected {len(contexts)}, got {len(scores) if scores else 0}"),
         )
 
     ranked_contexts = []
@@ -644,7 +648,9 @@ def result_row_key(row: dict[str, Any]) -> str:
     return f"question:{str(row.get('question', '') or '').strip()}"
 
 
-def parse_sample_indices(raw_samples: str | None, dataset_size: int | None = None) -> list[int] | None:
+def parse_sample_indices(
+    raw_samples: str | None, dataset_size: int | None = None
+) -> list[int] | None:
     if raw_samples is None:
         return None
 

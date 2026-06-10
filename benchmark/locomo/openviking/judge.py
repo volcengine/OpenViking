@@ -116,7 +116,7 @@ async def grade_answer(
             question,
             processed_answer,
             response,
-    )
+        )
 
     try:
         request_kwargs = {

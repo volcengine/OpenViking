@@ -4,7 +4,6 @@ LoCoMo answer-generation prompt aligned with the mem0 benchmark runner.
 
 from datetime import datetime as _datetime
 
-
 CATEGORY_NAMES = {
     1: "multi-hop",
     2: "temporal",
@@ -104,7 +103,10 @@ def get_answer_generation_prompt(
     else:
         top_results = search_results[:ANSWERER_MEMORY_LIMIT]
         sorted_results = sorted(top_results, key=lambda x: x.get("created_at", ""))
-        lines = ["The following memories are presented in chronological order (oldest to newest).", ""]
+        lines = [
+            "The following memories are presented in chronological order (oldest to newest).",
+            "",
+        ]
         for result in sorted_results:
             memory = result.get("memory", "")
             created_at = result.get("created_at", "")
@@ -123,7 +125,7 @@ def get_answer_generation_prompt(
 
 JUDGE_SYSTEM_PROMPT = (
     "You are evaluating conversational AI memory recall. "
-    'Return JSON only with the format requested.'
+    "Return JSON only with the format requested."
 )
 
 _EVIDENCE_CHUNK = """

@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import datetime as _datetime
 from typing import Any
 
-
 QUESTION_TYPES = [
     "temporal-reasoning",
     "multi-session",

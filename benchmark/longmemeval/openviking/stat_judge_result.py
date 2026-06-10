@@ -31,9 +31,7 @@ def main():
     total_tokens = 0
     valid_rows = 0
     total_iteration = 0
-    by_type: dict[str, dict[str, int]] = defaultdict(
-        lambda: {"CORRECT": 0, "WRONG": 0, "OTHER": 0}
-    )
+    by_type: dict[str, dict[str, int]] = defaultdict(lambda: {"CORRECT": 0, "WRONG": 0, "OTHER": 0})
 
     with open(args.input, "r", encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f)
@@ -74,13 +72,9 @@ def main():
     accuracy = correct / total_graded if total_graded > 0 else 0.0
     avg_time = total_time / valid_rows if valid_rows > 0 else 0.0
     avg_prompt_tokens = total_prompt_tokens / valid_rows if valid_rows > 0 else 0.0
-    avg_memory_prompt_tokens = (
-        total_memory_prompt_tokens / valid_rows if valid_rows > 0 else 0.0
-    )
+    avg_memory_prompt_tokens = total_memory_prompt_tokens / valid_rows if valid_rows > 0 else 0.0
     avg_memory_chars = total_memory_chars / valid_rows if valid_rows > 0 else 0.0
-    avg_completion_tokens = (
-        total_completion_tokens / valid_rows if valid_rows > 0 else 0.0
-    )
+    avg_completion_tokens = total_completion_tokens / valid_rows if valid_rows > 0 else 0.0
     avg_total_tokens = total_tokens / valid_rows if valid_rows > 0 else 0.0
 
     output_lines = [
@@ -90,12 +84,12 @@ def main():
         f"Correct: {correct}",
         f"Wrong: {wrong}",
         f"Accuracy: {accuracy:.2%}",
-        f"",
+        "",
         f"Average time cost: {avg_time:.2f}s",
-        f"",
+        "",
         f"Average iteration: {total_iteration / valid_rows if valid_rows > 0 else 0.0:.2f}",
-        f"",
-        f"Token usage:",
+        "",
+        "Token usage:",
         f"  Total prompt tokens: {total_prompt_tokens}",
         f"  Total memory prompt tokens: {total_memory_prompt_tokens}",
         f"  Total memory chars: {total_memory_chars}",
