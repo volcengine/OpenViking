@@ -746,8 +746,7 @@ class FailoverEmbedder(EmbedderBase):
                     raise
 
                 logger.warning(
-                    f"Credential {credential_id} failed with {error_class}, "
-                    "trying next credential"
+                    f"Credential {credential_id} failed with {error_class}, trying next credential"
                 )
 
         raise AllCredentialsFailedError(aggregated_errors)
@@ -792,8 +791,7 @@ class FailoverEmbedder(EmbedderBase):
                     raise
 
                 logger.warning(
-                    f"Credential {credential_id} failed with {error_class}, "
-                    "trying next credential"
+                    f"Credential {credential_id} failed with {error_class}, trying next credential"
                 )
 
         raise AllCredentialsFailedError(aggregated_errors)

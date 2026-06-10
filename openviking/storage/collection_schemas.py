@@ -313,8 +313,10 @@ async def init_context_collection(storage) -> bool:
     )
 
     allow_override = bool(getattr(config.embedding, "allow_metadata_override", False))
-    if allow_override and not dimension_changed and hasattr(
-        storage, "update_collection_description"
+    if (
+        allow_override
+        and not dimension_changed
+        and hasattr(storage, "update_collection_description")
     ):
         logger.warning(
             "Embedding metadata changed (provider/model) but dimension is "

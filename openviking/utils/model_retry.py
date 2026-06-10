@@ -8,8 +8,6 @@ import threading
 import time
 from typing import Awaitable, Callable, TypeVar
 
-from openviking.utils.exceptions import AllCredentialsFailedError
-
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")

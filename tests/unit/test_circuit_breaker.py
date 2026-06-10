@@ -14,7 +14,6 @@ from openviking.utils.circuit_breaker import (
 )
 from openviking.utils.model_retry import (
     ERROR_CLASS_AUTH,
-    ERROR_CLASS_PERMANENT,
     ERROR_CLASS_TRANSIENT,
     ERROR_CLASS_UNKNOWN,
 )

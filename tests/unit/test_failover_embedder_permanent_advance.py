@@ -66,9 +66,7 @@ def _make_400_error() -> Exception:
 
 def _make_401_error() -> Exception:
     """Construct a credential-level 401 auth error (AUTH, advances in multi-credential)."""
-    return RuntimeError(
-        "Error code: 401 - {'error': {'message': 'Incorrect API key provided'}}"
-    )
+    return RuntimeError("Error code: 401 - {'error': {'message': 'Incorrect API key provided'}}")
 
 
 def test_auth_error_on_primary_advances_to_backup():
@@ -214,9 +212,7 @@ def test_fast_failover_commits_new_active_index():
 
 def test_content_safety_does_not_cycle_the_ring():
     """Request-level content-safety errors fail fast and must not try others."""
-    cs = _StubEmbedder(
-        "cs", error=RuntimeError("content_filter: sensitive content detected")
-    )
+    cs = _StubEmbedder("cs", error=RuntimeError("content_filter: sensitive content detected"))
     backup = _StubEmbedder("backup")
 
     fe = FailoverEmbedder(embedders=[cs, backup], credential_ids=["cs", "backup"])

@@ -46,9 +46,12 @@ def test_per_credential_model_overrides_parent_model():
 
     # Skip wrapping into a FailoverEmbedder; we only care about the merged
     # configs passed into _create_embedder for each credential.
-    with patch.object(EmbeddingConfig, "_create_embedder", fake_create_embedder), patch(
-        "openviking.models.embedder.FailoverEmbedder",
-        lambda **kwargs: kwargs,
+    with (
+        patch.object(EmbeddingConfig, "_create_embedder", fake_create_embedder),
+        patch(
+            "openviking.models.embedder.FailoverEmbedder",
+            lambda **kwargs: kwargs,
+        ),
     ):
         cfg._create_failover_embedder("dense", parent)
 
