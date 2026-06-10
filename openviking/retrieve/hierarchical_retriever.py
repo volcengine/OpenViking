@@ -51,6 +51,8 @@ class HierarchicalRetriever:
     DIRECTORY_DOMINANCE_RATIO = 1.2  # Directory score must exceed max child score
     GLOBAL_SEARCH_TOPK = 10  # Global retrieval count (more candidates = better rerank precision)
     MAX_PARALLEL_CHILD_SEARCHES = 4  # Limit per-request fan-out against remote vector stores
+    MAX_PARALLEL_RELATION_FETCHES = 8
+    MAX_PARALLEL_RELATION_ABSTRACT_READS = 8
     LEVEL_URI_SUFFIX = {0: ".abstract.md", 1: ".overview.md"}
 
     def __init__(
@@ -95,6 +97,7 @@ class HierarchicalRetriever:
         self,
         query: TypedQuery,
         ctx: RequestContext,
+        include_relations: bool = True,
         limit: int = 5,
         mode: str = RetrieverMode.THINKING,
         score_threshold: Optional[float] = None,
@@ -113,6 +116,7 @@ class HierarchicalRetriever:
             scope_dsl: Additional scope constraints passed from public find/search filter
         """
         t0 = time.monotonic()
+        telemetry = get_current_telemetry()
         # Use custom threshold or default threshold
         effective_threshold = score_threshold if score_threshold is not None else self.threshold
 
@@ -136,9 +140,10 @@ class HierarchicalRetriever:
         query_vector = None
         sparse_query_vector = None
         if self.embedder:
-            result: EmbedResult = await embed_compat(self.embedder, query.query, is_query=True)
-            query_vector = result.dense_vector
-            sparse_query_vector = result.sparse_vector
+            with telemetry.measure("search.embed_query"):
+                result: EmbedResult = await embed_compat(self.embedder, query.query, is_query=True)
+                query_vector = result.dense_vector
+                sparse_query_vector = result.sparse_vector
 
         # Step 1: Determine starting directories based on explicit target dirs.
         if target_dirs:
@@ -147,15 +152,16 @@ class HierarchicalRetriever:
             root_uris = default_target_directories(ctx, context_type=query.context_type)
 
         # Step 2: Global vector search to supplement starting points
-        global_results = await self._global_vector_search(
-            vector_proxy=vector_proxy,
-            query_vector=query_vector,
-            sparse_query_vector=sparse_query_vector,
-            context_type=query.context_type.value if query.context_type else None,
-            target_dirs=target_dirs,
-            scope_dsl=scope_dsl,
-            limit=max(limit, self.GLOBAL_SEARCH_TOPK),
-        )
+        with telemetry.measure("search.vector_retrieval"):
+            global_results = await self._global_vector_search(
+                vector_proxy=vector_proxy,
+                query_vector=query_vector,
+                sparse_query_vector=sparse_query_vector,
+                context_type=query.context_type.value if query.context_type else None,
+                target_dirs=target_dirs,
+                scope_dsl=scope_dsl,
+                limit=max(limit, self.GLOBAL_SEARCH_TOPK),
+            )
 
         # Debug: Print all URIs in global_results
         if logger.isEnabledFor(logging.DEBUG):
@@ -195,25 +201,31 @@ class HierarchicalRetriever:
         )
 
         # Step 4: Recursive search
-        candidates = await self._recursive_search(
-            vector_proxy=vector_proxy,
-            query=query.query,
-            query_vector=query_vector,
-            sparse_query_vector=sparse_query_vector,
-            starting_points=starting_points,
-            limit=limit,
-            mode=mode,
-            threshold=effective_threshold,
-            score_gte=score_gte,
-            context_type=query.context_type.value if query.context_type else None,
-            target_dirs=target_dirs,
-            scope_dsl=scope_dsl,
-            initial_candidates=initial_candidates,
-            level=level,
-        )
+        with telemetry.measure("search.vector_retrieval"):
+            candidates = await self._recursive_search(
+                vector_proxy=vector_proxy,
+                query=query.query,
+                query_vector=query_vector,
+                sparse_query_vector=sparse_query_vector,
+                starting_points=starting_points,
+                limit=limit,
+                mode=mode,
+                threshold=effective_threshold,
+                score_gte=score_gte,
+                context_type=query.context_type.value if query.context_type else None,
+                target_dirs=target_dirs,
+                scope_dsl=scope_dsl,
+                initial_candidates=initial_candidates,
+                level=level,
+            )
 
         # Step 6: Convert results
-        matched = await self._convert_to_matched_contexts(candidates, ctx=ctx)
+        with telemetry.measure("search.result_convert"):
+            matched = await self._convert_to_matched_contexts(
+                candidates,
+                ctx=ctx,
+                include_relations=include_relations,
+            )
 
         final = matched[:limit]
 
@@ -541,6 +553,7 @@ class HierarchicalRetriever:
         self,
         candidates: List[Dict[str, Any]],
         ctx: RequestContext,
+        include_relations: bool = True,
     ) -> List[MatchedContext]:
         """Convert candidate results to MatchedContext list.
 
@@ -549,20 +562,55 @@ class HierarchicalRetriever:
         is controlled by ``retrieval.hotness_alpha`` (0 disables the boost).
         """
         results = []
+        viking_fs = get_viking_fs()
+        telemetry = get_current_telemetry()
+        limited_relation_uris: List[List[str]] = [[] for _ in candidates]
+        related_abstracts_by_candidate: List[Dict[str, str]] = [{} for _ in candidates]
 
-        for c in candidates:
-            # Read related contexts and get summaries
-            relations = []
-            if get_viking_fs():
-                related_uris = await get_viking_fs().get_relations(c.get("uri", ""), ctx=ctx)
-                if related_uris:
-                    related_abstracts = await get_viking_fs().read_batch(
-                        related_uris[: self.MAX_RELATIONS], level="l0", ctx=ctx
+        if include_relations and viking_fs and candidates:
+            relation_sem = asyncio.Semaphore(self.MAX_PARALLEL_RELATION_FETCHES)
+
+            async def _fetch_relations(idx: int, candidate_uri: str) -> None:
+                async with relation_sem:
+                    related_uris = await viking_fs.get_relations(candidate_uri, ctx=ctx)
+                limited_relation_uris[idx] = related_uris[: self.MAX_RELATIONS]
+
+            with telemetry.measure("search.rels"):
+                await asyncio.gather(
+                    *[
+                        _fetch_relations(idx, c.get("uri", ""))
+                        for idx, c in enumerate(candidates)
+                        if c.get("uri", "")
+                    ]
+                )
+
+            abstract_sem = asyncio.Semaphore(self.MAX_PARALLEL_RELATION_ABSTRACT_READS)
+
+            async def _fetch_relation_abstracts(idx: int, relation_uris: List[str]) -> None:
+                if not relation_uris:
+                    return
+                async with abstract_sem:
+                    related_abstracts_by_candidate[idx] = await viking_fs.read_batch(
+                        relation_uris, level="l0", ctx=ctx
                     )
-                    for uri in related_uris[: self.MAX_RELATIONS]:
-                        abstract = related_abstracts.get(uri, "")
-                        if abstract:
-                            relations.append(RelatedContext(uri=uri, abstract=abstract))
+
+            with telemetry.measure("search.rel_abstracts"):
+                await asyncio.gather(
+                    *[
+                        _fetch_relation_abstracts(idx, relation_uris)
+                        for idx, relation_uris in enumerate(limited_relation_uris)
+                        if relation_uris
+                    ]
+                )
+
+        for idx, c in enumerate(candidates):
+            relations = []
+            relation_uris = limited_relation_uris[idx]
+            related_abstracts = related_abstracts_by_candidate[idx]
+            for uri in relation_uris:
+                abstract = related_abstracts.get(uri, "")
+                if abstract:
+                    relations.append(RelatedContext(uri=uri, abstract=abstract))
 
             semantic_score = c.get("_final_score", c.get("_score", 0.0))
             # Fix: clamp inf/nan scores from vector search (#inf-score)

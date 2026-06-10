@@ -475,3 +475,40 @@ async def test_retrieval_hotness_alpha_blends_when_configured(monkeypatch):
     )
 
     assert result[0].score == pytest.approx(0.9)
+
+
+@pytest.mark.asyncio
+async def test_convert_to_matched_contexts_skips_relations_when_disabled(monkeypatch):
+    class _FailingVikingFS:
+        async def get_relations(self, *args, **kwargs):
+            pytest.fail("get_relations should not be called when include_relations is False")
+
+        async def read_batch(self, *args, **kwargs):
+            pytest.fail("read_batch should not be called when include_relations is False")
+
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.get_viking_fs",
+        lambda: _FailingVikingFS(),
+    )
+
+    retriever = HierarchicalRetriever(
+        storage=DummyStorage(),
+        embedder=None,
+        rerank_config=None,
+    )
+
+    result = await retriever._convert_to_matched_contexts(
+        [
+            {
+                "uri": "viking://resources/file-a",
+                "abstract": "child A",
+                "_score": 1.0,
+                "level": 2,
+                "context_type": "resource",
+            }
+        ],
+        ctx=_ctx(),
+        include_relations=False,
+    )
+
+    assert result[0].relations == []

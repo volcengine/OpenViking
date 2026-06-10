@@ -561,6 +561,9 @@ async def test_find_telemetry_metrics(client_with_resource):
     assert "tokens" not in summary
     assert "vector" in summary
     assert summary["vector"]["searches"] >= 0
+    assert "search" in summary
+    assert "vector_retrieval" in summary["search"]
+    assert "result_convert" in summary["search"]
     assert "queue" not in summary
     assert "semantic_nodes" not in summary
     assert "memory" not in summary
@@ -579,6 +582,9 @@ async def test_search_telemetry_metrics(client_with_resource):
     body = resp.json()
     summary = body["telemetry"]["summary"]
     assert summary["operation"] == "search.search"
+    assert "search" in summary
+    assert "vector_retrieval" in summary["search"]
+    assert "result_convert" in summary["search"]
     if body["result"]["total"] > 0:
         assert summary["vector"]["returned"] == body["result"]["total"]
     else:
@@ -586,6 +592,48 @@ async def test_search_telemetry_metrics(client_with_resource):
     assert "queue" not in summary
     assert "semantic_nodes" not in summary
     assert "memory" not in summary
+
+
+async def test_find_include_relations_passes_to_service(
+    client: httpx.AsyncClient, service, monkeypatch
+):
+    captured = {}
+
+    async def fake_find(*, include_relations=True, **kwargs):
+        captured["include_relations"] = include_relations
+        return {"items": []}
+
+    monkeypatch.setattr(service.search, "find", fake_find)
+
+    resp = await client.post(
+        "/api/v1/search/find",
+        json={"query": "sample", "include_relations": False},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+    assert captured["include_relations"] is False
+
+
+async def test_search_include_relations_passes_to_service(
+    client: httpx.AsyncClient, service, monkeypatch
+):
+    captured = {}
+
+    async def fake_search(*, include_relations=True, **kwargs):
+        captured["include_relations"] = include_relations
+        return {"items": []}
+
+    monkeypatch.setattr(service.search, "search", fake_search)
+
+    resp = await client.post(
+        "/api/v1/search/search",
+        json={"query": "sample", "include_relations": False},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+    assert captured["include_relations"] is False
 
 
 async def test_find_summary_only_telemetry(client_with_resource):

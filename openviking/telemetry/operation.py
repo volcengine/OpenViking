@@ -62,6 +62,20 @@ class TelemetrySummaryBuilder:
         "summarize": "resource.flags.summarize",
         "watch_enabled": "resource.flags.watch_enabled",
     }
+    _SEARCH_DURATION_KEYS = {
+        "request": "search.request.duration_ms",
+        "access_check": "search.access_check.duration_ms",
+        "target_abstract": "search.target_abstract.duration_ms",
+        "intent_analysis": "search.intent_analysis.duration_ms",
+        "embed_query": "search.embed_query.duration_ms",
+        "vector_retrieval": "search.vector_retrieval.duration_ms",
+        "result_convert": "search.result_convert.duration_ms",
+        "rels": "search.rels.duration_ms",
+        "rel_read": "search.rel_read.duration_ms",
+        "rel_filter": "search.rel_filter.duration_ms",
+        "rel_abstracts": "search.rel_abstracts.duration_ms",
+        "result_aggregate": "search.result_aggregate.duration_ms",
+    }
 
     @staticmethod
     def _i(value: Any, default: int = 0) -> int:
@@ -163,9 +177,7 @@ class TelemetrySummaryBuilder:
         llm_output_tokens = cls._i(counters.get("tokens.llm.output"), 0)
         llm_total_tokens = cls._i(counters.get("tokens.llm.total"), 0)
         llm_prompt_cached_tokens = cls._i(counters.get("tokens.llm.prompt_cached"), 0)
-        llm_completion_reasoning_tokens = cls._i(
-            counters.get("tokens.llm.completion_reasoning"), 0
-        )
+        llm_completion_reasoning_tokens = cls._i(counters.get("tokens.llm.completion_reasoning"), 0)
         embedding_total_tokens = cls._i(counters.get("tokens.embedding.total"), 0)
         rerank_total_tokens = cls._i(counters.get("tokens.rerank.total"), 0)
         stage_token_summary = cls._build_stage_token_summary(counters)
@@ -286,6 +298,18 @@ class TelemetrySummaryBuilder:
                 },
             }
 
+        if cls._has_metric_prefix("search", counters, gauges):
+            search_summary = {
+                public_key: {
+                    "duration_ms": cls._f(gauges.get(metric_key), 0.0),
+                }
+                for public_key, metric_key in cls._SEARCH_DURATION_KEYS.items()
+            }
+            typed_queries_count = gauges.get("search.typed_queries_count")
+            if typed_queries_count is not None:
+                search_summary["typed_queries_count"] = cls._i(typed_queries_count, 0)
+            summary["search"] = search_summary
+
         if error_stage or error_code or error_message:
             summary["errors"] = {
                 "stage": error_stage,
@@ -293,7 +317,16 @@ class TelemetrySummaryBuilder:
                 "message": error_message,
             }
 
-        for key in ("tokens", "queue", "vector", "semantic_nodes", "memory", "resource", "errors"):
+        for key in (
+            "tokens",
+            "queue",
+            "vector",
+            "semantic_nodes",
+            "memory",
+            "resource",
+            "search",
+            "errors",
+        ):
             if key not in summary:
                 continue
             pruned_value = cls._prune_zero_metrics(summary[key])
