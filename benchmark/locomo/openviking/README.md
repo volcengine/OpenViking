@@ -1,45 +1,44 @@
-# LoCoMo OpenViking Evaluation
+# LoCoMo OpenViking Benchmark
 
-This directory contains the OpenViking single-search evaluation flow for
-LoCoMo. It imports each conversation into an isolated OpenViking user space,
-runs one `find` retrieval per question, optionally reranks the retrieved
-memories, answers from the selected context, then judges and summarizes the
-CSV.
+This directory contains the OpenViking evaluation flow for LoCoMo:
 
-The commands below assume OpenViking is already running on the default local
-endpoint used by the CLI configuration. If your server is on a non-default port,
-add `--openviking-url http://127.0.0.1:<port>` to the import and eval commands.
+1. import each conversation into an isolated OpenViking user space;
+2. run one retrieval call per question;
+3. optionally rerank the retrieved memories;
+4. answer from the selected memory context;
+5. judge and summarize the result CSV.
+
+The benchmark expects an OpenViking server to already be running. The commands
+below use the default local OpenViking client configuration. If you need a
+different endpoint, pass `--openviking-url` to both import and eval.
 
 ## Data
 
-Use the prepared LoCoMo JSON:
+Use the prepared LoCoMo JSON file:
 
 ```bash
-export DATA=result/locomo.json
+DATA=result/locomo.json
 ```
 
-LoCoMo memories are imported under `viking://user/sample_{idx}/memories`.
-The eval script uses the same `sample_{idx}` user id when searching, so import
-and eval must use the same dataset order.
+LoCoMo samples are imported under `viking://user/sample_{idx}/memories`.
+Evaluation uses the same `sample_{idx}` user id, so import and eval must use the
+same dataset order.
 
-## Import Memories
-
-For a fresh full import:
+## Import
 
 ```bash
 python benchmark/locomo/openviking/import_to_ov.py \
   --input "$DATA" \
   --parallel-samples 16 \
-  --success-csv result/locomo_import_success.csv \
-  --error-log result/locomo_import_errors.log
+  --success-csv result/locomo_openviking_import_success.csv \
+  --error-log result/locomo_openviking_import_errors.log
 ```
 
-When intentionally re-importing the same data, add `--force-ingest`. If you
-also want to ignore old import success records, add `--clear-ingest-record`.
+Use `--force-ingest` only when intentionally re-importing existing samples.
 
 ## Smoke Test
 
-Run one question before starting a full sweep:
+Run one question before a full evaluation:
 
 ```bash
 python benchmark/locomo/openviking/run_eval.py "$DATA" \
@@ -49,27 +48,32 @@ python benchmark/locomo/openviking/run_eval.py "$DATA" \
   --threads 1 \
   --single-search-context-limit 50 \
   --single-search-rerank-limit 10 \
+  --single-search-max-context-chars 30000 \
   --debug-print-model-input
 ```
 
-The debug CSV includes `model_input_prompt`, memory token counts, and
-`retrieved_uris_by_iteration`. Check that `rerank_enabled` is true,
-`rerank_error` is empty, and `context_uris` has the expected rerank limit.
+With `--debug-print-model-input`, the CSV includes the full answer prompt and
+retrieval trace. Check `retrieved_uris_by_iteration` to confirm rerank is enabled
+and `context_uris` contains the expected number of memories.
 
 ## Full Eval
 
-This example retrieves 50 memories, keeps the top 10 after rerank, and runs
-evaluation with 8 worker threads:
+This example retrieves 50 memories, keeps the top 10 after rerank, and caps the
+memory text passed to the answer model at 30000 characters.
 
 ```bash
-OUT=result/locomo_openviking_limit50_rerank10.csv
+OUT=result/locomo_openviking_search50_rerank10_chars30000.csv
 
 python benchmark/locomo/openviking/run_eval.py "$DATA" \
   --output "$OUT" \
   --threads 8 \
   --single-search-context-limit 50 \
-  --single-search-rerank-limit 10
+  --single-search-rerank-limit 10 \
+  --single-search-max-context-chars 30000
 ```
+
+Set `--single-search-rerank-limit 0` to disable rerank. Set
+`--single-search-max-context-chars 0` to disable the character budget.
 
 ## Judge And Stat
 
@@ -82,5 +86,8 @@ python benchmark/locomo/openviking/stat_judge_result.py \
   --input "$OUT"
 ```
 
-The judge writes results back into the same CSV. Category 5 adversarial
-questions are excluded by the LoCoMo judge/stat flow.
+The judge writes `result` values back into the same CSV. Use `--force` to
+re-grade rows that already have a result. Use `--strict-prompt` when you want the
+stricter LoCoMo judge prompt instead of the default lenient prompt.
+
+Category 5 adversarial questions are skipped by the LoCoMo judge/stat flow.

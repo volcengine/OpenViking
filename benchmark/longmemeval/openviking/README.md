@@ -1,46 +1,46 @@
-# LongMemEval OpenViking Evaluation
+# LongMemEval OpenViking Benchmark
 
-This directory contains the OpenViking single-search evaluation flow for
-LongMemEval. It imports each user's history into OpenViking, retrieves memory
-with one `find` call, optionally reranks the retrieved memories, answers from
-the selected context, then judges and summarizes the CSV.
+This directory contains the OpenViking evaluation flow for LongMemEval:
 
-The commands below assume OpenViking is already running on the default local
-endpoint used by the CLI configuration. If your server is on a non-default port,
-add `--openviking-url http://127.0.0.1:<port>` to the import and eval commands.
+1. import each user's haystack sessions into OpenViking;
+2. run one retrieval call per question;
+3. optionally rerank the retrieved memories;
+4. answer from the selected memory context;
+5. judge and summarize the result CSV.
+
+The benchmark expects an OpenViking server to already be running. The commands
+below use the default local OpenViking client configuration. If you need a
+different endpoint, pass `--openviking-url` to both import and eval.
 
 ## Data
 
 Set the dataset path once:
 
 ```bash
-export DATA=/path/to/longmemeval_s_cleaned.json
+DATA=/path/to/longmemeval_s_cleaned.json
 ```
 
-## Import Memories
+The importer uses each sample's original `question_id`-derived user id, such as
+`lm_user_<id>`, so the eval script searches the same user space created during
+import.
 
-For a fresh full import:
+## Import
 
 ```bash
-mkdir -p result/longmemeval_import
-
-seq 0 499 | xargs -P 10 -I {} sh -c '
-  python benchmark/longmemeval/openviking/import_to_ov.py \
-    --input "$DATA" \
-    --sample "$1" \
-    --wait-mode deferred \
-    --submit-parallel 16 \
-    --success-csv "result/longmemeval_import/sample_${1}_success.csv" \
-    --error-log "result/longmemeval_import/sample_${1}_errors.log"
-' sh {}
+python benchmark/longmemeval/openviking/import_to_ov.py \
+  --input "$DATA" \
+  --parallel 16 \
+  --submit-parallel 16 \
+  --wait-mode deferred \
+  --success-csv result/longmemeval_openviking_import_success.csv \
+  --error-log result/longmemeval_openviking_import_errors.log
 ```
 
-When intentionally re-importing the same data, add `--force-ingest`. If you
-also want to ignore old import success records, add `--clear-ingest-record`.
+Use `--force-ingest` only when intentionally re-importing existing sessions.
 
 ## Smoke Test
 
-Run one question before starting a full sweep:
+Run one question before a full evaluation:
 
 ```bash
 python benchmark/longmemeval/openviking/run_eval.py "$DATA" \
@@ -49,28 +49,33 @@ python benchmark/longmemeval/openviking/run_eval.py "$DATA" \
   --threads 1 \
   --single-search-context-limit 50 \
   --single-search-rerank-limit 10 \
+  --single-search-max-context-chars 30000 \
   --debug-print-model-input
 ```
 
-The debug CSV includes `model_input_prompt`, memory token counts, and
-`retrieved_uris_by_iteration`. Check that `rerank_enabled` is true,
-`rerank_error` is empty, and `context_uris` has the expected rerank limit.
+With `--debug-print-model-input`, the CSV includes the full answer prompt and
+retrieval trace. Check `retrieved_uris_by_iteration` to confirm rerank is enabled
+and `context_uris` contains the expected number of memories.
 
 ## Full Eval
 
-This example retrieves 50 memories, keeps the top 10 after rerank, and runs
-evaluation with 8 worker threads:
+This example retrieves 50 memories, keeps the top 10 after rerank, and caps the
+memory text passed to the answer model at 30000 characters.
 
 ```bash
-OUT=result/longmemeval_openviking_search50_rerank10.csv
+OUT=result/longmemeval_openviking_search50_rerank10_chars30000.csv
 
 python benchmark/longmemeval/openviking/run_eval.py "$DATA" \
   --output "$OUT" \
   --threads 8 \
   --timeout 900 \
   --single-search-context-limit 50 \
-  --single-search-rerank-limit 10
+  --single-search-rerank-limit 10 \
+  --single-search-max-context-chars 30000
 ```
+
+Set `--single-search-rerank-limit 0` to disable rerank. Set
+`--single-search-max-context-chars 0` to disable the character budget.
 
 ## Judge And Stat
 
@@ -83,5 +88,9 @@ python benchmark/longmemeval/openviking/stat_judge_result.py \
   --input "$OUT"
 ```
 
-The judge writes results back into the same CSV. `stat_judge_result.py` prints
-overall accuracy and per-question-type accuracy.
+The judge writes `result` values back into the same CSV. Use `--force` to
+re-grade rows that already have a result. Use `--strict-prompt` when you want the
+stricter LongMemEval judge prompt instead of the default lenient prompt.
+
+`stat_judge_result.py` prints overall accuracy, average memory token/character
+usage, and accuracy grouped by LongMemEval question type.
