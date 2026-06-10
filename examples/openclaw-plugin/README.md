@@ -42,6 +42,7 @@ Once installed, the plugin provides these agent tools:
 | `add_resource` | Import documents, URLs, or Git repos |
 | `add_skill` | Import agent skills |
 | `ov_search` | Search imported resources and skills |
+| `ov_list` | List OpenViking directories after search to inspect sibling chunks and overview files |
 | `openviking_tool_result_read` | Restore the full original content of an externalized tool result |
 | `openviking_tool_result_search` | Search inside an externalized tool result by keyword |
 | `openviking_tool_result_list` | List externalized tool results in the current session |
@@ -224,7 +225,7 @@ So `afterTurn()` is closer to "incremental append plus threshold-triggered async
 
 ## Tools and Expandability
 
-Beyond automatic behavior, the plugin exposes seven tools directly:
+Beyond automatic behavior, the plugin exposes these tools directly:
 
 - `memory_recall`: explicit long-term memory search
 - `memory_store`: write explicit long-term facts into an OpenViking session and trigger commit
@@ -233,6 +234,7 @@ Beyond automatic behavior, the plugin exposes seven tools directly:
 - `add_resource`: import a document, directory, URL, or Git repository as an OpenViking resource
 - `add_skill`: import or register an OpenViking agent skill
 - `ov_search`: search OpenViking resources and skills, especially after importing them
+- `ov_list`: list a hit's parent directory after `ov_search` to recover sibling chunks, `.overview.md`, and related split-document context
 
 They serve different roles:
 
@@ -243,6 +245,7 @@ They serve different roles:
 - `add_resource` lets the agent save explicit document or repository import requests without asking the user to remember slash commands
 - `add_skill` imports skills into OpenViking, while `add_resource` imports resources
 - `ov_search` closes the loop after import by letting the user or agent confirm and consume resources and skills
+- `ov_list` complements `ov_search` when a ranked hit is only one chunk of a larger procedure or document
 
 `ov_archive_expand` is especially important because `assemble()` normally returns archive summaries and indexes, not the full raw transcript.
 

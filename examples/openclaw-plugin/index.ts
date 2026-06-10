@@ -162,6 +162,13 @@ type OVSearchInput = {
   limit?: number;
 };
 
+type OVListInput = {
+  uri: string;
+  recursive?: boolean;
+  simple?: boolean;
+  limit?: number;
+};
+
 type ToolResultRef = {
   sessionId: string;
   toolResultId: string;
@@ -822,10 +829,44 @@ const contextEnginePlugin = {
       const scope = uri ? ` under ${uri}` : "";
       const lines = [
         `Found ${result.total ?? 0} OpenViking results for "${query}"${scope}`,
+        "Tip: search results are ranked snippets. Use ov_list on a hit's parent URI to inspect sibling chunks or overview files before answering procedural or multi-step questions.",
         "",
         ...formatOVSearchRows(result),
       ].filter((line, index, all) => line || (all[index - 1] && all[index + 1]));
       return lines.join("\n");
+    };
+
+    const formatOVListEntry = (entry: unknown): string => {
+      if (typeof entry === "string") {
+        return entry;
+      }
+      if (!entry || typeof entry !== "object") {
+        return String(entry);
+      }
+      const item = entry as Record<string, unknown>;
+      const uri = typeof item.uri === "string" ? item.uri : "";
+      const name = typeof item.name === "string" ? item.name : "";
+      const isDir = item.isDir === true || item.type === "directory";
+      const marker = isDir ? "[dir]" : "[file]";
+      const summary =
+        typeof item.abstract === "string" && item.abstract.trim()
+          ? item.abstract.trim().replace(/\s+/g, " ")
+          : typeof item.overview === "string" && item.overview.trim()
+            ? item.overview.trim().replace(/\s+/g, " ")
+            : "";
+      const label = uri || name || JSON.stringify(item);
+      return summary ? `${marker} ${label} - ${summary}` : `${marker} ${label}`;
+    };
+
+    const formatOVListText = (uri: string, entries: unknown[]): string => {
+      if (entries.length === 0) {
+        return `No OpenViking entries found under ${uri}.`;
+      }
+      return [
+        `Listed ${entries.length} OpenViking entr${entries.length === 1 ? "y" : "ies"} under ${uri}`,
+        "",
+        ...entries.map((entry) => formatOVListEntry(entry)),
+      ].join("\n");
     };
 
     const searchOpenViking = async (
@@ -882,6 +923,35 @@ const contextEnginePlugin = {
           resources: result.resources ?? [],
           skills: result.skills ?? [],
           total: result.total ?? 0,
+        },
+      };
+    };
+
+    const listOpenViking = async (input: OVListInput, agentId?: string) => {
+      const uri = input.uri.trim();
+      if (!uri) {
+        throw new Error("uri is required");
+      }
+      const limit = Math.max(1, Math.floor(input.limit ?? 100));
+      const client = await getClient();
+      const entries = await client.list(
+        uri,
+        {
+          recursive: input.recursive ?? false,
+          simple: input.simple ?? false,
+          nodeLimit: limit,
+        },
+        agentId,
+      );
+      return {
+        content: [{ type: "text" as const, text: formatOVListText(uri, entries) }],
+        details: {
+          action: "listed",
+          uri,
+          recursive: input.recursive ?? false,
+          simple: input.simple ?? false,
+          count: entries.length,
+          entries,
         },
       };
     };
@@ -955,7 +1025,8 @@ const contextEnginePlugin = {
         name: "ov_search",
         label: "Search (OpenViking)",
         description:
-          "Search OpenViking resources and skills. Use after importing, or when the user asks to search OpenViking resources or skills.",
+          "Search OpenViking resources and skills. Use after importing, or when the user asks to search OpenViking resources or skills. " +
+          "When a result is part of a split document or a multi-step procedure, call ov_list on the parent URI to inspect sibling chunks and overview files before answering.",
         parameters: Type.Object({
           query: Type.String({ description: "Search query" }),
           uri: Type.Optional(Type.String({ description: "Optional search URI. Defaults to resources plus user skills." })),
@@ -975,6 +1046,34 @@ const contextEnginePlugin = {
         },
       }),
       { name: "ov_search" },
+    );
+
+    api.registerTool(
+      (ctx: ToolContext) => ({
+        name: "ov_list",
+        label: "List (OpenViking)",
+        description:
+          "List files and directories under an OpenViking URI. Use after ov_search to inspect a hit's parent directory, sibling chunks, or .overview.md files when search only returns ranked snippets.",
+        parameters: Type.Object({
+          uri: Type.String({ description: "OpenViking directory URI to list, e.g. viking://resources/project/docs" }),
+          recursive: Type.Optional(Type.Boolean({ description: "List nested entries recursively. Default: false" })),
+          simple: Type.Optional(Type.Boolean({ description: "Return only URI entries from OpenViking. Default: false" })),
+          limit: Type.Optional(Type.Number({ description: "Maximum entries to list. Default: 100" })),
+        }),
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          if (isBypassedSession(ctx)) {
+            return makeBypassedToolResult("ov_list");
+          }
+          const session = resolvePluginSessionRouting(ctx);
+          return listOpenViking({
+            uri: String((params as { uri?: unknown }).uri ?? ""),
+            recursive: typeof params.recursive === "boolean" ? params.recursive : undefined,
+            simple: typeof params.simple === "boolean" ? params.simple : undefined,
+            limit: typeof params.limit === "number" ? params.limit : undefined,
+          }, session.agentId);
+        },
+      }),
+      { name: "ov_list" },
     );
 
     api.registerCommand?.({
