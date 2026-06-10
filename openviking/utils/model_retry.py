@@ -482,6 +482,43 @@ class OrderedCredentialSwitcher:
             if idx == self._active_idx and self._active_idx > 0:
                 self._active_request_count += 1
 
+    @staticmethod
+    def is_fail_fast(error_class: str) -> bool:
+        """Whether an error is request-level and must not try other credentials.
+
+        Request-level errors (400 parameter error, input too large, content
+        safety) fail on every credential of the same model, so the caller should
+        re-raise immediately instead of cycling through credentials.
+        """
+        return error_class in (
+            ERROR_CLASS_PERMANENT,
+            ERROR_CLASS_INPUT_TOO_LARGE,
+            ERROR_CLASS_CONTENT_SAFETY,
+        )
+
+    def commit_success(self, idx: int) -> None:
+        """Record that credential ``idx`` successfully served a request.
+
+        - If ``idx`` is the current active credential, advance the failback
+          request counter (so failback to a higher-priority credential can
+          eventually trigger).
+        - If ``idx`` differs (a lower/other-priority credential served the
+          request after the active one was unavailable), commit it as the new
+          active credential (fast failover) and reset failback timers/counters.
+        """
+        with self._lock:
+            if idx == self._active_idx:
+                if self._active_idx > 0:
+                    self._active_request_count += 1
+                return
+            logger.info(
+                f"Fast failover: credential {idx} served the request; "
+                f"switching active credential from {self._active_idx} to {idx}"
+            )
+            self._active_idx = idx
+            self._last_switch_time = time.monotonic()
+            self._active_request_count = 0
+
     def on_failure(self, idx: int, error_class: str) -> bool:
         """Record a failure and decide whether to advance to the next credential.
 

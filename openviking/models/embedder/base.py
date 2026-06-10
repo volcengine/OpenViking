@@ -718,39 +718,39 @@ class FailoverEmbedder(EmbedderBase):
         """
         aggregated_errors = []
 
-        while True:
-            # Attempt failback to a higher-priority credential before issuing
-            # the request; pure reads elsewhere must not mutate this state.
-            idx = self._switcher.maybe_failback()
+        # Start from the current (possibly failed-back) active credential, then
+        # cycle through the whole ring once so an unavailable active credential
+        # does not block the request. A credential that succeeds this cycle
+        # becomes the new active one (fast failover); slow sticky failback to
+        # higher priority is still handled by maybe_failback() across requests.
+        start = self._switcher.maybe_failback()
+        n = self._switcher.n
 
-            # Stop once every credential in the chain has been exhausted.
-            # Per-credential retry counts are handled by each underlying
-            # instance; there is no global retry cap.
-            if idx >= self._switcher.n:
-                raise AllCredentialsFailedError(aggregated_errors)
-
+        for offset in range(n):
+            idx = (start + offset) % n
             credential_id = self._credential_ids[idx]
             embedder = self._embedders[idx]
 
             try:
                 method = getattr(embedder, method_name)
                 result = method(*args, **kwargs)
-                self._switcher.on_success(idx)
+                self._switcher.commit_success(idx)
                 return result
             except Exception as exc:
                 error_class = classify_api_error(exc)
                 aggregated_errors.append((credential_id, error_class, exc, idx))
 
-                advance = self._switcher.on_failure(idx, error_class)
-                if not advance:
-                    # Request-level / last-credential failure: re-raise the
-                    # original exception so callers can react to its type
-                    # (e.g. truncate on input_too_large).
+                if self._switcher.is_fail_fast(error_class):
+                    # Request-level failure: re-raise the original exception;
+                    # trying other credentials is useless.
                     raise
 
                 logger.warning(
-                    f"Credential {credential_id} failed with {error_class}, advancing to next credential"
+                    f"Credential {credential_id} failed with {error_class}, "
+                    "trying next credential"
                 )
+
+        raise AllCredentialsFailedError(aggregated_errors)
 
     async def _embed_with_failover_async(self, method_name: str, *args, **kwargs) -> EmbedResult:
         """Execute an async embedder method with multi-credential failover support.
@@ -768,39 +768,35 @@ class FailoverEmbedder(EmbedderBase):
         """
         aggregated_errors = []
 
-        while True:
-            # Attempt failback to a higher-priority credential before issuing
-            # the request; pure reads elsewhere must not mutate this state.
-            idx = self._switcher.maybe_failback()
+        # See the sync variant for the ring-traversal rationale.
+        start = self._switcher.maybe_failback()
+        n = self._switcher.n
 
-            # Stop once every credential in the chain has been exhausted.
-            # Per-credential retry counts are handled by each underlying
-            # instance; there is no global retry cap.
-            if idx >= self._switcher.n:
-                raise AllCredentialsFailedError(aggregated_errors)
-
+        for offset in range(n):
+            idx = (start + offset) % n
             credential_id = self._credential_ids[idx]
             embedder = self._embedders[idx]
 
             try:
                 method = getattr(embedder, method_name)
                 result = await method(*args, **kwargs)
-                self._switcher.on_success(idx)
+                self._switcher.commit_success(idx)
                 return result
             except Exception as exc:
                 error_class = classify_api_error(exc)
                 aggregated_errors.append((credential_id, error_class, exc, idx))
 
-                advance = self._switcher.on_failure(idx, error_class)
-                if not advance:
-                    # Request-level / last-credential failure: re-raise the
-                    # original exception so callers can react to its type
-                    # (e.g. truncate on input_too_large).
+                if self._switcher.is_fail_fast(error_class):
+                    # Request-level failure: re-raise the original exception;
+                    # trying other credentials is useless.
                     raise
 
                 logger.warning(
-                    f"Credential {credential_id} failed with {error_class}, advancing to next credential"
+                    f"Credential {credential_id} failed with {error_class}, "
+                    "trying next credential"
                 )
+
+        raise AllCredentialsFailedError(aggregated_errors)
 
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Embed text with multi-credential failover support."""

@@ -17,6 +17,7 @@ from typing import List
 import pytest
 
 from openviking.models.embedder.base import EmbedderBase, EmbedResult, FailoverEmbedder
+from openviking.utils.exceptions import AllCredentialsFailedError
 
 
 class _StubEmbedder(EmbedderBase):
@@ -86,8 +87,9 @@ def test_auth_error_on_primary_advances_to_backup():
     assert result.dense_vector == [0.0, 0.0, 0.0, 0.0]
 
 
-def test_auth_error_on_all_credentials_reraises_original():
-    """All credentials returning auth errors re-raise the original exception (last fails fast)."""
+def test_auth_error_on_all_credentials_raises_aggregated():
+    """When every credential fails with auth, the whole ring is tried then
+    AllCredentialsFailedError is raised aggregating each failure."""
     primary = _StubEmbedder("primary", error=_make_401_error())
     backup = _StubEmbedder("backup", error=_make_401_error())
 
@@ -96,11 +98,13 @@ def test_auth_error_on_all_credentials_reraises_original():
         credential_ids=["primary", "backup"],
     )
 
-    with pytest.raises(RuntimeError, match="401"):
+    with pytest.raises(AllCredentialsFailedError) as excinfo:
         fe.embed("hello")
 
     assert primary.calls == 1
     assert backup.calls == 1
+    # The aggregated error records both failing credentials.
+    assert len(excinfo.value.errors) == 2
 
 
 def test_permanent_400_fails_fast_without_trying_backup():
@@ -161,3 +165,59 @@ def test_more_than_ten_credentials_all_tried():
     assert all(e.calls == 1 for e in failing)
     assert last.calls == 1
     assert result.dense_vector == [0.0] * 4
+
+
+def test_ring_wraps_when_active_is_last_and_unavailable():
+    """If the active credential is the last one and it is down, the ring wraps
+    around to earlier credentials within the same request (fast failover)."""
+    good = _StubEmbedder("good")  # idx 0, healthy
+    down = _StubEmbedder("down", error=_make_401_error())  # idx 1, unavailable
+
+    fe = FailoverEmbedder(embedders=[good, down], credential_ids=["good", "down"])
+
+    # Force the active credential to the last (unavailable) one.
+    fe._switcher._active_idx = 1
+
+    result = fe.embed("hello")
+
+    # Started at idx 1 (down) -> failed -> wrapped to idx 0 (good) -> success.
+    assert down.calls == 1
+    assert good.calls == 1
+    assert result.dense_vector == [0.0] * 4
+
+
+def test_fast_failover_commits_new_active_index():
+    """A credential that serves the request after the active one was down
+    becomes the new active credential (fast failover, choice (a))."""
+    good = _StubEmbedder("good")  # idx 0
+    down = _StubEmbedder("down", error=_make_401_error())  # idx 1
+
+    fe = FailoverEmbedder(embedders=[good, down], credential_ids=["good", "down"])
+    fe._switcher._active_idx = 1
+
+    fe.embed("hello")
+
+    # active index committed to the credential that actually worked (idx 0).
+    assert fe._switcher.get_active_index() == 0
+    # A subsequent request now starts directly at idx 0 without touching idx 1.
+    good.calls = 0
+    down.calls = 0
+    fe.embed("hello again")
+    assert good.calls == 1
+    assert down.calls == 0
+
+
+def test_content_safety_does_not_cycle_the_ring():
+    """Request-level content-safety errors fail fast and must not try others."""
+    cs = _StubEmbedder(
+        "cs", error=RuntimeError("content_filter: sensitive content detected")
+    )
+    backup = _StubEmbedder("backup")
+
+    fe = FailoverEmbedder(embedders=[cs, backup], credential_ids=["cs", "backup"])
+
+    with pytest.raises(RuntimeError, match="content_filter"):
+        fe.embed("hello")
+
+    assert cs.calls == 1
+    assert backup.calls == 0
