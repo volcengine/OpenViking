@@ -539,8 +539,8 @@ def create_app(
     app.include_router(bot_router, prefix="/bot/v1")
 
     # OAuth 2.1: when enabled, mount the official MCP SDK auth routes
-    # (DCR / authorize / token / metadata) plus our authorize page + OTP
-    # issuance endpoint. The Provider that backs the SDK routes is built
+    # (DCR / authorize / token / metadata) plus our authorize page + consent /
+    # verify endpoints. The Provider that backs the SDK routes is built
     # in the lifespan; here we only register the route handlers, since the
     # SDK routes inspect request.app.state at call time.
     try:
@@ -552,14 +552,14 @@ def create_app(
 
             from openviking.server.oauth.router import router as oauth_router
 
-            # Custom routes (authorize page + /api/v1/auth/otp).
+            # Custom routes (authorize page + consent / verify endpoints).
             app.include_router(oauth_router)
 
             # SDK-owned routes (DCR / authorize / token / metadata / revoke).
             # We need a live Provider here; create_auth_routes captures it by
             # reference. Re-build the same construction the lifespan does so
             # the routes work as soon as they're hit (lifespan re-binds the
-            # same instance to app.state for the OTP / authorize-page path).
+            # same instance to app.state for the consent / authorize-page path).
             from pathlib import Path as _Path
 
             from openviking.server.oauth.provider import OpenVikingOAuthProvider
@@ -611,7 +611,7 @@ def create_app(
             app.routes.extend(sdk_routes)
             app.state.oauth_config = ov_cfg.oauth
             logger.info(
-                "OAuth 2.1 routes mounted (SDK + authorize-page + otp): %s",
+                "OAuth 2.1 routes mounted (SDK + authorize-page + consent): %s",
                 [r.path for r in sdk_routes],
             )
     except Exception as e:  # noqa: BLE001

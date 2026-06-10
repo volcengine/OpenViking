@@ -79,12 +79,31 @@ def check_config() -> tuple[bool, str, Optional[str]]:
     except json.JSONDecodeError as exc:
         return False, f"Invalid JSON in {config_path}", f"Fix syntax error: {exc}"
 
-    missing = [key for key in () if key not in data]
-    if missing:
+    if not isinstance(data, dict):
         return (
             False,
-            f"{config_path} missing required sections: {', '.join(missing)}",
-            "Add the missing sections (see examples/ov.conf.example)",
+            f"{config_path} must contain a JSON object",
+            "The top-level config must be a JSON object",
+        )
+
+    # Validate the parsed config the same way the server does on startup, so
+    # `doctor` reports unknown or invalid fields instead of passing a config
+    # that would actually fail to load on `openviking-server` startup (#2373).
+    from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
+
+    try:
+        OpenVikingConfig.from_dict(data)
+    except ValueError as exc:
+        first_error = next((line for line in str(exc).splitlines() if line.strip()), "")
+        detail = (
+            f"{config_path}: {first_error}"
+            if first_error
+            else f"Invalid configuration in {config_path}"
+        )
+        return (
+            False,
+            detail,
+            "Fix the reported field(s); run `openviking-server` to see full details",
         )
 
     return True, str(config_path), None

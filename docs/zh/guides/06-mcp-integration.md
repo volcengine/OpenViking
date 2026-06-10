@@ -84,7 +84,7 @@ claude mcp add --transport http openviking \
 
 ### Claude.ai / Claude Desktop（OAuth）
 
-这些客户端只接受 OAuth 2.1，不接受 API Key。OpenViking 已经原生实现 OAuth 2.1（DCR + PKCE + opaque token，SQLite 后端，配合 console 驱动的 OTP 授权页），不再需要外部代理。
+这些客户端只接受 OAuth 2.1，不接受 API Key。OpenViking 已经原生实现 OAuth 2.1（DCR + PKCE + opaque token，SQLite 后端，配合 Studio consent 授权页），不再需要外部代理。
 
 如果你已经为 OpenViking 服务配好了 HTTPS，直接连接 `https://your-server.com/mcp` 端点即可——客户端会自动引导完成 OAuth 授权流程。
 

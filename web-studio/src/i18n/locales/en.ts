@@ -12,8 +12,8 @@ const en = {
       home: {
         title: 'Home',
       },
-      oauthSetup: {
-        title: 'OAuth setup',
+      crossDeviceVerify: {
+        title: 'OAuth verify',
       },
       operations: {
         title: 'Operations',
@@ -99,19 +99,6 @@ const en = {
         label: 'User',
         placeholder: 'default',
       },
-    },
-    oauthOtp: {
-      title: 'OAuth client OTP',
-      description:
-        'Generate a short-lived code that an MCP client can submit to authorize as the selected identity.',
-      generate: 'Generate OTP',
-      regenerate: 'Regenerate',
-      copy: 'Copy',
-      copied: 'Copied',
-      codeLabel: 'One-time code',
-      expiresIn: 'Expires in {{seconds}}s',
-      expired: 'Expired — generate a new code.',
-      generateError: 'Could not generate OTP: {{message}}',
     },
   },
   settings: {
@@ -239,14 +226,6 @@ const en = {
       dataKeySelected: 'User API key selected',
       keyRegenerated: 'API key regenerated',
       userCreated: 'User created',
-    },
-  },
-  oauthSetup: {
-    page: {
-      title: 'OAuth setup',
-      intro:
-        'Use this page when authenticating an MCP client via OAuth — for example Claude.ai, Claude Desktop, ChatGPT, or Cursor. Generate a short-lived OTP here, then paste it into the MCP client to bind its connection to the selected identity.',
-      docsLink: 'Read the OAuth integration guide',
     },
   },
   home: {

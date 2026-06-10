@@ -155,7 +155,7 @@ During recall, the plugin:
 3. Runs a quick availability precheck so model requests do not stall when OpenViking is unavailable.
 4. Queries `viking://user/memories` and optionally `viking://resources`.
 5. Deduplicates, threshold-filters, reranks, and trims the results under a token budget.
-6. Prepends the selected memories as a `<relevant-memories>` block to the current user message; it does not append a standalone synthetic user message.
+6. Prepends the selected memories as a `## Long-term Memories` section inside `<openviking-context>` to the current user message; it does not append a standalone synthetic user message.
 
 The reranking logic is not pure vector-score sorting. The current implementation also considers:
 
@@ -190,7 +190,7 @@ That means OpenClaw sees "compressed history summary + archive index + active me
 - it slices only the newly added messages
 - it keeps only `user` / `assistant` capture text
 - it preserves `toolCall` / `toolResult` content in the serialized turn text
-- it strips injected `<relevant-memories>` blocks and metadata noise before capture
+- it strips injected `<openviking-context>` blocks, historical `<relevant-memories>` blocks, and metadata noise before capture
 - it appends the sanitized turn text into the OpenViking session
 
 After that, the plugin checks `pending_tokens`. Once the session crosses `commitTokenThreshold`, it triggers `commit(wait=false)`:

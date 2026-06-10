@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   sanitizeUserTextForCapture,
+  stripOpenVikingContextInjection,
   getCaptureDecision,
   extractNewTurnMessages,
   extractNewTurnTexts,
@@ -15,6 +16,14 @@ describe("sanitizeUserTextForCapture", () => {
     const input = "hello <relevant-memories>some injected context</relevant-memories> world";
     const result = sanitizeUserTextForCapture(input);
     expect(result).not.toContain("relevant-memories");
+    expect(result).toContain("hello");
+    expect(result).toContain("world");
+  });
+
+  it("strips <openviking-context> blocks", () => {
+    const input = "hello <openviking-context>context</openviking-context> world";
+    const result = sanitizeUserTextForCapture(input);
+    expect(result).not.toContain("openviking-context");
     expect(result).toContain("hello");
     expect(result).toContain("world");
   });
@@ -58,6 +67,19 @@ describe("sanitizeUserTextForCapture", () => {
     const input = "hello    world\n\n\tthere";
     const result = sanitizeUserTextForCapture(input);
     expect(result).toBe("hello world there");
+  });
+});
+
+describe("stripOpenVikingContextInjection", () => {
+  it("strips OpenViking context and relevant memories injected blocks", () => {
+    const input = [
+      "hello",
+      "<openviking-context>ctx</openviking-context>",
+      "<relevant-memories>legacy</relevant-memories>",
+      "world",
+    ].join(" ");
+    const result = stripOpenVikingContextInjection(input);
+    expect(result).toBe("hello world");
   });
 });
 

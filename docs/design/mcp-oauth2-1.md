@@ -16,18 +16,19 @@
 >   打开 `/studio/oauth/verify` 输入码完成授权。同设备的 quick-authorize
 >   面板（依赖 `sessionStorage.ov_console_api_key` 跨 tab 探测）已移除，
 >   不再需要把 API Key 写到 `localStorage`。
-> - OTP push 流程的入口也搬到 Studio：`ConnectionDialog` 增加了 "OAuth
->   client OTP" 区块（共用 `IdentityPicker`），可一键生成短期 OTP 给 MCP
->   客户端。`POST /api/v1/auth/otp` 后端端点未变。
+> - OTP push 流程（`POST /api/v1/auth/otp` 签发、Studio 里"OAuth client OTP"
+>   区块生成短期码交给客户端）从未接通消费端，已整体移除（后端端点 + 前端入口 +
+>   `otp_ttl_seconds` 配置）。Studio 侧边栏底部的那个槽位改造成"OAuth 验证"入口，
+>   直接打开跨设备 `display_code` 验证表单。
 > - 旧的 `/console` 独立服务（8020 + `openviking.console` Python 包 +
 >   `python -m openviking.console.bootstrap`）已在 #2160 整体下线，本次迁移
 >   是该 PR commit message 里明确指向的 OAuth follow-up。Caddy 仍保留
 >   `:1934 → openviking:1933` 的 legacy 单上游反代以兼容旧书签，公网 HTTPS
 >   按 12-public-access 指南在 Caddyfile 里 append `:443` domain block。
 >
-> 下文的 "Phase 1" 描述仍然刻画了 device-flow OTP 的核心思路；新迁移在此
-> 之上把 UI 层从 `/console` 替换为 `/studio`，并把 Studio consent 作为同
-> 设备主路径。
+> 下文的 "Phase 1" 描述仍然刻画了 device-flow 的核心思路（含已移除的 OTP push
+> 端点，仅作历史记录）；新迁移在此之上把 UI 层从 `/console` 替换为 `/studio`，
+> 并把 Studio consent 作为同设备主路径。
 
 ## Context
 
@@ -186,8 +187,8 @@ URL 走 §4 的 4 级回退。RFC 9728 客户端发现入口。
 |---|---|---|
 | `openviking/server/oauth/storage.py` | SQLite 5 张表 + CRUD + GC + verify/find_pending_by_display_code | ~620 |
 | `openviking/server/oauth/provider.py` | `OAuthAuthorizationServerProvider` Protocol 适配；子类化 SDK 的 `AuthorizationCode/RefreshToken/AccessToken` 嵌入 `(account, user, role)`；`authorize()` 自动生成 display_code | ~280 |
-| `openviking/server/oauth/router.py` | PRM、authorize page (HTML+JS)、page/status 轮询、`/api/v1/auth/oauth-verify`、legacy `/api/v1/auth/otp` | ~440 |
-| `openviking/server/oauth/otp.py` | `generate_otp` / `hash_secret`（stdlib） | ~30 |
+| `openviking/server/oauth/router.py` | PRM、authorize page (HTML+JS)、page/status 轮询、`/api/v1/auth/oauth-verify` | ~440 |
+| `openviking/server/oauth/otp.py` | `generate_otp`（cross-device display_code）/ `hash_secret`（stdlib） | ~30 |
 | `openviking_cli/utils/config/oauth_config.py` | `OAuthConfig` pydantic | ~70 |
 
 ### 修改
@@ -222,8 +223,7 @@ URL 走 §4 的 4 级回退。RFC 9728 客户端发现入口。
 | `/oauth/authorize/page/status` | GET | OpenViking | 无 | 返回 `{status: pending\|approved\|expired, redirect_url?}`；status=approved 时原子签发 auth_code 并删除 pending |
 | `/token` | POST | SDK | client auth | SDK 验 PKCE / redirect_uri / client，调 `provider.exchange_authorization_code()` 或 `exchange_refresh_token()` |
 | `/revoke` | POST | SDK | client auth | SDK 调 `provider.revoke_token()` |
-| `POST /api/v1/auth/oauth-verify` | POST | OpenViking | 现有 API Key（`Depends(get_request_context)`） | 接受 `{code, decision: approve\|deny}`；approve 时把 caller 身份写入 pending；deny 时删除 pending |
-| `POST /api/v1/auth/otp` | POST | OpenViking | 现有 API Key | **legacy push flow**：生成 OTP 绑定调用方身份；保留供 CLI/脚本场景使用 |
+| `POST /api/v1/auth/oauth-verify` | POST | OpenViking | 现有 API Key（`Depends(get_request_context)`） | 接受 `{pending_id 或 code, decision: approve\|deny}`；approve 时把 caller 身份写入 pending；deny 时删除 pending |
 
 ---
 
@@ -294,7 +294,7 @@ server {
 - `OpenVikingOAuthProvider`（8 个 Protocol 方法）
 - 自定义 authorize HTML 页 + display_code 显示 + JS 轮询
 - `POST /api/v1/auth/oauth-verify`（device flow 确认入口）
-- `POST /api/v1/auth/otp`（legacy push flow，保留）
+- `POST /api/v1/auth/otp`（legacy push flow，**已移除**——从未接通消费端）
 - `GET /.well-known/oauth-protected-resource`（RFC 9728）
 - `app.py` 用 `create_auth_routes()` 挂 SDK 路由
 
