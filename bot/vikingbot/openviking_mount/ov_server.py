@@ -317,10 +317,7 @@ class VikingClient:
         return f"viking://user/{user_space}/peers/{normalized_peer_id}/memories/"
 
     def _current_peer_profile_uri(self, peer_id: str) -> str:
-        normalized_peer_id = self._peer_id(peer_id)
-        if not normalized_peer_id:
-            raise ValueError("peer_id is required for peer profile")
-        return f"viking://user/peers/{normalized_peer_id}/memories/profile.md"
+        return f"{self._current_peer_memory_target_uri(peer_id).rstrip('/')}/profile.md"
 
     def build_current_memory_target_uris(
         self,

@@ -516,7 +516,7 @@ class OpenVikingConfig(BaseModel):
     """Viking tools configuration."""
 
     mode: str = "remote"  # local or remote
-    api_key_type: Literal["root", "user"] = ""
+    api_key_type: Literal["root", "user"] | None = None
     server_url: str = ""
     api_key: str = ""
     # 废弃，后续使用api_key
@@ -539,10 +539,11 @@ class OpenVikingConfig(BaseModel):
 
     @field_validator("api_key_type", mode="before")
     @classmethod
-    def normalize_api_key_type(cls, value: Any) -> str:
+    def normalize_api_key_type(cls, value: Any) -> str | None:
         if value is None:
-            return ""
-        return str(value).strip().lower()
+            return None
+        normalized = str(value).strip().lower()
+        return normalized or None
 
     @model_validator(mode="after")
     def apply_api_key_compatibility(self):

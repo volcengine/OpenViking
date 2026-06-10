@@ -17,7 +17,7 @@ from vikingbot.agent.tools.ov_file import (
 from vikingbot.agent.tools import ov_file as ov_file_module
 from vikingbot.cli import commands as commands_module
 from vikingbot.config import loader as config_loader_module
-from vikingbot.config.schema import SessionKey
+from vikingbot.config.schema import OpenVikingConfig, SessionKey
 from vikingbot.hooks.base import HookContext
 from vikingbot.hooks.builtins import openviking_hooks as openviking_hooks_module
 from vikingbot.hooks.builtins.openviking_hooks import OpenVikingCompactHook
@@ -167,6 +167,13 @@ def test_viking_client_init_user_mode_does_not_set_user_or_account(monkeypatch):
     assert "user" not in first.kwargs
     assert "account" not in first.kwargs
     assert "agent_id" not in first.kwargs
+
+
+def test_openviking_config_api_key_type_empty_values_are_inferred():
+    assert OpenVikingConfig(api_key_type=None, api_key="user-key").api_key_type == "user"
+    assert OpenVikingConfig(api_key_type="", api_key="user-key").api_key_type == "user"
+    assert OpenVikingConfig(api_key_type=None, root_api_key="root-key").api_key_type == "root"
+    assert OpenVikingConfig(api_key_type="", root_api_key="root-key").api_key_type == "root"
 
 
 def test_user_key_current_memory_targets_use_current_user_shorthand(monkeypatch):

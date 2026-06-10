@@ -72,6 +72,25 @@ async def test_read_peer_profile_uses_current_user_peer_alias(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_read_peer_profile_uses_explicit_user_namespace_for_root_key(monkeypatch):
+    client = _client(api_key_type="root")
+    calls = []
+
+    async def fake_read_content(uri, level="read"):
+        calls.append((uri, level))
+        return "Alice profile"
+
+    monkeypatch.setattr(client, "read_content", fake_read_content)
+
+    profile = await client.read_peer_profile("telegram:alice")
+
+    assert profile == "Alice profile"
+    assert calls == [
+        ("viking://user/bot-user/peers/telegram:alice/memories/profile.md", "read")
+    ]
+
+
+@pytest.mark.asyncio
 async def test_read_user_profile_uses_current_user_self_alias_for_user_key(monkeypatch):
     client = _client(api_key_type="user")
     calls = []
