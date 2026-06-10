@@ -806,8 +806,10 @@ class FailoverEmbedder(EmbedderBase):
 
                 advance = self._switcher.on_failure(idx, error_class)
                 if not advance:
-                    # fail-fast for permanent errors
-                    raise AllCredentialsFailedError(aggregated_errors) from exc
+                    # Request-level / last-credential failure: re-raise the
+                    # original exception so callers can react to its type
+                    # (e.g. truncate on input_too_large).
+                    raise
 
                 total_attempts += 1
                 logger.warning(
@@ -852,8 +854,10 @@ class FailoverEmbedder(EmbedderBase):
 
                 advance = self._switcher.on_failure(idx, error_class)
                 if not advance:
-                    # fail-fast for permanent errors
-                    raise AllCredentialsFailedError(aggregated_errors) from exc
+                    # Request-level / last-credential failure: re-raise the
+                    # original exception so callers can react to its type
+                    # (e.g. truncate on input_too_large).
+                    raise
 
                 total_attempts += 1
                 logger.warning(
