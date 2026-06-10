@@ -26,14 +26,6 @@ class EmbeddingCredential(BaseModel):
     region: Optional[str] = Field(default=None, description="Region for VikingDB API")
     host: Optional[str] = Field(default=None, description="Host for VikingDB API")
     extra_headers: Optional[dict[str, str]] = Field(default=None, description="Extra HTTP headers")
-    encoding_format: Optional[Literal["float", "base64"]] = Field(
-        default=None, description="Wire format for embedding values"
-    )
-    model_path: Optional[str] = Field(default=None, description="Explicit local GGUF model path")
-    cache_dir: Optional[str] = Field(default=None, description="Local model cache directory")
-    enable_fusion: Optional[bool] = Field(default=None, description="Enable multimodal fusion")
-    res_level: Optional[int] = Field(default=None, description="Resolution level")
-    max_video_frames: Optional[int] = Field(default=None, description="Maximum video frames")
 
     model_config = {"extra": "forbid"}
 
@@ -905,12 +897,14 @@ class EmbeddingConfig(BaseModel):
                 api_base=cred.api_base,
                 api_version=cred.api_version,
                 extra_headers=cred.extra_headers or config.extra_headers,
-                encoding_format=cred.encoding_format or config.encoding_format,
-                model_path=cred.model_path or config.model_path,
-                cache_dir=cred.cache_dir or config.cache_dir,
-                enable_fusion=cred.enable_fusion or config.enable_fusion,
-                res_level=cred.res_level or config.res_level,
-                max_video_frames=cred.max_video_frames or config.max_video_frames,
+                # Model-behavior fields are shared by all credentials of the
+                # same model and live only on the parent config.
+                encoding_format=config.encoding_format,
+                model_path=config.model_path,
+                cache_dir=config.cache_dir,
+                enable_fusion=config.enable_fusion,
+                res_level=config.res_level,
+                max_video_frames=config.max_video_frames,
             )
             provider = self._require_provider(merged_config.provider)
             embedders.append(self._create_embedder(provider, embedder_type, merged_config))
