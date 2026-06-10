@@ -12,6 +12,7 @@ immediately without trying other credentials, since the same request fails on
 every credential of the same model.
 """
 
+import time
 from typing import List
 
 import pytest
@@ -175,8 +176,11 @@ def test_ring_wraps_when_active_is_last_and_unavailable():
 
     fe = FailoverEmbedder(embedders=[good, down], credential_ids=["good", "down"])
 
-    # Force the active credential to the last (unavailable) one.
+    # Force the active credential to the last (unavailable) one. Bump the
+    # switch timestamp so maybe_failback() does not immediately retreat to 0
+    # before we even try idx 1 (which is what we want to exercise here).
     fe._switcher._active_idx = 1
+    fe._switcher._last_switch_time = time.monotonic()
 
     result = fe.embed("hello")
 
@@ -194,6 +198,7 @@ def test_fast_failover_commits_new_active_index():
 
     fe = FailoverEmbedder(embedders=[good, down], credential_ids=["good", "down"])
     fe._switcher._active_idx = 1
+    fe._switcher._last_switch_time = time.monotonic()
 
     fe.embed("hello")
 
