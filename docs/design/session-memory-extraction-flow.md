@@ -30,8 +30,8 @@ is set, extraction is limited to those names for both self and peer writes.
 
 Trajectory/experience extraction is controlled by `memory_types`: omitted or
 `null` allows both, while an explicit list must include those names. Session
-skill extraction also requires self memory to be enabled and is not controlled
-by `memory_types`.
+skill extraction also requires self memory to be enabled and only runs when the
+execution memory extraction phase has work.
 
 ## Commit Flow
 
@@ -46,9 +46,10 @@ Implemented in `openviking/session/session.py`:
 6. If long-term memory extraction is enabled and allowed by `memory_types`, call
    `SessionCompressorV2.extract_long_term_memories` once with the full archived
    batch, `allow_self_memory`, and `allowed_peer_ids`.
-7. If trajectory/experience extraction or session skill extraction has work,
-   call `SessionCompressorV2.extract_execution_memories` once with the full
-   archived batch.
+7. If trajectory/experience extraction has work, call
+   `SessionCompressorV2.extract_execution_memories` once with the full archived
+   batch. When session skill extraction is enabled, it runs inside this execution
+   phase instead of starting a separate phase by itself.
 
 The current flow does not build separate buckets such as
 `self_identity_messages`, `self_experience_messages`,

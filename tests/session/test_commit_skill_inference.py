@@ -13,7 +13,6 @@ from openviking.session.memory.agent_trajectory_context_provider import (
 from openviking.session.memory.dataclass import ResolvedOperation, ResolvedOperations
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.skill.session_skill_context_provider import (
-    SESSION_SKILL_MEMORY_TYPE,
     SessionSkillContextProvider,
     resolve_skill_extract_templates_dir,
 )
@@ -81,8 +80,8 @@ async def test_session_compressor_v2_extract_execution_memories_returns_session_
     ):
         del self, messages, ctx, strict_extract_errors, post_apply
         assert phase_label == "trajectory"
-        assert kwargs["allowed_memory_types"] == {"profile", SESSION_SKILL_MEMORY_TYPE}
-        assert provider._include_trajectories is False
+        assert kwargs["allowed_memory_types"] == {"trajectories"}
+        assert provider._include_trajectories is True
         assert provider._include_session_skills is True
         return (
             [],
@@ -109,7 +108,7 @@ async def test_session_compressor_v2_extract_execution_memories_returns_session_
         ctx=RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT),
         latest_archive_overview="",
         archive_uri="viking://sessions/s1/history/archive_001",
-        allowed_memory_types={"profile"},
+        allowed_memory_types={"trajectories"},
         include_session_skills=True,
     )
 

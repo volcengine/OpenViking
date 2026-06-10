@@ -16,6 +16,7 @@ from openviking.core.context import Context
 from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory import ExtractLoop, MemoryUpdater
+from openviking.session.memory.constants import EXECUTION_MEMORY_TYPES
 from openviking.session.memory.dataclass import ResolvedOperations, StoredLink
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.memory_updater import (
@@ -475,9 +476,9 @@ class SessionCompressorV2:
         """Extract trajectory, experience, and session-skill memories from execution context."""
         config = get_openviking_config()
         allowed_execution_types = (
-            {"trajectories", "experiences"}
+            set(EXECUTION_MEMORY_TYPES)
             if allowed_memory_types is None
-            else set(allowed_memory_types)
+            else set(allowed_memory_types) & EXECUTION_MEMORY_TYPES
         )
         include_trajectories = "trajectories" in allowed_execution_types
         include_experiences = "experiences" in allowed_execution_types
@@ -485,10 +486,8 @@ class SessionCompressorV2:
             include_session_skills = bool(
                 getattr(config.memory, "session_skill_extraction_enabled", False)
             )
-        if include_session_skills:
-            allowed_execution_types.add(SESSION_SKILL_MEMORY_TYPE)
         empty_result: Dict[str, List[Any]] = {"contexts": [], "session_skills": []}
-        if not (include_trajectories or include_session_skills):
+        if not include_trajectories:
             return empty_result
         if not messages or not ctx:
             return empty_result

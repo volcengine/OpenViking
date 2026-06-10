@@ -34,10 +34,6 @@ def _parse_memory_types(data: Any) -> Optional[set[str]]:
         if not isinstance(item, str) or not item:
             raise InvalidArgumentError("memory_policy.memory_types must contain non-empty strings")
         memory_types.add(item)
-    if "experiences" in memory_types and "trajectories" not in memory_types:
-        raise InvalidArgumentError(
-            "memory_policy.memory_types must include trajectories when experiences is enabled"
-        )
     return memory_types
 
 

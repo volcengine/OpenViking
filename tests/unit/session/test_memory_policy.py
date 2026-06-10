@@ -43,8 +43,7 @@ def test_memory_policy_rejects_invalid_memory_types():
     with pytest.raises(InvalidArgumentError, match="missing"):
         policy.validate_memory_types({"profile"})
 
-    with pytest.raises(InvalidArgumentError, match="trajectories"):
-        MemoryPolicy.from_dict({"memory_types": ["experiences"]})
+    assert MemoryPolicy.from_dict({"memory_types": ["experiences"]}).memory_types == {"experiences"}
 
 
 def test_memory_policy_commit_replaces_session_policy():

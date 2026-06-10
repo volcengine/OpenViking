@@ -19,6 +19,7 @@ from openviking.message import Message, Part
 from openviking.message.part import ContextPart, TextPart, ToolPart
 from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.server.identity import RequestContext, Role
+from openviking.session.memory.constants import EXECUTION_MEMORY_TYPES
 from openviking.session.memory_policy import MemoryPolicy
 from openviking.session.tool_result_store import (
     ToolResultStore,
@@ -71,6 +72,14 @@ def _validate_memory_policy_types(policy: MemoryPolicy) -> None:
     if policy.memory_types is None:
         return
     policy.validate_memory_types(_enabled_memory_types())
+
+
+def _split_policy_memory_types(
+    memory_types: Optional[set[str]],
+) -> tuple[Optional[set[str]], Optional[set[str]]]:
+    if memory_types is None:
+        return None, None
+    return memory_types - EXECUTION_MEMORY_TYPES, memory_types & EXECUTION_MEMORY_TYPES
 
 
 def _default_memory_counts() -> Dict[str, int]:
@@ -1363,25 +1372,22 @@ class Session:
                         config_session_skill_extraction_enabled and self_memory_enabled
                     )
                     memory_type_filter = effective_policy.memory_types
-                    memory_type_filter_has_work = memory_type_filter is None or bool(
+                    long_term_memory_types, execution_memory_types = _split_policy_memory_types(
                         memory_type_filter
-                    )
-                    execution_memory_type_enabled = memory_type_filter is None or bool(
-                        memory_type_filter & {"trajectories", "experiences"}
                     )
 
                     long_term_has_work = (
                         memory_extraction_enabled
                         and (self_memory_enabled or allowed_peer_ids)
-                        and memory_type_filter_has_work
+                        and (long_term_memory_types is None or bool(long_term_memory_types))
                     )
-                    execution_memory_has_work = self_memory_enabled and (
-                        session_skill_extraction_enabled
-                        or (
-                            memory_extraction_enabled
-                            and execution_memory_type_enabled
-                            and memory_type_filter_has_work
-                        )
+                    execution_memory_has_work = (
+                        self_memory_enabled
+                        and memory_extraction_enabled
+                        and (execution_memory_types is None or bool(execution_memory_types))
+                    )
+                    session_skill_extraction_enabled = (
+                        session_skill_extraction_enabled and execution_memory_has_work
                     )
                     has_policy_work = bool(long_term_has_work or execution_memory_has_work)
                     if self._session_compressor and has_policy_work:
@@ -1406,7 +1412,7 @@ class Session:
                                     ctx=self.ctx,
                                     latest_archive_overview=latest_archive_overview,
                                     archive_uri=archive_uri,
-                                    allowed_memory_types=memory_type_filter,
+                                    allowed_memory_types=long_term_memory_types,
                                     allow_self_memory=self_memory_enabled,
                                     allowed_peer_ids=allowed_peer_ids,
                                 )
@@ -1421,7 +1427,7 @@ class Session:
                                         ctx=self.ctx,
                                         latest_archive_overview=latest_archive_overview,
                                         archive_uri=archive_uri,
-                                        allowed_memory_types=memory_type_filter,
+                                        allowed_memory_types=execution_memory_types,
                                         include_session_skills=session_skill_extraction_enabled,
                                     )
                                 )
