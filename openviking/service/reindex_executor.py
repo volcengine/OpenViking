@@ -72,6 +72,7 @@ def _is_not_ready_sentinel(text: str, suffix: str) -> bool:
     head = head[: -len(suffix)].strip()
     return head.startswith("#") and "\n" not in head
 
+
 _reindex_executor: "ReindexExecutor | None" = None
 
 
