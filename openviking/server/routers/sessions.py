@@ -352,6 +352,14 @@ class CommitRequest(BaseModel):
             "(default 10); compact path passes 0 to archive everything."
         ),
     )
+    force: bool = Field(
+        default=False,
+        description=(
+            "If true, skip the blocking-failed-archive check and commit anyway. "
+            "Useful for recovering from transient failures (e.g. VLM timeouts) "
+            "that left a stale .failed.json marker."
+        ),
+    )
     memory_policy: Optional[Dict[str, Any]] = None
     telemetry: TelemetryRequest = False
 
@@ -377,6 +385,7 @@ async def commit_session(
             _ctx,
             keep_recent_count=body.keep_recent_count,
             memory_policy=body.memory_policy,
+            force=body.force,
         ),
     )
     return Response(
