@@ -47,7 +47,7 @@ OpenViking supports various resource types, categorized by functionality:
 
 | Type | Description |
 |------|-------------|
-| Feishu/Lark | URL-based, supports docx, wiki, sheets, bitable, requires FEISHU_APP_ID and FEISHU_APP_SECRET configuration |
+| Feishu/Lark | URL-based, supports docx, wiki, sheets, bitable. By default uses app credentials from FEISHU_APP_ID and FEISHU_APP_SECRET; one-time user-token imports can pass `args.feishu_access_token` |
 
 ### Resource Processing Pipeline
 
@@ -156,6 +156,7 @@ This endpoint is the core entry point for resource management, supporting adding
 | exclude | string | No | None | File patterns to exclude (glob) |
 | directly_upload_media | bool | No | True | Whether to directly upload media files |
 | preserve_structure | bool | No | None | Whether to preserve directory structure |
+| args | object | No | `{}` | Parser-specific import options forwarded to the source parser/accessor. Core `add_resource` fields such as `path`, `to`, `watch_interval`, `include`, and `exclude` are not allowed inside `args` |
 | watch_interval | float | No | 0 | Scheduled update interval (minutes). >0 creates task; <=0 cancels task; explicit `to` wins, otherwise binds to the imported `root_uri` |
 | telemetry | TelemetryRequest | No | False | Whether to return telemetry data |
 
@@ -167,6 +168,8 @@ This endpoint is the core entry point for resource management, supporting adding
 - Only Git repository sources use full background import when `wait=false`; OpenViking performs repository preflight and target planning before returning the `task_id`.
 - Other sources with `wait=false` finish source parsing, target resolution, and AGFS writes before returning. Only semantic and embedding queues continue asynchronously.
 - When `watch_interval > 0`, the watch task binds to `to` if provided; otherwise it binds to the `root_uri` returned by this import. If no stable `root_uri` is available, the request fails and asks for an explicit `to`.
+- Feishu/Lark user-token imports pass `args={"feishu_access_token": "u-..."}`. This mode is one-time only: `watch_interval > 0` is rejected because OpenViking does not store or refresh the user token.
+- Feishu/Lark app credentials are still required to construct the Lark client. Without `args.feishu_access_token`, OpenViking keeps the existing app credential flow and the SDK obtains a tenant access token from `app_id` and `app_secret`.
 - For local directory inputs, scanning respects `.gitignore` files (root and nested) with standard Git semantics; `ignore_dirs`, `include`, and `exclude` further refine what is ingested.
 - To create or update plain text directly, use [content/write](03-filesystem.md#write) instead of `add_resource`. Semantic processing and embeddings are refreshed automatically after resource ingestion and content writes.
 
@@ -206,6 +209,17 @@ curl -X POST http://localhost:1933/api/v1/resources \
     \"to\": \"viking://resources/guide.md\",
     \"reason\": \"User guide\"
   }"
+
+# Add a Feishu document with a one-time user access token
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "path": "https://example.feishu.cn/docx/doc_token",
+    "args": {
+      "feishu_access_token": "u-..."
+    }
+  }'
 ```
 
 **Python SDK**
@@ -244,6 +258,12 @@ client.add_resource(
     to="viking://resources/guide.md",
     watch_interval=60  # Update every 60 minutes
 )
+
+# Add a Feishu document with a one-time user access token
+client.add_resource(
+    "https://example.feishu.cn/docx/doc_token",
+    args={"feishu_access_token": "u-..."},
+)
 ```
 
 **CLI**
@@ -266,6 +286,9 @@ ov add-resource https://github.com/example/repo.git --watch-interval 60
 
 # Cancel scheduled updates
 ov add-resource https://github.com/example/repo.git --to viking://resources/guide.md --watch-interval 0
+
+# Add a Feishu document with a one-time user access token
+ov add-resource https://example.feishu.cn/docx/doc_token --args feishu_access_token:u-...
 
 # Add with parent directory (parent must exist)
 ov add-resource ./documents/guide.md --parent viking://resources/docs

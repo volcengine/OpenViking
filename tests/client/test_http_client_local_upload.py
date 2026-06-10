@@ -100,6 +100,26 @@ async def test_add_resource_uploads_local_file_even_when_url_is_localhost(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_add_resource_forwards_args_for_remote_url():
+    client = AsyncHTTPClient(url="http://127.0.0.1:1933")
+    fake_http = _FakeHTTPClient()
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {
+        "result": {"root_uri": "viking://resources/demo"}
+    }
+
+    await client.add_resource(
+        "https://example.feishu.cn/docx/doc_token",
+        args={"feishu_access_token": "u-test"},
+    )
+
+    call = fake_http.calls[-1]
+    assert call["path"] == "/api/v1/resources"
+    assert call["json"]["path"] == "https://example.feishu.cn/docx/doc_token"
+    assert call["json"]["args"] == {"feishu_access_token": "u-test"}
+
+
+@pytest.mark.asyncio
 async def test_import_ovpack_uploads_local_file_even_when_url_is_localhost(tmp_path):
     pack_file = tmp_path / "demo.ovpack"
     pack_file.write_bytes(b"ovpack")

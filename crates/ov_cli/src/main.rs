@@ -261,6 +261,9 @@ enum Commands {
         /// Watch interval in minutes for automatic resource monitoring (0 = no monitoring)
         #[arg(long, default_value = "0")]
         watch_interval: f64,
+        /// Parser-specific import options, e.g. --args feishu_access_token:u-xxx
+        #[arg(long = "args")]
+        resource_args: Option<String>,
         #[command(flatten)]
         upload_options: UploadCliOptions,
     },
@@ -2164,6 +2167,7 @@ async fn main() {
             exclude,
             no_directly_upload_media,
             watch_interval,
+            resource_args,
             upload_options,
         } => {
             let ctx =
@@ -2183,6 +2187,7 @@ async fn main() {
                 exclude,
                 no_directly_upload_media,
                 watch_interval,
+                resource_args,
                 ctx,
             )
             .await
@@ -2981,6 +2986,7 @@ mod tests {
         assert!(help.contains("--progress"));
         assert!(help.contains("--no-progress"));
         assert!(help.contains("--verbose"));
+        assert!(help.contains("--args"));
     }
 
     #[test]
@@ -3039,6 +3045,25 @@ mod tests {
 
         assert!(Cli::try_parse_from(["ov", "skills", "add", "./skill", "--progress"]).is_err());
         assert!(Cli::try_parse_from(["ov", "skills", "update", "--progress"]).is_err());
+    }
+
+    #[test]
+    fn cli_parses_add_resource_args() {
+        let cli = Cli::try_parse_from([
+            "ov",
+            "add-resource",
+            "https://example.feishu.cn/docx/doc123",
+            "--args",
+            "feishu_access_token:u-test",
+        ])
+        .expect("add-resource args should parse");
+
+        match cli.command {
+            Commands::AddResource { resource_args, .. } => {
+                assert_eq!(resource_args.as_deref(), Some("feishu_access_token:u-test"));
+            }
+            _ => panic!("expected add-resource command"),
+        }
     }
 
     #[test]

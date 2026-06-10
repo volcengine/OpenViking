@@ -42,7 +42,7 @@ OpenViking 支持多种资源类型，按照功能分类如下：
 云文档类
 | 类型 | 说明 |
 |------|------|
-| 飞书/Lark | URL 方式，支持 docx, wiki, sheets, bitable，需要配置 FEISHU_APP_ID 和 FEISHU_APP_SECRET |
+| 飞书/Lark | URL 方式，支持 docx, wiki, sheets, bitable。默认使用 FEISHU_APP_ID 和 FEISHU_APP_SECRET 应用凭证；一次性用户 token 导入可传 `args.feishu_access_token` |
 
 ### 资源处理流程
 
@@ -151,6 +151,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 | exclude | string | 否 | None | 排除的文件模式（glob） |
 | directly_upload_media | bool | 否 | True | 是否直接上传媒体文件 |
 | preserve_structure | bool | 否 | None | 是否保留目录结构 |
+| args | object | 否 | `{}` | 传给特定 parser/accessor 的导入参数。`path`、`to`、`watch_interval`、`include`、`exclude` 等 `add_resource` 核心字段不能放入 `args` |
 | watch_interval | float | 否 | 0 | 定时更新间隔（分钟）。>0 创建任务；≤0 取消任务；显式 `to` 优先，否则绑定本次导入的 `root_uri` |
 | telemetry | TelemetryRequest | 否 | False | 是否返回遥测数据 |
 
@@ -160,6 +161,8 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 - 只有 Git 仓库来源在 `wait=false` 时使用完整后台导入；OpenViking 会先完成仓库 preflight 和目标规划，再返回 `task_id`。
 - 其他来源在 `wait=false` 时会在响应前完成来源解析、目标解析和 AGFS 写入，仅 semantic 与 embedding 队列继续异步处理。
 - `watch_interval > 0` 时，如果指定了 `to`，监控任务绑定该目标；如果未指定 `to`，监控任务绑定本次导入返回的 `root_uri`。如果无法得到稳定 `root_uri`，请求会报错并要求显式传 `to`。
+- 飞书/Lark 用户 token 导入通过 `args={"feishu_access_token": "u-..."}` 传入。该模式只支持一次性导入：`watch_interval > 0` 会被拒绝，因为 OpenViking 不保存也不刷新用户 token。
+- 飞书/Lark 仍需要应用凭证来构造 Lark client。未传 `args.feishu_access_token` 时，OpenViking 保持原有应用凭证流程，由 SDK 使用 `app_id` 和 `app_secret` 自动获取 tenant access token。
 - 本地目录输入会遵循 `.gitignore`（根目录和子目录，标准 Git 语义）；`ignore_dirs`、`include`、`exclude` 会在此基础上进一步过滤。
 - 如果要直接创建或更新纯文本内容，请使用 [content/write](03-filesystem.md#write)，不要使用 `add_resource`。资源导入和内容写入后都会自动刷新语义与 embedding。
 
@@ -199,6 +202,17 @@ curl -X POST http://localhost:1933/api/v1/resources \
     \"to\": \"viking://resources/guide.md\",
     \"reason\": \"User guide\"
   }"
+
+# 使用一次性用户 access token 添加飞书文档
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "path": "https://example.feishu.cn/docx/doc_token",
+    "args": {
+      "feishu_access_token": "u-..."
+    }
+  }'
 ```
 
 **Python SDK**
@@ -237,6 +251,12 @@ client.add_resource(
     to="viking://resources/guide.md",
     watch_interval=60  # 每60分钟更新一次
 )
+
+# 使用一次性用户 access token 添加飞书文档
+client.add_resource(
+    "https://example.feishu.cn/docx/doc_token",
+    args={"feishu_access_token": "u-..."},
+)
 ```
 
 **CLI**
@@ -259,6 +279,9 @@ ov add-resource https://github.com/example/repo.git --watch-interval 60
 
 # 取消定时更新
 ov add-resource https://github.com/example/repo.git --to viking://resources/my_repo --watch-interval 0
+
+# 使用一次性用户 access token 添加飞书文档
+ov add-resource https://example.feishu.cn/docx/doc_token --args feishu_access_token:u-...
 
 # 添加到指定父目录（父目录必须存在）
 ov add-resource ./documents/guide.md --parent viking://resources/docs

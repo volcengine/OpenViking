@@ -11,7 +11,7 @@ import pytest_asyncio
 from openviking.resource.watch_manager import WatchManager
 from openviking.server.identity import RequestContext, Role
 from openviking.service.resource_service import ResourceService
-from openviking_cli.exceptions import ConflictError
+from openviking_cli.exceptions import ConflictError, InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -27,7 +27,11 @@ async def get_task_by_uri(service: ResourceService, to_uri: str, ctx: RequestCon
 class MockResourceProcessor:
     """Mock ResourceProcessor for testing."""
 
+    def __init__(self):
+        self.calls = []
+
     async def process_resource(self, **kwargs):
+        self.calls.append(kwargs)
         return {"root_uri": kwargs.get("to") or "viking://resources/test"}
 
 
@@ -207,6 +211,68 @@ class TestWatchTaskCreation:
 
         task = await get_task_by_uri(resource_service, to_uri, request_context)
         assert task is None
+
+
+class TestAddResourceArgs:
+    """Tests for parser-specific add_resource args."""
+
+    @pytest.mark.asyncio
+    async def test_forwards_args_to_resource_processor(
+        self, resource_service: ResourceService, request_context: RequestContext
+    ):
+        await resource_service.add_resource(
+            path="/test/path",
+            ctx=request_context,
+            args={"feishu_access_token": " u-test "},
+        )
+
+        processor = resource_service._resource_processor
+        assert processor.calls[-1]["feishu_access_token"] == "u-test"
+
+    @pytest.mark.asyncio
+    async def test_rejects_feishu_access_token_with_watch(
+        self, resource_service: ResourceService, request_context: RequestContext
+    ):
+        with pytest.raises(InvalidArgumentError, match="one-time import"):
+            await resource_service.add_resource(
+                path="/test/path",
+                ctx=request_context,
+                watch_interval=30,
+                args={"feishu_access_token": "u-test"},
+            )
+
+    @pytest.mark.asyncio
+    async def test_rejects_invalid_feishu_access_token(
+        self, resource_service: ResourceService, request_context: RequestContext
+    ):
+        with pytest.raises(InvalidArgumentError, match="non-empty string"):
+            await resource_service.add_resource(
+                path="/test/path",
+                ctx=request_context,
+                args={"feishu_access_token": 123},
+            )
+
+    @pytest.mark.asyncio
+    async def test_rejects_non_object_args(
+        self, resource_service: ResourceService, request_context: RequestContext
+    ):
+        with pytest.raises(InvalidArgumentError, match="args must be an object"):
+            await resource_service.add_resource(
+                path="/test/path",
+                ctx=request_context,
+                args=[],
+            )
+
+    @pytest.mark.asyncio
+    async def test_rejects_core_add_resource_fields_in_args(
+        self, resource_service: ResourceService, request_context: RequestContext
+    ):
+        with pytest.raises(InvalidArgumentError, match="core add_resource fields"):
+            await resource_service.add_resource(
+                path="/test/path",
+                ctx=request_context,
+                args={"watch_interval": 30},
+            )
 
 
 class TestWatchTaskConflict:

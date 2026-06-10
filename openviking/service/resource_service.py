@@ -56,6 +56,39 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
+_ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
+    {
+        "path",
+        "ctx",
+        "to",
+        "parent",
+        "reason",
+        "instruction",
+        "wait",
+        "timeout",
+        "build_index",
+        "summarize",
+        "watch_interval",
+        "skip_watch_management",
+        "allow_local_path_resolution",
+        "enforce_public_remote_targets",
+        "resource_lock",
+        "stage_callback",
+        "args",
+        "strict",
+        "source_name",
+        "ignore_dirs",
+        "include",
+        "exclude",
+        "directly_upload_media",
+        "preserve_structure",
+        "create_parent",
+        "telemetry",
+        "request_validator",
+    }
+)
+
+
 @dataclass
 class _ResourceSourceInfo:
     source_name: Optional[str] = None
@@ -111,6 +144,39 @@ class ResourceService:
             sanitized[key] = value
         return sanitized
 
+    def _normalize_add_resource_args(
+        self,
+        args: Optional[Dict[str, Any]],
+        *,
+        watch_interval: float,
+    ) -> Dict[str, Any]:
+        if args is None:
+            return {}
+        if not isinstance(args, dict):
+            raise InvalidArgumentError("args must be an object.")
+        if not args:
+            return {}
+
+        reserved = sorted(set(args).intersection(_ADD_RESOURCE_ARGS_RESERVED_FIELDS))
+        if reserved:
+            raise InvalidArgumentError(
+                "args cannot contain core add_resource fields: " + ", ".join(reserved)
+            )
+
+        normalized = dict(args)
+        token = normalized.get("feishu_access_token")
+        if token is not None:
+            if not isinstance(token, str) or not token.strip():
+                raise InvalidArgumentError("args.feishu_access_token must be a non-empty string.")
+            if watch_interval > 0:
+                raise InvalidArgumentError(
+                    "args.feishu_access_token only supports one-time import; "
+                    "watch_interval must be 0."
+                )
+            normalized["feishu_access_token"] = token.strip()
+
+        return normalized
+
     def _ensure_initialized(self) -> None:
         """Ensure all dependencies are initialized."""
         if not self._resource_processor:
@@ -145,10 +211,12 @@ class ResourceService:
         skip_watch_management: bool = False,
         allow_local_path_resolution: bool = True,
         enforce_public_remote_targets: bool = False,
+        args: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Start background ingestion for Git repositories while reserving the target URI."""
         self._ensure_initialized()
+        kwargs.update(self._normalize_add_resource_args(args, watch_interval=watch_interval))
 
         if to:
             to = resolve_path_variables(to)
@@ -422,6 +490,7 @@ class ResourceService:
         enforce_public_remote_targets: bool = False,
         resource_lock: Optional[LockLease] = None,
         stage_callback: Optional[Callable[[str], Any]] = None,
+        args: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking (only supports resources scope).
@@ -451,6 +520,7 @@ class ResourceService:
                 avoid recursive watch task creation during scheduled execution)
             enforce_public_remote_targets: When True, reject non-public remote hosts and
                 validate each outbound HTTP request URL during fetch.
+            args: Parser-specific options forwarded to the parser chain.
             **kwargs: Extra options forwarded to the parser chain
 
         Returns:
@@ -461,6 +531,7 @@ class ResourceService:
             InvalidArgumentError: If the URI scope is not 'resources'
         """
         self._ensure_initialized()
+        kwargs.update(self._normalize_add_resource_args(args, watch_interval=watch_interval))
         if not wait and is_git_repo_url(path):
             return await self.enqueue_git_add_resource(
                 path=path,
