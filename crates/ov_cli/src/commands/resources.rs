@@ -1,5 +1,5 @@
 use crate::client::HttpClient;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::output::{OutputFormat, output_success};
 
 pub async fn add_resource(
@@ -23,7 +23,8 @@ pub async fn add_resource(
     show_progress: bool,
     verbose: bool,
 ) -> Result<()> {
-    let result = client
+    let recovery_target = to.clone();
+    let result = match client
         .add_resource(
             path,
             to,
@@ -42,7 +43,33 @@ pub async fn add_resource(
             show_progress,
             verbose,
         )
-        .await?;
+        .await
+    {
+        Ok(result) => result,
+        Err(error) => {
+            if let (Some(target), Error::Network(_)) = (recovery_target.as_deref(), &error) {
+                if let Ok(stat) = client.stat(target).await {
+                    let is_locked = stat
+                        .get("isLocked")
+                        .and_then(|value| value.as_bool())
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "unknown".to_string());
+                    let count = stat
+                        .get("count")
+                        .and_then(|value| value.as_u64())
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "unknown".to_string());
+                    eprintln!(
+                        "Recovery: target URI exists after the network error: {target} (isLocked={is_locked}, count={count})."
+                    );
+                    eprintln!(
+                        "Run 'ov wait' and 'ov stat {target}' to confirm whether processing completed."
+                    );
+                }
+            }
+            return Err(error);
+        }
+    };
 
     if !wait && matches!(format, OutputFormat::Table) {
         eprintln!("Note: Resource is being processed in the background.");

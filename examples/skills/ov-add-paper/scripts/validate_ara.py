@@ -42,7 +42,7 @@ def read_text(path: Path) -> str:
 
 
 def has_field(block: str, field: str) -> bool:
-    pattern = rf"(?im)^\s*[-*]\s+\*\*{re.escape(field)}\*\*\s*:"
+    pattern = rf"(?im)^\s*[-*]\s+(?:\*\*)?{re.escape(field)}(?:\*\*)?\s*:"
     return bool(re.search(pattern, block))
 
 
@@ -127,7 +127,9 @@ def validate(root: Path) -> dict:
     experiment_ids = set(experiment_blocks)
 
     for claim_id, block in claim_blocks.items():
-        proof_match = re.search(r"(?im)^\s*[-*]\s+\*\*Proof\*\*\s*:\s*(.+)$", block)
+        proof_match = re.search(
+            r"(?im)^\s*[-*]\s+(?:\*\*)?Proof(?:\*\*)?\s*:\s*(.+)$", block
+        )
         if proof_match:
             refs = extract_refs(proof_match.group(1), "E")
             if not refs:
@@ -137,7 +139,9 @@ def validate(root: Path) -> dict:
                     errors.append(f"{claim_id} Proof references missing experiment: {ref}")
 
     for exp_id, block in experiment_blocks.items():
-        verifies_match = re.search(r"(?im)^\s*[-*]\s+\*\*Verifies\*\*\s*:\s*(.+)$", block)
+        verifies_match = re.search(
+            r"(?im)^\s*[-*]\s+(?:\*\*)?Verifies(?:\*\*)?\s*:\s*(.+)$", block
+        )
         if verifies_match:
             refs = extract_refs(verifies_match.group(1), "C")
             if not refs:
@@ -159,7 +163,9 @@ def validate(root: Path) -> dict:
         for md in md_files:
             content = read_text(md)
             rel = md.relative_to(root)
-            if not re.search(r"(?im)^\s*[-*]?\s*\*\*?Source\*?\*?\s*:", content):
+            if not re.search(
+                r"(?im)^\s*[-*]?\s*(?:\*\*)?Source(?:\*\*)?\s*:", content
+            ):
                 errors.append(f"{rel} missing Source field")
             if kind == "figure":
                 for field in ["Figure type", "Extraction method", "Reading confidence"]:

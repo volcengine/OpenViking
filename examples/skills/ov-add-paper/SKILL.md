@@ -68,6 +68,7 @@ python3 scripts/ingest_to_ov.py <artifact-dir> --to viking://resources/papers/<s
 ```
 
 If the helper script is unavailable, run `ov add-resource <artifact-dir> --to <target-uri> --wait` directly.
+If more than one `ov` binary is installed, pass `--ov-bin "$(which ov)"` or set `OV_BIN` so validation, preflight checks, and ingestion use the same CLI/config.
 
 ## Permissions
 
