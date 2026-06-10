@@ -47,7 +47,7 @@ _PREFETCH_SEARCH_TEXT_PART_MAX_CHARS = 1000
 _PREFETCH_SEARCH_ASSISTANT_TEXT_PART_MAX_CHARS = 500
 _PREFETCH_SEARCH_TOOL_FIELD_MAX_CHARS = 500
 _EXTRACTION_CHUNK_MIN_CHARS = 100
-_EXTRACTION_CHUNK_BOUNDARY_RE = re.compile(r"(\n+|[。！？；.!?;]+)")
+_EXTRACTION_CHUNK_BOUNDARY_RE = re.compile(r"(\n+|[。！？；!?;]+|(?<!\d)\.(?!\d))")
 
 
 class SessionExtractContextProvider(ExtractContextProvider):
@@ -148,10 +148,11 @@ class SessionExtractContextProvider(ExtractContextProvider):
         ]
 
     def _split_text_for_extraction(self, text: str) -> List[str]:
-        units = self._split_text_units(text)
+        return self._pack_text_units(self._split_text_units(text)) or [text]
+
+    def _pack_text_units(self, units: List[str]) -> List[str]:
         chunks: List[str] = []
         current = ""
-
         for unit in units:
             current += unit
             if len(current) < _EXTRACTION_CHUNK_MIN_CHARS:
@@ -164,7 +165,7 @@ class SessionExtractContextProvider(ExtractContextProvider):
                 chunks[-1] += current
             else:
                 chunks.append(current)
-        return chunks or [text]
+        return chunks
 
     def _split_text_units(self, text: str) -> List[str]:
         pieces = _EXTRACTION_CHUNK_BOUNDARY_RE.split(text)
