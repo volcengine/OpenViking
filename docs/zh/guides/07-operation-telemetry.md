@@ -243,6 +243,24 @@ summary 顶层这 3 个基础字段总会存在：
 | `summary.memory.extract.stages.create_relations_ms` | 创建 used-uri relations 的耗时 |
 | `summary.memory.extract.stages.flush_semantic_ms` | flush semantic queue 的耗时 |
 
+### `summary.search`
+
+| 字段 | 含义 |
+| --- | --- |
+| `summary.search.request.duration_ms` | 检索请求整体主流程耗时 |
+| `summary.search.access_check.duration_ms` | 访问控制检查耗时 |
+| `summary.search.target_abstract.duration_ms` | 为目标 URI 预取摘要的耗时 |
+| `summary.search.intent_analysis.duration_ms` | 查询意图分析耗时 |
+| `summary.search.embed_query.duration_ms` | 查询向量化耗时 |
+| `summary.search.vector_retrieval.duration_ms` | 向量召回阶段耗时 |
+| `summary.search.result_convert.duration_ms` | 检索结果转换为返回结构的耗时 |
+| `summary.search.rels.duration_ms` | 关联关系补全总耗时 |
+| `summary.search.rel_read.duration_ms` | 读取 relation 目标内容的耗时 |
+| `summary.search.rel_filter.duration_ms` | relation 候选过滤耗时 |
+| `summary.search.rel_abstracts.duration_ms` | relation 摘要构建耗时 |
+| `summary.search.result_aggregate.duration_ms` | 最终结果聚合耗时 |
+| `summary.search.typed_queries_count` | 解析出的 typed query 数量 |
+
 ### `summary.errors`
 
 | 字段 | 含义 |

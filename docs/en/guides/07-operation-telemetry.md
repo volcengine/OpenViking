@@ -243,6 +243,24 @@ This group appears on memory-extraction flows such as `session.commit`.
 | `summary.memory.extract.stages.create_relations_ms` | Time spent creating used-URI relations |
 | `summary.memory.extract.stages.flush_semantic_ms` | Time spent flushing semantic queue work |
 
+### `summary.search`
+
+| Field | Meaning |
+| --- | --- |
+| `summary.search.request.duration_ms` | End-to-end time spent in the main retrieval request flow |
+| `summary.search.access_check.duration_ms` | Time spent on access-control checks |
+| `summary.search.target_abstract.duration_ms` | Time spent prefetching abstracts for target URIs |
+| `summary.search.intent_analysis.duration_ms` | Time spent analyzing query intent |
+| `summary.search.embed_query.duration_ms` | Time spent embedding the query |
+| `summary.search.vector_retrieval.duration_ms` | Time spent in vector retrieval |
+| `summary.search.result_convert.duration_ms` | Time spent converting retrieval hits into response objects |
+| `summary.search.rels.duration_ms` | Total time spent enriching related contexts |
+| `summary.search.rel_read.duration_ms` | Time spent reading relation target content |
+| `summary.search.rel_filter.duration_ms` | Time spent filtering relation candidates |
+| `summary.search.rel_abstracts.duration_ms` | Time spent building relation abstracts |
+| `summary.search.result_aggregate.duration_ms` | Time spent aggregating final results |
+| `summary.search.typed_queries_count` | Number of typed queries produced during planning |
+
 ### `summary.errors`
 
 | Field | Meaning |
