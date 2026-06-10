@@ -92,6 +92,78 @@ def test_message_range_uses_peer_id_when_present():
     assert "[default]: invoice follow-up" not in msg_range.pretty_print()
 
 
+def test_extraction_context_chunks_long_text_and_preserves_decimal_numbers(stub_provider_config):
+    text = (
+        "周一 "
+        + "需求沟通。" * 20
+        + "上下文用量out：21.9K、in：110.2k、缓存读取501.0k，先简单记录下来。 "
+        + "周二 面试三个新员工：王军优势是agent算法，田伟优势是分布式后端架构，"
+        + "金然优势是Agent架构全栈，缺点是缺乏CPU服务器底层调优经验 "
+        + "周三 query-builder的输出直接进行判断会触发错误，原因不明。"
+    )
+    provider = SessionExtractContextProvider(
+        messages=[
+            Message(
+                id="msg-long",
+                role="user",
+                parts=[TextPart(text=text)],
+                created_at="2026-06-01T08:56:37.382Z",
+            )
+        ]
+    )
+
+    extraction_messages = provider._get_extraction_messages()
+    merged = "".join(message.content for message in extraction_messages)
+
+    assert len(extraction_messages) > 1
+    assert merged == text
+    assert all(message.id.startswith("msg-long#chunk_") for message in extraction_messages)
+    assert "21.9K" in merged
+    assert "110.2k" in merged
+    assert "501.0k" in merged
+    assert not any(message.content.startswith(("9K", "2k")) for message in extraction_messages)
+
+
+def test_message_range_merges_adjacent_chunks_for_same_speaker():
+    msg_range = MessageRange(
+        [
+            [
+                Message(
+                    id="msg-long#chunk_0",
+                    role="user",
+                    parts=[TextPart(text="first chunk. ")],
+                    peer_id="web:visitor:alice",
+                ),
+                Message(
+                    id="msg-long#chunk_1",
+                    role="user",
+                    parts=[TextPart(text="second chunk.")],
+                    peer_id="web:visitor:alice",
+                ),
+            ]
+        ]
+    )
+
+    assert msg_range.pretty_print() == "[web:visitor:alice]: first chunk. second chunk...."
+
+
+def test_message_range_marks_middle_chunk_as_abbreviated():
+    msg_range = MessageRange(
+        [
+            [
+                Message(
+                    id="msg-long#chunk_1",
+                    role="user",
+                    parts=[TextPart(text="middle chunk")],
+                    peer_id="web:visitor:alice",
+                )
+            ]
+        ]
+    )
+
+    assert msg_range.pretty_print() == "[web:visitor:alice]: ...middle chunk..."
+
+
 def test_peer_id_routes_peer_memory_for_all_role_selected_types(stub_provider_config):
     messages = [
         Message(
