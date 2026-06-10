@@ -62,8 +62,6 @@ Normal users should enable it through OpenCode's package plugin mechanism:
 }
 ```
 
-Use the final published package name if it changes before release.
-
 ### Source Install
 
 For development or PR testing, copy the package into OpenCode's plugin directory with a top-level wrapper:

@@ -38,8 +38,6 @@ curl http://localhost:1933/health
 }
 ```
 
-如果发布前包名有调整，请使用最终发布包名。
-
 ## 安装方式二：源码安装
 
 用于开发调试或 PR 测试。OpenCode 推荐插件目录：
@@ -130,6 +128,30 @@ user/admin API key 的 API_KEY mode 时应留空。
 
 高级场景可以用 `OPENVIKING_PLUGIN_CONFIG` 指向其他配置文件路径。
 
+## 验证
+
+修改插件或 OpenViking 配置后，需要重启 OpenCode。
+
+进入新的 OpenCode session 后，可以让 agent 浏览 OpenViking memory，或搜索一个已索引的资源。插件应暴露这些 tools：
+
+- `memsearch`、`memread`、`membrowse`
+- `memgrep`、`memglob`
+- `memadd`、`memremove`、`memqueue`
+- `memcommit`
+
+如果行为异常，先查看运行时文件：
+
+```bash
+ls ~/.config/opencode/openviking/
+tail -n 100 ~/.config/opencode/openviking/openviking-memory.log
+```
+
+如果使用本地 server，也确认 OpenViking 可访问：
+
+```bash
+curl http://localhost:1933/health
+```
+
 ## 可用工具
 
 插件会通过 OpenCode `tool` hook 暴露这些工具：
@@ -187,3 +209,13 @@ memadd path="file:///home/alice/project/notes.md" reason="project notes"
 可以通过配置里的 `runtime.dataDir` 修改这个目录。
 
 这些是本地运行时文件，不建议提交到版本库。
+
+## 故障排查
+
+| 问题 | 排查方向 |
+|------|----------|
+| 插件没有加载 | package 安装检查 `~/.config/opencode/opencode.json` 是否包含 `openviking-opencode-plugin`；源码安装检查 `~/.config/opencode/plugins/openviking.mjs` 是否存在 |
+| Tools 连到了错误的 server | 检查 `~/.config/opencode/openviking-config.json` 里的 `endpoint`，或用 `OPENVIKING_PLUGIN_CONFIG` 指向正确配置文件 |
+| OpenViking 返回 401 / 403 | 检查 `OPENVIKING_API_KEY`；trusted-mode 部署还要检查 `OPENVIKING_ACCOUNT` 和 `OPENVIKING_USER` |
+| recall 为空 | 确认 OpenViking 中已有 memories/resources，并且 `autoRecall.enabled` 为 `true` |
+| 本地 `memadd` 失败 | 传入文件路径而不是目录；目前还不支持自动上传本地目录 |
