@@ -565,7 +565,11 @@ function PlaygroundWorkbench() {
               entries={entries}
               onOpenAddResource={() => setUploadDialogOpen(true)}
               onOpenResource={revealResource}
+              onSessionChange={(sessionId) =>
+                syncSearch({ session: sessionId })
+              }
               openingUri={openingUri}
+              sessionId={search.session}
             />
           ) : (
             <AgentPanel
