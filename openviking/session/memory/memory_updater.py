@@ -263,27 +263,41 @@ class MessageRange:
 
     def _format_contiguous_group(self, msg_group: List[Message]) -> List[str]:
         formatted = []
-        current_role_id = None
         current_messages: List[Message] = []
 
         def flush_current() -> None:
-            nonlocal current_role_id, current_messages
+            nonlocal current_messages
             if not current_messages:
                 return
             content = self._format_merged_content(current_messages)
-            formatted.append(f"[{current_role_id}]: {content}")
-            current_role_id = None
+            formatted.append(f"[{self._speaker_for(current_messages[0])}]: {content}")
             current_messages = []
 
         for msg in msg_group:
-            speaker = getattr(msg, "peer_id", None) or getattr(msg, "role_id", None) or msg.role
-            if current_role_id is not None and speaker != current_role_id:
+            if current_messages and not self._can_merge_messages(current_messages[-1], msg):
                 flush_current()
-            current_role_id = speaker
             current_messages.append(msg)
 
         flush_current()
         return formatted
+
+    @staticmethod
+    def _speaker_for(message: Message) -> str:
+        return (
+            getattr(message, "peer_id", None) or getattr(message, "role_id", None) or message.role
+        )
+
+    def _can_merge_messages(self, previous: Message, current: Message) -> bool:
+        previous_meta = self._chunk_meta_for(previous)
+        current_meta = self._chunk_meta_for(current)
+        if previous_meta is None or current_meta is None:
+            return False
+        if self._speaker_for(previous) != self._speaker_for(current):
+            return False
+        return (
+            previous_meta.source_message_id == current_meta.source_message_id
+            and current_meta.chunk_index == previous_meta.chunk_index + 1
+        )
 
     def _format_merged_content(self, messages: List[Message]) -> str:
         content = "".join((msg.content or "") for msg in messages)

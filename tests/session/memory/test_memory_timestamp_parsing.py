@@ -140,12 +140,79 @@ def test_message_range_merges_adjacent_chunks_for_same_speaker():
     msg_range = MessageRange(
         [[first, second]],
         chunk_meta={
-            id(first): SimpleNamespace(chunk_index=0, chunk_count=2),
-            id(second): SimpleNamespace(chunk_index=1, chunk_count=2),
+            id(first): SimpleNamespace(
+                source_message_id="msg-long",
+                chunk_index=0,
+                chunk_count=2,
+            ),
+            id(second): SimpleNamespace(
+                source_message_id="msg-long",
+                chunk_index=1,
+                chunk_count=2,
+            ),
         },
     )
 
     assert msg_range.pretty_print() == "[web:visitor:alice]: first chunk. second chunk."
+
+
+def test_message_range_keeps_regular_same_speaker_messages_separate():
+    msg_range = MessageRange(
+        [
+            [
+                Message(
+                    id="msg-a",
+                    role="user",
+                    parts=[TextPart(text="first message")],
+                    peer_id="web:visitor:alice",
+                ),
+                Message(
+                    id="msg-b",
+                    role="user",
+                    parts=[TextPart(text="second message")],
+                    peer_id="web:visitor:alice",
+                ),
+            ]
+        ]
+    )
+
+    assert msg_range.pretty_print() == (
+        "[web:visitor:alice]: first message\n[web:visitor:alice]: second message"
+    )
+
+
+def test_message_range_keeps_different_source_chunks_separate():
+    first = Message(
+        id="msg-a#chunk_0",
+        role="user",
+        parts=[TextPart(text="first source chunk")],
+        peer_id="web:visitor:alice",
+    )
+    second = Message(
+        id="msg-b#chunk_0",
+        role="user",
+        parts=[TextPart(text="second source chunk")],
+        peer_id="web:visitor:alice",
+    )
+    msg_range = MessageRange(
+        [[first, second]],
+        chunk_meta={
+            id(first): SimpleNamespace(
+                source_message_id="msg-a",
+                chunk_index=0,
+                chunk_count=2,
+            ),
+            id(second): SimpleNamespace(
+                source_message_id="msg-b",
+                chunk_index=0,
+                chunk_count=2,
+            ),
+        },
+    )
+
+    assert msg_range.pretty_print() == (
+        "[web:visitor:alice]: first source chunk...\n[web:visitor:alice]: second source chunk..."
+    )
 
 
 def test_message_range_does_not_treat_original_chunk_like_id_as_chunk():
@@ -176,7 +243,13 @@ def test_message_range_marks_middle_chunk_as_abbreviated():
     )
     msg_range = MessageRange(
         [[message]],
-        chunk_meta={id(message): SimpleNamespace(chunk_index=1, chunk_count=3)},
+        chunk_meta={
+            id(message): SimpleNamespace(
+                source_message_id="msg-long",
+                chunk_index=1,
+                chunk_count=3,
+            )
+        },
     )
 
     assert msg_range.pretty_print() == "[web:visitor:alice]: ...middle chunk..."
