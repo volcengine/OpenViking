@@ -137,3 +137,27 @@ def test_three_credentials_advance_through_chain():
     assert cred1.calls == 1
     assert cred2.calls == 1
     assert result.dense_vector == [0.0] * 4
+
+
+def test_more_than_ten_credentials_all_tried():
+    """With >10 credentials, every one is tried (no global retry cap cuts it short).
+
+    Regression for the removed ``total_max_retries`` cap: exhaustion is decided
+    solely by reaching the end of the credential chain.
+    """
+    n = 15
+    failing = [_StubEmbedder(f"cred{i}", error=_make_401_error()) for i in range(n - 1)]
+    last = _StubEmbedder(f"cred{n - 1}")
+    embedders = failing + [last]
+
+    fe = FailoverEmbedder(
+        embedders=embedders,
+        credential_ids=[f"c{i}" for i in range(n)],
+    )
+
+    result = fe.embed("hello")
+
+    # Every failing credential was attempted exactly once, then the last succeeded.
+    assert all(e.calls == 1 for e in failing)
+    assert last.calls == 1
+    assert result.dense_vector == [0.0] * 4

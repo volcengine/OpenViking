@@ -650,9 +650,10 @@ def exponential_backoff_retry(
 class FailoverEmbedder(EmbedderBase):
     """Embedder wrapper that provides failover across multiple ordered credentials.
 
-    When a credential fails with quota_exceeded or permanent errors, this wrapper
-    automatically advances to the next credential in the list. After failback thresholds
-    are met, it attempts to move back to a higher-priority credential.
+    When a credential fails with a credential-level (auth) or quota/transient
+    error, this wrapper advances to the next credential in the list. After
+    failback thresholds are met, it attempts to move back to a higher-priority
+    credential.
 
     Credentials are tried in order (index 0 is highest priority).
     """
@@ -663,7 +664,6 @@ class FailoverEmbedder(EmbedderBase):
         credential_ids: List[str],
         failback_timeout_seconds: float = 600.0,
         failback_request_count: int = 50,
-        total_max_retries: int = 10,
     ):
         """Initialize FailoverEmbedder with multiple embedder instances.
 
@@ -672,14 +672,15 @@ class FailoverEmbedder(EmbedderBase):
             credential_ids: List of credential IDs corresponding to the embedder instances
             failback_timeout_seconds: Time after which to attempt failback
             failback_request_count: Number of requests after which to attempt failback
-            total_max_retries: Maximum total retry attempts across all credentials
 
         Note:
-            With multiple credentials, permanent errors (e.g. HTTP 400/401/403) on
-            a non-final credential automatically advance to the next one, since
-            different credentials may resolve to different upstream resources
-            (e.g. ARK endpoint ids). Only the last credential's permanent error
-            raises ``AllCredentialsFailedError``.
+            Request-level errors (e.g. HTTP 400 parameter error, input too
+            large, content safety) fail fast and re-raise the original
+            exception, since the same request fails on every credential of the
+            same model. Credential-level auth errors (401/403) advance to the
+            next credential; only the last credential fails fast. Per-credential
+            retry counts are handled by each underlying embedder; there is no
+            global retry cap.
         """
         if not embedders:
             raise ValueError("At least one embedder instance is required")
@@ -700,7 +701,6 @@ class FailoverEmbedder(EmbedderBase):
             failback_timeout_seconds=failback_timeout_seconds,
             failback_request_count=failback_request_count,
         )
-        self._total_max_retries = total_max_retries
 
     def _embed_with_failover(self, method_name: str, *args, **kwargs) -> EmbedResult:
         """Execute an embedder method with multi-credential failover support.
@@ -716,7 +716,6 @@ class FailoverEmbedder(EmbedderBase):
         Raises:
             AllCredentialsFailedError if all credentials fail
         """
-        total_attempts = 0
         aggregated_errors = []
 
         while True:
@@ -724,8 +723,10 @@ class FailoverEmbedder(EmbedderBase):
             # the request; pure reads elsewhere must not mutate this state.
             idx = self._switcher.maybe_failback()
 
-            # Check if all credentials are exhausted
-            if idx >= self._switcher.n or total_attempts >= self._total_max_retries:
+            # Stop once every credential in the chain has been exhausted.
+            # Per-credential retry counts are handled by each underlying
+            # instance; there is no global retry cap.
+            if idx >= self._switcher.n:
                 raise AllCredentialsFailedError(aggregated_errors)
 
             credential_id = self._credential_ids[idx]
@@ -738,7 +739,7 @@ class FailoverEmbedder(EmbedderBase):
                 return result
             except Exception as exc:
                 error_class = classify_api_error(exc)
-                aggregated_errors.append((credential_id, error_class, exc, total_attempts))
+                aggregated_errors.append((credential_id, error_class, exc, idx))
 
                 advance = self._switcher.on_failure(idx, error_class)
                 if not advance:
@@ -747,7 +748,6 @@ class FailoverEmbedder(EmbedderBase):
                     # (e.g. truncate on input_too_large).
                     raise
 
-                total_attempts += 1
                 logger.warning(
                     f"Credential {credential_id} failed with {error_class}, advancing to next credential"
                 )
@@ -766,7 +766,6 @@ class FailoverEmbedder(EmbedderBase):
         Raises:
             AllCredentialsFailedError if all credentials fail
         """
-        total_attempts = 0
         aggregated_errors = []
 
         while True:
@@ -774,8 +773,10 @@ class FailoverEmbedder(EmbedderBase):
             # the request; pure reads elsewhere must not mutate this state.
             idx = self._switcher.maybe_failback()
 
-            # Check if all credentials are exhausted
-            if idx >= self._switcher.n or total_attempts >= self._total_max_retries:
+            # Stop once every credential in the chain has been exhausted.
+            # Per-credential retry counts are handled by each underlying
+            # instance; there is no global retry cap.
+            if idx >= self._switcher.n:
                 raise AllCredentialsFailedError(aggregated_errors)
 
             credential_id = self._credential_ids[idx]
@@ -788,7 +789,7 @@ class FailoverEmbedder(EmbedderBase):
                 return result
             except Exception as exc:
                 error_class = classify_api_error(exc)
-                aggregated_errors.append((credential_id, error_class, exc, total_attempts))
+                aggregated_errors.append((credential_id, error_class, exc, idx))
 
                 advance = self._switcher.on_failure(idx, error_class)
                 if not advance:
@@ -797,7 +798,6 @@ class FailoverEmbedder(EmbedderBase):
                     # (e.g. truncate on input_too_large).
                     raise
 
-                total_attempts += 1
                 logger.warning(
                     f"Credential {credential_id} failed with {error_class}, advancing to next credential"
                 )

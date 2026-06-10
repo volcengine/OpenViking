@@ -594,7 +594,6 @@ class MultiCredentialVLM(VLMBase):
         credential_ids: List[str],
         failback_timeout_seconds: float = 600.0,  # 10 minutes
         failback_request_count: int = 50,
-        total_max_retries: int = 10,
     ):
         """Initialize MultiCredentialVLM with multiple VLM instances.
 
@@ -603,7 +602,6 @@ class MultiCredentialVLM(VLMBase):
             credential_ids: List of credential IDs corresponding to the VLM instances
             failback_timeout_seconds: Time after which to attempt failback
             failback_request_count: Number of requests after which to attempt failback
-            total_max_retries: Maximum total retry attempts across all credentials
         """
         if not vlm_instances:
             raise ValueError("At least one VLM instance is required")
@@ -626,7 +624,6 @@ class MultiCredentialVLM(VLMBase):
             failback_timeout_seconds=failback_timeout_seconds,
             failback_request_count=failback_request_count,
         )
-        self._total_max_retries = total_max_retries
 
     def _get_completion_with_failover(self, method_name: str, *args, **kwargs):
         """Execute a VLM method with multi-credential failover support.
@@ -642,7 +639,6 @@ class MultiCredentialVLM(VLMBase):
         Raises:
             AllCredentialsFailedError if all credentials fail
         """
-        total_attempts = 0
         aggregated_errors = []
 
         while True:
@@ -650,8 +646,10 @@ class MultiCredentialVLM(VLMBase):
             # the request; pure reads elsewhere must not mutate this state.
             idx = self._switcher.maybe_failback()
 
-            # Check if all credentials are exhausted
-            if idx >= self._switcher.n or total_attempts >= self._total_max_retries:
+            # Stop once every credential in the chain has been exhausted.
+            # Per-credential retry counts are handled by each underlying
+            # instance; there is no global retry cap.
+            if idx >= self._switcher.n:
                 raise AllCredentialsFailedError(aggregated_errors)
 
             credential_id = self._credential_ids[idx]
@@ -664,7 +662,7 @@ class MultiCredentialVLM(VLMBase):
                 return result
             except Exception as exc:
                 error_class = classify_api_error(exc)
-                aggregated_errors.append((credential_id, error_class, exc, total_attempts))
+                aggregated_errors.append((credential_id, error_class, exc, idx))
 
                 advance = self._switcher.on_failure(idx, error_class)
                 if not advance:
@@ -673,7 +671,6 @@ class MultiCredentialVLM(VLMBase):
                     # (e.g. truncate on input_too_large).
                     raise
 
-                total_attempts += 1
                 self._logger.warning(
                     f"Credential {credential_id} failed with {error_class}, advancing to next credential"
                 )
@@ -692,7 +689,6 @@ class MultiCredentialVLM(VLMBase):
         Raises:
             AllCredentialsFailedError if all credentials fail
         """
-        total_attempts = 0
         aggregated_errors = []
 
         while True:
@@ -700,8 +696,10 @@ class MultiCredentialVLM(VLMBase):
             # the request; pure reads elsewhere must not mutate this state.
             idx = self._switcher.maybe_failback()
 
-            # Check if all credentials are exhausted
-            if idx >= self._switcher.n or total_attempts >= self._total_max_retries:
+            # Stop once every credential in the chain has been exhausted.
+            # Per-credential retry counts are handled by each underlying
+            # instance; there is no global retry cap.
+            if idx >= self._switcher.n:
                 raise AllCredentialsFailedError(aggregated_errors)
 
             credential_id = self._credential_ids[idx]
@@ -714,7 +712,7 @@ class MultiCredentialVLM(VLMBase):
                 return result
             except Exception as exc:
                 error_class = classify_api_error(exc)
-                aggregated_errors.append((credential_id, error_class, exc, total_attempts))
+                aggregated_errors.append((credential_id, error_class, exc, idx))
 
                 advance = self._switcher.on_failure(idx, error_class)
                 if not advance:
@@ -723,7 +721,6 @@ class MultiCredentialVLM(VLMBase):
                     # (e.g. truncate on input_too_large).
                     raise
 
-                total_attempts += 1
                 self._logger.warning(
                     f"Credential {credential_id} failed with {error_class}, advancing to next credential"
                 )
