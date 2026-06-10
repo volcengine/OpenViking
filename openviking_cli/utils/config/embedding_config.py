@@ -81,6 +81,50 @@ class EmbeddingModelConfig(BaseModel):
         default=None,
         description="Local model cache directory for provider='local'.",
     )
+    k1: Optional[float] = Field(
+        default=None,
+        description="BM25 k1 saturation parameter for provider='local_bm25'.",
+    )
+    b: Optional[float] = Field(
+        default=None,
+        description="BM25 length normalization parameter for provider='local_bm25'.",
+    )
+    tokenizer: Optional[str] = Field(
+        default=None,
+        description="Tokenizer for provider='local_bm25': 'jieba' (default) or 'regex'.",
+    )
+    token_pattern: Optional[str] = Field(
+        default=None,
+        description="Regex token pattern for provider='local_bm25' when tokenizer='regex'.",
+    )
+    stats_path: Optional[str] = Field(
+        default=None,
+        description="Path for persisted BM25 corpus statistics for provider='local_bm25'.",
+    )
+    rebuild_growth_factor: Optional[float] = Field(
+        default=None,
+        description=(
+            "Corpus growth multiplier that triggers a local_bm25 rebuild "
+            "(default 1.5). Lower = fresher stats, more writes. "
+            "Higher = fewer writes, longer staleness window."
+        ),
+    )
+    rebuild_min_docs: Optional[int] = Field(
+        default=None,
+        description=(
+            "Below this corpus size, local_bm25 rebuilds on every insert "
+            "(default 100). Avoids thrashing on tiny corpora where "
+            "the growth factor would fire too often."
+        ),
+    )
+    rebuild_max_interval_seconds: Optional[int] = Field(
+        default=None,
+        description=(
+            "Maximum seconds between local_bm25 rebuilds when writes are "
+            "happening (default 600). Bounds staleness in time, not just "
+            "in corpus growth — useful when write rate is slow."
+        ),
+    )
     enable_fusion: Optional[bool] = Field(
         default=None,
         description="Enable multimodal fusion for DashScope provider (multimodal models only).",
@@ -109,6 +153,9 @@ class EmbeddingModelConfig(BaseModel):
                 value = data.get(key)
                 if isinstance(value, str):
                     data[key] = value.lower()
+            tokenizer = data.get("tokenizer")
+            if isinstance(tokenizer, str):
+                data["tokenizer"] = tokenizer.lower()
         return data
 
     @model_validator(mode="after")
@@ -118,7 +165,10 @@ class EmbeddingModelConfig(BaseModel):
             self.provider = self.backend
 
         if not self.model:
-            raise ValueError("Embedding model name is required")
+            if self.provider == "local_bm25":
+                self.model = "bm25"
+            else:
+                raise ValueError("Embedding model name is required")
 
         if not self.provider:
             raise ValueError("Embedding provider is required")
@@ -137,10 +187,11 @@ class EmbeddingModelConfig(BaseModel):
             "cohere",
             "litellm",
             "local",
+            "local_bm25",
         ]:
             raise ValueError(
                 f"Invalid embedding provider: '{self.provider}'. Must be one of: "
-                "'openai', 'azure', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage', 'dashscope', 'minimax', 'cohere', 'litellm', 'local'"
+                "'openai', 'azure', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage', 'dashscope', 'minimax', 'cohere', 'litellm', 'local', 'local_bm25'"
             )
 
         # Provider-specific validation
@@ -240,6 +291,22 @@ class EmbeddingModelConfig(BaseModel):
             from openviking.models.embedder.local_embedders import get_local_model_spec
 
             get_local_model_spec(self.model)
+
+        elif self.provider == "local_bm25":
+            if self.tokenizer and self.tokenizer not in {"jieba", "regex"}:
+                raise ValueError("local_bm25 tokenizer must be one of: 'jieba', 'regex'")
+            if self.rebuild_growth_factor is not None and self.rebuild_growth_factor <= 1.0:
+                raise ValueError(
+                    "local_bm25 rebuild_growth_factor must be > 1.0 "
+                    "(values <= 1.0 would rebuild on every insert)"
+                )
+            if self.rebuild_min_docs is not None and self.rebuild_min_docs < 0:
+                raise ValueError("local_bm25 rebuild_min_docs must be >= 0")
+            if (
+                self.rebuild_max_interval_seconds is not None
+                and self.rebuild_max_interval_seconds <= 0
+            ):
+                raise ValueError("local_bm25 rebuild_max_interval_seconds must be > 0")
 
         return self
 
@@ -459,6 +526,7 @@ class EmbeddingConfig(BaseModel):
             GeminiDenseEmbedder,
             JinaDenseEmbedder,
             LiteLLMDenseEmbedder,
+            LocalBM25Embedder,
             LocalDenseEmbedder,
             MinimaxDenseEmbedder,
             OpenAIDenseEmbedder,
@@ -711,6 +779,33 @@ class EmbeddingConfig(BaseModel):
                     "model_path": cfg.model_path,
                     "cache_dir": cfg.cache_dir,
                     "dimension": cfg.dimension,
+                    "config": dict(runtime_config),
+                },
+            ),
+            ("local_bm25", "sparse"): (
+                LocalBM25Embedder,
+                lambda cfg: {
+                    "model_name": cfg.model or "bm25",
+                    **({"k1": cfg.k1} if cfg.k1 is not None else {}),
+                    **({"b": cfg.b} if cfg.b is not None else {}),
+                    **({"tokenizer": cfg.tokenizer} if cfg.tokenizer else {}),
+                    **({"token_pattern": cfg.token_pattern} if cfg.token_pattern else {}),
+                    **({"stats_path": cfg.stats_path} if cfg.stats_path else {}),
+                    **(
+                        {"rebuild_growth_factor": cfg.rebuild_growth_factor}
+                        if cfg.rebuild_growth_factor is not None
+                        else {}
+                    ),
+                    **(
+                        {"rebuild_min_docs": cfg.rebuild_min_docs}
+                        if cfg.rebuild_min_docs is not None
+                        else {}
+                    ),
+                    **(
+                        {"rebuild_max_interval_seconds": cfg.rebuild_max_interval_seconds}
+                        if cfg.rebuild_max_interval_seconds is not None
+                        else {}
+                    ),
                     "config": dict(runtime_config),
                 },
             ),
