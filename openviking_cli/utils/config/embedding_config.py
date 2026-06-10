@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-from typing import Any, ClassVar, Literal, Optional, Tuple, cast, List
+from typing import Any, ClassVar, List, Literal, Optional, Tuple, cast
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -228,9 +228,7 @@ class EmbeddingModelConfig(BaseModel):
                     "cohere": "Cohere",
                     "dashscope": "DashScope",
                 }[provider]
-                raise ValueError(
-                    f"{label}: {provider_label} provider requires 'api_key' to be set"
-                )
+                raise ValueError(f"{label}: {provider_label} provider requires 'api_key' to be set")
         elif provider == "vikingdb":
             missing = [n for n, v in (("ak", ak), ("sk", sk), ("region", region)) if not v]
             if missing:
@@ -839,7 +837,7 @@ class EmbeddingConfig(BaseModel):
         Raises:
             ValueError: If configuration is invalid or unsupported
         """
-        from openviking.models.embedder import CompositeHybridEmbedder, FailoverEmbedder
+        from openviking.models.embedder import CompositeHybridEmbedder
         from openviking.models.embedder.base import DenseEmbedderBase, SparseEmbedderBase
 
         if self.hybrid:

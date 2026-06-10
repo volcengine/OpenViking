@@ -3,10 +3,11 @@
 """Tests for VLM failover/backup configuration functionality."""
 
 import time
-import pytest
-from unittest.mock import Mock, AsyncMock, patch
+from unittest.mock import AsyncMock, Mock
 
-from openviking.models.vlm.base import FailoverVLM, VLMResponse, PrimaryBackupSwitcher
+import pytest
+
+from openviking.models.vlm.base import FailoverVLM, PrimaryBackupSwitcher
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
 

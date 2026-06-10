@@ -311,8 +311,10 @@ async def init_context_collection(storage) -> bool:
     )
 
     allow_override = bool(getattr(config.embedding, "allow_metadata_override", False))
-    if allow_override and not dimension_changed and hasattr(
-        storage, "update_collection_description"
+    if (
+        allow_override
+        and not dimension_changed
+        and hasattr(storage, "update_collection_description")
     ):
         logger.warning(
             "Embedding metadata changed (provider/model) but dimension is "
@@ -501,7 +503,9 @@ class TextEmbeddingHandler(DequeueHandlerBase):
 
                 # Process string (text) or list (multimodal) messages
                 if not isinstance(embedding_msg.message, (str, list)):
-                    logger.debug(f"Skipping unsupported message type: {type(embedding_msg.message)}")
+                    logger.debug(
+                        f"Skipping unsupported message type: {type(embedding_msg.message)}"
+                    )
                     self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
                     self._record_request_success(embedding_msg)
                     report_success = True

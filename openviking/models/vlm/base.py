@@ -12,8 +12,8 @@ from typing import Any, Dict, List, Optional, Union
 from openviking.utils.exceptions import AllCredentialsFailedError
 from openviking.utils.model_retry import (
     OrderedCredentialSwitcher,
-    classify_api_error,
     PrimaryBackupSwitcher,
+    classify_api_error,
 )
 from openviking_cli.utils import get_logger
 
@@ -98,7 +98,6 @@ class VLMBase(ABC):
         Returns:
             str if no tools provided, VLMResponse if tools provided
         """
-        effective_thinking = self.thinking if thinking is None else thinking
         pass
 
     @abstractmethod
@@ -122,7 +121,6 @@ class VLMBase(ABC):
         Returns:
             str if no tools provided, VLMResponse if tools provided
         """
-        effective_thinking = self.thinking if thinking is None else thinking
         pass
 
     @abstractmethod
@@ -148,7 +146,6 @@ class VLMBase(ABC):
         Returns:
             str if no tools provided, VLMResponse if tools provided
         """
-        effective_thinking = self.thinking if thinking is None else thinking
         pass
 
     @abstractmethod
@@ -174,7 +171,6 @@ class VLMBase(ABC):
         Returns:
             str if no tools provided, VLMResponse if tools provided
         """
-        effective_thinking = self.thinking if thinking is None else thinking
         pass
 
     def _clean_response(self, content: str) -> str:
@@ -676,8 +672,7 @@ class MultiCredentialVLM(VLMBase):
                     raise
 
                 self._logger.warning(
-                    f"Credential {credential_id} failed with {error_class}, "
-                    "trying next credential"
+                    f"Credential {credential_id} failed with {error_class}, trying next credential"
                 )
 
         raise AllCredentialsFailedError(aggregated_errors)
@@ -722,8 +717,7 @@ class MultiCredentialVLM(VLMBase):
                     raise
 
                 self._logger.warning(
-                    f"Credential {credential_id} failed with {error_class}, "
-                    "trying next credential"
+                    f"Credential {credential_id} failed with {error_class}, trying next credential"
                 )
 
         raise AllCredentialsFailedError(aggregated_errors)
