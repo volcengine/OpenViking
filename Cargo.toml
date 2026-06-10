@@ -2,11 +2,14 @@
 members = [
     "crates/ov_cli",
     "crates/ragfs",
-    "crates/ragfs-cache-mooncake",
     "crates/ragfs-cache-redis",
+    "crates/ragfs-python",
+]
+exclude = [
+    "crates/ragfs-cache-mooncake",
     "crates/ragfs-cache-yuanrong",
     "crates/ragfs-cache-yuanrong-sys",
-    "crates/ragfs-python",
+    "crates/ragfs-python-native",
 ]
 resolver = "2"
 
