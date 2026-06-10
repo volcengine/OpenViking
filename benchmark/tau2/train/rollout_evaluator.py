@@ -16,6 +16,8 @@ class Tau2RewardRolloutEvaluator:
 
     async def evaluate(self, rollout: Rollout, context: Any = None) -> RubricEvaluation:
         del context
+        if rollout.evaluation is not None:
+            return rollout.evaluation
         reward = _safe_float(rollout.metadata.get("reward"), default=0.0)
         passed = reward >= 1.0
         evaluation_result = rollout.metadata.get("evaluation_result")

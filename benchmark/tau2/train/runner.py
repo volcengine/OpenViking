@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tau2 batch train/eval orchestration on the OpenViking train pipeline."""
+"""Tau2 batch train/eval orchestration through OfflinePolicyOptimizationPipeline."""
 
 from __future__ import annotations
 
@@ -9,30 +9,22 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from benchmark.tau2.train.case_loader import Tau2CaseLoader
-from benchmark.tau2.train.rollout_evaluator import Tau2RewardRolloutEvaluator
-from benchmark.tau2.train.rollout_executor import Tau2RolloutExecutor
 from openviking.server.config import load_server_config
-from openviking.server.identity import RequestContext, Role
-from openviking.service.core import OpenVikingService
 from openviking.session.train import (
     ContentHashPolicySnapshotter,
-    ExperienceGradientContext,
-    ExperienceGradientEstimator,
     ExperienceSet,
-    ExperienceSetLoader,
-    MemoryFilePolicyUpdater,
     OfflinePolicyOptimizationPipeline,
-    PatchMergePolicyOptimizer,
-    PatchMergePolicyOptimizerContext,
     PipelineContext,
     PipelineEvaluationResult,
     PipelineResult,
-    TrajectoryAnalyzerContext,
-    TrajectoryRolloutAnalyzer,
+    Rollout,
+    RolloutAnalysis,
+    SessionCommitPolicyTrainer,
 )
-from openviking.telemetry import start_current_span, tracer
-from openviking.telemetry.tracer import init_tracer_from_server_config
+from openviking.session.train.components.remote import RemoteCaseLoader, RemoteRolloutExecutor
+from openviking.session.train.domain import PolicyUpdatePlan
+from openviking.telemetry import tracer
+from openviking_cli.client.http import AsyncHTTPClient
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 
 
@@ -41,16 +33,30 @@ class Tau2BatchRunConfig:
     """Configuration for one tau2 batch train/eval run."""
 
     domain: str
+    dataset: str = "tau2"
     epochs: int = 1
     batch_size: int | None = None
     concurrency: int = 20
     config_path: str | None = None
     output_path: str | None = None
-    data_root: str | None = None
     keep_default_tools: bool = True
     max_iterations: int = 30
+    server_url: str | None = None
+    api_key: str | None = None
+    account_id: str = "default"
+    user_id: str = "default"
+    commit_keep_recent_count: int = 0
+    commit_poll_interval_seconds: float = 2.0
+    commit_timeout_seconds: float = 600.0
+    commit_concurrency: int = 20
+    train_limit: int | None = None
+    eval_limit: int | None = None
+    benchmark_service_url: str | None = None
+    baseline_eval_enabled: bool = False
 
     def __post_init__(self) -> None:
+        if not self.dataset:
+            raise ValueError("dataset is required")
         if not self.domain:
             raise ValueError("domain is required")
         if self.epochs < 0:
@@ -61,132 +67,154 @@ class Tau2BatchRunConfig:
             raise ValueError("concurrency must be > 0")
         if self.max_iterations <= 0:
             raise ValueError("max_iterations must be > 0")
+        if self.commit_poll_interval_seconds <= 0:
+            raise ValueError("commit_poll_interval_seconds must be > 0")
+        if self.commit_timeout_seconds <= 0:
+            raise ValueError("commit_timeout_seconds must be > 0")
+        if self.commit_concurrency <= 0:
+            raise ValueError("commit_concurrency must be > 0")
+        if self.train_limit is not None and self.train_limit <= 0:
+            raise ValueError("train_limit must be > 0")
+        if self.eval_limit is not None and self.eval_limit <= 0:
+            raise ValueError("eval_limit must be > 0")
+        if self.benchmark_service_url is not None and not self.benchmark_service_url.strip():
+            raise ValueError("benchmark_service_url must not be empty")
 
 
 @dataclass(slots=True)
 class Tau2BatchRunReport:
     """Serializable report for tau2 batch train/eval."""
 
+    dataset: str
     domain: str
     epochs: int
     batch_size: int | None
     concurrency: int
+    commit_concurrency: int
+    train_limit: int | None
+    eval_limit: int | None
     policy_root_uri: str
     baseline_eval: dict[str, Any] | None
     train_epochs: list[dict[str, Any]] = field(default_factory=list)
     final_eval: dict[str, Any] | None = None
-    score_delta: float | None = None
+    accuracy_delta: float | None = None
     output_path: str | None = None
     trace_id: str | None = None
+    run_id: str = ""
+    server_url: str = ""
+    benchmark_service_url: str | None = None
+    baseline_eval_enabled: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "dataset": self.dataset,
             "domain": self.domain,
             "epochs": self.epochs,
             "batch_size": self.batch_size,
             "concurrency": self.concurrency,
+            "commit_concurrency": self.commit_concurrency,
+            "train_limit": self.train_limit,
+            "eval_limit": self.eval_limit,
             "policy_root_uri": self.policy_root_uri,
             "baseline_eval": self.baseline_eval,
             "train_epochs": self.train_epochs,
             "final_eval": self.final_eval,
-            "score_delta": self.score_delta,
+            "accuracy_delta": self.accuracy_delta,
             "output_path": self.output_path,
             "trace_id": self.trace_id,
+            "run_id": self.run_id,
+            "server_url": self.server_url,
+            "benchmark_service_url": self.benchmark_service_url,
+            "baseline_eval_enabled": self.baseline_eval_enabled,
         }
 
 
 @tracer("tau2.batch_train_eval.run", ignore_result=True, ignore_args=True)
 async def run_tau2_batch_train_eval(config: Tau2BatchRunConfig) -> Tau2BatchRunReport:
-    """Run baseline eval, train epochs, and final eval for one tau2 domain."""
+    """Run baseline eval, commit-based train epochs, and final eval for one tau2 domain."""
 
     _configure_openviking_config(config.config_path)
-    init_tracer_from_server_config(load_server_config())
-
-    service = OpenVikingService()
-    await service.initialize()
+    client = _build_http_client(config)
+    await client.initialize()
     try:
-        if service.viking_fs is None:
-            raise RuntimeError("OpenVikingService.viking_fs is not initialized")
-        if service.vikingdb_manager is None:
-            raise RuntimeError("OpenVikingService.vikingdb_manager is not initialized")
-
-        request_context = RequestContext(user=service.user, role=Role.ROOT)
-        policy_root_uri = f"viking://user/{request_context.user.user_id}/memories/experiences"
-        policy_set = await ExperienceSetLoader(viking_fs=service.viking_fs).load(
-            policy_root_uri,
-            ctx=request_context,
+        policy_root_uri = "viking://user/default/memories/experiences"
+        policy_set = ExperienceSet(
+            root_uri=policy_root_uri,
+            policies=[],
+            metadata={"source": "remote_session_commit"},
         )
-        pipeline = _build_pipeline(config, service)
+        policy_trainer = SessionCommitPolicyTrainer(
+            client=client,
+            keep_recent_count=config.commit_keep_recent_count,
+            poll_interval_seconds=config.commit_poll_interval_seconds,
+            timeout_seconds=config.commit_timeout_seconds,
+            commit_concurrency=config.commit_concurrency,
+            show_progress=True,
+            progress_label="session-commit",
+        )
+        pipeline = _build_pipeline(config, policy_trainer)
+
         baseline_eval: dict[str, Any] | None = None
         final_eval: dict[str, Any] | None = None
         train_epoch_reports: list[dict[str, Any]] = []
 
-        test_loader = Tau2CaseLoader(
-            domain=config.domain,
-            split="test",
-            batch_size=config.batch_size,
-            data_root=config.data_root,
-        )
-        if test_loader.split_exists():
-            baseline_result = await _eval(
-                pipeline=pipeline,
-                loader=test_loader,
+        test_loader = _case_loader(config, split="test", limit=config.eval_limit)
+        if config.baseline_eval_enabled and await test_loader.split_exists():
+            baseline_result = await pipeline.eval(
+                case_loader=test_loader,
                 policy_set=policy_set,
-                request_context=request_context,
-                epoch=-1,
+                context=_pipeline_context(epoch=-1, training=False),
             )
             baseline_eval = _evaluation_report(baseline_result)
             _print_eval_summary("baseline_eval", baseline_eval)
 
         for epoch in range(config.epochs):
-            train_loader = Tau2CaseLoader(
-                domain=config.domain,
-                split="train",
-                batch_size=config.batch_size,
-                data_root=config.data_root,
-            )
-            result = await _train_one_epoch(
-                pipeline=pipeline,
-                loader=train_loader,
+            train_loader = _case_loader(config, split="train", limit=config.train_limit)
+            result = await pipeline.train(
+                case_loader=train_loader,
                 policy_set=policy_set,
-                request_context=request_context,
-                epoch=epoch,
+                context=_pipeline_context(epoch=epoch, training=True),
             )
-            policy_set = result.apply_result.updated_policy_set
             epoch_report = _train_result_report(result, epoch=epoch)
             train_epoch_reports.append(epoch_report)
             _print_train_summary(epoch_report)
 
-        if test_loader.split_exists():
-            final_result = await _eval(
-                pipeline=pipeline,
-                loader=test_loader,
+        if await test_loader.split_exists():
+            final_result = await pipeline.eval(
+                case_loader=test_loader,
                 policy_set=policy_set,
-                request_context=request_context,
-                epoch=config.epochs,
+                context=_pipeline_context(epoch=config.epochs, training=False),
             )
             final_eval = _evaluation_report(final_result)
             _print_eval_summary("final_eval", final_eval)
 
-        score_delta = _score_delta(baseline_eval, final_eval)
+        accuracy_delta = _accuracy_delta(baseline_eval, final_eval)
         report = Tau2BatchRunReport(
+            dataset=config.dataset,
             domain=config.domain,
             epochs=config.epochs,
             batch_size=config.batch_size,
             concurrency=config.concurrency,
+            commit_concurrency=config.commit_concurrency,
+            train_limit=config.train_limit,
+            eval_limit=config.eval_limit,
             policy_root_uri=policy_root_uri,
             baseline_eval=baseline_eval,
             train_epochs=train_epoch_reports,
             final_eval=final_eval,
-            score_delta=score_delta,
+            accuracy_delta=accuracy_delta,
             output_path=_default_output_path(config),
             trace_id=tracer.get_trace_id() or None,
+            run_id=policy_trainer.run_id,
+            server_url=client_url(client),
+            benchmark_service_url=config.benchmark_service_url,
+            baseline_eval_enabled=config.baseline_eval_enabled,
         )
         _write_report(report, config)
         _print_report_summary(report)
         return report
     finally:
-        await service.close()
+        await client.close()
 
 
 def _configure_openviking_config(config_path: str | None) -> None:
@@ -195,88 +223,107 @@ def _configure_openviking_config(config_path: str | None) -> None:
     OpenVikingConfigSingleton.reset_instance()
 
 
-def _build_pipeline(
-    config: Tau2BatchRunConfig,
-    service: OpenVikingService,
-) -> OfflinePolicyOptimizationPipeline:
-    return OfflinePolicyOptimizationPipeline(
-        snapshotter=ContentHashPolicySnapshotter(prefix="tau2-policy-snapshot"),
-        rollout_executor=Tau2RolloutExecutor(
-            config_path=config.config_path,
-            concurrency=config.concurrency,
-            keep_default_tools=config.keep_default_tools,
-            max_iterations=config.max_iterations,
-        ),
-        rollout_analyzer=TrajectoryRolloutAnalyzer(
-            viking_fs=service.viking_fs,
-            vikingdb=service.vikingdb_manager,
-            evaluator=Tau2RewardRolloutEvaluator(),
-        ),
-        gradient_estimator=ExperienceGradientEstimator(viking_fs=service.viking_fs),
-        policy_optimizer=PatchMergePolicyOptimizer(
-            viking_fs=service.viking_fs,
-            memory_type="experiences",
-        ),
-        policy_updater=MemoryFilePolicyUpdater(viking_fs=service.viking_fs),
+def _build_http_client(config: Tau2BatchRunConfig) -> AsyncHTTPClient:
+    server_url = config.server_url
+    api_key = config.api_key
+    if server_url is None or api_key is None:
+        server_config = load_server_config(config.config_path)
+        server_url = server_url or f"http://{server_config.host}:{server_config.port}"
+        api_key = api_key or server_config.root_api_key
+    return AsyncHTTPClient(
+        url=server_url,
+        api_key=api_key,
+        account=config.account_id,
+        user=config.user_id,
+        profile_enabled=False,
+        timeout=max(60.0, config.commit_timeout_seconds + 30.0),
     )
 
 
-async def _eval(
-    *,
-    pipeline: OfflinePolicyOptimizationPipeline,
-    loader: Tau2CaseLoader,
-    policy_set: ExperienceSet,
-    request_context: RequestContext,
-    epoch: int,
-) -> PipelineEvaluationResult:
-    with start_current_span(f"tau2.eval.{loader.split}.epoch_{epoch}"):
-        return await pipeline.eval(
-            case_loader=loader,
-            policy_set=policy_set,
-            context=_pipeline_context(request_context, epoch=epoch),
-        )
+def client_url(client: AsyncHTTPClient) -> str:
+    return str(getattr(client, "_url", ""))
 
 
-async def _train_one_epoch(
-    *,
-    pipeline: OfflinePolicyOptimizationPipeline,
-    loader: Tau2CaseLoader,
-    policy_set: ExperienceSet,
-    request_context: RequestContext,
-    epoch: int,
-) -> PipelineResult:
-    with start_current_span(f"tau2.train.epoch_{epoch}"):
-        return await pipeline.train(
-            case_loader=loader,
-            policy_set=policy_set,
-            context=_pipeline_context(request_context, epoch=epoch),
-        )
+def _build_pipeline(
+    config: Tau2BatchRunConfig,
+    policy_trainer: SessionCommitPolicyTrainer,
+) -> OfflinePolicyOptimizationPipeline:
+    return OfflinePolicyOptimizationPipeline(
+        snapshotter=ContentHashPolicySnapshotter(prefix="tau2-policy-snapshot"),
+        rollout_executor=RemoteRolloutExecutor(
+            service_url=_require_benchmark_service_url(config),
+            concurrency=config.concurrency,
+            show_progress=True,
+            progress_label="tau2-rollout",
+            options={
+                "config_path": config.config_path,
+                "keep_default_tools": config.keep_default_tools,
+                "max_iterations": config.max_iterations,
+            },
+        ),
+        rollout_analyzer=UnusedRolloutAnalyzer(),
+        gradient_estimator=UnusedGradientEstimator(),
+        policy_optimizer=UnusedPolicyOptimizer(),
+        policy_updater=UnusedPolicyUpdater(),
+        policy_trainer=policy_trainer,
+    )
 
 
-def _pipeline_context(request_context: RequestContext, *, epoch: int) -> PipelineContext:
+def _pipeline_context(*, epoch: int, training: bool) -> PipelineContext:
     return PipelineContext(
-        analysis_context=TrajectoryAnalyzerContext(
-            request_context=request_context,
-            evaluator_context={"epoch": epoch},
-        ),
-        gradient_context=ExperienceGradientContext(
-            request_context=request_context,
-            messages=[],
-        ),
-        optimization_context=PatchMergePolicyOptimizerContext(request_context=request_context),
-        apply_context=request_context,
-        execution_metadata={"epoch": epoch},
+        analysis_context={"epoch": epoch},
+        execution_metadata={"epoch": epoch, "training": training},
         max_epochs=1,
     )
 
 
+def _case_loader(config: Tau2BatchRunConfig, *, split: str, limit: int | None) -> RemoteCaseLoader:
+    return RemoteCaseLoader(
+        service_url=_require_benchmark_service_url(config),
+        dataset=config.dataset,
+        domain=config.domain,
+        split=split,
+        batch_size=config.batch_size,
+        limit=limit,
+    )
+
+
+def _require_benchmark_service_url(config: Tau2BatchRunConfig) -> str:
+    if not config.benchmark_service_url:
+        raise ValueError("benchmark_service_url is required; start benchmark service and pass --benchmark-service-url")
+    return config.benchmark_service_url
+
+
+class UnusedRolloutAnalyzer:
+    async def analyze(self, rollout: Rollout, context: Any = None) -> RolloutAnalysis:
+        raise RuntimeError("eval uses rollout.evaluation; training is handled by policy_trainer")
+
+
+class UnusedGradientEstimator:
+    async def estimate(self, analysis: RolloutAnalysis, experience_set: ExperienceSet, context: Any):
+        raise RuntimeError("policy_trainer handles training; gradient estimator must not run")
+
+
+class UnusedPolicyOptimizer:
+    async def plan(self, gradients: list[Any], policy_set: ExperienceSet, context: Any):
+        raise RuntimeError("policy_trainer handles training; policy optimizer must not run")
+
+
+class UnusedPolicyUpdater:
+    async def apply(self, plan: PolicyUpdatePlan, policy_set: ExperienceSet, context: Any):
+        raise RuntimeError("policy_trainer handles training; policy updater must not run")
+
+
 def _evaluation_report(result: PipelineEvaluationResult) -> dict[str, Any]:
     rewards = [float(analysis.evaluation.score) for analysis in result.analyses]
+    passed_count = sum(1 for analysis in result.analyses if analysis.evaluation.passed)
+    case_count = len(result.analyses)
     return {
         "epoch": result.epoch,
-        "case_count": len(result.analyses),
+        "case_count": case_count,
+        "accuracy": _ratio(passed_count, case_count),
+        "passed_count": passed_count,
         "average_reward": _average(rewards),
-        "passed_count": sum(1 for analysis in result.analyses if analysis.evaluation.passed),
         "rewards": rewards,
         "snapshot_ids": list(result.policy_snapshot_ids),
         "metadata": dict(result.metadata),
@@ -285,34 +332,39 @@ def _evaluation_report(result: PipelineEvaluationResult) -> dict[str, Any]:
 
 def _train_result_report(result: PipelineResult, *, epoch: int) -> dict[str, Any]:
     rewards = [float(analysis.evaluation.score) for analysis in result.analyses]
-    written_uris = [uri for item in result.epochs for uri in item.apply_result.written_uris]
-    deleted_uris = [uri for item in result.epochs for uri in item.apply_result.deleted_uris]
-    errors = [error for item in result.epochs for error in item.apply_result.errors]
+    passed_count = sum(1 for analysis in result.analyses if analysis.evaluation.passed)
+    case_count = len(result.analyses)
+    commit_results = [
+        item
+        for epoch_result in result.epochs
+        for item in epoch_result.apply_result.metadata.get("commit_results", [])
+    ]
+    errors = [error for item in commit_results if (error := item.get("error"))]
     snapshot_ids = [sid for item in result.epochs for sid in item.policy_snapshot_ids]
     return {
         "epoch": epoch,
-        "case_count": len(result.analyses),
+        "case_count": case_count,
+        "accuracy": _ratio(passed_count, case_count),
+        "passed_count": passed_count,
         "average_reward": _average(rewards),
-        "passed_count": sum(1 for analysis in result.analyses if analysis.evaluation.passed),
         "batch_count": len(snapshot_ids),
         "gradient_count": len(result.gradients),
-        "plan_item_count": len(result.plan.items),
-        "written_uris": written_uris,
-        "deleted_uris": deleted_uris,
+        "committed_rollout_count": len(commit_results),
         "errors": errors,
         "snapshot_ids": snapshot_ids,
+        "commit_results": commit_results,
         "metadata": dict(result.metadata),
     }
 
 
-def _score_delta(
+def _accuracy_delta(
     baseline_eval: dict[str, Any] | None,
     final_eval: dict[str, Any] | None,
 ) -> float | None:
     if not baseline_eval or not final_eval:
         return None
-    baseline = baseline_eval.get("average_reward")
-    final = final_eval.get("average_reward")
+    baseline = baseline_eval.get("accuracy")
+    final = final_eval.get("accuracy")
     if baseline is None or final is None:
         return None
     return float(final) - float(baseline)
@@ -322,6 +374,12 @@ def _average(values: list[float]) -> float | None:
     if not values:
         return None
     return sum(values) / len(values)
+
+
+def _ratio(numerator: int, denominator: int) -> float | None:
+    if denominator <= 0:
+        return None
+    return numerator / denominator
 
 
 def _write_report(report: Tau2BatchRunReport, config: Tau2BatchRunConfig) -> None:
@@ -347,30 +405,49 @@ def _default_output_path(config: Tau2BatchRunConfig) -> str:
 def _print_eval_summary(label: str, data: dict[str, Any]) -> None:
     print(
         f"[{label}] epoch={data['epoch']} cases={data['case_count']} "
-        f"avg_reward={_fmt_score(data['average_reward'])} passed={data['passed_count']}"
+        f"accuracy={_fmt_percent(data['accuracy'])} "
+        f"passed={data['passed_count']}/{data['case_count']} "
+        f"avg_reward={_fmt_score(data['average_reward'])}"
     )
 
 
 def _print_train_summary(data: dict[str, Any]) -> None:
     print(
         f"[train_epoch] epoch={data['epoch']} cases={data['case_count']} "
-        f"avg_reward={_fmt_score(data['average_reward'])} gradients={data['gradient_count']} "
-        f"writes={len(data['written_uris'])} deletes={len(data['deleted_uris'])} "
-        f"errors={len(data['errors'])}"
+        f"accuracy={_fmt_percent(data['accuracy'])} "
+        f"passed={data['passed_count']}/{data['case_count']} "
+        f"avg_reward={_fmt_score(data['average_reward'])} "
+        f"commits={data['committed_rollout_count']} errors={len(data['errors'])}"
     )
 
 
 def _print_report_summary(report: Tau2BatchRunReport) -> None:
     print("==== Tau2 Batch Train/Eval Report ====")
+    print(f"dataset: {report.dataset}")
     print(f"domain: {report.domain}")
     print(f"epochs: {report.epochs}")
+    print(f"commit_concurrency: {report.commit_concurrency}")
+    print(f"run_id: {report.run_id}")
+    print(f"server_url: {report.server_url}")
     print(f"policy_root_uri: {report.policy_root_uri}")
     if report.baseline_eval:
+        print(
+            "baseline accuracy: "
+            f"{_fmt_percent(report.baseline_eval['accuracy'])} "
+            f"({report.baseline_eval['passed_count']}/{report.baseline_eval['case_count']})"
+        )
         print(f"baseline average reward: {_fmt_score(report.baseline_eval['average_reward'])}")
     if report.final_eval:
+        print(
+            "final accuracy: "
+            f"{_fmt_percent(report.final_eval['accuracy'])} "
+            f"({report.final_eval['passed_count']}/{report.final_eval['case_count']})"
+        )
         print(f"final average reward: {_fmt_score(report.final_eval['average_reward'])}")
-    if report.score_delta is not None:
-        print(f"score delta: {_fmt_score(report.score_delta)}")
+    if report.accuracy_delta is not None:
+        print(f"accuracy delta: {_fmt_percentage_point(report.accuracy_delta)}")
+    if report.benchmark_service_url:
+        print(f"benchmark_service_url: {report.benchmark_service_url}")
     if report.trace_id:
         print(f"trace_id: {report.trace_id}")
     print(f"report: {report.output_path}")
@@ -380,3 +457,15 @@ def _fmt_score(value: Any) -> str:
     if value is None:
         return "n/a"
     return f"{float(value):.6f}"
+
+
+def _fmt_percent(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    return f"{float(value) * 100:.2f}%"
+
+
+def _fmt_percentage_point(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    return f"{float(value) * 100:+.2f}pp"

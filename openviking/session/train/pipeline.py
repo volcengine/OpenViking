@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from openviking.session.train.components.policy_trainer import BatchPolicyTrainer
 from openviking.session.train.context import ExecutionContext, PipelineContext
 from openviking.session.train.domain import (
     ExperienceSet,
@@ -23,12 +24,12 @@ from openviking.session.train.interfaces import (
     GradientEstimator,
     PolicyOptimizer,
     PolicySnapshotter,
+    PolicyTrainer,
     PolicyUpdater,
     RolloutAnalyzer,
     RolloutExecutor,
     SemanticGradient,
 )
-from openviking.session.train.trainers import BatchPolicyTrainer
 from openviking.telemetry import tracer
 
 
@@ -54,6 +55,7 @@ class OfflinePolicyOptimizationPipeline:
         gradient_estimator: GradientEstimator,
         policy_optimizer: PolicyOptimizer,
         policy_updater: PolicyUpdater,
+        policy_trainer: PolicyTrainer | None = None,
     ) -> None:
         self.snapshotter = snapshotter
         self.rollout_executor = rollout_executor
@@ -62,6 +64,12 @@ class OfflinePolicyOptimizationPipeline:
         self.policy_optimizer = policy_optimizer
         self.policy_updater = policy_updater
         self._training_engine = PolicyTrainingEngine(
+            rollout_analyzer=rollout_analyzer,
+            gradient_estimator=gradient_estimator,
+            policy_optimizer=policy_optimizer,
+            policy_updater=policy_updater,
+        )
+        self.policy_trainer = policy_trainer or BatchPolicyTrainer(
             rollout_analyzer=rollout_analyzer,
             gradient_estimator=gradient_estimator,
             policy_optimizer=policy_optimizer,
@@ -157,20 +165,18 @@ class OfflinePolicyOptimizationPipeline:
         ``RolloutExecutor`` while reusing the same downstream training stages as
         offline optimization:
 
-        ``Rollout[] -> RolloutAnalyzer -> GradientEstimator -> PolicyOptimizer -> PolicyUpdater``.
+        The configured PolicyTrainer owns downstream training semantics. The
+        default BatchPolicyTrainer analyzes rollouts locally; remote trainers
+        may submit raw rollouts to a server-side analyzer.
         """
 
         ctx = context if isinstance(context, PipelineContext) else PipelineContext()
         rollout_list = list(rollouts)
-        result = await BatchPolicyTrainer(
-            rollout_analyzer=self.rollout_analyzer,
-            gradient_estimator=self.gradient_estimator,
-            policy_optimizer=self.policy_optimizer,
-            policy_updater=self.policy_updater,
-        ).train_rollouts(
-            rollouts=rollout_list,
-            policy_set=policy_set,
-            context=ctx,
+        _validate_rollouts_have_cases(rollout_list)
+        result = await self.policy_trainer.train_rollouts(
+            rollout_list,
+            policy_set,
+            ctx,
         )
         result.metadata["source"] = "external_rollouts"
         return result
@@ -191,7 +197,7 @@ class OfflinePolicyOptimizationPipeline:
         snapshot_ids: list[str] = []
 
         async for cases in case_loader.batches(ctx.case_load_context):
-            analyses, snapshot_id = await self._rollout_and_analyze_batch(
+            rollouts, snapshot_id = await self._rollout_batch(
                 cases=cases,
                 policy_set=current_policy_set,
                 ctx=ctx,
@@ -199,20 +205,16 @@ class OfflinePolicyOptimizationPipeline:
                 training=True,
             )
             snapshot_ids.append(snapshot_id)
-            all_analyses.extend(analyses)
-
-            gradients = await self._training_engine.estimate_gradients(
-                analyses,
+            training_result = await self.policy_trainer.train_rollouts(
+                rollouts,
                 current_policy_set,
                 ctx,
             )
+            gradients = list(training_result.gradients)
+            all_analyses.extend(training_result.analyses)
+            last_plan = training_result.plan
+            last_apply_result = training_result.apply_result
             all_gradients.extend(gradients)
-
-            last_plan, last_apply_result = await self._training_engine.plan_and_apply(
-                gradients=gradients,
-                policy_set=current_policy_set,
-                ctx=ctx,
-            )
             current_policy_set = last_apply_result.updated_policy_set
 
         if last_plan is None or last_apply_result is None:
@@ -245,7 +247,7 @@ class OfflinePolicyOptimizationPipeline:
         snapshot_ids: list[str] = []
 
         async for cases in case_loader.batches(ctx.case_load_context):
-            analyses, snapshot_id = await self._rollout_and_analyze_batch(
+            rollouts, snapshot_id = await self._rollout_batch(
                 cases=cases,
                 policy_set=policy_set,
                 ctx=ctx,
@@ -253,7 +255,7 @@ class OfflinePolicyOptimizationPipeline:
                 training=False,
             )
             snapshot_ids.append(snapshot_id)
-            all_analyses.extend(analyses)
+            all_analyses.extend(_analyses_from_rollout_evaluations(rollouts))
 
         return PipelineEvaluationResult(
             epoch=epoch,
@@ -266,7 +268,7 @@ class OfflinePolicyOptimizationPipeline:
             },
         )
 
-    async def _rollout_and_analyze_batch(
+    async def _rollout_batch(
         self,
         *,
         cases,
@@ -274,7 +276,7 @@ class OfflinePolicyOptimizationPipeline:
         ctx: PipelineContext,
         epoch: int,
         training: bool,
-    ) -> tuple[list[RolloutAnalysis], str]:
+    ) -> tuple[list[Any], str]:
         snapshot_id = await self.snapshotter.snapshot(
             policy_set,
             ctx.snapshot_context,
@@ -283,6 +285,7 @@ class OfflinePolicyOptimizationPipeline:
             **dict(ctx.execution_metadata),
             "epoch": epoch,
             "training": training,
+            "stage": _rollout_stage(epoch=epoch, training=training),
         }
         execution_context = ExecutionContext(
             policy_snapshot_id=snapshot_id,
@@ -293,14 +296,44 @@ class OfflinePolicyOptimizationPipeline:
             policy_set,
             execution_context,
         )
-        analyses = await self._training_engine.analyze_rollouts(rollouts, ctx)
-        return analyses, snapshot_id
+        return rollouts, snapshot_id
+
+
+def _rollout_stage(*, epoch: int, training: bool) -> str:
+    if training:
+        return f"train-rollout epoch={epoch}"
+    if epoch < 0:
+        return "baseline-rollout"
+    return "final-rollout"
 
 
 def _average_score(analyses: list[RolloutAnalysis]) -> float | None:
     if not analyses:
         return None
     return sum(float(analysis.evaluation.score) for analysis in analyses) / len(analyses)
+
+
+def _analyses_from_rollout_evaluations(rollouts) -> list[RolloutAnalysis]:
+    analyses: list[RolloutAnalysis] = []
+    for idx, rollout in enumerate(rollouts):
+        if rollout.evaluation is None:
+            raise ValueError(
+                "pipeline eval requires RolloutExecutor to provide rollout.evaluation; "
+                f"missing index={idx}, case={rollout.case.name}"
+            )
+        analyses.append(
+            RolloutAnalysis(
+                evaluation=rollout.evaluation,
+                trajectories=[],
+                metadata={
+                    "rollout": rollout,
+                    "rollout_messages": rollout.messages,
+                    "policy_snapshot_id": rollout.policy_snapshot_id,
+                    "evaluation_source": "rollout_executor",
+                },
+            )
+        )
+    return analyses
 
 
 def _first_epoch_score(epochs: list[PipelineEpochResult]) -> float | None:
@@ -319,3 +352,13 @@ def _final_epoch_score(
         if score is not None:
             return score
     return None
+
+
+def _validate_rollouts_have_cases(rollouts) -> None:
+    missing = [
+        idx for idx, rollout in enumerate(rollouts) if getattr(rollout, "case", None) is None
+    ]
+    if missing:
+        raise ValueError(
+            f"rollout training requires Rollout.case for all rollouts; missing indices={missing}"
+        )

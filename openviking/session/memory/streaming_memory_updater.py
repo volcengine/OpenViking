@@ -724,13 +724,21 @@ def render_operation_after_file_content(
                 current_value,
                 metadata[field_def.name],
             )
-        except Exception:
+        except Exception as exc:
             logger.debug(
                 "Failed to preview memory patch field: memory_type=%s field=%s",
                 op.memory_type,
                 field_def.name,
                 exc_info=True,
             )
+            tracer.info(
+                "[streaming_memory_updater] skipping preview field update after merge_op failure "
+                f"memory_type={op.memory_type} field={field_def.name} error={exc}"
+            )
+            if current_value is None:
+                metadata.pop(field_def.name, None)
+            else:
+                metadata[field_def.name] = current_value
 
     if old_content and old_content.extra_fields:
         schema_field_names = {field.name for field in schema.fields} | {"content", "memory_type"}
@@ -739,23 +747,11 @@ def render_operation_after_file_content(
                 metadata[key] = value
     metadata.setdefault("memory_type", op.memory_type)
     mf = MemoryFile.from_parsed(uri=_first_uri(op.uris), parsed=dict(metadata))
-    try:
-        return MemoryFileUtils.write(
-            mf,
-            content_template=schema.content_template,
-            extract_context=extract_context,
-        )
-    except Exception:
-        return operation_after_content(op)
-
-
-def operation_after_content(op: ResolvedOperation) -> str:
-    import json
-
-    fields = dict(getattr(op, "memory_fields", {}) or {})
-    if fields.get("content") is not None:
-        return str(fields.get("content") or "")
-    return json.dumps(fields, ensure_ascii=False, indent=2, sort_keys=True)
+    return MemoryFileUtils.write(
+        mf,
+        content_template=schema.content_template,
+        extract_context=extract_context,
+    )
 
 
 def classify_memory_merge_mode(

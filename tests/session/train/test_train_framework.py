@@ -134,6 +134,7 @@ class DummyExecutor:
     async def execute(self, cases: list[Case], policy_set: ExperienceSet, context) -> list[Rollout]:
         self.calls += 1
         assert context.policy_snapshot_id.startswith("snapshot-")
+        epoch = int(context.policy_snapshot_id.removeprefix("snapshot-")) - 1
         return [
             Rollout(
                 case=case,
@@ -145,6 +146,12 @@ class DummyExecutor:
                     )
                 ],
                 policy_snapshot_id=context.policy_snapshot_id,
+                evaluation=RubricEvaluation(
+                    passed=True,
+                    score=float(epoch),
+                    criterion_results=[],
+                    feedback=[],
+                ),
             )
             for case in cases
         ]

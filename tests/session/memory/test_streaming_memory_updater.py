@@ -189,6 +189,78 @@ def test_operation_to_patch_omits_raw_operation_metadata():
     assert patch.after_file.content == "new content"
 
 
+def test_operation_to_patch_raises_when_after_file_preview_rendering_fails(monkeypatch):
+    schema = _registry().get("notes")
+    op = _note_op("note_render_failure")
+
+    def fail_write(*args, **kwargs):
+        raise RuntimeError("template render failed")
+
+    monkeypatch.setattr(
+        "openviking.session.memory.streaming_memory_updater.MemoryFileUtils.write",
+        fail_write,
+    )
+
+    with pytest.raises(RuntimeError, match="template render failed"):
+        operation_to_patch(op, schema=schema, extract_context=ExtractContext([]))
+
+
+def test_operation_to_patch_skips_failed_field_preview_update():
+    schema = MemoryTypeSchema(
+        memory_type="notes",
+        description="note memory",
+        directory="viking://user/{{ user_space }}/memories/notes",
+        filename_template="{{ note_name }}.md",
+        operation_mode="upsert",
+        fields=[
+            MemoryField(
+                name="note_name",
+                field_type=FieldType.STRING,
+                merge_op=MergeOp.IMMUTABLE,
+            ),
+            MemoryField(
+                name="content",
+                field_type=FieldType.STRING,
+                merge_op=MergeOp.PATCH,
+            ),
+            MemoryField(
+                name="summary",
+                field_type=FieldType.STRING,
+                merge_op=MergeOp.PATCH,
+            ),
+        ],
+    )
+    old_file = MemoryFile(
+        uri="viking://user/u/memories/notes/note.md",
+        content="old content",
+        memory_type="notes",
+        extra_fields={
+            "note_name": "note",
+            "summary": "old summary",
+        },
+    )
+    op = ResolvedOperation(
+        old_memory_file_content=old_file,
+        memory_type="notes",
+        uris=["viking://user/u/memories/notes/note.md"],
+        memory_fields={
+            "note_name": "note",
+            "content": StrPatch(
+                blocks=[SearchReplaceBlock(search="old content", replace="new content")]
+            ),
+            "summary": StrPatch(
+                blocks=[SearchReplaceBlock(search="missing summary", replace="new summary")]
+            ),
+        },
+    )
+
+    patch = operation_to_patch(op, schema=schema, extract_context=ExtractContext([]))
+
+    assert patch.after_file.content == "new content"
+    assert patch.after_file.extra_fields["summary"] == "old summary"
+    assert isinstance(op.memory_fields["summary"], StrPatch)
+
+
 @pytest.mark.asyncio
 async def test_streaming_memory_updater_submit_applies_fast_path(monkeypatch):
     fs = InMemoryVikingFS({})

@@ -122,6 +122,18 @@ class GradientEstimator(Protocol):
     ) -> list[SemanticGradient]: ...
 
 
+class PolicyTrainer(Protocol):
+    """Trains a policy from rollout batches, optionally using precomputed analyses."""
+
+    async def train_rollouts(
+        self,
+        rollouts: list[Rollout],
+        policy_set: ExperienceSet,
+        context: Any,
+        analyses: list[RolloutAnalysis] | None = None,
+    ) -> RolloutTrainingResult: ...
+
+
 class PolicyOptimizationPipeline(Protocol):
     """Runs end-to-end policy optimization over case batches."""
 

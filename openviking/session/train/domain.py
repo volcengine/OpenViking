@@ -147,6 +147,7 @@ class Rollout:
     case: Case
     messages: list[Message]
     policy_snapshot_id: str
+    evaluation: "RubricEvaluation | None" = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
 

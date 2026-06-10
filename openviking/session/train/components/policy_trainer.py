@@ -10,6 +10,7 @@ case rollout execution.
 
 from __future__ import annotations
 
+import asyncio
 import threading
 from dataclasses import dataclass, field
 from typing import Any, Hashable
@@ -22,6 +23,7 @@ from openviking.session.train.context import PipelineContext
 from openviking.session.train.domain import (
     ExperienceSet,
     PolicyApplyResult,
+    PolicyUpdatePlan,
     Rollout,
     RolloutAnalysis,
     RolloutTrainingResult,
@@ -64,12 +66,18 @@ class BatchPolicyTrainer:
         rollouts: list[Rollout],
         policy_set: ExperienceSet,
         context: PipelineContext | Any = None,
+        analyses: list[RolloutAnalysis] | None = None,
     ) -> RolloutTrainingResult:
         ctx = _coerce_pipeline_context(context)
         rollout_list = list(rollouts)
         _validate_rollouts_have_cases(rollout_list)
-        analyses, gradients, plan, apply_result = await self._engine.analyze_estimate_plan_apply(
-            rollouts=rollout_list,
+        if analyses is None:
+            analyses = await self._engine.analyze_rollouts(rollout_list, ctx)
+        else:
+            analyses = list(analyses)
+        gradients = await self._engine.estimate_gradients(analyses, policy_set, ctx)
+        plan, apply_result = await self._engine.plan_and_apply(
+            gradients=gradients,
             policy_set=policy_set,
             ctx=ctx,
         )
@@ -235,6 +243,19 @@ class StreamingPolicyTrainer:
         )
         return result
 
+
+    @tracer("train.streaming_policy_trainer.train_rollouts", ignore_result=True, ignore_args=True)
+    async def train_rollouts(
+        self,
+        rollouts: list[Rollout],
+        policy_set: ExperienceSet,
+        context: PipelineContext | Any = None,
+        analyses: list[RolloutAnalysis] | None = None,
+    ) -> RolloutTrainingResult:
+        del policy_set, context, analyses
+        results = await asyncio.gather(*[self.submit_rollout(rollout) for rollout in rollouts])
+        return _combine_training_results(results, source="streaming_rollouts")
+
     async def _process_batch(
         self,
         items: list["_BufferedRolloutTraining"],
@@ -375,3 +396,44 @@ def _unique_by_identity(items: list[Any]) -> list[Any]:
         seen.add(item_id)
         unique.append(item)
     return unique
+
+
+def _combine_training_results(
+    results: list[RolloutTrainingResult],
+    *,
+    source: str,
+) -> RolloutTrainingResult:
+    if not results:
+        return RolloutTrainingResult(
+            analyses=[],
+            gradients=[],
+            plan=PolicyUpdatePlan(metadata={"empty": True}),
+            apply_result=PolicyApplyResult(updated_policy_set=ExperienceSet(root_uri="", policies=[])),
+            metadata={
+                "source": source,
+                "rollout_count": 0,
+                "analysis_count": 0,
+                "gradient_count": 0,
+            },
+        )
+
+    last = results[-1]
+    analyses = _unique_by_identity([analysis for result in results for analysis in result.analyses])
+    gradients = [gradient for result in results for gradient in result.gradients]
+    metadata = dict(last.metadata)
+    metadata.update(
+        {
+            "source": source,
+            "rollout_count": len(analyses),
+            "analysis_count": len(analyses),
+            "gradient_count": len(gradients),
+            "score": _average_score(analyses),
+        }
+    )
+    return RolloutTrainingResult(
+        analyses=analyses,
+        gradients=gradients,
+        plan=last.plan,
+        apply_result=last.apply_result,
+        metadata=metadata,
+    )

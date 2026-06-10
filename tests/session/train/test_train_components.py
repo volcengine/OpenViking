@@ -359,7 +359,7 @@ async def test_patch_merge_policy_optimizer_runs_patch_merge_extract_loop(monkey
                 [],
             )
 
-    monkeypatch.setattr("openviking.session.train.optimizers.ExtractLoop", FakeExtractLoop)
+    monkeypatch.setattr("openviking.session.train.components.policy_optimizer.ExtractLoop", FakeExtractLoop)
 
     plan = await PatchMergePolicyOptimizer(viking_fs=FakeVikingFS({}), vlm=object()).plan(
         [gradient],
@@ -440,7 +440,7 @@ async def test_patch_merge_policy_optimizer_merges_all_patch_gradients_once(monk
                 [],
             )
 
-    monkeypatch.setattr("openviking.session.train.optimizers.ExtractLoop", FakeExtractLoop)
+    monkeypatch.setattr("openviking.session.train.components.policy_optimizer.ExtractLoop", FakeExtractLoop)
 
     plan = await PatchMergePolicyOptimizer(viking_fs=FakeVikingFS({}), vlm=object()).plan(
         gradients,
@@ -512,7 +512,7 @@ async def test_patch_merge_policy_optimizer_runs_llm_for_single_patch(monkeypatc
                 [],
             )
 
-    monkeypatch.setattr("openviking.session.train.optimizers.ExtractLoop", FakeExtractLoop)
+    monkeypatch.setattr("openviking.session.train.components.policy_optimizer.ExtractLoop", FakeExtractLoop)
 
     plan = await PatchMergePolicyOptimizer(viking_fs=FakeVikingFS({}), vlm=object()).plan(
         [gradient],

@@ -4,12 +4,24 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+import time
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from openviking.message import Message, TextPart
-from openviking.session.train import Case, ExecutionContext, ExperienceSet, Rollout
+from openviking.message import Message, TextPart, ToolPart
+from openviking.session.train import (
+    Case,
+    CriterionResult,
+    ExecutionContext,
+    ExperienceSet,
+    Rollout,
+    RubricEvaluation,
+)
+from openviking_cli.utils import get_logger
+
+logger = get_logger(__name__)
 
 
 def _tool_provider_cls():
@@ -48,7 +60,13 @@ def _vikingbot_imports() -> dict[str, Any]:
     }
 
 
-def _make_tau2_tool(schema: dict[str, Any], provider: Any):
+def _make_tau2_tool(
+    schema: dict[str, Any],
+    provider: Any,
+    *,
+    tool_lock: asyncio.Lock | None = None,
+    record_tool_timing: Callable[[str, float], None] | None = None,
+):
     Tool = _vikingbot_imports()["Tool"]
 
     class Tau2Tool(Tool):
@@ -76,7 +94,15 @@ def _make_tau2_tool(schema: dict[str, Any], provider: Any):
 
         async def execute(self, tool_context: Any, **kwargs: Any) -> str:
             del tool_context
-            return self._provider.call_tool(self._name, kwargs)
+            started_at = time.perf_counter()
+            try:
+                if tool_lock is None:
+                    return await asyncio.to_thread(self._provider.call_tool, self._name, kwargs)
+                async with tool_lock:
+                    return await asyncio.to_thread(self._provider.call_tool, self._name, kwargs)
+            finally:
+                if record_tool_timing is not None:
+                    record_tool_timing(self._name, _elapsed_ms(started_at))
 
     return Tau2Tool(schema, provider)
 
@@ -89,6 +115,7 @@ class Tau2RolloutExecutor:
     concurrency: int = 20
     keep_default_tools: bool = True
     max_iterations: int = 30
+    log_timings: bool = True
 
     async def execute(
         self,
@@ -108,21 +135,38 @@ class Tau2RolloutExecutor:
         return list(await asyncio.gather(*(run_one(case) for case in cases)))
 
     async def _execute_one(self, case: Case, context: ExecutionContext) -> Rollout:
-        return await asyncio.to_thread(self._execute_one_sync, case, context)
+        return await self._execute_one_async(case, context)
 
-    def _execute_one_sync(self, case: Case, context: ExecutionContext) -> Rollout:
+    async def _execute_one_async(self, case: Case, context: ExecutionContext) -> Rollout:
         domain = str(case.input["domain"])
         task_id = str(case.input["task_id"])
         task_no = int(case.input["task_no"])
         data_split = str(case.input["data_split"])
         data_root = case.input.get("data_root")
 
+        timings = _RolloutTiming(case=case.name, enabled=self.log_timings)
+        total_started_at = time.perf_counter()
+
+        stage_started_at = time.perf_counter()
         Tau2BenchToolProvider = _tool_provider_cls()
         provider = Tau2BenchToolProvider(domain, task_id, data_root=data_root)
         provider.reset()
-        agent = _build_agent(self.config_path, max_iterations=self.max_iterations)
-        _configure_tools(agent, provider, keep_default_tools=self.keep_default_tools)
+        timings.record("provider_reset", stage_started_at)
 
+        stage_started_at = time.perf_counter()
+        agent = _build_agent(self.config_path, max_iterations=self.max_iterations)
+        timings.record("build_agent", stage_started_at)
+
+        stage_started_at = time.perf_counter()
+        _configure_tools(
+            agent,
+            provider,
+            keep_default_tools=self.keep_default_tools,
+            record_tool_timing=timings.record_tool,
+        )
+        timings.record("configure_tools", stage_started_at)
+
+        stage_started_at = time.perf_counter()
         system_prompt = _build_system_prompt(
             provider.policy,
             keep_default_tools=self.keep_default_tools,
@@ -134,26 +178,33 @@ class Tau2RolloutExecutor:
             channel_id="tau2",
             chat_id=f"tau2_{data_split}_{task_no}",
         )
+        timings.record("prepare_prompt", stage_started_at)
+
         final_content, final_reasoning_content, tools_used, token_usage, iteration, memory_content = (
-            _run_agent_sync(
+            await _run_agent(
                 agent=agent,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 session_key=session_key,
                 sender_id="tau2_user",
                 keep_default_tools=self.keep_default_tools,
+                timings=timings,
             )
         )
+
         reward = None
         evaluation_result = None
+        stage_started_at = time.perf_counter()
         if provider.env is not None:
             try:
                 reward, evaluation_result = provider.env.env._get_reward()
             except Exception:
                 reward = None
                 evaluation_result = None
+        timings.record("reward", stage_started_at)
 
-        return Rollout(
+        stage_started_at = time.perf_counter()
+        rollout = Rollout(
             case=case,
             messages=_build_rollout_messages(
                 system_prompt=system_prompt,
@@ -164,6 +215,7 @@ class Tau2RolloutExecutor:
                 reward=reward,
             ),
             policy_snapshot_id=context.policy_snapshot_id,
+            evaluation=_tau2_evaluation(reward=reward, evaluation_result=evaluation_result),
             metadata={
                 "domain": domain,
                 "data_split": data_split,
@@ -183,6 +235,17 @@ class Tau2RolloutExecutor:
                 "execution_metadata": dict(context.metadata),
             },
         )
+        timings.record("build_rollout", stage_started_at)
+        timings.log_summary(
+            total_ms=_elapsed_ms(total_started_at),
+            task_id=task_id,
+            task_no=task_no,
+            data_split=data_split,
+            iterations=iteration,
+            reward=reward,
+            message_count=len(rollout.messages),
+        )
+        return rollout
 
 
 def _build_agent(config_path: str | None, *, max_iterations: int):
@@ -220,13 +283,22 @@ def _configure_tools(
     provider: Any,
     *,
     keep_default_tools: bool,
+    record_tool_timing: Callable[[str, float], None] | None = None,
 ) -> None:
     if not keep_default_tools:
         for tool_name in list(agent.tools.tool_names):
             agent.tools.unregister(tool_name)
     agent.tools.unregister("openviking_memory_commit")
+    tool_lock = asyncio.Lock()
     for schema in provider.list_openai_tools():
-        agent.tools.register(_make_tau2_tool(schema, provider))
+        agent.tools.register(
+            _make_tau2_tool(
+                schema,
+                provider,
+                tool_lock=tool_lock,
+                record_tool_timing=record_tool_timing,
+            )
+        )
 
 
 def _build_system_prompt(policy: str, *, keep_default_tools: bool) -> str:
@@ -249,27 +321,6 @@ def _build_system_prompt(policy: str, *, keep_default_tools: bool) -> str:
     return "\n".join(instructions)
 
 
-def _run_agent_sync(
-    *,
-    agent: Any,
-    system_prompt: str,
-    user_prompt: str,
-    session_key: Any,
-    sender_id: str,
-    keep_default_tools: bool,
-):
-    return asyncio.run(
-        _run_agent(
-            agent=agent,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            session_key=session_key,
-            sender_id=sender_id,
-            keep_default_tools=keep_default_tools,
-        )
-    )
-
-
 async def _run_agent(
     *,
     agent: Any,
@@ -278,7 +329,9 @@ async def _run_agent(
     session_key: Any,
     sender_id: str,
     keep_default_tools: bool,
+    timings: "_RolloutTiming | None" = None,
 ):
+    stage_started_at = time.perf_counter()
     messages = await agent.context.build_messages(
         history=[],
         current_message=user_prompt,
@@ -287,11 +340,14 @@ async def _run_agent(
         media=None,
         profile_user_list=[],
     )
+    if timings is not None:
+        timings.record("build_messages", stage_started_at)
     if system_prompt:
         messages.insert(1, {"role": "system", "content": system_prompt})
     memory_content = None
     if len(messages) > 2 and isinstance(messages[2].get("content"), str):
         memory_content = _extract_memory_content(messages[2]["content"])
+    stage_started_at = time.perf_counter()
     result = await agent._run_agent_loop(
         messages=messages,
         session_key=session_key,
@@ -299,7 +355,57 @@ async def _run_agent(
         sender_id=sender_id,
         ov_tools_enable=keep_default_tools,
     )
+    if timings is not None:
+        timings.record("agent_loop", stage_started_at)
     return (*result, memory_content)
+
+
+@dataclass(slots=True)
+class _RolloutTiming:
+    case: str
+    enabled: bool
+    stages: dict[str, float] = field(default_factory=dict)
+    tool_durations: list[tuple[str, float]] = field(default_factory=list)
+
+    def record(self, stage: str, started_at: float) -> None:
+        if self.enabled:
+            self.stages[stage] = _elapsed_ms(started_at)
+
+    def record_tool(self, tool_name: str, duration_ms: float) -> None:
+        if self.enabled:
+            self.tool_durations.append((tool_name, duration_ms))
+
+    def log_summary(self, *, total_ms: float, **metadata: Any) -> None:
+        if not self.enabled:
+            return
+        tool_total_ms = sum(duration for _, duration in self.tool_durations)
+        slowest_tool = max(self.tool_durations, key=lambda item: item[1], default=None)
+        logger.info(
+            "tau2 rollout timing case=%s total_ms=%.1f stages=%s tool_count=%d "
+            "tool_total_ms=%.1f slowest_tool=%s metadata=%s",
+            self.case,
+            total_ms,
+            _format_stage_timings(self.stages),
+            len(self.tool_durations),
+            tool_total_ms,
+            _format_tool_timing(slowest_tool),
+            metadata,
+        )
+
+
+def _elapsed_ms(started_at: float) -> float:
+    return (time.perf_counter() - started_at) * 1000.0
+
+
+def _format_stage_timings(stages: dict[str, float]) -> str:
+    return ",".join(f"{stage}:{duration_ms:.1f}" for stage, duration_ms in stages.items())
+
+
+def _format_tool_timing(item: tuple[str, float] | None) -> str | None:
+    if item is None:
+        return None
+    tool_name, duration_ms = item
+    return f"{tool_name}:{duration_ms:.1f}"
 
 
 MEMORY_PROMPT_PREFIX = "## Current Session\nChannel: cli\n\n---\n\n"
@@ -341,15 +447,31 @@ def _build_rollout_messages(
             args = tool_info.get("args", "")
             if tool_name:
                 messages.append(
-                    _message(
-                        f"tau2-tool-call-{idx}",
-                        "assistant",
-                        f"tool-call:\nname: {tool_name}\narguments: {args}",
+                    Message(
+                        id=f"tau2-tool-call-{idx}",
+                        role="assistant",
+                        parts=[
+                            TextPart(
+                                text=f"tool-call:\nname: {tool_name}\narguments: {_stringify(args)}"
+                            )
+                        ],
                     )
                 )
             if tool_info.get("result") is not None:
                 messages.append(
-                    _message(f"tau2-tool-result-{idx}", "user", f"tool-response:\n{tool_info['result']}")
+                    Message(
+                        id=f"tau2-tool-result-{idx}",
+                        role="user",
+                        parts=[
+                            ToolPart(
+                                tool_id=f"tau2-tool-{idx}",
+                                tool_name=str(tool_name or "unknown"),
+                                tool_input=_as_tool_input(args),
+                                tool_output=_stringify(tool_info.get("result")),
+                                tool_status="completed",
+                            )
+                        ],
+                    )
                 )
     messages.append(_message("tau2-final", "assistant", final_content or ""))
     success = reward == 1 or reward == 1.0
@@ -365,3 +487,52 @@ def _build_rollout_messages(
 
 def _message(message_id: str, role: str, text: str) -> Message:
     return Message(id=message_id, role=role, parts=[TextPart(text=text)])
+
+
+def _as_tool_input(args: Any) -> dict[str, Any]:
+    if isinstance(args, dict):
+        return args
+    return {"arguments": args}
+
+
+def _tau2_evaluation(*, reward: Any, evaluation_result: Any) -> RubricEvaluation:
+    score = _safe_float(reward, default=0.0)
+    passed = score >= 1.0
+    feedback = [] if passed else ["tau2 environment reward is below 1.0."]
+    if evaluation_result is not None:
+        feedback.append(_stringify(evaluation_result))
+    return RubricEvaluation(
+        passed=passed,
+        score=score,
+        criterion_results=[
+            CriterionResult(
+                criterion_name="tau2_reward",
+                passed=passed,
+                score=score,
+                feedback=feedback,
+                evidence=[_stringify(evaluation_result)] if evaluation_result is not None else [],
+                metadata={"reward": score},
+            )
+        ],
+        feedback=feedback,
+        metadata={
+            "source": "tau2_executor",
+            "reward": score,
+            "evaluation_result": evaluation_result,
+        },
+    )
+
+
+def _safe_float(value: Any, *, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _stringify(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    import json
+
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)

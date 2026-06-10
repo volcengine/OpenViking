@@ -27,6 +27,7 @@ class Tau2CaseLoader:
     split: str
     batch_size: int | None = None
     data_root: str | None = None
+    limit: int | None = None
 
     async def batches(self, context: Any = None) -> AsyncIterator[list[Case]]:
         del context
@@ -46,7 +47,12 @@ class Tau2CaseLoader:
         values = data.get(self.split)
         if not isinstance(values, list):
             return []
-        return [str(item) for item in values]
+        task_ids = [str(item) for item in values]
+        if self.limit is None:
+            return task_ids
+        if self.limit <= 0:
+            raise ValueError("limit must be > 0")
+        return task_ids[: self.limit]
 
     def split_exists(self) -> bool:
         data = _load_split_tasks(self.domain, self.data_root)
@@ -95,7 +101,27 @@ def _load_split_tasks(domain: str, data_root: str | None = None) -> dict[str, An
             "TAU2_DATA_ROOT is not set. Point it at your tau2-bench data dir, e.g. "
             "export TAU2_DATA_ROOT=<tau2-bench>/data/tau2."
         )
-    path = Path(root).expanduser() / "domains" / domain / "split_tasks.json"
-    if not path.exists():
-        raise FileNotFoundError(f"Split file not found: {path}")
-    return json.loads(path.read_text(encoding="utf-8"))
+    domain_dir = Path(root).expanduser() / "domains" / domain
+    split_path = domain_dir / "split_tasks.json"
+    if split_path.exists():
+        return json.loads(split_path.read_text(encoding="utf-8"))
+
+    tasks_path = domain_dir / "tasks.json"
+    if not tasks_path.exists():
+        raise FileNotFoundError(
+            f"Neither split_tasks.json nor tasks.json found under: {domain_dir}"
+        )
+    return _derive_split_tasks_from_tasks_json(tasks_path)
+
+
+def _derive_split_tasks_from_tasks_json(tasks_path: Path) -> dict[str, list[str]]:
+    tasks = json.loads(tasks_path.read_text(encoding="utf-8"))
+    if not isinstance(tasks, list):
+        raise ValueError(f"tasks.json must be a list: {tasks_path}")
+    task_ids = [str(task.get("id")) for task in tasks if isinstance(task, dict) and "id" in task]
+    if not task_ids:
+        raise ValueError(f"tasks.json contains no task ids: {tasks_path}")
+    split_at = max(1, len(task_ids) // 2)
+    if split_at >= len(task_ids):
+        return {"train": task_ids, "test": []}
+    return {"train": task_ids[:split_at], "test": task_ids[split_at:]}

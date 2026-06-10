@@ -1143,6 +1143,7 @@ class SessionCompressorV2:
 
         return {
             "archive_uri": archive_uri,
+            "trace_id": tracer.get_trace_id() or None,
             "extracted_at": datetime.utcnow().isoformat() + "Z",
             "operations": {
                 "adds": adds,

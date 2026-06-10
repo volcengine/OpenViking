@@ -111,6 +111,8 @@ class TrajectoryRolloutAnalyzer:
         rollout: Rollout,
         context: TrajectoryAnalyzerContext,
     ) -> RubricEvaluation | None:
+        if rollout.evaluation is not None:
+            return rollout.evaluation
         if self.evaluator is None:
             return None
         return await self.evaluator.evaluate(rollout, context.evaluator_context)

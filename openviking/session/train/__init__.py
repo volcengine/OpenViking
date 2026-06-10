@@ -2,11 +2,24 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Session training framework for trajectory/experience policy optimization."""
 
+from openviking.session.train.components.case_loader import ListCaseLoader
 from openviking.session.train.components.gradient_estimator import (
     ExperienceGradientContext,
     ExperienceGradientEstimator,
 )
 from openviking.session.train.components.memory_store import ExperienceSetLoader
+from openviking.session.train.components.policy_optimizer import (
+    PatchMergePolicyOptimizer,
+    PatchMergePolicyOptimizerContext,
+)
+from openviking.session.train.components.policy_trainer import (
+    BatchPolicyTrainer,
+    StreamingPolicyTrainer,
+    StreamingPolicyTrainerConfig,
+    StreamingPolicyTrainerKey,
+    get_streaming_policy_trainer,
+    make_streaming_policy_trainer_key,
+)
 from openviking.session.train.components.policy_updater import (
     DryRunPolicyUpdater,
     MemoryFilePolicyUpdater,
@@ -15,6 +28,8 @@ from openviking.session.train.components.rollout_executor import (
     SingleTurnLLMRolloutExecutor,
     default_single_turn_prompt,
 )
+from openviking.session.train.components.session_commit import SessionCommitPolicyTrainer
+from openviking.session.train.components.snapshotter import ContentHashPolicySnapshotter
 from openviking.session.train.components.trajectory_analyzer import (
     TrajectoryAnalyzerContext,
     TrajectoryRolloutAnalyzer,
@@ -49,27 +64,14 @@ from openviking.session.train.interfaces import (
     PolicyOptimizationPipeline,
     PolicyOptimizer,
     PolicySnapshotter,
+    PolicyTrainer,
     PolicyUpdater,
     RolloutAnalyzer,
     RolloutEvaluator,
     RolloutExecutor,
     SemanticGradient,
 )
-from openviking.session.train.loaders import ListCaseLoader
-from openviking.session.train.optimizers import (
-    PatchMergePolicyOptimizer,
-    PatchMergePolicyOptimizerContext,
-)
 from openviking.session.train.pipeline import OfflinePolicyOptimizationPipeline
-from openviking.session.train.snapshot import ContentHashPolicySnapshotter
-from openviking.session.train.trainers import (
-    BatchPolicyTrainer,
-    StreamingPolicyTrainer,
-    StreamingPolicyTrainerConfig,
-    StreamingPolicyTrainerKey,
-    get_streaming_policy_trainer,
-    make_streaming_policy_trainer_key,
-)
 
 __all__ = [
     "make_streaming_policy_trainer_key",
@@ -84,6 +86,8 @@ __all__ = [
     "TrajectoryAnalyzerContext",
     "PatchMergePolicyOptimizer",
     "PatchMergePolicyOptimizerContext",
+    "PolicyTrainer",
+    "SessionCommitPolicyTrainer",
     "ExperienceSetLoader",
     "DryRunPolicyUpdater",
     "MemoryFilePolicyUpdater",
