@@ -454,6 +454,44 @@ async fn remove_all_generation_rejects_residual_descendant_cache_entries() {
 }
 
 #[tokio::test]
+async fn shared_provider_generation_bump_invalidates_other_wrappers() {
+    let backend = CountingFileSystem::new();
+    backend.mkdir("/tree", 0o755).await.unwrap();
+    backend
+        .write("/tree/leaf.txt", b"old", 0, WriteFlag::Create)
+        .await
+        .unwrap();
+    let direct = backend.clone();
+    let probe = backend.clone();
+    let provider = Arc::new(MemoryCacheProvider::new());
+
+    let first = CachedFileSystem::new(
+        Box::new(backend.clone()),
+        provider.clone(),
+        CacheNamespace::new("shared"),
+        CachePolicy::default(),
+    );
+    let second = CachedFileSystem::new(
+        Box::new(backend),
+        provider,
+        CacheNamespace::new("shared"),
+        CachePolicy::default(),
+    );
+
+    assert_eq!(first.read("/tree/leaf.txt", 0, 0).await.unwrap(), b"old");
+    second.remove_all("/tree").await.unwrap();
+
+    direct.mkdir("/tree", 0o755).await.unwrap();
+    direct
+        .write("/tree/leaf.txt", b"new", 0, WriteFlag::Create)
+        .await
+        .unwrap();
+
+    assert_eq!(first.read("/tree/leaf.txt", 0, 0).await.unwrap(), b"new");
+    assert_eq!(probe.read_count(), 2);
+}
+
+#[tokio::test]
 async fn provider_generation_eviction_after_restart_cannot_revive_old_descendants() {
     let backend = CountingFileSystem::new();
     backend.mkdir("/tree", 0o755).await.unwrap();

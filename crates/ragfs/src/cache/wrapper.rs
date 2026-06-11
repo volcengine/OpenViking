@@ -137,14 +137,16 @@ impl CachedFileSystem {
     }
 
     async fn current_generation(&self, key: &str) -> CacheResult<u64> {
-        if let Some(value) = self.generations.read().await.get(key).copied() {
-            return Ok(value);
-        }
-
         let provider_value = self.cache_get(key).await?;
         let was_missing = provider_value.is_none();
         let value = match provider_value {
-            None => self.generation_epoch,
+            None => self
+                .generations
+                .read()
+                .await
+                .get(key)
+                .copied()
+                .unwrap_or(self.generation_epoch),
             Some(value) if value.len() == std::mem::size_of::<u64>() => {
                 let mut bytes = [0_u8; 8];
                 bytes.copy_from_slice(&value);
