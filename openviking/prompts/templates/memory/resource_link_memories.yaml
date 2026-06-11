@@ -1,0 +1,24 @@
+memory_type: resource_link_memories
+description: |
+  System-managed aggregate memories for resources added with user reasons.
+directory: "viking://user/{{ user_space }}/memories/resource_link_memories"
+filename_template: "{{ topic }}.md"
+enabled: true
+agent_only: true
+embedding_template: |-
+  {{ topic }}
+
+  {{ content }}
+
+fields:
+  - name: topic
+    type: string
+    description: |
+      Short topic title for a resource-link aggregate memory.
+    merge_op: immutable
+
+  - name: content
+    type: string
+    description: |
+      Human-readable aggregate summary for resource additions, with a few representative resource links.
+    merge_op: patch

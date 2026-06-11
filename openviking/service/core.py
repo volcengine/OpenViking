@@ -423,6 +423,7 @@ class OpenVikingService:
         self._resource_memory_link_service.set_dependencies(
             vikingdb=self._vikingdb_manager,
             viking_fs=self._viking_fs,
+            queue_manager=self._queue_manager,
         )
         self._relation_service.set_viking_fs(self._viking_fs)
         self._pack_service.set_dependencies(

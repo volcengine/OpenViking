@@ -1038,6 +1038,9 @@ class MemoryUpdater:
                 ):
                     md_files.append(f"{base_uri}/{name}")
 
+        except (NotFoundError, FileNotFoundError):
+            logger.debug("Skip overview generation for deleted directory: %s", directory)
+            return
         except Exception as e:
             tracer.error(f"Failed to list files in {directory}: {e}")
             return

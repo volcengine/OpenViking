@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for resource-memory linking service."""
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -54,6 +55,20 @@ class _ReadFailVikingFS:
         return [{"uri": memory_uri, "rel_path": "entities/wang.md", "isDir": False}]
 
 
+class _FakeCompactor:
+    def __init__(self):
+        self.marked = None
+        self.enqueued = False
+
+    async def mark_managed_memories(self, **kwargs):
+        self.marked = kwargs
+        return list(kwargs["memory_uris"])
+
+    async def enqueue_check(self, **kwargs):
+        self.enqueued = True
+        return "msg-1"
+
+
 @pytest.fixture
 def request_context():
     return RequestContext(
@@ -83,6 +98,51 @@ async def test_append_resource_refs_stores_only_memory_metadata(request_context)
     assert mf.links == []
     assert f"[王大锤]({resource_uri})" in store[memory_uri]
     assert resource_uri not in store
+
+
+@pytest.mark.asyncio
+async def test_on_resource_added_marks_new_memories_for_compaction(request_context):
+    memory_uri = "viking://user/alice/memories/entities/动漫角色/越前龙马.md"
+    resource_uri = "viking://resources/images/2026/06/11/yueqian_jpeg"
+    store = {
+        memory_uri: MemoryFileUtils.write(
+            MemoryFile(
+                uri=memory_uri,
+                content="用户上传了一张越前龙马的照片。",
+                memory_type="entities",
+                extra_fields={"category": "动漫角色", "name": "越前龙马"},
+            )
+        )
+    }
+    compactor = _FakeCompactor()
+    service = ResourceMemoryLinkService(
+        viking_fs=_FakeVikingFS(store),
+        compactor=compactor,
+    )
+    service._run_extract_loop = AsyncMock(
+        return_value=(
+            SimpleNamespace(upsert_operations=[object()], delete_file_contents=[], errors=[]),
+            object(),
+            object(),
+        )
+    )
+    update_result = MemoryUpdateResult()
+    update_result.add_written(memory_uri)
+    service._apply_memory_operations = AsyncMock(return_value=update_result)
+
+    result = await service.on_resource_added(
+        ctx=request_context,
+        resource_uri=resource_uri,
+        reason="这是越前龙马的照片",
+        source_name="yueqian.jpeg",
+    )
+
+    assert result["status"] == "success"
+    assert result["managed_memory_uris"] == [memory_uri]
+    assert result["compaction_msg_id"] == "msg-1"
+    assert compactor.enqueued is True
+    assert compactor.marked["memory_uris"] == [memory_uri]
+    assert compactor.marked["created_at"]
 
 
 def test_resource_linking_provider_detects_language_from_reason_not_resource_uri():

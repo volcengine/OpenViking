@@ -35,6 +35,7 @@ from openviking.session.memory.utils import (
     MemoryFileUtils,
     parse_memory_file_with_fields,
 )
+from openviking_cli.exceptions import NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -163,6 +164,42 @@ class TestMemoryUpdater:
             ("viking://user/alice/memories/entities/动漫角色/.overview.md", False),
             ("viking://user/alice/memories/entities/动漫角色", True),
         ]
+
+    @pytest.mark.asyncio
+    async def test_generate_overview_skips_deleted_directory(self):
+        schema = MemoryTypeSchema(
+            memory_type="entities",
+            description="entity memory",
+            directory="viking://user/{{ user_space }}/memories/entities",
+            filename_template="{{ name }}.md",
+            fields=[],
+            overview_template="overview",
+        )
+        registry = MagicMock()
+        registry.get.return_value = schema
+
+        class FakeVikingFS:
+            def __init__(self):
+                self.rm_calls = []
+
+            async def ls(self, uri, show_all_hidden=False, ctx=None):
+                raise NotFoundError(uri, "directory")
+
+            async def rm(self, uri, recursive=False, ctx=None, lock_handle=None):
+                self.rm_calls.append((uri, recursive))
+
+        viking_fs = FakeVikingFS()
+        updater = MemoryUpdater(registry=registry)
+        updater._get_viking_fs = MagicMock(return_value=viking_fs)
+        ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
+
+        await updater.generate_overview(
+            "entities",
+            "viking://user/alice/memories/entities/动漫角色",
+            ctx,
+        )
+
+        assert viking_fs.rm_calls == []
 
     @pytest.mark.asyncio
     async def test_apply_operations_preserves_pre_resolved_multi_uris_for_new_page_ids(self):

@@ -18,6 +18,7 @@ from openviking.message import Message
 from openviking.message.part import TextPart
 from openviking.prompts.manager import render_prompt
 from openviking.server.identity import RequestContext
+from openviking.service.resource_link_memory_compactor import ResourceLinkMemoryCompactor
 from openviking.session.memory.dataclass import MemoryFile, ResolvedOperations
 from openviking.session.memory.extract_loop import ExtractLoop
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
@@ -30,6 +31,7 @@ from openviking.session.memory.session_extract_context_provider import SessionEx
 from openviking.session.memory.utils.link_renderer import LinkRenderer
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.storage import VikingDBManager
+from openviking.storage.queuefs.queue_manager import QueueManager
 from openviking.storage.viking_fs import VikingFS, get_viking_fs
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import VikingURI, get_logger
@@ -222,18 +224,31 @@ class ResourceMemoryLinkService:
         *,
         vikingdb: Optional[VikingDBManager] = None,
         viking_fs: Optional[VikingFS] = None,
+        queue_manager: Optional[QueueManager] = None,
+        compactor: Optional[ResourceLinkMemoryCompactor] = None,
     ):
         self._vikingdb = vikingdb
         self._viking_fs = viking_fs
+        self._compactor = compactor or ResourceLinkMemoryCompactor(
+            vikingdb=vikingdb,
+            viking_fs=viking_fs,
+            queue_manager=queue_manager,
+        )
 
     def set_dependencies(
         self,
         *,
         vikingdb: Optional[VikingDBManager],
         viking_fs: VikingFS,
+        queue_manager: Optional[QueueManager] = None,
     ) -> None:
         self._vikingdb = vikingdb
         self._viking_fs = viking_fs
+        self._compactor.set_dependencies(
+            vikingdb=vikingdb,
+            viking_fs=viking_fs,
+            queue_manager=queue_manager,
+        )
 
     def _get_viking_fs(self) -> VikingFS:
         return self._viking_fs or get_viking_fs()
@@ -288,10 +303,18 @@ class ResourceMemoryLinkService:
             ctx=ctx,
             created_at=added_at,
         )
+        managed_uris = await self._compactor.mark_managed_memories(
+            ctx=ctx,
+            memory_uris=result.written_uris,
+            created_at=added_at,
+        )
+        compaction_msg_id = await self._compactor.enqueue_check(ctx=ctx)
         missing_uri = await self._memory_files_missing_resource_uri(changed_uris, resource_uri, ctx)
         return {
             "status": "success" if not result.errors else "partial_success",
             "memory_uris": changed_uris,
+            "managed_memory_uris": managed_uris,
+            "compaction_msg_id": compaction_msg_id,
             "deleted_memory_uris": result.deleted_uris,
             "errors": [f"{uri}: {exc}" for uri, exc in result.errors],
             "missing_resource_uri_uris": missing_uri,
