@@ -5,7 +5,7 @@ import logging
 import os
 from pathlib import Path
 from threading import Lock
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
@@ -48,6 +48,54 @@ from .vlm_config import VLMConfig
 def _get_config_warning_logger():
     """Use stdlib logging during config bootstrap to avoid early logger side effects."""
     return logging.getLogger(__name__)
+
+
+class ParserApiConfig(BaseModel):
+    """Configuration for the Understanding files/responses API."""
+
+    enable: bool = False
+    extensions: List[str] = Field(default_factory=list)
+    host: str = ""
+    api_key: str = ""
+    enable_resumable_upload: bool = False
+    upload_simple_max_bytes: int = 512 * 1024 * 1024
+    upload_part_size_bytes: int = 8 * 1024 * 1024
+    http_timeout_seconds: float = 10.0
+    response_timeout_seconds: int = 1800
+    poll_interval_ms: int = 3000
+
+    model_config = {"extra": "forbid"}
+
+    @model_validator(mode="after")
+    def _normalize_and_validate(self) -> "ParserApiConfig":
+        normalized_extensions: List[str] = []
+        for ext in self.extensions or []:
+            s = str(ext).strip().lower()
+            if not s:
+                continue
+            if s.startswith("."):
+                s = s[1:]
+            normalized_extensions.append(s)
+        self.extensions = normalized_extensions
+
+        if self.enable:
+            if not self.host.strip():
+                raise ValueError("parser_api.host is required when parser_api.enable=true")
+            if not self.api_key.strip():
+                raise ValueError("parser_api.api_key is required when parser_api.enable=true")
+        if self.host and "://" not in self.host:
+            raise ValueError("parser_api.host must include scheme (e.g., https://...)")
+        if self.upload_simple_max_bytes <= 0:
+            raise ValueError("parser_api.upload_simple_max_bytes must be > 0")
+        if self.upload_part_size_bytes <= 0:
+            raise ValueError("parser_api.upload_part_size_bytes must be > 0")
+        if self.http_timeout_seconds <= 0:
+            raise ValueError("parser_api.http_timeout_seconds must be > 0")
+        if self.response_timeout_seconds <= 0:
+            raise ValueError("parser_api.response_timeout_seconds must be > 0")
+        if self.poll_interval_ms <= 0:
+            raise ValueError("parser_api.poll_interval_ms must be > 0")
+        return self
 
 
 class OpenVikingConfig(BaseModel):
@@ -126,6 +174,11 @@ class OpenVikingConfig(BaseModel):
     semantic: SemanticConfig = Field(
         default_factory=SemanticConfig,
         description="Semantic processing configuration (overview/abstract limits)",
+    )
+
+    parser_api: ParserApiConfig = Field(
+        default_factory=ParserApiConfig,
+        description="Third-party parser API configuration (files/responses)",
     )
 
     auto_generate_l0: bool = Field(

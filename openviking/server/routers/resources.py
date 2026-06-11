@@ -226,6 +226,8 @@ async def add_resource(
         "watch_interval": request.watch_interval,
         "create_parent": request.create_parent,
     }
+    if request.temp_file_id:
+        kwargs["temp_file_id"] = request.temp_file_id
     if request.preserve_structure is not None:
         kwargs["preserve_structure"] = request.preserve_structure
 
