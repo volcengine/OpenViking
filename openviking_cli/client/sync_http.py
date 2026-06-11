@@ -206,7 +206,6 @@ class SyncHTTPClient:
         telemetry: TelemetryRequest = False,
         *,
         keep_recent_count: int = 0,
-        memory_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Commit a session (archive and extract memories)."""
         return run_async(
@@ -214,7 +213,6 @@ class SyncHTTPClient:
                 session_id,
                 telemetry=telemetry,
                 keep_recent_count=keep_recent_count,
-                memory_policy=memory_policy,
             )
         )
 

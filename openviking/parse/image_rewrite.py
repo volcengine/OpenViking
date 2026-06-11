@@ -9,7 +9,6 @@ directory.
 
 import json
 import re
-from pathlib import PurePath
 from typing import TYPE_CHECKING, Dict, Optional, Set
 
 from openviking.server.identity import RequestContext

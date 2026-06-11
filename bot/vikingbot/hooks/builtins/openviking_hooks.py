@@ -1,6 +1,4 @@
-import asyncio
 import re
-from collections import defaultdict
 from datetime import datetime
 from typing import Any
 
@@ -11,9 +9,7 @@ from vikingbot.openviking_mount.session_state import (
     get_openviking_session_id,
     get_openviking_state,
     get_unsynced_messages,
-    get_unsynced_messages_for_sender,
     parse_local_index,
-    set_sender_synced_local_index,
 )
 from vikingbot.utils.helpers import cal_str_tokens
 
@@ -30,16 +26,17 @@ except Exception:
     VikingClient = None
     ov = None
 
-_global_client: Any = None
+_global_clients: dict[str, Any] = {}
 
 
 async def get_global_client(workspace_id: str | None) -> VikingClient:
     """Get or create the shared VikingClient."""
-    del workspace_id
-    global _global_client
-    if _global_client is None:
-        _global_client = await VikingClient.create()
-    return _global_client
+    cache_key = str(workspace_id or "__default__")
+    client = _global_clients.get(cache_key)
+    if client is None:
+        client = await VikingClient.create(workspace_id)
+        _global_clients[cache_key] = client
+    return client
 
 
 class OpenVikingCompactHook(Hook):
@@ -91,8 +88,6 @@ class OpenVikingCompactHook(Hook):
 
         admin_append_result = None
         admin_commit_result = None
-        user_results = []
-        pending_tokens_before_sync = pending_tokens
 
         unsynced_tokens = sum(
             cal_str_tokens(str(msg.get("content") or ""))
@@ -100,176 +95,40 @@ class OpenVikingCompactHook(Hook):
             if msg.get("content") is not None
         )
 
-        all_sender_ids = sorted(
-            {
-                str(msg.get("sender_id"))
-                for msg in session.messages
-                if msg.get("sender_id") and msg.get("sender_id") != admin_user_id
-            }
-        )
-        unsynced_messages_by_sender = {}
-        sender_latest_indexes: dict[str, int] = {}
-        for sender_id in all_sender_ids:
-            user_messages = get_unsynced_messages_for_sender(
-                session,
-                sender_id,
-                admin_user_id=admin_user_id,
-            )
-            if user_messages:
-                unsynced_messages_by_sender[sender_id] = user_messages
-                sender_latest_indexes[sender_id] = max(
-                    index
-                    for index, msg in enumerate(session.messages)
-                    if msg.get("sender_id") == sender_id
-                )
-
         should_commit = bool(
             force_commit
             or pending_tokens + unsynced_tokens >= commit_token_threshold
             or reached_message_threshold
         )
-        sender_ids_to_sync = (
-            all_sender_ids if should_commit else sorted(unsynced_messages_by_sender)
-        )
-        user_results_by_id: dict[str, dict[str, Any]] = {}
-
-        if sender_ids_to_sync:
-            semaphore = asyncio.Semaphore(5)
-
-            async def sync_sender(user_id: str):
-                user_messages = unsynced_messages_by_sender.get(user_id, [])
-                async with semaphore:
-                    sender_session_id = f"{session_id}_{user_id}"
-                    append_result = None
-                    if user_messages:
-                        append_result = await client.append_messages(
-                            session_id=sender_session_id,
-                            messages=user_messages,
-                            default_user_peer_id=user_id,
-                            session_user_id=user_id,
-                        )
-                    return {
-                        "session_id": sender_session_id,
-                        "user_id": user_id,
-                        "append": append_result,
-                    }
-
-            user_results = await asyncio.gather(
-                *(sync_sender(user_id) for user_id in sender_ids_to_sync),
-                return_exceptions=True,
-            )
-            for result in user_results:
-                if isinstance(result, dict):
-                    user_id = result["user_id"]
-                    user_results_by_id[user_id] = result
-                    if result.get("append") is not None and user_id in sender_latest_indexes:
-                        set_sender_synced_local_index(
-                            session, user_id, sender_latest_indexes[user_id]
-                        )
-
-        fanout_errors = [result for result in user_results if isinstance(result, Exception)]
-        if fanout_errors:
-            error_message = "; ".join(str(error) for error in fanout_errors)
-            state["last_pending_tokens"] = pending_tokens_before_sync
-            state["last_commit_performed"] = False
-            state["last_sync_status"] = "error"
-            state["last_sync_error"] = error_message
-            return {
-                "success": False,
-                "session_id": session_id,
-                "admin_result": {
-                    "append": admin_append_result,
-                    "commit": admin_commit_result,
-                    "committed": False,
-                },
-                "user_results": user_results,
-                "users_count": len(sender_ids_to_sync),
-                "pending_tokens": pending_tokens_before_sync,
-                "error": error_message,
-            }
+        session_user_id = client.session_owner_user_id()
 
         if messages_to_sync:
             admin_append_result = await client.append_messages(
                 session_id=session_id,
                 messages=messages_to_sync,
-                default_user_peer_id=admin_user_id,
-                session_user_id=admin_user_id,
+                default_user_peer_id=None,
+                session_user_id=session_user_id,
             )
             state["last_synced_local_index"] = len(session.messages) - 1
-            admin_session_state = await client.get_session(session_id, user_id=admin_user_id)
+            admin_session_state = await client.get_session(session_id, user_id=session_user_id)
             pending_tokens = int(admin_session_state.get("pending_tokens", 0) or 0)
         elif force_commit:
-            admin_session_state = await client.get_session(session_id, user_id=admin_user_id)
+            admin_session_state = await client.get_session(session_id, user_id=session_user_id)
             pending_tokens = int(admin_session_state.get("pending_tokens", 0) or 0)
 
         should_commit = (
             force_commit or pending_tokens >= commit_token_threshold or reached_message_threshold
         )
         if should_commit:
-            sender_ids_to_commit = all_sender_ids
-            for user_id in sender_ids_to_commit:
-                user_results_by_id.setdefault(
-                    user_id,
-                    {
-                        "session_id": f"{session_id}_{user_id}",
-                        "user_id": user_id,
-                        "append": None,
-                    },
-                )
-
-            if sender_ids_to_commit:
-                semaphore = asyncio.Semaphore(5)
-
-                async def commit_sender(user_id: str):
-                    async with semaphore:
-                        sender_session_id = f"{session_id}_{user_id}"
-                        logger.info(
-                            f"[HOOK] Committed session {sender_session_id} for user {user_id}"
-                        )
-                        return await client.commit_session(
-                            session_id=sender_session_id,
-                            keep_recent_count=keep_recent_count,
-                            user_id=user_id,
-                        )
-
-                commit_results = await asyncio.gather(
-                    *(commit_sender(user_id) for user_id in sender_ids_to_commit),
-                    return_exceptions=True,
-                )
-                for user_id, commit_result in zip(
-                    sender_ids_to_commit, commit_results, strict=True
-                ):
-                    user_results_by_id[user_id]["commit"] = commit_result
-                fanout_errors = [
-                    result for result in commit_results if isinstance(result, Exception)
-                ]
-                if fanout_errors:
-                    error_message = "; ".join(str(error) for error in fanout_errors)
-                    state["last_pending_tokens"] = pending_tokens
-                    state["last_commit_performed"] = False
-                    state["last_sync_status"] = "error"
-                    state["last_sync_error"] = error_message
-                    return {
-                        "success": False,
-                        "session_id": session_id,
-                        "admin_result": {
-                            "append": admin_append_result,
-                            "commit": admin_commit_result,
-                            "committed": False,
-                        },
-                        "user_results": list(user_results_by_id.values()),
-                        "users_count": len(user_results_by_id),
-                        "pending_tokens": pending_tokens,
-                        "error": error_message,
-                    }
-
             admin_commit_result = await client.commit_session(
                 session_id=session_id,
                 keep_recent_count=keep_recent_count,
-                user_id=admin_user_id,
+                user_id=session_user_id,
             )
-            logger.info(f"[HOOK] Committed session {session_id} for user {admin_user_id}")
-            admin_session_state = await client.get_session(session_id, user_id=admin_user_id)
+            logger.info(
+                f"[HOOK] Committed session {session_id} for user {session_user_id or 'current'}"
+            )
+            admin_session_state = await client.get_session(session_id, user_id=session_user_id)
             pending_tokens = int(admin_session_state.get("pending_tokens", 0) or 0)
 
         if should_commit:
@@ -288,8 +147,8 @@ class OpenVikingCompactHook(Hook):
                 "commit": admin_commit_result,
                 "committed": should_commit,
             },
-            "user_results": list(user_results_by_id.values()),
-            "users_count": len(user_results_by_id),
+            "user_results": [],
+            "users_count": 0,
             "pending_tokens": pending_tokens,
         }
 
@@ -342,47 +201,16 @@ class OpenVikingCompactHook(Hook):
                     commit_message_threshold=commit_message_threshold,
                 )
 
-            if not client.should_sender_fanout():
-                single_result = await client.commit(session_id, vikingbot_session.messages, None)
-                return {
-                    "success": True,
-                    "admin_result": single_result,
-                    "user_results": [],
-                    "users_count": 0,
-                }
-
             admin_result = await client.commit(
-                session_id, vikingbot_session.messages, admin_user_id
+                session_id,
+                vikingbot_session.messages,
+                user_id=client.session_owner_user_id(),
             )
-
-            messages_by_sender = defaultdict(list)
-            for msg in vikingbot_session.messages:
-                sender_id = msg.get("sender_id")
-                if sender_id and sender_id != admin_user_id:
-                    messages_by_sender[sender_id].append(msg)
-
-            user_results = []
-            if messages_by_sender:
-                semaphore = asyncio.Semaphore(5)
-
-                async def commit_with_semaphore(user_id: str, user_messages: list):
-                    async with semaphore:
-                        return await client.commit(
-                            f"{session_id}_{user_id}", user_messages, user_id
-                        )
-
-                user_tasks = []
-                for user_id, user_messages in messages_by_sender.items():
-                    task = commit_with_semaphore(user_id, user_messages)
-                    user_tasks.append(task)
-
-                user_results = await asyncio.gather(*user_tasks, return_exceptions=True)
-
             return {
                 "success": True,
                 "admin_result": admin_result,
-                "user_results": user_results,
-                "users_count": len(messages_by_sender),
+                "user_results": [],
+                "users_count": 0,
             }
         except Exception as e:
             state = None

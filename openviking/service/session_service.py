@@ -14,6 +14,7 @@ from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session, SessionMeta
+from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory_policy import MemoryPolicy
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import VikingFS
@@ -189,6 +190,9 @@ class SessionService:
             session = self.session(ctx, session_id)
             if memory_policy is not None:
                 policy = MemoryPolicy.from_dict(memory_policy)
+                policy.validate_memory_types(
+                    set(MemoryTypeRegistry().list_names(include_disabled=False))
+                )
                 session.meta.memory_policy = policy.to_dict()
             await session.ensure_exists()
             self._record_lifecycle_metric("create", "ok")
@@ -290,7 +294,6 @@ class SessionService:
         session_id: str,
         ctx: RequestContext,
         keep_recent_count: int = 0,
-        memory_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Commit a session (archive messages and extract memories).
 
@@ -307,7 +310,6 @@ class SessionService:
             session_id,
             ctx,
             keep_recent_count=keep_recent_count,
-            memory_policy=memory_policy,
         )
 
     async def commit_async(
@@ -315,7 +317,6 @@ class SessionService:
         session_id: str,
         ctx: RequestContext,
         keep_recent_count: int = 0,
-        memory_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Async commit a session.
 
@@ -333,10 +334,7 @@ class SessionService:
         """
         self._ensure_initialized()
         session = await self.get(session_id, ctx)
-        result = await session.commit_async(
-            keep_recent_count=keep_recent_count,
-            memory_policy=memory_policy,
-        )
+        result = await session.commit_async(keep_recent_count=keep_recent_count)
         self._record_lifecycle_metric("commit", "ok" if result.get("status") else "error")
         self._record_archive_metric("ok" if result.get("archived") else "skip")
         return result

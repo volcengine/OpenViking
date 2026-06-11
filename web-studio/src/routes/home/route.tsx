@@ -24,8 +24,8 @@ export const Route = createFileRoute('/home')({
 function HomePage() {
   const { t } = useTranslation('home')
   const { connectionRole, isConnectionRoleLoading } = useAppConnection()
-  const isRegularUser = connectionRole === 'user'
-  const canQueryAdminMetrics = !isConnectionRoleLoading && !isRegularUser
+  const hasAdminRole = connectionRole === 'admin' || connectionRole === 'root'
+  const canQueryAdminMetrics = !isConnectionRoleLoading && hasAdminRole
 
   const dashboard = useQuery({
     enabled: canQueryAdminMetrics,
@@ -51,7 +51,7 @@ function HomePage() {
   const summary = dashboard.data
   const usageDisabled = isDisabledPayload(summary)
 
-  if (isRegularUser) {
+  if (!isConnectionRoleLoading && !hasAdminRole) {
     return (
       <div className="flex min-h-[calc(100svh-8rem)] items-center justify-center px-4 py-10">
         <section className="w-full max-w-xl rounded-lg border bg-card px-6 py-5 shadow-sm">

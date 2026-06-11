@@ -17,6 +17,7 @@ def test_gateway_rejects_non_localhost_without_token(monkeypatch):
     )
 
     monkeypatch.setattr(commands, "ensure_config", lambda _: config)
+    monkeypatch.setattr(commands, "validate_openviking_auth", lambda _config: None)
 
     def _abort(*args, **kwargs):
         raise AssertionError("_abort_if_port_in_use should not be reached")
@@ -33,6 +34,7 @@ def test_gateway_allows_non_localhost_with_token(monkeypatch):
     )
 
     monkeypatch.setattr(commands, "ensure_config", lambda _: config)
+    monkeypatch.setattr(commands, "validate_openviking_auth", lambda _config: None)
 
     def _abort(*args, **kwargs):
         raise _AbortCalled

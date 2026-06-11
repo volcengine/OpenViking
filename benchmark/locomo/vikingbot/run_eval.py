@@ -153,16 +153,20 @@ def load_locomo_qa(
         samples = data
 
     for sample in samples:
-        original_id = sample.get("sample_id", "")
+        original_sample_id = sample.get("sample_id", "")
         # Find the sample's index in the full dataset
         if sample_index is not None:
             try:
                 data_idx = int(sample_index)
             except ValueError:
-                data_idx = next(i for i, s in enumerate(data) if s.get("sample_id") == original_id)
+                data_idx = next(
+                    i for i, s in enumerate(data) if s.get("sample_id") == original_sample_id
+                )
         else:
-            data_idx = next(i for i, s in enumerate(data) if s.get("sample_id") == original_id)
-        sample_id = f"sample_{data_idx}"
+            data_idx = next(
+                i for i, s in enumerate(data) if s.get("sample_id") == original_sample_id
+            )
+        benchmark_sample_id = f"sample_{data_idx}"
         question_time = get_sample_question_time(sample)
         qa_items = sample.get("qa", [])
 
@@ -182,10 +186,10 @@ def load_locomo_qa(
                 )
             qa = qa_items[question_index]
             evidence_list = qa.get("evidence", [])
-            question_id = f"{sample_id}_qa{question_index}"
+            question_id = f"{benchmark_sample_id}_qa{question_index}"
             qa_list.append(
                 {
-                    "sample_id": sample_id,
+                    "sample_id": benchmark_sample_id,
                     "question_id": question_id,
                     "question_index": question_index,
                     "question": qa["question"],
@@ -195,7 +199,7 @@ def load_locomo_qa(
                     "evidence_text": get_evidence_text(evidence_list, sample),
                     "question_time": question_time,
                     "speakers": speakers,
-                    "original_sample_id": original_id,
+                    "original_sample_id": original_sample_id,
                     "is_invalid": qa["question"] in invalid_questions
                     if invalid_questions
                     else False,
@@ -204,10 +208,10 @@ def load_locomo_qa(
         else:
             for q_idx, qa in enumerate(qa_items):
                 evidence_list = qa.get("evidence", [])
-                question_id = f"{sample_id}_qa{q_idx}"
+                question_id = f"{benchmark_sample_id}_qa{q_idx}"
                 qa_list.append(
                     {
-                        "sample_id": sample_id,
+                        "sample_id": benchmark_sample_id,
                         "question_id": question_id,
                         "question_index": q_idx,
                         "question": qa["question"],
@@ -217,7 +221,7 @@ def load_locomo_qa(
                         "evidence_text": get_evidence_text(evidence_list, sample),
                         "question_time": question_time,
                         "speakers": speakers,
-                        "original_sample_id": original_id,
+                        "original_sample_id": original_sample_id,
                         "is_invalid": qa["question"] in invalid_questions
                         if invalid_questions
                         else False,
@@ -232,14 +236,14 @@ def load_locomo_qa(
 def run_vikingbot_chat(
     question: str,
     question_time: str | None = None,
-    sample_id: str | None = None,
+    sender_peer_id: str | None = None,
     question_id: str | None = None,
     config: str | None = None,
-    memory_users: list[str] | None = None,
+    memory_peer_ids: list[str] | None = None,
 ) -> tuple[str, dict, float, int, list]:
     """执行vikingbot chat命令，返回回答、token使用情况、耗时（秒）、迭代次数、使用的工具列表"""
     # 先执行 /new 命令清除会话
-    if sample_id:
+    if sender_peer_id:
         new_cmd = ["vikingbot", "chat"]
         if config:
             new_cmd.extend(["--config", config])
@@ -249,14 +253,14 @@ def run_vikingbot_chat(
                 "/new",
                 "-e",
                 "--sender",
-                sample_id,
+                sender_peer_id,
                 "--session",
                 question_id,
             ]
         )
-        if memory_users:
-            for user in memory_users:
-                new_cmd.extend(["--memory-user", user])
+        if memory_peer_ids:
+            for peer_id in memory_peer_ids:
+                new_cmd.extend(["--memory-peer", peer_id])
         try:
             # print(f'new_cmd={new_cmd}')
             subprocess.run(new_cmd, capture_output=True, text=True, timeout=300)
@@ -274,13 +278,13 @@ def run_vikingbot_chat(
     if config:
         cmd.extend(["--config", config])
     cmd.extend(["-m", input, "-e"])
-    # 添加 --sender 作为 user_id，--session 作为会话隔离标识
-    if sample_id:
-        cmd.extend(["--sender", sample_id, "--session", question_id])
-    # 添加 --memory-user 参数，指定检索哪些用户的记忆
-    if memory_users:
-        for user in memory_users:
-            cmd.extend(["--memory-user", user])
+    # 添加 --sender 作为当前 peer，--session 作为会话隔离标识
+    if sender_peer_id:
+        cmd.extend(["--sender", sender_peer_id, "--session", question_id])
+    # 添加 --memory-peer 参数，指定当前 User 下需要一并检索的额外 peer 记忆
+    if memory_peer_ids:
+        for peer_id in memory_peer_ids:
+            cmd.extend(["--memory-peer", peer_id])
     start_time = time.time()
     try:
         # print(f'cmd={cmd}')
@@ -402,9 +406,9 @@ def main():
     )
     parser.add_argument(
         "--group-chat",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=False,
-        help="Group-chat mode: pass --memory-peer to vikingbot chat. Default is group-chat mode.",
+        help="Group-chat mode: use speaker peers for sender/memory-peer (default: false).",
     )
     parser.add_argument(
         "--retry-wrong",
@@ -529,19 +533,31 @@ def main():
         # 使用 question_id 作为 session_id，实现完全独立并行
         question_id = qa_item.get("question_id")
         speakers = qa_item.get("speakers", [])
+        source_sample_id = qa_item.get("original_sample_id")
+        sender_peer_id = source_sample_id
+        memory_peer_ids = None
+        if args.group_chat:
+            sender_peer_id = speakers[0] if speakers else source_sample_id
+            memory_peer_ids = speakers[1:] if len(speakers) > 1 else None
         print(f"Processing {idx}/{total_count}: {question[:60]}...")
         if question_time:
             print(f"  [time context: {question_time}]")
+        if source_sample_id:
+            print(f"  [sample peer: {source_sample_id}]")
         if speakers:
-            print(f"  [memory users: {speakers}]")
+            print(f"  [speakers: {speakers}]")
+        if sender_peer_id:
+            print(f"  [sender peer: {sender_peer_id}]")
+        if memory_peer_ids:
+            print(f"  [memory peers: {memory_peer_ids}]")
 
         response, token_usage, time_cost, iteration, tools_used_names = run_vikingbot_chat(
             question,
             question_time,
-            qa_item.get("original_sample_id"),
+            sender_peer_id,
             question_id,
             args.config,
-            None if not args.group_chat else speakers,
+            memory_peer_ids,
         )
 
         row = {

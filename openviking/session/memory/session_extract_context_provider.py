@@ -99,7 +99,9 @@ class SessionExtractContextProvider(ExtractContextProvider):
         from openviking.session.memory.memory_updater import ExtractContext
 
         if self._extract_context is None:
-            self._extract_context = ExtractContext(self.messages or [])
+            self._extract_context = ExtractContext(
+                self.messages if isinstance(self.messages, list) else []
+            )
         return self._extract_context
 
     def _detect_language(self) -> str:
@@ -180,7 +182,8 @@ from neighboring messages.
         else:
             time_display = session_time_str
 
-        conversation = self._assemble_conversation(self.messages)
+        extract_context = self.get_extract_context()
+        conversation = self._assemble_conversation(extract_context.messages)
 
         return {
             "role": "user",
@@ -409,7 +412,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         pre_fetch_messages = []
         pre_fetch_messages.append(self._build_conversation_message())
 
-        # 触发 registry 加载，过滤掉 agent_only 的 schema（trajectory/experience 只由 agent memory 处理）
+        # 触发 registry 加载，过滤掉 agent_only 的 schema（trajectory/experience 由执行提取处理）
         schemas = [
             s
             for s in self._get_registry().list_all(include_disabled=False)

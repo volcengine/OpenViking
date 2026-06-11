@@ -9,7 +9,7 @@ Provides URI template resolution with support for variables like {calendar:today
 import re
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
-from typing import Dict, Optional, Set
+from typing import Dict, Optional
 
 from openviking_cli.utils import get_logger
 
@@ -132,14 +132,6 @@ class PathVariableResolver:
         """Check if a URI template contains variables."""
         return VARIABLE_PATTERN.search(uri_template) is not None
 
-    def extract_variables(self, uri_template: str) -> Set[str]:
-        """Extract all variables from a URI template."""
-        variables = set()
-        matches = VARIABLE_PATTERN.findall(uri_template)
-        for namespace, key in matches:
-            variables.add(f"{namespace}:{key}")
-        return variables
-
     def resolve(self, uri_template: str, dt: Optional[datetime] = None) -> str:
         """
         Resolve variables in a URI template.
@@ -224,17 +216,3 @@ def resolve_path_variables(uri_template: str, dt: Optional[datetime] = None) -> 
     """
     resolver = get_path_variable_resolver()
     return resolver.resolve(uri_template, dt=dt)
-
-
-def has_path_variables(uri_template: str) -> bool:
-    """
-    Convenience function to check if a URI template contains variables.
-
-    Args:
-        uri_template: URI template to check
-
-    Returns:
-        True if the template contains variables
-    """
-    resolver = get_path_variable_resolver()
-    return resolver.has_variables(uri_template)

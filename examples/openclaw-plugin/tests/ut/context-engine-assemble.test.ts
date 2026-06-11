@@ -227,7 +227,7 @@ describe("context-engine assemble()", () => {
         JSON.stringify({
           message_id: "om_1",
           sender_id: "ou_bcc",
-          sender: "秦浩杰",
+          sender: "Dana Tester",
           is_group_chat: true,
         }),
         "```",
@@ -236,12 +236,12 @@ describe("context-engine assemble()", () => {
         "```json",
         JSON.stringify({
           id: "ou_bcc",
-          name: "秦浩杰",
+          name: "Dana Tester",
         }),
         "```",
         "",
         "[message_id: om_1]",
-        "秦浩杰: 我是谁",
+        "Dana Tester: who am I?",
         "",
         "[System: mention metadata]",
       ].join("\n");
@@ -408,7 +408,7 @@ describe("context-engine assemble()", () => {
       );
 
       const experienceHit = {
-        uri: "viking://agent/main/memories/experiences/openclaw-plugin-file-write-guard.md",
+        uri: "viking://user/default/memories/experiences/openclaw-plugin-file-write-guard.md",
         level: 2,
         category: "experience",
         abstract: "经验摘要",
@@ -463,6 +463,9 @@ describe("context-engine assemble()", () => {
         ],
       });
 
+      expect(client.find.mock.calls[0]?.[1]).toMatchObject({
+        targetUri: "viking://user/memories/experiences",
+      });
       const injected = String(result.messages[1]?.content ?? "");
       expect(injected).toMatch(/^<openviking-context>/);
       expect(injected).not.toContain("<relevant-memories>");

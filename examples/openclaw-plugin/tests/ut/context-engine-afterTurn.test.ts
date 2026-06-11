@@ -375,11 +375,8 @@ describe("context-engine afterTurn()", () => {
     expect(client.commitSession).toHaveBeenCalledTimes(1);
     expect(client.commitSession.mock.calls[0][1]).toMatchObject({
       wait: false,
-      memoryPolicy: {
-        self: { enabled: true },
-        peer: { enabled: true },
-      },
     });
+    expect(client.commitSession.mock.calls[0][1]).not.toHaveProperty("memoryPolicy");
   });
 
   it("catches errors without throwing", async () => {

@@ -355,7 +355,7 @@ describe("OpenVikingClient resource and skill import", () => {
     });
   });
 
-  it("sends memory_policy when committing a session", async () => {
+  it("does not send memory_policy when committing a session", async () => {
     const fetchMock = vi.fn().mockResolvedValue(okResponse({
       session_id: "s1",
       status: "accepted",
@@ -364,20 +364,10 @@ describe("OpenVikingClient resource and skill import", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const client = new OpenVikingClient("http://127.0.0.1:1933", "", "agent", 5000);
-    await client.commitSession("s1", {
-      memoryPolicy: {
-        self: { enabled: true },
-        peer: { enabled: true },
-      },
-    });
+    await client.commitSession("s1");
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(JSON.parse(String(init.body))).toEqual({
-      memory_policy: {
-        self: { enabled: true },
-        peer: { enabled: true },
-      },
-    });
+    expect(JSON.parse(String(init.body))).toEqual({});
   });
 });
 

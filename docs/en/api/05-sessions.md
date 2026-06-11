@@ -32,7 +32,7 @@ Create a new session. Sessions are containers for conversations, storing message
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | session_id | str | No | None | Session ID. Creates new session with auto-generated ID if None |
-| memory_policy | object | No | None | Default self/peer memory-extraction policy for the session. An object with optional `self` and `peer` keys, each `{"enabled": <bool>}` (defaults: `self.enabled=true`, `peer.enabled=false`). Overridable per commit; a non-object value is rejected with `InvalidArgumentError`. |
+| memory_policy | object | No | None | Default memory extraction policy for the session. Optional `self` and `peer` switches control write targets, and optional top-level `memory_types` limits extraction to specific enabled memory schemas. When `memory_types` is omitted or `null`, all enabled memory schemas are allowed. Invalid shapes or unknown memory types are rejected with `InvalidArgumentError`. |
 
 #### 3. Usage Examples
 
@@ -910,7 +910,6 @@ Commit a session. Message archiving (Phase 1) completes immediately. Summary gen
 |-----------|------|----------|---------|-------------|
 | session_id | str | Yes | - | Session ID to commit |
 | keep_recent_count | int | No | 0 | Number of recent live messages to retain (kept live, not archived) after commit. `0` (default) archives all messages. |
-| memory_policy | object | No | None | Controls whether self-memory and peer-memory extraction run on this commit. An object with optional `self` and `peer` keys, each `{"enabled": <bool>}` (defaults: `self.enabled=true`, `peer.enabled=false`). A commit-level value overrides the session-level policy; a non-object value is rejected with `InvalidArgumentError`. |
 
 #### 3. Usage Examples
 
@@ -925,12 +924,6 @@ POST /api/v1/sessions/{session_id}/commit
 curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/commit \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key"
-
-# Commit and additionally run peer-memory extraction (off by default)
-curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/commit \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{"memory_policy": {"peer": {"enabled": true}}}'
 
 # Poll task status
 curl -X GET http://localhost:1933/api/v1/tasks/{task_id} \

@@ -3,11 +3,7 @@
 """Session management module."""
 
 from typing import TYPE_CHECKING, Optional
-from openviking.session.memory_archiver import (
-    ArchivalCandidate,
-    ArchivalResult,
-    MemoryArchiver,
-)
+
 from openviking.session.session import Session, SessionCompression, SessionMeta, SessionStats
 from openviking.storage import VikingDBManager
 from openviking_cli.utils import get_logger
@@ -50,8 +46,4 @@ __all__ = [
     "SessionStats",
     # Compressor
     "create_session_compressor",
-    # Memory Archiver
-    "MemoryArchiver",
-    "ArchivalCandidate",
-    "ArchivalResult",
 ]

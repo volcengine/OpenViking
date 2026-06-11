@@ -16,10 +16,10 @@ from openviking.core.context import Context
 from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory import ExtractLoop, MemoryUpdater
+from openviking.session.memory.constants import EXECUTION_MEMORY_TYPES
 from openviking.session.memory.dataclass import ResolvedOperations, StoredLink
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.memory_updater import (
-    ExtractContext,
     MemoryUpdateResult,
     write_stored_links,
 )
@@ -139,6 +139,7 @@ class SessionCompressorV2:
         latest_archive_overview: str = "",
         isolation_handler: Optional[MemoryIsolationHandler] = None,
         transaction_handle=None,
+        context_provider: Optional[Any] = None,
     ) -> ExtractLoop:
         """Create new ExtractLoop instance with current ctx.
 
@@ -149,19 +150,20 @@ class SessionCompressorV2:
         vlm = config.vlm.get_vlm_instance()
         viking_fs = get_viking_fs()
 
-        # Create context provider with messages (provider 负责加载 schema)
-        from openviking.session.memory.session_extract_context_provider import (
-            SessionExtractContextProvider,
-        )
+        if context_provider is None:
+            # Create context provider with messages (provider 负责加载 schema)
+            from openviking.session.memory.session_extract_context_provider import (
+                SessionExtractContextProvider,
+            )
 
-        context_provider = SessionExtractContextProvider(
-            messages=messages,
-            latest_archive_overview=latest_archive_overview,
-            isolation_handler=isolation_handler,
-            ctx=ctx,
-            viking_fs=viking_fs,
-            transaction_handle=transaction_handle,
-        )
+            context_provider = SessionExtractContextProvider(
+                messages=messages,
+                latest_archive_overview=latest_archive_overview,
+                isolation_handler=isolation_handler,
+                ctx=ctx,
+                viking_fs=viking_fs,
+                transaction_handle=transaction_handle,
+            )
 
         return ExtractLoop(
             vlm=vlm,
@@ -265,7 +267,10 @@ class SessionCompressorV2:
 
         registry = create_default_registry()
         if allow_self_memory:
-            await registry.initialize_memory_files(ctx)
+            await registry.initialize_memory_files(
+                ctx,
+                allowed_memory_types=allowed_memory_types,
+            )
 
         # Initialize telemetry counters before extraction.
         telemetry = get_current_telemetry()
@@ -292,12 +297,19 @@ class SessionCompressorV2:
             logger.debug("AGFS unavailable, running memory extraction without locks")
 
         try:
-            # Create extract context from messages
-            from openviking.session.memory.memory_updater import ExtractContext
+            from openviking.session.memory.session_extract_context_provider import (
+                SessionExtractContextProvider,
+            )
 
-            extract_context = ExtractContext(messages)
-
-            # Create MemoryIsolationHandler
+            context_provider = SessionExtractContextProvider(
+                messages=messages,
+                latest_archive_overview=latest_archive_overview,
+                isolation_handler=None,
+                ctx=ctx,
+                viking_fs=viking_fs,
+                transaction_handle=transaction_handle,
+            )
+            extract_context = context_provider.get_extract_context()
             isolation_handler = MemoryIsolationHandler(
                 ctx,
                 extract_context,
@@ -306,6 +318,8 @@ class SessionCompressorV2:
                 allowed_peer_ids=allowed_peer_ids,
             )
             isolation_handler.prepare_messages()
+            context_provider._isolation_handler = isolation_handler
+
             # 获取所有记忆 schema 目录并加锁（仅在有锁管理器时）
             orchestrator = self._get_or_create_react(
                 ctx=ctx,
@@ -313,6 +327,7 @@ class SessionCompressorV2:
                 latest_archive_overview=latest_archive_overview,
                 isolation_handler=isolation_handler,
                 transaction_handle=transaction_handle,
+                context_provider=context_provider,
             )
             read_scope = isolation_handler.get_read_scope()
             if lock_manager:
@@ -459,7 +474,7 @@ class SessionCompressorV2:
                     logger.warning(f"Failed to release transaction lock: {e}")
 
     @tracer(ignore_result=True)
-    async def extract_agent_memories(
+    async def extract_execution_memories(
         self,
         messages: List[Message],
         ctx: Optional[RequestContext] = None,
@@ -469,22 +484,21 @@ class SessionCompressorV2:
         allowed_memory_types: Optional[set[str]] = None,
         include_session_skills: Optional[bool] = None,
     ) -> Dict[str, List[Any]]:
-        """Two-phase agent-scope extraction for trajectories, experiences, and session skills."""
+        """Extract trajectory, experience, and session-skill memories from execution context."""
         config = get_openviking_config()
-        allowed_agent_types = (
-            {"trajectories", "experiences"}
+        allowed_execution_types = (
+            set(EXECUTION_MEMORY_TYPES)
             if allowed_memory_types is None
-            else set(allowed_memory_types)
+            else set(allowed_memory_types) & EXECUTION_MEMORY_TYPES
         )
-        agent_memory_enabled = config.memory.agent_memory_enabled
-        include_trajectories = agent_memory_enabled and "trajectories" in allowed_agent_types
-        include_experiences = agent_memory_enabled and "experiences" in allowed_agent_types
+        include_trajectories = "trajectories" in allowed_execution_types
+        include_experiences = "experiences" in allowed_execution_types
         if include_session_skills is None:
             include_session_skills = bool(
                 getattr(config.memory, "session_skill_extraction_enabled", False)
             )
         empty_result: Dict[str, List[Any]] = {"contexts": [], "session_skills": []}
-        if not (include_trajectories or include_session_skills):
+        if not include_trajectories:
             return empty_result
         if not messages or not ctx:
             return empty_result
@@ -512,7 +526,7 @@ class SessionCompressorV2:
             ctx=ctx,
             strict_extract_errors=strict_extract_errors,
             phase_label="trajectory",
-            allowed_memory_types=allowed_agent_types,
+            allowed_memory_types=allowed_execution_types,
         )
         if traj_result is None:
             return empty_result
@@ -587,7 +601,7 @@ class SessionCompressorV2:
                 strict_extract_errors=strict_extract_errors,
                 phase_label=f"experience({traj_uri})",
                 post_apply=_append_sources_before_unlock,
-                allowed_memory_types=allowed_agent_types,
+                allowed_memory_types=allowed_execution_types,
             )
             if exp_result is None:
                 fallback_uris = await self._single_existing_experience_uris(
@@ -701,9 +715,9 @@ class SessionCompressorV2:
         vlm = config.vlm.get_vlm_instance()
         viking_fs = get_viking_fs()
 
-        # Build isolation_handler BEFORE creating the orchestrator so that
-        # ExtractLoop.resolve_operations() can fill identity fields correctly.
-        extract_context = ExtractContext(messages)
+        # Use the provider's extraction context so prompt ranges and memory
+        # rendering resolve against the same message list.
+        extract_context = provider.get_extract_context()
         isolation_handler = MemoryIsolationHandler(
             ctx,
             extract_context,

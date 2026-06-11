@@ -372,7 +372,7 @@ export async function buildAgentExperienceRecallContext(params: {
   return withTimeout(
     (async () => {
       const result = await client.find(queryText, {
-        targetUri: "viking://agent/memories/experiences",
+        targetUri: "viking://user/memories/experiences",
         limit: Math.max(expCfg.recallLimit * 4, 12),
         scoreThreshold: expCfg.scoreThreshold,
       }, agentId);

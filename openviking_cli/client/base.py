@@ -281,7 +281,6 @@ class BaseClient(ABC):
         telemetry: TelemetryRequest = False,
         *,
         keep_recent_count: int = 0,
-        memory_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Commit a session (archive and extract memories).
 
@@ -289,7 +288,6 @@ class BaseClient(ABC):
             session_id: Session ID
             telemetry: Whether to attach operation telemetry data to the result.
             keep_recent_count: Number of recent live messages to retain after commit.
-            memory_policy: Optional per-commit extraction policy.
         """
         ...
 

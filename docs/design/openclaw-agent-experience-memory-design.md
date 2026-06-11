@@ -10,7 +10,7 @@ OpenViking 已经负责从 session commit 后的轨迹中抽取 agent experience
 
 1. 经验记忆功能默认关闭，必须显式配置 `agentExperience.enabled: true` 才启用。
 2. 启用后，OpenClaw 在 `transformContext assemble` 阶段判断当前 turn 是否像执行任务。
-3. 符合条件时，从 `viking://agent/memories/experiences` 检索 agent experience。
+3. 符合条件时，从 `viking://user/memories/experiences` 检索 agent experience。
 4. 同一轮也保留原有长期记忆 auto recall，并把 experience 和长期记忆分成不同 section。
 5. 使用统一的 `<openviking-context>` 外壳注入到 latest user message 前；即使只有长期记忆，也使用这个外壳。
 6. `afterTurn` 写 session 前剥离 `<openviking-context>`，避免把召回内容再次写回 OV。
@@ -109,12 +109,11 @@ agentExperience?: {
 
 ```text
 experience recall
-  -> 只查 viking://agent/memories/experiences
+  -> 只查 viking://user/memories/experiences
   -> 受 agentExperience 配置和 shouldRecallAgentExperience 控制
 
 long-term recall
   -> 查 viking://user/memories
-  -> 查 viking://agent/memories
   -> recallResources=true 时查 viking://resources
   -> 过滤掉 experiences
 ```
@@ -215,7 +214,7 @@ const recallQuery = prepareRecallQuery(extractAgentMessageText(latestMessage));
 
 ```ts
 client.find(queryText, {
-  targetUri: "viking://agent/memories/experiences",
+  targetUri: "viking://user/memories/experiences",
   limit: Math.max(expCfg.recallLimit * 4, 12),
   scoreThreshold: expCfg.scoreThreshold,
 }, agentId)
@@ -280,7 +279,6 @@ Check:
 搜索范围：
 
 - `viking://user/memories`
-- `viking://agent/memories`
 - `viking://resources`，仅 `recallResources=true`
 
 后处理：
@@ -316,7 +314,7 @@ The following OpenViking memories may be relevant:
 These are prior execution lessons learned by this agent. Use them as task guidance, not as user facts.
 
 ### Experience: openclaw-plugin-file-write-guard
-Source: viking://agent/main/memories/experiences/openclaw-plugin-file-write-guard.md
+Source: viking://user/default/memories/experiences/openclaw-plugin-file-write-guard.md
 Score: 0.910
 
 Trigger:
@@ -518,7 +516,7 @@ recent failure/success summary
 ```text
 OpenClaw 插件负责：
   - 判断当前 turn 是否值得使用 agent experience
-  - 检索 viking://agent/memories/experiences
+  - 检索 viking://user/memories/experiences
   - 渲染 Agent Experiences section
   - 与 Long-term Memories 共同放入 <openviking-context>
   - 写 session 前清理注入块
