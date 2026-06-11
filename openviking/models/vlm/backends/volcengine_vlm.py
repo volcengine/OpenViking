@@ -31,16 +31,6 @@ class VolcEngineVLM(OpenAIVLM):
         if not self.model:
             self.model = "doubao-seed-2-0-pro-260215"
 
-    def _ark_client_kwargs(self) -> Dict[str, Any]:
-        return {
-            "api_key": self.api_key,
-            "base_url": self.api_base,
-            "timeout": self.timeout,
-            # OpenViking owns retry/backoff behavior. Disable SDK retries to
-            # keep request duration bounded by the configured timeout.
-            "max_retries": 0,
-        }
-
     def _parse_tool_calls(self, message) -> List[ToolCall]:
         """Parse tool calls from VolcEngine response message."""
         tool_calls = []
@@ -88,7 +78,10 @@ class VolcEngineVLM(OpenAIVLM):
                 raise ImportError(
                     "Please install volcenginesdkarkruntime: pip install volcenginesdkarkruntime"
                 )
-            self._sync_client = volcenginesdkarkruntime.Ark(**self._ark_client_kwargs())
+            self._sync_client = volcenginesdkarkruntime.Ark(
+                api_key=self.api_key,
+                base_url=self.api_base,
+            )
         return self._sync_client
 
     def _build_async_client(self):
@@ -99,12 +92,9 @@ class VolcEngineVLM(OpenAIVLM):
             raise ImportError(
                 "Please install volcenginesdkarkruntime: pip install volcenginesdkarkruntime"
             )
-        return volcenginesdkarkruntime.AsyncArk(**self._ark_client_kwargs())
-
-    async def _create_chat_completion_async(self, client: Any, kwargs: Dict[str, Any]) -> Any:
-        return await asyncio.wait_for(
-            client.chat.completions.create(**kwargs),
-            timeout=self.timeout,
+        return volcenginesdkarkruntime.AsyncArk(
+            api_key=self.api_key,
+            base_url=self.api_base,
         )
 
     def get_completion(
@@ -177,7 +167,7 @@ class VolcEngineVLM(OpenAIVLM):
         for attempt in range(self.max_retries + 1):
             try:
                 t0 = time.perf_counter()
-                response = await self._create_chat_completion_async(client, kwargs)
+                response = await client.chat.completions.create(**kwargs)
                 elapsed = time.perf_counter() - t0
                 self._update_token_usage_from_response(response, duration_seconds=elapsed)
                 result = self._build_vlm_response(response, has_tools=bool(tools))
@@ -389,7 +379,7 @@ class VolcEngineVLM(OpenAIVLM):
 
         client = self.get_async_client()
         t0 = time.perf_counter()
-        response = await self._create_chat_completion_async(client, kwargs)
+        response = await client.chat.completions.create(**kwargs)
         elapsed = time.perf_counter() - t0
         self._update_token_usage_from_response(response, duration_seconds=elapsed)
         result = self._build_vlm_response(response, has_tools=bool(tools))
