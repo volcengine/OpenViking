@@ -20,12 +20,17 @@ from openviking_cli.session.user_id import UserIdentifier
 class _FakeVikingFS:
     def __init__(self, store):
         self.store = store
+        self.rm_calls = []
 
     async def read_file(self, uri, ctx=None):
         return self.store[uri]
 
     async def write_file(self, uri, content, ctx=None):
         self.store[uri] = content
+
+    async def rm(self, uri, recursive=False, ctx=None, lock_handle=None):
+        self.rm_calls.append((uri, recursive))
+        self.store.pop(uri, None)
 
     async def tree(self, uri, ctx=None, node_limit=None, level_limit=None):
         prefix = uri.rstrip("/") + "/"
@@ -96,6 +101,8 @@ def test_resource_linking_provider_exposes_resource_uri_only_as_metadata():
         resource_uri=resource_uri,
         reason="这是越前龙马的照片",
         source_name="yueqian.jpeg",
+        added_at="2026-06-11T08:00:00+00:00",
+        resource_abstract="动漫角色照片合集",
     )
 
     message_text = "\n".join(
@@ -110,6 +117,13 @@ def test_resource_linking_provider_exposes_resource_uri_only_as_metadata():
     assert resource_uri in provider._build_conversation_message()["content"]
     assert resource_uri in provider.get_conversation_text()
     assert resource_uri in message_text
+    assert "2026-06-11T08:00:00+00:00" in instruction
+    assert "动漫角色照片合集" in instruction
+    assert (
+        "Added at: 2026-06-11T08:00:00+00:00"
+        in provider._build_conversation_message()["content"]
+    )
+    assert "Resource abstract: 动漫角色照片合集" in message_text
     assert "include the exact Resource URI in the visible memory content" not in instruction
     assert "Use the Resource URI only as resource identity metadata" in instruction
     assert "Do NOT include raw resource URIs" in instruction
@@ -131,6 +145,61 @@ def test_resource_linking_prompt_prefers_natural_sentence_over_terse_label():
     assert "merge with it" in instruction
     assert "only the newest resource" in instruction
     assert "enumerate/count resources" in instruction
+    assert "under 12 Chinese characters" in instruction
+    assert "under 8 English words" in instruction
+    assert "weak supporting context" in instruction
+    assert "short resource descriptor only" in instruction
+    assert "adds non-redundant readability" in instruction
+    assert "Source name alone is opaque" in instruction
+    assert "配置服务项目" in instruction
+    assert "merely repeats the subject, media type, or facts" in instruction
+    assert "角色照片" not in instruction
+    assert "身份证" not in instruction
+
+
+@pytest.mark.asyncio
+async def test_read_resource_directory_abstract_uses_parent_abstract(request_context):
+    service = ResourceMemoryLinkService(
+        viking_fs=_FakeVikingFS({"viking://resources/images/.abstract.md": "动漫角色照片合集"})
+    )
+
+    abstract = await service._read_resource_directory_abstract(
+        "viking://resources/images/yueqian.jpeg",
+        request_context,
+    )
+
+    assert abstract == "动漫角色照片合集"
+
+
+@pytest.mark.asyncio
+async def test_read_resource_directory_abstract_ignores_missing_or_not_ready(
+    request_context,
+):
+    service = ResourceMemoryLinkService(viking_fs=_FakeVikingFS({}))
+
+    missing = await service._read_resource_directory_abstract(
+        "viking://resources/images/yueqian.jpeg",
+        request_context,
+    )
+
+    assert missing == ""
+
+    service = ResourceMemoryLinkService(
+        viking_fs=_FakeVikingFS(
+            {
+                "viking://resources/images/.abstract.md": (
+                    "# viking://resources/images [Directory abstract is not ready]"
+                )
+            }
+        )
+    )
+
+    not_ready = await service._read_resource_directory_abstract(
+        "viking://resources/images/yueqian.jpeg",
+        request_context,
+    )
+
+    assert not_ready == ""
 
 
 @pytest.mark.asyncio
@@ -344,6 +413,75 @@ async def test_cleanup_memory_reference_does_not_introduce_schema_metadata(reque
     assert mf.content == "今天是清明节。"
     assert mf.extra_fields == {}
     assert mf.memory_type is None
+
+
+@pytest.mark.asyncio
+async def test_cleanup_memory_reference_deletes_empty_memory_shell(
+    request_context,
+    monkeypatch,
+):
+    memory_uri = "viking://user/ryoma/memories/entities/动漫角色/越前龙马.md"
+    resource_uri = "viking://resources/images/2026/06/11/yueqian_jpeg"
+    original_raw = MemoryFileUtils.write(
+        MemoryFile(
+            uri=memory_uri,
+            content=f"[用户保存了一张越前龙马的照片]({resource_uri})",
+            extra_fields={
+                "category": "动漫角色",
+                "name": "越前龙马",
+                "user_id": "ryoma",
+                "memory_type": "entities",
+            },
+        )
+    )
+    store = {memory_uri: original_raw}
+    service = ResourceMemoryLinkService(viking_fs=_FakeVikingFS(store))
+    service._run_extract_loop = AsyncMock(return_value=(object(), object(), object()))
+    refresh_overview = AsyncMock()
+    monkeypatch.setattr(
+        "openviking.service.resource_memory_link_service.MemoryUpdater.refresh_schema_overview",
+        refresh_overview,
+    )
+
+    async def fake_apply_memory_operations(**kwargs):
+        store[memory_uri] = MemoryFileUtils.write(
+            MemoryFile(
+                uri=memory_uri,
+                content="",
+                memory_type="entities",
+                extra_fields={
+                    "category": "动漫角色",
+                    "name": "越前龙马",
+                    "user_id": "ryoma",
+                    "memory_type": "entities",
+                    "resource_refs": [
+                        {
+                            "resource_uri": resource_uri,
+                            "source": "add_resource.reason",
+                        }
+                    ],
+                },
+            )
+        )
+        result = MemoryUpdateResult()
+        result.add_edited(memory_uri)
+        return result
+
+    service._apply_memory_operations = AsyncMock(side_effect=fake_apply_memory_operations)
+
+    result = await service._cleanup_memory_reference(
+        ctx=request_context,
+        memory_uri=memory_uri,
+        memory_file=MemoryFileUtils.read(original_raw, uri=memory_uri),
+        resource_uri=resource_uri,
+        reason="这是越前龙马的照片",
+    )
+
+    assert memory_uri not in store
+    assert service._get_viking_fs().rm_calls == [(memory_uri, False)]
+    assert result.edited_uris == []
+    assert result.deleted_uris == [memory_uri]
+    refresh_overview.assert_awaited_once()
 
 
 @pytest.mark.asyncio

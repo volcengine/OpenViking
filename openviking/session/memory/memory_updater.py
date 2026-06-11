@@ -1045,15 +1045,19 @@ class MemoryUpdater:
         # If no memory files, delete the .overview.md and the directory if empty
         if not md_files:
             overview_path = f"{directory.rstrip('/')}/.overview.md"
+            can_delete_directory = all(
+                entry.get("name", "") in {"", ".overview.md"} for entry in entries
+            )
             try:
-                await viking_fs.delete_file(overview_path, ctx=ctx)
+                await viking_fs.rm(overview_path, recursive=False, ctx=ctx)
             except Exception:
                 pass
             # Try to delete empty directory
-            try:
-                await viking_fs.delete_file(directory, ctx=ctx)
-            except Exception:
-                pass
+            if can_delete_directory:
+                try:
+                    await viking_fs.rm(directory, recursive=True, ctx=ctx)
+                except Exception:
+                    pass
             return
 
         # Parse each file and collect items

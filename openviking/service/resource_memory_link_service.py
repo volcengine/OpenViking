@@ -38,6 +38,11 @@ from openviking_cli.utils.config import get_openviking_config
 logger = get_logger(__name__)
 
 RESOURCE_REF_SOURCE = "add_resource.reason"
+_RESOURCE_ABSTRACT_MAX_CHARS = 200
+_ABSTRACT_NOT_READY_MARKERS = (
+    "[.abstract.md is not ready]",
+    "[Directory abstract is not ready]",
+)
 
 
 @dataclass
@@ -56,20 +61,27 @@ class _ResourceLinkingProvider(SessionExtractContextProvider):
         resource_uri: str,
         reason: str,
         source_name: Optional[str],
+        added_at: Optional[str] = None,
+        resource_abstract: Optional[str] = None,
         **kwargs: Any,
     ):
         self.resource_uri = resource_uri
         self.reason = reason
         self.source_name = source_name or ""
+        self.added_at = added_at or ""
+        self.resource_abstract = resource_abstract or ""
         messages = [
             Message(
                 id="resource-linking",
                 role="user",
+                created_at=self.added_at or None,
                 parts=[
                     TextPart(
                         text=(
                             "Resource URI: "
-                            f"{resource_uri}\nReason: {reason}\nSource name: {self.source_name}"
+                            f"{resource_uri}\nReason: {reason}\nSource name: {self.source_name}\n"
+                            f"Added at: {self.added_at or 'N/A'}\n"
+                            f"Resource abstract: {self.resource_abstract or 'N/A'}"
                         )
                     )
                 ],
@@ -85,6 +97,8 @@ class _ResourceLinkingProvider(SessionExtractContextProvider):
                 "resource_uri": self.resource_uri,
                 "reason": self.reason,
                 "source_name": self.source_name,
+                "added_at": self.added_at,
+                "resource_abstract": self.resource_abstract,
             },
         )
 
@@ -95,17 +109,31 @@ class _ResourceLinkingProvider(SessionExtractContextProvider):
                 "## Resource Addition\n"
                 f"Resource URI: {self.resource_uri}\n"
                 f"Reason: {self.reason}\n"
-                f"Source name: {self.source_name or 'N/A'}\n\n"
+                f"Source name: {self.source_name or 'N/A'}\n"
+                f"Added at: {self.added_at or 'N/A'}\n"
+                f"Resource abstract: {self.resource_abstract or 'N/A'}\n\n"
                 "Analyze only this resource addition record and output all memory "
                 "write/edit/delete operations in a single JSON response."
             ),
         }
 
     def _build_prefetch_search_query(self) -> str:
-        return "\n".join(part for part in [self.reason, self.source_name] if part).strip()
+        return "\n".join(
+            part for part in [self.reason, self.source_name, self.resource_abstract] if part
+        ).strip()
 
     def get_conversation_text(self) -> str:
-        return f"{self.reason}\n{self.resource_uri}\n{self.source_name}".strip()
+        return "\n".join(
+            part
+            for part in [
+                self.reason,
+                self.resource_uri,
+                self.source_name,
+                self.added_at,
+                self.resource_abstract,
+            ]
+            if part
+        ).strip()
 
     def _detect_language(self) -> str:
         from openviking.session.memory.utils import resolve_output_language
@@ -225,10 +253,14 @@ class ResourceMemoryLinkService:
         if not resource_uri:
             return {"status": "skipped", "reason": "empty_resource_uri"}
 
+        added_at = datetime.now(timezone.utc).isoformat()
+        resource_abstract = await self._read_resource_directory_abstract(resource_uri, ctx)
         provider = _ResourceLinkingProvider(
             resource_uri=resource_uri,
             reason=reason,
             source_name=source_name,
+            added_at=added_at,
+            resource_abstract=resource_abstract,
             ctx=ctx,
             viking_fs=self._get_viking_fs(),
         )
@@ -254,6 +286,7 @@ class ResourceMemoryLinkService:
             resource_uri=resource_uri,
             reason=reason,
             ctx=ctx,
+            created_at=added_at,
         )
         missing_uri = await self._memory_files_missing_resource_uri(changed_uris, resource_uri, ctx)
         return {
@@ -300,6 +333,8 @@ class ResourceMemoryLinkService:
                 )
                 cleaned.extend(cleanup_result.written_uris + cleanup_result.edited_uris)
                 deleted.extend(cleanup_result.deleted_uris)
+                if memory_uri in cleanup_result.deleted_uris:
+                    continue
                 if not cleanup_result.has_changes():
                     await self._remove_resource_refs(memory_uri, resource_uri, ctx)
                     cleaned.append(memory_uri)
@@ -402,6 +437,8 @@ class ResourceMemoryLinkService:
             await self._remove_resource_refs(uri, resource_uri, ctx)
             if uri == memory_uri:
                 await self._restore_cleanup_metadata(uri, memory_file, ctx)
+            if await self._delete_empty_cleanup_memory(uri, ctx):
+                self._mark_result_deleted(result, uri)
         return result
 
     async def _restore_cleanup_metadata(
@@ -425,6 +462,35 @@ class ResourceMemoryLinkService:
             mf.backlinks = []
         await viking_fs.write_file(memory_uri, MemoryFileUtils.write(mf), ctx=ctx)
 
+    async def _delete_empty_cleanup_memory(self, memory_uri: str, ctx: RequestContext) -> bool:
+        """Delete memory files whose visible content was emptied by resource cleanup."""
+        if context_type_for_uri(memory_uri) != "memory":
+            return False
+        viking_fs = self._get_viking_fs()
+        try:
+            raw = await viking_fs.read_file(memory_uri, ctx=ctx)
+        except (NotFoundError, FileNotFoundError):
+            return True
+        mf = MemoryFileUtils.read(raw, uri=memory_uri)
+        if (mf.content or "").strip():
+            return False
+        directory_uri = memory_uri.rsplit("/", 1)[0]
+        await viking_fs.rm(memory_uri, recursive=False, ctx=ctx)
+        await MemoryUpdater.refresh_schema_overview(
+            viking_fs=viking_fs,
+            directory_uri=directory_uri,
+            ctx=ctx,
+        )
+        logger.info("Deleted empty memory after resource cleanup: %s", memory_uri)
+        return True
+
+    @staticmethod
+    def _mark_result_deleted(result: MemoryUpdateResult, uri: str) -> None:
+        result.written_uris = [item for item in result.written_uris if item != uri]
+        result.edited_uris = [item for item in result.edited_uris if item != uri]
+        if uri not in result.deleted_uris:
+            result.add_deleted(uri)
+
     async def _append_resource_refs(
         self,
         *,
@@ -432,9 +498,10 @@ class ResourceMemoryLinkService:
         resource_uri: str,
         reason: str,
         ctx: RequestContext,
+        created_at: Optional[str] = None,
     ) -> None:
         viking_fs = self._get_viking_fs()
-        created_at = datetime.now(timezone.utc).isoformat()
+        created_at = created_at or datetime.now(timezone.utc).isoformat()
         for memory_uri in dict.fromkeys(memory_uris):
             if context_type_for_uri(memory_uri) != "memory":
                 continue
@@ -527,6 +594,54 @@ class ResourceMemoryLinkService:
                 if self._resource_ref_matches(ref.get("resource_uri"), resource_uri, recursive):
                     matches.append(_MemoryRefMatch(uri, mf, ref))
         return matches
+
+    async def _read_resource_directory_abstract(
+        self,
+        resource_uri: str,
+        ctx: RequestContext,
+    ) -> str:
+        """Best-effort directory abstract lookup for resource-addition readability."""
+        viking_fs = self._get_viking_fs()
+        for abstract_uri in self._resource_abstract_uri_candidates(resource_uri):
+            try:
+                abstract = await viking_fs.read_file(abstract_uri, ctx=ctx)
+            except Exception:
+                continue
+            abstract = self._clean_resource_abstract(abstract)
+            if abstract:
+                return abstract
+        return ""
+
+    @classmethod
+    def _resource_abstract_uri_candidates(cls, resource_uri: str) -> List[str]:
+        normalized = (resource_uri or "").strip().rstrip("/")
+        if not normalized:
+            return []
+        candidates = [f"{normalized}/.abstract.md"]
+        parent = cls._parent_uri(normalized)
+        if parent:
+            candidates.append(f"{parent}/.abstract.md")
+        return list(dict.fromkeys(candidates))
+
+    @staticmethod
+    def _parent_uri(uri: str) -> str:
+        scheme_index = uri.find("://")
+        min_slash_index = scheme_index + 3 if scheme_index >= 0 else 0
+        slash_index = uri.rfind("/")
+        if slash_index <= min_slash_index:
+            return ""
+        return uri[:slash_index]
+
+    @staticmethod
+    def _clean_resource_abstract(abstract: Any) -> str:
+        text = " ".join(str(abstract or "").split())
+        if not text:
+            return ""
+        if any(text == marker or text.endswith(marker) for marker in _ABSTRACT_NOT_READY_MARKERS):
+            return ""
+        if len(text) > _RESOURCE_ABSTRACT_MAX_CHARS:
+            return text[: _RESOURCE_ABSTRACT_MAX_CHARS - 3].rstrip() + "..."
+        return text
 
     async def _memory_files_missing_resource_uri(
         self,
