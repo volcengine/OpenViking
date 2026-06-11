@@ -771,6 +771,37 @@ AST extraction supports: Python, JavaScript/TypeScript, Rust, Go, Java, C/C++. O
 
 See [Code Skeleton Extraction](../concepts/06-extraction.md#code-skeleton-extraction-ast-mode) for details.
 
+### parser_api
+
+Routes selected file extensions to the third-party Understanding API instead of the built-in parser registry. This is an opt-in path: OpenViking only uses it when `parser_api.enable` is `true` and the resource extension matches `parser_api.extensions`.
+
+```json
+{
+  "parser_api": {
+    "enable": true,
+    "extensions": ["pdf", "docx", "pptx", "mp4", "mp3", "png"],
+    "host": "https://api.example.com",
+    "api_key": "${UNDERSTANDING_API_KEY}",
+    "enable_resumable_upload": true
+  }
+}
+```
+
+For local files, OpenViking uploads the file through the Files API and then submits a Responses API request with the returned `file_id`. For URLs, it submits the URL directly to the Responses API. If `host` does not already end with `/api/v3`, OpenViking appends `/api/v3` before calling `/files` and `/responses`.
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `enable` | bool | Enable routing matching extensions to the Understanding API | `false` |
+| `extensions` | list[str] | File extensions to route. Values are normalized to lowercase and may include or omit the leading dot | `[]` |
+| `host` | str | API host with scheme, for example `https://api.example.com`; required when `enable` is `true` | `""` |
+| `api_key` | str | Bearer token used for Files and Responses API calls; required when `enable` is `true` | `""` |
+| `enable_resumable_upload` | bool | Allow multipart/resumable upload when a local file exceeds `upload_simple_max_bytes` | `false` |
+| `upload_simple_max_bytes` | int | Maximum size for the simple upload path | `536870912` |
+| `upload_part_size_bytes` | int | Part size for multipart upload | `8388608` |
+| `http_timeout_seconds` | float | Timeout for API create/poll requests | `10.0` |
+| `response_timeout_seconds` | int | Maximum total wait time while polling a Responses API job | `1800` |
+| `poll_interval_ms` | int | Poll interval for Responses API status checks | `3000` |
+
 ### rerank
 
 Reranking model for search result refinement. Supports VikingDB (Volcengine), Cohere, and OpenAI-compatible APIs.
@@ -1144,7 +1175,7 @@ openviking-server --config /path/to/ov.conf
 
 ### ov.conf
 
-The config sections documented above (embedding, vlm, rerank, storage) all belong to `ov.conf`. SDK embedded mode and server share this file.
+The config sections documented above (embedding, vlm, parser_api, rerank, storage) all belong to `ov.conf`. SDK embedded mode and server share this file.
 
 For memory-related settings, add a `memory` section in `ov.conf`:
 
@@ -1473,6 +1504,18 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
       "url": "string",
       "project": "string"
     }
+  },
+  "parser_api": {
+    "enable": false,
+    "extensions": ["pdf", "docx", "pptx"],
+    "host": "https://api.example.com",
+    "api_key": "string",
+    "enable_resumable_upload": false,
+    "upload_simple_max_bytes": 536870912,
+    "upload_part_size_bytes": 8388608,
+    "http_timeout_seconds": 10.0,
+    "response_timeout_seconds": 1800,
+    "poll_interval_ms": 3000
   },
   "code": {
     "code_summary_mode": "ast"
