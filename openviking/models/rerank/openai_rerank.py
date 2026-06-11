@@ -63,10 +63,27 @@ class OpenAIRerankClient(RerankBase):
         if not documents:
             return []
 
+        # Filter out empty documents — rerank providers (e.g. DashScope) reject
+        # empty strings with HTTP 400.
+        valid_indices = [i for i, d in enumerate(documents) if d and d.strip()]
+        if not valid_indices:
+            # All documents are empty -- signal caller to fall back to vector scores.
+            return None
+
+        if len(valid_indices) < len(documents):
+            filtered_docs = [documents[i] for i in valid_indices]
+            logger.debug(
+                "[OpenAIRerankClient] Filtered %d empty documents from %d total",
+                len(documents) - len(valid_indices),
+                len(documents),
+            )
+        else:
+            filtered_docs = documents
+
         req_body = {
             "model": self.model_name,
             "query": query,
-            "documents": documents,
+            "documents": filtered_docs,
         }
 
         try:
@@ -87,7 +104,7 @@ class OpenAIRerankClient(RerankBase):
             result = response.json()
 
             # Update token usage tracking (estimate, OpenAI rerank doesn't provide token info)
-            self._extract_and_update_token_usage(result, query, documents)
+            self._extract_and_update_token_usage(result, query, filtered_docs)
 
             # Standard OpenAI/Cohere rerank format: results[].{index, relevance_score}
             results = result.get("results")
@@ -95,26 +112,35 @@ class OpenAIRerankClient(RerankBase):
                 logger.warning(f"[OpenAIRerankClient] Unexpected response format: {result}")
                 return None
 
-            if len(results) != len(documents):
+            if len(results) != len(filtered_docs):
                 logger.warning(
                     "[OpenAIRerankClient] Unexpected rerank result length: expected=%s actual=%s",
-                    len(documents),
+                    len(filtered_docs),
                     len(results),
                 )
                 return None
 
-            # Results may not be in original order — sort by index
-            scores = [0.0] * len(documents)
+            # Map scores back to original document indices.
+            # Empty documents get a score of 0.0.
+            filtered_scores = [0.0] * len(filtered_docs)
             for item in results:
                 idx = item.get("index")
-                if idx is None or not (0 <= idx < len(documents)):
+                if idx is None or not (0 <= idx < len(filtered_docs)):
                     logger.warning(
                         "[OpenAIRerankClient] Out-of-bounds or missing index in result: %s", item
                     )
                     return None
-                scores[idx] = item.get("relevance_score", 0.0)
+                filtered_scores[idx] = item.get("relevance_score", 0.0)
 
-            logger.debug(f"[OpenAIRerankClient] Reranked {len(documents)} documents")
+            scores = [0.0] * len(documents)
+            for fi, oi in enumerate(valid_indices):
+                scores[oi] = filtered_scores[fi]
+
+            logger.debug(
+                "[OpenAIRerankClient] Reranked %d documents (%d non-empty)",
+                len(documents),
+                len(valid_indices),
+            )
             return scores
 
         except Exception as e:
