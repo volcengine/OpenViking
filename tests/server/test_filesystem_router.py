@@ -15,7 +15,7 @@ from openviking_cli.session.user_id import UserIdentifier
 async def test_rm_preserves_memory_cleanup(monkeypatch):
     cleanup = {"status": "success", "memory_uris": ["viking://user/alice/memories/entities/a.md"]}
 
-    async def fake_rm(uri, ctx=None, recursive=False):
+    async def fake_rm(uri, ctx=None, recursive=False, wait=False, timeout=None):
         return {"estimated_deleted_count": 1, "memory_cleanup": cleanup}
 
     monkeypatch.setattr(

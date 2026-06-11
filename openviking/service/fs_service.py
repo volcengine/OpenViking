@@ -213,6 +213,12 @@ class FSService:
                 directory_uri=memory_overview_uri,
                 ctx=ctx,
             )
+        for cleanup_overview_uri in self._memory_overview_parent_uris_from_cleanup(cleanup_result):
+            await MemoryUpdater.refresh_schema_overview(
+                viking_fs=viking_fs,
+                directory_uri=cleanup_overview_uri,
+                ctx=ctx,
+            )
         if cleanup_result is not None and isinstance(result, dict):
             result["memory_cleanup"] = cleanup_result
         if refresh_parent_uri and isinstance(result, dict):
@@ -242,6 +248,30 @@ class FSService:
         if not MemoryUpdater.memory_type_from_uri(parent.uri):
             return None
         return parent.uri
+
+    @classmethod
+    def _memory_overview_parent_uris_from_cleanup(
+        cls,
+        cleanup_result: Optional[Dict[str, Any]],
+    ) -> List[str]:
+        if not isinstance(cleanup_result, dict):
+            return []
+
+        overview_uris: List[str] = []
+        for field in ("memory_uris", "deleted_memory_uris"):
+            values = cleanup_result.get(field)
+            if not isinstance(values, list):
+                continue
+            for memory_uri in values:
+                if not isinstance(memory_uri, str):
+                    continue
+                overview_uri = cls._memory_overview_parent_uri(
+                    memory_uri,
+                    context_type_for_uri(memory_uri),
+                )
+                if overview_uri:
+                    overview_uris.append(overview_uri)
+        return list(dict.fromkeys(overview_uris))
 
     async def _enqueue_delete_refresh(
         self,
