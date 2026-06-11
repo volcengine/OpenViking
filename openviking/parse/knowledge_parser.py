@@ -1,16 +1,16 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 """
-KnowledgeParser: Integrate with a third-party knowledge_base_server for parsing.
+UnderstanderAPI: Integrate with Understander API for parsing.
 
 Workflow:
-1. Submit a parse task (submit)
-2. Poll task status (get_task_info) until success/failed
-3. Download result (zip_url)
-4. Materialize the result into VikingFS temp directory
-5. Return ParseResult for downstream TreeBuilder/SemanticQueue processing
+1. Upload local file to Files API (file_id) or submit URL directly
+2. Submit a parse request to Responses API (response_id)
+3. Poll Responses API until completed/failed
+4. Download result zip (zip_url)
+5. Materialize the result into VikingFS temp directory
+6. Return ParseResult for downstream TreeBuilder/SemanticQueue processing
 """
-import hashlib
 import json
 import asyncio
 import mimetypes
@@ -30,9 +30,9 @@ from openviking_cli.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-class KnowledgeParser(BaseParser):
+class UnderstanderAPI(BaseParser):
     """
-    KnowledgeParser: Third-party parse client.
+    UnderstanderAPI: Third-party parse client.
     """
 
     def __init__(self):
@@ -40,23 +40,26 @@ class KnowledgeParser(BaseParser):
 
         ov_config = get_openviking_config()
         parser_api = ov_config.parser_api
-        self._api_host = (parser_api.host or "").rstrip("/")
-        self._account_id = parser_api.account_id
-        self._kb_env = parser_api.env or None
+        raw_host = (parser_api.host or "").rstrip("/")
+        self._api_host = raw_host
+        self._api_base = raw_host if raw_host.endswith("/api/v3") else f"{raw_host}/api/v3"
+        self._api_key = parser_api.api_key
+        self._enable_resumable_upload = bool(parser_api.enable_resumable_upload)
+        self._upload_simple_max_bytes = int(parser_api.upload_simple_max_bytes)
+        self._upload_part_size_bytes = int(parser_api.upload_part_size_bytes)
 
-        self._http_timeout_sec = 10.0
-        self._timeout_sec = 1800
-        self._default_poll_interval_ms = 3000
-        self._upload_simple_max_bytes = 100 * 1024 * 1024
-        self._upload_part_size_bytes = 8 * 1024 * 1024
+        self._http_timeout_sec = float(getattr(parser_api, "http_timeout_seconds", 10.0))
+        self._timeout_sec = int(getattr(parser_api, "response_timeout_seconds", 1800))
+        self._default_poll_interval_ms = int(getattr(parser_api, "poll_interval_ms", 3000))
 
         if not self._api_host:
-            raise ValueError("parser_api.host is required for KnowledgeParser")
-        if not self._account_id:
-            raise ValueError("parser_api.account_id is required for KnowledgeParser")
+            raise ValueError("parser_api.host is required for UnderstanderAPI")
+        if not self._api_key:
+            raise ValueError("parser_api.api_key is required for UnderstanderAPI")
 
         self._video_exts = {"mp4", "mov", "avi", "flv", "mkv", "wmv", "webm"}
         self._audio_exts = {"mp3", "wav", "m4a", "flac", "aac", "ogg"}
+        self._image_exts = {"jpg", "jpeg", "png", "webp", "gif", "bmp"}
 
     @property
     def supported_extensions(self) -> List[str]:
@@ -66,8 +69,8 @@ class KnowledgeParser(BaseParser):
         """
         Parse via third-party API.
 
-        - For remote resources: accept http(s) URL.
-        - For local video/audio files: upload to base_server to obtain a presigned URL, then submit.
+        - For local files: upload to Files API (file_id).
+        - For URL: submit URL directly via Responses API.
         """
         source_str = str(source)
         original_source = kwargs.get("original_source")
@@ -84,67 +87,37 @@ class KnowledgeParser(BaseParser):
             local_path = Path(candidate)
             if not local_path.is_file():
                 raise ValueError(
-                    "KnowledgeParser supports http(s) URLs or local video/audio files. "
-                    f"Got source={source_str!r} original_source={original_source!r}."
+                    "UnderstanderAPI supports http(s) URLs or local files. "
+                    "Got an invalid local file path."
                 )
             doc_name = local_path.stem or "resource"
             doc_type = local_path.suffix.lower().lstrip(".") or "unknown"
 
+        task_meta: Dict[str, Any] = {}
+
         if url is None and local_path is not None:
-            if doc_type not in (self._video_exts | self._audio_exts):
-                raise ValueError(
-                    "KnowledgeParser only supports local video/audio files. "
-                    f"Got file={str(local_path)!r} doc_type={doc_type!r}."
-                )
-            url, upload_meta = await self._upload_local_file(
-                file_path=local_path,
-                account_id=self._account_id,
-            )
+            file_obj = await self._create_file(local_path=local_path)
+            file_id = file_obj.get("id")
+            if not file_id:
+                raise RuntimeError(f"files api missing file_id: {self._safe_error_summary(file_obj)}")
+            task_meta["file_id"] = file_id
+            response_obj = await self._create_response_for_file(file_id=file_id)
         else:
-            upload_meta = {}
+            if url is None:
+                raise RuntimeError("missing url for url mode")
+            response_obj = await self._create_response_for_url(url=url, doc_type=doc_type)
 
-        agent_id = kwargs.get("agent_id")
-        sub_path = agent_id if isinstance(agent_id, str) and agent_id.strip() else None
+        response_id = response_obj.get("id")
+        if not response_id:
+            raise RuntimeError(f"responses api missing id: {self._safe_error_summary(response_obj)}")
+        task_meta["response_id"] = response_id
 
-        temp_file_id = kwargs.get("temp_file_id")
-        file_id_seed = (
-            temp_file_id
-            if isinstance(temp_file_id, str) and temp_file_id.strip()
-            else (url or "")
-        )
-        if not file_id_seed:
-            raise ValueError("file_id seed is empty for KnowledgeParser")
-        file_id = hashlib.sha256(file_id_seed.encode("utf-8")).hexdigest()[:32]
-
-        task_info = await self._submit_task(
-            url=url,
-            doc_type=doc_type,
-            doc_name=doc_name,
-            account_id=self._account_id,
-            file_id=file_id,
-            sub_path=sub_path,
-        )
-        task_id = task_info["task_id"]
-        poll_ms = int(task_info.get("next_poll_after_ms") or self._default_poll_interval_ms)
-        data = await self._wait_done(
-            task_id=task_id,
-            poll_interval_ms=poll_ms,
-            account_id=self._account_id,
-            file_id=file_id,
-            sub_path=sub_path,
-        )
-        result_obj = (data.get("result") or {}) if isinstance(data, dict) else {}
-        zip_url = result_obj.get("zip_url")
-        task_meta = {
-            "task_id": task_id,
-            "zip_object_key": result_obj.get("zip_object_key"),
-            "cost_ms": result_obj.get("cost_ms"),
-        }
-        if upload_meta:
-            task_meta["upload"] = upload_meta
-
+        response_obj = await self._poll_response(response_id=response_id)
+        zip_url = self._extract_zip_url(response_obj)
         if not zip_url:
-            raise RuntimeError("knowledge parser result missing zip_url")
+            raise RuntimeError(
+                f"understander result missing zip_url: {self._safe_error_summary(response_obj)}"
+            )
 
         zip_path = await self._download_zip(zip_url)
         try:
@@ -158,7 +131,15 @@ class KnowledgeParser(BaseParser):
             except Exception:
                 pass
 
-        content_type = "video" if doc_type in self._video_exts else "audio" if doc_type in self._audio_exts else "text"
+        content_type = (
+            "video"
+            if doc_type in self._video_exts
+            else "audio"
+            if doc_type in self._audio_exts
+            else "image"
+            if doc_type in self._image_exts
+            else "text"
+        )
         root_node = ResourceNode(
             type=NodeType.ROOT,
             title=doc_name,
@@ -178,112 +159,269 @@ class KnowledgeParser(BaseParser):
             source_path=url or source_str,
             source_format=doc_type,
             temp_dir_path=temp_dir_path,
-            parser_name="KnowledgeParser",
+            parser_name="UnderstanderAPI",
             meta=task_meta,
         )
 
-        logger.info(f"[KnowledgeParser] done source={result.temp_dir_path}")
+        logger.info("[UnderstanderAPI] done")
         return result
 
     async def parse_content(
         self, content: str, source_path: Optional[str] = None, instruction: str = "", **kwargs
     ) -> ParseResult:
-        """
-        Not supported. Use parse() with an http(s) URL.
-        """
-        raise ValueError("KnowledgeParser.parse_content is not supported. Use parse() with an http(s) URL.")
+        raise NotImplementedError("UnderstanderAPI.parse_content is not supported")
 
     def _json_bytes(self, obj: Any) -> bytes:
         return json.dumps(obj, ensure_ascii=False).encode("utf-8")
 
-    async def _submit_task(
-        self,
-        *,
-        url: str,
-        doc_type: str,
-        doc_name: str,
-        account_id: str,
-        file_id: str,
-        sub_path: Optional[str],
-    ) -> Dict[str, Any]:
-        submit_url = f"{self._api_host}/api/knowledge/task/parse_doc/submit"
-        headers = {"Content-Type": "application/json;charset=UTF-8"}
-        payload: Dict[str, Any] = {
-            "url": url,
-            "doc_type": doc_type,
-            "doc_name": doc_name,
-            "account_id": account_id,
-            "file_id": file_id,
-        }
-        headers["V-Account-Id"] = str(account_id)
-        if sub_path:
-            payload["sub_path"] = sub_path
-        if self._kb_env:
-            headers["x-kb-env"] = self._kb_env
+    def _auth_headers(self, extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+        headers = {"Authorization": f"Bearer {self._api_key}"}
+        if extra:
+            headers.update(extra)
+        return headers
 
-        body = self._json_bytes(payload)
-        async with httpx.AsyncClient(timeout=self._http_timeout_sec, follow_redirects=True) as client:
-            rsp = await client.post(submit_url, content=body, headers=headers)
+    def _safe_error_summary(self, obj: Any) -> Dict[str, Any]:
+        if not isinstance(obj, dict):
+            return {"kind": type(obj).__name__}
+        summary: Dict[str, Any] = {}
+        for key in ("id", "status", "message"):
+            if key in obj:
+                summary[key] = obj.get(key)
+        err = obj.get("error")
+        if isinstance(err, dict):
+            summary["error"] = {k: err.get(k) for k in ("type", "code", "message") if k in err}
+        return summary
+
+    def _raise_if_error(self, obj: Any, *, context: str) -> None:
+        if not isinstance(obj, dict):
+            return
+        err = obj.get("error")
+        if isinstance(err, dict) and err.get("code"):
+            raise RuntimeError(f"{context}: {self._safe_error_summary(obj)}")
+
+    async def _create_file(self, *, local_path: Path) -> Dict[str, Any]:
+        file_size = local_path.stat().st_size
+        if file_size > self._upload_simple_max_bytes:
+            if not self._enable_resumable_upload:
+                raise ValueError(
+                    f"file too large ({file_size} bytes), enable parser_api.enable_resumable_upload to continue"
+                )
+            return await self._multipart_create_file(local_path)
+
+        data: Dict[str, Any] = {"purpose": "user_data"}
+
+        content_type = mimetypes.guess_type(str(local_path))[0] or "application/octet-stream"
+        with open(local_path, "rb") as f:
+            files = {"file": (local_path.name, f, content_type)}
+            async with httpx.AsyncClient(timeout=1200.0, follow_redirects=True) as client:
+                rsp = await client.post(
+                    f"{self._api_base}/files",
+                    headers=self._auth_headers(),
+                    data=data,
+                    files=files,
+                )
         rsp.raise_for_status()
         body = rsp.json()
-        if body.get("code") != 0:
-            raise RuntimeError(f"submit failed: code={body.get('code')} message={body.get('message')}")
-        data = body.get("data") or {}
-        if not data.get("task_id"):
-            raise RuntimeError(f"submit missing task_id: {body}")
-        return data
+        self._raise_if_error(body, context="files api error")
+        return body
 
-    async def _wait_done(
-        self,
-        *,
-        task_id: str,
-        poll_interval_ms: int,
-        account_id: str,
-        file_id: str,
-        sub_path: Optional[str],
-    ) -> Dict[str, Any]:
-        info_url = f"{self._api_host}/api/knowledge/task/parse_doc/get_task_info"
-        headers = {"Content-Type": "application/json;charset=UTF-8"}
+    async def _create_response_for_file(self, *, file_id: str) -> Dict[str, Any]:
+        content: Dict[str, Any] = {"type": "file", "file": {"file_id": file_id}}
+        payload = {
+            "input": [{"role": "user", "content": [content]}],
+            "tools": [{"type": "understander"}],
+            "store": True,
+        }
+        async with httpx.AsyncClient(timeout=self._http_timeout_sec, follow_redirects=True) as client:
+            rsp = await client.post(
+                f"{self._api_base}/responses",
+                content=self._json_bytes(payload),
+                headers=self._auth_headers({"Content-Type": "application/json;charset=UTF-8"}),
+            )
+        rsp.raise_for_status()
+        body = rsp.json()
+        self._raise_if_error(body, context="responses api error")
+        return body
+
+    async def _create_response_for_url(self, *, url: str, doc_type: str) -> Dict[str, Any]:
+        if doc_type in self._video_exts:
+            content: Dict[str, Any] = {"type": "input_video", "video_url": url}
+        elif doc_type in self._image_exts:
+            content = {"type": "input_image", "image_url": url}
+        elif doc_type in self._audio_exts:
+            content = {"type": "input_audio", "audio_url": url}
+        else:
+            content = {"type": "input_file", "file_url": url}
+        payload = {
+            "input": [{"role": "user", "content": [content]}],
+            "tools": [{"type": "understander"}],
+            "store": True,
+        }
+        async with httpx.AsyncClient(timeout=self._http_timeout_sec, follow_redirects=True) as client:
+            rsp = await client.post(
+                f"{self._api_base}/responses",
+                content=self._json_bytes(payload),
+                headers=self._auth_headers({"Content-Type": "application/json;charset=UTF-8"}),
+            )
+        rsp.raise_for_status()
+        body = rsp.json()
+        self._raise_if_error(body, context="responses api error")
+        return body
+
+    async def _poll_response(self, *, response_id: str) -> Dict[str, Any]:
         deadline = asyncio.get_running_loop().time() + float(self._timeout_sec)
         last_status = None
-        headers["V-Account-Id"] = str(account_id)
-        if self._kb_env:
-            headers["x-kb-env"] = self._kb_env
-
         async with httpx.AsyncClient(timeout=self._http_timeout_sec, follow_redirects=True) as client:
             while True:
-                if asyncio.get_running_loop().time() > deadline:
-                    raise TimeoutError(f"knowledge parser timeout: task_id={task_id} last_status={last_status}")
-
-                payload: Dict[str, Any] = {
-                    "task_id": task_id,
-                    "account_id": account_id,
-                    "file_id": file_id,
-                }
-                if sub_path:
-                    payload["sub_path"] = sub_path
-                req_body = self._json_bytes(payload)
-                rsp = await client.post(info_url, content=req_body, headers=headers)
+                rsp = await client.get(
+                    f"{self._api_base}/responses/{response_id}",
+                    headers=self._auth_headers(),
+                )
                 rsp.raise_for_status()
                 body = rsp.json()
-                if body.get("code") != 0:
-                    raise RuntimeError(
-                        f"get_task_info failed: code={body.get('code')} message={body.get('message')}"
-                    )
-                data = body.get("data") or {}
-                status = data.get("status")
+                self._raise_if_error(body, context=f"responses api error: response_id={response_id}")
+                status = body.get("status")
                 if status != last_status:
-                    logger.info(f"[KnowledgeParser] task_id={task_id} status={status}")
+                    logger.info(f"[UnderstanderAPI] response_id={response_id} status={status}")
                     last_status = status
-                if status in {"success", "failed"}:
-                    if status == "failed":
-                        err = data.get("error") or {}
-                        raise RuntimeError(
-                            f"knowledge parser failed: task_id={task_id} "
-                            f"error_code={err.get('error_code')} error_msg={err.get('error_msg')}"
-                        )
-                    return data
-                await asyncio.sleep(max(poll_interval_ms, 200) / 1000.0)
+                if status == "completed":
+                    return body
+                if status == "failed":
+                    raise RuntimeError(
+                        f"understander failed: response_id={response_id} body={self._safe_error_summary(body)}"
+                    )
+                if asyncio.get_running_loop().time() > deadline:
+                    raise TimeoutError(
+                        f"understander timeout: response_id={response_id} last_status={last_status}"
+                    )
+                await asyncio.sleep(max(self._default_poll_interval_ms, 200) / 1000.0)
+
+    def _extract_zip_url(self, response_obj: Dict[str, Any]) -> Optional[str]:
+        result_obj = response_obj.get("result") or {}
+        if isinstance(result_obj, dict) and result_obj.get("zip_url"):
+            return str(result_obj["zip_url"])
+        for output_item in response_obj.get("output") or []:
+            if not isinstance(output_item, dict):
+                continue
+            for content_item in output_item.get("content") or []:
+                if not isinstance(content_item, dict):
+                    continue
+                if content_item.get("type") != "zip_url":
+                    continue
+                zip_obj = content_item.get("zip_url")
+                if isinstance(zip_obj, dict) and zip_obj.get("url"):
+                    return str(zip_obj["url"])
+        return None
+
+    async def _uploads_init(self, *, file_path: Path) -> Dict[str, Any]:
+        payload = {
+            "file_name": file_path.name,
+            "file_size": file_path.stat().st_size,
+            "content_type": mimetypes.guess_type(str(file_path))[0] or "application/octet-stream",
+            "part_size": int(self._upload_part_size_bytes),
+        }
+        async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
+            rsp = await client.post(
+                f"{self._api_base}/files?uploads",
+                content=self._json_bytes(payload),
+                headers=self._auth_headers({"Content-Type": "application/json;charset=UTF-8"}),
+            )
+        rsp.raise_for_status()
+        body = rsp.json()
+        self._raise_if_error(body, context="uploads init error")
+        return body
+
+    async def _uploads_status(self, *, upload_id: str, object_key: str) -> Dict[str, Any]:
+        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+            rsp = await client.get(
+                f"{self._api_base}/files?upload_id={upload_id}&object_key={object_key}",
+                headers=self._auth_headers(),
+            )
+        rsp.raise_for_status()
+        body = rsp.json()
+        self._raise_if_error(body, context="uploads status error")
+        return body
+
+    async def _uploads_put_part(
+        self, *, upload_id: str, object_key: str, part_number: int, data: bytes
+    ) -> Dict[str, Any]:
+        headers = self._auth_headers({"Content-Type": "application/octet-stream"})
+        async with httpx.AsyncClient(timeout=1200.0, follow_redirects=True) as client:
+            rsp = await client.put(
+                f"{self._api_base}/files?upload_id={upload_id}&object_key={object_key}&part_number={part_number}",
+                headers=headers,
+                content=data,
+            )
+        rsp.raise_for_status()
+        body = rsp.json()
+        self._raise_if_error(body, context="uploads part error")
+        return body
+
+    async def _uploads_complete(
+        self, *, upload_id: str, object_key: str, parts: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        payload = {"parts": parts}
+        async with httpx.AsyncClient(timeout=600.0, follow_redirects=True) as client:
+            rsp = await client.post(
+                f"{self._api_base}/files?upload_id={upload_id}&object_key={object_key}",
+                content=self._json_bytes(payload),
+                headers=self._auth_headers({"Content-Type": "application/json;charset=UTF-8"}),
+            )
+        rsp.raise_for_status()
+        body = rsp.json()
+        self._raise_if_error(body, context="uploads complete error")
+        return body
+
+    async def _multipart_create_file(self, file_path: Path) -> Dict[str, Any]:
+        init_obj = await self._uploads_init(file_path=file_path)
+        upload_id = init_obj.get("upload_id") or init_obj.get("uploadId")
+        object_key = init_obj.get("object_key") or init_obj.get("objectKey")
+        part_size = int(init_obj.get("part_size") or init_obj.get("partSize") or self._upload_part_size_bytes)
+        if not upload_id:
+            raise RuntimeError(f"uploads init missing upload_id: {self._safe_error_summary(init_obj)}")
+        if not object_key:
+            raise RuntimeError(f"uploads init missing object_key: {self._safe_error_summary(init_obj)}")
+
+        status_obj = await self._uploads_status(upload_id=upload_id, object_key=object_key)
+        uploaded_parts = status_obj.get("parts") or []
+        uploaded_map: Dict[int, str] = {}
+        for p in uploaded_parts:
+            try:
+                pn = int(p.get("part_number") or p.get("partNumber"))
+            except Exception:
+                continue
+            etag = p.get("etag")
+            if isinstance(etag, str) and etag:
+                uploaded_map[pn] = etag
+
+        parts: Dict[int, str] = dict(uploaded_map)
+        file_size = file_path.stat().st_size
+        total_parts = (file_size + part_size - 1) // part_size
+
+        with open(file_path, "rb") as f:
+            for n in range(1, total_parts + 1):
+                if n in parts:
+                    continue
+                f.seek((n - 1) * part_size)
+                chunk = f.read(part_size)
+                part_obj = await self._uploads_put_part(
+                    upload_id=upload_id, object_key=object_key, part_number=n, data=chunk
+                )
+                etag = part_obj.get("etag")
+                if not etag:
+                    raise RuntimeError(
+                        f"uploads part missing etag: part={n} resp={self._safe_error_summary(part_obj)}"
+                    )
+                parts[n] = etag
+
+        complete_obj = await self._uploads_complete(
+            upload_id=upload_id,
+            object_key=object_key,
+            parts=[{"part_number": n, "etag": e} for n, e in sorted(parts.items())],
+        )
+        if complete_obj.get("status") != "active" or not complete_obj.get("id"):
+            raise RuntimeError(f"uploads complete did not return file object: {complete_obj}")
+        return complete_obj
 
     async def _download_zip(self, zip_url: str) -> Path:
         async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
@@ -341,144 +479,3 @@ class KnowledgeParser(BaseParser):
                 file_content = item.read_bytes()
                 file_uri = f"{fs_uri}/{item.name}"
                 await viking_fs.write_file_bytes(file_uri, file_content)
-
-    async def _post_base_server(
-        self,
-        path: str,
-        account_id: Optional[str] = None,
-        *,
-        params: Optional[Dict[str, Any]] = None,
-        json: Optional[Dict[str, Any]] = None,
-        content: Any = None,
-        headers: Optional[Dict[str, str]] = None,
-        timeout_sec: float = 600.0,
-    ) -> Dict[str, Any]:
-        url = f"{self._api_host}{path}"
-        req_headers = dict(headers or {})
-        if account_id:
-            req_headers.setdefault("V-Account-Id", str(account_id))
-        if self._kb_env:
-            req_headers.setdefault("x-kb-env", self._kb_env)
-
-        body: Optional[Union[str, bytes]] = None
-        if json is not None:
-            req_headers.setdefault("Content-Type", "application/json;charset=UTF-8")
-            body = self._json_bytes(json)
-        elif content is not None:
-            body = content
-        async with httpx.AsyncClient(timeout=timeout_sec, follow_redirects=True) as client:
-            rsp = await client.post(url, params=params, content=body, headers=req_headers)
-        rsp.raise_for_status()
-        body = rsp.json()
-        if body.get("code") != 0:
-            raise RuntimeError(f"base_server error: {body}")
-        data = body.get("data")
-        if not isinstance(data, dict):
-            raise RuntimeError(f"base_server invalid response: {body}")
-        return data
-
-    async def _upload_local_file(
-        self, file_path: Path, account_id: Optional[str]
-    ) -> tuple[str, Dict[str, Any]]:
-        file_size = file_path.stat().st_size
-        content_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
-        if file_size <= self._upload_simple_max_bytes:
-            data = await self._simple_upload(
-                file_path=file_path,
-                account_id=account_id,
-                content_type=content_type,
-            )
-        else:
-            data = await self._multipart_upload(
-                file_path=file_path,
-                account_id=account_id,
-                content_type=content_type,
-            )
-        presigned_url = data.get("presigned_url")
-        if not presigned_url:
-            raise RuntimeError(f"upload missing presigned_url: {data}")
-        meta = {
-            "object_key": data.get("object_key"),
-            "size": data.get("size", file_size),
-            "expires_at": data.get("expires_at"),
-            "content_type": content_type,
-            "upload_method": "simple" if file_size <= self._upload_simple_max_bytes else "multipart",
-        }
-        return presigned_url, meta
-
-    async def _simple_upload(
-        self, file_path: Path, account_id: Optional[str], content_type: str
-    ) -> Dict[str, Any]:
-        headers = {"Content-Type": "application/octet-stream"}
-        with open(file_path, "rb") as f:
-            content = f.read()
-            return await self._post_base_server(
-                "/api/knowledge/upload/simple",
-                account_id,
-                params={"file_name": file_path.name, "content_type": content_type},
-                content=content,
-                headers=headers,
-                timeout_sec=1200.0,
-            )
-
-    async def _multipart_upload(
-        self, file_path: Path, account_id: Optional[str], content_type: str
-    ) -> Dict[str, Any]:
-        min_part_size = 5 * 1024 * 1024
-        part_size = max(self._upload_part_size_bytes, min_part_size)
-        init_data = await self._post_base_server(
-            "/api/knowledge/upload/multipart/init",
-            account_id,
-            json={
-                "file_name": file_path.name,
-                "file_size": file_path.stat().st_size,
-                "content_type": content_type,
-                "part_size": part_size,
-            },
-            timeout_sec=600.0,
-        )
-        upload_id = init_data.get("upload_id")
-        object_key = init_data.get("object_key")
-        server_part_size = int(init_data.get("part_size") or part_size)
-        if not upload_id or not object_key:
-            raise RuntimeError(f"multipart init missing fields: {init_data}")
-
-        parts: Dict[int, str] = {}
-        file_size = file_path.stat().st_size
-        total_parts = (file_size + server_part_size - 1) // server_part_size
-        headers = {"Content-Type": "application/octet-stream"}
-
-        with open(file_path, "rb") as f:
-            for n in range(1, total_parts + 1):
-                offset = (n - 1) * server_part_size
-                length = min(server_part_size, file_size - offset)
-                f.seek(offset)
-                chunk = f.read(length)
-                part_data = await self._post_base_server(
-                    "/api/knowledge/upload/multipart/part",
-                    account_id,
-                    params={
-                        "upload_id": upload_id,
-                        "object_key": object_key,
-                        "part_number": n,
-                    },
-                    content=chunk,
-                    headers=headers,
-                    timeout_sec=1200.0,
-                )
-                etag = part_data.get("etag")
-                if not etag:
-                    raise RuntimeError(f"multipart part missing etag: part={n} resp={part_data}")
-                parts[n] = etag
-
-        complete_data = await self._post_base_server(
-            "/api/knowledge/upload/multipart/complete",
-            account_id,
-            json={
-                "upload_id": upload_id,
-                "object_key": object_key,
-                "parts": [{"part_number": n, "etag": e} for n, e in sorted(parts.items())],
-            },
-            timeout_sec=600.0,
-        )
-        return complete_data
