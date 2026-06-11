@@ -18,6 +18,7 @@
       "ov_multi_read",
       "ov_list",
       "memory_recall",
+      "ov_recall_trace",
       "memory_store",
       "memory_forget",
       "ov_archive_search",
@@ -237,7 +238,7 @@
     "enabledTools": {
       "label": "Enabled Tools",
       "placeholder": "default",
-      "help": "Agent-visible tool allowlist. Accepts tool names or groups: default, all, memory, resource_query, import, archive, tool_result. add_resource also requires enableAddResourceTool=true.",
+      "help": "Agent-visible tool allowlist. Accepts tool names or groups: default, all, memory, resource_query, import, recall_trace, archive, tool_result. add_resource also requires enableAddResourceTool=true.",
       "advanced": true
     },
     "disabledTools": {
