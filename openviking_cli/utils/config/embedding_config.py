@@ -409,9 +409,7 @@ class EmbeddingModelConfig(BaseModel):
                 "to force a fixed schema dimension."
             )
 
-    def _resolve_dimension_for(
-        self, provider: str, model: Optional[str]
-    ) -> Optional[int]:
+    def _resolve_dimension_for(self, provider: str, model: Optional[str]) -> Optional[int]:
         """Resolve dimension for a (provider, model) pair using the same
         rules as ``get_effective_dimension``. The explicit parent dimension,
         when set, always wins."""

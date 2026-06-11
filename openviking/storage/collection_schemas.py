@@ -163,11 +163,7 @@ def _build_embedding_metadata(config: "OpenVikingConfig") -> Dict[str, Any]:
         or getattr(model_cfg, "backend", None)
         or ""
     ).lower()
-    model = (
-        cred_model
-        or getattr(model_cfg, "model", None)
-        or ""
-    )
+    model = cred_model or getattr(model_cfg, "model", None) or ""
     dimension = config.embedding.dimension
     model_path = getattr(model_cfg, "model_path", None)
     model_identity = model
