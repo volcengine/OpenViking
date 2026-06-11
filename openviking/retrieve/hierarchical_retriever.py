@@ -15,6 +15,15 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
+from openviking_cli.retrieve.types import (
+    ContextType,
+    MatchedContext,
+    QueryResult,
+    TypedQuery,
+)
+from openviking_cli.utils.config import RerankConfig, RetrievalConfig
+from openviking_cli.utils.logger import get_logger
+
 from openviking.core.retrieval_targets import default_target_directories
 from openviking.models.embedder.base import EmbedResult, embed_compat
 from openviking.models.rerank import RerankClient
@@ -24,14 +33,6 @@ from openviking.server.identity import RequestContext
 from openviking.storage import VikingDBManager, VikingDBManagerProxy
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.time_utils import parse_iso_datetime
-from openviking_cli.retrieve.types import (
-    ContextType,
-    MatchedContext,
-    QueryResult,
-    TypedQuery,
-)
-from openviking_cli.utils.config import RerankConfig, RetrievalConfig
-from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -273,26 +274,34 @@ class HierarchicalRetriever:
         if not self._rerank_client or not documents:
             return fallback_scores
 
+        rerank_documents = [
+            (index, document)
+            for index, document in enumerate(documents)
+            if document.strip()
+        ]
+        if not rerank_documents:
+            return fallback_scores
+
         try:
-            scores = self._rerank_client.rerank_batch(query, documents)
+            scores = self._rerank_client.rerank_batch(
+                query, [document for _, document in rerank_documents]
+            )
         except Exception as e:
             logger.warning(
                 "[HierarchicalRetriever] Rerank failed, fallback to vector scores: %s", e
             )
             return fallback_scores
 
-        if not scores or len(scores) != len(documents):
+        if not scores or len(scores) != len(rerank_documents):
             logger.warning(
                 "[HierarchicalRetriever] Invalid rerank result, fallback to vector scores"
             )
             return fallback_scores
 
-        normalized_scores: List[float] = []
-        for score, fallback in zip(scores, fallback_scores, strict=True):
+        normalized_scores = list(fallback_scores)
+        for score, (index, _) in zip(scores, rerank_documents, strict=True):
             if isinstance(score, (int, float)):
-                normalized_scores.append(float(score))
-            else:
-                normalized_scores.append(fallback)
+                normalized_scores[index] = float(score)
         return normalized_scores
 
     def _merge_starting_points(

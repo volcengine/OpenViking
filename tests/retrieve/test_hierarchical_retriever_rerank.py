@@ -4,12 +4,12 @@
 """Hierarchical retriever rerank behavior tests."""
 
 import pytest
-
-from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever, RetrieverMode
-from openviking.server.identity import RequestContext, Role
 from openviking_cli.retrieve.types import ContextType, TypedQuery
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import RerankConfig, RetrievalConfig
+
+from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever, RetrieverMode
+from openviking.server.identity import RequestContext, Role
 
 
 class DummyEmbedResult:
@@ -298,6 +298,29 @@ def test_merge_starting_points_prefers_rerank_scores_in_thinking_mode(monkeypatc
         ("viking://resources/root-b", 0.05),
     ]
     assert fake_client.calls == [("hello", ["root A", "root B"])]
+
+
+def test_rerank_scores_preserves_fallbacks_for_empty_documents(monkeypatch):
+    fake_client = FakeRerankClient([0.95, 0.05])
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
+        lambda config: fake_client,
+    )
+
+    retriever = HierarchicalRetriever(
+        storage=DummyStorage(),
+        embedder=DummyEmbedder(),
+        rerank_config=_config(),
+    )
+
+    scores = retriever._rerank_scores(
+        "hello",
+        ["root A", "", "   ", "root D"],
+        [0.2, 0.8, 0.7, 0.4],
+    )
+
+    assert scores == [0.95, 0.8, 0.7, 0.05]
+    assert fake_client.calls == [("hello", ["root A", "root D"])]
 
 
 @pytest.mark.asyncio
