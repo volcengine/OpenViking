@@ -6,10 +6,15 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Any, List, Optional, Set
 
-from openviking.utils.crawl_filter import CrawlConfig, CrawlFilter
-from openviking.utils.link_extractor import LinkExtractor
-from openviking.utils.page_fetcher import FetchResult, PageFetcher, SimpleFetcher, PlaywrightFetcher
-from openviking.utils.ssr_extractor import SSRDataExtractor
+from openviking.parse.parsers.html_crawler.crawl_filter import CrawlConfig, CrawlFilter
+from openviking.parse.parsers.html_crawler.link_extractor import LinkExtractor
+from openviking.parse.parsers.html_crawler.page_fetcher import (
+    FetchResult,
+    PageFetcher,
+    PlaywrightFetcher,
+    SimpleFetcher,
+)
+from openviking.parse.parsers.html_crawler.ssr_extractor import SSRDataExtractor
 
 from openviking_cli.utils.logger import get_logger
 

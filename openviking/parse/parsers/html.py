@@ -8,7 +8,6 @@ Parses local HTML files.
 For URL downloading, use HTTPAccessor in the new two-layer architecture.
 """
 
-import re
 import time
 from pathlib import Path
 from typing import List, Optional, Union

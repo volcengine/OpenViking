@@ -101,6 +101,9 @@ _CORE_ADD_RESOURCE_ARG_FIELDS = frozenset(
         "preserve_structure",
         "create_parent",
         "telemetry",
+        "request_validator",
+        "original_source",
+        "temp_file_id",
         "args",
     }
 )
@@ -618,7 +621,7 @@ class ResourceService:
             )
             if enforce_public_remote_targets and is_remote_resource_source(path):
                 path = require_remote_resource_source(path)
-                kwargs.setdefault("request_validator", ensure_public_remote_target)
+                kwargs["request_validator"] = ensure_public_remote_target
             if resource_lock is not None:
                 kwargs["resource_lock"] = resource_lock
             if not to and not parent:
@@ -875,8 +878,8 @@ class ResourceService:
         use_playwright: bool = False,
         **kwargs,
     ) -> Any:
-        from openviking.utils.crawl_filter import CrawlConfig
-        from openviking.utils.web_crawler import CrawlResult, WebCrawler
+        from openviking.parse.parsers.html_crawler.crawl_filter import CrawlConfig
+        from openviking.parse.parsers.html_crawler.web_crawler import CrawlResult, WebCrawler
 
         # args carries path filters as comma-separated strings at API boundaries.
         include_list = [p.strip() for p in (include_paths or "").split(",") if p.strip()] or None

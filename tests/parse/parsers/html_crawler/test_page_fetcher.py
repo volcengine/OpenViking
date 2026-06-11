@@ -4,7 +4,7 @@
 
 import pytest
 
-from openviking.utils.page_fetcher import (
+from openviking.parse.parsers.html_crawler.page_fetcher import (
     PLAYWRIGHT_CHROMIUM_INSTALL_HINT,
     PLAYWRIGHT_PACKAGE_INSTALL_HINT,
     PlaywrightFetcher,

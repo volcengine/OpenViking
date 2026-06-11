@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for crawl URL filtering rules."""
 
-from openviking.utils.crawl_filter import CrawlConfig, CrawlFilter
+from openviking.parse.parsers.html_crawler.crawl_filter import CrawlConfig, CrawlFilter
 
 
 def test_filter_applies_include_and_exclude_paths_with_exclude_priority():

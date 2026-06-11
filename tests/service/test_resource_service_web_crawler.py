@@ -6,9 +6,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from openviking.parse.parsers.html_crawler.web_crawler import CrawledPage, CrawlResult
 from openviking.server.identity import RequestContext, Role
 from openviking.service.resource_service import ResourceService
-from openviking.utils.web_crawler import CrawledPage, CrawlResult
+from openviking.utils.network_guard import ensure_public_remote_target
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -31,6 +32,15 @@ class HTMLResourceProcessor:
             "_html_content": "<html><a href='/child'>child</a></html>",
             "_html_final_url": "https://www.example.com/docs/",
         }
+
+
+class CapturingResourceProcessor:
+    def __init__(self):
+        self.kwargs = None
+
+    async def process_resource(self, **kwargs):
+        self.kwargs = kwargs
+        return {"status": "success", "root_uri": "viking://resources/test"}
 
 
 @pytest.fixture
@@ -82,6 +92,48 @@ async def test_add_resource_rejects_core_fields_inside_args(
             ctx=request_context,
             args={"path": "https://evil.example"},
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["request_validator", "original_source", "temp_file_id"])
+async def test_add_resource_rejects_internal_fields_inside_args(
+    resource_service: ResourceService,
+    request_context: RequestContext,
+    field: str,
+):
+    with pytest.raises(
+        InvalidArgumentError,
+        match="args cannot include core add_resource fields",
+    ):
+        await resource_service.add_resource(
+            path="https://example.com/docs",
+            ctx=request_context,
+            args={field: None},
+        )
+
+
+@pytest.mark.asyncio
+async def test_add_resource_forces_remote_request_validator(
+    request_context: RequestContext,
+):
+    processor = CapturingResourceProcessor()
+    service = ResourceService(
+        vikingdb=MagicMock(),
+        viking_fs=MagicMock(),
+        resource_processor=processor,
+        skill_processor=MockSkillProcessor(),
+        watch_scheduler=None,
+    )
+
+    await service.add_resource(
+        path="https://example.com/docs",
+        ctx=request_context,
+        enforce_public_remote_targets=True,
+        args={"depth": 0},
+        request_validator=None,
+    )
+
+    assert processor.kwargs["request_validator"] is ensure_public_remote_target
 
 
 @pytest.mark.asyncio
@@ -150,7 +202,7 @@ async def test_crawl_and_add_resources_counts_child_status_error(
         async def close(self):
             self.closed = True
 
-    monkeypatch.setattr("openviking.utils.web_crawler.WebCrawler", FakeWebCrawler)
+    monkeypatch.setattr("openviking.parse.parsers.html_crawler.web_crawler.WebCrawler", FakeWebCrawler)
 
     calls = []
 

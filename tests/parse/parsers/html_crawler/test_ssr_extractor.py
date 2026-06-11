@@ -4,7 +4,7 @@
 
 import json
 
-from openviking.utils.ssr_extractor import SSRDataExtractor
+from openviking.parse.parsers.html_crawler.ssr_extractor import SSRDataExtractor
 
 
 def test_extract_volcengine_router_data_returns_doc_and_child_urls():
