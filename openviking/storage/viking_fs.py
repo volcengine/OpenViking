@@ -1367,19 +1367,21 @@ class VikingFS:
         target_abstract = ""
         if primary_target_uri:
             try:
-                target_abstract = await self.abstract(primary_target_uri, ctx=ctx)
+                with telemetry.measure("search.target_abstract"):
+                    target_abstract = await self.abstract(primary_target_uri, ctx=ctx)
             except Exception:
                 target_abstract = ""
 
         # With session context: intent analysis
         if session_summary or current_messages:
             analyzer = IntentAnalyzer(max_recent_messages=5)
-            query_plan = await analyzer.analyze(
-                compression_summary=session_summary or "",
-                messages=current_messages or [],
-                current_message=query,
-                target_abstract=target_abstract,
-            )
+            with telemetry.measure("search.intent_analysis"):
+                query_plan = await analyzer.analyze(
+                    compression_summary=session_summary or "",
+                    messages=current_messages or [],
+                    current_message=query,
+                    target_abstract=target_abstract,
+                )
             typed_queries = query_plan.queries
             for tq in typed_queries:
                 tq.target_directories = retrieval_targets.target_directories
@@ -2390,10 +2392,11 @@ class VikingFS:
     async def get_relations(self, uri: str, ctx: Optional[RequestContext] = None) -> List[str]:
         """Get all related URIs (backward compatible)."""
         entries = await self.get_relation_table(uri, ctx=ctx)
+        real_ctx = self._ctx_or_default(ctx)
         all_uris = []
         for entry in entries:
             for related in entry.uris:
-                if self._is_accessible(related, self._ctx_or_default(ctx)):
+                if self._is_accessible(related, real_ctx):
                     all_uris.append(related)
         return all_uris
 

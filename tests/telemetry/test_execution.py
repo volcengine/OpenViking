@@ -120,6 +120,27 @@ def test_operation_telemetry_summary_includes_resource_breakdown():
     }
 
 
+def test_operation_telemetry_summary_includes_search_breakdown():
+    from openviking.telemetry.operation import OperationTelemetry
+
+    telemetry = OperationTelemetry(operation="search.find", enabled=True)
+    telemetry.set("search.target_abstract.duration_ms", 18.4)
+    telemetry.set("search.intent_analysis.duration_ms", 24.6)
+    telemetry.set("search.embed_query.duration_ms", 11.3)
+    telemetry.set("search.vector_retrieval.duration_ms", 88.1)
+    telemetry.set("search.typed_queries_count", 3)
+
+    summary = telemetry.finish().summary
+
+    assert summary["search"] == {
+        "target_abstract": {"duration_ms": 18.4},
+        "intent_analysis": {"duration_ms": 24.6},
+        "embed_query": {"duration_ms": 11.3},
+        "vector_retrieval": {"duration_ms": 88.1},
+        "typed_queries_count": 3,
+    }
+
+
 def test_operation_telemetry_summary_omits_zero_valued_fields():
     from openviking.telemetry.operation import OperationTelemetry
 

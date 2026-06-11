@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::{
     CliContext, ConfigAddCustomArgs, ConfigAddOvServiceArgs, ConfigAddTarget, ConfigDeleteArgs,
     ConfigEditArgs,
-    config::{Config, DEFAULT_CUSTOM_URL, display_config_home},
+    config::{Config, DEFAULT_CUSTOM_URL},
     config_wizard::{
         ApiKeyRole, ConfigKind, ConfigStore, OPENVIKING_SERVICE_URL, configs_equivalent,
         custom_allows_empty_api_key, custom_requires_api_key, normalize_custom_url,
@@ -918,11 +918,6 @@ fn no_active_config() -> bool {
 
 fn path_string(path: impl Into<PathBuf>) -> String {
     path.into().display().to_string()
-}
-
-#[allow(dead_code)]
-fn config_home_string() -> String {
-    display_config_home()
 }
 
 #[cfg(test)]

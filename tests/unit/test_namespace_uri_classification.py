@@ -3,9 +3,14 @@
 """Tests for shared Viking URI namespace/content classification."""
 
 from openviking.core.namespace import (
+    canonical_session_uri,
+    canonicalize_uri,
     classify_uri,
     context_type_for_uri,
+    is_session_uri,
+    legacy_session_uri,
     owner_space_for_uri,
+    visible_roots,
 )
 from openviking.server.identity import RequestContext, Role
 from openviking_cli.session.user_id import UserIdentifier
@@ -48,3 +53,25 @@ def test_owner_space_for_uri_uses_user_only():
     assert owner_space_for_uri("viking://user/alice/memories", ctx) == "alice"
     assert owner_space_for_uri("viking://user/alice/skills/demo", ctx) == "alice"
     assert owner_space_for_uri("viking://resources/readme.md", ctx) == ""
+
+
+def test_session_uri_helpers_use_user_namespace():
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="acct", user_id="alice"),
+        role=Role.USER,
+    )
+
+    assert canonical_session_uri(ctx) == "viking://user/alice/sessions"
+    assert canonical_session_uri(ctx, "s1") == "viking://user/alice/sessions/s1"
+    assert canonicalize_uri("viking://user/sessions/s1", ctx) == ("viking://user/alice/sessions/s1")
+    assert canonicalize_uri("user/sessions/s1", ctx) == "viking://user/alice/sessions/s1"
+    assert canonicalize_uri("viking://session/s1", ctx) == "viking://user/alice/sessions/s1"
+    assert (
+        canonicalize_uri("viking://session/s1/history/archive_001/messages.jsonl", ctx)
+        == "viking://user/alice/sessions/s1/history/archive_001/messages.jsonl"
+    )
+    assert legacy_session_uri("s1") == "viking://session/s1"
+    assert is_session_uri("viking://user/alice/sessions/s1")
+    assert is_session_uri("viking://user/sessions/s1")
+    assert is_session_uri("viking://session/s1")
+    assert "viking://session" not in visible_roots(ctx)

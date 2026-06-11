@@ -44,7 +44,7 @@ cat $STATE_DIR/state/verify-sess.json
 
 OV side:
 ```bash
-OPENVIKING_CONFIG_FILE=$OV_CONF ov read viking://session/cx-verify-sess/messages.jsonl
+OPENVIKING_CONFIG_FILE=$OV_CONF ov read viking://user/sessions/cx-verify-sess/messages.jsonl
 # 2 JSONL records: user "fuchsia", assistant "noted"
 ```
 
@@ -78,7 +78,7 @@ echo '{"session_id":"verify-sess","transcript_path":"'"$STATE_DIR"'/transcript.j
 ```
 
 Expect: `appended 2 turn(s)` (only the new ones). Re-read
-`viking://session/cx-verify-sess/messages.jsonl` — 4 records now.
+`viking://user/sessions/cx-verify-sess/messages.jsonl` — 4 records now.
 
 ## 4. PreCompact — commit + reset
 
@@ -96,10 +96,10 @@ State file: `ovSessionId` is now `null`, `capturedTurnCount` stays at 4.
 
 OV side:
 ```bash
-OPENVIKING_CONFIG_FILE=$OV_CONF ov ls viking://session/cx-verify-sess
+OPENVIKING_CONFIG_FILE=$OV_CONF ov ls viking://user/sessions/cx-verify-sess
 # messages.jsonl is now size 0 (archived)
 # history/archive_001/ exists with the committed messages
-OPENVIKING_CONFIG_FILE=$OV_CONF ov read viking://session/cx-verify-sess/history/archive_001/messages.jsonl
+OPENVIKING_CONFIG_FILE=$OV_CONF ov read viking://user/sessions/cx-verify-sess/history/archive_001/messages.jsonl
 ```
 
 ## 5. Post-compact Stop — same deterministic OV session id

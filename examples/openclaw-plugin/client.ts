@@ -29,6 +29,11 @@ export type RuntimeIdentity = {
   userId: string;
   agentId: string;
 };
+
+function userSessionUri(sessionId: string): string {
+  return `viking://user/sessions/${encodeURIComponent(sessionId)}`;
+}
+
 export type CommitSessionResult = {
   session_id: string;
   /** "accepted" (async), "completed", "failed", or "timeout" (wait mode). */
@@ -301,7 +306,7 @@ export class OpenVikingClient {
           X_OpenViking_User: tenantHeaders.userId ?? null,
           resolved_user_id: identity.userId,
           session_vfs_hint: detail.sessionId
-            ? `viking://session/${String(detail.sessionId)}`
+            ? userSessionUri(String(detail.sessionId))
             : undefined,
         }),
     );
@@ -938,7 +943,7 @@ export class OpenVikingClient {
     match_count?: number;
     files_scanned?: number;
   }> {
-    const baseUri = `viking://session/${sessionId}/history`;
+    const baseUri = `${userSessionUri(sessionId)}/history`;
     const uri = options.archiveId ? `${baseUri}/${options.archiveId}` : baseUri;
     return this.request(
       "/api/v1/search/grep",

@@ -141,7 +141,6 @@ async def delete_account(
     viking_fs = get_viking_fs()
     account_prefixes = [
         "viking://user/",
-        "viking://session/",
         "viking://resources/",
     ]
     for prefix in account_prefixes:

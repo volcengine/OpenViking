@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from openviking.core.context import ResourceContentType
+from openviking.core.namespace import is_session_uri
 from openviking.server.identity import RequestContext
 from openviking.storage.expr import Eq
 from openviking.utils.embedding_utils import get_resource_content_type
@@ -88,7 +89,7 @@ def _entry_uri(root_uri: str, entry: dict[str, Any]) -> str:
 
 def _is_index_scope(uri: str) -> bool:
     try:
-        return VikingURI(uri).scope not in NON_INDEX_SCOPES
+        return VikingURI(uri).scope not in NON_INDEX_SCOPES and not is_session_uri(uri)
     except Exception:
         return False
 

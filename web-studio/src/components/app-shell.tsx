@@ -357,11 +357,11 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
     pathname === '/oauth/verify' || pathname.startsWith('/oauth/verify/')
   const visibleNavItems = React.useMemo(
     () =>
-      connectionRole === 'user'
-        ? NAV_ITEMS.filter(
+      connectionRole === 'admin' || connectionRole === 'root'
+        ? NAV_ITEMS
+        : NAV_ITEMS.filter(
             (item) => item.id !== 'home' && item.id !== 'requestLogs',
-          )
-        : NAV_ITEMS,
+          ),
     [connectionRole],
   )
 

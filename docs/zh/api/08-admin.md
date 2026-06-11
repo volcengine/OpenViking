@@ -260,7 +260,7 @@ ov --sudo admin list-accounts
 
 **处理流程：**
 1. 验证请求者具有 ROOT 权限
-2. 级联删除账户下的所有 AGFS 数据（user/、agent/、session/、resources/）
+2. 级联删除账户下的所有 AGFS 数据（`user/` 和 `resources/`；sessions 位于 `user/` 下）
 3. 级联删除向量数据库中该账户的所有记录
 4. 最后删除账户元数据和所有用户密钥
 

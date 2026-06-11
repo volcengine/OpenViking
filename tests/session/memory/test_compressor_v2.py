@@ -328,6 +328,9 @@ class TestCompressorV2:
                     def get_memory_schemas(self, ctx):
                         return []
 
+                    def get_extract_context(self):
+                        return ExtractContext(messages)
+
                 return DummyProvider()
 
             async def run(self):
@@ -552,6 +555,9 @@ class TestCompressorV2:
             def get_memory_schemas(self, _ctx):
                 return [FixedSchema(), VariableSchema()]
 
+            def get_extract_context(self):
+                return ExtractContext(messages)
+
             def _get_registry(self):
                 return object()
 
@@ -618,6 +624,9 @@ class TestCompressorV2:
         class DummyProvider:
             def get_memory_schemas(self, _ctx):
                 return []
+
+            def get_extract_context(self):
+                return ExtractContext(messages)
 
             def _get_registry(self):
                 return object()

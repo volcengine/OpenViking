@@ -17,6 +17,7 @@ from openviking.telemetry.execution import (
 )
 from openviking.utils.search_filters import merge_time_filter
 from openviking_cli.client.base import BaseClient
+from openviking_cli.exceptions import NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import run_async
 
@@ -443,6 +444,7 @@ class LocalClient(BaseClient):
         )
         return {
             "session_id": session.session_id,
+            "uri": session.uri,
             "user": session.user.to_dict(),
         }
 
@@ -454,6 +456,7 @@ class LocalClient(BaseClient):
         """Get session details."""
         session = await self._service.sessions.get(session_id, self._ctx, auto_create=auto_create)
         result = session.meta.to_dict()
+        result["uri"] = session.uri
         result["user"] = session.user.to_dict()
         return result
 
@@ -461,15 +464,13 @@ class LocalClient(BaseClient):
         self, session_id: str, token_budget: int = 128_000
     ) -> Dict[str, Any]:
         """Get assembled session context."""
-        session = self._service.sessions.session(self._ctx, session_id)
-        await session.load()
+        session = await self._service.sessions.get(session_id, self._ctx, auto_create=False)
         result = await session.get_session_context(token_budget=token_budget)
         return _to_jsonable(result)
 
     async def get_session_archive(self, session_id: str, archive_id: str) -> Dict[str, Any]:
         """Get one completed archive for a session."""
-        session = self._service.sessions.session(self._ctx, session_id)
-        await session.load()
+        session = await self._service.sessions.get(session_id, self._ctx, auto_create=False)
         result = await session.get_session_archive(archive_id)
         return _to_jsonable(result)
 
@@ -709,14 +710,17 @@ class LocalClient(BaseClient):
             Session object if exists, None otherwise.
         """
 
-        session = self._service.sessions.session(self._ctx, session_id)
-        if not run_async(session.exists()):
-            if must_exist and session_id:
-                from openviking_cli.exceptions import NotFoundError
+        if session_id:
+            try:
+                return run_async(
+                    self._service.sessions.get(session_id, self._ctx, auto_create=False)
+                )
+            except NotFoundError:
+                if must_exist:
+                    raise NotFoundError(session_id, "session")
 
-                raise NotFoundError(session_id, "session")
-            else:
-                run_async(session.ensure_exists())
+        session = self._service.sessions.session(self._ctx, session_id)
+        run_async(session.ensure_exists())
         return session
 
     async def session_exists(self, session_id: str) -> bool:
@@ -728,8 +732,11 @@ class LocalClient(BaseClient):
         Returns:
             True if the session exists, False otherwise
         """
-        session = self._service.sessions.session(self._ctx, session_id)
-        return await session.exists()
+        try:
+            await self._service.sessions.get(session_id, self._ctx, auto_create=False)
+            return True
+        except NotFoundError:
+            return False
 
     def get_status(self) -> Any:
         """Get system status.

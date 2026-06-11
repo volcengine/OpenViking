@@ -10,7 +10,6 @@ import pytest
 from openviking.core.path_variables import (
     CalendarVariableProvider,
     PathVariableResolver,
-    has_path_variables,
     resolve_path_variables,
 )
 
@@ -260,18 +259,6 @@ class TestPathVariableResolver:
         assert resolver.has_variables("") is False
         assert resolver.has_variables("no variables here") is False
 
-    def test_extract_variables(self, resolver):
-        uri = "viking://resources/{calendar:year}/{calendar:month}/{calendar:day}"
-        variables = resolver.extract_variables(uri)
-
-        assert variables == {"calendar:year", "calendar:month", "calendar:day"}
-
-    def test_extract_variables_none(self, resolver):
-        uri = "viking://resources/docs/api.md"
-        variables = resolver.extract_variables(uri)
-
-        assert variables == set()
-
     def test_multiple_occurrences_same_variable(self, resolver, sample_datetime):
         uri = "viking://resources/{calendar:year}/backup/{calendar:year}/data"
         resolved = resolver.resolve(uri, dt=sample_datetime)
@@ -292,12 +279,6 @@ class TestConvenienceFunctions:
         resolved = resolve_path_variables(uri, dt=sample_datetime)
 
         assert resolved == "viking://resources/emails/2026/05/07/inbox"
-
-    def test_has_path_variables_true(self):
-        assert has_path_variables("viking://resources/{calendar:year}/docs") is True
-
-    def test_has_path_variables_false(self):
-        assert has_path_variables("viking://resources/docs") is False
 
 
 class TestRealWorldExamples:

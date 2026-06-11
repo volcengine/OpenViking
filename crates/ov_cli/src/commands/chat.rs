@@ -677,35 +677,6 @@ impl ChatCommand {
     }
 }
 
-#[allow(dead_code)]
-impl ChatCommand {
-    /// Create a new ChatCommand with the given parameters
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        endpoint: String,
-        api_key: Option<String>,
-        session: Option<String>,
-        sender: String,
-        message: Option<String>,
-        stream: bool,
-        no_format: bool,
-        no_history: bool,
-    ) -> Self {
-        Self {
-            endpoint,
-            api_key,
-            account: None,
-            user: None,
-            session,
-            sender,
-            message,
-            stream,
-            no_format,
-            no_history,
-        }
-    }
-}
-
 /// Render markdown to terminal using termimad
 fn render_markdown(text: &str) {
     let skin = MadSkin::default();

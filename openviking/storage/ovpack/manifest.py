@@ -37,7 +37,7 @@ def read_manifest(zf: zipfile.ZipFile, base_name: str) -> dict[str, Any]:
         raise invalid_manifest(
             "Missing ovpack manifest",
             manifest_path,
-            hint="Re-export this package with OVPack v2 checksum support before importing.",
+            hint="Re-export this package with the current OVPack format before importing.",
         )
 
     try:
