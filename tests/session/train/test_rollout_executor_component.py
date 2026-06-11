@@ -149,3 +149,44 @@ def test_tau2_rollout_messages_use_structured_tool_parts():
     assert isinstance(tool_result_message.parts[0], ToolPart)
     assert tool_result_message.parts[0].tool_status == "completed"
     assert tool_result_message.parts[0].tool_output == '{"membership": "gold"}'
+
+
+def test_tau2_native_env_reward_handles_required_id_and_tool_call_ids():
+    from benchmark.tau2.common.tau2_env.tau2_environment import Tau2BenchEnv
+
+    env = Tau2BenchEnv("airline", "1")
+    env.reset()
+    env.tool_call("get_user_details", {"user_id": "raj_sanchez_7340"})
+    env.tool_call("get_reservation_details", {"reservation_id": "Q69X3R"})
+
+    reward, evaluation = env._impl._get_reward()
+
+    assert reward == 1.0
+    assert evaluation.reward == 1.0
+
+
+def test_tau2_native_env_records_communication_as_assistant_text():
+    from benchmark.tau2.common.tau2_env.tau2_environment import Tau2BenchEnv
+
+    env = Tau2BenchEnv("airline", "3")
+    env.reset()
+    env.tool_call("communicate_with_user", {"content": "You may bring 4 suitcases."})
+
+    reward, evaluation = env._impl._get_reward()
+
+    assert reward == 1.0
+    assert evaluation.communicate_checks[0].met is True
+
+
+def test_tau2_final_answer_is_appended_for_native_evaluation():
+    from benchmark.tau2.common.tau2_env.tau2_environment import Tau2BenchEnv
+    from benchmark.tau2.train.rollout_executor import _append_final_answer_for_tau2_evaluation
+
+    env = Tau2BenchEnv("airline", "3")
+    env.reset()
+    _append_final_answer_for_tau2_evaluation(env, "You may bring 4 suitcases.")
+
+    reward, evaluation = env._impl._get_reward()
+
+    assert reward == 1.0
+    assert evaluation.communicate_checks[0].met is True

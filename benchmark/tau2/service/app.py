@@ -11,6 +11,7 @@ import os
 import sys
 import time
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -255,10 +256,23 @@ def _rollout_to_dict(rollout: Rollout) -> dict[str, Any]:
         "case": _case_to_dict(rollout.case),
         "messages": [message.to_dict() for message in rollout.messages],
         "policy_snapshot_id": rollout.policy_snapshot_id,
-        "evaluation": _evaluation_to_dict(rollout.evaluation),
-        "metadata": rollout.metadata,
+        "evaluation": _jsonable(_evaluation_to_dict(rollout.evaluation)),
+        "metadata": _jsonable(rollout.metadata),
     }
 
+
+
+
+def _jsonable(value: Any) -> Any:
+    if hasattr(value, "model_dump"):
+        return _jsonable(value.model_dump(mode="json"))
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, dict):
+        return {str(_jsonable(key)): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [_jsonable(item) for item in value]
+    return value
 
 def _evaluation_to_dict(evaluation: RubricEvaluation | None) -> dict[str, Any] | None:
     if evaluation is None:
