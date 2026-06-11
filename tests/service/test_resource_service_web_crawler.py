@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for ResourceService web crawler integration."""
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -43,11 +44,31 @@ class CapturingResourceProcessor:
         return {"status": "success", "root_uri": "viking://resources/test"}
 
 
+class FakeTaskTracker:
+    async def create(self, *args, **kwargs):
+        return SimpleNamespace(task_id="task_test")
+
+    async def start(self, *args, **kwargs):
+        return None
+
+    async def complete(self, *args, **kwargs):
+        return None
+
+
 @pytest.fixture
 def request_context() -> RequestContext:
     return RequestContext(
-        user=UserIdentifier("test_account", "test_user", "test_agent"),
+        user=UserIdentifier("test_account", "test_user"),
         role=Role.USER,
+    )
+
+
+@pytest.fixture(autouse=True)
+def skip_git_repo_preflight(monkeypatch):
+    monkeypatch.setattr("openviking.service.resource_service.is_git_repo_url", lambda _path: False)
+    monkeypatch.setattr(
+        "openviking.service.task_tracker.get_task_tracker",
+        lambda: FakeTaskTracker(),
     )
 
 
