@@ -166,7 +166,7 @@ Skills with available="false" need dependencies installed first - you can try in
             else:
                 profile = await self.memory.get_viking_user_profile(
                     workspace_id=workspace_id,
-                    user_id=self._sender_id,
+                    user_id=None,
                     openviking_connection=self._openviking_connection,
                 )
             cost = round(_time.time() - start, 2)
