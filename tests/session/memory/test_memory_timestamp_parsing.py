@@ -101,8 +101,8 @@ def test_extraction_context_chunks_long_text_and_preserves_decimal_numbers(stub_
         + "金然优势是Agent架构全栈，缺点是缺乏CPU服务器底层调优经验 "
         + "周三 query-builder的输出直接进行判断会触发错误，原因不明。"
     )
-    provider = SessionExtractContextProvider(
-        messages=[
+    extract_context = ExtractContext(
+        [
             Message(
                 id="msg-long",
                 role="user",
@@ -112,12 +112,13 @@ def test_extraction_context_chunks_long_text_and_preserves_decimal_numbers(stub_
         ]
     )
 
-    extraction_messages = provider._get_extraction_messages()
+    extraction_messages = extract_context.messages
     merged = "".join(message.content for message in extraction_messages)
 
     assert len(extraction_messages) > 1
     assert merged == text
     assert all(message.id.startswith("msg-long#chunk_") for message in extraction_messages)
+    assert all(id(message) in extract_context.chunk_meta for message in extraction_messages)
     assert "21.9K" in merged
     assert "110.2k" in merged
     assert "501.0k" in merged

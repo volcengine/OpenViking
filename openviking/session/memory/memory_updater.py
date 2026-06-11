@@ -9,6 +9,7 @@ to the storage system.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
@@ -16,6 +17,7 @@ if TYPE_CHECKING:
     from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 
 from openviking.message import Message
+from openviking.message.part import TextPart
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import (
     MemoryFile,
@@ -37,6 +39,9 @@ from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
+
+_EXTRACTION_CHUNK_MIN_CHARS = 100
+_EXTRACTION_CHUNK_BOUNDARY_RE = re.compile(r"(\n+|[。！？；!?;]+|(?<!\d)\.(?!\d))")
 
 
 @dataclass(frozen=True)
@@ -93,9 +98,103 @@ class ExtractContext:
     """Extract context for template rendering."""
 
     def __init__(self, messages: List[Message], chunk_meta: Optional[Dict[int, ChunkMeta]] = None):
-        self.messages = messages
-        self.chunk_meta = chunk_meta or {}
+        if chunk_meta is None:
+            self.messages, self.chunk_meta = self._build_extraction_messages(messages)
+        else:
+            self.messages = messages
+            self.chunk_meta = chunk_meta
         self.page_id_map = PageIdMap()
+
+    @classmethod
+    def _build_extraction_messages(
+        cls, messages: List[Message]
+    ) -> Tuple[List[Message], Dict[int, ChunkMeta]]:
+        """Build messages used by memory extraction.
+
+        Long text-only messages are split into derived chunks so event `ranges`
+        can point to a narrower source span without relying on brittle text
+        matching. The original session messages are not modified.
+        """
+        extraction_messages: List[Message] = []
+        chunk_meta: Dict[int, ChunkMeta] = {}
+        for message in messages:
+            for extraction_message, meta in cls._split_message_for_extraction(message):
+                extraction_messages.append(extraction_message)
+                if meta is not None:
+                    chunk_meta[id(extraction_message)] = meta
+        return extraction_messages, chunk_meta
+
+    @classmethod
+    def _split_message_for_extraction(
+        cls, message: Message
+    ) -> List[Tuple[Message, Optional[ChunkMeta]]]:
+        parts = getattr(message, "parts", [])
+        if not parts or not all(isinstance(part, TextPart) for part in parts):
+            return [(message, None)]
+
+        text = "".join(part.text for part in parts)
+        chunks = cls._split_text_for_extraction(text)
+        if len(chunks) <= 1:
+            return [(message, None)]
+
+        chunk_messages = []
+        for idx, chunk in enumerate(chunks):
+            chunk_message = Message(
+                id=f"{message.id}#chunk_{idx}",
+                role=message.role,
+                peer_id=getattr(message, "peer_id", None),
+                parts=[TextPart(chunk)],
+                created_at=message.created_at,
+            )
+            chunk_messages.append(
+                (
+                    chunk_message,
+                    ChunkMeta(
+                        source_message_id=message.id,
+                        chunk_index=idx,
+                        chunk_count=len(chunks),
+                    ),
+                )
+            )
+        return chunk_messages
+
+    @classmethod
+    def _split_text_for_extraction(cls, text: str) -> List[str]:
+        return cls._pack_text_units(cls._split_text_units(text)) or [text]
+
+    @staticmethod
+    def _pack_text_units(units: List[str]) -> List[str]:
+        chunks: List[str] = []
+        current = ""
+        for unit in units:
+            current += unit
+            if len(current) < _EXTRACTION_CHUNK_MIN_CHARS:
+                continue
+            chunks.append(current)
+            current = ""
+
+        if current:
+            if chunks:
+                chunks[-1] += current
+            else:
+                chunks.append(current)
+        return chunks
+
+    @staticmethod
+    def _split_text_units(text: str) -> List[str]:
+        pieces = _EXTRACTION_CHUNK_BOUNDARY_RE.split(text)
+        units: List[str] = []
+        current = ""
+        for piece in pieces:
+            if not piece:
+                continue
+            current += piece
+            if _EXTRACTION_CHUNK_BOUNDARY_RE.fullmatch(piece):
+                units.append(current)
+                current = ""
+        if current:
+            units.append(current)
+        return units or [text]
 
     def get_first_message_time_from_ranges(self, ranges_str: str) -> str | None:
         """根据 ranges 字符串获取第一条消息的时间（YAML 日期格式）"""
