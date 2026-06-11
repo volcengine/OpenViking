@@ -8,13 +8,21 @@ from .backends.kimi_vlm import KimiVLM
 from .backends.litellm_vlm import LiteLLMVLMProvider
 from .backends.openai_vlm import OpenAIVLM
 from .backends.volcengine_vlm import VolcEngineVLM
-from .base import VLMBase, VLMFactory, FailoverVLM
+from .base import (
+    AllCredentialsFailedError,
+    FailoverVLM,
+    MultiCredentialVLM,
+    VLMBase,
+    VLMFactory,
+)
 from .registry import get_all_provider_names, is_valid_provider
 
 __all__ = [
     "VLMBase",
     "VLMFactory",
     "FailoverVLM",
+    "MultiCredentialVLM",
+    "AllCredentialsFailedError",
     "OpenAIVLM",
     "CodexVLM",
     "KimiVLM",
