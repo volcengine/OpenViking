@@ -104,6 +104,11 @@ PRESET_DIRECTORIES: Dict[str, DirectoryDefinition] = {
                 ],
             ),
             DirectoryDefinition(
+                path="resources",
+                abstract="User-owned resource storage. Contains private documents and knowledge resources owned by the current User.",
+                overview="Use this directory for resources scoped to the current User. Project and document directories are created lazily as content is added.",
+            ),
+            DirectoryDefinition(
                 path="privacy",
                 abstract="User privacy config root. Stores user-scoped sensitive configuration snapshots by category and target key.",
                 overview="Use this directory to access privacy-managed configuration values such as skill secrets. Concrete category and target-key subdirectories are created lazily by the privacy config service.",

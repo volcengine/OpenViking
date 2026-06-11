@@ -268,6 +268,15 @@ enum Commands {
     AddSkill {
         /// Skill directory, SKILL.md, or raw content
         data: String,
+        /// Exact target URI (must end with the skill name) (cannot be used with --parent)
+        #[arg(long)]
+        to: Option<String>,
+        /// Target parent skills URI (must already exist and be a directory) (cannot be used with --to)
+        #[arg(long)]
+        parent: Option<String>,
+        /// Target parent skills URI (create parent directory if it does not exist) (cannot be used with --to or --parent)
+        #[arg(short = 'p', long = "parent-auto-create")]
+        parent_auto_create: Option<String>,
         /// Wait until processing is complete
         #[arg(long)]
         wait: bool,
@@ -879,6 +888,9 @@ enum SkillCommands {
     /// List installed agent skills
     #[command(alias = "ls")]
     List {
+        /// Skills root URI to manage
+        #[arg(long = "root-uri")]
+        root_uri: Option<String>,
         /// Maximum number of skills to list
         #[arg(
             short = 'n',
@@ -892,6 +904,9 @@ enum SkillCommands {
     Find {
         /// Search query
         query: String,
+        /// Skills root URI to search
+        #[arg(long = "root-uri")]
+        root_uri: Option<String>,
         /// Maximum number of results
         #[arg(
             short = 'n',
@@ -911,6 +926,9 @@ enum SkillCommands {
     Show {
         /// Skill name
         name: String,
+        /// Skills root URI containing the skill
+        #[arg(long = "root-uri")]
+        root_uri: Option<String>,
         /// Detail level to show (0=abstract, 1=overview, 2=SKILL.md content)
         #[arg(short = 'L', long = "level", value_parser = clap::value_parser!(i32).range(0..=2))]
         level: Option<i32>,
@@ -929,6 +947,9 @@ enum SkillCommands {
     },
     /// Update installed skills from their recorded source
     Update {
+        /// Skills root URI to update from
+        #[arg(long = "root-uri")]
+        root_uri: Option<String>,
         /// Skill name(s) to update; omit to update all installed skills
         skills: Vec<String>,
         /// Wait until processing is complete
@@ -941,6 +962,9 @@ enum SkillCommands {
     /// Remove installed skills
     #[command(alias = "rm", alias = "delete")]
     Remove {
+        /// Skills root URI to remove from
+        #[arg(long = "root-uri")]
+        root_uri: Option<String>,
         /// Skill name(s) to remove
         skills: Vec<String>,
         /// Remove all installed skills
@@ -2189,13 +2213,17 @@ async fn main() {
         }
         Commands::AddSkill {
             data,
+            to,
+            parent,
+            parent_auto_create,
             wait,
             timeout,
             upload_options,
         } => {
             let ctx =
                 ctx.with_upload_options(upload_options.merged_with_legacy(legacy_upload_options));
-            handlers::handle_add_skill(data, wait, timeout, ctx).await
+            handlers::handle_add_skill(data, to, parent, parent_auto_create, wait, timeout, ctx)
+                .await
         }
         Commands::Skills { action } => match action {
             SkillCommands::Add {
@@ -2220,12 +2248,23 @@ async fn main() {
                 )
                 .await
             }
-            SkillCommands::List { node_limit } => {
+            SkillCommands::List {
+                root_uri,
+                node_limit,
+            } => {
                 let client = ctx.get_client();
-                commands::skills::list(&client, node_limit, ctx.output_format, ctx.compact).await
+                commands::skills::list(
+                    &client,
+                    root_uri.as_deref(),
+                    node_limit,
+                    ctx.output_format,
+                    ctx.compact,
+                )
+                .await
             }
             SkillCommands::Find {
                 query,
+                root_uri,
                 node_limit,
                 threshold,
                 level,
@@ -2234,6 +2273,7 @@ async fn main() {
                 commands::skills::find(
                     &client,
                     &query,
+                    root_uri.as_deref(),
                     node_limit,
                     threshold,
                     level,
@@ -2244,6 +2284,7 @@ async fn main() {
             }
             SkillCommands::Show {
                 name,
+                root_uri,
                 level,
                 files,
                 source,
@@ -2259,6 +2300,7 @@ async fn main() {
                 commands::skills::show(
                     &client,
                     &name,
+                    root_uri.as_deref(),
                     level,
                     files,
                     source,
@@ -2267,15 +2309,41 @@ async fn main() {
                 )
                 .await
             }
-            SkillCommands::Update { skills, wait, yes } => {
+            SkillCommands::Update {
+                root_uri,
+                skills,
+                wait,
+                yes,
+            } => {
                 let client = ctx.get_client();
-                commands::skills::update(&client, skills, wait, yes, ctx.output_format, ctx.compact)
-                    .await
+                commands::skills::update(
+                    &client,
+                    root_uri.as_deref(),
+                    skills,
+                    wait,
+                    yes,
+                    ctx.output_format,
+                    ctx.compact,
+                )
+                .await
             }
-            SkillCommands::Remove { skills, all, yes } => {
+            SkillCommands::Remove {
+                root_uri,
+                skills,
+                all,
+                yes,
+            } => {
                 let client = ctx.get_client();
-                commands::skills::remove(&client, skills, all, yes, ctx.output_format, ctx.compact)
-                    .await
+                commands::skills::remove(
+                    &client,
+                    root_uri.as_deref(),
+                    skills,
+                    all,
+                    yes,
+                    ctx.output_format,
+                    ctx.compact,
+                )
+                .await
             }
             SkillCommands::Validate { path, strict } => {
                 let client = ctx.get_client();
@@ -2598,12 +2666,12 @@ mod tests {
 
     #[test]
     fn cli_parses_find_peer_id() {
-        let cli = Cli::try_parse_from(["ov", "find", "invoice", "--peer-id", "web:visitor:alice"])
+        let cli = Cli::try_parse_from(["ov", "find", "invoice", "--peer-id", "web-visitor-alice"])
             .expect("find peer id should parse");
 
         match cli.command {
             Commands::Find { peer_id, .. } => {
-                assert_eq!(peer_id.as_deref(), Some("web:visitor:alice"));
+                assert_eq!(peer_id.as_deref(), Some("web-visitor-alice"));
             }
             _ => panic!("expected find command"),
         }
@@ -2612,12 +2680,12 @@ mod tests {
     #[test]
     fn cli_parses_search_peer_id() {
         let cli =
-            Cli::try_parse_from(["ov", "search", "invoice", "--peer-id", "web:visitor:alice"])
+            Cli::try_parse_from(["ov", "search", "invoice", "--peer-id", "web-visitor-alice"])
                 .expect("search peer id should parse");
 
         match cli.command {
             Commands::Search { peer_id, .. } => {
-                assert_eq!(peer_id.as_deref(), Some("web:visitor:alice"));
+                assert_eq!(peer_id.as_deref(), Some("web-visitor-alice"));
             }
             _ => panic!("expected search command"),
         }
@@ -3047,8 +3115,15 @@ mod tests {
             .expect("skills list should parse");
         match list.command {
             Commands::Skills {
-                action: SkillCommands::List { node_limit },
-            } => assert_eq!(node_limit, 25),
+                action:
+                    SkillCommands::List {
+                        node_limit,
+                        root_uri,
+                    },
+            } => {
+                assert!(root_uri.is_none());
+                assert_eq!(node_limit, 25);
+            }
             _ => panic!("expected skills list"),
         }
 
@@ -3145,6 +3220,7 @@ mod tests {
             Commands::Skills {
                 action:
                     SkillCommands::Show {
+                        root_uri,
                         level,
                         files,
                         source,
@@ -3152,11 +3228,31 @@ mod tests {
                         ..
                     },
             } => {
+                assert!(root_uri.is_none());
                 assert_eq!(level, Some(2));
                 assert!(files);
                 assert!(source);
                 assert_eq!(format.as_deref(), Some("json"));
             }
+            _ => panic!("expected skills show"),
+        }
+
+        let show_with_root_uri = Cli::try_parse_from([
+            "ov",
+            "skills",
+            "show",
+            "code-review",
+            "--root-uri",
+            "viking://user/default/peers/alice/skills",
+        ])
+        .expect("skills show root_uri should parse");
+        match show_with_root_uri.command {
+            Commands::Skills {
+                action: SkillCommands::Show { root_uri, .. },
+            } => assert_eq!(
+                root_uri.as_deref(),
+                Some("viking://user/default/peers/alice/skills")
+            ),
             _ => panic!("expected skills show"),
         }
 
@@ -3169,7 +3265,10 @@ mod tests {
             .expect("skills remove --yes should parse");
         match remove.command {
             Commands::Skills {
-                action: SkillCommands::Remove { skills, yes, all },
+                action:
+                    SkillCommands::Remove {
+                        skills, yes, all, ..
+                    },
             } => {
                 assert_eq!(skills, vec!["foo", "bar"]);
                 assert!(yes);

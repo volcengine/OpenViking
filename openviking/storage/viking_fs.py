@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from pathlib import PurePath
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
-from openviking.core.namespace import canonicalize_uri
+from openviking.core.namespace import canonicalize_uri, is_content_namespace_root_uri
 from openviking.core.namespace import (
     is_accessible as namespace_is_accessible,
 )
@@ -287,6 +287,32 @@ class VikingFS:
             yield
         finally:
             self._bound_ctx.reset(token)
+
+    async def ensure_parent_exists(
+        self,
+        parent: str,
+        ctx: RequestContext,
+        *,
+        create_parent: bool = True,
+    ) -> None:
+        try:
+            stat_result = await self.stat(parent, ctx=ctx)
+        except Exception as exc:
+            if not isinstance(exc, (FileNotFoundError, NotFoundError)) and not is_not_found_error(
+                exc
+            ):
+                raise
+            if create_parent or is_content_namespace_root_uri(parent, ctx):
+                await self.mkdir(parent, exist_ok=True, ctx=ctx)
+                stat_result = await self.stat(parent, ctx=ctx)
+            else:
+                raise FileNotFoundError(
+                    f"Parent URI does not exist: {parent}. "
+                    "Use --parent-auto-create/-p to automatically create it."
+                ) from exc
+
+        if not stat_result.get("isDir"):
+            raise InvalidArgumentError(f"Parent URI is not a directory: {parent}")
 
     @staticmethod
     def _normalize_uri(uri: str) -> str:
@@ -1669,9 +1695,6 @@ class VikingFS:
             prefix = prefix[:-1]
         return f"{prefix}_{hash_suffix}"
 
-    _USER_STRUCTURE_DIRS = {"memories"}
-    _AGENT_STRUCTURE_DIRS = {"memories", "skills", "instructions", "workspaces"}
-
     def _uri_to_path(self, uri: str, ctx: Optional[RequestContext] = None) -> str:
         """Map virtual URI to account-isolated AGFS path.
 
@@ -1737,35 +1760,6 @@ class VikingFS:
         if len(parts) == 2:
             return True
         return not self._looks_like_legacy_temp_leaf(parts[2])
-
-    def _extract_space_from_uri(self, uri: str) -> Optional[str]:
-        """Extract space segment from URI if present.
-
-        URIs are WYSIWYG: viking://{scope}/{space}/...
-        For user, the second segment is space unless it's a known structure dir.
-        For session, the second segment is always space (when 3+ parts).
-        Legacy temp URIs keep the historical shape viking://temp/<temp-id> and therefore
-        intentionally have no space segment.
-        """
-        _, parts = self._normalized_uri_parts(uri)
-        if len(parts) < 2:
-            return None
-        scope = parts[0]
-        second = parts[1]
-        # Treat scope-root metadata files as not having a tenant space segment.
-        if len(parts) == 2 and second in {".abstract.md", ".overview.md"}:
-            return None
-        if self._is_legacy_temp_uri_parts(parts):
-            return None
-        if scope == "upload":
-            return None
-        if scope == "user" and second not in self._USER_STRUCTURE_DIRS:
-            return second
-        if scope == "agent" and second not in self._AGENT_STRUCTURE_DIRS:
-            return second
-        if scope == "session" and len(parts) >= 2:
-            return second
-        return None
 
     def _is_accessible(self, uri: str, ctx: RequestContext) -> bool:
         """Check whether a URI is visible/accessible under current request context."""

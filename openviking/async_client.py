@@ -336,6 +336,9 @@ class AsyncOpenViking:
     async def add_skill(
         self,
         data: Any,
+        to: Optional[str] = None,
+        parent: Optional[str] = None,
+        create_parent: bool = False,
         wait: bool = False,
         timeout: float = None,
         telemetry: TelemetryRequest = False,
@@ -349,6 +352,9 @@ class AsyncOpenViking:
         await self._ensure_initialized()
         return await self._client.add_skill(
             data=data,
+            to=to,
+            parent=parent,
+            create_parent=create_parent,
             wait=wait,
             timeout=timeout,
             telemetry=telemetry,

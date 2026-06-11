@@ -117,6 +117,9 @@ pub async fn add(
         let result = client
             .add_skill(
                 &target.data,
+                None,
+                None,
+                None,
                 wait,
                 None,
                 show_progress,
@@ -152,11 +155,12 @@ pub async fn add(
 
 pub async fn list(
     client: &HttpClient,
+    root_uri: Option<&str>,
     node_limit: i32,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let result = client.skills_list(node_limit).await?;
+    let result = client.skills_list(node_limit, root_uri).await?;
     output_success(result, output_format, compact);
     Ok(())
 }
@@ -164,6 +168,7 @@ pub async fn list(
 pub async fn show(
     client: &HttpClient,
     name: &str,
+    root_uri: Option<&str>,
     level: Option<i32>,
     include_files: bool,
     include_source: bool,
@@ -172,7 +177,14 @@ pub async fn show(
 ) -> Result<()> {
     let include_content = level.is_none() || level == Some(2);
     let mut result = client
-        .skill_show(name, include_content, include_files, include_source, level)
+        .skill_show(
+            name,
+            include_content,
+            include_files,
+            include_source,
+            level,
+            root_uri,
+        )
         .await?;
     if let Some(level) = level {
         filter_skill_show_level(&mut result, level);
@@ -184,6 +196,7 @@ pub async fn show(
 pub async fn find(
     client: &HttpClient,
     query: &str,
+    root_uri: Option<&str>,
     node_limit: i32,
     threshold: Option<f64>,
     level: Option<Vec<i32>>,
@@ -191,7 +204,7 @@ pub async fn find(
     compact: bool,
 ) -> Result<()> {
     let result = client
-        .skill_find(query, node_limit, threshold, level)
+        .skill_find(query, node_limit, threshold, level, root_uri)
         .await?;
     output_success(result, output_format, compact);
     Ok(())
@@ -199,6 +212,7 @@ pub async fn find(
 
 pub async fn update(
     client: &HttpClient,
+    root_uri: Option<&str>,
     skill_names: Vec<String>,
     wait: bool,
     yes: bool,
@@ -206,7 +220,7 @@ pub async fn update(
     compact: bool,
 ) -> Result<()> {
     let update_all = skill_names.is_empty();
-    let names = resolve_installed_skill_names(client, skill_names).await?;
+    let names = resolve_installed_skill_names(client, root_uri, skill_names).await?;
     if names.is_empty() {
         output_message_result(
             serde_json::json!({ "updated": [], "total": 0 }),
@@ -229,7 +243,8 @@ pub async fn update(
     let mut updated = Vec::new();
     let mut skipped = Vec::new();
     for name in names {
-        let update_target = match resolve_update_target(client, &name, !update_all).await {
+        let update_target = match resolve_update_target(client, root_uri, &name, !update_all).await
+        {
             Ok(target) => target,
             Err(error) if update_all => {
                 skipped.push(json!({
@@ -250,6 +265,7 @@ pub async fn update(
                 false,
                 false,
                 source_metadata,
+                root_uri,
             )
             .await?;
         updated.push(result);
@@ -271,6 +287,7 @@ pub async fn update(
 
 pub async fn remove(
     client: &HttpClient,
+    root_uri: Option<&str>,
     skill_names: Vec<String>,
     all: bool,
     yes: bool,
@@ -284,7 +301,7 @@ pub async fn remove(
     }
     let requested_names = normalize_skill_names(skill_names)?;
     let names = if all {
-        resolve_installed_skill_names(client, Vec::new()).await?
+        resolve_installed_skill_names(client, root_uri, Vec::new()).await?
     } else if !requested_names.is_empty() {
         requested_names
     } else {
@@ -293,7 +310,7 @@ pub async fn remove(
                 "Specify at least one skill name, or pass --all.".to_string(),
             ));
         }
-        match prompt_remove_skill_selection(client).await? {
+        match prompt_remove_skill_selection(client, root_uri).await? {
             Some(selected) => selected,
             None => {
                 output_message_result(
@@ -328,7 +345,7 @@ pub async fn remove(
     let removed_names = names.clone();
     let mut removed = Vec::new();
     for name in names {
-        removed.push(client.skill_remove(&name).await?);
+        removed.push(client.skill_remove(&name, root_uri).await?);
     }
     let total = removed.len();
     output_message_result(
@@ -800,7 +817,9 @@ fn normalize_git_subdir(subdir: &Path) -> Result<PathBuf> {
     }
 
     if normalized.as_os_str().is_empty() {
-        return Err(Error::Parse("Git source metadata missing subdir".to_string()));
+        return Err(Error::Parse(
+            "Git source metadata missing subdir".to_string(),
+        ));
     }
 
     Ok(normalized)
@@ -1132,10 +1151,11 @@ fn skill_target_label(target: &AddTarget) -> String {
 
 async fn resolve_update_target(
     client: &HttpClient,
+    root_uri: Option<&str>,
     name: &str,
     allow_prompt: bool,
 ) -> Result<AddTarget> {
-    if let Some(record) = read_skill_source_record(client, name).await? {
+    if let Some(record) = read_skill_source_record(client, root_uri, name).await? {
         return update_target_from_record(&record, name, allow_prompt);
     }
 
@@ -1153,9 +1173,12 @@ async fn resolve_update_target(
 
 async fn read_skill_source_record(
     client: &HttpClient,
+    root_uri: Option<&str>,
     name: &str,
 ) -> Result<Option<SkillSourceRecord>> {
-    let result = client.skill_show(name, false, false, true, Some(0)).await?;
+    let result = client
+        .skill_show(name, false, false, true, Some(0), root_uri)
+        .await?;
     let Some(source) = result.get("source") else {
         return Ok(None);
     };
@@ -1330,6 +1353,7 @@ fn resolve_named_skill_dir(root: &Path, name: &str) -> Result<PathBuf> {
 
 async fn resolve_installed_skill_names(
     client: &HttpClient,
+    root_uri: Option<&str>,
     requested: Vec<String>,
 ) -> Result<Vec<String>> {
     let requested = normalize_skill_names(requested)?;
@@ -1337,15 +1361,18 @@ async fn resolve_installed_skill_names(
         return Ok(requested);
     }
 
-    Ok(list_installed_skills(client)
+    Ok(list_installed_skills(client, root_uri)
         .await?
         .into_iter()
         .map(|skill| skill.name)
         .collect())
 }
 
-async fn list_installed_skills(client: &HttpClient) -> Result<Vec<InstalledSkillSummary>> {
-    let result = client.skills_list(10000).await?;
+async fn list_installed_skills(
+    client: &HttpClient,
+    root_uri: Option<&str>,
+) -> Result<Vec<InstalledSkillSummary>> {
+    let result = client.skills_list(10000, root_uri).await?;
     let skills = result
         .get("skills")
         .and_then(Value::as_array)
@@ -1365,8 +1392,11 @@ async fn list_installed_skills(client: &HttpClient) -> Result<Vec<InstalledSkill
     Ok(skills)
 }
 
-async fn prompt_remove_skill_selection(client: &HttpClient) -> Result<Option<Vec<String>>> {
-    let skills = list_installed_skills(client).await?;
+async fn prompt_remove_skill_selection(
+    client: &HttpClient,
+    root_uri: Option<&str>,
+) -> Result<Option<Vec<String>>> {
+    let skills = list_installed_skills(client, root_uri).await?;
     if skills.is_empty() {
         return Ok(Some(Vec::new()));
     }
@@ -1936,7 +1966,11 @@ mod tests {
 
         let error = update_target_from_record(&record, "local-skill", false)
             .expect_err("local source should not be trusted for non-interactive update");
-        assert!(error.to_string().contains("server-recorded local paths are not trusted"));
+        assert!(
+            error
+                .to_string()
+                .contains("server-recorded local paths are not trusted")
+        );
     }
 
     #[test]
@@ -1954,7 +1988,11 @@ mod tests {
         let error = prepare_source_from_git_record(&record)
             .err()
             .expect("parent dir subdir should be rejected before clone");
-        assert!(error.to_string().contains("parent directory components are not allowed"));
+        assert!(
+            error
+                .to_string()
+                .contains("parent directory components are not allowed")
+        );
     }
 
     #[test]

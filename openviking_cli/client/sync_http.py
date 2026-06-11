@@ -260,13 +260,24 @@ class SyncHTTPClient:
     def add_skill(
         self,
         data: Any,
+        to: Optional[str] = None,
+        parent: Optional[str] = None,
+        create_parent: bool = False,
         wait: bool = False,
         timeout: Optional[float] = None,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add skill to OpenViking."""
         return run_async(
-            self._async_client.add_skill(data, wait=wait, timeout=timeout, telemetry=telemetry)
+            self._async_client.add_skill(
+                data,
+                to=to,
+                parent=parent,
+                create_parent=create_parent,
+                wait=wait,
+                timeout=timeout,
+                telemetry=telemetry,
+            )
         )
 
     def wait_processed(self, timeout: Optional[float] = None) -> Dict[str, Any]:

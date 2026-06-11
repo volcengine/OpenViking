@@ -499,6 +499,7 @@ async def add_resource(
                 result = await service.resources.add_resource(
                     path=resolved.local_path,
                     ctx=ctx,
+                    to=to or None,
                     reason=description,
                     source_name=resolved.original_filename,
                     wait=False,

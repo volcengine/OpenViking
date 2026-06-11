@@ -16,8 +16,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from openviking.core.path_variables import resolve_path_variables
-from openviking.core.uri_validation import validate_optional_viking_uri
+from openviking.core.content_targets import ContentTargetSpec
+from openviking.core.uri_validation import validate_optional_content_target_uri
 from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import (
     is_remote_resource_source,
@@ -150,19 +150,12 @@ class ResourceService:
         """Start background ingestion for Git repositories while reserving the target URI."""
         self._ensure_initialized()
 
-        if to:
-            to = resolve_path_variables(to)
-        if parent:
-            parent = resolve_path_variables(parent)
-        to = validate_optional_viking_uri(
-            to,
-            field_name="to",
-            allowed_scopes={"resources"},
-        )
-        parent = validate_optional_viking_uri(
-            parent,
-            field_name="parent",
-            allowed_scopes={"resources"},
+        target = ContentTargetSpec.from_fields(
+            ctx=ctx,
+            kind="resource",
+            to=to,
+            parent=parent,
+            create_parent=bool(kwargs.get("create_parent", False)),
         )
 
         from openviking.service.task_tracker import get_task_tracker
@@ -180,11 +173,9 @@ class ResourceService:
             root_uri, resource_lock = await self._plan_resource_target(
                 path=path,
                 ctx=ctx,
-                to=to,
-                parent=parent,
+                target=target,
                 source_name=source_name,
                 source_info=source_info,
-                create_parent=bool(kwargs.get("create_parent", False)),
             )
 
             task_tracker = get_task_tracker()
@@ -317,11 +308,9 @@ class ResourceService:
         *,
         path: str,
         ctx: RequestContext,
-        to: Optional[str],
-        parent: Optional[str],
+        target: ContentTargetSpec,
         source_name: Optional[str],
         source_info: _ResourceSourceInfo,
-        create_parent: bool,
     ) -> tuple[str, LockLease]:
         if not self._resource_processor or not self._viking_fs:
             raise NotInitializedError("ResourceProcessor")
@@ -332,11 +321,11 @@ class ResourceService:
             ctx=ctx,
             doc_name=doc_name,
             scope="resources",
-            to_uri=to,
-            parent_uri=parent,
+            to_uri=target.to,
+            parent_uri=target.parent,
             source_path=source_path,
             source_format=source_info.source_format,
-            create_parent=create_parent,
+            create_parent=target.create_parent,
         )
         if candidate_uri:
             return await self._resource_processor.reserve_unique_candidate(
@@ -495,21 +484,12 @@ class ResourceService:
         telemetry.set("resource.flags.watch_enabled", watch_enabled)
 
         try:
-            # Resolve path variables before validation
-            if to:
-                to = resolve_path_variables(to)
-            if parent:
-                parent = resolve_path_variables(parent)
-
-            to = validate_optional_viking_uri(
-                to,
-                field_name="to",
-                allowed_scopes={"resources"},
-            )
-            parent = validate_optional_viking_uri(
-                parent,
-                field_name="parent",
-                allowed_scopes={"resources"},
+            target = ContentTargetSpec.from_fields(
+                ctx=ctx,
+                kind="resource",
+                to=to,
+                parent=parent,
+                create_parent=bool(kwargs.get("create_parent", False)),
             )
             if enforce_public_remote_targets and is_remote_resource_source(path):
                 path = require_remote_resource_source(path)
@@ -523,8 +503,8 @@ class ResourceService:
                 reason=reason,
                 instruction=instruction,
                 scope="resources",
-                to=to,
-                parent=parent,
+                to=target.to,
+                parent=target.parent,
                 build_index=build_index,
                 summarize=summarize,
                 stage_callback=stage_callback,
@@ -584,13 +564,14 @@ class ResourceService:
             if watch_manager and not skip_watch_management:
                 with telemetry.measure("resource.watch"):
                     if watch_interval > 0:
-                        watch_to = to
-                        parent_uri = parent
+                        watch_to = target.to
+                        parent_uri = target.parent
                         if not watch_to:
-                            watch_to = validate_optional_viking_uri(
+                            watch_to = validate_optional_content_target_uri(
                                 result.get("root_uri"),
+                                ctx,
+                                kind="resource",
                                 field_name="root_uri",
-                                allowed_scopes={"resources"},
                             )
                             parent_uri = None
                         if not watch_to:
@@ -825,6 +806,9 @@ class ResourceService:
         self,
         data: Any,
         ctx: RequestContext,
+        to: Optional[str] = None,
+        parent: Optional[str] = None,
+        create_parent: bool = False,
         wait: bool = False,
         timeout: Optional[float] = None,
         allow_local_path_resolution: bool = True,
@@ -850,11 +834,19 @@ class ResourceService:
             request_wait_tracker.register_request(telemetry_id)
 
         try:
+            target = ContentTargetSpec.from_fields(
+                ctx=ctx,
+                kind="skill",
+                to=to,
+                parent=parent,
+                create_parent=create_parent,
+            )
             if isinstance(data, SkillProcessingPreparation):
                 result = await self._skill_processor.process_prepared_skill(
                     data,
                     viking_fs=self._viking_fs,
                     ctx=ctx,
+                    target=target,
                     apply_privacy=apply_privacy,
                     privacy_change_reason=privacy_change_reason,
                 )
@@ -863,6 +855,7 @@ class ResourceService:
                     data=data,
                     viking_fs=self._viking_fs,
                     ctx=ctx,
+                    target=target,
                     allow_local_path_resolution=allow_local_path_resolution,
                     source_path_hint=source_path_hint,
                     apply_privacy=apply_privacy,

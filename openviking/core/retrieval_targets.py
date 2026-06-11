@@ -61,17 +61,16 @@ def default_target_directories(
     if not ctx or ctx.role == Role.ROOT:
         return []
 
-    user_root = canonical_user_root(ctx)
     if context_type == ContextType.MEMORY:
-        return _default_memory_targets(ctx, peer_id)
+        return _default_user_scoped_targets(ctx, peer_id, "memories")
     if context_type == ContextType.RESOURCE:
-        return ["viking://resources"]
+        return _default_resource_targets(ctx, peer_id)
     if context_type == ContextType.SKILL:
-        return [f"{user_root}/skills"]
+        return _default_user_scoped_targets(ctx, peer_id, "skills")
     return [
-        *_default_memory_targets(ctx, peer_id),
-        "viking://resources",
-        f"{user_root}/skills",
+        *_default_user_scoped_targets(ctx, peer_id, "memories"),
+        *_default_resource_targets(ctx, peer_id),
+        *_default_user_scoped_targets(ctx, peer_id, "skills"),
     ]
 
 
@@ -107,32 +106,51 @@ def _target_directories_for_uri(
     peer_id: Optional[str],
 ) -> List[str]:
     if _is_current_user_root(target_uri, ctx):
-        return [*_default_memory_targets(ctx, peer_id), f"{canonical_user_root(ctx)}/skills"]
+        return _default_user_root_targets(ctx, peer_id)
 
-    peer_target = _resolve_peer_memory_target(target_uri, ctx=ctx, peer_id=peer_id)
+    peer_target = _resolve_peer_target(target_uri, ctx=ctx, peer_id=peer_id)
     if peer_target is not None:
-        return [peer_target]
+        return peer_target
 
-    if _is_default_user_memory_root(target_uri, ctx):
-        return _default_memory_targets(ctx, peer_id)
+    for segment in ("memories", "resources", "skills"):
+        if _is_default_user_content_root(target_uri, ctx, segment):
+            return _default_user_scoped_targets(ctx, peer_id, segment)
 
     return [target_uri]
 
 
-def _default_memory_targets(ctx: RequestContext, peer_id: Optional[str]) -> List[str]:
-    user_root = canonical_user_root(ctx)
-    targets = [f"{user_root}/memories"]
+def _default_user_root_targets(ctx: RequestContext, peer_id: Optional[str]) -> List[str]:
+    return [
+        *_default_user_scoped_targets(ctx, peer_id, "memories"),
+        *_default_user_scoped_targets(ctx, peer_id, "resources"),
+        *_default_user_scoped_targets(ctx, peer_id, "skills"),
+    ]
+
+
+def _default_resource_targets(ctx: RequestContext, peer_id: Optional[str]) -> List[str]:
+    return [
+        "viking://resources",
+        *_default_user_scoped_targets(ctx, peer_id, "resources"),
+    ]
+
+
+def _default_user_scoped_targets(
+    ctx: RequestContext,
+    peer_id: Optional[str],
+    segment: str,
+) -> List[str]:
+    targets = [f"{canonical_user_root(ctx)}/{segment}"]
     if peer_id:
-        targets.append(f"{user_root}/peers/{peer_id}/memories")
+        targets.append(f"{canonical_user_root(ctx)}/peers/{peer_id}/{segment}")
     return targets
 
 
-def _resolve_peer_memory_target(
+def _resolve_peer_target(
     target_uri: str,
     *,
     ctx: RequestContext,
     peer_id: Optional[str],
-) -> Optional[str]:
+) -> Optional[List[str]]:
     parts = uri_parts(target_uri)
     user_root_parts = uri_parts(canonical_user_root(ctx))
     if parts[: len(user_root_parts)] != user_root_parts:
@@ -143,18 +161,22 @@ def _resolve_peer_memory_target(
         return None
 
     if len(suffix) == 1:
-        raise InvalidArgumentError("target_uri must not point at all peer memories.")
+        raise InvalidArgumentError("target_uri must not point at all peer contexts.")
 
-    target_peer_id = suffix[1]
+    target_peer_id = _normalize_peer_id(suffix[1])
     if peer_id and target_peer_id != peer_id:
         raise InvalidArgumentError("target_uri peer does not match peer_id.")
 
     peer_root = f"{canonical_user_root(ctx)}/peers/{target_peer_id}"
     if len(suffix) == 2:
-        return f"{peer_root}/memories"
-    if suffix[2] != "memories":
-        raise InvalidArgumentError("Only peer memory targets are searchable.")
-    return target_uri
+        return [
+            f"{peer_root}/memories",
+            f"{peer_root}/resources",
+            f"{peer_root}/skills",
+        ]
+    if suffix[2] not in {"memories", "resources", "skills"}:
+        raise InvalidArgumentError("Only peer memories, resources, and skills are searchable.")
+    return [target_uri]
 
 
 def _is_current_user_root(target_uri: str, ctx: RequestContext) -> bool:
@@ -162,9 +184,9 @@ def _is_current_user_root(target_uri: str, ctx: RequestContext) -> bool:
     return normalized in {"viking://user", canonical_user_root(ctx).rstrip("/")}
 
 
-def _is_default_user_memory_root(target_uri: str, ctx: RequestContext) -> bool:
+def _is_default_user_content_root(target_uri: str, ctx: RequestContext, segment: str) -> bool:
     normalized = VikingURI.normalize(target_uri).rstrip("/")
     return normalized in {
-        "viking://user/memories",
-        f"{canonical_user_root(ctx).rstrip('/')}/memories",
+        f"viking://user/{segment}",
+        f"{canonical_user_root(ctx).rstrip('/')}/{segment}",
     }

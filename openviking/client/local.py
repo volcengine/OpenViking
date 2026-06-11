@@ -135,6 +135,9 @@ class LocalClient(BaseClient):
     async def add_skill(
         self,
         data: Any,
+        to: Optional[str] = None,
+        parent: Optional[str] = None,
+        create_parent: bool = False,
         wait: bool = False,
         timeout: Optional[float] = None,
         telemetry: TelemetryRequest = False,
@@ -146,6 +149,9 @@ class LocalClient(BaseClient):
             fn=lambda: self._service.resources.add_skill(
                 data=data,
                 ctx=self._ctx,
+                to=to,
+                parent=parent,
+                create_parent=create_parent,
                 wait=wait,
                 timeout=timeout,
             ),
