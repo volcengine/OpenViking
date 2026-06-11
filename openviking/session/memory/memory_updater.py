@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 if TYPE_CHECKING:
@@ -694,6 +695,16 @@ class MemoryUpdater:
                 for key, val in old_content.extra_fields.items():
                     if key not in schema_field_names and key not in metadata and val is not None:
                         metadata[key] = val
+
+            # Inject system-managed timestamps into MEMORY_FIELDS.
+            # created_at: inherited from existing file for updates; set to now for new files.
+            # updated_at: always refreshed to the current time.
+            now = datetime.now(timezone.utc)
+            if old_content and old_content.extra_fields.get("created_at"):
+                metadata["created_at"] = old_content.extra_fields["created_at"]
+            else:
+                metadata["created_at"] = now
+            metadata["updated_at"] = now
 
             # Handle links/backlinks fields: merge with existing
             incoming_links_by_uri = getattr(resolved_op, "_incoming_links_by_uri", {})
