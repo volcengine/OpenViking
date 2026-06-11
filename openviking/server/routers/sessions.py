@@ -5,7 +5,7 @@
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Body, Depends, Path, Query, Request
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.peer_id import normalize_peer_id
@@ -343,8 +343,6 @@ class CommitRequest(BaseModel):
     immediate context. Default 0 preserves the pre-v2 "archive everything"
     behavior.
     """
-
-    model_config = ConfigDict(extra="forbid")
 
     keep_recent_count: int = Field(
         default=0,
