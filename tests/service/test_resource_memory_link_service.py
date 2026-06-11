@@ -2,16 +2,12 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for resource-memory linking service."""
 
-from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
 from openviking.server.identity import RequestContext, Role
-from openviking.service.resource_memory_link_service import (
-    ResourceMemoryLinkService,
-    _ResourceLinkingProvider,
-)
+from openviking.service.resource_memory_link_service import ResourceMemoryLinkService
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.memory_updater import MemoryUpdateResult
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
@@ -55,18 +51,46 @@ class _ReadFailVikingFS:
         return [{"uri": memory_uri, "rel_path": "entities/wang.md", "isDir": False}]
 
 
-class _FakeCompactor:
+class _FakeSession:
     def __init__(self):
-        self.marked = None
-        self.enqueued = False
+        self.messages = []
 
-    async def mark_managed_memories(self, **kwargs):
-        self.marked = kwargs
-        return list(kwargs["memory_uris"])
+    def add_messages(self, specs):
+        self.messages.extend(specs)
 
-    async def enqueue_check(self, **kwargs):
-        self.enqueued = True
-        return "msg-1"
+
+class _FakeSessionService:
+    def __init__(self):
+        self.session = _FakeSession()
+        self.created = []
+        self.committed = []
+        self.deleted = []
+
+    async def create(self, ctx, session_id=None, memory_policy=None):
+        self.created.append(
+            {
+                "ctx": ctx,
+                "session_id": session_id,
+                "memory_policy": memory_policy,
+            }
+        )
+        return self.session
+
+    async def commit_async(self, session_id, ctx, keep_recent_count=0):
+        self.committed.append(
+            {
+                "ctx": ctx,
+                "session_id": session_id,
+                "keep_recent_count": keep_recent_count,
+            }
+        )
+        return {
+            "task_id": None,
+            "archive_uri": f"viking://user/alice/sessions/{session_id}/history/archive_001",
+        }
+
+    async def delete(self, session_id, ctx):
+        self.deleted.append({"ctx": ctx, "session_id": session_id})
 
 
 @pytest.fixture
@@ -78,57 +102,15 @@ def request_context():
 
 
 @pytest.mark.asyncio
-async def test_append_resource_refs_stores_only_memory_metadata(request_context):
-    memory_uri = "viking://user/alice/memories/entities/wang.md"
-    resource_uri = "viking://resources/id_card.pdf"
-    store = {memory_uri: "王大锤的身份证资料。\n"}
-    service = ResourceMemoryLinkService(viking_fs=_FakeVikingFS(store))
-
-    await service._append_resource_refs(
-        memory_uris=[memory_uri],
-        resource_uri=resource_uri,
-        reason="这是王大锤的身份证",
-        ctx=request_context,
-    )
-
-    mf = MemoryFileUtils.read(store[memory_uri], uri=memory_uri)
-    assert mf.extra_fields["resource_refs"][0]["resource_uri"] == resource_uri
-    assert mf.extra_fields["resource_refs"][0]["source"] == "add_resource.reason"
-    assert mf.extra_fields["resource_refs"][0]["match_text"] == "王大锤"
-    assert mf.links == []
-    assert f"[王大锤]({resource_uri})" in store[memory_uri]
-    assert resource_uri not in store
-
-
-@pytest.mark.asyncio
-async def test_on_resource_added_marks_new_memories_for_compaction(request_context):
-    memory_uri = "viking://user/alice/memories/entities/动漫角色/越前龙马.md"
+async def test_on_resource_added_bridges_reason_through_temporary_session(request_context):
     resource_uri = "viking://resources/images/2026/06/11/yueqian_jpeg"
-    store = {
-        memory_uri: MemoryFileUtils.write(
-            MemoryFile(
-                uri=memory_uri,
-                content="用户上传了一张越前龙马的照片。",
-                memory_type="entities",
-                extra_fields={"category": "动漫角色", "name": "越前龙马"},
-            )
-        )
-    }
-    compactor = _FakeCompactor()
+    session_service = _FakeSessionService()
     service = ResourceMemoryLinkService(
-        viking_fs=_FakeVikingFS(store),
-        compactor=compactor,
+        viking_fs=_FakeVikingFS(
+            {"viking://resources/images/2026/06/11/.abstract.md": "动漫角色照片合集"}
+        ),
+        session_service=session_service,
     )
-    service._run_extract_loop = AsyncMock(
-        return_value=(
-            SimpleNamespace(upsert_operations=[object()], delete_file_contents=[], errors=[]),
-            object(),
-            object(),
-        )
-    )
-    update_result = MemoryUpdateResult()
-    update_result.add_written(memory_uri)
-    service._apply_memory_operations = AsyncMock(return_value=update_result)
 
     result = await service.on_resource_added(
         ctx=request_context,
@@ -137,84 +119,33 @@ async def test_on_resource_added_marks_new_memories_for_compaction(request_conte
         source_name="yueqian.jpeg",
     )
 
+    session_id = result["session_id"]
     assert result["status"] == "success"
-    assert result["managed_memory_uris"] == [memory_uri]
-    assert result["compaction_msg_id"] == "msg-1"
-    assert compactor.enqueued is True
-    assert compactor.marked["memory_uris"] == [memory_uri]
-    assert compactor.marked["created_at"]
-
-
-def test_resource_linking_provider_detects_language_from_reason_not_resource_uri():
-    provider = _ResourceLinkingProvider(
-        resource_uri="viking://resources/images/2026/06/10/yueqian_jpeg",
-        reason="这是越前龙马的照片",
-        source_name="yueqian.jpeg",
-    )
-
-    assert provider.get_output_language() == "zh-CN"
-
-
-def test_resource_linking_provider_exposes_resource_uri_only_as_metadata():
-    resource_uri = "viking://resources/images/2026/06/10/yueqian_jpeg"
-    provider = _ResourceLinkingProvider(
-        resource_uri=resource_uri,
-        reason="这是越前龙马的照片",
-        source_name="yueqian.jpeg",
-        added_at="2026-06-11T08:00:00+00:00",
-        resource_abstract="动漫角色照片合集",
-    )
-
-    message_text = "\n".join(
-        part.text
-        for message in provider.messages
-        for part in message.parts
-        if getattr(part, "text", None)
-    )
-
-    instruction = provider.instruction()
-    assert resource_uri in instruction
-    assert resource_uri in provider._build_conversation_message()["content"]
-    assert resource_uri in provider.get_conversation_text()
+    assert session_id.startswith("resource_reason_")
+    assert session_service.created == [
+        {
+            "ctx": request_context,
+            "session_id": session_id,
+            "memory_policy": {
+                "self": {"enabled": True},
+                "peer": {"enabled": False},
+                "memory_types": ["entities", "events", "preferences"],
+            },
+        }
+    ]
+    assert session_service.committed == [
+        {
+            "ctx": request_context,
+            "session_id": session_id,
+            "keep_recent_count": 0,
+        }
+    ]
+    assert session_service.deleted == [{"ctx": request_context, "session_id": session_id}]
+    message_text = session_service.session.messages[0]["parts"][0].text
     assert resource_uri in message_text
-    assert "2026-06-11T08:00:00+00:00" in instruction
-    assert "动漫角色照片合集" in instruction
-    assert (
-        "Added at: 2026-06-11T08:00:00+00:00"
-        in provider._build_conversation_message()["content"]
-    )
-    assert "Resource abstract: 动漫角色照片合集" in message_text
-    assert "include the exact Resource URI in the visible memory content" not in instruction
-    assert "Use the Resource URI only as resource identity metadata" in instruction
-    assert "Do NOT include raw resource URIs" in instruction
-
-
-def test_resource_linking_prompt_prefers_natural_sentence_over_terse_label():
-    provider = _ResourceLinkingProvider(
-        resource_uri="viking://resources/reports/gdp_pdf",
-        reason="这个 PDF 第 65 页的人均 GDP 数据应为 4 万",
-        source_name="gdp.pdf",
-    )
-
-    instruction = provider.instruction()
-    assert "Create/edit visible memory as durable natural sentences" in instruction
-    assert "user intent/judgment" in instruction
-    assert "rewrite terse resource labels" in instruction
-    assert 'reason "page 3 total should be 42"' in instruction
-    assert '"User said page 3 total should be 42"' in instruction
-    assert "merge with it" in instruction
-    assert "only the newest resource" in instruction
-    assert "enumerate/count resources" in instruction
-    assert "under 12 Chinese characters" in instruction
-    assert "under 8 English words" in instruction
-    assert "weak supporting context" in instruction
-    assert "short resource descriptor only" in instruction
-    assert "adds non-redundant readability" in instruction
-    assert "Source name alone is opaque" in instruction
-    assert "配置服务项目" in instruction
-    assert "merely repeats the subject, media type, or facts" in instruction
-    assert "角色照片" not in instruction
-    assert "身份证" not in instruction
+    assert "这是越前龙马的照片" in message_text
+    assert "yueqian.jpeg" in message_text
+    assert "动漫角色照片合集" in message_text
 
 
 @pytest.mark.asyncio
@@ -260,97 +191,6 @@ async def test_read_resource_directory_abstract_ignores_missing_or_not_ready(
     )
 
     assert not_ready == ""
-
-
-@pytest.mark.asyncio
-async def test_append_resource_refs_linkifies_memory_entity_name_and_removes_plain_uri(
-    request_context,
-):
-    memory_uri = "viking://user/ryoma/memories/entities/fictional_character/越前龙马.md"
-    resource_uri = "viking://resources/images/2026/06/10/yueqian_jpeg"
-    raw = MemoryFileUtils.write(
-        MemoryFile(
-            uri=memory_uri,
-            content=f"用户上传了一张越前龙马的照片，资源 URI：{resource_uri}",
-            extra_fields={
-                "category": "fictional_character",
-                "name": "越前龙马",
-                "memory_type": "entities",
-            },
-        )
-    )
-    store = {memory_uri: raw}
-    service = ResourceMemoryLinkService(viking_fs=_FakeVikingFS(store))
-
-    await service._append_resource_refs(
-        memory_uris=[memory_uri],
-        resource_uri=resource_uri,
-        reason="这是越前龙马的照片",
-        ctx=request_context,
-    )
-
-    written = store[memory_uri]
-    assert f"[越前龙马]({resource_uri})" in written
-    assert f"资源 URI：{resource_uri}" not in written
-    mf = MemoryFileUtils.read(written, uri=memory_uri)
-    assert mf.extra_fields["resource_refs"][0]["match_text"] == "越前龙马"
-    assert mf.links == []
-
-
-@pytest.mark.asyncio
-async def test_append_resource_refs_removes_colon_visible_uri_with_markdown_escape(
-    request_context,
-):
-    memory_uri = "viking://user/ryoma/memories/entities/fictional_character/越前龙马.md"
-    resource_uri = "viking://resources/images/2026/06/10/yueqian_jpeg"
-    visible_uri = "viking://resources/images/2026/06/10/yueqian\\_jpeg"
-    raw = MemoryFileUtils.write(
-        MemoryFile(
-            uri=memory_uri,
-            content=f"- 越前龙马的照片资源：{visible_uri}",
-            extra_fields={
-                "category": "fictional_character",
-                "name": "越前龙马",
-                "memory_type": "entities",
-            },
-        )
-    )
-    store = {memory_uri: raw}
-    service = ResourceMemoryLinkService(viking_fs=_FakeVikingFS(store))
-
-    await service._append_resource_refs(
-        memory_uris=[memory_uri],
-        resource_uri=resource_uri,
-        reason="这是越前龙马的照片",
-        ctx=request_context,
-    )
-
-    mf = MemoryFileUtils.read(store[memory_uri], uri=memory_uri)
-    assert mf.content == f"- [越前龙马]({resource_uri})的照片资源"
-    assert visible_uri not in mf.content
-
-
-@pytest.mark.asyncio
-async def test_append_resource_refs_falls_back_to_first_sentence_when_anchor_missing(
-    request_context,
-):
-    memory_uri = "viking://user/ryoma/memories/entities/fictional_character/越前龙马.md"
-    resource_uri = "viking://resources/images/2026/06/10/yueqian_jpeg"
-    store = {memory_uri: "用户上传了一张角色照片。后续句子不应被链接。"}
-    service = ResourceMemoryLinkService(viking_fs=_FakeVikingFS(store))
-
-    await service._append_resource_refs(
-        memory_uris=[memory_uri],
-        resource_uri=resource_uri,
-        reason="这是越前龙马的照片",
-        ctx=request_context,
-    )
-
-    written = store[memory_uri]
-    assert f"[用户上传了一张角色照片。]({resource_uri})" in written
-    assert "后续句子不应被链接。" in written
-    mf = MemoryFileUtils.read(written, uri=memory_uri)
-    assert mf.extra_fields["resource_refs"][0]["match_text"] == "用户上传了一张角色照片。"
 
 
 @pytest.mark.asyncio

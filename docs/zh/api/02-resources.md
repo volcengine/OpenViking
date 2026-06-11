@@ -121,7 +121,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 3. 调用对应 Parser 解析内容
 4. 构建目录树并写入 AGFS
 5. `wait=true` 时等待语义处理完成；`wait=false` 时返回 `task_id` 用于队列跟踪
-6. 如果 `reason` 非空，基于 `reason` 和资源 URI 触发一次独立的 memory linking，生成或更新合适的用户记忆
+6. 如果 `reason` 非空，通过一次短临时 session 复用常规记忆抽取链路，让合适的用户记忆引用该资源 URI
 7. 如指定 `--watch-interval`，设置定时更新任务
 
 **代码入口**：
@@ -142,7 +142,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 | to | string | 否 | - | 目标 Viking URI（精确位置）。与 `parent` 互斥 |
 | parent | string | 否 | - | 父级 Viking URI（资源放入此目录下）。与 `to` 互斥 |
 | create_parent | bool | 否 | False | 如果父目录不存在，自动创建父目录（服务端标志） |
-| reason | string | 否 | "" | 添加资源的原因（用于文档化和相关性提升，实验特性） |
+| reason | string | 否 | "" | 添加资源的原因；非空时会随资源 URI 进入常规 session 记忆抽取链路，并在生成的记忆中记录资源引用 |
 | instruction | string | 否 | "" | 语义提取的处理指令（实验特性） |
 | wait | bool | 否 | False | 是否等待语义处理和向量化完成才返回 |
 | timeout | float | 否 | None | 超时时间（秒），仅 `wait=true` 时生效 |
@@ -159,7 +159,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 - `to` 和 `parent` 不能同时使用；如果使用 `parent` 且希望父目录不存在时自动创建，请传 `create_parent=true`。指定 `to` 且目标已存在时，触发增量更新。
 - `path` 和 `temp_file_id` 不能同时指定，上传本地文件需要先通过 [temp_upload](#temp_upload) 上传获取 `temp_file_id`，在 SDK 和 CLI 中已经封装好。
 - 只有 Git 仓库来源在 `wait=false` 时使用完整后台导入；OpenViking 会先完成仓库 preflight 和目标规划，再返回 `task_id`。
-- `reason` 触发的记忆生成不会读取或展开资源正文，只使用 `reason`、`viking://resources/...` URI 和可用的资源名称。
+- `reason` 触发的记忆生成复用 `session.commit` 的抽取链路，只使用 `reason`、`viking://resources/...` URI、可用的资源名称和目录摘要，不会读取或展开完整资源正文；系统会写入 `entities`、`events`、`preferences` 等已有记忆类型，不创建独立的资源记忆目录。
 - 删除 `viking://resources/...` 时，系统会在删除前扫描当前用户记忆中的 `resource_refs`，清理对应资源 URI 和由该 `reason` 引入的内容，并重新刷新相关记忆的语义索引。
 - 其他来源在 `wait=false` 时会在响应前完成来源解析、目标解析和 AGFS 写入，仅 semantic 与 embedding 队列继续异步处理。
 - `watch_interval > 0` 时，如果指定了 `to`，监控任务绑定该目标；如果未指定 `to`，监控任务绑定本次导入返回的 `root_uri`。如果无法得到稳定 `root_uri`，请求会报错并要求显式传 `to`。

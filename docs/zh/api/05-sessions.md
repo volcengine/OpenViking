@@ -906,6 +906,7 @@ await client.session_used(
 - 同一 session 的多次快速连续 commit 会被接受；每次请求都会拿到独立的 `task_id`
 - 后台 Phase 2 会按 archive 顺序串行推进：`archive_N+1` 会等待 `archive_N` 写出 `.done` 后再继续
 - 如果更早的 archive 已失败且没有 `.done`，后续 commit 会直接返回错误，直到该失败被处理
+- 如果提交的消息中包含带 `viking://resources/...` 的长期事实、评价、偏好或事件，记忆抽取会把资源保留为 markdown 链接，并写入 `MEMORY_FIELDS.resource_refs`
 
 **代码入口**：
 - `openviking/session/session.py:Session.commit_async()` - 核心实现

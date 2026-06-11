@@ -29,6 +29,10 @@ from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.merge_op import MergeOpFactory
 from openviking.session.memory.page_id_map import PageIdMap
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+from openviking.session.memory.utils.resource_refs import (
+    RESOURCE_REF_SOURCE_SESSION_COMMIT,
+    sync_memory_resource_refs,
+)
 from openviking.session.memory.utils.template_utils import TemplateUtils
 from openviking.session.memory.utils.uri import render_template
 from openviking.storage.viking_fs import get_viking_fs
@@ -654,6 +658,8 @@ class MemoryUpdater:
                 tracer.error(f"Failed to delete memory {file_content.uri}", e)
                 result.add_error(file_content.uri, e)
 
+        await self._sync_resource_refs_for_result(result, ctx)
+
         # Vectorize written and edited memories
         uri_memory_type_map = {}
         for op in operations.upsert_operations:
@@ -696,6 +702,29 @@ class MemoryUpdater:
             await self.generate_overview(memory_type, dir, ctx, extract_context)
 
         return result
+
+    async def _sync_resource_refs_for_result(
+        self,
+        result: MemoryUpdateResult,
+        ctx: RequestContext,
+    ) -> None:
+        """Synchronize resource refs for memory files touched by session extraction."""
+        viking_fs = self._get_viking_fs()
+        deleted_uris = set(result.deleted_uris)
+        for uri in dict.fromkeys(result.written_uris + result.edited_uris):
+            if uri in deleted_uris or uri.endswith("/.overview.md") or uri.endswith("/.abstract.md"):
+                continue
+            try:
+                raw = await viking_fs.read_file(uri, ctx=ctx)
+                mf = MemoryFileUtils.read(raw, uri=uri)
+                changed = sync_memory_resource_refs(
+                    mf,
+                    source=RESOURCE_REF_SOURCE_SESSION_COMMIT,
+                )
+                if changed:
+                    await viking_fs.write_file(uri, MemoryFileUtils.write(mf), ctx=ctx)
+            except Exception as exc:
+                logger.warning("Failed to sync resource refs for %s: %s", uri, exc)
 
     async def _apply_upsert(
         self, resolved_op: ResolvedOperation, ctx: RequestContext, extract_context: Any = None

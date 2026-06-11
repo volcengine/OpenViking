@@ -8,17 +8,17 @@ files' MEMORY_FIELDS metadata.
 
 from __future__ import annotations
 
-import re
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
+from uuid import uuid4
 
 from openviking.core.namespace import canonical_user_root, context_type_for_uri
 from openviking.message import Message
 from openviking.message.part import TextPart
 from openviking.prompts.manager import render_prompt
 from openviking.server.identity import RequestContext
-from openviking.service.resource_link_memory_compactor import ResourceLinkMemoryCompactor
 from openviking.session.memory.dataclass import MemoryFile, ResolvedOperations
 from openviking.session.memory.extract_loop import ExtractLoop
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
@@ -28,18 +28,20 @@ from openviking.session.memory.memory_updater import (
     MemoryUpdateResult,
 )
 from openviking.session.memory.session_extract_context_provider import SessionExtractContextProvider
-from openviking.session.memory.utils.link_renderer import LinkRenderer
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.storage import VikingDBManager
-from openviking.storage.queuefs.queue_manager import QueueManager
 from openviking.storage.viking_fs import VikingFS, get_viking_fs
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import VikingURI, get_logger
 from openviking_cli.utils.config import get_openviking_config
 
+if TYPE_CHECKING:
+    from openviking.service.session_service import SessionService
+
 logger = get_logger(__name__)
 
-RESOURCE_REF_SOURCE = "add_resource.reason"
+_RESOURCE_REASON_MEMORY_TYPES = ["entities", "events", "preferences"]
+_RESOURCE_REASON_COMMIT_TIMEOUT_SECONDS = 1800.0
 _RESOURCE_ABSTRACT_MAX_CHARS = 200
 _ABSTRACT_NOT_READY_MARKERS = (
     "[.abstract.md is not ready]",
@@ -52,97 +54,6 @@ class _MemoryRefMatch:
     memory_uri: str
     memory_file: MemoryFile
     resource_ref: Dict[str, Any]
-
-
-class _ResourceLinkingProvider(SessionExtractContextProvider):
-    """Provider for creating/updating memory from an add-resource reason."""
-
-    def __init__(
-        self,
-        *,
-        resource_uri: str,
-        reason: str,
-        source_name: Optional[str],
-        added_at: Optional[str] = None,
-        resource_abstract: Optional[str] = None,
-        **kwargs: Any,
-    ):
-        self.resource_uri = resource_uri
-        self.reason = reason
-        self.source_name = source_name or ""
-        self.added_at = added_at or ""
-        self.resource_abstract = resource_abstract or ""
-        messages = [
-            Message(
-                id="resource-linking",
-                role="user",
-                created_at=self.added_at or None,
-                parts=[
-                    TextPart(
-                        text=(
-                            "Resource URI: "
-                            f"{resource_uri}\nReason: {reason}\nSource name: {self.source_name}\n"
-                            f"Added at: {self.added_at or 'N/A'}\n"
-                            f"Resource abstract: {self.resource_abstract or 'N/A'}"
-                        )
-                    )
-                ],
-            )
-        ]
-        super().__init__(messages=messages, **kwargs)
-
-    def instruction(self) -> str:
-        return render_prompt(
-            "processing.resource_linking",
-            {
-                "output_language": self.get_output_language(),
-                "resource_uri": self.resource_uri,
-                "reason": self.reason,
-                "source_name": self.source_name,
-                "added_at": self.added_at,
-                "resource_abstract": self.resource_abstract,
-            },
-        )
-
-    def _build_conversation_message(self) -> Dict[str, Any]:
-        return {
-            "role": "user",
-            "content": (
-                "## Resource Addition\n"
-                f"Resource URI: {self.resource_uri}\n"
-                f"Reason: {self.reason}\n"
-                f"Source name: {self.source_name or 'N/A'}\n"
-                f"Added at: {self.added_at or 'N/A'}\n"
-                f"Resource abstract: {self.resource_abstract or 'N/A'}\n\n"
-                "Analyze only this resource addition record and output all memory "
-                "write/edit/delete operations in a single JSON response."
-            ),
-        }
-
-    def _build_prefetch_search_query(self) -> str:
-        return "\n".join(
-            part for part in [self.reason, self.source_name, self.resource_abstract] if part
-        ).strip()
-
-    def get_conversation_text(self) -> str:
-        return "\n".join(
-            part
-            for part in [
-                self.reason,
-                self.resource_uri,
-                self.source_name,
-                self.added_at,
-                self.resource_abstract,
-            ]
-            if part
-        ).strip()
-
-    def _detect_language(self) -> str:
-        from openviking.session.memory.utils import resolve_output_language
-
-        return resolve_output_language(
-            "\n".join(part for part in [self.reason, self.source_name] if part).strip()
-        )
 
 
 class _ResourceUnlinkingProvider(SessionExtractContextProvider):
@@ -224,31 +135,24 @@ class ResourceMemoryLinkService:
         *,
         vikingdb: Optional[VikingDBManager] = None,
         viking_fs: Optional[VikingFS] = None,
-        queue_manager: Optional[QueueManager] = None,
-        compactor: Optional[ResourceLinkMemoryCompactor] = None,
+        session_service: Optional["SessionService"] = None,
     ):
         self._vikingdb = vikingdb
         self._viking_fs = viking_fs
-        self._compactor = compactor or ResourceLinkMemoryCompactor(
-            vikingdb=vikingdb,
-            viking_fs=viking_fs,
-            queue_manager=queue_manager,
-        )
+        self._session_service = session_service
+        self._background_tasks: set[asyncio.Task] = set()
 
     def set_dependencies(
         self,
         *,
         vikingdb: Optional[VikingDBManager],
         viking_fs: VikingFS,
-        queue_manager: Optional[QueueManager] = None,
+        session_service: Optional["SessionService"] = None,
     ) -> None:
         self._vikingdb = vikingdb
         self._viking_fs = viking_fs
-        self._compactor.set_dependencies(
-            vikingdb=vikingdb,
-            viking_fs=viking_fs,
-            queue_manager=queue_manager,
-        )
+        if session_service is not None:
+            self._session_service = session_service
 
     def _get_viking_fs(self) -> VikingFS:
         return self._viking_fs or get_viking_fs()
@@ -260,65 +164,177 @@ class ResourceMemoryLinkService:
         resource_uri: str,
         reason: str,
         source_name: Optional[str] = None,
+        timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
-        """Extract user memory from an add-resource reason."""
+        """Bridge add-resource reason extraction through normal session commit."""
         reason = (reason or "").strip()
         if not reason:
             return {"status": "skipped", "reason": "empty_reason"}
         if not resource_uri:
             return {"status": "skipped", "reason": "empty_resource_uri"}
+        if not self._session_service:
+            return {"status": "skipped", "reason": "session_service_unavailable"}
 
         added_at = datetime.now(timezone.utc).isoformat()
         resource_abstract = await self._read_resource_directory_abstract(resource_uri, ctx)
-        provider = _ResourceLinkingProvider(
-            resource_uri=resource_uri,
-            reason=reason,
-            source_name=source_name,
-            added_at=added_at,
-            resource_abstract=resource_abstract,
-            ctx=ctx,
-            viking_fs=self._get_viking_fs(),
-        )
-        operations, extract_context, isolation_handler = await self._run_extract_loop(
-            provider=provider,
-            ctx=ctx,
-        )
-        if not operations or not (
-            operations.upsert_operations or operations.delete_file_contents or operations.errors
-        ):
-            return {"status": "no_changes", "memory_uris": []}
+        session_id = f"resource_reason_{uuid4().hex}"
+        commit_result: Dict[str, Any] = {}
+        task_result: Optional[Dict[str, Any]] = None
+        delete_session_now = True
+        try:
+            session = await self._session_service.create(
+                ctx,
+                session_id=session_id,
+                memory_policy={
+                    "self": {"enabled": True},
+                    "peer": {"enabled": False},
+                    "memory_types": _RESOURCE_REASON_MEMORY_TYPES,
+                },
+            )
+            session.add_messages(
+                [
+                    {
+                        "role": "user",
+                        "parts": [
+                            TextPart(
+                                text=self._build_resource_addition_message(
+                                    resource_uri=resource_uri,
+                                    reason=reason,
+                                    source_name=source_name,
+                                    added_at=added_at,
+                                    resource_abstract=resource_abstract,
+                                )
+                            )
+                        ],
+                        "created_at": added_at,
+                    }
+                ]
+            )
+            commit_result = await self._session_service.commit_async(
+                session_id,
+                ctx,
+                keep_recent_count=0,
+            )
+            task_id = commit_result.get("task_id")
+            if task_id:
+                try:
+                    task_result = await self._wait_for_commit_task(
+                        task_id=str(task_id),
+                        ctx=ctx,
+                        timeout=timeout,
+                    )
+                except asyncio.TimeoutError:
+                    delete_session_now = False
+                    self._schedule_session_delete_after_task(
+                        session_id=session_id,
+                        task_id=str(task_id),
+                        ctx=ctx,
+                    )
+                    raise
+            return {
+                "status": "success",
+                "session_id": session_id,
+                "commit_task_id": task_id,
+                "archive_uri": commit_result.get("archive_uri"),
+                "commit_task": task_result,
+            }
+        finally:
+            if delete_session_now:
+                await self._delete_temporary_session(session_id, ctx)
 
-        result = await self._apply_memory_operations(
-            provider=provider,
-            operations=operations,
-            ctx=ctx,
-            extract_context=extract_context,
-            isolation_handler=isolation_handler,
+    @staticmethod
+    def _build_resource_addition_message(
+        *,
+        resource_uri: str,
+        reason: str,
+        source_name: Optional[str],
+        added_at: str,
+        resource_abstract: str,
+    ) -> str:
+        return (
+            "## Resource Addition\n"
+            f"Resource URI: {resource_uri}\n"
+            f"Source name: {source_name or 'N/A'}\n"
+            f"Added at: {added_at or 'N/A'}\n"
+            f"Resource abstract: {resource_abstract or 'N/A'}\n"
+            f"User reason: {reason}"
         )
-        changed_uris = list(dict.fromkeys(result.written_uris + result.edited_uris))
-        await self._append_resource_refs(
-            memory_uris=changed_uris,
-            resource_uri=resource_uri,
-            reason=reason,
-            ctx=ctx,
-            created_at=added_at,
+
+    def _schedule_session_delete_after_task(
+        self,
+        *,
+        session_id: str,
+        task_id: str,
+        ctx: RequestContext,
+    ) -> None:
+        task = asyncio.create_task(
+            self._delete_session_after_task(session_id=session_id, task_id=task_id, ctx=ctx)
         )
-        managed_uris = await self._compactor.mark_managed_memories(
-            ctx=ctx,
-            memory_uris=result.written_uris,
-            created_at=added_at,
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
+    async def _delete_session_after_task(
+        self,
+        *,
+        session_id: str,
+        task_id: str,
+        ctx: RequestContext,
+    ) -> None:
+        try:
+            await self._wait_for_commit_task(
+                task_id=task_id,
+                ctx=ctx,
+                timeout=_RESOURCE_REASON_COMMIT_TIMEOUT_SECONDS,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Skipped temporary resource reason session cleanup after task %s: %s",
+                task_id,
+                exc,
+            )
+            return
+        await self._delete_temporary_session(session_id, ctx)
+
+    async def _delete_temporary_session(self, session_id: str, ctx: RequestContext) -> None:
+        if not self._session_service:
+            return
+        try:
+            await self._session_service.delete(session_id, ctx)
+        except NotFoundError:
+            pass
+        except Exception as exc:
+            logger.warning("Failed to delete temporary resource reason session: %s", exc)
+
+    async def _wait_for_commit_task(
+        self,
+        *,
+        task_id: str,
+        ctx: RequestContext,
+        timeout: Optional[float],
+    ) -> Dict[str, Any]:
+        from openviking.service.task_tracker import get_task_tracker
+
+        async def _poll() -> Dict[str, Any]:
+            tracker = get_task_tracker()
+            while True:
+                task = await tracker.get(
+                    task_id,
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                )
+                if task is None:
+                    raise RuntimeError(f"session commit task not found: {task_id}")
+                status = task.status.value if hasattr(task.status, "value") else str(task.status)
+                if status == "completed":
+                    return task.to_dict()
+                if status == "failed":
+                    raise RuntimeError(task.error or f"session commit task failed: {task_id}")
+                await asyncio.sleep(0.1)
+
+        return await asyncio.wait_for(
+            _poll(),
+            timeout=timeout or _RESOURCE_REASON_COMMIT_TIMEOUT_SECONDS,
         )
-        compaction_msg_id = await self._compactor.enqueue_check(ctx=ctx)
-        missing_uri = await self._memory_files_missing_resource_uri(changed_uris, resource_uri, ctx)
-        return {
-            "status": "success" if not result.errors else "partial_success",
-            "memory_uris": changed_uris,
-            "managed_memory_uris": managed_uris,
-            "compaction_msg_id": compaction_msg_id,
-            "deleted_memory_uris": result.deleted_uris,
-            "errors": [f"{uri}: {exc}" for uri, exc in result.errors],
-            "missing_resource_uri_uris": missing_uri,
-        }
 
     async def before_resource_delete(
         self,
@@ -514,53 +530,6 @@ class ResourceMemoryLinkService:
         if uri not in result.deleted_uris:
             result.add_deleted(uri)
 
-    async def _append_resource_refs(
-        self,
-        *,
-        memory_uris: Sequence[str],
-        resource_uri: str,
-        reason: str,
-        ctx: RequestContext,
-        created_at: Optional[str] = None,
-    ) -> None:
-        viking_fs = self._get_viking_fs()
-        created_at = created_at or datetime.now(timezone.utc).isoformat()
-        for memory_uri in dict.fromkeys(memory_uris):
-            if context_type_for_uri(memory_uri) != "memory":
-                continue
-            try:
-                raw = await viking_fs.read_file(memory_uri, ctx=ctx)
-                mf = MemoryFileUtils.read(raw, uri=memory_uri)
-            except Exception as exc:
-                logger.warning("Failed to read memory for resource ref append: %s", exc)
-                continue
-            existing_refs = self._coerce_resource_refs(mf.extra_fields.get("resource_refs"))
-            allow_sentence_fallback = not any(
-                not self._resource_ref_matches(ref.get("resource_uri"), resource_uri, recursive=False)
-                for ref in existing_refs
-            )
-            match_text = self._pick_match_text(mf, reason)
-            mf.content, rendered_match_text = self._link_resource_in_content(
-                mf.content,
-                resource_uri=resource_uri,
-                match_text=match_text,
-                allow_sentence_fallback=allow_sentence_fallback,
-            )
-            match_text = rendered_match_text or match_text
-            ref = {
-                "resource_uri": resource_uri,
-                "reason": reason,
-                "source": RESOURCE_REF_SOURCE,
-                "created_at": created_at,
-            }
-            if match_text:
-                ref["match_text"] = match_text
-            mf.extra_fields["resource_refs"] = self._merge_resource_refs(
-                existing_refs,
-                ref,
-            )
-            await viking_fs.write_file(memory_uri, MemoryFileUtils.write(mf), ctx=ctx)
-
     async def _remove_resource_refs(
         self,
         memory_uri: str,
@@ -666,23 +635,6 @@ class ResourceMemoryLinkService:
             return text[: _RESOURCE_ABSTRACT_MAX_CHARS - 3].rstrip() + "..."
         return text
 
-    async def _memory_files_missing_resource_uri(
-        self,
-        memory_uris: Iterable[str],
-        resource_uri: str,
-        ctx: RequestContext,
-    ) -> List[str]:
-        missing: List[str] = []
-        viking_fs = self._get_viking_fs()
-        for uri in memory_uris:
-            try:
-                raw = await viking_fs.read_file(uri, ctx=ctx)
-            except Exception:
-                continue
-            if resource_uri not in raw:
-                missing.append(uri)
-        return missing
-
     async def _assert_resource_unlinked(
         self,
         memory_uri: str,
@@ -699,19 +651,6 @@ class ResourceMemoryLinkService:
         for ref in self._coerce_resource_refs(mf.extra_fields.get("resource_refs")):
             if self._resource_ref_matches(ref.get("resource_uri"), resource_uri, recursive=True):
                 raise RuntimeError(f"memory still contains resource ref: {memory_uri}")
-
-    @staticmethod
-    def _merge_resource_refs(existing: Any, new_ref: Dict[str, Any]) -> List[Dict[str, Any]]:
-        refs = ResourceMemoryLinkService._coerce_resource_refs(existing)
-        for ref in refs:
-            if (
-                ref.get("resource_uri") == new_ref.get("resource_uri")
-                and ref.get("source") == new_ref.get("source")
-            ):
-                ref.update({k: v for k, v in new_ref.items() if v})
-                return refs
-        refs.append(new_ref)
-        return refs
 
     @staticmethod
     def _coerce_resource_refs(value: Any) -> List[Dict[str, Any]]:
@@ -743,162 +682,6 @@ class ResourceMemoryLinkService:
         if normalized_ref == normalized_target:
             return True
         return recursive and normalized_ref.startswith(normalized_target + "/")
-
-    @classmethod
-    def _pick_match_text(cls, memory_file: MemoryFile, reason: str) -> Optional[str]:
-        content = memory_file.content or ""
-        candidates = []
-        name = str(memory_file.extra_fields.get("name") or "").strip()
-        if name:
-            candidates.append(name)
-        reason_anchor = cls._extract_anchor_from_reason(reason)
-        if reason_anchor:
-            candidates.append(reason_anchor)
-        for token in (reason or "").replace("，", " ").replace(",", " ").split():
-            stripped = token.strip()
-            if stripped:
-                candidates.append(stripped)
-        candidates.extend(["资源", "resource", "Resource"])
-        for candidate in dict.fromkeys(candidates):
-            if candidate and LinkRenderer._find_match_span(content, candidate):
-                return candidate
-        return None
-
-    @staticmethod
-    def _extract_anchor_from_reason(reason: str) -> Optional[str]:
-        text = (reason or "").strip()
-        if not text:
-            return None
-        patterns = [
-            r"^(?:这是一张|这是|这张|这个|用户上传了(?:一张|一个)?|上传了(?:一张|一个)?|新增了|添加了)?\s*(?P<anchor>[^，,。！？\n]{1,60}?)(?:的)?(?:照片|图片|截图|图像|文件|资源|文档|身份证|证件|资料)\s*$",
-            r"(?P<anchor>[^，,。！？\n]{1,60}?)(?:的)?(?:照片|图片|截图|图像|文件|资源|文档|身份证|证件|资料)",
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, text)
-            if not match:
-                continue
-            anchor = (match.group("anchor") or "").strip()
-            anchor = re.sub(r"^(?:关于|有关|一张|一个)\s*", "", anchor).strip()
-            anchor = re.sub(r"(?:的|之)$", "", anchor).strip()
-            if anchor:
-                return anchor
-        return None
-
-    @classmethod
-    def _link_resource_in_content(
-        cls,
-        content: str,
-        *,
-        resource_uri: str,
-        match_text: Optional[str],
-        allow_sentence_fallback: bool,
-    ) -> tuple[str, Optional[str]]:
-        content = content or ""
-        if not content or not resource_uri:
-            return content, None
-        if cls._content_links_resource(content, resource_uri):
-            return content, match_text
-
-        if match_text:
-            span = cls._find_unlinked_match_span(content, match_text)
-            if span:
-                linked = cls._replace_span_with_link(content, span, resource_uri)
-                linked = cls._remove_redundant_visible_resource_uri(linked, resource_uri)
-                return linked, content[span[0] : span[1]]
-
-        if allow_sentence_fallback:
-            span = cls._first_sentence_span(content, resource_uri)
-            if span:
-                linked = cls._replace_span_with_link(content, span, resource_uri)
-                linked = cls._remove_redundant_visible_resource_uri(linked, resource_uri)
-                return linked, content[span[0] : span[1]].strip()
-
-        return content, match_text
-
-    @staticmethod
-    def _content_links_resource(content: str, resource_uri: str) -> bool:
-        return bool(
-            re.search(
-                r"\[[^\]]+\]\(" + re.escape(resource_uri) + r"\)",
-                content or "",
-            )
-        )
-
-    @classmethod
-    def _find_unlinked_match_span(
-        cls,
-        content: str,
-        match_text: str,
-    ) -> Optional[tuple[int, int]]:
-        span = LinkRenderer._find_match_span(content, match_text)
-        if not span:
-            return None
-        if cls._span_inside_markdown_link(content, span):
-            return None
-        return span
-
-    @staticmethod
-    def _span_inside_markdown_link(content: str, span: tuple[int, int]) -> bool:
-        start, end = span
-        for match in re.finditer(r"\[[^\]]+\]\([^)]+\)", content or ""):
-            if start >= match.start() and end <= match.end():
-                return True
-        return False
-
-    @staticmethod
-    def _replace_span_with_link(
-        content: str,
-        span: tuple[int, int],
-        resource_uri: str,
-    ) -> str:
-        start, end = span
-        anchor = content[start:end]
-        return f"{content[:start]}[{anchor}]({resource_uri}){content[end:]}"
-
-    @staticmethod
-    def _first_sentence_span(content: str, resource_uri: str) -> Optional[tuple[int, int]]:
-        match = re.search(r"\S", content or "")
-        if not match:
-            return None
-        start = match.start()
-        line_end = content.find("\n", start)
-        if line_end == -1:
-            line_end = len(content)
-        line = content[start:line_end]
-        punctuation = re.search(r"[。！？.!?]", line)
-        end = start + punctuation.end() if punctuation else line_end
-        sentence = content[start:end].strip()
-        if not sentence or resource_uri in sentence or len(sentence) > 160:
-            return None
-        if ResourceMemoryLinkService._span_inside_markdown_link(content, (start, end)):
-            return None
-        return start, end
-
-    @staticmethod
-    def _remove_redundant_visible_resource_uri(content: str, resource_uri: str) -> str:
-        if not ResourceMemoryLinkService._content_links_resource(content, resource_uri):
-            return content
-        uri = ResourceMemoryLinkService._visible_resource_uri_pattern(resource_uri)
-        label = r"(?:resource\s+URI|资源\s*URI|资源地址|资源链接)"
-        patterns = [
-            re.compile(rf"(?im)^[ \t]*(?:[-*]\s*)?{label}\s*[:：]\s*{uri}[ \t]*(?:\r?\n|$)"),
-            re.compile(rf"\s*[,，;；]?\s*{label}\s*[:：]\s*{uri}"),
-            re.compile(rf"\s*[:：]\s*{uri}"),
-        ]
-        cleaned = content
-        for pattern in patterns:
-            cleaned = pattern.sub("", cleaned)
-        cleaned = re.sub(r"[ \t]+([。！？.!?,，;；])", r"\1", cleaned)
-        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
-        return cleaned.strip()
-
-    @staticmethod
-    def _visible_resource_uri_pattern(resource_uri: str) -> str:
-        markdown_escaped_chars = set(r"\`*_{}[]()#+-.!|")
-        return "".join(
-            rf"\\?{re.escape(char)}" if char in markdown_escaped_chars else re.escape(char)
-            for char in resource_uri
-        )
 
     @staticmethod
     def _infer_memory_type(memory_uri: str, memory_file: MemoryFile) -> str:

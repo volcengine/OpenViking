@@ -165,3 +165,43 @@ class TestSkillToolCallExposure:
         provider = SessionExtractContextProvider(messages=messages)
 
         assert provider._detect_language() == "zh-CN"
+
+    def test_detect_language_ignores_resource_uri_latin_segments(self):
+        messages = [
+            Message(
+                id="m1",
+                role="user",
+                parts=[
+                    TextPart(
+                        "这是越前龙马的照片 "
+                        "viking://resources/images/2026/06/12/yueqian_jpeg"
+                    )
+                ],
+            )
+        ]
+
+        provider = SessionExtractContextProvider(messages=messages)
+
+        assert provider._detect_language() == "zh-CN"
+
+    def test_detect_language_uses_resource_reason_not_metadata_labels(self):
+        messages = [
+            Message(
+                id="m1",
+                role="user",
+                parts=[
+                    TextPart(
+                        "## Resource Addition\n"
+                        "Resource URI: viking://resources/images/2026/06/12/yueqian_jpeg\n"
+                        "Source name: yueqian.jpeg\n"
+                        "Added at: 2026-06-11T17:26:21.332768+00:00\n"
+                        "Resource abstract: high-quality anime-style illustration\n"
+                        "User reason: 这是越前龙马的照片"
+                    )
+                ],
+            )
+        ]
+
+        provider = SessionExtractContextProvider(messages=messages)
+
+        assert provider._detect_language() == "zh-CN"

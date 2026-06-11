@@ -630,12 +630,14 @@ class ResourceService:
                             logger.warning(
                                 f"[ResourceService] Failed to cancel watch task for {to}: {e}"
                             )
-            await self._link_resource_reason_memory(
-                result=result,
-                ctx=ctx,
-                reason=reason,
-                source_name=kwargs.get("source_name"),
-            )
+            if wait:
+                await self._link_resource_reason_memory(
+                    result=result,
+                    ctx=ctx,
+                    reason=reason,
+                    source_name=kwargs.get("source_name"),
+                    timeout=timeout,
+                )
             if not wait:
                 from openviking.service.task_tracker import get_task_tracker
 
@@ -651,25 +653,33 @@ class ResourceService:
                 if telemetry_id:
                     monitor_started = True
                     background = asyncio.create_task(
-                        self._monitor_queue_processing(
+                        self._monitor_resource_queue_then_link_memory(
                             task.task_id,
                             telemetry_id,
-                            ctx.account_id,
-                            ctx.user.user_id,
+                            ctx,
+                            root_uri=root_uri,
+                            reason=reason,
+                            source_name=kwargs.get("source_name"),
+                            timeout=timeout,
                         )
                     )
                     self._background_tasks.add(background)
                     background.add_done_callback(self._background_tasks.discard)
                 else:
-                    await task_tracker.start(
-                        task.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
+                    monitor_started = True
+                    background = asyncio.create_task(
+                        self._monitor_resource_queue_then_link_memory(
+                            task.task_id,
+                            None,
+                            ctx,
+                            root_uri=root_uri,
+                            reason=reason,
+                            source_name=kwargs.get("source_name"),
+                            timeout=timeout,
+                        )
                     )
-                    await task_tracker.complete(
-                        task.task_id,
-                        {"root_uri": root_uri},
-                        account_id=ctx.account_id,
-                        user_id=ctx.user.user_id,
-                    )
+                    self._background_tasks.add(background)
+                    background.add_done_callback(self._background_tasks.discard)
             return result
         except Exception as exc:
             telemetry.set_error(
@@ -694,6 +704,7 @@ class ResourceService:
         ctx: RequestContext,
         reason: str,
         source_name: Optional[str],
+        timeout: Optional[float] = None,
     ) -> None:
         if not self._resource_memory_link_service:
             return
@@ -708,11 +719,72 @@ class ResourceService:
                 resource_uri=root_uri,
                 reason=reason,
                 source_name=source_name,
+                timeout=timeout,
             )
             result["memory_linking"] = link_result
         except Exception as exc:
             logger.warning("[ResourceService] Failed to link resource reason memory: %s", exc)
             result.setdefault("warnings", []).append(f"Memory linking failed: {exc}")
+
+    async def _monitor_resource_queue_then_link_memory(
+        self,
+        task_id: str,
+        telemetry_id: Optional[str],
+        ctx: RequestContext,
+        *,
+        root_uri: str,
+        reason: str,
+        source_name: Optional[str],
+        timeout: Optional[float],
+    ) -> None:
+        from openviking.service.task_tracker import get_task_tracker
+
+        task_tracker = get_task_tracker()
+        request_wait_tracker = get_request_wait_tracker()
+        await task_tracker.start(task_id, account_id=ctx.account_id, user_id=ctx.user.user_id)
+        try:
+            if telemetry_id:
+                await request_wait_tracker.wait_for_request(telemetry_id)
+                status = request_wait_tracker.build_queue_status(telemetry_id)
+            else:
+                status = build_queue_status_payload(
+                    await get_queue_manager().wait_complete(timeout=timeout)
+                )
+            errors = sum(int(group.get("error_count", 0) or 0) for group in status.values())
+            if errors:
+                await task_tracker.fail(
+                    task_id,
+                    f"queue processing failed: {status}",
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                )
+                return
+
+            result: Dict[str, Any] = {"root_uri": root_uri, "queue_status": status}
+            await self._link_resource_reason_memory(
+                result=result,
+                ctx=ctx,
+                reason=reason,
+                source_name=source_name,
+                timeout=timeout,
+            )
+            await task_tracker.complete(
+                task_id,
+                result,
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+            )
+        except Exception as exc:
+            await task_tracker.fail(
+                task_id,
+                str(exc),
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+            )
+        finally:
+            if telemetry_id:
+                request_wait_tracker.cleanup(telemetry_id)
+                unregister_wait_telemetry(telemetry_id)
 
     async def _monitor_queue_processing(
         self,
