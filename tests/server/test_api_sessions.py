@@ -18,7 +18,6 @@ from openviking.server.config import ServerConfig, ToolOutputExternalizationConf
 from openviking.server.dependencies import set_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import sessions as sessions_router
-from openviking.session import SessionMeta
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
@@ -147,48 +146,31 @@ async def test_list_sessions(client: httpx.AsyncClient):
 async def test_get_session(client: httpx.AsyncClient):
     create_resp = await client.post("/api/v1/sessions", json={})
     session_id = create_resp.json()["result"]["session_id"]
+    session_uri = create_resp.json()["result"]["uri"]
 
     resp = await client.get(f"/api/v1/sessions/{session_id}")
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
     assert body["result"]["session_id"] == session_id
+    assert body["result"]["uri"] == session_uri
 
 
-@pytest.mark.asyncio
-async def test_legacy_session_without_meta_remains_visible_to_owner(service):
-    session_id = "legacy-no-meta"
-    owner_ctx = RequestContext(
-        user=UserIdentifier("acct-legacy", "owner"),
-        role=Role.USER,
+async def test_legacy_session_uri_alias_reads_current_user_session(client: httpx.AsyncClient):
+    session_id = "legacy-alias-read"
+    await client.post("/api/v1/sessions", json={"session_id": session_id})
+    await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json=_message_request("user", content="legacy alias message"),
     )
-    session = service.sessions.session(owner_ctx, session_id)
-    await session.ensure_exists()
-    session.add_message("user", [TextPart("legacy message")], peer_id="owner")
-    await service.viking_fs.rm(f"viking://session/{session_id}/.meta.json", ctx=owner_ctx)
 
-    loaded = await service.sessions.get(session_id, owner_ctx, auto_create=False)
-    listed = await service.sessions.sessions(owner_ctx)
-
-    assert [part.text for part in loaded.messages[0].parts] == ["legacy message"]
-    assert loaded.meta.created_by_account_id == "acct-legacy"
-    assert loaded.meta.created_by_user_id == "owner"
-    assert any(item["session_id"] == session_id for item in listed)
-
-
-def test_session_visibility_is_account_scoped_for_non_root(service):
-    ctx = RequestContext(
-        user=UserIdentifier("acct-current", "owner"),
-        role=Role.USER,
+    resp = await client.get(
+        "/api/v1/content/read",
+        params={"uri": f"viking://session/{session_id}/messages.jsonl"},
     )
-    meta = SessionMeta(created_by_user_id="owner", participant_user_ids=["owner"])
 
-    assert service.sessions._session_is_visible_in_account(ctx, meta) is False
-
-    meta.created_by_account_id = "acct-current"
-    meta.created_by_user_id = "someone-else"
-    meta.participant_user_ids = ["someone-else"]
-    assert service.sessions._session_is_visible_in_account(ctx, meta) is True
+    assert resp.status_code == 200
+    assert "legacy alias message" in resp.json()["result"]
 
 
 async def test_get_session_context(client: httpx.AsyncClient):
@@ -242,9 +224,11 @@ async def test_tool_result_externalization_read_and_search(client: httpx.AsyncCl
 
     context_resp = await client.get(f"/api/v1/sessions/{session_id}/context")
     assert context_resp.status_code == 200
+    session_resp = await client.get(f"/api/v1/sessions/{session_id}")
+    session_uri = session_resp.json()["result"]["uri"]
     part = context_resp.json()["result"]["messages"][0]["parts"][0]
     assert part["tool_output_truncated"] is True
-    assert part["tool_output_ref"].startswith(f"viking://session/{session_id}/tool-results/")
+    assert part["tool_output_ref"].startswith(f"{session_uri}/tool-results/")
     assert raw not in part["tool_output"]
     assert "kind: text" in part["tool_output"]
     assert "openviking_tool_result_search" in part["tool_output"]
@@ -651,6 +635,7 @@ async def test_get_session_context_endpoint_returns_trimmed_latest_archive_and_m
 ):
     create_resp = await client.post("/api/v1/sessions", json={})
     session_id = create_resp.json()["result"]["session_id"]
+    session_uri = create_resp.json()["result"]["uri"]
 
     await client.post(
         f"/api/v1/sessions/{session_id}/messages",
@@ -670,7 +655,7 @@ async def test_get_session_context_endpoint_returns_trimmed_latest_archive_and_m
                     "type": "tool",
                     "tool_id": "tool_123",
                     "tool_name": "demo_tool",
-                    "tool_uri": f"viking://session/{session_id}/tools/tool_123",
+                    "tool_uri": f"{session_uri}/tools/tool_123",
                     "tool_input": {"x": 1},
                     "tool_status": "running",
                 },

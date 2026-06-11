@@ -969,7 +969,7 @@ def test_archive_search_without_archive_id_searches_raw_history():
     )
 
     assert "Hidden cobalt archive detail" in searched
-    assert "viking://session/archive-search-session/history" in searched
+    assert "viking://user/default/sessions/archive-search-session/history" in searched
 
 
 def test_archive_grep_pattern_uses_backend_safe_token_regex():

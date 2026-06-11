@@ -16,14 +16,16 @@ Regular `export/import` handles one package root:
 
 - `viking://resources/...`
 - `viking://user/...`
-- `viking://session/...`
 
 Full migration uses the separate `backup/restore` flow. It packages public
 scope roots together:
 
 - `viking://resources`
 - `viking://user`
-- `viking://session`
+
+Sessions are included through the user namespace at
+`viking://user/{user_id}/sessions/{session_id}`. The
+`viking://session/...` alias is not an OVPack v3 import/export scope.
 
 Internal or runtime data such as `temp`, `queue`, `upload`, lock files, watch
 control files, and `.relations.json` are outside the OVPack migration scope.
@@ -244,7 +246,7 @@ curl -X POST http://localhost:1933/api/v1/pack/backup \
 
 ## Package Layout
 
-OVPack v2 is a standard ZIP archive with one package root directory:
+OVPack v3 is a standard ZIP archive with one package root directory:
 
 ```text
 my-project/
@@ -268,7 +270,7 @@ internal index files. It does not inline per-file index records:
 ```json
 {
   "kind": "openviking.ovpack",
-  "format_version": 2,
+  "format_version": 3,
   "root": {
     "name": "my-project",
     "uri": "viking://resources/my-project",
@@ -365,7 +367,7 @@ Import validates the entire package before writing package content. Core checks:
 6. Each file `size` and `sha256` must match actual content.
 7. `content_sha256` must match the sorted file inventory.
 8. `_ovpack/index_records.jsonl` and optional `_ovpack/dense.f32` must match manifest hashes, counts, and dimensions.
-9. Source scope and target scope must match; structured scopes such as `user`, `agent`, and `session` also keep root depth stable.
+9. Source scope and target scope must match; structured scopes such as `user` also keep root depth stable.
 10. No package content is written before validation passes; conflict handling also runs before writes.
 
 Typical rejection examples:
@@ -404,14 +406,15 @@ ov import ./exports/resources.ovpack viking:// --on-conflict overwrite
 These imports are rejected:
 
 ```bash
-# A resources package cannot be imported into session.
-ov import ./exports/a.ovpack viking://session/
+# A resources package cannot be imported into user.
+ov import ./exports/a.ovpack viking://user/alice/
 
-# A session subtree cannot be imported into resources.
+# A user session subtree cannot be imported into resources.
 ov import ./exports/sess_123.ovpack viking://resources/
 
-# A session subtree cannot use itself as parent, which would create session/sess_123/sess_123.
-ov import ./exports/sess_123.ovpack viking://session/sess_123/
+# A session subtree cannot use itself as parent, which would create
+# sessions/sess_123/sess_123.
+ov import ./exports/sess_123.ovpack viking://user/alice/sessions/sess_123/
 ```
 
 ## Memories and Sessions
@@ -426,33 +429,31 @@ ov export viking://user/default/memories ./exports/user-memories.ovpack
 ov import ./exports/user-memories.ovpack viking://user/default/ --on-conflict overwrite
 ```
 
-User memories:
+Session data:
 
 ```bash
-ov export viking://user/default/memories ./exports/agent-memories.ovpack
-ov import ./exports/agent-memories.ovpack viking://user/default/ --on-conflict overwrite
+ov export viking://user/alice/sessions/sess_123 ./exports/sess_123.ovpack
+ov import ./exports/sess_123.ovpack viking://user/alice/sessions/ --on-conflict overwrite
 ```
 
-Sessions restore file state only and do not trigger vectorization:
-
-```bash
-ov export viking://session/sess_123 ./exports/sess_123.ovpack
-ov import ./exports/sess_123.ovpack viking://session/ --on-conflict overwrite
-```
+Sessions restore file state only and do not trigger vectorization.
 
 Result:
 
 ```text
-viking://session/sess_123
+viking://user/alice/sessions/sess_123
 ```
 
 ## Old Packages and Future Versions
 
-The current implementation only accepts OVPack v2. Legacy packages without a
+The current implementation only accepts OVPack v3. Legacy packages without a
 manifest do not provide a file set, directory set, or checksums, so OpenViking
 cannot tell whether content was removed, modified, or mixed in. They are
 rejected by default. To migrate a legacy package, import it in a trusted old
-environment first, then re-export it with the current version.
+environment first, then re-export it with OVPack v3.
+
+OVPack v2 packages are also rejected by current OpenViking. Re-export old
+packages with a current server before importing them here.
 
 Future package versions are not silently accepted either. Upgrade OpenViking or
 re-export from an environment that can read that version.
@@ -461,11 +462,11 @@ re-export from an environment that can read that version.
 
 | Error | Common cause | Fix |
 | --- | --- | --- |
-| `Missing ovpack manifest` | Legacy package without a manifest | Re-export as v2 in a trusted environment. |
+| `Missing ovpack manifest` | Legacy package without a manifest | Re-export as v3 in a trusted environment. |
 | `Unsupported ovpack format_version` | Package format version is not currently supported | Upgrade OpenViking or re-export. |
 | `sha256 does not match manifest` | File or internal index content was changed | Discard the package or re-export from a trusted source. |
 | `ovpack entries do not match manifest` | ZIP content is missing files/directories or includes extra files/directories | Discard the package or re-export. |
-| `source scope does not match target scope` | Cross-scope import, such as session into resources | Import into a parent directory in the same scope. |
+| `source scope does not match target scope` | Cross-scope import, such as user into resources | Import into a parent directory in the same scope. |
 | `source path is incompatible with target path` | Structured scope root depth would change | Import into the correct system parent directory. |
 | `Top-level scope ovpack packages must be imported to viking://` | A top-level scope package was imported to a non-root parent | Import to `viking://`. |
 | `Backup ovpack packages must be restored` | A backup package was imported with regular import | Use `ov restore`. |

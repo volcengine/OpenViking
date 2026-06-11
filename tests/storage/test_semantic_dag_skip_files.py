@@ -87,10 +87,16 @@ class _DummyTracker:
 
 
 @pytest.mark.asyncio
-async def test_messages_jsonl_excluded_from_summary(monkeypatch):
+@pytest.mark.parametrize(
+    "root_uri",
+    [
+        "viking://session/test-session",
+        "viking://user/user1/sessions/test-session",
+    ],
+)
+async def test_messages_jsonl_excluded_from_summary(monkeypatch, root_uri):
     """messages.jsonl should be skipped by _list_dir and never summarized."""
     _mock_transaction_layer(monkeypatch)
-    root_uri = "viking://session/test-session"
     tree = {
         root_uri: [
             {"name": "messages.jsonl", "isDir": False},
@@ -122,10 +128,16 @@ async def test_messages_jsonl_excluded_from_summary(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_messages_jsonl_excluded_in_subdirectory(monkeypatch):
+@pytest.mark.parametrize(
+    "root_uri",
+    [
+        "viking://session/test-session",
+        "viking://user/user1/sessions/test-session",
+    ],
+)
+async def test_messages_jsonl_excluded_in_subdirectory(monkeypatch, root_uri):
     """messages.jsonl in a subdirectory should also be skipped."""
     _mock_transaction_layer(monkeypatch)
-    root_uri = "viking://session/test-session"
     tree = {
         root_uri: [
             {"name": "subdir", "isDir": True},

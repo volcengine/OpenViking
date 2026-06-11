@@ -9,7 +9,7 @@ viking://{scope}/{path}
 ```
 
 - **scheme**: 始终为 `viking`
-- **scope**: 顶级命名空间（`resources`、`user`、`agent`、`session`；`temp` 和 `queue` 为内部作用域）
+- **scope**: 顶级命名空间（`resources`、`user`；`temp`、`queue` 和 `upload` 为内部作用域）
 - **path**: 作用域内的资源路径
 
 ## 作用域
@@ -17,15 +17,15 @@ viking://{scope}/{path}
 | 作用域 | 说明 | 生命周期 | 可见性 |
 |--------|------|----------|--------|
 | **resources** | 独立资源 | 长期 | 全局 |
-| **user** | 用户级数据 | 长期 | 全局 |
-| **agent** | Agent 级数据 | 长期 | 全局 |
-| **session** | 会话级数据 | 会话生命周期 | 当前会话 |
+| **user** | 用户级数据，包括 session | 长期 / 会话生命周期 | 当前用户 |
 | **queue** | 处理队列 | 临时 | 内部 |
 | **temp** | 临时文件 | 解析期间 | 内部 |
+| **upload** | 临时上传文件 | 临时 | 内部 |
 
-公开 API 和 CLI 的文件系统/内容操作只接受公开作用域：
-`resources`、`user`、`agent`、`session`，以及根 URI `viking://`。
-`temp` 和 `queue` 是内部实现作用域，不能通过公开 API 的 URI 参数直接访问。
+公开 API 和 CLI 的文件系统/内容操作接受公开作用域 `resources` 和 `user`，
+以及根 URI `viking://`。`session` 保留为 user session 路径的向后兼容别名；
+新 session 数据位于 `viking://user/{user_id}/sessions`。`agent` 已废弃。
+`temp`、`queue` 和 `upload` 是内部实现作用域，不能通过公开 API 的 URI 参数直接访问。
 
 ## 初始目录
 
@@ -33,33 +33,19 @@ viking://{scope}/{path}
 
 ```
 viking://
-├── session/{session_id}/
-│   ├── .abstract.md          # L0: 会话一句话摘要
-│   ├── .overview.md          # L1: 会话概览
-│   ├── .meta.json            # 会话元数据
-│   ├── messages.json         # 结构化消息存储
-│   ├── checkpoints/          # 版本快照
-│   ├── summaries/            # 压缩摘要历史
-│   └── .relations.json       # 关联表
-│
 ├── user/
-│   ├── .abstract.md          # L0: 内容摘要
-│   ├── .overview.md          # 用户画像
-│   └── memories/             # 用户记忆存储
-│       ├── .overview.md      # 记忆概览
-│       ├── preferences/      # 用户偏好
-│       ├── entities/         # 实体记忆
-│       └── events/           # 事件记录
-│
-├── agent/
-│   ├── .abstract.md          # L0: 内容摘要
-│   ├── .overview.md          # Agent概览
-│   ├── memories/             # Agent学习记忆
-│   │   ├── .overview.md
-│   │   ├── cases/            # 案例
-│   │   └── patterns/         # 模式
-│   ├── instructions/         # Agent指令
-│   └── skills/               # 技能目录
+│   └── {user_id}/
+│       ├── profile.md        # 用户画像
+│       ├── memories/         # 用户记忆
+│       ├── skills/           # 用户技能
+│       └── sessions/         # 用户会话
+│           └── {session_id}/
+│               ├── .abstract.md
+│               ├── .overview.md
+│               ├── .meta.json
+│               ├── messages.jsonl
+│               ├── tools/
+│               └── history/
 │
 └── resources/{project}/      # 资源工作区
 ```
@@ -103,11 +89,15 @@ OpenViking 会在存储和检索前将它展开为显式命名空间路径，例
 ### 会话数据
 
 ```
-viking://session/{session_id}/                # 会话根目录
-viking://session/{session_id}/messages/       # 会话消息
-viking://session/{session_id}/tools/          # 工具执行
-viking://session/{session_id}/history/        # 归档历史
+viking://user/{user_id}/sessions/{session_id}/          # 会话根目录
+viking://user/{user_id}/sessions/{session_id}/messages  # 会话消息
+viking://user/{user_id}/sessions/{session_id}/tools     # 工具执行
+viking://user/{user_id}/sessions/{session_id}/history   # 归档历史
+viking://user/sessions/{session_id}/                    # 当前用户短路径
 ```
+
+`viking://session/{session_id}` 会作为当前用户 session 路径的向后兼容别名被接受。
+它不是新会话数据的独立存储根。
 
 ## 路径变量
 
@@ -201,8 +191,8 @@ viking://
 │       ├── entities/             # 每条独立
 │       └── events/               # 每条独立
 │
-└── session/{session_id}/
-    ├── messages/
+└── user/{user_id}/sessions/{session_id}/
+    ├── messages.jsonl
     ├── tools/
     └── history/
 ```

@@ -50,7 +50,7 @@ Once installed, the plugin provides these agent tools:
 
 - **What is sent**: User/assistant message text from each turn (after stripping injected memory blocks and metadata noise).
 - **Where it goes**: Your configured OpenViking server (`baseUrl`). The plugin only sends data to that server; downstream model/provider data handling (embedding, VLM) depends on the server's configuration.
-- **Storage**: All data lives on your OpenViking server under `viking://user/*`, `viking://resources/*`, and `viking://session/*`.
+- **Storage**: All data lives on your OpenViking server under `viking://user/*` (including `viking://user/sessions/*`) and `viking://resources/*`.
 - **API Key**: Sent as `X-OpenViking-Key` header over your configured connection. Never logged or forwarded.
 - **Multi-tenant isolation**: Supports `accountId` and `userId`. Optional `peer_role` / `peer_prefix` controls whether OpenClaw speakers are written as OpenViking `peer_id`.
 
@@ -100,7 +100,7 @@ The diagram above reflects the current implementation boundary:
 - OpenClaw remains the primary runtime on the left. The plugin does not take over agent execution.
 - The middle layer combines hooks, the context engine, tools, and runtime management in one plugin registration.
 - All HTTP traffic goes through `OpenVikingClient`, which centralizes tenant headers and routing logs.
-- The OpenViking service owns sessions, memories, archives, and Phase 2 extraction, with storage under `viking://user/*`, `viking://resources/*`, and `viking://session/*`.
+- The OpenViking service owns sessions, memories, archives, and Phase 2 extraction, with storage under `viking://user/*` (including `viking://user/sessions/*`) and `viking://resources/*`.
 
 That split lets OpenClaw stay focused on reasoning and orchestration while OpenViking becomes the source of truth for long-lived context.
 
