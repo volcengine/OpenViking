@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import re
 import uuid
@@ -7,6 +8,7 @@ from typing import Any, Dict, List, Mapping, Optional
 from loguru import logger
 
 import openviking as ov
+from openviking.core.peer_id import safe_peer_id as openviking_safe_peer_id
 from vikingbot.config.loader import load_config
 from vikingbot.openviking_mount.user_apikey_manager import UserApiKeyManager
 
@@ -20,9 +22,16 @@ def _is_session_key(agent_id: Optional[str]) -> bool:
 def _safe_peer_id(peer_id: Optional[str]) -> Optional[str]:
     if not peer_id:
         return None
-    if "/" in peer_id or "\\" in peer_id:
+    raw_peer_id = str(peer_id).strip()
+    if not raw_peer_id:
         return None
-    return peer_id
+    if "/" in raw_peer_id or "\\" in raw_peer_id:
+        return None
+    if safe_peer_id := openviking_safe_peer_id(raw_peer_id):
+        return safe_peer_id
+
+    encoded = base64.urlsafe_b64encode(raw_peer_id.encode("utf-8")).decode("ascii").rstrip("=")
+    return openviking_safe_peer_id(f"ext-{encoded}")
 
 
 class VikingClient:
@@ -419,9 +428,6 @@ class VikingClient:
 
     def _skill_memory_uri(self, skill_name: str, user_id: Optional[str] = None) -> str:
         return f"{self._memory_target_uri(user_id)}skills/{skill_name}.md"
-
-    def should_sender_fanout(self) -> bool:
-        return self._is_root_key_mode()
 
     async def find(
         self,
@@ -1019,7 +1025,7 @@ class VikingClient:
         appended = await self.append_messages(
             session_id,
             messages,
-            default_user_peer_id=peer_id,
+            default_user_peer_id=self._peer_id(peer_id),
             session_user_id=session_user_id,
         )
         commit_result = await self.commit_session(

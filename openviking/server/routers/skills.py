@@ -560,12 +560,11 @@ async def update_skill(
     http_request: Request,
     request: UpdateSkillRequest,
     skill_name: str = ApiPath(..., description="Skill name"),
-    root_uri: Optional[str] = None,
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Replace an existing agent skill with new content."""
     service = get_service()
-    skills_root_uri = _resolve_skills_root(_ctx, root_uri)
+    skills_root_uri = _resolve_skills_root(_ctx, request.root_uri)
     skill_root_uri = await _require_skill(service, _ctx, skill_name, skills_root_uri)
 
     data = request.data
