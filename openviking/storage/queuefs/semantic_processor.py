@@ -3,6 +3,7 @@
 """SemanticProcessor: Processes messages from SemanticQueue, generates .abstract.md and .overview.md."""
 
 import asyncio
+import json
 import threading
 from contextlib import nullcontext
 from dataclasses import dataclass, field
@@ -19,7 +20,10 @@ from openviking.parse.parsers.constants import (
     FILE_TYPE_DOCUMENTATION,
     FILE_TYPE_OTHER,
 )
-from openviking.parse.image_rewrite import rewrite_image_uris
+from openviking.parse.image_rewrite import (
+    IMAGE_MAPPINGS_FILENAME,
+    rewrite_image_uris,
+)
 from openviking.parse.parsers.media.utils import (
     generate_audio_summary,
     generate_image_summary,
@@ -951,34 +955,57 @@ class SemanticProcessor(DequeueHandlerBase):
     ) -> None:
         """Rewrite local image refs in the target after a temp-to-target sync.
 
-        ``_sync_topdown_recursive`` skips hidden files, so the
-        ``.image_mappings.json`` sidecar written by the parser at the temp root
-        is not copied into the target. Carry it over (when missing) so
+        ``_sync_topdown_recursive`` MOVES the visible files into the target and
+        skips hidden ones, so afterwards the temp tree holds only the
+        ``.image_mappings.json`` sidecars written by the parser (one per
+        document root, possibly nested for directory ingests). Discovery is
+        therefore driven by the markdown files already synced into the TARGET:
+        their ancestor directories, mirrored back onto the temp tree, are where
+        sidecars can live. Carry each one over (when missing) so
         :func:`rewrite_image_uris` can resolve local image paths against the
         images that were synced into the final target.
         """
         viking_fs = get_viking_fs()
         root_prefix = root_uri.rstrip("/")
         target_prefix = target_uri.rstrip("/")
-        mapping_name = ".image_mappings.json"
+        mapping_name = IMAGE_MAPPINGS_FILENAME
 
         if root_prefix != target_prefix:
             try:
-                await viking_fs.stat(f"{target_prefix}/{mapping_name}", ctx=ctx)
-                target_has_mapping = True
+                glob_result = await viking_fs.glob("*.md", uri=target_prefix, ctx=ctx)
+                target_md_uris = glob_result.get("matches", [])
             except Exception:
-                target_has_mapping = False
+                target_md_uris = []
 
-            if not target_has_mapping:
+            # Ancestor dirs of the target md files, as paths relative to the
+            # target root — the candidate sidecar locations on both trees.
+            candidate_rels = set()
+            for md_uri in target_md_uris:
+                d = md_uri.rsplit("/", 1)[0]
+                while d == target_prefix or d.startswith(target_prefix + "/"):
+                    candidate_rels.add(d[len(target_prefix) :].lstrip("/"))
+                    if d == target_prefix:
+                        break
+                    d = d.rsplit("/", 1)[0]
+
+            for rel in candidate_rels:
+                src_mapping = f"{root_prefix}/{rel}/{mapping_name}" if rel else f"{root_prefix}/{mapping_name}"
+                target_mapping = (
+                    f"{target_prefix}/{rel}/{mapping_name}" if rel else f"{target_prefix}/{mapping_name}"
+                )
                 try:
-                    mapping_content = await viking_fs.read_file(
-                        f"{root_prefix}/{mapping_name}", ctx=ctx
-                    )
-                    await viking_fs.write_file(
-                        f"{target_prefix}/{mapping_name}", mapping_content, ctx=ctx
-                    )
+                    await viking_fs.stat(target_mapping, ctx=ctx)
+                    continue  # already carried over
                 except Exception:
-                    # No sidecar to carry over (e.g. no local images ingested).
+                    pass
+                try:
+                    mapping_content = await viking_fs.read_file(src_mapping, ctx=ctx)
+                except Exception:
+                    continue  # no sidecar at this level
+                try:
+                    await viking_fs.write_file(target_mapping, mapping_content, ctx=ctx)
+                except Exception:
+                    # Target subtree may not exist (doc removed in sync); skip.
                     pass
 
         try:
