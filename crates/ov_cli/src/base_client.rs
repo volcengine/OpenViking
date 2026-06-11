@@ -145,7 +145,6 @@ pub struct BaseClient {
     pub(crate) api_key: Option<String>,
     pub(crate) account: Option<String>,
     pub(crate) user: Option<String>,
-    timeout_secs: f64,
     pub(crate) profile_enabled: bool,
     pub(crate) extra_headers: Option<std::collections::HashMap<String, String>>,
 }
@@ -171,7 +170,6 @@ impl BaseClient {
             api_key,
             account,
             user,
-            timeout_secs,
             profile_enabled,
             extra_headers,
         }
@@ -360,8 +358,7 @@ impl BaseClient {
         timeout: std::time::Duration,
     ) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
-        let configured_timeout = std::time::Duration::from_secs_f64(self.timeout_secs);
-        let client = self.create_client_with_timeout(std::cmp::max(timeout, configured_timeout))?;
+        let client = self.create_client_with_timeout(timeout)?;
 
         let request = client.post(&url).headers(self.build_headers()).json(body);
         let request = if self.profile_enabled {

@@ -386,10 +386,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Wait until indexing/processing completes.",
             },
             HelpItem {
-                label: "--timeout <seconds>",
-                description: "Maximum wait time when using --wait.",
-            },
-            HelpItem {
                 label: "--include / --exclude",
                 description: "Filter files during folder import.",
             },
