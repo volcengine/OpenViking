@@ -758,6 +758,53 @@ async def test_single_account_backend_upsert_drops_legacy_parent_uri_before_writ
 
 
 @pytest.mark.asyncio
+async def test_single_account_backend_truncates_content_only_at_vector_write():
+    captured = {}
+    full_content = "x" * (64 * 1024 + 17)
+
+    class _Collection:
+        def get_meta_data(self):
+            return {
+                "Fields": [
+                    {"FieldName": "id"},
+                    {"FieldName": "uri"},
+                    {"FieldName": "abstract"},
+                    {"FieldName": "content", "FieldType": "text"},
+                    {"FieldName": "account_id"},
+                ]
+            }
+
+    class _Adapter:
+        mode = "local"
+
+        def get_collection(self):
+            return _Collection()
+
+        def upsert(self, data):
+            captured["data"] = dict(data)
+            return [data["id"]]
+
+    backend = _SingleAccountBackend(
+        config=VectorDBBackendConfig(backend="local", name="context", dimension=2),
+        bound_account_id="acc1",
+        shared_adapter=_Adapter(),
+    )
+    source_data = {
+        "id": "rec-large",
+        "uri": "viking://resources/large.txt",
+        "abstract": "sample",
+        "content": full_content,
+        "account_id": "acc1",
+    }
+
+    record_id = await backend.upsert(source_data)
+
+    assert record_id == "rec-large"
+    assert source_data["content"] == full_content
+    assert captured["data"]["content"] == full_content[: 64 * 1024]
+
+
+@pytest.mark.asyncio
 async def test_single_account_backend_collection_exists_runs_in_threadpool(monkeypatch):
     called = {}
 

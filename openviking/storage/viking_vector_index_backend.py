@@ -74,6 +74,8 @@ URI_REWRITE_OUTPUT_FIELDS = [
     "account_id",
 ]
 
+VIKINGDB_CONTENT_MAX_SIZE = 64 * 1024
+
 
 class _AsyncVectorAdapter:
     """Thread-offloaded facade for sync vector adapters."""
@@ -170,6 +172,10 @@ class _SingleAccountBackend:
                     result[field["FieldName"]] = ""
         except Exception:
             pass
+
+        content = result.get("content")
+        if isinstance(content, (str, bytes)):
+            result["content"] = content[:VIKINGDB_CONTENT_MAX_SIZE]
 
         return result
 
