@@ -42,7 +42,7 @@ OpenViking 支持多种资源类型，按照功能分类如下：
 云文档类
 | 类型 | 说明 |
 |------|------|
-| 飞书/Lark | URL 方式，支持 docx, wiki, sheets, bitable。默认使用 FEISHU_APP_ID 和 FEISHU_APP_SECRET 应用凭证；一次性用户 token 导入可传 `args.feishu_access_token` |
+| 飞书/Lark | URL 方式，支持 docx, wiki, sheets, bitable。默认使用 FEISHU_APP_ID 和 FEISHU_APP_SECRET 应用凭证；用户 token 导入可传 `args.feishu_access_token`，用户 token watch 还需传 `args.feishu_refresh_token` |
 
 ### 资源处理流程
 
@@ -161,8 +161,11 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 - 只有 Git 仓库来源在 `wait=false` 时使用完整后台导入；OpenViking 会先完成仓库 preflight 和目标规划，再返回 `task_id`。
 - 其他来源在 `wait=false` 时会在响应前完成来源解析、目标解析和 AGFS 写入，仅 semantic 与 embedding 队列继续异步处理。
 - `watch_interval > 0` 时，如果指定了 `to`，监控任务绑定该目标；如果未指定 `to`，监控任务绑定本次导入返回的 `root_uri`。如果无法得到稳定 `root_uri`，请求会报错并要求显式传 `to`。
-- 飞书/Lark 用户 token 导入通过 `args={"feishu_access_token": "u-..."}` 传入。该模式只支持一次性导入：`watch_interval > 0` 会被拒绝，因为 OpenViking 不保存也不刷新用户 token。
-- 飞书/Lark 仍需要应用凭证来构造 Lark client。未传 `args.feishu_access_token` 时，OpenViking 保持原有应用凭证流程，由 SDK 使用 `app_id` 和 `app_secret` 自动获取 tenant access token。
+- 飞书/Lark 应用 token 导入不传 `args.feishu_access_token`。OpenViking 保持原有应用凭证流程，由 SDK 使用 `app_id` 和 `app_secret` 自动获取 app/tenant token。该模式支持一次性导入和 `watch_interval > 0`。
+- 飞书/Lark 一次性用户 token 导入通过 `args={"feishu_access_token": "u-..."}` 传入，且 `watch_interval <= 0`。OpenViking 只在本次导入使用该用户 token，不保存。
+- 飞书/Lark 用户 token watch 通过 `args={"feishu_access_token": "u-...", "feishu_refresh_token": "r-..."}` 传入，且 `watch_interval > 0`。OpenViking 会把 token 状态保存在 watch task 私有状态里，用配置的飞书应用凭证刷新，并在后续 watch 重跑中使用刷新后的用户 token。
+- 飞书/Lark 用户 token watch 需要 `FEISHU_APP_ID` 和 `FEISHU_APP_SECRET`，或 `ov.conf` 中的 `feishu.app_id` 和 `feishu.app_secret`。飞书 refresh token 绑定签发它的应用，因此传入的用户 token 必须来自 OpenViking 当前配置的同一个飞书应用。
+- Watch task 的 token 状态保存在内部控制文件 `viking://resources/.watch_tasks.json` 中，不会出现在 watch API/MCP/CLI 返回里。若启用了 VikingFS 文件加密，该控制文件会静态加密；否则服务端控制文件中会包含明文 token 状态。
 - 本地目录输入会遵循 `.gitignore`（根目录和子目录，标准 Git 语义）；`ignore_dirs`、`include`、`exclude` 会在此基础上进一步过滤。
 - 如果要直接创建或更新纯文本内容，请使用 [content/write](03-filesystem.md#write)，不要使用 `add_resource`。资源导入和内容写入后都会自动刷新语义与 embedding。
 
@@ -213,6 +216,20 @@ curl -X POST http://localhost:1933/api/v1/resources \
       "feishu_access_token": "u-..."
     }
   }'
+
+# 使用用户 token 自动刷新添加飞书文档
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "path": "https://example.feishu.cn/docx/doc_token",
+    "to": "viking://resources/feishu/doc",
+    "watch_interval": 1440,
+    "args": {
+      "feishu_access_token": "u-...",
+      "feishu_refresh_token": "r-..."
+    }
+  }'
 ```
 
 **Python SDK**
@@ -257,6 +274,17 @@ client.add_resource(
     "https://example.feishu.cn/docx/doc_token",
     args={"feishu_access_token": "u-..."},
 )
+
+# 使用用户 token 自动刷新添加飞书文档
+client.add_resource(
+    "https://example.feishu.cn/docx/doc_token",
+    to="viking://resources/feishu/doc",
+    watch_interval=1440,
+    args={
+        "feishu_access_token": "u-...",
+        "feishu_refresh_token": "r-...",
+    },
+)
 ```
 
 **CLI**
@@ -282,6 +310,13 @@ ov add-resource https://github.com/example/repo.git --to viking://resources/my_r
 
 # 使用一次性用户 access token 添加飞书文档
 ov add-resource https://example.feishu.cn/docx/doc_token --args feishu_access_token:u-...
+
+# 使用用户 token 自动刷新添加飞书文档
+ov add-resource https://example.feishu.cn/docx/doc_token \
+  --to viking://resources/feishu/doc \
+  --watch-interval 1440 \
+  --args feishu_access_token:u-... \
+  --args feishu_refresh_token:r-...
 
 # 添加到指定父目录（父目录必须存在）
 ov add-resource ./documents/guide.md --parent viking://resources/docs

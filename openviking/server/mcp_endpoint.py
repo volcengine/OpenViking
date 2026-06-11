@@ -473,8 +473,9 @@ async def add_resource(
         to: Target URI under viking://resources/ (e.g.
             "viking://resources/volcengine/OpenViking"). Leave empty to let the
             system derive a URI from the source.
-        args: Parser-specific import options. For Feishu user-token imports, pass
-            {"feishu_access_token": "..."}.
+        args: Parser-specific import options. For Feishu one-time user-token imports,
+            pass {"feishu_access_token": "..."}. For Feishu user-token watches,
+            pass {"feishu_access_token": "...", "feishu_refresh_token": "..."}.
     """
     from openviking.server.local_input_guard import require_remote_resource_source
 

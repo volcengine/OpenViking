@@ -47,7 +47,7 @@ OpenViking supports various resource types, categorized by functionality:
 
 | Type | Description |
 |------|-------------|
-| Feishu/Lark | URL-based, supports docx, wiki, sheets, bitable. By default uses app credentials from FEISHU_APP_ID and FEISHU_APP_SECRET; one-time user-token imports can pass `args.feishu_access_token` |
+| Feishu/Lark | URL-based, supports docx, wiki, sheets, bitable. By default uses app credentials from FEISHU_APP_ID and FEISHU_APP_SECRET; user-token imports can pass `args.feishu_access_token`, and user-token watches also pass `args.feishu_refresh_token` |
 
 ### Resource Processing Pipeline
 
@@ -168,8 +168,11 @@ This endpoint is the core entry point for resource management, supporting adding
 - Only Git repository sources use full background import when `wait=false`; OpenViking performs repository preflight and target planning before returning the `task_id`.
 - Other sources with `wait=false` finish source parsing, target resolution, and AGFS writes before returning. Only semantic and embedding queues continue asynchronously.
 - When `watch_interval > 0`, the watch task binds to `to` if provided; otherwise it binds to the `root_uri` returned by this import. If no stable `root_uri` is available, the request fails and asks for an explicit `to`.
-- Feishu/Lark user-token imports pass `args={"feishu_access_token": "u-..."}`. This mode is one-time only: `watch_interval > 0` is rejected because OpenViking does not store or refresh the user token.
-- Feishu/Lark app credentials are still required to construct the Lark client. Without `args.feishu_access_token`, OpenViking keeps the existing app credential flow and the SDK obtains a tenant access token from `app_id` and `app_secret`.
+- Feishu/Lark app-token imports do not pass `args.feishu_access_token`. OpenViking keeps the existing app credential flow and the SDK obtains an app/tenant token from `app_id` and `app_secret`. This mode supports both one-time imports and `watch_interval > 0`.
+- Feishu/Lark one-time user-token imports pass `args={"feishu_access_token": "u-..."}` with `watch_interval <= 0`. OpenViking uses that user token only for the current import and does not store it.
+- Feishu/Lark user-token watches pass `args={"feishu_access_token": "u-...", "feishu_refresh_token": "r-..."}` with `watch_interval > 0`. OpenViking stores the token state in the private watch task state, refreshes it with the configured Feishu app credentials, and uses the refreshed user token for later watch runs.
+- Feishu/Lark user-token watches require `FEISHU_APP_ID` and `FEISHU_APP_SECRET` (or `feishu.app_id` and `feishu.app_secret` in `ov.conf`) because Feishu refresh tokens are bound to the app that issued them. The supplied user token must come from the same Feishu app configured in OpenViking.
+- Watch task token state is stored in the internal `viking://resources/.watch_tasks.json` control file and is hidden from watch API/MCP/CLI responses. If VikingFS file encryption is enabled, this control file is encrypted at rest; otherwise the server-side control file contains plaintext token state.
 - For local directory inputs, scanning respects `.gitignore` files (root and nested) with standard Git semantics; `ignore_dirs`, `include`, and `exclude` further refine what is ingested.
 - To create or update plain text directly, use [content/write](03-filesystem.md#write) instead of `add_resource`. Semantic processing and embeddings are refreshed automatically after resource ingestion and content writes.
 
@@ -220,6 +223,20 @@ curl -X POST http://localhost:1933/api/v1/resources \
       "feishu_access_token": "u-..."
     }
   }'
+
+# Add a Feishu document with scheduled user-token refresh
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "path": "https://example.feishu.cn/docx/doc_token",
+    "to": "viking://resources/feishu/doc",
+    "watch_interval": 1440,
+    "args": {
+      "feishu_access_token": "u-...",
+      "feishu_refresh_token": "r-..."
+    }
+  }'
 ```
 
 **Python SDK**
@@ -264,6 +281,17 @@ client.add_resource(
     "https://example.feishu.cn/docx/doc_token",
     args={"feishu_access_token": "u-..."},
 )
+
+# Add a Feishu document with scheduled user-token refresh
+client.add_resource(
+    "https://example.feishu.cn/docx/doc_token",
+    to="viking://resources/feishu/doc",
+    watch_interval=1440,
+    args={
+        "feishu_access_token": "u-...",
+        "feishu_refresh_token": "r-...",
+    },
+)
 ```
 
 **CLI**
@@ -289,6 +317,13 @@ ov add-resource https://github.com/example/repo.git --to viking://resources/guid
 
 # Add a Feishu document with a one-time user access token
 ov add-resource https://example.feishu.cn/docx/doc_token --args feishu_access_token:u-...
+
+# Add a Feishu document with scheduled user-token refresh
+ov add-resource https://example.feishu.cn/docx/doc_token \
+  --to viking://resources/feishu/doc \
+  --watch-interval 1440 \
+  --args feishu_access_token:u-... \
+  --args feishu_refresh_token:r-...
 
 # Add with parent directory (parent must exist)
 ov add-resource ./documents/guide.md --parent viking://resources/docs

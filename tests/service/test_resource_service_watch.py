@@ -10,6 +10,7 @@ import pytest_asyncio
 
 from openviking.resource.watch_manager import WatchManager
 from openviking.server.identity import RequestContext, Role
+from openviking.service import resource_service as resource_service_module
 from openviking.service.resource_service import ResourceService
 from openviking_cli.exceptions import ConflictError, InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
@@ -233,12 +234,105 @@ class TestAddResourceArgs:
     async def test_rejects_feishu_access_token_with_watch(
         self, resource_service: ResourceService, request_context: RequestContext
     ):
-        with pytest.raises(InvalidArgumentError, match="one-time import"):
+        with pytest.raises(InvalidArgumentError, match="feishu_refresh_token"):
             await resource_service.add_resource(
                 path="/test/path",
                 ctx=request_context,
                 watch_interval=30,
                 args={"feishu_access_token": "u-test"},
+            )
+
+    @pytest.mark.asyncio
+    async def test_rejects_feishu_user_token_watch_without_app_config(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        resource_service: ResourceService,
+        request_context: RequestContext,
+    ):
+        def raise_missing_credentials():
+            raise ValueError("missing Feishu config")
+
+        monkeypatch.setattr(
+            resource_service_module,
+            "load_feishu_app_credentials",
+            raise_missing_credentials,
+        )
+
+        with pytest.raises(InvalidArgumentError, match="Feishu user-token watch requires"):
+            await resource_service.add_resource(
+                path="/test/path",
+                ctx=request_context,
+                watch_interval=30,
+                args={
+                    "feishu_access_token": "u-test",
+                    "feishu_refresh_token": "r-test",
+                },
+            )
+
+    @pytest.mark.asyncio
+    async def test_feishu_user_token_watch_stores_private_auth_state(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        resource_service: ResourceService,
+        request_context: RequestContext,
+    ):
+        monkeypatch.setattr(
+            resource_service_module,
+            "load_feishu_app_credentials",
+            lambda: object(),
+        )
+        to_uri = "viking://resources/feishu_user_watch"
+
+        await resource_service.add_resource(
+            path="https://example.feishu.cn/docx/doc_token",
+            ctx=request_context,
+            to=to_uri,
+            watch_interval=30,
+            args={
+                "feishu_access_token": " u-test ",
+                "feishu_refresh_token": " r-test ",
+            },
+        )
+
+        processor = resource_service._resource_processor
+        assert processor.calls[-1]["feishu_access_token"] == "u-test"
+        assert "feishu_refresh_token" not in processor.calls[-1]
+
+        task = await get_task_by_uri(resource_service, to_uri, request_context)
+        assert task is not None
+        assert task.processor_kwargs == {}
+        assert task.auth_state == {
+            "provider": "feishu",
+            "access_token": "u-test",
+            "refresh_token": "r-test",
+            "expires_at": None,
+        }
+        assert "auth_state" not in task.to_dict()
+
+    @pytest.mark.asyncio
+    async def test_rejects_feishu_refresh_token_without_watch(
+        self, resource_service: ResourceService, request_context: RequestContext
+    ):
+        with pytest.raises(InvalidArgumentError, match="only supported"):
+            await resource_service.add_resource(
+                path="/test/path",
+                ctx=request_context,
+                args={
+                    "feishu_access_token": "u-test",
+                    "feishu_refresh_token": "r-test",
+                },
+            )
+
+    @pytest.mark.asyncio
+    async def test_rejects_feishu_refresh_token_without_access_token(
+        self, resource_service: ResourceService, request_context: RequestContext
+    ):
+        with pytest.raises(InvalidArgumentError, match="requires args.feishu_access_token"):
+            await resource_service.add_resource(
+                path="/test/path",
+                ctx=request_context,
+                watch_interval=30,
+                args={"feishu_refresh_token": "r-test"},
             )
 
     @pytest.mark.asyncio

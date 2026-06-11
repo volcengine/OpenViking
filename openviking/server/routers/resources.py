@@ -50,8 +50,9 @@ class AddResourceRequest(BaseModel):
         exclude: Glob pattern for files to exclude during parsing.
         directly_upload_media: Whether to directly upload media files. Default is True.
         preserve_structure: Whether to preserve directory structure when adding directories.
-        args: Parser-specific import options. For Feishu user-token imports, pass
-            {"feishu_access_token": "..."}.
+        args: Parser-specific import options. For Feishu one-time user-token imports,
+            pass {"feishu_access_token": "..."}. For Feishu user-token watches,
+            pass {"feishu_access_token": "...", "feishu_refresh_token": "..."}.
         watch_interval: Watch interval in minutes for automatic resource monitoring.
             - watch_interval > 0: Creates or updates a watch task. The resource will be
               automatically re-processed at the specified interval.
