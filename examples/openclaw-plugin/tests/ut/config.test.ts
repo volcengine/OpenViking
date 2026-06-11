@@ -39,6 +39,7 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.traceRecallQueryMaxDays).toBe(14);
     expect(cfg.traceRecallIncludeContentByDefault).toBe(false);
     expect(cfg.traceRecallIncludeRawUserPreview).toBe(false);
+    expect(cfg.recallTargetTypes).toEqual(["user", "agent"]);
     expect(cfg.enableAddResourceTool).toBe(false);
     expect(cfg.enabledTools).toContain("ov_search");
     expect(cfg.enabledTools).toContain("ov_read");
@@ -362,5 +363,36 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg1.recallResources).toBe(false);
     const cfg2 = memoryOpenVikingConfigSchema.parse({ recallResources: 1 });
     expect(cfg2.recallResources).toBe(false);
+  });
+
+  it("normalizes recallTargetTypes from arrays and comma-separated strings", () => {
+    const fromArray = memoryOpenVikingConfigSchema.parse({
+      recallTargetTypes: [" user ", "agent", "user", ""],
+    });
+    expect(fromArray.recallTargetTypes).toEqual(["user", "agent"]);
+
+    const fromString = memoryOpenVikingConfigSchema.parse({
+      recallTargetTypes: "resource, session\nagent",
+    });
+    expect(fromString.recallTargetTypes).toEqual(["resource", "session", "agent"]);
+  });
+
+  it("rejects unknown recallTargetTypes instead of falling back to defaults", () => {
+    expect(() =>
+      memoryOpenVikingConfigSchema.parse({ recallTargetTypes: ["user", "project"] }),
+    ).toThrow("recallTargetTypes contains unknown resource types: project");
+  });
+
+  it("keeps deprecated recallResources as an additive compatibility switch when recallTargetTypes is unset", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ recallResources: true });
+    expect(cfg.recallTargetTypes).toEqual(["user", "agent", "resource"]);
+  });
+
+  it("does not let deprecated recallResources override explicit resource-only recallTargetTypes", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({
+      recallResources: true,
+      recallTargetTypes: ["resource"],
+    });
+    expect(cfg.recallTargetTypes).toEqual(["resource"]);
   });
 });

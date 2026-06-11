@@ -177,6 +177,7 @@ describe("Tool: memory_recall (registration)", () => {
     expect(props).toHaveProperty("limit");
     expect(props).toHaveProperty("scoreThreshold");
     expect(props).toHaveProperty("targetUri");
+    expect(props).toHaveProperty("resourceTypes");
   });
 
   it("fills L2 content and filters explicit recall results like auto-recall", async () => {
@@ -239,7 +240,13 @@ describe("Tool: memory_recall (registration)", () => {
     const findCalls = fetchMock.mock.calls.filter(([calledUrl]) =>
       String(calledUrl).includes("/api/v1/search/find")
     );
-    expect(findCalls).toHaveLength(1);
+    expect(findCalls).toHaveLength(2);
+    const targetUris = findCalls.map(([, init]) =>
+      JSON.parse(String((init as RequestInit).body)).target_uri,
+    );
+    expect(targetUris).toHaveLength(2);
+    expect(targetUris).toContain("viking://agent/memories");
+    expect(targetUris.some((uri) => String(uri).endsWith("/memories") && String(uri).includes("viking://user/"))).toBe(true);
     for (const [, init] of findCalls) {
       const body = JSON.parse(String((init as RequestInit).body));
       expect(body.limit).toBe(20);
@@ -276,10 +283,58 @@ describe("Tool: memory_recall (registration)", () => {
     const findBodies = fetchMock.mock.calls
       .filter(([calledUrl]) => String(calledUrl).includes("/api/v1/search/find"))
       .map((call) => JSON.parse(String((call[1] as RequestInit).body)));
-    expect(findBodies).toHaveLength(1);
+    expect(findBodies).toHaveLength(2);
     for (const body of findBodies) {
       expect(body.peer_id).toBe("wx_user-01_abc");
     }
+  });
+
+  it("lets memory_recall override default targets with resourceTypes", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const requestUrl = new URL(url);
+      if (requestUrl.pathname === "/api/v1/system/status") {
+        return okResponse({ user: "default" });
+      }
+      if (requestUrl.pathname === "/api/v1/search/find") {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        expect(body.target_uri).toBe("viking://resources");
+        return okResponse({
+          memories: [],
+          resources: [
+            makeMemory({
+              uri: "viking://resources/project/design.md",
+              abstract: "Resource design note",
+              score: 0.9,
+            }),
+          ],
+          skills: [],
+          total: 1,
+        });
+      }
+      if (requestUrl.pathname === "/api/v1/content/read") {
+        return okResponse("Resource design full text");
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { factoryTools, api } = setupPlugin(undefined, {
+      recallLimit: 1,
+      recallScoreThreshold: 0.2,
+    });
+    contextEnginePlugin.register(api as any);
+    const tool = factoryTools.get("memory_recall")!({ sessionId: "test-session" });
+
+    const result = await tool.execute("tc-resource-recall", {
+      query: "design note",
+      resourceTypes: ["resource"],
+    }) as ToolResult;
+
+    expect(result.content[0]!.text).toContain("Resource design full text");
+    const findCalls = fetchMock.mock.calls.filter(([calledUrl]) =>
+      String(calledUrl).includes("/api/v1/search/find")
+    );
+    expect(findCalls).toHaveLength(1);
   });
 
   it("applies recallMaxInjectedChars to explicit memory_recall output", async () => {
@@ -1277,7 +1332,7 @@ describe("Tool: ov_search (behavioral)", () => {
     expect(entry.trigger.queryTruncated).toBe(true);
   });
 
-  it("records explicit memory_recall traces without duplicate default searches", async () => {
+  it("records explicit memory_recall traces without duplicate default target searches", async () => {
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       const requestUrl = new URL(url);
       if (requestUrl.pathname === "/api/v1/system/status") {
@@ -1311,8 +1366,11 @@ describe("Tool: ov_search (behavioral)", () => {
     const findBodies = fetchMock.mock.calls
       .filter(([calledUrl]) => String(calledUrl).includes("/api/v1/search/find"))
       .map(([, fetchInit]) => JSON.parse(String((fetchInit as RequestInit).body)));
-    expect(findBodies).toHaveLength(1);
-    expect(findBodies[0]!.target_uri).toBe("viking://user/default/memories");
+    expect(findBodies).toHaveLength(2);
+    const targetUris = findBodies.map((body) => body.target_uri);
+    expect(new Set(targetUris).size).toBe(2);
+    expect(targetUris).toContain("viking://agent/memories");
+    expect(targetUris).toContain("viking://user/default/memories");
 
     const trace = factoryTools.get("ov_recall_trace")!({ sessionId: "test-session" });
     const result = await trace.execute("tc-trace", { source: "memory_recall", limit: 10 }) as ToolResult;
@@ -1320,13 +1378,12 @@ describe("Tool: ov_search (behavioral)", () => {
     expect(result.content[0]!.text).toContain("backend preference");
 
     const entry = (result.details.entries as any[])[0];
-    expect(entry.resourceTypes).toEqual(["user"]);
-    expect(entry.searches).toHaveLength(1);
-    expect(entry.searches[0]).toMatchObject({
-      resourceType: "user",
-      targetUriResolved: "viking://user/memories",
-      total: 1,
-    });
+    expect(entry.resourceTypes).toEqual(["user", "agent"]);
+    expect(entry.searches).toHaveLength(2);
+    expect(entry.searches.map((search: any) => search.targetUriResolved)).toEqual([
+      "viking://user/memories",
+      "viking://agent/memories",
+    ]);
     expect(entry.selected).toEqual(expect.arrayContaining([
       expect.objectContaining({
         uri: "viking://user/default/memories/backend-pref",

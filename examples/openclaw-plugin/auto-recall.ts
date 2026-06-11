@@ -14,6 +14,7 @@ import type {
   RecallTraceEntry,
   RecallTraceResult,
 } from "./recall-trace.js";
+import { resolveRecallSearchPlan } from "./recall-trace.js";
 
 const RECALL_QUERY_MAX_CHARS = 4_000;
 export const AUTO_RECALL_SOURCE_MARKER = "Source: openviking-auto-recall";
@@ -257,7 +258,10 @@ function preview(value: string | undefined | null, maxChars: number): string | u
 }
 
 function traceResourceTypeForUri(uri: string | undefined): RecallResourceType {
-  return uri?.startsWith("viking://resources") ? "resource" : "user";
+  if (uri?.startsWith("viking://resources")) return "resource";
+  if (uri?.startsWith("viking://agent/")) return "agent";
+  if (uri?.startsWith("viking://session/") || uri?.includes("/sessions/")) return "session";
+  return "user";
 }
 
 function toTraceResults(items: FindResultItem[], resourceType: RecallResourceType): RecallTraceResult[] {
@@ -532,51 +536,58 @@ export async function buildLongTermMemoryRecallContext(params: {
   return withTimeout(
     (async () => {
       const candidateLimit = Math.max(cfg.recallLimit * 4, 20);
-      const targetUris = [
-        "viking://user/memories",
-        ...(cfg.recallResources ? ["viking://resources"] : []),
-      ];
-      const autoRecallPromises = targetUris.map(async (targetUri) => {
+      const searchPlan = resolveRecallSearchPlan(cfg.recallTargetTypes, {
+        ovSessionId: params.ovSessionId,
+        agentId,
+      });
+      const autoRecallPromises = searchPlan.searches.map(async (search) => {
         const started = Date.now();
         const result = await client.find(queryText, {
-          targetUri,
+          targetUri: search.targetUri,
           limit: candidateLimit,
           scoreThreshold: 0,
           peerId,
         }, agentId);
         return {
-          targetUri,
+          search,
           result,
           durationMs: Date.now() - started,
         };
       });
-      const traceSearches: RecallTraceEntry["searches"] = [];
+      const traceSearches: RecallTraceEntry["searches"] = searchPlan.skipped.map((skipped) => ({
+        resourceType: skipped.resourceType,
+        limit: candidateLimit,
+        scoreThreshold: 0,
+        durationMs: 0,
+        total: 0,
+        results: [],
+        error: skipped.reason,
+      }));
       const autoRecallSettled = await Promise.allSettled(autoRecallPromises);
 
       const allMemories: FindResultItem[] = [];
       for (let index = 0; index < autoRecallSettled.length; index += 1) {
         const s = autoRecallSettled[index]!;
-        const targetUri = targetUris[index]!;
-        const resourceType = traceResourceTypeForUri(targetUri);
+        const search = searchPlan.searches[index]!;
         if (s.status === "fulfilled") {
           const result = s.value.result;
           const memories = result.memories ?? [];
           const resources = result.resources ?? [];
           allMemories.push(...memories, ...resources);
           traceSearches.push({
-            resourceType,
-            targetUriInput: targetUri,
-            targetUriResolved: targetUri,
+            resourceType: s.value.search.resourceType,
+            targetUriInput: s.value.search.targetUri,
+            targetUriResolved: s.value.search.targetUri,
             limit: candidateLimit,
             scoreThreshold: 0,
             durationMs: s.value.durationMs,
             total: result.total ?? memories.length + resources.length + (result.skills?.length ?? 0),
             results: [
-              ...toTraceResults(memories, resourceType),
+              ...toTraceResults(memories, s.value.search.resourceType),
               ...toTraceResults(resources, "resource"),
               ...(result.skills ?? []).map((item): RecallTraceResult => ({
                 uri: item.uri,
-                resourceType,
+                resourceType: s.value.search.resourceType,
                 category: item.category,
                 score: item.score,
                 level: item.level,
@@ -588,9 +599,9 @@ export async function buildLongTermMemoryRecallContext(params: {
         } else {
           logger.warn?.(`openviking: auto-recall search failed: ${String(s.reason)}`);
           traceSearches.push({
-            resourceType,
-            targetUriInput: targetUri,
-            targetUriResolved: targetUri,
+            resourceType: search.resourceType,
+            targetUriInput: search.targetUri,
+            targetUriResolved: search.targetUri,
             limit: candidateLimit,
             scoreThreshold: 0,
             durationMs: 0,
@@ -610,9 +621,6 @@ export async function buildLongTermMemoryRecallContext(params: {
         scoreThreshold: cfg.recallScoreThreshold,
       });
       const memories = pickMemoriesForInjection(processed, cfg.recallLimit, queryText);
-      const resourceTypes = [...new Set(traceSearches
-        .map((search) => search.resourceType)
-        .filter((resourceType): resourceType is RecallResourceType => resourceType !== "archive"))];
       const recordTrace = (injectedMemories: FindResultItem[], injectedCount: number, estimatedTokens?: number) => {
         params.traceRecorder?.record({
           schemaVersion: "1.0",
@@ -624,7 +632,7 @@ export async function buildLongTermMemoryRecallContext(params: {
           agentId,
           source: "auto_recall",
           operationType: "semantic_find",
-          resourceTypes: resourceTypes.length > 0 ? resourceTypes : ["user"],
+          resourceTypes: searchPlan.resourceTypes,
           trigger: {
             rawUserTextPreview: params.rawUserTextPreview,
             ...boundTraceQuery(queryText, cfg.traceRecallQueryMaxChars),

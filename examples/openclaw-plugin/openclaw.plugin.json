@@ -150,6 +150,12 @@
       "help": "Include resources (viking://resources) in auto-recall and default memory_recall search. Enables account-level shared knowledge retrieval.",
       "advanced": true
     },
+    "recallTargetTypes": {
+      "label": "Recall Target Types",
+      "placeholder": "user,agent",
+      "help": "Comma-separated auto-recall and default memory_recall targets: user, agent, session, resource. Replaces recallResources for new configs.",
+      "advanced": true
+    },
     "recallLimit": {
       "label": "Recall Limit",
       "placeholder": "6",
@@ -311,6 +317,25 @@
       },
       "recallResources": {
         "type": "boolean"
+      },
+      "recallTargetTypes": {
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "resource",
+                "session",
+                "user",
+                "agent"
+              ]
+            }
+          }
+        ]
       },
       "recallLimit": {
         "type": "number"

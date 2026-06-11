@@ -71,6 +71,8 @@ export type MemoryOpenVikingConfig = {
   traceRecallIncludeContentByDefault?: boolean;
   /** Whether raw user text preview may be persisted. Default false. */
   traceRecallIncludeRawUserPreview?: boolean;
+  /** Auto-recall target resource types. Empty means the backward-compatible memory recall set. */
+  recallTargetTypes?: Array<"resource" | "session" | "user" | "agent"> | string;
   /** Agent-visible add_resource tool is disabled by default; manual /add-resource remains available. */
   enableAddResourceTool?: boolean;
   /** Agent-visible tool allowlist. Supports exact tool names or groups such as "memory" and "resource_query". */
@@ -118,6 +120,9 @@ const DEFAULT_TRACE_RECALL_MAX_RESULTS_PER_SEARCH = 20;
 const DEFAULT_TRACE_RECALL_PREVIEW_CHARS = 240;
 const DEFAULT_TRACE_RECALL_QUERY_MAX_CHARS = 4000;
 const DEFAULT_TRACE_RECALL_QUERY_MAX_DAYS = 14;
+const ALLOWED_RECALL_TARGET_TYPES = ["resource", "session", "user", "agent"] as const;
+const DEFAULT_RECALL_TARGET_TYPES = ["user", "agent"] as const;
+type RecallTargetType = typeof ALLOWED_RECALL_TARGET_TYPES[number];
 export const OPENVIKING_ADD_RESOURCE_TOOL_NAME = "add_resource" as const;
 export const OPENVIKING_DEFAULT_ENABLED_TOOL_NAMES = [
   "add_skill",
@@ -235,6 +240,35 @@ function toStringArray(value: unknown, fallback: string[]): string[] {
 
 function toIntegerInRange(value: unknown, fallback: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, Math.floor(toNumber(value, fallback))));
+}
+
+function normalizeRecallTargetTypes(value: unknown, includeResources = false): RecallTargetType[] {
+  const entries = toStringArray(value, [...DEFAULT_RECALL_TARGET_TYPES]);
+  const seen = new Set<RecallTargetType>();
+  const normalized: RecallTargetType[] = [];
+  const unknown: string[] = [];
+
+  for (const entry of entries) {
+    if ((ALLOWED_RECALL_TARGET_TYPES as readonly string[]).includes(entry)) {
+      const typed = entry as RecallTargetType;
+      if (!seen.has(typed)) {
+        seen.add(typed);
+        normalized.push(typed);
+      }
+    } else {
+      unknown.push(entry);
+    }
+  }
+
+  if (unknown.length > 0) {
+    throw new Error(`openviking recallTargetTypes contains unknown resource types: ${unknown.join(", ")}`);
+  }
+
+  const result = normalized.length > 0 ? normalized : [...DEFAULT_RECALL_TARGET_TYPES];
+  if (includeResources && !seen.has("resource")) {
+    result.push("resource");
+  }
+  return result;
 }
 
 function toRecord(value: unknown): Record<string, unknown> {
@@ -377,6 +411,7 @@ export const memoryOpenVikingConfigSchema = {
         "traceRecallQueryMaxDays",
         "traceRecallIncludeContentByDefault",
         "traceRecallIncludeRawUserPreview",
+        "recallTargetTypes",
         "enableAddResourceTool",
         "enabledTools",
         "disabledTools",
@@ -427,6 +462,11 @@ export const memoryOpenVikingConfigSchema = {
         ),
       ),
     );
+    const recallResources = cfg.recallResources === true || envFlag("OPENVIKING_RECALL_RESOURCES");
+    const recallTargetTypes = normalizeRecallTargetTypes(
+      cfg.recallTargetTypes,
+      !("recallTargetTypes" in cfg) && recallResources,
+    );
     const { enabledTools, disabledTools } = normalizeEnabledTools(cfg);
 
     return {
@@ -450,7 +490,7 @@ export const memoryOpenVikingConfigSchema = {
         1000,
         Math.min(300_000, Math.floor(toNumber(cfg.autoRecallTimeoutMs, DEFAULT_AUTO_RECALL_TIMEOUT_MS))),
       ),
-      recallResources: cfg.recallResources === true || envFlag("OPENVIKING_RECALL_RESOURCES"),
+      recallResources,
       recallLimit: Math.max(1, Math.floor(toNumber(cfg.recallLimit, DEFAULT_RECALL_LIMIT))),
       recallScoreThreshold: Math.min(
         1,
@@ -542,6 +582,7 @@ export const memoryOpenVikingConfigSchema = {
       ),
       traceRecallIncludeContentByDefault: cfg.traceRecallIncludeContentByDefault === true,
       traceRecallIncludeRawUserPreview: cfg.traceRecallIncludeRawUserPreview === true,
+      recallTargetTypes,
       enableAddResourceTool: cfg.enableAddResourceTool === true,
       enabledTools,
       disabledTools,
@@ -651,6 +692,12 @@ export const memoryOpenVikingConfigSchema = {
     recallResources: {
       label: "Recall Resources",
       help: "Include resources (viking://resources) in auto-recall and default memory_recall search. Enables account-level shared knowledge retrieval.",
+      advanced: true,
+    },
+    recallTargetTypes: {
+      label: "Recall Target Types",
+      placeholder: "user,agent",
+      help: "Comma-separated auto-recall and default memory_recall targets: user, agent, session, resource. Replaces recallResources for new configs.",
       advanced: true,
     },
     recallLimit: {
