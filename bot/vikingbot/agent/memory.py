@@ -177,7 +177,7 @@ class MemoryStore:
                 query=current_message,
                 user_ids=user_ids,
                 peer_ids=search_peer_ids,
-                limit=10,
+                limit=30,
             )
             if not result:
                 return ""
