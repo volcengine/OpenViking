@@ -5,6 +5,16 @@
 - L1（overview）: 关键决策和总结
 - L2（messages）: 完整消息
 
+会话存储在当前用户命名空间下：
+
+```text
+viking://user/{user_id}/sessions/{session_id}
+```
+
+Session API 按认证用户作用域访问会话，并返回 canonical user session URI。
+基于 URI 的 API 也可以接受向后兼容的 `viking://session/{session_id}` 别名，
+该别名会在同一个用户上下文中解析。
+
 ## API 参考
 
 ### create_session()
@@ -85,6 +95,7 @@ ov session new
   "status": "ok",
   "result": {
     "session_id": "a1b2c3d4",
+    "uri": "viking://user/alice/sessions/a1b2c3d4",
     "user": {
       "account_id": "default",
       "user_id": "alice"
@@ -152,12 +163,12 @@ ov session list
   "result": [
     {
       "session_id": "a1b2c3d4",
-      "uri": "viking://session/alice/a1b2c3d4",
+      "uri": "viking://user/alice/sessions/a1b2c3d4",
       "is_dir": true
     },
     {
       "session_id": "e5f6g7h8",
-      "uri": "viking://session/alice/e5f6g7h8",
+      "uri": "viking://user/alice/sessions/e5f6g7h8",
       "is_dir": true
     }
   ],
@@ -965,7 +976,7 @@ ov session commit a1b2c3d4
     "session_id": "a1b2c3d4",
     "status": "accepted",
     "task_id": "uuid-xxx",
-    "archive_uri": "viking://session/alice/a1b2c3d4/history/archive_001",
+    "archive_uri": "viking://user/alice/sessions/a1b2c3d4/history/archive_001",
     "archived": true
   }
 }
@@ -1087,7 +1098,7 @@ print(f"Status: {task['status']}")
     "status": "completed",
     "result": {
       "session_id": "a1b2c3d4",
-      "archive_uri": "viking://session/alice/a1b2c3d4/history/archive_001",
+      "archive_uri": "viking://user/alice/sessions/a1b2c3d4/history/archive_001",
       "memories_extracted": {
         "profile": 1,
         "preferences": 2,
@@ -1175,7 +1186,7 @@ curl -X GET "http://localhost:1933/api/v1/tasks?task_type=session_commit&status=
 
 | 属性 | 类型 | 说明 |
 |------|------|------|
-| uri | str | 会话 Viking URI（`viking://session/{session_id}/`） |
+| uri | str | 会话 Viking URI（`viking://user/{user_id}/sessions/{session_id}/`） |
 | messages | List[Message] | 会话中的当前消息 |
 | stats | SessionStats | 会话统计信息 |
 | summary | str | 压缩摘要 |
@@ -1186,7 +1197,7 @@ curl -X GET "http://localhost:1933/api/v1/tasks?task_type=session_commit&status=
 ## 会话存储结构
 
 ```
-viking://session/{user_id}/{session_id}/
+viking://user/{user_id}/sessions/{session_id}/
 ├── .abstract.md              # L0：会话概览
 ├── .overview.md              # L1：关键决策
 ├── .meta.json                # 元数据
@@ -1213,7 +1224,7 @@ viking://session/{user_id}/{session_id}/
 
 ```json
 {
-  "archive_uri": "viking://session/{session_id}/history/archive_001",
+  "archive_uri": "viking://user/{user_id}/sessions/{session_id}/history/archive_001",
   "extracted_at": "2026-04-21T10:00:00Z",
   "operations": {
     "adds": [

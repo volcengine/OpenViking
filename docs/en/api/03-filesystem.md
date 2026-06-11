@@ -136,7 +136,7 @@ Read L2 full content.
 **Notes**
 
 - `read()` accepts file URIs only. Passing an existing directory URI returns `INVALID_ARGUMENT` (`400`), not `NOT_FOUND`. This error carries a structured `details` payload — `details.expected` is `"file"`, `details.actual` is `"directory"`, and `details.resource` is the offending URI (present on the HTTP path) — so clients can detect a file-vs-directory mismatch programmatically (for example, fall back to `list`) instead of string-matching the message.
-- Public URI parameters accept `resources`, `user`, `agent`, and `session` scopes. Internal scopes such as `temp` and `queue` return `INVALID_URI`.
+- Public URI parameters accept `resources` and `user` scopes. For session files, use `viking://user/{user_id}/sessions/{session_id}` or the backward-compatible `viking://session/{session_id}` alias. Internal scopes such as `temp` and `queue` return `INVALID_URI`.
 
 **Python SDK (Embedded / HTTP)**
 
@@ -1148,12 +1148,12 @@ Imports a `.ovpack` file to a specified location for restoring or migrating data
 - The API no longer accepts `vectorize` or `force`.
 - `vector_mode=auto` restores a compatible dense snapshot when present, otherwise recomputes vectors. `recompute` always ignores package vectors. `require` fails unless a compatible dense snapshot is present.
 - Dense snapshot compatibility checks compare embedding provider, model, input mode, query/document parameters, and dimensions.
-- Session imports restore session files and do not trigger vectorization.
+- Session files are part of the user namespace (`viking://user/{user_id}/sessions/...`) and do not trigger vectorization.
 - `on_conflict=fail` returns a structured `409 CONFLICT` when the target root already exists.
 - `on_conflict=overwrite` replaces the existing target root. `on_conflict=skip` keeps the existing target root and returns it without writing package contents. `skip` is root-level, not file-level.
 - Packages without a manifest are rejected by default because they cannot provide content integrity guarantees.
 - Packages with manifest entries are rejected if content files or directories are missing, extra files or directories are present, file sizes differ, per-file `sha256` differs, or `content_sha256` is missing or differs.
-- Packages whose manifest `format_version` is not the current supported version are rejected.
+- Packages whose manifest `format_version` is not the current supported version (`3`) are rejected.
 - `.abstract.md` and `.overview.md` are restored as semantic sidecars. `.relations.json` and OVPack internals are excluded.
 - Manifest `context_type`, when present in index scalar metadata, must match the final import path semantics.
 - Top-level scope packages such as `viking://resources/` must be imported to `viking://`.
@@ -1248,8 +1248,9 @@ ov import ./exports/my-project.ovpack viking://resources/imported/ --vector-mode
 ### backup_ovpack
 
 Back up public scope roots as a restore-only `.ovpack` file. The backup includes
-`resources`, `user`, `agent`, and `session`; it excludes internal runtime data
-such as `temp` and `queue`. Set `include_vectors=true` to include compatible
+`resources` and `user`; sessions are included through the user namespace under
+`user/{user_id}/sessions`. It excludes internal runtime data such as `temp` and
+`queue`. Set `include_vectors=true` to include compatible
 pure-dense vector snapshots; hybrid index types reject vector snapshot export.
 
 ```
@@ -1277,7 +1278,8 @@ ov backup ./backups/openviking.ovpack --include-vectors
 
 Restore a backup package created by `backup_ovpack` to the original public scope
 roots. Regular import rejects backup packages. Vector handling follows
-`vector_mode`; session files are restored without vectorization.
+`vector_mode`; session files under the user namespace are restored without
+vectorization.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|

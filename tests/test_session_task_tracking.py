@@ -10,6 +10,7 @@ import httpx
 import pytest_asyncio
 
 from openviking import AsyncOpenViking
+from openviking.core.namespace import canonical_session_uri
 from openviking.server.app import create_app
 from openviking.server.config import ServerConfig
 from openviking.server.dependencies import set_service
@@ -72,7 +73,7 @@ def _make_tracked_commit(behavior="instant", result_overrides=None, gate=None, s
             account_id=_ctx.account_id,
             user_id=_ctx.user.user_id,
         )
-        archive_uri = f"viking://session/test/{_sid}/history/archive_001"
+        archive_uri = f"{canonical_session_uri(_ctx, _sid)}/history/archive_001"
 
         async def _background():
             await tracker.start(task.task_id, account_id=_ctx.account_id, user_id=_ctx.user.user_id)

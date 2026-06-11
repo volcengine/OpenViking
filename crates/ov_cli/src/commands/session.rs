@@ -63,9 +63,6 @@ fn render_session_get_for_table(value: &Value) -> Option<String> {
     lines.push(String::new());
     lines.push(theme::heading("Identity").bold().to_string());
     push_optional_row(&mut lines, "created by", object.get("created_by_user_id"));
-    if let Some(users) = object.get("participant_user_ids") {
-        push_row(&mut lines, "participants", &format_list(users));
-    }
     if let Some(user) = object.get("user").and_then(Value::as_object) {
         push_row(&mut lines, "active user", &format_identity(user));
     }
@@ -157,18 +154,6 @@ fn pad_label(label: &str, width: usize) -> String {
     } else {
         format!("{}{}", label, " ".repeat(width - label.len()))
     }
-}
-
-fn format_list(value: &Value) -> String {
-    if let Some(items) = value.as_array() {
-        return items
-            .iter()
-            .map(format_json_value)
-            .filter(|value| !value.is_empty() && value != "null")
-            .collect::<Vec<_>>()
-            .join(", ");
-    }
-    format_json_value(value)
 }
 
 fn format_identity(object: &serde_json::Map<String, Value>) -> String {
@@ -477,7 +462,6 @@ mod tests {
             "created_at": "2026-05-26T09:53:03.661Z",
             "updated_at": "2026-05-26T10:00:07.603Z",
             "created_by_user_id": "haozhe",
-            "participant_user_ids": ["haozhe"],
             "message_count": 0,
             "commit_count": 1,
             "memories_extracted": {

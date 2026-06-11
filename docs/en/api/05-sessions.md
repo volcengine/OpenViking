@@ -5,6 +5,16 @@ Sessions manage conversation state, track context usage, and extract long-term m
 - L1 (overview): Key decisions
 - L2 (messages): Complete messages
 
+Sessions are stored under the current user's namespace:
+
+```text
+viking://user/{user_id}/sessions/{session_id}
+```
+
+Session APIs are scoped to the authenticated user and return canonical user
+session URIs. URI-based APIs may also accept the backward-compatible
+`viking://session/{session_id}` alias, resolved in the same user context.
+
 ## API Reference
 
 ### create_session()
@@ -85,6 +95,7 @@ ov session new
   "status": "ok",
   "result": {
     "session_id": "a1b2c3d4",
+    "uri": "viking://user/alice/sessions/a1b2c3d4",
     "user": {
       "account_id": "default",
       "user_id": "alice"
@@ -152,12 +163,12 @@ ov session list
   "result": [
     {
       "session_id": "a1b2c3d4",
-      "uri": "viking://session/alice/a1b2c3d4",
+      "uri": "viking://user/alice/sessions/a1b2c3d4",
       "is_dir": true
     },
     {
       "session_id": "e5f6g7h8",
-      "uri": "viking://session/alice/e5f6g7h8",
+      "uri": "viking://user/alice/sessions/e5f6g7h8",
       "is_dir": true
     }
   ],
@@ -965,7 +976,7 @@ ov session commit a1b2c3d4
     "session_id": "a1b2c3d4",
     "status": "accepted",
     "task_id": "uuid-xxx",
-    "archive_uri": "viking://session/alice/a1b2c3d4/history/archive_001",
+    "archive_uri": "viking://user/alice/sessions/a1b2c3d4/history/archive_001",
     "archived": true
   }
 }
@@ -1087,7 +1098,7 @@ print(f"Status: {task['status']}")
     "status": "completed",
     "result": {
       "session_id": "a1b2c3d4",
-      "archive_uri": "viking://session/alice/a1b2c3d4/history/archive_001",
+      "archive_uri": "viking://user/alice/sessions/a1b2c3d4/history/archive_001",
       "memories_extracted": {
         "profile": 1,
         "preferences": 2,
@@ -1177,7 +1188,7 @@ curl -X GET "http://localhost:1933/api/v1/tasks?task_type=session_commit&status=
 
 | Property | Type | Description |
 |----------|------|-------------|
-| uri | str | Session Viking URI (`viking://session/{session_id}/`) |
+| uri | str | Session Viking URI (`viking://user/{user_id}/sessions/{session_id}/`) |
 | messages | List[Message] | Current messages in the session |
 | stats | SessionStats | Session statistics |
 | summary | str | Compression summary |
@@ -1188,7 +1199,7 @@ curl -X GET "http://localhost:1933/api/v1/tasks?task_type=session_commit&status=
 ## Session Storage Structure
 
 ```
-viking://session/{user_id}/{session_id}/
+viking://user/{user_id}/sessions/{session_id}/
 +-- .abstract.md              # L0: Session overview
 +-- .overview.md              # L1: Key decisions
 +-- messages.jsonl            # Current messages
@@ -1215,7 +1226,7 @@ Each commit writes a `memory_diff.json` to the archive directory, recording all 
 
 ```json
 {
-  "archive_uri": "viking://session/{session_id}/history/archive_001",
+  "archive_uri": "viking://user/{user_id}/sessions/{session_id}/history/archive_001",
   "extracted_at": "2026-04-21T10:00:00Z",
   "operations": {
     "adds": [

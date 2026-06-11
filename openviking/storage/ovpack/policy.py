@@ -18,11 +18,10 @@ from openviking.storage.ovpack.format import (
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.utils.uri import VikingURI
 
-PUBLIC_SCOPES = ("resources", "user", "session")
+PUBLIC_SCOPES = ("resources", "user")
 IMPORTABLE_SCOPES = frozenset(PUBLIC_SCOPES)
-STRUCTURED_IMPORT_SCOPES = frozenset({"user", "session"})
+STRUCTURED_IMPORT_SCOPES = frozenset({"user"})
 EXCLUDED_FILENAMES = frozenset({".relations.json"})
-NON_VECTOR_SCOPES = frozenset({"session"})
 
 
 def is_excluded_rel_path(rel_path: str) -> bool:

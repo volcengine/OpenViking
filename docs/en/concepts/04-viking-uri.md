@@ -9,7 +9,7 @@ viking://{scope}/{path}
 ```
 
 - **scheme**: Always `viking`
-- **scope**: Top-level namespace (`resources`, `user`, `agent`, `session`; `temp` and `queue` are internal)
+- **scope**: Top-level namespace (`resources`, `user`; `temp`, `queue`, and `upload` are internal)
 - **path**: Resource path within the scope
 
 ## Scopes
@@ -17,16 +17,17 @@ viking://{scope}/{path}
 | Scope | Description | Lifecycle | Visibility |
 |-------|-------------|-----------|------------|
 | **resources** | Independent resources | Long-term | Global |
-| **user** | User-level data | Long-term | Global |
-| **agent** | Agent-level data | Long-term | Global |
-| **session** | Session-level data | Session lifetime | Current session |
+| **user** | User-level data, including sessions | Long-term / session lifetime | Current user |
 | **queue** | Processing queue | Temporary | Internal |
 | **temp** | Temporary files | During parsing | Internal |
+| **upload** | Temporary upload files | Temporary | Internal |
 
-Public API and CLI filesystem/content operations accept only the public scopes:
-`resources`, `user`, `agent`, and `session` (plus the root URI `viking://`).
-`temp` and `queue` are internal implementation scopes and cannot be addressed
-directly through public API URI parameters.
+Public API and CLI filesystem/content operations accept the public scopes
+`resources` and `user` (plus the root URI `viking://`). `session` is retained
+as a backward-compatible alias for user session paths; new session data lives
+under `viking://user/{user_id}/sessions`.
+`agent` is deprecated. `temp`, `queue`, and `upload` are internal implementation
+scopes and cannot be addressed directly through public API URI parameters.
 
 ## Initial Directory Structure
 
@@ -34,33 +35,19 @@ Moving away from traditional flat database thinking, all context is organized as
 
 ```
 viking://
-├── session/{session_id}/
-│   ├── .abstract.md          # L0: One-line session summary
-│   ├── .overview.md          # L1: Session overview
-│   ├── .meta.json            # Session metadata
-│   ├── messages.json         # Structured message storage
-│   ├── checkpoints/          # Version snapshots
-│   ├── summaries/            # Compression summary history
-│   └── .relations.json       # Relations table
-│
 ├── user/
-│   ├── .abstract.md          # L0: Content summary
-│   ├── .overview.md          # User profile
-│   └── memories/             # User memory storage
-│       ├── .overview.md      # Memory overview
-│       ├── preferences/      # User preferences
-│       ├── entities/         # Entity memories
-│       └── events/           # Event records
-│
-├── agent/
-│   ├── .abstract.md          # L0: Content summary
-│   ├── .overview.md          # Agent overview
-│   ├── memories/             # Agent learning memories
-│   │   ├── .overview.md
-│   │   ├── cases/            # Cases
-│   │   └── patterns/         # Patterns
-│   ├── instructions/         # Agent instructions
-│   └── skills/               # Skills directory
+│   └── {user_id}/
+│       ├── profile.md        # User profile
+│       ├── memories/         # User memory storage
+│       ├── skills/           # User skills
+│       └── sessions/         # User session storage
+│           └── {session_id}/
+│               ├── .abstract.md
+│               ├── .overview.md
+│               ├── .meta.json
+│               ├── messages.jsonl
+│               ├── tools/
+│               └── history/
 │
 └── resources/{project}/      # Resource workspace
 ```
@@ -104,11 +91,16 @@ OpenViking expands it internally to explicit namespace paths such as
 ### Session Data
 
 ```
-viking://session/{session_id}/                # Session root
-viking://session/{session_id}/messages/       # Session messages
-viking://session/{session_id}/tools/          # Tool executions
-viking://session/{session_id}/history/        # Archived history
+viking://user/{user_id}/sessions/{session_id}/          # Session root
+viking://user/{user_id}/sessions/{session_id}/messages  # Session messages
+viking://user/{user_id}/sessions/{session_id}/tools     # Tool executions
+viking://user/{user_id}/sessions/{session_id}/history   # Archived history
+viking://user/sessions/{session_id}/                    # Current-user short form
 ```
+
+`viking://session/{session_id}` is accepted as a backward-compatible alias for
+the current user's session path. It is not a separate storage root for new
+session data.
 
 ## Path Variables
 
@@ -202,8 +194,8 @@ viking://
 │       ├── entities/             # Each independent
 │       └── events/               # Each independent
 │
-└── session/{user_space}/{session_id}/
-    ├── messages/
+└── user/{user_id}/sessions/{session_id}/
+    ├── messages.jsonl
     ├── tools/
     └── history/
 ```

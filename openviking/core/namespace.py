@@ -12,6 +12,7 @@ _USER_SHORTHAND_SEGMENTS = {
     "memories",
     "peers",
     "privacy",
+    "sessions",
     ".abstract.md",
     ".overview.md",
     "profile.md",
@@ -164,16 +165,35 @@ def user_space_fragment(ctx: RequestContext) -> str:
     return ctx.user.user_id
 
 
-def canonical_session_uri(session_id: Optional[str] = None) -> str:
+def canonical_session_root(ctx: RequestContext) -> str:
+    return f"{canonical_user_root(ctx)}/sessions"
+
+
+def canonical_session_uri(ctx: RequestContext, session_id: Optional[str] = None) -> str:
+    root = canonical_session_root(ctx)
+    if not session_id:
+        return root
+    return f"{root}/{session_id}"
+
+
+def legacy_session_uri(session_id: Optional[str] = None) -> str:
     if not session_id:
         return "viking://session"
     return f"viking://session/{session_id}"
 
 
+def is_session_uri(uri: str) -> bool:
+    parts = uri_parts(uri)
+    if parts[:1] == ["session"]:
+        return True
+    if parts[:2] == ["user", "sessions"]:
+        return True
+    return len(parts) >= 3 and parts[0] == "user" and parts[2] == "sessions"
+
+
 def visible_roots(ctx: RequestContext) -> list[str]:
     return [
         "viking://resources",
-        "viking://session",
         canonical_user_root(ctx),
     ]
 
@@ -196,7 +216,7 @@ def resolve_uri(
     if scope == "agent":
         raise NamespaceShapeError("viking://agent is deprecated; use viking://user instead")
     if scope == "session":
-        return _resolve_session_uri(parts)
+        return _resolve_session_uri(parts, ctx=ctx, require_canonical=require_canonical)
     if scope in {"resources", "temp", "queue", "upload"}:
         return ResolvedNamespace(uri=VikingURI.normalize(uri).rstrip("/"), scope=scope)
     return ResolvedNamespace(uri=VikingURI.normalize(uri).rstrip("/"), scope=scope)
@@ -215,7 +235,7 @@ def is_accessible(uri: str, ctx: RequestContext) -> bool:
     except NamespaceShapeError:
         return False
 
-    if target.scope in {"", "resources", "temp", "queue", "session"}:
+    if target.scope in {"", "resources", "temp", "queue"}:
         return True
     if target.scope == "upload":
         return False
@@ -317,7 +337,34 @@ def _resolve_user_uri(
     )
 
 
-def _resolve_session_uri(parts: list[str]) -> ResolvedNamespace:
+def _resolve_session_uri(
+    parts: list[str],
+    ctx: Optional[RequestContext],
+    *,
+    require_canonical: bool,
+) -> ResolvedNamespace:
+    normalized = "viking://" + "/".join(parts)
+    if require_canonical:
+        raise NamespaceShapeError(f"Legacy session URI is not allowed here: {normalized}")
+    if ctx is not None:
+        if len(parts) == 1:
+            return ResolvedNamespace(
+                uri=canonical_session_uri(ctx),
+                scope="user",
+                owner_user_id=ctx.user.user_id,
+                is_container=True,
+            )
+        session_id = parts[1]
+        suffix = parts[2:]
+        canonical = canonical_session_uri(ctx, session_id)
+        if suffix:
+            canonical = f"{canonical}/{'/'.join(suffix)}"
+        return ResolvedNamespace(
+            uri=canonical,
+            scope="user",
+            owner_user_id=ctx.user.user_id,
+        )
+
     if len(parts) == 1:
         return ResolvedNamespace(uri="viking://session", scope="session", is_container=True)
     session_id = parts[1]

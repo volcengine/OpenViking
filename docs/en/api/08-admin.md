@@ -262,7 +262,7 @@ Delete a workspace and all associated users and data (ROOT only).
 
 **Processing Flow:**
 1. Verify requester has ROOT privileges
-2. Cascade delete all AGFS data for the account (user/, agent/, session/, resources/)
+2. Cascade delete all AGFS data for the account (`user/` and `resources/`; sessions live under `user/`)
 3. Cascade delete all vector DB records for the account
 4. Finally delete account metadata and all user keys
 

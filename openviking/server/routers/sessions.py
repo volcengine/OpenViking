@@ -178,6 +178,7 @@ async def create_session(
         )
         return {
             "session_id": session.session_id,
+            "uri": session.uri,
             "user": session.user.to_dict(),
         }
 
@@ -214,6 +215,7 @@ async def get_session(
     except NotFoundError:
         return error_response("NOT_FOUND", f"Session {session_id} not found")
     result = session.meta.to_dict()
+    result["uri"] = session.uri
     result["user"] = session.user.to_dict()
     result["pending_tokens"] = int(session.meta.pending_tokens or 0)
     return Response(status="ok", result=result)

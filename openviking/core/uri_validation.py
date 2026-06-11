@@ -9,7 +9,7 @@ from openviking_cli.exceptions import InvalidURIError
 from openviking_cli.utils.uri import VikingURI
 
 _URI_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
-_PUBLIC_API_SCOPES = frozenset({"", *VikingURI.PUBLIC_SCOPES})
+_PUBLIC_API_SCOPES = frozenset({"", *VikingURI.PUBLIC_SCOPES, *VikingURI.LEGACY_SCOPES})
 _ALL_API_SCOPES = frozenset({"", *VikingURI.VISITABLE_SCOPES})
 
 
