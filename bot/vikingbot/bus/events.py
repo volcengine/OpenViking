@@ -35,6 +35,7 @@ class InboundMessage:
     session_key: SessionKey
     timestamp: datetime = field(default_factory=datetime.now)
     sender_name: str | None = None
+    sender_is_peer: bool = False
     need_reply: bool = True
     media: list[str] = field(default_factory=list)  # Media URLs
     metadata: dict[str, Any] = field(default_factory=dict)  # Channel-specific data

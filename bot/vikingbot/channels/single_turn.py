@@ -46,12 +46,14 @@ class SingleTurnChannel(BaseChannel):
         markdown: bool = True,
         eval: bool = False,
         sender: str | None = None,
+        sender_is_peer: bool = False,
     ):
         super().__init__(config, bus, workspace_path)
         self.message = message
         self.session_id = session_id
         self.markdown = markdown
         self.sender = sender
+        self.sender_is_peer = sender_is_peer
         self._response_received = asyncio.Event()
         self._last_response: str | None = None
         self._eval = eval
@@ -76,6 +78,7 @@ class SingleTurnChannel(BaseChannel):
                 chat_id=self.session_id,
             ),
             sender_id=sender_id,
+            sender_is_peer=self.sender_is_peer,
             content=self.message,
             metadata=metadata,
         )

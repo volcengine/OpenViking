@@ -307,6 +307,7 @@ def _run_vikingbot_chat_with_config(
         new_cmd.extend(["-m", "/new", "-e"])
         if sender_peer_id:
             new_cmd.extend(["--sender", sender_peer_id])
+            new_cmd.append("--sender-is-peer")
         if question_id:
             new_cmd.extend(["--session", question_id])
         if memory_peer_ids:
@@ -332,6 +333,7 @@ def _run_vikingbot_chat_with_config(
     # 添加 --sender 作为当前 peer；--session 作为会话隔离标识。
     if sender_peer_id:
         cmd.extend(["--sender", sender_peer_id])
+        cmd.append("--sender-is-peer")
     if question_id:
         cmd.extend(["--session", question_id])
     # 添加 --memory-peer 参数，指定当前 User 下需要一并检索的额外 peer 记忆

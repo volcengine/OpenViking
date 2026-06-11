@@ -633,6 +633,7 @@ def prepare_agent_channel(
     sender: str | None = None,
     memory_peer: list[str] | None = None,
     memory_user: list[str] | None = None,
+    sender_is_peer: bool = False,
 ):
     """Prepare channel for agent command."""
     from vikingbot.channels.chat import ChatChannel, ChatChannelConfig
@@ -654,6 +655,7 @@ def prepare_agent_channel(
             markdown=markdown,
             eval=eval,
             sender=sender,
+            sender_is_peer=sender_is_peer,
         )
         channels.add_channel(channel)
     else:
@@ -670,6 +672,7 @@ def prepare_agent_channel(
             markdown=markdown,
             logs=logs,
             sender=sender,
+            sender_is_peer=sender_is_peer,
         )
         channels.add_channel(channel)
 
@@ -694,6 +697,11 @@ def chat(
     ),
     sender: str = typer.Option(
         None, "--sender", help="Sender ID, same usage as feishu channel sender"
+    ),
+    sender_is_peer: bool = typer.Option(
+        False,
+        "--sender-is-peer",
+        help="Treat sender as an OpenViking peer under the current user.",
     ),
     memory_peer: list[str] = typer.Option(
         None, "--memory-peer", help="Peer ID for memory retrieval (can be repeated)"
@@ -748,6 +756,7 @@ def chat(
         sender,
         memory_peer,
         memory_user,
+        sender_is_peer,
     )
     agent_loop = prepare_agent_loop(
         config, bus, session_manager, cron, quiet=is_single_turn, eval=eval

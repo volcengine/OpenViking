@@ -67,8 +67,8 @@ class OVFileTool(Tool, ABC):
     def _memory_peer_ids(self, tool_context: ToolContext) -> list[str]:
         return self._dedupe_strings(
             [
-                getattr(tool_context, "sender_id", None),
                 *(getattr(tool_context, "memory_peer_ids", None) or []),
+                getattr(tool_context, "sender_id", None),
             ]
         )
 

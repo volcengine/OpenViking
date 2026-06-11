@@ -47,12 +47,14 @@ class ChatChannel(BaseChannel):
         markdown: bool = True,
         logs: bool = False,
         sender: str | None = None,
+        sender_is_peer: bool = False,
     ):
         super().__init__(config, bus, workspace_path)
         self.session_id = session_id
         self.markdown = markdown
         self.logs = logs
         self.sender = sender
+        self.sender_is_peer = sender_is_peer
         self._response_received = asyncio.Event()
         self._last_response: str | None = None
 
@@ -170,6 +172,7 @@ class ChatChannel(BaseChannel):
                         chat_id=self.session_id,
                     ),
                     sender_id=sender_id,
+                    sender_is_peer=self.sender_is_peer,
                     content=user_input,
                     metadata=metadata,
                 )

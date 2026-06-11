@@ -198,6 +198,8 @@ def test_run_vikingbot_chat_non_group_builds_session_without_peer(monkeypatch, t
     assert calls[1].count("--memory-peer") == 0
     assert "--sender" not in calls[0]
     assert "--sender" not in calls[1]
+    assert "--sender-is-peer" not in calls[0]
+    assert "--sender-is-peer" not in calls[1]
     assert calls[0][calls[0].index("--session") + 1] == "sample_0_qa0"
     assert calls[1][calls[1].index("--session") + 1] == "sample_0_qa0"
 

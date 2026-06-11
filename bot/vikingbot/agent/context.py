@@ -35,6 +35,7 @@ class ContextBuilder:
         sandbox_manager: SandboxManager | None = None,
         sender_id: str = None,
         sender_name: str = None,
+        sender_is_peer: bool = False,
         is_group_chat: bool = False,
         eval: bool = False,
         openviking_connection: dict[str, Any] | None = None,
@@ -46,6 +47,7 @@ class ContextBuilder:
         self._skills = None
         self._sender_id = sender_id
         self._sender_name = sender_name
+        self._sender_is_peer = sender_is_peer
         self._is_group_chat = is_group_chat
         self._eval = eval
         self._openviking_connection = openviking_connection
@@ -153,39 +155,44 @@ Skills with available="false" need dependencies installed first - you can try in
 
 {skills_summary}""")
 
-        # Viking peer profile (only if ov tools are enabled). In the current
-        # OpenViking identity model, the bot API key owns the User, and the
-        # message sender is represented as a peer under that User.
         if ov_tools_enable:
-            # Fetch current sender's peer profile
             start = _time.time()
-            profile = await self.memory.get_viking_peer_profile(
-                workspace_id=workspace_id,
-                peer_id=self._sender_id,
-                openviking_connection=self._openviking_connection,
-            )
-            cost = round(_time.time() - start, 2)
-            logger.info(
-                f"[READ_PEER_PROFILE]: cost {cost}s, profile={profile[:50] if profile else 'None'}"
-            )
-            if profile:
-                parts.append(f"## Current sender's information\n{profile}")
-
-            # Fetch additional peer profiles from profile_user_list and from the
-            # peers used for memory retrieval. The profile_user_list config name
-            # is retained for compatibility with older deployments.
-            additional_peer_ids = self._dedupe_ids(
-                [*(profile_user_list or []), *(memory_peer_ids or [])],
-                exclude={self._sender_id} if self._sender_id else set(),
-            )
-            if additional_peer_ids:
-                profiles = await self.memory.get_viking_peer_profiles(
+            if self._sender_is_peer:
+                profile = await self.memory.get_viking_peer_profile(
                     workspace_id=workspace_id,
-                    peer_ids=additional_peer_ids,
+                    peer_id=self._sender_id,
                     openviking_connection=self._openviking_connection,
                 )
-                if profiles:
-                    parts.append(profiles)
+            else:
+                profile = await self.memory.get_viking_user_profile(
+                    workspace_id=workspace_id,
+                    user_id=self._sender_id,
+                    openviking_connection=self._openviking_connection,
+                )
+            cost = round(_time.time() - start, 2)
+            logger.info(
+                f"[READ_PROFILE]: scope={'peer' if self._sender_is_peer else 'self'}, "
+                f"cost {cost}s, profile={profile[:50] if profile else 'None'}"
+            )
+            if profile:
+                parts.append(f"## Current user's information\n{profile}")
+
+            if self._sender_is_peer:
+                # Fetch additional peer profiles from profile_user_list and from the
+                # peers used for memory retrieval. The profile_user_list config name
+                # is retained for compatibility with older deployments.
+                additional_peer_ids = self._dedupe_ids(
+                    [*(profile_user_list or []), *(memory_peer_ids or [])],
+                    exclude={self._sender_id} if self._sender_id else set(),
+                )
+                if additional_peer_ids:
+                    profiles = await self.memory.get_viking_peer_profiles(
+                        workspace_id=workspace_id,
+                        peer_ids=additional_peer_ids,
+                        openviking_connection=self._openviking_connection,
+                    )
+                    if profiles:
+                        parts.append(profiles)
 
         return "\n\n---\n\n".join(parts)
 
@@ -258,14 +265,13 @@ Skills with available="false" need dependencies installed first - you can try in
                         parts.append(f"## Relevant Agent Experience\n{exp_memory}")
             else:
                 start = _time.time()
-                # Default recall runs under the configured/request OpenViking user.
-                # sender_id is passed separately as peer identity.
-                search_peer_ids = memory_peer_ids if memory_peer_ids else None
+                search_peer_ids = self._dedupe_ids(
+                    [*(memory_peer_ids or []), *([sender_id] if self._sender_is_peer else [])]
+                )
                 viking_memory = await self.memory.get_viking_memory_context(
                     current_message=current_message,
                     workspace_id=workspace_id,
-                    sender_id=sender_id,
-                    peer_ids=search_peer_ids,
+                    peer_ids=search_peer_ids if search_peer_ids else None,
                     user_ids=memory_owner_user_ids if memory_owner_user_ids else None,
                     openviking_connection=self._openviking_connection,
                 )

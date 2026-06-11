@@ -335,6 +335,10 @@ class AgentLoop:
         agents_config = getattr(self.config, "agents", None)
         return bool(agents_config and getattr(agents_config, "session_context_enabled", False))
 
+    @staticmethod
+    def _sender_for_openviking(msg: InboundMessage) -> str | None:
+        return msg.sender_id if getattr(msg, "sender_is_peer", False) else None
+
     def _get_ov_workspace_id(self, session_key: SessionKey) -> str:
         if self.sandbox_manager:
             return self.sandbox_manager.to_workspace_id(session_key)
@@ -939,6 +943,8 @@ class AgentLoop:
             # Handle slash commands
             is_group_chat = msg.metadata.get("chat_type") == "group" if msg.metadata else False
             if is_group_chat:
+                msg.sender_is_peer = True
+            if is_group_chat:
                 cmd = msg.content
                 cmd = re.sub(r"^\[[^\]]+\]:\s*", "", cmd)
                 cmd = cmd.replace(f"@{msg.sender_id}", "").strip().lower()
@@ -1031,13 +1037,21 @@ class AgentLoop:
             if self.config.mode == BotMode.DEBUG:
                 # In debug mode, only record message to session, no processing or reply
                 await self._evaluate_previous_response_outcome(session, msg)
-                session.add_message("user", msg.content, sender_id=msg.sender_id)
+                session.add_message(
+                    "user",
+                    msg.content,
+                    sender_id=self._sender_for_openviking(msg),
+                )
                 await self.sessions.save(session)
                 return None
 
             if not msg.need_reply:
                 await self._evaluate_previous_response_outcome(session, msg)
-                session.add_message("user", msg.content, sender_id=msg.sender_id)
+                session.add_message(
+                    "user",
+                    msg.content,
+                    sender_id=self._sender_for_openviking(msg),
+                )
                 await self.sessions.save(session)
                 return OutboundMessage(
                     session_key=msg.session_key,
@@ -1072,6 +1086,7 @@ class AgentLoop:
                 sandbox_manager=self.sandbox_manager,
                 sender_id=msg.sender_id,
                 sender_name=msg.sender_name,
+                sender_is_peer=msg.sender_is_peer,
                 is_group_chat=is_group_chat,
                 eval=self._eval,
                 openviking_connection=openviking_connection,
@@ -1117,7 +1132,7 @@ class AgentLoop:
                     messages=messages,
                     session_key=session_key,
                     publish_events=True,
-                    sender_id=msg.sender_id,
+                    sender_id=self._sender_for_openviking(msg),
                     ov_tools_enable=ov_tools_enable,
                     memory_peer_ids=memory_peer_ids,
                     memory_owner_user_ids=memory_owner_user_ids,
@@ -1145,14 +1160,17 @@ class AgentLoop:
 
             is_heartbeat = bool(msg.metadata.get(HEARTBEAT_METADATA_KEY))
             if not (is_heartbeat and is_heartbeat_noop_response(final_content)):
-                session.add_message("user", msg.content, sender_id=msg.sender_id)
+                session.add_message(
+                    "user",
+                    msg.content,
+                    sender_id=self._sender_for_openviking(msg),
+                )
                 session.add_message(
                     "assistant",
                     final_content,
                     response_id=response_id,
                     tools_used=tools_used if tools_used else None,
                     token_usage=token_usage,
-                    sender_id=msg.sender_id,
                     reasoning_content=final_reasoning_content,
                 )
                 session.metadata.setdefault("response_facts", {})[response_id] = response_completed
