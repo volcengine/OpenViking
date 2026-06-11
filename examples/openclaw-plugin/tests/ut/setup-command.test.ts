@@ -17,3 +17,19 @@ describe("openviking setup agent prefix validation", () => {
     },
   );
 });
+
+describe("openviking setup recall target type parsing", () => {
+  it("normalizes comma-separated target types", () => {
+    expect(__test__.normalizeSetupRecallTargetTypes("resource, user\nagent, user")).toEqual([
+      "resource",
+      "user",
+      "agent",
+    ]);
+  });
+
+  it("rejects unknown target types", () => {
+    expect(() => __test__.normalizeSetupRecallTargetTypes("user,project")).toThrow(
+      "unknown resource types: project",
+    );
+  });
+});

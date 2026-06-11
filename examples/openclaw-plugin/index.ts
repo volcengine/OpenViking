@@ -46,6 +46,7 @@ import {
 import {
   RecallTraceRecorder,
   normalizeResourceTypes,
+  resolveRecallSearchPlan,
   type RecallResourceType,
   type RecallTraceEntry,
   type RecallTraceQuery,
@@ -1655,6 +1656,9 @@ const contextEnginePlugin = {
           targetUri: Type.Optional(
             Type.String({ description: "Search scope URI (default: plugin config)" }),
           ),
+          resourceTypes: Type.Optional(
+            Type.Array(Type.String({ description: "resource, session, user, or agent; used when targetUri is omitted" })),
+          ),
         }),
         async execute(_toolCallId: string, params: Record<string, unknown>) {
           if (isBypassedSession(ctx)) {
@@ -1675,6 +1679,9 @@ const contextEnginePlugin = {
             typeof (params as { targetUri?: string }).targetUri === "string"
               ? (params as { targetUri: string }).targetUri
               : undefined;
+          const requestedResourceTypes = Object.prototype.hasOwnProperty.call(params, "resourceTypes")
+            ? (params as { resourceTypes?: unknown }).resourceTypes
+            : undefined;
           const requestLimit = Math.max(limit * 4, 20);
 
           const recallClient = await getClient();
@@ -1717,41 +1724,36 @@ const contextEnginePlugin = {
               results: traceResults,
             }];
           } else {
-            const searchPromises: Promise<FindResult>[] = [
+            const searchPlan = resolveRecallSearchPlan(requestedResourceTypes ?? cfg.recallTargetTypes, {
+              ovSessionId: session.ovSessionId,
+              agentId: session.agentId,
+            });
+            memoryRecallSearches.push(...searchPlan.skipped.map((skipped) => ({
+              resourceType: skipped.resourceType,
+              limit: requestLimit,
+              scoreThreshold,
+              durationMs: 0,
+              total: 0,
+              results: [],
+              error: skipped.reason,
+            })));
+            const searchPromises = searchPlan.searches.map((search) =>
               recallClient.find(
                 query,
                 {
-                  targetUri: "viking://user/memories",
+                  targetUri: search.targetUri,
                   limit: requestLimit,
                   scoreThreshold: 0,
                   peerId,
                 },
                 session.agentId,
               ),
-            ];
-            if (cfg.recallResources) {
-              searchPromises.push(
-                recallClient.find(
-                  query,
-                  {
-                    targetUri: "viking://resources",
-                    limit: requestLimit,
-                    scoreThreshold: 0,
-                    peerId,
-                  },
-                  session.agentId,
-                ),
-              );
-            }
+            );
             const settled = await Promise.allSettled(searchPromises);
             const allMemories: FindResultItem[] = [];
-            const targetUris = [
-              "viking://user/memories",
-              ...(cfg.recallResources ? ["viking://resources"] : []),
-            ];
             for (let index = 0; index < settled.length; index += 1) {
               const s = settled[index]!;
-              const targetUriResolved = targetUris[index] ?? "viking://user/memories";
+              const search = searchPlan.searches[index]!;
               if (s.status === "fulfilled") {
                 allMemories.push(...(s.value.memories ?? []), ...(s.value.resources ?? []));
                 const traceResults = [
@@ -1760,9 +1762,9 @@ const contextEnginePlugin = {
                   ...(s.value.skills ?? []).map((item) => toTraceResult(item, "skill")),
                 ].slice(0, cfg.traceRecallMaxResultsPerSearch);
                 memoryRecallSearches.push({
-                  resourceType: inferRecallResourceType(targetUriResolved) ?? "user",
-                  targetUriInput: targetUriResolved,
-                  targetUriResolved,
+                  resourceType: search.resourceType,
+                  targetUriInput: search.targetUri,
+                  targetUriResolved: search.targetUri,
                   limit: requestLimit,
                   scoreThreshold,
                   durationMs: 0,
@@ -1771,9 +1773,9 @@ const contextEnginePlugin = {
                 });
               } else {
                 memoryRecallSearches.push({
-                  resourceType: inferRecallResourceType(targetUriResolved) ?? "user",
-                  targetUriInput: targetUriResolved,
-                  targetUriResolved,
+                  resourceType: search.resourceType,
+                  targetUriInput: search.targetUri,
+                  targetUriResolved: search.targetUri,
                   limit: requestLimit,
                   scoreThreshold,
                   durationMs: 0,
