@@ -1,3 +1,5 @@
+import { homedir } from "node:os";
+
 import { getEnv } from "./runtime-utils.js";
 
 export type MemoryOpenVikingConfig = {
@@ -45,6 +47,30 @@ export type MemoryOpenVikingConfig = {
   emitStandardDiagnostics?: boolean;
   /** When true, log tenant routing for semantic find and session writes (messages/commit) to the plugin logger. */
   logFindRequests?: boolean;
+  /** Enable recall trace recording. Default false. */
+  traceRecall?: boolean;
+  /** Persist recall traces to local JSONL files. Default false. */
+  traceRecallPersist?: boolean;
+  /** Directory for JSONL recall trace files. */
+  traceRecallDir?: string;
+  /** Number of days to retain persisted trace files. */
+  traceRecallRetentionDays?: number;
+  /** Number of recent persisted days to preload on startup. */
+  traceRecallLoadRecentDays?: number;
+  /** Maximum in-memory recall trace entries. */
+  traceRecallMaxEntries?: number;
+  /** Maximum candidate results stored per search in trace. */
+  traceRecallMaxResultsPerSearch?: number;
+  /** Preview character limit for persisted trace summaries. */
+  traceRecallPreviewChars?: number;
+  /** Maximum query characters preserved in trace. */
+  traceRecallQueryMaxChars?: number;
+  /** Maximum days to scan when querying persisted traces without explicit time bounds. */
+  traceRecallQueryMaxDays?: number;
+  /** Whether trace queries include full content by default. */
+  traceRecallIncludeContentByDefault?: boolean;
+  /** Whether raw user text preview may be persisted. Default false. */
+  traceRecallIncludeRawUserPreview?: boolean;
   /** Agent-visible add_resource tool is disabled by default; manual /add-resource remains available. */
   enableAddResourceTool?: boolean;
   /** Agent-visible tool allowlist. Supports exact tool names or groups such as "memory" and "resource_query". */
@@ -84,6 +110,14 @@ const DEFAULT_BYPASS_SESSION_PATTERNS: string[] = [];
 const DEFAULT_EMIT_STANDARD_DIAGNOSTICS = false;
 const DEFAULT_PEER_ROLE = "none" as const;
 const DEFAULT_PEER_PREFIX = "";
+const DEFAULT_TRACE_RECALL_DIR = "~/.openclaw/openviking/recall-traces";
+const DEFAULT_TRACE_RECALL_RETENTION_DAYS = 14;
+const DEFAULT_TRACE_RECALL_LOAD_RECENT_DAYS = 2;
+const DEFAULT_TRACE_RECALL_MAX_ENTRIES = 1000;
+const DEFAULT_TRACE_RECALL_MAX_RESULTS_PER_SEARCH = 20;
+const DEFAULT_TRACE_RECALL_PREVIEW_CHARS = 240;
+const DEFAULT_TRACE_RECALL_QUERY_MAX_CHARS = 4000;
+const DEFAULT_TRACE_RECALL_QUERY_MAX_DAYS = 14;
 export const OPENVIKING_ADD_RESOURCE_TOOL_NAME = "add_resource" as const;
 export const OPENVIKING_DEFAULT_ENABLED_TOOL_NAMES = [
   "add_skill",
@@ -158,6 +192,16 @@ function resolveEnvVars(value: string): string {
   });
 }
 
+function expandHomeDir(value: string): string {
+  if (value === "~") {
+    return homedir();
+  }
+  if (value.startsWith("~/")) {
+    return `${homedir()}${value.slice(1)}`;
+  }
+  return value;
+}
+
 function toNumber(value: unknown, fallback: number): number {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
@@ -185,6 +229,10 @@ function toStringArray(value: unknown, fallback: string[]): string[] {
       .filter(Boolean);
   }
   return fallback;
+}
+
+function toIntegerInRange(value: unknown, fallback: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, Math.floor(toNumber(value, fallback))));
 }
 
 function toRecord(value: unknown): Record<string, unknown> {
@@ -315,6 +363,18 @@ export const memoryOpenVikingConfigSchema = {
         "ingestReplyAssistIgnoreSessionPatterns",
         "emitStandardDiagnostics",
         "logFindRequests",
+        "traceRecall",
+        "traceRecallPersist",
+        "traceRecallDir",
+        "traceRecallRetentionDays",
+        "traceRecallLoadRecentDays",
+        "traceRecallMaxEntries",
+        "traceRecallMaxResultsPerSearch",
+        "traceRecallPreviewChars",
+        "traceRecallQueryMaxChars",
+        "traceRecallQueryMaxDays",
+        "traceRecallIncludeContentByDefault",
+        "traceRecallIncludeRawUserPreview",
         "enableAddResourceTool",
         "enabledTools",
         "disabledTools",
@@ -430,6 +490,56 @@ export const memoryOpenVikingConfigSchema = {
         cfg.logFindRequests === true ||
         envFlag("OPENVIKING_LOG_ROUTING") ||
         envFlag("OPENVIKING_DEBUG"),
+      traceRecall: cfg.traceRecall === true,
+      traceRecallPersist: cfg.traceRecallPersist === true,
+      traceRecallDir:
+        typeof cfg.traceRecallDir === "string" && cfg.traceRecallDir.trim()
+          ? expandHomeDir(cfg.traceRecallDir.trim())
+          : expandHomeDir(DEFAULT_TRACE_RECALL_DIR),
+      traceRecallRetentionDays: toIntegerInRange(
+        cfg.traceRecallRetentionDays,
+        DEFAULT_TRACE_RECALL_RETENTION_DAYS,
+        1,
+        3650,
+      ),
+      traceRecallLoadRecentDays: toIntegerInRange(
+        cfg.traceRecallLoadRecentDays,
+        DEFAULT_TRACE_RECALL_LOAD_RECENT_DAYS,
+        0,
+        3650,
+      ),
+      traceRecallMaxEntries: toIntegerInRange(
+        cfg.traceRecallMaxEntries,
+        DEFAULT_TRACE_RECALL_MAX_ENTRIES,
+        1,
+        1_000_000,
+      ),
+      traceRecallMaxResultsPerSearch: toIntegerInRange(
+        cfg.traceRecallMaxResultsPerSearch,
+        DEFAULT_TRACE_RECALL_MAX_RESULTS_PER_SEARCH,
+        1,
+        1_000,
+      ),
+      traceRecallPreviewChars: toIntegerInRange(
+        cfg.traceRecallPreviewChars,
+        DEFAULT_TRACE_RECALL_PREVIEW_CHARS,
+        20,
+        10_000,
+      ),
+      traceRecallQueryMaxChars: toIntegerInRange(
+        cfg.traceRecallQueryMaxChars,
+        DEFAULT_TRACE_RECALL_QUERY_MAX_CHARS,
+        200,
+        200_000,
+      ),
+      traceRecallQueryMaxDays: toIntegerInRange(
+        cfg.traceRecallQueryMaxDays,
+        DEFAULT_TRACE_RECALL_QUERY_MAX_DAYS,
+        1,
+        3650,
+      ),
+      traceRecallIncludeContentByDefault: cfg.traceRecallIncludeContentByDefault === true,
+      traceRecallIncludeRawUserPreview: cfg.traceRecallIncludeRawUserPreview === true,
       enableAddResourceTool: cfg.enableAddResourceTool === true,
       enabledTools,
       disabledTools,
@@ -604,6 +714,24 @@ export const memoryOpenVikingConfigSchema = {
       help:
         "Log tenant routing: POST /api/v1/search/find (query, target_uri) and session POST .../messages + .../commit (sessionId, X-OpenViking-*). Never logs apiKey. " +
         "Or set env OPENVIKING_LOG_ROUTING=1 or OPENVIKING_DEBUG=1 (no JSON edit).",
+      advanced: true,
+    },
+    traceRecall: {
+      label: "Trace Recall",
+      placeholder: "false",
+      help: "Enable best-effort recall trace recording for debugging recall and search decisions.",
+      advanced: true,
+    },
+    traceRecallPersist: {
+      label: "Persist Recall Trace",
+      placeholder: "false",
+      help: "Persist recall traces to local JSONL files. Disabled by default.",
+      advanced: true,
+    },
+    traceRecallDir: {
+      label: "Recall Trace Directory",
+      placeholder: DEFAULT_TRACE_RECALL_DIR,
+      help: "Directory for persisted recall trace JSONL files.",
       advanced: true,
     },
     enableAddResourceTool: {
