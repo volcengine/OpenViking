@@ -951,6 +951,23 @@ describe("Tool: add_resource, add_skill, and ov_search (registration)", () => {
     expect(props).toHaveProperty("limit");
   });
 
+  it("registers ov_recall_trace tool and command", () => {
+    const { tools, commands, api } = setupPlugin(undefined, { traceRecall: true });
+    contextEnginePlugin.register(api as any);
+
+    const tool = tools.get("ov_recall_trace");
+    expect(tool).toBeDefined();
+    expect(tool!.description).toContain("recall trace");
+    const props = (tool!.parameters as any).properties;
+    expect(props).toHaveProperty("traceId");
+    expect(props).toHaveProperty("source");
+    expect(props).toHaveProperty("resourceTypes");
+    expect(commands.get("ov-recall-trace")).toMatchObject({
+      acceptsArgs: true,
+      description: "Query OpenViking recall trace records.",
+    });
+  });
+
   it("applies enabledTools and disabledTools to runtime tool registration", () => {
     const { tools, api } = setupPlugin(undefined, {
       enabledTools: ["resource_query", "memory"],
@@ -1076,6 +1093,59 @@ describe("Tool: ov_search (behavioral)", () => {
       .map((call) => JSON.parse(String((call[1] as RequestInit).body)));
     expect(findBodies.some((body) => body.target_uri === "viking://resources")).toBe(true);
     expect(findBodies.some((body) => String(body.target_uri).startsWith("viking://user/") && String(body.target_uri).endsWith("/skills"))).toBe(true);
+  });
+
+  it("records ov_search recall traces when traceRecall is enabled", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/api/v1/system/status")) {
+        return okResponse({ user: "default" });
+      }
+      if (url.includes("/api/v1/fs/ls")) {
+        return okResponse([]);
+      }
+      if (url.endsWith("/api/v1/search/find")) {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        return okResponse({
+          memories: [],
+          resources: [
+            {
+              context_type: "resource",
+              uri: body.target_uri === "viking://resources"
+                ? "viking://resources/trace-design.md"
+                : "viking://user/skills/trace-skill",
+              level: 2,
+              score: 0.88,
+              category: "",
+              match_reason: "",
+              relations: [],
+              abstract: "Trace design note",
+              overview: null,
+            },
+          ],
+          skills: [],
+          total: 1,
+        });
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { tools, api } = setupPlugin(undefined, { traceRecall: true });
+    contextEnginePlugin.register(api as any);
+    await tools.get("ov_search")!.execute("tc-search", { query: "trace design" });
+
+    const result = await tools.get("ov_recall_trace")!.execute("tc-trace", {
+      source: "ov_search",
+      limit: 10,
+    }) as ToolResult;
+
+    expect(result.content[0]!.text).toContain("ov_search");
+    expect(result.content[0]!.text).toContain("trace design");
+    expect(result.details.count).toBe(1);
+    const entry = (result.details.entries as any[])[0];
+    expect(entry.source).toBe("ov_search");
+    expect(entry.searches.length).toBeGreaterThan(0);
+    expect(entry.selected[0].uri).toContain("trace");
   });
 
   it("passes assistant peer_id to ov_search when peer_role is assistant", async () => {
@@ -1422,16 +1492,16 @@ describe("OpenViking ov_search command parsing", () => {
 });
 
 describe("Plugin registration", () => {
-  it("registers all 13 default tools", () => {
+  it("registers all 14 default tools", () => {
     const { api } = setupPlugin();
     contextEnginePlugin.register(api as any);
-    expect(api.registerTool).toHaveBeenCalledTimes(13);
+    expect(api.registerTool).toHaveBeenCalledTimes(14);
   });
 
-  it("registers all 14 tools when add_resource is explicitly enabled", () => {
+  it("registers all 15 tools when add_resource is explicitly enabled", () => {
     const { api } = setupPlugin(undefined, { enableAddResourceTool: true });
     contextEnginePlugin.register(api as any);
-    expect(api.registerTool).toHaveBeenCalledTimes(14);
+    expect(api.registerTool).toHaveBeenCalledTimes(15);
   });
 
   it("registers add and search commands", () => {
@@ -1448,6 +1518,10 @@ describe("Plugin registration", () => {
     expect(commands.get("ov-search")).toMatchObject({
       acceptsArgs: true,
       description: "Search OpenViking resources and skills.",
+    });
+    expect(commands.get("ov-recall-trace")).toMatchObject({
+      acceptsArgs: true,
+      description: "Query OpenViking recall trace records.",
     });
   });
 

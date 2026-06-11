@@ -43,6 +43,15 @@ import {
   estimateTokenCount,
   prepareRecallQuery,
 } from "./auto-recall.js";
+import {
+  RecallTraceRecorder,
+  normalizeResourceTypes,
+  type RecallResourceType,
+  type RecallTraceEntry,
+  type RecallTraceQuery,
+  type RecallTraceResult,
+  type RecallTraceSource,
+} from "./recall-trace.js";
 export {
   buildMemoryLines,
   buildMemoryLinesWithBudget,
@@ -175,6 +184,20 @@ type OVReadInput = {
 
 type OVMultiReadInput = {
   uris: string[];
+};
+
+type RecallTraceToolInput = {
+  turn?: "latest" | "all";
+  traceId?: string;
+  sessionId?: string;
+  sessionKey?: string;
+  ovSessionId?: string;
+  source?: RecallTraceSource;
+  resourceTypes?: RecallResourceType[] | string;
+  since?: number;
+  until?: number;
+  includeContent?: boolean;
+  limit?: number;
 };
 
 type ToolResultRef = {
@@ -379,6 +402,43 @@ function getNumberFlag(flags: Map<string, string | boolean>, name: string): numb
 
 function getBoolFlag(flags: Map<string, string | boolean>, name: string): boolean {
   return flags.get(name) === true;
+}
+
+function createTraceId(source: RecallTraceSource): string {
+  return `${source}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function previewText(value: string | undefined | null, maxChars: number): string | undefined {
+  const normalized = typeof value === "string" ? value.trim().replace(/\s+/g, " ") : "";
+  if (!normalized) {
+    return undefined;
+  }
+  return normalized.length > maxChars ? normalized.slice(0, maxChars) : normalized;
+}
+
+function boundTraceQuery(query: string, maxChars: number): { query: string; queryTruncated?: boolean } {
+  return query.length <= maxChars
+    ? { query }
+    : { query: query.slice(0, maxChars), queryTruncated: true };
+}
+
+function inferRecallResourceType(uri: string | undefined): RecallResourceType | undefined {
+  if (!uri) {
+    return undefined;
+  }
+  if (uri.startsWith("viking://resources")) {
+    return "resource";
+  }
+  if (uri.startsWith("viking://session/") || uri.includes("/sessions/")) {
+    return "session";
+  }
+  if (uri.startsWith("viking://agent/")) {
+    return "agent";
+  }
+  if (uri.startsWith("viking://user/")) {
+    return "user";
+  }
+  return undefined;
 }
 
 function extractToolSenderId(ctx: unknown): string | undefined {
@@ -681,6 +741,17 @@ const contextEnginePlugin = {
 
     const getClient = (): Promise<OpenVikingClient> => clientPromise;
 
+    const traceRecorder = cfg.traceRecall
+      ? new RecallTraceRecorder({
+          memoryMaxEntries: cfg.traceRecallMaxEntries,
+          persist: cfg.traceRecallPersist,
+          traceDir: cfg.traceRecallDir,
+          includeRawUserPreview: cfg.traceRecallIncludeRawUserPreview,
+          retentionDays: cfg.traceRecallRetentionDays,
+          queryMaxDays: cfg.traceRecallQueryMaxDays,
+        })
+      : undefined;
+
     const isBypassedSession = (ctx?: {
       sessionId?: string;
       sessionKey?: string;
@@ -737,6 +808,100 @@ const contextEnginePlugin = {
         personPeerId: toPeerId(extractToolSenderId(ctx)),
         assistantPeerId: session.agentId,
       });
+
+    const toTraceResult = (
+      item: FindResultItem,
+      resultType: RecallTraceResult["resultType"],
+    ): RecallTraceResult => ({
+      uri: item.uri,
+      resourceType: inferRecallResourceType(item.uri),
+      category: item.category,
+      score: item.score,
+      level: item.level,
+      abstractPreview: previewText(item.abstract || item.overview, cfg.traceRecallPreviewChars),
+      resultType,
+    });
+
+    const parseRecallTraceInput = (
+      input: RecallTraceToolInput,
+      ctx: { sessionId?: string; sessionKey?: string; ovSessionId?: string },
+    ): RecallTraceQuery => ({
+      turn: input.turn === "all" ? "all" : "latest",
+      traceId: typeof input.traceId === "string" && input.traceId.trim() ? input.traceId.trim() : undefined,
+      sessionId: typeof input.sessionId === "string" && input.sessionId.trim() ? input.sessionId.trim() : ctx.sessionId,
+      sessionKey: typeof input.sessionKey === "string" && input.sessionKey.trim() ? input.sessionKey.trim() : undefined,
+      ovSessionId: typeof input.ovSessionId === "string" && input.ovSessionId.trim() ? input.ovSessionId.trim() : ctx.ovSessionId,
+      source: typeof input.source === "string" && input.source.trim() ? input.source as RecallTraceSource : undefined,
+      resourceTypes: input.resourceTypes ? normalizeResourceTypes(input.resourceTypes) : undefined,
+      since: typeof input.since === "number" ? input.since : undefined,
+      until: typeof input.until === "number" ? input.until : undefined,
+      limit: getPositiveInteger(input.limit, 20),
+    });
+
+    const shouldIncludeTraceContent = (input?: { includeContent?: boolean }): boolean =>
+      input?.includeContent === true || cfg.traceRecallIncludeContentByDefault;
+
+    const enrichTraceEntriesWithContent = async (
+      result: { entries: RecallTraceEntry[]; lookupLayer: "memory" | "persistent"; warnings: string[] },
+      includeContent: boolean,
+      agentId?: string,
+    ): Promise<{ entries: RecallTraceEntry[]; lookupLayer: "memory" | "persistent"; warnings: string[] }> => {
+      if (!includeContent || result.entries.length === 0) {
+        return result;
+      }
+      const client = await getClient();
+      const warnings = [...result.warnings];
+      const entries = await Promise.all(result.entries.map(async (entry) => {
+        const selected = await Promise.all(entry.selected.map(async (item) => {
+          try {
+            const content = await client.read(item.uri, agentId);
+            return {
+              ...item,
+              contentPreview: previewText(content, cfg.recallMaxContentChars),
+            };
+          } catch (err) {
+            const readError = err instanceof Error ? err.message : String(err);
+            warnings.push(`Failed to read recall trace content ${item.uri}: ${readError}`);
+            return { ...item, readError };
+          }
+        }));
+        return { ...entry, selected };
+      }));
+      return { ...result, entries, warnings };
+    };
+
+    const queryRecallTraces = async (
+      input: RecallTraceToolInput,
+      session: PluginSessionRouting,
+    ): Promise<{ entries: RecallTraceEntry[]; lookupLayer: "memory" | "persistent"; warnings: string[] }> => {
+      const base = traceRecorder
+        ? await traceRecorder.queryWithFallback(parseRecallTraceInput(input, session))
+        : { entries: [], lookupLayer: "memory" as const, warnings: ["traceRecall is disabled"] };
+      return enrichTraceEntriesWithContent(base, shouldIncludeTraceContent(input), session.agentId);
+    };
+
+    const formatRecallTraceText = (result: { entries: RecallTraceEntry[]; lookupLayer: string; warnings: string[] }): string => {
+      if (result.entries.length === 0) {
+        return `No OpenViking recall traces found (lookupLayer=${result.lookupLayer}).`;
+      }
+      const blocks = result.entries.map((entry, index) => {
+        const selected = entry.selected.slice(0, 8)
+          .map((item) => `  - ${item.uri}${item.score !== undefined ? ` (${(clampScore(item.score) * 100).toFixed(0)}%)` : ""}`)
+          .join("\n");
+        return [
+          `## Trace ${index + 1}: ${entry.source}`,
+          `traceId: ${entry.traceId}`,
+          `query: ${entry.trigger.query}`,
+          `resourceTypes: ${entry.resourceTypes.join(", ")}`,
+          `stats: candidates=${entry.stats.candidateCount}, selected=${entry.stats.selectedCount}, injected=${entry.stats.injectedCount}`,
+          selected ? `selected:\n${selected}` : "selected: (none)",
+        ].join("\n");
+      });
+      const warnings = result.warnings.length > 0
+        ? `\n\nWarnings:\n${result.warnings.map((warning) => `- ${warning}`).join("\n")}`
+        : "";
+      return `${blocks.join("\n\n")}${warnings}`;
+    };
 
     const formatResourceImportText = (result: AddResourceResult): string => {
       const root = result.root_uri ? ` ${result.root_uri}` : "";
@@ -919,6 +1084,7 @@ const contextEnginePlugin = {
       input: OVSearchInput,
       agentId?: string,
       peerId?: string,
+      traceCtx?: PluginSessionRouting,
     ) => {
       const query = input.query.trim();
       if (!query) {
@@ -927,12 +1093,59 @@ const contextEnginePlugin = {
       const limit = Math.max(1, Math.floor(input.limit ?? 10));
       const client = await getClient();
       let result: FindResult;
+      const searches: RecallTraceEntry["searches"] = [];
       if (input.uri) {
+        const started = Date.now();
         result = await client.find(query, { targetUri: input.uri, limit, peerId }, agentId);
+        const items = [
+          ...(result.memories ?? []).map((item) => toTraceResult(item, "memory")),
+          ...(result.resources ?? []).map((item) => toTraceResult(item, "resource")),
+          ...(result.skills ?? []).map((item) => toTraceResult(item, "skill")),
+        ].slice(0, cfg.traceRecallMaxResultsPerSearch);
+        searches.push({
+          resourceType: inferRecallResourceType(input.uri) ?? "resource",
+          targetUriInput: input.uri,
+          targetUriResolved: input.uri,
+          limit,
+          durationMs: Date.now() - started,
+          total: result.total ?? items.length,
+          results: items,
+        });
       } else {
+        const runSearch = async (targetUri: string): Promise<FindResult> => {
+          const started = Date.now();
+          try {
+            const found = await client.find(query, { targetUri, limit, peerId }, agentId);
+            const items = [
+              ...(found.memories ?? []).map((item) => toTraceResult(item, "memory")),
+              ...(found.resources ?? []).map((item) => toTraceResult(item, "resource")),
+              ...(found.skills ?? []).map((item) => toTraceResult(item, "skill")),
+            ].slice(0, cfg.traceRecallMaxResultsPerSearch);
+            searches.push({
+              resourceType: inferRecallResourceType(targetUri) ?? "resource",
+              targetUriResolved: targetUri,
+              limit,
+              durationMs: Date.now() - started,
+              total: found.total ?? items.length,
+              results: items,
+            });
+            return found;
+          } catch (err) {
+            searches.push({
+              resourceType: inferRecallResourceType(targetUri) ?? "resource",
+              targetUriResolved: targetUri,
+              limit,
+              durationMs: Date.now() - started,
+              total: 0,
+              results: [],
+              error: err instanceof Error ? err.message : String(err),
+            });
+            throw err;
+          }
+        };
         const [resourcesSettled, skillsSettled] = await Promise.allSettled([
-          client.find(query, { targetUri: "viking://resources", limit, peerId }, agentId),
-          client.find(query, { targetUri: "viking://user/skills", limit, peerId }, agentId),
+          runSearch("viking://resources"),
+          runSearch("viking://user/skills"),
         ]);
         const successful: FindResult[] = [];
         if (resourcesSettled.status === "fulfilled") {
@@ -958,6 +1171,54 @@ const contextEnginePlugin = {
         }
         result = mergeFindResults(successful);
       }
+      const selected = [
+        ...(result.memories ?? []).map((item) => ({
+          uri: item.uri,
+          resourceType: inferRecallResourceType(item.uri),
+          category: item.category,
+          score: item.score,
+          abstractPreview: previewText(item.abstract || item.overview, cfg.traceRecallPreviewChars),
+          displayed: true,
+        })),
+        ...(result.resources ?? []).map((item) => ({
+          uri: item.uri,
+          resourceType: inferRecallResourceType(item.uri),
+          category: item.category,
+          score: item.score,
+          abstractPreview: previewText(item.abstract || item.overview, cfg.traceRecallPreviewChars),
+          displayed: true,
+        })),
+        ...(result.skills ?? []).map((item) => ({
+          uri: item.uri,
+          resourceType: inferRecallResourceType(item.uri),
+          category: item.category,
+          score: item.score,
+          abstractPreview: previewText(item.abstract || item.overview, cfg.traceRecallPreviewChars),
+          displayed: true,
+        })),
+      ];
+      await traceRecorder?.recordAndFlush({
+        schemaVersion: "1.0",
+        traceId: createTraceId("ov_search"),
+        ts: Date.now(),
+        sessionId: traceCtx?.sessionId,
+        sessionKey: traceCtx?.sessionKey,
+        ovSessionId: traceCtx?.ovSessionId,
+        agentId,
+        source: "ov_search",
+        operationType: "semantic_find",
+        resourceTypes: [...new Set(searches
+          .map((search) => search.resourceType)
+          .filter((resourceType): resourceType is RecallResourceType => resourceType !== "archive"))],
+        trigger: boundTraceQuery(query, cfg.traceRecallQueryMaxChars),
+        searches,
+        selected,
+        stats: {
+          candidateCount: searches.reduce((sum, search) => sum + search.results.length, 0),
+          selectedCount: selected.length,
+          injectedCount: 0,
+        },
+      });
       return {
         content: [{ type: "text" as const, text: formatOVSearchText(query, input.uri, result) }],
         details: {
@@ -1151,7 +1412,7 @@ const contextEnginePlugin = {
             query: String((params as { query?: unknown }).query ?? ""),
             uri: typeof params.uri === "string" ? params.uri : undefined,
             limit: typeof params.limit === "number" ? params.limit : undefined,
-          }, session.agentId, peerId);
+          }, session.agentId, peerId, session);
         },
       }),
       { name: "ov_search" },
@@ -1288,7 +1549,7 @@ const contextEnginePlugin = {
           const session = resolvePluginSessionRouting(ctx);
           const input = parseOVSearchCommandArgs(ctx.args ?? "");
           const peerId = resolveToolSearchPeerId(ctx, session);
-          const result = await searchOpenViking(input, session.agentId, peerId);
+          const result = await searchOpenViking(input, session.agentId, peerId, session);
           return { text: result.content[0]!.text, details: result.details };
         } catch (err) {
           return { text: `OpenViking search failed: ${err instanceof Error ? err.message : String(err)}` };
@@ -1344,9 +1605,11 @@ const contextEnginePlugin = {
             );
           }
 
-          let result;
+          let result: FindResult;
+          let memoryRecallSearches: RecallTraceEntry["searches"] = [];
           if (targetUri) {
             // 如果指定了目标 URI，只检索该位置
+            const started = Date.now();
             result = await recallClient.find(
               query,
               {
@@ -1357,6 +1620,21 @@ const contextEnginePlugin = {
               },
               session.agentId,
             );
+            const traceResults = [
+              ...(result.memories ?? []).map((item) => toTraceResult(item, "memory")),
+              ...(result.resources ?? []).map((item) => toTraceResult(item, "resource")),
+              ...(result.skills ?? []).map((item) => toTraceResult(item, "skill")),
+            ].slice(0, cfg.traceRecallMaxResultsPerSearch);
+            memoryRecallSearches = [{
+              resourceType: inferRecallResourceType(targetUri) ?? "resource",
+              targetUriInput: targetUri,
+              targetUriResolved: targetUri,
+              limit: requestLimit,
+              scoreThreshold,
+              durationMs: Date.now() - started,
+              total: result.total ?? traceResults.length,
+              results: traceResults,
+            }];
           } else {
             const searchPromises: Promise<FindResult>[] = [
               recallClient.find(
@@ -1396,9 +1674,43 @@ const contextEnginePlugin = {
             }
             const settled = await Promise.allSettled(searchPromises);
             const allMemories: FindResultItem[] = [];
-            for (const s of settled) {
+            const targetUris = [
+              "viking://user/memories",
+              "viking://user/memories",
+              ...(cfg.recallResources ? ["viking://resources"] : []),
+            ];
+            for (let index = 0; index < settled.length; index += 1) {
+              const s = settled[index]!;
+              const targetUriResolved = targetUris[index] ?? "viking://user/memories";
               if (s.status === "fulfilled") {
                 allMemories.push(...(s.value.memories ?? []), ...(s.value.resources ?? []));
+                const traceResults = [
+                  ...(s.value.memories ?? []).map((item) => toTraceResult(item, "memory")),
+                  ...(s.value.resources ?? []).map((item) => toTraceResult(item, "resource")),
+                  ...(s.value.skills ?? []).map((item) => toTraceResult(item, "skill")),
+                ].slice(0, cfg.traceRecallMaxResultsPerSearch);
+                memoryRecallSearches.push({
+                  resourceType: inferRecallResourceType(targetUriResolved) ?? "user",
+                  targetUriInput: targetUriResolved,
+                  targetUriResolved,
+                  limit: requestLimit,
+                  scoreThreshold,
+                  durationMs: 0,
+                  total: s.value.total ?? traceResults.length,
+                  results: traceResults,
+                });
+              } else {
+                memoryRecallSearches.push({
+                  resourceType: inferRecallResourceType(targetUriResolved) ?? "user",
+                  targetUriInput: targetUriResolved,
+                  targetUriResolved,
+                  limit: requestLimit,
+                  scoreThreshold,
+                  durationMs: 0,
+                  total: 0,
+                  results: [],
+                  error: s.reason instanceof Error ? s.reason.message : String(s.reason),
+                });
               }
             }
             const uniqueMemories = allMemories.filter((memory, index, self) =>
@@ -1417,7 +1729,54 @@ const contextEnginePlugin = {
             scoreThreshold,
           });
           const memories = pickMemoriesForInjection(processed, limit, query);
+          const candidateTraceResults = leafOnly
+            .map((item) => toTraceResult(item, inferRecallResourceType(item.uri) === "resource" ? "resource" : "memory"))
+            .slice(0, cfg.traceRecallMaxResultsPerSearch);
+          const traceResourceTypes = [...new Set(
+            (targetUri ? [inferRecallResourceType(targetUri)] : memoryRecallSearches.map((search) => search.resourceType))
+              .filter((resourceType): resourceType is RecallResourceType => Boolean(resourceType) && resourceType !== "archive"),
+          )];
+          const recordMemoryRecallTrace = async (injectedUris: Set<string>) => {
+            await traceRecorder?.recordAndFlush({
+              schemaVersion: "1.0",
+              traceId: createTraceId("memory_recall"),
+              ts: Date.now(),
+              sessionId: session.sessionId,
+              sessionKey: session.sessionKey,
+              ovSessionId: session.ovSessionId,
+              agentId: session.agentId,
+              source: "memory_recall",
+              operationType: "semantic_find",
+              resourceTypes: traceResourceTypes.length > 0 ? traceResourceTypes : ["user"],
+              trigger: boundTraceQuery(query, cfg.traceRecallQueryMaxChars),
+              searches: memoryRecallSearches.length > 0 ? memoryRecallSearches : [{
+                resourceType: inferRecallResourceType(targetUri) ?? "user",
+                targetUriInput: targetUri,
+                targetUriResolved: targetUri ?? "viking://user/memories",
+                limit: requestLimit,
+                scoreThreshold,
+                durationMs: 0,
+                total: result.total ?? leafOnly.length,
+                results: candidateTraceResults,
+              }],
+              selected: memories.map((item) => ({
+                uri: item.uri,
+                resourceType: inferRecallResourceType(item.uri),
+                category: item.category,
+                score: item.score,
+                abstractPreview: previewText(item.abstract || item.overview, cfg.traceRecallPreviewChars),
+                injected: injectedUris.has(item.uri),
+                displayed: injectedUris.has(item.uri),
+              })),
+              stats: {
+                candidateCount: leafOnly.length,
+                selectedCount: memories.length,
+                injectedCount: injectedUris.size,
+              },
+            });
+          };
           if (memories.length === 0) {
+            await recordMemoryRecallTrace(new Set());
             return {
               content: [{ type: "text", text: "No relevant OpenViking memories found." }],
               details: { count: 0, total: result.total ?? 0, scoreThreshold },
@@ -1432,6 +1791,7 @@ const contextEnginePlugin = {
             },
           );
           if (memoryLines.length === 0) {
+            await recordMemoryRecallTrace(new Set());
             return {
               content: [
                 {
@@ -1449,6 +1809,7 @@ const contextEnginePlugin = {
               },
             };
           }
+          await recordMemoryRecallTrace(new Set(memories.slice(0, memoryLines.length).map((item) => item.uri)));
           return {
             content: [
               {
@@ -1469,6 +1830,86 @@ const contextEnginePlugin = {
       }),
       { name: "memory_recall" },
     );
+
+    registerOpenVikingTool(
+      (ctx: ToolContext) => ({
+        name: "ov_recall_trace",
+        label: "Recall Trace (OpenViking)",
+        description: "Query OpenViking recall trace records captured by auto-recall and explicit recall/search tools.",
+        parameters: Type.Object({
+          turn: Type.Optional(Type.String({ description: "latest or all (default: latest)" })),
+          traceId: Type.Optional(Type.String({ description: "Exact trace id" })),
+          sessionId: Type.Optional(Type.String({ description: "OpenClaw session id" })),
+          sessionKey: Type.Optional(Type.String({ description: "OpenClaw session key" })),
+          ovSessionId: Type.Optional(Type.String({ description: "OpenViking session id" })),
+          source: Type.Optional(Type.String({ description: "auto_recall, memory_recall, ov_search, or ov_archive_search" })),
+          resourceTypes: Type.Optional(Type.Array(Type.String({ description: "resource, session, user, or agent" }))),
+          since: Type.Optional(Type.Number({ description: "Unix timestamp lower bound in milliseconds" })),
+          until: Type.Optional(Type.Number({ description: "Unix timestamp upper bound in milliseconds" })),
+          includeContent: Type.Optional(Type.Boolean({ description: "Read selected/displayed URI content previews on demand" })),
+          limit: Type.Optional(Type.Number({ description: "Maximum traces to return (default: 20)" })),
+        }),
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          if (isBypassedSession(ctx)) {
+            return makeBypassedToolResult("ov_recall_trace");
+          }
+          const session = resolvePluginSessionRouting(ctx);
+          const result = await queryRecallTraces(params as RecallTraceToolInput, session);
+          return {
+            content: [{ type: "text" as const, text: formatRecallTraceText(result) }],
+            details: {
+              action: "queried",
+              count: result.entries.length,
+              lookupLayer: result.lookupLayer,
+              warnings: result.warnings,
+              entries: result.entries,
+            },
+          };
+        },
+      }),
+      { name: "ov_recall_trace" },
+    );
+
+    api.registerCommand?.({
+      name: "ov-recall-trace",
+      description: "Query OpenViking recall trace records.",
+      acceptsArgs: true,
+      handler: async (ctx: PluginCommandContext) => {
+        try {
+          if (isBypassedSession(ctx)) {
+            const bypassed = makeBypassedToolResult("ov_recall_trace");
+            return { text: bypassed.content[0]!.text, details: bypassed.details };
+          }
+          const session = resolvePluginSessionRouting(ctx);
+          const flags = parseFlagArgs(ctx.args ?? "").flags;
+          const input: RecallTraceToolInput = {
+            turn: getStringFlag(flags, "turn") as "latest" | "all" | undefined,
+            traceId: getStringFlag(flags, "trace-id"),
+            sessionId: getStringFlag(flags, "session-id"),
+            sessionKey: getStringFlag(flags, "session-key"),
+            ovSessionId: getStringFlag(flags, "ov-session-id"),
+            source: getStringFlag(flags, "source") as RecallTraceSource | undefined,
+            resourceTypes: getStringFlag(flags, "resource-types"),
+            since: getNumberFlag(flags, "since"),
+            until: getNumberFlag(flags, "until"),
+            includeContent: getBoolFlag(flags, "include-content"),
+            limit: getNumberFlag(flags, "limit"),
+          };
+          const result = await queryRecallTraces(input, session);
+          return {
+            text: formatRecallTraceText(result),
+            details: {
+              count: result.entries.length,
+              lookupLayer: result.lookupLayer,
+              warnings: result.warnings,
+              entries: result.entries,
+            },
+          };
+        } catch (err) {
+          return { text: `OpenViking recall trace query failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    });
 
     registerOpenVikingTool(
       (ctx: ToolContext) => ({
@@ -1791,8 +2232,54 @@ const contextEnginePlugin = {
               caseInsensitive: true,
               agentId,
             });
+            const traceResults: RecallTraceResult[] = (result.matches ?? [])
+              .slice(0, cfg.traceRecallMaxResultsPerSearch)
+              .map((match) => ({
+                uri: match.uri,
+                resourceType: "archive",
+                abstractPreview: previewText(match.content, cfg.traceRecallPreviewChars),
+                resultType: "archive_match",
+              }));
+            const recordArchiveTrace = async (displayed: Array<{ uri: string; line: number; content: string }>) => {
+              await traceRecorder?.recordAndFlush({
+                schemaVersion: "1.0",
+                traceId: createTraceId("ov_archive_search"),
+                ts: Date.now(),
+                sessionId: ctx.sessionId,
+                sessionKey: ctx.sessionKey,
+                ovSessionId,
+                agentId,
+                source: "ov_archive_search",
+                operationType: "archive_grep",
+                resourceTypes: ["session"],
+                trigger: boundTraceQuery(query, cfg.traceRecallQueryMaxChars),
+                searches: [{
+                  resourceType: "archive",
+                  targetUriResolved: `viking://session/${ovSessionId}/archives`,
+                  limit: cfg.traceRecallMaxResultsPerSearch,
+                  durationMs: 0,
+                  total: result.matches?.length ?? 0,
+                  results: traceResults,
+                  archiveId,
+                  caseInsensitive: true,
+                }],
+                selected: displayed.map((match) => ({
+                  uri: match.uri,
+                  resourceType: "archive",
+                  line: match.line,
+                  contentPreview: previewText(match.content, cfg.traceRecallPreviewChars),
+                  displayed: true,
+                })),
+                stats: {
+                  candidateCount: result.matches?.length ?? 0,
+                  selectedCount: displayed.length,
+                  injectedCount: 0,
+                },
+              });
+            };
 
             if (!result.matches || result.matches.length === 0) {
+              await recordArchiveTrace([]);
               return {
                 content: [{
                   type: "text",
@@ -1807,6 +2294,7 @@ const contextEnginePlugin = {
             const MAX_MATCHES = 12;
             const MAX_LINE_LEN = 1500;
             const shown = result.matches.slice(0, MAX_MATCHES);
+            await recordArchiveTrace(shown);
             const blocks = shown.map((m, i) => {
               const archiveTag = m.uri.match(/archive_\d+/)?.[0] ?? "unknown";
               const truncated = m.content.length > MAX_LINE_LEN
@@ -2270,6 +2758,7 @@ const contextEnginePlugin = {
           getClient,
           resolveAgentId,
           rememberSessionAgentId,
+          traceRecorder,
         });
         return contextEngineRef;
       });

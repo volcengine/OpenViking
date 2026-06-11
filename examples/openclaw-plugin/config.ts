@@ -126,6 +126,7 @@ export const OPENVIKING_DEFAULT_ENABLED_TOOL_NAMES = [
   "ov_multi_read",
   "ov_list",
   "memory_recall",
+  "ov_recall_trace",
   "memory_store",
   "memory_forget",
   "ov_archive_search",
@@ -145,6 +146,7 @@ export const OPENVIKING_TOOL_GROUPS: Record<string, readonly OpenVikingToolName[
   memory: ["memory_recall", "memory_store", "memory_forget"],
   resource_query: ["ov_search", "ov_read", "ov_multi_read", "ov_list"],
   import: ["add_resource", "add_skill"],
+  recall_trace: ["ov_recall_trace"],
   archive: ["ov_archive_search", "ov_archive_expand"],
   tool_result: [
     "openviking_tool_result_read",
@@ -743,7 +745,7 @@ export const memoryOpenVikingConfigSchema = {
     enabledTools: {
       label: "Enabled Tools",
       placeholder: "default",
-      help: "Agent-visible tool allowlist. Accepts tool names or groups: default, all, memory, resource_query, import, archive, tool_result. add_resource also requires enableAddResourceTool=true.",
+      help: "Agent-visible tool allowlist. Accepts tool names or groups: default, all, memory, resource_query, import, recall_trace, archive, tool_result. add_resource also requires enableAddResourceTool=true.",
       advanced: true,
     },
     disabledTools: {
