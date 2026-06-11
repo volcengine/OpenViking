@@ -156,7 +156,10 @@ class CollectionSchemas:
             "Fields": fields,
             "ScalarIndex": scalar_index,
             "FullText": [
-                {"Field": "content", "Analyzer": {"Tokenizer": "standard"}},
+                {
+                    "Field": "content",
+                    "Analyzer": {"Tokenizer": "standard", "StopWordsFilters": ["symbol"]},
+                },
             ],
         }
 
