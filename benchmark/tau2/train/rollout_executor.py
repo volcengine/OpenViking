@@ -203,10 +203,16 @@ class Tau2RolloutExecutor:
         stage_started_at = time.perf_counter()
         if provider.env is not None:
             try:
+                _append_final_answer_for_tau2_evaluation(provider.env, final_content)
                 reward, evaluation_result = provider.env.env._get_reward()
-            except Exception:
-                reward = None
-                evaluation_result = None
+            except Exception as exc:
+                logger.exception(
+                    "tau2 reward calculation failed case=%s domain=%s task_id=%s",
+                    case.name,
+                    domain,
+                    task_id,
+                )
+                evaluation_result = {"error": str(exc), "type": type(exc).__name__}
         timings.record("reward", stage_started_at)
 
         stage_started_at = time.perf_counter()
@@ -253,6 +259,16 @@ class Tau2RolloutExecutor:
         )
         return rollout
 
+
+
+
+def _append_final_answer_for_tau2_evaluation(provider_env: Any, final_content: str | None) -> None:
+    if not final_content or not str(final_content).strip():
+        return
+    target = getattr(provider_env, "_impl", provider_env)
+    append_message = getattr(target, "append_agent_message", None)
+    if callable(append_message):
+        append_message(str(final_content))
 
 def _build_agent(config_path: str | None, *, max_iterations: int):
     imports = _vikingbot_imports()
@@ -325,6 +341,11 @@ def _build_system_prompt(policy: str, *, keep_default_tools: bool, rollout_langu
         )
     instructions.append(
         "If you need to communicate with the user, you MUST call tool `communicate_with_user`."
+    )
+    instructions.append(
+        "When communicating numbers, prices, reservation IDs, flight numbers, airport codes, "
+        "dates, names, or other values from tool results, include the exact original value "
+        "verbatim even if the surrounding response is in another language."
     )
     instructions.append(
         "When the task is finished or terminated, call tool `done` first and output an ending "

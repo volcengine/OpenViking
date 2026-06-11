@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from uuid import uuid4
 
 try:
     from tau2.gym.gym_agent import AgentGymEnv
@@ -87,6 +88,11 @@ class Tau2BenchEnv:
         self.terminated = self._impl.terminated
         return response
 
+    def append_agent_message(self, content: str) -> None:
+        append_message = getattr(self._impl, "append_agent_message", None)
+        if callable(append_message):
+            append_message(content)
+
 
 class _GymTau2BenchEnv:
     def __init__(self, domain: str, task_id: str):
@@ -167,33 +173,50 @@ class _NativeTau2BenchEnv:
         self._messages = []
 
     def tool_call(self, tool_name: str, arguments: dict) -> str:
-        from tau2.data_model.message import AssistantMessage, ToolCall, UserMessage
+        from tau2.data_model.message import AssistantMessage, ToolCall
 
         if self.terminated:
             return "Task Terminated"
 
         if tool_name == CommunicateWithUser.name:
-            message = UserMessage(role="user", content=arguments["content"])
-            self._messages.append(message)
+            # tau2 evaluates required customer-facing information by scanning
+            # AssistantMessage text content. Record this synthetic communication
+            # as assistant text so the native fallback matches gym trajectories.
+            self._messages.append(
+                AssistantMessage(role="assistant", content=str(arguments["content"]))
+            )
             return (
                 "User simulator is unavailable in this tau2 version; "
                 "continue using tools and final answer."
             )
 
-        tool_call = ToolCall(name=tool_name, arguments=arguments, requestor="assistant")
+        tool_call = ToolCall(
+            id=f"call_{uuid4().hex}",
+            name=tool_name,
+            arguments=arguments,
+            requestor="assistant",
+        )
         assistant_message = AssistantMessage(role="assistant", tool_calls=[tool_call])
         tool_message = self.env.get_response(tool_call)
         self._messages.extend([assistant_message, tool_message])
         return _clean_obs(tool_message.content or "")
 
+    def append_agent_message(self, content: str) -> None:
+        from tau2.data_model.message import AssistantMessage
+
+        if content.strip():
+            self._messages.append(AssistantMessage(role="assistant", content=content))
+
     def _get_reward(self):
         from tau2.data_model.simulation import SimulationRun
         from tau2.utils.utils import get_now
 
+        now = get_now()
         simulation = SimulationRun(
+            id=f"native_tau2_{self.domain}_{self.task_id}_{uuid4().hex}",
             task_id=self.task.id,
-            start_time=get_now(),
-            end_time=get_now(),
+            start_time=now,
+            end_time=now,
             duration=0.0,
             termination_reason="agent_stop",
             reward_info=None,
