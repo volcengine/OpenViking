@@ -99,7 +99,9 @@ class SessionExtractContextProvider(ExtractContextProvider):
         from openviking.session.memory.memory_updater import ExtractContext
 
         if self._extract_context is None:
-            self._extract_context = ExtractContext(self.messages or [])
+            self._extract_context = ExtractContext(
+                self.messages if isinstance(self.messages, list) else []
+            )
         return self._extract_context
 
     def _detect_language(self) -> str:
@@ -180,7 +182,8 @@ from neighboring messages.
         else:
             time_display = session_time_str
 
-        conversation = self._assemble_conversation(self.messages)
+        extract_context = self.get_extract_context()
+        conversation = self._assemble_conversation(extract_context.messages)
 
         return {
             "role": "user",

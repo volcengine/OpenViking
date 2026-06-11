@@ -50,7 +50,7 @@ Agent 会自动完成安装 → 配置 → 重启 → 验证。详见 [INSTALL-A
 
 - **发送内容**：每轮 user/assistant 消息文本（已剥离注入的记忆块和元数据噪音）。
 - **发送去向**：仅发往你配置的 OpenViking 服务（`baseUrl`）。插件本身只与该服务通信；服务端对 embedding、VLM 等模型的调用取决于服务端配置。
-- **存储位置**：所有数据存储在你的 OpenViking 服务上，路径为 `viking://user/*`、`viking://resources/*`、`viking://session/*`。
+- **存储位置**：所有数据存储在你的 OpenViking 服务上，路径为 `viking://user/*`（包含 `viking://user/sessions/*`）和 `viking://resources/*`。
 - **API Key**：通过 `X-OpenViking-Key` header 发送，不会被日志记录或转发。
 - **多租户隔离**：支持 `accountId`、`userId`。可选的 `peer_role` / `peer_prefix` 控制是否把 OpenClaw 说话人写入 OpenViking `peer_id`。
 
@@ -100,7 +100,7 @@ openclaw config get plugins.slots.contextEngine  # 应输出：openviking
 - OpenClaw 在左侧，仍然是主运行时；插件并不接管 agent 执行本身。
 - 插件中间层把 Hook、Context Engine、Tools、Runtime Manager 四部分合并在一个注册单元里。
 - 所有 HTTP 调用最终都走 `OpenVikingClient`，由 client 层统一补租户 header 和路由日志。
-- OpenViking 服务端承接 session、memory、archive 和 Phase 2 抽取，底层存储落在 `viking://user/*`、`viking://resources/*`、`viking://session/*`。
+- OpenViking 服务端承接 session、memory、archive 和 Phase 2 抽取，底层存储落在 `viking://user/*`（包含 `viking://user/sessions/*`）和 `viking://resources/*`。
 
 这套拆分的意义，是让 OpenClaw 继续专注推理与编排，让 OpenViking 成为长期上下文的事实源。
 

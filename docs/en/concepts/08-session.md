@@ -62,7 +62,7 @@ result = session.commit()
 # {
 #   "status": "accepted",
 #   "task_id": "uuid-xxx",
-#   "archive_uri": "viking://session/.../history/archive_001",
+#   "archive_uri": "viking://user/{user_id}/sessions/.../history/archive_001",
 #   "archived": True
 # }
 
@@ -175,7 +175,7 @@ Each `session.commit()` writes a `memory_diff.json` to the archive directory, re
 
 ```json
 {
-  "archive_uri": "viking://session/{session_id}/history/archive_001",
+  "archive_uri": "viking://user/{user_id}/sessions/{session_id}/history/archive_001",
   "extracted_at": "2026-04-21T10:00:00Z",
   "operations": {
     "adds": [
@@ -223,7 +223,7 @@ An empty `memory_diff.json` (all counts zero) is written even when no memory ope
 ## Storage Structure
 
 ```
-viking://session/{session_id}/
+viking://user/{user_id}/sessions/{session_id}/
 ├── messages.jsonl            # Current messages
 ├── .abstract.md              # Current abstract
 ├── .overview.md              # Current overview
@@ -250,6 +250,12 @@ viking://user/memories/
 ├── tools/
 └── skills/
 ```
+
+`viking://user/sessions/{session_id}` is accepted as a short form relative to
+the current request user and is canonicalized to
+`viking://user/{user_id}/sessions/{session_id}`. The old
+`viking://session/{session_id}` form is accepted as a backward-compatible alias
+for the same current-user session path and is not a separate storage root.
 
 ## Related Documents
 

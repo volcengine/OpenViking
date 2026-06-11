@@ -211,7 +211,6 @@ class SessionMeta:
     updated_at: str = ""
     created_by_account_id: str = ""
     created_by_user_id: str = ""
-    participant_user_ids: List[str] = field(default_factory=list)
     message_count: int = 0
     total_message_count: Optional[int] = 0
     commit_count: int = 0
@@ -250,7 +249,6 @@ class SessionMeta:
             "updated_at": self.updated_at,
             "created_by_account_id": self.created_by_account_id,
             "created_by_user_id": self.created_by_user_id,
-            "participant_user_ids": list(self.participant_user_ids),
             "message_count": self.message_count,
             "commit_count": self.commit_count,
             "memories_extracted": dict(self.memories_extracted),
@@ -285,7 +283,6 @@ class SessionMeta:
             created_by_account_id=data.get("created_by_account_id", "")
             or data.get("account_id", ""),
             created_by_user_id=data.get("created_by_user_id", ""),
-            participant_user_ids=list(data.get("participant_user_ids", [])),
             message_count=data.get("message_count", 0),
             total_message_count=data.get("total_message_count"),
             commit_count=data.get("commit_count", 0),
@@ -331,6 +328,7 @@ class Session:
         user: Optional["UserIdentifier"] = None,
         ctx: Optional[RequestContext] = None,
         session_id: Optional[str] = None,
+        session_uri: Optional[str] = None,
         auto_commit_threshold: int = 8000,
         tool_output_externalization_config: Optional[ToolOutputExternalizationConfig] = None,
     ):
@@ -342,7 +340,7 @@ class Session:
         self.session_id = session_id or str(uuid4())
         self.created_at = int(datetime.now(timezone.utc).timestamp() * 1000)
         self._auto_commit_threshold = auto_commit_threshold
-        self._session_uri = canonical_session_uri(self.session_id)
+        self._session_uri = session_uri or canonical_session_uri(self.ctx, self.session_id)
 
         self._messages: List[Message] = []
         self._usage_records: List[Usage] = []
@@ -353,7 +351,6 @@ class Session:
             created_at=get_current_timestamp(),
             created_by_account_id=self.ctx.account_id,
             created_by_user_id=self.ctx.user.user_id,
-            participant_user_ids=[self.ctx.user.user_id],
         )
         self._loaded = False
         self._tool_output_externalization_config = (
@@ -412,8 +409,6 @@ class Session:
             self._meta.created_by_account_id = self.ctx.account_id
         if not self._meta.created_by_user_id:
             self._meta.created_by_user_id = self.ctx.user.user_id
-        if not self._meta.participant_user_ids:
-            self._meta.participant_user_ids = [self._meta.created_by_user_id]
         # WM v2: always rebuild pending_tokens from current messages so the
         # counter stays consistent across restarts and is also backfilled for
         # legacy sessions whose .meta.json predates these fields. O(n) once,

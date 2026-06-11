@@ -19,6 +19,7 @@ from openviking.core.context import (
 from openviking.core.namespace import (
     classify_uri,
     context_type_for_uri,
+    is_session_uri,
     owner_space_for_uri,
 )
 from openviking.server.dependencies import get_service
@@ -183,6 +184,12 @@ class ReindexExecutor:
         parts = classification.parts
         if not parts:
             return "global_namespace"
+        if is_session_uri(uri):
+            raise OpenVikingError(
+                f"Unsupported reindex URI: {uri}",
+                code="UNSUPPORTED_URI",
+                details={"uri": uri},
+            )
         if parts == ("user",):
             return "user_namespace"
         if classification.is_user_namespace_root:
@@ -744,6 +751,8 @@ class ReindexExecutor:
             entry_uri = entry.get("uri")
             if not entry_uri:
                 continue
+            if is_session_uri(entry_uri):
+                continue
             classification = classify_uri(entry_uri)
             if classification.is_memory:
                 if entry.get("isDir") and classification.is_memory_root:
@@ -830,7 +839,7 @@ class ReindexExecutor:
                 if entry.get("isDir") and remainder and "/" not in remainder:
                     user_roots.append(entry_uri)
                 continue
-            if entry_uri == "viking://session" or entry_uri.startswith("viking://session/"):
+            if is_session_uri(entry_uri):
                 continue
             if not self._is_global_resource_entry(entry_uri):
                 continue

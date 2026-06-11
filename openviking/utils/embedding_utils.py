@@ -14,7 +14,7 @@ from typing import Any, Dict, Optional
 from charset_normalizer import from_bytes
 
 from openviking.core.context import Context, ContextLevel, ResourceContentType, Vectorize
-from openviking.core.namespace import context_type_for_uri, owner_space_for_uri
+from openviking.core.namespace import context_type_for_uri, is_session_uri, owner_space_for_uri
 from openviking.server.identity import RequestContext
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
@@ -518,7 +518,7 @@ async def index_resource(
     (``/memories/``) are indexed as ``"memory"`` rather than the default
     ``"resource"``.
     """
-    if uri.startswith("viking://session/") or uri == "viking://session":
+    if is_session_uri(uri):
         logger.info("Skipping indexing for session namespace: %s", uri)
         return
 

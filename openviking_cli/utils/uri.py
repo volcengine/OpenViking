@@ -19,15 +19,16 @@ class VikingURI:
 
     Scopes:
     - resources: Independent resource scope (viking://resources/{project}/...)
-    - user: User scope (viking://user/...)
-    - session: Session scope (viking://session/{session_id}/...)
+    - user: User scope (viking://user/...), including sessions under
+      viking://user/{user_id}/sessions/{session_id}
+    - session: Legacy alias for user sessions (viking://session/{session_id}/...)
     - queue: Queue scope (viking://queue/...)
 
     Examples:
     - viking://resources/my_project/docs/api
     - viking://user/memories/preferences/code_style
     - viking://user/skills/pdf
-    - viking://session/session123/messages
+    - viking://user/alice/sessions/session123/messages.jsonl
     """
 
     SCHEME = "viking"
@@ -35,13 +36,13 @@ class VikingURI:
     LISTABLE_SCOPES = {
         "resources",
         "user",
-        "session",
     }
     PUBLIC_SCOPES = frozenset(LISTABLE_SCOPES)
+    LEGACY_SCOPES = frozenset({"session"})
     INTERNAL_SCOPES = frozenset({"temp", "queue", "upload"})
     # All valid scopes that can be addressed by the URI parser/storage internals.
     # Public API handlers must not use this as their external whitelist.
-    VISITABLE_SCOPES = PUBLIC_SCOPES | INTERNAL_SCOPES
+    VISITABLE_SCOPES = PUBLIC_SCOPES | LEGACY_SCOPES | INTERNAL_SCOPES
 
     def __init__(self, uri: str):
         """
