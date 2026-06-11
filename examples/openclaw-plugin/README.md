@@ -39,7 +39,8 @@ Once installed, the plugin provides these agent tools:
 | `memory_forget` | Delete memories by URI or query |
 | `ov_archive_search` | Search across archives by keyword |
 | `ov_archive_expand` | Expand an archive back to raw messages |
-| `add_resource` | Import documents, URLs, or Git repos |
+| `ov_recall_trace` | Inspect why recall/search returned or injected specific results |
+| `add_resource` | Import documents, URLs, or Git repos when explicitly enabled |
 | `add_skill` | Import agent skills |
 | `ov_search` | Search imported resources and skills |
 | `ov_read` | Read the full original content of one exact OpenViking URI |
@@ -48,6 +49,8 @@ Once installed, the plugin provides these agent tools:
 | `openviking_tool_result_read` | Restore the full original content of an externalized tool result |
 | `openviking_tool_result_search` | Search inside an externalized tool result by keyword |
 | `openviking_tool_result_list` | List externalized tool results in the current session |
+
+`add_resource` is hidden from agents by default (`enableAddResourceTool=false`), while manual `/add-resource` remains available. Configure `recallTargetTypes` to choose default recall targets (`user`, `agent`, `session`, `resource`); legacy `recallResources=true` appends `resource` only when `recallTargetTypes` is unset.
 
 ## Data Flow & Privacy
 
@@ -156,7 +159,7 @@ During recall, the plugin:
 1. Extracts query text from the latest user message.
 2. Resolves the agent routing for the current `sessionId/sessionKey`.
 3. Runs a quick availability precheck so model requests do not stall when OpenViking is unavailable.
-4. Queries `viking://user/memories` and optionally `viking://resources`.
+4. Queries the configured `recallTargetTypes` (`user,agent` by default; optionally `session` or `resource`).
 5. Deduplicates, threshold-filters, reranks, and trims the results under a token budget.
 6. Prepends the selected memories as a `## Long-term Memories` section inside `<openviking-context>` to the current user message; it does not append a standalone synthetic user message.
 
@@ -233,7 +236,8 @@ Beyond automatic behavior, the plugin exposes these tools directly:
 - `memory_store`: write explicit long-term facts into an OpenViking session and trigger commit
 - `memory_forget`: delete by URI, or search first and remove a single strong match
 - `ov_archive_expand`: expand a concrete archive back into raw messages
-- `add_resource`: import a document, directory, URL, or Git repository as an OpenViking resource
+- `ov_recall_trace`: inspect recent recall/search trace records when `traceRecall` is enabled
+- `add_resource`: import a document, directory, URL, or Git repository as an OpenViking resource when explicitly enabled
 - `add_skill`: import or register an OpenViking agent skill
 - `ov_search`: search OpenViking resources and skills, especially after importing them
 - `ov_read`: read one exact `viking://` URI returned by `ov_search` or `ov_list`

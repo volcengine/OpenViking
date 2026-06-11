@@ -30,6 +30,7 @@
       "package-lock.json",
       ".gitignore",
       "skills/install-openviking-memory/SKILL.md",
+      "skills/openviking-context-database/SKILL.md",
       "INSTALL-AGENT.md"
     ]
   },
