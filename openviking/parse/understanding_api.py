@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 """
-UnderstanderAPI: Integrate with Understander API for parsing.
+UnderstandingAPI: Integrate with Understanding API for parsing.
 
 Workflow:
 1. Upload local file to Files API (file_id) or submit URL directly
@@ -30,9 +30,9 @@ from openviking_cli.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-class UnderstanderAPI(BaseParser):
+class UnderstandingAPI(BaseParser):
     """
-    UnderstanderAPI: Third-party parse client.
+    UnderstandingAPI: Third-party parse client.
     """
 
     def __init__(self):
@@ -53,9 +53,9 @@ class UnderstanderAPI(BaseParser):
         self._default_poll_interval_ms = int(getattr(parser_api, "poll_interval_ms", 3000))
 
         if not self._api_host:
-            raise ValueError("parser_api.host is required for UnderstanderAPI")
+            raise ValueError("parser_api.host is required for UnderstandingAPI")
         if not self._api_key:
-            raise ValueError("parser_api.api_key is required for UnderstanderAPI")
+            raise ValueError("parser_api.api_key is required for UnderstandingAPI")
 
         self._video_exts = {"mp4", "mov", "avi", "flv", "mkv", "wmv", "webm"}
         self._audio_exts = {"mp3", "wav", "m4a", "flac", "aac", "ogg"}
@@ -87,7 +87,7 @@ class UnderstanderAPI(BaseParser):
             local_path = Path(candidate)
             if not local_path.is_file():
                 raise ValueError(
-                    "UnderstanderAPI supports http(s) URLs or local files. "
+                    "UnderstandingAPI supports http(s) URLs or local files. "
                     "Got an invalid local file path."
                 )
             doc_name = local_path.stem or "resource"
@@ -116,7 +116,7 @@ class UnderstanderAPI(BaseParser):
         zip_url = self._extract_zip_url(response_obj)
         if not zip_url:
             raise RuntimeError(
-                f"understander result missing zip_url: {self._safe_error_summary(response_obj)}"
+                f"understanding result missing zip_url: {self._safe_error_summary(response_obj)}"
             )
 
         zip_path = await self._download_zip(zip_url)
@@ -159,17 +159,17 @@ class UnderstanderAPI(BaseParser):
             source_path=url or source_str,
             source_format=doc_type,
             temp_dir_path=temp_dir_path,
-            parser_name="UnderstanderAPI",
+            parser_name="UnderstandingAPI",
             meta=task_meta,
         )
 
-        logger.info("[UnderstanderAPI] done")
+        logger.info("[UnderstandingAPI] done")
         return result
 
     async def parse_content(
         self, content: str, source_path: Optional[str] = None, instruction: str = "", **kwargs
     ) -> ParseResult:
-        raise NotImplementedError("UnderstanderAPI.parse_content is not supported")
+        raise NotImplementedError("UnderstandingAPI.parse_content is not supported")
 
     def _json_bytes(self, obj: Any) -> bytes:
         return json.dumps(obj, ensure_ascii=False).encode("utf-8")
@@ -229,7 +229,7 @@ class UnderstanderAPI(BaseParser):
         content: Dict[str, Any] = {"type": "file", "file": {"file_id": file_id}}
         payload = {
             "input": [{"role": "user", "content": [content]}],
-            "tools": [{"type": "understander"}],
+            "tools": [{"type": "understanding"}],
             "store": True,
         }
         async with httpx.AsyncClient(timeout=self._http_timeout_sec, follow_redirects=True) as client:
@@ -254,7 +254,7 @@ class UnderstanderAPI(BaseParser):
             content = {"type": "input_file", "file_url": url}
         payload = {
             "input": [{"role": "user", "content": [content]}],
-            "tools": [{"type": "understander"}],
+            "tools": [{"type": "understanding"}],
             "store": True,
         }
         async with httpx.AsyncClient(timeout=self._http_timeout_sec, follow_redirects=True) as client:
@@ -282,17 +282,17 @@ class UnderstanderAPI(BaseParser):
                 self._raise_if_error(body, context=f"responses api error: response_id={response_id}")
                 status = body.get("status")
                 if status != last_status:
-                    logger.info(f"[UnderstanderAPI] response_id={response_id} status={status}")
+                    logger.info(f"[UnderstandingAPI] response_id={response_id} status={status}")
                     last_status = status
                 if status == "completed":
                     return body
                 if status == "failed":
                     raise RuntimeError(
-                        f"understander failed: response_id={response_id} body={self._safe_error_summary(body)}"
+                        f"understanding failed: response_id={response_id} body={self._safe_error_summary(body)}"
                     )
                 if asyncio.get_running_loop().time() > deadline:
                     raise TimeoutError(
-                        f"understander timeout: response_id={response_id} last_status={last_status}"
+                        f"understanding timeout: response_id={response_id} last_status={last_status}"
                     )
                 await asyncio.sleep(max(self._default_poll_interval_ms, 200) / 1000.0)
 

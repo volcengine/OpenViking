@@ -51,7 +51,7 @@ def _get_config_warning_logger():
 
 
 class ParserApiConfig(BaseModel):
-    """Configuration for the Understander files/responses API."""
+    """Configuration for the Understanding files/responses API."""
 
     enable: bool = False
     extensions: List[str] = Field(default_factory=list)
