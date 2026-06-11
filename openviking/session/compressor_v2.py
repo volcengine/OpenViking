@@ -19,7 +19,6 @@ from openviking.session.memory import ExtractLoop, MemoryUpdater
 from openviking.session.memory.dataclass import ResolvedOperations, StoredLink
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.memory_updater import (
-    ExtractContext,
     MemoryUpdateResult,
     write_stored_links,
 )
@@ -713,13 +712,9 @@ class SessionCompressorV2:
         vlm = config.vlm.get_vlm_instance()
         viking_fs = get_viking_fs()
 
-        # Use the provider's extraction context when available so prompt
-        # ranges and memory rendering resolve against the same message list.
-        # Fallback providers still get ExtractContext-level message chunking.
-        get_extract_context = getattr(provider, "get_extract_context", None)
-        extract_context = (
-            get_extract_context() if callable(get_extract_context) else ExtractContext(messages)
-        )
+        # Use the provider's extraction context so prompt ranges and memory
+        # rendering resolve against the same message list.
+        extract_context = provider.get_extract_context()
         isolation_handler = MemoryIsolationHandler(
             ctx,
             extract_context,
