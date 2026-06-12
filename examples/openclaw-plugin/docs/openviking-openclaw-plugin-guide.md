@@ -161,7 +161,7 @@ transformContext auto recall 流程：
 | `recallScoreThreshold` | `0.15` | 候选过滤阈值 |
 | `recallMaxInjectedChars` | `4000` | 注入总字符上限；单条记忆不截断，不完整则跳过 |
 | `recallPreferAbstract` | `false` | 是否优先使用 abstract，而非读取 leaf 记忆全文 |
-| `recallTargetTypes` | `["user","agent"]` | 自动召回和默认显式召回目标类型；可选 `resource`、`session`、`user`、`agent` |
+| `recallTargetTypes` | `["user","agent"]` | 自动召回和默认显式召回目标类型；可选 `resource`、`user`、`agent` |
 | `recallResources` | `false` | 旧兼容开关；仅在未显式配置 `recallTargetTypes` 时把 `resource` 追加到默认 `user` + `agent` |
 
 配置默认值在 `config.ts:58`。
@@ -695,7 +695,7 @@ openclaw config get plugins.slots.contextEngine
 | `captureMode` | `semantic` | `semantic` 全量候选；`keyword` 先过触发词 |
 | `captureMaxLength` | `24000` | 自动捕获文本最大长度 |
 | `autoRecall` | `true` | 是否回复前自动召回 |
-| `recallTargetTypes` | `["user","agent"]` | 自动召回和默认显式召回目标类型；可选 `resource`、`session`、`user`、`agent` |
+| `recallTargetTypes` | `["user","agent"]` | 自动召回和默认显式召回目标类型；可选 `resource`、`user`、`agent` |
 | `recallResources` | `false` | 旧兼容开关；仅在未显式配置 `recallTargetTypes` 时追加 `resource` |
 | `recallLimit` | `6` | 召回条数 |
 | `recallScoreThreshold` | `0.15` | 召回阈值 |
@@ -741,7 +741,7 @@ openclaw config get plugins.slots.contextEngine
 | `targetUri` | `memory_recall` / `memory_forget` 默认搜索范围 | `viking://user/memories` | 是 | 否 | — | 未显式传 `targetUri` 时的默认 memory 搜索位置：`config.ts:275`、`index.ts:1366` |
 | `timeoutMs` | 所有搜索/读取请求超时 | `15000` | 是 | 否 | — | 控制 `find/read/grep/session` 等 HTTP 请求超时：`config.ts:276` |
 | `autoRecall` | 自动召回总开关 | `true` | 是 | 否 | — | 关闭后插件不再在 `assemble()` 阶段自动发起 recall：`config.ts:283`、`context-engine.ts:1132` |
-| `recallTargetTypes` | 自动召回 + 默认 `memory_recall` 资源类型集合 | `["user","agent"]` | 是 | 安装脚本/setup 参数支持 | `OPENVIKING_RECALL_TARGET_TYPES`（安装脚本写入 setup 参数） | 当前默认只查 `user` + `agent` 记忆。设置为 `["resource"]` 才会切成 resource-only；可组合 `resource,session,user,agent`：`config.ts:174`、`config.ts:360` |
+| `recallTargetTypes` | 自动召回 + 默认 `memory_recall` 资源类型集合 | `["user","agent"]` | 是 | 安装脚本/setup 参数支持 | `OPENVIKING_RECALL_TARGET_TYPES`（安装脚本写入 setup 参数） | 当前默认只查 `user` + `agent` 记忆。设置为 `["resource"]` 才会切成 resource-only；可组合 `resource,user,agent`：`config.ts:174`、`config.ts:360` |
 | `recallResources` | 自动召回 + 默认 `memory_recall` resources 兼容开关 | `false` | 是 | 是 | `OPENVIKING_RECALL_RESOURCES` | 旧兼容字段；只有未显式配置 `recallTargetTypes` 时才把 `resource` 追加到默认 `user` + `agent`，不会覆盖显式 resource-only：`config.ts:360` |
 | `recallLimit` | 自动召回 / `memory_recall` 返回条数 | `6` | 是 | 否 | — | 最终注入或展示的 recall 条数上限；内部请求会放大到 `max(limit*4, 20)` 先召回再重排：`config.ts:285`、`auto-recall.ts:181` |
 | `recallScoreThreshold` | 自动召回 / `memory_recall` 过滤阈值 | `0.15` | 是 | 否 | — | 低于阈值的结果会在后处理阶段被丢弃：`config.ts:286`、`auto-recall.ts:218`、`index.ts:1132` |

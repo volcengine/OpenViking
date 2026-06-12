@@ -50,7 +50,7 @@ Once installed, the plugin provides these agent tools:
 | `openviking_tool_result_search` | Search inside an externalized tool result by keyword |
 | `openviking_tool_result_list` | List externalized tool results in the current session |
 
-`add_resource` is hidden from agents by default (`enableAddResourceTool=false`), while manual `/add-resource` remains available. Configure `recallTargetTypes` to choose default recall targets (`user`, `agent`, `session`, `resource`); legacy `recallResources=true` appends `resource` only when `recallTargetTypes` is unset.
+`add_resource` is hidden from agents by default (`enableAddResourceTool=false`), while manual `/add-resource` remains available. Configure `recallTargetTypes` to choose default recall targets (`user`, `agent`, `resource`); legacy `recallResources=true` appends `resource` only when `recallTargetTypes` is unset.
 
 ## Data Flow & Privacy
 
@@ -160,7 +160,7 @@ During recall, the plugin:
 1. Extracts query text from the latest user message.
 2. Resolves the agent routing for the current `sessionId/sessionKey`.
 3. Runs a quick availability precheck so model requests do not stall when OpenViking is unavailable.
-4. Queries the configured `recallTargetTypes` (`user,agent` by default; optionally `session` or `resource`).
+4. Queries the configured `recallTargetTypes` (`user,agent` by default; optionally `resource`; use `ov_archive_search` and `ov_archive_expand` for session history).
 5. Deduplicates, threshold-filters, reranks, and trims the results under a token budget.
 6. Prepends the selected memories as a `## Long-term Memories` section inside `<openviking-context>` to the current user message; it does not append a standalone synthetic user message.
 
