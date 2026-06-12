@@ -894,12 +894,16 @@ describe("Tool: add_resource, add_skill, and ov_search (registration)", () => {
     expect(tool).toBeDefined();
     expect(tool!.description).toContain("explicitly asks");
     expect(tool!.description).toContain("[media attached: /path");
+    expect(tool!.description).toContain("Set either to");
+    expect(tool!.description).toContain("never both");
     expect(tool!.description).toContain("Do not invent OpenViking upload REST endpoints");
     const props = (tool!.parameters as any).properties;
     expect(props).toHaveProperty("source");
     expect(props.source.description).toContain("OpenClaw media attachment path");
     expect(props).toHaveProperty("to");
+    expect(props.to.description).toContain("Mutually exclusive with parent");
     expect(props).toHaveProperty("parent");
+    expect(props.parent.description).toContain("Mutually exclusive with to");
     expect(props).toHaveProperty("reason");
     expect(props).toHaveProperty("instruction");
     expect(props).toHaveProperty("wait");
@@ -932,9 +936,44 @@ describe("Tool: add_resource, add_skill, and ov_search (registration)", () => {
     expect(tools.get("memory_search")).toBeUndefined();
     expect(tool!.description).toContain("Search OpenViking resources and skills");
     expect(tool!.description).toContain("Use after importing");
+    expect(tool!.description).toContain("call ov_read");
+    expect(tool!.description).toContain("call ov_list on the parent URI");
     const props = (tool!.parameters as any).properties;
     expect(props).toHaveProperty("query");
     expect(props).toHaveProperty("uri");
+    expect(props).toHaveProperty("limit");
+  });
+
+  it("registers ov_read and ov_multi_read tools for original evidence retrieval", () => {
+    const { tools, api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+
+    const read = tools.get("ov_read");
+    expect(read).toBeDefined();
+    expect(read!.description).toContain("Read the full original content");
+    expect(read!.description).toContain("after ov_search");
+    expect(read!.description).toContain("Do not use filesystem read/cat");
+    expect((read!.parameters as any).properties).toHaveProperty("uri");
+
+    const multiRead = tools.get("ov_multi_read");
+    expect(multiRead).toBeDefined();
+    expect(multiRead!.description).toContain("multiple exact OpenViking URIs");
+    expect(multiRead!.description).toContain("sibling chunks");
+    expect((multiRead!.parameters as any).properties).toHaveProperty("uris");
+  });
+
+  it("registers ov_list tool with directory browsing guidance", () => {
+    const { tools, api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+    const tool = tools.get("ov_list");
+    expect(tool).toBeDefined();
+    expect(tool!.description).toContain("List files and directories");
+    expect(tool!.description).toContain("after ov_search");
+    expect(tool!.description).toContain("sibling chunks");
+    const props = (tool!.parameters as any).properties;
+    expect(props).toHaveProperty("uri");
+    expect(props).toHaveProperty("recursive");
+    expect(props).toHaveProperty("simple");
     expect(props).toHaveProperty("limit");
   });
 });
@@ -1000,6 +1039,8 @@ describe("Tool: ov_search (behavioral)", () => {
 
     expect(result.content[0]!.text).toContain("no");
     expect(result.content[0]!.text).toContain("type");
+    expect(result.content[0]!.text).toContain("Use ov_read on exact hit URIs");
+    expect(result.content[0]!.text).toContain("Use ov_list on a hit's parent URI");
     expect(result.content[0]!.text).toContain("resource");
     expect(result.content[0]!.text).toContain("skill");
     expect(result.details.resources).toHaveLength(1);
@@ -1131,6 +1172,148 @@ describe("Tool: ov_search (behavioral)", () => {
   });
 });
 
+describe("Tool: ov_read and ov_multi_read (behavioral)", () => {
+  it("reads full content for one exact OpenViking URI", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      const requestUrl = new URL(url);
+      if (requestUrl.pathname === "/api/v1/content/read") {
+        expect(requestUrl.searchParams.get("uri")).toBe("viking://resources/guide/step-1.md");
+        return okResponse("# Step 1\nDo the first thing.");
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { tools, api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+    const read = tools.get("ov_read")!;
+    const result = await read.execute("tc-ov-read", {
+      uri: "viking://resources/guide/step-1.md",
+    }) as ToolResult;
+
+    expect(result.content[0]!.text).toContain("--- START OF viking://resources/guide/step-1.md ---");
+    expect(result.content[0]!.text).toContain("# Step 1");
+    expect(result.content[0]!.text).toContain("--- END OF viking://resources/guide/step-1.md ---");
+    expect(result.details).toMatchObject({
+      action: "read",
+      uri: "viking://resources/guide/step-1.md",
+      chars: 28,
+    });
+  });
+
+  it("reads multiple OpenViking URIs and preserves per-URI failures", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      const requestUrl = new URL(url);
+      if (requestUrl.pathname === "/api/v1/content/read") {
+        const uri = requestUrl.searchParams.get("uri");
+        if (uri === "viking://resources/guide/missing.md") {
+          return new Response(JSON.stringify({ status: "error", message: "not found" }), {
+            status: 404,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return okResponse(`content for ${uri}`);
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { tools, api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+    const multiRead = tools.get("ov_multi_read")!;
+    const result = await multiRead.execute("tc-ov-multi-read", {
+      uris: [
+        "viking://resources/guide/.overview.md",
+        "viking://resources/guide/missing.md",
+      ],
+    }) as ToolResult;
+
+    expect(result.content[0]!.text).toContain("Multi-read results for 2 OpenViking resources");
+    expect(result.content[0]!.text).toContain("--- START OF viking://resources/guide/.overview.md ---");
+    expect(result.content[0]!.text).toContain("content for viking://resources/guide/.overview.md");
+    expect(result.content[0]!.text).toContain("--- START OF viking://resources/guide/missing.md ---");
+    expect(result.content[0]!.text).toContain("ERROR:");
+    expect(result.details).toMatchObject({
+      action: "multi_read",
+      count: 2,
+      success_count: 1,
+    });
+  });
+});
+
+describe("Tool: ov_list (behavioral)", () => {
+  it("lists an OpenViking directory through the fs ls endpoint", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      const requestUrl = new URL(url);
+      if (requestUrl.pathname === "/api/v1/fs/ls") {
+        expect(requestUrl.searchParams.get("uri")).toBe("viking://resources/guide");
+        expect(requestUrl.searchParams.get("recursive")).toBe("true");
+        expect(requestUrl.searchParams.get("simple")).toBe("false");
+        expect(requestUrl.searchParams.get("node_limit")).toBe("5");
+        return okResponse([
+          {
+            name: ".overview.md",
+            uri: "viking://resources/guide/.overview.md",
+            isDir: false,
+            abstract: "Guide overview",
+          },
+          {
+            name: "step-2.md",
+            uri: "viking://resources/guide/step-2.md",
+            isDir: false,
+            abstract: "Second step",
+          },
+        ]);
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { tools, api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+    const list = tools.get("ov_list")!;
+    const result = await list.execute("tc-ov-list", {
+      uri: "viking://resources/guide",
+      recursive: true,
+      limit: 5,
+    }) as ToolResult;
+
+    expect(result.content[0]!.text).toContain("Listed 2 OpenViking entries");
+    expect(result.content[0]!.text).toContain("viking://resources/guide/.overview.md");
+    expect(result.content[0]!.text).toContain("Second step");
+    expect(result.details).toMatchObject({
+      action: "listed",
+      uri: "viking://resources/guide",
+      recursive: true,
+      simple: false,
+      count: 2,
+    });
+  });
+
+  it("passes simple list mode through to OpenViking", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      const requestUrl = new URL(url);
+      if (requestUrl.pathname === "/api/v1/fs/ls") {
+        expect(requestUrl.searchParams.get("simple")).toBe("true");
+        return okResponse(["viking://resources/guide/step-1.md"]);
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { tools, api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+    const list = tools.get("ov_list")!;
+    const result = await list.execute("tc-ov-list-simple", {
+      uri: "viking://resources/guide",
+      simple: true,
+    }) as ToolResult;
+
+    expect(result.content[0]!.text).toContain("viking://resources/guide/step-1.md");
+    expect(result.details.simple).toBe(true);
+  });
+});
+
 describe("OpenViking import command parsing", () => {
   it("tokenizes quoted args", () => {
     expect(tokenizeCommandArgs(`./README.md --reason "project docs" --wait`)).toEqual([
@@ -1214,10 +1397,10 @@ describe("OpenViking ov_search command parsing", () => {
 });
 
 describe("Plugin registration", () => {
-  it("registers all 11 tools", () => {
+  it("registers all 14 tools", () => {
     const { api } = setupPlugin();
     contextEnginePlugin.register(api as any);
-    expect(api.registerTool).toHaveBeenCalledTimes(11);
+    expect(api.registerTool).toHaveBeenCalledTimes(14);
   });
 
   it("registers add and search commands", () => {

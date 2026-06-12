@@ -266,12 +266,16 @@ class MarkdownParser(BaseParser):
             # Set up relative-link rewrite context consumed by _write_section during
             # apply. Link rewriting is opt-in via kwargs (DirectoryParser sets these);
             # single-file ingestion never passes link_rewrite_root, so it never rewrites.
+            # base_dir/allowed_media_dirs let the rewrite ask _ingest_will_handle_image
+            # which image embeds ingestion will take (those are left for #2429).
             self._rewrite_ctx = {
                 "enabled": bool(kwargs.get("enable_link_rewrite", False)),
                 "source_path": source_path,
                 "doc_name": layout.doc_name,
                 "root_dir": layout.root_dir,
                 "import_root": kwargs.get("link_rewrite_root"),
+                "base_dir": base_dir,
+                "allowed_media_dirs": allowed_media_dirs,
             }
 
             # Phase 2 — write only: replay the plan against the real VikingFS,
@@ -574,9 +578,13 @@ class MarkdownParser(BaseParser):
                 logger.warning(f"[MarkdownParser] Failed to read markdown file: {md_uri}")
                 continue
 
-            # Collect all image references in this markdown file
-            images = list(self._image_pattern.finditer(content))
-            if not images:
+            # Collect all image references in this markdown file: markdown
+            # embeds (![...]) and HTML <img src="..."> tags alike.
+            from openviking.parse.image_rewrite import HTML_IMG_PATTERN
+
+            image_refs = [m.group(2) for m in self._image_pattern.finditer(content)]
+            image_refs += [m.group(2) for m in HTML_IMG_PATTERN.finditer(content)]
+            if not image_refs:
                 continue
 
             # Resolve local image paths, skipping remote URIs and duplicates
@@ -584,8 +592,7 @@ class MarkdownParser(BaseParser):
             origin_images_links = []
             seen_paths = set()
 
-            for match in images:
-                path_str = match.group(2)
+            for path_str in image_refs:
 
                 # Skip remote URIs
                 if self._is_remote_uri(path_str):
@@ -648,8 +655,11 @@ class MarkdownParser(BaseParser):
         # Write a single mapping file at the root directory for rewrite_image_uris
         if mappings:
             import json
+
+            from openviking.parse.image_rewrite import IMAGE_MAPPINGS_FILENAME
+
             await viking_fs.write_file(
-                f"{root_prefix}/.image_mappings.json",
+                f"{root_prefix}/{IMAGE_MAPPINGS_FILENAME}",
                 json.dumps(mappings, ensure_ascii=False),
             )
 
@@ -693,6 +703,23 @@ class MarkdownParser(BaseParser):
             if not allowed_roots:
                 return None
 
+            # Markdown semantics first: the reference is relative to the file's
+            # own directory. Accept it when the resolved target stays inside ANY
+            # allowed root (e.g. ../images/x.gif escaping base_dir but still
+            # inside the import root a DirectoryParser passed down).
+            if base_dir:
+                candidate = (base_dir / path).resolve()
+                if candidate.exists():
+                    for root in allowed_roots:
+                        try:
+                            candidate.relative_to(root.resolve())
+                            return candidate
+                        except ValueError:
+                            continue
+
+            # Derived-media semantics: the reference may instead be relative to
+            # one of the media roots themselves (e.g. images extracted by the
+            # PDF/DOC parser into a media dir).
             for root in allowed_roots:
                 candidate = (root / path).resolve()
 
@@ -927,6 +954,31 @@ class MarkdownParser(BaseParser):
         # D) Directory landing → point at the directory and drop any suffix.
         return _to_rel(os.path.join(target_parent, landing), keep_suffix=False)
 
+    async def _ingest_will_handle_image(self, link: str) -> bool:
+        """Whether ``_ingest_local_images`` will take this image reference: it must
+        resolve within base_dir/allowed_media_dirs AND pass image validation — the
+        exact conditions ingestion itself applies. Such embeds are left untouched so
+        #2429 can copy them next to the section and ``rewrite_image_uris`` can turn
+        them into viking:// URIs; everything else falls back to depth adjustment.
+        Results are cached per parse_content call."""
+        ctx = self._rewrite_ctx or {}
+        cache = ctx.setdefault("_image_probe_cache", {})
+        if link not in cache:
+            handled = False
+            resolved = self._resolve_image_path(
+                link, ctx.get("base_dir"), ctx.get("allowed_media_dirs")
+            )
+            if resolved is not None:
+                try:
+                    image_bytes = await asyncio.to_thread(resolved.read_bytes)
+                    handled = await asyncio.to_thread(
+                        self._is_valid_image, image_bytes, resolved
+                    )
+                except Exception:
+                    handled = False
+            cache[link] = handled
+        return cache[link]
+
     async def _rewrite_relative_links(
         self,
         content: str,
@@ -936,12 +988,17 @@ class MarkdownParser(BaseParser):
         section_subpath: str,
         import_root: str,
     ) -> str:
-        """Rewrite relative markdown *document* links in `content` (disk-coordinate).
+        """Rewrite relative markdown links in `content` (disk-coordinate).
 
-        Image embeds (``![...]``) are left untouched. Image ingestion and image-path
-        rewriting are owned entirely by ``_ingest_local_images`` (PR #2429); link
-        rewriting only re-bases links between documents.
+        Image embeds (``![...]``) that ingestion will take are left untouched —
+        ``_ingest_local_images`` (PR #2429) copies them next to the section and
+        ``rewrite_image_uris`` later rewrites them to viking:// URIs. Image embeds
+        ingestion will NOT take (outside base_dir, missing, failing validation) get
+        the same depth adjustment as document links so they stay valid after the
+        document moves into its ingest directory.
         """
+        from openviking.parse.image_rewrite import HTML_IMG_PATTERN
+
         src_dir = os.path.dirname(os.path.abspath(source_path))
         import_root_abs = os.path.abspath(import_root)
         source_new_dir = os.path.join(src_dir, doc_name, section_subpath)
@@ -951,18 +1008,33 @@ class MarkdownParser(BaseParser):
         for match in _MD_LINK_RE.finditer(content):
             out.append(content[last : match.start()])
             bang, text, link = match.group(1), match.group(2), match.group(3)
-            # Image embeds are #2429's to ingest and rewrite; never touch them here.
-            new_link = (
-                link
-                if bang
-                else await self._rewrite_single_link(
+            if bang and await self._ingest_will_handle_image(link):
+                new_link = link
+            else:
+                new_link = await self._rewrite_single_link(
                     link, src_dir, import_root_abs, source_new_dir
                 )
-            )
             out.append(f"{bang}[{text}]({new_link})")
             last = match.end()
         out.append(content[last:])
-        return "".join(out)
+        rewritten = "".join(out)
+
+        # HTML <img src="..."> embeds get the same ownership split as ![...].
+        pieces: List[str] = []
+        last = 0
+        for match in HTML_IMG_PATTERN.finditer(rewritten):
+            pieces.append(rewritten[last : match.start()])
+            src = match.group(2)
+            if await self._ingest_will_handle_image(src):
+                new_src = src
+            else:
+                new_src = await self._rewrite_single_link(
+                    src, src_dir, import_root_abs, source_new_dir
+                )
+            pieces.append(f"{match.group(1)}{new_src}{match.group(3)}")
+            last = match.end()
+        pieces.append(rewritten[last:])
+        return "".join(pieces)
 
     async def _target_split_files(self, target_path: str) -> Optional[Dict[str, str]]:
         """The target's real ingest layout {"<doc_dir>/<section...>": text} via a

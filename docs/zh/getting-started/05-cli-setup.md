@@ -53,6 +53,8 @@ CLI 使用 `~/.openviking/ovcli.conf` 作为 active 客户端连接配置。
 - 本地无鉴权服务通常不需要 API Key。
 - 除非用户选择本地自定义配置，否则 Agent 不应探测本地端口、curl 本地 health endpoint，或运行启动服务端的命令。
 
+> **注意：** 最近的 CLI 版本（v0.3.23+）要求在运行大多数命令前先保存一个显示语言。在交互式终端中，CLI 会在首次使用时提示你选择；在非交互式 shell（Agent 或 CI）中，任何非豁免命令都会以 `2` 退出，直到你运行 `ov language en` 或 `ov language zh-CN`。只有 `ov language`/`ov lang`、`ov config add|edit|delete|list` 和 `ov config switch <name>` 是豁免的，因此请在上面的 `ov config validate`、`ov health` 和 `ov status` 之前先运行 `ov language <code>`。
+
 ## 开始前
 
 你需要准备：
@@ -212,7 +214,7 @@ Agent 应该根据进程退出码和 JSON 中的 `error.code` 分支处理，不
 | 退出码 | 含义 |
 |--------|------|
 | `0` | 成功，或已经处于目标状态 |
-| `2` | 输入错误、缺少参数、名称非法，或无法读取密钥来源 |
+| `2` | 输入错误、缺少参数、名称非法、无法读取密钥来源，或在非交互式 shell 中尚未选择显示语言（请先运行 `ov language <code>`） |
 | `3` | 同名配置已经存在但内容不同；只有确认要替换时才传 `--force` |
 | `4` | 服务端不可达，或配置校验失败 |
 | `5` | 鉴权或 key 角色不匹配，例如把 root key 传到了需要 user key 的位置 |
