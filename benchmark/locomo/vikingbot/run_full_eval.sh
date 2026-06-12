@@ -31,7 +31,7 @@ for arg in "$@"; do
         echo "  --no-group-chat   非群聊模式（默认），使用 sample_id 作为 Peer"
         echo "  --auto-commit     自动提交未提交的代码变更，结果文件名带 commit id 和时间戳"
         echo "  --retry-wrong CSV 只重跑指定结果文件中的有效错题（导入相关对话+重新问答）"
-        echo "  --parallel-import-sessions N  并发导入 session（传给 import_to_ov.py --parallel-samples）"
+        echo "  --parallel-import-sessions N  单 sample 内并发导入 sessions"
         exit 0
     fi
 done
@@ -138,6 +138,10 @@ for arg in "$@"; do
     fi
     PREV_ARG=""
 done
+if [ -n "$PREV_ARG" ]; then
+    echo "Error: $PREV_ARG requires a value" >&2
+    exit 1
+fi
 
 # 过滤掉开关参数和 --retry-wrong 的值，获取位置参数
 ARGS=()
@@ -172,7 +176,12 @@ if [ -n "${OPENVIKING_API_KEY:-}" ]; then
     IMPORT_OPTS+=("--no-separate-user-by-sample")
 fi
 if [ -n "${PARALLEL_IMPORT_SESSIONS:-}" ]; then
-    IMPORT_OPTS+=("--parallel-samples" "$PARALLEL_IMPORT_SESSIONS")
+    if ! [[ "$PARALLEL_IMPORT_SESSIONS" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Error: --parallel-import-sessions requires a positive integer" >&2
+        exit 1
+    fi
+    IMPORT_OPTS+=("--parallel-sessions" "$PARALLEL_IMPORT_SESSIONS")
+    echo "[import] 单 sample 内 session 并发已开启: $PARALLEL_IMPORT_SESSIONS"
 fi
 
 SAMPLE=${ARGS[0]}
