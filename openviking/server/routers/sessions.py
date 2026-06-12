@@ -4,7 +4,7 @@
 
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Body, Depends, Path, Query, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, Request
 from pydantic import BaseModel, Field, model_validator
 
 from openviking.core.path_variables import resolve_path_variables
@@ -123,19 +123,27 @@ class CreateSessionRequest(BaseModel):
 def _resolve_message_parts(msg_request: AddMessageRequest) -> List[Part]:
     """Resolve parts from an AddMessageRequest, handling path variables."""
     if msg_request.parts is not None:
-        resolved_parts = []
-        for p in msg_request.parts:
-            part_copy = dict(p)
-            if part_copy.get("type") == "context" and "uri" in part_copy:
-                part_copy["uri"] = resolve_path_variables(part_copy["uri"])
-            if part_copy.get("type") == "tool":
-                if "tool_uri" in part_copy:
-                    part_copy["tool_uri"] = resolve_path_variables(part_copy["tool_uri"])
-                if "skill_uri" in part_copy:
-                    part_copy["skill_uri"] = resolve_path_variables(part_copy["skill_uri"])
-            resolved_parts.append(part_copy)
-        return [part_from_dict(p) for p in resolved_parts]
+        return [_part_request_to_part(p) for p in msg_request.parts]
     return [TextPart(text=msg_request.content or "")]
+
+
+def _part_request_to_part(raw_part: Dict[str, Any]) -> Part:
+    """Convert request part payload into an internal Part."""
+    if not isinstance(raw_part, dict):
+        return TextPart(text=str(raw_part))
+
+    part_copy = dict(raw_part)
+    if part_copy.get("type") == "context" and "uri" in part_copy:
+        part_copy["uri"] = resolve_path_variables(part_copy["uri"])
+    if part_copy.get("type") == "tool":
+        if "tool_uri" in part_copy:
+            part_copy["tool_uri"] = resolve_path_variables(part_copy["tool_uri"])
+        if "skill_uri" in part_copy:
+            part_copy["skill_uri"] = resolve_path_variables(part_copy["skill_uri"])
+    try:
+        return part_from_dict(part_copy)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _to_jsonable(value: Any) -> Any:

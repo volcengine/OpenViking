@@ -4,8 +4,9 @@
 Test that provider instruction correctly instructs LLM.
 """
 
-from openviking.message import Message, TextPart, ToolPart
+from openviking.message import ImagePart, Message, TextPart, ToolPart
 from openviking.session.memory.session_extract_context_provider import SessionExtractContextProvider
+from openviking.session.memory.vision_message_normalizer import IMAGE_DESCRIPTION_PROMPT
 
 
 class TestProviderInstruction:
@@ -165,3 +166,110 @@ class TestSkillToolCallExposure:
         provider = SessionExtractContextProvider(messages=messages)
 
         assert provider._detect_language() == "zh-CN"
+
+    async def test_prepare_extraction_messages_replaces_image_part_with_vlm_description(self):
+        class FakeVisionVLM:
+            def __init__(self):
+                self.messages = None
+
+            async def get_vision_completion_async(self, **kwargs):
+                self.messages = kwargs.get("messages")
+                return "A high level image description."
+
+        messages = [
+            Message(
+                id="m1",
+                role="user",
+                parts=[
+                    TextPart("Please remember this image."),
+                    ImagePart(url="https://example.com/image.png", detail="auto"),
+                ],
+            )
+        ]
+        provider = SessionExtractContextProvider(messages=messages)
+        fake_vlm = FakeVisionVLM()
+        provider._vision_vlm = fake_vlm
+
+        await provider.prepare_extraction_messages()
+        prompt_message = provider._build_conversation_message()
+
+        assert "Please remember this image." in prompt_message["content"]
+        assert "A high level image description." in prompt_message["content"]
+        assert "https://example.com/image.png" not in prompt_message["content"]
+        assert fake_vlm.messages == [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": IMAGE_DESCRIPTION_PROMPT,
+                    },
+                    {"type": "text", "text": "Please remember this image."},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "https://example.com/image.png",
+                            "detail": "auto",
+                        },
+                    },
+                ],
+            }
+        ]
+
+    async def test_prepare_extraction_messages_skips_image_only_without_description(self):
+        messages = [
+            Message(
+                id="m1",
+                role="user",
+                parts=[ImagePart(url="https://example.com/private-family-photo.png")],
+            )
+        ]
+        provider = SessionExtractContextProvider(messages=messages)
+        provider._vision_vlm = None
+
+        await provider.prepare_extraction_messages()
+        prompt_message = provider._build_conversation_message()
+
+        assert "[Image description]" not in prompt_message["content"]
+        assert "https://example.com/private-family-photo.png" not in prompt_message["content"]
+
+    async def test_prepare_extraction_messages_keeps_text_when_image_is_undescribed(self):
+        messages = [
+            Message(
+                id="m1",
+                role="user",
+                parts=[
+                    TextPart("Please remember the surrounding text."),
+                    ImagePart(url="https://example.com/private-family-photo.png"),
+                ],
+            )
+        ]
+        provider = SessionExtractContextProvider(messages=messages)
+        provider._vision_vlm = None
+
+        await provider.prepare_extraction_messages()
+        prompt_message = provider._build_conversation_message()
+
+        assert "Please remember the surrounding text." in prompt_message["content"]
+        assert "[Image description]" not in prompt_message["content"]
+        assert "https://example.com/private-family-photo.png" not in prompt_message["content"]
+
+    async def test_prepare_extraction_messages_does_not_replace_caller_message_list(self):
+        messages = [
+            Message(
+                id="m1",
+                role="user",
+                parts=[
+                    TextPart("Please remember this image."),
+                    ImagePart(url="https://example.com/image.png"),
+                ],
+            )
+        ]
+        provider = SessionExtractContextProvider(messages=messages)
+        provider._vision_vlm = None
+
+        await provider.prepare_extraction_messages()
+
+        assert len(messages) == 1
+        assert any(isinstance(part, ImagePart) for part in messages[0].parts)
+        assert provider.messages is not messages
