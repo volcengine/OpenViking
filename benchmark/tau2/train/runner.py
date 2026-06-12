@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from openviking.server.config import load_server_config
+from openviking.server.identity import AuthMode
 from openviking.session.train import (
     ContentHashPolicySnapshotter,
     ExperienceSet,
@@ -137,7 +138,7 @@ async def run_tau2_batch_train_eval(config: Tau2BatchRunConfig) -> Tau2BatchRunR
     client = _build_http_client(config)
     await client.initialize()
     try:
-        policy_root_uri = "viking://user/default/memories/experiences"
+        policy_root_uri = "viking://user/memories/experiences"
         policy_set = ExperienceSet(
             root_uri=policy_root_uri,
             policies=[],
@@ -226,15 +227,25 @@ def _configure_openviking_config(config_path: str | None) -> None:
 def _build_http_client(config: Tau2BatchRunConfig) -> AsyncHTTPClient:
     server_url = config.server_url
     api_key = config.api_key
-    if server_url is None or api_key is None:
+    auth_mode: AuthMode | None = None
+    if config.config_path or server_url is None or api_key is None:
         server_config = load_server_config(config.config_path)
+        auth_mode = server_config.get_effective_auth_mode()
         server_url = server_url or f"http://{server_config.host}:{server_config.port}"
         api_key = api_key or server_config.root_api_key
+    if auth_mode is None:
+        auth_mode = AuthMode.API_KEY
+
+    # Trusted mode uses X-API-Key as the gateway/root key and takes identity from
+    # X-OpenViking-Account/User. In api_key/dev modes, user API keys already pin
+    # identity and account/user assertion headers must not be sent.
+    account = config.account_id if auth_mode == AuthMode.TRUSTED else None
+    user = config.user_id if auth_mode == AuthMode.TRUSTED else None
     return AsyncHTTPClient(
         url=server_url,
         api_key=api_key,
-        account=config.account_id,
-        user=config.user_id,
+        account=account,
+        user=user,
         profile_enabled=False,
         timeout=max(60.0, config.commit_timeout_seconds + 30.0),
     )

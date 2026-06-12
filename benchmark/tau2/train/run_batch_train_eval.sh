@@ -25,9 +25,9 @@ BATCH_SIZE=""
 CONFIG="${OPENVIKING_CONFIG_FILE:-}"
 OUTPUT=""
 SERVER_URL=""
-API_KEY=""
-ACCOUNT_ID="${OPENVIKING_ACCOUNT:-default}"
-USER_ID="${OPENVIKING_USER:-default}"
+API_KEY="${OPENVIKING_API_KEY:-}"
+ACCOUNT_ID="${OPENVIKING_ACCOUNT:-}"
+USER_ID="${OPENVIKING_USER:-}"
 BENCHMARK_SERVICE_URL="${BENCHMARK_SERVICE_URL:-http://127.0.0.1:1944}"
 MAX_ITERATIONS="30"
 TRAIN_LIMIT=""
@@ -115,6 +115,41 @@ export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
 export OPENVIKING_CONFIG_FILE="${OPENVIKING_CONFIG_FILE:-${HOME}/.openviking/ov.conf}"
 
 CONFIG="${CONFIG:-${OPENVIKING_CONFIG_FILE:-}}"
+
+if [[ -z "${ACCOUNT_ID}" || -z "${USER_ID}" ]]; then
+  RESOLVED_OV_IDENTITY="$(${PYTHON_BIN} - "${CONFIG}" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+config_path = Path(sys.argv[1]).expanduser() if len(sys.argv) > 1 and sys.argv[1] else None
+ov_data = {}
+if config_path and config_path.exists():
+    try:
+        ov_data = json.loads(config_path.read_text(encoding="utf-8-sig"))
+    except Exception:
+        ov_data = {}
+ov_server = (ov_data.get("bot") or {}).get("ov_server") or {}
+account = str(ov_server.get("account_id") or "").strip()
+user = str(ov_server.get("admin_user_id") or "").strip()
+
+cli_path = Path(os.environ.get("OPENVIKING_CLI_CONFIG_FILE") or Path.home() / ".openviking" / "ovcli.conf").expanduser()
+if (not account or not user) and cli_path.exists():
+    try:
+        cli_data = json.loads(cli_path.read_text(encoding="utf-8-sig"))
+    except Exception:
+        cli_data = {}
+    account = account or str(cli_data.get("account") or "").strip()
+    user = user or str(cli_data.get("user") or "").strip()
+
+print(f"{account or 'default'}\t{user or 'default'}")
+PY
+)"
+  IFS=$'\t' read -r RESOLVED_ACCOUNT_ID RESOLVED_USER_ID <<< "${RESOLVED_OV_IDENTITY}"
+  ACCOUNT_ID="${ACCOUNT_ID:-${RESOLVED_ACCOUNT_ID:-default}}"
+  USER_ID="${USER_ID:-${RESOLVED_USER_ID:-default}}"
+fi
 
 CMD=(
   "${PYTHON_BIN}" "${SCRIPT_DIR}/run_batch_train_eval.py"

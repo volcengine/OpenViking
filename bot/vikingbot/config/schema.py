@@ -516,6 +516,7 @@ class OpenVikingConfig(BaseModel):
     """Viking tools configuration."""
 
     mode: str = "remote"  # local or remote
+    auth_mode: Literal["api_key", "trusted", "dev"] | None = None
     api_key_type: Literal["root", "user"] | None = None
     server_url: str = ""
     api_key: str = ""
