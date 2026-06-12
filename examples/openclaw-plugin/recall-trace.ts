@@ -155,7 +155,10 @@ export function resolveRecallSearchPlan(
       searches.push({ resourceType, targetUri: "viking://resources" });
     } else if (resourceType === "session") {
       if (ctx.ovSessionId) {
-        searches.push({ resourceType, targetUri: `viking://session/${ctx.ovSessionId}/history` });
+        searches.push({
+          resourceType,
+          targetUri: `viking://user/sessions/${encodeURIComponent(ctx.ovSessionId)}/history`,
+        });
       } else {
         skipped.push({ resourceType, reason: "missing_session" });
       }
