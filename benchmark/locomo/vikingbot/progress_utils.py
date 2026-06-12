@@ -18,7 +18,6 @@ from rich.progress import (
     TaskID,
     TextColumn,
     TimeElapsedColumn,
-    TimeRemainingColumn,
 )
 from rich.table import Column
 from rich.text import Text
@@ -113,7 +112,6 @@ def make_three_state_progress(
     """
     console = console or Console(stderr=True, soft_wrap=False)
     progress = Progress(
-        TextColumn("[bold]{task.description}"),
         ThreeStateBarColumn(),
         TextColumn(
             "[progress.percentage]{task.percentage:>3.0f}%"
@@ -121,8 +119,6 @@ def make_three_state_progress(
             "[bold yellow]{task.fields[running]} running[/])"
         ),
         TimeElapsedColumn(),
-        TextColumn("ETA:"),
-        TimeRemainingColumn(),
         console=console,
         transient=transient,
     )
