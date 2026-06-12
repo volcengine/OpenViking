@@ -403,7 +403,9 @@ The HTTP request body rejects unknown fields. `uri` may use OpenViking path vari
 - `viking://user/<user_id>/skills`
 - `viking://user/<user_id>/skills/<skill_name>`
 
-`viking://session/...` is not supported by `reindex()`.
+Session namespaces are not supported by `reindex()`. Requests for
+`viking://session/...` or `viking://user/<user_id>/sessions/...` are rejected;
+when reindexing a broader user namespace, session subtrees are skipped.
 
 **Modes**
 

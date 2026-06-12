@@ -14,7 +14,12 @@ from openviking_cli.session.user_id import UserIdentifier
 
 
 def test_normalize_peer_id_accepts_peer_id():
-    assert normalize_peer_id("web:visitor:alice") == "web:visitor:alice"
+    assert normalize_peer_id("web-visitor-alice") == "web-visitor-alice"
+
+
+def test_normalize_peer_id_rejects_invalid_character():
+    with pytest.raises(ValueError, match="Invalid peer_id"):
+        normalize_peer_id("web+visitor+alice")
 
 
 def _target_dirs(target_uri="", peer_id=None):
@@ -22,76 +27,89 @@ def _target_dirs(target_uri="", peer_id=None):
     return resolve_retrieval_targets(target_uri, ctx, peer_id).target_directories
 
 
-def test_default_search_targets_user_memory_without_all_peer_memories():
+def test_default_search_targets_user_content_without_all_peer_content():
     targets = _target_dirs()
 
     assert targets == [
         "viking://user/support_bot/memories",
         "viking://resources",
+        "viking://user/support_bot/resources",
         "viking://user/support_bot/skills",
     ]
 
 
-def test_default_peer_search_targets_self_and_requested_peer_memories():
-    targets = _target_dirs(peer_id="web:visitor:alice")
+def test_default_peer_search_targets_self_and_requested_peer_content():
+    targets = _target_dirs(peer_id="web-visitor-alice")
 
     assert targets == [
         "viking://user/support_bot/memories",
-        "viking://user/support_bot/peers/web:visitor:alice/memories",
+        "viking://user/support_bot/peers/web-visitor-alice/memories",
         "viking://resources",
+        "viking://user/support_bot/resources",
+        "viking://user/support_bot/peers/web-visitor-alice/resources",
         "viking://user/support_bot/skills",
     ]
 
 
 def test_peer_search_keeps_explicit_target_uri():
-    targets = _target_dirs("viking://resources/docs", peer_id="web:visitor:alice")
+    targets = _target_dirs("viking://resources/docs", peer_id="web-visitor-alice")
 
     assert targets == ["viking://resources/docs"]
 
 
 def test_peer_search_expands_default_user_memory_target():
-    targets = _target_dirs("viking://user/memories", peer_id="web:visitor:alice")
+    targets = _target_dirs("viking://user/memories", peer_id="web-visitor-alice")
 
     assert targets == [
         "viking://user/support_bot/memories",
-        "viking://user/support_bot/peers/web:visitor:alice/memories",
+        "viking://user/support_bot/peers/web-visitor-alice/memories",
     ]
 
 
-def test_peer_search_explicit_peer_root_targets_that_peer_memory():
-    targets = _target_dirs("viking://user/support_bot/peers/web:visitor:alice")
+def test_peer_search_explicit_peer_root_targets_that_peer_content():
+    targets = _target_dirs("viking://user/support_bot/peers/web-visitor-alice")
 
-    assert targets == ["viking://user/support_bot/peers/web:visitor:alice/memories"]
+    assert targets == [
+        "viking://user/support_bot/peers/web-visitor-alice/memories",
+        "viking://user/support_bot/peers/web-visitor-alice/resources",
+    ]
 
 
 def test_peer_search_explicit_peer_memory_matches_peer_id():
     targets = _target_dirs(
-        "viking://user/support_bot/peers/web:visitor:alice/memories",
-        peer_id="web:visitor:alice",
+        "viking://user/support_bot/peers/web-visitor-alice/memories",
+        peer_id="web-visitor-alice",
     )
 
-    assert targets == ["viking://user/support_bot/peers/web:visitor:alice/memories"]
+    assert targets == ["viking://user/support_bot/peers/web-visitor-alice/memories"]
 
 
 def test_peer_search_explicit_peer_target_rejects_mismatched_peer_id():
     with pytest.raises(InvalidArgumentError, match="target_uri peer does not match peer_id"):
         _target_dirs(
-            "viking://user/support_bot/peers/web:visitor:alice/memories",
-            peer_id="web:visitor:bob",
+            "viking://user/support_bot/peers/web-visitor-alice/memories",
+            peer_id="web-visitor-bob",
         )
 
 
+def test_peer_search_explicit_peer_target_rejects_invalid_peer_id():
+    with pytest.raises(InvalidArgumentError, match="Invalid peer_id"):
+        _target_dirs("viking://user/support_bot/peers/web+visitor+alice/memories")
+
+
 def test_peer_search_rejects_all_peers_target():
-    with pytest.raises(InvalidArgumentError, match="all peer memories"):
+    with pytest.raises(InvalidArgumentError, match="all peer contexts"):
         _target_dirs("viking://user/support_bot/peers")
 
 
-def test_peer_search_user_root_targets_user_memory_and_skills_only():
-    targets = _target_dirs("viking://user", peer_id="web:visitor:alice")
+def test_peer_search_user_root_targets_user_content_and_requested_peer_content():
+    targets = _target_dirs("viking://user", peer_id="web-visitor-alice")
 
     assert targets == [
         "viking://user/support_bot/memories",
-        "viking://user/support_bot/peers/web:visitor:alice/memories",
+        "viking://user/support_bot/peers/web-visitor-alice/memories",
+        "viking://user/support_bot/resources",
+        "viking://user/support_bot/peers/web-visitor-alice/resources",
         "viking://user/support_bot/skills",
     ]
 
@@ -99,24 +117,24 @@ def test_peer_search_user_root_targets_user_memory_and_skills_only():
 def test_peer_search_expands_canonical_user_memory_target():
     targets = _target_dirs(
         "viking://user/support_bot/memories",
-        peer_id="web:visitor:alice",
+        peer_id="web-visitor-alice",
     )
 
     assert targets == [
         "viking://user/support_bot/memories",
-        "viking://user/support_bot/peers/web:visitor:alice/memories",
+        "viking://user/support_bot/peers/web-visitor-alice/memories",
     ]
 
 
 def test_peer_search_list_expands_only_default_memory_targets():
     targets = _target_dirs(
         ["viking://user/memories", "viking://resources/docs"],
-        peer_id="web:visitor:alice",
+        peer_id="web-visitor-alice",
     )
 
     assert targets == [
         "viking://user/support_bot/memories",
-        "viking://user/support_bot/peers/web:visitor:alice/memories",
+        "viking://user/support_bot/peers/web-visitor-alice/memories",
         "viking://resources/docs",
     ]
 

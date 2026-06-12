@@ -147,15 +147,19 @@ ov chat --no-format
 ### OpenViking Server 配置
 bot 将连接到远程 OpenViking Server，使用前请先启动 OpenViking Server。默认使用 `ov.conf` 中配置的 OpenViking Server 信息。
 - OpenViking 默认启动地址为 `127.0.0.1:1933`
-- 如果配置了 `root_api_key`，则开启多租户模式。详见 [多租户](https://github.com/volcengine/OpenViking/blob/main/examples/multi_tenant/README.md)
+- 新部署的 bot 默认应使用 OpenViking User API key。`root_api_key` 仅作为旧 root-key 部署的废弃兼容字段保留。
 - OpenViking Server 配置示例
 ```json
 {
   "server": {
-
     "host": "127.0.0.1",
-    "port": 1933,
-    "root_api_key": "test"
+    "port": 1933
+  },
+  "bot": {
+    "ov_server": {
+      "api_key": "<your-openviking-user-api-key>",
+      "api_key_type": "user"
+    }
   }
 }
 ```
@@ -181,9 +185,11 @@ bot 将连接到远程 OpenViking Server，使用前请先启动 OpenViking Serv
   - 若不配置，默认使用 `ov.conf` 中配置的 OpenViking Server 信息。
   - 如果你使用远端 OpenViking Server，可以在这里配置目标服务地址和 API Key。
     - `server_url`：OpenViking Server 基础地址，例如 `https://api.vikingdb.cn-beijing.volces.com/openviking` 或 `http://localhost:1933`。
-    - `root_api_key`：bot 调用 OpenViking Server 时使用的 API Key。尽管字段名保留为 `root_api_key`，但在 `user` key 流程下该字段同样会被使用。
+    - `api_key`：bot 调用 OpenViking Server 时使用的 API Key。新配置应填写 OpenViking User key。
+    - `root_api_key`：旧 root-key 部署的废弃兼容字段；新配置不要再使用。
     - `account_id`：默认值为 `default`，即 OpenViking 的账号 ID。同一 OpenViking account 下的所有 user 共享 resources。
-    - `api_key_type`：可选 `root` 或 `user`，默认 `root`。`root` 保留原有的 root-key fanout 行为；`user` 切换 bot 走 user-key 流程调用 OpenViking 客户端。对于托管型远端 OpenViking 服务，通常推荐使用 `user`。
+    - `api_key_type`：可选 `root` 或 `user`，默认 `user`。`user` 使用 OpenViking User-key 流程，并将 bot sender 映射为该 User 下的 peer。`root` 仅用于旧 root-key fanout 行为，如仍需使用必须显式配置。
+      旧配置如果把 root key 填在 `api_key`，需要补充 `api_key_type: "root"`，或迁移到 `root_api_key`；否则 `api_key` 会按 User key 解释。
     - `exp_write_tools`：可选，触发经验记忆注入的工具名列表（自演化 agent memory 循环，详见 #2007）。默认 `["write_file", "edit_file"]`。该配置只控制 bot 侧注入触发时机；已存储 experience 的生成由 OpenViking 记忆抽取和当前 session 的 `memory_policy.memory_types` 白名单控制。
     - `recall_exp_first_round_only`：可选。为 `true` 时，`ContextBuilder._build_user_memory` 跳过每轮 user/agent 经验召回，仅在首个 user turn 注入一次经验。默认 `false`。
     - `exp_recall_limit`：可选。召回时每个任务检索的经验条数。默认 `5`。
@@ -211,7 +217,7 @@ bot 将连接到远程 OpenViking Server，使用前请先启动 OpenViking Serv
     },
     "ov_server": {
       "server_url": "https://api.vikingdb.cn-beijing.volces.com/openviking",
-      "root_api_key": "<your-openviking-user-api-key>",
+      "api_key": "<your-openviking-user-api-key>",
       "account_id": "default",
       "api_key_type": "user"
     },

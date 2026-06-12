@@ -95,7 +95,6 @@ class VLMBase(ABC):
         Returns:
             str if no tools provided, VLMResponse if tools provided
         """
-        effective_thinking = self.thinking if thinking is None else thinking
         pass
 
     @abstractmethod
@@ -119,7 +118,6 @@ class VLMBase(ABC):
         Returns:
             str if no tools provided, VLMResponse if tools provided
         """
-        effective_thinking = self.thinking if thinking is None else thinking
         pass
 
     @abstractmethod
@@ -145,7 +143,6 @@ class VLMBase(ABC):
         Returns:
             str if no tools provided, VLMResponse if tools provided
         """
-        effective_thinking = self.thinking if thinking is None else thinking
         pass
 
     @abstractmethod
@@ -171,7 +168,6 @@ class VLMBase(ABC):
         Returns:
             str if no tools provided, VLMResponse if tools provided
         """
-        effective_thinking = self.thinking if thinking is None else thinking
         pass
 
     def _clean_response(self, content: str) -> str:

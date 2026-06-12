@@ -16,8 +16,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from openviking.core.path_variables import resolve_path_variables
-from openviking.core.uri_validation import validate_optional_viking_uri
+from openviking.core.content_targets import ContentTargetSpec
+from openviking.core.uri_validation import validate_optional_content_target_uri
 from openviking.resource.feishu_watch_auth import (
     FEISHU_ACCESS_TOKEN_ARG,
     FEISHU_REFRESH_TOKEN_ARG,
@@ -255,19 +255,12 @@ class ResourceService:
         normalized_args = self._normalize_add_resource_args(args, watch_interval=watch_interval)
         kwargs.update(normalized_args.processor_kwargs)
 
-        if to:
-            to = resolve_path_variables(to)
-        if parent:
-            parent = resolve_path_variables(parent)
-        to = validate_optional_viking_uri(
-            to,
-            field_name="to",
-            allowed_scopes={"resources"},
-        )
-        parent = validate_optional_viking_uri(
-            parent,
-            field_name="parent",
-            allowed_scopes={"resources"},
+        target = ContentTargetSpec.from_fields(
+            ctx=ctx,
+            kind="resource",
+            to=to,
+            parent=parent,
+            create_parent=bool(kwargs.get("create_parent", False)),
         )
 
         from openviking.service.task_tracker import get_task_tracker
@@ -285,11 +278,9 @@ class ResourceService:
             root_uri, resource_lock = await self._plan_resource_target(
                 path=path,
                 ctx=ctx,
-                to=to,
-                parent=parent,
+                target=target,
                 source_name=source_name,
                 source_info=source_info,
-                create_parent=bool(kwargs.get("create_parent", False)),
             )
 
             task_tracker = get_task_tracker()
@@ -422,11 +413,9 @@ class ResourceService:
         *,
         path: str,
         ctx: RequestContext,
-        to: Optional[str],
-        parent: Optional[str],
+        target: ContentTargetSpec,
         source_name: Optional[str],
         source_info: _ResourceSourceInfo,
-        create_parent: bool,
     ) -> tuple[str, LockLease]:
         if not self._resource_processor or not self._viking_fs:
             raise NotInitializedError("ResourceProcessor")
@@ -437,11 +426,11 @@ class ResourceService:
             ctx=ctx,
             doc_name=doc_name,
             scope="resources",
-            to_uri=to,
-            parent_uri=parent,
+            to_uri=target.to,
+            parent_uri=target.parent,
             source_path=source_path,
             source_format=source_info.source_format,
-            create_parent=create_parent,
+            create_parent=target.create_parent,
         )
         if candidate_uri:
             return await self._resource_processor.reserve_unique_candidate(
@@ -604,21 +593,12 @@ class ResourceService:
         telemetry.set("resource.flags.watch_enabled", watch_enabled)
 
         try:
-            # Resolve path variables before validation
-            if to:
-                to = resolve_path_variables(to)
-            if parent:
-                parent = resolve_path_variables(parent)
-
-            to = validate_optional_viking_uri(
-                to,
-                field_name="to",
-                allowed_scopes={"resources"},
-            )
-            parent = validate_optional_viking_uri(
-                parent,
-                field_name="parent",
-                allowed_scopes={"resources"},
+            target = ContentTargetSpec.from_fields(
+                ctx=ctx,
+                kind="resource",
+                to=to,
+                parent=parent,
+                create_parent=bool(kwargs.get("create_parent", False)),
             )
             if enforce_public_remote_targets and is_remote_resource_source(path):
                 path = require_remote_resource_source(path)
@@ -632,8 +612,8 @@ class ResourceService:
                 reason=reason,
                 instruction=instruction,
                 scope="resources",
-                to=to,
-                parent=parent,
+                to=target.to,
+                parent=target.parent,
                 build_index=build_index,
                 summarize=summarize,
                 stage_callback=stage_callback,
@@ -693,13 +673,14 @@ class ResourceService:
             if watch_manager and not skip_watch_management:
                 with telemetry.measure("resource.watch"):
                     if watch_interval > 0:
-                        watch_to = to
-                        parent_uri = parent
+                        watch_to = target.to
+                        parent_uri = target.parent
                         if not watch_to:
-                            watch_to = validate_optional_viking_uri(
+                            watch_to = validate_optional_content_target_uri(
                                 result.get("root_uri"),
+                                ctx,
+                                kind="resource",
                                 field_name="root_uri",
-                                allowed_scopes={"resources"},
                             )
                             parent_uri = None
                         if not watch_to:
@@ -730,12 +711,12 @@ class ResourceService:
                             logger.warning(
                                 f"[ResourceService] Failed to create watch task for {watch_to}: {e}"
                             )
-                    elif to:
+                    elif target.to:
                         try:
-                            await self._handle_watch_task_cancellation(to_uri=to, ctx=ctx)
+                            await self._handle_watch_task_cancellation(to_uri=target.to, ctx=ctx)
                         except Exception as e:
                             logger.warning(
-                                f"[ResourceService] Failed to cancel watch task for {to}: {e}"
+                                f"[ResourceService] Failed to cancel watch task for {target.to}: {e}"
                             )
             if not wait:
                 from openviking.service.task_tracker import get_task_tracker

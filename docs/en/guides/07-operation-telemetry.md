@@ -243,6 +243,16 @@ This group appears on memory-extraction flows such as `session.commit`.
 | `summary.memory.extract.stages.create_relations_ms` | Time spent creating used-URI relations |
 | `summary.memory.extract.stages.flush_semantic_ms` | Time spent flushing semantic queue work |
 
+### `summary.search`
+
+| Field | Meaning |
+| --- | --- |
+| `summary.search.target_abstract.duration_ms` | Time spent prefetching abstracts for target URIs |
+| `summary.search.intent_analysis.duration_ms` | Time spent analyzing query intent |
+| `summary.search.embed_query.duration_ms` | Time spent embedding the query |
+| `summary.search.vector_retrieval.duration_ms` | Time spent in vector retrieval |
+| `summary.search.typed_queries_count` | Number of typed queries produced during planning |
+
 ### `summary.errors`
 
 | Field | Meaning |

@@ -44,24 +44,6 @@ def merge_time_filter(
     return {"op": "and", "conds": [existing_filter, time_filter]}
 
 
-def merge_level_filter(
-    existing_filter: Optional[Dict[str, Any]],
-    level: Optional[Union[int, str, List[int]]] = None,
-) -> Optional[Dict[str, Any]]:
-    """Merge level filter into an existing metadata filter tree."""
-    levels = _resolve_levels(level)
-    if not levels:
-        return existing_filter
-
-    level_filter: Dict[str, Any] = {"op": "must", "field": "level", "conds": levels}
-
-    if not existing_filter:
-        return level_filter
-    # Preserve any caller-supplied metadata predicates by AND-ing the level filter
-    # into the existing filter tree instead of replacing it.
-    return {"op": "and", "conds": [existing_filter, level_filter]}
-
-
 def _resolve_levels(level: Optional[Union[int, str, List[int], List[str]]]) -> List[int]:
     """Resolve level parameter into a list of integers."""
     if level is None:

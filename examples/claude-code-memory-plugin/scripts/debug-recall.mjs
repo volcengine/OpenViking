@@ -191,7 +191,7 @@ function postProcess(items, limit, threshold) {
 // ---------------------------------------------------------------------------
 
 const USER_RESERVED_DIRS = new Set(["memories"]);
-const AGENT_RESERVED_DIRS = new Set(["memories", "skills", "instructions", "workspaces"]);
+const AGENT_RESERVED_DIRS = new Set(["memories", "skills"]);
 const _spaceCache = {};
 
 async function resolveScopeSpace(scope) {

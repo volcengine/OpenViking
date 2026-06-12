@@ -145,7 +145,7 @@ describe("convertToAgentMessages: structured tool round-trip", () => {
           tool_status: "completed",
           tool_input: { path: "/tmp/big.txt" },
           tool_output: "preview only",
-          tool_output_ref: "viking://session/s1/tool-results/tr_call_big_abc",
+          tool_output_ref: "viking://user/sessions/s1/tool-results/tr_call_big_abc",
           tool_output_original_chars: 120000,
         },
       ],
@@ -155,7 +155,7 @@ describe("convertToAgentMessages: structured tool round-trip", () => {
     const toolResult = result[1] as Record<string, unknown>;
     const content = toolResult.content as Array<Record<string, string>>;
     expect(content[0]!.text).toContain("preview only");
-    expect(content[0]!.text).toContain("viking://session/s1/tool-results/tr_call_big_abc");
+    expect(content[0]!.text).toContain("viking://user/sessions/s1/tool-results/tr_call_big_abc");
     expect(content[0]!.text).toContain("original_chars=120000");
   });
 

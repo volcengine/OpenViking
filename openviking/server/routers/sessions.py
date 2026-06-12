@@ -5,7 +5,7 @@
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Body, Depends, Path, Query, Request
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.peer_id import normalize_peer_id
@@ -178,6 +178,7 @@ async def create_session(
         )
         return {
             "session_id": session.session_id,
+            "uri": session.uri,
             "user": session.user.to_dict(),
         }
 
@@ -214,6 +215,7 @@ async def get_session(
     except NotFoundError:
         return error_response("NOT_FOUND", f"Session {session_id} not found")
     result = session.meta.to_dict()
+    result["uri"] = session.uri
     result["user"] = session.user.to_dict()
     result["pending_tokens"] = int(session.meta.pending_tokens or 0)
     return Response(status="ok", result=result)
@@ -341,8 +343,6 @@ class CommitRequest(BaseModel):
     immediate context. Default 0 preserves the pre-v2 "archive everything"
     behavior.
     """
-
-    model_config = ConfigDict(extra="forbid")
 
     keep_recent_count: int = Field(
         default=0,

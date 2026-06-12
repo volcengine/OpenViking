@@ -162,18 +162,43 @@ type OVSearchInput = {
   limit?: number;
 };
 
+type OVListInput = {
+  uri: string;
+  recursive?: boolean;
+  simple?: boolean;
+  limit?: number;
+};
+
+type OVReadInput = {
+  uri: string;
+};
+
+type OVMultiReadInput = {
+  uris: string[];
+};
+
 type ToolResultRef = {
   sessionId: string;
   toolResultId: string;
   ref: string;
 };
 
+function userSessionUri(sessionId: string): string {
+  return `viking://user/sessions/${encodeURIComponent(sessionId)}`;
+}
+
+function toolResultRef(sessionId: string, toolResultId: string): string {
+  return `${userSessionUri(sessionId)}/tool-results/${encodeURIComponent(toolResultId)}`;
+}
+
 function parseToolResultRef(value: unknown): ToolResultRef | null {
   const raw = typeof value === "string" ? value.trim() : "";
   if (!raw) {
     return null;
   }
-  const match = raw.match(/^viking:\/\/session\/([^/]+)\/tool-results\/([^/?#]+)(?:[?#].*)?$/);
+  const match =
+    raw.match(/^viking:\/\/user\/(?:(?:[^/]+)\/)?sessions\/([^/]+)\/tool-results\/([^/?#]+)(?:[?#].*)?$/) ??
+    raw.match(/^viking:\/\/session\/([^/]+)\/tool-results\/([^/?#]+)(?:[?#].*)?$/);
   if (!match) {
     return null;
   }
@@ -185,7 +210,7 @@ function parseToolResultRef(value: unknown): ToolResultRef | null {
   return {
     sessionId,
     toolResultId,
-    ref: `viking://session/${encodeURIComponent(sessionId)}/tool-results/${encodeURIComponent(toolResultId)}`,
+    ref: toolResultRef(sessionId, toolResultId),
   };
 }
 
@@ -625,6 +650,22 @@ const contextEnginePlugin = {
     const defaultMemoryPolicy = defaultMemoryPolicyForPeerRole(cfg.peer_role);
     const tenantAccount = cfg.accountId;
     const tenantUser = cfg.userId;
+    const enabledToolNames = new Set<string>(cfg.enabledTools);
+    const registerOpenVikingTool = (
+      toolOrFactory: ToolDefinition | ((ctx: ToolContext) => ToolDefinition),
+      opts: { name: string; names?: string[] },
+    ) => {
+      const names = opts.names ?? [opts.name];
+      if (!names.some((name) => enabledToolNames.has(name))) {
+        api.logger.debug?.(`openviking: tool ${opts.name} disabled by config`);
+        return;
+      }
+      if (typeof toolOrFactory === "function") {
+        api.registerTool(toolOrFactory, opts);
+      } else {
+        api.registerTool(toolOrFactory, opts);
+      }
+    };
 
     const clientPromise = Promise.resolve(
       new OpenVikingClient(
@@ -781,12 +822,6 @@ const contextEnginePlugin = {
         }
         return `${collapsed.slice(0, maxChars - 3)}...`;
       };
-      const truncateUri = (value: string, maxChars = 84): string => {
-        if (value.length <= maxChars) {
-          return value;
-        }
-        return `${value.slice(0, maxChars - 3)}...`;
-      };
       const items = [
         ...(result.memories ?? []).map((item) => ({ contextType: "memory", item })),
         ...(result.resources ?? []).map((item) => ({ contextType: "resource", item })),
@@ -798,7 +833,7 @@ const contextEnginePlugin = {
       const numberHeader = "no";
       const numberWidth = Math.max(numberHeader.length, String(items.length).length);
       const typeWidth = Math.max("type".length, ...items.map(({ contextType }) => contextType.length));
-      const uriWidth = Math.max("uri".length, ...items.map(({ item }) => truncateUri(item.uri).length));
+      const uriWidth = Math.max("uri".length, ...items.map(({ item }) => item.uri.length));
       const levelWidth = Math.max("level".length, ...items.map(({ item }) => String(item.level ?? "").length));
       const scoreWidth = Math.max(
         "score".length,
@@ -809,7 +844,7 @@ const contextEnginePlugin = {
         ...items.map(({ contextType, item }, index) => {
           const score = typeof item.score === "number" ? item.score.toFixed(2) : "";
           const summary = truncateSummary(item.abstract || item.overview || "(no summary)");
-          return `${String(index + 1).padEnd(numberWidth)}  ${contextType.padEnd(typeWidth)}  ${truncateUri(item.uri).padEnd(uriWidth)}  ${String(item.level ?? "").padEnd(levelWidth)}  ${score.padEnd(scoreWidth)}  ${summary}`;
+          return `${String(index + 1).padEnd(numberWidth)}  ${contextType.padEnd(typeWidth)}  ${item.uri.padEnd(uriWidth)}  ${String(item.level ?? "").padEnd(levelWidth)}  ${score.padEnd(scoreWidth)}  ${summary}`;
         }),
       ];
     };
@@ -822,11 +857,63 @@ const contextEnginePlugin = {
       const scope = uri ? ` under ${uri}` : "";
       const lines = [
         `Found ${result.total ?? 0} OpenViking results for "${query}"${scope}`,
+        "Tip: search results are ranked snippets. Use ov_read on exact hit URIs before answering precise questions. Use ov_list on a hit's parent URI to inspect sibling chunks or overview files before answering procedural or multi-step questions.",
         "",
         ...formatOVSearchRows(result),
       ].filter((line, index, all) => line || (all[index - 1] && all[index + 1]));
       return lines.join("\n");
     };
+
+    const formatOVListEntry = (entry: unknown): string => {
+      if (typeof entry === "string") {
+        return entry;
+      }
+      if (!entry || typeof entry !== "object") {
+        return String(entry);
+      }
+      const item = entry as Record<string, unknown>;
+      const uri = typeof item.uri === "string" ? item.uri : "";
+      const name = typeof item.name === "string" ? item.name : "";
+      const isDir = item.isDir === true || item.type === "directory";
+      const marker = isDir ? "[dir]" : "[file]";
+      const summary =
+        typeof item.abstract === "string" && item.abstract.trim()
+          ? item.abstract.trim().replace(/\s+/g, " ")
+          : typeof item.overview === "string" && item.overview.trim()
+            ? item.overview.trim().replace(/\s+/g, " ")
+            : "";
+      const label = uri || name || JSON.stringify(item);
+      return summary ? `${marker} ${label} - ${summary}` : `${marker} ${label}`;
+    };
+
+    const formatOVListText = (uri: string, entries: unknown[]): string => {
+      if (entries.length === 0) {
+        return `No OpenViking entries found under ${uri}.`;
+      }
+      return [
+        `Listed ${entries.length} OpenViking entr${entries.length === 1 ? "y" : "ies"} under ${uri}`,
+        "",
+        ...entries.map((entry) => formatOVListEntry(entry)),
+      ].join("\n");
+    };
+
+    const formatOVReadText = (uri: string, content: string): string => {
+      const body = content || "(empty OpenViking content)";
+      return [`--- START OF ${uri} ---`, body, `--- END OF ${uri} ---`].join("\n");
+    };
+
+    const formatOVMultiReadText = (
+      results: Array<{ uri: string; content: string; success: boolean }>,
+    ): string => [
+      `Multi-read results for ${results.length} OpenViking resource${results.length === 1 ? "" : "s"}:`,
+      "",
+      ...results.flatMap((result) => [
+        `--- START OF ${result.uri} ---`,
+        result.success ? (result.content || "(empty OpenViking content)") : `ERROR: ${result.content}`,
+        `--- END OF ${result.uri} ---`,
+        "",
+      ]),
+    ].join("\n").trimEnd();
 
     const searchOpenViking = async (
       input: OVSearchInput,
@@ -886,42 +973,133 @@ const contextEnginePlugin = {
       };
     };
 
-    api.registerTool(
-      (ctx: ToolContext) => ({
-        name: "add_resource",
-        label: "Add Resource (OpenViking)",
-        description:
-          "Use only when the user explicitly asks to import, add, upload, save, or index a document, directory, URL, Git repository, or OpenClaw media attachment into OpenViking resources. " +
-          "For a '[media attached: /path ...]' document, set source to that exact local media path. Do not invent OpenViking upload REST endpoints.",
-        parameters: Type.Object({
-          source: Type.String({ description: "Local path, OpenClaw media attachment path, directory path, public URL, or Git URL" }),
-          to: Type.Optional(Type.String({ description: "Exact target URI, e.g. viking://resources/project-docs" })),
-          parent: Type.Optional(Type.String({ description: "Parent URI under viking://resources" })),
-          reason: Type.Optional(Type.String({ description: "Reason or note for adding this resource" })),
-          instruction: Type.Optional(Type.String({ description: "Processing instruction for semantic extraction" })),
-          wait: Type.Optional(Type.Boolean({ description: "Wait for processing to complete" })),
-          timeout: Type.Optional(Type.Number({ description: "Timeout in seconds when wait is true" })),
-        }),
-        async execute(_toolCallId: string, params: Record<string, unknown>) {
-          if (isBypassedSession(ctx)) {
-            return makeBypassedToolResult("add_resource");
-          }
-          const session = resolvePluginSessionRouting(ctx);
-          return addResourceOpenViking({
-            source: typeof params.source === "string" ? params.source : undefined,
-            to: typeof params.to === "string" ? params.to : undefined,
-            parent: typeof params.parent === "string" ? params.parent : undefined,
-            reason: typeof params.reason === "string" ? params.reason : undefined,
-            instruction: typeof params.instruction === "string" ? params.instruction : undefined,
-            wait: typeof params.wait === "boolean" ? params.wait : undefined,
-            timeout: typeof params.timeout === "number" ? params.timeout : undefined,
-          }, session.agentId);
+    const readOpenViking = async (input: OVReadInput, agentId?: string) => {
+      const uri = input.uri.trim();
+      if (!uri) {
+        throw new Error("uri is required");
+      }
+      const client = await getClient();
+      const content = await client.read(uri, agentId);
+      return {
+        content: [{ type: "text" as const, text: formatOVReadText(uri, content) }],
+        details: {
+          action: "read",
+          uri,
+          chars: content.length,
         },
-      }),
-      { name: "add_resource" },
-    );
+      };
+    };
 
-    api.registerTool(
+    const multiReadOpenViking = async (input: OVMultiReadInput, agentId?: string) => {
+      const uris = input.uris
+        .map((uri) => (typeof uri === "string" ? uri.trim() : ""))
+        .filter((uri) => uri.length > 0);
+      if (uris.length === 0) {
+        throw new Error("uris is required");
+      }
+      const client = await getClient();
+      const results = await Promise.all(
+        uris.map(async (uri) => {
+          try {
+            const content = await client.read(uri, agentId);
+            return {
+              uri,
+              content,
+              success: true,
+              chars: content.length,
+            };
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            return {
+              uri,
+              content: message,
+              success: false,
+              chars: 0,
+            };
+          }
+        }),
+      );
+      return {
+        content: [{ type: "text" as const, text: formatOVMultiReadText(results) }],
+        details: {
+          action: "multi_read",
+          count: results.length,
+          success_count: results.filter((result) => result.success).length,
+          results,
+        },
+      };
+    };
+
+    const listOpenViking = async (input: OVListInput, agentId?: string) => {
+      const uri = input.uri.trim();
+      if (!uri) {
+        throw new Error("uri is required");
+      }
+      const limit = Math.max(1, Math.floor(input.limit ?? 100));
+      const client = await getClient();
+      const entries = await client.list(
+        uri,
+        {
+          recursive: input.recursive ?? false,
+          simple: input.simple ?? false,
+          nodeLimit: limit,
+        },
+        agentId,
+      );
+      return {
+        content: [{ type: "text" as const, text: formatOVListText(uri, entries) }],
+        details: {
+          action: "listed",
+          uri,
+          recursive: input.recursive ?? false,
+          simple: input.simple ?? false,
+          count: entries.length,
+          entries,
+        },
+      };
+    };
+
+    if (cfg.enableAddResourceTool) {
+      registerOpenVikingTool(
+        (ctx: ToolContext) => ({
+          name: "add_resource",
+          label: "Add Resource (OpenViking)",
+          description:
+            "Use only when the user explicitly asks to import, add, upload, save, or index a document, directory, URL, Git repository, or OpenClaw media attachment into OpenViking resources. " +
+            "Never use this during search, retrieval, URI reading, or search-result optimization; use ov_search, ov_list, ov_read, and ov_multi_read for those flows. " +
+            "For a '[media attached: /path ...]' document, set source to that exact local media path. " +
+            "Set either to for an exact target URI or parent for a parent directory, never both. " +
+            "Do not invent OpenViking upload REST endpoints.",
+          parameters: Type.Object({
+            source: Type.String({ description: "Local path, OpenClaw media attachment path, directory path, public URL, or Git URL" }),
+            to: Type.Optional(Type.String({ description: "Exact target URI, e.g. viking://resources/project-docs. Mutually exclusive with parent." })),
+            parent: Type.Optional(Type.String({ description: "Parent URI under viking://resources. Mutually exclusive with to." })),
+            reason: Type.Optional(Type.String({ description: "Reason or note for adding this resource" })),
+            instruction: Type.Optional(Type.String({ description: "Processing instruction for semantic extraction" })),
+            wait: Type.Optional(Type.Boolean({ description: "Wait for processing to complete" })),
+            timeout: Type.Optional(Type.Number({ description: "Timeout in seconds when wait is true" })),
+          }),
+          async execute(_toolCallId: string, params: Record<string, unknown>) {
+            if (isBypassedSession(ctx)) {
+              return makeBypassedToolResult("add_resource");
+            }
+            const session = resolvePluginSessionRouting(ctx);
+            return addResourceOpenViking({
+              source: typeof params.source === "string" ? params.source : undefined,
+              to: typeof params.to === "string" ? params.to : undefined,
+              parent: typeof params.parent === "string" ? params.parent : undefined,
+              reason: typeof params.reason === "string" ? params.reason : undefined,
+              instruction: typeof params.instruction === "string" ? params.instruction : undefined,
+              wait: typeof params.wait === "boolean" ? params.wait : undefined,
+              timeout: typeof params.timeout === "number" ? params.timeout : undefined,
+            }, session.agentId);
+          },
+        }),
+        { name: "add_resource" },
+      );
+    }
+
+    registerOpenVikingTool(
       (ctx: ToolContext) => ({
         name: "add_skill",
         label: "Add Skill (OpenViking)",
@@ -950,12 +1128,14 @@ const contextEnginePlugin = {
       { name: "add_skill" },
     );
 
-    api.registerTool(
+    registerOpenVikingTool(
       (ctx: ToolContext) => ({
         name: "ov_search",
         label: "Search (OpenViking)",
         description:
-          "Search OpenViking resources and skills. Use after importing, or when the user asks to search OpenViking resources or skills.",
+          "Search OpenViking resources and skills. Use after importing, or when the user asks to search OpenViking resources or skills. " +
+          "Search only returns ranked snippets; call ov_read on exact hit URIs before answering precise questions. " +
+          "When a result is part of a split document or a multi-step procedure, call ov_list on the parent URI to inspect sibling chunks and overview files before answering.",
         parameters: Type.Object({
           query: Type.String({ description: "Search query" }),
           uri: Type.Optional(Type.String({ description: "Optional search URI. Defaults to resources plus user skills." })),
@@ -975,6 +1155,84 @@ const contextEnginePlugin = {
         },
       }),
       { name: "ov_search" },
+    );
+
+    registerOpenVikingTool(
+      (ctx: ToolContext) => ({
+        name: "ov_read",
+        label: "Read (OpenViking)",
+        description:
+          "Read the full original content of one exact OpenViking URI returned by ov_search or ov_list. " +
+          "Use after ov_search before answering precise documentation, codebase, configuration, or procedural questions. " +
+          "Do not use filesystem read/cat for viking:// URIs.",
+        parameters: Type.Object({
+          uri: Type.String({ description: "Exact OpenViking URI to read, e.g. viking://resources/project/docs/step-1.md" }),
+        }),
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          if (isBypassedSession(ctx)) {
+            return makeBypassedToolResult("ov_read");
+          }
+          const session = resolvePluginSessionRouting(ctx);
+          return readOpenViking({
+            uri: String((params as { uri?: unknown }).uri ?? ""),
+          }, session.agentId);
+        },
+      }),
+      { name: "ov_read" },
+    );
+
+    registerOpenVikingTool(
+      (ctx: ToolContext) => ({
+        name: "ov_multi_read",
+        label: "Multi Read (OpenViking)",
+        description:
+          "Read the full original content of multiple exact OpenViking URIs concurrently. " +
+          "Use after ov_search and ov_list to read an overview plus sibling chunks for split documents or multi-step procedures.",
+        parameters: Type.Object({
+          uris: Type.Array(Type.String({ description: "Exact OpenViking URI to read" }), {
+            description: "Exact OpenViking URIs to read",
+          }),
+        }),
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          if (isBypassedSession(ctx)) {
+            return makeBypassedToolResult("ov_multi_read");
+          }
+          const session = resolvePluginSessionRouting(ctx);
+          const uris = Array.isArray((params as { uris?: unknown }).uris)
+            ? (params as { uris: unknown[] }).uris.map((uri) => String(uri))
+            : [];
+          return multiReadOpenViking({ uris }, session.agentId);
+        },
+      }),
+      { name: "ov_multi_read" },
+    );
+
+    registerOpenVikingTool(
+      (ctx: ToolContext) => ({
+        name: "ov_list",
+        label: "List (OpenViking)",
+        description:
+          "List files and directories under an OpenViking URI. Use after ov_search to inspect a hit's parent directory, sibling chunks, or .overview.md files when search only returns ranked snippets.",
+        parameters: Type.Object({
+          uri: Type.String({ description: "OpenViking directory URI to list, e.g. viking://resources/project/docs" }),
+          recursive: Type.Optional(Type.Boolean({ description: "List nested entries recursively. Default: false" })),
+          simple: Type.Optional(Type.Boolean({ description: "Return only URI entries from OpenViking. Default: false" })),
+          limit: Type.Optional(Type.Number({ description: "Maximum entries to list. Default: 100" })),
+        }),
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          if (isBypassedSession(ctx)) {
+            return makeBypassedToolResult("ov_list");
+          }
+          const session = resolvePluginSessionRouting(ctx);
+          return listOpenViking({
+            uri: String((params as { uri?: unknown }).uri ?? ""),
+            recursive: typeof params.recursive === "boolean" ? params.recursive : undefined,
+            simple: typeof params.simple === "boolean" ? params.simple : undefined,
+            limit: typeof params.limit === "number" ? params.limit : undefined,
+          }, session.agentId);
+        },
+      }),
+      { name: "ov_list" },
     );
 
     api.registerCommand?.({
@@ -1038,7 +1296,7 @@ const contextEnginePlugin = {
       },
     });
 
-    api.registerTool(
+    registerOpenVikingTool(
       (ctx: ToolContext) => ({
         name: "memory_recall",
         label: "Memory Recall (OpenViking)",
@@ -1212,7 +1470,7 @@ const contextEnginePlugin = {
       { name: "memory_recall" },
     );
 
-    api.registerTool(
+    registerOpenVikingTool(
       (ctx: ToolContext) => ({
         name: "memory_store",
         label: "Memory Store (OpenViking)",
@@ -1362,7 +1620,7 @@ const contextEnginePlugin = {
       { name: "memory_store" },
     );
 
-    api.registerTool(
+    registerOpenVikingTool(
       (ctx: ToolContext) => ({
         name: "memory_forget",
         label: "Memory Forget (OpenViking)",
@@ -1476,7 +1734,7 @@ const contextEnginePlugin = {
       { name: "memory_forget" },
     );
 
-    api.registerTool(
+    registerOpenVikingTool(
       (ctx: ToolContext) => ({
         name: "ov_archive_search",
         label: "Archive Search (OpenViking)",
@@ -1577,7 +1835,7 @@ const contextEnginePlugin = {
       { name: "ov_archive_search" },
     );
 
-    api.registerTool((ctx: ToolContext) => ({
+    registerOpenVikingTool((ctx: ToolContext) => ({
       name: "ov_archive_expand",
       label: "Archive Expand (OpenViking)",
       description:
@@ -1656,21 +1914,21 @@ const contextEnginePlugin = {
       },
     }), { name: "ov_archive_expand" });
 
-    api.registerTool(
+    registerOpenVikingTool(
       (ctx: ToolContext) => ({
         name: "openviking_tool_result_read",
         label: "Tool Result Read (OpenViking)",
         description:
           "Restore the full original content of a tool result that was externalized by OpenViking. " +
           "Use when a previous tool result was externalized and only a preview is visible — " +
-          "the preview contains a [tool-result-ref] or viking://session/.../tool-results/... URI. " +
+          "the preview contains a [tool-result-ref] or viking://user/sessions/.../tool-results/... URI. " +
           "\"Read\" tool returns the same truncated preview; this tool returns the complete content. " +
           "To read all content: pass offset=0 and a limit large enough to cover the whole result " +
           "(e.g. limit=100000). Use offset/limit for paging only when you need a specific section.",
         parameters: Type.Object({
           tool_output_ref: Type.String({
             description:
-              "Exact OV URI from the preview, e.g. viking://session/<session_id>/tool-results/<tool_result_id>",
+              "Exact OV URI from the preview, e.g. viking://user/sessions/<session_id>/tool-results/<tool_result_id>",
           }),
           offset: Type.Optional(Type.Number({ description: "Unicode character offset. Default: 0" })),
           limit: Type.Optional(Type.Number({ description: "Maximum Unicode characters to read. Default: 20000" })),
@@ -1690,7 +1948,7 @@ const contextEnginePlugin = {
           const parsed = parseToolResultRef(params.tool_output_ref ?? params.ref ?? params.uri);
           if (!parsed) {
             return {
-              content: [{ type: "text", text: "Error: tool_output_ref must be a viking://session/.../tool-results/... URI." }],
+              content: [{ type: "text", text: "Error: tool_output_ref must be a viking://user/sessions/.../tool-results/... URI." }],
               details: { error: "invalid_tool_output_ref" },
             };
           }
@@ -1753,7 +2011,7 @@ const contextEnginePlugin = {
       { name: "openviking_tool_result_read" },
     );
 
-    api.registerTool(
+    registerOpenVikingTool(
       (ctx: ToolContext) => ({
         name: "openviking_tool_result_search",
         label: "Tool Result Search (OpenViking)",
@@ -1765,7 +2023,7 @@ const contextEnginePlugin = {
         parameters: Type.Object({
           tool_output_ref: Type.String({
             description:
-              "Exact OV URI from the preview, e.g. viking://session/<session_id>/tool-results/<tool_result_id>",
+              "Exact OV URI from the preview, e.g. viking://user/sessions/<session_id>/tool-results/<tool_result_id>",
           }),
           query: Type.String({ description: "Keyword or exact text to search for" }),
           limit: Type.Optional(Type.Number({ description: "Maximum matches. Default: 20" })),
@@ -1786,7 +2044,7 @@ const contextEnginePlugin = {
           const parsed = parseToolResultRef(params.tool_output_ref ?? params.ref ?? params.uri);
           if (!parsed) {
             return {
-              content: [{ type: "text", text: "Error: tool_output_ref must be a viking://session/.../tool-results/... URI." }],
+              content: [{ type: "text", text: "Error: tool_output_ref must be a viking://user/sessions/.../tool-results/... URI." }],
               details: { error: "invalid_tool_output_ref" },
             };
           }
@@ -1857,7 +2115,7 @@ const contextEnginePlugin = {
       { name: "openviking_tool_result_search" },
     );
 
-    api.registerTool(
+    registerOpenVikingTool(
       (ctx: ToolContext) => ({
         name: "openviking_tool_result_list",
         label: "Tool Result List (OpenViking)",

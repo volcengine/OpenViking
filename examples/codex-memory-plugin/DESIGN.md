@@ -11,7 +11,7 @@ events imply "context for a particular codex `session_id` is gone".
 - **codex `session_id`** — the codex thread/session id. Stable across
   process restarts when zouk-daemon resumes the same thread; replaced when
   `/clear`, `/new`, fresh codex startup, or zouk reset occurs.
-- **OV session** — `viking://session/cx-<codex-session-id>`. New captures
+- **OV session** — `viking://user/sessions/cx-<codex-session-id>`. New captures
   derive the OV session id from the codex `session_id` with a `cx-` prefix,
   append messages on every `Stop`, and commit it (which triggers OV's
   memory extractor) at session-end-equivalent moments. `/messages`
@@ -203,7 +203,7 @@ continuity unless the most recent committed memories are surfaced.
 Proposed flow:
 1. Load state for the resumed `session_id`. If `ovSessionId` is non-null,
    no action — the session is still appendable.
-2. Otherwise list `viking://session/cx-<codex-session-id>/history/archive_*/`
+2. Otherwise list `viking://user/sessions/cx-<codex-session-id>/history/archive_*/`
    on the OV server, take the most recent.
 3. Read its abstract (L0) / overview (L1).
 4. Emit via `hookSpecificOutput.additionalContext` so codex injects the

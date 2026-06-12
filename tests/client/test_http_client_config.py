@@ -311,7 +311,7 @@ async def test_async_http_client_find_sends_peer_id(tmp_path, monkeypatch):
     await client.find(
         "invoice",
         target_uri="viking://user/memories",
-        peer_id="web:visitor:alice",
+        peer_id="web-visitor-alice",
     )
 
     assert http.calls == [
@@ -324,7 +324,7 @@ async def test_async_http_client_find_sends_peer_id(tmp_path, monkeypatch):
                 "score_threshold": None,
                 "filter": None,
                 "telemetry": False,
-                "peer_id": "web:visitor:alice",
+                "peer_id": "web-visitor-alice",
             },
         )
     ]
@@ -344,7 +344,7 @@ async def test_async_http_client_search_sends_peer_id(tmp_path, monkeypatch):
         "invoice",
         target_uri="viking://user/memories",
         session_id="session-1",
-        peer_id="web:visitor:alice",
+        peer_id="web-visitor-alice",
     )
 
     assert http.calls == [
@@ -358,7 +358,7 @@ async def test_async_http_client_search_sends_peer_id(tmp_path, monkeypatch):
                 "score_threshold": None,
                 "filter": None,
                 "telemetry": False,
-                "peer_id": "web:visitor:alice",
+                "peer_id": "web-visitor-alice",
             },
         )
     ]

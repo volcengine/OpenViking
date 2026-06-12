@@ -73,9 +73,12 @@ OpenViking Server 支持两种多租户相关认证模式：
 
 | 数据类型 | 是否跨 account 共享 | account 内是否共享 | 默认隔离边界 |
 |----------|---------------------|-------------------|--------------|
-| `resources` | 否 | 是 | account |
-| `user` | 否 | 否 | user |
-| `session` | 否 | 否 | user / session |
+| 共享资源 (`viking://resources`) | 否 | 是 | account |
+| 用户资源 (`viking://user/{user_id}/resources`) | 否 | 否 | user |
+| Peer 资源 (`viking://user/{user_id}/peers/{peer_id}/resources`) | 否 | 否 | user / peer |
+| 记忆 | 否 | 否 | user / peer |
+| 技能 | 否 | 否 | user |
+| 会话 | 否 | 否 | user / session |
 
 ### 存储层
 
@@ -84,6 +87,8 @@ OpenViking Server 支持两种多租户相关认证模式：
 ```text
 viking://resources/project-a/
 viking://user/alice/memories/
+viking://user/alice/resources/
+viking://user/alice/peers/web-visitor-alice/resources/
 ```
 
 但底层存储会自动带上 account 前缀：
@@ -91,6 +96,8 @@ viking://user/alice/memories/
 ```text
 /local/{account_id}/resources/project-a/
 /local/{account_id}/user/alice/memories/
+/local/{account_id}/user/alice/resources/
+/local/{account_id}/user/alice/peers/web-visitor-alice/resources/
 ```
 
 因此多租户隔离不是靠“不同 URI 前缀”，而是靠请求上下文中的 `account_id` 和 `user_id` 共同生效。
@@ -101,7 +108,8 @@ viking://user/alice/memories/
 
 - 非 ROOT 请求会自动按 `account_id` 过滤
 - `resources` 会允许检索 account 内共享资源
-- `memory` 和 `skill` 会进一步按当前 `user space` 过滤
+- `memory`、用户资源和 `skill` 会进一步按当前 `user space` 过滤
+- 传入 `peer_id` 时只额外加入该 peer 的 memories/resources；skills 仍保持 user-scoped
 
 这意味着“能搜到什么”与“能读到什么”保持一致，不会因为向量召回而越权。
 
@@ -265,10 +273,13 @@ Root key 主要用于：
 
 ### 2. `peer_id` 不决定 account
 
-`peer_id` 表示共享会话里的消息说话人，不创建租户或文件系统 namespace。
+`peer_id` 表示当前用户下的交互对象。它不创建租户，但可以选择当前用户内的 peer 内容子空间，
+例如 `viking://user/{user_id}/peers/{peer_id}/memories` 或
+`viking://user/{user_id}/peers/{peer_id}/resources`。
 
 - account 边界由 `account_id` 决定
 - user 边界由 `user_id` 决定
+- peer 内容仍位于该 user 边界内
 
 ### 3. 不配置 `root_api_key` 不等于“单租户正式部署”
 

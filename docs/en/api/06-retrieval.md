@@ -56,7 +56,7 @@ The `find()` method performs pure vector similarity search for simple query scen
 |-----------|------|----------|---------|-------------|
 | query | str | Yes | - | Search query string |
 | target_uri | str \| List[str] | No | "" | Limit search to specific URI prefix |
-| peer_id | str | No | None | Stable interaction peer ID. When searching the default user memory scope, results include both current user memories and this peer's memories. CLI maps `--peer-id` to this field |
+| peer_id | str | No | None | Stable interaction peer ID. When searching default user-scoped targets, results include this peer's memories and resources in addition to current-user content. CLI maps `--peer-id` to this field |
 | node_limit | int | No | None | Maximum number of results |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filter |
@@ -66,6 +66,12 @@ The `find()` method performs pure vector similarity search for simple query scen
 | level | str | No | None | Limit results to specific level(s), e.g., `0`, `1`, `2`, or `0,1,2`. CLI `--level`/`-L` maps to this field |
 | include_provenance | bool | No | False | Include provenance/query-plan details in serialized result |
 | telemetry | bool \| object | No | False | Attach telemetry data to response |
+
+**Target resolution notes**:
+- With empty `target_uri`, non-ROOT retrieval searches current-user memories, shared `viking://resources`, current-user resources, and current-user skills.
+- When `peer_id` is provided, OpenViking also searches `viking://user/{user_id}/peers/{peer_id}/memories` and `viking://user/{user_id}/peers/{peer_id}/resources`. Peer skills are not searched.
+- `peer_id` must be a safe single path segment, for example `web-visitor-alice`; values such as `web:visitor:alice`, `web+visitor+alice`, `.`, `..`, or values with path separators are rejected.
+- Current-user shorthand target URIs such as `viking://user/memories`, `viking://user/resources`, and `viking://user/skills` are canonicalized from the authenticated request identity.
 
 **FindResult Structure**
 
@@ -167,6 +173,18 @@ results = client.find(
 results = client.find(
     "preferences",
     target_uri="viking://user/memories"
+)
+
+# Search only in current-user resources
+results = client.find(
+    "private docs",
+    target_uri="viking://user/resources"
+)
+
+# Include a specific peer's memories and resources in default retrieval
+results = client.find(
+    "invoice follow-up",
+    peer_id="web-visitor-alice"
 )
 
 # Search only in skills
@@ -274,7 +292,7 @@ The `search()` method adds session context understanding and intent analysis cap
 | target_uri | str \| List[str] | No | "" | Limit search to specific URI prefix |
 | session | Session | No | None | Session for context-aware search (SDK) |
 | session_id | str | No | None | Session ID for context-aware search (HTTP) |
-| peer_id | str | No | None | Stable interaction peer ID. When searching the default user memory scope, results include both current user memories and this peer's memories. CLI maps `--peer-id` to this field |
+| peer_id | str | No | None | Stable interaction peer ID. When searching default user-scoped targets, results include this peer's memories and resources in addition to current-user content. CLI maps `--peer-id` to this field |
 | node_limit | int | No | None | Maximum number of results |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filter |
@@ -284,6 +302,8 @@ The `search()` method adds session context understanding and intent analysis cap
 | level | str | No | None | Limit results to specific level(s), e.g., `0`, `1`, `2`, or `0,1,2`. CLI `--level`/`-L` maps to this field |
 | include_provenance | bool | No | False | Include provenance/query-plan details in serialized result |
 | telemetry | bool \| object | No | False | Attach telemetry data to response |
+
+`search()` uses the same target resolution rules as `find()`: default retrieval includes current-user memories/resources/skills plus shared resources, and `peer_id` adds only that peer's memories/resources.
 
 #### 3. Usage Examples
 

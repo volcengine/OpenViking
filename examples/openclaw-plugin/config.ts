@@ -45,6 +45,12 @@ export type MemoryOpenVikingConfig = {
   emitStandardDiagnostics?: boolean;
   /** When true, log tenant routing for semantic find and session writes (messages/commit) to the plugin logger. */
   logFindRequests?: boolean;
+  /** Agent-visible add_resource tool is disabled by default; manual /add-resource remains available. */
+  enableAddResourceTool?: boolean;
+  /** Agent-visible tool allowlist. Supports exact tool names or groups such as "memory" and "resource_query". */
+  enabledTools?: string[] | string;
+  /** Agent-visible tool blocklist applied after enabledTools. Supports exact tool names or groups. */
+  disabledTools?: string[] | string;
   agentExperience?: {
     enabled?: boolean;
     recallLimit?: number;
@@ -78,6 +84,40 @@ const DEFAULT_BYPASS_SESSION_PATTERNS: string[] = [];
 const DEFAULT_EMIT_STANDARD_DIAGNOSTICS = false;
 const DEFAULT_PEER_ROLE = "none" as const;
 const DEFAULT_PEER_PREFIX = "";
+export const OPENVIKING_ADD_RESOURCE_TOOL_NAME = "add_resource" as const;
+export const OPENVIKING_DEFAULT_ENABLED_TOOL_NAMES = [
+  "add_skill",
+  "ov_search",
+  "ov_read",
+  "ov_multi_read",
+  "ov_list",
+  "memory_recall",
+  "memory_store",
+  "memory_forget",
+  "ov_archive_search",
+  "ov_archive_expand",
+  "openviking_tool_result_read",
+  "openviking_tool_result_search",
+  "openviking_tool_result_list",
+] as const;
+export const OPENVIKING_ALL_TOOL_NAMES = [
+  OPENVIKING_ADD_RESOURCE_TOOL_NAME,
+  ...OPENVIKING_DEFAULT_ENABLED_TOOL_NAMES,
+] as const;
+export type OpenVikingToolName = typeof OPENVIKING_ALL_TOOL_NAMES[number];
+export const OPENVIKING_TOOL_GROUPS: Record<string, readonly OpenVikingToolName[]> = {
+  all: OPENVIKING_ALL_TOOL_NAMES,
+  default: OPENVIKING_DEFAULT_ENABLED_TOOL_NAMES,
+  memory: ["memory_recall", "memory_store", "memory_forget"],
+  resource_query: ["ov_search", "ov_read", "ov_multi_read", "ov_list"],
+  import: ["add_resource", "add_skill"],
+  archive: ["ov_archive_search", "ov_archive_expand"],
+  tool_result: [
+    "openviking_tool_result_read",
+    "openviking_tool_result_search",
+    "openviking_tool_result_list",
+  ],
+};
 const DEFAULT_AGENT_EXPERIENCE = {
   enabled: false,
   recallLimit: 3,
@@ -153,6 +193,62 @@ function toRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
+function expandToolSelectors(value: unknown, fallback: string[], label: string): OpenVikingToolName[] {
+  const entries = toStringArray(value, fallback);
+  const seen = new Set<OpenVikingToolName>();
+  const normalized: OpenVikingToolName[] = [];
+  const unknown: string[] = [];
+
+  for (const rawEntry of entries) {
+    const entry = rawEntry.trim();
+    const group = OPENVIKING_TOOL_GROUPS[entry];
+    const tools = group ??
+      ((OPENVIKING_ALL_TOOL_NAMES as readonly string[]).includes(entry)
+        ? [entry as OpenVikingToolName]
+        : undefined);
+    if (!tools) {
+      unknown.push(entry);
+      continue;
+    }
+    for (const tool of tools) {
+      if (!seen.has(tool)) {
+        seen.add(tool);
+        normalized.push(tool);
+      }
+    }
+  }
+
+  if (unknown.length > 0) {
+    throw new Error(`openviking ${label} contains unknown tool selectors: ${unknown.join(", ")}`);
+  }
+  return normalized;
+}
+
+function normalizeEnabledTools(cfg: Record<string, unknown>): {
+  enabledTools: OpenVikingToolName[];
+  disabledTools: OpenVikingToolName[];
+} {
+  const enableAddResourceTool = cfg.enableAddResourceTool === true;
+  const defaultTools = enableAddResourceTool
+    ? [OPENVIKING_ADD_RESOURCE_TOOL_NAME, ...OPENVIKING_DEFAULT_ENABLED_TOOL_NAMES]
+    : [...OPENVIKING_DEFAULT_ENABLED_TOOL_NAMES];
+  const selected = expandToolSelectors(cfg.enabledTools, defaultTools, "enabledTools");
+  const disabled = expandToolSelectors(cfg.disabledTools, [], "disabledTools");
+  const disabledSet = new Set(disabled);
+  if (!enableAddResourceTool) {
+    disabledSet.add(OPENVIKING_ADD_RESOURCE_TOOL_NAME);
+  }
+  const enabledTools = selected.filter((tool) =>
+    !disabledSet.has(tool) &&
+    (tool !== OPENVIKING_ADD_RESOURCE_TOOL_NAME || enableAddResourceTool)
+  );
+
+  return {
+    enabledTools,
+    disabledTools: Array.from(disabledSet),
+  };
+}
+
 /** True when env is 1 / true / yes (case-insensitive). Used for debug flags without editing plugin JSON. */
 function envFlag(name: string): boolean {
   const v = getEnv(name);
@@ -219,6 +315,9 @@ export const memoryOpenVikingConfigSchema = {
         "ingestReplyAssistIgnoreSessionPatterns",
         "emitStandardDiagnostics",
         "logFindRequests",
+        "enableAddResourceTool",
+        "enabledTools",
+        "disabledTools",
         "agentExperience",
       ],
       "openviking config",
@@ -266,6 +365,7 @@ export const memoryOpenVikingConfigSchema = {
         ),
       ),
     );
+    const { enabledTools, disabledTools } = normalizeEnabledTools(cfg);
 
     return {
       mode,
@@ -330,6 +430,9 @@ export const memoryOpenVikingConfigSchema = {
         cfg.logFindRequests === true ||
         envFlag("OPENVIKING_LOG_ROUTING") ||
         envFlag("OPENVIKING_DEBUG"),
+      enableAddResourceTool: cfg.enableAddResourceTool === true,
+      enabledTools,
+      disabledTools,
       agentExperience: {
         enabled:
           typeof agentExperienceRaw.enabled === "boolean"
@@ -501,6 +604,24 @@ export const memoryOpenVikingConfigSchema = {
       help:
         "Log tenant routing: POST /api/v1/search/find (query, target_uri) and session POST .../messages + .../commit (sessionId, X-OpenViking-*). Never logs apiKey. " +
         "Or set env OPENVIKING_LOG_ROUTING=1 or OPENVIKING_DEBUG=1 (no JSON edit).",
+      advanced: true,
+    },
+    enableAddResourceTool: {
+      label: "Enable Add Resource Tool",
+      placeholder: "false",
+      help: "Disabled by default so search and read flows cannot call add_resource. Set true only when agents should import resources; manual /add-resource remains available.",
+      advanced: true,
+    },
+    enabledTools: {
+      label: "Enabled Tools",
+      placeholder: "default",
+      help: "Agent-visible tool allowlist. Accepts tool names or groups: default, all, memory, resource_query, import, archive, tool_result. add_resource also requires enableAddResourceTool=true.",
+      advanced: true,
+    },
+    disabledTools: {
+      label: "Disabled Tools",
+      placeholder: "memory",
+      help: "Agent-visible tool blocklist applied after enabledTools. Accepts the same tool names or groups.",
       advanced: true,
     },
   },

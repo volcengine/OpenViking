@@ -561,6 +561,10 @@ async def test_find_telemetry_metrics(client_with_resource):
     assert "tokens" not in summary
     assert "vector" in summary
     assert summary["vector"]["searches"] >= 0
+    assert "search" in summary
+    assert "vector_retrieval" in summary["search"]
+    assert "result_convert" not in summary["search"]
+    assert "request" not in summary["search"]
     assert "queue" not in summary
     assert "semantic_nodes" not in summary
     assert "memory" not in summary
@@ -579,6 +583,10 @@ async def test_search_telemetry_metrics(client_with_resource):
     body = resp.json()
     summary = body["telemetry"]["summary"]
     assert summary["operation"] == "search.search"
+    assert "search" in summary
+    assert "vector_retrieval" in summary["search"]
+    assert "result_convert" not in summary["search"]
+    assert "request" not in summary["search"]
     if body["result"]["total"] > 0:
         assert summary["vector"]["returned"] == body["result"]["total"]
     else:

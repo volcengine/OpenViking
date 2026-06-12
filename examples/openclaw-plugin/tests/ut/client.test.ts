@@ -603,4 +603,22 @@ describe("OpenVikingClient canonical user namespace", () => {
     const body = JSON.parse(String(init.body));
     expect(body.peer_id).toBe("telegram_12345");
   });
+
+  it("greps session archives through the user session alias", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse({ matches: [], count: 0 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new OpenVikingClient("http://127.0.0.1:1933", "", "agent", 5000);
+    await client.grepSessionArchives("s1", "needle", {
+      archiveId: "archive_001",
+      caseInsensitive: true,
+      agentId: "agent",
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(String(init.body));
+    expect(body.uri).toBe("viking://user/sessions/s1/history/archive_001");
+    expect(body.pattern).toBe("needle");
+    expect(body.case_insensitive).toBe(true);
+  });
 });

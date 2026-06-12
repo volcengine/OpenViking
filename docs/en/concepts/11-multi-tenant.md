@@ -73,9 +73,12 @@ If `auth_mode = "api_key"` and `root_api_key` is not configured, the server runs
 
 | Data type | Shared across accounts | Shared inside one account | Default isolation boundary |
 |-----------|------------------------|---------------------------|----------------------------|
-| `resources` | No | Yes | account |
-| `user` | No | No | user |
-| `session` | No | No | user / session |
+| Shared resources (`viking://resources`) | No | Yes | account |
+| User resources (`viking://user/{user_id}/resources`) | No | No | user |
+| Peer resources (`viking://user/{user_id}/peers/{peer_id}/resources`) | No | No | user / peer |
+| Memories | No | No | user / peer |
+| Skills | No | No | user |
+| Sessions | No | No | user / session |
 
 ### Storage Layer
 
@@ -84,6 +87,8 @@ For users, URIs still look like normal `viking://...` paths:
 ```text
 viking://resources/project-a/
 viking://user/alice/memories/
+viking://user/alice/resources/
+viking://user/alice/peers/web-visitor-alice/resources/
 ```
 
 But the underlying storage automatically gains an account prefix:
@@ -91,6 +96,8 @@ But the underlying storage automatically gains an account prefix:
 ```text
 /local/{account_id}/resources/project-a/
 /local/{account_id}/user/alice/memories/
+/local/{account_id}/user/alice/resources/
+/local/{account_id}/user/alice/peers/web-visitor-alice/resources/
 ```
 
 So multi-tenant isolation does not rely on a special public URI format. It relies on request context, `account_id` and `user_id`, applied consistently through the stack.
@@ -101,7 +108,8 @@ Semantic retrieval is tenant-aware as well:
 
 - Non-ROOT requests are automatically filtered by `account_id`
 - `resources` can include account-shared resources
-- `memory` and `skill` are further filtered by the current `user space`
+- `memory`, user resources, and `skill` are further filtered by the current user space
+- Passing `peer_id` adds only that peer's memories/resources; skills remain user-scoped
 
 This keeps "what you can search" aligned with "what you can read."
 
@@ -268,10 +276,14 @@ caller identity it should run as.
 
 ### 2. `peer_id` does not define the tenant
 
-`peer_id` identifies the message peer in shared conversations. It does not create a tenant or filesystem namespace.
+`peer_id` identifies an interaction peer under the current user. It does not create a tenant,
+but it can select a peer content subspace such as
+`viking://user/{user_id}/peers/{peer_id}/memories` or
+`viking://user/{user_id}/peers/{peer_id}/resources`.
 
 - The tenant boundary is `account_id`
 - The user boundary is `user_id`
+- Peer content remains inside that user boundary
 
 ### 3. No `root_api_key` does not mean "formal single-tenant production mode"
 

@@ -24,11 +24,20 @@ export type FindResult = {
   total?: number;
 };
 
+export type FsListEntry = string | Record<string, unknown>;
+
+export type FsListResult = FsListEntry[];
+
 export type CaptureMode = "semantic" | "keyword";
 export type RuntimeIdentity = {
   userId: string;
   agentId: string;
 };
+
+function userSessionUri(sessionId: string): string {
+  return `viking://user/sessions/${encodeURIComponent(sessionId)}`;
+}
+
 export type CommitSessionResult = {
   session_id: string;
   /** "accepted" (async), "completed", "failed", or "timeout" (wait mode). */
@@ -301,7 +310,7 @@ export class OpenVikingClient {
           X_OpenViking_User: tenantHeaders.userId ?? null,
           resolved_user_id: identity.userId,
           session_vfs_hint: detail.sessionId
-            ? `viking://session/${String(detail.sessionId)}`
+            ? userSessionUri(String(detail.sessionId))
             : undefined,
         }),
     );
@@ -501,6 +510,31 @@ export class OpenVikingClient {
       {},
       agentId,
     );
+  }
+
+  async list(
+    uri: string,
+    options?: {
+      recursive?: boolean;
+      simple?: boolean;
+      output?: "agent" | "original";
+      absLimit?: number;
+      showAllHidden?: boolean;
+      nodeLimit?: number;
+    },
+    agentId?: string,
+  ): Promise<FsListResult> {
+    const normalizedUri = await this.normalizeTargetUri(uri, agentId);
+    const params = new URLSearchParams({
+      uri: normalizedUri,
+      recursive: String(options?.recursive ?? false),
+      simple: String(options?.simple ?? false),
+      output: options?.output ?? "agent",
+      abs_limit: String(options?.absLimit ?? 256),
+      show_all_hidden: String(options?.showAllHidden ?? false),
+      node_limit: String(options?.nodeLimit ?? 1000),
+    });
+    return this.request<FsListResult>(`/api/v1/fs/ls?${params.toString()}`, {}, agentId);
   }
 
   async readToolResult(
@@ -938,7 +972,7 @@ export class OpenVikingClient {
     match_count?: number;
     files_scanned?: number;
   }> {
-    const baseUri = `viking://session/${sessionId}/history`;
+    const baseUri = `${userSessionUri(sessionId)}/history`;
     const uri = options.archiveId ? `${baseUri}/${options.archiveId}` : baseUri;
     return this.request(
       "/api/v1/search/grep",

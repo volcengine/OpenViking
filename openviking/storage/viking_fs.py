@@ -1367,19 +1367,21 @@ class VikingFS:
         target_abstract = ""
         if primary_target_uri:
             try:
-                target_abstract = await self.abstract(primary_target_uri, ctx=ctx)
+                with telemetry.measure("search.target_abstract"):
+                    target_abstract = await self.abstract(primary_target_uri, ctx=ctx)
             except Exception:
                 target_abstract = ""
 
         # With session context: intent analysis
         if session_summary or current_messages:
             analyzer = IntentAnalyzer(max_recent_messages=5)
-            query_plan = await analyzer.analyze(
-                compression_summary=session_summary or "",
-                messages=current_messages or [],
-                current_message=query,
-                target_abstract=target_abstract,
-            )
+            with telemetry.measure("search.intent_analysis"):
+                query_plan = await analyzer.analyze(
+                    compression_summary=session_summary or "",
+                    messages=current_messages or [],
+                    current_message=query,
+                    target_abstract=target_abstract,
+                )
             typed_queries = query_plan.queries
             for tq in typed_queries:
                 tq.target_directories = retrieval_targets.target_directories
@@ -1667,9 +1669,6 @@ class VikingFS:
             prefix = prefix[:-1]
         return f"{prefix}_{hash_suffix}"
 
-    _USER_STRUCTURE_DIRS = {"memories"}
-    _AGENT_STRUCTURE_DIRS = {"memories", "skills", "instructions", "workspaces"}
-
     def _uri_to_path(self, uri: str, ctx: Optional[RequestContext] = None) -> str:
         """Map virtual URI to account-isolated AGFS path.
 
@@ -1735,35 +1734,6 @@ class VikingFS:
         if len(parts) == 2:
             return True
         return not self._looks_like_legacy_temp_leaf(parts[2])
-
-    def _extract_space_from_uri(self, uri: str) -> Optional[str]:
-        """Extract space segment from URI if present.
-
-        URIs are WYSIWYG: viking://{scope}/{space}/...
-        For user, the second segment is space unless it's a known structure dir.
-        For session, the second segment is always space (when 3+ parts).
-        Legacy temp URIs keep the historical shape viking://temp/<temp-id> and therefore
-        intentionally have no space segment.
-        """
-        _, parts = self._normalized_uri_parts(uri)
-        if len(parts) < 2:
-            return None
-        scope = parts[0]
-        second = parts[1]
-        # Treat scope-root metadata files as not having a tenant space segment.
-        if len(parts) == 2 and second in {".abstract.md", ".overview.md"}:
-            return None
-        if self._is_legacy_temp_uri_parts(parts):
-            return None
-        if scope == "upload":
-            return None
-        if scope == "user" and second not in self._USER_STRUCTURE_DIRS:
-            return second
-        if scope == "agent" and second not in self._AGENT_STRUCTURE_DIRS:
-            return second
-        if scope == "session" and len(parts) >= 2:
-            return second
-        return None
 
     def _is_accessible(self, uri: str, ctx: RequestContext) -> bool:
         """Check whether a URI is visible/accessible under current request context."""
@@ -2390,10 +2360,11 @@ class VikingFS:
     async def get_relations(self, uri: str, ctx: Optional[RequestContext] = None) -> List[str]:
         """Get all related URIs (backward compatible)."""
         entries = await self.get_relation_table(uri, ctx=ctx)
+        real_ctx = self._ctx_or_default(ctx)
         all_uris = []
         for entry in entries:
             for related in entry.uris:
-                if self._is_accessible(related, self._ctx_or_default(ctx)):
+                if self._is_accessible(related, real_ctx):
                     all_uris.append(related)
         return all_uris
 

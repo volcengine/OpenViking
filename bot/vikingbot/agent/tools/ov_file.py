@@ -1,7 +1,9 @@
 """OpenViking file system tools: read, write, list, search resources."""
 
 import asyncio
+import itertools
 import json
+import time
 from abc import ABC
 from pathlib import Path
 from typing import Any, Optional
@@ -14,6 +16,8 @@ from vikingbot.openviking_mount.ov_server import VikingClient
 
 
 class OVFileTool(Tool, ABC):
+    _memory_commit_counter = itertools.count(1)
+
     def __init__(self):
         super().__init__()
         self._clients = {}
@@ -28,7 +32,7 @@ class OVFileTool(Tool, ABC):
                 tool_context.workspace_id,
                 connection=tool_context.openviking_connection,
             )
-        cache_key = "__default__"
+        cache_key = str(tool_context.workspace_id or "__default__")
         client = self._clients.get(cache_key)
         if client is None:
             client = await VikingClient.create(tool_context.workspace_id)
@@ -38,6 +42,95 @@ class OVFileTool(Tool, ABC):
     async def _release_client(self, tool_context: ToolContext, client: VikingClient | None) -> None:
         if client is not None and self._has_request_connection(tool_context):
             await client.close()
+
+    @staticmethod
+    def _normalize_uri(uri: str | None) -> str:
+        normalized = (uri or "").strip()
+        if normalized == "viking://":
+            return normalized
+        return normalized.rstrip("/")
+
+    @staticmethod
+    def _dedupe_strings(values: list[str | None]) -> list[str]:
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            if not value:
+                continue
+            value = str(value).strip()
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            deduped.append(value)
+        return deduped
+
+    def _memory_peer_ids(self, tool_context: ToolContext) -> list[str]:
+        return self._dedupe_strings(
+            [
+                getattr(tool_context, "sender_id", None),
+                *(getattr(tool_context, "memory_peer_ids", None) or []),
+            ]
+        )
+
+    def _is_default_memory_uri(self, client: VikingClient, uri: str | None) -> bool:
+        normalized = self._normalize_uri(uri)
+        if normalized in {"", "viking://user/memories"}:
+            return True
+        try:
+            return normalized == self._normalize_uri(client._memory_target_uri(None))
+        except Exception:
+            return False
+
+    def _is_default_root_uri(self, uri: str | None) -> bool:
+        return self._normalize_uri(uri) in {"", "viking://", "viking://user"}
+
+    def _peer_memory_uris(
+        self,
+        client: VikingClient,
+        tool_context: ToolContext,
+        peer_ids: list[str] | None = None,
+    ) -> list[str]:
+        builder = getattr(client, "build_current_memory_target_uris", None)
+        if not callable(builder):
+            return []
+        return builder(
+            peer_ids=peer_ids if peer_ids is not None else self._memory_peer_ids(tool_context),
+            include_self=False,
+        )
+
+    def _current_memory_uri(self, client: VikingClient) -> str:
+        return client._memory_target_uri(None)
+
+    def _current_skill_uri(self, client: VikingClient) -> str:
+        memory_uri = self._current_memory_uri(client).rstrip("/")
+        if memory_uri.endswith("/memories"):
+            return f"{memory_uri[: -len('/memories')]}/skills/"
+        return "viking://user/skills/"
+
+    def _fs_retrieval_uris(
+        self,
+        client: VikingClient,
+        tool_context: ToolContext,
+        uri: str | None,
+    ) -> list[str]:
+        if not self._is_default_memory_uri(client, uri):
+            if not self._is_default_root_uri(uri):
+                return [uri or ""]
+
+            target_uris = [
+                "viking://resources/",
+                self._current_memory_uri(client),
+                self._current_skill_uri(client),
+                *self._peer_memory_uris(client, tool_context),
+            ]
+            return self._dedupe_strings(target_uris)
+
+        builder = getattr(client, "build_current_memory_target_uris", None)
+        if callable(builder):
+            uris = builder(peer_ids=self._memory_peer_ids(tool_context))
+            if uris:
+                return uris
+        return [uri or "viking://user/memories/"]
 
 
 class VikingListTool(OVFileTool):
@@ -58,7 +151,8 @@ class VikingListTool(OVFileTool):
             "properties": {
                 "uri": {
                     "type": "string",
-                    "description": "The parent Viking uri to list (e.g., viking://resources/)",
+                    "description": "Optional parent Viking URI to list. Defaults to all visible OpenViking roots plus current peer memory.",
+                    "default": "viking://",
                 },
                 "recursive": {
                     "type": "boolean",
@@ -66,16 +160,27 @@ class VikingListTool(OVFileTool):
                     "default": False,
                 },
             },
-            "required": ["uri"],
+            "required": [],
         }
 
     async def execute(
-        self, tool_context: "ToolContext", uri: str, recursive: bool = False, **kwargs: Any
+        self, tool_context: "ToolContext", uri: str = "viking://", recursive: bool = False, **kwargs: Any
     ) -> str:
         client = None
         try:
             client = await self._get_client(tool_context)
-            entries = await client.list_resources(path=uri, recursive=recursive)
+            entries = []
+            target_uris = self._fs_retrieval_uris(client, tool_context, uri)
+            for target_uri in target_uris:
+                try:
+                    entries.extend(
+                        await client.list_resources(path=target_uri, recursive=recursive)
+                    )
+                except Exception as exc:
+                    if len(target_uris) == 1:
+                        raise
+                    logger.debug(f"Skip OpenViking list target {target_uri}: {exc}")
+                    continue
 
             if not entries:
                 return f"No resources found at {uri}"
@@ -271,72 +376,87 @@ class VikingSearchTool(OVFileTool):
         client = None
         try:
             client = await self._get_client(tool_context)
-            admin_user_id = client.admin_user_id
-            memory_user_ids = getattr(tool_context, "memory_user_ids", None)
-            memory_peer_ids = getattr(tool_context, "memory_peer_ids", None)
+            memory_owner_user_ids = getattr(tool_context, "memory_owner_user_ids", None)
+            legacy_memory_user_ids = getattr(tool_context, "memory_user_ids", None)
 
-            if not target_uri and (memory_user_ids or memory_peer_ids):
-                grouped_items = {
-                    "memory": [],
-                    "resource": [],
-                    "skill": [],
-                }
+            grouped_items = {
+                "memory": [],
+                "resource": [],
+                "skill": [],
+            }
 
-                if memory_user_ids:
-                    user_ids = memory_user_ids if client.should_sender_fanout() else [None]
-                    deduped_user_ids: list[str | None] = []
-                    for user_id in user_ids or []:
-                        if user_id in deduped_user_ids:
-                            continue
-                        deduped_user_ids.append(user_id)
+            if (
+                not target_uri
+                and client.should_sender_fanout()
+                and (memory_owner_user_ids or legacy_memory_user_ids)
+            ):
+                user_ids = memory_owner_user_ids or legacy_memory_user_ids
+                search_requests = [{"target_uri": "viking://resources/", "peer_id": None}]
+                for user_id in self._dedupe_strings(list(user_ids or [])):
+                    memory_uri = client._memory_target_uri(user_id)
+                    skill_uri = (
+                        f"{memory_uri.rstrip('/')[: -len('/memories')]}/skills/"
+                        if memory_uri.rstrip("/").endswith("/memories")
+                        else "viking://user/skills/"
+                    )
+                    search_requests.extend(
+                        [
+                            {"target_uri": memory_uri, "peer_id": None},
+                            {"target_uri": skill_uri, "peer_id": None},
+                        ]
+                    )
+            else:
+                peer_ids = self._memory_peer_ids(tool_context)
+                if not target_uri:
+                    search_requests = (
+                        [{"target_uri": "", "peer_id": peer_ids[0]}]
+                        if peer_ids
+                        else [{"target_uri": "", "peer_id": None}]
+                    )
+                    peer_memory_uris = self._peer_memory_uris(
+                        client, tool_context, peer_ids=peer_ids[1:]
+                    )
+                    if peer_memory_uris:
+                        search_requests.extend(
+                            {"target_uri": peer_uri, "peer_id": None}
+                            for peer_uri in peer_memory_uris
+                        )
+                    else:
+                        search_requests.extend(
+                            {"target_uri": "viking://user/memories/", "peer_id": peer_id}
+                            for peer_id in peer_ids[1:]
+                        )
+                elif self._is_default_memory_uri(client, target_uri) and peer_ids:
+                    memory_uris = self._dedupe_strings(
+                        [
+                            "viking://user/memories/",
+                            *self._peer_memory_uris(client, tool_context, peer_ids=peer_ids),
+                        ]
+                    )
                     search_requests = [
-                        {"target_uri": client._memory_target_uri(user_id), "peer_id": None}
-                        for user_id in deduped_user_ids
+                        {"target_uri": memory_uri, "peer_id": None}
+                        for memory_uri in memory_uris
                     ]
                 else:
-                    search_requests = client.build_memory_search_requests(
-                        owner_user_id=tool_context.sender_id if client.should_sender_fanout() else None,
-                        peer_ids=memory_peer_ids,
-                    )
+                    search_requests = [{"target_uri": target_uri, "peer_id": None}]
 
-                for request in search_requests:
-                    search_kwargs = {
-                        "target_uri": request["target_uri"],
-                        "limit": 10,
-                        "user_id": admin_user_id,
-                    }
-                    if request.get("peer_id") is not None:
-                        search_kwargs["peer_id"] = request.get("peer_id")
-                    results = await client.search(
-                        query,
-                        **search_kwargs,
-                    )
-                    filtered_items = self._filter_search_items(results, min_score=min_score)
-                    for item_type, items in filtered_items.items():
-                        grouped_items[item_type].extend(items)
+            for request in search_requests:
+                search_kwargs = {
+                    "target_uri": request["target_uri"],
+                    "limit": 10,
+                }
+                if request.get("peer_id") is not None:
+                    search_kwargs["peer_id"] = request.get("peer_id")
+                results = await client.search(query, **search_kwargs)
+                filtered_items = self._filter_search_items(results, min_score=min_score)
+                for item_type, items in filtered_items.items():
+                    grouped_items[item_type].extend(items)
 
-                total = sum(len(items) for items in grouped_items.values())
-                if total == 0:
-                    return f"No results found for query: {query}"
-                return self._format_search_items_json(grouped_items, min_score=min_score)
-
-            results = await client.search(
-                query,
-                target_uri=target_uri,
-                limit=10,
-                user_id=admin_user_id,
-            )
-
-            if not results:
-                return f"No results found for query: {query}"
-
-            grouped_items = self._filter_search_items(results, min_score=min_score)
             total = sum(len(items) for items in grouped_items.values())
             if total == 0:
                 return f"No results found for query: {query}"
 
-            content = self._format_search_items_json(grouped_items, min_score=min_score)
-            return content
+            return self._format_search_items_json(grouped_items, min_score=min_score)
         except Exception as e:
             return f"Error searching Viking: {str(e)}"
         finally:
@@ -420,7 +540,8 @@ class VikingGrepTool(OVFileTool):
             "properties": {
                 "uri": {
                     "type": "string",
-                    "description": "The whole Viking URI to search within (e.g., viking://resources/)",
+                    "description": "Optional Viking URI to search within. Defaults to all visible OpenViking roots plus current peer memory.",
+                    "default": "viking://",
                 },
                 "pattern": {
                     "type": "string",
@@ -432,30 +553,38 @@ class VikingGrepTool(OVFileTool):
                     "default": False,
                 },
             },
-            "required": ["uri", "pattern"],
+            "required": ["pattern"],
         }
 
     async def execute(
         self,
         tool_context: "ToolContext",
-        uri: str,
         pattern: str,
+        uri: str = "viking://",
         case_insensitive: bool = False,
         **kwargs: Any,
     ) -> str:
         client = None
         try:
             client = await self._get_client(tool_context)
-            result = await client.grep(
-                uri,
-                pattern,
-                case_insensitive=case_insensitive,
-                user_id=client.admin_user_id,
-            )
-            if isinstance(result, dict):
-                matches = result.get("matches", [])
-            else:
-                matches = getattr(result, "matches", [])
+            matches = []
+            target_uris = self._fs_retrieval_uris(client, tool_context, uri)
+            for target_uri in target_uris:
+                try:
+                    result = await client.grep(
+                        target_uri,
+                        pattern,
+                        case_insensitive=case_insensitive,
+                    )
+                except Exception as exc:
+                    if len(target_uris) == 1:
+                        raise
+                    logger.debug(f"Skip OpenViking grep target {target_uri}: {exc}")
+                    continue
+                if isinstance(result, dict):
+                    matches.extend(result.get("matches", []))
+                else:
+                    matches.extend(getattr(result, "matches", []))
 
             if not matches:
                 return f"No matches found for pattern: '{pattern}'"
@@ -532,14 +661,26 @@ class VikingGlobTool(OVFileTool):
         client = None
         try:
             client = await self._get_client(tool_context)
-            result = await client.glob(pattern, uri=uri or None, user_id=client.admin_user_id)
+            matches = []
+            count = 0
+            target_uris = self._fs_retrieval_uris(client, tool_context, uri or "viking://")
+            for target_uri in target_uris:
+                try:
+                    result = await client.glob(pattern, uri=target_uri or "viking://")
+                except Exception as exc:
+                    if len(target_uris) == 1:
+                        raise
+                    logger.debug(f"Skip OpenViking glob target {target_uri}: {exc}")
+                    continue
 
-            if isinstance(result, dict):
-                matches = result.get("matches", [])
-                count = result.get("count", 0)
-            else:
-                matches = getattr(result, "matches", [])
-                count = getattr(result, "count", 0)
+                if isinstance(result, dict):
+                    batch_matches = result.get("matches", [])
+                    batch_count = result.get("count", len(batch_matches))
+                else:
+                    batch_matches = getattr(result, "matches", [])
+                    batch_count = getattr(result, "count", len(batch_matches))
+                matches.extend(batch_matches)
+                count += int(batch_count or 0)
 
             if not matches:
                 return f"No files found for pattern: {pattern}"
@@ -647,14 +788,14 @@ class VikingMemoryCommitTool(OVFileTool):
         client = None
         try:
             client = await self._get_client(tool_context)
-            if self._has_request_connection(tool_context):
-                commit_user_id = client.admin_user_id or tool_context.sender_id
-            else:
-                commit_user_id = tool_context.sender_id or client.admin_user_id
-            if not commit_user_id:
-                return "Error: user id is required for OpenViking memory commit."
-            session_id = tool_context.session_key.safe_name()
-            result = await client.commit(session_id, messages, commit_user_id)
+            if not tool_context.sender_id:
+                return "Error: peer id is required for OpenViking memory commit."
+            source_session_id = tool_context.session_key.safe_name()
+            commit_seq = next(self._memory_commit_counter)
+            timestamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+            session_id = f"{source_session_id}__memory_commit__{timestamp}__{commit_seq:04d}"
+            result = await client.commit(session_id, messages, peer_id=tool_context.sender_id)
+            session_id = result.get("session_id", session_id) if isinstance(result, dict) else session_id
             commit_result = result.get("commit", {}) if isinstance(result, dict) else {}
             archive_uri = commit_result.get("archive_uri")
             memory_diff_uri = f"{archive_uri}/memory_diff.json" if archive_uri else None
@@ -674,6 +815,8 @@ class VikingMemoryCommitTool(OVFileTool):
                 {
                     "status": "success",
                     "session_id": session_id,
+                    "memory_commit_session_id": session_id,
+                    "source_session_id": source_session_id,
                     "message_count": len(messages),
                     "archived": commit_result.get("archived"),
                     **changed_uris,

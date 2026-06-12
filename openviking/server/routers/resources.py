@@ -7,7 +7,6 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from openviking.core.path_variables import resolve_path_variables
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext, Role
@@ -197,8 +196,6 @@ async def add_resource(
 ):
     """Add resource to OpenViking."""
     service = get_service()
-    if request.to and request.parent:
-        raise InvalidArgumentError("Cannot specify both 'to' and 'parent' at the same time.")
 
     path = request.path
     allow_local_path_resolution = False
@@ -234,17 +231,13 @@ async def add_resource(
     if request.preserve_structure is not None:
         kwargs["preserve_structure"] = request.preserve_structure
 
-    # Resolve path variables before passing to service.
-    to = resolve_path_variables(request.to) if request.to else None
-    parent = resolve_path_variables(request.parent) if request.parent else None
-
     async def _add() -> dict[str, Any]:
         try:
             result = await service.resources.add_resource(
                 path=path,
                 ctx=_ctx,
-                to=to,
-                parent=parent,
+                to=request.to,
+                parent=request.parent,
                 reason=request.reason,
                 instruction=request.instruction,
                 wait=request.wait,

@@ -5,7 +5,6 @@
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
-from openviking.core.peer_id import safe_peer_id
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import MemoryTypeSchema, ResolvedOperation
 from openviking.session.memory.memory_updater import ExtractContext
@@ -48,11 +47,9 @@ class MemoryIsolationHandler:
             if allowed_memory_types is not None
             else None
         )
-        peer_ids = {safe_peer_id(item) for item in allowed_peer_ids or set()}
-        peer_ids = {item for item in peer_ids if item}
         self.allow_self = bool(allow_self)
-        self.allowed_peer_ids = peer_ids
-        self.allow_peer = bool(peer_ids)
+        self.allowed_peer_ids = {item for item in allowed_peer_ids or set() if item}
+        self.allow_peer = bool(self.allowed_peer_ids)
 
     def prepare_messages(self) -> None:
         """No-op hook kept for the extraction pipeline."""
@@ -66,13 +63,13 @@ class MemoryIsolationHandler:
         for msg in self._messages():
             if getattr(msg, "role", None) != "user":
                 continue
-            if safe_peer_id(getattr(msg, "peer_id", None)) is None:
+            if not getattr(msg, "peer_id", None):
                 return True
         return False
 
     def _first_peer_id_in_messages(self) -> Optional[str]:
         for msg in self._messages():
-            peer_id = safe_peer_id(getattr(msg, "peer_id", None))
+            peer_id = getattr(msg, "peer_id", None)
             if peer_id and self._can_write_peer(peer_id):
                 return peer_id
         return None
@@ -100,7 +97,7 @@ class MemoryIsolationHandler:
             item_dict["user_id"] = self.ctx.user.user_id
         item_dict.pop("user_ids", None)
 
-        peer_id = safe_peer_id(item_dict.get("peer_id"))
+        peer_id = item_dict.get("peer_id")
         if peer_id:
             item_dict["peer_id"] = peer_id
         else:
@@ -151,8 +148,7 @@ class MemoryIsolationHandler:
         peer_ids = set()
         for msg_group in getattr(msg_range, "elements", []) or []:
             for msg in msg_group:
-                raw_peer_id = getattr(msg, "peer_id", None)
-                peer_id = safe_peer_id(raw_peer_id)
+                peer_id = getattr(msg, "peer_id", None)
                 if peer_id:
                     if self._can_write_peer(peer_id):
                         peer_ids.add(peer_id)
@@ -184,10 +180,7 @@ class MemoryIsolationHandler:
             )
             operation.memory_fields.pop("peer_id", None)
         else:
-            raw_peer_id = operation.memory_fields.get("peer_id")
-            peer_id = safe_peer_id(raw_peer_id)
-            if raw_peer_id and not peer_id:
-                return []
+            peer_id = operation.memory_fields.get("peer_id")
             if peer_id:
                 if not self._can_write_peer(peer_id):
                     return []

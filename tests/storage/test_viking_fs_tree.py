@@ -127,8 +127,8 @@ async def default_batch_fetch(entries, abs_limit, **_kwargs):
     [
         ("resources", "/local/test_account", True),
         ("user", "/local/test_account", True),
-        ("agent", "/local/test_account", True),
-        ("session", "/local/test_account", True),
+        ("agent", "/local/test_account", False),
+        ("session", "/local/test_account", False),
         ("tasks", "/local/test_account", False),
         ("_system", "/local/test_account", False),
         ("temp", "/local/test_account", False),

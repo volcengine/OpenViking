@@ -36,11 +36,6 @@ class DirectoryDefinition:
 
 # Preset directory tree - each scope has a root DirectoryDefinition
 PRESET_DIRECTORIES: Dict[str, DirectoryDefinition] = {
-    "session": DirectoryDefinition(
-        path="",
-        abstract="Session scope. Stores complete context for a single conversation, including original messages and compressed summaries.",
-        overview="Session-level temporary data storage, can be archived or cleaned after session ends.",
-    ),
     "user": DirectoryDefinition(
         path="",
         abstract="User scope. Stores user's long-term memory, persisted across sessions.",
@@ -109,6 +104,11 @@ PRESET_DIRECTORIES: Dict[str, DirectoryDefinition] = {
                 ],
             ),
             DirectoryDefinition(
+                path="resources",
+                abstract="User-owned resource storage. Contains private documents and knowledge resources owned by the current User.",
+                overview="Use this directory for resources scoped to the current User. Project and document directories are created lazily as content is added.",
+            ),
+            DirectoryDefinition(
                 path="privacy",
                 abstract="User privacy config root. Stores user-scoped sensitive configuration snapshots by category and target key.",
                 overview="Use this directory to access privacy-managed configuration values such as skill secrets. Concrete category and target-key subdirectories are created lazily by the privacy config service.",
@@ -159,7 +159,6 @@ class DirectoryInitializer:
         scope_roots = {
             "user": PRESET_DIRECTORIES["user"],
             "resources": PRESET_DIRECTORIES["resources"],
-            "session": PRESET_DIRECTORIES["session"],
         }
         for scope, defn in scope_roots.items():
             root_uri = f"viking://{scope}"

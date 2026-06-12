@@ -6,6 +6,8 @@ This module provides high-level helper functions for common operations:
 - download: Download files/directories from AGFS to local filesystem
 """
 
+from __future__ import annotations
+
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any

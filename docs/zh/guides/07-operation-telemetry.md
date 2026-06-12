@@ -243,6 +243,16 @@ summary 顶层这 3 个基础字段总会存在：
 | `summary.memory.extract.stages.create_relations_ms` | 创建 used-uri relations 的耗时 |
 | `summary.memory.extract.stages.flush_semantic_ms` | flush semantic queue 的耗时 |
 
+### `summary.search`
+
+| 字段 | 含义 |
+| --- | --- |
+| `summary.search.target_abstract.duration_ms` | 为目标 URI 预取摘要的耗时 |
+| `summary.search.intent_analysis.duration_ms` | 查询意图分析耗时 |
+| `summary.search.embed_query.duration_ms` | 查询向量化耗时 |
+| `summary.search.vector_retrieval.duration_ms` | 向量召回阶段耗时 |
+| `summary.search.typed_queries_count` | 解析出的 typed query 数量 |
+
 ### `summary.errors`
 
 | 字段 | 含义 |

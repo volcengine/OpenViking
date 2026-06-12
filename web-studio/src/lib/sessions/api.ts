@@ -1,12 +1,15 @@
 import {
   deleteSessionBySessionId,
+  getSessionIdArchiveByArchiveId,
   getSessions,
   getSessionBySessionId,
   getSessionIdContext,
   postBotV1Chat,
   postSessions,
   postSessionIdCommit,
+  postSessionIdExtract,
   postSessionIdMessages,
+  postSessionIdUsed,
 } from '#/gen/ov-client/sdk.gen'
 import {
   getOvResult,
@@ -26,6 +29,7 @@ import type {
   SessionListItem,
   SessionMeta,
 } from '@ov-server/api/v1/sessions'
+import type { UsedRequest } from '#/gen/ov-client/types.gen'
 
 // ---------------------------------------------------------------------------
 // Session CRUD
@@ -50,6 +54,30 @@ export async function createSession(
   return getOvResult<CreateSessionResult>(
     postSessions({
       body: sessionId ? { session_id: sessionId } : undefined,
+    }),
+  )
+}
+
+export async function fetchSessionContext(
+  sessionId: string,
+  tokenBudget?: number,
+): Promise<SessionContextResult> {
+  return getOvResult<SessionContextResult>(
+    getSessionIdContext({
+      path: { session_id: sessionId },
+      query:
+        tokenBudget === undefined ? undefined : { token_budget: tokenBudget },
+    }),
+  )
+}
+
+export async function fetchSessionArchive(
+  sessionId: string,
+  archiveId: string,
+): Promise<unknown> {
+  return getOvResult<unknown>(
+    getSessionIdArchiveByArchiveId({
+      path: { archive_id: archiveId, session_id: sessionId },
     }),
   )
 }
@@ -110,12 +138,94 @@ export async function addMessage(
 
 export async function commitSession(
   sessionId: string,
+  keepRecentCount?: number,
 ): Promise<CommitSessionResult> {
   return getOvResult<CommitSessionResult>(
     postSessionIdCommit({
+      body:
+        keepRecentCount === undefined
+          ? undefined
+          : { keep_recent_count: keepRecentCount },
       path: { session_id: sessionId },
     }),
   )
+}
+
+export async function extractSession(sessionId: string): Promise<unknown> {
+  return getOvResult<unknown>(
+    postSessionIdExtract({
+      path: { session_id: sessionId },
+    }),
+  )
+}
+
+export async function recordSessionUsed(
+  sessionId: string,
+  body: UsedRequest,
+): Promise<unknown> {
+  return getOvResult<unknown>(
+    postSessionIdUsed({
+      body,
+      path: { session_id: sessionId },
+    }),
+  )
+}
+
+export async function fetchSessionToolResults(
+  sessionId: string,
+  options: { limit?: number; toolName?: string } = {},
+): Promise<unknown> {
+  const response = await ovClient.instance.get(
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/tool-results`,
+    {
+      params: {
+        limit: options.limit,
+        tool_name: options.toolName || undefined,
+      },
+    },
+  )
+  return getOvResult<unknown>(Promise.resolve(response))
+}
+
+export async function fetchSessionToolResult(
+  sessionId: string,
+  toolResultId: string,
+  options: { includeMetadata?: boolean; limit?: number; offset?: number } = {},
+): Promise<unknown> {
+  const response = await ovClient.instance.get(
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/tool-results/${encodeURIComponent(
+      toolResultId,
+    )}`,
+    {
+      params: {
+        include_metadata: options.includeMetadata,
+        limit: options.limit,
+        offset: options.offset,
+      },
+    },
+  )
+  return getOvResult<unknown>(Promise.resolve(response))
+}
+
+export async function searchSessionToolResult(
+  sessionId: string,
+  toolResultId: string,
+  query: string,
+  options: { contextChars?: number; limit?: number } = {},
+): Promise<unknown> {
+  const response = await ovClient.instance.get(
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/tool-results/${encodeURIComponent(
+      toolResultId,
+    )}/search`,
+    {
+      params: {
+        context_chars: options.contextChars,
+        limit: options.limit,
+        q: query,
+      },
+    },
+  )
+  return getOvResult<unknown>(Promise.resolve(response))
 }
 
 // ---------------------------------------------------------------------------
