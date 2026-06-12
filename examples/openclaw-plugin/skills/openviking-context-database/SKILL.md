@@ -50,7 +50,7 @@ Common config fields:
 | `peer_prefix` | empty | Optional prefix for assistant peer IDs. |
 | `autoCapture` | `true` | Capture new turns into the OpenViking session. |
 | `autoRecall` | `true` | Inject relevant memory before replies. |
-| `recallTargetTypes` | `user,agent` | Default recall targets. Allowed: `user`, `agent`, `session`, `resource`. |
+| `recallTargetTypes` | `user,agent` | Default recall targets. Allowed: `user`, `agent`, `resource`. |
 | `recallResources` | `false` | Deprecated compatibility shortcut that appends `resource` when `recallTargetTypes` is unset. |
 | `traceRecall` | `false` | Record recall/search trace entries in memory. |
 | `traceRecallPersist` | `false` | Persist recall traces as JSONL. |
@@ -82,8 +82,7 @@ Tool groups for `enabledTools` and `disabledTools`: `default`, `all`, `memory`, 
 1. Use `memory_recall` when the user asks about known preferences, previous decisions, or durable facts.
 2. Leave `targetUri` unset for normal recall. The plugin uses `resourceTypes` from the tool call or configured `recallTargetTypes`.
 3. Use `resourceTypes: ["resource"]` when the user explicitly wants shared imported knowledge instead of personal memory.
-4. Use `resourceTypes: ["session"]` only when an active OpenClaw/OpenViking session identity is available.
-5. If the answer requires exact original source text, follow returned URIs with `ov_read` or `ov_multi_read`.
+4. If the answer requires exact original source text, follow returned URIs with `ov_read` or `ov_multi_read`.
 
 ## Resource Workflow
 
@@ -109,7 +108,7 @@ Useful filters:
 
 - `source`: `auto_recall`, `memory_recall`, `ov_search`, or `ov_archive_search`.
 - `turn`: `latest` or `all`.
-- `resourceTypes`: `user`, `agent`, `session`, `resource`.
+- `resourceTypes`: `user`, `agent`, `resource`.
 - `includeContent`: read selected/displayed URI previews on demand.
 
 Use recall trace to answer diagnostic questions such as:

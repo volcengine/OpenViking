@@ -50,7 +50,7 @@ Agent 会自动完成安装 → 配置 → 重启 → 验证。详见 [INSTALL-A
 | `openviking_tool_result_search` | 按关键词在外置的工具结果中检索 |
 | `openviking_tool_result_list` | 列出当前会话中外置的工具结果 |
 
-`add_resource` 默认不暴露给 Agent（`enableAddResourceTool=false`），但手动 `/add-resource` 仍然可用。可通过 `recallTargetTypes` 配置默认召回目标（`user`、`agent`、`session`、`resource`）；旧配置 `recallResources=true` 只会在未显式设置 `recallTargetTypes` 时追加 `resource`。
+`add_resource` 默认不暴露给 Agent（`enableAddResourceTool=false`），但手动 `/add-resource` 仍然可用。可通过 `recallTargetTypes` 配置默认召回目标（`user`、`agent`、`resource`）；旧配置 `recallResources=true` 只会在未显式设置 `recallTargetTypes` 时追加 `resource`。
 
 ## 数据流与隐私
 
@@ -159,7 +159,7 @@ openclaw config get plugins.slots.contextEngine  # 应输出：openviking
 1. 从最后一条 user message 提取查询文本。
 2. 基于当前 `sessionId/sessionKey` 解析本轮的 agent 路由。
 3. 先做一次快速可用性检查，避免在 OpenViking 不可用时拖慢模型请求。
-4. 检索配置的 `recallTargetTypes`（默认 `user,agent`；可选 `session` 或 `resource`）。
+4. 检索配置的 `recallTargetTypes`（默认 `user,agent`；可选 `resource`；session 历史请使用 `ov_archive_search` 和 `ov_archive_expand`）。
 5. 在插件侧做去重、阈值筛选、重排和 token budget 裁剪。
 6. 把最终记忆以 `## Long-term Memories` section 放进 `<openviking-context>`，再 prepend 到当前 user message；不会追加独立 synthetic user message。
 

@@ -97,7 +97,7 @@ $OPENCLAW_STATE_DIR/openclaw.json
 | --- | --- | --- | --- | --- |
 | `autoRecall` | boolean | `true` | — | 是否在 assemble 阶段自动召回并注入上下文。 |
 | `targetUri` | string | `viking://user/memories` | — | `memory_recall` / `memory_forget` 默认搜索范围。 |
-| `recallTargetTypes` | string[] | `["user", "agent"]` | — | 自动召回和默认 `memory_recall` 的搜索类型。允许 `resource`、`session`、`user`、`agent`。 |
+| `recallTargetTypes` | string[] | `["user", "agent"]` | — | 自动召回和默认 `memory_recall` 的搜索类型。允许 `resource`、`user`、`agent`。 |
 | `recallResources` | boolean | `false` | `OPENVIKING_RECALL_RESOURCES` | 旧兼容开关；仅在未显式配置 `recallTargetTypes` 时追加 `resource`。 |
 | `recallLimit` | number | `6` | — | 最终召回条数下限为 `1`。内部请求通常放大为 `max(limit * 4, 20)`。 |
 | `recallScoreThreshold` | number | `0.15` | — | 召回结果分数阈值，范围 `0` 到 `1`。 |
@@ -432,7 +432,7 @@ Manifest 中声明了 runtime slash alias：
 | `add_skill` | `source?`、`data?`、`wait?`、`timeout?` | 导入或注册 OpenViking agent skill。 |
 | `ov_search` | `query`、`uri?`、`limit?` | 搜索 OpenViking resources 和 skills。 |
 | `ov_read` | `uri` | 读取精确 `viking://...` OpenViking URI 的完整内容。 |
-| `memory_recall` | `query`、`limit?`、`scoreThreshold?`、`targetUri?`、`resourceTypes?` | 显式召回长期记忆、资源或 session 内容。 |
+| `memory_recall` | `query`、`limit?`、`scoreThreshold?`、`targetUri?`、`resourceTypes?` | 显式召回长期记忆或资源。 |
 | `ov_recall_trace` | `turn?`、`traceId?`、`sessionId?`、`sessionKey?`、`ovSessionId?`、`source?`、`resourceTypes?`、`since?`、`until?`、`includeContent?`、`limit?` | 查询 recall trace。 |
 | `memory_store` | `text`、`role?`、`sessionId?` | 将文本写入 session 并触发记忆抽取。 |
 | `memory_forget` | `uri?`、`query?`、`targetUri?`、`limit?`、`scoreThreshold?` | 删除记忆 URI，或先搜索后删除唯一高置信候选。 |
