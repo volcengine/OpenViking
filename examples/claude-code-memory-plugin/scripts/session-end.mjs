@@ -11,7 +11,14 @@
 
 import { isPluginEnabled, loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
-import { commitSession, deriveOvSessionId, isBypassed, makeFetchJSON } from "./lib/ov-session.mjs";
+import {
+  commitSession,
+  deriveOvSessionId,
+  enqueuePendingDirectly,
+  isBypassed,
+  isRetryableFailure,
+  makeFetchJSON,
+} from "./lib/ov-session.mjs";
 import { maybeDetach, readHookStdin } from "./lib/async-writer.mjs";
 
 if (!isPluginEnabled()) {
@@ -59,14 +66,26 @@ async function main() {
 
   const ovSessionId = deriveOvSessionId(sessionId);
   const health = await fetchJSON("/health");
+  if (!health.ok && isRetryableFailure(health)) {
+    const queued = await enqueuePendingDirectly("commitSession", ovSessionId, {});
+    log("commit", { ovSessionId, ok: false, queued: queued.ok, reason: "health_retryable" });
+    approve();
+    return;
+  }
   if (!health.ok) {
-    logError("health_check", "server unreachable");
+    logError("health_check", `non-retryable status ${health.status || "unknown"}`);
     approve();
     return;
   }
 
   const res = await commitSession(fetchJSON, ovSessionId);
-  log("commit", { ovSessionId, ok: res.ok, error: res.ok ? undefined : res.error?.message });
+  log("commit", {
+    ovSessionId,
+    ok: res.ok,
+    queued: Boolean(res.pendingQueued),
+    enqueueFailed: Boolean(res.pendingEnqueueFailed),
+    error: res.ok ? undefined : res.error?.message,
+  });
   approve();
 }
 
