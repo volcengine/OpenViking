@@ -153,7 +153,7 @@
     "recallTargetTypes": {
       "label": "Recall Target Types",
       "placeholder": "user,agent",
-      "help": "Comma-separated auto-recall and default memory_recall targets: user, agent, session, resource. Replaces recallResources for new configs.",
+      "help": "Comma-separated auto-recall and default memory_recall targets: user, agent, resource. Session history is available through ov_archive_search and ov_archive_expand.",
       "advanced": true
     },
     "recallLimit": {
@@ -329,7 +329,6 @@
               "type": "string",
               "enum": [
                 "resource",
-                "session",
                 "user",
                 "agent"
               ]

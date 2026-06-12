@@ -91,7 +91,7 @@ export type RecallTraceFlushResult = {
   warnings: string[];
 };
 
-const ALLOWED_RESOURCE_TYPES: RecallResourceType[] = ["resource", "session", "user", "agent"];
+const ALLOWED_RESOURCE_TYPES: RecallResourceType[] = ["resource", "user", "agent"];
 const DEFAULT_RESOURCE_TYPES: RecallResourceType[] = ["user", "agent"];
 
 function toResourceTypeEntries(value: unknown): string[] {
@@ -140,7 +140,7 @@ export function normalizeResourceTypes(value: unknown): RecallResourceType[] {
 
 export function resolveRecallSearchPlan(
   resourceTypes: unknown,
-  ctx: { ovSessionId?: string; agentId?: string },
+  _ctx: { ovSessionId?: string; agentId?: string },
 ): {
   resourceTypes: RecallResourceType[];
   searches: Array<{ resourceType: RecallResourceType; targetUri: string }>;
@@ -153,15 +153,6 @@ export function resolveRecallSearchPlan(
   for (const resourceType of normalized) {
     if (resourceType === "resource") {
       searches.push({ resourceType, targetUri: "viking://resources" });
-    } else if (resourceType === "session") {
-      if (ctx.ovSessionId) {
-        searches.push({
-          resourceType,
-          targetUri: `viking://user/sessions/${encodeURIComponent(ctx.ovSessionId)}/history`,
-        });
-      } else {
-        skipped.push({ resourceType, reason: "missing_session" });
-      }
     } else if (resourceType === "user") {
       searches.push({ resourceType, targetUri: "viking://user/memories" });
     } else if (resourceType === "agent") {

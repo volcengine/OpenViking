@@ -372,15 +372,21 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(fromArray.recallTargetTypes).toEqual(["user", "agent"]);
 
     const fromString = memoryOpenVikingConfigSchema.parse({
-      recallTargetTypes: "resource, session\nagent",
+      recallTargetTypes: "resource, user\nagent",
     });
-    expect(fromString.recallTargetTypes).toEqual(["resource", "session", "agent"]);
+    expect(fromString.recallTargetTypes).toEqual(["resource", "user", "agent"]);
   });
 
   it("rejects unknown recallTargetTypes instead of falling back to defaults", () => {
     expect(() =>
       memoryOpenVikingConfigSchema.parse({ recallTargetTypes: ["user", "project"] }),
     ).toThrow("recallTargetTypes contains unknown resource types: project");
+  });
+
+  it("rejects session recallTargetTypes because session history is not a semantic recall target", () => {
+    expect(() =>
+      memoryOpenVikingConfigSchema.parse({ recallTargetTypes: ["session"] }),
+    ).toThrow("recallTargetTypes contains unknown resource types: session");
   });
 
   it("keeps deprecated recallResources as an additive compatibility switch when recallTargetTypes is unset", () => {

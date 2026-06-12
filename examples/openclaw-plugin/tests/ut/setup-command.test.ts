@@ -32,4 +32,10 @@ describe("openviking setup recall target type parsing", () => {
       "unknown resource types: project",
     );
   });
+
+  it("rejects session as a recall target type", () => {
+    expect(() => __test__.normalizeSetupRecallTargetTypes("session")).toThrow(
+      "unknown resource types: session",
+    );
+  });
 });
