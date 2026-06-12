@@ -625,9 +625,6 @@ impl HttpClient {
     pub async fn add_skill(
         &self,
         data: &str,
-        to: Option<String>,
-        parent: Option<String>,
-        parent_auto_create: Option<String>,
         wait: bool,
         timeout: Option<f64>,
         show_progress: bool,
@@ -635,31 +632,6 @@ impl HttpClient {
         source_metadata: Option<Value>,
     ) -> Result<serde_json::Value> {
         let path_obj = Path::new(data);
-        let (effective_parent, create_parent) = match (parent, parent_auto_create) {
-            (Some(p), None) => (Some(p), false),
-            (None, Some(p)) => (Some(p), true),
-            (None, None) => (None, false),
-            (Some(_), Some(_)) => {
-                return Err(Error::Client(
-                    "Specify only one of --parent or --parent-auto-create.".to_string(),
-                ));
-            }
-        };
-        if to.is_some() && effective_parent.is_some() {
-            return Err(Error::Client(
-                "Specify only one of --to, --parent, or --parent-auto-create.".to_string(),
-            ));
-        }
-
-        let build_body = |base: serde_json::Value| {
-            let mut body = base;
-            if create_parent {
-                body.as_object_mut()
-                    .expect("add_skill request body must be an object")
-                    .insert("create_parent".to_string(), serde_json::Value::Bool(true));
-            }
-            body
-        };
 
         if path_obj.exists() {
             if path_obj.is_dir() {
@@ -675,13 +647,11 @@ impl HttpClient {
                     self.upload_temp_file(zip_file.path()).await?
                 };
 
-                let mut body = build_body(serde_json::json!({
+                let mut body = serde_json::json!({
                     "temp_file_id": temp_file_id,
-                    "to": to,
-                    "parent": effective_parent,
                     "wait": wait,
                     "timeout": timeout,
-                }));
+                });
                 if let Some(source_metadata) = source_metadata.clone() {
                     body["source_metadata"] = source_metadata;
                 }
@@ -698,13 +668,11 @@ impl HttpClient {
                     self.upload_temp_file(path_obj).await?
                 };
 
-                let mut body = build_body(serde_json::json!({
+                let mut body = serde_json::json!({
                     "temp_file_id": temp_file_id,
-                    "to": to,
-                    "parent": effective_parent,
                     "wait": wait,
                     "timeout": timeout,
-                }));
+                });
                 if let Some(source_metadata) = source_metadata.clone() {
                     body["source_metadata"] = source_metadata;
                 }
@@ -714,26 +682,22 @@ impl HttpClient {
                     .post_with_timeout("/api/v1/skills", &body, dynamic_timeout)
                     .await
             } else {
-                let mut body = build_body(serde_json::json!({
+                let mut body = serde_json::json!({
                     "data": data,
-                    "to": to,
-                    "parent": effective_parent,
                     "wait": wait,
                     "timeout": timeout,
-                }));
+                });
                 if let Some(source_metadata) = source_metadata.clone() {
                     body["source_metadata"] = source_metadata;
                 }
                 self.post("/api/v1/skills", &body).await
             }
         } else {
-            let mut body = build_body(serde_json::json!({
+            let mut body = serde_json::json!({
                 "data": data,
-                "to": to,
-                "parent": effective_parent,
                 "wait": wait,
                 "timeout": timeout,
-            }));
+            });
             if let Some(source_metadata) = source_metadata {
                 body["source_metadata"] = source_metadata;
             }
@@ -741,15 +705,8 @@ impl HttpClient {
         }
     }
 
-    pub async fn skills_list(
-        &self,
-        node_limit: i32,
-        root_uri: Option<&str>,
-    ) -> Result<serde_json::Value> {
-        let mut params = vec![("node_limit".to_string(), node_limit.to_string())];
-        if let Some(root_uri) = root_uri {
-            params.push(("root_uri".to_string(), root_uri.to_string()));
-        }
+    pub async fn skills_list(&self, node_limit: i32) -> Result<serde_json::Value> {
+        let params = vec![("node_limit".to_string(), node_limit.to_string())];
         self.get("/api/v1/skills", &params).await
     }
 
@@ -760,7 +717,6 @@ impl HttpClient {
         include_files: bool,
         include_source: bool,
         level: Option<i32>,
-        root_uri: Option<&str>,
     ) -> Result<serde_json::Value> {
         let path = format!("/api/v1/skills/{}", name);
         let mut params = vec![
@@ -771,9 +727,6 @@ impl HttpClient {
         if let Some(level) = level {
             params.push(("level".to_string(), level.to_string()));
         }
-        if let Some(root_uri) = root_uri {
-            params.push(("root_uri".to_string(), root_uri.to_string()));
-        }
         self.get(&path, &params).await
     }
 
@@ -783,11 +736,9 @@ impl HttpClient {
         node_limit: i32,
         threshold: Option<f64>,
         level: Option<Vec<i32>>,
-        root_uri: Option<&str>,
     ) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "query": query,
-            "root_uri": root_uri,
             "limit": node_limit,
             "score_threshold": threshold,
             "level": level,
@@ -858,7 +809,6 @@ impl HttpClient {
         show_progress: bool,
         verbose: bool,
         source_metadata: Option<Value>,
-        root_uri: Option<&str>,
     ) -> Result<serde_json::Value> {
         let endpoint = format!("/api/v1/skills/{}", name);
         let path_obj = Path::new(data);
@@ -878,7 +828,6 @@ impl HttpClient {
                 };
                 let mut body = serde_json::json!({
                     "temp_file_id": temp_file_id,
-                    "root_uri": root_uri,
                     "wait": wait,
                     "timeout": timeout,
                 });
@@ -895,7 +844,6 @@ impl HttpClient {
                 };
                 let mut body = serde_json::json!({
                     "temp_file_id": temp_file_id,
-                    "root_uri": root_uri,
                     "wait": wait,
                     "timeout": timeout,
                 });
@@ -906,7 +854,6 @@ impl HttpClient {
             } else {
                 let mut body = serde_json::json!({
                     "data": data,
-                    "root_uri": root_uri,
                     "wait": wait,
                     "timeout": timeout,
                 });
@@ -918,7 +865,6 @@ impl HttpClient {
         } else {
             let mut body = serde_json::json!({
                 "data": data,
-                "root_uri": root_uri,
                 "wait": wait,
                 "timeout": timeout,
             });
@@ -929,17 +875,9 @@ impl HttpClient {
         }
     }
 
-    pub async fn skill_remove(
-        &self,
-        name: &str,
-        root_uri: Option<&str>,
-    ) -> Result<serde_json::Value> {
+    pub async fn skill_remove(&self, name: &str) -> Result<serde_json::Value> {
         let path = format!("/api/v1/skills/{}", name);
-        let mut params = Vec::new();
-        if let Some(root_uri) = root_uri {
-            params.push(("root_uri".to_string(), root_uri.to_string()));
-        }
-        self.delete(&path, &params).await
+        self.delete(&path, &[]).await
     }
 
     // ============ Task Methods ============

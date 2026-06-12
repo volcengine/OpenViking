@@ -37,12 +37,6 @@ def test_context_type_for_uri_uses_path_segments():
         context_type_for_uri("viking://user/support_bot/peers/web-visitor-alice/resources/faq.md")
         == "resource"
     )
-    assert (
-        context_type_for_uri(
-            "viking://user/support_bot/peers/web-visitor-alice/skills/search-helper"
-        )
-        == "skill"
-    )
     assert context_type_for_uri("viking://resources/memories-report.md") == "resource"
     assert context_type_for_uri("viking://user/alice/resources/skills-report.md") == "resource"
 
@@ -55,9 +49,9 @@ def test_peer_content_target_uri_rejects_invalid_peer_id():
 
     with pytest.raises(InvalidURIError, match="Invalid peer_id"):
         validate_content_target_uri(
-            "viking://user/support_bot/peers/web:visitor:alice/skills/demo",
+            "viking://user/support_bot/peers/web+visitor+alice/resources/demo",
             ctx,
-            kind="skill",
+            kind="resource",
         )
 
 

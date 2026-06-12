@@ -51,9 +51,6 @@ class BaseClient(ABC):
     async def add_skill(
         self,
         data: Any,
-        to: Optional[str] = None,
-        parent: Optional[str] = None,
-        create_parent: bool = False,
         wait: bool = False,
         timeout: Optional[float] = None,
         telemetry: TelemetryRequest = False,

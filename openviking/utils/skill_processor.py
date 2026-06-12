@@ -17,12 +17,10 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
-from openviking.core.content_targets import ContentTargetSpec
 from openviking.core.context import Context, ContextType, Vectorize
 from openviking.core.mcp_converter import is_mcp_format, mcp_to_skill
 from openviking.core.namespace import (
-    canonical_user_content_root,
-    uri_leaf_name,
+    canonical_user_root,
     user_space_fragment,
 )
 from openviking.core.skill_loader import SkillLoader
@@ -41,7 +39,6 @@ from openviking.utils.zip_safe import safe_extract_zip
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
-from openviking_cli.utils.uri import VikingURI
 
 logger = get_logger(__name__)
 
@@ -119,7 +116,6 @@ class SkillProcessor:
         data: Any,
         viking_fs: VikingFS,
         ctx: RequestContext,
-        target: Optional[ContentTargetSpec] = None,
         allow_local_path_resolution: bool = True,
         source_path_hint: Optional[str] = None,
         apply_privacy: bool = True,
@@ -155,7 +151,6 @@ class SkillProcessor:
             preparation,
             viking_fs=viking_fs,
             ctx=ctx,
-            target=target,
             apply_privacy=apply_privacy,
             privacy_change_reason=privacy_change_reason,
         )
@@ -166,7 +161,6 @@ class SkillProcessor:
         viking_fs: VikingFS,
         ctx: RequestContext,
         *,
-        target: Optional[ContentTargetSpec] = None,
         apply_privacy: bool = True,
         privacy_change_reason: str = "auto-extracted from add_skill",
     ) -> Dict[str, Any]:
@@ -187,14 +181,9 @@ class SkillProcessor:
                 )
             skill_abstract = self._build_skill_abstract(skill_dict)
 
-            skill_dir_uri, skill_root_uri = await self._resolve_skill_target_uri(
-                viking_fs=viking_fs,
-                ctx=ctx,
-                skill_name=skill_dict["name"],
-                target=target,
-            )
+            skill_root_uri = f"{canonical_user_root(ctx)}/skills"
             context = Context(
-                uri=skill_dir_uri,
+                uri=f"{skill_root_uri}/{skill_dict['name']}",
                 parent_uri=skill_root_uri,
                 is_leaf=False,
                 abstract=skill_abstract,
@@ -218,6 +207,8 @@ class SkillProcessor:
                 "skill.overview.duration_ms",
                 round((time.perf_counter() - overview_start) * 1000, 3),
             )
+
+            skill_dir_uri = context.uri
 
             write_start = time.perf_counter()
             await self._write_skill_content(
@@ -285,40 +276,6 @@ class SkillProcessor:
             if cleanup_path:
                 shutil.rmtree(cleanup_path, ignore_errors=True)
             raise
-
-    async def _resolve_skill_target_uri(
-        self,
-        *,
-        viking_fs: VikingFS,
-        ctx: RequestContext,
-        skill_name: str,
-        target: Optional[ContentTargetSpec],
-    ) -> tuple[str, str]:
-        target = target or ContentTargetSpec()
-        if target.to:
-            target_uri = target.to.rstrip("/")
-            target_name = uri_leaf_name(target_uri)
-            if target_name != skill_name:
-                raise InvalidArgumentError(
-                    f"Skill target URI name mismatch: target name is '{target_name}', "
-                    f"content name is '{skill_name}'",
-                    details={"expected": skill_name, "actual": target_name},
-                )
-            parent_uri_obj = VikingURI(target_uri).parent
-            if parent_uri_obj is None:
-                raise InvalidArgumentError(
-                    f"Skill target URI must be under a skills root: {target_uri}"
-                )
-            return target_uri, parent_uri_obj.uri
-
-        skill_root_uri = (target.parent or canonical_user_content_root(ctx, "skill")).rstrip("/")
-        if target.parent:
-            await viking_fs.ensure_parent_exists(
-                skill_root_uri,
-                ctx,
-                create_parent=target.create_parent,
-            )
-        return f"{skill_root_uri}/{skill_name}", skill_root_uri
 
     def _parse_skill(
         self,

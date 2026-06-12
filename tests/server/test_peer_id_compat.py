@@ -17,9 +17,9 @@ def test_normalize_peer_id_accepts_peer_id():
     assert normalize_peer_id("web-visitor-alice") == "web-visitor-alice"
 
 
-def test_normalize_peer_id_rejects_colon():
+def test_normalize_peer_id_rejects_invalid_character():
     with pytest.raises(ValueError, match="Invalid peer_id"):
-        normalize_peer_id("web:visitor:alice")
+        normalize_peer_id("web+visitor+alice")
 
 
 def _target_dirs(target_uri="", peer_id=None):
@@ -48,7 +48,6 @@ def test_default_peer_search_targets_self_and_requested_peer_content():
         "viking://user/support_bot/resources",
         "viking://user/support_bot/peers/web-visitor-alice/resources",
         "viking://user/support_bot/skills",
-        "viking://user/support_bot/peers/web-visitor-alice/skills",
     ]
 
 
@@ -73,7 +72,6 @@ def test_peer_search_explicit_peer_root_targets_that_peer_content():
     assert targets == [
         "viking://user/support_bot/peers/web-visitor-alice/memories",
         "viking://user/support_bot/peers/web-visitor-alice/resources",
-        "viking://user/support_bot/peers/web-visitor-alice/skills",
     ]
 
 
@@ -96,7 +94,7 @@ def test_peer_search_explicit_peer_target_rejects_mismatched_peer_id():
 
 def test_peer_search_explicit_peer_target_rejects_invalid_peer_id():
     with pytest.raises(InvalidArgumentError, match="Invalid peer_id"):
-        _target_dirs("viking://user/support_bot/peers/web:visitor:alice/memories")
+        _target_dirs("viking://user/support_bot/peers/web+visitor+alice/memories")
 
 
 def test_peer_search_rejects_all_peers_target():
@@ -113,7 +111,6 @@ def test_peer_search_user_root_targets_user_content_and_requested_peer_content()
         "viking://user/support_bot/resources",
         "viking://user/support_bot/peers/web-visitor-alice/resources",
         "viking://user/support_bot/skills",
-        "viking://user/support_bot/peers/web-visitor-alice/skills",
     ]
 
 

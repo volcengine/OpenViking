@@ -37,7 +37,7 @@ def test_normalize_session_messages_maps_sender_to_peer_only_for_user_messages()
 
     messages = [
         {"role": "user", "content": "hello", "sender_id": "telegram:alice"},
-        {"role": "assistant", "content": "hi", "sender_id": "telegram:alice"},
+        {"role": "assistant", "content": "hi", "sender_id": "agent-1"},
     ]
 
     normalized = client._normalize_session_messages(messages)

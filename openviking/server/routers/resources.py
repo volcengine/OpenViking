@@ -97,9 +97,6 @@ class AddSkillRequest(BaseModel):
         data: Inline skill content or structured skill data. HTTP requests do not treat
             string values as host filesystem paths.
         temp_file_id: Temporary upload id returned by /api/v1/resources/temp_upload.
-        to: Exact target URI for the skill.
-        parent: Parent skills URI under which the skill name will be stored.
-        create_parent: Whether to automatically create parent when it does not exist.
         wait: Whether to wait for skill processing to complete.
         timeout: Timeout in seconds when wait=True.
     """
@@ -108,9 +105,6 @@ class AddSkillRequest(BaseModel):
 
     data: Any = None
     temp_file_id: Optional[str] = None
-    to: Optional[str] = None
-    parent: Optional[str] = None
-    create_parent: bool = False
     wait: bool = False
     timeout: Optional[float] = None
     source_metadata: Optional[Dict[str, Any]] = None
@@ -308,9 +302,6 @@ async def add_skill(
             result = await service.resources.add_skill(
                 data=data,
                 ctx=_ctx,
-                to=request.to,
-                parent=request.parent,
-                create_parent=request.create_parent,
                 wait=request.wait,
                 timeout=request.timeout,
                 allow_local_path_resolution=allow_local_path_resolution,

@@ -58,9 +58,6 @@ pub async fn add_resource(
 pub async fn add_skill(
     client: &HttpClient,
     data: &str,
-    to: Option<String>,
-    parent: Option<String>,
-    parent_auto_create: Option<String>,
     wait: bool,
     timeout: Option<f64>,
     show_progress: bool,
@@ -69,17 +66,7 @@ pub async fn add_skill(
     compact: bool,
 ) -> Result<()> {
     let result = client
-        .add_skill(
-            data,
-            to,
-            parent,
-            parent_auto_create,
-            wait,
-            timeout,
-            show_progress,
-            verbose,
-            None,
-        )
+        .add_skill(data, wait, timeout, show_progress, verbose, None)
         .await?;
 
     if !wait && matches!(format, OutputFormat::Table) {

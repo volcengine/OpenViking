@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from uuid import uuid4
 
 from openviking.core.namespace import canonical_session_uri
-from openviking.core.peer_id import normalize_peer_id, safe_peer_id
+from openviking.core.peer_id import normalize_peer_id
 from openviking.message import Message, Part
 from openviking.message.part import ContextPart, TextPart, ToolPart
 from openviking.server.config import ToolOutputExternalizationConfig
@@ -86,7 +86,7 @@ def _message_peer_ids(messages: List[Message]) -> set[str]:
     return {
         peer_id
         for message in messages
-        if (peer_id := safe_peer_id(getattr(message, "peer_id", None)))
+        if (peer_id := getattr(message, "peer_id", None))
     }
 
 

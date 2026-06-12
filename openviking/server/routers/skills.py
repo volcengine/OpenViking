@@ -13,12 +13,8 @@ from fastapi import APIRouter, Depends, Request
 from fastapi import Path as ApiPath
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from openviking.core.namespace import (
-    canonical_user_content_root,
-    is_content_root_uri,
-)
+from openviking.core.namespace import canonical_user_root
 from openviking.core.skill_loader import SkillLoader
-from openviking.core.uri_validation import validate_content_target_uri
 from openviking.privacy.service import UserPrivacyConfigVersion
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
@@ -45,7 +41,6 @@ class UpdateSkillRequest(BaseModel):
 
     data: Any = None
     temp_file_id: Optional[str] = None
-    root_uri: Optional[str] = None
     wait: bool = False
     timeout: Optional[float] = None
     source_metadata: Optional[Dict[str, Any]] = None
@@ -62,7 +57,6 @@ class FindSkillsRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     query: str
-    root_uri: Optional[str] = None
     limit: int = 10
     score_threshold: Optional[float] = None
     level: Optional[list[int]] = None
@@ -79,24 +73,15 @@ class ValidateSkillRequest(BaseModel):
 
 
 def _agent_skills_root(ctx: RequestContext) -> str:
-    return canonical_user_content_root(ctx, "skill")
-
-
-def _resolve_skills_root(ctx: RequestContext, root_uri: Optional[str]) -> str:
-    if not root_uri:
-        return _agent_skills_root(ctx)
-    resolved = validate_content_target_uri(root_uri, ctx, kind="skill", field_name="root_uri")
-    if not is_content_root_uri(resolved, ctx, kind="skill"):
-        raise InvalidArgumentError("root_uri must point to a skills root.")
-    return resolved.rstrip("/")
+    return f"{canonical_user_root(ctx)}/skills"
 
 
 def _validate_skill_name(skill_name: str) -> str:
     return validate_skill_name(skill_name)
 
 
-def _skill_root_uri(skills_root_uri: str, skill_name: str) -> str:
-    return f"{skills_root_uri.rstrip('/')}/{_validate_skill_name(skill_name)}"
+def _skill_root_uri(ctx: RequestContext, skill_name: str) -> str:
+    return f"{_agent_skills_root(ctx)}/{_validate_skill_name(skill_name)}"
 
 
 def _skill_md_uri(root_uri: str) -> str:
@@ -304,13 +289,8 @@ def _skill_summary_from_hit(hit: Dict[str, Any]) -> Dict[str, Any]:
     return summary
 
 
-async def _require_skill(
-    service,
-    ctx: RequestContext,
-    skill_name: str,
-    skills_root_uri: str,
-) -> str:
-    root_uri = _skill_root_uri(skills_root_uri, skill_name)
+async def _require_skill(service, ctx: RequestContext, skill_name: str) -> str:
+    root_uri = _skill_root_uri(ctx, skill_name)
     try:
         stat = await service.fs.stat(root_uri, ctx=ctx)
     except NotFoundError:
@@ -431,12 +411,11 @@ async def _restore_skill_privacy(
 @router.get("")
 async def list_skills(
     node_limit: int = 1000,
-    root_uri: Optional[str] = None,
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """List installed agent skills."""
     service = get_service()
-    root_uri = _resolve_skills_root(_ctx, root_uri)
+    root_uri = _agent_skills_root(_ctx)
     try:
         entries = await service.fs.ls(
             root_uri,
@@ -464,7 +443,7 @@ async def find_skills(
 ):
     """Find agent skills by semantic search."""
     service = get_service()
-    root_uri = _resolve_skills_root(_ctx, request.root_uri)
+    root_uri = _agent_skills_root(_ctx)
     execution = await run_operation(
         operation="skills.find",
         telemetry=request.telemetry,
@@ -512,7 +491,6 @@ async def get_skill(
     include_files: bool = True,
     include_source: bool = False,
     level: Optional[int] = None,
-    root_uri: Optional[str] = None,
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Show one installed agent skill."""
@@ -522,36 +500,34 @@ async def get_skill(
             details={"field": "level", "allowed": [0, 1, 2]},
         )
     service = get_service()
-    skills_root_uri = _resolve_skills_root(_ctx, root_uri)
-    skill_root_uri = await _require_skill(service, _ctx, skill_name, skills_root_uri)
-    abstract = await service.fs.abstract(skill_root_uri, ctx=_ctx)
-    result = _skill_summary_from_meta(skill_name, skill_root_uri, _parse_abstract_meta(abstract))
+    root_uri = await _require_skill(service, _ctx, skill_name)
+    abstract = await service.fs.abstract(root_uri, ctx=_ctx)
+    result = _skill_summary_from_meta(skill_name, root_uri, _parse_abstract_meta(abstract))
     if level is None or level == 0:
         result["abstract"] = abstract
     if level is None or level == 1:
-        result["overview"] = await service.fs.overview(skill_root_uri, ctx=_ctx)
+        result["overview"] = await service.fs.overview(root_uri, ctx=_ctx)
     if level == 2 or include_content is True or (level is None and include_content is not False):
-        result["content"] = await service.fs.read(_skill_md_uri(skill_root_uri), ctx=_ctx)
+        result["content"] = await service.fs.read(_skill_md_uri(root_uri), ctx=_ctx)
     if include_files:
-        entries = await _list_skill_files(service, _ctx, skill_root_uri)
+        entries = await _list_skill_files(service, _ctx, root_uri)
         result["files"] = [
             {
                 "name": entry.get("name") or _skill_name_from_uri(entry.get("uri", "")),
                 "uri": entry.get("uri", ""),
-                "path": _relative_skill_path(skill_root_uri, entry.get("uri", "")),
+                "path": _relative_skill_path(root_uri, entry.get("uri", "")),
                 "is_dir": entry.get("isDir", False),
                 "kind": _skill_file_kind(
-                    _relative_skill_path(skill_root_uri, entry.get("uri", "")),
+                    _relative_skill_path(root_uri, entry.get("uri", "")),
                     entry.get("isDir", False),
                 ),
             }
             for entry in entries
             if isinstance(entry, dict)
-            and _relative_skill_path(skill_root_uri, entry.get("uri", ""))
-            != SOURCE_METADATA_FILENAME
+            and _relative_skill_path(root_uri, entry.get("uri", "")) != SOURCE_METADATA_FILENAME
         ]
     if include_source:
-        result["source"] = await read_skill_source_metadata(service, _ctx, skill_root_uri)
+        result["source"] = await read_skill_source_metadata(service, _ctx, root_uri)
     return Response(status="ok", result=result)
 
 
@@ -564,8 +540,7 @@ async def update_skill(
 ):
     """Replace an existing agent skill with new content."""
     service = get_service()
-    skills_root_uri = _resolve_skills_root(_ctx, request.root_uri)
-    skill_root_uri = await _require_skill(service, _ctx, skill_name, skills_root_uri)
+    root_uri = await _require_skill(service, _ctx, skill_name)
 
     data = request.data
     allow_local_path_resolution = False
@@ -594,7 +569,7 @@ async def update_skill(
     store = TempUploadStore.build(http_request.app.state.config) if resolved else None
 
     async def _update() -> Dict[str, Any]:
-        backup_uri = f"{skills_root_uri}/.{skill_name}.update-backup-{uuid.uuid4().hex}"
+        backup_uri = f"{_agent_skills_root(_ctx)}/.{skill_name}.update-backup-{uuid.uuid4().hex}"
         backup_created = False
         privacy_update_attempted = False
         previous_privacy = None
@@ -618,12 +593,11 @@ async def update_skill(
                         "actual": preparation.skill_dict.get("name"),
                     },
                 )
-            await service.fs.mv(skill_root_uri, backup_uri, ctx=_ctx)
+            await service.fs.mv(root_uri, backup_uri, ctx=_ctx)
             backup_created = True
             result = await service.resources.add_skill(
                 data=preparation,
                 ctx=_ctx,
-                to=skill_root_uri,
                 wait=request.wait,
                 timeout=request.timeout,
                 allow_local_path_resolution=False,
@@ -643,11 +617,11 @@ async def update_skill(
         except Exception:
             if backup_created:
                 try:
-                    await service.fs.rm(skill_root_uri, ctx=_ctx, recursive=True)
+                    await service.fs.rm(root_uri, ctx=_ctx, recursive=True)
                 except Exception:
                     pass
                 try:
-                    await service.fs.mv(backup_uri, skill_root_uri, ctx=_ctx)
+                    await service.fs.mv(backup_uri, root_uri, ctx=_ctx)
                 except Exception:
                     pass
             if privacy_update_attempted:
@@ -686,22 +660,20 @@ async def update_skill(
 @router.delete("/{skill_name}")
 async def delete_skill(
     skill_name: str = ApiPath(..., description="Skill name"),
-    root_uri: Optional[str] = None,
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Remove one installed agent skill."""
     service = get_service()
-    skills_root_uri = _resolve_skills_root(_ctx, root_uri)
-    skill_root_uri = await _require_skill(service, _ctx, skill_name, skills_root_uri)
-    result = await service.fs.rm(skill_root_uri, ctx=_ctx, recursive=True)
+    root_uri = await _require_skill(service, _ctx, skill_name)
+    result = await service.fs.rm(root_uri, ctx=_ctx, recursive=True)
     privacy_deleted = False
     privacy = service.privacy_configs
     if privacy is not None:
         privacy_deleted = await privacy.delete(_ctx, "skill", skill_name)
     response_result: Dict[str, Any] = {
         "name": skill_name,
-        "uri": skill_root_uri,
-        "root_uri": skill_root_uri,
+        "uri": root_uri,
+        "root_uri": root_uri,
     }
     if isinstance(result, dict) and "estimated_deleted_count" in result:
         response_result["estimated_deleted_count"] = result["estimated_deleted_count"]

@@ -110,29 +110,14 @@ pub async fn handle_add_resource(
 
 pub async fn handle_add_skill(
     data: String,
-    to: Option<String>,
-    parent: Option<String>,
-    parent_auto_create: Option<String>,
     wait: bool,
     timeout: Option<f64>,
     ctx: CliContext,
 ) -> Result<()> {
-    let exclusive_count = usize::from(to.is_some())
-        + usize::from(parent.is_some())
-        + usize::from(parent_auto_create.is_some());
-    if exclusive_count > 1 {
-        return Err(Error::Client(
-            "Specify only one of --to, --parent, or --parent-auto-create.".to_string(),
-        ));
-    }
-
     let client = ctx.get_client();
     commands::resources::add_skill(
         &client,
         &data,
-        to,
-        parent,
-        parent_auto_create,
         wait,
         timeout,
         ctx.should_show_progress(),

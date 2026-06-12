@@ -66,11 +66,11 @@ def default_target_directories(
     if context_type == ContextType.RESOURCE:
         return _default_resource_targets(ctx, peer_id)
     if context_type == ContextType.SKILL:
-        return _default_user_scoped_targets(ctx, peer_id, "skills")
+        return _default_skill_targets(ctx)
     return [
         *_default_user_scoped_targets(ctx, peer_id, "memories"),
         *_default_resource_targets(ctx, peer_id),
-        *_default_user_scoped_targets(ctx, peer_id, "skills"),
+        *_default_skill_targets(ctx),
     ]
 
 
@@ -114,6 +114,8 @@ def _target_directories_for_uri(
 
     for segment in ("memories", "resources", "skills"):
         if _is_default_user_content_root(target_uri, ctx, segment):
+            if segment == "skills":
+                return _default_skill_targets(ctx)
             return _default_user_scoped_targets(ctx, peer_id, segment)
 
     return [target_uri]
@@ -123,7 +125,7 @@ def _default_user_root_targets(ctx: RequestContext, peer_id: Optional[str]) -> L
     return [
         *_default_user_scoped_targets(ctx, peer_id, "memories"),
         *_default_user_scoped_targets(ctx, peer_id, "resources"),
-        *_default_user_scoped_targets(ctx, peer_id, "skills"),
+        *_default_skill_targets(ctx),
     ]
 
 
@@ -132,6 +134,10 @@ def _default_resource_targets(ctx: RequestContext, peer_id: Optional[str]) -> Li
         "viking://resources",
         *_default_user_scoped_targets(ctx, peer_id, "resources"),
     ]
+
+
+def _default_skill_targets(ctx: RequestContext) -> List[str]:
+    return [f"{canonical_user_root(ctx)}/skills"]
 
 
 def _default_user_scoped_targets(
@@ -172,10 +178,9 @@ def _resolve_peer_target(
         return [
             f"{peer_root}/memories",
             f"{peer_root}/resources",
-            f"{peer_root}/skills",
         ]
-    if suffix[2] not in {"memories", "resources", "skills"}:
-        raise InvalidArgumentError("Only peer memories, resources, and skills are searchable.")
+    if suffix[2] not in {"memories", "resources"}:
+        raise InvalidArgumentError("Only peer memories and resources are searchable.")
     return [target_uri]
 
 

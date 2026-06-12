@@ -806,9 +806,6 @@ class ResourceService:
         self,
         data: Any,
         ctx: RequestContext,
-        to: Optional[str] = None,
-        parent: Optional[str] = None,
-        create_parent: bool = False,
         wait: bool = False,
         timeout: Optional[float] = None,
         allow_local_path_resolution: bool = True,
@@ -834,19 +831,11 @@ class ResourceService:
             request_wait_tracker.register_request(telemetry_id)
 
         try:
-            target = ContentTargetSpec.from_fields(
-                ctx=ctx,
-                kind="skill",
-                to=to,
-                parent=parent,
-                create_parent=create_parent,
-            )
             if isinstance(data, SkillProcessingPreparation):
                 result = await self._skill_processor.process_prepared_skill(
                     data,
                     viking_fs=self._viking_fs,
                     ctx=ctx,
-                    target=target,
                     apply_privacy=apply_privacy,
                     privacy_change_reason=privacy_change_reason,
                 )
@@ -855,7 +844,6 @@ class ResourceService:
                     data=data,
                     viking_fs=self._viking_fs,
                     ctx=ctx,
-                    target=target,
                     allow_local_path_resolution=allow_local_path_resolution,
                     source_path_hint=source_path_hint,
                     apply_privacy=apply_privacy,

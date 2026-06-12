@@ -13,6 +13,7 @@ from openviking_cli.utils.uri import VikingURI
 _CONTENT_TYPES_BY_SCOPE = {
     "user": {"memories": "memory", "resources": "resource", "skills": "skill"},
 }
+_PEER_CONTENT_SEGMENTS = frozenset({"memories", "resources"})
 _USER_RELATIVE_ROOT_SEGMENTS = frozenset({"peers", "privacy", "sessions"})
 _CONTENT_SEGMENT_BY_KIND = {"resource": "resources", "skill": "skills"}
 
@@ -117,9 +118,9 @@ def _content_segment_index(parts: tuple[str, ...]) -> Optional[int]:
         return None
     if parts[1] in _CONTENT_TYPES_BY_SCOPE["user"]:
         return 1
-    if len(parts) >= 4 and parts[1] == "peers" and parts[3] in _CONTENT_TYPES_BY_SCOPE["user"]:
+    if len(parts) >= 4 and parts[1] == "peers" and parts[3] in _PEER_CONTENT_SEGMENTS:
         return 3
-    if len(parts) >= 5 and parts[2] == "peers" and parts[4] in _CONTENT_TYPES_BY_SCOPE["user"]:
+    if len(parts) >= 5 and parts[2] == "peers" and parts[4] in _PEER_CONTENT_SEGMENTS:
         return 4
     if len(parts) >= 3 and parts[2] in _CONTENT_TYPES_BY_SCOPE["user"]:
         return 2

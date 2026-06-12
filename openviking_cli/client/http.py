@@ -477,9 +477,6 @@ class AsyncHTTPClient(BaseClient):
     async def add_skill(
         self,
         data: Any,
-        to: Optional[str] = None,
-        parent: Optional[str] = None,
-        create_parent: bool = False,
         wait: bool = False,
         timeout: Optional[float] = None,
         telemetry: TelemetryRequest = False,
@@ -487,9 +484,6 @@ class AsyncHTTPClient(BaseClient):
         """Add skill to OpenViking."""
         telemetry = self._validate_telemetry(telemetry)
         request_data = {
-            "to": to,
-            "parent": parent,
-            "create_parent": create_parent,
             "wait": wait,
             "timeout": timeout,
         }
