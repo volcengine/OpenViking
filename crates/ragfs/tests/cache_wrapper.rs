@@ -313,6 +313,49 @@ async fn read_dir_is_cached_and_parent_changes_invalidate_it() {
 }
 
 #[tokio::test]
+async fn oversized_directories_bypass_directory_cache() {
+    let cacheable = CountingFileSystem::new();
+    cacheable.mkdir("/small", 0o755).await.unwrap();
+    for index in 0..1024 {
+        cacheable
+            .write(
+                &format!("/small/{index:04}.txt"),
+                b"x",
+                0,
+                WriteFlag::Create,
+            )
+            .await
+            .unwrap();
+    }
+    let cacheable_probe = cacheable.clone();
+    let (cacheable_fs, _) = cached_fs(cacheable);
+
+    assert_eq!(cacheable_fs.read_dir("/small").await.unwrap().len(), 1024);
+    assert_eq!(cacheable_fs.read_dir("/small").await.unwrap().len(), 1024);
+    assert_eq!(cacheable_probe.read_dir_count(), 1);
+
+    let oversized = CountingFileSystem::new();
+    oversized.mkdir("/large", 0o755).await.unwrap();
+    for index in 0..1025 {
+        oversized
+            .write(
+                &format!("/large/{index:04}.txt"),
+                b"x",
+                0,
+                WriteFlag::Create,
+            )
+            .await
+            .unwrap();
+    }
+    let oversized_probe = oversized.clone();
+    let (oversized_fs, _) = cached_fs(oversized);
+
+    assert_eq!(oversized_fs.read_dir("/large").await.unwrap().len(), 1025);
+    assert_eq!(oversized_fs.read_dir("/large").await.unwrap().len(), 1025);
+    assert_eq!(oversized_probe.read_dir_count(), 2);
+}
+
+#[tokio::test]
 async fn all_directory_membership_mutations_invalidate_parent_entries() {
     let backend = CountingFileSystem::new();
     backend.mkdir("/root", 0o755).await.unwrap();

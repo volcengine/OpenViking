@@ -1,5 +1,7 @@
 //! Provider-independent cache eligibility rules.
 
+const DEFAULT_MAX_CACHED_DIR_ENTRIES: usize = 1024;
+
 /// Cache admission decision for a filesystem object.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CacheDecision {
@@ -21,6 +23,7 @@ impl CacheDecision {
 #[derive(Debug, Clone)]
 pub struct CachePolicy {
     max_file_size: usize,
+    max_cached_dir_entries: usize,
     bypass_prefixes: Vec<String>,
 }
 
@@ -29,6 +32,7 @@ impl CachePolicy {
     pub fn new(max_file_size: usize) -> Self {
         Self {
             max_file_size,
+            max_cached_dir_entries: DEFAULT_MAX_CACHED_DIR_ENTRIES,
             bypass_prefixes: Vec::new(),
         }
     }
@@ -42,6 +46,11 @@ impl CachePolicy {
     /// Return the maximum cacheable file size.
     pub fn max_file_size(&self) -> usize {
         self.max_file_size
+    }
+
+    /// Return the maximum cacheable raw directory entry count.
+    pub fn max_cached_dir_entries(&self) -> usize {
+        self.max_cached_dir_entries
     }
 
     /// Return the admission decision for a full-file object.
@@ -73,6 +82,11 @@ impl CachePolicy {
     /// Return whether raw directory entries are eligible for caching.
     pub fn cache_directory(&self, path: &str) -> bool {
         self.directory_decision(path).should_cache()
+    }
+
+    /// Return whether raw directory entries are small enough to cache.
+    pub fn cache_directory_entries(&self, path: &str, entry_count: usize) -> bool {
+        self.cache_directory(path) && entry_count <= self.max_cached_dir_entries
     }
 
     fn cache_path(&self, path: &str) -> bool {

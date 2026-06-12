@@ -291,6 +291,10 @@ impl CachedFileSystem {
         match self.generations_match(&envelope).await {
             Ok(true) => match envelope.into_directory() {
                 Ok(entries) => {
+                    if !self.policy.cache_directory_entries(path, entries.len()) {
+                        self.cache_delete(key, path).await;
+                        return None;
+                    }
                     if record_hit {
                         self.metrics.read_dir_hit();
                     }
@@ -355,6 +359,9 @@ impl CachedFileSystem {
     }
 
     async fn fill_directory(&self, key: &str, path: &str, entries: &[FileInfo]) {
+        if !self.policy.cache_directory_entries(path, entries.len()) {
+            return;
+        }
         let generations = match self.generation_snapshots(path).await {
             Ok(generations) => generations,
             Err(_) => {
