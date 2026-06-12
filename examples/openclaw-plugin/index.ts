@@ -2308,6 +2308,7 @@ const contextEnginePlugin = {
           try {
             const client = await getClient();
             const agentId = resolveAgentId(ctx.sessionId, ctx.sessionKey);
+            const started = Date.now();
             const result = await client.grepSessionArchives(ovSessionId, escapedQuery, {
               archiveId,
               caseInsensitive: true,
@@ -2333,13 +2334,18 @@ const contextEnginePlugin = {
                 source: "ov_archive_search",
                 operationType: "archive_grep",
                 resourceTypes: ["session"],
-                trigger: boundTraceQuery(query, cfg.traceRecallQueryMaxChars),
+                trigger: {
+                  ...boundTraceQuery(query, cfg.traceRecallQueryMaxChars),
+                  derivedKeywords: [query],
+                },
                 searches: [{
                   resourceType: "archive",
-                  targetUriResolved: `viking://session/${ovSessionId}/archives`,
+                  targetUriResolved: archiveId
+                    ? `${userSessionUri(ovSessionId)}/history/${archiveId}`
+                    : `${userSessionUri(ovSessionId)}/history`,
                   limit: cfg.traceRecallMaxResultsPerSearch,
-                  durationMs: 0,
-                  total: result.matches?.length ?? 0,
+                  durationMs: Date.now() - started,
+                  total: result.matches?.length ?? result.count ?? 0,
                   results: traceResults,
                   archiveId,
                   caseInsensitive: true,
@@ -2348,11 +2354,11 @@ const contextEnginePlugin = {
                   uri: match.uri,
                   resourceType: "archive",
                   line: match.line,
-                  contentPreview: previewText(match.content, cfg.traceRecallPreviewChars),
+                  abstractPreview: previewText(match.content, cfg.traceRecallPreviewChars),
                   displayed: true,
                 })),
                 stats: {
-                  candidateCount: result.matches?.length ?? 0,
+                  candidateCount: result.matches?.length ?? result.count ?? 0,
                   selectedCount: displayed.length,
                   injectedCount: 0,
                 },
