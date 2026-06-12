@@ -325,6 +325,7 @@ class SessionCompressorV3:
                     "source_extraction_id": extraction_id,
                     "session_id": session_id,
                     "archive_uri": archive_uri,
+                    "trace_id": tracer.get_trace_id(),
                     "extracted_at": extracted_at,
                 },
             )

@@ -13,6 +13,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import (
     MemoryField,
     MemoryFile,
+    MemoryOperationSource,
     MemoryTypeSchema,
     ResolvedOperation,
     ResolvedOperations,
@@ -29,6 +30,7 @@ from openviking.session.memory.streaming_memory_updater import (
     classify_memory_merge_mode,
     merge_one_memory_type_operations,
     operation_to_patch,
+    render_operation_after_file_content,
     split_request_by_merge_group,
 )
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
@@ -657,7 +659,7 @@ def test_classify_memory_merge_mode_forces_cross_extraction_merge():
 
 
 @pytest.mark.asyncio
-async def test_streaming_memory_updater_persists_source_extraction_id_and_hides_from_read(
+async def test_streaming_memory_updater_persists_source_extraction_id_trace_id_and_hides_from_read(
     monkeypatch,
 ):
     fs = InMemoryVikingFS({})
@@ -689,12 +691,13 @@ async def test_streaming_memory_updater_persists_source_extraction_id_and_hides_
             ),
             messages=[Message(id="m1", role="user", parts=[TextPart("note source")])],
             ctx=_ctx(),
-            metadata={"source_extraction_id": "extract_1"},
+            metadata={"source_extraction_id": "extract_1", "trace_id": "trace_1"},
         )
     )
 
     assert result.apply_result.written_uris == [op.uris[0]]
     assert '"source_extraction_id": "extract_1"' in fs.files[op.uris[0]]
+    assert '"last_update_trace_id": "trace_1"' in fs.files[op.uris[0]]
 
     from openviking.server.identity import ToolContext
     from openviking.session.memory.tools import MemoryReadTool
@@ -705,6 +708,22 @@ async def test_streaming_memory_updater_persists_source_extraction_id_and_hides_
     )
 
     assert "source_extraction_id" not in read_result
+    assert "last_update_trace_id" not in read_result
+
+
+def test_render_operation_after_file_content_persists_source_trace_id():
+    schema = _registry().get("notes")
+    op = _note_op("note_trace")
+    op.source = MemoryOperationSource(extraction_id="extract_2", trace_id="trace_2")
+
+    rendered = render_operation_after_file_content(
+        op,
+        schema=schema,
+        extract_context=ExtractContext([]),
+    )
+
+    assert '"source_extraction_id": "extract_2"' in rendered
+    assert '"last_update_trace_id": "trace_2"' in rendered
 
 
 @pytest.mark.asyncio

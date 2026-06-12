@@ -14,6 +14,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import (
     MemoryField,
     MemoryFile,
+    MemoryOperationSource,
     MemoryTypeSchema,
     ResolvedOperation,
     ResolvedOperations,
@@ -460,6 +461,33 @@ class TestApplyEditWithSearchReplacePatch:
         registry = MemoryTypeRegistry()
         registry.register(schema)
         return MemoryUpdater(registry=registry)
+
+    @pytest.mark.asyncio
+    async def test_apply_upsert_persists_last_update_trace_id(self):
+        updater = self._make_updater_with_registry()
+        mock_viking_fs = MagicMock()
+        mock_viking_fs.read_file = AsyncMock(side_effect=FileNotFoundError("missing"))
+        written_content = None
+
+        async def mock_write_file(uri, content, **kwargs):
+            nonlocal written_content
+            written_content = content
+
+        mock_viking_fs.write_file = mock_write_file
+        updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
+
+        op = ResolvedOperation(
+            memory_fields={"content": "Line 1"},
+            memory_type="test",
+            uris=["viking://test/test.md"],
+            source=MemoryOperationSource(extraction_id="extract_1", trace_id="trace_1"),
+        )
+        await updater._apply_upsert(op, MagicMock())
+
+        assert written_content is not None
+        result = MemoryFileUtils.read(written_content)
+        assert result.extra_fields["source_extraction_id"] == "extract_1"
+        assert result.extra_fields["last_update_trace_id"] == "trace_1"
 
     @pytest.mark.asyncio
     async def test_apply_edit_with_str_patch_instance(self):

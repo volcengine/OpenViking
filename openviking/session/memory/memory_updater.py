@@ -38,6 +38,7 @@ from openviking.session.memory.utils.uri import render_template
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
+from openviking.telemetry.tracer import get_trace_id
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
@@ -93,10 +94,26 @@ async def write_stored_links(
                 mf.backlinks = merge_links(
                     mf.backlinks, [l.model_dump() for l in link_groups["backlinks"]]
                 )
+            current_trace_id = get_trace_id()
+            if current_trace_id:
+                mf.extra_fields["last_update_trace_id"] = current_trace_id
             bump_memory_version(mf)
             await viking_fs.write_file(uri, MemoryFileUtils.write(mf), ctx=ctx)
         except Exception as e:
             tracer.error(f"Failed to apply links to {uri}: {e}")
+
+
+def _operation_trace_id(op: ResolvedOperation) -> str | None:
+    source = getattr(op, "source", None)
+    trace_id = getattr(source, "trace_id", None) if source else None
+    if trace_id:
+        return str(trace_id)
+    fields = dict(getattr(op, "memory_fields", {}) or {})
+    field_value = fields.get("last_update_trace_id") or fields.get("trace_id")
+    if field_value:
+        return str(field_value)
+    current_trace_id = get_trace_id()
+    return current_trace_id or None
 
 
 class ExtractContext:
@@ -686,6 +703,9 @@ class MemoryUpdater:
             source_extraction_id = getattr(source, "extraction_id", None) if source else None
             if source_extraction_id:
                 metadata["source_extraction_id"] = str(source_extraction_id)
+            source_trace_id = _operation_trace_id(resolved_op)
+            if source_trace_id:
+                metadata["last_update_trace_id"] = source_trace_id
             # Process fields defined in schema (apply merge_op)
             for field in schema.fields:
                 if field.name in resolved_op.memory_fields:

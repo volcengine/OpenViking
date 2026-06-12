@@ -50,6 +50,7 @@ from openviking.session.memory.utils.streaming_batcher import (
 )
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
+from openviking.telemetry.tracer import get_trace_id
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
 
@@ -997,6 +998,9 @@ def render_operation_after_file_content(
     source_extraction_id = source_extraction_id_for_operation(op)
     if source_extraction_id:
         metadata["source_extraction_id"] = source_extraction_id
+    source_trace_id = source_trace_id_for_operation(op)
+    if source_trace_id:
+        metadata["last_update_trace_id"] = source_trace_id
     for field_def in schema.fields:
         if field_def.name not in metadata:
             continue
@@ -1118,6 +1122,9 @@ def attach_source_to_request_operations(request: MemoryUpdateRequest) -> None:
         source_extraction_id = getattr(op.source, "extraction_id", None)
         if source_extraction_id:
             op.memory_fields.setdefault("source_extraction_id", source_extraction_id)
+        source_trace_id = getattr(op.source, "trace_id", None)
+        if source_trace_id:
+            op.memory_fields.setdefault("last_update_trace_id", source_trace_id)
 
 
 def memory_operation_source_from_request(
@@ -1145,6 +1152,19 @@ def source_extraction_id_for_operation(op: ResolvedOperation) -> str | None:
     fields = dict(getattr(op, "memory_fields", {}) or {})
     field_value = fields.get("source_extraction_id")
     return str(field_value) if field_value else None
+
+
+def source_trace_id_for_operation(op: ResolvedOperation) -> str | None:
+    source = getattr(op, "source", None)
+    trace_id = getattr(source, "trace_id", None) if source is not None else None
+    if trace_id:
+        return str(trace_id)
+    fields = dict(getattr(op, "memory_fields", {}) or {})
+    field_value = fields.get("last_update_trace_id") or fields.get("trace_id")
+    if field_value:
+        return str(field_value)
+    current_trace_id = get_trace_id()
+    return current_trace_id or None
 
 
 def is_cross_extraction_group(operations: list[ResolvedOperation]) -> bool:
