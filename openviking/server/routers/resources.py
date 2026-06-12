@@ -5,7 +5,7 @@
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from openviking.core.path_variables import resolve_path_variables
 from openviking.server.auth import get_request_context
@@ -50,6 +50,8 @@ class AddResourceRequest(BaseModel):
         exclude: Glob pattern for files to exclude during parsing.
         directly_upload_media: Whether to directly upload media files. Default is True.
         preserve_structure: Whether to preserve directory structure when adding directories.
+        args: Parser-specific or import-specific extension options. Recursive web
+            crawler options such as depth/max_pages/include_paths are passed here.
         watch_interval: Watch interval in minutes for automatic resource monitoring.
             - watch_interval > 0: Creates or updates a watch task. The resource will be
               automatically re-processed at the specified interval.
@@ -83,6 +85,7 @@ class AddResourceRequest(BaseModel):
     preserve_structure: Optional[bool] = None
     telemetry: TelemetryRequest = False
     watch_interval: float = 0
+    args: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def check_path_or_temp_file_id(self):
@@ -230,7 +233,7 @@ async def add_resource(
     if request.preserve_structure is not None:
         kwargs["preserve_structure"] = request.preserve_structure
 
-    # Resolve path variables before passing to service.
+    # Resolve path variables before passing to service
     to = resolve_path_variables(request.to) if request.to else None
     parent = resolve_path_variables(request.parent) if request.parent else None
 
@@ -247,6 +250,7 @@ async def add_resource(
                 timeout=request.timeout,
                 allow_local_path_resolution=allow_local_path_resolution,
                 enforce_public_remote_targets=True,
+                args=request.args,
                 **kwargs,
             )
         except Exception:

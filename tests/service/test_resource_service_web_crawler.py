@@ -1,0 +1,258 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
+"""Tests for ResourceService web crawler integration."""
+
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+import pytest
+
+from openviking.parse.parsers.html_crawler.web_crawler import CrawledPage, CrawlResult
+from openviking.server.identity import RequestContext, Role
+from openviking.service.resource_service import ResourceService
+from openviking.utils.network_guard import ensure_public_remote_target
+from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.session.user_id import UserIdentifier
+
+
+class MockResourceProcessor:
+    async def process_resource(self, **kwargs):
+        return {"root_uri": kwargs.get("to") or "viking://resources/test"}
+
+
+class MockSkillProcessor:
+    async def process_skill(self, **kwargs):
+        return {"status": "ok"}
+
+
+class HTMLResourceProcessor:
+    async def process_resource(self, **kwargs):
+        return {
+            "status": "success",
+            "root_uri": "viking://resources/example.com/docs",
+            "_html_content": "<html><a href='/child'>child</a></html>",
+            "_html_final_url": "https://www.example.com/docs/",
+        }
+
+
+class CapturingResourceProcessor:
+    def __init__(self):
+        self.kwargs = None
+
+    async def process_resource(self, **kwargs):
+        self.kwargs = kwargs
+        return {"status": "success", "root_uri": "viking://resources/test"}
+
+
+class FakeTaskTracker:
+    async def create(self, *args, **kwargs):
+        return SimpleNamespace(task_id="task_test")
+
+    async def start(self, *args, **kwargs):
+        return None
+
+    async def complete(self, *args, **kwargs):
+        return None
+
+
+@pytest.fixture
+def request_context() -> RequestContext:
+    return RequestContext(
+        user=UserIdentifier("test_account", "test_user"),
+        role=Role.USER,
+    )
+
+
+@pytest.fixture(autouse=True)
+def skip_git_repo_preflight(monkeypatch):
+    monkeypatch.setattr("openviking.service.resource_service.is_git_repo_url", lambda _path: False)
+    monkeypatch.setattr(
+        "openviking.service.task_tracker.get_task_tracker",
+        lambda: FakeTaskTracker(),
+    )
+
+
+@pytest.fixture
+def resource_service() -> ResourceService:
+    return ResourceService(
+        vikingdb=MagicMock(),
+        viking_fs=MagicMock(),
+        resource_processor=MockResourceProcessor(),
+        skill_processor=MockSkillProcessor(),
+        watch_scheduler=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_add_resource_rejects_top_level_crawler_args(
+    resource_service: ResourceService,
+    request_context: RequestContext,
+):
+    with pytest.raises(
+        InvalidArgumentError,
+        match="Crawler options must be passed via args",
+    ):
+        await resource_service.add_resource(
+            path="https://example.com/docs",
+            ctx=request_context,
+            depth=1,
+        )
+
+
+@pytest.mark.asyncio
+async def test_add_resource_rejects_core_fields_inside_args(
+    resource_service: ResourceService,
+    request_context: RequestContext,
+):
+    with pytest.raises(
+        InvalidArgumentError,
+        match="args cannot include core add_resource fields",
+    ):
+        await resource_service.add_resource(
+            path="https://example.com/docs",
+            ctx=request_context,
+            args={"path": "https://evil.example"},
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["request_validator", "original_source", "temp_file_id"])
+async def test_add_resource_rejects_internal_fields_inside_args(
+    resource_service: ResourceService,
+    request_context: RequestContext,
+    field: str,
+):
+    with pytest.raises(
+        InvalidArgumentError,
+        match="args cannot include core add_resource fields",
+    ):
+        await resource_service.add_resource(
+            path="https://example.com/docs",
+            ctx=request_context,
+            args={field: None},
+        )
+
+
+@pytest.mark.asyncio
+async def test_add_resource_forces_remote_request_validator(
+    request_context: RequestContext,
+):
+    processor = CapturingResourceProcessor()
+    service = ResourceService(
+        vikingdb=MagicMock(),
+        viking_fs=MagicMock(),
+        resource_processor=processor,
+        skill_processor=MockSkillProcessor(),
+        watch_scheduler=None,
+    )
+
+    await service.add_resource(
+        path="https://example.com/docs",
+        ctx=request_context,
+        enforce_public_remote_targets=True,
+        args={"depth": 0},
+        request_validator=None,
+    )
+
+    assert processor.kwargs["request_validator"] is ensure_public_remote_target
+
+
+@pytest.mark.asyncio
+async def test_add_resource_strips_internal_html_fields_from_result(
+    request_context: RequestContext,
+    monkeypatch,
+):
+    service = ResourceService(
+        vikingdb=MagicMock(),
+        viking_fs=MagicMock(),
+        resource_processor=HTMLResourceProcessor(),
+        skill_processor=MockSkillProcessor(),
+        watch_scheduler=None,
+    )
+
+    async def fake_crawl_and_add_resources(**kwargs):
+        assert kwargs["root_url"] == "https://www.example.com/docs/"
+        return CrawlResult(total_crawled=1)
+
+    monkeypatch.setattr(service, "_crawl_and_add_resources", fake_crawl_and_add_resources)
+
+    result = await service.add_resource(
+        path="https://example.com/docs",
+        ctx=request_context,
+        args={"depth": 1},
+    )
+
+    assert "_html_content" not in result
+    assert "_html_final_url" not in result
+    assert result["_crawl_result"]["total_crawled"] == 1
+
+
+@pytest.mark.asyncio
+async def test_crawl_and_add_resources_counts_child_status_error(
+    resource_service: ResourceService,
+    request_context: RequestContext,
+    monkeypatch,
+):
+    class FakeWebCrawler:
+        def __init__(self, config):
+            self.config = config
+            self.closed = False
+
+        async def crawl(self, root_url):
+            assert root_url == "https://example.com/docs"
+            return CrawlResult(
+                pages=[
+                    CrawledPage(
+                        url="https://example.com/docs",
+                        depth=0,
+                        title="Root",
+                        content="<h1>Root</h1>",
+                        content_type="text/html",
+                    ),
+                    CrawledPage(
+                        url="https://example.com/docs/child",
+                        depth=1,
+                        title="Child",
+                        content="<h1>Child</h1>",
+                        content_type="text/html",
+                    ),
+                ],
+                total_crawled=2,
+            )
+
+        async def close(self):
+            self.closed = True
+
+    monkeypatch.setattr("openviking.parse.parsers.html_crawler.web_crawler.WebCrawler", FakeWebCrawler)
+
+    calls = []
+
+    async def fake_add_resource(**kwargs):
+        calls.append(kwargs)
+        if kwargs.get("original_source") == "https://example.com/docs/child":
+            return {"status": "error", "error": "parser failed"}
+        return {"status": "success", "root_uri": kwargs.get("to")}
+
+    resource_service.add_resource = fake_add_resource
+
+    result = await resource_service._crawl_and_add_resources(
+        root_url="https://example.com/docs",
+        depth=1,
+        max_pages=5,
+        include_paths=None,
+        exclude_paths=None,
+        allow_external_links=False,
+        ctx=request_context,
+        parent_uri="viking://resources/example.com",
+        root_uri="viking://resources/example.com/docs",
+        instruction="",
+        reason="",
+        build_index=True,
+        summarize=False,
+    )
+
+    assert len(calls) == 2
+    assert all(call["args"] == {"depth": 0} for call in calls)
+    assert result.root_updated is True
+    assert result.child_added == 0
+    assert result.child_failed == 1

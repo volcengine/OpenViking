@@ -261,6 +261,9 @@ enum Commands {
         /// Watch interval in minutes for automatic resource monitoring (0 = no monitoring)
         #[arg(long, default_value = "0")]
         watch_interval: f64,
+        /// Parser-specific import options, e.g. --args=depth:1,max_pages:3
+        #[arg(long = "args")]
+        resource_args: Option<String>,
         #[command(flatten)]
         upload_options: UploadCliOptions,
     },
@@ -2164,6 +2167,7 @@ async fn main() {
             exclude,
             no_directly_upload_media,
             watch_interval,
+            resource_args,
             upload_options,
         } => {
             let ctx =
@@ -2183,6 +2187,7 @@ async fn main() {
                 exclude,
                 no_directly_upload_media,
                 watch_interval,
+                resource_args,
                 ctx,
             )
             .await
@@ -2981,6 +2986,9 @@ mod tests {
         assert!(help.contains("--progress"));
         assert!(help.contains("--no-progress"));
         assert!(help.contains("--verbose"));
+        assert!(help.contains("--args"));
+        assert!(!help.contains("--depth"));
+        assert!(!help.contains("--max-pages"));
     }
 
     #[test]
@@ -3021,9 +3029,14 @@ mod tests {
         ])
         .expect("add-resource upload flags should parse");
         match add_resource.command {
-            Commands::AddResource { upload_options, .. } => {
+            Commands::AddResource {
+                upload_options,
+                resource_args,
+                ..
+            } => {
                 assert!(upload_options.progress);
                 assert!(upload_options.verbose);
+                assert!(resource_args.is_none());
             }
             _ => panic!("expected add-resource command"),
         }
@@ -3190,6 +3203,42 @@ mod tests {
             }
             _ => panic!("expected skills validate"),
         }
+    }
+
+    #[test]
+    fn cli_parses_add_resource_args() {
+        let add_resource = Cli::try_parse_from([
+            "ov",
+            "add-resource",
+            "https://example.com",
+            "--args=depth:1,max_pages:3",
+        ])
+        .expect("add-resource --args should parse");
+
+        match add_resource.command {
+            Commands::AddResource { resource_args, .. } => {
+                assert_eq!(resource_args.as_deref(), Some("depth:1,max_pages:3"));
+            }
+            _ => panic!("expected add-resource command"),
+        }
+    }
+
+    #[test]
+    fn cli_rejects_legacy_web_crawl_flags() {
+        assert!(
+            Cli::try_parse_from(["ov", "add-resource", "https://example.com", "--depth", "1"])
+                .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "ov",
+                "add-resource",
+                "https://example.com",
+                "--max-pages",
+                "3"
+            ])
+            .is_err()
+        );
     }
 
     #[test]

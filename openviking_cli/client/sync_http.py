@@ -234,6 +234,7 @@ class SyncHTTPClient:
         directly_upload_media: bool = True,
         watch_interval: float = 0,
         telemetry: TelemetryRequest = False,
+        args: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
         if to and parent:
@@ -254,6 +255,7 @@ class SyncHTTPClient:
                 directly_upload_media=directly_upload_media,
                 watch_interval=watch_interval,
                 telemetry=telemetry,
+                args=args,
             )
         )
 

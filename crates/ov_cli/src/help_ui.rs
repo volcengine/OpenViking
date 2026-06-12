@@ -363,6 +363,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 label: "ov add-resource https://example.com/spec.md --to viking://specs/api.md",
                 description: "Import a URL to an exact target URI.",
             },
+            HelpItem {
+                label: "ov add-resource https://example.com --args='depth:1,max_pages:3'",
+                description: "Import a URL with parser-specific options.",
+            },
         ],
         arguments: &[HelpItem {
             label: "<path-or-url>",
@@ -402,6 +406,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             HelpItem {
                 label: "--watch-interval <minutes>",
                 description: "Set automatic refresh cadence.",
+            },
+            HelpItem {
+                label: "--args <key:value,...>",
+                description: "Pass parser-specific options; quote values containing commas.",
             },
             HelpItem {
                 label: "--progress / --no-progress",

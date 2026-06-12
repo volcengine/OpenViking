@@ -76,6 +76,37 @@ class TestAddResource:
         assert str(seen["telemetry_id"]).startswith("tm_")
         assert seen["kwargs"]["wait"] is True
 
+    async def test_local_client_add_resource_forwards_extension_args(self):
+        """Local SDK should pass crawler options through args, not top-level params."""
+        seen: dict[str, object] = {}
+
+        async def _fake_add_resource(**kwargs):
+            seen["kwargs"] = kwargs
+            return {"root_uri": "viking://resources/demo"}
+
+        client = LocalClient.__new__(LocalClient)
+        client._ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+        client._service = SimpleNamespace(
+            resources=SimpleNamespace(add_resource=_fake_add_resource)
+        )
+
+        result = await LocalClient.add_resource(
+            client,
+            path="https://example.com/docs",
+            args={
+                "depth": 1,
+                "max_pages": 5,
+                "use_playwright": True,
+            },
+        )
+
+        assert result["root_uri"] == "viking://resources/demo"
+        assert seen["kwargs"]["args"] == {
+            "depth": 1,
+            "max_pages": 5,
+            "use_playwright": True,
+        }
+
     async def test_add_resource_without_wait(
         self, client: AsyncOpenViking, sample_markdown_file: Path
     ):

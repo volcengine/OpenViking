@@ -140,8 +140,7 @@ impl HttpClient {
         verbose: bool,
         ignore_dirs: Option<&str>,
     ) -> Result<tempfile::NamedTempFile> {
-        self.create_uploader()
-            .zip_directory_with_progress(dir_path, verbose, ignore_dirs)
+        self.create_uploader().zip_directory_with_progress(dir_path, verbose, ignore_dirs)
     }
 
     async fn upload_temp_file(&self, file_path: &Path) -> Result<String> {
@@ -482,6 +481,7 @@ impl HttpClient {
         exclude: Option<String>,
         directly_upload_media: bool,
         watch_interval: f64,
+        resource_args: Option<serde_json::Map<String, serde_json::Value>>,
         show_progress: bool,
         verbose: bool,
     ) -> Result<serde_json::Value> {
@@ -504,6 +504,14 @@ impl HttpClient {
                 body.as_object_mut()
                     .expect("add_resource request body must be an object")
                     .insert("create_parent".to_string(), serde_json::Value::Bool(true));
+            }
+            if let Some(resource_args) = &resource_args {
+                body.as_object_mut()
+                    .expect("add_resource request body must be an object")
+                    .insert(
+                        "args".to_string(),
+                        serde_json::Value::Object(resource_args.clone()),
+                    );
             }
             body
         };
@@ -1350,8 +1358,7 @@ impl HttpClient {
     pub async fn trigger_watch_by_uri(&self, to_uri: &str) -> Result<serde_json::Value> {
         let params = vec![("to_uri".to_string(), to_uri.to_string())];
         let empty = serde_json::json!({});
-        self.post_with_query("/api/v1/watches/trigger", &empty, &params)
-            .await
+        self.post_with_query("/api/v1/watches/trigger", &empty, &params).await
     }
 }
 

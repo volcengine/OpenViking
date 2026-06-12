@@ -193,16 +193,46 @@ class HTMLParser(BaseParser):
         markdown = markdownify.markdownify(
             content_html,
             heading_style=markdownify.ATX,
-            strip=["script", "style"],
+            strip=["script", "style", "noscript"],
         )
 
+        markdown = self._clean_inline_images(markdown)
+
         return markdown.strip()
+
+    @staticmethod
+    def _clean_inline_images(markdown: str) -> str:
+        """清理 Markdown 中的 data:image base64 内联图片噪音、非标准后缀和空锚点"""
+        import re
+
+        # 匹配 Markdown 语法的内联图片
+        markdown = re.sub(r"!\[[^\]]*\]\(data:image/[^)]+\)", "", markdown)
+        # 匹配 HTML 标签语法的内联图片
+        markdown = re.sub(
+            r"<img[^>]*src\s*=\s*['\"]data:image/[^'\"]*['\"][^>]*/?>",
+            "",
+            markdown,
+            flags=re.IGNORECASE,
+        )
+        # 清除 Markdown 图片 URL 后面的非标准尺寸后缀 (例如 =4881x 或 =500x300)
+        markdown = re.sub(r"(!\[[^\]]*\]\([^)]+?)(?:\s+=\d*x\d*)(?=\))", r"\1", markdown)
+
+        # 移除空锚点，例如 <span id="..."></span> 或 <a name="..."></a>
+        markdown = re.sub(r"<(span|a)\s+(?:id|name)=['\"][^'\"]*['\"]\s*>\s*</\1>", "", markdown)
+
+        # 清理多余空行
+        markdown = re.sub(r"\n{3,}", "\n\n", markdown)
+        return markdown
 
     def _preprocess_html(self, html: str) -> str:
         """Preprocess HTML to fix hidden content and lazy loading issues (e.g., WeChat public accounts)."""
         from bs4 import BeautifulSoup
 
         soup = BeautifulSoup(html, "html.parser")
+
+        # Remove noisy tags completely before processing
+        for el in soup(["script", "noscript", "style"]):
+            el.decompose()
 
         # WeChat public account: js_content is hidden by default, need to remove hidden style
         js_content = soup.find(id="js_content")
@@ -215,7 +245,7 @@ class HTMLParser(BaseParser):
                     img["src"] = img["data-src"]
             return str(js_content)
 
-        return html
+        return str(soup)
 
     async def parse_content(
         self, content: str, source_path: Optional[str] = None, instruction: str = "", **kwargs

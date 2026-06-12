@@ -7,6 +7,7 @@ import asyncio
 import zipfile
 
 import httpx
+import pytest
 
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
@@ -180,6 +181,63 @@ async def test_add_resource_business_error_uses_error_envelope(
     assert "result" not in body
     assert body["error"]["code"] == "PROCESSING_ERROR"
     assert body["error"]["message"] == "Parse error: boom"
+
+
+async def test_add_resource_forwards_extension_args_without_flattening(
+    client: httpx.AsyncClient,
+    service,
+    monkeypatch,
+):
+    captured = {}
+
+    async def fake_add_resource(**kwargs):
+        captured.update(kwargs)
+        return {"status": "success", "root_uri": "viking://resources/docs"}
+
+    monkeypatch.setattr(service.resources, "add_resource", fake_add_resource)
+
+    resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "path": "https://example.com/docs",
+            "args": {
+                "depth": 1,
+                "max_pages": 5,
+                "use_playwright": False,
+            },
+        },
+    )
+
+    assert resp.status_code == 200
+    assert captured["args"] == {
+        "depth": 1,
+        "max_pages": 5,
+        "use_playwright": False,
+    }
+    assert "depth" not in captured
+    assert "max_pages" not in captured
+    assert "use_playwright" not in captured
+
+
+@pytest.mark.parametrize("reserved_key", ["path", "wait"])
+async def test_add_resource_rejects_core_fields_inside_args(
+    client: httpx.AsyncClient,
+    reserved_key: str,
+):
+    resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "path": "https://example.com/docs",
+            "args": {reserved_key: "bad"},
+        },
+    )
+
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "INVALID_ARGUMENT"
+    assert "args cannot include core add_resource fields" in body["error"]["message"]
+    assert reserved_key in body["error"]["message"]
 
 
 async def test_add_skill_business_error_uses_error_envelope(

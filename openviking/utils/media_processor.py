@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Unified resource processor with strategy-based routing."""
 
+import os
+
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
@@ -189,7 +191,25 @@ class UnifiedResourceProcessor:
                 return result
 
             # For files, use the unified parse function (including .zip files via ZipParser)
-            return await parse(str(local_resource.path), **parse_kwargs)
+            result = await parse(str(local_resource.path), **parse_kwargs)
+
+            if (
+                local_resource.source_type == SourceType.HTTP
+                and local_resource.path
+                and local_resource.path.exists()
+            ):
+                try:
+                    suffix = str(local_resource.path).lower()
+                    if suffix.endswith((".html", ".htm")) or not os.path.splitext(suffix)[1]:
+                        # Keep downloaded HTML so ResourceService can start recursive crawling.
+                        result._html_content = local_resource.path.read_text(
+                            encoding="utf-8", errors="replace"
+                        )
+                        result._html_final_url = local_resource.meta.get("final_url", "")
+                except Exception:
+                    pass
+
+            return result
         finally:
             # Clean up temporary resources unless they need to be preserved
             local_resource.cleanup()

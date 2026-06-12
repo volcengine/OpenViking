@@ -43,6 +43,7 @@ class BaseClient(ABC):
         timeout: Optional[float] = None,
         watch_interval: float = 0,
         telemetry: TelemetryRequest = False,
+        args: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
         ...

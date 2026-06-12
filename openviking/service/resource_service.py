@@ -10,11 +10,13 @@ import asyncio
 import contextlib
 import inspect
 import json
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_optional_viking_uri
@@ -61,6 +63,80 @@ class _ResourceSourceInfo:
     source_name: Optional[str] = None
     source_path: Optional[str] = None
     source_format: Optional[str] = None
+
+
+_CRAWL_ARG_FIELDS = frozenset(
+    {
+        "depth",
+        "max_pages",
+        "include_paths",
+        "exclude_paths",
+        "allow_external_links",
+        "use_playwright",
+    }
+)
+
+_CORE_ADD_RESOURCE_ARG_FIELDS = frozenset(
+    {
+        "path",
+        "ctx",
+        "to",
+        "parent",
+        "reason",
+        "instruction",
+        "wait",
+        "timeout",
+        "build_index",
+        "summarize",
+        "watch_interval",
+        "skip_watch_management",
+        "allow_local_path_resolution",
+        "enforce_public_remote_targets",
+        "strict",
+        "source_name",
+        "ignore_dirs",
+        "include",
+        "exclude",
+        "directly_upload_media",
+        "preserve_structure",
+        "create_parent",
+        "telemetry",
+        "request_validator",
+        "original_source",
+        "temp_file_id",
+        "args",
+    }
+)
+
+
+def _pop_int_arg(
+    args: Dict[str, Any],
+    key: str,
+    default: int,
+    min_value: Optional[int] = None,
+) -> int:
+    value = args.pop(key, default)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise InvalidArgumentError(f"args.{key} must be an integer.")
+    if min_value is not None and value < min_value:
+        raise InvalidArgumentError(f"args.{key} must be >= {min_value}.")
+    return value
+
+
+def _pop_bool_arg(args: Dict[str, Any], key: str, default: bool) -> bool:
+    value = args.pop(key, default)
+    if not isinstance(value, bool):
+        raise InvalidArgumentError(f"args.{key} must be a boolean.")
+    return value
+
+
+def _pop_optional_str_arg(args: Dict[str, Any], key: str) -> Optional[str]:
+    value = args.pop(key, None)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise InvalidArgumentError(f"args.{key} must be a string.")
+    return value
 
 
 class ResourceService:
@@ -422,6 +498,7 @@ class ResourceService:
         enforce_public_remote_targets: bool = False,
         resource_lock: Optional[LockLease] = None,
         stage_callback: Optional[Callable[[str], Any]] = None,
+        args: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking (only supports resources scope).
@@ -451,6 +528,8 @@ class ResourceService:
                 avoid recursive watch task creation during scheduled execution)
             enforce_public_remote_targets: When True, reject non-public remote hosts and
                 validate each outbound HTTP request URL during fetch.
+            args: Parser-specific or import-specific extension options. Recursive web
+                crawler options such as depth/max_pages/include_paths are passed here.
             **kwargs: Extra options forwarded to the parser chain
 
         Returns:
@@ -461,6 +540,32 @@ class ResourceService:
             InvalidArgumentError: If the URI scope is not 'resources'
         """
         self._ensure_initialized()
+
+        # Keep crawler options under args so every entrypoint shares this validation.
+        top_level_crawl_args = sorted(key for key in kwargs if key in _CRAWL_ARG_FIELDS)
+        if top_level_crawl_args:
+            raise InvalidArgumentError(
+                "Crawler options must be passed via args, not as top-level "
+                f"add_resource arguments: {', '.join(top_level_crawl_args)}"
+            )
+
+        resource_args = dict(args or {})
+        reserved_args = sorted(
+            key for key in resource_args if key in _CORE_ADD_RESOURCE_ARG_FIELDS
+        )
+        if reserved_args:
+            raise InvalidArgumentError(
+                "args cannot include core add_resource fields: "
+                + ", ".join(reserved_args)
+            )
+        depth = _pop_int_arg(resource_args, "depth", 0)
+        max_pages = _pop_int_arg(resource_args, "max_pages", 100, min_value=1)
+        include_paths = _pop_optional_str_arg(resource_args, "include_paths")
+        exclude_paths = _pop_optional_str_arg(resource_args, "exclude_paths")
+        allow_external_links = _pop_bool_arg(resource_args, "allow_external_links", False)
+        use_playwright = _pop_bool_arg(resource_args, "use_playwright", False)
+        kwargs.update(resource_args)
+
         if not wait and is_git_repo_url(path):
             return await self.enqueue_git_add_resource(
                 path=path,
@@ -494,6 +599,9 @@ class ResourceService:
         telemetry.set("resource.flags.summarize", summarize)
         telemetry.set("resource.flags.watch_enabled", watch_enabled)
 
+        if max_pages < 1:
+            raise InvalidArgumentError("max_pages must be >= 1 for recursive web crawling.")
+
         try:
             # Resolve path variables before validation
             if to:
@@ -513,9 +621,18 @@ class ResourceService:
             )
             if enforce_public_remote_targets and is_remote_resource_source(path):
                 path = require_remote_resource_source(path)
-                kwargs.setdefault("request_validator", ensure_public_remote_target)
+                kwargs["request_validator"] = ensure_public_remote_target
             if resource_lock is not None:
                 kwargs["resource_lock"] = resource_lock
+            if not to and not parent:
+                default_parent = self._default_parent_uri_for_url(path)
+                if default_parent:
+                    parent = validate_optional_viking_uri(
+                        default_parent,
+                        field_name="parent",
+                        allowed_scopes={"resources"},
+                    )
+                    kwargs["create_parent"] = True
 
             result = await self._resource_processor.process_resource(
                 path=path,
@@ -534,7 +651,45 @@ class ResourceService:
 
             if result.get("status") == "error":
                 return result
-            elif wait:
+
+            html_content = result.pop("_html_content", "")
+            html_final_url = result.pop("_html_final_url", "")
+
+            if depth != 0 and self._should_crawl(path, html_content):
+                # Crawl from the redirected final URL so relative links and dedup are correct.
+                crawl_root_url = html_final_url or path
+                root_uri = result.get("root_uri")
+                crawl_parent_uri = self._get_parent_resource_uri(root_uri) or parent
+                try:
+                    crawl_result = await self._crawl_and_add_resources(
+                        root_url=crawl_root_url,
+                        depth=depth,
+                        max_pages=max_pages,
+                        include_paths=include_paths,
+                        exclude_paths=exclude_paths,
+                        allow_external_links=allow_external_links,
+                        use_playwright=use_playwright,
+                        ctx=ctx,
+                        parent_uri=crawl_parent_uri,
+                        root_uri=root_uri,
+                        instruction=instruction,
+                        reason=reason,
+                        build_index=build_index,
+                        summarize=summarize,
+                        **kwargs,
+                    )
+                    result["_crawl_result"] = {
+                        "total_crawled": crawl_result.total_crawled,
+                        "total_failed": crawl_result.total_failed,
+                        "total_skipped": crawl_result.total_skipped,
+                        "root_updated": crawl_result.root_updated,
+                        "child_added": crawl_result.child_added,
+                        "child_failed": crawl_result.child_failed,
+                    }
+                except Exception as e:
+                    logger.warning(f"[Crawl] Crawl failed for {path}: {e}")
+
+            if wait:
                 if stage_callback is not None:
                     stage_result = stage_callback("processing_queue")
                     if inspect.isawaitable(stage_result):
@@ -675,6 +830,188 @@ class ResourceService:
             if wait or not telemetry_id or not monitor_started:
                 get_request_wait_tracker().cleanup(telemetry_id)
                 unregister_wait_telemetry(telemetry_id)
+
+    def _should_crawl(self, path: str, html_content: str) -> bool:
+        if not path or not path.startswith(("http://", "https://")):
+            return False
+        return bool(html_content)
+
+    def _get_parent_resource_uri(self, uri: Optional[str]) -> Optional[str]:
+        if not uri:
+            return None
+        normalized = uri.rstrip("/")
+        if normalized == "viking://resources":
+            return "viking://resources"
+        if "/" not in normalized.replace("viking://", "", 1):
+            return None
+        parent = normalized.rsplit("/", 1)[0]
+        if parent == "viking:":
+            return None
+        return parent
+
+    @staticmethod
+    def _default_parent_uri_for_url(source: str) -> Optional[str]:
+        parsed = urlparse(source)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            return None
+        host = parsed.hostname.rstrip(".").lower()
+        safe_host = re.sub(r"[^a-z0-9._-]+", "_", host).strip("._-")
+        if not safe_host:
+            return None
+        return f"viking://resources/{safe_host}"
+
+    async def _crawl_and_add_resources(
+        self,
+        root_url: str,
+        depth: int,
+        max_pages: int,
+        include_paths: Optional[str],
+        exclude_paths: Optional[str],
+        allow_external_links: bool,
+        ctx: RequestContext,
+        parent_uri: Optional[str],
+        root_uri: Optional[str],
+        instruction: str,
+        reason: str,
+        build_index: bool,
+        summarize: bool,
+        use_playwright: bool = False,
+        **kwargs,
+    ) -> Any:
+        from openviking.parse.parsers.html_crawler.crawl_filter import CrawlConfig
+        from openviking.parse.parsers.html_crawler.web_crawler import CrawlResult, WebCrawler
+
+        # args carries path filters as comma-separated strings at API boundaries.
+        include_list = [p.strip() for p in (include_paths or "").split(",") if p.strip()] or None
+        exclude_list = [p.strip() for p in (exclude_paths or "").split(",") if p.strip()] or None
+
+        config = CrawlConfig(
+            depth=depth - 1,
+            max_pages=max_pages,
+            include_paths=include_list,
+            exclude_paths=exclude_list,
+            allow_external_links=allow_external_links,
+            use_playwright=use_playwright,
+            request_validator=kwargs.get("request_validator"),
+        )
+
+        # Remove keys that child imports override to avoid "multiple values" errors.
+        kwargs.pop("source_name", None)
+        kwargs.pop("original_source", None)
+        kwargs.pop("depth", None)
+        kwargs.pop("temp_file_id", None)
+
+        crawler = WebCrawler(config)
+        try:
+            crawl_result: CrawlResult = await crawler.crawl(root_url)
+
+            success_pages = [page for page in crawl_result.pages if page.status == "success"]
+            logger.info(
+                f"[Crawl] Persisting {len(success_pages)} crawled pages "
+                f"(concurrency=3, parent={parent_uri})"
+            )
+            sem = asyncio.Semaphore(3)
+            added_count = 0
+            failed_count = 0
+            root_updated = False
+
+            async def _add_page(page):
+                nonlocal added_count, failed_count, root_updated
+                async with sem:
+                    try:
+                        import tempfile
+                        import os
+                        from openviking.parse.parsers.html import HTMLParser
+
+                        target_to = root_uri if page.depth == 0 and root_uri else None
+                        target_parent = None if target_to else parent_uri
+
+                        if page.content:
+                            content_to_save = page.content
+                            if page.source == "ssr" and page.content_type == "text/markdown":
+                                content_to_save = HTMLParser._clean_inline_images(content_to_save)
+
+                            # Persist fetched content directly so child imports do not refetch.
+                            fd, temp_path = tempfile.mkstemp(suffix=".md" if page.content_type == "text/markdown" else ".html")
+                            try:
+                                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                                    f.write(content_to_save)
+
+                                add_result = await self.add_resource(
+                                    path=temp_path,
+                                    to=target_to,
+                                    source_name=page.title or page.url,
+                                    original_source=page.url,
+                                    ctx=ctx,
+                                    parent=target_parent,
+                                    instruction=instruction,
+                                    reason=reason,
+                                    build_index=build_index,
+                                    summarize=summarize,
+                                    args={"depth": 0},
+                                    **kwargs,
+                                )
+                                self._raise_if_child_add_failed(page.url, add_result)
+                            finally:
+                                if os.path.exists(temp_path):
+                                    os.remove(temp_path)
+                        else:
+                            # fallback (理论上不会发生)
+                            add_result = await self.add_resource(
+                                path=page.url,
+                                to=target_to,
+                                ctx=ctx,
+                                parent=target_parent,
+                                instruction=instruction,
+                                reason=reason,
+                                build_index=build_index,
+                                summarize=summarize,
+                                args={"depth": 0},
+                                **kwargs,
+                            )
+                            self._raise_if_child_add_failed(page.url, add_result)
+
+                        if page.depth == 0 and root_uri:
+                            root_updated = True
+                        else:
+                            added_count += 1
+                        if added_count > 0 and added_count % 10 == 0:
+                            logger.info(
+                                f"[Crawl] Progress: {added_count}/{len(success_pages)} child pages added"
+                            )
+                    except Exception as e:
+                        failed_count += 1
+                        if failed_count <= 5:
+                            logger.warning(f"[Crawl] Failed to add {page.url}: {e}")
+
+            tasks = [_add_page(page) for page in success_pages]
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+
+            logger.info(
+                f"[Crawl] Child resources done: "
+                f"root_updated={root_updated} added={added_count} "
+                f"failed={failed_count} total={len(tasks)}"
+            )
+            crawl_result.root_updated = root_updated
+            crawl_result.child_added = added_count
+            crawl_result.child_failed = failed_count
+
+            return crawl_result
+        finally:
+            await crawler.close()
+
+    @staticmethod
+    def _raise_if_child_add_failed(page_url: str, result: Dict[str, Any]) -> None:
+        if not isinstance(result, dict) or result.get("status") != "error":
+            return
+        message = (
+            result.get("error")
+            or result.get("message")
+            or result.get("detail")
+            or "unknown error"
+        )
+        raise RuntimeError(f"Child resource import failed for {page_url}: {message}")
 
     async def _monitor_queue_processing(
         self,
