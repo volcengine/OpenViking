@@ -46,6 +46,65 @@ node -v
 openclaw --version
 ```
 
+## 火山 OpenViking Service 一键接入
+
+如果你使用的是火山控制台创建的 OpenViking Service 库，不需要启动本地 `openviking-server`。从控制台复制 OpenViking Service 的 server url、API Key，并按需配置 peer 标识：
+
+```bash
+openclaw plugins install clawhub:@openviking/openclaw-plugin
+openclaw openviking setup \
+  --base-url "https://api.vikingdb.cn-beijing.volces.com/openviking" \
+  --api-key "<your-openviking-service-api-key>" \
+  --json
+openclaw gateway restart
+openclaw openviking status --json
+```
+
+这条命令会完成：
+
+- 通过 ClawHub 安装 OpenViking 插件。
+- 调用 `openclaw openviking setup --base-url ... --api-key ...` 写入插件配置。
+- 重启 `openclaw gateway`。
+- 执行 `openclaw openviking status --json` 和 `openclaw config get plugins.slots.contextEngine` 验证。
+
+如果需要把 OpenClaw assistant 说话人写成独立 `peer_id`，可以额外传：
+
+```bash
+openclaw openviking setup \
+  --base-url "https://api.vikingdb.cn-beijing.volces.com/openviking" \
+  --api-key "<your-openviking-service-api-key>" \
+  --peer-role assistant \
+  --peer-prefix "openclaw-prod" \
+  --json
+```
+
+如果使用 root key 或可信服务身份，补充租户信息：
+
+```bash
+openclaw openviking setup \
+  --base-url "https://api.vikingdb.cn-beijing.volces.com/openviking" \
+  --api-key "<root-key>" \
+  --account-id "<account-id>" \
+  --user-id "<user-id>" \
+  --json
+```
+
+本地源码验证：
+
+```bash
+npm install
+npm run typecheck
+npm test
+npm run build
+```
+
+接入后，在火山 OpenViking Service 控制台检查：
+
+- 发送一轮 OpenClaw 对话后，`Session` 下出现原始会话。
+- 触发 `/compact` 或等待 commit 后，`User/memories` 出现长期记忆。
+- 如果配置了 `peer_role=assistant`，recall/search 会携带对应 `peer_id`，可用于区分不同 OpenClaw assistant 说话人。
+- 通过手动 `/add-resource` 导入文档、URL 或目录后，`Resources` 下出现对应知识，并可做目录递归检索。Agent 可见的 `add_resource` 工具默认禁用，只有显式设置 `enableAddResourceTool=true` 后才暴露。
+
 ## 启动 OpenViking Server
 
 如果 OpenViking 和 OpenClaw 在同一台机器上，最短流程是：

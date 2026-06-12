@@ -13,7 +13,7 @@ description: >
   The user does NOT need to know any CLI commands — the agent runs everything and only asks for a few values.
   This skill assumes the OpenViking server is already running. If the server is not ready, the skill
   tells the user to contact their admin or set it up via the OpenViking docs — it does NOT install the server.
-version: 2.0.1
+version: 2026.6.12
 metadata:
   openclaw:
     requires:
@@ -109,7 +109,7 @@ Send this message:
 > 我需要 3 条信息，不知道的可以问你的管理员：
 > 1. **OpenViking 服务地址** —— 例如 `https://ov.example.com` 或 `http://192.168.1.100:1933`，本机服务可以直接说"本机"
 > 2. **API Key** —— 用来鉴权；服务没开认证可以说"没有"
-> 3. **Agent 标识前缀**（可选） —— 用于生成 OpenClaw 运行时 peer 标识，留空就用默认
+> 3. **Peer 标识设置**（可选） —— 需要区分多个 assistant/sender 时才配置；默认不用填
 >
 > 先告诉我服务地址吧？
 
@@ -118,7 +118,7 @@ Send this message:
 > I need 3 things (ask your admin if unsure):
 > 1. **OpenViking server URL** — e.g. `https://ov.example.com` or `http://192.168.1.100:1933`. For a local server, just say "local".
 > 2. **API Key** — for auth. Say "none" if the server has no auth.
-> 3. **Agent prefix** (optional) — used to build the OpenClaw runtime peer identity. Leave blank for default.
+> 3. **Peer identity settings** (optional) — configure only if you need to separate multiple assistants/senders. Leave blank for default.
 >
 > What's the server URL?
 
@@ -141,16 +141,21 @@ Collect 3 values through natural conversation. Be flexible: if the user gives se
 > (CN) API Key 是什么？服务没开认证就直接说"没有"。
 > (EN) What's the API Key? Say "none" if the server has no auth.
 
-- "no" / "none" / "没有" / "空" / empty → `API_KEY=""` (you will skip the flag later).
-- Otherwise store as-is.
+- If the user says "none", "no key", "没有", or "不开认证", leave it empty.
+- If they paste a key, keep it in memory only for command execution. Do **not** echo it back.
+- If they are unsure whether the key is a root key, continue. STEP 7 detects that and asks for tenant IDs if needed.
 
-### 4c. `AGENT_PREFIX` (OPTIONAL)
+### 4c. `PEER_ROLE` / `PEER_PREFIX` (OPTIONAL)
 
-> (CN) 想给这个 agent 一个记忆前缀吗？留空就用默认。只能用字母、数字、`_`、`-`。
-> (EN) Want to set an agent prefix? Leave blank for the default. Letters, digits, `_`, `-` only.
+Default to no peer scoping: `peer_role=none` and empty `peer_prefix`.
 
-- Empty / "default" / "默认" → leave unset (plugin defaults to `""`).
-- Otherwise validate against `/^[A-Za-z0-9_-]+$/`. If invalid, ask again.
+Only collect peer settings when the user explicitly wants multiple OpenClaw assistants or senders to be separated:
+
+- For assistant-specific memory routing, use `--peer-role assistant`.
+- If they provide a prefix such as `openclaw-prod`, pass it as `--peer-prefix openclaw-prod`.
+- `peer_prefix` may contain only letters, digits, `_`, and `-`.
+
+Do not use legacy agent routing flags. Current plugin config uses `peer_role` / `peer_prefix`.
 
 ### 4d. (Conditional) Multi-Tenant Root-Key Fields
 
