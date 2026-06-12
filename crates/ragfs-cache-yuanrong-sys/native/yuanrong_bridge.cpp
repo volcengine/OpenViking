@@ -23,6 +23,13 @@ using datasystem::StringView;
 
 struct YrClientHandle {
     std::shared_ptr<DsClient> client;
+    // Serialize all SDK calls made through this native client handle. A single
+    // native YuanrongProvider owns one handle today, so sdk_concurrency > 1 in
+    // Rust does not create true backend concurrency for that provider.
+    //
+    // If the Rust layer creates multiple native clients to provide concurrent
+    // channels, those channels must not be treated as a global ordering
+    // guarantee for concurrent conflicting writes.
     std::mutex call_mutex;
     std::atomic<bool> shutdown { false };
 };

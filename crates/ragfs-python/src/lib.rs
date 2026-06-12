@@ -18,9 +18,9 @@ use ragfs::cache::{
 };
 use ragfs::core::builder::EncryptionConfig;
 use ragfs::core::{
-    ConfigValue, FS_CTX, FileInfo, FileSystem, FilesystemStats, FsContext, FsContextInner,
-    FsOperation, GrepResult, MountableFS, OperationStats, PluginConfig, RagfsConfig,
-    StatsWrappedFS, TreeEntry, WriteFlag, build_default_stack, register_builtin_plugins,
+    build_default_stack, register_builtin_plugins, ConfigValue, FileInfo, FileSystem,
+    FilesystemStats, FsContext, FsContextInner, FsOperation, GrepResult, MountableFS,
+    OperationStats, PluginConfig, RagfsConfig, StatsWrappedFS, TreeEntry, WriteFlag, FS_CTX,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -896,7 +896,7 @@ impl RAGFSBindingClient {
             ));
             ragfs::core::RagfsStack { mountable, top }
         } else {
-            build_default_stack(ragfs_cfg)
+            rt.block_on(build_default_stack(ragfs_cfg))
         };
         Ok(Self {
             mountable: stack.mountable,

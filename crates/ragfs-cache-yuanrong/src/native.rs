@@ -290,6 +290,9 @@ impl YuanrongProvider {
         .map_err(|error| CacheError::Internal(format!("Yuanrong connection task failed: {error}")))?
         .map_err(map_cache_error)?;
 
+        // A native provider currently owns one native client handle. The C++
+        // bridge serializes SDK calls on that handle, so sdk_concurrency only
+        // bounds Rust blocking tasks here; it is not backend concurrency.
         Self::from_store(config, Arc::new(store)).await
     }
 }
