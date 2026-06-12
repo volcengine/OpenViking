@@ -369,6 +369,45 @@ async def test_before_resource_delete_cleans_visible_uri_without_resource_refs(
 
 
 @pytest.mark.asyncio
+async def test_before_resource_delete_exact_keeps_child_resource_refs(
+    request_context,
+):
+    memory_uri = "viking://user/alice/memories/entities/photos.md"
+    resource_uri = "viking://resources/images/album"
+    child_uri = f"{resource_uri}/child.jpeg"
+    raw = MemoryFileUtils.write(
+        MemoryFile(
+            uri=memory_uri,
+            content=(
+                f"用户保存了[相册资源]({resource_uri})。\n"
+                f"用户保存了[相册里的子图]({child_uri})。"
+            ),
+            extra_fields={
+                "resource_refs": [
+                    {"resource_uri": resource_uri, "source": "content.write"},
+                    {"resource_uri": child_uri, "source": "content.write"},
+                ],
+            },
+        )
+    )
+    store = {memory_uri: raw}
+    service = ResourceMemoryLinkService(viking_fs=_FakeVikingFS(store))
+
+    result = await service.before_resource_delete(
+        ctx=request_context,
+        resource_uri=resource_uri,
+        recursive=False,
+    )
+
+    assert result["status"] == "success"
+    mf = MemoryFileUtils.read(store[memory_uri], uri=memory_uri)
+    assert f"[相册资源]({resource_uri})" not in mf.content
+    assert f"[相册里的子图]({child_uri})" in mf.content
+    refs = mf.extra_fields["resource_refs"]
+    assert refs == [{"resource_uri": child_uri, "source": "content.write"}]
+
+
+@pytest.mark.asyncio
 async def test_before_resource_delete_deletes_previous_failed_cleanup_artifact(
     request_context,
     monkeypatch,

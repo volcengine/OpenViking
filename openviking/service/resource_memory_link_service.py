@@ -297,15 +297,26 @@ class ResourceMemoryLinkService:
                     memory_file=first.memory_file,
                     resource_uri=resource_uri,
                     reason=reason,
+                    recursive=recursive,
                 )
                 cleaned.extend(cleanup_result.written_uris + cleanup_result.edited_uris)
                 deleted.extend(cleanup_result.deleted_uris)
                 if memory_uri in cleanup_result.deleted_uris:
                     continue
                 if not cleanup_result.has_changes():
-                    await self._remove_resource_refs(memory_uri, resource_uri, ctx)
+                    await self._remove_resource_refs(
+                        memory_uri,
+                        resource_uri,
+                        ctx,
+                        recursive=recursive,
+                    )
                     cleaned.append(memory_uri)
-                await self._assert_resource_unlinked(memory_uri, resource_uri, ctx)
+                await self._assert_resource_unlinked(
+                    memory_uri,
+                    resource_uri,
+                    ctx,
+                    recursive=recursive,
+                )
             except NotFoundError:
                 deleted.append(memory_uri)
             except Exception as exc:
@@ -329,6 +340,7 @@ class ResourceMemoryLinkService:
         memory_file: MemoryFile,
         resource_uri: str,
         reason: str,
+        recursive: bool = False,
     ) -> MemoryUpdateResult:
         del reason
         viking_fs = self._get_viking_fs()
@@ -344,7 +356,7 @@ class ResourceMemoryLinkService:
         changed = remove_resource_references_from_memory(
             current,
             resource_uri,
-            recursive=True,
+            recursive=recursive,
         )
         result = MemoryUpdateResult()
         if not changed:
@@ -390,6 +402,8 @@ class ResourceMemoryLinkService:
         memory_uri: str,
         resource_uri: str,
         ctx: RequestContext,
+        *,
+        recursive: bool,
     ) -> None:
         viking_fs = self._get_viking_fs()
         raw = await viking_fs.read_file(memory_uri, ctx=ctx)
@@ -397,7 +411,11 @@ class ResourceMemoryLinkService:
         refs = [
             ref
             for ref in self._coerce_resource_refs(mf.extra_fields.get("resource_refs"))
-            if not self._resource_ref_matches(ref.get("resource_uri"), resource_uri, recursive=True)
+            if not self._resource_ref_matches(
+                ref.get("resource_uri"),
+                resource_uri,
+                recursive=recursive,
+            )
         ]
         if refs:
             mf.extra_fields["resource_refs"] = refs
@@ -518,16 +536,22 @@ class ResourceMemoryLinkService:
         memory_uri: str,
         resource_uri: str,
         ctx: RequestContext,
+        *,
+        recursive: bool = True,
     ) -> None:
         try:
             raw = await self._get_viking_fs().read_file(memory_uri, ctx=ctx)
         except (NotFoundError, FileNotFoundError) as exc:
             raise NotFoundError(memory_uri, "memory") from exc
         mf = MemoryFileUtils.read(raw, uri=memory_uri)
-        if resource_uri in (mf.content or ""):
+        if content_references_resource(mf.content, resource_uri, recursive=recursive):
             raise RuntimeError(f"memory content still contains deleted resource URI: {memory_uri}")
         for ref in self._coerce_resource_refs(mf.extra_fields.get("resource_refs")):
-            if self._resource_ref_matches(ref.get("resource_uri"), resource_uri, recursive=True):
+            if self._resource_ref_matches(
+                ref.get("resource_uri"),
+                resource_uri,
+                recursive=recursive,
+            ):
                 raise RuntimeError(f"memory still contains resource ref: {memory_uri}")
 
     @staticmethod

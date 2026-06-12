@@ -13,20 +13,23 @@ from openviking.session.memory.dataclass import MemoryFile
 RESOURCE_REF_SOURCE_CONTENT_WRITE = "content.write"
 RESOURCE_REF_SOURCE_SESSION_COMMIT = "session.commit"
 
+_RESOURCE_URI_PATH_CHARS = r"[^\s<>\]\)\"'，。；：！？、,;:!?）】》]+"
+_RESOURCE_URI_BOUNDARY = r"(?=$|[\s<>\]\)\"'，。；：！？、,;:!?.）】》])"
 _RESOURCE_URI_PATTERN = (
     r"viking://(?:"
-    r"resources(?:/[^\s<>\]\)\"']*)?"
+    rf"resources(?:/{_RESOURCE_URI_PATH_CHARS})?"
     r"|user/[^/\s<>\]\)\"']+/(?:"
-    r"resources(?:/[^\s<>\]\)\"']*)?"
-    r"|peers/[^/\s<>\]\)\"']+/resources(?:/[^\s<>\]\)\"']*)?"
+    rf"resources(?:/{_RESOURCE_URI_PATH_CHARS})?"
+    rf"|peers/[^/\s<>\]\)\"']+/resources(?:/{_RESOURCE_URI_PATH_CHARS})?"
     r")"
     r")"
+    rf"{_RESOURCE_URI_BOUNDARY}"
 )
 _MARKDOWN_RESOURCE_LINK_RE = re.compile(rf"\[([^\]\n]+)\]\(({_RESOURCE_URI_PATTERN})\)")
 _RESOURCE_URI_RE = re.compile(_RESOURCE_URI_PATTERN)
 _CODE_BLOCK_RE = re.compile(r"```.*?```", re.DOTALL)
 _INLINE_CODE_RE = re.compile(r"`[^`\n]+`")
-_TRAILING_URI_PUNCTUATION = ".,;:!?，。；：！？"
+_TRAILING_URI_PUNCTUATION = ".,;:!?，。；：！？、）】》"
 _SENTENCE_BOUNDARIES = "。！？.!?\n"
 _MAX_LINKIFIED_SENTENCE_CHARS = 160
 _RESOURCE_CLEANUP_ARTIFACT_LINE_RE = re.compile(
