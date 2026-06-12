@@ -28,6 +28,7 @@ from openviking.session.memory.streaming_memory_updater import (
     StreamingMemoryUpdater,
     StreamingMemoryUpdaterConfig,
     classify_memory_merge_mode,
+    enforce_merge_group_peer_id,
     merge_one_memory_type_operations,
     operation_to_patch,
     render_operation_after_file_content,
@@ -477,6 +478,75 @@ def test_split_request_by_merge_group_groups_by_peer_and_memory_type():
         0,
         0,
     ]
+
+
+def test_split_request_by_merge_group_infers_peer_from_uri_when_field_missing():
+    peer_uri = "viking://user/u/peers/conv-42/memories/notes/peer_note.md"
+    op = ResolvedOperation(
+        old_memory_file_content=None,
+        memory_fields={"note_name": "peer_note", "content": "peer content"},
+        memory_type="notes",
+        uris=[peer_uri],
+    )
+    request = MemoryUpdateRequest(
+        operations=ResolvedOperations(
+            upsert_operations=[op],
+            delete_file_contents=[],
+            errors=[],
+        ),
+        messages=[],
+        ctx=_ctx(),
+    )
+
+    grouped = split_request_by_merge_group(request)
+
+    assert [key for key, _ in grouped] == [
+        MemoryMergeGroupKey(peer_id="conv-42", memory_type="notes")
+    ]
+
+
+def test_enforce_merge_group_peer_id_rewrites_merged_output_scope():
+    op = ResolvedOperation(
+        old_memory_file_content=None,
+        memory_fields={"note_name": "peer_note", "content": "peer content"},
+        memory_type="notes",
+        uris=["viking://user/u/memories/notes/peer_note.md"],
+    )
+
+    enforce_merge_group_peer_id(
+        [op],
+        peer_id="conv-42",
+        memory_type="notes",
+        registry=_registry(),
+        ctx=_ctx(),
+    )
+
+    assert op.memory_fields["peer_id"] == "conv-42"
+    assert op.uris == ["viking://user/u/peers/conv-42/memories/notes/peer_note.md"]
+
+
+def test_enforce_merge_group_self_scope_removes_peer_id():
+    op = ResolvedOperation(
+        old_memory_file_content=None,
+        memory_fields={
+            "note_name": "self_note",
+            "content": "self content",
+            "peer_id": "conv-42",
+        },
+        memory_type="notes",
+        uris=["viking://user/u/peers/conv-42/memories/notes/self_note.md"],
+    )
+
+    enforce_merge_group_peer_id(
+        [op],
+        peer_id=None,
+        memory_type="notes",
+        registry=_registry(),
+        ctx=_ctx(),
+    )
+
+    assert "peer_id" not in op.memory_fields
+    assert op.uris == ["viking://user/u/memories/notes/self_note.md"]
 
 
 @pytest.mark.asyncio

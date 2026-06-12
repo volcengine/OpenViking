@@ -11,10 +11,12 @@ PatchMergeContextProvider, then applies the merged operations with MemoryUpdater
 from __future__ import annotations
 
 import asyncio
+import re
 import threading
 from dataclasses import dataclass, field
 from typing import Any, Hashable
 
+from openviking.core.peer_id import safe_peer_id
 from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import (
@@ -637,6 +639,13 @@ async def merge_memory_operations(
         ops_list = upsert_groups.get(group_key, [])
         if not isinstance(merge_result, Exception):
             merged = merge_result
+            enforce_merge_group_peer_id(
+                merged.upsert_operations,
+                peer_id=peer_id,
+                memory_type=memory_type,
+                registry=registry,
+                ctx=ctx,
+            )
             merged_upserts.extend(merged.upsert_operations)
             merged_deletes.extend(merged.delete_file_contents)
             merged_links = merge_link_lists(
@@ -1064,20 +1073,113 @@ def can_fast_path_memory_operations(
     return classify_memory_merge_mode(operations, schema=schema)[0]
 
 
+def enforce_merge_group_peer_id(
+    operations: list[ResolvedOperation],
+    *,
+    peer_id: str | None,
+    memory_type: str,
+    registry: MemoryTypeRegistry,
+    ctx: RequestContext,
+) -> None:
+    """Pin merged operations to the peer scope selected by group-by.
+
+    The second-stage merge LLM may omit or hallucinate peer_id. The group key is
+    authoritative because it is decided before merge from the original request
+    routing; all merged upserts must therefore be rewritten to that scope.
+    """
+    schema = registry.get(memory_type)
+    for op in operations or []:
+        if op.memory_type != memory_type:
+            continue
+        if peer_id:
+            op.memory_fields["peer_id"] = peer_id
+        else:
+            op.memory_fields.pop("peer_id", None)
+        if schema is not None:
+            op.uris = _uris_for_merge_group_operation(
+                op,
+                schema=schema,
+                ctx=ctx,
+                peer_id=peer_id,
+            )
+
+
+def _uris_for_merge_group_operation(
+    op: ResolvedOperation,
+    *,
+    schema: MemoryTypeSchema,
+    ctx: RequestContext,
+    peer_id: str | None,
+) -> list[str]:
+    fields = dict(op.memory_fields or {})
+    user_id = getattr(getattr(ctx, "user", None), "user_id", None) or fields.get("user_id")
+    if not user_id:
+        return list(op.uris or [])
+    fields["user_id"] = user_id
+    if peer_id:
+        fields["peer_id"] = peer_id
+        user_space = f"{user_id}/peers/{peer_id}"
+    else:
+        fields.pop("peer_id", None)
+        user_space = user_id
+    try:
+        from openviking.session.memory.utils.uri import generate_uri
+
+        return [
+            generate_uri(
+                memory_type=schema,
+                fields=fields,
+                user_space=user_space,
+            )
+        ]
+    except Exception as exc:
+        tracer.info(
+            "[streaming_memory_updater] failed to enforce merge group uri "
+            f"memory_type={op.memory_type} peer_id={peer_id} old_uris={op.uris} error={exc}"
+        )
+        return list(op.uris or [])
+
+
+def _peer_id_from_uri(uri: str | None) -> str | None:
+    if not uri:
+        return None
+    match = re.search(r"/peers/([^/]+)/memories/", uri)
+    if not match:
+        return None
+    return safe_peer_id(match.group(1))
+
+
 def _peer_id_for_operation(op: ResolvedOperation) -> str | None:
-    """Get peer_id from a resolved operation's memory_fields.
+    """Get peer_id from a resolved operation, falling back to peer URI scope.
 
     Returns None for self (user-level) memories.
     """
-    return op.memory_fields.get("peer_id")
+    fields = dict(getattr(op, "memory_fields", {}) or {})
+    peer_id = safe_peer_id(fields.get("peer_id"))
+    if peer_id:
+        return peer_id
+    old_file = getattr(op, "old_memory_file_content", None)
+    if old_file is not None:
+        old_peer_id = safe_peer_id((old_file.extra_fields or {}).get("peer_id"))
+        if old_peer_id:
+            return old_peer_id
+        old_uri_peer_id = _peer_id_from_uri(getattr(old_file, "uri", None))
+        if old_uri_peer_id:
+            return old_uri_peer_id
+    for uri in getattr(op, "uris", []) or []:
+        uri_peer_id = _peer_id_from_uri(uri)
+        if uri_peer_id:
+            return uri_peer_id
+    return None
 
 
 def _peer_id_for_memory_file(mf: MemoryFile) -> str | None:
-    """Get peer_id from a MemoryFile's extra_fields.
+    """Get peer_id from a MemoryFile, falling back to peer URI scope.
 
     Returns None for self (user-level) memories.
     """
-    return mf.extra_fields.get("peer_id") if mf.extra_fields else None
+    peer_id = safe_peer_id((mf.extra_fields or {}).get("peer_id"))
+    return peer_id or _peer_id_from_uri(mf.uri)
 
 
 def _unique_operation_uris(operations: list[ResolvedOperation]) -> list[str]:
