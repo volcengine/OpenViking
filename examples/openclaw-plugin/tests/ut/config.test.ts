@@ -27,7 +27,54 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.peer_role).toBe("none");
     expect(cfg.peer_prefix).toBe("");
     expect(cfg.emitStandardDiagnostics).toBe(false);
+    expect(cfg.enableAddResourceTool).toBe(false);
+    expect(cfg.enabledTools).toContain("ov_search");
+    expect(cfg.enabledTools).toContain("ov_read");
+    expect(cfg.enabledTools).not.toContain("add_resource");
+    expect(cfg.disabledTools).toContain("add_resource");
     expect(cfg.agentExperience.enabled).toBe(false);
+  });
+
+  it("enables add_resource only when explicitly allowed", () => {
+    const disabled = memoryOpenVikingConfigSchema.parse({});
+    expect(disabled.enableAddResourceTool).toBe(false);
+    expect(disabled.enabledTools).not.toContain("add_resource");
+
+    const enabled = memoryOpenVikingConfigSchema.parse({ enableAddResourceTool: true });
+    expect(enabled.enableAddResourceTool).toBe(true);
+    expect(enabled.enabledTools).toContain("add_resource");
+    expect(enabled.disabledTools).not.toContain("add_resource");
+  });
+
+  it("expands enabled and disabled tool groups", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({
+      enabledTools: ["resource_query", "memory"],
+      disabledTools: "memory_forget",
+    });
+    expect(cfg.enabledTools).toEqual([
+      "ov_search",
+      "ov_read",
+      "ov_multi_read",
+      "ov_list",
+      "memory_recall",
+      "memory_store",
+    ]);
+    expect(cfg.disabledTools).toEqual(["memory_forget", "add_resource"]);
+  });
+
+  it("does not expose add_resource through enabledTools without enableAddResourceTool", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ enabledTools: "all" });
+    expect(cfg.enabledTools).not.toContain("add_resource");
+    expect(cfg.disabledTools).toContain("add_resource");
+  });
+
+  it("throws on unknown tool selectors", () => {
+    expect(() =>
+      memoryOpenVikingConfigSchema.parse({ enabledTools: ["resource_query", "nope"] }),
+    ).toThrow("unknown tool selectors");
+    expect(() =>
+      memoryOpenVikingConfigSchema.parse({ disabledTools: "nope" }),
+    ).toThrow("unknown tool selectors");
   });
 
   it("defaults recallMaxInjectedChars to the 4000-character memory budget", () => {

@@ -887,12 +887,19 @@ describe("Tool: OpenViking tool result access", () => {
 });
 
 describe("Tool: add_resource, add_skill, and ov_search (registration)", () => {
-  it("registers add_resource tool with expected parameters", () => {
+  it("does not register add_resource by default", () => {
     const { tools, api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+    expect(tools.get("add_resource")).toBeUndefined();
+  });
+
+  it("registers add_resource tool with expected parameters when explicitly enabled", () => {
+    const { tools, api } = setupPlugin(undefined, { enableAddResourceTool: true });
     contextEnginePlugin.register(api as any);
     const tool = tools.get("add_resource");
     expect(tool).toBeDefined();
     expect(tool!.description).toContain("explicitly asks");
+    expect(tool!.description).toContain("Never use this during search");
     expect(tool!.description).toContain("[media attached: /path");
     expect(tool!.description).toContain("Set either to");
     expect(tool!.description).toContain("never both");
@@ -942,6 +949,24 @@ describe("Tool: add_resource, add_skill, and ov_search (registration)", () => {
     expect(props).toHaveProperty("query");
     expect(props).toHaveProperty("uri");
     expect(props).toHaveProperty("limit");
+  });
+
+  it("applies enabledTools and disabledTools to runtime tool registration", () => {
+    const { tools, api } = setupPlugin(undefined, {
+      enabledTools: ["resource_query", "memory"],
+      disabledTools: ["memory_forget"],
+    });
+    contextEnginePlugin.register(api as any);
+
+    expect(tools.get("ov_search")).toBeDefined();
+    expect(tools.get("ov_read")).toBeDefined();
+    expect(tools.get("ov_multi_read")).toBeDefined();
+    expect(tools.get("ov_list")).toBeDefined();
+    expect(tools.get("memory_recall")).toBeDefined();
+    expect(tools.get("memory_store")).toBeDefined();
+    expect(tools.get("memory_forget")).toBeUndefined();
+    expect(tools.get("add_skill")).toBeUndefined();
+    expect(tools.get("add_resource")).toBeUndefined();
   });
 
   it("registers ov_read and ov_multi_read tools for original evidence retrieval", () => {
@@ -1397,8 +1422,14 @@ describe("OpenViking ov_search command parsing", () => {
 });
 
 describe("Plugin registration", () => {
-  it("registers all 14 tools", () => {
+  it("registers all 13 default tools", () => {
     const { api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+    expect(api.registerTool).toHaveBeenCalledTimes(13);
+  });
+
+  it("registers all 14 tools when add_resource is explicitly enabled", () => {
+    const { api } = setupPlugin(undefined, { enableAddResourceTool: true });
     contextEnginePlugin.register(api as any);
     expect(api.registerTool).toHaveBeenCalledTimes(14);
   });
@@ -1477,7 +1508,7 @@ describe("Plugin registration", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const { tools, api } = setupPlugin();
+    const { tools, api } = setupPlugin(undefined, { enableAddResourceTool: true });
     api.pluginConfig = {
       ...api.pluginConfig,
       accountId: "acct-shared",
@@ -1510,7 +1541,7 @@ describe("Plugin registration", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     try {
-      const { tools, api } = setupPlugin();
+      const { tools, api } = setupPlugin(undefined, { enableAddResourceTool: true });
       contextEnginePlugin.register(api as any);
 
       const tool = tools.get("add_resource")!;

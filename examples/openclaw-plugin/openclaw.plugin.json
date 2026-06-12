@@ -12,7 +12,6 @@
   },
   "contracts": {
     "tools": [
-      "add_resource",
       "add_skill",
       "ov_search",
       "ov_read",
@@ -210,6 +209,24 @@
       "label": "Log find requests",
       "help": "Log tenant routing: /search/find + session messages/commit (X-OpenViking-*; not apiKey). Or set env OPENVIKING_LOG_ROUTING=1 or OPENVIKING_DEBUG=1.",
       "advanced": true
+    },
+    "enableAddResourceTool": {
+      "label": "Enable Add Resource Tool",
+      "placeholder": "false",
+      "help": "Disabled by default so search and read flows cannot call add_resource. Set true only when agents should import resources; manual /add-resource remains available.",
+      "advanced": true
+    },
+    "enabledTools": {
+      "label": "Enabled Tools",
+      "placeholder": "default",
+      "help": "Agent-visible tool allowlist. Accepts tool names or groups: default, all, memory, resource_query, import, archive, tool_result. add_resource also requires enableAddResourceTool=true.",
+      "advanced": true
+    },
+    "disabledTools": {
+      "label": "Disabled Tools",
+      "placeholder": "memory",
+      "help": "Agent-visible tool blocklist applied after enabledTools. Accepts the same tool names or groups.",
+      "advanced": true
     }
   },
   "configSchema": {
@@ -328,6 +345,35 @@
       },
       "logFindRequests": {
         "type": "boolean"
+      },
+      "enableAddResourceTool": {
+        "type": "boolean"
+      },
+      "enabledTools": {
+        "oneOf": [
+          {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "disabledTools": {
+        "oneOf": [
+          {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          {
+            "type": "string"
+          }
+        ]
       },
       "agentExperience": {
         "type": "object",

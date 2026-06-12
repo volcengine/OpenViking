@@ -650,6 +650,22 @@ const contextEnginePlugin = {
     const defaultMemoryPolicy = defaultMemoryPolicyForPeerRole(cfg.peer_role);
     const tenantAccount = cfg.accountId;
     const tenantUser = cfg.userId;
+    const enabledToolNames = new Set<string>(cfg.enabledTools);
+    const registerOpenVikingTool = (
+      toolOrFactory: ToolDefinition | ((ctx: ToolContext) => ToolDefinition),
+      opts: { name: string; names?: string[] },
+    ) => {
+      const names = opts.names ?? [opts.name];
+      if (!names.some((name) => enabledToolNames.has(name))) {
+        api.logger.debug?.(`openviking: tool ${opts.name} disabled by config`);
+        return;
+      }
+      if (typeof toolOrFactory === "function") {
+        api.registerTool(toolOrFactory, opts);
+      } else {
+        api.registerTool(toolOrFactory, opts);
+      }
+    };
 
     const clientPromise = Promise.resolve(
       new OpenVikingClient(
@@ -1043,44 +1059,47 @@ const contextEnginePlugin = {
       };
     };
 
-    api.registerTool(
-      (ctx: ToolContext) => ({
-        name: "add_resource",
-        label: "Add Resource (OpenViking)",
-        description:
-          "Use only when the user explicitly asks to import, add, upload, save, or index a document, directory, URL, Git repository, or OpenClaw media attachment into OpenViking resources. " +
-          "For a '[media attached: /path ...]' document, set source to that exact local media path. " +
-          "Set either to for an exact target URI or parent for a parent directory, never both. " +
-          "Do not invent OpenViking upload REST endpoints.",
-        parameters: Type.Object({
-          source: Type.String({ description: "Local path, OpenClaw media attachment path, directory path, public URL, or Git URL" }),
-          to: Type.Optional(Type.String({ description: "Exact target URI, e.g. viking://resources/project-docs. Mutually exclusive with parent." })),
-          parent: Type.Optional(Type.String({ description: "Parent URI under viking://resources. Mutually exclusive with to." })),
-          reason: Type.Optional(Type.String({ description: "Reason or note for adding this resource" })),
-          instruction: Type.Optional(Type.String({ description: "Processing instruction for semantic extraction" })),
-          wait: Type.Optional(Type.Boolean({ description: "Wait for processing to complete" })),
-          timeout: Type.Optional(Type.Number({ description: "Timeout in seconds when wait is true" })),
+    if (cfg.enableAddResourceTool) {
+      registerOpenVikingTool(
+        (ctx: ToolContext) => ({
+          name: "add_resource",
+          label: "Add Resource (OpenViking)",
+          description:
+            "Use only when the user explicitly asks to import, add, upload, save, or index a document, directory, URL, Git repository, or OpenClaw media attachment into OpenViking resources. " +
+            "Never use this during search, retrieval, URI reading, or search-result optimization; use ov_search, ov_list, ov_read, and ov_multi_read for those flows. " +
+            "For a '[media attached: /path ...]' document, set source to that exact local media path. " +
+            "Set either to for an exact target URI or parent for a parent directory, never both. " +
+            "Do not invent OpenViking upload REST endpoints.",
+          parameters: Type.Object({
+            source: Type.String({ description: "Local path, OpenClaw media attachment path, directory path, public URL, or Git URL" }),
+            to: Type.Optional(Type.String({ description: "Exact target URI, e.g. viking://resources/project-docs. Mutually exclusive with parent." })),
+            parent: Type.Optional(Type.String({ description: "Parent URI under viking://resources. Mutually exclusive with to." })),
+            reason: Type.Optional(Type.String({ description: "Reason or note for adding this resource" })),
+            instruction: Type.Optional(Type.String({ description: "Processing instruction for semantic extraction" })),
+            wait: Type.Optional(Type.Boolean({ description: "Wait for processing to complete" })),
+            timeout: Type.Optional(Type.Number({ description: "Timeout in seconds when wait is true" })),
+          }),
+          async execute(_toolCallId: string, params: Record<string, unknown>) {
+            if (isBypassedSession(ctx)) {
+              return makeBypassedToolResult("add_resource");
+            }
+            const session = resolvePluginSessionRouting(ctx);
+            return addResourceOpenViking({
+              source: typeof params.source === "string" ? params.source : undefined,
+              to: typeof params.to === "string" ? params.to : undefined,
+              parent: typeof params.parent === "string" ? params.parent : undefined,
+              reason: typeof params.reason === "string" ? params.reason : undefined,
+              instruction: typeof params.instruction === "string" ? params.instruction : undefined,
+              wait: typeof params.wait === "boolean" ? params.wait : undefined,
+              timeout: typeof params.timeout === "number" ? params.timeout : undefined,
+            }, session.agentId);
+          },
         }),
-        async execute(_toolCallId: string, params: Record<string, unknown>) {
-          if (isBypassedSession(ctx)) {
-            return makeBypassedToolResult("add_resource");
-          }
-          const session = resolvePluginSessionRouting(ctx);
-          return addResourceOpenViking({
-            source: typeof params.source === "string" ? params.source : undefined,
-            to: typeof params.to === "string" ? params.to : undefined,
-            parent: typeof params.parent === "string" ? params.parent : undefined,
-            reason: typeof params.reason === "string" ? params.reason : undefined,
-            instruction: typeof params.instruction === "string" ? params.instruction : undefined,
-            wait: typeof params.wait === "boolean" ? params.wait : undefined,
-            timeout: typeof params.timeout === "number" ? params.timeout : undefined,
-          }, session.agentId);
-        },
-      }),
-      { name: "add_resource" },
-    );
+        { name: "add_resource" },
+      );
+    }
 
-    api.registerTool(
+    registerOpenVikingTool(
       (ctx: ToolContext) => ({
         name: "add_skill",
         label: "Add Skill (OpenViking)",
@@ -1109,7 +1128,7 @@ const contextEnginePlugin = {
       { name: "add_skill" },
     );
 
-    api.registerTool(
+    registerOpenVikingTool(
       (ctx: ToolContext) => ({
         name: "ov_search",
         label: "Search (OpenViking)",
@@ -1138,7 +1157,7 @@ const contextEnginePlugin = {
       { name: "ov_search" },
     );
 
-    api.registerTool(
+    registerOpenVikingTool(
       (ctx: ToolContext) => ({
         name: "ov_read",
         label: "Read (OpenViking)",
@@ -1162,7 +1181,7 @@ const contextEnginePlugin = {
       { name: "ov_read" },
     );
 
-    api.registerTool(
+    registerOpenVikingTool(
       (ctx: ToolContext) => ({
         name: "ov_multi_read",
         label: "Multi Read (OpenViking)",
@@ -1188,7 +1207,7 @@ const contextEnginePlugin = {
       { name: "ov_multi_read" },
     );
 
-    api.registerTool(
+    registerOpenVikingTool(
       (ctx: ToolContext) => ({
         name: "ov_list",
         label: "List (OpenViking)",
@@ -1277,7 +1296,7 @@ const contextEnginePlugin = {
       },
     });
 
-    api.registerTool(
+    registerOpenVikingTool(
       (ctx: ToolContext) => ({
         name: "memory_recall",
         label: "Memory Recall (OpenViking)",
@@ -1451,7 +1470,7 @@ const contextEnginePlugin = {
       { name: "memory_recall" },
     );
 
-    api.registerTool(
+    registerOpenVikingTool(
       (ctx: ToolContext) => ({
         name: "memory_store",
         label: "Memory Store (OpenViking)",
@@ -1601,7 +1620,7 @@ const contextEnginePlugin = {
       { name: "memory_store" },
     );
 
-    api.registerTool(
+    registerOpenVikingTool(
       (ctx: ToolContext) => ({
         name: "memory_forget",
         label: "Memory Forget (OpenViking)",
@@ -1715,7 +1734,7 @@ const contextEnginePlugin = {
       { name: "memory_forget" },
     );
 
-    api.registerTool(
+    registerOpenVikingTool(
       (ctx: ToolContext) => ({
         name: "ov_archive_search",
         label: "Archive Search (OpenViking)",
@@ -1816,7 +1835,7 @@ const contextEnginePlugin = {
       { name: "ov_archive_search" },
     );
 
-    api.registerTool((ctx: ToolContext) => ({
+    registerOpenVikingTool((ctx: ToolContext) => ({
       name: "ov_archive_expand",
       label: "Archive Expand (OpenViking)",
       description:
@@ -1895,7 +1914,7 @@ const contextEnginePlugin = {
       },
     }), { name: "ov_archive_expand" });
 
-    api.registerTool(
+    registerOpenVikingTool(
       (ctx: ToolContext) => ({
         name: "openviking_tool_result_read",
         label: "Tool Result Read (OpenViking)",
@@ -1992,7 +2011,7 @@ const contextEnginePlugin = {
       { name: "openviking_tool_result_read" },
     );
 
-    api.registerTool(
+    registerOpenVikingTool(
       (ctx: ToolContext) => ({
         name: "openviking_tool_result_search",
         label: "Tool Result Search (OpenViking)",
@@ -2096,7 +2115,7 @@ const contextEnginePlugin = {
       { name: "openviking_tool_result_search" },
     );
 
-    api.registerTool(
+    registerOpenVikingTool(
       (ctx: ToolContext) => ({
         name: "openviking_tool_result_list",
         label: "Tool Result List (OpenViking)",
