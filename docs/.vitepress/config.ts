@@ -154,6 +154,53 @@ function collectAllMdFiles(srcDir: string): { relativePath: string; absPath: str
   return results.sort((a, b) => a.relativePath.localeCompare(b.relativePath))
 }
 
+function markdownToSearchText(content: string): string {
+  return content
+    .replace(/^---[\s\S]*?---\s*/m, '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/!\[[^\]]*\]\([^)]+\)/g, ' ')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/[#>*_~|:-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function docsSearchLocale(relativePath: string): 'en' | 'zh' | null {
+  if (relativePath.startsWith('en/')) return 'en'
+  if (relativePath.startsWith('zh/')) return 'zh'
+  return null
+}
+
+function buildDocsSearchRecords(srcDir: string) {
+  return collectAllMdFiles(srcDir)
+    .map(({ relativePath, absPath }) => {
+      const normalizedPath = relativePath.replace(/\\/g, '/')
+      const locale = docsSearchLocale(normalizedPath)
+      if (!locale) return null
+
+      const content = fs.readFileSync(absPath, 'utf-8')
+      const url = `/${normalizedPath.replace(/\.md$/, '')}`.replace(/\/index$/, '')
+      return {
+        locale,
+        path: normalizedPath,
+        text: markdownToSearchText(content),
+        title: titleFromMarkdown(absPath),
+        url
+      }
+    })
+    .filter((record): record is NonNullable<typeof record> => record !== null)
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function buildDocsSearchIndex(siteConfig: any) {
+  fs.writeFileSync(
+    path.join(siteConfig.outDir, 'docs-search-index.json'),
+    JSON.stringify(buildDocsSearchRecords(siteConfig.srcDir)),
+    'utf-8'
+  )
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function buildLlmsTxt(siteConfig: any) {
   const siteUrl = (process.env.DOCS_SITE_URL || '').replace(/\/$/, '')
@@ -242,6 +289,7 @@ export default defineConfig({
   },
   buildEnd(siteConfig) {
     buildLlmsTxt(siteConfig)
+    buildDocsSearchIndex(siteConfig)
   },
   vite: {
     publicDir: 'images',
@@ -260,6 +308,13 @@ export default defineConfig({
               next()
             }
           })
+          server.middlewares.use((req, res, next) => {
+            const pathname = req.url?.split('?')[0]
+            if (pathname !== '/docs-search-index.json') return next()
+
+            res.setHeader('Content-Type', 'application/json; charset=utf-8')
+            res.end(JSON.stringify(buildDocsSearchRecords(docsRoot)))
+          })
         }
       }
     ]
@@ -267,9 +322,6 @@ export default defineConfig({
   themeConfig: {
     logo: '/ov-logo.png',
     logoLink: mainSiteBase,
-    search: {
-      provider: 'local'
-    },
     socialLinks: [
       { icon: 'github', link: `https://github.com/${repo}` }
     ],
