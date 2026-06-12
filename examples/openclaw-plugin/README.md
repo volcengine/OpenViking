@@ -41,7 +41,7 @@ Once installed, the plugin provides these agent tools:
 | `ov_archive_expand` | Expand an archive back to raw messages |
 | `ov_recall_trace` | Inspect why recall/search returned or injected specific results |
 | `add_resource` | Import documents, URLs, or Git repos when explicitly enabled |
-| `add_skill` | Import agent skills |
+| `add_skill` | Import OpenViking skills |
 | `ov_search` | Search imported resources and skills |
 | `ov_read` | Read the full original content of one exact OpenViking URI |
 | `ov_multi_read` | Read the full original content of multiple OpenViking URIs |
@@ -57,7 +57,7 @@ Once installed, the plugin provides these agent tools:
 - **What is sent**: User/assistant message text from each turn (after stripping injected memory blocks and metadata noise).
 - **Where it goes**: Your configured OpenViking server (`baseUrl`). The plugin only sends data to that server; downstream model/provider data handling (embedding, VLM) depends on the server's configuration.
 - **Storage**: All data lives on your OpenViking server under `viking://user/*` (including `viking://user/sessions/*`) and `viking://resources/*`.
-- **API Key**: Sent as `X-OpenViking-Key` header over your configured connection. Never logged or forwarded.
+- **API Key**: Sent as `X-API-Key` header over your configured connection. Never logged or forwarded.
 - **Multi-tenant isolation**: Supports `accountId` and `userId`. Optional `peer_role` / `peer_prefix` controls whether OpenClaw speakers are written as OpenViking `peer_id`.
 
 ## Verify
@@ -239,7 +239,7 @@ Beyond automatic behavior, the plugin exposes these tools directly:
 - `ov_archive_expand`: expand a concrete archive back into raw messages
 - `ov_recall_trace`: inspect recent recall/search trace records when `traceRecall` is enabled
 - `add_resource`: import a document, directory, URL, or Git repository as an OpenViking resource when explicitly enabled
-- `add_skill`: import or register an OpenViking agent skill
+- `add_skill`: import or register an OpenViking skill
 - `ov_search`: search OpenViking resources and skills, especially after importing them
 - `ov_read`: read one exact `viking://` URI returned by `ov_search` or `ov_list`
 - `ov_multi_read`: read multiple exact `viking://` URIs, useful for an overview plus sibling chunks

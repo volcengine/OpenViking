@@ -71,15 +71,12 @@ $OPENCLAW_STATE_DIR/openclaw.json
 | `userId` | string | 空 | `OPENVIKING_USER_ID` | 高级租户路由字段；请求时写入 `X-OpenViking-User`。Root key 或 trusted 部署通常需要。 |
 | `timeoutMs` | number | `15000` | — | OpenViking HTTP 请求超时，最低会 clamp 到 `1000`。 |
 
-### 3.2 Agent 与命名空间隔离
+### 3.2 Peer 与检索隔离
 
 | 参数 | 类型 | 默认值 | 环境变量 | 说明 |
 | --- | --- | --- | --- | --- |
-| `agent_prefix` | string | 空 | — | Agent 路由前缀。非空时会参与生成实际 `X-OpenViking-Agent`。交互式 setup 仅允许字母、数字、`_`、`-`。 |
-| `agentId` | string | — | — | 旧配置兼容字段；解析时迁移为 `agent_prefix`。 |
-| `isolateUserScopeByAgent` | boolean | `false` | `OPENVIKING_ISOLATE_USER_SCOPE_BY_AGENT` | 控制 `viking://user/memories` 是否展开到按 agent 隔离的 user scope。 |
-| `isolateAgentScopeByUser` | boolean | `false` | `OPENVIKING_ISOLATE_AGENT_SCOPE_BY_USER` | 控制 `viking://agent/...` 是否展开到按 user 隔离的 agent scope。 |
-| `agentScopeMode` | `"user_agent"` \| `"agent"` | `"agent"` | `OPENVIKING_AGENT_SCOPE_MODE` | 已废弃兼容项；建议改用 `isolateUserScopeByAgent` / `isolateAgentScopeByUser`。 |
+| `peer_role` | `"none"` \| `"assistant"` \| `"person"` | `"none"` | — | 控制 session message 和 recall/search 请求是否写入 `peer_id`。 |
+| `peer_prefix` | string | 空 | — | `peer_role=assistant` 时 assistant `peer_id` 的可选前缀；仅允许字母、数字、`_`、`-`。 |
 
 ### 3.3 自动捕获与提交
 
@@ -382,7 +379,7 @@ Manifest 中声明了 runtime slash alias：
 | 参数 | 必填 | 说明 |
 | --- | --- | --- |
 | `<query>` | 是 | 搜索 query。支持多词 query。 |
-| `--uri URI` | 否 | 搜索目标 URI。未指定时默认搜索 resources 和 agent skills。 |
+| `--uri URI` | 否 | 搜索目标 URI。未指定时默认搜索 resources 和 user skills。 |
 | `--limit N` | 否 | 每个搜索范围返回条数，默认 `10`。 |
 
 示例：
@@ -429,7 +426,7 @@ Manifest 中声明了 runtime slash alias：
 
 | Tool | 参数 | 用途 |
 | --- | --- | --- |
-| `add_skill` | `source?`、`data?`、`wait?`、`timeout?` | 导入或注册 OpenViking agent skill。 |
+| `add_skill` | `source?`、`data?`、`wait?`、`timeout?` | 导入或注册 OpenViking skill。 |
 | `ov_search` | `query`、`uri?`、`limit?` | 搜索 OpenViking resources 和 skills。 |
 | `ov_read` | `uri` | 读取精确 `viking://...` OpenViking URI 的完整内容。 |
 | `memory_recall` | `query`、`limit?`、`scoreThreshold?`、`targetUri?`、`resourceTypes?` | 显式召回长期记忆或资源。 |
@@ -504,7 +501,8 @@ curl 'http://127.0.0.1:<gateway-port>/api/openviking/recall-traces/ov_search-178
 | `X-API-Key` | `apiKey` | API Key。 |
 | `X-OpenViking-Account` | `accountId` | 租户 account。 |
 | `X-OpenViking-User` | `userId` | 租户 user。 |
-| `X-OpenViking-Agent` | 当前 session agent 或默认 agent | Agent 命名空间路由。 |
+
+`peer_role=assistant/person` 时，插件通过请求 body 的 `peer_id` 字段隔离 session 写入和 recall/search；当前实现不发送 `X-OpenViking-Agent` header。
 
 后端 API 封装清单：
 
