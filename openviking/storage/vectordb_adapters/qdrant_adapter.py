@@ -62,17 +62,15 @@ class QdrantCollectionAdapter(CollectionAdapter):
     def from_config(cls, config: Any):
         cfg = getattr(config, "qdrant", None)
         params = dict(getattr(config, "custom_params", {}) or {})
-        url = (
-            getattr(cfg, "url", None)
-            or getattr(config, "url", None)
-            or params.get("url")
-        )
+        url = getattr(cfg, "url", None) or getattr(config, "url", None) or params.get("url")
         if not url:
             raise ValueError("Qdrant backend requires qdrant.url or url")
         return cls(
             url=str(url).strip().rstrip("/"),
             api_key=getattr(cfg, "api_key", None) or params.get("api_key"),
-            timeout_seconds=int(getattr(cfg, "timeout_seconds", None) or params.get("timeout_seconds") or 10),
+            timeout_seconds=int(
+                getattr(cfg, "timeout_seconds", None) or params.get("timeout_seconds") or 10
+            ),
             project_name=config.project_name or "default",
             collection_name=config.name or "context",
             index_name=config.index_name or "default",
@@ -132,7 +130,9 @@ class QdrantCollectionAdapter(CollectionAdapter):
         fields_meta: list[dict[str, Any]],
     ) -> list[str]:
         text_fields = self.DEFAULT_TEXT_INDEX_FIELDS if self._enable_text_index else []
-        merged = list(dict.fromkeys(list(scalar_index_fields) + self.INTERNAL_PATH_FIELDS + text_fields))
+        merged = list(
+            dict.fromkeys(list(scalar_index_fields) + self.INTERNAL_PATH_FIELDS + text_fields)
+        )
         return merged
 
     def _build_default_index_meta(
@@ -201,7 +201,9 @@ class QdrantCollectionAdapter(CollectionAdapter):
             normalized["uri"] = normalized_uri
             normalized["parent_uri"] = self._compute_parent_uri(normalized_uri)
             normalized["scope_roots"] = self._compute_scope_roots(normalized_uri)
-            normalized["uri_depth"] = len([part for part in normalized_uri.strip("/").split("/") if part])
+            normalized["uri_depth"] = len(
+                [part for part in normalized_uri.strip("/").split("/") if part]
+            )
         return normalized
 
     def _normalize_record_for_read(self, record: Dict[str, Any]) -> Dict[str, Any]:
@@ -266,17 +268,27 @@ class QdrantCollectionAdapter(CollectionAdapter):
 
         if op == "and":
             return self._must_clause(
-                *(self._compile_legacy_dict_filter(cond) for cond in payload.get("conds", []) if cond)
+                *(
+                    self._compile_legacy_dict_filter(cond)
+                    for cond in payload.get("conds", [])
+                    if cond
+                )
             )
         if op == "or":
             return self._should_clause(
-                *(self._compile_legacy_dict_filter(cond) for cond in payload.get("conds", []) if cond)
+                *(
+                    self._compile_legacy_dict_filter(cond)
+                    for cond in payload.get("conds", [])
+                    if cond
+                )
             )
         if op == "must":
             field = payload.get("field")
             values = payload.get("conds", []) or []
             if field in self._URI_FIELD_NAMES:
-                values = [self._normalize_path(self._encode_uri_field_value(value)) for value in values]
+                values = [
+                    self._normalize_path(self._encode_uri_field_value(value)) for value in values
+                ]
             if len(values) <= 1:
                 value = values[0] if values else None
                 return {"must": [self._match_condition(field, value)]} if value is not None else {}
@@ -285,7 +297,9 @@ class QdrantCollectionAdapter(CollectionAdapter):
             field = payload.get("field")
             values = payload.get("conds", []) or []
             if field in self._URI_FIELD_NAMES:
-                values = [self._normalize_path(self._encode_uri_field_value(value)) for value in values]
+                values = [
+                    self._normalize_path(self._encode_uri_field_value(value)) for value in values
+                ]
             condition = (
                 self._match_any_condition(field, list(values))
                 if len(values) > 1
@@ -307,7 +321,9 @@ class QdrantCollectionAdapter(CollectionAdapter):
                 branches.append({"must": [self._range_condition(field, {"gt": payload["lte"]})]})
             return self._should_clause(*branches)
         if op == "contains":
-            return {"must": [self._text_condition(payload.get("field"), payload.get("substring", ""))]}
+            return {
+                "must": [self._text_condition(payload.get("field"), payload.get("substring", ""))]
+            }
         if op == "prefix":
             field = payload.get("field")
             prefix = payload.get("prefix", "")
@@ -340,7 +356,9 @@ class QdrantCollectionAdapter(CollectionAdapter):
         if isinstance(expr, In):
             values = list(expr.values)
             if expr.field in self._URI_FIELD_NAMES:
-                values = [self._normalize_path(self._encode_uri_field_value(value)) for value in values]
+                values = [
+                    self._normalize_path(self._encode_uri_field_value(value)) for value in values
+                ]
             if len(values) == 1:
                 return {"must": [self._match_condition(expr.field, values[0])]}
             return {"must": [self._match_any_condition(expr.field, values)]}
@@ -372,5 +390,7 @@ class QdrantCollectionAdapter(CollectionAdapter):
                 return {"must": [self._match_condition("parent_uri", encoded_path)]}
             if expr.depth == -1:
                 return {"must": [self._match_condition("scope_roots", encoded_path)]}
-            raise ValueError(f"Qdrant adapter only supports PathScope depth 0/1/-1, got {expr.depth}")
+            raise ValueError(
+                f"Qdrant adapter only supports PathScope depth 0/1/-1, got {expr.depth}"
+            )
         raise TypeError(f"Unsupported filter expr type: {type(expr)!r}")

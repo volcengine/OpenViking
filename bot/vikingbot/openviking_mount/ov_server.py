@@ -420,9 +420,6 @@ class VikingClient:
     def _skill_memory_uri(self, skill_name: str, user_id: Optional[str] = None) -> str:
         return f"{self._memory_target_uri(user_id)}skills/{skill_name}.md"
 
-    def should_sender_fanout(self) -> bool:
-        return self._is_root_key_mode()
-
     async def find(
         self,
         query: str,
@@ -705,7 +702,7 @@ class VikingClient:
         user_ids_to_check = self._dedupe_strings(
             [
                 *normalized_user_ids,
-                *( [effective_owner_user_id] if effective_owner_user_id else [] ),
+                *([effective_owner_user_id] if effective_owner_user_id else []),
             ]
         )
 

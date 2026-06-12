@@ -495,6 +495,9 @@ enum Commands {
         /// Maximum depth level to traverse (default: 10)
         #[arg(short = 'L', long = "level-limit", default_value = "10")]
         level_limit: i32,
+        /// Maximum files recalled by vikingdb bm25; 0 means auto-adapt (0-100000)
+        #[arg(long = "remote-return-limit", default_value = "0")]
+        remote_return_limit: Option<i32>,
     },
     /// [Data] Run file glob pattern search
     Glob {
@@ -2539,6 +2542,7 @@ async fn main() {
             ignore_case,
             node_limit,
             level_limit,
+            remote_return_limit,
         } => {
             handlers::handle_grep(
                 uri,
@@ -2547,6 +2551,7 @@ async fn main() {
                 ignore_case,
                 node_limit,
                 level_limit,
+                remote_return_limit,
                 ctx,
             )
             .await

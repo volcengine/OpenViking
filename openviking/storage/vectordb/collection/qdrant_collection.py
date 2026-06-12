@@ -117,9 +117,7 @@ def _sparse_to_qdrant(sparse_vector: Optional[Dict[str, float]]) -> Optional[Dic
             hashed_terms[idx] = str(raw_term)
         merged[idx] = merged.get(idx, 0.0) + weight
     if collisions:
-        sample = ", ".join(
-            f"{left!r}<->{right!r}@{idx}" for left, right, idx in collisions[:3]
-        )
+        sample = ", ".join(f"{left!r}<->{right!r}@{idx}" for left, right, idx in collisions[:3])
         logger.warning(
             "Qdrant sparse term hash collision detected; colliding terms are merged into the same sparse index bucket. count=%s sample=%s",
             len(collisions),
@@ -135,7 +133,9 @@ def _sparse_to_qdrant(sparse_vector: Optional[Dict[str, float]]) -> Optional[Dic
 class QdrantIndex(IIndex):
     """Lightweight logical index facade backed by Qdrant payload/vector config."""
 
-    def __init__(self, collection: "QdrantCollection", index_name: str, meta: Dict[str, Any]) -> None:
+    def __init__(
+        self, collection: "QdrantCollection", index_name: str, meta: Dict[str, Any]
+    ) -> None:
         super().__init__(meta=meta)
         self._collection = collection
         self._index_name = index_name
@@ -160,7 +160,9 @@ class QdrantIndex(IIndex):
     def aggregate(self, filters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         raise NotImplementedError("QdrantIndex.aggregate is not exposed via raw index interface")
 
-    def update(self, scalar_index: Optional[Dict[str, Any]] = None, description: Optional[str] = None):
+    def update(
+        self, scalar_index: Optional[Dict[str, Any]] = None, description: Optional[str] = None
+    ):
         self._collection.update_index(
             index_name=self._index_name,
             scalar_index=scalar_index,
@@ -629,7 +631,9 @@ class QdrantCollection(ICollection):
         field_type_map = self._field_type_map()
         scalar_fields = list(meta_data.get("ScalarIndex", []) or [])
         for field_name in scalar_fields:
-            field_schema = self._payload_field_schema(field_name, field_type_map.get(field_name, ""))
+            field_schema = self._payload_field_schema(
+                field_name, field_type_map.get(field_name, "")
+            )
             if not field_schema:
                 continue
             self._client.request(
@@ -804,9 +808,7 @@ class QdrantCollection(ICollection):
             points = points[offset:]
         if len(points) > limit:
             points = points[:limit]
-        return SearchResult(
-            data=self._parse_points_as_search_result(points, score=1.0).data
-        )
+        return SearchResult(data=self._parse_points_as_search_result(points, score=1.0).data)
 
     def search_by_id(
         self,
@@ -938,9 +940,7 @@ class QdrantCollection(ICollection):
             points = points[offset:]
         if len(points) > limit:
             points = points[:limit]
-        return SearchResult(
-            data=self._parse_points_as_search_result(points, score=1.0).data
-        )
+        return SearchResult(data=self._parse_points_as_search_result(points, score=1.0).data)
 
     def search_by_scalar(
         self,
@@ -1028,7 +1028,9 @@ class QdrantCollection(ICollection):
         for field_name in new_scalar_fields:
             if field_name in old_scalar_fields:
                 continue
-            field_schema = self._payload_field_schema(field_name, field_type_map.get(field_name, ""))
+            field_schema = self._payload_field_schema(
+                field_name, field_type_map.get(field_name, "")
+            )
             if not field_schema:
                 continue
             self._client.request(
@@ -1054,7 +1056,9 @@ class QdrantCollection(ICollection):
         return current_meta
 
     def get_index_meta_data(self, index_name: str):
-        return self._meta_store.get_index_meta(collection_key=self.collection_key, index_name=index_name)
+        return self._meta_store.get_index_meta(
+            collection_key=self.collection_key, index_name=index_name
+        )
 
     def list_indexes(self):
         return self._meta_store.list_indexes(collection_key=self.collection_key)
@@ -1063,7 +1067,9 @@ class QdrantCollection(ICollection):
         index_meta = self.get_index_meta_data(index_name) or {}
         for field_name in index_meta.get("ScalarIndex", []) or []:
             self._delete_field_index(field_name)
-        self._meta_store.delete_index_meta(collection_key=self.collection_key, index_name=index_name)
+        self._meta_store.delete_index_meta(
+            collection_key=self.collection_key, index_name=index_name
+        )
 
     def upsert_data(self, data_list: List[Dict[str, Any]], ttl=0):
         # Qdrant does not provide a collection-level per-point TTL primitive that

@@ -1340,6 +1340,7 @@ pub async fn handle_grep(
     ignore_case: bool,
     node_limit: i32,
     level_limit: i32,
+    remote_return_limit: Option<i32>,
     ctx: CliContext,
 ) -> Result<()> {
     // Prevent grep from root directory to avoid excessive server load and timeouts
@@ -1371,6 +1372,7 @@ pub async fn handle_grep(
         ignore_case,
         node_limit,
         level_limit,
+        remote_return_limit,
         ctx.output_format,
         ctx.compact,
     )

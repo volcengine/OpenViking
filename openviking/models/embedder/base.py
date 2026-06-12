@@ -202,9 +202,7 @@ class EmbedderBase(ABC):
                 return content
             return truncate_embedding_input(content, self.max_input_tokens)
 
-    def prepare_embedding_inputs(
-        self, contents: List["EmbeddingInput"]
-    ) -> List["EmbeddingInput"]:
+    def prepare_embedding_inputs(self, contents: List["EmbeddingInput"]) -> List["EmbeddingInput"]:
         """Apply this embedder's input guard to a batch."""
         return [self.prepare_embedding_input(content) for content in contents]
 
@@ -261,9 +259,7 @@ class EmbedderBase(ABC):
         """Batch embed document texts."""
         return self.embed_batch(texts, is_query=False)
 
-    async def embed_async(
-        self, content: "EmbeddingInput", is_query: bool = False
-    ) -> EmbedResult:
+    async def embed_async(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
         """Async embed text or multimodal content.
 
         Subclasses should override this with a non-blocking implementation.
@@ -586,10 +582,7 @@ class CompositeHybridEmbedder(HybridEmbedderBase):
     @property
     def supports_multimodal(self) -> bool:
         """Supports multimodal input only if both sub-embedders do."""
-        return (
-            self.dense_embedder.supports_multimodal
-            and self.sparse_embedder.supports_multimodal
-        )
+        return self.dense_embedder.supports_multimodal and self.sparse_embedder.supports_multimodal
 
     def embed(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
         """Combine results from both embedders"""
@@ -616,9 +609,7 @@ class CompositeHybridEmbedder(HybridEmbedderBase):
             for d, s in zip(dense_results, sparse_results, strict=True)
         ]
 
-    async def embed_async(
-        self, content: "EmbeddingInput", is_query: bool = False
-    ) -> EmbedResult:
+    async def embed_async(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
         dense_input = self.dense_embedder.prepare_embedding_input(content)
         sparse_input = self.sparse_embedder.prepare_embedding_input(content)
         dense_res, sparse_res = await asyncio.gather(

@@ -377,6 +377,7 @@ class LocalClient(BaseClient):
         node_limit: Optional[int] = None,
         exclude_uri: Optional[str] = None,
         level_limit: int = 5,
+        remote_return_limit: int = 0,
     ) -> Dict[str, Any]:
         """Content search with pattern."""
         return await self._service.fs.grep(
@@ -387,6 +388,7 @@ class LocalClient(BaseClient):
             node_limit=node_limit,
             exclude_uri=exclude_uri,
             level_limit=level_limit,
+            remote_return_limit=remote_return_limit,
         )
 
     async def glob(self, pattern: str, uri: str = "viking://") -> Dict[str, Any]:

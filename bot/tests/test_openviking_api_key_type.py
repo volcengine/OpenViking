@@ -6,6 +6,7 @@ import pytest
 from vikingbot.agent.context import ContextBuilder
 from vikingbot.agent.loop import _is_tool_result_success
 from vikingbot.agent.memory import MemoryStore
+from vikingbot.agent.tools import ov_file as ov_file_module
 from vikingbot.agent.tools.base import ToolContext
 from vikingbot.agent.tools.ov_file import (
     VikingGlobTool,
@@ -14,7 +15,6 @@ from vikingbot.agent.tools.ov_file import (
     VikingMemoryCommitTool,
     VikingSearchTool,
 )
-from vikingbot.agent.tools import ov_file as ov_file_module
 from vikingbot.cli import commands as commands_module
 from vikingbot.config import loader as config_loader_module
 from vikingbot.config.schema import OpenVikingConfig, SessionKey
@@ -1339,9 +1339,7 @@ def test_tool_context_syncs_legacy_memory_user_alias():
 
 
 @pytest.mark.asyncio
-async def test_viking_memory_context_keeps_legacy_users_separate_from_peers(
-    monkeypatch, tmp_path
-):
+async def test_viking_memory_context_keeps_legacy_users_separate_from_peers(monkeypatch, tmp_path):
     calls = []
 
     class _FakeClient:
@@ -1451,7 +1449,9 @@ async def test_openviking_grep_default_memory_expands_current_peer(monkeypatch):
 
         def build_current_memory_target_uris(self, *, peer_ids=None, include_self=True):
             uris = ["viking://user/memories/"] if include_self else []
-            uris.extend(f"viking://user/default/peers/{peer_id}/memories/" for peer_id in peer_ids or [])
+            uris.extend(
+                f"viking://user/default/peers/{peer_id}/memories/" for peer_id in peer_ids or []
+            )
             return uris
 
         async def grep(self, uri, pattern, case_insensitive=False, user_id=None):
@@ -1486,7 +1486,9 @@ async def test_openviking_list_default_memory_expands_current_peer(monkeypatch):
 
         def build_current_memory_target_uris(self, *, peer_ids=None, include_self=True):
             uris = ["viking://user/memories/"] if include_self else []
-            uris.extend(f"viking://user/default/peers/{peer_id}/memories/" for peer_id in peer_ids or [])
+            uris.extend(
+                f"viking://user/default/peers/{peer_id}/memories/" for peer_id in peer_ids or []
+            )
             return uris
 
         async def list_resources(self, path=None, recursive=False):
@@ -1520,7 +1522,9 @@ async def test_openviking_glob_root_adds_current_peer_memory(monkeypatch):
 
         def build_current_memory_target_uris(self, *, peer_ids=None, include_self=True):
             uris = ["viking://user/memories/"] if include_self else []
-            uris.extend(f"viking://user/default/peers/{peer_id}/memories/" for peer_id in peer_ids or [])
+            uris.extend(
+                f"viking://user/default/peers/{peer_id}/memories/" for peer_id in peer_ids or []
+            )
             return uris
 
         async def glob(self, pattern, uri="viking://"):
@@ -1557,8 +1561,7 @@ async def test_openviking_glob_root_uses_namespaced_self_targets_for_root_key(mo
         def build_current_memory_target_uris(self, *, peer_ids=None, include_self=True):
             uris = ["viking://user/admin/memories/"] if include_self else []
             uris.extend(
-                f"viking://user/admin/peers/{peer_id}/memories/"
-                for peer_id in peer_ids or []
+                f"viking://user/admin/peers/{peer_id}/memories/" for peer_id in peer_ids or []
             )
             return uris
 

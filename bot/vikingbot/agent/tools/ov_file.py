@@ -164,7 +164,11 @@ class VikingListTool(OVFileTool):
         }
 
     async def execute(
-        self, tool_context: "ToolContext", uri: str = "viking://", recursive: bool = False, **kwargs: Any
+        self,
+        tool_context: "ToolContext",
+        uri: str = "viking://",
+        recursive: bool = False,
+        **kwargs: Any,
     ) -> str:
         client = None
         try:
@@ -434,8 +438,7 @@ class VikingSearchTool(OVFileTool):
                         ]
                     )
                     search_requests = [
-                        {"target_uri": memory_uri, "peer_id": None}
-                        for memory_uri in memory_uris
+                        {"target_uri": memory_uri, "peer_id": None} for memory_uri in memory_uris
                     ]
                 else:
                     search_requests = [{"target_uri": target_uri, "peer_id": None}]
@@ -795,7 +798,9 @@ class VikingMemoryCommitTool(OVFileTool):
             timestamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
             session_id = f"{source_session_id}__memory_commit__{timestamp}__{commit_seq:04d}"
             result = await client.commit(session_id, messages, peer_id=tool_context.sender_id)
-            session_id = result.get("session_id", session_id) if isinstance(result, dict) else session_id
+            session_id = (
+                result.get("session_id", session_id) if isinstance(result, dict) else session_id
+            )
             commit_result = result.get("commit", {}) if isinstance(result, dict) else {}
             archive_uri = commit_result.get("archive_uri")
             memory_diff_uri = f"{archive_uri}/memory_diff.json" if archive_uri else None

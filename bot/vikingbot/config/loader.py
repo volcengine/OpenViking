@@ -7,8 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from loguru import logger
-from openviking_cli.utils.config.ovcli_config import load_ovcli_config
 
+from openviking_cli.utils.config.ovcli_config import load_ovcli_config
 from vikingbot.config.schema import Config
 
 CONFIG_PATH = None
@@ -173,6 +173,7 @@ def _merge_ov_server_config(bot_data: dict, ov_data: dict) -> None:
             raise
         if cli_config and cli_config.api_key:
             bot_data["api_key"] = cli_config.api_key
+
 
 def validate_openviking_auth(config: Config) -> None:
     ov_server = config.ov_server

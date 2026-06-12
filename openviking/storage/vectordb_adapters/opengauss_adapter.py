@@ -191,7 +191,9 @@ def _sparse_dot(left: Optional[Dict[str, float]], right: Optional[Dict[str, floa
 class OpenGaussIndex(IIndex):
     """Metadata-only logical index facade for openGauss."""
 
-    def __init__(self, collection: "OpenGaussCollection", index_name: str, meta: Dict[str, Any]) -> None:
+    def __init__(
+        self, collection: "OpenGaussCollection", index_name: str, meta: Dict[str, Any]
+    ) -> None:
         super().__init__(meta=meta)
         self._collection = collection
         self._index_name = index_name
@@ -216,7 +218,9 @@ class OpenGaussIndex(IIndex):
     def aggregate(self, filters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         raise NotImplementedError("OpenGaussIndex.aggregate is not exposed via raw index interface")
 
-    def update(self, scalar_index: Optional[Dict[str, Any]] = None, description: Optional[str] = None):
+    def update(
+        self, scalar_index: Optional[Dict[str, Any]] = None, description: Optional[str] = None
+    ):
         self._collection.update_index(
             index_name=self._index_name,
             scalar_index=scalar_index,
@@ -487,7 +491,7 @@ class OpenGaussCollection(ICollection):
 
     def _ensure_columns_for_record(self, record: Dict[str, Any]) -> None:
         existing = set(self._all_columns())
-        for field_name, value in record.items():
+        for field_name in record:
             if field_name in existing:
                 continue
             if field_name == "id":
@@ -529,14 +533,24 @@ class OpenGaussCollection(ICollection):
                 if field == self._sparse_vector_name and not include_sparse:
                     continue
                 wanted.append(field)
-        if include_vector and self._dense_vector_name in columns and self._dense_vector_name not in wanted:
+        if (
+            include_vector
+            and self._dense_vector_name in columns
+            and self._dense_vector_name not in wanted
+        ):
             wanted.append(self._dense_vector_name)
-        if include_sparse and self._sparse_vector_name in columns and self._sparse_vector_name not in wanted:
+        if (
+            include_sparse
+            and self._sparse_vector_name in columns
+            and self._sparse_vector_name not in wanted
+        ):
             wanted.append(self._sparse_vector_name)
         return wanted
 
-    def _row_to_payload(self, row: Sequence[Any], columns: Sequence[str]) -> Tuple[Any, Dict[str, Any]]:
-        record = dict(zip(columns, row))
+    def _row_to_payload(
+        self, row: Sequence[Any], columns: Sequence[str]
+    ) -> Tuple[Any, Dict[str, Any]]:
+        record = dict(zip(columns, row, strict=False))
         record_id = record.pop("id", "")
         record.pop(self._dense_vector_name, None)
         sparse = record.pop(self._sparse_vector_name, None)
@@ -745,7 +759,9 @@ class OpenGaussCollection(ICollection):
     ):
         meta = self.get_index_meta_data(index_name) or {"IndexName": index_name}
         if scalar_index is not None:
-            meta["ScalarIndex"] = list(scalar_index.keys()) if isinstance(scalar_index, dict) else list(scalar_index)
+            meta["ScalarIndex"] = (
+                list(scalar_index.keys()) if isinstance(scalar_index, dict) else list(scalar_index)
+            )
         if description is not None:
             meta["Description"] = description
         for field_name in meta.get("ScalarIndex", []) or []:
@@ -784,7 +800,9 @@ class OpenGaussCollection(ICollection):
         pg_index_name = _safe_identifier(self._table_name, index_name, "vec", prefix="idx")
         self._execute(f"DROP INDEX IF EXISTS {self._index_ref(pg_index_name)}")
         for field_name in meta.get("ScalarIndex", []) or []:
-            scalar_index_name = _safe_identifier(self._table_name, index_name, field_name, prefix="idx")
+            scalar_index_name = _safe_identifier(
+                self._table_name, index_name, field_name, prefix="idx"
+            )
             self._execute(f"DROP INDEX IF EXISTS {self._index_ref(scalar_index_name)}")
         self._delete_index_meta(index_name)
 
@@ -807,7 +825,9 @@ class OpenGaussCollection(ICollection):
             return SearchResult()
         fetch_limit = max(limit + offset, limit)
         if dense_vector is None:
-            return self._search_by_sparse(sparse_vector, fetch_limit, offset, limit, filters, output_fields)
+            return self._search_by_sparse(
+                sparse_vector, fetch_limit, offset, limit, filters, output_fields
+            )
 
         columns = self._select_columns(output_fields, include_sparse=bool(sparse_vector))
         where_sql, params = self._where_sql(filters)
@@ -821,7 +841,9 @@ class OpenGaussCollection(ICollection):
             f"ORDER BY {_quote_ident(self._dense_vector_name)} {operator} %s::vector "
             "LIMIT %s OFFSET %s"
         )
-        rows = self._execute(sql, [vector_text] + params + [vector_text, fetch_limit, 0], fetch=True)
+        rows = self._execute(
+            sql, [vector_text] + params + [vector_text, fetch_limit, 0], fetch=True
+        )
         scored_items: List[SearchItemResult] = []
         for row in rows:
             record_id, payload = self._row_to_payload(row[:-1], columns)
@@ -853,12 +875,16 @@ class OpenGaussCollection(ICollection):
             f"SELECT {', '.join(_quote_ident(col) for col in columns)} "
             f"FROM {self._table_ref()}{where_sql} LIMIT %s"
         )
-        rows = self._execute(sql, params + [max(fetch_limit, self.DEFAULT_SPARSE_SCAN_LIMIT)], fetch=True)
+        rows = self._execute(
+            sql, params + [max(fetch_limit, self.DEFAULT_SPARSE_SCAN_LIMIT)], fetch=True
+        )
         items = []
         for row in rows:
             record_id, payload = self._row_to_payload(row, columns)
             sparse_payload = payload.pop(self._sparse_vector_name, None)
-            score = _sparse_dot(sparse_vector, sparse_payload if isinstance(sparse_payload, dict) else None)
+            score = _sparse_dot(
+                sparse_vector, sparse_payload if isinstance(sparse_payload, dict) else None
+            )
             if score > 0:
                 items.append(SearchItemResult(id=record_id, fields=payload, score=score))
         items.sort(key=lambda item: item.score or 0.0, reverse=True)
@@ -918,7 +944,7 @@ class OpenGaussCollection(ICollection):
         )
         if not rows:
             return SearchResult()
-        row_payload = dict(zip(columns, rows[0]))
+        row_payload = dict(zip(columns, rows[0], strict=False))
         dense_vector = row_payload.get(self._dense_vector_name)
         sparse_raw = row_payload.get(self._sparse_vector_name)
         sparse_vector = None
@@ -1010,7 +1036,11 @@ class OpenGaussCollection(ICollection):
         items = []
         for row in rows:
             record_id, payload = self._row_to_payload(row, columns)
-            score = payload.pop(field, None) if output_fields and field not in output_fields else payload.get(field)
+            score = (
+                payload.pop(field, None)
+                if output_fields and field not in output_fields
+                else payload.get(field)
+            )
             items.append(
                 SearchItemResult(
                     id=record_id,
@@ -1056,7 +1086,9 @@ class OpenGaussCollection(ICollection):
     def _upsert_row(self, columns: List[str], values: List[Any]) -> None:
         id_index = columns.index("id")
         update_columns = [column for column in columns if column != "id"]
-        update_values = [value for column, value in zip(columns, values) if column != "id"]
+        update_values = [
+            value for column, value in zip(columns, values, strict=False) if column != "id"
+        ]
         set_parts = [
             f"{_quote_ident(column)} = {'%s::vector' if column == self._dense_vector_name else '%s'}"
             for column in update_columns
@@ -1071,8 +1103,7 @@ class OpenGaussCollection(ICollection):
             try:
                 if update_columns:
                     cur.execute(
-                        f"UPDATE {self._table_ref()} "
-                        f"SET {', '.join(set_parts)} WHERE id = %s",
+                        f"UPDATE {self._table_ref()} SET {', '.join(set_parts)} WHERE id = %s",
                         update_values + [values[id_index]],
                     )
                 if not update_columns or cur.rowcount == 0:
@@ -1091,8 +1122,7 @@ class OpenGaussCollection(ICollection):
                         conn = self._ensure_connection()
                         cur = conn.cursor()
                         cur.execute(
-                            f"UPDATE {self._table_ref()} "
-                            f"SET {', '.join(set_parts)} WHERE id = %s",
+                            f"UPDATE {self._table_ref()} SET {', '.join(set_parts)} WHERE id = %s",
                             update_values + [values[id_index]],
                         )
                 conn.commit()
@@ -1154,7 +1184,9 @@ class OpenGaussCollection(ICollection):
                 params,
                 fetch=True,
             )
-            return AggregateResult(agg={"_total": int(rows[0][0]) if rows else 0}, op=op, field=None)
+            return AggregateResult(
+                agg={"_total": int(rows[0][0]) if rows else 0}, op=op, field=None
+            )
         rows = self._execute(
             f"SELECT {_quote_ident(field)}, COUNT(*) FROM {self._table_ref()}"
             f"{where_sql} GROUP BY {_quote_ident(field)}",
@@ -1239,14 +1271,18 @@ class OpenGaussCollectionAdapter(CollectionAdapter):
             index_name=config.index_name or "default",
             distance_metric=config.distance_metric or "cosine",
             dense_vector_name=str(
-                getattr(cfg, "dense_vector_name", None) or params.get("dense_vector_name") or "vector"
+                getattr(cfg, "dense_vector_name", None)
+                or params.get("dense_vector_name")
+                or "vector"
             ),
             sparse_vector_name=str(
                 getattr(cfg, "sparse_vector_name", None)
                 or params.get("sparse_vector_name")
                 or "sparse_vector"
             ),
-            connect_timeout=int(getattr(cfg, "connect_timeout", None) or params.get("connect_timeout") or 10),
+            connect_timeout=int(
+                getattr(cfg, "connect_timeout", None) or params.get("connect_timeout") or 10
+            ),
             mode=str(getattr(cfg, "mode", None) or params.get("mode") or "standalone"),
             shard_count=int(getattr(cfg, "shard_count", None) or params.get("shard_count") or 32),
         )
@@ -1320,7 +1356,9 @@ class OpenGaussCollectionAdapter(CollectionAdapter):
             return
         cur = conn.cursor()
         try:
-            cur.execute("SELECT create_reference_table(%s)", [self._function_table_name(table_name)])
+            cur.execute(
+                "SELECT create_reference_table(%s)", [self._function_table_name(table_name)]
+            )
             conn.commit()
         except Exception as exc:
             conn.rollback()
@@ -1481,7 +1519,9 @@ class OpenGaussCollectionAdapter(CollectionAdapter):
             normalized["uri"] = normalized_uri
             normalized["parent_uri"] = self._compute_parent_uri(normalized_uri)
             normalized["scope_roots"] = self._compute_scope_roots(normalized_uri)
-            normalized["uri_depth"] = len([part for part in normalized_uri.strip("/").split("/") if part])
+            normalized["uri_depth"] = len(
+                [part for part in normalized_uri.strip("/").split("/") if part]
+            )
         return normalized
 
     def _normalize_record_for_read(self, record: Dict[str, Any]) -> Dict[str, Any]:
@@ -1518,7 +1558,9 @@ class OpenGaussCollectionAdapter(CollectionAdapter):
         if isinstance(expr, In):
             values = list(expr.values)
             if expr.field in self._URI_FIELD_NAMES:
-                values = [self._normalize_path(self._encode_uri_field_value(value)) for value in values]
+                values = [
+                    self._normalize_path(self._encode_uri_field_value(value)) for value in values
+                ]
             return {"op": "must", "field": expr.field, "conds": values}
         if isinstance(expr, Range):
             payload: Dict[str, Any] = {"op": "range", "field": expr.field}
@@ -1548,5 +1590,7 @@ class OpenGaussCollectionAdapter(CollectionAdapter):
                 return {"op": "must", "field": "parent_uri", "conds": [encoded_path]}
             if expr.depth == -1:
                 return {"op": "must", "field": "scope_roots", "conds": [encoded_path]}
-            raise ValueError(f"OpenGauss adapter only supports PathScope depth 0/1/-1, got {expr.depth}")
+            raise ValueError(
+                f"OpenGauss adapter only supports PathScope depth 0/1/-1, got {expr.depth}"
+            )
         raise TypeError(f"Unsupported filter expr type: {type(expr)!r}")

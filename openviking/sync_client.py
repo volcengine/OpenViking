@@ -404,10 +404,20 @@ class SyncOpenViking:
         case_insensitive: bool = False,
         node_limit: Optional[int] = None,
         exclude_uri: Optional[str] = None,
+        level_limit: int = 5,
+        remote_return_limit: int = 0,
     ) -> Dict:
         """Content search"""
         return run_async(
-            self._async_client.grep(uri, pattern, case_insensitive, node_limit, exclude_uri)
+            self._async_client.grep(
+                uri,
+                pattern,
+                case_insensitive,
+                node_limit,
+                exclude_uri,
+                level_limit,
+                remote_return_limit,
+            )
         )
 
     def glob(self, pattern: str, uri: str = "viking://") -> Dict:

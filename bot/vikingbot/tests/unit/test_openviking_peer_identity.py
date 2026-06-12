@@ -13,7 +13,7 @@ config_module.load_config = loader_module.load_config
 sys.modules.setdefault("vikingbot.config", config_module)
 sys.modules.setdefault("vikingbot.config.loader", loader_module)
 
-from vikingbot.openviking_mount.ov_server import VikingClient
+from vikingbot.openviking_mount.ov_server import VikingClient  # noqa: E402
 
 
 def _client(api_key_type: str = "user") -> VikingClient:
@@ -85,9 +85,7 @@ async def test_read_peer_profile_uses_explicit_user_namespace_for_root_key(monke
     profile = await client.read_peer_profile("telegram:alice")
 
     assert profile == "Alice profile"
-    assert calls == [
-        ("viking://user/bot-user/peers/telegram:alice/memories/profile.md", "read")
-    ]
+    assert calls == [("viking://user/bot-user/peers/telegram:alice/memories/profile.md", "read")]
 
 
 @pytest.mark.asyncio

@@ -3,7 +3,6 @@
 """SemanticProcessor: Processes messages from SemanticQueue, generates .abstract.md and .overview.md."""
 
 import asyncio
-import json
 import threading
 from contextlib import nullcontext
 from dataclasses import dataclass, field
@@ -13,16 +12,13 @@ from openviking.observability.context import (
     bind_root_observability_context,
     reset_root_observability_context,
 )
+from openviking.parse.image_rewrite import IMAGE_MAPPINGS_FILENAME, rewrite_image_uris
 from openviking.parse.parsers.constants import (
     CODE_EXTENSIONS,
     DOCUMENTATION_EXTENSIONS,
     FILE_TYPE_CODE,
     FILE_TYPE_DOCUMENTATION,
     FILE_TYPE_OTHER,
-)
-from openviking.parse.image_rewrite import (
-    IMAGE_MAPPINGS_FILENAME,
-    rewrite_image_uris,
 )
 from openviking.parse.parsers.media.utils import (
     generate_audio_summary,
@@ -989,9 +985,15 @@ class SemanticProcessor(DequeueHandlerBase):
                     d = d.rsplit("/", 1)[0]
 
             for rel in candidate_rels:
-                src_mapping = f"{root_prefix}/{rel}/{mapping_name}" if rel else f"{root_prefix}/{mapping_name}"
+                src_mapping = (
+                    f"{root_prefix}/{rel}/{mapping_name}"
+                    if rel
+                    else f"{root_prefix}/{mapping_name}"
+                )
                 target_mapping = (
-                    f"{target_prefix}/{rel}/{mapping_name}" if rel else f"{target_prefix}/{mapping_name}"
+                    f"{target_prefix}/{rel}/{mapping_name}"
+                    if rel
+                    else f"{target_prefix}/{mapping_name}"
                 )
                 try:
                     await viking_fs.stat(target_mapping, ctx=ctx)
@@ -1032,7 +1034,7 @@ class SemanticProcessor(DequeueHandlerBase):
         file_name: str,
         llm_sem: asyncio.Semaphore,
         ctx: Optional[RequestContext] = None,
-    ) -> Dict[str, str]:
+    ) -> Dict[str, Any]:
         """Generate summary for a single text file (code, documentation, or other text)."""
         viking_fs = get_viking_fs()
         vlm = get_openviking_config().vlm
@@ -1040,12 +1042,14 @@ class SemanticProcessor(DequeueHandlerBase):
 
         content = await viking_fs.read_file(file_path, ctx=active_ctx)
         if isinstance(content, bytes):
-            # Try to decode with error handling for text files
-            try:
-                content = content.decode("utf-8")
-            except UnicodeDecodeError:
-                logger.warning(f"Failed to decode file as UTF-8, skipping: {file_path}")
-                return {"name": file_name, "summary": ""}
+            from openviking.utils.embedding_utils import _decode_text_bytes
+
+            content = _decode_text_bytes(content)
+
+        full_content = content or ""
+
+        def result(summary: str) -> Dict[str, Any]:
+            return {"name": file_name, "summary": summary, "content": full_content}
 
         # Limit content length
         max_chars = get_openviking_config().semantic.max_file_content_chars
@@ -1055,7 +1059,7 @@ class SemanticProcessor(DequeueHandlerBase):
         # Generate summary
         if not vlm.is_available():
             logger.warning("VLM not available, using empty summary")
-            return {"name": file_name, "summary": ""}
+            return result("")
 
         from openviking.session.memory.utils.language import resolve_output_language
 
@@ -1077,7 +1081,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     if len(skeleton_text) > max_skeleton_chars:
                         skeleton_text = skeleton_text[:max_skeleton_chars]
                     if code_mode == "ast":
-                        return {"name": file_name, "summary": skeleton_text}
+                        return result(skeleton_text)
                     else:  # ast_llm
                         prompt = render_prompt(
                             "semantic.code_ast_summary",
@@ -1090,7 +1094,7 @@ class SemanticProcessor(DequeueHandlerBase):
                         async with llm_sem:
                             with bind_telemetry_stage("resource_summarize"):
                                 summary = await vlm.get_completion_async(prompt)
-                        return {"name": file_name, "summary": summary.strip()}
+                        return result(summary.strip())
                 if skeleton_text is None:
                     logger.info("AST unsupported language, fallback to LLM: %s", file_path)
                 else:
@@ -1104,7 +1108,7 @@ class SemanticProcessor(DequeueHandlerBase):
             async with llm_sem:
                 with bind_telemetry_stage("resource_summarize"):
                     summary = await vlm.get_completion_async(prompt)
-            return {"name": file_name, "summary": summary.strip()}
+            return result(summary.strip())
 
         elif file_type == FILE_TYPE_DOCUMENTATION:
             prompt_id = "semantic.document_summary"
@@ -1119,21 +1123,22 @@ class SemanticProcessor(DequeueHandlerBase):
         async with llm_sem:
             with bind_telemetry_stage("resource_summarize"):
                 summary = await vlm.get_completion_async(prompt)
-        return {"name": file_name, "summary": summary.strip()}
+        return result(summary.strip())
 
     async def _generate_single_file_summary(
         self,
         file_path: str,
         llm_sem: Optional[asyncio.Semaphore] = None,
         ctx: Optional[RequestContext] = None,
-    ) -> Dict[str, str]:
+    ) -> Dict[str, Any]:
         """Generate summary for a single file.
 
         Args:
             file_path: File path
 
         Returns:
-            {"name": file_name, "summary": summary_content}
+            {"name": file_name, "summary": summary_content}; text files also carry
+            decoded "content" so vectorization can avoid re-reading the same file.
         """
         file_name = file_path.split("/")[-1]
         llm_sem = llm_sem or asyncio.Semaphore(self.max_concurrent_llm)

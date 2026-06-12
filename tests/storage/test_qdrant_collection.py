@@ -11,8 +11,8 @@ import openviking.storage.vectordb.collection.qdrant_collection as qdrant_collec
 from openviking.storage.vectordb.collection.qdrant_collection import (
     ORIGINAL_ID_FIELD,
     QdrantCollection,
-    _to_qdrant_point_id,
     _sparse_to_qdrant,
+    _to_qdrant_point_id,
 )
 from openviking.storage.vectordb.collection.qdrant_rest import QdrantRestError
 

@@ -748,6 +748,8 @@ class AsyncHTTPClient(BaseClient):
         case_insensitive: bool = False,
         node_limit: Optional[int] = None,
         exclude_uri: Optional[str] = None,
+        level_limit: int = 5,
+        remote_return_limit: int = 0,
     ) -> Dict[str, Any]:
         """Content search with pattern."""
         uri = VikingURI.normalize(uri)
@@ -755,6 +757,8 @@ class AsyncHTTPClient(BaseClient):
             "uri": uri,
             "pattern": pattern,
             "case_insensitive": case_insensitive,
+            "level_limit": level_limit,
+            "remote_return_limit": remote_return_limit,
         }
         if node_limit is not None:
             request_json["node_limit"] = node_limit

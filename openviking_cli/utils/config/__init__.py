@@ -50,6 +50,7 @@ from .consts import (
     SYSTEM_CONFIG_DIR,
 )
 from .embedding_config import EmbeddingConfig
+from .grep_config import GrepConfig, GrepEngine
 from .log_config import LogConfig
 from .open_viking_config import (
     OpenVikingConfig,
@@ -129,6 +130,8 @@ __all__ = [
     "OpenVikingConfig",
     "OpenVikingConfigSingleton",
     "OVCLIConfig",
+    "GrepConfig",
+    "GrepEngine",
     "RerankConfig",
     "RetrievalConfig",
     "StorageConfig",
