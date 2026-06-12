@@ -210,6 +210,24 @@
       "help": "Log tenant routing: /search/find + session messages/commit (X-OpenViking-*; not apiKey). Or set env OPENVIKING_LOG_ROUTING=1 or OPENVIKING_DEBUG=1.",
       "advanced": true
     },
+    "traceRecall": {
+      "label": "Trace Recall",
+      "placeholder": "false",
+      "help": "Enable best-effort recall trace recording for debugging recall and search decisions.",
+      "advanced": true
+    },
+    "traceRecallPersist": {
+      "label": "Persist Recall Trace",
+      "placeholder": "false",
+      "help": "Persist recall traces to local JSONL files. Disabled by default.",
+      "advanced": true
+    },
+    "traceRecallDir": {
+      "label": "Recall Trace Directory",
+      "placeholder": "~/.openclaw/openviking/recall-traces",
+      "help": "Directory for persisted recall trace JSONL files.",
+      "advanced": true
+    },
     "enableAddResourceTool": {
       "label": "Enable Add Resource Tool",
       "placeholder": "false",
@@ -344,6 +362,56 @@
         "type": "boolean"
       },
       "logFindRequests": {
+        "type": "boolean"
+      },
+      "traceRecall": {
+        "type": "boolean"
+      },
+      "traceRecallPersist": {
+        "type": "boolean"
+      },
+      "traceRecallDir": {
+        "type": "string"
+      },
+      "traceRecallRetentionDays": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 3650
+      },
+      "traceRecallLoadRecentDays": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 3650
+      },
+      "traceRecallMaxEntries": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 1000000
+      },
+      "traceRecallMaxResultsPerSearch": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 1000
+      },
+      "traceRecallPreviewChars": {
+        "type": "number",
+        "minimum": 20,
+        "maximum": 10000
+      },
+      "traceRecallQueryMaxChars": {
+        "type": "number",
+        "minimum": 200,
+        "maximum": 200000
+      },
+      "traceRecallQueryMaxDays": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 3650
+      },
+      "traceRecallIncludeContentByDefault": {
+        "type": "boolean"
+      },
+      "traceRecallIncludeRawUserPreview": {
         "type": "boolean"
       },
       "enableAddResourceTool": {
