@@ -93,8 +93,9 @@ enabled: true
 # upsert 表示新增或更新（默认行为）
 operation_mode: "add_only"
 content_template: |
-  Summary: {{ summary }}
-  {{extract_context.get_first_message_time_with_weekday_from_ranges(ranges|default(''))|default('N/A')}} ChatLog:
+  # Summary
+  {{ summary }}
+  # {{extract_context.get_first_message_time_with_weekday_from_ranges(ranges|default(''))|default('N/A')}} ChatLog
   {{ extract_context.get_event_content(ranges, summary, 0) }}
 embedding_template: |-
   EventName: {{ event_name }}
