@@ -38,6 +38,7 @@ export type RecallTraceEntry = {
     resourceType: RecallResourceType | "archive";
     targetUriInput?: string;
     targetUriResolved?: string;
+    contextType?: "memory" | "resource" | "skill" | Array<"memory" | "resource" | "skill">;
     limit: number;
     scoreThreshold?: number;
     durationMs: number;
@@ -140,23 +141,57 @@ export function normalizeResourceTypes(value: unknown): RecallResourceType[] {
 
 export function resolveRecallSearchPlan(
   resourceTypes: unknown,
-  _ctx: { ovSessionId?: string; agentId?: string },
+  ctx: { ovSessionId?: string; agentId?: string; peerId?: string },
 ): {
   resourceTypes: RecallResourceType[];
-  searches: Array<{ resourceType: RecallResourceType; targetUri: string }>;
+  searches: Array<{
+    resourceType: RecallResourceType;
+    targetUri: string;
+    contextType?: "memory" | "resource" | "skill" | Array<"memory" | "resource" | "skill">;
+    includePeerId?: boolean;
+  }>;
   skipped: Array<{ resourceType: RecallResourceType; reason: "missing_session" }>;
 } {
   const normalized = normalizeResourceTypes(resourceTypes);
-  const searches: Array<{ resourceType: RecallResourceType; targetUri: string }> = [];
+  const searches: Array<{
+    resourceType: RecallResourceType;
+    targetUri: string;
+    contextType?: "memory" | "resource" | "skill" | Array<"memory" | "resource" | "skill">;
+    includePeerId?: boolean;
+  }> = [];
   const skipped: Array<{ resourceType: RecallResourceType; reason: "missing_session" }> = [];
+  const wantsUser = normalized.includes("user");
+  const wantsAgent = normalized.includes("agent");
+  const wantsResource = normalized.includes("resource");
 
-  for (const resourceType of normalized) {
-    if (resourceType === "resource") {
-      searches.push({ resourceType, targetUri: "viking://resources" });
-    } else if (resourceType === "user") {
-      searches.push({ resourceType, targetUri: "viking://user/memories" });
-    } else if (resourceType === "agent") {
-      searches.push({ resourceType, targetUri: "viking://agent/memories" });
+  const contextTypes: Array<"memory" | "resource"> = [];
+  if (wantsUser || wantsAgent) contextTypes.push("memory");
+  if (wantsResource) contextTypes.push("resource");
+
+  if (contextTypes.length > 0 && (wantsUser || wantsResource) && (!wantsAgent || wantsUser || wantsResource)) {
+    searches.push({
+      resourceType: wantsResource && !wantsUser && !wantsAgent ? "resource" : "user",
+      targetUri: "",
+      contextType: contextTypes.length === 1 ? contextTypes[0] : contextTypes,
+      includePeerId: wantsAgent,
+    });
+  }
+
+  if (wantsAgent && !wantsUser && !wantsResource) {
+    if (ctx.peerId) {
+      searches.push({
+        resourceType: "agent",
+        targetUri: `viking://user/peers/${ctx.peerId}/memories`,
+        contextType: "memory",
+        includePeerId: false,
+      });
+    } else {
+      searches.push({
+        resourceType: "agent",
+        targetUri: "",
+        contextType: "memory",
+        includePeerId: true,
+      });
     }
   }
 

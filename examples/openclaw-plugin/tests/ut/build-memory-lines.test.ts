@@ -317,7 +317,8 @@ describe("buildLongTermMemoryRecallContext trace", () => {
     expect(recorded.searches).toHaveLength(1);
     expect(recorded.searches[0]).toMatchObject({
       resourceType: "user",
-      targetUriInput: "viking://user/memories",
+      targetUriInput: "",
+      contextType: "memory",
       total: 1,
     });
     expect(recorded.searches[0]!.results[0]).toMatchObject({
@@ -332,20 +333,18 @@ describe("buildLongTermMemoryRecallContext trace", () => {
     expect(recorded.stats.injectedCount).toBe(1);
   });
 
-  it("records search errors while still injecting successful recall hits", async () => {
+  it("records combined context type searches while still injecting successful recall hits", async () => {
     const cfg = makeCfg({ recallTargetTypes: ["user", "resource"] });
     const client = {
       healthCheck: vi.fn().mockResolvedValue(undefined),
-      find: vi.fn()
-        .mockRejectedValueOnce(new Error("user search failed"))
-        .mockResolvedValueOnce({
-          resources: [makeMemory({
-            uri: "viking://resources/backend-pref",
-            abstract: "Use TypeScript for this service.",
-            score: 0.88,
-          })],
-          total: 1,
-        }),
+      find: vi.fn().mockResolvedValue({
+        resources: [makeMemory({
+          uri: "viking://resources/backend-pref",
+          abstract: "Use TypeScript for this service.",
+          score: 0.88,
+        })],
+        total: 1,
+      }),
       read: vi.fn().mockResolvedValue("unused"),
     };
     const logger = { info: vi.fn(), warn: vi.fn() };
@@ -363,18 +362,20 @@ describe("buildLongTermMemoryRecallContext trace", () => {
 
     expect(result.section).toContain("Use TypeScript for this service.");
     const recorded = traces.query({ turn: "latest", sessionId: "session-err", limit: 10 }).entries[0]!;
-    expect(recorded.searches).toHaveLength(2);
+    expect(client.find).toHaveBeenCalledTimes(1);
+    expect(client.find.mock.calls[0]![1]).toMatchObject({
+      targetUri: "",
+      contextType: ["memory", "resource"],
+    });
+    expect(recorded.resourceTypes).toEqual(["user", "resource"]);
+    expect(recorded.searches).toHaveLength(1);
     expect(recorded.searches[0]).toMatchObject({
       resourceType: "user",
-      targetUriInput: "viking://user/memories",
-      error: "Error: user search failed",
-    });
-    expect(recorded.searches[1]).toMatchObject({
-      resourceType: "resource",
-      targetUriInput: "viking://resources",
+      targetUriInput: "",
+      contextType: ["memory", "resource"],
       total: 1,
     });
     expect(recorded.selected[0]).toMatchObject({ injected: true });
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("auto-recall search failed"));
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 });

@@ -454,17 +454,21 @@ export class OpenVikingClient {
   async find(
     query: string,
     options: {
-      targetUri: string;
+      targetUri?: string;
+      contextType?: "memory" | "resource" | "skill" | Array<"memory" | "resource" | "skill">;
       limit?: number;
       scoreThreshold?: number;
       peerId?: string;
     },
     agentId?: string,
   ): Promise<FindResult> {
-    const normalizedTargetUri = await this.normalizeTargetUri(options.targetUri, agentId);
+    const normalizedTargetUri = options.targetUri
+      ? await this.normalizeTargetUri(options.targetUri, agentId)
+      : "";
     const body: {
       query: string;
       target_uri: string;
+      context_type?: "memory" | "resource" | "skill" | Array<"memory" | "resource" | "skill">;
       limit?: number;
       score_threshold?: number;
       peer_id?: string;
@@ -474,6 +478,9 @@ export class OpenVikingClient {
       limit: options.limit,
       score_threshold: options.scoreThreshold,
     };
+    if (options.contextType) {
+      body.context_type = options.contextType;
+    }
     if (options.peerId) {
       body.peer_id = options.peerId;
     }
@@ -488,7 +495,8 @@ export class OpenVikingClient {
           X_OpenViking_User: tenantHeaders.userId ?? null,
           resolved_user_id: identity.userId,
           target_uri: normalizedTargetUri,
-          target_uri_input: options.targetUri,
+          target_uri_input: options.targetUri ?? "",
+          context_type: body.context_type ?? null,
           peer_id: options.peerId ?? null,
           query:
             query.length > 4000

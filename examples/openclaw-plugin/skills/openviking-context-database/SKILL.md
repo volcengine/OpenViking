@@ -150,7 +150,7 @@ Delete a memory.
 
 | Parameter | Required | Description |
 |---|---|---|
-| `uri` | No | Exact `viking://user/.../memories/...` or `viking://agent/.../memories/...` memory URI. Non-memory URIs are refused. |
+| `uri` | No | Exact `viking://user/.../memories/...` or `viking://user/.../peers/{peerId}/memories/...` memory URI. Non-memory URIs are refused. |
 | `query` | No | Search query when `uri` is unknown. |
 | `targetUri` | No | Search scope URI, default `targetUri`. |
 | `limit` | No | Search limit, default `5`. |

@@ -539,14 +539,16 @@ export async function buildLongTermMemoryRecallContext(params: {
       const searchPlan = resolveRecallSearchPlan(cfg.recallTargetTypes, {
         ovSessionId: params.ovSessionId,
         agentId,
+        peerId,
       });
       const autoRecallPromises = searchPlan.searches.map(async (search) => {
         const started = Date.now();
         const result = await client.find(queryText, {
           targetUri: search.targetUri,
+          contextType: search.contextType,
           limit: candidateLimit,
           scoreThreshold: 0,
-          peerId,
+          peerId: search.includePeerId === false ? undefined : peerId,
         }, agentId);
         return {
           search,
@@ -578,6 +580,7 @@ export async function buildLongTermMemoryRecallContext(params: {
             resourceType: s.value.search.resourceType,
             targetUriInput: s.value.search.targetUri,
             targetUriResolved: s.value.search.targetUri,
+            contextType: s.value.search.contextType,
             limit: candidateLimit,
             scoreThreshold: 0,
             durationMs: s.value.durationMs,
@@ -602,6 +605,7 @@ export async function buildLongTermMemoryRecallContext(params: {
             resourceType: search.resourceType,
             targetUriInput: search.targetUri,
             targetUriResolved: search.targetUri,
+            contextType: search.contextType,
             limit: candidateLimit,
             scoreThreshold: 0,
             durationMs: 0,

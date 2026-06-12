@@ -79,23 +79,38 @@ describe("resolveRecallSearchPlan()", () => {
     });
 
     expect(plan.searches).toEqual([
-      { resourceType: "user", targetUri: "viking://user/memories" },
-      { resourceType: "agent", targetUri: "viking://agent/memories" },
+      { resourceType: "user", targetUri: "", contextType: "memory", includePeerId: true },
     ]);
     expect(plan.skipped).toEqual([]);
     expect(plan.resourceTypes).toEqual(["user", "agent"]);
   });
 
-  it("builds resource/user/agent searches only when explicitly requested", () => {
+  it("uses context type filters for resource/user/agent searches", () => {
     const plan = resolveRecallSearchPlan(["resource", "user", "agent"], {
       ovSessionId: "ov-session-1",
       agentId: "agent-1",
+      peerId: "agent-1",
     });
 
     expect(plan.searches).toEqual([
-      { resourceType: "resource", targetUri: "viking://resources" },
-      { resourceType: "user", targetUri: "viking://user/memories" },
-      { resourceType: "agent", targetUri: "viking://agent/memories" },
+      { resourceType: "user", targetUri: "", contextType: ["memory", "resource"], includePeerId: true },
+    ]);
+    expect(plan.skipped).toEqual([]);
+  });
+
+  it("uses the current-user peer namespace for explicit agent-only recall", () => {
+    const plan = resolveRecallSearchPlan(["agent"], {
+      agentId: "agent-1",
+      peerId: "agent-1",
+    });
+
+    expect(plan.searches).toEqual([
+      {
+        resourceType: "agent",
+        targetUri: "viking://user/peers/agent-1/memories",
+        contextType: "memory",
+        includePeerId: false,
+      },
     ]);
     expect(plan.skipped).toEqual([]);
   });

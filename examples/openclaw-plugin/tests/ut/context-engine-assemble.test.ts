@@ -201,6 +201,68 @@ describe("context-engine assemble()", () => {
     expect(recorded.resourceTypes).toEqual(["user"]);
   });
 
+  it("uses user and agent auto-recall targets by default during transformContext", async () => {
+    const traces = new RecallTraceMemoryStore(10);
+    const { engine, client } = makeEngine(
+      {
+        latest_archive_overview: "unused",
+        pre_archive_abstracts: [],
+        messages: [],
+        estimatedTokens: 0,
+        stats: makeStats(),
+      },
+      {
+        traceRecorder: traces,
+        cfgOverrides: {
+          autoRecall: true,
+          recallPreferAbstract: true,
+        },
+      },
+    );
+    client.find.mockImplementation(async (_query: string, options: { targetUri?: string; contextType?: string; peerId?: string }) => {
+      if (!options.targetUri && options.contextType === "memory") {
+        return {
+          memories: [
+            {
+              uri: "viking://user/default/memories/gateway-docs",
+              context_type: "memory",
+              level: 2,
+              category: "memory",
+              abstract: "Gateway plugin docs live in the user memory store.",
+              score: 0.9,
+            },
+          ],
+          total: 1,
+        };
+      }
+      throw new Error(`unexpected auto-recall target: ${options.targetUri ?? "none"} contextType=${options.contextType ?? "none"} peerId=${options.peerId ?? "none"}`);
+    });
+
+    await engine.assemble({
+      sessionId: "session-transform-default-targets",
+      messages: [{ role: "user", content: "where are the gateway plugin docs?" }],
+    });
+
+    expect(client.find.mock.calls).toHaveLength(1);
+    expect(client.find.mock.calls[0]![1]).toMatchObject({
+      targetUri: "",
+      contextType: "memory",
+    });
+    expect(client.find.mock.calls[0]![1].peerId).toBeUndefined();
+
+    const recorded = traces.query({
+      turn: "latest",
+      sessionId: "session-transform-default-targets",
+      limit: 10,
+    }).entries[0]!;
+    expect(recorded.resourceTypes).toEqual(["user", "agent"]);
+    expect(recorded.searches).toHaveLength(1);
+    expect(recorded.searches[0]).toMatchObject({
+      targetUriResolved: "",
+      contextType: "memory",
+    });
+  });
+
   it("passes sender peer_id to transformContext auto-recall when peer_role is person", async () => {
     vi.stubGlobal(
       "fetch",
@@ -238,10 +300,12 @@ describe("context-engine assemble()", () => {
         messages: sourceMessages,
       });
 
-      expect(client.find).toHaveBeenCalledTimes(2);
-      for (const call of client.find.mock.calls) {
-        expect(call[1]).toMatchObject({ peerId: "wx_user-01_abc" });
-      }
+      expect(client.find).toHaveBeenCalledTimes(1);
+      expect(client.find.mock.calls[0]![1]).toMatchObject({
+        targetUri: "",
+        contextType: "memory",
+        peerId: "wx_user-01_abc",
+      });
     } finally {
       vi.unstubAllGlobals();
     }
@@ -415,10 +479,12 @@ describe("context-engine assemble()", () => {
         messages: sourceMessages,
       });
 
-      expect(client.find).toHaveBeenCalledTimes(2);
-      for (const call of client.find.mock.calls) {
-        expect(call[1]).toMatchObject({ peerId: "agent:session-assistant-peer" });
-      }
+      expect(client.find).toHaveBeenCalledTimes(1);
+      expect(client.find.mock.calls[0]![1]).toMatchObject({
+        targetUri: "",
+        contextType: "memory",
+        peerId: "agent:session-assistant-peer",
+      });
     } finally {
       vi.unstubAllGlobals();
     }

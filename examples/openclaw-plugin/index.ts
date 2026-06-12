@@ -1695,6 +1695,7 @@ const contextEnginePlugin = {
 
           let result: FindResult;
           let memoryRecallSearches: RecallTraceEntry["searches"] = [];
+          let plannedResourceTypes: RecallResourceType[] | undefined;
           if (targetUri) {
             // 如果指定了目标 URI，只检索该位置
             const started = Date.now();
@@ -1727,7 +1728,9 @@ const contextEnginePlugin = {
             const searchPlan = resolveRecallSearchPlan(requestedResourceTypes ?? cfg.recallTargetTypes, {
               ovSessionId: session.ovSessionId,
               agentId: session.agentId,
+              peerId,
             });
+            plannedResourceTypes = searchPlan.resourceTypes;
             memoryRecallSearches.push(...searchPlan.skipped.map((skipped) => ({
               resourceType: skipped.resourceType,
               limit: requestLimit,
@@ -1742,9 +1745,10 @@ const contextEnginePlugin = {
                 query,
                 {
                   targetUri: search.targetUri,
+                  contextType: search.contextType,
                   limit: requestLimit,
                   scoreThreshold: 0,
-                  peerId,
+                  peerId: search.includePeerId === false ? undefined : peerId,
                 },
                 session.agentId,
               ),
@@ -1765,6 +1769,7 @@ const contextEnginePlugin = {
                   resourceType: search.resourceType,
                   targetUriInput: search.targetUri,
                   targetUriResolved: search.targetUri,
+                  contextType: search.contextType,
                   limit: requestLimit,
                   scoreThreshold,
                   durationMs: 0,
@@ -1776,6 +1781,7 @@ const contextEnginePlugin = {
                   resourceType: search.resourceType,
                   targetUriInput: search.targetUri,
                   targetUriResolved: search.targetUri,
+                  contextType: search.contextType,
                   limit: requestLimit,
                   scoreThreshold,
                   durationMs: 0,
@@ -1805,7 +1811,7 @@ const contextEnginePlugin = {
             .map((item) => toTraceResult(item, inferRecallResourceType(item.uri) === "resource" ? "resource" : "memory"))
             .slice(0, cfg.traceRecallMaxResultsPerSearch);
           const traceResourceTypes = [...new Set(
-            (targetUri ? [inferRecallResourceType(targetUri)] : memoryRecallSearches.map((search) => search.resourceType))
+            (targetUri ? [inferRecallResourceType(targetUri)] : plannedResourceTypes ?? memoryRecallSearches.map((search) => search.resourceType))
               .filter((resourceType): resourceType is RecallResourceType => Boolean(resourceType) && resourceType !== "archive"),
           )];
           const recordMemoryRecallTrace = async (injectedUris: Set<string>) => {
