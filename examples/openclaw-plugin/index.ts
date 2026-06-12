@@ -1728,16 +1728,6 @@ const contextEnginePlugin = {
                 },
                 session.agentId,
               ),
-              recallClient.find(
-                query,
-                {
-                  targetUri: "viking://user/memories",
-                  limit: requestLimit,
-                  scoreThreshold: 0,
-                  peerId,
-                },
-                session.agentId,
-              ),
             ];
             if (cfg.recallResources) {
               searchPromises.push(
@@ -1756,7 +1746,6 @@ const contextEnginePlugin = {
             const settled = await Promise.allSettled(searchPromises);
             const allMemories: FindResultItem[] = [];
             const targetUris = [
-              "viking://user/memories",
               "viking://user/memories",
               ...(cfg.recallResources ? ["viking://resources"] : []),
             ];
