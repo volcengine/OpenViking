@@ -109,6 +109,13 @@ async def _root_exists(viking_fs, root_uri: str, ctx: RequestContext) -> bool:
         return False
 
 
+async def _ensure_parent_exists(viking_fs, parent: str, ctx: RequestContext) -> None:
+    try:
+        await viking_fs.stat(parent, ctx=ctx)
+    except Exception:
+        await viking_fs.mkdir(parent, ctx=ctx)
+
+
 async def _remove_existing_root(viking_fs, root_uri: str, ctx: RequestContext) -> None:
     if not hasattr(viking_fs, "rm"):
         logger.warning(f"[ovpack] Cannot remove existing resource without rm(): {root_uri}")
@@ -325,7 +332,7 @@ async def import_ovpack(
                 vector_mode=vector_action_mode,
             )
         if parent != "viking://":
-            await viking_fs.ensure_parent_exists(parent, ctx)
+            await _ensure_parent_exists(viking_fs, parent, ctx)
 
         for existing_root in existing_roots:
             logger.info(f"[ovpack] Overwriting existing resource at {existing_root}")

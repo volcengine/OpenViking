@@ -113,11 +113,26 @@ class TreeBuilder:
             effective_parent_uri = effective_parent_uri.rstrip("/")
         if effective_parent_uri:
             viking_fs = get_viking_fs()
-            await viking_fs.ensure_parent_exists(
-                effective_parent_uri,
-                ctx,
-                create_parent=create_parent,
-            )
+            try:
+                parent_exists = await viking_fs.exists(effective_parent_uri, ctx=ctx)
+                if not parent_exists:
+                    if create_parent:
+                        logger.info(
+                            f"[TreeBuilder] Parent URI does not exist, creating: {effective_parent_uri}"
+                        )
+                        await viking_fs.mkdir(effective_parent_uri, exist_ok=True, ctx=ctx)
+                    else:
+                        raise FileNotFoundError(
+                            f"Parent URI does not exist: {effective_parent_uri}. "
+                            f"Use --parent-auto-create/-p to automatically create it."
+                        )
+                stat_result = await viking_fs.stat(effective_parent_uri, ctx=ctx)
+            except FileNotFoundError:
+                raise
+            except Exception as e:
+                raise FileNotFoundError(f"Parent URI does not exist: {effective_parent_uri}") from e
+            if not stat_result.get("isDir"):
+                raise ValueError(f"Parent URI is not a directory: {effective_parent_uri}")
             base_uri = effective_parent_uri
 
         planned_uri = VikingURI(base_uri).join(final_doc_name).uri

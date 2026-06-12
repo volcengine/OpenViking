@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from pathlib import PurePath
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
-from openviking.core.namespace import canonicalize_uri, is_content_namespace_root_uri
+from openviking.core.namespace import canonicalize_uri
 from openviking.core.namespace import (
     is_accessible as namespace_is_accessible,
 )
@@ -287,32 +287,6 @@ class VikingFS:
             yield
         finally:
             self._bound_ctx.reset(token)
-
-    async def ensure_parent_exists(
-        self,
-        parent: str,
-        ctx: RequestContext,
-        *,
-        create_parent: bool = True,
-    ) -> None:
-        try:
-            stat_result = await self.stat(parent, ctx=ctx)
-        except Exception as exc:
-            if not isinstance(exc, (FileNotFoundError, NotFoundError)) and not is_not_found_error(
-                exc
-            ):
-                raise
-            if create_parent or is_content_namespace_root_uri(parent, ctx):
-                await self.mkdir(parent, exist_ok=True, ctx=ctx)
-                stat_result = await self.stat(parent, ctx=ctx)
-            else:
-                raise FileNotFoundError(
-                    f"Parent URI does not exist: {parent}. "
-                    "Use --parent-auto-create/-p to automatically create it."
-                ) from exc
-
-        if not stat_result.get("isDir"):
-            raise InvalidArgumentError(f"Parent URI is not a directory: {parent}")
 
     @staticmethod
     def _normalize_uri(uri: str) -> str:
