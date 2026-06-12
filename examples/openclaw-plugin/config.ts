@@ -72,7 +72,7 @@ export type MemoryOpenVikingConfig = {
   /** Whether raw user text preview may be persisted. Default false. */
   traceRecallIncludeRawUserPreview?: boolean;
   /** Auto-recall target resource types. Empty means the backward-compatible memory recall set. */
-  recallTargetTypes?: Array<"resource" | "session" | "user" | "agent"> | string;
+  recallTargetTypes?: Array<"resource" | "user" | "agent"> | string;
   /** Agent-visible add_resource tool is disabled by default; manual /add-resource remains available. */
   enableAddResourceTool?: boolean;
   /** Agent-visible tool allowlist. Supports exact tool names or groups such as "memory" and "resource_query". */
@@ -120,7 +120,7 @@ const DEFAULT_TRACE_RECALL_MAX_RESULTS_PER_SEARCH = 20;
 const DEFAULT_TRACE_RECALL_PREVIEW_CHARS = 240;
 const DEFAULT_TRACE_RECALL_QUERY_MAX_CHARS = 4000;
 const DEFAULT_TRACE_RECALL_QUERY_MAX_DAYS = 14;
-const ALLOWED_RECALL_TARGET_TYPES = ["resource", "session", "user", "agent"] as const;
+const ALLOWED_RECALL_TARGET_TYPES = ["resource", "user", "agent"] as const;
 const DEFAULT_RECALL_TARGET_TYPES = ["user", "agent"] as const;
 type RecallTargetType = typeof ALLOWED_RECALL_TARGET_TYPES[number];
 export const OPENVIKING_ADD_RESOURCE_TOOL_NAME = "add_resource" as const;
@@ -697,7 +697,7 @@ export const memoryOpenVikingConfigSchema = {
     recallTargetTypes: {
       label: "Recall Target Types",
       placeholder: "user,agent",
-      help: "Comma-separated auto-recall and default memory_recall targets: user, agent, session, resource. Replaces recallResources for new configs.",
+      help: "Comma-separated auto-recall and default memory_recall targets: user, agent, resource. Session history is available through ov_archive_search and ov_archive_expand.",
       advanced: true,
     },
     recallLimit: {

@@ -86,30 +86,24 @@ describe("resolveRecallSearchPlan()", () => {
     expect(plan.resourceTypes).toEqual(["user", "agent"]);
   });
 
-  it("builds session/user/agent searches only when explicitly requested", () => {
-    const plan = resolveRecallSearchPlan(["resource", "session", "user", "agent"], {
+  it("builds resource/user/agent searches only when explicitly requested", () => {
+    const plan = resolveRecallSearchPlan(["resource", "user", "agent"], {
       ovSessionId: "ov-session-1",
       agentId: "agent-1",
     });
 
     expect(plan.searches).toEqual([
       { resourceType: "resource", targetUri: "viking://resources" },
-      { resourceType: "session", targetUri: "viking://user/sessions/ov-session-1/history" },
       { resourceType: "user", targetUri: "viking://user/memories" },
       { resourceType: "agent", targetUri: "viking://agent/memories" },
     ]);
+    expect(plan.skipped).toEqual([]);
   });
 
-  it("skips session search without failing the whole plan when ovSessionId is missing", () => {
-    const plan = resolveRecallSearchPlan(["session", "user"], { agentId: "agent-1" });
-
-    expect(plan.searches).toEqual([
-      { resourceType: "user", targetUri: "viking://user/memories" },
-    ]);
-    expect(plan.skipped).toEqual([
-      { resourceType: "session", reason: "missing_session" },
-    ]);
-    expect(plan.resourceTypes).toEqual(["session", "user"]);
+  it("rejects session as a semantic recall target", () => {
+    expect(() => resolveRecallSearchPlan(["session", "user"], { agentId: "agent-1" })).toThrow(
+      "invalid resourceTypes: session",
+    );
   });
 });
 

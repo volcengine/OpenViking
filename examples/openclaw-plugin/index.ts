@@ -1657,7 +1657,7 @@ const contextEnginePlugin = {
             Type.String({ description: "Search scope URI (default: plugin config)" }),
           ),
           resourceTypes: Type.Optional(
-            Type.Array(Type.String({ description: "resource, session, user, or agent; used when targetUri is omitted" })),
+            Type.Array(Type.String({ description: "resource, user, or agent; used when targetUri is omitted. Use ov_archive_search/ov_archive_expand for session history." })),
           ),
         }),
         async execute(_toolCallId: string, params: Record<string, unknown>) {
@@ -1915,7 +1915,7 @@ const contextEnginePlugin = {
           sessionKey: Type.Optional(Type.String({ description: "OpenClaw session key" })),
           ovSessionId: Type.Optional(Type.String({ description: "OpenViking session id" })),
           source: Type.Optional(Type.String({ description: "auto_recall, memory_recall, ov_search, or ov_archive_search" })),
-          resourceTypes: Type.Optional(Type.Array(Type.String({ description: "resource, session, user, or agent" }))),
+          resourceTypes: Type.Optional(Type.Array(Type.String({ description: "resource, user, or agent" }))),
           since: Type.Optional(Type.Number({ description: "Unix timestamp lower bound in milliseconds" })),
           until: Type.Optional(Type.Number({ description: "Unix timestamp upper bound in milliseconds" })),
           includeContent: Type.Optional(Type.Boolean({ description: "Read selected/displayed URI content previews on demand" })),

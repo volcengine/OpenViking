@@ -79,8 +79,8 @@ const CONFIG_KEYS_TO_PRESERVE = [
 ] as const;
 
 type PeerRole = "none" | "assistant" | "person";
-type RecallTargetType = "resource" | "session" | "user" | "agent";
-const ALLOWED_RECALL_TARGET_TYPES = ["resource", "session", "user", "agent"] as const;
+type RecallTargetType = "resource" | "user" | "agent";
+const ALLOWED_RECALL_TARGET_TYPES = ["resource", "user", "agent"] as const;
 
 type CommandProgram = {
   command: (name: string) => CommandBuilder;
@@ -581,7 +581,7 @@ export function registerSetupCli(api: any): void {
         .option("--peer-prefix <prefix>", "Prefix for assistant peer_id values")
         .option("--account-id <id>", "Account ID (required for root API keys)")
         .option("--user-id <id>", "User ID (required for root API keys)")
-        .option("--recall-target-types <types>", "Comma-separated recall target types: user, agent, session, resource")
+        .option("--recall-target-types <types>", "Comma-separated recall target types: user, agent, resource")
         .option("--allow-offline", "Allow config write even if server is unreachable")
         .option("--force-slot", "Replace existing contextEngine slot even if owned by another plugin")
         .option("--json", "Output result as JSON (machine-readable)")
