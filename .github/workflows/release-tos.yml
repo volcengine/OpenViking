@@ -110,6 +110,10 @@ jobs:
             case "${content_type}" in
               text/*) extra_args+=(--content-disposition "inline") ;;
             esac
+            # s3:// source = server-side CopyObject; REPLACE re-applies metadata
+            case "${src}" in
+              s3://*) extra_args+=(--metadata-directive REPLACE) ;;
+            esac
 
             aws s3 cp "${src}" "s3://${TOS_BUCKET}/${key}" \
               --endpoint-url "https://${TOS_S3_ENDPOINT}" \
@@ -130,9 +134,10 @@ jobs:
           upload "${CLAUDE_INSTALL}" "releases/${RELEASE_TAG}/claude-code-memory-plugin/install.sh" "${SHELL_CONTENT_TYPE}" "${IMMUTABLE_CACHE_CONTROL}"
           upload "${CODEX_INSTALL}" "releases/${RELEASE_TAG}/codex-memory-plugin/install.sh" "${SHELL_CONTENT_TYPE}" "${IMMUTABLE_CACHE_CONTROL}"
 
-          # Stable paths, overwritten on every release
+          # Stable paths, overwritten on every release. The zip is copied
+          # server-side from the versioned key instead of re-transferring it.
           if [ "${UPDATE_LATEST}" = "true" ]; then
-            upload "${SOURCE_ZIP}" "releases/latest/openviking-source.zip" "${ZIP_CONTENT_TYPE}" "${NO_CACHE_CONTROL}"
+            upload "s3://${TOS_BUCKET}/releases/${RELEASE_TAG}/openviking-${RELEASE_TAG}-source.zip" "releases/latest/openviking-source.zip" "${ZIP_CONTENT_TYPE}" "${NO_CACHE_CONTROL}"
             upload "${CLAUDE_INSTALL}" "claude-code-memory-plugin/install.sh" "${SHELL_CONTENT_TYPE}" "${NO_CACHE_CONTROL}"
             upload "${CODEX_INSTALL}" "codex-memory-plugin/install.sh" "${SHELL_CONTENT_TYPE}" "${NO_CACHE_CONTROL}"
           else
