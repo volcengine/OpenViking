@@ -239,7 +239,7 @@ describe("Tool: memory_recall (registration)", () => {
     const findCalls = fetchMock.mock.calls.filter(([calledUrl]) =>
       String(calledUrl).includes("/api/v1/search/find")
     );
-    expect(findCalls).toHaveLength(2);
+    expect(findCalls).toHaveLength(1);
     for (const [, init] of findCalls) {
       const body = JSON.parse(String((init as RequestInit).body));
       expect(body.limit).toBe(20);
@@ -276,7 +276,7 @@ describe("Tool: memory_recall (registration)", () => {
     const findBodies = fetchMock.mock.calls
       .filter(([calledUrl]) => String(calledUrl).includes("/api/v1/search/find"))
       .map((call) => JSON.parse(String((call[1] as RequestInit).body)));
-    expect(findBodies).toHaveLength(2);
+    expect(findBodies).toHaveLength(1);
     for (const body of findBodies) {
       expect(body.peer_id).toBe("wx_user-01_abc");
     }
@@ -1275,6 +1275,64 @@ describe("Tool: ov_search (behavioral)", () => {
 
     expect(entry.trigger.query).toHaveLength(200);
     expect(entry.trigger.queryTruncated).toBe(true);
+  });
+
+  it("records explicit memory_recall traces without duplicate default searches", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const requestUrl = new URL(url);
+      if (requestUrl.pathname === "/api/v1/system/status") {
+        return okResponse({ user: "default" });
+      }
+      if (requestUrl.pathname === "/api/v1/search/find") {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        return okResponse({
+          memories: [makeMemory({
+            uri: `${body.target_uri}/backend-pref`,
+            abstract: "Backend preference",
+            score: 0.91,
+          })],
+          resources: [],
+          skills: [],
+          total: 1,
+        });
+      }
+      if (requestUrl.pathname === "/api/v1/content/read") {
+        return okResponse("Full backend memory content");
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { factoryTools, api } = setupPlugin(undefined, { traceRecall: true });
+    contextEnginePlugin.register(api as any);
+    const recall = factoryTools.get("memory_recall")!({ sessionId: "test-session", agentId: "main" });
+    await recall.execute("tc-recall", { query: "backend preference", limit: 1, scoreThreshold: 0.2 });
+
+    const findBodies = fetchMock.mock.calls
+      .filter(([calledUrl]) => String(calledUrl).includes("/api/v1/search/find"))
+      .map(([, fetchInit]) => JSON.parse(String((fetchInit as RequestInit).body)));
+    expect(findBodies).toHaveLength(1);
+    expect(findBodies[0]!.target_uri).toBe("viking://user/default/memories");
+
+    const trace = factoryTools.get("ov_recall_trace")!({ sessionId: "test-session" });
+    const result = await trace.execute("tc-trace", { source: "memory_recall", limit: 10 }) as ToolResult;
+    expect(result.content[0]!.text).toContain("memory_recall");
+    expect(result.content[0]!.text).toContain("backend preference");
+
+    const entry = (result.details.entries as any[])[0];
+    expect(entry.resourceTypes).toEqual(["user"]);
+    expect(entry.searches).toHaveLength(1);
+    expect(entry.searches[0]).toMatchObject({
+      resourceType: "user",
+      targetUriResolved: "viking://user/memories",
+      total: 1,
+    });
+    expect(entry.selected).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        uri: "viking://user/default/memories/backend-pref",
+        injected: true,
+      }),
+    ]));
   });
 
   it("records archive search traces with displayed archive matches", async () => {
