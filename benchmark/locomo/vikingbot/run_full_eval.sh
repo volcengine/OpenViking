@@ -154,7 +154,11 @@ else
 fi
 IMPORT_OPTS=()
 if [ -n "${OPENVIKING_API_KEY:-}" ]; then
-    IMPORT_OPTS+=("--api-key" "$OPENVIKING_API_KEY" "--no-separate-user-by-sample")
+    IMPORT_OPTS+=("--api-key" "$OPENVIKING_API_KEY" "--auth-mode" "${OPENVIKING_AUTH_MODE:-api_key}")
+    if [ "${OPENVIKING_AUTH_MODE:-api_key}" = "trusted" ]; then
+        IMPORT_OPTS+=("--user" "${OPENVIKING_USER:-default}")
+    fi
+    IMPORT_OPTS+=("--no-separate-user-by-sample")
 fi
 
 SAMPLE=${ARGS[0]}
@@ -162,7 +166,7 @@ QUESTION_INDEX=${ARGS[1]}
 INPUT_FILE="$SCRIPT_DIR/../data/locomo10.json"
 
 # Export for inline Python usage
-export SCRIPT_DIR INPUT_FILE RETRY_WRONG ACCOUNT OPENVIKING_URL OPENVIKING_API_KEY GROUP_CHAT
+export SCRIPT_DIR INPUT_FILE RETRY_WRONG ACCOUNT OPENVIKING_URL OPENVIKING_API_KEY OPENVIKING_USER OPENVIKING_AUTH_MODE GROUP_CHAT
 
 # auto-commit 逻辑
 if [ "$AUTO_COMMIT" = "true" ]; then

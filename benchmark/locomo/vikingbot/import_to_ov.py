@@ -450,14 +450,14 @@ async def process_single_session(
     source_sample_id = str(sample_id)
     try:
         started_at = time.perf_counter()
-        if args.api_key:
+        if args.api_key and args.auth_mode == "api_key":
             # User API keys already pin account/user on the server side. Passing
             # account/user headers would be rejected in api_key auth mode.
             user_id = ""
             account = ""
         else:
-            user_id = str(sample_id) if args.separate_user_by_sample else ""
-            account = args.account if args.separate_user_by_sample else ""
+            user_id = args.user or ""
+            account = args.account if args.auth_mode == "trusted" else ""
         result = await viking_ingest(
             messages,
             args.openviking_url,
@@ -909,6 +909,17 @@ def main():
         "--account",
         default="default",
         help="OpenViking account identifier (default: default)",
+    )
+    parser.add_argument(
+        "--user",
+        default="default",
+        help="OpenViking user identifier for trusted mode when --no-separate-user-by-sample is used (default: default)",
+    )
+    parser.add_argument(
+        "--auth-mode",
+        choices=["api_key", "trusted"],
+        default="api_key",
+        help="OpenViking server auth mode for request identity wiring (default: api_key)",
     )
     parser.add_argument(
         "--sample",
