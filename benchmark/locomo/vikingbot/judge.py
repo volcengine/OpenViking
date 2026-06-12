@@ -178,34 +178,30 @@ async def main():
             if progress_tracker is not None:
                 progress_tracker.job_started()
 
-            row = rows[idx]
-            question = row["question"]
-            gold = row["answer"]
-            response = row["response"]
-            if not show_progress:
-                print(f"Grading {idx + 1}/{total}: {question[:60]}...")
-
             try:
+                row = rows[idx]
+                question = row["question"]
+                gold = row["answer"]
+                response = row["response"]
+                if not show_progress:
+                    print(f"Grading {idx + 1}/{total}: {question[:60]}...")
+
                 is_correct, reasoning = await grade_answer(
                     client, args.model, question, gold, response
                 )
-            except Exception:
+
+                row["result"] = "CORRECT" if is_correct else "WRONG"
+                row["reasoning"] = reasoning
+
+                # 处理完一条就立即保存结果
+                await save_results()
+                if not show_progress:
+                    print(f"Saved result for {idx + 1}/{total}: {row['result']}")
+
+                return idx, row
+            finally:
                 if progress_tracker is not None:
                     progress_tracker.job_finished()
-                raise
-
-            row["result"] = "CORRECT" if is_correct else "WRONG"
-            row["reasoning"] = reasoning
-
-            # 处理完一条就立即保存结果
-            await save_results()
-            if not show_progress:
-                print(f"Saved result for {idx + 1}/{total}: {row['result']}")
-
-            if progress_tracker is not None:
-                progress_tracker.job_finished()
-
-            return idx, row
 
     tasks = [process_row(idx) for idx in ungraded]
 

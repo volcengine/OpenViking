@@ -602,33 +602,33 @@ def main():
         if progress_tracker is not None:
             progress_tracker.job_started()
 
-        question = qa_item["question"]
-        answer = qa_item["answer"]
-        question_time = qa_item.get("question_time")
-        # 使用 question_id 作为 session_id，实现完全独立并行
-        question_id = qa_item.get("question_id")
-        speakers = qa_item.get("speakers", [])
-        source_sample_id = qa_item.get("original_sample_id")
-        sender_peer_id = source_sample_id
-        memory_peer_ids = None
-        if args.group_chat:
-            sender_peer_id = speakers[0] if speakers else source_sample_id
-            memory_peer_ids = speakers[1:] if len(speakers) > 1 else None
-
-        if not show_progress:
-            print(f"Processing {idx}/{total_count}: {question[:60]}...")
-            if question_time:
-                print(f"  [time context: {question_time}]")
-            if source_sample_id:
-                print(f"  [sample peer: {source_sample_id}]")
-            if speakers:
-                print(f"  [speakers: {speakers}]")
-            if sender_peer_id:
-                print(f"  [sender peer: {sender_peer_id}]")
-            if memory_peer_ids:
-                print(f"  [memory peers: {memory_peer_ids}]")
-
         try:
+            question = qa_item["question"]
+            answer = qa_item["answer"]
+            question_time = qa_item.get("question_time")
+            # 使用 question_id 作为 session_id，实现完全独立并行
+            question_id = qa_item.get("question_id")
+            speakers = qa_item.get("speakers", [])
+            source_sample_id = qa_item.get("original_sample_id")
+            sender_peer_id = source_sample_id
+            memory_peer_ids = None
+            if args.group_chat:
+                sender_peer_id = speakers[0] if speakers else source_sample_id
+                memory_peer_ids = speakers[1:] if len(speakers) > 1 else None
+
+            if not show_progress:
+                print(f"Processing {idx}/{total_count}: {question[:60]}...")
+                if question_time:
+                    print(f"  [time context: {question_time}]")
+                if source_sample_id:
+                    print(f"  [sample peer: {source_sample_id}]")
+                if speakers:
+                    print(f"  [speakers: {speakers}]")
+                if sender_peer_id:
+                    print(f"  [sender peer: {sender_peer_id}]")
+                if memory_peer_ids:
+                    print(f"  [memory peers: {memory_peer_ids}]")
+
             response, token_usage, time_cost, iteration, tools_used_names, bot_log_file = (
                 run_vikingbot_chat(
                     question,
@@ -639,70 +639,67 @@ def main():
                     memory_peer_ids,
                 )
             )
-        except Exception as e:
-            if progress_tracker is not None:
-                progress_tracker.job_finished()
-            raise
 
-        row = {
-            "sample_id": qa_item["sample_id"],
-            "question_index": qa_item.get("question_index", ""),
-            "result": "",
-            "question": question,
-            "answer": answer,
-            "category": qa_item.get("category", ""),
-            "question_time": question_time or "",
-            "evidence": json.dumps(qa_item.get("evidence", [])),
-            "evidence_text": json.dumps(qa_item.get("evidence_text", [])),
-            "response": response,
-            "token_usage": json.dumps(token_usage, ensure_ascii=False),
-            "time_cost": round(time_cost, 2),
-            "iteration": iteration,
-            "tools_used_names": json.dumps(tools_used_names, ensure_ascii=False),
-            "bot_log_file": bot_log_file,
-            "is_invalid": qa_item.get("is_invalid", False),
-        }
+            row = {
+                "sample_id": qa_item["sample_id"],
+                "question_index": qa_item.get("question_index", ""),
+                "result": "",
+                "question": question,
+                "answer": answer,
+                "category": qa_item.get("category", ""),
+                "question_time": question_time or "",
+                "evidence": json.dumps(qa_item.get("evidence", [])),
+                "evidence_text": json.dumps(qa_item.get("evidence_text", [])),
+                "response": response,
+                "token_usage": json.dumps(token_usage, ensure_ascii=False),
+                "time_cost": round(time_cost, 2),
+                "iteration": iteration,
+                "tools_used_names": json.dumps(tools_used_names, ensure_ascii=False),
+                "bot_log_file": bot_log_file,
+                "is_invalid": qa_item.get("is_invalid", False),
+            }
 
-        # 线程安全的结果收集
-        with write_lock:
-            nonlocal processed_count
-            if args.update_mode:
-                if os.path.exists(args.output):
-                    with open(args.output, "r", encoding="utf-8", newline="") as f:
-                        reader = csv.DictReader(f)
-                        existing_rows = list(reader)
-                        existing_fieldnames = reader.fieldnames or fieldnames
-                    if "bot_log_file" not in existing_fieldnames:
-                        existing_fieldnames.append("bot_log_file")
+            # 线程安全的结果收集
+            with write_lock:
+                nonlocal processed_count
+                if args.update_mode:
+                    if os.path.exists(args.output):
+                        with open(args.output, "r", encoding="utf-8", newline="") as f:
+                            reader = csv.DictReader(f)
+                            existing_rows = list(reader)
+                            existing_fieldnames = reader.fieldnames or fieldnames
+                        if "bot_log_file" not in existing_fieldnames:
+                            existing_fieldnames.append("bot_log_file")
 
-                    q_idx = str(row.get("question_index", ""))
-                    found = False
-                    for existing_row in existing_rows:
-                        if str(existing_row.get("question_index", "")) == q_idx:
-                            existing_row.update(row)
-                            found = True
-                            break
-                    if not found:
-                        existing_rows.append(row)
+                        q_idx = str(row.get("question_index", ""))
+                        found = False
+                        for existing_row in existing_rows:
+                            if str(existing_row.get("question_index", "")) == q_idx:
+                                existing_row.update(row)
+                                found = True
+                                break
+                        if not found:
+                            existing_rows.append(row)
 
-                    with open(args.output, "w", encoding="utf-8", newline="") as f:
-                        writer = csv.DictWriter(f, fieldnames=existing_fieldnames)
-                        writer.writeheader()
-                        writer.writerows(existing_rows)
+                        with open(args.output, "w", encoding="utf-8", newline="") as f:
+                            writer = csv.DictWriter(f, fieldnames=existing_fieldnames)
+                            writer.writeheader()
+                            writer.writerows(existing_rows)
+                    else:
+                        append_row_to_csv(args.output, fieldnames, row)
                 else:
                     append_row_to_csv(args.output, fieldnames, row)
-            else:
-                append_row_to_csv(args.output, fieldnames, row)
 
-            new_rows.append(row)
-            processed_questions.add(question)
-            processed_count += 1
-            if not show_progress:
-                print(f"Completed {processed_count}/{total_count}, time cost: {round(time_cost, 2)}s")
+                new_rows.append(row)
+                processed_questions.add(question)
+                processed_count += 1
+                if not show_progress:
+                    print(f"Completed {processed_count}/{total_count}, time cost: {round(time_cost, 2)}s")
 
-        if progress_tracker is not None:
-            progress_tracker.job_finished()
-        return True
+            return True
+        finally:
+            if progress_tracker is not None:
+                progress_tracker.job_finished()
 
     # 使用线程池处理：全局并行，每个 question 独立 session
     ctx = progress if show_progress else _NullCtx()
