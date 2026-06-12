@@ -276,6 +276,18 @@ type OpenClawPluginApi = {
   ) => void;
 };
 
+type RecallTraceRouteAdapter = {
+  registerRoute?: (route: {
+    method: "GET";
+    path: string;
+    handler: (request?: {
+      query?: Record<string, unknown>;
+      params?: Record<string, unknown>;
+      url?: string;
+    }) => Promise<unknown>;
+  }) => void;
+};
+
 const DEFAULT_OPENCLAW_AGENT_ID = "main";
 
 /**
@@ -878,6 +890,75 @@ const contextEnginePlugin = {
         ? await traceRecorder.queryWithFallback(parseRecallTraceInput(input, session))
         : { entries: [], lookupLayer: "memory" as const, warnings: ["traceRecall is disabled"] };
       return enrichTraceEntriesWithContent(base, shouldIncludeTraceContent(input), session.agentId);
+    };
+
+    const registerRecallTraceRoutes = (ctx?: unknown): boolean => {
+      const routeAdapter = ctx as RecallTraceRouteAdapter | undefined;
+      if (typeof routeAdapter?.registerRoute !== "function") {
+        return false;
+      }
+      const toQueryObject = (request?: {
+        query?: Record<string, unknown>;
+        params?: Record<string, unknown>;
+        url?: string;
+      }) => {
+        const query: Record<string, unknown> = { ...(request?.query ?? {}) };
+        if (request?.url) {
+          const parsed = new URL(request.url, "http://openclaw.local");
+          for (const [key, value] of parsed.searchParams.entries()) {
+            query[key] = value;
+          }
+        }
+        return { ...query, ...(request?.params ?? {}) };
+      };
+      const toBoolean = (value: unknown): boolean | undefined => {
+        if (typeof value === "boolean") return value;
+        if (typeof value !== "string") return undefined;
+        return ["1", "true", "yes"].includes(value.trim().toLowerCase());
+      };
+      const toNumber = (value: unknown): number | undefined => {
+        if (typeof value === "number") return value;
+        if (typeof value === "string" && value.trim()) {
+          const parsed = Number(value);
+          return Number.isFinite(parsed) ? parsed : undefined;
+        }
+        return undefined;
+      };
+      const handle = async (request?: {
+        query?: Record<string, unknown>;
+        params?: Record<string, unknown>;
+        url?: string;
+      }) => {
+        const query = toQueryObject(request);
+        const session = resolvePluginSessionRouting(query as SessionAgentLookup);
+        const result = await queryRecallTraces({
+          turn: query.turn === "all" ? "all" : "latest",
+          traceId: typeof query.traceId === "string" ? query.traceId : undefined,
+          sessionId: typeof query.sessionId === "string" ? query.sessionId : undefined,
+          sessionKey: typeof query.sessionKey === "string" ? query.sessionKey : undefined,
+          ovSessionId: typeof query.ovSessionId === "string" ? query.ovSessionId : undefined,
+          source: typeof query.source === "string" ? query.source as RecallTraceSource : undefined,
+          resourceTypes: typeof query.resourceTypes === "string" ? query.resourceTypes : undefined,
+          since: toNumber(query.since),
+          until: toNumber(query.until),
+          includeContent: toBoolean(query.includeContent),
+          limit: toNumber(query.limit),
+        }, session);
+        return { status: 200, body: { ok: true, ...result } };
+      };
+      routeAdapter.registerRoute({ method: "GET", path: "/api/openviking/recall-traces", handler: handle });
+      routeAdapter.registerRoute({
+        method: "GET",
+        path: "/api/openviking/recall-traces/:traceId",
+        handler: (request) => handle({
+          ...request,
+          query: {
+            ...(request?.query ?? {}),
+            traceId: typeof request?.params?.traceId === "string" ? request.params.traceId : undefined,
+          },
+        }),
+      });
+      return true;
     };
 
     const formatRecallTraceText = (result: { entries: RecallTraceEntry[]; lookupLayer: string; warnings: string[] }): string => {
@@ -2775,11 +2856,17 @@ const contextEnginePlugin = {
 
     api.registerService({
       id: "openviking",
-      start: async () => {
+      start: async (ctx?: unknown) => {
+        const routeRegistered = registerRecallTraceRoutes(ctx);
         await (await getClient()).healthCheck().catch(() => {});
         api.logger.info(
           `openviking: initialized (url: ${cfg.baseUrl}, targetUri: ${cfg.targetUri}, search: hybrid endpoint)`,
         );
+        if (routeRegistered) {
+          api.logger.info("openviking: registered recall trace Gateway routes");
+        } else {
+          api.logger.warn?.("openviking: recall trace Gateway route adapter unavailable; use ov_recall_trace tool or /ov-recall-trace command");
+        }
       },
       stop: () => {
         api.logger.info("openviking: stopped");

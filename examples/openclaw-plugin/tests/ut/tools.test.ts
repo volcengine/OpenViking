@@ -968,6 +968,24 @@ describe("Tool: add_resource, add_skill, and ov_search (registration)", () => {
     });
   });
 
+  it("registers recall trace gateway routes when a route adapter is available", async () => {
+    const { api } = setupPlugin(undefined, { traceRecall: true });
+    contextEnginePlugin.register(api as any);
+    const service = (api.registerService as any).mock.calls[0][0];
+    const registerRoute = vi.fn();
+
+    await service.start({ registerRoute });
+
+    expect(registerRoute).toHaveBeenCalledWith(expect.objectContaining({
+      method: "GET",
+      path: "/api/openviking/recall-traces",
+    }));
+    expect(registerRoute).toHaveBeenCalledWith(expect.objectContaining({
+      method: "GET",
+      path: "/api/openviking/recall-traces/:traceId",
+    }));
+  });
+
   it("applies enabledTools and disabledTools to runtime tool registration", () => {
     const { tools, api } = setupPlugin(undefined, {
       enabledTools: ["resource_query", "memory"],
