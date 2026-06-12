@@ -11,7 +11,12 @@ pub struct YuanrongConfig {
     pub connect_timeout_ms: u64,
     /// Timeout applied to each KV operation.
     pub request_timeout_ms: u64,
-    /// Maximum number of concurrent synchronous SDK calls.
+    /// Maximum number of concurrent blocking tasks allowed by the Rust client.
+    ///
+    /// The current native bridge creates one native client handle per
+    /// `YuanrongProvider`; calls through that handle are serialized in C++.
+    /// Therefore `sdk_concurrency > 1` does not provide true Yuanrong backend
+    /// concurrency for a single native provider instance.
     pub sdk_concurrency: usize,
 }
 
