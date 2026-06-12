@@ -548,6 +548,14 @@ enum Commands {
             help_heading = "Common options"
         )]
         level: Option<Vec<i32>>,
+        /// Only include results with specific context type(s) (memory, resource, skill)
+        #[arg(
+            long = "context-type",
+            value_delimiter = ',',
+            value_name = "type",
+            help_heading = "Common options"
+        )]
+        context_type: Option<Vec<String>>,
         /// Limit memory retrieval to this peer plus the current user memory
         #[arg(long = "peer-id", value_name = "id", help_heading = "Advanced options")]
         peer_id: Option<String>,
@@ -601,6 +609,14 @@ enum Commands {
             help_heading = "Advanced options"
         )]
         level: Option<Vec<i32>>,
+        /// Only include results with specific context type(s) (memory, resource, skill)
+        #[arg(
+            long = "context-type",
+            value_delimiter = ',',
+            value_name = "type",
+            help_heading = "Advanced options"
+        )]
+        context_type: Option<Vec<String>>,
         /// Limit memory retrieval to this peer plus the current user memory
         #[arg(long = "peer-id", value_name = "id", help_heading = "Advanced options")]
         peer_id: Option<String>,
@@ -1780,6 +1796,7 @@ fn consumes_plain_help_value(token: &str) -> bool {
             | "--threshold"
             | "--after"
             | "--before"
+            | "--context-type"
             | "--peer-id"
             | "-s"
             | "--skill"
@@ -1838,6 +1855,7 @@ fn consumes_plain_help_value(token: &str) -> bool {
         || token.starts_with("--threshold=")
         || token.starts_with("--after=")
         || token.starts_with("--before=")
+        || token.starts_with("--context-type=")
         || token.starts_with("--peer-id=")
         || token.starts_with("--skill=")
         || token.starts_with("--session=")
@@ -2898,10 +2916,20 @@ async fn main() {
             after,
             before,
             level,
+            context_type,
             peer_id,
         } => {
             handlers::handle_find(
-                query, uri, node_limit, threshold, after, before, level, peer_id, ctx,
+                query,
+                uri,
+                node_limit,
+                threshold,
+                after,
+                before,
+                level,
+                context_type,
+                peer_id,
+                ctx,
             )
             .await
         }
@@ -2914,10 +2942,21 @@ async fn main() {
             after,
             before,
             level,
+            context_type,
             peer_id,
         } => {
             handlers::handle_search(
-                query, uri, session_id, node_limit, threshold, after, before, level, peer_id, ctx,
+                query,
+                uri,
+                session_id,
+                node_limit,
+                threshold,
+                after,
+                before,
+                level,
+                context_type,
+                peer_id,
+                ctx,
             )
             .await
         }
@@ -2999,6 +3038,23 @@ mod tests {
     }
 
     #[test]
+    fn cli_parses_find_context_type() {
+        let cli =
+            Cli::try_parse_from(["ov", "find", "invoice", "--context-type", "memory,resource"])
+                .expect("find context type should parse");
+
+        match cli.command {
+            Commands::Find { context_type, .. } => {
+                assert_eq!(
+                    context_type,
+                    Some(vec!["memory".to_string(), "resource".to_string()])
+                );
+            }
+            _ => panic!("expected find command"),
+        }
+    }
+
+    #[test]
     fn cli_parses_search_peer_id() {
         let cli =
             Cli::try_parse_from(["ov", "search", "invoice", "--peer-id", "web-visitor-alice"])
@@ -3007,6 +3063,19 @@ mod tests {
         match cli.command {
             Commands::Search { peer_id, .. } => {
                 assert_eq!(peer_id.as_deref(), Some("web-visitor-alice"));
+            }
+            _ => panic!("expected search command"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_search_context_type() {
+        let cli = Cli::try_parse_from(["ov", "search", "invoice", "--context-type", "skill"])
+            .expect("search context type should parse");
+
+        match cli.command {
+            Commands::Search { context_type, .. } => {
+                assert_eq!(context_type, Some(vec!["skill".to_string()]));
             }
             _ => panic!("expected search command"),
         }

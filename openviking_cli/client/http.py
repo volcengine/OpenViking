@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Union
 import httpx
 
 from openviking.telemetry import TelemetryRequest, normalize_telemetry_request
+from openviking.utils.search_filters import SearchContextTypeInput
 from openviking_cli.client.base import BaseClient
 from openviking_cli.exceptions import (
     AbortedError,
@@ -687,6 +688,7 @@ class AsyncHTTPClient(BaseClient):
         node_limit: Optional[int] = None,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
+        context_type: Optional[SearchContextTypeInput] = None,
         telemetry: TelemetryRequest = False,
         peer_id: Optional[str] = None,
     ) -> FindResult:
@@ -700,6 +702,7 @@ class AsyncHTTPClient(BaseClient):
             "limit": actual_limit,
             "score_threshold": score_threshold,
             "filter": filter,
+            "context_type": context_type,
             "telemetry": telemetry,
         }
         if peer_id is not None:
@@ -718,6 +721,7 @@ class AsyncHTTPClient(BaseClient):
         node_limit: Optional[int] = None,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
+        context_type: Optional[SearchContextTypeInput] = None,
         telemetry: TelemetryRequest = False,
         peer_id: Optional[str] = None,
     ) -> FindResult:
@@ -733,6 +737,7 @@ class AsyncHTTPClient(BaseClient):
             "limit": actual_limit,
             "score_threshold": score_threshold,
             "filter": filter,
+            "context_type": context_type,
             "telemetry": telemetry,
         }
         if peer_id is not None:

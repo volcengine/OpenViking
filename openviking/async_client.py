@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Union
 from openviking.client import LocalClient, Session
 from openviking.service.debug_service import SystemStatus
 from openviking.telemetry import TelemetryRequest
+from openviking.utils.search_filters import SearchContextTypeInput
 from openviking_cli.client.base import BaseClient
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
@@ -365,6 +366,7 @@ class AsyncOpenViking:
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        context_type: Optional[SearchContextTypeInput] = None,
         telemetry: TelemetryRequest = False,
         since: Optional[str] = None,
         until: Optional[str] = None,
@@ -395,6 +397,7 @@ class AsyncOpenViking:
             limit=limit,
             score_threshold=score_threshold,
             filter=filter,
+            context_type=context_type,
             telemetry=telemetry,
             since=since,
             until=until,
@@ -410,6 +413,7 @@ class AsyncOpenViking:
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        context_type: Optional[SearchContextTypeInput] = None,
         telemetry: TelemetryRequest = False,
         since: Optional[str] = None,
         until: Optional[str] = None,
@@ -425,6 +429,7 @@ class AsyncOpenViking:
             limit=limit,
             score_threshold=score_threshold,
             filter=filter,
+            context_type=context_type,
             telemetry=telemetry,
             since=since,
             until=until,

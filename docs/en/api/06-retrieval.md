@@ -56,6 +56,7 @@ The `find()` method performs pure vector similarity search for simple query scen
 |-----------|------|----------|---------|-------------|
 | query | str | Yes | - | Search query string |
 | target_uri | str \| List[str] | No | "" | Limit search to specific URI prefix |
+| context_type | str \| List[str] | No | None | Limit results to one or more `ContextType` values: `memory`, `resource`, or `skill` |
 | peer_id | str | No | None | Stable interaction peer ID. When searching default user-scoped targets, results include this peer's memories and resources in addition to current-user content. CLI maps `--peer-id` to this field |
 | node_limit | int | No | None | Maximum number of results |
 | score_threshold | float | No | None | Minimum relevance score threshold |
@@ -132,10 +133,23 @@ curl -X POST http://localhost:1933/api/v1/search/find \
     }'
 ```
 
+**Search by Context Type**
+
+```bash
+curl -X POST http://localhost:1933/api/v1/search/find \
+    -H "Content-Type: application/json" \
+    -H "X-API-Key: your-key" \
+    -d '{
+        "query": "authentication",
+        "context_type": ["memory", "resource"]
+    }'
+```
+
 **Python SDK**
 
 ```python
 import openviking as ov
+from openviking.retrieve import ContextType
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
@@ -149,6 +163,12 @@ recent_emails = client.find(
     target_uri="viking://resources/email",
     since="7d",
     time_field="created_at",
+)
+
+# Search only memories and resources
+typed_results = client.find(
+    "authentication",
+    context_type=[ContextType.MEMORY, ContextType.RESOURCE],
 )
 
 # Iterate through results
@@ -208,6 +228,9 @@ openviking find "how to authenticate users"
 
 # Specify URI scope
 openviking find "how to authenticate users" --uri "viking://resources"
+
+# Limit to context types
+openviking find "authentication" --context-type memory,resource
 
 # With time filter
 openviking find "invoice" --after 7d
@@ -292,6 +315,7 @@ The `search()` method adds session context understanding and intent analysis cap
 | target_uri | str \| List[str] | No | "" | Limit search to specific URI prefix |
 | session | Session | No | None | Session for context-aware search (SDK) |
 | session_id | str | No | None | Session ID for context-aware search (HTTP) |
+| context_type | str \| List[str] | No | None | Limit results to one or more `ContextType` values: `memory`, `resource`, or `skill` |
 | peer_id | str | No | None | Stable interaction peer ID. When searching default user-scoped targets, results include this peer's memories and resources in addition to current-user content. CLI maps `--peer-id` to this field |
 | node_limit | int | No | None | Maximum number of results |
 | score_threshold | float | No | None | Minimum relevance score threshold |
@@ -320,6 +344,7 @@ curl -X POST http://localhost:1933/api/v1/search/search \
     -d '{
         "query": "best practices",
         "session_id": "abc123",
+        "context_type": "skill",
         "since": "2h",
         "time_field": "updated_at",
         "limit": 10
@@ -341,6 +366,7 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 
 ```python
 import openviking as ov
+from openviking.retrieve import ContextType
 from openviking.message import TextPart
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
@@ -359,6 +385,7 @@ session.add_message("assistant", [
 results = client.search(
     "best practices",
     session=session,
+    context_type=ContextType.SKILL,
     since="2h"
 )
 
@@ -385,6 +412,9 @@ for ctx in results.resources:
 ```bash
 # Search with session ID
 openviking search "best practices" --session-id abc123
+
+# Limit to a context type
+openviking search "best practices" --context-type skill
 
 # Search with time filter
 openviking search "watch vs scheduled" --after 2026-03-15 --before 2026-03-20

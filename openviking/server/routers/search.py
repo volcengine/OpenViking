@@ -18,7 +18,11 @@ from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
-from openviking.utils.search_filters import _resolve_levels, merge_time_filter
+from openviking.utils.search_filters import (
+    SearchContextTypeInput,
+    _resolve_levels,
+    merge_search_filter,
+)
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 
 
@@ -45,13 +49,15 @@ def _resolve_search_limit(limit: int, node_limit: Optional[int]) -> int:
 
 def _resolve_search_filter(
     request_filter: Optional[Dict[str, Any]],
+    context_type: Optional[SearchContextTypeInput],
     since: Optional[str],
     until: Optional[str],
     time_field: Optional[TimeField],
 ) -> Optional[Dict[str, Any]]:
     try:
-        return merge_time_filter(
+        return merge_search_filter(
             request_filter,
+            context_type=context_type,
             since=since,
             until=until,
             time_field=time_field,
@@ -72,6 +78,7 @@ class FindRequest(BaseModel):
 
     query: str
     target_uri: Union[str, List[str]] = ""
+    context_type: Optional[Union[str, List[str]]] = None
     peer_id: Optional[str] = None
     limit: int = 10
     node_limit: Optional[int] = None
@@ -95,6 +102,7 @@ class SearchRequest(BaseModel):
 
     query: str
     target_uri: Union[str, List[str]] = ""
+    context_type: Optional[Union[str, List[str]]] = None
     peer_id: Optional[str] = None
     session_id: Optional[str] = None
     limit: int = 10
@@ -144,6 +152,7 @@ async def find(
     actual_limit = _resolve_search_limit(request.limit, request.node_limit)
     effective_filter = _resolve_search_filter(
         request.filter,
+        request.context_type,
         request.since,
         request.until,
         request.time_field,
@@ -184,6 +193,7 @@ async def search(
     actual_limit = _resolve_search_limit(request.limit, request.node_limit)
     effective_filter = _resolve_search_filter(
         request.filter,
+        request.context_type,
         request.since,
         request.until,
         request.time_field,

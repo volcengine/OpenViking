@@ -1116,6 +1116,7 @@ pub async fn handle_find(
     after: Option<String>,
     before: Option<String>,
     level: Option<Vec<i32>>,
+    context_type: Option<Vec<String>>,
     peer_id: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
@@ -1133,6 +1134,9 @@ pub async fn handle_find(
                 .join(",")
         ));
     }
+    if let Some(ref context_types) = context_type {
+        params.push(format!("--context-type {}", context_types.join(",")));
+    }
     if let Some(ref p) = peer_id {
         params.push(format!("--peer-id {}", p));
     }
@@ -1149,6 +1153,7 @@ pub async fn handle_find(
         before.as_deref(),
         None,
         level,
+        context_type,
         peer_id.as_deref(),
         ctx.output_format,
         ctx.compact,
@@ -1165,6 +1170,7 @@ pub async fn handle_search(
     after: Option<String>,
     before: Option<String>,
     level: Option<Vec<i32>>,
+    context_type: Option<Vec<String>>,
     peer_id: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
@@ -1185,6 +1191,9 @@ pub async fn handle_search(
                 .join(",")
         ));
     }
+    if let Some(ref context_types) = context_type {
+        params.push(format!("--context-type {}", context_types.join(",")));
+    }
     if let Some(ref p) = peer_id {
         params.push(format!("--peer-id {}", p));
     }
@@ -1202,6 +1211,7 @@ pub async fn handle_search(
         before.as_deref(),
         None,
         level,
+        context_type,
         peer_id.as_deref(),
         ctx.output_format,
         ctx.compact,

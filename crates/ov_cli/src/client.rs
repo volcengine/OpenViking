@@ -386,6 +386,7 @@ impl HttpClient {
         until: Option<String>,
         time_field: Option<String>,
         level: Option<Vec<i32>>,
+        context_type: Option<Vec<String>>,
         peer_id: Option<String>,
     ) -> Result<serde_json::Value> {
         let body = serde_json::json!({
@@ -397,6 +398,7 @@ impl HttpClient {
             "until": until,
             "time_field": time_field,
             "level": level,
+            "context_type": context_type,
             "peer_id": peer_id,
         });
         self.post("/api/v1/search/find", &body).await
@@ -413,6 +415,7 @@ impl HttpClient {
         until: Option<String>,
         time_field: Option<String>,
         level: Option<Vec<i32>>,
+        context_type: Option<Vec<String>>,
         peer_id: Option<String>,
     ) -> Result<serde_json::Value> {
         let body = serde_json::json!({
@@ -425,6 +428,7 @@ impl HttpClient {
             "until": until,
             "time_field": time_field,
             "level": level,
+            "context_type": context_type,
             "peer_id": peer_id,
         });
         self.post("/api/v1/search/search", &body).await

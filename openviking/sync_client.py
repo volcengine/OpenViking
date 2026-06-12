@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
 from openviking.async_client import AsyncOpenViking
 from openviking.telemetry import TelemetryRequest
+from openviking.utils.search_filters import SearchContextTypeInput
 from openviking_cli.utils import run_async
 
 
@@ -228,6 +229,7 @@ class SyncOpenViking:
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        context_type: Optional[SearchContextTypeInput] = None,
         telemetry: TelemetryRequest = False,
         since: Optional[str] = None,
         until: Optional[str] = None,
@@ -245,6 +247,7 @@ class SyncOpenViking:
                 limit=limit,
                 score_threshold=score_threshold,
                 filter=filter,
+                context_type=context_type,
                 telemetry=telemetry,
                 since=since,
                 until=until,
@@ -261,6 +264,7 @@ class SyncOpenViking:
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        context_type: Optional[SearchContextTypeInput] = None,
         telemetry: TelemetryRequest = False,
         since: Optional[str] = None,
         until: Optional[str] = None,
@@ -276,6 +280,7 @@ class SyncOpenViking:
                 limit,
                 score_threshold,
                 filter,
+                context_type,
                 telemetry,
                 since,
                 until,

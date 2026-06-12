@@ -476,6 +476,71 @@ async def test_find_combines_existing_filter_with_time_range(
     }
 
 
+async def test_find_with_context_type_compiles_filter(
+    client: httpx.AsyncClient, service, monkeypatch
+):
+    captured = {}
+
+    async def fake_find(*, filter=None, **kwargs):
+        captured["filter"] = filter
+        return {"items": []}
+
+    monkeypatch.setattr(service.search, "find", fake_find)
+
+    resp = await client.post(
+        "/api/v1/search/find",
+        json={"query": "sample", "context_type": "memory"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+    assert captured["filter"] == {"op": "must", "field": "context_type", "conds": ["memory"]}
+
+
+async def test_search_combines_context_type_list_with_existing_filter(
+    client: httpx.AsyncClient, service, monkeypatch
+):
+    captured = {}
+
+    async def fake_search(*, filter=None, **kwargs):
+        captured["filter"] = filter
+        return {"items": []}
+
+    monkeypatch.setattr(service.search, "search", fake_search)
+
+    resp = await client.post(
+        "/api/v1/search/search",
+        json={
+            "query": "sample",
+            "context_type": ["memory", "resource"],
+            "filter": {"op": "must", "field": "kind", "conds": ["email"]},
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+    assert captured["filter"] == {
+        "op": "and",
+        "conds": [
+            {"op": "must", "field": "kind", "conds": ["email"]},
+            {"op": "must", "field": "context_type", "conds": ["memory", "resource"]},
+        ],
+    }
+
+
+async def test_find_with_invalid_context_type_returns_invalid_argument(client: httpx.AsyncClient):
+    resp = await client.post(
+        "/api/v1/search/find",
+        json={"query": "sample", "context_type": "archive"},
+    )
+
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "INVALID_ARGUMENT"
+    assert "context_type" in body["error"]["message"]
+
+
 async def test_find_with_invalid_time_returns_invalid_argument(client: httpx.AsyncClient):
     resp = await client.post(
         "/api/v1/search/find",

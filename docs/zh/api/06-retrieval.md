@@ -56,6 +56,7 @@ OpenViking 提供多种检索方法，包括简单的向量相似度搜索、带
 |------|------|------|--------|------|
 | query | str | 是 | - | 搜索查询字符串 |
 | target_uri | str \| List[str] | 否 | "" | 限制搜索范围到指定的 URI 前缀 |
+| context_type | str \| List[str] | 否 | None | 限定一个或多个 `ContextType` 取值：`memory`、`resource` 或 `skill` |
 | peer_id | str | 否 | None | 稳定交互对象 ID。检索默认 user-scoped 目标时，会在当前用户内容之外额外检索该 peer 的 memories 和 resources。CLI `--peer-id` 会映射到这个字段 |
 | limit | int | 否 | 10 | 最大返回结果数 |
 | node_limit | int | 否 | None | 可选 HTTP 别名；如果提供，会覆盖 limit |
@@ -133,10 +134,23 @@ curl -X POST http://localhost:1933/api/v1/search/find \
     }'
 ```
 
+**按 Context Type 搜索**
+
+```bash
+curl -X POST http://localhost:1933/api/v1/search/find \
+    -H "Content-Type: application/json" \
+    -H "X-API-Key: your-key" \
+    -d '{
+        "query": "authentication",
+        "context_type": ["memory", "resource"]
+    }'
+```
+
 **Python SDK**
 
 ```python
 import openviking as ov
+from openviking.retrieve import ContextType
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
@@ -150,6 +164,12 @@ recent_emails = client.find(
     target_uri="viking://resources/email",
     since="7d",
     time_field="created_at",
+)
+
+# 仅搜索 memories 和 resources
+typed_results = client.find(
+    "authentication",
+    context_type=[ContextType.MEMORY, ContextType.RESOURCE],
 )
 
 # 遍历结果
@@ -209,6 +229,9 @@ openviking find "how to authenticate users"
 
 # 指定 URI 范围
 openviking find "how to authenticate users" --uri "viking://resources"
+
+# 限定上下文类型
+openviking find "authentication" --context-type memory,resource
 
 # 带时间过滤
 openviking find "invoice" --after 7d
@@ -293,6 +316,7 @@ openviking find "how to authenticate users" -L 1,2
 | target_uri | str \| List[str] | 否 | "" | 限制搜索范围到指定的 URI 前缀 |
 | session | Session | 否 | None | 用于上下文感知搜索的会话（SDK）|
 | session_id | str | 否 | None | 用于上下文感知搜索的会话 ID（HTTP）|
+| context_type | str \| List[str] | 否 | None | 限定一个或多个 `ContextType` 取值：`memory`、`resource` 或 `skill` |
 | peer_id | str | 否 | None | 稳定交互对象 ID。检索默认 user-scoped 目标时，会在当前用户内容之外额外检索该 peer 的 memories 和 resources。CLI `--peer-id` 会映射到这个字段 |
 | limit | int | 否 | 10 | 最大返回结果数 |
 | node_limit | int | 否 | None | 可选 HTTP 别名；如果提供，会覆盖 limit |
@@ -322,6 +346,7 @@ curl -X POST http://localhost:1933/api/v1/search/search \
     -d '{
         "query": "best practices",
         "session_id": "abc123",
+        "context_type": "skill",
         "since": "2h",
         "time_field": "updated_at",
         "limit": 10
@@ -343,6 +368,7 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 
 ```python
 import openviking as ov
+from openviking.retrieve import ContextType
 from openviking.message import TextPart
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
@@ -361,6 +387,7 @@ session.add_message("assistant", [
 results = client.search(
     "best practices",
     session=session,
+    context_type=ContextType.SKILL,
     since="2h"
 )
 
@@ -387,6 +414,9 @@ for ctx in results.resources:
 ```bash
 # 带会话 ID 的搜索
 openviking search "best practices" --session-id abc123
+
+# 限定上下文类型
+openviking search "best practices" --context-type skill
 
 # 带时间过滤的搜索
 openviking search "watch vs scheduled" --after 2026-03-15 --before 2026-03-20

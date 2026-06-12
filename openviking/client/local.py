@@ -15,7 +15,7 @@ from openviking.telemetry.execution import (
     attach_telemetry_payload,
     run_with_telemetry,
 )
-from openviking.utils.search_filters import merge_time_filter
+from openviking.utils.search_filters import SearchContextTypeInput, merge_search_filter
 from openviking_cli.client.base import BaseClient
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
@@ -36,13 +36,15 @@ def _to_jsonable(value: Any) -> Any:
 
 def _resolve_search_filter(
     filter: Optional[Dict[str, Any]],
+    context_type: Optional[SearchContextTypeInput],
     since: Optional[str],
     until: Optional[str],
     time_field: Optional[str],
 ) -> Optional[Dict[str, Any]]:
-    """Merge optional retrieval time bounds into the metadata filter."""
-    return merge_time_filter(
+    """Merge public retrieval filter shortcuts into the metadata filter."""
+    return merge_search_filter(
         filter,
+        context_type=context_type,
         since=since,
         until=until,
         time_field=time_field,
@@ -296,6 +298,7 @@ class LocalClient(BaseClient):
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
+        context_type: Optional[SearchContextTypeInput] = None,
         telemetry: TelemetryRequest = False,
         since: Optional[str] = None,
         until: Optional[str] = None,
@@ -304,7 +307,7 @@ class LocalClient(BaseClient):
         peer_id: Optional[str] = None,
     ) -> Any:
         """Semantic search without session context."""
-        resolved_filter = _resolve_search_filter(filter, since, until, time_field)
+        resolved_filter = _resolve_search_filter(filter, context_type, since, until, time_field)
         execution = await run_with_telemetry(
             operation="search.find",
             telemetry=telemetry,
@@ -332,6 +335,7 @@ class LocalClient(BaseClient):
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
+        context_type: Optional[SearchContextTypeInput] = None,
         telemetry: TelemetryRequest = False,
         since: Optional[str] = None,
         until: Optional[str] = None,
@@ -340,7 +344,7 @@ class LocalClient(BaseClient):
         peer_id: Optional[str] = None,
     ) -> Any:
         """Semantic search with optional session context."""
-        resolved_filter = _resolve_search_filter(filter, since, until, time_field)
+        resolved_filter = _resolve_search_filter(filter, context_type, since, until, time_field)
 
         async def _search():
             session = None

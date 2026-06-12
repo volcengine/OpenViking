@@ -8,6 +8,7 @@ Wraps AsyncHTTPClient with synchronous methods.
 from typing import Any, Dict, List, Optional, Union
 
 from openviking.telemetry import TelemetryRequest
+from openviking.utils.search_filters import SearchContextTypeInput
 from openviking_cli.client.http import AsyncHTTPClient
 from openviking_cli.utils import run_async
 
@@ -285,6 +286,7 @@ class SyncHTTPClient:
         node_limit: Optional[int] = None,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        context_type: Optional[SearchContextTypeInput] = None,
         telemetry: TelemetryRequest = False,
         peer_id: Optional[str] = None,
     ):
@@ -299,6 +301,7 @@ class SyncHTTPClient:
                 node_limit=node_limit,
                 score_threshold=score_threshold,
                 filter=filter,
+                context_type=context_type,
                 telemetry=telemetry,
                 peer_id=peer_id,
             )
@@ -312,6 +315,7 @@ class SyncHTTPClient:
         node_limit: Optional[int] = None,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        context_type: Optional[SearchContextTypeInput] = None,
         telemetry: TelemetryRequest = False,
         peer_id: Optional[str] = None,
     ):
@@ -324,6 +328,7 @@ class SyncHTTPClient:
                 node_limit,
                 score_threshold,
                 filter,
+                context_type,
                 telemetry=telemetry,
                 peer_id=peer_id,
             )

@@ -2590,6 +2590,10 @@ mod tests {
                 rendered.contains("--peer-id <id>"),
                 "missing --peer-id for {command} in:\n{rendered}"
             );
+            assert!(
+                rendered.contains("--context-type <type>"),
+                "missing --context-type for {command} in:\n{rendered}"
+            );
         }
     }
 
