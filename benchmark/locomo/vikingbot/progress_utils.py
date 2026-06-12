@@ -17,7 +17,6 @@ from rich.progress import (
     Task,
     TaskID,
     TextColumn,
-    TimeElapsedColumn,
 )
 from rich.table import Column
 from rich.text import Text
@@ -118,7 +117,6 @@ def make_three_state_progress(
             " ({task.completed}/{task.total}, "
             "[bold yellow]{task.fields[running]} running[/])"
         ),
-        TimeElapsedColumn(),
         console=console,
         transient=transient,
     )
