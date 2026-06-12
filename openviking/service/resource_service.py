@@ -599,12 +599,12 @@ class ResourceService:
                             logger.warning(
                                 f"[ResourceService] Failed to create watch task for {watch_to}: {e}"
                             )
-                    elif to:
+                    elif target.to:
                         try:
-                            await self._handle_watch_task_cancellation(to_uri=to, ctx=ctx)
+                            await self._handle_watch_task_cancellation(to_uri=target.to, ctx=ctx)
                         except Exception as e:
                             logger.warning(
-                                f"[ResourceService] Failed to cancel watch task for {to}: {e}"
+                                f"[ResourceService] Failed to cancel watch task for {target.to}: {e}"
                             )
             if not wait:
                 from openviking.service.task_tracker import get_task_tracker
