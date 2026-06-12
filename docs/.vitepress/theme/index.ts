@@ -14,6 +14,7 @@ const PREFERENCE_COOKIE_KEY = 'openviking-preferences'
 const PREFERENCE_TRANSFER_PREFIX = 'openviking-preferences:'
 const VITEPRESS_THEME_KEY = 'vitepress-theme-appearance'
 const LOCAL_PLAYGROUND_URL = 'http://localhost:8080/'
+const ROOT_DOCS_REDIRECT_PATH = '/en/getting-started/01-introduction'
 const MAIN_SITE_HOSTS = new Set([
   'www.openviking.ai',
   'openviking.ai',
@@ -277,12 +278,21 @@ function syncPreferenceToMainSiteLinks() {
 }
 
 function startPreferenceSync() {
+  redirectDocsRoot()
   syncPreferenceFromPeerSite()
   syncCurrentDocsPreference()
   patchHistoryForPreferenceSync()
   watchThemePreference()
   syncPreferenceToMainSiteLinks()
   window.addEventListener('pageshow', syncPreferenceFromPeerSite)
+}
+
+function redirectDocsRoot() {
+  if (window.location.pathname !== '/') return
+
+  window.location.replace(
+    `${ROOT_DOCS_REDIRECT_PATH}${window.location.search}${window.location.hash}`
+  )
 }
 
 syncPreferenceFromPeerSite()
