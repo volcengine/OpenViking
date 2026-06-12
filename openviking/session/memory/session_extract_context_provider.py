@@ -29,6 +29,7 @@ from openviking.session.memory.tools import (
     add_tool_call_pair_to_messages,
     get_tool,
 )
+from openviking.session.memory.utils.resource_refs import contains_resource_uri
 from openviking.session.memory.utils.uri import render_template
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import tracer
@@ -147,8 +148,33 @@ class SessionExtractContextProvider(ExtractContextProvider):
     def get_output_language(self) -> str:
         return self._output_language
 
+    def _conversation_contains_resource_uri(self) -> bool:
+        for message in self.messages or []:
+            content = getattr(message, "content", None)
+            if content and contains_resource_uri(content):
+                return True
+            for part in getattr(message, "parts", []) or []:
+                text = getattr(part, "text", None)
+                if text and contains_resource_uri(text):
+                    return True
+        return False
+
     def instruction(self) -> str:
         output_language = self._output_language
+        resource_uri_handling = (
+            """
+
+## Resource URI Handling
+- If the conversation contains a resource URI (`viking://resources/...`, `viking://user/{user_id}/resources/...`, or `viking://user/{user_id}/peers/{peer_id}/resources/...`) and the user says a durable fact, judgment, preference, or event about it, extract that memory into the appropriate normal memory type such as entities, events, or preferences.
+- Preserve resource references as markdown links in visible memory content when useful. Example: user said "用户保存了越前龙马照片 viking://resources/images/ryoma" -> write "用户保存了[越前龙马照片](viking://resources/images/ryoma)".
+- For `## Resource Addition` blocks, use `User reason` as the user's intent and `Resource abstract` only as optional context. Do not copy raw fields such as `Resource URI`, `Added at`, `Resource abstract`, or `User reason` into visible memory content.
+- Use descriptive link text such as `[越前龙马照片](viking://resources/...)`; avoid visible wording like `资源URI为` or `Resource URI`.
+- If the user already wrote a markdown link to a resource URI, keep the same resource link intent.
+- Do NOT claim you inspected, summarized, OCRed, or opened the resource file unless the conversation explicitly provides that fact.
+"""
+            if self._conversation_contains_resource_uri()
+            else ""
+        )
         goal = f"""You are a memory extraction agent. Your task is to analyze conversations and update memories.
 
 ## Workflow
@@ -166,14 +192,7 @@ All memory content MUST be written in {output_language}.
 
 ## URI Handling
 The system automatically generates URIs based on memory_type and fields. Just provide correct memory_type and fields.
-
-## Resource URI Handling
-- If the conversation contains a `viking://resources/...` URI and the user says a durable fact, judgment, preference, or event about it, extract that memory into the appropriate normal memory type such as entities, events, or preferences.
-- Preserve resource references as markdown links in visible memory content when useful. Example: user said "用户保存了越前龙马照片 viking://resources/images/ryoma" -> write "用户保存了[越前龙马照片](viking://resources/images/ryoma)".
-- For `## Resource Addition` blocks, use `User reason` as the user's intent and `Resource abstract` only as optional context. Do not copy raw fields such as `Resource URI`, `Added at`, `Resource abstract`, or `User reason` into visible memory content.
-- Use descriptive link text such as `[越前龙马照片](viking://resources/...)`; avoid visible wording like `资源URI为` or `Resource URI`.
-- If the user already wrote `[text](viking://resources/...)`, keep the same resource link intent.
-- Do NOT claim you inspected, summarized, OCRed, or opened the resource file unless the conversation explicitly provides that fact.
+{resource_uri_handling}
 
 ## Self and Peer Memory
 When a memory item describes the current user, omit peer_id.

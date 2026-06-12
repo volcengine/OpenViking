@@ -13,8 +13,17 @@ from openviking.session.memory.dataclass import MemoryFile
 RESOURCE_REF_SOURCE_CONTENT_WRITE = "content.write"
 RESOURCE_REF_SOURCE_SESSION_COMMIT = "session.commit"
 
-_MARKDOWN_RESOURCE_LINK_RE = re.compile(r"\[([^\]\n]+)\]\((viking://resources/[^)\s]+)\)")
-_RESOURCE_URI_RE = re.compile(r"viking://resources/[^\s<>\]\)\"']+")
+_RESOURCE_URI_PATTERN = (
+    r"viking://(?:"
+    r"resources(?:/[^\s<>\]\)\"']*)?"
+    r"|user/[^/\s<>\]\)\"']+/(?:"
+    r"resources(?:/[^\s<>\]\)\"']*)?"
+    r"|peers/[^/\s<>\]\)\"']+/resources(?:/[^\s<>\]\)\"']*)?"
+    r")"
+    r")"
+)
+_MARKDOWN_RESOURCE_LINK_RE = re.compile(rf"\[([^\]\n]+)\]\(({_RESOURCE_URI_PATTERN})\)")
+_RESOURCE_URI_RE = re.compile(_RESOURCE_URI_PATTERN)
 _CODE_BLOCK_RE = re.compile(r"```.*?```", re.DOTALL)
 _INLINE_CODE_RE = re.compile(r"`[^`\n]+`")
 _TRAILING_URI_PUNCTUATION = ".,;:!?，。；：！？"
@@ -63,6 +72,11 @@ def sync_memory_resource_refs(
 
 def coerce_resource_refs(value: Any) -> List[Dict[str, Any]]:
     return _coerce_resource_refs(value)
+
+
+def contains_resource_uri(content: str) -> bool:
+    """Return whether text contains any supported resource URI form."""
+    return bool(_RESOURCE_URI_RE.search(content or ""))
 
 
 def content_references_resource(
@@ -220,7 +234,7 @@ def _linkify_bare_resource_uris(
             if label_span:
                 anchor_start, anchor_end = label_span
                 anchor = updated[anchor_start:anchor_end]
-        if "viking://resources/" in anchor or "](" in anchor:
+        if contains_resource_uri(anchor) or "](" in anchor:
             continue
         refs[-1]["match_text"] = anchor
         replacement = f"[{anchor}]({resource_uri})"

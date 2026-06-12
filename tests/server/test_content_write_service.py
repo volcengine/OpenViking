@@ -144,6 +144,34 @@ async def test_memory_write_adds_resource_refs_for_markdown_resource_link(servic
     assert mf.links == []
 
 
+@pytest.mark.parametrize(
+    "resource_uri",
+    [
+        "viking://user/test_user/resources/images/2026/06/10/yueqian_jpeg",
+        "viking://user/test_user/peers/fuji/resources/images/2026/06/10/yueqian_jpeg",
+    ],
+)
+@pytest.mark.asyncio
+async def test_memory_write_adds_resource_refs_for_user_scoped_resource_links(
+    service,
+    resource_uri,
+):
+    ctx = RequestContext(user=service.user, role=Role.USER)
+    memory_uri = f"viking://user/{ctx.user.user_space_name()}/memories/entities/ryoma.md"
+    content = f"用户上传了一张[越前龙马]({resource_uri})的照片"
+    await service.viking_fs.write_file(memory_uri, "Original", ctx=ctx)
+
+    await service.fs.write(memory_uri, content=content, ctx=ctx, mode="replace")
+
+    stored = await service.viking_fs.read_file(memory_uri, ctx=ctx)
+    mf = MemoryFileUtils.read(stored, uri=memory_uri)
+    refs = mf.extra_fields["resource_refs"]
+    assert mf.content == content
+    assert refs[0]["resource_uri"] == resource_uri
+    assert refs[0]["source"] == "content.write"
+    assert refs[0]["match_text"] == "越前龙马"
+
+
 @pytest.mark.asyncio
 async def test_memory_write_linkifies_bare_resource_uri_previous_sentence(service):
     ctx = RequestContext(user=service.user, role=Role.USER)
