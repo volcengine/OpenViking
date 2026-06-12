@@ -510,7 +510,8 @@ async def process_single_session(
         return result
 
     except Exception as e:
-        print(f"    -> [ERROR] [{csv_id}/{session_key}] {e}", file=sys.stderr)
+        error_message = f"{type(e).__name__}: {e}" if str(e) else repr(e)
+        print(f"    -> [ERROR] [{csv_id}/{session_key}] {error_message}", file=sys.stderr)
         traceback.print_exc(file=sys.stderr)
 
         # Write error record
@@ -520,7 +521,7 @@ async def process_single_session(
             "display_id": csv_id,
             "session": session_key,
             "status": "error",
-            "error": str(e),
+            "error": error_message,
         }
 
         # 写入错误日志
@@ -646,6 +647,12 @@ async def run_import(args: argparse.Namespace) -> None:
     total_reasoning_tokens = 0
     total_llm_output_tokens = 0
     tasks = []
+    session_semaphore = asyncio.Semaphore(args.parallel_sessions) if args.parallel_sessions else None
+    if args.parallel_sessions:
+        print(
+            f"[parallel-sessions] global concurrency={args.parallel_sessions}",
+            file=sys.stderr,
+        )
 
     if args.input.endswith(".json"):
         # LoCoMo JSON format
@@ -736,13 +743,7 @@ async def run_import(args: argparse.Namespace) -> None:
                     args=args,
                 )
 
-            if args.parallel_sessions:
-                print(
-                    f"    [parallel-sessions] concurrency={args.parallel_sessions}",
-                    file=sys.stderr,
-                )
-                session_semaphore = asyncio.Semaphore(args.parallel_sessions)
-
+            if session_semaphore is not None:
                 async def import_one_session_with_limit(sess):
                     async with session_semaphore:
                         return await import_one_session(sess)
