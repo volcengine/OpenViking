@@ -321,6 +321,50 @@ class TestMemoryUpdater:
         mock_viking_fs.read_file.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_apply_operations_skips_case_only_delete_conflicting_with_upsert(self):
+        written_uri = "viking://user/conv-26/memories/entities/person/melanie.md"
+        deleted_uri = "viking://user/conv-26/memories/entities/person/Melanie.md"
+
+        schema = MemoryTypeSchema(
+            memory_type="entities",
+            description="entity memory",
+            directory="viking://user/{{ user_space }}/memories/entities",
+            filename_template="{{ category }}/{{ name }}.md",
+            fields=[],
+            overview_template="overview",
+        )
+        registry = MagicMock()
+        registry.get.return_value = schema
+
+        updater = MemoryUpdater(registry=registry)
+        updater._get_viking_fs = MagicMock(return_value=MagicMock())
+        updater._apply_upsert = AsyncMock(return_value=None)
+        updater._apply_delete = AsyncMock()
+        updater._vectorize_memories = AsyncMock()
+        updater.generate_overview = AsyncMock()
+
+        resolved = ResolvedOperations(
+            upsert_operations=[
+                ResolvedOperation(
+                    memory_fields={"category": "person", "name": "melanie"},
+                    memory_type="entities",
+                    uris=[written_uri],
+                )
+            ],
+            delete_file_contents=[
+                MemoryFile(uri=deleted_uri, extra_fields={"memory_type": "entities"})
+            ],
+            errors=[],
+        )
+        ctx = RequestContext(user=UserIdentifier("acme", "conv-26"), role=Role.USER)
+
+        result = await updater.apply_operations(operations=resolved, ctx=ctx)
+
+        assert result.written_uris == [written_uri]
+        assert result.deleted_uris == []
+        updater._apply_delete.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_apply_operations_routes_backlinks_to_matching_uri_only(self):
         caroline_uri = (
             "viking://user/Caroline/memories/events/2023/05/08/career_education_planning.md"

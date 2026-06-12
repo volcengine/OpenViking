@@ -20,7 +20,20 @@ from openviking.session.memory.extract_loop import (
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.memory_updater import MemoryUpdater, MemoryUpdateResult
 from openviking.session.memory.merge_op import FieldType, MergeOp
+from openviking.session.memory.patch_merge_context_provider import (
+    PatchMergeContextProvider,
+    PatchMergePatch,
+)
 from openviking.session.memory.schema_model_generator import SchemaModelGenerator
+from openviking.session.memory.streaming_memory_updater import (
+    MemoryUpdateRequest,
+    StreamingMemoryUpdater,
+    StreamingMemoryUpdaterConfig,
+    StreamingMemoryUpdateResult,
+    StreamingMemoryUpdaterKey,
+    get_streaming_memory_updater,
+    make_streaming_memory_updater_key,
+)
 from openviking.session.memory.tools import (
     MemoryLsTool,
     MemoryReadTool,
@@ -48,6 +61,8 @@ __all__ = [
     # Operations
     "MemoryOperations",
     "StructuredMemoryOperations",
+    "PatchMergeContextProvider",
+    "PatchMergePatch",
     # Registry
     "MemoryTypeRegistry",
     # Schema models
@@ -55,6 +70,13 @@ __all__ = [
     # Updater
     "MemoryUpdater",
     "MemoryUpdateResult",
+    "MemoryUpdateRequest",
+    "StreamingMemoryUpdater",
+    "StreamingMemoryUpdaterConfig",
+    "StreamingMemoryUpdaterKey",
+    "StreamingMemoryUpdateResult",
+    "get_streaming_memory_updater",
+    "make_streaming_memory_updater_key",
     # ExtractLoop
     "ExtractLoop",
     # Tools (Tool implementations)

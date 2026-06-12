@@ -1,0 +1,558 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
+
+from __future__ import annotations
+
+import asyncio
+from unittest.mock import AsyncMock
+
+import pytest
+
+from openviking.message import Message, TextPart
+from openviking.server.identity import RequestContext, Role
+from openviking.session.memory.dataclass import (
+    MemoryField,
+    MemoryFile,
+    MemoryTypeSchema,
+    ResolvedOperation,
+    ResolvedOperations,
+    StoredLink,
+)
+from openviking.session.memory.memory_updater import ExtractContext
+from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
+from openviking.session.memory.merge_op.base import FieldType, MergeOp, SearchReplaceBlock, StrPatch
+from openviking.session.memory.streaming_memory_updater import (
+    MemoryUpdateRequest,
+    StreamingMemoryUpdater,
+    StreamingMemoryUpdaterConfig,
+    classify_memory_merge_mode,
+    merge_one_memory_type_operations,
+    operation_to_patch,
+)
+from openviking_cli.session.user_id import UserIdentifier
+
+
+class InMemoryVikingFS:
+    def __init__(self, files: dict[str, str] | None = None):
+        self.files = dict(files or {})
+        self.writes = []
+
+    async def ls(self, uri: str, output: str = "original", ctx=None):
+        del output, ctx
+        prefix = uri.rstrip("/") + "/"
+        return [
+            {"name": path.removeprefix(prefix), "uri": path, "isDir": False}
+            for path in sorted(self.files)
+            if path.startswith(prefix) and "/" not in path.removeprefix(prefix)
+        ]
+
+    async def read_file(self, uri: str, ctx=None):
+        uri = _canonical_user_uri(uri, ctx)
+        if uri not in self.files:
+            raise FileNotFoundError(uri)
+        return self.files[uri]
+
+    async def write_file(self, uri: str, content: str, ctx=None):
+        uri = _canonical_user_uri(uri, ctx)
+        self.files[uri] = content
+        self.writes.append((uri, content, ctx))
+
+    async def rm(self, uri: str, recursive: bool = False, ctx=None, lock_handle=None):
+        del recursive, lock_handle
+        uri = _canonical_user_uri(uri, ctx)
+        self.files.pop(uri, None)
+
+
+def _canonical_user_uri(uri: str, ctx=None) -> str:
+    if not uri.startswith("viking://user/memories/"):
+        return uri
+    user_id = getattr(getattr(ctx, "user", None), "user_id", None) or "u"
+    return uri.replace("viking://user/memories/", f"viking://user/{user_id}/memories/", 1)
+
+
+def _ctx() -> RequestContext:
+    return RequestContext(user=UserIdentifier.the_default_user("u"), role=Role.ROOT)
+
+
+def _registry() -> MemoryTypeRegistry:
+    registry = MemoryTypeRegistry(load_schemas=False)
+    registry.register(
+        MemoryTypeSchema(
+            memory_type="cases",
+            description="case memory",
+            directory="viking://user/{{ user_space }}/memories/cases",
+            filename_template="{{ case_name }}.md",
+            operation_mode="add_only",
+            fields=[
+                MemoryField(
+                    name="case_name",
+                    field_type=FieldType.STRING,
+                    merge_op=MergeOp.IMMUTABLE,
+                ),
+                MemoryField(
+                    name="task_signature",
+                    field_type=FieldType.STRING,
+                    merge_op=MergeOp.IMMUTABLE,
+                ),
+                MemoryField(
+                    name="input",
+                    field_type=FieldType.STRING,
+                    merge_op=MergeOp.IMMUTABLE,
+                ),
+                MemoryField(
+                    name="rubric",
+                    field_type=FieldType.STRING,
+                    merge_op=MergeOp.IMMUTABLE,
+                ),
+            ],
+        )
+    )
+    registry.register(
+        MemoryTypeSchema(
+            memory_type="notes",
+            description="note memory",
+            directory="viking://user/{{ user_space }}/memories/notes",
+            filename_template="{{ note_name }}.md",
+            operation_mode="upsert",
+            fields=[
+                MemoryField(
+                    name="note_name",
+                    field_type=FieldType.STRING,
+                    merge_op=MergeOp.IMMUTABLE,
+                ),
+                MemoryField(
+                    name="content",
+                    field_type=FieldType.STRING,
+                    merge_op=MergeOp.PATCH,
+                ),
+            ],
+        )
+    )
+    return registry
+
+
+def _case_op(name: str) -> ResolvedOperation:
+    return ResolvedOperation(
+        old_memory_file_content=None,
+        memory_type="cases",
+        uris=[f"viking://user/u/memories/cases/{name}.md"],
+        memory_fields={
+            "case_name": name,
+            "task_signature": f"{name} signature",
+            "input": '{"summary":"case input"}',
+            "rubric": '{"criteria":[{"name":"done","description":"done","required":true,"weight":1.0}]}',
+        },
+    )
+
+
+def _note_op(name: str) -> ResolvedOperation:
+    return ResolvedOperation(
+        old_memory_file_content=None,
+        memory_type="notes",
+        uris=[f"viking://user/u/memories/notes/{name}.md"],
+        memory_fields={
+            "note_name": name,
+            "content": f"{name} content",
+        },
+    )
+
+
+def _note_op_with_source(name: str, extraction_id: str) -> ResolvedOperation:
+    op = _note_op(name)
+    op.memory_fields["source_extraction_id"] = extraction_id
+    return op
+
+
+def test_operation_to_patch_omits_raw_operation_metadata():
+    schema = _registry().get("notes")
+    old_file = MemoryFile(
+        uri="viking://user/u/memories/notes/note.md",
+        content="old content",
+        memory_type="notes",
+        extra_fields={"note_name": "note"},
+    )
+    op = ResolvedOperation(
+        old_memory_file_content=old_file,
+        memory_type="notes",
+        uris=["viking://user/u/memories/notes/note.md"],
+        memory_fields={
+            "note_name": "note",
+            "content": StrPatch(
+                blocks=[SearchReplaceBlock(search="old content", replace="new content")]
+            ),
+        },
+    )
+
+    patch = operation_to_patch(op, schema=schema, extract_context=ExtractContext([]))
+
+    assert patch.metadata == {}
+    assert patch.after_file.content == "new content"
+
+
+def test_operation_to_patch_raises_when_after_file_preview_rendering_fails(monkeypatch):
+    schema = _registry().get("notes")
+    op = _note_op("note_render_failure")
+
+    def fail_write(*args, **kwargs):
+        raise RuntimeError("template render failed")
+
+    monkeypatch.setattr(
+        "openviking.session.memory.streaming_memory_updater.MemoryFileUtils.write",
+        fail_write,
+    )
+
+    with pytest.raises(RuntimeError, match="template render failed"):
+        operation_to_patch(op, schema=schema, extract_context=ExtractContext([]))
+
+
+def test_operation_to_patch_skips_failed_field_preview_update():
+    schema = MemoryTypeSchema(
+        memory_type="notes",
+        description="note memory",
+        directory="viking://user/{{ user_space }}/memories/notes",
+        filename_template="{{ note_name }}.md",
+        operation_mode="upsert",
+        fields=[
+            MemoryField(
+                name="note_name",
+                field_type=FieldType.STRING,
+                merge_op=MergeOp.IMMUTABLE,
+            ),
+            MemoryField(
+                name="content",
+                field_type=FieldType.STRING,
+                merge_op=MergeOp.PATCH,
+            ),
+            MemoryField(
+                name="summary",
+                field_type=FieldType.STRING,
+                merge_op=MergeOp.PATCH,
+            ),
+        ],
+    )
+    old_file = MemoryFile(
+        uri="viking://user/u/memories/notes/note.md",
+        content="old content",
+        memory_type="notes",
+        extra_fields={
+            "note_name": "note",
+            "summary": "old summary",
+        },
+    )
+    op = ResolvedOperation(
+        old_memory_file_content=old_file,
+        memory_type="notes",
+        uris=["viking://user/u/memories/notes/note.md"],
+        memory_fields={
+            "note_name": "note",
+            "content": StrPatch(
+                blocks=[SearchReplaceBlock(search="old content", replace="new content")]
+            ),
+            "summary": StrPatch(
+                blocks=[SearchReplaceBlock(search="missing summary", replace="new summary")]
+            ),
+        },
+    )
+
+    patch = operation_to_patch(op, schema=schema, extract_context=ExtractContext([]))
+
+    assert patch.after_file.content == "new content"
+    assert patch.after_file.extra_fields["summary"] == "old summary"
+    assert isinstance(op.memory_fields["summary"], StrPatch)
+
+
+@pytest.mark.asyncio
+async def test_streaming_memory_updater_submit_applies_fast_path(monkeypatch):
+    fs = InMemoryVikingFS({})
+    fs.search = AsyncMock(return_value=[])
+    monkeypatch.setattr(
+        "openviking.session.memory.streaming_memory_updater.get_viking_fs",
+        lambda: fs,
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.memory_updater.get_viking_fs",
+        lambda: fs,
+    )
+
+    updater = StreamingMemoryUpdater(
+        registry=_registry(),
+        config=StreamingMemoryUpdaterConfig(
+            max_operations_per_update=8,
+            max_wait_seconds=0.01,
+            timer_check_interval_seconds=0.01,
+        ),
+    )
+    result = await updater.submit(
+        MemoryUpdateRequest(
+            operations=ResolvedOperations(
+                upsert_operations=[_case_op("重复预订处理")],
+                delete_file_contents=[],
+                errors=[],
+            ),
+            messages=[Message(id="m1", role="user", parts=[TextPart("处理重复预订")])],
+            ctx=_ctx(),
+        )
+    )
+
+    assert result.request_count == 1
+    assert result.operations.upsert_operations[0].memory_type == "cases"
+    assert result.apply_result.written_uris == ["viking://user/u/memories/cases/重复预订处理.md"]
+    assert fs.writes
+    written_uri, written_content, _ = fs.writes[0]
+    assert written_uri.endswith("/memories/cases/重复预订处理.md")
+    assert "重复预订处理" in written_content
+
+
+@pytest.mark.asyncio
+async def test_streaming_memory_updater_fast_path_filters_links(monkeypatch):
+    fs = InMemoryVikingFS(
+        {
+            "viking://user/u/memories/events/existing.md": (
+                "existing\n<!-- MEMORY_FIELDS\n"
+                '{"memory_type":"events","content":"existing"}\n'
+                "-->"
+            )
+        }
+    )
+    fs.search = AsyncMock(return_value=[])
+    monkeypatch.setattr(
+        "openviking.session.memory.streaming_memory_updater.get_viking_fs",
+        lambda: fs,
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.memory_updater.get_viking_fs",
+        lambda: fs,
+    )
+
+    updater = StreamingMemoryUpdater(
+        registry=_registry(),
+        config=StreamingMemoryUpdaterConfig(
+            max_operations_per_update=8,
+            max_wait_seconds=0.01,
+            timer_check_interval_seconds=0.01,
+        ),
+    )
+    op1 = _case_op("并发案例A")
+    link = StoredLink(
+        from_uri=op1.uris[0],
+        to_uri="viking://user/u/memories/events/existing.md",
+        link_type="related_to",
+        weight=0.8,
+        match_text="并发",
+        description="valid link",
+    )
+    duplicate_link = link.model_copy(update={"weight": 0.6, "description": "short"})
+    missing_link = StoredLink(
+        from_uri=op1.uris[0],
+        to_uri="viking://user/u/memories/events/missing.md",
+        link_type="related_to",
+        weight=0.9,
+        match_text="缺失",
+        description="invalid link",
+    )
+
+    result = await updater.submit(
+        MemoryUpdateRequest(
+            operations=ResolvedOperations(
+                upsert_operations=[op1],
+                delete_file_contents=[],
+                errors=[],
+                resolved_links=[link, duplicate_link, missing_link],
+            ),
+            messages=[Message(id="m1", role="user", parts=[TextPart("并发A")])],
+            ctx=_ctx(),
+        )
+    )
+
+    assert result.request_count == 1
+    assert result.metadata["flush_reason"] == "append_only_fast_path"
+    assert len(result.operations.upsert_operations) == 1
+    assert len(result.operations.resolved_links) == 1
+    assert result.operations.resolved_links[0].to_uri.endswith("/events/existing.md")
+    assert result.apply_result.written_uris == [op1.uris[0]]
+
+
+@pytest.mark.asyncio
+async def test_streaming_memory_updater_batches_non_append_only_submits(monkeypatch):
+    fs = InMemoryVikingFS({})
+    fs.search = AsyncMock(return_value=[])
+    monkeypatch.setattr(
+        "openviking.session.memory.streaming_memory_updater.get_viking_fs",
+        lambda: fs,
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.memory_updater.get_viking_fs",
+        lambda: fs,
+    )
+
+    updater = StreamingMemoryUpdater(
+        registry=_registry(),
+        config=StreamingMemoryUpdaterConfig(
+            max_operations_per_update=2,
+            max_wait_seconds=0.01,
+            timer_check_interval_seconds=0.01,
+        ),
+    )
+    op1 = _note_op("note_a")
+    op2 = _note_op("note_b")
+
+    result1, result2 = await asyncio.gather(
+        updater.submit(
+            MemoryUpdateRequest(
+                operations=ResolvedOperations(
+                    upsert_operations=[op1],
+                    delete_file_contents=[],
+                    errors=[],
+                ),
+                messages=[Message(id="m1", role="user", parts=[TextPart("note A")])],
+                ctx=_ctx(),
+            )
+        ),
+        updater.submit(
+            MemoryUpdateRequest(
+                operations=ResolvedOperations(
+                    upsert_operations=[op2],
+                    delete_file_contents=[],
+                    errors=[],
+                ),
+                messages=[Message(id="m2", role="user", parts=[TextPart("note B")])],
+                ctx=_ctx(),
+            )
+        ),
+    )
+
+    assert result1 is result2
+    assert result1.request_count == 2
+    assert result1.metadata["flush_reason"] == "count"
+    assert sorted(result1.apply_result.written_uris) == sorted([op1.uris[0], op2.uris[0]])
+
+
+def test_classify_memory_merge_mode_forces_cross_extraction_merge():
+    op1 = _note_op_with_source("note_a", "extract_a")
+    op2 = _note_op_with_source("note_b", "extract_b")
+
+    fast_path, reason = classify_memory_merge_mode([op1, op2], schema=_registry().get("notes"))
+
+    assert fast_path is False
+    assert reason == "cross_extraction_batch"
+
+
+@pytest.mark.asyncio
+async def test_streaming_memory_updater_persists_source_extraction_id_and_hides_from_read(
+    monkeypatch,
+):
+    fs = InMemoryVikingFS({})
+    fs.search = AsyncMock(return_value=[])
+    monkeypatch.setattr(
+        "openviking.session.memory.streaming_memory_updater.get_viking_fs",
+        lambda: fs,
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.memory_updater.get_viking_fs",
+        lambda: fs,
+    )
+
+    updater = StreamingMemoryUpdater(
+        registry=_registry(),
+        config=StreamingMemoryUpdaterConfig(
+            max_operations_per_update=8,
+            max_wait_seconds=0.01,
+            timer_check_interval_seconds=0.01,
+        ),
+    )
+    op = _note_op("note_source")
+    result = await updater.submit(
+        MemoryUpdateRequest(
+            operations=ResolvedOperations(
+                upsert_operations=[op],
+                delete_file_contents=[],
+                errors=[],
+            ),
+            messages=[Message(id="m1", role="user", parts=[TextPart("note source")])],
+            ctx=_ctx(),
+            metadata={"source_extraction_id": "extract_1"},
+        )
+    )
+
+    assert result.apply_result.written_uris == [op.uris[0]]
+    assert '"source_extraction_id": "extract_1"' in fs.files[op.uris[0]]
+
+    from openviking.server.identity import ToolContext
+    from openviking.session.memory.tools import MemoryReadTool
+
+    read_result = await MemoryReadTool().execute(
+        ToolContext(viking_fs=fs, request_ctx=_ctx(), read_file_contents={}),
+        uri=op.uris[0],
+    )
+
+    assert "source_extraction_id" not in read_result
+
+
+@pytest.mark.asyncio
+async def test_cross_extraction_merge_deletes_existing_loser_uri(monkeypatch):
+    existing_uri = "viking://user/u/memories/notes/existing.md"
+    winner_uri = "viking://user/u/memories/notes/winner.md"
+    old_file = __import__(
+        "openviking.session.memory.dataclass", fromlist=["MemoryFile"]
+    ).MemoryFile(
+        uri=existing_uri,
+        content="old",
+        memory_type="notes",
+        extra_fields={"note_name": "existing"},
+    )
+    existing_op = ResolvedOperation(
+        old_memory_file_content=old_file,
+        memory_type="notes",
+        uris=[existing_uri],
+        memory_fields={
+            "note_name": "existing",
+            "content": {"blocks": [{"search": "old", "replace": "old updated"}]},
+            "source_extraction_id": "extract_a",
+        },
+    )
+    new_op = ResolvedOperation(
+        old_memory_file_content=None,
+        memory_type="notes",
+        uris=[winner_uri],
+        memory_fields={
+            "note_name": "winner",
+            "content": "merged content",
+            "source_extraction_id": "extract_b",
+        },
+    )
+
+    async def fake_run(self):
+        return (
+            ResolvedOperations(
+                upsert_operations=[new_op],
+                delete_file_contents=[],
+                errors=[],
+            ),
+            [],
+        )
+
+    monkeypatch.setattr(
+        "openviking.session.memory.streaming_memory_updater.ExtractLoop.run",
+        fake_run,
+    )
+    fs = InMemoryVikingFS({existing_uri: "old"})
+    fs.search = AsyncMock(return_value=[])
+    monkeypatch.setattr(
+        "openviking.session.memory.streaming_memory_updater.get_viking_fs",
+        lambda: fs,
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.memory_updater.get_viking_fs",
+        lambda: fs,
+    )
+
+    merged = await merge_one_memory_type_operations(
+        memory_type="notes",
+        operations=[existing_op, new_op],
+        messages=[],
+        ctx=_ctx(),
+        registry=_registry(),
+    )
+
+    assert [op.uris for op in merged.upsert_operations] == [[winner_uri]]
+    assert [file.uri for file in merged.delete_file_contents] == [existing_uri]

@@ -135,6 +135,22 @@ class StoredLink(BaseModel):
     created_at: str = ""
 
 
+class MemoryOperationSource(BaseModel):
+    """Runtime and persisted provenance for one extracted memory operation.
+
+    ``extraction_id`` identifies one archive/commit extraction run, not an
+    entire chat session.  Streaming memory merge uses it to detect batches that
+    combine patches produced from different extraction snapshots.
+    """
+
+    extraction_id: Optional[str] = None
+    session_id: Optional[str] = None
+    archive_uri: Optional[str] = None
+    task_id: Optional[str] = None
+    trace_id: Optional[str] = None
+    extracted_at: Optional[str] = None
+
+
 # ============================================================================
 # Memory Field and Schema Definitions
 # ============================================================================
@@ -254,6 +270,7 @@ class ResolvedOperation(BaseModel):
     memory_type: str  # The memory type (e.g., 'tools', 'skills', 'events')
     uris: List[str]
     page_id: Optional[int] = None  # Temporary page_id for link resolution (not persisted)
+    source: Optional[MemoryOperationSource] = None
 
     def is_edit(self):
         return self.old_memory_file_content is not None

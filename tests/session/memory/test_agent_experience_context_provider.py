@@ -108,3 +108,33 @@ async def test_agent_experience_prefetch_includes_structured_read_results():
         == "candidate_experience"
     )
     assert add_tool_call_pair.call_args_list[1].kwargs["result"]["page_id"] == 1
+
+
+@pytest.mark.asyncio
+async def test_agent_experience_prefetch_missing_experience_dir_returns_empty_candidates():
+    provider = AgentExperienceContextProvider(
+        messages=[],
+        trajectory_summary="new execution",
+        trajectory_uri="viking://user/user_1/memories/trajectories/new_execution.md",
+    )
+    provider._ctx = RequestContext(
+        user=UserIdentifier(account_id="acc", user_id="user_1"),
+        role=Role.USER,
+    )
+    provider._viking_fs = AsyncMock()
+    provider._viking_fs.ls = AsyncMock(
+        side_effect=Exception("Directory not found: viking://user/user_1/memories/experiences")
+    )
+    provider._transaction_handle = None
+    provider.search_files = AsyncMock(return_value=[])
+
+    with patch(
+        "openviking.session.memory.agent_experience_context_provider.tracer.error"
+    ) as tracer_error, patch(
+        "openviking.session.memory.agent_experience_context_provider.add_tool_call_pair_to_messages"
+    ) as add_tool_call_pair:
+        messages = await provider.prefetch()
+
+    assert messages[-1]["role"] == "user"
+    assert add_tool_call_pair.call_count == 1
+    tracer_error.assert_not_called()

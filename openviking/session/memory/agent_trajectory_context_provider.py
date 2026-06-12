@@ -29,6 +29,8 @@ TRAJECTORY_MEMORY_TYPE = "trajectories"
 class AgentTrajectoryContextProvider(SessionExtractContextProvider):
     """Phase 1 provider: extract trajectories and optional session skills."""
 
+    include_tool_parts_in_conversation = True
+
     _SHARED_SKILL_STATE = {
         "messages",
         "latest_archive_overview",

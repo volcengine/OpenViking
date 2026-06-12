@@ -45,7 +45,10 @@ class VikingClient:
         self.agent_id = agent_id
         self.ov_path = config.ov_data_path
         self.mode = openviking_config.mode
+        self.auth_mode = (openviking_config.auth_mode or "").strip().lower()
         self.api_key_type = (openviking_config.api_key_type or "user").strip().lower()
+        if self._is_trusted_mode():
+            self.api_key_type = "user"
         if self.api_key_type not in {"root", "user"}:
             raise ValueError(f"Invalid ov_server.api_key_type: {self.api_key_type}")
 
@@ -84,7 +87,7 @@ class VikingClient:
             "api_key": api_key,
             "profile_enabled": False,
         }
-        if self._is_root_key_mode():
+        if self._is_root_key_mode() or self._is_trusted_mode():
             remote_client_kwargs["account"] = openviking_config.account_id
             remote_client_kwargs["user"] = openviking_config.admin_user_id
 
@@ -193,10 +196,18 @@ class VikingClient:
             "reason": getattr(relation, "reason", ""),
         }
 
+    def _is_trusted_mode(self) -> bool:
+        return (
+            self.mode == "remote"
+            and getattr(self, "auth_mode", "") == "trusted"
+            and not self._has_request_connection()
+        )
+
     def _is_root_key_mode(self) -> bool:
         return (
             self.mode == "remote"
             and self.api_key_type == "root"
+            and not self._is_trusted_mode()
             and not self._has_request_connection()
         )
 

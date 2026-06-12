@@ -6,6 +6,7 @@ import functools
 import inspect
 import json
 import logging
+from contextlib import contextmanager
 from typing import Any, Callable, Optional
 
 from loguru import logger
@@ -344,6 +345,14 @@ def from_trace_info(trace_info: str) -> Optional[Any]:
     except Exception as e:
         logger.debug(f"[TRACER] failed to extract trace context: {e}")
         return None
+
+
+@contextmanager
+def start_current_span(name: str, *, trace_id: Optional[str] = None):
+    """Start a span as the current context for an explicit code block."""
+
+    with tracer.start_as_current_span(name=name, trace_id=trace_id) as span:
+        yield span
 
 
 def start_span(
