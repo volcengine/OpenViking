@@ -169,6 +169,30 @@ async def test_memory_write_linkifies_bare_resource_uri_previous_sentence(servic
 
 
 @pytest.mark.asyncio
+async def test_memory_write_linkifies_resource_uri_marker_with_readable_anchor(service):
+    ctx = RequestContext(user=service.user, role=Role.USER)
+    memory_uri = f"viking://user/{ctx.user.user_space_name()}/memories/entities/ryoma.md"
+    resource_uri = "viking://resources/images/2026/06/12/yueqian_jpeg"
+    await service.viking_fs.write_file(memory_uri, "Original", ctx=ctx)
+
+    await service.fs.write(
+        memory_uri,
+        content=f"2026-06-12，用户保存了粉丝创作的越前龙马动漫插画资源，资源URI为{resource_uri}。",
+        ctx=ctx,
+        mode="replace",
+    )
+
+    stored = await service.viking_fs.read_file(memory_uri, ctx=ctx)
+    mf = MemoryFileUtils.read(stored, uri=memory_uri)
+    assert mf.content == f"2026-06-12，[用户保存了粉丝创作的越前龙马动漫插画资源]({resource_uri})。"
+    refs = mf.extra_fields["resource_refs"]
+    assert refs[0]["resource_uri"] == resource_uri
+    assert refs[0]["source"] == "content.write"
+    assert refs[0]["match_text"] == "用户保存了粉丝创作的越前龙马动漫插画资源"
+    assert mf.links == []
+
+
+@pytest.mark.asyncio
 async def test_memory_write_ignores_resource_uri_in_inline_code(service):
     ctx = RequestContext(user=service.user, role=Role.USER)
     memory_uri = f"viking://user/{ctx.user.user_space_name()}/memories/entities/ryoma.md"

@@ -46,6 +46,14 @@ logger = get_logger(__name__)
 
 _EXTRACTION_CHUNK_MIN_CHARS = 100
 _EXTRACTION_CHUNK_BOUNDARY_RE = re.compile(r"(\n+|[。！？；!?;]+|(?<!\d)\.(?!\d))")
+_RESOURCE_ADDITION_FIELD_RE = re.compile(
+    r"^(Resource URI|Source name|Added at|Resource abstract|User reason):\s*(.*)$",
+    re.MULTILINE,
+)
+_RESOURCE_URI_MARKER_RE = re.compile(
+    r"[，,；;：:\s]*(?:资源\s*URI\s*为|资源\s*URI|Resource\s+URI)\s*[:：为]?\s*",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -285,6 +293,122 @@ class ExtractContext:
         if len(summary) / len(original) >= ratio_threshold:
             return original
         return summary
+
+    def get_resource_event_content(self, ranges_str: str, summary: str) -> str:
+        """Return a user-readable event body for add-resource derived events."""
+        if not ranges_str:
+            return ""
+        additions = self._resource_additions_from_ranges(ranges_str)
+        if not additions:
+            return ""
+        addition = additions[0]
+        resource_uri = addition.get("Resource URI", "")
+        if not resource_uri:
+            return ""
+        return self._link_resource_summary(summary or "", resource_uri, addition).strip()
+
+    def _resource_additions_from_ranges(self, ranges_str: str) -> List[Dict[str, str]]:
+        msg_range = self.read_message_ranges(ranges_str)
+        additions: List[Dict[str, str]] = []
+        for msg_group in msg_range.elements:
+            for msg in msg_group:
+                text = self._message_text(msg)
+                if "## Resource Addition" not in text:
+                    continue
+                fields = {
+                    match.group(1): match.group(2).strip()
+                    for match in _RESOURCE_ADDITION_FIELD_RE.finditer(text)
+                }
+                if fields.get("Resource URI"):
+                    additions.append(fields)
+        return additions
+
+    @staticmethod
+    def _message_text(message: Message) -> str:
+        parts = getattr(message, "parts", [])
+        texts = [part.text for part in parts if isinstance(part, TextPart) and part.text]
+        if texts:
+            return "\n".join(texts)
+        return message.content or ""
+
+    @classmethod
+    def _link_resource_summary(
+        cls,
+        summary: str,
+        resource_uri: str,
+        addition: Dict[str, str],
+    ) -> str:
+        text = (summary or "").strip()
+        if not text:
+            return cls._resource_addition_fallback_sentence(resource_uri, addition)
+        if f"]({resource_uri})" in text:
+            return text
+        if resource_uri in text:
+            return cls._replace_bare_resource_uri(text, resource_uri, addition)
+        label = cls._resource_label_from_addition(addition)
+        return cls._finish_sentence(f"{text.rstrip('。.!')}，关联资源为[{label}]({resource_uri})")
+
+    @classmethod
+    def _replace_bare_resource_uri(
+        cls,
+        text: str,
+        resource_uri: str,
+        addition: Dict[str, str],
+    ) -> str:
+        uri_start = text.find(resource_uri)
+        if uri_start < 0:
+            return text
+        prefix = text[:uri_start]
+        suffix = text[uri_start + len(resource_uri) :]
+        marker = _RESOURCE_URI_MARKER_RE.search(prefix)
+        if marker:
+            visible_prefix = prefix[: marker.start()].rstrip("，,；;：: ")
+            label = cls._resource_clause_from_summary_prefix(visible_prefix)
+            if not label:
+                label = cls._resource_label_from_addition(addition)
+            if label and visible_prefix.endswith(label):
+                visible_prefix = visible_prefix[: -len(label)] + f"[{label}]({resource_uri})"
+            else:
+                visible_prefix = f"{visible_prefix}[{label}]({resource_uri})"
+            return cls._finish_sentence(visible_prefix)
+
+        label = cls._resource_label_from_addition(addition)
+        return cls._finish_sentence(f"{prefix.rstrip()}[{label}]({resource_uri}){suffix.strip()}")
+
+    @staticmethod
+    def _resource_clause_from_summary_prefix(prefix: str) -> str:
+        text = prefix.strip("，,；;：: ")
+        tail = re.split(r"[，,；;。.!?？]", text)[-1].strip()
+        return tail if 0 < len(tail) <= 120 else ""
+
+    @classmethod
+    def _resource_label_from_addition(cls, addition: Dict[str, str]) -> str:
+        reason = addition.get("User reason", "").strip()
+        for prefix in ("这是一张", "这是一个", "该资源是", "这个是", "这是"):
+            if reason.startswith(prefix):
+                reason = reason[len(prefix) :].strip()
+                break
+        reason = reason.strip("。.!！ ")
+        if reason:
+            return reason[:80]
+        source_name = addition.get("Source name", "").strip()
+        return source_name or "相关资源"
+
+    @classmethod
+    def _resource_addition_fallback_sentence(
+        cls,
+        resource_uri: str,
+        addition: Dict[str, str],
+    ) -> str:
+        label = cls._resource_label_from_addition(addition)
+        return f"用户保存了[{label}]({resource_uri})。"
+
+    @staticmethod
+    def _finish_sentence(text: str) -> str:
+        text = text.strip("，,；;：: ")
+        if text.endswith(("。", ".", "！", "!", "？", "?")):
+            return text
+        return text + "。"
 
     def read_message_ranges(self, ranges_str: str) -> "MessageRange":
         """Parse ranges string like "0-10,50-60" or "7,9,11,13" and return combined MessageRange.

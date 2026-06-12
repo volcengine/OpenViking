@@ -170,6 +170,8 @@ The system automatically generates URIs based on memory_type and fields. Just pr
 ## Resource URI Handling
 - If the conversation contains a `viking://resources/...` URI and the user says a durable fact, judgment, preference, or event about it, extract that memory into the appropriate normal memory type such as entities, events, or preferences.
 - Preserve resource references as markdown links in visible memory content when useful. Example: user said "用户保存了越前龙马照片 viking://resources/images/ryoma" -> write "用户保存了[越前龙马照片](viking://resources/images/ryoma)".
+- For `## Resource Addition` blocks, use `User reason` as the user's intent and `Resource abstract` only as optional context. Do not copy raw fields such as `Resource URI`, `Added at`, `Resource abstract`, or `User reason` into visible memory content.
+- Use descriptive link text such as `[越前龙马照片](viking://resources/...)`; avoid visible wording like `资源URI为` or `Resource URI`.
 - If the user already wrote `[text](viking://resources/...)`, keep the same resource link intent.
 - Do NOT claim you inspected, summarized, OCRed, or opened the resource file unless the conversation explicitly provides that fact.
 

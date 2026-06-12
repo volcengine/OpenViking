@@ -102,6 +102,41 @@ class TestMemoryUpdater:
         page_id = extract_context.page_id_map.get_page_id("viking://user/a/memories/profile.md")
         assert page_id == 1
 
+    def test_extract_context_resource_event_content_hides_add_resource_fields(self):
+        resource_uri = "viking://resources/images/2026/06/12/yueqian_jpeg"
+        extract_context = ExtractContext(
+            messages=[
+                Message(
+                    id="1",
+                    role="user",
+                    parts=[
+                        TextPart(
+                            text=(
+                                "## Resource Addition\n"
+                                f"Resource URI: {resource_uri}\n"
+                                "Source name: yueqian.jpeg\n"
+                                "Added at: 2026-06-12T03:43:36.343325+00:00\n"
+                                "Resource abstract: This directory contains an anime illustration.\n"
+                                "User reason: 这是越前龙马的照片"
+                            )
+                        )
+                    ],
+                    created_at="2026-06-12T03:43:36.343325+00:00",
+                )
+            ]
+        )
+
+        content = extract_context.get_resource_event_content(
+            "0",
+            f"2026-06-12，用户保存了粉丝创作的越前龙马动漫插画资源，资源URI为{resource_uri}。",
+        )
+
+        assert content == f"2026-06-12，[用户保存了粉丝创作的越前龙马动漫插画资源]({resource_uri})。"
+        assert "Resource URI" not in content
+        assert "Added at" not in content
+        assert "Resource abstract" not in content
+        assert "User reason" not in content
+
     def test_create(self):
         """Test creating a MemoryUpdater."""
         updater = MemoryUpdater()
