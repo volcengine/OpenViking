@@ -1362,6 +1362,9 @@ mod tests {
     use reqwest::StatusCode;
     use serde_json::json;
     use std::collections::HashMap;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+    use tokio::sync::oneshot;
 
     #[test]
     fn timeout_config_calculation() {
@@ -1434,6 +1437,38 @@ mod tests {
         assert!(body.get("revectorize").is_none());
     }
 
+    #[tokio::test]
+    async fn ls_does_not_send_display_time_query() {
+        let (base_url, request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, 5.0, false, None);
+
+        client
+            .ls("viking://resources", false, false, "agent", 256, false, 1)
+            .await
+            .expect("ls request should succeed");
+
+        let request = request_rx.await.expect("request should be captured");
+        assert!(request.starts_with("GET /api/v1/fs/ls?"));
+        assert!(!request.contains("tz="));
+        assert!(!request.contains("include_mod_time_iso="));
+    }
+
+    #[tokio::test]
+    async fn tree_does_not_send_display_time_query() {
+        let (base_url, request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, 5.0, false, None);
+
+        client
+            .tree("viking://resources", "agent", 256, false, 1, 3)
+            .await
+            .expect("tree request should succeed");
+
+        let request = request_rx.await.expect("request should be captured");
+        assert!(request.starts_with("GET /api/v1/fs/tree?"));
+        assert!(!request.contains("tz="));
+        assert!(!request.contains("include_mod_time_iso="));
+    }
+
     #[test]
     fn standard_error_envelope_formats_api_error() {
         let body = json!({
@@ -1492,5 +1527,35 @@ mod tests {
         let result = crate::base_client::unwrap_success_envelope(body, false);
 
         assert_eq!(result, json!("content"));
+    }
+
+    async fn spawn_request_capture_server() -> (String, oneshot::Receiver<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test server should bind");
+        let addr = listener.local_addr().expect("test server should have addr");
+        let (request_tx, request_rx) = oneshot::channel();
+
+        tokio::spawn(async move {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            let mut buffer = vec![0; 4096];
+            let Ok(read) = stream.read(&mut buffer).await else {
+                return;
+            };
+            let request = String::from_utf8_lossy(&buffer[..read]).to_string();
+            let _ = request_tx.send(request);
+
+            let body = r#"{"status":"ok","result":[]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes()).await;
+        });
+
+        (format!("http://{addr}"), request_rx)
     }
 }

@@ -45,7 +45,7 @@ from openviking.storage.internal_names import (
     STORAGE_INTERNAL_ENTRY_NAMES,
 )
 from openviking.telemetry import get_current_telemetry
-from openviking.utils.time_utils import format_simplified, get_current_timestamp, parse_iso_datetime
+from openviking.utils.time_utils import format_iso8601, get_current_timestamp, parse_iso_datetime
 from openviking_cli.exceptions import (
     FailedPreconditionError,
     InvalidArgumentError,
@@ -1012,7 +1012,7 @@ class VikingFS:
         [{'name': '.abstract.md', 'size': 100, 'mode': 420, 'modTime': '2026-02-11T16:52:16.256334192+08:00', 'isDir': False, 'rel_path': '.abstract.md', 'uri': 'viking://resources...'}]
 
         output="agent"
-        [{'uri': 'viking://resources...', 'size': 100, 'isDir': False, 'modTime': '2026-02-11 16:52:16', 'rel_path': '.abstract.md', 'abstract': "..."}]
+        [{'uri': 'viking://resources...', 'size': 100, 'isDir': False, 'modTime': '2026-02-11T08:52:16.256Z', 'rel_path': '.abstract.md', 'abstract': "..."}]
         """
         self._ensure_access(uri, ctx)
         if output == "original":
@@ -1068,7 +1068,6 @@ class VikingFS:
     ) -> List[Dict[str, Any]]:
         """Recursively list all contents (agent format with abstracts)."""
         result = []
-        now = datetime.now(timezone.utc)
 
         async for entry, entry_uri in self._iter_visible_tree_entries(
             uri,
@@ -1084,7 +1083,7 @@ class VikingFS:
                     "uri": entry_uri,
                     "size": 0 if is_dir else info["size"],
                     "isDir": is_dir,
-                    "modTime": format_simplified(parse_iso_datetime(info["modTime"]), now),
+                    "modTime": format_iso8601(parse_iso_datetime(info["modTime"])),
                     "rel_path": entry["rel_path"],
                 }
             )
@@ -2200,7 +2199,7 @@ class VikingFS:
         [{'name': '.abstract.md', 'size': 100, 'mode': 420, 'modTime': '2026-02-11T16:52:16.256334192+08:00', 'isDir': False, 'meta': {'Name': 'localfs', 'Type': 'local', 'Content': None}, 'uri': 'viking://resources/.abstract.md'}]
 
         output="agent"
-        [{'name': '.abstract.md', 'size': 100, 'modTime': '2026-02-11(or 16:52:16 for today)', 'isDir': False, 'uri': 'viking://resources/.abstract.md', 'abstract': "..."}]
+        [{'name': '.abstract.md', 'size': 100, 'modTime': '2026-02-11T08:52:16.256Z', 'isDir': False, 'uri': 'viking://resources/.abstract.md', 'abstract': "..."}]
         """
         self._ensure_access(uri, ctx)
         if output == "original":
@@ -2226,14 +2225,14 @@ class VikingFS:
         except Exception:
             raise NotFoundError(uri, "directory")
         # basic info
-        now = datetime.now(timezone.utc)
+        fallback_time = datetime.now(timezone.utc)
         all_entries = []
         for entry in entries:
             if len(all_entries) >= node_limit:
                 break
             name = entry.get("name", "")
             raw_time = entry.get("modTime", "")
-            parsed_time = now
+            parsed_time = fallback_time
             if isinstance(raw_time, (int, float)):
                 parsed_time = datetime.fromtimestamp(raw_time, tz=timezone.utc)
             elif raw_time:
@@ -2248,7 +2247,7 @@ class VikingFS:
                 "uri": self._path_to_uri(f"{path}/{name}", ctx=ctx),
                 "size": 0 if is_dir else entry.get("size", 0),
                 "isDir": is_dir,
-                "modTime": format_simplified(parsed_time, now),
+                "modTime": format_iso8601(parsed_time),
             }
             if not self._is_accessible(new_entry["uri"], real_ctx):
                 continue
