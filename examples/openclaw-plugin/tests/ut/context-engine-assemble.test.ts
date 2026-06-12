@@ -109,6 +109,7 @@ describe("context-engine assemble()", () => {
         cfgOverrides: {
           autoRecall: true,
           recallPreferAbstract: true,
+          recallTargetTypes: ["user"],
         },
       },
     );
@@ -170,6 +171,7 @@ describe("context-engine assemble()", () => {
         cfgOverrides: {
           autoRecall: true,
           recallPreferAbstract: true,
+          recallTargetTypes: ["user"],
         },
       },
     );

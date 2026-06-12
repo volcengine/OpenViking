@@ -94,7 +94,7 @@ describe("resolveRecallSearchPlan()", () => {
 
     expect(plan.searches).toEqual([
       { resourceType: "resource", targetUri: "viking://resources" },
-      { resourceType: "session", targetUri: "viking://session/ov-session-1/history" },
+      { resourceType: "session", targetUri: "viking://user/sessions/ov-session-1/history" },
       { resourceType: "user", targetUri: "viking://user/memories" },
       { resourceType: "agent", targetUri: "viking://agent/memories" },
     ]);

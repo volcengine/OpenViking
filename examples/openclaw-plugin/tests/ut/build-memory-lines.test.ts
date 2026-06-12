@@ -271,7 +271,7 @@ describe("buildLongTermMemoryRecallContext trace", () => {
   }
 
   it("records auto-recall trace without changing the generated section", async () => {
-    const cfg = makeCfg();
+    const cfg = makeCfg({ recallTargetTypes: ["user"] });
     const memory = makeMemory({
       uri: "viking://user/memories/rust-pref",
       category: "preferences",
@@ -333,7 +333,7 @@ describe("buildLongTermMemoryRecallContext trace", () => {
   });
 
   it("records search errors while still injecting successful recall hits", async () => {
-    const cfg = makeCfg({ recallResources: true });
+    const cfg = makeCfg({ recallTargetTypes: ["user", "resource"] });
     const client = {
       healthCheck: vi.fn().mockResolvedValue(undefined),
       find: vi.fn()
