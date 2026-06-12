@@ -14,10 +14,12 @@ OpenViking supports multiple skill definition formats:
 
 ### Skill Storage Structure
 
-Skills are stored at `viking://user/skills/`:
+Skills are stored under the current user's skills root. The short URI
+`viking://user/skills/` resolves to `viking://user/{user_id}/skills/` for the
+authenticated request:
 
 ```
-viking://user/skills/
+viking://user/{user_id}/skills/
 +-- search-web/
 |   +-- .abstract.md      # L0: Brief description
 |   +-- .overview.md      # L1: Parameters and usage overview
@@ -152,7 +154,7 @@ Skills are a special type of resource that define actions or tools agents can pe
 1. Receive skill data or uploaded temporary file
 2. Detect data format (structured data, SKILL.md content, MCP format)
 3. Parse skill definition
-4. Store to `viking://user/skills/` path
+4. Store to the current user's `viking://user/{user_id}/skills/` path
 5. If `wait=true`, wait for vectorization to complete
 
 **Code Entry Points**:
@@ -183,6 +185,11 @@ Skills are a special type of resource that define actions or tools agents can pe
     - First call `POST /api/v1/resources/temp_upload` to upload a local `SKILL.md` file/zip directory, then call `POST /api/v1/skills` with `temp_file_id`
     - `temp_upload` defaults to local temporary storage; pass `upload_mode=shared` only when you explicitly need distributed shared temporary uploads. In Python HTTP client / CLI flows, this can also be driven by `ovcli.conf` via `upload.mode = "shared"`
   - `POST /api/v1/skills` does not accept direct host filesystem paths in `data`.
+
+- **Targeting**:
+  - Skills are always user-scoped. `add_skill` does not accept `to`, `parent`, or `root_uri`.
+  - Peer-scoped skill roots are not supported; peer-aware retrieval only adds peer memories/resources, not peer skills.
+  - Use `viking://user/skills/...` as current-user shorthand when listing, reading, deleting, or searching skills.
 
 - **Supported data formats**:
   1. **Dict (Skill format)**: Includes `name`, `description`, `content`, etc.
@@ -337,8 +344,8 @@ ov add-skill ./skills/my-skill/ -o json
   "status": "ok",
   "result": {
     "status": "success",
-    "root_uri": "viking://user/skills/my-skill/",
-    "uri": "viking://user/skills/my-skill/",
+    "root_uri": "viking://user/alice/skills/my-skill",
+    "uri": "viking://user/alice/skills/my-skill",
     "name": "my-skill",
     "auxiliary_files": 2,
     "queue_status": {
@@ -359,8 +366,8 @@ ov add-skill ./skills/my-skill/ -o json
 Note: Skill is being processed in the background.
 Use 'ov wait' to wait for completion, or 'ov observer queue' to check status.
 status          success
-root_uri        viking://user/skills/my-skill
-uri             viking://user/skills/my-skill
+root_uri        viking://user/alice/skills/my-skill
+uri             viking://user/alice/skills/my-skill
 name            my-skill
 auxiliary_files 2
 ```
@@ -369,8 +376,8 @@ auxiliary_files 2
 ```json
 {
   "status": "success",
-  "root_uri": "viking://user/skills/my-skill",
-  "uri": "viking://user/skills/my-skill",
+  "root_uri": "viking://user/alice/skills/my-skill",
+  "uri": "viking://user/alice/skills/my-skill",
   "name": "my-skill",
   "auxiliary_files": 2
 }
@@ -381,8 +388,8 @@ auxiliary_files 2
 | Field | Type | Description |
 |-------|------|-------------|
 | `status` | string | Processing status: `success` or `error` |
-| `root_uri` | string | Final URI of the skill in OpenViking (same as `uri`) |
-| `uri` | string | Final URI of the skill in OpenViking (same as `root_uri`) |
+| `root_uri` | string | Canonical final URI of the skill in OpenViking (same as `uri`) |
+| `uri` | string | Canonical final URI of the skill in OpenViking (same as `root_uri`) |
 | `name` | string | Skill name |
 | `auxiliary_files` | number | Number of auxiliary files included with the skill |
 | `queue_status` | object | (Optional, only when `wait=true`) Queue processing status with `pending`, `processing`, `completed` counts |

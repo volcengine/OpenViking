@@ -37,7 +37,12 @@ viking://
 │   └── {user_id}/
 │       ├── profile.md        # 用户画像
 │       ├── memories/         # 用户记忆
+│       ├── resources/        # 用户私有资源
 │       ├── skills/           # 用户技能
+│       ├── peers/
+│       │   └── {peer_id}/
+│       │       ├── memories/  # 关于某个交互对象的记忆
+│       │       └── resources/ # 归属于该 peer 的资源
 │       └── sessions/         # 用户会话
 │           └── {session_id}/
 │               ├── .abstract.md
@@ -70,9 +75,11 @@ viking://user/memories/preferences/           # 用户偏好
 viking://user/memories/preferences/coding     # 具体偏好
 viking://user/memories/entities/              # 实体记忆
 viking://user/memories/events/                # 事件记忆
+viking://user/resources/                      # 当前用户资源
+viking://user/resources/docs/                 # 当前用户资源目录
 ```
 
-### 用户技能和记忆
+### 用户技能和 peer 内容
 
 ```
 viking://user/skills/                         # 当前用户的技能
@@ -80,11 +87,15 @@ viking://user/skills/search-web               # 某个技能
 viking://user/memories/                       # 当前用户的记忆
 viking://user/memories/cases/                 # 学习的案例
 viking://user/memories/patterns/              # 学习的模式
+viking://user/{user_id}/peers/{peer_id}/memories/
+viking://user/{user_id}/peers/{peer_id}/resources/
 ```
 
 上面的 `viking://user/...` 短路径会按当前请求身份解析。
 OpenViking 会在存储和检索前将它展开为显式命名空间路径，例如
 `viking://user/{user_id}/...`。
+`{user_id}` 和 `{peer_id}` 等身份路径片段必须是安全的单段标识，例如
+`alice` 或 `web-visitor-alice`。
 
 ### 会话数据
 
@@ -184,12 +195,18 @@ viking://
 │       ├── .overview.md          # 概述
 │       └── {files...}
 │
-├── user/
-│   ├── profile.md              	# 用户基本信息
-│   └── memories/
-│       ├── preferences/          # 按主题
-│       ├── entities/             # 每条独立
-│       └── events/               # 每条独立
+├── user/{user_id}/
+│   ├── profile.md                # 用户基本信息
+│   ├── memories/
+│   │   ├── preferences/          # 按主题
+│   │   ├── entities/             # 每条独立
+│   │   └── events/               # 每条独立
+│   ├── resources/
+│   │   └── {project}/
+│   ├── skills/
+│   └── peers/{peer_id}/
+│       ├── memories/
+│       └── resources/
 │
 └── user/{user_id}/sessions/{session_id}/
     ├── messages.jsonl
@@ -232,6 +249,12 @@ parent = VikingURI(uri).parent.uri  # viking://resources/docs
 results = client.find(
     "认证",
     target_uri="viking://resources/"
+)
+
+# 仅在当前用户资源中搜索
+results = client.find(
+    "私有项目笔记",
+    target_uri="viking://user/resources/"
 )
 
 # 仅在用户记忆中搜索
@@ -289,11 +312,14 @@ overview = await client.overview("viking://resources/docs/")
 ### 作用域特定操作
 
 ```python
-# 资源只添加到 resources 作用域
+# 添加到 account 共享资源作用域
 await client.add_resource(url, to="viking://resources/project/")
 
-# 技能添加到 user 作用域
-await client.add_skill(skill)  # 自动到 viking://user/skills/
+# 添加到当前用户私有资源根
+await client.add_resource(path, parent="viking://user/resources/project/")
+
+# 技能始终添加到当前用户技能根
+await client.add_skill(skill)  # canonical root: viking://user/{user_id}/skills/
 ```
 
 ## 相关文档

@@ -161,6 +161,8 @@ This endpoint is the core entry point for resource management, supporting adding
 
 **Additional Notes**:
 - `to` and `parent` cannot be specified together. Use `create_parent=true` with `parent` when the parent directory should be created automatically.
+- Resource targets may use public `viking://resources/...`, current-user shorthand `viking://user/resources/...`, explicit user `viking://user/{user_id}/resources/...`, or peer `viking://user/{user_id}/peers/{peer_id}/resources/...` paths. Current-user shorthand is canonicalized with the authenticated request identity.
+- `user_id` and `peer_id` path segments must be safe single-segment identifiers, for example `alice` or `web-visitor-alice`. Values with path separators, `.`, `..`, `:`, or `+` are rejected.
 - `path` and `temp_file_id` cannot be specified together
 - Raw HTTP calls for local files require first uploading via [temp_upload](#temp_upload) to obtain `temp_file_id`
 - When `to` is specified and the target already exists, triggers incremental update
@@ -206,6 +208,16 @@ curl -X POST http://localhost:1933/api/v1/resources \
     \"to\": \"viking://resources/guide.md\",
     \"reason\": \"User guide\"
   }"
+
+# Add to the current user's private resource root
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d "{
+    \"temp_file_id\": \"$TEMP_FILE_ID\",
+    \"parent\": \"viking://user/resources/docs\",
+    \"create_parent\": true
+  }"
 ```
 
 **Python SDK**
@@ -233,6 +245,13 @@ result = client.add_resource(
     "https://example.com/api-docs.md",
     to="viking://resources/external/api-docs.md",
     reason="External API documentation"
+)
+
+# Add to the current user's private resource root
+result = client.add_resource(
+    "./documents/guide.md",
+    parent="viking://user/resources/docs",
+    create_parent=True,
 )
 
 # Wait for processing to complete
@@ -269,6 +288,13 @@ ov add-resource https://github.com/example/repo.git --to viking://resources/guid
 
 # Add with parent directory (parent must exist)
 ov add-resource ./documents/guide.md --parent viking://resources/docs
+
+# Add under the current user's private resource root
+ov add-resource ./documents/guide.md --parent viking://user/resources/docs
+
+# Add under a specific peer's private resource root
+ov add-resource ./documents/guide.md \
+  --parent viking://user/alice/peers/web-visitor-alice/resources/docs
 
 # Add with parent directory (auto-create parent if it doesn't exist)
 ov add-resource ./documents/guide.md -p viking://resources/docs/2026/05/07
@@ -488,6 +514,11 @@ Skills are special resources used to define operations or tools that agents can 
 | timeout | float | No | None | Timeout in seconds, only effective when `wait=True` |
 | telemetry | TelemetryRequest | No | False | Whether to return telemetry data |
 
+Skills are always installed under the current user's skills root. The public short form
+`viking://user/skills` is accepted for filesystem/search operations and resolves to
+`viking://user/{user_id}/skills`; `add_skill` does not accept `to`, `parent`,
+`root_uri`, or peer-scoped skill targets.
+
 #### 3. Usage Examples
 
 **HTTP API**
@@ -560,8 +591,8 @@ ov add-skill ./skills/my-skill.json --wait
   "status": "ok",
   "result": {
     "status": "success",
-    "root_uri": "viking://user/skills/my-skill",
-    "uri": "viking://user/skills/my-skill",
+    "root_uri": "viking://user/alice/skills/my-skill",
+    "uri": "viking://user/alice/skills/my-skill",
     "name": "my-skill",
     "auxiliary_files": 2,
     "queue_status": {
@@ -582,8 +613,8 @@ ov add-skill ./skills/my-skill.json --wait
 Note: Skill is being processed in the background.
 Use 'ov wait' to wait for completion, or 'ov observer queue' to check status.
 status          success
-root_uri        viking://user/skills/my-skill
-uri             viking://user/skills/my-skill
+root_uri        viking://user/alice/skills/my-skill
+uri             viking://user/alice/skills/my-skill
 name            my-skill
 auxiliary_files 2
 ```
@@ -593,8 +624,8 @@ auxiliary_files 2
 ```json
 {
   "status": "success",
-  "root_uri": "viking://user/skills/my-skill",
-  "uri": "viking://user/skills/my-skill",
+  "root_uri": "viking://user/alice/skills/my-skill",
+  "uri": "viking://user/alice/skills/my-skill",
   "name": "my-skill",
   "auxiliary_files": 2
 }
@@ -605,8 +636,8 @@ auxiliary_files 2
 | Field | Type | Description |
 |-------|------|-------------|
 | `status` | string | Processing status: "success" or "error" |
-| `root_uri` | string | Final URI of the skill in OpenViking (same as `uri`) |
-| `uri` | string | Final URI of the skill in OpenViking (same as `root_uri`) |
+| `root_uri` | string | Canonical final URI of the skill in OpenViking (same as `uri`) |
+| `uri` | string | Canonical final URI of the skill in OpenViking (same as `root_uri`) |
 | `name` | string | Skill name |
 | `auxiliary_files` | number | Number of auxiliary files attached to the skill |
 | `queue_status` | object | (Optional, only when `wait=true`) Queue processing status with `pending`, `processing`, `completed` counts |
