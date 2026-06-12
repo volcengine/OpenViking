@@ -190,43 +190,80 @@ class FSService:
         context_type = context_type_for_uri(uri)
         refresh_parent_uri = self._semantic_refresh_parent_uri(uri, context_type)
         memory_overview_uri = self._memory_overview_parent_uri(uri, context_type)
-        if self._resource_memory_link_service and context_type == "resource":
-            cleanup_result = await self._resource_memory_link_service.before_resource_delete(
-                ctx=ctx,
-                resource_uri=uri,
-                recursive=recursive,
-            )
         result = await viking_fs.rm(uri, recursive=recursive, ctx=ctx)
         queue_status = None
-        if refresh_parent_uri:
-            await self._enqueue_delete_refresh(
-                root_uri=refresh_parent_uri,
-                deleted_uri=uri,
-                context_type=context_type,
-                ctx=ctx,
-            )
-            if wait:
+        request_registered = False
+        telemetry_id = get_current_telemetry().telemetry_id
+        try:
+            if refresh_parent_uri:
+                if wait and telemetry_id:
+                    get_request_wait_tracker().register_request(telemetry_id)
+                    request_registered = True
+                await self._enqueue_delete_refresh(
+                    root_uri=refresh_parent_uri,
+                    deleted_uri=uri,
+                    context_type=context_type,
+                    ctx=ctx,
+                )
+            if self._resource_memory_link_service and context_type == "resource":
+                cleanup_result = await self._resource_memory_link_service.before_resource_delete(
+                    ctx=ctx,
+                    resource_uri=uri,
+                    recursive=recursive,
+                )
+            if memory_overview_uri:
+                await MemoryUpdater.refresh_schema_overview(
+                    viking_fs=viking_fs,
+                    directory_uri=memory_overview_uri,
+                    ctx=ctx,
+                )
+            for cleanup_overview_uri in self._memory_overview_parent_uris_from_cleanup(
+                cleanup_result
+            ):
+                await MemoryUpdater.refresh_schema_overview(
+                    viking_fs=viking_fs,
+                    directory_uri=cleanup_overview_uri,
+                    ctx=ctx,
+                )
+            if refresh_parent_uri and wait:
                 queue_status = await self._wait_for_refresh(timeout=timeout)
-        if memory_overview_uri:
-            await MemoryUpdater.refresh_schema_overview(
-                viking_fs=viking_fs,
-                directory_uri=memory_overview_uri,
-                ctx=ctx,
-            )
-        for cleanup_overview_uri in self._memory_overview_parent_uris_from_cleanup(cleanup_result):
-            await MemoryUpdater.refresh_schema_overview(
-                viking_fs=viking_fs,
-                directory_uri=cleanup_overview_uri,
-                ctx=ctx,
-            )
+        finally:
+            if request_registered:
+                get_request_wait_tracker().cleanup(telemetry_id)
         if cleanup_result is not None and isinstance(result, dict):
             result["memory_cleanup"] = cleanup_result
         if refresh_parent_uri and isinstance(result, dict):
             result["semantic_root_uri"] = refresh_parent_uri
-            result["semantic_status"] = "complete" if wait else "queued"
+            result["semantic_status"] = self._semantic_refresh_status(
+                wait=wait,
+                queue_status=queue_status,
+            )
             if queue_status is not None:
                 result["queue_status"] = queue_status
         return result
+
+    @staticmethod
+    def _semantic_refresh_status(
+        *,
+        wait: bool,
+        queue_status: Optional[Dict[str, Any]],
+    ) -> str:
+        if not wait:
+            return "queued"
+        if not isinstance(queue_status, dict):
+            return "complete"
+        semantic = queue_status.get("Semantic", {})
+        if not isinstance(semantic, dict):
+            return "complete"
+        try:
+            if int(semantic.get("error_count", 0) or 0) > 0:
+                return "failed"
+        except (TypeError, ValueError):
+            if semantic.get("errors"):
+                return "failed"
+        if semantic.get("errors"):
+            return "failed"
+        return "complete"
 
     @staticmethod
     def _semantic_refresh_parent_uri(uri: str, context_type: str) -> Optional[str]:
