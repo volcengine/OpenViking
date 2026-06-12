@@ -1,4 +1,5 @@
 mod base_client;
+mod cli_arg_scan;
 mod client;
 mod commands;
 mod config;
@@ -18,7 +19,7 @@ mod theme;
 mod tui;
 mod utils;
 
-use clap::{ArgAction, Args, Parser, Subcommand};
+use clap::{ArgAction, Args, CommandFactory, Parser, Subcommand};
 use colored::Colorize;
 use config::Config;
 use error::{Error, Result};
@@ -128,7 +129,10 @@ struct Cli {
         long,
         global = true,
         default_value = "true",
+        default_missing_value = "true",
         hide = true,
+        num_args = 0..=1,
+        require_equals = true,
         action = ArgAction::Set,
         value_name = "bool"
     )]
@@ -1687,21 +1691,26 @@ struct ConfigDeleteArgs {
 }
 
 fn find_command_index(args: &[OsString]) -> Option<usize> {
+    let root_value_options = cli_root_value_options();
     let mut i = 1;
     while i < args.len() {
         let token = args[i].to_string_lossy();
-        match token.as_ref() {
-            "--output" | "-o" | "--compact" | "--account" | "--user" | "--actor-peer-id" => {
-                i += 2;
-            }
-            "--sudo" | "--progress" | "--no-progress" | "--verbose" | "-v" => {
-                i += 1;
-            }
-            _ if token.starts_with('-') => {
-                i += 1;
-            }
-            _ => return Some(i),
+        let token_ref = token.as_ref();
+
+        if token_ref == "--compact" || token_ref == "-c" {
+            i += compact_option_width(args, i);
+            continue;
         }
+        if token_ref.starts_with('-') {
+            i += if root_value_options.consumes_value(token_ref) && !token_ref.contains('=') {
+                2
+            } else {
+                1
+            };
+            continue;
+        }
+
+        return Some(i);
     }
     None
 }
@@ -1764,12 +1773,14 @@ fn plain_help_misuse(args: &[OsString]) -> Option<PlainHelpMisuse> {
 }
 
 fn command_tokens_for_plain_help(args: &[OsString]) -> Vec<String> {
+    let value_options = cli_value_options();
+
     let mut tokens = Vec::new();
     let mut i = 1;
     while i < args.len() {
         let token = args[i].to_string_lossy();
         let token_ref = token.as_ref();
-        if consumes_plain_help_value(token_ref) {
+        if value_options.consumes_value(token_ref) {
             i += if token_ref.contains('=') { 1 } else { 2 };
             continue;
         }
@@ -1783,135 +1794,16 @@ fn command_tokens_for_plain_help(args: &[OsString]) -> Vec<String> {
     tokens
 }
 
-fn consumes_plain_help_value(token: &str) -> bool {
-    matches!(
-        token,
-        "-o" | "--output"
-            | "-c"
-            | "--compact"
-            | "--account"
-            | "--user"
-            | "--actor-peer-id"
-            | "-u"
-            | "--uri"
-            | "-x"
-            | "--exclude-uri"
-            | "--to"
-            | "--parent"
-            | "-p"
-            | "--parent-auto-create"
-            | "--reason"
-            | "--instruction"
-            | "--timeout"
-            | "--watch-interval"
-            | "--ignore-dirs"
-            | "--include"
-            | "--exclude"
-            | "--description"
-            | "-n"
-            | "--node-limit"
-            | "--limit"
-            | "-l"
-            | "--abs-limit"
-            | "-L"
-            | "--level"
-            | "--level-limit"
-            | "-t"
-            | "--threshold"
-            | "--after"
-            | "--before"
-            | "--context-type"
-            | "--peer-id"
-            | "-s"
-            | "--skill"
-            | "--session"
-            | "--session-id"
-            | "-m"
-            | "--sender"
-            | "--message"
-            | "--role"
-            | "--content"
-            | "--from-file"
-            | "--mode"
-            | "--stream"
-            | "--on-conflict"
-            | "--vector-mode"
-            | "--task-type"
-            | "--status"
-            | "--token-budget"
-            | "--interval"
-            | "--active"
-            | "--values-json"
-            | "--values-file"
-            | "--key"
-            | "--change-reason"
-            | "--labels-json"
-            | "--admin"
-            | "--name"
-            | "--new-name"
-            | "--url"
-            | "--api-key-env"
-            | "--root-api-key-env"
-            | "--output-file"
-            | "--format"
-    ) || token.starts_with("--output=")
-        || token.starts_with("--compact=")
-        || token.starts_with("--account=")
-        || token.starts_with("--user=")
-        || token.starts_with("--actor-peer-id=")
-        || token.starts_with("--uri=")
-        || token.starts_with("--exclude-uri=")
-        || token.starts_with("--to=")
-        || token.starts_with("--parent=")
-        || token.starts_with("--parent-auto-create=")
-        || token.starts_with("--reason=")
-        || token.starts_with("--instruction=")
-        || token.starts_with("--timeout=")
-        || token.starts_with("--watch-interval=")
-        || token.starts_with("--ignore-dirs=")
-        || token.starts_with("--include=")
-        || token.starts_with("--exclude=")
-        || token.starts_with("--description=")
-        || token.starts_with("--node-limit=")
-        || token.starts_with("--limit=")
-        || token.starts_with("--abs-limit=")
-        || token.starts_with("--level=")
-        || token.starts_with("--level-limit=")
-        || token.starts_with("--threshold=")
-        || token.starts_with("--after=")
-        || token.starts_with("--before=")
-        || token.starts_with("--context-type=")
-        || token.starts_with("--peer-id=")
-        || token.starts_with("--skill=")
-        || token.starts_with("--session=")
-        || token.starts_with("--session-id=")
-        || token.starts_with("--sender=")
-        || token.starts_with("--message=")
-        || token.starts_with("--role=")
-        || token.starts_with("--content=")
-        || token.starts_with("--from-file=")
-        || token.starts_with("--mode=")
-        || token.starts_with("--stream=")
-        || token.starts_with("--on-conflict=")
-        || token.starts_with("--vector-mode=")
-        || token.starts_with("--task-type=")
-        || token.starts_with("--status=")
-        || token.starts_with("--token-budget=")
-        || token.starts_with("--interval=")
-        || token.starts_with("--active=")
-        || token.starts_with("--values-json=")
-        || token.starts_with("--values-file=")
-        || token.starts_with("--key=")
-        || token.starts_with("--change-reason=")
-        || token.starts_with("--labels-json=")
-        || token.starts_with("--admin=")
-        || token.starts_with("--name=")
-        || token.starts_with("--new-name=")
-        || token.starts_with("--url=")
-        || token.starts_with("--api-key-env=")
-        || token.starts_with("--root-api-key-env=")
-        || token.starts_with("--output-file=")
-        || token.starts_with("--format=")
+fn cli_value_options() -> cli_arg_scan::ValueOptions {
+    let mut command = Cli::command();
+    command.build();
+    cli_arg_scan::ValueOptions::from_command(&command)
+}
+
+fn cli_root_value_options() -> cli_arg_scan::ValueOptions {
+    let mut command = Cli::command();
+    command.build();
+    cli_arg_scan::ValueOptions::from_command_arguments(&command)
 }
 
 fn canonical_plain_help_token(token: &str) -> &str {
@@ -2002,6 +1894,8 @@ fn is_config_agent_command_request(args: &[OsString]) -> bool {
 }
 
 fn command_tokens_for_config_gate(args: &[OsString]) -> Vec<String> {
+    let value_options = cli_value_options();
+    let root_value_options = cli_root_value_options();
     let mut tokens = Vec::new();
     let mut seen_command = false;
     let mut i = 1;
@@ -2021,18 +1915,11 @@ fn command_tokens_for_config_gate(args: &[OsString]) -> Vec<String> {
 
         if !seen_command {
             if token_ref == "--compact" || token_ref == "-c" {
-                i += if args
-                    .get(i + 1)
-                    .is_some_and(|value| is_bool_arg(&value.to_string_lossy()))
-                {
-                    2
-                } else {
-                    1
-                };
+                i += compact_option_width(args, i);
                 continue;
             }
             if token_ref.starts_with("--") {
-                i += if global_option_takes_value(token_ref) && !token_ref.contains('=') {
+                i += if root_value_options.consumes_value(token_ref) && !token_ref.contains('=') {
                     2
                 } else {
                     1
@@ -2040,7 +1927,7 @@ fn command_tokens_for_config_gate(args: &[OsString]) -> Vec<String> {
                 continue;
             }
             if token_ref.starts_with('-') {
-                i += if global_short_option_takes_value(token_ref) {
+                i += if root_value_options.consumes_value(token_ref) && !token_ref.contains('=') {
                     2
                 } else {
                     1
@@ -2054,17 +1941,10 @@ fn command_tokens_for_config_gate(args: &[OsString]) -> Vec<String> {
         }
 
         if token_ref == "--compact" || token_ref == "-c" {
-            i += if args
-                .get(i + 1)
-                .is_some_and(|value| is_bool_arg(&value.to_string_lossy()))
-            {
-                2
-            } else {
-                1
-            };
+            i += compact_option_width(args, i);
             continue;
         }
-        if consumes_plain_help_value(token_ref) {
+        if value_options.consumes_value(token_ref) {
             i += if token_ref.contains('=') { 1 } else { 2 };
             continue;
         }
@@ -2279,6 +2159,43 @@ fn preprocess_privacy_upsert_key_flags(args: Vec<OsString>) -> Vec<OsString> {
     converted
 }
 
+fn preprocess_compact_args(args: Vec<OsString>) -> Vec<OsString> {
+    if args.is_empty() {
+        return args;
+    }
+
+    let mut converted = Vec::with_capacity(args.len());
+    converted.push(args[0].clone());
+    let mut i = 1;
+
+    while i < args.len() {
+        let token = args[i].to_string_lossy();
+        if token == "--compact" || token == "-c" {
+            if let Some(next) = args.get(i + 1) {
+                let next_value = next.to_string_lossy();
+                if is_bool_arg(&next_value) {
+                    converted.push(OsString::from(format!("--compact={next_value}")));
+                    i += 2;
+                    continue;
+                }
+            }
+            converted.push(OsString::from("--compact=true"));
+            i += 1;
+            continue;
+        }
+
+        converted.push(args[i].clone());
+        i += 1;
+    }
+
+    converted
+}
+
+fn preprocess_cli_args(args: Vec<OsString>) -> Vec<OsString> {
+    let args = preprocess_compact_args(args);
+    preprocess_privacy_args(args)
+}
+
 fn preprocess_privacy_args(args: Vec<OsString>) -> Vec<OsString> {
     let args = preprocess_privacy_get_shortcut(args);
     preprocess_privacy_upsert_key_flags(args)
@@ -2334,6 +2251,7 @@ fn is_language_command_request(args: &[OsString]) -> bool {
 }
 
 fn first_command_token(args: &[OsString]) -> Option<String> {
+    let root_value_options = cli_root_value_options();
     let mut index = 1usize;
 
     while index < args.len() {
@@ -2344,18 +2262,11 @@ fn first_command_token(args: &[OsString]) -> Option<String> {
                 .map(|value| value.to_string_lossy().to_string());
         }
         if token == "--compact" || token == "-c" {
-            index += if args
-                .get(index + 1)
-                .is_some_and(|value| is_bool_arg(&value.to_string_lossy()))
-            {
-                2
-            } else {
-                1
-            };
+            index += compact_option_width(args, index);
             continue;
         }
         if token.starts_with("--") {
-            index += if global_option_takes_value(&token) && !token.contains('=') {
+            index += if root_value_options.consumes_value(&token) && !token.contains('=') {
                 2
             } else {
                 1
@@ -2363,7 +2274,7 @@ fn first_command_token(args: &[OsString]) -> Option<String> {
             continue;
         }
         if token.starts_with('-') {
-            index += if global_short_option_takes_value(&token) {
+            index += if root_value_options.consumes_value(&token) && !token.contains('=') {
                 2
             } else {
                 1
@@ -2376,15 +2287,15 @@ fn first_command_token(args: &[OsString]) -> Option<String> {
     None
 }
 
-fn global_option_takes_value(option: &str) -> bool {
-    matches!(
-        option,
-        "--output" | "--account" | "--user" | "--actor-peer-id"
-    )
-}
-
-fn global_short_option_takes_value(option: &str) -> bool {
-    matches!(option, "-o")
+fn compact_option_width(args: &[OsString], index: usize) -> usize {
+    if args
+        .get(index + 1)
+        .is_some_and(|value| is_bool_arg(&value.to_string_lossy()))
+    {
+        2
+    } else {
+        1
+    }
 }
 
 fn is_bool_arg(value: &str) -> bool {
@@ -2411,7 +2322,7 @@ fn language_command_can_run_picker(has_language_value: bool, is_interactive: boo
 
 #[tokio::main]
 async fn main() {
-    let args = preprocess_privacy_args(std::env::args_os().collect());
+    let args = preprocess_cli_args(std::env::args_os().collect());
     let command_display = error_ui::display_command(&args);
     match ensure_language_selected_before_command(&args).await {
         Ok(true) => {}
@@ -3025,10 +2936,10 @@ async fn main() {
 mod tests {
     use super::{
         Cli, CliContext, Commands, ConfigAddTarget, ConfigCommands, LanguageGateAction,
-        PrivacyCommands, SkillCommands, UploadCliOptions, first_command_token,
+        PrivacyCommands, SkillCommands, UploadCliOptions, find_command_index, first_command_token,
         is_language_command_request, language_command_can_run_picker, language_gate_action,
         language_required_message, legacy_upload_option_error, plain_help_misuse,
-        pre_parse_requires_cli_config_file, preprocess_privacy_args,
+        pre_parse_requires_cli_config_file, preprocess_cli_args, preprocess_privacy_args,
     };
     use crate::config::{Config, DEFAULT_CUSTOM_URL};
     use crate::output::OutputFormat;
@@ -3892,6 +3803,31 @@ mod tests {
     }
 
     #[test]
+    fn find_command_index_skips_root_value_options() {
+        assert_eq!(
+            find_command_index(&os_args(&[
+                "ov",
+                "--output",
+                "json",
+                "--account=acme",
+                "--actor-peer-id",
+                "peer-a",
+                "privacy",
+                "sample-policy",
+            ])),
+            Some(6)
+        );
+        assert_eq!(
+            find_command_index(&os_args(&["ov", "--compact", "privacy", "sample-policy"])),
+            Some(2)
+        );
+        assert_eq!(
+            find_command_index(&os_args(&["ov", "-c", "false", "privacy", "sample-policy"])),
+            Some(3)
+        );
+    }
+
+    #[test]
     fn cli_status_parses_verbose_flag() {
         let cli =
             Cli::try_parse_from(["ov", "status", "--verbose"]).expect("status verbose parses");
@@ -4258,5 +4194,43 @@ mod tests {
             },
             _ => panic!("expected privacy command"),
         }
+    }
+
+    #[test]
+    fn cli_parses_privacy_shortcut_after_compact_without_value() {
+        let cli = Cli::try_parse_from(preprocess_cli_args(vec![
+            OsString::from("ov"),
+            OsString::from("--compact"),
+            OsString::from("privacy"),
+            OsString::from("skill"),
+            OsString::from("demo"),
+        ]))
+        .expect("--compact without a value should not consume the privacy command");
+
+        assert!(cli.compact);
+        match cli.command {
+            Commands::Privacy { action } => match action {
+                PrivacyCommands::Get {
+                    category,
+                    target_key,
+                } => {
+                    assert_eq!(category, "skill");
+                    assert_eq!(target_key, "demo");
+                }
+                _ => panic!("expected privacy get"),
+            },
+            _ => panic!("expected privacy command"),
+        }
+
+        let explicit_false = Cli::try_parse_from(preprocess_cli_args(vec![
+            OsString::from("ov"),
+            OsString::from("-c"),
+            OsString::from("false"),
+            OsString::from("privacy"),
+            OsString::from("skill"),
+            OsString::from("demo"),
+        ]))
+        .expect("-c false should keep its explicit bool value");
+        assert!(!explicit_false.compact);
     }
 }
