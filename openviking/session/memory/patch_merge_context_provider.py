@@ -13,6 +13,7 @@ from openviking.session.memory.dataclass import MemoryFile, MemoryTypeSchema
 from openviking.session.memory.session_extract_context_provider import (
     SessionExtractContextProvider,
 )
+from openviking.session.memory.utils.language import resolve_output_language_from_text
 
 _SYSTEM_HIDDEN_FIELDS = {"source_extraction_id", "source_extraction_ids"}
 
@@ -57,6 +58,40 @@ class PatchMergePatch:
         return uri.rstrip("/").split("/")[-1].removesuffix(".md") if uri else "unknown"
 
 
+def _resolve_patch_output_language(patches: list[PatchMergePatch]) -> str:
+    return resolve_output_language_from_text(_patch_language_text(patches), fallback_language="en")
+
+
+def _patch_language_text(patches: list[PatchMergePatch]) -> str:
+    parts: list[str] = []
+    for patch in patches:
+        parts.extend(_memory_file_language_text(patch.after_file))
+        if patch.before_file is not None:
+            parts.extend(_memory_file_language_text(patch.before_file))
+    return "\n".join(part for part in parts if part)
+
+
+def _memory_file_language_text(file: MemoryFile) -> list[str]:
+    parts: list[str] = []
+    for key, value in (file.extra_fields or {}).items():
+        if key in _SYSTEM_HIDDEN_FIELDS or key in {"memory_type", "version"}:
+            continue
+        parts.extend(_string_values(value))
+    if file.content:
+        parts.append(file.content)
+    return parts
+
+
+def _string_values(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [item for entry in value for item in _string_values(entry)]
+    if isinstance(value, dict):
+        return [item for entry in value.values() for item in _string_values(entry)]
+    return []
+
+
 class PatchMergeContextProvider(SessionExtractContextProvider):
     """Provide original memory files and structured field diffs to ExtractLoop.
 
@@ -71,11 +106,13 @@ class PatchMergeContextProvider(SessionExtractContextProvider):
         memory_type: str,
         patches: list[PatchMergePatch],
         required_file_uris: list[str] | None = None,
+        output_language: str | None = None,
     ):
         super().__init__(messages=[])
         self.memory_type = memory_type
         self.required_file_uris = list(required_file_uris or [])
         self.patches = list(patches)
+        self._output_language = output_language or _resolve_patch_output_language(self.patches)
 
     def instruction(self) -> str:
         output_language = self._output_language

@@ -203,3 +203,40 @@ def test_patch_merge_context_provider_instruction_mentions_path_field_normalizat
     assert "put it in delete_uris" in instruction
     assert "activity/activities" in instruction
     assert "pet/pets" in instruction
+
+
+def test_patch_merge_context_provider_detects_language_from_patch_content(monkeypatch):
+    monkeypatch.setenv("TZ", "Asia/Shanghai")
+    provider = PatchMergeContextProvider(
+        memory_type="preferences",
+        required_file_uris=[],
+        patches=[
+            PatchMergePatch(
+                before_file=None,
+                after_file=MemoryFile(
+                    uri=None,
+                    content="User prefers concise implementation and minimal fallback logic.",
+                    memory_type="preferences",
+                    extra_fields={
+                        "memory_type": "preferences",
+                        "user": "alice",
+                        "topic": "code_style",
+                    },
+                ),
+            )
+        ],
+    )
+
+    assert provider.get_output_language() == "en"
+    assert "All memory content must be written in en." in provider.instruction()
+
+
+def test_patch_merge_context_provider_empty_patches_fallback_to_english(monkeypatch):
+    monkeypatch.setenv("TZ", "Asia/Shanghai")
+    provider = PatchMergeContextProvider(
+        memory_type="preferences",
+        required_file_uris=[],
+        patches=[],
+    )
+
+    assert provider.get_output_language() == "en"

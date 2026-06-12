@@ -42,6 +42,7 @@ from openviking.session.memory.patch_merge_context_provider import (
     PatchMergeContextProvider,
     PatchMergePatch,
 )
+from openviking.session.memory.session_extract_context_provider import SessionExtractContextProvider
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils, next_memory_version
 from openviking.session.memory.utils.streaming_batcher import (
     StreamingBatcher,
@@ -814,6 +815,7 @@ async def merge_one_memory_type_operations(
         memory_type=memory_type,
         required_file_uris=required_file_uris,
         patches=patches,
+        output_language=merge_output_language_from_messages(messages),
     )
     provider._ctx = ctx
     provider._viking_fs = safe_get_viking_fs()
@@ -901,6 +903,16 @@ async def merge_one_memory_type_operations(
         console=trace_console,
     )
     return merged
+
+
+def merge_output_language_from_messages(messages: list[Message]) -> str | None:
+    if not any(
+        getattr(part, "text", None)
+        for message in messages or []
+        for part in getattr(message, "parts", [])
+    ):
+        return None
+    return SessionExtractContextProvider(messages=messages).get_output_language()
 
 
 def clone_operation_for_uri(op: ResolvedOperation, uri: str) -> ResolvedOperation:

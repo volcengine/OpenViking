@@ -775,3 +775,63 @@ async def test_cross_extraction_merge_deletes_existing_loser_uri(monkeypatch):
 
     assert [op.uris for op in merged.upsert_operations] == [[winner_uri]]
     assert [file.uri for file in merged.delete_file_contents] == [existing_uri]
+
+
+@pytest.mark.asyncio
+async def test_patch_merge_uses_original_messages_for_output_language(monkeypatch):
+    existing_uri = "viking://user/u/memories/notes/code.md"
+    old_file = MemoryFile(
+        uri=existing_uri,
+        content="old",
+        memory_type="notes",
+        extra_fields={"memory_type": "notes", "topic": "code"},
+    )
+    existing_op = ResolvedOperation(
+        old_memory_file_content=old_file,
+        memory_fields={"topic": "code", "content": "older"},
+        memory_type="notes",
+        uris=[existing_uri],
+    )
+    new_op = ResolvedOperation(
+        old_memory_file_content=None,
+        memory_fields={"topic": "code", "content": "new"},
+        memory_type="notes",
+        uris=["viking://user/u/memories/notes/code_new.md"],
+    )
+    captured_languages = []
+
+    async def fake_run(self):
+        captured_languages.append(self.context_provider.get_output_language())
+        return (
+            ResolvedOperations(
+                upsert_operations=[existing_op],
+                delete_file_contents=[],
+                errors=[],
+            ),
+            [],
+        )
+
+    monkeypatch.setattr(
+        "openviking.session.memory.streaming_memory_updater.ExtractLoop.run",
+        fake_run,
+    )
+    fs = InMemoryVikingFS({existing_uri: "old"})
+    fs.search = AsyncMock(return_value=[])
+    monkeypatch.setattr(
+        "openviking.session.memory.streaming_memory_updater.get_viking_fs",
+        lambda: fs,
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.memory_updater.get_viking_fs",
+        lambda: fs,
+    )
+
+    await merge_one_memory_type_operations(
+        memory_type="notes",
+        operations=[existing_op, new_op],
+        messages=[Message(id="m1", role="user", parts=[TextPart("请保持中文记忆")])],
+        ctx=_ctx(),
+        registry=_registry(),
+    )
+
+    assert captured_languages == ["zh-CN"]

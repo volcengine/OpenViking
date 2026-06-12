@@ -195,3 +195,10 @@ class TestSessionConversationToolFiltering:
         provider = SessionExtractContextProvider(messages=messages)
 
         assert provider._detect_language() == "zh-CN"
+
+
+def test_session_provider_empty_messages_still_uses_environment_fallback(monkeypatch):
+    monkeypatch.setenv("TZ", "Asia/Shanghai")
+    provider = SessionExtractContextProvider(messages=[])
+
+    assert provider.get_output_language() == "zh-CN"
