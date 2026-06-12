@@ -1,6 +1,7 @@
 import type { FindResult, FindResultItem, OpenVikingClient } from "./client.js";
 import type { ParsedMemoryOpenVikingConfig } from "./config.js";
 import {
+  passesRecallScoreThreshold,
   pickMemoriesForInjection,
   postProcessMemories,
   summarizeInjectionMemories,
@@ -520,9 +521,12 @@ export async function buildLongTermMemoryRecallContext(params: {
         index === self.findIndex((m) => m.uri === memory.uri)
       );
       const leafOnly = uniqueMemories.filter((m) => (!m.level || m.level === 2) && !isExperienceMemory(m));
-      const processed = postProcessMemories(leafOnly, {
+      const thresholded = leafOnly.filter((memory) =>
+        passesRecallScoreThreshold(memory, cfg.recallScoreThreshold)
+      );
+      const processed = postProcessMemories(thresholded, {
         limit: candidateLimit,
-        scoreThreshold: cfg.recallScoreThreshold,
+        scoreThreshold: 0,
       });
       const memories = pickMemoriesForInjection(processed, cfg.recallLimit, queryText);
 

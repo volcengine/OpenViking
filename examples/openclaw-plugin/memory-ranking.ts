@@ -145,10 +145,24 @@ function isLeafLikeMemory(item: FindResultItem): boolean {
   return item.level === 2;
 }
 
+export function isResourceMemory(item: FindResultItem): boolean {
+  return item.uri.startsWith("viking://resources/");
+}
+
+export const RESOURCE_RECALL_SCORE_FLOOR = 0.56;
+
+export function recallScoreThresholdForItem(item: FindResultItem, baseThreshold: number): number {
+  return isResourceMemory(item) ? Math.max(baseThreshold, RESOURCE_RECALL_SCORE_FLOOR) : baseThreshold;
+}
+
+export function passesRecallScoreThreshold(item: FindResultItem, baseThreshold: number): boolean {
+  return clampScore(item.score) >= recallScoreThresholdForItem(item, baseThreshold);
+}
+
 const PREFERENCE_QUERY_RE = /prefer|preference|favorite|favourite|like|偏好|喜欢|爱好|更倾向/i;
 const TEMPORAL_QUERY_RE =
   /when|what time|date|day|month|year|yesterday|today|tomorrow|last|next|什么时候|何时|哪天|几月|几年|昨天|今天|明天|上周|下周|上个月|下个月|去年|明年/i;
-const QUERY_TOKEN_RE = /[a-z0-9]{2,}/gi;
+const QUERY_TOKEN_RE = /[\p{L}\p{N}][\p{L}\p{N}_-]+/giu;
 const QUERY_TOKEN_STOPWORDS = new Set([
   "what",
   "when",
