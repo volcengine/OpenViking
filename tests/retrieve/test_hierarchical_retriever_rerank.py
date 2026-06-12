@@ -4,12 +4,12 @@
 """Hierarchical retriever rerank behavior tests."""
 
 import pytest
-from openviking_cli.retrieve.types import ContextType, TypedQuery
-from openviking_cli.session.user_id import UserIdentifier
-from openviking_cli.utils.config import RerankConfig, RetrievalConfig
 
 from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever, RetrieverMode
 from openviking.server.identity import RequestContext, Role
+from openviking_cli.retrieve.types import ContextType, TypedQuery
+from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config import RerankConfig, RetrievalConfig
 
 
 class DummyEmbedResult:

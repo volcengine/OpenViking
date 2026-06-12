@@ -15,15 +15,6 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-from openviking_cli.retrieve.types import (
-    ContextType,
-    MatchedContext,
-    QueryResult,
-    TypedQuery,
-)
-from openviking_cli.utils.config import RerankConfig, RetrievalConfig
-from openviking_cli.utils.logger import get_logger
-
 from openviking.core.retrieval_targets import default_target_directories
 from openviking.models.embedder.base import EmbedResult, embed_compat
 from openviking.models.rerank import RerankClient
@@ -33,6 +24,14 @@ from openviking.server.identity import RequestContext
 from openviking.storage import VikingDBManager, VikingDBManagerProxy
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.time_utils import parse_iso_datetime
+from openviking_cli.retrieve.types import (
+    ContextType,
+    MatchedContext,
+    QueryResult,
+    TypedQuery,
+)
+from openviking_cli.utils.config import RerankConfig, RetrievalConfig
+from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -275,9 +274,7 @@ class HierarchicalRetriever:
             return fallback_scores
 
         rerank_documents = [
-            (index, document)
-            for index, document in enumerate(documents)
-            if document.strip()
+            (index, document) for index, document in enumerate(documents) if document.strip()
         ]
         if not rerank_documents:
             return fallback_scores
