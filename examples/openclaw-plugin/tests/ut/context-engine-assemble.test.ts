@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenVikingClient } from "../../client.js";
 import { memoryOpenVikingConfigSchema } from "../../config.js";
 import { createMemoryOpenVikingContextEngine } from "../../context-engine.js";
+import { RecallTraceMemoryStore } from "../../recall-trace.js";
 import { estimateAgentMessagesTokens, estimateTextTokens } from "../../token-estimator.js";
 
 const cfg = memoryOpenVikingConfigSchema.parse({
@@ -43,6 +44,7 @@ function makeEngine(
   contextResult: unknown,
   opts?: {
     cfgOverrides?: Record<string, unknown>;
+    traceRecorder?: RecallTraceMemoryStore;
   },
 ) {
   const logger = makeLogger();
@@ -69,6 +71,7 @@ function makeEngine(
     logger,
     getClient,
     resolveAgentId,
+    traceRecorder: opts?.traceRecorder,
   });
 
   return {
@@ -150,6 +153,50 @@ describe("context-engine assemble()", () => {
     expect(result.messages[2]?.content).toContain("User prefers Rust for backend tasks.");
     expect(result.messages[2]?.content).toContain("what backend language should we use?");
     expect(result.systemPromptAddition).toBeUndefined();
+  });
+
+  it("passes session metadata into auto-recall trace recording during transformContext", async () => {
+    const traces = new RecallTraceMemoryStore(10);
+    const { engine, client } = makeEngine(
+      {
+        latest_archive_overview: "unused",
+        pre_archive_abstracts: [],
+        messages: [],
+        estimatedTokens: 0,
+        stats: makeStats(),
+      },
+      {
+        traceRecorder: traces,
+        cfgOverrides: {
+          autoRecall: true,
+          recallPreferAbstract: true,
+        },
+      },
+    );
+    client.find.mockResolvedValueOnce({
+      memories: [
+        {
+          uri: "viking://user/default/memories/typescript-pref",
+          level: 2,
+          category: "preferences",
+          abstract: "Use TypeScript for gateway plugins.",
+          score: 0.9,
+        },
+      ],
+      total: 1,
+    });
+
+    await engine.assemble({
+      sessionId: "session-transform-trace",
+      messages: [{ role: "user", content: "which language should the gateway plugin use?" }],
+    });
+
+    const recorded = traces.query({ turn: "latest", sessionId: "session-transform-trace", limit: 10 }).entries[0]!;
+    expect(recorded.sessionId).toBe("session-transform-trace");
+    expect(recorded.ovSessionId).toBe("session-transform-trace");
+    expect(recorded.agentId).toBe("agent:session-transform-trace");
+    expect(recorded.trigger.query).toBe("which language should the gateway plugin use?");
+    expect(recorded.resourceTypes).toEqual(["user"]);
   });
 
   it("passes sender peer_id to transformContext auto-recall when peer_role is person", async () => {
