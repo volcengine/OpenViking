@@ -208,7 +208,7 @@ def main():
     print("      Subsequent runs can use any engine; cached ground truth is reused.")
     print()
 
-    client = SyncHTTPClient(account="default", user="default")
+    client = SyncHTTPClient()
     client.initialize()
 
     # Phase 1: Compute ground truth (needs fs engine on first run)

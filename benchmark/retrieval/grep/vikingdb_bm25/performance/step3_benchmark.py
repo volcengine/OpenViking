@@ -338,7 +338,7 @@ def main():
 
     total_files = count_local_files()
 
-    client = SyncHTTPClient(account="default", user="default")
+    client = SyncHTTPClient()
     client.initialize()
 
     print("Computing ground truth (OV grep, fs engine)...")

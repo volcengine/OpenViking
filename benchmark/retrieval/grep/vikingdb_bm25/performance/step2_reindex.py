@@ -105,7 +105,7 @@ def main():
         print(f"  Resuming: {len(already_done)} directories already reindexed")
         print()
 
-    client = SyncHTTPClient(account="default", user="default")
+    client = SyncHTTPClient()
     client.initialize()
 
     # Build work queue (skip already completed)
