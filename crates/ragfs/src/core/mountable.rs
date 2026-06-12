@@ -1154,13 +1154,10 @@ mod tests {
         })
         .await;
 
-        let config = PluginConfig {
-            name: "counting".to_string(),
-            mount_path: "/cached".to_string(),
-            params: HashMap::new(),
-        };
+        let config = PluginConfig::single_backend("counting", "/cached", HashMap::new());
 
         mfs.mount(config).await.unwrap();
+        reads.store(0, Ordering::Relaxed);
 
         assert_eq!(
             mfs.read("/cached/file.txt", 0, 0).await.unwrap(),
