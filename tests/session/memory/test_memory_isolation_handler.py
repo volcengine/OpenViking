@@ -109,6 +109,51 @@ class TestGetReadScope:
         assert scope.user_ids == ["default_user"]
 
 
+
+    def test_get_read_scope_filters_self_sentinel_from_peer_scope(self):
+        ctx = create_ctx(user_id="support_bot")
+        messages = [create_message("user")]
+        extract_ctx = create_mock_extract_context(messages)
+        handler = MemoryIsolationHandler(
+            ctx,
+            extract_ctx,
+            allow_self=True,
+            allowed_peer_ids={"__self", "web:visitor:alice"},
+        )
+
+        scope = handler.get_read_scope()
+
+        assert scope.user_ids == ["support_bot"]
+        assert scope.peer_ids == ["web:visitor:alice"]
+
+    def test_render_schema_directories_self_sentinel_maps_to_user_space(self):
+        from openviking.session.memory.dataclass import MemoryTypeSchema
+        from openviking.session.memory.memory_isolation_handler import peer_user_space
+
+        assert peer_user_space("support_bot", "__self") == "support_bot"
+
+        ctx = create_ctx(user_id="support_bot")
+        messages = [create_message("user")]
+        extract_ctx = create_mock_extract_context(messages)
+        handler = MemoryIsolationHandler(
+            ctx,
+            extract_ctx,
+            allow_self=True,
+            allowed_peer_ids={"__self", "web:visitor:alice"},
+        )
+        schema = MemoryTypeSchema(
+            memory_type="preferences",
+            filename_template="preferences.md",
+            directory="viking://user/{{ user_space }}/memories",
+        )
+
+        dirs = handler.render_schema_directories(schema)
+
+        assert "viking://user/support_bot/memories" in dirs
+        assert "viking://user/support_bot/peers/__self/memories" not in dirs
+        assert "viking://user/support_bot/peers/web:visitor:alice/memories" in dirs
+
+
 class TestFillIdentityFields:
     """Tests for fill_identity_fields."""
 

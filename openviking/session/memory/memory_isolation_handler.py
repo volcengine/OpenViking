@@ -28,6 +28,8 @@ class RoleScope:
 
 def peer_user_space(user_space: str, peer_id: str) -> str:
     """Return the user-space fragment for memory about a stable peer."""
+    if peer_id == _SELF_PEER_ID:
+        return user_space
     return f"{user_space}/peers/{peer_id}"
 
 
@@ -49,8 +51,11 @@ class MemoryIsolationHandler:
             if allowed_memory_types is not None
             else None
         )
-        peer_ids = {safe_peer_id(item) for item in allowed_peer_ids or set()}
-        peer_ids = {item for item in peer_ids if item}
+        peer_ids = {
+            item
+            for item in (safe_peer_id(item) for item in allowed_peer_ids or set())
+            if item and item != _SELF_PEER_ID
+        }
         self.allow_self = bool(allow_self)
         self.allowed_peer_ids = peer_ids
         self.allow_peer = bool(peer_ids)
