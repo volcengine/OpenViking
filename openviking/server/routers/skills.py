@@ -670,11 +670,7 @@ async def delete_skill(
     privacy = service.privacy_configs
     if privacy is not None:
         privacy_deleted = await privacy.delete(_ctx, "skill", skill_name)
-    response_result: Dict[str, Any] = {
-        "name": skill_name,
-        "uri": root_uri,
-        "root_uri": root_uri,
-    }
+    response_result: Dict[str, Any] = {"name": skill_name, "uri": root_uri, "root_uri": root_uri}
     if isinstance(result, dict) and "estimated_deleted_count" in result:
         response_result["estimated_deleted_count"] = result["estimated_deleted_count"]
     response_result["privacy_deleted"] = privacy_deleted

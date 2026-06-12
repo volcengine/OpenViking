@@ -270,7 +270,6 @@ async def add_skill(
 ):
     """Add skill to OpenViking."""
     service = get_service()
-
     data = request.data
     allow_local_path_resolution = False
     resolved = None

@@ -3169,10 +3169,7 @@ mod tests {
             .expect("skills remove --yes should parse");
         match remove.command {
             Commands::Skills {
-                action:
-                    SkillCommands::Remove {
-                        skills, yes, all, ..
-                    },
+                action: SkillCommands::Remove { skills, yes, all },
             } => {
                 assert_eq!(skills, vec!["foo", "bar"]);
                 assert!(yes);

@@ -19,10 +19,7 @@ import yaml
 
 from openviking.core.context import Context, ContextType, Vectorize
 from openviking.core.mcp_converter import is_mcp_format, mcp_to_skill
-from openviking.core.namespace import (
-    canonical_user_root,
-    user_space_fragment,
-)
+from openviking.core.namespace import canonical_user_root, user_space_fragment
 from openviking.core.skill_loader import SkillLoader
 from openviking.privacy import (
     UserPrivacyConfigService,

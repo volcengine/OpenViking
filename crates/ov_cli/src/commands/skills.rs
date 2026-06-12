@@ -800,9 +800,7 @@ fn normalize_git_subdir(subdir: &Path) -> Result<PathBuf> {
     }
 
     if normalized.as_os_str().is_empty() {
-        return Err(Error::Parse(
-            "Git source metadata missing subdir".to_string(),
-        ));
+        return Err(Error::Parse("Git source metadata missing subdir".to_string()));
     }
 
     Ok(normalized)
@@ -1938,11 +1936,7 @@ mod tests {
 
         let error = update_target_from_record(&record, "local-skill", false)
             .expect_err("local source should not be trusted for non-interactive update");
-        assert!(
-            error
-                .to_string()
-                .contains("server-recorded local paths are not trusted")
-        );
+        assert!(error.to_string().contains("server-recorded local paths are not trusted"));
     }
 
     #[test]
@@ -1960,11 +1954,7 @@ mod tests {
         let error = prepare_source_from_git_record(&record)
             .err()
             .expect("parent dir subdir should be rejected before clone");
-        assert!(
-            error
-                .to_string()
-                .contains("parent directory components are not allowed")
-        );
+        assert!(error.to_string().contains("parent directory components are not allowed"));
     }
 
     #[test]

@@ -266,12 +266,7 @@ class SyncHTTPClient:
     ) -> Dict[str, Any]:
         """Add skill to OpenViking."""
         return run_async(
-            self._async_client.add_skill(
-                data,
-                wait=wait,
-                timeout=timeout,
-                telemetry=telemetry,
-            )
+            self._async_client.add_skill(data, wait=wait, timeout=timeout, telemetry=telemetry)
         )
 
     def wait_processed(self, timeout: Optional[float] = None) -> Dict[str, Any]:
