@@ -714,7 +714,13 @@ def chat(
     _init_bot_data(config)
 
     logger.remove()
-    log_file = get_data_dir() / "log" / f"vikingbot.debug.{os.getpid()}.log"
+    configured_log_file = os.environ.get("VIKINGBOT_LOG_FILE")
+    log_file = (
+        Path(configured_log_file).expanduser()
+        if configured_log_file
+        else get_data_dir() / "log" / f"vikingbot.debug.{os.getpid()}.log"
+    )
+    log_file.parent.mkdir(parents=True, exist_ok=True)
     logger.add(
         log_file,
         level="DEBUG",

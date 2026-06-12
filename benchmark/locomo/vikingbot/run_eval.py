@@ -2,6 +2,7 @@ import argparse
 import csv
 import json
 import os
+import re
 import subprocess
 import threading
 import time
@@ -240,8 +241,13 @@ def run_vikingbot_chat(
     question_id: str | None = None,
     config: str | None = None,
     memory_peer_ids: list[str] | None = None,
-) -> tuple[str, dict, float, int, list]:
+) -> tuple[str, dict, float, int, list, str]:
     """执行vikingbot chat命令，返回回答、token使用情况、耗时（秒）、迭代次数、使用的工具列表"""
+    bot_log_file = build_bot_log_file(question_id)
+    env = os.environ.copy()
+    if bot_log_file:
+        env["VIKINGBOT_LOG_FILE"] = bot_log_file
+
     # 先执行 /new 命令清除会话
     if sender_peer_id:
         new_cmd = ["vikingbot", "chat"]
@@ -263,7 +269,7 @@ def run_vikingbot_chat(
                 new_cmd.extend(["--memory-peer", peer_id])
         try:
             # print(f'new_cmd={new_cmd}')
-            subprocess.run(new_cmd, capture_output=True, text=True, timeout=300)
+            subprocess.run(new_cmd, capture_output=True, text=True, timeout=300, env=env)
         except Exception:
             # 忽略 /new 命令的错误
             pass
@@ -288,7 +294,9 @@ def run_vikingbot_chat(
     start_time = time.time()
     try:
         # print(f'cmd={cmd}')
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=600)
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, check=True, timeout=600, env=env
+        )
         end_time = time.time()
         time_cost = end_time - start_time
 
@@ -308,7 +316,7 @@ def run_vikingbot_chat(
             token_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
             iteration = 0
             tools_used_names = []
-        return response, token_usage, time_cost, iteration, tools_used_names
+        return response, token_usage, time_cost, iteration, tools_used_names, bot_log_file
     except subprocess.CalledProcessError as e:
         return (
             f"[CMD ERROR] {e.stderr}",
@@ -316,6 +324,7 @@ def run_vikingbot_chat(
             0,
             0,
             [],
+            bot_log_file,
         )
     except subprocess.TimeoutExpired:
         time_cost = 0
@@ -325,7 +334,23 @@ def run_vikingbot_chat(
             time_cost,
             0,
             [],
+            bot_log_file,
         )
+
+
+def sanitize_log_name(value: str | None) -> str:
+    text = value or f"qa_{int(time.time() * 1000)}"
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", text).strip("._") or "qa"
+
+
+def build_bot_log_file(question_id: str | None) -> str:
+    log_dir = os.environ.get("LOCOMO_VIKINGBOT_LOG_DIR")
+    if not log_dir:
+        return ""
+
+    path = Path(log_dir).expanduser()
+    path.mkdir(parents=True, exist_ok=True)
+    return str(path / f"vikingbot.{sanitize_log_name(question_id)}.log")
 
 
 def load_processed_questions(output_path: str, skip_done: bool = False) -> set[str]:
@@ -346,6 +371,20 @@ def load_processed_questions(output_path: str, skip_done: bool = False) -> set[s
 def append_row_to_csv(output_path: str, fieldnames: list[str], row: dict) -> None:
     """追加单行结果到 CSV。"""
     file_exists = os.path.exists(output_path)
+    if file_exists:
+        with open(output_path, "r", encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            existing_fieldnames = reader.fieldnames or []
+            existing_rows = list(reader)
+        missing_fields = [field for field in fieldnames if field not in existing_fieldnames]
+        if missing_fields:
+            merged_fieldnames = [*existing_fieldnames, *missing_fields]
+            with open(output_path, "w", encoding="utf-8", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=merged_fieldnames)
+                writer.writeheader()
+                writer.writerows(existing_rows)
+            fieldnames = merged_fieldnames
+
     with open(output_path, "a", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         if not file_exists:
@@ -506,6 +545,7 @@ def main():
         "time_cost",
         "iteration",
         "tools_used_names",
+        "bot_log_file",
     ]
 
     # 创建线程锁，确保多线程写文件安全
@@ -551,13 +591,15 @@ def main():
         if memory_peer_ids:
             print(f"  [memory peers: {memory_peer_ids}]")
 
-        response, token_usage, time_cost, iteration, tools_used_names = run_vikingbot_chat(
-            question,
-            question_time,
-            sender_peer_id,
-            question_id,
-            args.config,
-            memory_peer_ids,
+        response, token_usage, time_cost, iteration, tools_used_names, bot_log_file = (
+            run_vikingbot_chat(
+                question,
+                question_time,
+                sender_peer_id,
+                question_id,
+                args.config,
+                memory_peer_ids,
+            )
         )
 
         row = {
@@ -575,6 +617,7 @@ def main():
             "time_cost": round(time_cost, 2),
             "iteration": iteration,
             "tools_used_names": json.dumps(tools_used_names, ensure_ascii=False),
+            "bot_log_file": bot_log_file,
             "is_invalid": qa_item.get("is_invalid", False),
         }
 
@@ -587,6 +630,8 @@ def main():
                         reader = csv.DictReader(f)
                         existing_rows = list(reader)
                         existing_fieldnames = reader.fieldnames or fieldnames
+                    if "bot_log_file" not in existing_fieldnames:
+                        existing_fieldnames.append("bot_log_file")
 
                     q_idx = str(row.get("question_index", ""))
                     found = False
