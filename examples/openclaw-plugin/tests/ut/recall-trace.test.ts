@@ -79,8 +79,7 @@ describe("resolveRecallSearchPlan()", () => {
     });
 
     expect(plan.searches).toEqual([
-      { resourceType: "user", targetUri: "viking://user/memories" },
-      { resourceType: "agent", targetUri: "viking://agent/memories" },
+      { resourceType: "user", contextType: "memory" },
     ]);
     expect(plan.skipped).toEqual([]);
     expect(plan.resourceTypes).toEqual(["user", "agent"]);
@@ -93,9 +92,8 @@ describe("resolveRecallSearchPlan()", () => {
     });
 
     expect(plan.searches).toEqual([
-      { resourceType: "resource", targetUri: "viking://resources" },
-      { resourceType: "user", targetUri: "viking://user/memories" },
-      { resourceType: "agent", targetUri: "viking://agent/memories" },
+      { resourceType: "resource", contextType: "resource" },
+      { resourceType: "user", contextType: "memory" },
     ]);
     expect(plan.skipped).toEqual([]);
   });

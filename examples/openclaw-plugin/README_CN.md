@@ -122,7 +122,7 @@ openclaw config get plugins.slots.contextEngine  # 应输出：openviking
 - `peer_role=none` 是默认值，session message 不写 `peer_id`。
 - `peer_role=assistant` 时，assistant message 写入 `peer_id=<sessionAgent>`；如果配置了 `peer_prefix`，则写入 `<peer_prefix>_<sessionAgent>`。
 - `peer_role=person` 时，user message 使用 OpenClaw sender 身份派生 `peer_id`；assistant message 不写 `peer_id`。
-- recall/search 请求也会在 `peer_role=assistant` 或 `peer_role=person` 时发送同一个解析后的 `peer_id`。
+- 数据面的 recall/search/read/import/delete 会在 `peer_role=assistant` 或 `peer_role=person` 时把同一个解析后的 peer 身份作为 `X-OpenViking-Actor-Peer` 发送。
 - OpenClaw 没有提供 session agent 时，使用其默认 agent `main` 作为本地 session 和 assistant peer metadata。
 - 只有显式配置了 `accountId` / `userId` 时才发送 `X-OpenViking-Account` / `X-OpenViking-User`。
 
@@ -141,9 +141,9 @@ openclaw config get plugins.slots.contextEngine  # 应输出：openviking
 - 新安装默认 `peer_role=none`
 - `accountId` / `userId` 仅在部署需要显式身份 header 时作为高级选项使用，例如 root key 或 trusted server 流程
 
-### Canonical user namespace
+### User namespace
 
-插件写入和检索 user-scoped memory。`viking://user/memories` 会根据 user key 解析出的身份展开为 `viking://user/<user_id>/memories`。`viking://agent/...` 已由 OpenViking 废弃，插件不再使用。
+插件通过 `viking://user/...` 写入和检索 user-scoped memory；OpenViking 会根据请求里的租户身份和 actor peer context 解析这个别名。`viking://agent/...` 已由 OpenViking 废弃，插件不再使用。
 
 ## assemble 召回链路
 

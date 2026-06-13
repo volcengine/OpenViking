@@ -145,7 +145,7 @@ async function main() {
   let profile = null;
   if (!cfg.noAutoInject) {
     try {
-      profile = await buildProfileBlock(fetchJSON, cfg.profileTokenBudget);
+      profile = await buildProfileBlock(fetchJSON, cfg.profileTokenBudget, cfg.peerId);
     } catch (err) {
       logError("profile_inject", err);
     }

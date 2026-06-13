@@ -121,8 +121,7 @@ export OPENVIKING_API_KEY="your-api-key-here"
 `apiKey` 会作为 `X-API-Key` 发送。`account` 和 `user` 是 trusted mode
 身份头，会作为 `X-OpenViking-Account`、`X-OpenViking-User` 发送；使用
 user/admin API key 的 API_KEY mode 时应留空。
-`peerId` 会作为请求级 `peer_id` 用于 memory recall/search 和 session message 写入；
-需要 peer 维度路由时请显式配置。
+`peerId` 会作为 `X-OpenViking-Actor-Peer` 用于数据面的 memory/resource 请求；捕获 session message 时仍写入 body `peer_id`。需要 peer 维度路由时请显式配置。
 
 `OPENVIKING_API_KEY`、`OPENVIKING_ACCOUNT`、`OPENVIKING_USER`、
 `OPENVIKING_PEER_ID`

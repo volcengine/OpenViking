@@ -139,7 +139,7 @@ describe("context-engine assemble()", () => {
       messages: sourceMessages,
     });
 
-    expect(client.healthCheck).toHaveBeenCalledWith("agent:session-transform", 500);
+    expect(client.healthCheck).toHaveBeenCalledWith(500);
     expect(client.getSessionContext).not.toHaveBeenCalled();
     expect(result.messages).toHaveLength(sourceMessages.length);
     expect(result.messages[0]).toBe(sourceMessages[0]);
@@ -238,9 +238,10 @@ describe("context-engine assemble()", () => {
         messages: sourceMessages,
       });
 
-      expect(client.find).toHaveBeenCalledTimes(2);
+      expect(client.find).toHaveBeenCalledTimes(1);
       for (const call of client.find.mock.calls) {
-        expect(call[1]).toMatchObject({ peerId: "wx_user-01_abc" });
+        expect(call[1]).toMatchObject({ actorPeerId: "wx_user-01_abc", contextType: "memory" });
+        expect(call[1].targetUri).toBeUndefined();
       }
     } finally {
       vi.unstubAllGlobals();
@@ -415,9 +416,10 @@ describe("context-engine assemble()", () => {
         messages: sourceMessages,
       });
 
-      expect(client.find).toHaveBeenCalledTimes(2);
+      expect(client.find).toHaveBeenCalledTimes(1);
       for (const call of client.find.mock.calls) {
-        expect(call[1]).toMatchObject({ peerId: "agent:session-assistant-peer" });
+        expect(call[1]).toMatchObject({ actorPeerId: "agent_session-assistant-peer", contextType: "memory" });
+        expect(call[1].targetUri).toBeUndefined();
       }
     } finally {
       vi.unstubAllGlobals();
@@ -772,15 +774,9 @@ describe("context-engine assemble()", () => {
       availableTools: new Set(),
     });
 
-    expect(resolveAgentId).toHaveBeenCalledWith(
-      "session-main-no-prompt",
-      undefined,
-      "session-main-no-prompt",
-    );
     expect(client.getSessionContext).toHaveBeenCalledWith(
       "session-main-no-prompt",
       4096,
-      "agent:session-main-no-prompt",
     );
     expect(client.find).not.toHaveBeenCalled();
     expect(result.messages[0]).toEqual({
@@ -840,8 +836,7 @@ describe("context-engine assemble()", () => {
       tokenBudget: 4096,
     });
 
-    expect(resolveAgentId).toHaveBeenCalledWith("session-1", undefined, "session-1");
-    expect(client.getSessionContext).toHaveBeenCalledWith("session-1", 4096, "agent:session-1");
+    expect(client.getSessionContext).toHaveBeenCalledWith("session-1", 4096);
     expect(result.estimatedTokens).toBe(
       roughEstimate(result.messages) + systemPromptTokens(result.systemPromptAddition),
     );
