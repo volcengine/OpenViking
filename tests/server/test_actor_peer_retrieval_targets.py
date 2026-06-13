@@ -8,7 +8,7 @@ import pytest
 from openviking.core.peer_id import normalize_peer_id
 from openviking.core.retrieval_targets import default_target_directories, resolve_retrieval_targets
 from openviking.server.identity import RequestContext, Role
-from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
+from openviking_cli.exceptions import PermissionDeniedError
 from openviking_cli.retrieve import ContextType
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -33,20 +33,20 @@ def test_owner_default_search_targets_owner_memory_resources_and_skills():
     targets = _target_dirs()
 
     assert targets == [
-        "viking://user/support_bot/memories",
-        "viking://user/support_bot/peers",
+        "viking://user/support_bot",
         "viking://resources",
-        "viking://user/support_bot/resources",
-        "viking://user/support_bot/skills",
     ]
 
 
-def test_actor_default_search_targets_actor_peer_memory_and_resources_only():
+def test_actor_default_search_keeps_user_view_and_filters_peer_collection():
     targets = _target_dirs(actor_peer_id="web-visitor-alice")
 
     assert targets == [
-        "viking://user/support_bot/peers/web-visitor-alice/memories",
         "viking://resources",
+        "viking://user/support_bot/memories",
+        "viking://user/support_bot/resources",
+        "viking://user/support_bot/skills",
+        "viking://user/support_bot/peers/web-visitor-alice/memories",
         "viking://user/support_bot/peers/web-visitor-alice/resources",
     ]
 
@@ -57,10 +57,13 @@ def test_actor_search_keeps_explicit_resource_target():
     assert targets == ["viking://resources/docs"]
 
 
-def test_actor_search_user_root_targets_actor_peer_content_only():
+def test_actor_search_user_root_keeps_user_content_and_filters_peer_collection():
     targets = _target_dirs("viking://user", actor_peer_id="web-visitor-alice")
 
     assert targets == [
+        "viking://user/support_bot/memories",
+        "viking://user/support_bot/resources",
+        "viking://user/support_bot/skills",
         "viking://user/support_bot/peers/web-visitor-alice/memories",
         "viking://user/support_bot/peers/web-visitor-alice/resources",
     ]
@@ -70,14 +73,15 @@ def test_actor_default_memory_targets_actor_peer_memory():
     assert default_target_directories(
         _ctx("web-visitor-alice"), context_type=ContextType.MEMORY
     ) == [
+        "viking://user/support_bot/memories",
         "viking://user/support_bot/peers/web-visitor-alice/memories",
     ]
 
 
-def test_actor_skill_defaults_are_empty():
-    assert (
-        default_target_directories(_ctx("web-visitor-alice"), context_type=ContextType.SKILL) == []
-    )
+def test_actor_skill_defaults_keep_user_skills():
+    assert default_target_directories(
+        _ctx("web-visitor-alice"), context_type=ContextType.SKILL
+    ) == ["viking://user/support_bot/skills"]
 
 
 def test_actor_default_resource_targets_global_and_actor_peer_resources():
@@ -85,6 +89,7 @@ def test_actor_default_resource_targets_global_and_actor_peer_resources():
         _ctx("web-visitor-alice"), context_type=ContextType.RESOURCE
     ) == [
         "viking://resources",
+        "viking://user/support_bot/resources",
         "viking://user/support_bot/peers/web-visitor-alice/resources",
     ]
 
@@ -127,6 +132,17 @@ def test_actor_explicit_other_peer_memory_target_is_denied():
         )
 
 
-def test_peer_search_rejects_all_peers_target():
-    with pytest.raises(InvalidArgumentError, match="all peer contexts"):
-        _target_dirs("viking://user/support_bot/peers")
+def test_owner_peer_collection_targets_all_peer_contexts():
+    assert _target_dirs("viking://user/support_bot/peers") == [
+        "viking://user/support_bot/peers",
+    ]
+
+
+def test_actor_peer_collection_targets_actor_peer_only():
+    assert _target_dirs(
+        "viking://user/support_bot/peers",
+        actor_peer_id="web-visitor-alice",
+    ) == [
+        "viking://user/support_bot/peers/web-visitor-alice/memories",
+        "viking://user/support_bot/peers/web-visitor-alice/resources",
+    ]

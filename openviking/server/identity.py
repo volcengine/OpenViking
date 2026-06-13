@@ -48,9 +48,8 @@ class RequestContext:
 
     user: UserIdentifier
     role: Role
-    # Request-level actor peer scope. When set, the request acts on behalf of
-    # this peer within the current user's namespace and permissions are narrowed
-    # to that peer's subtree plus read-only shared resources.
+    # Request-level peer collection filter for retrieval. This does not change
+    # tenant/user identity, session ownership, or VikingFS read/write rules.
     actor_peer_id: Optional[str] = None
     # Mirrors ResolvedIdentity.from_oauth. Routes that mint OAuth state
     # (OTP issuance, oauth-verify) reject callers with from_oauth=True to

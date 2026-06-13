@@ -109,21 +109,21 @@ Semantic retrieval is tenant-aware as well:
 - Non-ROOT requests are automatically filtered by `account_id`
 - `resources` can include account-shared resources
 - `memory`, user resources, and `skill` are further filtered by the current user space
-- A peer-restricted view can narrow access to one peer under the current user
+- An actor peer can filter `viking://user/{user}/peers` to one peer during retrieval
 
 This keeps "what you can search" aligned with "what you can read."
 
-### Peer-Restricted View
+### Peer Collection Filter
 
 `peer_id` is a content scope inside the current user boundary. It never changes the
 tenant or user identity.
 
 Set `X-OpenViking-Actor-Peer: <peer_id>` (or SDK/CLI `actor_peer_id`) when a request
-should run in one peer's restricted view:
+should search only one peer from the current user's peer collection:
 
-- Default retrieval uses that peer's memories/resources plus shared `viking://resources`.
-- Peer skills are not searched; skills remain user-scoped.
-- Writes through the restricted view are limited to that peer's subtree.
+- Empty-target retrieval still includes the current user root and shared `viking://resources`.
+- When retrieval resolves `viking://user/{user}/peers`, only that peer's memories/resources are selected.
+- User-scoped memories, resources, skills, session ownership, and filesystem read/write rules are unchanged.
 - The peer ID must be a safe single path segment, for example `web-visitor-alice`.
 
 ## Standard Usage Flow
@@ -290,7 +290,7 @@ caller identity it should run as.
 ### 2. `peer_id` does not define the tenant
 
 `peer_id` identifies an interaction peer under the current user. It does not create a tenant,
-but peer content can be selected through explicit peer URIs or the peer-restricted view, such as
+but peer content can be selected through explicit peer URIs or the peer collection filter, such as
 `viking://user/{user_id}/peers/{peer_id}/memories` or
 `viking://user/{user_id}/peers/{peer_id}/resources`.
 

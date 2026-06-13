@@ -25,7 +25,7 @@ tools = create_openviking_tools(
 
 ## Peer 身份
 
-传入 `actor_peer_id` 可启用 peer 受限视图，用于收窄检索/文件访问范围。session message capture 仍可使用 `peer_id` 表达每条消息的说话人归属。
+传入 `actor_peer_id` 可以在检索时过滤当前用户的 peer 集合。session message capture 仍可使用 `peer_id` 表达每条消息的说话人归属。
 
 ```python
 retriever = OpenVikingRetriever(

@@ -68,8 +68,8 @@ The `find()` method performs pure vector similarity search for simple query scen
 | telemetry | bool \| object | No | False | Attach telemetry data to response |
 
 **Target resolution notes**:
-- With empty `target_uri`, non-ROOT retrieval without a peer-restricted view searches current-user memories, all peer memories, shared `viking://resources`, current-user resources, and current-user skills.
-- To use a peer-restricted view, send `X-OpenViking-Actor-Peer: <peer_id>` or construct the SDK/CLI client with `actor_peer_id`. See [Multi-Tenant: Peer-Restricted View](../concepts/11-multi-tenant.md#peer-restricted-view).
+- With empty `target_uri`, non-ROOT retrieval searches the current user root (`viking://user/{user}`) and shared `viking://resources`.
+- To filter the current user's peer collection to one peer during retrieval, send `X-OpenViking-Actor-Peer: <peer_id>` or construct the SDK/CLI client with `actor_peer_id`. See [Multi-Tenant: Peer Collection Filter](../concepts/11-multi-tenant.md#peer-restricted-view).
 - Current-user shorthand target URIs such as `viking://user/memories`, `viking://user/resources`, and `viking://user/skills` are canonicalized from the authenticated request identity.
 
 **FindResult Structure**
@@ -199,7 +199,7 @@ results = client.find(
     target_uri="viking://user/resources"
 )
 
-# Search through the peer-restricted view
+# Search with the peer collection filtered to one peer
 peer_client = ov.SyncHTTPClient(
     url="http://localhost:1933",
     api_key="your-key",
@@ -326,7 +326,7 @@ The `search()` method adds session context understanding and intent analysis cap
 | include_provenance | bool | No | False | Include provenance/query-plan details in serialized result |
 | telemetry | bool \| object | No | False | Attach telemetry data to response |
 
-`search()` uses the same target resolution rules as `find()`, including the peer-restricted view selected by `X-OpenViking-Actor-Peer` or SDK `actor_peer_id`.
+`search()` uses the same target resolution rules as `find()`, including the peer collection filter selected by `X-OpenViking-Actor-Peer` or SDK `actor_peer_id`.
 
 #### 3. Usage Examples
 

@@ -58,19 +58,27 @@ def default_target_directories(
     if not ctx or ctx.role == Role.ROOT:
         return []
 
+    user_root = canonical_user_root(ctx)
     if context_type == ContextType.MEMORY:
-        return _default_user_scoped_targets(ctx, "memories")
+        if ctx.actor_peer_id:
+            return [
+                f"{user_root}/memories",
+                f"{user_root}/peers/{ctx.actor_peer_id}/memories",
+            ]
+        return [user_root]
     if context_type == ContextType.RESOURCE:
-        return _default_resource_targets(ctx)
+        if ctx.actor_peer_id:
+            return [
+                "viking://resources",
+                f"{user_root}/resources",
+                f"{user_root}/peers/{ctx.actor_peer_id}/resources",
+            ]
+        return ["viking://resources", user_root]
     if context_type == ContextType.SKILL:
         return _default_skill_targets(ctx)
-    return _dedupe(
-        [
-            *_default_user_scoped_targets(ctx, "memories"),
-            *_default_resource_targets(ctx),
-            *_default_skill_targets(ctx),
-        ]
-    )
+    if ctx.actor_peer_id:
+        return ["viking://resources", *_default_user_root_targets(ctx)]
+    return [user_root, "viking://resources"]
 
 
 def _canonicalize_target_uris(
@@ -111,38 +119,31 @@ def _target_directories_for_uri(
 
 
 def _default_user_root_targets(ctx: RequestContext) -> List[str]:
+    user_root = canonical_user_root(ctx)
+    if not ctx.actor_peer_id:
+        return [user_root]
     return _dedupe(
         [
-            *_default_user_scoped_targets(ctx, "memories"),
-            *_default_user_scoped_targets(ctx, "resources"),
+            f"{user_root}/memories",
+            f"{user_root}/resources",
             *_default_skill_targets(ctx),
+            *_actor_peer_targets(ctx),
         ]
     )
 
 
-def _default_resource_targets(ctx: RequestContext) -> List[str]:
-    return [
-        "viking://resources",
-        *_default_user_scoped_targets(ctx, "resources"),
-    ]
-
-
 def _default_skill_targets(ctx: RequestContext) -> List[str]:
-    if ctx.actor_peer_id:
-        return []
     return [f"{canonical_user_root(ctx)}/skills"]
 
 
-def _default_user_scoped_targets(
-    ctx: RequestContext,
-    segment: str,
-) -> List[str]:
-    user_root = canonical_user_root(ctx)
-    if ctx.actor_peer_id:
-        return [f"{user_root}/peers/{ctx.actor_peer_id}/{segment}"]
-    if segment in {"memories", "resources"}:
-        return [f"{user_root}/{segment}", f"{user_root}/peers"]
-    return [f"{user_root}/{segment}"]
+def _actor_peer_targets(ctx: RequestContext) -> List[str]:
+    if not ctx.actor_peer_id:
+        return []
+    peer_root = f"{canonical_user_root(ctx)}/peers/{ctx.actor_peer_id}"
+    return [
+        f"{peer_root}/memories",
+        f"{peer_root}/resources",
+    ]
 
 
 def _resolve_peer_target(
@@ -160,7 +161,9 @@ def _resolve_peer_target(
         return None
 
     if len(suffix) == 1:
-        raise InvalidArgumentError("target_uri must not point at all peer contexts.")
+        if ctx.actor_peer_id:
+            return _actor_peer_targets(ctx)
+        return [target_uri]
 
     target_peer_id = _normalize_peer_id(suffix[1])
     if ctx.actor_peer_id and target_peer_id != ctx.actor_peer_id:

@@ -18,7 +18,6 @@ from openviking.server.config import ServerConfig, ToolOutputExternalizationConf
 from openviking.server.dependencies import set_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import sessions as sessions_router
-from openviking_cli.exceptions import PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
@@ -44,14 +43,6 @@ def _message_request(
     if peer_id is not _UNSET and peer_id is not None:
         payload["peer_id"] = peer_id
     return payload
-
-
-def _session_ctx(actor_peer_id: str | None = None) -> RequestContext:
-    return RequestContext(
-        user=UserIdentifier.the_default_user("test_user"),
-        role=Role.USER,
-        actor_peer_id=actor_peer_id,
-    )
 
 
 @pytest.fixture(autouse=True)
@@ -428,44 +419,6 @@ async def test_add_message_request_persists_peer_id(service, monkeypatch):
     session = await service.sessions.get(session_id, ctx, auto_create=False)
     await session.load()
     assert session.messages[-1].peer_id == "assistant-b"
-
-
-async def test_actor_session_scope_filters_access_and_listing(service):
-    owner_ctx = _session_ctx()
-    alice_ctx = _session_ctx("alice")
-    bob_ctx = _session_ctx("bob")
-
-    await service.sessions.create(owner_ctx, session_id="owner-session")
-    alice_session = await service.sessions.create(alice_ctx, session_id="alice-session")
-    await service.sessions.create(bob_ctx, session_id="bob-session")
-
-    assert alice_session.meta.actor_peer_id == "alice"
-    assert (await service.sessions.get("alice-session", alice_ctx)).meta.actor_peer_id == "alice"
-
-    with pytest.raises(PermissionDeniedError, match="another actor"):
-        await service.sessions.get("owner-session", alice_ctx)
-    with pytest.raises(PermissionDeniedError, match="another actor"):
-        await service.sessions.get("bob-session", alice_ctx)
-
-    owner_sessions = {item["session_id"] for item in await service.sessions.sessions(owner_ctx)}
-    alice_sessions = {item["session_id"] for item in await service.sessions.sessions(alice_ctx)}
-
-    assert {"owner-session", "alice-session", "bob-session"}.issubset(owner_sessions)
-    assert alice_sessions == {"alice-session"}
-
-
-async def test_actor_add_message_does_not_autofill_peer_id_and_rejects_other_peer(service):
-    alice_ctx = _session_ctx("alice")
-    session = await service.sessions.create(alice_ctx, session_id="alice-message-session")
-
-    session.add_message("user", [TextPart("no explicit peer")])
-    session.add_message("assistant", [TextPart("same actor peer")], peer_id="alice")
-
-    assert session.messages[-2].peer_id is None
-    assert session.messages[-1].peer_id == "alice"
-
-    with pytest.raises(PermissionDeniedError, match="another peer"):
-        session.add_message("user", [TextPart("wrong peer")], peer_id="bob")
 
 
 async def test_add_multiple_messages(client: httpx.AsyncClient):

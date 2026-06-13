@@ -40,14 +40,14 @@ def test_owner_memory_extraction_scope_uses_message_peer_ids():
     assert scope.include_session_skills is True
 
 
-def test_actor_memory_extraction_scope_forces_actor_peer_only():
+def test_actor_memory_extraction_scope_still_uses_policy_and_messages():
     scope = _resolve_memory_extraction_scope(
         _ctx("alice"),
-        MemoryPolicy(),
+        MemoryPolicy(peer_enabled=True),
         [_message("bob"), _message()],
         config_session_skill_extraction_enabled=True,
     )
 
-    assert scope.allow_self_memory is False
-    assert scope.allowed_peer_ids == {"alice"}
-    assert scope.include_session_skills is False
+    assert scope.allow_self_memory is True
+    assert scope.allowed_peer_ids == {"bob"}
+    assert scope.include_session_skills is True
