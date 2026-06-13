@@ -183,7 +183,7 @@ On any /commit failure (OV unreachable, non-2xx, timeout) we **preserve state** 
 { "hookSpecificOutput": { "hookEventName": "UserPromptSubmit", "additionalContext": "OpenViking memory digest:\n- ..." } }
 ```
 
-Codex injects `additionalContext` into the model turn, so memories arrive without an extra tool call. By default the hook runs a low-reasoning Codex compression pass over recalled candidates before injection, dropping weakly-related memories and preserving only a short digest. Set `OPENVIKING_RECALL_COMPRESS=0` to fall back to deterministic short formatting.
+Codex injects `additionalContext` into the model turn, so memories arrive without an extra tool call. By default the hook runs a low-reasoning Codex compression pass over recalled candidates before injection, dropping weakly-related memories and preserving only a short digest. If the compressor returns `NO_RELEVANT_MEMORY`, empty text, or non-digest chatter, the hook emits `{}` and injects nothing. Digests may keep `viking://` source URIs and point the model at the OpenViking MCP `read`/`search` tools for details when the inline bullet is intentionally short. Set `OPENVIKING_RECALL_COMPRESS=0` to fall back to deterministic short formatting.
 
 ### Stop (turn end → `add_message`, NOT `commit`)
 

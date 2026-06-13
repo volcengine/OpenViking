@@ -265,12 +265,31 @@ function sanitizeInjectedText(text) {
   return String(text || "").replace(new RegExp(`</?${legacyTag}>`, "gi"), "legacy memory wrapper");
 }
 
+function isNoRelevantMemory(text) {
+  const value = String(text || "")
+    .trim()
+    .replace(/^openviking memory digest:\s*/i, "")
+    .trim();
+  return !value || /^NO_RELEVANT_MEMORY\.?$/i.test(value) || /^no (?:directly )?relevant memor(?:y|ies)\.?$/i.test(value);
+}
+
+function hasDigestSignal(text) {
+  const body = String(text || "").replace(/^openviking memory digest:\s*/i, "").trim();
+  return /(^|\n)\s*[-*]\s+\S/.test(body) || /\bviking:\/\//i.test(body);
+}
+
+function appendMcpRetrievalHint(text) {
+  const value = String(text || "").trim();
+  if (!/\bviking:\/\//i.test(value) || /OpenViking MCP/i.test(value)) return value;
+  return `${value}\n\nMore detail: use the OpenViking MCP read/search tools with the cited viking:// URI if needed.`;
+}
+
 function fallbackDigest(items) {
   const lines = items.slice(0, cfg.recallCompressMaxBullets).map((item) => {
     const text = sanitizeInjectedText(truncateText(item.text, 260)).replace(/\s+/g, " ");
     return `- [${item.category || "memory"}] ${text} (${item.uri})`;
   });
-  return lines.length > 0 ? `OpenViking memory digest:\n${lines.join("\n")}` : "";
+  return lines.length > 0 ? appendMcpRetrievalHint(`OpenViking memory digest:\n${lines.join("\n")}`) : "";
 }
 
 function normalizeCompressedContext(text) {
@@ -278,11 +297,12 @@ function normalizeCompressedContext(text) {
   if (!value) return "";
   value = value.replace(/^```(?:text|markdown)?\s*/i, "").replace(/\s*```$/i, "").trim();
   value = sanitizeInjectedText(value);
-  if (!value || /^NO_RELEVANT_MEMORY\.?$/i.test(value)) return "";
+  if (isNoRelevantMemory(value)) return "";
   if (!value.toLowerCase().startsWith("openviking memory digest:")) {
     value = `OpenViking memory digest:\n${value}`;
   }
-  return truncateText(value, 4000);
+  if (!hasDigestSignal(value)) return "";
+  return truncateText(appendMcpRetrievalHint(value), 4000);
 }
 
 async function runCodexCompressor(prompt) {
@@ -382,9 +402,12 @@ Task:
 - Drop stale, generic, duplicate, merely adjacent, or operationally unrelated memories.
 - Compress to at most ${cfg.recallCompressMaxBullets} short bullets.
 - Preserve concrete facts, dates, paths, repo names, commands, and user preferences.
+- Include the source viking:// URI when the agent may need to inspect more detail.
+- If the answer needs detail beyond the bullet, say to use OpenViking MCP read/search with the cited viking:// URI if needed.
 - Do not include XML/HTML wrappers.
 - Do not mention that you filtered memories.
-- If no memory is directly useful, output exactly: NO_RELEVANT_MEMORY
+- Output either "OpenViking memory digest:" followed by useful bullets, or exactly: NO_RELEVANT_MEMORY.
+- If no memory is directly useful, output exactly: NO_RELEVANT_MEMORY.
 
 Input JSON:
 ${JSON.stringify(payload, null, 2)}
