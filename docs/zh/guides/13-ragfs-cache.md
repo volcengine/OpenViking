@@ -72,6 +72,99 @@ openviking-server
 
 如果运行包没有编译对应 Provider，启动时会返回类似 “requires the ... feature” 的错误。
 
+## 原生 Provider 构建
+
+标准 OpenViking wheel 适用于 `memory` 和 `redis` Provider。`yuanrong` 和
+`mooncake` Provider 依赖平台相关的原生 SDK，需要针对目标部署环境单独构建。
+
+先安装 wheel 构建工具：
+
+```bash
+python -m pip install "maturin[patchelf]"
+```
+
+### Yuanrong
+
+安装 Yuanrong DataSystem C++ SDK，并导出头文件和库目录：
+
+```bash
+export YUANRONG_SDK_INCLUDE=/path/to/yuanrong/include
+export YUANRONG_SDK_LIB_DIR=/path/to/yuanrong/lib
+# 可选，默认值为 "datasystem"。
+export YUANRONG_SDK_LIB_NAME=datasystem
+export LD_LIBRARY_PATH="$YUANRONG_SDK_LIB_DIR:${LD_LIBRARY_PATH:-}"
+```
+
+构建并安装 wheel：
+
+```bash
+maturin build --release \
+  --manifest-path crates/ragfs-python-native/Cargo.toml \
+  --features yuanrong-native
+
+python -m pip install --force-reinstall target/wheels/ragfs_python-*.whl
+```
+
+OpenViking 启动时，`storage.agfs.cache.yuanrong` 配置的 Yuanrong worker
+必须可用。
+
+### Mooncake
+
+检出 `crates/ragfs-cache-mooncake/Cargo.toml` 使用的 Mooncake revision，
+然后构建启用 Rust 支持的 Mooncake Store：
+
+```bash
+cmake -S /path/to/Mooncake -B /path/to/Mooncake/build \
+  -DWITH_STORE=ON \
+  -DWITH_STORE_RUST=ON \
+  -DCMAKE_BUILD_TYPE=Release
+
+cmake --build /path/to/Mooncake/build \
+  --target build_mooncake_store_rust mooncake_master -j
+```
+
+导出 Mooncake 官方 Rust binding 所需路径：
+
+```bash
+export MOONCAKE_BUILD_DIR=/path/to/Mooncake/build
+export MOONCAKE_STORE_LIB_DIR="$MOONCAKE_BUILD_DIR/mooncake-store/src"
+export MOONCAKE_STORE_INCLUDE_DIR=/path/to/Mooncake/mooncake-store/include
+export LD_LIBRARY_PATH="$MOONCAKE_BUILD_DIR/mooncake-common:\
+$MOONCAKE_BUILD_DIR/mooncake-common/src:\
+$MOONCAKE_BUILD_DIR/mooncake-store/src:\
+$MOONCAKE_BUILD_DIR/mooncake-store/src/cachelib_memory_allocator:\
+$MOONCAKE_BUILD_DIR/mooncake-transfer-engine/src:\
+$MOONCAKE_BUILD_DIR/mooncake-transfer-engine/src/common/base:\
+${LD_LIBRARY_PATH:-}"
+```
+
+构建并安装 wheel：
+
+```bash
+maturin build --release \
+  --manifest-path crates/ragfs-python-native/Cargo.toml \
+  --features mooncake-native
+
+python -m pip install --force-reinstall target/wheels/ragfs_python-*.whl
+```
+
+OpenViking 启动时，`storage.agfs.cache.mooncake` 配置的 Mooncake metadata
+service 和 Master 必须可用。原生 wheel 与平台相关，应在与目标部署环境兼容的
+系统中构建。
+
+生产 wheel 应使用仅在显式启用 ASan 时才链接 `libasan` 的 Mooncake revision。
+构建后检查 release wheel 不包含且不依赖 `libasan`：
+
+```bash
+rm -rf /tmp/ragfs-python-wheel
+python -m zipfile -e target/wheels/ragfs_python-*.whl /tmp/ragfs-python-wheel
+readelf -d /tmp/ragfs-python-wheel/ragfs_python/ragfs_python.abi3.so \
+  | grep libasan
+find /tmp/ragfs-python-wheel -name 'libasan*'
+```
+
+两项检查都应无输出。
+
 ## 配置项
 
 `storage.agfs.cache` 支持以下通用配置：

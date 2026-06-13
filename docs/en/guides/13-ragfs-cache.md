@@ -72,6 +72,104 @@ Available Providers:
 
 If the runtime package was not compiled with the selected Provider, startup returns an error similar to "requires the ... feature".
 
+## Native Provider Builds
+
+The standard OpenViking wheel is suitable for the `memory` and `redis`
+Providers. The `yuanrong` and `mooncake` Providers depend on platform-specific
+native SDKs and must be built for the target deployment environment.
+
+Install the wheel builder first:
+
+```bash
+python -m pip install "maturin[patchelf]"
+```
+
+### Yuanrong
+
+Install the Yuanrong DataSystem C++ SDK and export its header and library
+locations:
+
+```bash
+export YUANRONG_SDK_INCLUDE=/path/to/yuanrong/include
+export YUANRONG_SDK_LIB_DIR=/path/to/yuanrong/lib
+# Optional; defaults to "datasystem".
+export YUANRONG_SDK_LIB_NAME=datasystem
+export LD_LIBRARY_PATH="$YUANRONG_SDK_LIB_DIR:${LD_LIBRARY_PATH:-}"
+```
+
+Build and install the wheel:
+
+```bash
+maturin build --release \
+  --manifest-path crates/ragfs-python-native/Cargo.toml \
+  --features yuanrong-native
+
+python -m pip install --force-reinstall target/wheels/ragfs_python-*.whl
+```
+
+The Yuanrong worker configured by `storage.agfs.cache.yuanrong` must be
+available when OpenViking starts.
+
+### Mooncake
+
+Check out the Mooncake revision used by
+`crates/ragfs-cache-mooncake/Cargo.toml`, then build Mooncake Store with Rust
+support:
+
+```bash
+cmake -S /path/to/Mooncake -B /path/to/Mooncake/build \
+  -DWITH_STORE=ON \
+  -DWITH_STORE_RUST=ON \
+  -DCMAKE_BUILD_TYPE=Release
+
+cmake --build /path/to/Mooncake/build \
+  --target build_mooncake_store_rust mooncake_master -j
+```
+
+Export the paths required by the official Mooncake Rust binding:
+
+```bash
+export MOONCAKE_BUILD_DIR=/path/to/Mooncake/build
+export MOONCAKE_STORE_LIB_DIR="$MOONCAKE_BUILD_DIR/mooncake-store/src"
+export MOONCAKE_STORE_INCLUDE_DIR=/path/to/Mooncake/mooncake-store/include
+export LD_LIBRARY_PATH="$MOONCAKE_BUILD_DIR/mooncake-common:\
+$MOONCAKE_BUILD_DIR/mooncake-common/src:\
+$MOONCAKE_BUILD_DIR/mooncake-store/src:\
+$MOONCAKE_BUILD_DIR/mooncake-store/src/cachelib_memory_allocator:\
+$MOONCAKE_BUILD_DIR/mooncake-transfer-engine/src:\
+$MOONCAKE_BUILD_DIR/mooncake-transfer-engine/src/common/base:\
+${LD_LIBRARY_PATH:-}"
+```
+
+Build and install the wheel:
+
+```bash
+maturin build --release \
+  --manifest-path crates/ragfs-python-native/Cargo.toml \
+  --features mooncake-native
+
+python -m pip install --force-reinstall target/wheels/ragfs_python-*.whl
+```
+
+The Mooncake metadata service and Master configured by
+`storage.agfs.cache.mooncake` must be available when OpenViking starts.
+Native wheels are platform-specific and should be built on a system compatible
+with the target deployment environment.
+
+For production wheels, use a Mooncake revision whose Rust `build.rs` links
+`libasan` only when ASan is explicitly enabled. Verify that the release wheel
+does not contain or depend on `libasan`:
+
+```bash
+rm -rf /tmp/ragfs-python-wheel
+python -m zipfile -e target/wheels/ragfs_python-*.whl /tmp/ragfs-python-wheel
+readelf -d /tmp/ragfs-python-wheel/ragfs_python/ragfs_python.abi3.so \
+  | grep libasan
+find /tmp/ragfs-python-wheel -name 'libasan*'
+```
+
+Both checks should produce no output.
+
 ## Configuration
 
 `storage.agfs.cache` supports these common options:
