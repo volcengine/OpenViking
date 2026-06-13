@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 
 const CONFIG = {
   serverUrl: (import.meta.env.VITE_ZOUK_SERVER_URL || 'https://zouk.zaynjarvis.com').replace(/\/+$/, ''),
@@ -411,11 +410,11 @@ function MessageIcon() {
   );
 }
 
-function MessagesIcon() {
+function SendIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <path d="M17 12a4 4 0 0 1-4 4H7l-4 3V8a4 4 0 0 1 4-4h6a4 4 0 0 1 4 4Z" />
-      <path d="M9 16v1a3 3 0 0 0 3 3h5l4 2V11a3 3 0 0 0-3-3h-1" />
+      <path d="M22 2 11 13" />
+      <path d="m22 2-7 20-4-9-9-4Z" />
     </svg>
   );
 }
@@ -591,8 +590,8 @@ export function ZoukInteractiveBlog({ route }) {
   const [sourceUrl, setSourceUrl] = useState(currentSourceUrl);
   const [lastContextUrl, setLastContextUrl] = useState('');
   const [selectionAction, setSelectionAction] = useState(null);
-  const [headerSlot, setHeaderSlot] = useState(null);
   const [dismissedThinkingKey, setDismissedThinkingKey] = useState('');
+  const [sendWhenReady, setSendWhenReady] = useState(false);
   const scrollRef = useRef(null);
   const textareaRef = useRef(null);
   const wsRef = useRef(null);
@@ -602,10 +601,13 @@ export function ZoukInteractiveBlog({ route }) {
   const thinkingMessageKeyRef = useRef('');
   const target = `#${CONFIG.channel}`;
   const panelVisible = open || closing;
+  const composerPlaceholder = `Ask OpenViking about this post...`;
   const referencedText = compactText(selectedText);
   const contextUrlChanged = Boolean(sourceUrl && sourceUrl !== lastContextUrl);
   const includeContextUrl = contextUrlChanged || Boolean(referencedText);
   const shouldInjectContext = includeContextUrl || Boolean(referencedText);
+  const composerTrimmed = composer.trim();
+  const submitDisabled = !composerTrimmed || status === 'sending' || sendWhenReady;
 
   const authHeaders = useMemo(() => ({
     'Content-Type': 'application/json',
@@ -641,15 +643,6 @@ export function ZoukInteractiveBlog({ route }) {
   );
   const thinkingMessageKey = thinkingAgent ? thinkingAgent.id : '';
   const showThinkingMessage = Boolean(thinkingAgent && thinkingMessageKey !== dismissedThinkingKey);
-  const launcherStatus = useMemo(() => {
-    const statuses = liveAgents.map(agentDotStatus);
-    if (statuses.includes('error')) return 'error';
-    if (statuses.includes('working')) return 'working';
-    if (statuses.includes('thinking')) return 'thinking';
-    if (statuses.includes('online')) return 'online';
-    return liveAgents.length ? 'offline' : '';
-  }, [liveAgents]);
-
   const rememberSource = useCallback(() => {
     const next = currentSourceUrl();
     setSourceUrl(next);
@@ -685,11 +678,6 @@ export function ZoukInteractiveBlog({ route }) {
       closeTimerRef.current = null;
     }, CLOSE_ANIMATION_MS);
   }, []);
-
-  const toggleChat = useCallback(() => {
-    if (panelVisible) closeChat();
-    else openChat();
-  }, [closeChat, openChat, panelVisible]);
 
   const loadHistory = useCallback(async (nextToken = token) => {
     if (!nextToken) return;
@@ -800,12 +788,6 @@ export function ZoukInteractiveBlog({ route }) {
 
   useEffect(() => {
     if (!browserAvailable()) return undefined;
-    setHeaderSlot(document.getElementById('zouk-reader-header-slot'));
-    return undefined;
-  }, []);
-
-  useEffect(() => {
-    if (!browserAvailable()) return undefined;
     const media = window.matchMedia('(min-width: 900px)');
     const update = () => setIsDesktop(media.matches);
     update();
@@ -819,6 +801,13 @@ export function ZoukInteractiveBlog({ route }) {
     root.classList.toggle('zouk-reader-open-desktop', open && !closing && isDesktop);
     return () => root.classList.remove('zouk-reader-open-desktop');
   }, [closing, isDesktop, open]);
+
+  useEffect(() => {
+    if (!browserAvailable()) return undefined;
+    const root = document.documentElement;
+    root.classList.toggle('zouk-reader-bottom-composer-visible', !panelVisible);
+    return () => root.classList.remove('zouk-reader-bottom-composer-visible');
+  }, [panelVisible]);
 
   useEffect(() => {
     const node = scrollRef.current;
@@ -953,9 +942,15 @@ export function ZoukInteractiveBlog({ route }) {
     else setDragY(0);
   }, [closeChat]);
 
-  const sendMessage = useCallback(async () => {
+  const sendMessage = useCallback(async ({ openPanel = false } = {}) => {
     const trimmed = composer.trim();
-    if (!trimmed || !token || status === 'sending') return;
+    if (!trimmed || status === 'sending') return;
+    if (openPanel && !panelVisible) openChat();
+    if (!token) {
+      setSendWhenReady(true);
+      if (status === 'error') connect();
+      return;
+    }
     const nextSourceUrl = rememberSource();
     const nextReferencedText = compactText(selectedText);
     const nextIncludeUrl = Boolean(nextSourceUrl && (nextSourceUrl !== lastContextUrl || nextReferencedText));
@@ -986,7 +981,13 @@ export function ZoukInteractiveBlog({ route }) {
       setStatus('error');
       setError(err instanceof Error ? err.message : 'Send failed');
     }
-  }, [authHeaders, composer, dismissThinkingMessage, lastContextUrl, rememberSource, selectedText, status, target, token]);
+  }, [authHeaders, composer, connect, dismissThinkingMessage, lastContextUrl, openChat, panelVisible, rememberSource, selectedText, status, target, token]);
+
+  useEffect(() => {
+    if (!sendWhenReady || !token || status !== 'connected') return;
+    setSendWhenReady(false);
+    sendMessage();
+  }, [sendMessage, sendWhenReady, status, token]);
 
   const loadThreadMessages = useCallback(async (parentMessage) => {
     const parentId = parentMessage?.id;
@@ -1050,20 +1051,8 @@ export function ZoukInteractiveBlog({ route }) {
 
   const onSubmit = (event) => {
     event.preventDefault();
-    sendMessage();
+    sendMessage({ openPanel: true });
   };
-
-  const launcher = (
-    <button
-      type="button"
-      className={`zouk-reader-launcher${panelVisible ? ' is-active' : ''}${launcherStatus ? ` has-live is-${launcherStatus}` : ''}`}
-      aria-label={panelVisible ? 'Close blog chat' : 'Open blog chat'}
-      aria-pressed={panelVisible}
-      onClick={toggleChat}
-    >
-      <MessagesIcon />
-    </button>
-  );
 
   return (
     <>
@@ -1079,7 +1068,34 @@ export function ZoukInteractiveBlog({ route }) {
         </button>
       ) : null}
 
-      {headerSlot ? createPortal(launcher, headerSlot) : null}
+      {!panelVisible ? (
+        <form className="zouk-reader-bottom-composer" onSubmit={onSubmit} aria-label="Ask OpenViking">
+          <div className="zouk-reader-input-shell">
+            <textarea
+              ref={textareaRef}
+              value={composer}
+              rows={1}
+              enterKeyHint="send"
+              placeholder={composerPlaceholder}
+              onChange={(event) => setComposer(event.target.value)}
+              onKeyDown={(event) => {
+                if (shouldSubmitOnEnter(event)) {
+                  event.preventDefault();
+                  sendMessage({ openPanel: true });
+                }
+              }}
+            />
+            <button
+              type="submit"
+              className="zouk-reader-send"
+              aria-label="Send message"
+              disabled={submitDisabled}
+            >
+              <SendIcon />
+            </button>
+          </div>
+        </form>
+      ) : null}
 
       {panelVisible ? (
         <aside
@@ -1177,10 +1193,18 @@ export function ZoukInteractiveBlog({ route }) {
                 onKeyDown={(event) => {
                   if (shouldSubmitOnEnter(event)) {
                     event.preventDefault();
-                    sendMessage();
+                    sendMessage({ openPanel: true });
                   }
                 }}
               />
+              <button
+                type="submit"
+                className="zouk-reader-send"
+                aria-label="Send message"
+                disabled={submitDisabled}
+              >
+                <SendIcon />
+              </button>
             </div>
             {error && visibleMessages.length ? (
               <div className="zouk-reader-error">

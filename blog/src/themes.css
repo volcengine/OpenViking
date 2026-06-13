@@ -293,9 +293,6 @@ a.b-tag:hover { color: var(--th-ink); border-color: var(--th-ink); }
 /* light/dark toggle */
 .b-mode-toggle { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; background: var(--th-bg-2); border: 1px solid var(--th-line); border-radius: 999px; cursor: pointer; color: var(--th-ink); transition: border-color 0.12s; }
 .b-mode-toggle:hover { border-color: var(--th-ink); }
-.zouk-reader-header-slot { display: inline-flex; align-items: center; flex: 0 0 auto; }
-.zouk-reader-header-slot:empty { display: none; }
-
 @media (max-width: 720px) {
   .b-topbar__inner { padding: 10px 16px; gap: 10px; flex-wrap: nowrap; justify-content: space-between; }
   .b-brand { min-width: 0; max-width: calc(100% - 168px); flex: 0 1 auto; }
@@ -564,8 +561,8 @@ html[lang="zh"] :is(.b-hero__title, .b-post__title, .b-card__title, .b-post__nav
 /* ===========================================================
    ZOUK INTERACTIVE BLOG
    =========================================================== */
-.zouk-reader-launcher,
 .zouk-selection-action,
+.zouk-reader-bottom-composer button,
 .zouk-reader-panel button {
   font-family: var(--th-font-mono);
 }
@@ -574,64 +571,8 @@ html {
   --zouk-reader-rail: min(33.333vw, 460px);
 }
 
-.zouk-reader-launcher {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  min-width: 36px;
-  padding: 0;
-  border: 1px solid var(--th-line);
-  border-radius: 999px;
-  background: var(--th-bg-2);
-  color: var(--th-ink);
-  box-shadow: none;
-  cursor: pointer;
-  transition: border-color 0.12s, background 0.12s, color 0.12s;
-}
-
-.zouk-reader-launcher:hover,
-.zouk-reader-launcher.is-active {
-  border-color: var(--th-ink);
-}
-
-.zouk-reader-launcher.is-active {
-  background: color-mix(in oklab, var(--th-ink) 10%, var(--th-bg-2));
-}
-
-.zouk-reader-launcher.has-live::after {
-  content: "";
-  position: absolute;
-  right: 3px;
-  bottom: 3px;
-  width: 6px;
-  height: 6px;
-  border: 2px solid var(--th-bg-2);
-  border-radius: 999px;
-  background: var(--zouk-status-online);
-  box-sizing: content-box;
-}
-
-.zouk-reader-launcher.has-live.is-working::after {
-  background: var(--zouk-status-working);
-}
-
-.zouk-reader-launcher.has-live.is-thinking::after {
-  background: var(--zouk-status-thinking);
-}
-
-.zouk-reader-launcher.has-live.is-offline::after {
-  background: var(--zouk-status-offline);
-}
-
-.zouk-reader-launcher.has-live.is-error::after {
-  background: var(--zouk-status-error);
-}
-
-.zouk-reader-launcher svg,
 .zouk-selection-action svg,
+.zouk-reader-send svg,
 .zouk-reader-panel svg {
   width: 18px;
   height: 18px;
@@ -663,6 +604,18 @@ html {
 .zouk-selection-action svg {
   width: 15px;
   height: 15px;
+}
+
+.zouk-reader-bottom-composer {
+  position: fixed;
+  z-index: 84;
+  left: 50%;
+  bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+  width: min(620px, calc(100vw - 32px));
+  transform: translateX(-50%);
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 
 .zouk-reader-panel {
@@ -1165,10 +1118,12 @@ html {
   position: relative;
   display: flex;
   align-items: flex-end;
+  gap: 6px;
   min-height: var(--zouk-reader-input-min-height);
   border: 1px solid var(--th-line);
   border-radius: var(--zouk-reader-field-radius);
   background: var(--th-bg-2);
+  padding-right: 5px;
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 
@@ -1178,7 +1133,9 @@ html {
 }
 
 .zouk-reader-input-shell textarea {
-  width: 100%;
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
   min-height: 42px;
   max-height: 132px;
   border: 0;
@@ -1196,6 +1153,44 @@ html {
   color: var(--th-mute);
 }
 
+.zouk-reader-send {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  margin-bottom: 5px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: var(--th-ink);
+  color: var(--th-bg);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, opacity 0.15s, transform 0.15s;
+}
+
+.zouk-reader-send:hover,
+.zouk-reader-send:focus-visible {
+  background: color-mix(in oklab, var(--th-ink) 88%, var(--th-accent));
+}
+
+.zouk-reader-send:active {
+  transform: scale(0.96);
+}
+
+.zouk-reader-send:disabled {
+  cursor: default;
+  opacity: 0.34;
+  transform: none;
+}
+
+.zouk-reader-bottom-composer .zouk-reader-input-shell {
+  border-color: color-mix(in oklab, var(--th-line) 78%, transparent);
+  background: color-mix(in oklab, var(--th-bg) 92%, var(--th-bg-2));
+  box-shadow: 0 14px 42px color-mix(in oklab, #000 16%, transparent);
+}
+
 .zouk-reader-error {
   display: flex;
   align-items: center;
@@ -1210,7 +1205,11 @@ html {
 @media (min-width: 900px) {
   .b-shell__main,
   .b-footer {
-    transition: padding-right 220ms ease;
+    transition: padding-right 220ms ease, padding-bottom 220ms ease;
+  }
+
+  html.zouk-reader-bottom-composer-visible .b-shell__main {
+    padding-bottom: 96px;
   }
 
   html.zouk-reader-open-desktop .b-shell__main {
@@ -1312,22 +1311,23 @@ html {
     border-color: color-mix(in oklab, var(--th-line) 68%, transparent);
     background: color-mix(in oklab, var(--th-bg-2) 60%, transparent);
   }
-}
 
-@media (max-width: 720px) {
-  .zouk-reader-launcher {
-    width: 34px;
-    height: 34px;
-    min-width: 34px;
-  }
-
-  .zouk-reader-launcher svg {
-    width: 17px;
-    height: 17px;
+  .zouk-reader-bottom-composer .zouk-reader-input-shell {
+    border-color: color-mix(in oklab, var(--th-line) 72%, transparent);
+    background: color-mix(in oklab, var(--th-bg) 88%, var(--th-bg-2));
   }
 }
 
 @media (max-width: 899px) {
+  html.zouk-reader-bottom-composer-visible .b-shell__main {
+    padding-bottom: calc(86px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .zouk-reader-bottom-composer {
+    bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+    width: calc(100vw - 20px);
+  }
+
   .zouk-reader-panel {
     --zouk-blog-drag: 0px;
     --zouk-blog-sheet-top: calc(var(--zouk-blog-vv-top, 0px) + var(--zouk-blog-vv-height, 100svh) - var(--zouk-blog-sheet-height, 50svh));

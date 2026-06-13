@@ -53,7 +53,6 @@ function Topbar({ lang, theme, onLang, onToggleTheme, onHome, S }) {
               </svg>
             )}
           </button>
-          <div id="zouk-reader-header-slot" className="zouk-reader-header-slot" />
         </div>
       </div>
     </header>
