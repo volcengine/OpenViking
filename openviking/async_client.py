@@ -47,12 +47,14 @@ class AsyncOpenViking:
     def __init__(
         self,
         path: Optional[str] = None,
+        actor_peer_id: Optional[str] = None,
     ):
         """
         Initialize OpenViking client (embedded mode).
 
         Args:
             path: Local storage path (overrides ov.conf storage path).
+            actor_peer_id: Optional peer actor scope for embedded requests.
         """
         # Singleton guard for repeated initialization
         if hasattr(self, "_singleton_initialized") and self._singleton_initialized:
@@ -65,6 +67,7 @@ class AsyncOpenViking:
 
         self._client: BaseClient = LocalClient(
             path=path,
+            actor_peer_id=actor_peer_id,
         )
         self._singleton_initialized = True
 
@@ -372,7 +375,6 @@ class AsyncOpenViking:
         until: Optional[str] = None,
         time_field: Optional[str] = None,
         level: Optional[List[int]] = None,
-        peer_id: Optional[str] = None,
     ):
         """
         Complex search with session context.
@@ -403,7 +405,6 @@ class AsyncOpenViking:
             until=until,
             time_field=time_field,
             level=level,
-            peer_id=peer_id,
         )
 
     async def find(
@@ -419,7 +420,6 @@ class AsyncOpenViking:
         until: Optional[str] = None,
         time_field: Optional[str] = None,
         level: Optional[List[int]] = None,
-        peer_id: Optional[str] = None,
     ):
         """Semantic search"""
         await self._ensure_initialized()
@@ -435,7 +435,6 @@ class AsyncOpenViking:
             until=until,
             time_field=time_field,
             level=level,
-            peer_id=peer_id,
         )
 
     # ============= FS methods =============

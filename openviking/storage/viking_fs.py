@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from pathlib import PurePath
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
-from openviking.core.namespace import canonicalize_uri
+from openviking.core.namespace import canonicalize_uri, uri_parts
 from openviking.core.namespace import (
     is_accessible as namespace_is_accessible,
 )
@@ -330,6 +330,11 @@ class VikingFS:
         self._ensure_access(uri, ctx)
         real_ctx = self._ctx_or_default(ctx)
         normalized_uri, _ = self._normalized_uri_parts(uri)
+        if not self._is_mutable_under_actor_scope(normalized_uri, real_ctx):
+            raise PermissionDeniedError(
+                f"Actor peer cannot modify {uri}",
+                resource=normalized_uri,
+            )
         if real_ctx.role != Role.ROOT and normalized_uri.rstrip("/") == "viking://temp":
             raise PermissionDeniedError(
                 "Temp root is read-only for non-root users",
@@ -1231,7 +1236,6 @@ class VikingFS:
         filter: Optional[Dict] = None,
         ctx: Optional[RequestContext] = None,
         level: Optional[List[int]] = None,
-        peer_id: Optional[str] = None,
     ):
         """Semantic search.
 
@@ -1255,7 +1259,7 @@ class VikingFS:
         )
 
         real_ctx = self._ctx_or_default(ctx)
-        retrieval_targets = resolve_retrieval_targets(target_uri, real_ctx, peer_id)
+        retrieval_targets = resolve_retrieval_targets(target_uri, real_ctx)
 
         for target_dir in retrieval_targets.target_directories:
             self._ensure_access(target_dir, ctx)
@@ -1324,7 +1328,6 @@ class VikingFS:
         filter: Optional[Dict] = None,
         ctx: Optional[RequestContext] = None,
         level: Optional[List[int]] = None,
-        peer_id: Optional[str] = None,
     ):
         """Complex search with session context.
 
@@ -1350,7 +1353,7 @@ class VikingFS:
         )
 
         real_ctx = self._ctx_or_default(ctx)
-        retrieval_targets = resolve_retrieval_targets(target_uri, real_ctx, peer_id)
+        retrieval_targets = resolve_retrieval_targets(target_uri, real_ctx)
         primary_target_uri = retrieval_targets.first_explicit_directory
 
         session_summary = (
@@ -1737,6 +1740,8 @@ class VikingFS:
     def _is_accessible(self, uri: str, ctx: RequestContext) -> bool:
         """Check whether a URI is visible/accessible under current request context."""
         normalized_uri, parts = self._normalized_uri_parts(uri)
+        if ctx.actor_peer_id:
+            return self._is_accessible_under_actor_scope(normalized_uri, parts, ctx)
         if ctx.role == Role.ROOT:
             return True
         if not parts:
@@ -1758,6 +1763,61 @@ class VikingFS:
         if scope == "_system":
             return False
         return namespace_is_accessible(normalized_uri, ctx)
+
+    def _canonical_parts_for_ctx(self, uri: str, ctx: RequestContext) -> List[str]:
+        try:
+            return uri_parts(canonicalize_uri(uri, ctx))
+        except Exception:
+            return []
+
+    def _is_accessible_under_actor_scope(
+        self,
+        uri: str,
+        parts: List[str],
+        ctx: RequestContext,
+    ) -> bool:
+        """Actor scope is a request-level narrowing inside the current user namespace."""
+        if not parts:
+            return True
+        if is_watch_task_control_uri(uri):
+            return False
+
+        scope = parts[0]
+        if scope == "resources":
+            return True
+        if scope == "temp":
+            if len(parts) == 1:
+                return True
+            if parts[1] == ctx.user.user_space_name():
+                return True
+            return self._is_legacy_temp_uri_parts(parts)
+        if scope in {"upload", "_system"}:
+            return False
+
+        canonical_parts = self._canonical_parts_for_ctx(uri, ctx)
+        if not canonical_parts:
+            return False
+        if canonical_parts[:2] != ["user", ctx.user.user_id]:
+            return False
+        suffix = canonical_parts[2:]
+        if not suffix:
+            return True
+        if suffix[0] == "peers":
+            if len(suffix) == 1:
+                return True
+            return suffix[1] == ctx.actor_peer_id
+        if suffix[0] == "sessions":
+            return True
+        return False
+
+    def _is_mutable_under_actor_scope(self, uri: str, ctx: RequestContext) -> bool:
+        if not ctx.actor_peer_id:
+            return True
+        canonical_parts = self._canonical_parts_for_ctx(uri, ctx)
+        if canonical_parts[:2] != ["user", ctx.user.user_id]:
+            return False
+        suffix = canonical_parts[2:]
+        return len(suffix) >= 2 and suffix[0] == "peers" and suffix[1] == ctx.actor_peer_id
 
     def _handle_agfs_read(self, result: Union[bytes, Any, None]) -> bytes:
         """Handle AGFSClient read return types consistently."""
@@ -2051,7 +2111,7 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> None:
         """Write file directly."""
-        self._ensure_access(uri, ctx)
+        self._ensure_mutable_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         await self._ensure_parent_dirs(path, ctx=ctx)
 
@@ -2139,7 +2199,7 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> None:
         """Write single binary file."""
-        self._ensure_access(uri, ctx)
+        self._ensure_mutable_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         await self._ensure_parent_dirs(path, ctx=ctx)
 
@@ -2152,7 +2212,7 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> None:
         """Append content to file."""
-        self._ensure_access(uri, ctx)
+        self._ensure_mutable_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
 
         try:

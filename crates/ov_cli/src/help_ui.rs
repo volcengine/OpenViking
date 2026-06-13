@@ -2134,6 +2134,7 @@ fn config_help_path(tokens: &[String]) -> Option<Vec<String>> {
                         | "--root-api-key-env"
                         | "--account"
                         | "--user"
+                        | "--actor-peer-id"
                 )
             {
                 i += if token.contains('=') { 1 } else { 2 };
@@ -2189,6 +2190,7 @@ fn has_invalid_config_add_provider(tokens: &[String]) -> bool {
                     | "--root-api-key-env"
                     | "--account"
                     | "--user"
+                    | "--actor-peer-id"
             )
         {
             i += if token.contains('=') { 1 } else { 2 };
@@ -2263,11 +2265,12 @@ fn is_help_flag(token: &str) -> bool {
 fn consumes_value(token: &str) -> bool {
     matches!(
         token,
-        "-o" | "--output" | "-c" | "--compact" | "--account" | "--user"
+        "-o" | "--output" | "-c" | "--compact" | "--account" | "--user" | "--actor-peer-id"
     ) || token.starts_with("--output=")
         || token.starts_with("--compact=")
         || token.starts_with("--account=")
         || token.starts_with("--user=")
+        || token.starts_with("--actor-peer-id=")
 }
 
 #[cfg(test)]
@@ -2549,7 +2552,7 @@ mod tests {
     }
 
     #[test]
-    fn curated_help_lists_upload_filters_peer_id_and_limit_aliases() {
+    fn curated_help_lists_upload_filters_and_limit_aliases() {
         let add_resource = strip_ansi(
             &render_command_help_request(&os_args(&["ov", "add-resource", "--help"]))
                 .expect("add-resource help should render"),
@@ -2580,15 +2583,10 @@ mod tests {
                 "missing --limit alias for {command} in:\n{rendered}"
             );
         }
-
         for command in ["find", "search"] {
             let rendered = strip_ansi(
                 &render_command_help_request(&os_args(&["ov", command, "--help"]))
                     .expect("help should render"),
-            );
-            assert!(
-                rendered.contains("--peer-id <id>"),
-                "missing --peer-id for {command} in:\n{rendered}"
             );
             assert!(
                 rendered.contains("--context-type <type>"),

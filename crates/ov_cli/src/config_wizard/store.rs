@@ -574,6 +574,7 @@ pub(crate) async fn validate_candidate_config_with_role(
         auth.api_key.clone(),
         auth.account,
         auth.user,
+        config.actor_peer_id.clone(),
         timeout,
         config.profile,
         config.extra_headers.clone(),

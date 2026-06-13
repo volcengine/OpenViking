@@ -36,7 +36,7 @@ from openviking.telemetry import get_current_telemetry, tracer
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.time_utils import get_current_timestamp
 from openviking.utils.token_estimation import estimate_text_tokens
-from openviking_cli.exceptions import FailedPreconditionError
+from openviking_cli.exceptions import FailedPreconditionError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger, run_async
 from openviking_cli.utils.config import get_openviking_config
@@ -83,11 +83,37 @@ def _default_memory_counts() -> Dict[str, int]:
 
 
 def _message_peer_ids(messages: List[Message]) -> set[str]:
-    return {
-        peer_id
-        for message in messages
-        if (peer_id := getattr(message, "peer_id", None))
-    }
+    return {peer_id for message in messages if (peer_id := getattr(message, "peer_id", None))}
+
+
+@dataclass(frozen=True)
+class _MemoryExtractionScope:
+    allow_self_memory: bool
+    allowed_peer_ids: set[str]
+    include_session_skills: bool
+    memory_types: Optional[set[str]]
+
+
+def _resolve_memory_extraction_scope(
+    ctx: RequestContext,
+    policy: MemoryPolicy,
+    messages: List[Message],
+    *,
+    config_session_skill_extraction_enabled: bool,
+) -> _MemoryExtractionScope:
+    allow_self_memory = policy.self_enabled
+    allowed_peer_ids = _message_peer_ids(messages) if policy.peer_enabled else set()
+
+    if ctx.actor_peer_id:
+        allow_self_memory = False
+        allowed_peer_ids = {ctx.actor_peer_id}
+
+    return _MemoryExtractionScope(
+        allow_self_memory=allow_self_memory,
+        allowed_peer_ids=allowed_peer_ids,
+        include_session_skills=config_session_skill_extraction_enabled and allow_self_memory,
+        memory_types=policy.memory_types,
+    )
 
 
 # =====================================================================
@@ -211,6 +237,7 @@ class SessionMeta:
     updated_at: str = ""
     created_by_account_id: str = ""
     created_by_user_id: str = ""
+    actor_peer_id: Optional[str] = None
     message_count: int = 0
     total_message_count: Optional[int] = 0
     commit_count: int = 0
@@ -249,6 +276,7 @@ class SessionMeta:
             "updated_at": self.updated_at,
             "created_by_account_id": self.created_by_account_id,
             "created_by_user_id": self.created_by_user_id,
+            "actor_peer_id": self.actor_peer_id,
             "message_count": self.message_count,
             "commit_count": self.commit_count,
             "memories_extracted": dict(self.memories_extracted),
@@ -283,6 +311,7 @@ class SessionMeta:
             created_by_account_id=data.get("created_by_account_id", "")
             or data.get("account_id", ""),
             created_by_user_id=data.get("created_by_user_id", ""),
+            actor_peer_id=data.get("actor_peer_id") or None,
             message_count=data.get("message_count", 0),
             total_message_count=data.get("total_message_count"),
             commit_count=data.get("commit_count", 0),
@@ -337,6 +366,16 @@ class Session:
         self._session_compressor = session_compressor
         self.user = user or UserIdentifier.the_default_user()
         self.ctx = ctx or RequestContext(user=self.user, role=Role.ROOT)
+        self._storage_ctx = (
+            RequestContext(
+                user=self.ctx.user,
+                role=self.ctx.role,
+                actor_peer_id=None,
+                from_oauth=self.ctx.from_oauth,
+            )
+            if self.ctx.actor_peer_id
+            else self.ctx
+        )
         self.session_id = session_id or str(uuid4())
         self.created_at = int(datetime.now(timezone.utc).timestamp() * 1000)
         self._auto_commit_threshold = auto_commit_threshold
@@ -351,6 +390,7 @@ class Session:
             created_at=get_current_timestamp(),
             created_by_account_id=self.ctx.account_id,
             created_by_user_id=self.ctx.user.user_id,
+            actor_peer_id=self.ctx.actor_peer_id,
         )
         self._loaded = False
         self._tool_output_externalization_config = (
@@ -368,7 +408,7 @@ class Session:
 
         try:
             content = await self._viking_fs.read_file(
-                f"{self._session_uri}/messages.jsonl", ctx=self.ctx
+                f"{self._session_uri}/messages.jsonl", ctx=self._storage_ctx
             )
             self._messages = [
                 Message.from_dict(json.loads(line))
@@ -381,7 +421,9 @@ class Session:
 
         # Restore compression_index (scan history directory)
         try:
-            history_items = await self._viking_fs.ls(f"{self._session_uri}/history", ctx=self.ctx)
+            history_items = await self._viking_fs.ls(
+                f"{self._session_uri}/history", ctx=self._storage_ctx
+            )
             archives = [
                 item["name"] for item in history_items if item["name"].startswith("archive_")
             ]
@@ -396,7 +438,7 @@ class Session:
         # Load .meta.json
         try:
             meta_content = await self._viking_fs.read_file(
-                f"{self._session_uri}/.meta.json", ctx=self.ctx
+                f"{self._session_uri}/.meta.json", ctx=self._storage_ctx
             )
             self._meta = SessionMeta.from_dict(json.loads(meta_content))
         except Exception:
@@ -438,7 +480,7 @@ class Session:
     async def exists(self) -> bool:
         """Check whether this session already exists in storage."""
         try:
-            await self._viking_fs.stat(self._session_uri, ctx=self.ctx)
+            await self._viking_fs.stat(self._session_uri, ctx=self._storage_ctx)
             return True
         except Exception:
             return False
@@ -447,8 +489,10 @@ class Session:
         """Materialize session root and messages file if missing."""
         if await self.exists():
             return
-        await self._viking_fs.mkdir(self._session_uri, exist_ok=True, ctx=self.ctx)
-        await self._viking_fs.write_file(f"{self._session_uri}/messages.jsonl", "", ctx=self.ctx)
+        await self._viking_fs.mkdir(self._session_uri, exist_ok=True, ctx=self._storage_ctx)
+        await self._viking_fs.write_file(
+            f"{self._session_uri}/messages.jsonl", "", ctx=self._storage_ctx
+        )
         await self._save_meta()
 
     async def _save_meta(self) -> None:
@@ -459,7 +503,7 @@ class Session:
         await self._viking_fs.write_file(
             uri=f"{self._session_uri}/.meta.json",
             content=json.dumps(self._meta.to_dict(), ensure_ascii=False),
-            ctx=self.ctx,
+            ctx=self._storage_ctx,
         )
 
     def _save_meta_sync(self) -> None:
@@ -522,7 +566,12 @@ class Session:
     def _tool_result_store(self) -> Optional[ToolResultStore]:
         if not self._viking_fs:
             return None
-        return ToolResultStore(self._viking_fs, self._session_uri, self.session_id, self.ctx)
+        return ToolResultStore(
+            self._viking_fs,
+            self._session_uri,
+            self.session_id,
+            self._storage_ctx,
+        )
 
     async def _hydrate_tool_outputs_for_extraction(
         self,
@@ -895,6 +944,10 @@ class Session:
                 from openviking_cli.exceptions import InvalidArgumentError
 
                 raise InvalidArgumentError(str(exc)) from exc
+            if self.ctx.actor_peer_id and peer_id and peer_id != self.ctx.actor_peer_id:
+                raise PermissionDeniedError(
+                    "Actor peer cannot add messages attributed to another peer."
+                )
 
             if self._is_tool_result_aggregate(role, parts):
                 msgs = [
@@ -1100,7 +1153,7 @@ class Session:
             )
 
         # Use filesystem-based distributed lock so this works across workers/processes.
-        session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
+        session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self._storage_ctx)
         async with LockContext(get_lock_manager(), [session_path], lock_mode="exact"):
             # Authoritative check under lock: handles the race where two concurrent
             # callers both passed the pre-check but only the first should archive.
@@ -1170,7 +1223,7 @@ class Session:
             await self._viking_fs.write_file(
                 uri=f"{archive_uri}/messages.jsonl",
                 content="\n".join(lines) + "\n",
-                ctx=self.ctx,
+                ctx=self._storage_ctx,
             )
 
         # WM v2: live session is now the retained tail; pending_tokens resets
@@ -1314,12 +1367,12 @@ class Session:
                             await self._viking_fs.write_file(
                                 uri=f"{archive_uri}/.abstract.md",
                                 content=abstract,
-                                ctx=self.ctx,
+                                ctx=self._storage_ctx,
                             )
                             await self._viking_fs.write_file(
                                 uri=f"{archive_uri}/.overview.md",
                                 content=summary,
-                                ctx=self.ctx,
+                                ctx=self._storage_ctx,
                             )
                             await self._viking_fs.write_file(
                                 uri=f"{archive_uri}/.meta.json",
@@ -1329,7 +1382,7 @@ class Session:
                                         "abstract_tokens": estimate_text_tokens(abstract),
                                     }
                                 ),
-                                ctx=self.ctx,
+                                ctx=self._storage_ctx,
                             )
 
                     # Summary, long-term memory, and execution-derived memory run concurrently.
@@ -1339,15 +1392,18 @@ class Session:
                         ov_config.memory.session_skill_extraction_enabled
                     )
                     effective_policy = MemoryPolicy.from_dict(memory_policy)
-                    self_memory_enabled = effective_policy.self_enabled
-                    peer_memory_enabled = effective_policy.peer_enabled
-                    allowed_peer_ids = (
-                        _message_peer_ids(extraction_messages) if peer_memory_enabled else set()
+                    extraction_scope = _resolve_memory_extraction_scope(
+                        self.ctx,
+                        effective_policy,
+                        extraction_messages,
+                        config_session_skill_extraction_enabled=(
+                            config_session_skill_extraction_enabled
+                        ),
                     )
-                    session_skill_extraction_enabled = (
-                        config_session_skill_extraction_enabled and self_memory_enabled
-                    )
-                    memory_type_filter = effective_policy.memory_types
+                    self_memory_enabled = extraction_scope.allow_self_memory
+                    allowed_peer_ids = extraction_scope.allowed_peer_ids
+                    session_skill_extraction_enabled = extraction_scope.include_session_skills
+                    memory_type_filter = extraction_scope.memory_types
                     long_term_memory_types, execution_memory_types = _split_policy_memory_types(
                         memory_type_filter
                     )
@@ -1615,7 +1671,7 @@ class Session:
         await self._viking_fs.write_file(
             uri=f"{archive_uri}/.done",
             content=content,
-            ctx=self.ctx,
+            ctx=self._storage_ctx,
         )
 
     async def _write_failed_marker(
@@ -1638,7 +1694,7 @@ class Session:
         await self._viking_fs.write_file(
             uri=f"{archive_uri}/.failed.json",
             content=json.dumps(payload, ensure_ascii=False),
-            ctx=self.ctx,
+            ctx=self._storage_ctx,
         )
 
     def _update_active_counts(self) -> int:
@@ -1822,7 +1878,9 @@ class Session:
             return []
 
         try:
-            history_items = await self._viking_fs.ls(f"{self._session_uri}/history", ctx=self.ctx)
+            history_items = await self._viking_fs.ls(
+                f"{self._session_uri}/history", ctx=self._storage_ctx
+            )
         except Exception:
             return []
 
@@ -1858,7 +1916,9 @@ class Session:
             if exclude and archive["archive_uri"] == exclude:
                 continue
             try:
-                await self._viking_fs.read_file(f"{archive['archive_uri']}/.done", ctx=self.ctx)
+                await self._viking_fs.read_file(
+                    f"{archive['archive_uri']}/.done", ctx=self._storage_ctx
+                )
             except Exception:
                 continue
             completed.append(archive)
@@ -1869,14 +1929,16 @@ class Session:
         """Return the earliest unresolved failed archive, if any."""
         for archive in sorted(await self._list_archive_refs(), key=lambda item: item["index"]):
             try:
-                await self._viking_fs.read_file(f"{archive['archive_uri']}/.done", ctx=self.ctx)
+                await self._viking_fs.read_file(
+                    f"{archive['archive_uri']}/.done", ctx=self._storage_ctx
+                )
                 continue
             except Exception:
                 pass
             try:
                 await self._viking_fs.read_file(
                     f"{archive['archive_uri']}/.failed.json",
-                    ctx=self.ctx,
+                    ctx=self._storage_ctx,
                 )
             except Exception:
                 continue
@@ -1886,7 +1948,9 @@ class Session:
     async def _read_archive_overview(self, archive_uri: str) -> str:
         """Read archive overview text."""
         try:
-            overview = await self._viking_fs.read_file(f"{archive_uri}/.overview.md", ctx=self.ctx)
+            overview = await self._viking_fs.read_file(
+                f"{archive_uri}/.overview.md", ctx=self._storage_ctx
+            )
         except Exception:
             return ""
         return overview or ""
@@ -1894,7 +1958,9 @@ class Session:
     async def _read_archive_abstract(self, archive_uri: str, overview: str = "") -> str:
         """Read archive abstract text, falling back to summary extraction."""
         try:
-            abstract = await self._viking_fs.read_file(f"{archive_uri}/.abstract.md", ctx=self.ctx)
+            abstract = await self._viking_fs.read_file(
+                f"{archive_uri}/.abstract.md", ctx=self._storage_ctx
+            )
         except Exception:
             abstract = ""
 
@@ -1910,7 +1976,7 @@ class Session:
         overview_tokens = estimate_text_tokens(overview)
         try:
             meta_content = await self._viking_fs.read_file(
-                f"{archive_uri}/.meta.json", ctx=self.ctx
+                f"{archive_uri}/.meta.json", ctx=self._storage_ctx
             )
             meta_tokens = int(json.loads(meta_content).get("overview_tokens", overview_tokens))
             overview_tokens = max(overview_tokens, meta_tokens)
@@ -1921,7 +1987,9 @@ class Session:
     async def _read_archive_messages(self, archive_uri: str) -> List[Message]:
         """Read archived messages from one archive."""
         try:
-            content = await self._viking_fs.read_file(f"{archive_uri}/messages.jsonl", ctx=self.ctx)
+            content = await self._viking_fs.read_file(
+                f"{archive_uri}/messages.jsonl", ctx=self._storage_ctx
+            )
         except Exception:
             return []
 
@@ -1972,7 +2040,9 @@ class Session:
         incomplete_archives: List[Dict[str, Any]] = []
         for archive in sorted(await self._list_archive_refs(), key=lambda item: item["index"]):
             try:
-                await self._viking_fs.read_file(f"{archive['archive_uri']}/.done", ctx=self.ctx)
+                await self._viking_fs.read_file(
+                    f"{archive['archive_uri']}/.done", ctx=self._storage_ctx
+                )
                 latest_completed_index = max(latest_completed_index, archive["index"])
             except Exception:
                 incomplete_archives.append(archive)
@@ -2001,7 +2071,9 @@ class Session:
         previous_archive_uri = f"{self._session_uri}/history/archive_{archive_index - 1:03d}"
         while True:
             try:
-                await self._viking_fs.read_file(f"{previous_archive_uri}/.done", ctx=self.ctx)
+                await self._viking_fs.read_file(
+                    f"{previous_archive_uri}/.done", ctx=self._storage_ctx
+                )
                 return True
             except Exception:
                 pass
@@ -2009,7 +2081,7 @@ class Session:
             try:
                 await self._viking_fs.read_file(
                     f"{previous_archive_uri}/.failed.json",
-                    ctx=self.ctx,
+                    ctx=self._storage_ctx,
                 )
                 return False
             except Exception:
@@ -2028,7 +2100,7 @@ class Session:
         try:
             meta_content = await self._viking_fs.read_file(
                 f"{self._session_uri}/.meta.json",
-                ctx=self.ctx,
+                ctx=self._storage_ctx,
             )
             latest_meta = SessionMeta.from_dict(json.loads(meta_content))
         except Exception:
@@ -2062,7 +2134,7 @@ class Session:
         try:
             content = await self._viking_fs.read_file(
                 f"{self._session_uri}/messages.jsonl",
-                ctx=self.ctx,
+                ctx=self._storage_ctx,
             )
         except Exception:
             return len(self._messages)
@@ -3144,15 +3216,23 @@ class Session:
             viking_fs.write_file(
                 uri=f"{archive_uri}/messages.jsonl",
                 content="\n".join(lines) + "\n",
-                ctx=self.ctx,
+                ctx=self._storage_ctx,
             )
         )
 
         run_async(
-            viking_fs.write_file(uri=f"{archive_uri}/.abstract.md", content=abstract, ctx=self.ctx)
+            viking_fs.write_file(
+                uri=f"{archive_uri}/.abstract.md",
+                content=abstract,
+                ctx=self._storage_ctx,
+            )
         )
         run_async(
-            viking_fs.write_file(uri=f"{archive_uri}/.overview.md", content=overview, ctx=self.ctx)
+            viking_fs.write_file(
+                uri=f"{archive_uri}/.overview.md",
+                content=overview,
+                ctx=self._storage_ctx,
+            )
         )
 
         logger.debug(f"Written archive: {archive_uri}")
@@ -3175,7 +3255,7 @@ class Session:
             viking_fs.write_file(
                 uri=f"{self._session_uri}/messages.jsonl",
                 content=content,
-                ctx=self.ctx,
+                ctx=self._storage_ctx,
             )
         )
 
@@ -3184,14 +3264,14 @@ class Session:
             viking_fs.write_file(
                 uri=f"{self._session_uri}/.abstract.md",
                 content=abstract,
-                ctx=self.ctx,
+                ctx=self._storage_ctx,
             )
         )
         run_async(
             viking_fs.write_file(
                 uri=f"{self._session_uri}/.overview.md",
                 content=overview,
-                ctx=self.ctx,
+                ctx=self._storage_ctx,
             )
         )
 
@@ -3212,17 +3292,17 @@ class Session:
         await viking_fs.write_file(
             uri=f"{self._session_uri}/messages.jsonl",
             content=content,
-            ctx=self.ctx,
+            ctx=self._storage_ctx,
         )
         await viking_fs.write_file(
             uri=f"{self._session_uri}/.abstract.md",
             content=abstract,
-            ctx=self.ctx,
+            ctx=self._storage_ctx,
         )
         await viking_fs.write_file(
             uri=f"{self._session_uri}/.overview.md",
             content=overview,
-            ctx=self.ctx,
+            ctx=self._storage_ctx,
         )
 
     def _append_messages_to_jsonl_batch(self, messages: List[Message]) -> None:
@@ -3234,7 +3314,7 @@ class Session:
             self._viking_fs.append_file(
                 f"{self._session_uri}/messages.jsonl",
                 batch_content,
-                ctx=self.ctx,
+                ctx=self._storage_ctx,
             )
         )
 
@@ -3249,7 +3329,7 @@ class Session:
             self._viking_fs.write_file(
                 f"{self._session_uri}/messages.jsonl",
                 content,
-                ctx=self.ctx,
+                ctx=self._storage_ctx,
             )
         )
 
@@ -3284,7 +3364,7 @@ class Session:
             self._viking_fs.write_file(
                 f"{self._session_uri}/tools/{tool_id}/tool.json",
                 json.dumps(tool_data, ensure_ascii=False),
-                ctx=self.ctx,
+                ctx=self._storage_ctx,
             )
         )
 

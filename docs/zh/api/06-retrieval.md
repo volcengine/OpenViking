@@ -57,7 +57,6 @@ OpenViking 提供多种检索方法，包括简单的向量相似度搜索、带
 | query | str | 是 | - | 搜索查询字符串 |
 | target_uri | str \| List[str] | 否 | "" | 限制搜索范围到指定的 URI 前缀 |
 | context_type | str \| List[str] | 否 | None | 限定一个或多个 `ContextType` 取值：`memory`、`resource` 或 `skill` |
-| peer_id | str | 否 | None | 稳定交互对象 ID。检索默认 user-scoped 目标时，会在当前用户内容之外额外检索该 peer 的 memories 和 resources。CLI `--peer-id` 会映射到这个字段 |
 | limit | int | 否 | 10 | 最大返回结果数 |
 | node_limit | int | 否 | None | 可选 HTTP 别名；如果提供，会覆盖 limit |
 | score_threshold | float | 否 | None | 最低相关性分数阈值 |
@@ -70,9 +69,8 @@ OpenViking 提供多种检索方法，包括简单的向量相似度搜索、带
 | telemetry | bool \| object | 否 | False | 在响应中附带遥测数据 |
 
 **目标解析说明**：
-- `target_uri` 为空时，非 ROOT 检索默认搜索当前用户 memories、公共 `viking://resources`、当前用户 resources 和当前用户 skills。
-- 传入 `peer_id` 时，OpenViking 会额外搜索 `viking://user/{user_id}/peers/{peer_id}/memories` 和 `viking://user/{user_id}/peers/{peer_id}/resources`，不会搜索 peer skills。
-- `peer_id` 必须是安全的单段路径标识，例如 `web-visitor-alice`；`web:visitor:alice`、`web+visitor+alice`、`.`、`..` 或包含路径分隔符的值会被拒绝。
+- `target_uri` 为空时，未启用 peer 受限视图的非 ROOT 检索默认搜索当前用户 memories、所有 peer memories、公共 `viking://resources`、当前用户 resources 和当前用户 skills。
+- 如需使用 peer 受限视图，发送 `X-OpenViking-Actor-Peer: <peer_id>`，或用 SDK/CLI client 的 `actor_peer_id` 初始化。见 [多租户：Peer 受限视图](../concepts/11-multi-tenant.md#peer-restricted-view)。
 - `viking://user/memories`、`viking://user/resources`、`viking://user/skills` 等当前用户短写 target URI 会按认证请求身份 canonicalize。
 
 **FindResult 结构**
@@ -202,11 +200,13 @@ results = client.find(
     target_uri="viking://user/resources"
 )
 
-# 在默认检索范围中额外加入指定 peer 的 memories/resources
-results = client.find(
-    "invoice follow-up",
-    peer_id="web-visitor-alice"
+# 通过 peer 受限视图检索
+peer_client = ov.SyncHTTPClient(
+    url="http://localhost:1933",
+    api_key="your-key",
+    actor_peer_id="web-visitor-alice",
 )
+peer_results = peer_client.find("invoice follow-up")
 
 # 仅在技能中搜索
 results = client.find(
@@ -317,7 +317,6 @@ openviking find "how to authenticate users" -L 1,2
 | session | Session | 否 | None | 用于上下文感知搜索的会话（SDK）|
 | session_id | str | 否 | None | 用于上下文感知搜索的会话 ID（HTTP）|
 | context_type | str \| List[str] | 否 | None | 限定一个或多个 `ContextType` 取值：`memory`、`resource` 或 `skill` |
-| peer_id | str | 否 | None | 稳定交互对象 ID。检索默认 user-scoped 目标时，会在当前用户内容之外额外检索该 peer 的 memories 和 resources。CLI `--peer-id` 会映射到这个字段 |
 | limit | int | 否 | 10 | 最大返回结果数 |
 | node_limit | int | 否 | None | 可选 HTTP 别名；如果提供，会覆盖 limit |
 | score_threshold | float | 否 | None | 最低相关性分数阈值 |
@@ -329,7 +328,7 @@ openviking find "how to authenticate users" -L 1,2
 | include_provenance | bool | 否 | False | 在序列化结果中附带 provenance / query-plan 细节 |
 | telemetry | bool \| object | 否 | False | 在响应中附带遥测数据 |
 
-`search()` 使用和 `find()` 相同的目标解析规则：默认检索包含当前用户 memories/resources/skills 和公共 resources，`peer_id` 只额外加入该 peer 的 memories/resources。
+`search()` 使用和 `find()` 相同的目标解析规则，包括由 `X-OpenViking-Actor-Peer` 或 SDK `actor_peer_id` 选择的 peer 受限视图。
 
 #### 3. 使用示例
 

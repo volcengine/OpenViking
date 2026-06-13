@@ -49,6 +49,7 @@ impl CliContext {
         compact: bool,
         account: Option<String>,
         user: Option<String>,
+        actor_peer_id: Option<String>,
         sudo: bool,
         show_progress: Option<bool>,
         verbose: Option<bool>,
@@ -59,6 +60,9 @@ impl CliContext {
         }
         if user.is_some() {
             config.user = user;
+        }
+        if actor_peer_id.is_some() {
+            config.actor_peer_id = actor_peer_id;
         }
         Self {
             config,
@@ -92,6 +96,7 @@ impl CliContext {
             auth.api_key,
             auth.account,
             auth.user,
+            self.config.actor_peer_id.clone(),
             timeout_secs.unwrap_or(self.config.timeout),
             self.profile.unwrap_or(self.config.profile),
             self.config.extra_headers.clone(),
@@ -136,6 +141,10 @@ struct Cli {
     /// Override X-OpenViking-User for this command
     #[arg(long, global = true, hide = true)]
     user: Option<String>,
+
+    /// Peer actor scope to send as X-OpenViking-Actor-Peer
+    #[arg(long = "actor-peer-id", global = true, hide = true)]
+    actor_peer_id: Option<String>,
 
     /// Use root API key for admin, system, and reindex commands
     #[arg(long, global = true, hide = true)]
@@ -556,9 +565,6 @@ enum Commands {
             help_heading = "Common options"
         )]
         context_type: Option<Vec<String>>,
-        /// Limit memory retrieval to this peer plus the current user memory
-        #[arg(long = "peer-id", value_name = "id", help_heading = "Advanced options")]
-        peer_id: Option<String>,
     },
     /// [Experimental][Data] Run context-aware retrieval
     Search {
@@ -617,9 +623,6 @@ enum Commands {
             help_heading = "Advanced options"
         )]
         context_type: Option<Vec<String>>,
-        /// Limit memory retrieval to this peer plus the current user memory
-        #[arg(long = "peer-id", value_name = "id", help_heading = "Advanced options")]
-        peer_id: Option<String>,
     },
     /// [Data] Run content pattern search
     Grep {
@@ -1524,6 +1527,9 @@ struct ConfigAddOvServiceArgs {
     /// User identifier to send as X-OpenViking-User
     #[arg(long, value_name = "user", help_heading = "Advanced options")]
     user: Option<String>,
+    /// Peer actor scope to send as X-OpenViking-Actor-Peer
+    #[arg(long = "actor-peer-id", hide = true)]
+    actor_peer_id: Option<String>,
     /// Make the saved config active after validation
     #[arg(long, help_heading = "Common options")]
     activate: bool,
@@ -1576,6 +1582,9 @@ struct ConfigAddCustomArgs {
     /// User identifier to send as X-OpenViking-User
     #[arg(long, value_name = "user", help_heading = "Advanced options")]
     user: Option<String>,
+    /// Peer actor scope to send as X-OpenViking-Actor-Peer
+    #[arg(long = "actor-peer-id", hide = true)]
+    actor_peer_id: Option<String>,
     /// Make the saved config active after validation
     #[arg(long, help_heading = "Common options")]
     activate: bool,
@@ -1645,6 +1654,20 @@ struct ConfigEditArgs {
     /// User identifier to send as X-OpenViking-User
     #[arg(long, value_name = "user", help_heading = "Advanced options")]
     user: Option<String>,
+    /// Peer actor scope to send as X-OpenViking-Actor-Peer
+    #[arg(
+        long = "actor-peer-id",
+        hide = true,
+        conflicts_with = "clear_actor_peer_id"
+    )]
+    actor_peer_id: Option<String>,
+    /// Remove the peer actor scope
+    #[arg(
+        long = "clear-actor-peer-id",
+        hide = true,
+        conflicts_with = "actor_peer_id"
+    )]
+    clear_actor_peer_id: bool,
     /// Make the saved config active after validation
     #[arg(long, help_heading = "Common options")]
     activate: bool,
@@ -1668,7 +1691,7 @@ fn find_command_index(args: &[OsString]) -> Option<usize> {
     while i < args.len() {
         let token = args[i].to_string_lossy();
         match token.as_ref() {
-            "--output" | "-o" | "--compact" | "--account" | "--user" => {
+            "--output" | "-o" | "--compact" | "--account" | "--user" | "--actor-peer-id" => {
                 i += 2;
             }
             "--sudo" | "--progress" | "--no-progress" | "--verbose" | "-v" => {
@@ -1768,6 +1791,7 @@ fn consumes_plain_help_value(token: &str) -> bool {
             | "--compact"
             | "--account"
             | "--user"
+            | "--actor-peer-id"
             | "-u"
             | "--uri"
             | "-x"
@@ -1834,6 +1858,7 @@ fn consumes_plain_help_value(token: &str) -> bool {
         || token.starts_with("--compact=")
         || token.starts_with("--account=")
         || token.starts_with("--user=")
+        || token.starts_with("--actor-peer-id=")
         || token.starts_with("--uri=")
         || token.starts_with("--exclude-uri=")
         || token.starts_with("--to=")
@@ -2352,7 +2377,10 @@ fn first_command_token(args: &[OsString]) -> Option<String> {
 }
 
 fn global_option_takes_value(option: &str) -> bool {
-    matches!(option, "--output" | "--account" | "--user")
+    matches!(
+        option,
+        "--output" | "--account" | "--user" | "--actor-peer-id"
+    )
 }
 
 fn global_short_option_takes_value(option: &str) -> bool {
@@ -2522,6 +2550,7 @@ async fn main() {
         compact,
         cli.account.clone(),
         cli.user.clone(),
+        cli.actor_peer_id.clone(),
         cli.sudo,
         None,
         None,
@@ -2917,7 +2946,6 @@ async fn main() {
             before,
             level,
             context_type,
-            peer_id,
         } => {
             handlers::handle_find(
                 query,
@@ -2928,7 +2956,6 @@ async fn main() {
                 before,
                 level,
                 context_type,
-                peer_id,
                 ctx,
             )
             .await
@@ -2943,7 +2970,6 @@ async fn main() {
             before,
             level,
             context_type,
-            peer_id,
         } => {
             handlers::handle_search(
                 query,
@@ -2955,7 +2981,6 @@ async fn main() {
                 before,
                 level,
                 context_type,
-                peer_id,
                 ctx,
             )
             .await
@@ -3017,24 +3042,21 @@ mod tests {
 
     #[test]
     fn cli_parses_global_identity_override_flags() {
-        let cli = Cli::try_parse_from(["ov", "--account", "acme", "--user", "alice", "ls"])
-            .expect("cli should parse");
+        let cli = Cli::try_parse_from([
+            "ov",
+            "--account",
+            "acme",
+            "--user",
+            "alice",
+            "--actor-peer-id",
+            "peer-a",
+            "ls",
+        ])
+        .expect("cli should parse");
 
         assert_eq!(cli.account.as_deref(), Some("acme"));
         assert_eq!(cli.user.as_deref(), Some("alice"));
-    }
-
-    #[test]
-    fn cli_parses_find_peer_id() {
-        let cli = Cli::try_parse_from(["ov", "find", "invoice", "--peer-id", "web-visitor-alice"])
-            .expect("find peer id should parse");
-
-        match cli.command {
-            Commands::Find { peer_id, .. } => {
-                assert_eq!(peer_id.as_deref(), Some("web-visitor-alice"));
-            }
-            _ => panic!("expected find command"),
-        }
+        assert_eq!(cli.actor_peer_id.as_deref(), Some("peer-a"));
     }
 
     #[test]
@@ -3051,20 +3073,6 @@ mod tests {
                 );
             }
             _ => panic!("expected find command"),
-        }
-    }
-
-    #[test]
-    fn cli_parses_search_peer_id() {
-        let cli =
-            Cli::try_parse_from(["ov", "search", "invoice", "--peer-id", "web-visitor-alice"])
-                .expect("search peer id should parse");
-
-        match cli.command {
-            Commands::Search { peer_id, .. } => {
-                assert_eq!(peer_id.as_deref(), Some("web-visitor-alice"));
-            }
-            _ => panic!("expected search command"),
         }
     }
 
@@ -3188,6 +3196,8 @@ mod tests {
             "https://ov.example.com",
             "--api-key-env",
             "OV_KEY",
+            "--actor-peer-id",
+            "peer-a",
         ])
         .expect("custom add should parse");
         let Commands::Config {
@@ -3201,6 +3211,7 @@ mod tests {
         };
         assert_eq!(custom.url.as_deref(), Some("https://ov.example.com"));
         assert_eq!(custom.api_key_env.as_deref(), Some("OV_KEY"));
+        assert_eq!(custom.actor_peer_id.as_deref(), Some("peer-a"));
 
         let edit = Cli::try_parse_from([
             "ov",
@@ -3208,6 +3219,7 @@ mod tests {
             "edit",
             "prod",
             "--clear-api-key",
+            "--clear-actor-peer-id",
             "--activate",
         ])
         .expect("config edit should parse");
@@ -3219,6 +3231,7 @@ mod tests {
         };
         assert_eq!(edit.name, "prod");
         assert!(edit.clear_api_key);
+        assert!(edit.clear_actor_peer_id);
         assert!(edit.activate);
 
         assert!(
@@ -3864,6 +3877,8 @@ mod tests {
                 "--output",
                 "json",
                 "--account=acme",
+                "--actor-peer-id",
+                "peer-a",
                 "--sudo",
                 "admin",
             ]))
@@ -4005,6 +4020,7 @@ mod tests {
             root_api_key: None,
             account: Some("from-config-account".to_string()),
             user: Some("from-config-user".to_string()),
+            actor_peer_id: Some("from-config-peer".to_string()),
             timeout: 60.0,
             output: "table".to_string(),
             echo_command: true,
@@ -4021,6 +4037,7 @@ mod tests {
             true,
             Some("from-cli-account".to_string()),
             Some("from-cli-user".to_string()),
+            Some("from-cli-peer".to_string()),
             false,
             None,
             None,
@@ -4029,6 +4046,7 @@ mod tests {
 
         assert_eq!(ctx.config.account.as_deref(), Some("from-cli-account"));
         assert_eq!(ctx.config.user.as_deref(), Some("from-cli-user"));
+        assert_eq!(ctx.config.actor_peer_id.as_deref(), Some("from-cli-peer"));
     }
 
     #[test]
@@ -4039,6 +4057,7 @@ mod tests {
             root_api_key: Some("root-key".to_string()),
             account: None,
             user: None,
+            actor_peer_id: Some("peer-a".to_string()),
             timeout: 60.0,
             output: "table".to_string(),
             echo_command: true,
@@ -4056,6 +4075,7 @@ mod tests {
             true,
             None,
             None,
+            None,
             false,
             None,
             None,
@@ -4063,12 +4083,14 @@ mod tests {
         );
         let client = ctx.get_client();
         assert_eq!(client.api_key(), Some("user-key"));
+        assert_eq!(client.actor_peer_id(), Some("peer-a"));
 
         // With sudo: use root_api_key
         let ctx = CliContext::from_config(
             config,
             OutputFormat::Json,
             true,
+            None,
             None,
             None,
             true,

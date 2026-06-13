@@ -23,8 +23,8 @@ class SyncOpenViking:
     Wraps AsyncOpenViking with synchronous methods.
     """
 
-    def __init__(self, path: Optional[str] = None):
-        self._async_client = AsyncOpenViking(path=path)
+    def __init__(self, path: Optional[str] = None, actor_peer_id: Optional[str] = None):
+        self._async_client = AsyncOpenViking(path=path, actor_peer_id=actor_peer_id)
         self._initialized = False
 
     def initialize(self) -> None:
@@ -235,7 +235,6 @@ class SyncOpenViking:
         until: Optional[str] = None,
         time_field: Optional[str] = None,
         level: Optional[List[int]] = None,
-        peer_id: Optional[str] = None,
     ):
         """Execute complex retrieval (intent analysis, hierarchical retrieval)."""
         return run_async(
@@ -253,7 +252,6 @@ class SyncOpenViking:
                 until=until,
                 time_field=time_field,
                 level=level,
-                peer_id=peer_id,
             )
         )
 
@@ -270,7 +268,6 @@ class SyncOpenViking:
         until: Optional[str] = None,
         time_field: Optional[str] = None,
         level: Optional[List[int]] = None,
-        peer_id: Optional[str] = None,
     ):
         """Quick retrieval"""
         return run_async(
@@ -286,7 +283,6 @@ class SyncOpenViking:
                 until,
                 time_field,
                 level,
-                peer_id=peer_id,
             )
         )
 

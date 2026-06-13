@@ -36,6 +36,7 @@ class SyncHTTPClient:
         user_id: Optional[str] = None,
         account: Optional[str] = None,
         user: Optional[str] = None,
+        actor_peer_id: Optional[str] = None,
         timeout: float = 60.0,
         extra_headers: Optional[Dict[str, str]] = None,
         profile_enabled: Optional[bool] = None,
@@ -46,6 +47,7 @@ class SyncHTTPClient:
             user_id=user_id,
             account=account,
             user=user,
+            actor_peer_id=actor_peer_id,
             timeout=timeout,
             extra_headers=extra_headers,
             profile_enabled=profile_enabled,
@@ -288,7 +290,6 @@ class SyncHTTPClient:
         filter: Optional[Dict] = None,
         context_type: Optional[SearchContextTypeInput] = None,
         telemetry: TelemetryRequest = False,
-        peer_id: Optional[str] = None,
     ):
         """Semantic search with optional session context."""
         return run_async(
@@ -303,7 +304,6 @@ class SyncHTTPClient:
                 filter=filter,
                 context_type=context_type,
                 telemetry=telemetry,
-                peer_id=peer_id,
             )
         )
 
@@ -317,7 +317,6 @@ class SyncHTTPClient:
         filter: Optional[Dict] = None,
         context_type: Optional[SearchContextTypeInput] = None,
         telemetry: TelemetryRequest = False,
-        peer_id: Optional[str] = None,
     ):
         """Semantic search without session context."""
         return run_async(
@@ -330,7 +329,6 @@ class SyncHTTPClient:
                 filter,
                 context_type,
                 telemetry=telemetry,
-                peer_id=peer_id,
             )
         )
 

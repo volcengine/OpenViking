@@ -61,19 +61,25 @@ class LocalClient(BaseClient):
         self,
         path: Optional[str] = None,
         user: Optional[UserIdentifier] = None,
+        actor_peer_id: Optional[str] = None,
     ):
         """Initialize LocalClient.
 
         Args:
             path: Local storage path (overrides ov.conf storage path)
             user: Explicit account/user identity for embedded mode
+            actor_peer_id: Optional peer actor scope for embedded requests.
         """
         self._service = OpenVikingService(
             path=path,
             user=user or UserIdentifier.the_default_user(),
         )
         self._user = self._service.user
-        self._ctx = RequestContext(user=self._user, role=Role.USER)
+        self._ctx = RequestContext(
+            user=self._user,
+            role=Role.USER,
+            actor_peer_id=normalize_peer_id(actor_peer_id),
+        )
 
     @property
     def service(self) -> OpenVikingService:
@@ -304,7 +310,6 @@ class LocalClient(BaseClient):
         until: Optional[str] = None,
         time_field: Optional[str] = None,
         level: Optional[List[int]] = None,
-        peer_id: Optional[str] = None,
     ) -> Any:
         """Semantic search without session context."""
         resolved_filter = _resolve_search_filter(filter, context_type, since, until, time_field)
@@ -315,7 +320,6 @@ class LocalClient(BaseClient):
                 query=query,
                 ctx=self._ctx,
                 target_uri=target_uri,
-                peer_id=normalize_peer_id(peer_id),
                 limit=limit,
                 score_threshold=score_threshold,
                 filter=resolved_filter,
@@ -341,7 +345,6 @@ class LocalClient(BaseClient):
         until: Optional[str] = None,
         time_field: Optional[str] = None,
         level: Optional[List[int]] = None,
-        peer_id: Optional[str] = None,
     ) -> Any:
         """Semantic search with optional session context."""
         resolved_filter = _resolve_search_filter(filter, context_type, since, until, time_field)
@@ -355,7 +358,6 @@ class LocalClient(BaseClient):
                 query=query,
                 ctx=self._ctx,
                 target_uri=target_uri,
-                peer_id=normalize_peer_id(peer_id),
                 session=session,
                 limit=limit,
                 score_threshold=score_threshold,

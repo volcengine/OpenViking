@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Union
 
 import httpx
 
+from openviking.core.peer_id import normalize_peer_id
 from openviking.telemetry import TelemetryRequest, normalize_telemetry_request
 from openviking.utils.search_filters import SearchContextTypeInput
 from openviking_cli.client.base import BaseClient
@@ -144,6 +145,7 @@ class AsyncHTTPClient(BaseClient):
         user_id: Optional[str] = None,
         account: Optional[str] = None,
         user: Optional[str] = None,
+        actor_peer_id: Optional[str] = None,
         timeout: float = 60.0,
         extra_headers: Optional[Dict[str, str]] = None,
         profile_enabled: Optional[bool] = None,
@@ -156,6 +158,7 @@ class AsyncHTTPClient(BaseClient):
             user_id: User identifier. If not provided, defaults to "default".
             account: Optional account identity header for trusted deployments.
             user: Optional user identity header for trusted deployments.
+            actor_peer_id: Optional peer actor scope header.
             timeout: HTTP request timeout in seconds. Default 60.0.
             extra_headers: Additional HTTP headers to send with requests. If not provided, reads from ovcli.conf.
         """
@@ -166,6 +169,7 @@ class AsyncHTTPClient(BaseClient):
             or api_key is None
             or account is None
             or effective_user is None
+            or actor_peer_id is None
             or timeout == 60.0
             or extra_headers is None
         )
@@ -177,6 +181,8 @@ class AsyncHTTPClient(BaseClient):
                 api_key = api_key or cli_config.api_key
                 account = account or cli_config.account
                 effective_user = effective_user or cli_config.user
+                if actor_peer_id is None:
+                    actor_peer_id = cli_config.actor_peer_id
                 if timeout == 60.0:  # only override default with config value
                     timeout = cli_config.timeout
                 if extra_headers is None:
@@ -195,6 +201,7 @@ class AsyncHTTPClient(BaseClient):
         self._api_key = api_key
         self._account = account
         self._user_id = effective_user
+        self._actor_peer_id = normalize_peer_id(actor_peer_id)
         self._user = UserIdentifier.the_default_user()
         self._timeout = timeout
         self._extra_headers = extra_headers
@@ -216,6 +223,8 @@ class AsyncHTTPClient(BaseClient):
             headers["X-OpenViking-Account"] = self._account
         if self._user_id:
             headers["X-OpenViking-User"] = self._user_id
+        if self._actor_peer_id:
+            headers["X-OpenViking-Actor-Peer"] = self._actor_peer_id
         if self._extra_headers:
             headers.update(self._extra_headers)
         self._http = httpx.AsyncClient(
@@ -690,7 +699,6 @@ class AsyncHTTPClient(BaseClient):
         filter: Optional[Dict[str, Any]] = None,
         context_type: Optional[SearchContextTypeInput] = None,
         telemetry: TelemetryRequest = False,
-        peer_id: Optional[str] = None,
     ) -> FindResult:
         """Semantic search without session context."""
         telemetry = self._validate_telemetry(telemetry)
@@ -705,8 +713,6 @@ class AsyncHTTPClient(BaseClient):
             "context_type": context_type,
             "telemetry": telemetry,
         }
-        if peer_id is not None:
-            payload["peer_id"] = peer_id
         response = await self._http.post("/api/v1/search/find", json=payload)
         response_data = self._handle_response_data(response)
         return FindResult.from_dict(response_data.get("result") or {})
@@ -723,7 +729,6 @@ class AsyncHTTPClient(BaseClient):
         filter: Optional[Dict[str, Any]] = None,
         context_type: Optional[SearchContextTypeInput] = None,
         telemetry: TelemetryRequest = False,
-        peer_id: Optional[str] = None,
     ) -> FindResult:
         """Semantic search with optional session context."""
         telemetry = self._validate_telemetry(telemetry)
@@ -740,8 +745,6 @@ class AsyncHTTPClient(BaseClient):
             "context_type": context_type,
             "telemetry": telemetry,
         }
-        if peer_id is not None:
-            payload["peer_id"] = peer_id
         response = await self._http.post("/api/v1/search/search", json=payload)
         response_data = self._handle_response_data(response)
         return FindResult.from_dict(response_data.get("result") or {})

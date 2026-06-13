@@ -46,6 +46,19 @@ async def test_find_basic(client_with_resource):
     assert "telemetry" not in body
 
 
+@pytest.mark.parametrize("endpoint", ["/api/v1/search/find", "/api/v1/search/search"])
+async def test_search_endpoints_reject_unknown_request_fields(
+    client: httpx.AsyncClient,
+    endpoint: str,
+):
+    resp = await client.post(
+        endpoint,
+        json={"query": "sample document", "unexpected": "value"},
+    )
+
+    assert resp.status_code == 400
+
+
 async def test_find_with_target_uri(client_with_resource):
     client, uri = client_with_resource
     resp = await client.post(

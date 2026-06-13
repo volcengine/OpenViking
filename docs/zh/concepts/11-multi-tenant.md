@@ -109,9 +109,23 @@ viking://user/alice/peers/web-visitor-alice/resources/
 - 非 ROOT 请求会自动按 `account_id` 过滤
 - `resources` 会允许检索 account 内共享资源
 - `memory`、用户资源和 `skill` 会进一步按当前 `user space` 过滤
-- 传入 `peer_id` 时只额外加入该 peer 的 memories/resources；skills 仍保持 user-scoped
+- Peer 受限视图可以把访问范围收窄到当前 user 下的一个 peer
 
 这意味着“能搜到什么”与“能读到什么”保持一致，不会因为向量召回而越权。
+
+<a id="peer-restricted-view"></a>
+
+### Peer 受限视图
+
+`peer_id` 是当前 user 边界内的内容范围，不会改变 tenant 或 user 身份。
+
+当一次请求应该只代表某个 peer 访问内容时，设置
+`X-OpenViking-Actor-Peer: <peer_id>`，或使用 SDK/CLI 的 `actor_peer_id`：
+
+- 默认检索使用该 peer 的 memories/resources 加公共 `viking://resources`。
+- 不检索 peer skills；skills 仍保持 user-scoped。
+- 受限视图下的写入只能落到该 peer 子树。
+- peer ID 必须是安全的单段路径标识，例如 `web-visitor-alice`。
 
 ## 标准使用流程
 
@@ -273,8 +287,9 @@ Root key 主要用于：
 
 ### 2. `peer_id` 不决定 account
 
-`peer_id` 表示当前用户下的交互对象。它不创建租户，但可以选择当前用户内的 peer 内容子空间，
-例如 `viking://user/{user_id}/peers/{peer_id}/memories` 或
+`peer_id` 表示当前用户下的交互对象。它不创建租户，但可以通过显式 peer URI 或
+Peer 受限视图选择当前用户内的 peer 内容子空间，例如
+`viking://user/{user_id}/peers/{peer_id}/memories` 或
 `viking://user/{user_id}/peers/{peer_id}/resources`。
 
 - account 边界由 `account_id` 决定

@@ -17,7 +17,12 @@ from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory_policy import MemoryPolicy
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import VikingFS
-from openviking_cli.exceptions import AlreadyExistsError, NotFoundError, NotInitializedError
+from openviking_cli.exceptions import (
+    AlreadyExistsError,
+    NotFoundError,
+    NotInitializedError,
+    PermissionDeniedError,
+)
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -118,6 +123,26 @@ class SessionService:
             tool_output_externalization_config=self._tool_output_externalization_config,
         )
 
+    @staticmethod
+    def _ensure_actor_session_access(ctx: RequestContext, session: Session) -> None:
+        if not ctx.actor_peer_id:
+            return
+        if session.meta.actor_peer_id != ctx.actor_peer_id:
+            raise PermissionDeniedError(
+                "Actor peer cannot access a session created for another actor."
+            )
+
+    @staticmethod
+    def _storage_ctx(ctx: RequestContext) -> RequestContext:
+        if not ctx.actor_peer_id:
+            return ctx
+        return RequestContext(
+            user=ctx.user,
+            role=ctx.role,
+            actor_peer_id=None,
+            from_oauth=ctx.from_oauth,
+        )
+
     async def create(
         self,
         ctx: RequestContext,
@@ -173,6 +198,7 @@ class SessionService:
                     raise NotFoundError(session_id, "session")
                 await session.ensure_exists()
             await session.load()
+            self._ensure_actor_session_access(ctx, session)
             self._record_lifecycle_metric("get", "ok")
             return session
         except Exception:
@@ -195,6 +221,11 @@ class SessionService:
                 name = entry.get("name", "")
                 if name in [".", ".."]:
                     continue
+                if ctx.actor_peer_id:
+                    session = self.session(ctx, name)
+                    await session.load()
+                    if session.meta.actor_peer_id != ctx.actor_peer_id:
+                        continue
                 sessions.append(
                     {
                         "session_id": name,
@@ -218,13 +249,12 @@ class SessionService:
         self._ensure_initialized()
 
         session_uri = canonical_session_uri(ctx, session_id)
-        if await self.session(ctx, session_id).exists():
-            storage_ctx = ctx
-        else:
+        session = await self.get(session_id, ctx)
+        if not await session.exists():
             self._record_lifecycle_metric("delete", "error")
             raise NotFoundError(session_id, "session")
 
-        await self._viking_fs.rm(session_uri, recursive=True, ctx=storage_ctx)
+        await self._viking_fs.rm(session_uri, recursive=True, ctx=self._storage_ctx(ctx))
         logger.info(f"Deleted session: {session_id}")
         self._record_lifecycle_metric("delete", "ok")
         return True

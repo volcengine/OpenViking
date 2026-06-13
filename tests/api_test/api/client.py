@@ -175,15 +175,12 @@ class OpenVikingAPIClient:
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
         context_type: Optional[str | list[str]] = None,
-        peer_id: Optional[str] = None,
     ) -> requests.Response:
         endpoint = "/api/v1/search/find"
         url = self._build_url(self.server_url, endpoint)
         payload = {"query": query, "limit": limit}
         if target_uri:
             payload["target_uri"] = target_uri
-        if peer_id is not None:
-            payload["peer_id"] = peer_id
         if score_threshold is not None:
             payload["score_threshold"] = score_threshold
         if filter:
@@ -201,7 +198,6 @@ class OpenVikingAPIClient:
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
         context_type: Optional[str | list[str]] = None,
-        peer_id: Optional[str] = None,
     ) -> requests.Response:
         endpoint = "/api/v1/search/search"
         url = self._build_url(self.server_url, endpoint)
@@ -210,8 +206,6 @@ class OpenVikingAPIClient:
             payload["target_uri"] = target_uri
         if session_id:
             payload["session_id"] = session_id
-        if peer_id is not None:
-            payload["peer_id"] = peer_id
         if score_threshold is not None:
             payload["score_threshold"] = score_threshold
         if filter:

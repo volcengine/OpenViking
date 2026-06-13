@@ -21,6 +21,7 @@ impl HttpClient {
         api_key: Option<String>,
         account: Option<String>,
         user: Option<String>,
+        actor_peer_id: Option<String>,
         timeout_secs: f64,
         profile_enabled: bool,
         extra_headers: Option<std::collections::HashMap<String, String>>,
@@ -31,6 +32,7 @@ impl HttpClient {
                 api_key,
                 account,
                 user,
+                actor_peer_id,
                 timeout_secs,
                 profile_enabled,
                 extra_headers,
@@ -40,6 +42,10 @@ impl HttpClient {
 
     pub fn user_id(&self) -> Option<&str> {
         self.base.user_id()
+    }
+
+    pub fn actor_peer_id(&self) -> Option<&str> {
+        self.base.actor_peer_id()
     }
 
     pub fn api_key(&self) -> Option<&str> {
@@ -387,7 +393,6 @@ impl HttpClient {
         time_field: Option<String>,
         level: Option<Vec<i32>>,
         context_type: Option<Vec<String>>,
-        peer_id: Option<String>,
     ) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "query": query,
@@ -399,7 +404,6 @@ impl HttpClient {
             "time_field": time_field,
             "level": level,
             "context_type": context_type,
-            "peer_id": peer_id,
         });
         self.post("/api/v1/search/find", &body).await
     }
@@ -416,7 +420,6 @@ impl HttpClient {
         time_field: Option<String>,
         level: Option<Vec<i32>>,
         context_type: Option<Vec<String>>,
-        peer_id: Option<String>,
     ) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "query": query,
@@ -429,7 +432,6 @@ impl HttpClient {
             "time_field": time_field,
             "level": level,
             "context_type": context_type,
-            "peer_id": peer_id,
         });
         self.post("/api/v1/search/search", &body).await
     }
@@ -1396,6 +1398,7 @@ mod tests {
             Some("test-key".to_string()),
             Some("acme".to_string()),
             Some("alice".to_string()),
+            Some("peer-a".to_string()),
             5.0,
             true,
             Some(extra_headers),
@@ -1408,6 +1411,24 @@ mod tests {
                 .get("X-API-Key")
                 .and_then(|value| value.to_str().ok()),
             Some("test-key")
+        );
+        assert_eq!(
+            headers
+                .get("X-OpenViking-Account")
+                .and_then(|value| value.to_str().ok()),
+            Some("acme")
+        );
+        assert_eq!(
+            headers
+                .get("X-OpenViking-User")
+                .and_then(|value| value.to_str().ok()),
+            Some("alice")
+        );
+        assert_eq!(
+            headers
+                .get("X-OpenViking-Actor-Peer")
+                .and_then(|value| value.to_str().ok()),
+            Some("peer-a")
         );
         assert_eq!(
             headers
@@ -1444,7 +1465,7 @@ mod tests {
     #[tokio::test]
     async fn ls_does_not_send_display_time_query() {
         let (base_url, request_rx) = spawn_request_capture_server().await;
-        let client = HttpClient::new(base_url, None, None, None, 5.0, false, None);
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
 
         client
             .ls("viking://resources", false, false, "agent", 256, false, 1)
@@ -1460,7 +1481,7 @@ mod tests {
     #[tokio::test]
     async fn tree_does_not_send_display_time_query() {
         let (base_url, request_rx) = spawn_request_capture_server().await;
-        let client = HttpClient::new(base_url, None, None, None, 5.0, false, None);
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
 
         client
             .tree("viking://resources", "agent", 256, false, 1, 3)

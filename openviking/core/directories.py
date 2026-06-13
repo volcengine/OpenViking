@@ -154,10 +154,14 @@ class DirectoryInitializer:
         return get_viking_fs()
 
     async def initialize_account_directories(self, ctx: RequestContext) -> int:
-        """Initialize account-shared scope roots."""
+        """Initialize account-shared scope roots.
+
+        ``viking://user`` is a current-user shorthand at API boundaries. Its
+        concrete metadata belongs to ``viking://user/{user_id}`` and is created
+        by ``initialize_user_directories``.
+        """
         count = 0
         scope_roots = {
-            "user": PRESET_DIRECTORIES["user"],
             "resources": PRESET_DIRECTORIES["resources"],
         }
         for scope, defn in scope_roots.items():

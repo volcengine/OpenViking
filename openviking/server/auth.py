@@ -7,6 +7,7 @@ from typing import Optional
 
 from fastapi import Depends, Header, Request
 
+from openviking.core.peer_id import normalize_peer_id
 from openviking.server.identity import (
     AuthMode,
     RequestContext,
@@ -94,6 +95,16 @@ def _normalize_request_value(value: object) -> Optional[str]:
         normalized = value.strip()
         return normalized or None
     return None
+
+
+def normalize_actor_peer_header(value: Optional[str]) -> Optional[str]:
+    normalized = _normalize_header_value(value)
+    if normalized and ("/" in normalized or "\\" in normalized):
+        raise InvalidArgumentError("actor_peer_id must not contain path separators.")
+    try:
+        return normalize_peer_id(normalized)
+    except ValueError as exc:
+        raise InvalidArgumentError(str(exc)) from exc
 
 
 def _explicit_identity_from_request(request: Request) -> tuple[Optional[str], Optional[str]]:
@@ -331,6 +342,7 @@ async def resolve_identity(
 async def get_request_context(
     request: Request,
     identity: ResolvedIdentity = Depends(resolve_identity),
+    x_openviking_actor_peer: Optional[str] = Header(None, alias="X-OpenViking-Actor-Peer"),
 ) -> RequestContext:
     """Convert ResolvedIdentity to RequestContext."""
     path = request.url.path
@@ -365,6 +377,7 @@ async def get_request_context(
             identity.user_id or "default",
         ),
         role=identity.role,
+        actor_peer_id=normalize_actor_peer_header(x_openviking_actor_peer),
         from_oauth=identity.from_oauth,
     )
     # Update the unified root observability context after authentication succeeds.

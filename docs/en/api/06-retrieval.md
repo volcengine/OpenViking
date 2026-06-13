@@ -57,7 +57,6 @@ The `find()` method performs pure vector similarity search for simple query scen
 | query | str | Yes | - | Search query string |
 | target_uri | str \| List[str] | No | "" | Limit search to specific URI prefix |
 | context_type | str \| List[str] | No | None | Limit results to one or more `ContextType` values: `memory`, `resource`, or `skill` |
-| peer_id | str | No | None | Stable interaction peer ID. When searching default user-scoped targets, results include this peer's memories and resources in addition to current-user content. CLI maps `--peer-id` to this field |
 | node_limit | int | No | None | Maximum number of results |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filter |
@@ -69,9 +68,8 @@ The `find()` method performs pure vector similarity search for simple query scen
 | telemetry | bool \| object | No | False | Attach telemetry data to response |
 
 **Target resolution notes**:
-- With empty `target_uri`, non-ROOT retrieval searches current-user memories, shared `viking://resources`, current-user resources, and current-user skills.
-- When `peer_id` is provided, OpenViking also searches `viking://user/{user_id}/peers/{peer_id}/memories` and `viking://user/{user_id}/peers/{peer_id}/resources`. Peer skills are not searched.
-- `peer_id` must be a safe single path segment, for example `web-visitor-alice`; values such as `web:visitor:alice`, `web+visitor+alice`, `.`, `..`, or values with path separators are rejected.
+- With empty `target_uri`, non-ROOT retrieval without a peer-restricted view searches current-user memories, all peer memories, shared `viking://resources`, current-user resources, and current-user skills.
+- To use a peer-restricted view, send `X-OpenViking-Actor-Peer: <peer_id>` or construct the SDK/CLI client with `actor_peer_id`. See [Multi-Tenant: Peer-Restricted View](../concepts/11-multi-tenant.md#peer-restricted-view).
 - Current-user shorthand target URIs such as `viking://user/memories`, `viking://user/resources`, and `viking://user/skills` are canonicalized from the authenticated request identity.
 
 **FindResult Structure**
@@ -201,11 +199,13 @@ results = client.find(
     target_uri="viking://user/resources"
 )
 
-# Include a specific peer's memories and resources in default retrieval
-results = client.find(
-    "invoice follow-up",
-    peer_id="web-visitor-alice"
+# Search through the peer-restricted view
+peer_client = ov.SyncHTTPClient(
+    url="http://localhost:1933",
+    api_key="your-key",
+    actor_peer_id="web-visitor-alice",
 )
+peer_results = peer_client.find("invoice follow-up")
 
 # Search only in skills
 results = client.find(
@@ -316,7 +316,6 @@ The `search()` method adds session context understanding and intent analysis cap
 | session | Session | No | None | Session for context-aware search (SDK) |
 | session_id | str | No | None | Session ID for context-aware search (HTTP) |
 | context_type | str \| List[str] | No | None | Limit results to one or more `ContextType` values: `memory`, `resource`, or `skill` |
-| peer_id | str | No | None | Stable interaction peer ID. When searching default user-scoped targets, results include this peer's memories and resources in addition to current-user content. CLI maps `--peer-id` to this field |
 | node_limit | int | No | None | Maximum number of results |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filter |
@@ -327,7 +326,7 @@ The `search()` method adds session context understanding and intent analysis cap
 | include_provenance | bool | No | False | Include provenance/query-plan details in serialized result |
 | telemetry | bool \| object | No | False | Attach telemetry data to response |
 
-`search()` uses the same target resolution rules as `find()`: default retrieval includes current-user memories/resources/skills plus shared resources, and `peer_id` adds only that peer's memories/resources.
+`search()` uses the same target resolution rules as `find()`, including the peer-restricted view selected by `X-OpenViking-Actor-Peer` or SDK `actor_peer_id`.
 
 #### 3. Usage Examples
 

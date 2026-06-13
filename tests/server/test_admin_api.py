@@ -16,6 +16,7 @@ from openviking.server.api_keys import APIKeyManager
 from openviking.server.app import create_app
 from openviking.server.config import ServerConfig
 from openviking.server.dependencies import set_service
+from openviking.server.identity import RequestContext, Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
 from openviking.service.core import OpenVikingService
 from openviking_cli.exceptions import OpenVikingError
@@ -153,7 +154,7 @@ def trusted_headers(
 # ---- Account CRUD ----
 
 
-async def test_create_account(admin_client: httpx.AsyncClient):
+async def test_create_account(admin_client: httpx.AsyncClient, admin_service: OpenVikingService):
     """ROOT can create an account with first admin."""
     acct = _uid()
     resp = await admin_client.post(
@@ -166,6 +167,10 @@ async def test_create_account(admin_client: httpx.AsyncClient):
     assert body["result"]["account_id"] == acct
     assert body["result"]["admin_user_id"] == "alice"
     assert "user_key" in body["result"]
+
+    ctx = RequestContext(user=UserIdentifier(acct, "alice"), role=Role.ADMIN)
+    assert await admin_service.viking_fs.abstract("viking://resources", ctx=ctx)
+    assert await admin_service.viking_fs.abstract("viking://user", ctx=ctx)
 
 
 async def test_list_accounts(admin_client: httpx.AsyncClient):
