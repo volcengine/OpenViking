@@ -13,6 +13,10 @@
  * is just `{}`.
  */
 
+import { spawn } from "node:child_process";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
 
@@ -250,6 +254,148 @@ async function readMemoryContent(uri) {
   return null;
 }
 
+function truncateText(text, maxChars) {
+  const value = String(text || "").trim();
+  if (value.length <= maxChars) return value;
+  return `${value.slice(0, Math.max(0, maxChars - 20)).trimEnd()}\n[truncated]`;
+}
+
+function sanitizeInjectedText(text) {
+  const legacyTag = ["relevant", "memories"].join("-");
+  return String(text || "").replace(new RegExp(`</?${legacyTag}>`, "gi"), "legacy memory wrapper");
+}
+
+function fallbackDigest(items) {
+  const lines = items.slice(0, cfg.recallCompressMaxBullets).map((item) => {
+    const text = sanitizeInjectedText(truncateText(item.text, 260)).replace(/\s+/g, " ");
+    return `- [${item.category || "memory"}] ${text} (${item.uri})`;
+  });
+  return lines.length > 0 ? `OpenViking memory digest:\n${lines.join("\n")}` : "";
+}
+
+function normalizeCompressedContext(text) {
+  let value = String(text || "").trim();
+  if (!value) return "";
+  value = value.replace(/^```(?:text|markdown)?\s*/i, "").replace(/\s*```$/i, "").trim();
+  value = sanitizeInjectedText(value);
+  if (!value || /^NO_RELEVANT_MEMORY\.?$/i.test(value)) return "";
+  if (!value.toLowerCase().startsWith("openviking memory digest:")) {
+    value = `OpenViking memory digest:\n${value}`;
+  }
+  return truncateText(value, 4000);
+}
+
+async function runCodexCompressor(prompt) {
+  const tmp = await mkdtemp(join(tmpdir(), "ov-recall-compress-"));
+  const outputPath = join(tmp, "last-message.txt");
+  const args = [
+    "-m",
+    cfg.recallCompressModel,
+    "-c",
+    'model_reasoning_effort="low"',
+    "--sandbox",
+    "read-only",
+    "--ask-for-approval",
+    "never",
+    "exec",
+    "--ephemeral",
+    "--ignore-user-config",
+    "--skip-git-repo-check",
+    "--output-last-message",
+    outputPath,
+    "-",
+  ];
+
+  try {
+    return await new Promise((resolve) => {
+      const env = {
+        ...process.env,
+        OPENVIKING_AUTO_RECALL: "0",
+        OPENVIKING_AUTO_CAPTURE: "0",
+        OPENVIKING_RECALL_COMPRESS: "0",
+      };
+      let done = false;
+      let timedOut = false;
+      let stderr = "";
+      const child = spawn("codex", args, { env, stdio: ["pipe", "ignore", "pipe"] });
+      const finish = (value) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        resolve(value);
+      };
+      const timer = setTimeout(() => {
+        timedOut = true;
+        logError("compress_timeout", `timed out after ${cfg.recallCompressTimeoutMs}ms`);
+        child.kill("SIGKILL");
+      }, cfg.recallCompressTimeoutMs);
+
+      child.stderr.on("data", (chunk) => {
+        stderr += chunk.toString();
+        if (stderr.length > 4000) stderr = stderr.slice(-4000);
+      });
+      child.on("error", (err) => {
+        logError("compress_spawn", err);
+        finish(null);
+      });
+      child.on("close", async (code) => {
+        if (timedOut) {
+          finish(null);
+          return;
+        }
+        if (code !== 0) {
+          logError("compress_exit", stderr.trim().slice(-1000) || `codex exited ${code}`);
+          finish(null);
+          return;
+        }
+        try {
+          finish(await readFile(outputPath, "utf-8"));
+        } catch (err) {
+          logError("compress_read", err);
+          finish(null);
+        }
+      });
+      child.stdin.end(prompt);
+    });
+  } finally {
+    await rm(tmp, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function compressMemoryContext(userPrompt, items) {
+  if (!cfg.recallCompress) return null;
+  const perItemChars = Math.max(500, Math.floor(cfg.recallCompressMaxInputChars / Math.max(1, items.length)));
+  const payload = {
+    user_prompt: userPrompt,
+    max_bullets: cfg.recallCompressMaxBullets,
+    memories: items.map((item) => ({
+      uri: item.uri,
+      category: item.category || "memory",
+      score: item.score,
+      text: truncateText(item.text, perItemChars),
+    })),
+  };
+  const prompt = `You are a memory relevance compressor for a Codex UserPromptSubmit hook.
+
+Task:
+- Keep only memories directly useful for answering the user's current prompt.
+- Drop stale, generic, duplicate, merely adjacent, or operationally unrelated memories.
+- Compress to at most ${cfg.recallCompressMaxBullets} short bullets.
+- Preserve concrete facts, dates, paths, repo names, commands, and user preferences.
+- Do not include XML/HTML wrappers.
+- Do not mention that you filtered memories.
+- If no memory is directly useful, output exactly: NO_RELEVANT_MEMORY
+
+Input JSON:
+${JSON.stringify(payload, null, 2)}
+`;
+  const raw = await runCodexCompressor(prompt);
+  if (raw === null) return null;
+  const compressed = normalizeCompressedContext(raw);
+  log("compressed", { inputCount: items.length, chars: compressed.length });
+  return compressed;
+}
+
 async function main() {
   if (!cfg.autoRecall) {
     log("skip", { stage: "init", reason: "autoRecall disabled" });
@@ -324,21 +470,24 @@ async function main() {
 
   log("picked", { pickedCount: memories.length, uris: memories.map((m) => m.uri) });
 
-  const lines = await Promise.all(
+  const memoryItems = await Promise.all(
     memories.map(async (item) => {
+      let text = (item.abstract || item.overview || item.uri).trim();
       if (item.level === 2) {
         const content = await readMemoryContent(item.uri);
-        if (content) return `- [${item.category || "memory"}] ${content}`;
+        if (content) text = content;
       }
-      return `- [${item.category || "memory"}] ${(item.abstract || item.overview || item.uri).trim()}`;
+      return {
+        uri: item.uri,
+        category: item.category || "memory",
+        score: clampScore(item.score),
+        text,
+      };
     }),
   );
 
-  const memoryContext =
-    "<relevant-memories>\n" +
-    "The following long-term memories from OpenViking may be relevant to this conversation:\n" +
-    lines.join("\n") + "\n" +
-    "</relevant-memories>";
+  const compressedContext = await compressMemoryContext(userPrompt, memoryItems);
+  const memoryContext = compressedContext === null ? fallbackDigest(memoryItems) : compressedContext;
 
   emit(memoryContext);
 }

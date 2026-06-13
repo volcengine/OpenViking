@@ -216,6 +216,23 @@ export function loadConfig() {
       num(cx.minQueryLength, 3),
     ))),
     logRankingDetails: envBool("OPENVIKING_LOG_RANKING_DETAILS") ?? (cx.logRankingDetails === true),
+    recallCompress: envBool("OPENVIKING_RECALL_COMPRESS") ?? (cx.recallCompress !== false),
+    recallCompressModel: str(
+      process.env.OPENVIKING_RECALL_COMPRESS_MODEL,
+      str(cx.recallCompressModel, "gpt-5.5"),
+    ),
+    recallCompressTimeoutMs: Math.max(1000, Math.floor(num(
+      process.env.OPENVIKING_RECALL_COMPRESS_TIMEOUT_MS,
+      num(cx.recallCompressTimeoutMs, 10000),
+    ))),
+    recallCompressMaxInputChars: Math.max(1000, Math.floor(num(
+      process.env.OPENVIKING_RECALL_COMPRESS_MAX_INPUT_CHARS,
+      num(cx.recallCompressMaxInputChars, 18000),
+    ))),
+    recallCompressMaxBullets: Math.max(1, Math.floor(num(
+      process.env.OPENVIKING_RECALL_COMPRESS_MAX_BULLETS,
+      num(cx.recallCompressMaxBullets, 6),
+    ))),
 
     autoCapture: envBool("OPENVIKING_AUTO_CAPTURE") ?? (cx.autoCapture !== false),
     captureMode: (str(process.env.OPENVIKING_CAPTURE_MODE, str(cx.captureMode, "semantic")) === "keyword")
@@ -224,6 +241,10 @@ export function loadConfig() {
     captureMaxLength: Math.max(200, Math.floor(num(
       process.env.OPENVIKING_CAPTURE_MAX_LENGTH,
       num(cx.captureMaxLength, 24000),
+    ))),
+    captureMaxTurnsPerStop: Math.max(1, Math.floor(num(
+      process.env.OPENVIKING_CAPTURE_MAX_TURNS_PER_STOP,
+      num(cx.captureMaxTurnsPerStop, 8),
     ))),
     captureTimeoutMs,
     // Default true: a "memory plugin" without assistant-side capture only sees half the

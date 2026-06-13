@@ -109,6 +109,7 @@ All plugin behavior is controlled by `OPENVIKING_*` environment variables — se
 ```sh
 # ~/.zshrc — examples
 export OPENVIKING_RECALL_LIMIT=6
+export OPENVIKING_RECALL_COMPRESS=1
 export OPENVIKING_CAPTURE_ASSISTANT_TURNS=1
 export OPENVIKING_AUTO_COMMIT_ON_COMPACT=1
 export OPENVIKING_DEBUG=1
@@ -179,10 +180,10 @@ On any /commit failure (OV unreachable, non-2xx, timeout) we **preserve state** 
 `auto-recall.mjs` reads `prompt` from stdin, calls `/api/v1/search/find`, ranks results, reads full content for top-ranked leaves, and emits:
 
 ```json
-{ "hookSpecificOutput": { "hookEventName": "UserPromptSubmit", "additionalContext": "<relevant-memories>...</relevant-memories>" } }
+{ "hookSpecificOutput": { "hookEventName": "UserPromptSubmit", "additionalContext": "OpenViking memory digest:\n- ..." } }
 ```
 
-Codex injects `additionalContext` into the model turn, so memories arrive without an extra tool call.
+Codex injects `additionalContext` into the model turn, so memories arrive without an extra tool call. By default the hook runs a low-reasoning Codex compression pass over recalled candidates before injection, dropping weakly-related memories and preserving only a short digest. Set `OPENVIKING_RECALL_COMPRESS=0` to fall back to deterministic short formatting.
 
 ### Stop (turn end → `add_message`, NOT `commit`)
 

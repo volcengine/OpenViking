@@ -137,7 +137,16 @@ async function readTranscriptTurns(transcriptPath) {
   }
 }
 
-async function appendTurns(ovSessionId, turns) {
+function selectStopTurns(state, turns) {
+  const limit = cfg.captureMaxTurnsPerStop;
+  if (turns.length <= limit) return turns;
+  const skipped = turns.length - limit;
+  state.capturedTurnCount += skipped;
+  log("backlog_trimmed", { newTurns: turns.length, skipped, selected: limit });
+  return turns.slice(-limit);
+}
+
+async function appendTurns(ovSessionId, turns, state) {
   let appended = 0;
   for (const turn of turns) {
     const body = { role: turn.role, content: turn.text };
@@ -148,6 +157,8 @@ async function appendTurns(ovSessionId, turns) {
     });
     if (!result) break;
     appended += 1;
+    state.capturedTurnCount += 1;
+    await saveState(state);
   }
   return appended;
 }
@@ -222,8 +233,9 @@ async function main() {
     if (!ovSessionId) {
       logError("resolve_ov_session", "failed to derive OV session id");
     } else {
-      added = await appendTurns(ovSessionId, newTurns);
-      state.capturedTurnCount += added;
+      const turnsToAppend = selectStopTurns(state, newTurns);
+      await saveState(state);
+      added = await appendTurns(ovSessionId, turnsToAppend, state);
       log("appended", { ovSessionId, added });
     }
   }
