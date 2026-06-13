@@ -31,7 +31,9 @@ class RagfsBindingConfig:
 
     def to_binding_dict(self) -> Dict[str, Any]:
         """Convert the runtime config into the sectioned dict consumed by `RAGFSBindingClient`."""
-        binding_config: Dict[str, Any] = {}
+        binding_config: Dict[str, Any] = {
+            "cache": self.agfs.cache.model_dump(mode="json"),
+        }
 
         if self.root_key is not None:
             if len(self.root_key) != 32:

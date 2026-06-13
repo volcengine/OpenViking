@@ -244,14 +244,17 @@ fn cache_config_from_ov_conf(path: &str) -> Result<RagfsCacheConfig, String> {
     let json: serde_json::Value = serde_json::from_str(&raw)
         .map_err(|error| format!("failed to parse OpenViking config {path}: {error}"))?;
 
-    let Some(cache) = json
+    match json
         .get("storage")
         .and_then(|storage| storage.get("agfs"))
         .and_then(|agfs| agfs.get("cache"))
-    else {
-        return Ok(RagfsCacheConfig::default());
-    };
+    {
+        Some(cache) => cache_config_from_value(cache),
+        None => Ok(RagfsCacheConfig::default()),
+    }
+}
 
+fn cache_config_from_value(cache: &serde_json::Value) -> Result<RagfsCacheConfig, String> {
     if cache.is_null() {
         return Ok(RagfsCacheConfig::default());
     }
@@ -827,7 +830,7 @@ impl RAGFSBindingClient {
     /// `RAGFSBindingClient(config_path=...)` do not fail. `config` is an optional sectioned dict
     /// (mirrors ov.conf). The `encryption` section, when present, carries `root_key` (32 bytes) +
     /// `provider_type` (int) and causes the stack to include an `EncryptionWrappedFS` layer.
-    /// Absence of the section yields a plaintext stack.
+    /// Runtime `cache` configuration takes precedence over `config_path`.
     #[new]
     #[pyo3(signature = (config_path=None, config=None))]
     fn new(
@@ -840,6 +843,7 @@ impl RAGFSBindingClient {
 
         // Phase A (holding GIL): parse the sectioned config into an owned RagfsConfig.
         let mut ragfs_cfg = RagfsConfig::default();
+        let mut runtime_cache_config = None;
         if let Some(cfg) = config {
             if let Some(enc_obj) = cfg.get("encryption") {
                 let enc: HashMap<String, Py<PyAny>> = enc_obj.extract(py)?;
@@ -860,13 +864,23 @@ impl RAGFSBindingClient {
                     provider_type,
                 });
             }
+            if let Some(cache_obj) = cfg.get("cache") {
+                let cache_value = py_to_json_value(cache_obj.bind(py))?;
+                runtime_cache_config =
+                    Some(cache_config_from_value(&cache_value).map_err(|error| {
+                        PyRuntimeError::new_err(format!("Invalid cache config: {error}"))
+                    })?);
+            }
         }
 
-        let cache_config = match config_path {
-            Some(path) => cache_config_from_ov_conf(path).map_err(|error| {
-                PyRuntimeError::new_err(format!("Invalid cache config: {error}"))
-            })?,
-            None => RagfsCacheConfig::default(),
+        let cache_config = match runtime_cache_config {
+            Some(config) => config,
+            None => match config_path {
+                Some(path) => cache_config_from_ov_conf(path).map_err(|error| {
+                    PyRuntimeError::new_err(format!("Invalid cache config: {error}"))
+                })?,
+                None => RagfsCacheConfig::default(),
+            },
         };
 
         // Phase B: build the stack. Cache, when enabled, replaces the mountable
@@ -1683,6 +1697,40 @@ mod tests {
         assert!(!cache_config.enabled);
         assert_eq!(cache_config.provider, CacheProviderKind::Memory);
         assert_eq!(cache_config.namespace, "openviking");
+
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn constructor_runtime_cache_overrides_config_path() {
+        Python::initialize();
+        let path = std::env::temp_dir().join(format!(
+            "openviking-runtime-cache-override-{}.json",
+            std::process::id()
+        ));
+        fs::write(
+            &path,
+            r#"{"storage": {"agfs": {"cache": {"enabled": true, "provider": "invalid"}}}}"#,
+        )
+        .unwrap();
+
+        Python::attach(|py| {
+            let ty = py.get_type::<RAGFSBindingClient>();
+            let cache = PyDict::new(py);
+            cache.set_item("enabled", true).unwrap();
+            cache.set_item("provider", "memory").unwrap();
+            cache.set_item("namespace", "runtime-cache").unwrap();
+            let config = PyDict::new(py);
+            config.set_item("cache", cache).unwrap();
+            let kwargs = PyDict::new(py);
+            kwargs
+                .set_item("config_path", path.to_str().unwrap())
+                .unwrap();
+            kwargs.set_item("config", config).unwrap();
+
+            let instance = ty.call((), Some(&kwargs));
+            assert!(instance.is_ok());
+        });
 
         fs::remove_file(path).unwrap();
     }

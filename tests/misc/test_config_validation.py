@@ -517,7 +517,15 @@ def test_mount_agfs_backend_raises_mount_error(tmp_path):
 
 
 def test_ragfs_binding_config_builds_single_binding_dict_for_local_backend(tmp_path):
-    agfs_config = AGFSConfig(path=str(tmp_path), backend="local")
+    agfs_config = AGFSConfig(
+        path=str(tmp_path),
+        backend="local",
+        cache={
+            "enabled": True,
+            "provider": "memory",
+            "namespace": "runtime-cache",
+        },
+    )
 
     config = RagfsBindingConfig(
         agfs=agfs_config,
@@ -529,12 +537,17 @@ def test_ragfs_binding_config_builds_single_binding_dict_for_local_backend(tmp_p
         "encryption": {
             "root_key": b"\x01" * 32,
             "provider_type": 7,
-        }
+        },
+        "cache": agfs_config.cache.model_dump(mode="json"),
     }
 
 
 def test_create_agfs_client_uses_single_binding_config_object(monkeypatch, tmp_path):
-    agfs_config = AGFSConfig(path=str(tmp_path), backend="memory")
+    agfs_config = AGFSConfig(
+        path=str(tmp_path),
+        backend="memory",
+        cache={"enabled": True, "provider": "memory", "namespace": "runtime-cache"},
+    )
 
     def _fake_get_binding_client():
         return (_FakeBindingClient, None)
@@ -545,7 +558,8 @@ def test_create_agfs_client_uses_single_binding_config_object(monkeypatch, tmp_p
     client = create_agfs_client(config)
 
     assert isinstance(client, _FakeBindingClient)
-    assert client.config == {}
+    assert client.config["cache"]["enabled"] is True
+    assert client.config["cache"]["namespace"] == "runtime-cache"
     assert any(call[0] == "memfs" for call in client.mount_calls)
 
 
