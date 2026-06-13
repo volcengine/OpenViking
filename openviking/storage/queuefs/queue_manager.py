@@ -132,13 +132,14 @@ class QueueManager:
 
         # Semantic Queue
         # Load max_retries_per_uri from config (storage.semantic_processor)
-        max_retries_per_uri = 3  # default
+        from openviking.storage.queuefs.semantic_processor import DEFAULT_MAX_RETRIES_PER_URI
+        max_retries_per_uri = DEFAULT_MAX_RETRIES_PER_URI
         try:
             from openviking_cli.utils.config import get_openviking_config
             sp_config = get_openviking_config().storage.semantic_processor
             max_retries_per_uri = sp_config.max_retries_per_uri
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to load semantic processor config, using defaults: %s", e)
 
         semantic_processor = SemanticProcessor(
             max_concurrent_llm=self._max_concurrent_semantic,

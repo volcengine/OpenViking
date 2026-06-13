@@ -15,6 +15,7 @@ from openviking.storage.queuefs.semantic_processor import (
     DEFAULT_MAX_RETRIES_PER_URI,
     SemanticProcessor,
 )
+from openviking.utils.circuit_breaker import CircuitBreaker
 
 
 # ---------------------------------------------------------------------------
@@ -24,6 +25,15 @@ from openviking.storage.queuefs.semantic_processor import (
 
 def _make_msg(uri: str = "viking://user/default/file.txt") -> SemanticMsg:
     return SemanticMsg(uri=uri, context_type="resource")
+
+
+def _circuit_breaker_is_open(cb: CircuitBreaker) -> bool:
+    """Check if circuit breaker is open by attempting a check."""
+    try:
+        cb.check()
+        return False
+    except Exception:
+        return True
 
 
 # ---------------------------------------------------------------------------
@@ -59,7 +69,8 @@ class TestMaxRetriesPerUri:
                             msg, {}, RuntimeError("test error")
                         )
 
-        assert processor._retry_counts[msg.uri] == 1
+        with processor._retry_counts_lock:
+            assert processor._retry_counts[msg.uri] == 1
 
     @pytest.mark.asyncio
     async def test_drops_after_max_retries(self):
@@ -67,7 +78,8 @@ class TestMaxRetriesPerUri:
         msg = _make_msg()
 
         # Pre-set retry count to max-1
-        processor._retry_counts[msg.uri] = 1
+        with processor._retry_counts_lock:
+            processor._retry_counts[msg.uri] = 1
 
         with patch.object(processor, "report_error") as mock_err:
             with patch(
@@ -81,16 +93,41 @@ class TestMaxRetriesPerUri:
         # Should have reported error, not re-enqueued
         mock_err.assert_called_once()
         # URI should be cleaned up from retry counts
-        assert msg.uri not in processor._retry_counts
+        with processor._retry_counts_lock:
+            assert msg.uri not in processor._retry_counts
 
     @pytest.mark.asyncio
     async def test_success_resets_retry_count(self):
+        """Verify that a successful on_dequeue clears the retry counter for that URI."""
         processor = SemanticProcessor(max_retries_per_uri=3)
-        processor._retry_counts["viking://test"] = 2
+        msg = _make_msg()
 
-        # Simulate success by directly calling the reset logic
-        processor._retry_counts.pop("viking://test", None)
-        assert "viking://test" not in processor._retry_counts
+        # Pre-set retry count
+        with processor._retry_counts_lock:
+            processor._retry_counts[msg.uri] = 2
+
+        # Mock on_dequeue to succeed (return None without error)
+        mock_fs = MagicMock()
+        mock_fs.exists = AsyncMock(return_value=True)
+
+        with patch(
+            "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+            return_value=mock_fs,
+        ):
+            with patch(
+                "openviking.storage.queuefs.semantic_processor.resolve_telemetry",
+                return_value=None,
+            ):
+                with patch(
+                    "openviking.storage.queuefs.semantic_processor.is_semantic_msg_stale",
+                    return_value=True,  # Mark as stale so it returns early with success
+                ):
+                    data = msg.to_dict()
+                    await processor.on_dequeue(data)
+
+        # After successful processing, retry count should be cleared
+        with processor._retry_counts_lock:
+            assert msg.uri not in processor._retry_counts
 
 
 # ---------------------------------------------------------------------------
@@ -218,10 +255,9 @@ class TestProcessorInitFromConfig:
     """Tests that SemanticProcessor reads circuit breaker config during init."""
 
     def test_uses_circuit_breaker_config_when_available(self):
-        from openviking.utils.circuit_breaker import CircuitBreaker
-
+        """Verify configured breaker trips after the configured number of failures."""
         mock_cb_config = MagicMock()
-        mock_cb_config.failure_threshold = 10
+        mock_cb_config.failure_threshold = 3
         mock_cb_config.reset_timeout = 120.0
 
         mock_vlm = MagicMock()
@@ -236,15 +272,28 @@ class TestProcessorInitFromConfig:
         ):
             processor = SemanticProcessor()
 
-        assert processor._circuit_breaker._failure_threshold == 10
-        assert processor._circuit_breaker._base_reset_timeout == 120.0
+        # Verify behavior: breaker should trip after 3 failures
+        cb = processor._circuit_breaker
+        for _ in range(3):
+            cb.record_failure(RuntimeError("test"))
+
+        assert _circuit_breaker_is_open(cb)
+        # Verify retry_after reflects configured timeout
+        assert cb.retry_after == pytest.approx(120.0, abs=10.0)
 
     def test_defaults_when_no_config(self):
+        """Verify default breaker trips after 5 failures with 300s timeout."""
         with patch(
             "openviking.storage.queuefs.semantic_processor.get_openviking_config",
             side_effect=Exception("no config"),
         ):
             processor = SemanticProcessor()
 
-        assert processor._circuit_breaker._failure_threshold == 5
-        assert processor._circuit_breaker._base_reset_timeout == 300
+        # Verify behavior: breaker should trip after 5 failures (default)
+        cb = processor._circuit_breaker
+        for _ in range(5):
+            cb.record_failure(RuntimeError("test"))
+
+        assert _circuit_breaker_is_open(cb)
+        # Verify retry_after reflects default timeout
+        assert cb.retry_after == pytest.approx(300.0, abs=10.0)

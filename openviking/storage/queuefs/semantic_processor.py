@@ -123,17 +123,19 @@ class SemanticProcessor(DequeueHandlerBase):
             cb_config = getattr(config.vlm, "circuit_breaker", None)
             if cb_config is not None:
                 self._circuit_breaker = CircuitBreaker(
-                    failure_threshold=getattr(cb_config, "failure_threshold", 5),
-                    reset_timeout=getattr(cb_config, "reset_timeout", 300),
+                    failure_threshold=cb_config.failure_threshold,
+                    reset_timeout=cb_config.reset_timeout,
                 )
             else:
                 self._circuit_breaker = CircuitBreaker()
-        except Exception:
+        except Exception as e:
+            logger.debug("Failed to load circuit breaker config, using defaults: %s", e)
             self._circuit_breaker = CircuitBreaker()
 
         # Track consecutive retry counts per URI to prevent infinite retry loops.
         # Maps URI -> number of consecutive failures since last success.
         self._retry_counts: Dict[str, int] = {}
+        self._retry_counts_lock = threading.Lock()
 
     @classmethod
     def _cache_dag_stats(cls, telemetry_id: str, uri: str, stats: DagStats) -> None:
@@ -273,8 +275,9 @@ class SemanticProcessor(DequeueHandlerBase):
         error: Exception,
     ) -> None:
         uri = msg.uri
-        current_count = self._retry_counts.get(uri, 0) + 1
-        self._retry_counts[uri] = current_count
+        with self._retry_counts_lock:
+            current_count = self._retry_counts.get(uri, 0) + 1
+            self._retry_counts[uri] = current_count
 
         if current_count >= self.max_retries_per_uri:
             logger.warning(
@@ -284,7 +287,8 @@ class SemanticProcessor(DequeueHandlerBase):
                 uri,
                 error,
             )
-            self._retry_counts.pop(uri, None)
+            with self._retry_counts_lock:
+                self._retry_counts.pop(uri, None)
             self._merge_request_stats(msg.telemetry_id, error_count=1)
             get_request_wait_tracker().mark_semantic_failed(
                 msg.telemetry_id, msg.id, f"Max retries ({self.max_retries_per_uri}) exceeded: {error}"
@@ -395,13 +399,15 @@ class SemanticProcessor(DequeueHandlerBase):
             # Prevents infinite retry loops on deleted files (see #1595).
             try:
                 viking_fs = get_viking_fs()
-                file_exists = await viking_fs.exists(msg.uri, ctx=None)
+                check_ctx = self._ctx_from_semantic_msg(msg)
+                file_exists = await viking_fs.exists(msg.uri, ctx=check_ctx)
                 if not file_exists:
                     logger.warning(
                         "Source URI does not exist, dropping from queue: %s",
                         msg.uri,
                     )
-                    self._retry_counts.pop(msg.uri, None)
+                    with self._retry_counts_lock:
+                        self._retry_counts.pop(msg.uri, None)
                     if msg.telemetry_id and msg.id:
                         get_request_wait_tracker().mark_semantic_failed(
                             msg.telemetry_id, msg.id, "Source URI does not exist"
@@ -525,7 +531,8 @@ class SemanticProcessor(DequeueHandlerBase):
                     logger.info(f"Completed semantic generation for: {msg.uri}")
                     self.report_success()
                     self._circuit_breaker.record_success()
-                    self._retry_counts.pop(msg.uri, None)
+                    with self._retry_counts_lock:
+                        self._retry_counts.pop(msg.uri, None)
                     return None
                 finally:
                     reset_root_observability_context(root_context_token)
