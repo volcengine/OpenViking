@@ -243,6 +243,13 @@ class _SingleAccountBackend:
 
         if self._bound_account_id and not payload.get("account_id"):
             payload["account_id"] = self._bound_account_id
+        elif self._bound_account_id and payload.get("account_id") != self._bound_account_id:
+            logger.warning(
+                "Rejected cross-account upsert: payload.account_id=%s, bound_account_id=%s",
+                payload.get("account_id"),
+                self._bound_account_id,
+            )
+            return ""
         logger.debug(
             f"[_SingleAccountBackend.upsert] Final payload.account_id={payload.get('account_id')}"
         )

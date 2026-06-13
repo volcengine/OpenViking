@@ -68,3 +68,40 @@ async def test_local_file_provider_different_accounts(local_file_provider):
 
     decrypted2 = await local_file_provider.decrypt_file_key(encrypted_key2, iv2, account2)
     assert decrypted2 == plaintext_key
+
+
+@pytest.mark.asyncio
+async def test_local_file_provider_binds_key_purpose(local_file_provider):
+    """Account keys for different logical purposes must not share HKDF output."""
+    account_id = "test_account"
+
+    file_key = await local_file_provider.derive_account_key(
+        account_id,
+        key_purpose="file-encryption",
+        derivation_version="v2",
+    )
+    token_key = await local_file_provider.derive_account_key(
+        account_id,
+        key_purpose="token-signing",
+        derivation_version="v2",
+    )
+
+    assert file_key != token_key
+
+
+@pytest.mark.asyncio
+async def test_local_file_provider_keeps_legacy_decrypt_fallback(local_file_provider):
+    """Existing v1-wrapped file keys remain decryptable while new writes use v2."""
+    account_id = "test_account"
+    plaintext_key = b"test_file_key"
+
+    legacy_key = await local_file_provider.derive_account_key(
+        account_id,
+        derivation_version="v1",
+    )
+    iv = b"1" * 12
+    legacy_ciphertext = await local_file_provider._aes_gcm_encrypt(legacy_key, iv, plaintext_key)
+
+    decrypted = await local_file_provider.decrypt_file_key(legacy_ciphertext, iv, account_id)
+
+    assert decrypted == plaintext_key
