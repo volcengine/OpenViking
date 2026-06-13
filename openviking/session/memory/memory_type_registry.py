@@ -301,13 +301,20 @@ class MemoryTypeRegistry:
                 pass
 
             # Add MEMORY_FIELDS comment with field metadata
+            from datetime import datetime, timezone
+
             from openviking.session.memory.dataclass import MemoryFile
             from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+
+            now = datetime.now(timezone.utc)
+            extra = dict(fields_with_init)
+            extra["created_at"] = now
+            extra["updated_at"] = now
 
             mf = MemoryFile(
                 uri=file_uri,
                 memory_type=schema.memory_type,
-                extra_fields=fields_with_init,
+                extra_fields=extra,
             )
             full_content = MemoryFileUtils.write(
                 mf,
