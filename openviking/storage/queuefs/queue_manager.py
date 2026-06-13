@@ -131,7 +131,19 @@ class QueueManager:
         logger.info("Embedding queue initialized with TextEmbeddingHandler")
 
         # Semantic Queue
-        semantic_processor = SemanticProcessor(max_concurrent_llm=self._max_concurrent_semantic)
+        # Load max_retries_per_uri from config (storage.semantic_processor)
+        max_retries_per_uri = 3  # default
+        try:
+            from openviking_cli.utils.config import get_openviking_config
+            sp_config = get_openviking_config().storage.semantic_processor
+            max_retries_per_uri = sp_config.max_retries_per_uri
+        except Exception:
+            pass
+
+        semantic_processor = SemanticProcessor(
+            max_concurrent_llm=self._max_concurrent_semantic,
+            max_retries_per_uri=max_retries_per_uri,
+        )
         self.get_queue(
             self.SEMANTIC,
             dequeue_handler=semantic_processor,

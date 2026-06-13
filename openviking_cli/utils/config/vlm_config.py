@@ -18,6 +18,23 @@ def _normalize_provider_name(name: Optional[str]) -> Optional[str]:
     return cleaned or None
 
 
+class CircuitBreakerConfig(BaseModel):
+    """Circuit breaker settings for the semantic processor VLM calls."""
+
+    failure_threshold: int = Field(
+        default=5,
+        ge=1,
+        description="Number of consecutive failures before the circuit breaker trips open",
+    )
+    reset_timeout: float = Field(
+        default=300.0,
+        gt=0,
+        description="Seconds to wait in OPEN state before allowing a probe request",
+    )
+
+    model_config = {"extra": "forbid"}
+
+
 class VLMConfig(BaseModel):
     """VLM configuration, supports multiple provider backends."""
 
@@ -66,6 +83,11 @@ class VLMConfig(BaseModel):
 
     max_concurrent: int = Field(
         default=64, description="Maximum number of concurrent LLM calls for semantic processing"
+    )
+
+    circuit_breaker: Optional[CircuitBreakerConfig] = Field(
+        default=None,
+        description="Circuit breaker settings for semantic processor VLM call protection",
     )
 
     api_version: Optional[str] = Field(

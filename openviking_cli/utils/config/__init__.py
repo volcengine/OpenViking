@@ -77,10 +77,10 @@ from .parser_config import (
 from .prompts_config import PromptsConfig
 from .rerank_config import RerankConfig
 from .retrieval_config import RetrievalConfig
-from .storage_config import StorageConfig
+from .storage_config import SemanticProcessorConfig, StorageConfig
 from .telemetry_config import TelemetryConfig, TracerConfig
 from .vectordb_config import VectorDBBackendConfig
-from .vlm_config import VLMConfig
+from .vlm_config import CircuitBreakerConfig, VLMConfig
 
 __all__ = [
     "AGFSConfig",
@@ -132,6 +132,8 @@ __all__ = [
     "RerankConfig",
     "RetrievalConfig",
     "StorageConfig",
+    "SemanticProcessorConfig",
+    "CircuitBreakerConfig",
     "VectorDBBackendConfig",
     "VLMConfig",
     "ParserConfig",
