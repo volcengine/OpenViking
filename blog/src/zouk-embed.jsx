@@ -600,7 +600,9 @@ export function ZoukInteractiveBlog({ route }) {
   const sheetHeightRef = useRef(0);
   const thinkingMessageKeyRef = useRef('');
   const target = `#${CONFIG.channel}`;
+  const isPostRoute = route?.name === 'post';
   const panelVisible = open || closing;
+  const showBottomComposer = isPostRoute && !panelVisible;
   const composerPlaceholder = `Ask OpenViking about this post...`;
   const referencedText = compactText(selectedText);
   const contextUrlChanged = Boolean(sourceUrl && sourceUrl !== lastContextUrl);
@@ -805,9 +807,9 @@ export function ZoukInteractiveBlog({ route }) {
   useEffect(() => {
     if (!browserAvailable()) return undefined;
     const root = document.documentElement;
-    root.classList.toggle('zouk-reader-bottom-composer-visible', !panelVisible);
+    root.classList.toggle('zouk-reader-bottom-composer-visible', showBottomComposer);
     return () => root.classList.remove('zouk-reader-bottom-composer-visible');
-  }, [panelVisible]);
+  }, [showBottomComposer]);
 
   useEffect(() => {
     const node = scrollRef.current;
@@ -1068,7 +1070,7 @@ export function ZoukInteractiveBlog({ route }) {
         </button>
       ) : null}
 
-      {!panelVisible ? (
+      {showBottomComposer ? (
         <form className="zouk-reader-bottom-composer" onSubmit={onSubmit} aria-label="Ask OpenViking">
           <div className="zouk-reader-input-shell">
             <textarea

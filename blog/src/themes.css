@@ -607,6 +607,7 @@ html {
 }
 
 .zouk-reader-bottom-composer {
+  --zouk-reader-field-radius: 18px;
   position: fixed;
   z-index: 84;
   left: 50%;
@@ -1121,7 +1122,7 @@ html {
   gap: 6px;
   min-height: var(--zouk-reader-input-min-height);
   border: 1px solid var(--th-line);
-  border-radius: var(--zouk-reader-field-radius);
+  border-radius: var(--zouk-reader-field-radius, 12px);
   background: var(--th-bg-2);
   padding-right: 5px;
   transition: border-color 0.15s, box-shadow 0.15s;
