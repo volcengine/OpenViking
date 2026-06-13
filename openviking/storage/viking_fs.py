@@ -24,7 +24,11 @@ from datetime import datetime, timezone
 from pathlib import PurePath
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
-from openviking.core.namespace import canonicalize_uri
+from openviking.core.namespace import (
+    canonicalize_uri,
+    is_hidden_by_actor_peer_view,
+    may_include_hidden_actor_peers,
+)
 from openviking.core.namespace import (
     is_accessible as namespace_is_accessible,
 )
@@ -330,6 +334,10 @@ class VikingFS:
         self._ensure_access(uri, ctx)
         real_ctx = self._ctx_or_default(ctx)
         normalized_uri, _ = self._normalized_uri_parts(uri)
+        if is_hidden_by_actor_peer_view(normalized_uri, real_ctx) or may_include_hidden_actor_peers(
+            normalized_uri, real_ctx
+        ):
+            raise PermissionDeniedError(f"Access denied for {uri}", resource=normalized_uri)
         if real_ctx.role != Role.ROOT and normalized_uri.rstrip("/") == "viking://temp":
             raise PermissionDeniedError(
                 "Temp root is read-only for non-root users",
@@ -802,6 +810,7 @@ class VikingFS:
         matches = result.get("matches", [])
         results = []
         files_scanned_set = set()
+        real_ctx = self._ctx_or_default(ctx)
 
         for match in matches:
             match_file = match.get("file", "")
@@ -811,6 +820,8 @@ class VikingFS:
             agfs_file_path = self._resolve_grep_match_agfs_path(path, match_file)
 
             file_uri = self._path_to_uri(agfs_file_path, ctx=ctx)
+            if not self._is_accessible(file_uri, real_ctx):
+                continue
 
             files_scanned_set.add(file_uri)
 
@@ -829,7 +840,9 @@ class VikingFS:
         # counting files that produced at least one match (best-effort).
         backend_files_scanned = result.get("files_scanned")
         if isinstance(backend_files_scanned, int) and backend_files_scanned >= 0:
-            files_scanned = backend_files_scanned
+            files_scanned = (
+                len(files_scanned_set) if real_ctx.actor_peer_id else backend_files_scanned
+            )
         else:
             files_scanned = len(files_scanned_set)
 
@@ -881,8 +894,12 @@ class VikingFS:
                         target_canonical_uri = canonicalize_uri(
                             self._path_to_uri(path, ctx=real_ctx), real_ctx
                         )
-                        filter_expr = PathScope("uri", target_canonical_uri, depth=-1)
-                        result["count"] = await vector_store.count(filter=filter_expr, ctx=real_ctx)
+                        if not may_include_hidden_actor_peers(target_canonical_uri, real_ctx):
+                            filter_expr = PathScope("uri", target_canonical_uri, depth=-1)
+                            result["count"] = await vector_store.count(
+                                filter=filter_expr,
+                                ctx=real_ctx,
+                            )
                 except Exception as e:
                     logger.warning(f"[VikingFS] Failed to count nodes for directory stat: {e}")
         return result
@@ -1737,6 +1754,8 @@ class VikingFS:
         normalized_uri, parts = self._normalized_uri_parts(uri)
         if ctx.role == Role.ROOT:
             return True
+        if is_hidden_by_actor_peer_view(normalized_uri, ctx):
+            return False
         if not parts:
             return True
         if is_watch_task_control_uri(normalized_uri):

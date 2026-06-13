@@ -70,7 +70,7 @@ OpenViking 提供多种检索方法，包括简单的向量相似度搜索、带
 
 **目标解析说明**：
 - `target_uri` 为空时，非 ROOT 检索默认搜索当前用户根 `viking://user/{user}` 和公共 `viking://resources`。
-- 如需在检索时把当前用户的 peer 集合过滤到某一个 peer，发送 `X-OpenViking-Actor-Peer: <peer_id>`，或用 SDK/CLI client 的 `actor_peer_id` 初始化。见 [多租户：Peer 集合过滤](../concepts/11-multi-tenant.md#peer-restricted-view)。
+- 如需在文件系统和检索操作中把当前用户的 peer 集合过滤到某一个 peer，发送 `X-OpenViking-Actor-Peer: <peer_id>`，或用 SDK/CLI client 的 `actor_peer_id` 初始化。见 [多租户：Peer 集合过滤](../concepts/11-multi-tenant.md#peer-restricted-view)。
 - `viking://user/memories`、`viking://user/resources`、`viking://user/skills` 等当前用户短写 target URI 会按认证请求身份 canonicalize。
 
 **FindResult 结构**

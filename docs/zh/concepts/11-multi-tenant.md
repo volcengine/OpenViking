@@ -102,14 +102,14 @@ viking://user/alice/peers/web-visitor-alice/resources/
 
 因此多租户隔离不是靠“不同 URI 前缀”，而是靠请求上下文中的 `account_id` 和 `user_id` 共同生效。
 
-### 检索层
+### 文件系统与检索层
 
-语义检索同样受租户约束：
+文件系统操作和语义检索都受租户约束：
 
 - 非 ROOT 请求会自动按 `account_id` 过滤
 - `resources` 会允许检索 account 内共享资源
 - `memory`、用户资源和 `skill` 会进一步按当前 `user space` 过滤
-- Actor peer 可以在检索时把 `viking://user/{user}/peers` 过滤到一个 peer
+- Actor peer 会把 `viking://user/{user}/peers` 过滤到一个 peer，并作用于文件系统和检索操作
 
 这意味着“能搜到什么”与“能读到什么”保持一致，不会因为向量召回而越权。
 
@@ -119,12 +119,13 @@ viking://user/alice/peers/web-visitor-alice/resources/
 
 `peer_id` 是当前 user 边界内的内容范围，不会改变 tenant 或 user 身份。
 
-当一次请求在检索时只需要当前用户 peer 集合中的某一个 peer 时，设置
+当一次请求只应该看到当前用户 peer 集合中的某一个 peer 时，设置
 `X-OpenViking-Actor-Peer: <peer_id>`，或使用 SDK/CLI 的 `actor_peer_id`：
 
 - 空 target 检索仍包含当前用户根和公共 `viking://resources`。
 - 检索解析到 `viking://user/{user}/peers` 时，只选择该 peer 的 memories/resources。
-- User-scoped memories、resources、skills、session 归属和文件系统读写规则都不变。
+- 文件系统操作不能 read、list、tree、grep/search/find、write、move 或 delete `viking://user/{user}/peers` 下的其他 peer。
+- User-scoped memories、resources、skills、共享 resources 和 session 归属不因 actor peer 改变。
 - peer ID 必须是安全的单段路径标识，例如 `web-visitor-alice`。
 
 ## 标准使用流程

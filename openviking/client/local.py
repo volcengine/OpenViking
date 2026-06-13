@@ -68,7 +68,7 @@ class LocalClient(BaseClient):
         Args:
             path: Local storage path (overrides ov.conf storage path)
             user: Explicit account/user identity for embedded mode
-            actor_peer_id: Optional peer collection filter for retrieval.
+            actor_peer_id: Optional view filter for the current user's peer collection.
         """
         self._service = OpenVikingService(
             path=path,

@@ -25,7 +25,7 @@ When `url` is omitted, the adapters load connection settings from the OpenViking
 
 ## Peer Identity
 
-Pass `actor_peer_id` to filter the current user's peer collection during retrieval. Session message capture can still use `peer_id` for per-message speaker attribution.
+Pass `actor_peer_id` to filter the current user's peer collection for filesystem and retrieval operations. Session message capture can still use `peer_id` for per-message speaker attribution.
 
 ```python
 retriever = OpenVikingRetriever(

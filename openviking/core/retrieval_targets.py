@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Retrieval-only target resolution for search/find."""
+"""Target resolution for search/find."""
 
 from dataclasses import dataclass
 from typing import List, Optional, Union
@@ -9,6 +9,7 @@ from openviking.core.namespace import (
     NamespaceShapeError,
     canonical_user_root,
     canonicalize_uri,
+    is_hidden_by_actor_peer_view,
     uri_parts,
 )
 from openviking.core.peer_id import normalize_peer_id
@@ -166,7 +167,7 @@ def _resolve_peer_target(
         return [target_uri]
 
     target_peer_id = _normalize_peer_id(suffix[1])
-    if ctx.actor_peer_id and target_peer_id != ctx.actor_peer_id:
+    if is_hidden_by_actor_peer_view(target_uri, ctx):
         raise PermissionDeniedError("Actor peer cannot access another peer's context.")
 
     peer_root = f"{canonical_user_root(ctx)}/peers/{target_peer_id}"

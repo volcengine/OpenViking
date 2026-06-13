@@ -69,7 +69,7 @@ The `find()` method performs pure vector similarity search for simple query scen
 
 **Target resolution notes**:
 - With empty `target_uri`, non-ROOT retrieval searches the current user root (`viking://user/{user}`) and shared `viking://resources`.
-- To filter the current user's peer collection to one peer during retrieval, send `X-OpenViking-Actor-Peer: <peer_id>` or construct the SDK/CLI client with `actor_peer_id`. See [Multi-Tenant: Peer Collection Filter](../concepts/11-multi-tenant.md#peer-restricted-view).
+- To filter the current user's peer collection to one peer for filesystem and retrieval operations, send `X-OpenViking-Actor-Peer: <peer_id>` or construct the SDK/CLI client with `actor_peer_id`. See [Multi-Tenant: Peer Collection Filter](../concepts/11-multi-tenant.md#peer-restricted-view).
 - Current-user shorthand target URIs such as `viking://user/memories`, `viking://user/resources`, and `viking://user/skills` are canonicalized from the authenticated request identity.
 
 **FindResult Structure**

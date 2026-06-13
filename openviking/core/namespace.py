@@ -197,6 +197,40 @@ def visible_roots(ctx: RequestContext) -> list[str]:
     ]
 
 
+def is_hidden_by_actor_peer_view(uri: str, ctx: RequestContext) -> bool:
+    """Return whether uri points to another peer hidden by the actor peer view."""
+    suffix = _actor_peer_view_user_suffix(uri, ctx)
+    return bool(
+        suffix and len(suffix) >= 2 and suffix[0] == "peers" and suffix[1] != ctx.actor_peer_id
+    )
+
+
+def may_include_hidden_actor_peers(uri: str, ctx: RequestContext) -> bool:
+    """Return whether recursive data under uri may include hidden peers."""
+    suffix = _actor_peer_view_user_suffix(uri, ctx)
+    return suffix is not None and (not suffix or suffix == ["peers"])
+
+
+def _actor_peer_view_user_suffix(uri: str, ctx: RequestContext) -> Optional[list[str]]:
+    """Return uri's suffix under the current user root when actor peer view is active.
+
+    The actor peer view filters only the current user's ``peers`` collection.
+    It applies to filesystem and retrieval views, but does not change
+    tenant/user identity or hide non-peer user content.
+    """
+    if not ctx.actor_peer_id:
+        return None
+    try:
+        canonical_uri = canonicalize_uri(uri, ctx)
+    except NamespaceShapeError:
+        return None
+    parts = uri_parts(canonical_uri)
+    user_root_parts = ["user", ctx.user.user_id]
+    if parts[: len(user_root_parts)] != user_root_parts:
+        return None
+    return parts[len(user_root_parts) :]
+
+
 def resolve_uri(
     uri: str,
     ctx: Optional[RequestContext] = None,

@@ -48,8 +48,8 @@ class RequestContext:
 
     user: UserIdentifier
     role: Role
-    # Request-level peer collection filter for retrieval. This does not change
-    # tenant/user identity, session ownership, or VikingFS read/write rules.
+    # Request-level view filter for the current user's peers collection. This does
+    # not change tenant/user identity or session ownership.
     actor_peer_id: Optional[str] = None
     # Mirrors ResolvedIdentity.from_oauth. Routes that mint OAuth state
     # (OTP issuance, oauth-verify) reject callers with from_oauth=True to

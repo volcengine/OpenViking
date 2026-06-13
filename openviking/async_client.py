@@ -54,7 +54,7 @@ class AsyncOpenViking:
 
         Args:
             path: Local storage path (overrides ov.conf storage path).
-            actor_peer_id: Optional peer collection filter for retrieval.
+            actor_peer_id: Optional view filter for the current user's peer collection.
         """
         # Singleton guard for repeated initialization
         if hasattr(self, "_singleton_initialized") and self._singleton_initialized:
