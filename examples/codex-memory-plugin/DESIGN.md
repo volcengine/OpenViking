@@ -27,7 +27,7 @@ events imply "context for a particular codex `session_id` is gone".
 | Codex event | Fires when | What we learn |
 |---|---|---|
 | `SessionStart` source=`startup` | fresh codex process; `/new`; zouk daemon spawn-without-sessionId; zouk reset | new `session_id` was created |
-| `SessionStart` source=`resume` | `/resume`; short reconnect; zouk daemon spawn-with-sessionId | same `session_id` continues |
+| `SessionStart` source=`resume` | `/resume`; short reconnect; zouk daemon spawn-with-sessionId | same `session_id` continues; may need archive continuity |
 | `SessionStart` source=`clear` | `/clear` (creates a fresh thread, preserves prior thread on disk as resumable) | new `session_id`; previous one orphaned |
 | `UserPromptSubmit` | every user turn before model | recall context inject |
 | `Stop` | end of every model turn (NOT end of session) | append turns to OV session |
@@ -90,11 +90,24 @@ fired and bumped `lastUpdatedAt`; we commit it. The multi-recent case
 implies concurrent codex sessions are active; we can't tell which one (if
 any) ended, so we defer to idle TTL to clean up genuinely-dead ones.
 
-### 4. `SessionStart` source=`resume` — never commits
+### 4. `SessionStart` source=`resume` — never commits, optional archive inject
 
 Short reconnects and `/resume` re-fire `SessionStart` for the same
 `session_id`. Committing here would seal a still-active session. So
 `resume` is a no-op for commit purposes.
+
+Resume may still need continuity after `PreCompact` or idle sweep already
+committed the live OV session. If local state has `ovSessionId = null`
+(or no state file remains), the hook derives `cx-<codex-session-id>`,
+calls `GET /api/v1/sessions/{id}/context?token_budget=...`, and injects
+`latest_archive_overview` via `hookSpecificOutput.additionalContext` when
+present. The injected block includes
+`viking://user/sessions/{id}/history/` so the model can use OpenViking MCP
+read/search tools for exact prior details.
+
+If local state still has a live `ovSessionId`, resume injection is skipped:
+the session is appendable and Codex should already be resuming its own
+transcript.
 
 ### 5. Idle TTL sweep — fallback
 
@@ -191,45 +204,47 @@ Env var overrides for tuning without rebuilding:
 | `OPENVIKING_CODEX_STATE_DIR` | `~/.openviking/codex-plugin-state` | state file dir |
 | `OPENVIKING_CODEX_ACTIVE_WINDOW_MS` | `120000` (2 min) | rule-3 active window |
 | `OPENVIKING_CODEX_IDLE_TTL_MS` | `1800000` (30 min) | idle sweep TTL |
+| `OPENVIKING_RECALL_TIMEOUT_MS` | `120000` (2 min) | whole UserPromptSubmit auto-recall deadline |
+| `OPENVIKING_RESUME_ARCHIVE_INJECT` | `1` | inject latest archive summary on `source=resume` when no live OV session is open |
+| `OPENVIKING_RESUME_ARCHIVE_TOKEN_BUDGET` | `32000` | token budget for `/sessions/{id}/context` on resume |
+| `OPENVIKING_RESUME_ARCHIVE_MAX_CHARS` | `6000` | max chars injected from latest archive overview |
+| `OPENVIKING_CAPTURE_TOOL_MAX_CHARS` | `2000` | max chars retained per compressed tool call/result |
 | `OPENVIKING_DEBUG` | `0` | enable hook debug log |
 
-## Phase 2: resume context inject (not yet implemented)
+## Resume context inject
 
-When `SessionStart` source=`resume` fires for a codex `session_id` whose
-state shows `ovSessionId = null` (already committed via idle TTL or
-PreCompact), we have no live OV session to resume into. The model loses
-continuity unless the most recent committed memories are surfaced.
+`SessionStart` `source=resume` runs only the archive-inject path above. It
+never commits and never runs idle sweep. This keeps short reconnects cheap
+while still restoring continuity after a committed archive. The API shape
+is the existing session context endpoint; no archive listing UX is required
+for the model.
 
-Proposed flow:
-1. Load state for the resumed `session_id`. If `ovSessionId` is non-null,
-   no action — the session is still appendable.
-2. Otherwise list `viking://user/sessions/cx-<codex-session-id>/history/archive_*/`
-   on the OV server, take the most recent.
-3. Read its abstract (L0) / overview (L1).
-4. Emit via `hookSpecificOutput.additionalContext` so codex injects the
-   summary into the resumed turn.
-
-Deferred because (a) it requires a new OV API call shape, (b) the failure
-mode is acceptable in v0.3 (model just lacks continuity for one turn,
-recovers via auto-recall), and (c) the core commit logic above must be
-proven first.
+Injected context is intentionally a summary, not raw history. If exact
+commands, file paths, code snippets, config values, or tool outputs matter,
+the injected `viking://` URI tells the model to use OpenViking MCP
+read/search tools.
 
 ## What changed vs v0.3.1
 
-- `SessionStart` matcher widened from `"clear"` to `"clear|startup"` so the
-  active-window heuristic runs on both /clear and /new (and zouk reset).
+- `SessionStart` matcher widened from `"clear"` to `"clear|startup|resume"`
+  so the active-window heuristic runs on /clear and /new (and zouk reset),
+  while `/resume` can inject latest archive context without commit/sweep.
 - `session-start-commit.mjs` switches commit logic from "all non-current"
   to active-window heuristic.
 - Idle TTL sweep brought back, but only at the tail of
   `session-start-commit.mjs` (not every `Stop`). Default TTL 30 min.
 - `auto-capture.mjs` Stop hook guards against post-compact transcript
   shrink (resets `capturedTurnCount` to 0 if `allTurns.length` < cached).
+- Capture parsing shared by Stop and PreCompact now filters obvious hook
+  noise and compresses tool calls/results instead of dropping them or
+  storing full blobs.
+- `auto-recall.mjs` has a whole-hook timeout (default 2 min) in addition
+  to per-request timeouts.
 - All commit failure paths preserve state instead of clearing.
 - All state writes go through tmpfile + rename for crash safety.
 
 ## Open questions / future work
 
-- **Phase 2 resume context inject** (above).
 - **MCP tool `openviking_commit_pending`**: explicit commit for the model
   to call, useful when user knows they're about to exit.
 - **Subagent hook events**: kimicode has them, codex doesn't yet.

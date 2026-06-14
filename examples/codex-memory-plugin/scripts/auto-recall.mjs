@@ -23,8 +23,20 @@ import { createLogger } from "./debug-log.mjs";
 const cfg = loadConfig();
 const { log, logError } = createLogger("auto-recall");
 
-function output(obj) {
-  process.stdout.write(JSON.stringify(obj) + "\n");
+let emitted = false;
+let activeCompressor = null;
+let recallDeadline = null;
+
+function output(obj, exitAfter = false) {
+  if (emitted) return;
+  emitted = true;
+  if (recallDeadline) clearTimeout(recallDeadline);
+  const line = JSON.stringify(obj) + "\n";
+  if (exitAfter) {
+    process.stdout.write(line, () => process.exit(0));
+    return;
+  }
+  process.stdout.write(line);
 }
 
 function emit(additionalContext) {
@@ -39,6 +51,15 @@ function emit(additionalContext) {
     },
   });
 }
+
+recallDeadline = setTimeout(() => {
+  logError("recall_timeout", `timed out after ${cfg.recallTimeoutMs}ms`);
+  try {
+    activeCompressor?.kill("SIGKILL");
+  } catch { /* best effort */ }
+  output({}, true);
+}, cfg.recallTimeoutMs);
+recallDeadline.unref?.();
 
 async function fetchJSON(path, init = {}) {
   const controller = new AbortController();
@@ -338,16 +359,20 @@ async function runCodexCompressor(prompt) {
       let timedOut = false;
       let stderr = "";
       const child = spawn("codex", args, { env, stdio: ["pipe", "ignore", "pipe"] });
+      activeCompressor = child;
       const finish = (value) => {
         if (done) return;
         done = true;
+        if (activeCompressor === child) activeCompressor = null;
         clearTimeout(timer);
         resolve(value);
       };
       const timer = setTimeout(() => {
         timedOut = true;
         logError("compress_timeout", `timed out after ${cfg.recallCompressTimeoutMs}ms`);
-        child.kill("SIGKILL");
+        try {
+          child.kill("SIGKILL");
+        } catch { /* best effort */ }
       }, cfg.recallCompressTimeoutMs);
 
       child.stderr.on("data", (chunk) => {

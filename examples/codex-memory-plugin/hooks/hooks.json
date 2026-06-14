@@ -2,7 +2,7 @@
   "hooks": {
     "SessionStart": [
       {
-        "matcher": "clear|startup",
+        "matcher": "clear|startup|resume",
         "hooks": [
           {
             "type": "command",
@@ -19,7 +19,7 @@
           {
             "type": "command",
             "command": "node __OPENVIKING_PLUGIN_ROOT__/scripts/auto-recall.mjs",
-            "timeout": 15
+            "timeout": 130
           }
         ]
       }

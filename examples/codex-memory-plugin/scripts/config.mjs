@@ -28,6 +28,7 @@
  *
  * Misc env vars:
  *   OPENVIKING_TIMEOUT_MS, OPENVIKING_CAPTURE_TIMEOUT_MS
+ *   OPENVIKING_RECALL_TIMEOUT_MS, OPENVIKING_RECALL_COMPRESS_TIMEOUT_MS
  *   OPENVIKING_RECALL_LIMIT, OPENVIKING_SCORE_THRESHOLD
  *   OPENVIKING_DEBUG=1, OPENVIKING_DEBUG_LOG
  */
@@ -190,6 +191,15 @@ export function loadConfig() {
     process.env.OPENVIKING_CAPTURE_TIMEOUT_MS,
     num(cx.captureTimeoutMs, Math.max(timeoutMs * 2, 30000)),
   )));
+  const recallTimeoutMs = Math.max(1000, Math.floor(num(
+    process.env.OPENVIKING_RECALL_TIMEOUT_MS,
+    num(cx.recallTimeoutMs, 120000),
+  )));
+  const defaultRecallCompressTimeoutMs = Math.max(1000, recallTimeoutMs - 10000);
+  const recallCompressTimeoutMs = Math.max(1000, Math.floor(num(
+    process.env.OPENVIKING_RECALL_COMPRESS_TIMEOUT_MS,
+    num(cx.recallCompressTimeoutMs, defaultRecallCompressTimeoutMs),
+  )));
 
   return {
     configPath,
@@ -201,6 +211,7 @@ export function loadConfig() {
     user,
     peerId,
     timeoutMs,
+    recallTimeoutMs,
 
     autoRecall: envBool("OPENVIKING_AUTO_RECALL") ?? (cx.autoRecall !== false),
     recallLimit: Math.max(1, Math.floor(num(
@@ -221,10 +232,7 @@ export function loadConfig() {
       process.env.OPENVIKING_RECALL_COMPRESS_MODEL,
       str(cx.recallCompressModel, "gpt-5.5"),
     ),
-    recallCompressTimeoutMs: Math.max(1000, Math.floor(num(
-      process.env.OPENVIKING_RECALL_COMPRESS_TIMEOUT_MS,
-      num(cx.recallCompressTimeoutMs, 10000),
-    ))),
+    recallCompressTimeoutMs,
     recallCompressMaxInputChars: Math.max(1000, Math.floor(num(
       process.env.OPENVIKING_RECALL_COMPRESS_MAX_INPUT_CHARS,
       num(cx.recallCompressMaxInputChars, 18000),
@@ -247,6 +255,10 @@ export function loadConfig() {
       num(cx.captureMaxTurnsPerStop, 8),
     ))),
     captureTimeoutMs,
+    captureToolMaxChars: Math.max(200, Math.floor(num(
+      process.env.OPENVIKING_CAPTURE_TOOL_MAX_CHARS,
+      num(cx.captureToolMaxChars, 2000),
+    ))),
     // Default true: a "memory plugin" without assistant-side capture only sees half the
     // conversation, which makes extraction noticeably worse. Mirrors the claude-code plugin
     // (examples/claude-code-memory-plugin/scripts/config.mjs). Operators who want the old
@@ -255,6 +267,15 @@ export function loadConfig() {
     captureLastAssistantOnStop: envBool("OPENVIKING_CAPTURE_LAST_ASSISTANT_ON_STOP") ?? (cx.captureLastAssistantOnStop !== false),
 
     autoCommitOnCompact: envBool("OPENVIKING_AUTO_COMMIT_ON_COMPACT") ?? (cx.autoCommitOnCompact !== false),
+    resumeArchiveInject: envBool("OPENVIKING_RESUME_ARCHIVE_INJECT") ?? (cx.resumeArchiveInject !== false),
+    resumeArchiveTokenBudget: Math.max(0, Math.floor(num(
+      process.env.OPENVIKING_RESUME_ARCHIVE_TOKEN_BUDGET,
+      num(cx.resumeArchiveTokenBudget, 32000),
+    ))),
+    resumeArchiveMaxChars: Math.max(1000, Math.floor(num(
+      process.env.OPENVIKING_RESUME_ARCHIVE_MAX_CHARS,
+      num(cx.resumeArchiveMaxChars, 6000),
+    ))),
 
     debug,
     debugLogPath,
