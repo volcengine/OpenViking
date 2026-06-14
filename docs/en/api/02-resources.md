@@ -126,7 +126,8 @@ This endpoint is the core entry point for resource management, supporting adding
 3. Call the corresponding Parser to parse content
 4. Build the directory tree and write to AGFS
 5. Wait for semantic processing completion when `wait=true`; with `wait=false`, return a `task_id` for queue tracking
-6. Set up scheduled update task if `watch_interval` is specified
+6. If `reason` is non-empty, commit a short temporary session through the normal memory extraction pipeline so suitable user memories can reference the resource URI
+7. Set up scheduled update task if `watch_interval` is specified
 
 **Code Entry Points**:
 - `openviking/client/local.py:LocalClient.add_resource` - SDK entry (embedded)
@@ -146,7 +147,7 @@ This endpoint is the core entry point for resource management, supporting adding
 | to | string | No | - | Target Viking URI (exact location). Mutually exclusive with `parent` |
 | parent | string | No | - | Parent Viking URI (resource placed under this directory). Mutually exclusive with `to` |
 | create_parent | bool | No | False | Automatically create parent directory if it does not exist (server-side flag) |
-| reason | string | No | "" | Reason for adding the resource (for documentation and relevance improvement, experimental feature) |
+| reason | string | No | "" | Reason for adding the resource. When non-empty, OpenViking runs it through the normal session memory extraction pipeline with the resource URI and records resource references in the resulting memory |
 | instruction | string | No | "" | Processing instructions for semantic extraction (experimental feature) |
 | wait | bool | No | False | Whether to wait for semantic processing and vectorization to complete before returning |
 | timeout | float | No | None | Timeout in seconds, only effective when `wait=True` |
@@ -167,6 +168,8 @@ This endpoint is the core entry point for resource management, supporting adding
 - Raw HTTP calls for local files require first uploading via [temp_upload](#temp_upload) to obtain `temp_file_id`
 - When `to` is specified and the target already exists, triggers incremental update
 - Only Git repository sources use full background import when `wait=false`; OpenViking performs repository preflight and target planning before returning the `task_id`.
+- Memory generated from `reason` is extracted through the same pipeline as `session.commit`. It uses `reason`, the `viking://resources/...` URI, available source name, and available directory abstract; it does not inspect or expand the full resource content. OpenViking writes to existing memory types such as `entities`, `events`, or `preferences`, not a dedicated resource memory directory.
+- When deleting `viking://resources/...`, OpenViking scans the current user's memories before deletion, removes the matching resource URI and content introduced by that `reason`, and refreshes the semantic index for the affected memories.
 - Other sources with `wait=false` finish source parsing, target resolution, and AGFS writes before returning. Only semantic and embedding queues continue asynchronously.
 - When `watch_interval > 0`, the watch task binds to `to` if provided; otherwise it binds to the `root_uri` returned by this import. If no stable `root_uri` is available, the request fails and asks for an explicit `to`.
 - For local directory inputs, scanning respects `.gitignore` files (root and nested) with standard Git semantics; `ignore_dirs`, `include`, and `exclude` further refine what is ingested.

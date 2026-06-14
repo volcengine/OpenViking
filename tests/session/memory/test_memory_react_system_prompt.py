@@ -49,6 +49,37 @@ class TestProviderInstruction:
         assert "profile/preferences/entities/events" in instruction
         assert "cases/patterns/tools/skills" in instruction
 
+    def test_instruction_omits_resource_uri_handling_without_resource_uri(self):
+        provider = SessionExtractContextProvider(
+            messages=[Message(id="m1", role="user", parts=[TextPart("我喜欢越前龙马。")])]
+        )
+
+        instruction = provider.instruction()
+
+        assert "Resource URI Handling" not in instruction
+
+    def test_instruction_includes_resource_uri_handling_for_user_scoped_resource_uri(self):
+        provider = SessionExtractContextProvider(
+            messages=[
+                Message(
+                    id="m1",
+                    role="user",
+                    parts=[
+                        TextPart(
+                            "这张图是越前龙马："
+                            "viking://user/ryoma/peers/fuji/resources/images/yueqian_jpeg"
+                        )
+                    ],
+                )
+            ]
+        )
+
+        instruction = provider.instruction()
+
+        assert "Resource URI Handling" in instruction
+        assert "viking://user/{user_id}/resources/..." in instruction
+        assert "viking://user/{user_id}/peers/{peer_id}/resources/..." in instruction
+
 
 class TestSkillToolCallExposure:
     def test_assemble_conversation_includes_skill_tool_call(self):
@@ -160,6 +191,46 @@ class TestSkillToolCallExposure:
                 role="assistant",
                 parts=[TextPart("한국어 응답이 섞였습니다")],
             ),
+        ]
+
+        provider = SessionExtractContextProvider(messages=messages)
+
+        assert provider._detect_language() == "zh-CN"
+
+    def test_detect_language_ignores_resource_uri_latin_segments(self):
+        messages = [
+            Message(
+                id="m1",
+                role="user",
+                parts=[
+                    TextPart(
+                        "这是越前龙马的照片 "
+                        "viking://resources/images/2026/06/12/yueqian_jpeg"
+                    )
+                ],
+            )
+        ]
+
+        provider = SessionExtractContextProvider(messages=messages)
+
+        assert provider._detect_language() == "zh-CN"
+
+    def test_detect_language_uses_resource_reason_not_metadata_labels(self):
+        messages = [
+            Message(
+                id="m1",
+                role="user",
+                parts=[
+                    TextPart(
+                        "## Resource Addition\n"
+                        "Resource URI: viking://resources/images/2026/06/12/yueqian_jpeg\n"
+                        "Source name: yueqian.jpeg\n"
+                        "Added at: 2026-06-11T17:26:21.332768+00:00\n"
+                        "Resource abstract: high-quality anime-style illustration\n"
+                        "User reason: 这是越前龙马的照片"
+                    )
+                ],
+            )
         ]
 
         provider = SessionExtractContextProvider(messages=messages)

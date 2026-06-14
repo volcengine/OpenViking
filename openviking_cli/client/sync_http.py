@@ -401,9 +401,15 @@ class SyncHTTPClient:
         """Create directory."""
         run_async(self._async_client.mkdir(uri, description=description))
 
-    def rm(self, uri: str, recursive: bool = False) -> None:
+    def rm(
+        self,
+        uri: str,
+        recursive: bool = False,
+        wait: bool = False,
+        timeout: Optional[float] = None,
+    ) -> None:
         """Remove resource."""
-        run_async(self._async_client.rm(uri, recursive))
+        run_async(self._async_client.rm(uri, recursive, wait=wait, timeout=timeout))
 
     def mv(self, from_uri: str, to_uri: str) -> None:
         """Move resource."""

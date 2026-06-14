@@ -264,7 +264,32 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 label: "ov rm viking://scratch --recursive",
                 description: "Remove a directory subtree.",
             },
+            HelpItem {
+                label: "ov rm viking://resources/images/foo --recursive --wait",
+                description: "Remove a subtree and wait for generated overviews to refresh.",
+            },
         ],
+        arguments: &[HelpItem {
+            label: "<uri>",
+            description: "Resource URI to remove.",
+        }],
+        common_options: &[HelpItem {
+            label: "-r, --recursive",
+            description: "Required for directory/subtree removal.",
+        }],
+        advanced_options: &[
+            HelpItem {
+                label: "--wait",
+                description: "Wait for semantic refresh after deletion.",
+            },
+            HelpItem {
+                label: "--timeout <seconds>",
+                description: "Maximum time to wait with --wait.",
+            },
+        ],
+        subcommands: &[],
+=======
+>>>>>>> main
         next_steps: &[
             HelpItem {
                 label: "ov ls <parent-uri>",
