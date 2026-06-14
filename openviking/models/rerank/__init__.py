@@ -8,12 +8,14 @@ Provides rerank functionality for hierarchical retrieval with multiple provider 
 - cohere: Cohere Rerank v3.5 API
 - litellm: LiteLLM rerank (supports multiple providers)
 - openai: OpenAI-compatible rerank API
+- tei: Hugging Face Text Embeddings Inference rerank API
 """
 
 from openviking.models.rerank.base import RerankBase
 from openviking.models.rerank.cohere_rerank import CohereRerankClient
 from openviking.models.rerank.litellm_rerank import LiteLLMRerankClient
 from openviking.models.rerank.openai_rerank import OpenAIRerankClient
+from openviking.models.rerank.tei_rerank import TEIRerankClient
 from openviking.models.rerank.volcengine_rerank import RerankClient
 
 __all__ = [
@@ -22,4 +24,5 @@ __all__ = [
     "CohereRerankClient",
     "LiteLLMRerankClient",
     "OpenAIRerankClient",
+    "TEIRerankClient",
 ]
