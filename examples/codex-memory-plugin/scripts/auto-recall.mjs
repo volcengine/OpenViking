@@ -39,15 +39,30 @@ function output(obj, exitAfter = false) {
   process.stdout.write(line);
 }
 
+function wrapRecallContext(additionalContext) {
+  const body = sanitizeInjectedText(additionalContext).trim();
+  if (!body) return "";
+  return [
+    '<openviking-context source="auto-recall" format="digest">',
+    body,
+    "</openviking-context>",
+  ].join("\n");
+}
+
 function emit(additionalContext) {
   if (!additionalContext) {
+    output({});
+    return;
+  }
+  const wrappedContext = wrapRecallContext(additionalContext);
+  if (!wrappedContext) {
     output({});
     return;
   }
   output({
     hookSpecificOutput: {
       hookEventName: "UserPromptSubmit",
-      additionalContext,
+      additionalContext: wrappedContext,
     },
   });
 }
@@ -282,8 +297,9 @@ function truncateText(text, maxChars) {
 }
 
 function sanitizeInjectedText(text) {
-  const legacyTag = ["relevant", "memories"].join("-");
-  return String(text || "").replace(new RegExp(`</?${legacyTag}>`, "gi"), "legacy memory wrapper");
+  return String(text || "")
+    .replace(/<\/?relevant-memor(?:y|ies)\b[^>]*>/gi, "legacy memory wrapper")
+    .replace(/<\/?openviking-context\b[^>]*>/gi, "openviking context marker");
 }
 
 function isNoRelevantMemory(text) {

@@ -275,7 +275,7 @@ export function sanitizeCapturedText(text) {
   value = value
     .replace(/\u0000/g, "")
     .replace(/<openviking-context\b[^>]*>[\s\S]*?<\/openviking-context>/gi, " ")
-    .replace(/<relevant-memories\b[^>]*>[\s\S]*?<\/relevant-memories>/gi, " ")
+    .replace(/<relevant-memor(?:y|ies)\b[^>]*>[\s\S]*?<\/relevant-memor(?:y|ies)>/gi, " ")
     .replace(/^\s*Sender\s*\([^)]+\)\s*```[\s\S]*?```\s*/gim, " ")
     .replace(/^\s*Conversation (?:metadata|info):\s*```[\s\S]*?```\s*/gim, " ")
     .replace(/^\s*\[?\d{4}-\d{2}-\d{2}[T ][^\]\n]{3,80}\]?\s*/gm, "")

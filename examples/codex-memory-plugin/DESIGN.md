@@ -144,6 +144,27 @@ and appends each new user/assistant turn to the OV session for this codex
 State is updated:
 `{ovSessionId, capturedTurnCount, lastUpdatedAt: now}`. Never commits.
 
+## Injected context boundary
+
+`UserPromptSubmit` stdin `prompt` is the user's prompt only. Recalled
+memory is sent back through `hookSpecificOutput.additionalContext`, then
+Codex injects it into the model turn. Transcript capture may later see
+that injected context adjacent to the prompt, so plugin-generated recall
+and resume context are wrapped in a deterministic boundary:
+
+```text
+<openviking-context source="auto-recall" format="digest">
+OpenViking memory digest:
+- ...
+</openviking-context>
+```
+
+The compressor is still instructed not to generate XML/HTML wrappers. The
+wrapper is added by the hook after compression so capture can strip it
+mechanically. Legacy `<relevant-memory>` / `<relevant-memories>` blocks and
+unwrapped `OpenViking memory digest:` blocks are stripped as backward
+compatibility fallbacks.
+
 ## Edge cases handled
 
 ### Post-compact transcript shrink
@@ -236,8 +257,8 @@ read/search tools.
 - `auto-capture.mjs` Stop hook guards against post-compact transcript
   shrink (resets `capturedTurnCount` to 0 if `allTurns.length` < cached).
 - Capture parsing shared by Stop and PreCompact now filters obvious hook
-  noise and compresses tool calls/results instead of dropping them or
-  storing full blobs.
+  noise, strips deterministic OpenViking context wrappers, and compresses
+  tool calls/results instead of dropping them or storing full blobs.
 - `auto-recall.mjs` has a whole-hook timeout (default 2 min) in addition
   to per-request timeouts.
 - All commit failure paths preserve state instead of clearing.

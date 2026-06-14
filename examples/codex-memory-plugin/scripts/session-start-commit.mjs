@@ -62,10 +62,15 @@ function emitAdditionalContext(additionalContext) {
     noop();
     return;
   }
+  const wrappedContext = wrapResumeContext(additionalContext);
+  if (!wrappedContext) {
+    noop();
+    return;
+  }
   output({
     hookSpecificOutput: {
       hookEventName: "SessionStart",
-      additionalContext,
+      additionalContext: wrappedContext,
     },
   });
 }
@@ -118,6 +123,18 @@ function buildResumeArchiveContext(ovSessionId, context) {
     body,
     "",
     `More detail: use the OpenViking MCP read/search tools with ${archiveUri} if you need exact prior commands, files, tool outputs, or messages.`,
+  ].join("\n");
+}
+
+function wrapResumeContext(additionalContext) {
+  const body = String(additionalContext || "")
+    .replace(/<\/?openviking-context\b[^>]*>/gi, "openviking context marker")
+    .trim();
+  if (!body) return "";
+  return [
+    '<openviking-context source="session-resume" format="archive-digest">',
+    body,
+    "</openviking-context>",
   ].join("\n");
 }
 
