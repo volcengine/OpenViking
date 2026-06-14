@@ -7,7 +7,7 @@ This is the Codex counterpart to [`claude-code-memory-plugin`](../claude-code-me
 - **Auto-recall** relevant memories on every `UserPromptSubmit` and inject them via `hookSpecificOutput.additionalContext`
 - **Incremental capture on `Stop`** (turn end): append the new user/assistant turns to a deterministic OpenViking session id `cx-<codex_session_id>`. No commit per turn.
 - **Commit on `PreCompact`**: trigger OpenViking's memory extractor on the full pre-compact transcript before Codex summarizes it.
-- **Commit on `SessionStart` (source=startup|clear)**: active-window heuristic — if exactly one *other* state file was touched within the last 2 min, commit it (the just-ended session). On `≥2`, defer to idle-TTL sweep at the tail. `source=resume` is a hard no-op (short reconnects re-fire `resume` and we don't want to commit a still-active session). See `DESIGN.md` for the full decision tree.
+- **Commit on `SessionStart` (source=startup|clear)**: active-window heuristic — if exactly one *other* state file was touched within the last 2 min, commit it (the just-ended session). On `≥2`, defer to idle-TTL sweep at the tail. `source=resume` never commits or sweeps; if the live OV session was already committed, it may inject the latest archive summary for continuity. See `DESIGN.md` for the full decision tree.
 
 It also wires Codex up to OpenViking's native `/mcp` endpoint (streamable HTTP, Bearer auth), so the model has direct access to the `search`, `store`, `read`, `list`, `grep`, `glob`, `forget`, `add_resource`, and `health` tools — no local MCP server process to maintain.
 
@@ -109,6 +109,10 @@ All plugin behavior is controlled by `OPENVIKING_*` environment variables — se
 ```sh
 # ~/.zshrc — examples
 export OPENVIKING_RECALL_LIMIT=6
+export OPENVIKING_RECALL_COMPRESS=1
+export OPENVIKING_RECALL_COMPRESS_MODEL=gpt-5.3-codex-spark
+export OPENVIKING_RECALL_COMPRESS_THINKING=default
+export OPENVIKING_RECALL_TIMEOUT_MS=120000
 export OPENVIKING_CAPTURE_ASSISTANT_TURNS=1
 export OPENVIKING_AUTO_COMMIT_ON_COMPACT=1
 export OPENVIKING_DEBUG=1
@@ -128,14 +132,15 @@ Earlier plugin versions configured tuning fields under a `codex` block in `~/.op
    └──┬─────────────────┬────────────────┬───────────────────┬────┘
       │                 │                │                   │
  SessionStart      UserPromptSubmit    Stop              PreCompact
- (startup|clear)        │              (per turn)            │
+ (startup|clear|resume) │              (per turn)            │
       │                 │                │                   │
  ┌────▼──────────┐ ┌────▼──────┐ ┌──────▼──────┐ ┌──────────▼──────┐
  │ session-start │ │ auto-     │ │ auto-       │ │ pre-compact-    │
  │ -commit.mjs   │ │ recall.mjs│ │ capture.mjs │ │ capture.mjs     │
- │ (active-win   │ │ (search)  │ │ (append +   │ │ (commit + reset │
- │ heuristic +   │ │           │ │ no commit)  │ │ ovSessionId)    │
- │ idle TTL)     │ │           │ │             │ │                 │
+ │ (active-win   │ │ (search + │ │ (append +   │ │ (commit + reset │
+ │ heuristic +   │ │ compress) │ │ no commit)  │ │ ovSessionId)    │
+ │ idle TTL +    │ │           │ │             │ │                 │
+ │ resume inject)│ │           │ │             │ │                 │
  └────┬──────────┘ └────┬──────┘ └──────┬──────┘ └──────────┬──────┘
       │                 │                │                   │
       │             ┌───▼────────────────▼───────────────────▼──┐
@@ -160,9 +165,9 @@ For details on OpenViking's MCP endpoint, tools, and protocol, see the [MCP Inte
 
 ### SessionStart commit logic (source=startup|clear, heuristic + idle TTL)
 
-Codex fires `SessionStart` with one of three `source` values: `startup` (fresh process / `/new` / zouk daemon spawn-without-sessionId), `resume` (`/resume` or short reconnect), and `clear` (`/clear` — the previous transcript is orphaned and a new session_id is created). `resume` is the *only* source we treat as a hard no-op; on `startup` and `clear` we run the same active-window heuristic.
+Codex fires `SessionStart` with one of three `source` values: `startup` (fresh process / `/new` / zouk daemon spawn-without-sessionId), `resume` (`/resume` or short reconnect), and `clear` (`/clear` — the previous transcript is orphaned and a new session_id is created). `resume` never commits or sweeps; on `startup` and `clear` we run the same active-window heuristic.
 
-`hooks.json` registers `SessionStart` with `matcher: "clear|startup"` so codex's dispatcher invokes the script on both sources. `session-start-commit.mjs` gates internally on `source ∈ {startup, clear}` as defense-in-depth.
+`hooks.json` registers `SessionStart` with `matcher: "clear|startup|resume"` so codex's dispatcher invokes the script on all three relevant sources. `session-start-commit.mjs` gates internally so only `startup` and `clear` commit/sweep.
 
 On `startup` or `clear`, the script:
 
@@ -174,19 +179,39 @@ On `startup` or `clear`, the script:
 
 On any /commit failure (OV unreachable, non-2xx, timeout) we **preserve state** (don't `clearState`) so the next sweep can retry.
 
+On `resume`, the script skips commit/sweep. If local state has no live `ovSessionId`, it reads `/api/v1/sessions/{cx-session-id}/context` and injects the latest committed archive overview. The injected block includes a `viking://user/sessions/{cx-session-id}/history/` URI and tells the model to use the OpenViking MCP `read`/`search` tools for exact prior commands, file paths, tool outputs, or messages. Set `OPENVIKING_RESUME_ARCHIVE_INJECT=0` to disable this.
+
 ### Auto-recall (every UserPromptSubmit)
 
 `auto-recall.mjs` reads `prompt` from stdin, calls `/api/v1/search/find`, ranks results, reads full content for top-ranked leaves, and emits:
 
 ```json
-{ "hookSpecificOutput": { "hookEventName": "UserPromptSubmit", "additionalContext": "<relevant-memories>...</relevant-memories>" } }
+{ "hookSpecificOutput": { "hookEventName": "UserPromptSubmit", "additionalContext": "<openviking-context source=\"auto-recall\" format=\"digest\">\nOpenViking memory digest:\n- ...\n</openviking-context>" } }
 ```
 
-Codex injects `additionalContext` into the model turn, so memories arrive without an extra tool call.
+Codex injects `additionalContext` into the model turn, so memories arrive without an extra tool call. By default the hook runs a Codex compression pass over recalled candidates before injection, dropping weakly-related memories and preserving only a short digest. If the compressor returns `NO_RELEVANT_MEMORY`, empty text, or non-digest chatter, the hook emits `{}` and injects nothing. The whole hook has its own `OPENVIKING_RECALL_TIMEOUT_MS` deadline (default 120s); the bundled `hooks.json` gives Codex 130s so the script can return `{}` before Codex kills it. Digests may keep `viking://` source URIs and point the model at the OpenViking MCP `read`/`search` tools for details when the inline bullet is intentionally short. The outer `<openviking-context ...>` wrapper is deterministic, not compressor-generated; capture strips it to distinguish recalled context from the user's prompt. Set `OPENVIKING_RECALL_COMPRESS=0` to fall back to deterministic short formatting.
+
+The compressor profile is recreated on every `SessionStart` and cached under `OPENVIKING_CODEX_STATE_DIR` so cross-session config changes are picked up but each `UserPromptSubmit` does not probe models. Default fallback order:
+
+1. configured `OPENVIKING_RECALL_COMPRESS_MODEL` + `OPENVIKING_RECALL_COMPRESS_THINKING`
+2. `gpt-5.3-codex-spark` with thinking `default`
+3. `gpt-5.5` with thinking `low`
+4. off (deterministic digest, no `codex exec` compression)
+
+Config knobs:
+
+| Env var | Default | Meaning |
+|---|---|---|
+| `OPENVIKING_RECALL_COMPRESS` | `1` | Set `0` / `off` to disable `codex exec` compression. |
+| `OPENVIKING_RECALL_COMPRESS_MODEL` | unset | Custom first-choice compressor model. Set `off` to disable compression. |
+| `OPENVIKING_RECALL_COMPRESS_THINKING` | unset | Custom `model_reasoning_effort`; `default` omits the Codex config override. Alias: `OPENVIKING_RECALL_COMPRESS_REASONING_EFFORT`. |
+| `OPENVIKING_RECALL_COMPRESS_DETECT_ON_STARTUP` | `1` | Recreate/cache compressor profile in `SessionStart`. |
+| `OPENVIKING_RECALL_COMPRESS_DETECT_TIMEOUT_MS` | `15000` | Per-candidate startup probe timeout. |
+| `OPENVIKING_RECALL_COMPRESS_DETECT_TTL_MS` | `604800000` | Cache TTL used by `UserPromptSubmit` when reading the latest profile. |
 
 ### Stop (turn end → `add_message`, NOT `commit`)
 
-`auto-capture.mjs` derives one long-lived OpenViking session id per Codex `session_id` as `cx-<safe-session-id>` and incrementally appends every new user/assistant turn via `/api/v1/sessions/{id}/messages`. The `/messages` endpoint auto-creates the session on first append. Per-codex-session state lives at `~/.openviking/codex-plugin-state/<safe-session-id>.json`. No `/commit` per turn — that would over-fragment memory extraction.
+`auto-capture.mjs` derives one long-lived OpenViking session id per Codex `session_id` as `cx-<safe-session-id>` and incrementally appends every new user/assistant turn via `/api/v1/sessions/{id}/messages`. The `/messages` endpoint auto-creates the session on first append. Per-codex-session state lives at `~/.openviking/codex-plugin-state/<safe-session-id>.json`. No `/commit` per turn — that would over-fragment memory extraction. Capture sanitizes obvious hook noise, metadata wrappers, and plugin-injected `<openviking-context ...>` blocks before append; tool calls/results are retained as compact `[tool-call ...]` / `[tool-result ...]` lines capped by `OPENVIKING_CAPTURE_TOOL_MAX_CHARS` (default 2000).
 
 ### PreCompact (deterministic commit)
 
@@ -228,7 +253,9 @@ codex-memory-plugin/
 │                                   installer renders to absolute paths)
 ├── scripts/
 │   ├── config.mjs               # Shared config loader (ovcli.conf + env)
+│   ├── capture-utils.mjs        # Transcript text extraction, filtering, tool compression
 │   ├── debug-log.mjs            # Structured JSONL logger
+│   ├── recall-compressor-profile.mjs # Compressor profile detection/cache
 │   ├── session-state.mjs        # Per-codex-session OV session state
 │   ├── auto-recall.mjs          # UserPromptSubmit hook (REST /search/find)
 │   ├── auto-capture.mjs         # Stop hook (REST /sessions/{id}/messages)
