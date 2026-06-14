@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -12,6 +12,26 @@ from .transaction_config import TransactionConfig
 from .vectordb_config import VectorDBBackendConfig
 
 logger = get_logger(__name__)
+
+
+class SemanticProcessorConfig(BaseModel):
+    """Configuration for the semantic processor queue worker."""
+
+    max_concurrent_llm: int = Field(
+        default=64,
+        ge=1,
+        description="Maximum number of concurrent LLM calls during semantic processing",
+    )
+    max_retries_per_uri: int = Field(
+        default=3,
+        ge=1,
+        description=(
+            "Maximum consecutive failures for a single URI before it is dropped "
+            "from the queue. Prevents runaway token consumption from retry loops."
+        ),
+    )
+
+    model_config = {"extra": "forbid"}
 
 
 class StorageConfig(BaseModel):
@@ -41,6 +61,11 @@ class StorageConfig(BaseModel):
     vectordb: VectorDBBackendConfig = Field(
         default_factory=VectorDBBackendConfig,
         description="VectorDB backend configuration",
+    )
+
+    semantic_processor: SemanticProcessorConfig = Field(
+        default_factory=SemanticProcessorConfig,
+        description="Semantic processor queue worker configuration",
     )
 
     params: Dict[str, Any] = Field(
