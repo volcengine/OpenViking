@@ -16,6 +16,15 @@ from openviking.session.memory.session_extract_context_provider import (
 from openviking.session.memory.utils.language import resolve_output_language_from_text
 
 _SYSTEM_HIDDEN_FIELDS = {"source_extraction_id", "source_extraction_ids"}
+_MAX_EXTRA_CANDIDATE_FILES = 10
+_PATCH_METADATA_KEYS = ("base_version", "rationale", "confidence")
+_PATCH_GRADIENT_METADATA_KEYS = (
+    "trajectory_outcome",
+    "rubric_passed",
+    "training_category",
+    "category",
+    "supersedes",
+)
 
 
 @dataclass(slots=True)
@@ -165,7 +174,7 @@ is an existing file, put it in delete_ids; if it is only a new proposal, omit it
         """Resolve required files plus semantic-search candidates for this merge."""
 
         required_uris = _dedupe_uris(self.required_file_uris)
-        max_extra_candidate_files = max(5, len(required_uris))
+        max_extra_candidate_files = min(_MAX_EXTRA_CANDIDATE_FILES, max(5, len(required_uris)))
         search_limit = max_extra_candidate_files * 2
         candidate_uris = await self._search_candidate_file_uris(limit=search_limit)
         extra_uris: list[str] = []
@@ -229,7 +238,9 @@ def _render_one_field_diff_patch(index: int, patch: PatchMergePatch) -> str:
         f"target_name: {patch.target_name}",
     ]
     if patch.metadata:
-        lines.append(f"metadata: {_compact_value(_hide_system_fields(patch.metadata))}")
+        compact_metadata = _compact_patch_metadata(patch.metadata)
+        if compact_metadata:
+            lines.append(f"metadata: {_compact_value(compact_metadata)}")
     field_diffs = _field_diffs(patch.before_file, patch.after_file)
     if not field_diffs:
         lines.extend(["", "No changed fields."])
@@ -321,6 +332,51 @@ def _hide_system_fields(value: Any) -> Any:
     if isinstance(value, list):
         return [_hide_system_fields(item) for item in value]
     return value
+
+
+def _compact_patch_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Keep only metadata that helps reconcile patch proposals.
+
+    Full gradient metadata can contain large duplicated fields (links, uris, and
+    memory_fields). The patch body already renders the target URI and field
+    changes, while source links are merged outside the LLM response. Keep only
+    decision signals that help the merge model rank or reconcile proposals.
+    """
+
+    cleaned = _hide_system_fields(dict(metadata or {}))
+    result = {
+        key: cleaned[key]
+        for key in _PATCH_METADATA_KEYS
+        if key in cleaned and _metadata_value_is_useful(cleaned[key])
+    }
+
+    gradient_metadata = cleaned.get("gradient_metadata")
+    if isinstance(gradient_metadata, dict):
+        compact_gradient_metadata = {
+            key: gradient_metadata[key]
+            for key in _PATCH_GRADIENT_METADATA_KEYS
+            if key in gradient_metadata and _metadata_value_is_useful(gradient_metadata[key])
+        }
+        if compact_gradient_metadata:
+            result["gradient_metadata"] = compact_gradient_metadata
+
+    # Some callers may place these signals at the top level instead of under
+    # gradient_metadata.
+    for key in _PATCH_GRADIENT_METADATA_KEYS:
+        if key in cleaned and key not in result and _metadata_value_is_useful(cleaned[key]):
+            result[key] = cleaned[key]
+
+    return result
+
+
+def _metadata_value_is_useful(value: Any) -> bool:
+    if value is None:
+        return False
+    if value == "":
+        return False
+    if isinstance(value, (list, dict, tuple, set)) and not value:
+        return False
+    return True
 
 
 def _dedupe_uris(uris: list[str] | None) -> list[str]:

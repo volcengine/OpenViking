@@ -135,6 +135,104 @@ async def test_patch_merge_context_provider_prefetch_searches_and_reads_extra_ca
 
 
 @pytest.mark.asyncio
+async def test_patch_merge_context_provider_caps_extra_candidate_reads_at_ten():
+    schema = MemoryTypeSchema(
+        memory_type="experiences",
+        description="Experiences",
+        directory="viking://user/{{ user_space }}/memories/experiences",
+        filename_template="{{ experience_name }}.md",
+        fields=[],
+    )
+    required_uris = [
+        f"viking://user/u/memories/experiences/required_{idx}.md" for idx in range(12)
+    ]
+    provider = PatchMergeContextProvider(
+        memory_type="experiences",
+        required_file_uris=required_uris,
+        patches=[
+            PatchMergePatch(
+                before_file=None,
+                after_file=_memory_file(
+                    name="books",
+                    uri="viking://user/u/memories/experiences/books.md",
+                    content="用户喜欢阅读科幻书籍，尤其是太空歌剧。",
+                ),
+            )
+        ],
+    )
+    provider._registry = SimpleNamespace(get=lambda name: schema if name == "experiences" else None)
+    provider._ctx = SimpleNamespace(user=SimpleNamespace(user_id="u"))
+    provider.search_files = AsyncMock(
+        return_value=[
+            *required_uris,
+            *[
+                f"viking://user/u/memories/experiences/candidate_{idx}.md"
+                for idx in range(20)
+            ],
+        ]
+    )
+    provider.read_file = AsyncMock(
+        return_value={
+            "memory_type": "experiences",
+            "experience_name": "candidate",
+            "content": "candidate content",
+        }
+    )
+
+    await provider.prefetch()
+
+    _, search_kwargs = provider.search_files.await_args
+    assert search_kwargs["limit"] == 20
+    assert provider.read_file.await_count == 22
+    read_uris = [call.args[0] for call in provider.read_file.await_args_list]
+    assert required_uris[-1] in read_uris
+    assert "viking://user/u/memories/experiences/candidate_9.md" in read_uris
+    assert "viking://user/u/memories/experiences/candidate_10.md" not in read_uris
+
+
+@pytest.mark.asyncio
+async def test_patch_merge_context_provider_renders_compact_patch_metadata():
+    provider = PatchMergeContextProvider(
+        memory_type="experiences",
+        required_file_uris=[],
+        patches=[
+            PatchMergePatch(
+                before_file=None,
+                after_file=_memory_file(
+                    name="new_booking",
+                    uri=None,
+                    content="created line",
+                ),
+                metadata={
+                    "base_version": 3,
+                    "rationale": "useful reason",
+                    "confidence": 0.9,
+                    "links": [{"to_uri": "viking://user/u/memories/trajectories/t.md"}],
+                    "memory_fields": {"content": "created line"},
+                    "uris": ["viking://user/u/memories/experiences/new_booking.md"],
+                    "gradient_metadata": {
+                        "trajectory_outcome": "success",
+                        "rubric_passed": True,
+                        "training_category": "tau2:airline:train:1",
+                        "memory_fields": {"content": "duplicated"},
+                    },
+                },
+            )
+        ],
+    )
+
+    messages = await provider.prefetch()
+    content = messages[0]["content"]
+
+    assert 'metadata: {"base_version": 3' in content
+    assert '"rationale": "useful reason"' in content
+    assert '"trajectory_outcome": "success"' in content
+    assert "links" not in content
+    assert "memory_fields" not in content
+    assert "duplicated" not in content
+
+
+@pytest.mark.asyncio
 async def test_patch_merge_context_provider_renders_create_patch_from_dev_null():
     provider = PatchMergeContextProvider(
         memory_type="experiences",
