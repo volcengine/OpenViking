@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from openviking.core.retrieval_targets import default_target_directories
 from openviking.models.embedder.base import EmbedResult, embed_compat
 from openviking.models.rerank import RerankClient
+from openviking.retrieve.graph_loader import load_graph_data_for_uris
 from openviking.retrieve.memory_lifecycle import hotness_score
 from openviking.retrieve.retrieval_stats import get_stats_collector
 from openviking.server.identity import RequestContext
@@ -57,14 +58,16 @@ class HierarchicalRetriever:
         embedder: Optional[Any],
         rerank_config: Optional[RerankConfig] = None,
         retrieval_config: Optional[RetrievalConfig] = None,
+        viking_fs: Optional[Any] = None,
     ):
-        """Initialize hierarchical retriever with rerank_config.
+        """Initialize hierarchical retriever with rerank_config and optional graph data.
 
         Args:
             storage: VikingVectorIndexBackend instance
             embedder: Embedder instance (supports dense/sparse/hybrid)
             rerank_config: Rerank configuration (optional, will fallback to vector search only)
             retrieval_config: Retrieval ranking configuration.
+            viking_fs: VikingFS instance for graph relation loading (optional).
         """
         self.vector_store = storage
         self.embedder = embedder
@@ -72,6 +75,9 @@ class HierarchicalRetriever:
         self.retrieval_config = retrieval_config or RetrievalConfig()
         self.hotness_alpha = self.retrieval_config.hotness_alpha
         self.score_propagation_alpha = self.retrieval_config.score_propagation_alpha
+        self.viking_fs = viking_fs
+        self.graph_alpha = self.retrieval_config.graph_alpha
+        self.graph_saturation_k = self.retrieval_config.graph_saturation_k
 
         # Use rerank threshold if available, otherwise use a default
         self.threshold = rerank_config.threshold if rerank_config else 0
@@ -603,6 +609,37 @@ class HierarchicalRetriever:
 
         # Re-sort by blended score so hotness boost can change ranking
         results.sort(key=lambda x: x.score, reverse=True)
+
+        # Graph-aware scoring: boost results with more graph connections
+        if self.graph_alpha > 0 and self.viking_fs is not None and results:
+            # Lazy load: only for top candidates to avoid I/O on every item
+            graph_candidate_count = max(len(results) * 2, self.MAX_RELATIONS)
+            graph_candidates = results[:graph_candidate_count]
+
+            uri_to_graph = await load_graph_data_for_uris(
+                uris=[mc.uri for mc in graph_candidates],
+                viking_fs=self.viking_fs,
+                ctx=ctx,
+                max_relations_per_uri=self.MAX_RELATIONS,
+            )
+
+            for mc in graph_candidates:
+                gd = uri_to_graph.get(mc.uri)
+                if gd is None:
+                    graph_score = 0.0
+                    mc.relations = []
+                else:
+                    graph_score = math.tanh(gd.total_count / self.graph_saturation_k)
+                    mc.relations = gd.relations[: self.MAX_RELATIONS]
+
+                ga = self.graph_alpha
+                mc.score = (1 - ga) * mc.score + ga * graph_score
+                if not math.isfinite(mc.score):
+                    mc.score = 0.0
+
+            # Re-sort after graph blending
+            results.sort(key=lambda x: x.score, reverse=True)
+
         return results
 
     @classmethod
