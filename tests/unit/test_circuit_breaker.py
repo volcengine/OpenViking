@@ -13,7 +13,7 @@ from openviking.utils.circuit_breaker import (
     classify_api_error,
 )
 from openviking.utils.model_retry import (
-    ERROR_CLASS_PERMANENT,
+    ERROR_CLASS_AUTH,
     ERROR_CLASS_TRANSIENT,
     ERROR_CLASS_UNKNOWN,
 )
@@ -22,30 +22,30 @@ from openviking.utils.model_retry import (
 class TestClassifyApiError:
     """Test API error classification."""
 
-    def test_classify_403_as_permanent(self):
-        """Test 403 Forbidden is classified as permanent."""
+    def test_classify_403_as_auth(self):
+        """Test 403 Forbidden is classified as auth (credential-level)."""
         error = Exception("403 Forbidden")
-        assert classify_api_error(error) == ERROR_CLASS_PERMANENT
+        assert classify_api_error(error) == ERROR_CLASS_AUTH
 
-    def test_classify_401_as_permanent(self):
-        """Test 401 Unauthorized is classified as permanent."""
+    def test_classify_401_as_auth(self):
+        """Test 401 Unauthorized is classified as auth (credential-level)."""
         error = Exception("401 Unauthorized")
-        assert classify_api_error(error) == ERROR_CLASS_PERMANENT
+        assert classify_api_error(error) == ERROR_CLASS_AUTH
 
-    def test_classify_forbidden_as_permanent(self):
-        """Test 'Forbidden' string is classified as permanent."""
+    def test_classify_forbidden_as_auth(self):
+        """Test 'Forbidden' string is classified as auth."""
         error = Exception("Access Forbidden")
-        assert classify_api_error(error) == ERROR_CLASS_PERMANENT
+        assert classify_api_error(error) == ERROR_CLASS_AUTH
 
-    def test_classify_unauthorized_as_permanent(self):
-        """Test 'Unauthorized' string is classified as permanent."""
+    def test_classify_unauthorized_as_auth(self):
+        """Test 'Unauthorized' string is classified as auth."""
         error = Exception("Unauthorized access")
-        assert classify_api_error(error) == ERROR_CLASS_PERMANENT
+        assert classify_api_error(error) == ERROR_CLASS_AUTH
 
-    def test_classify_account_overdue_as_permanent(self):
-        """Test 'AccountOverdue' string is classified as permanent."""
+    def test_classify_account_overdue_as_auth(self):
+        """Test 'AccountOverdue' string is classified as auth."""
         error = Exception("AccountOverdue error")
-        assert classify_api_error(error) == ERROR_CLASS_PERMANENT
+        assert classify_api_error(error) == ERROR_CLASS_AUTH
 
     def test_classify_429_as_transient(self):
         """Test 429 TooManyRequests is classified as transient."""
@@ -106,7 +106,7 @@ class TestClassifyApiError:
         """Test classification checks error cause."""
         error = Exception("Primary error")
         error.__cause__ = Exception("403 Forbidden")
-        assert classify_api_error(error) == ERROR_CLASS_PERMANENT
+        assert classify_api_error(error) == ERROR_CLASS_AUTH
 
     def test_classify_error_with_transient_cause(self):
         """Test classification checks error cause for transient."""
@@ -114,10 +114,10 @@ class TestClassifyApiError:
         error.__cause__ = Exception("429 Rate limit")
         assert classify_api_error(error) == ERROR_CLASS_TRANSIENT
 
-    def test_permanent_takes_precedence_over_transient(self):
-        """Test permanent error patterns are checked first."""
+    def test_auth_takes_precedence_over_transient(self):
+        """Test auth error patterns are checked before transient."""
         error = Exception("403 Forbidden 429 timeout")
-        assert classify_api_error(error) == ERROR_CLASS_PERMANENT
+        assert classify_api_error(error) == ERROR_CLASS_AUTH
 
 
 class TestCircuitBreaker:

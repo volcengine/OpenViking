@@ -3,18 +3,19 @@
 """Tests for VLM failover/backup configuration functionality."""
 
 import time
-import pytest
-from unittest.mock import Mock, AsyncMock, patch
+from unittest.mock import AsyncMock, Mock
 
-from openviking.models.vlm.base import FailoverVLM, VLMResponse, PrimaryBackupSwitcher
+import pytest
+
+from openviking.models.vlm.base import FailoverVLM, PrimaryBackupSwitcher
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
 
 class TestVLMBackupConfig:
-    """Tests for VLMConfig backup field validation."""
+    """Tests for VLMConfig backup field validation and migration."""
 
-    def test_backup_config_allowed(self):
-        """Test that backup configuration is allowed when not recursive."""
+    def test_backup_config_migrated_to_credentials(self):
+        """Test that backup configuration is migrated to credentials list."""
         backup_config = VLMConfig(
             model="backup-model",
             api_key="backup-key",
@@ -26,11 +27,25 @@ class TestVLMBackupConfig:
             provider="volcengine",
             backup=backup_config,
         )
-        assert config.backup is not None
-        assert config.backup.model == "backup-model"
+        # After migration, backup should be None but credentials should have 2 entries
+        assert config.backup is None
+        assert len(config.credentials) == 2
+        assert config.credentials[0].id == "legacy-primary"
+        assert config.credentials[0].provider == "volcengine"
+        assert config.credentials[0].api_key == "primary-key"
+        assert config.credentials[0].model == "primary-model"
+        assert config.credentials[1].id == "legacy-backup"
+        assert config.credentials[1].provider == "openai"
+        assert config.credentials[1].api_key == "backup-key"
+        assert config.credentials[1].model == "backup-model"
 
-    def test_recursive_backup_config_rejected(self):
-        """Test that recursive backup configurations are rejected."""
+    def test_recursive_backup_config_not_possible(self):
+        """Test that recursive backup configurations are automatically prevented by migration.
+
+        With the new multi-credential architecture, when a config with backup is created,
+        it gets migrated to credentials format and backup is set to None. This means
+        recursive backups are automatically prevented.
+        """
         nested_backup = VLMConfig(
             model="nested-model",
             api_key="nested-key",
@@ -42,13 +57,22 @@ class TestVLMBackupConfig:
             provider="openai",
             backup=nested_backup,
         )
-        with pytest.raises(ValueError, match="recursive backups are not allowed"):
-            VLMConfig(
-                model="primary-model",
-                api_key="primary-key",
-                provider="volcengine",
-                backup=backup_config,
-            )
+        # After migration, backup_config.backup should be None
+        assert backup_config.backup is None
+        # And it should have 2 credentials (primary + backup)
+        assert len(backup_config.credentials) == 2
+
+        # Now creating a config with backup=backup_config works (no recursion)
+        # because backup_config.backup is already None
+        config = VLMConfig(
+            model="primary-model",
+            api_key="primary-key",
+            provider="volcengine",
+            backup=backup_config,
+        )
+        # The outer config gets its own 2 credentials (primary + backup_config's top-level)
+        assert len(config.credentials) == 2
+        assert config.backup is None
 
     def test_backup_without_own_backup_allowed(self):
         """Test that backup config without its own backup is allowed."""
@@ -63,8 +87,151 @@ class TestVLMBackupConfig:
             provider="volcengine",
             backup=backup_config,
         )
-        # Should not raise
-        config.validate_no_recursive_backup()
+        # Should not raise and should migrate to credentials
+        assert len(config.credentials) == 2
+
+    def test_per_credential_model_overrides_parent_model(self):
+        """Each credential's `model` field should override parent VLMConfig.model
+        when building the per-credential VLM config dict."""
+        from openviking_cli.utils.config.vlm_config import VLMCredential
+
+        config = VLMConfig(
+            model="parent-model",
+            credentials=[
+                VLMCredential(
+                    id="cred-a",
+                    provider="volcengine",
+                    model="endpoint-a",
+                    api_key="key-a",
+                    api_base="https://example.com/a",
+                ),
+                VLMCredential(
+                    id="cred-b",
+                    provider="volcengine",
+                    api_key="key-b",
+                    api_base="https://example.com/b",
+                ),
+            ],
+        )
+
+        dict_a = config._build_vlm_config_dict_for_credential(config.credentials[0])
+        dict_b = config._build_vlm_config_dict_for_credential(config.credentials[1])
+
+        assert dict_a["model"] == "endpoint-a"
+        # Falls back to parent model when credential.model is not set.
+        assert dict_b["model"] == "parent-model"
+
+
+class TestLegacyProvidersDictMigration:
+    """Tests for migrating legacy ``providers: {name: {...}}`` configs into credentials.
+
+    Regression coverage for: when only ``providers`` was set (without top-level
+    ``provider``/``api_key``), ``_normalize_credentials`` previously produced a
+    credential with provider=None and api_key=None, which made ``is_available()``
+    return False even though the config was valid in the legacy code path.
+    """
+
+    def test_providers_only_single_provider_migrates_provider_and_api_key(self):
+        """``providers={openai: {api_key: sk}}`` should yield a usable default credential."""
+        cfg = VLMConfig(
+            model="gpt-4o-mini",
+            providers={"openai": {"api_key": "sk-test", "api_base": "https://api.example.com"}},
+        )
+
+        assert len(cfg.credentials) == 1
+        cred = cfg.credentials[0]
+        assert cred.id == "default"
+        assert cred.provider == "openai"
+        assert cred.api_key == "sk-test"
+        assert cred.api_base == "https://api.example.com"
+        assert cred.model == "gpt-4o-mini"
+
+        # is_available() must return True - this was the original blocking bug
+        assert cfg.is_available() is True
+
+    def test_providers_only_default_provider_picks_correct_one(self):
+        """When ``default_provider`` is set, the matching providers entry is used."""
+        cfg = VLMConfig(
+            model="gpt-4o-mini",
+            default_provider="openai",
+            providers={
+                "openai": {"api_key": "sk-openai"},
+                "azure": {"api_key": "sk-azure", "api_base": "https://azure.example.com"},
+            },
+        )
+
+        assert len(cfg.credentials) == 1
+        cred = cfg.credentials[0]
+        assert cred.provider == "openai"
+        assert cred.api_key == "sk-openai"
+        assert cfg.is_available() is True
+
+    def test_top_level_provider_with_providers_dict_merges_correctly(self):
+        """``provider=openai`` plus ``providers={openai: {api_key: ...}}`` works."""
+        cfg = VLMConfig(
+            model="gpt-4o",
+            provider="openai",
+            providers={"openai": {"api_key": "sk-merged"}},
+        )
+
+        assert len(cfg.credentials) == 1
+        cred = cfg.credentials[0]
+        assert cred.provider == "openai"
+        assert cred.api_key == "sk-merged"
+        assert cfg.is_available() is True
+
+    def test_legacy_top_level_api_key_still_works(self):
+        """Pure top-level legacy config (provider + api_key) keeps working."""
+        cfg = VLMConfig(
+            model="gpt-4o",
+            provider="openai",
+            api_key="sk-top-level",
+        )
+
+        assert len(cfg.credentials) == 1
+        cred = cfg.credentials[0]
+        assert cred.provider == "openai"
+        assert cred.api_key == "sk-top-level"
+        assert cfg.is_available() is True
+
+    def test_providers_only_propagates_extra_fields(self):
+        """extra_headers / extra_request_body / api_version / stream all propagate."""
+        cfg = VLMConfig(
+            model="gpt-4o",
+            providers={
+                "openai": {
+                    "api_key": "sk",
+                    "api_base": "https://api.example.com",
+                    "api_version": "2024-01-01",
+                    "extra_headers": {"X-Trace": "1"},
+                    "extra_request_body": {"foo": "bar"},
+                    "stream": True,
+                }
+            },
+        )
+
+        cred = cfg.credentials[0]
+        assert cred.provider == "openai"
+        assert cred.api_key == "sk"
+        assert cred.api_base == "https://api.example.com"
+        assert cred.api_version == "2024-01-01"
+        assert cred.extra_headers == {"X-Trace": "1"}
+        assert cred.extra_request_body == {"foo": "bar"}
+        assert cred.stream is True
+
+    def test_explicit_credentials_take_precedence_over_legacy(self):
+        """When ``credentials`` is set, legacy providers dict is not migrated again."""
+        cfg = VLMConfig(
+            model="gpt-4o",
+            credentials=[
+                {"id": "explicit", "provider": "openai", "api_key": "sk-explicit"},
+            ],
+            providers={"openai": {"api_key": "sk-legacy"}},
+        )
+
+        assert len(cfg.credentials) == 1
+        assert cfg.credentials[0].id == "explicit"
+        assert cfg.credentials[0].api_key == "sk-explicit"
 
 
 class TestFailoverVLM:
@@ -288,9 +455,7 @@ class TestFailoverVLM:
         primary.model = "primary-model"
         primary.provider = "volcengine"
         primary.get_completion_async = AsyncMock(
-            side_effect=Exception(
-                'API Error: 429 {"error":{"code":"AccountQuotaExceeded"}}'
-            )
+            side_effect=Exception('API Error: 429 {"error":{"code":"AccountQuotaExceeded"}}')
         )
 
         backup = Mock()
@@ -313,23 +478,17 @@ class TestFailoverVLM:
         primary.model = "primary-model"
         primary.provider = "volcengine"
         primary.get_vision_completion_async = AsyncMock(
-            side_effect=Exception(
-                'API Error: 429 {"error":{"code":"AccountQuotaExceeded"}}'
-            )
+            side_effect=Exception('API Error: 429 {"error":{"code":"AccountQuotaExceeded"}}')
         )
 
         backup = Mock()
         backup.model = "backup-model"
         backup.provider = "openai"
-        backup.get_vision_completion_async = AsyncMock(
-            return_value="backup async vision response"
-        )
+        backup.get_vision_completion_async = AsyncMock(return_value="backup async vision response")
 
         failover = FailoverVLM(primary, backup)
 
-        result = await failover.get_vision_completion_async(
-            prompt="describe", images=["test.jpg"]
-        )
+        result = await failover.get_vision_completion_async(prompt="describe", images=["test.jpg"])
 
         assert result == "backup async vision response"
 
@@ -356,8 +515,8 @@ class TestVLMConfigWithBackup:
         assert instance is mock_vlm
         mock_factory.create.assert_called_once()
 
-    def test_config_with_backup_creates_failover_instance(self, monkeypatch):
-        """Test that config with backup creates a FailoverVLM instance."""
+    def test_config_with_backup_creates_multicredential_instance(self, monkeypatch):
+        """Test that config with backup creates a MultiCredentialVLM instance."""
         mock_factory = Mock()
         mock_primary = Mock()
         mock_backup = Mock()
@@ -379,9 +538,10 @@ class TestVLMConfigWithBackup:
 
         instance = config.get_vlm_instance()
 
-        # Should be a FailoverVLM instance
-        assert hasattr(instance, "primary")
-        assert hasattr(instance, "backup")
+        # Should be a MultiCredentialVLM instance
+        assert hasattr(instance, "active_credential_index")
+        assert hasattr(instance, "_vlm_instances")
+        assert len(instance._vlm_instances) == 2
 
 
 class TestPrimaryBackupSwitcher:
@@ -597,10 +757,12 @@ class TestFailoverVLMAutomaticFailback:
         primary = Mock()
         primary.model = "primary-model"
         primary.provider = "volcengine"
-        primary.get_completion_async = AsyncMock(side_effect=[
-            Exception("quota exceeded"),
-            "primary async is back!",
-        ])
+        primary.get_completion_async = AsyncMock(
+            side_effect=[
+                Exception("quota exceeded"),
+                "primary async is back!",
+            ]
+        )
 
         backup = Mock()
         backup.model = "backup-model"

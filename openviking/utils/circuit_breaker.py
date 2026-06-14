@@ -8,6 +8,7 @@ import threading
 import time
 
 from openviking.utils.model_retry import (
+    ERROR_CLASS_AUTH,
     ERROR_CLASS_INPUT_TOO_LARGE,
     ERROR_CLASS_PERMANENT,
     ERROR_CLASS_QUOTA_EXCEEDED,
@@ -114,7 +115,11 @@ class CircuitBreaker:
                 )
                 return
 
-            if error_class in (ERROR_CLASS_PERMANENT, ERROR_CLASS_QUOTA_EXCEEDED):
+            if error_class in (
+                ERROR_CLASS_PERMANENT,
+                ERROR_CLASS_AUTH,
+                ERROR_CLASS_QUOTA_EXCEEDED,
+            ):
                 self._state = _STATE_OPEN
                 self._current_reset_timeout = self._base_reset_timeout
                 logger.info(f"Circuit breaker tripped immediately on {error_class} error: {error}")
