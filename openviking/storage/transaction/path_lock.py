@@ -800,22 +800,37 @@ class PathLockEngine:
             timeout: Maximum seconds to wait for each lock.
             src_is_dir: Whether the source is a directory (TREE lock)
                 or a file (ExactPathLock on source and destination path).
+
+        On partial failure only the locks acquired *by this call* are rolled
+        back; locks the owner already held (e.g. an outer subtree lock borrowed
+        from a transaction handle) are preserved. Releasing the whole owner here
+        would tear down that borrowed lock and cascade into "Failed to acquire
+        mv lock" for every sibling move sharing the handle (issue #1047).
         """
+        locks_before = set(owner.locks)
+
+        async def _rollback() -> None:
+            newly_acquired = [lp for lp in owner.locks if lp not in locks_before]
+            if newly_acquired:
+                await self.release_selected(owner, newly_acquired)
+
         if src_is_dir:
             if not await self.acquire_tree(src_path, owner, timeout=timeout):
                 logger.warning(f"[MV] Failed to acquire TREE lock on source: {src_path}")
+                await _rollback()
                 return False
             if not await self.acquire_exact_path(dst_path, owner, timeout=timeout):
                 logger.warning(f"[MV] Failed to acquire exact lock on destination: {dst_path}")
-                await self.release(owner)
+                await _rollback()
                 return False
         else:
             if not await self.acquire_exact_path(src_path, owner, timeout=timeout):
                 logger.warning(f"[MV] Failed to acquire exact lock on source: {src_path}")
+                await _rollback()
                 return False
             if not await self.acquire_exact_path(dst_path, owner, timeout=timeout):
                 logger.warning(f"[MV] Failed to acquire exact lock on destination: {dst_path}")
-                await self.release(owner)
+                await _rollback()
                 return False
 
         logger.debug(f"[MV] Locks acquired: {src_path} -> {dst_path}")
