@@ -187,12 +187,7 @@ export async function detectRecallCompressorProfile(cfg, logger = {}) {
     log?.("compress_profile_skip", { reason: "detect disabled" });
     return loadCachedRecallCompressorProfile(cfg);
   }
-
-  const cached = await loadCachedRecallCompressorProfile(cfg);
-  if (cached) {
-    log?.("compress_profile_cache_hit", cached);
-    return cached;
-  }
+  log?.("compress_profile_recreate", { reason: "session_start" });
 
   if (recallCompressionExplicitlyOff(cfg)) {
     const profile = { enabled: false, source: "configured_off" };

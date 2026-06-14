@@ -229,9 +229,9 @@ Env var overrides for tuning without rebuilding:
 | `OPENVIKING_RECALL_COMPRESS` | `1` | set `0` / `off` to skip `codex exec` compression |
 | `OPENVIKING_RECALL_COMPRESS_MODEL` | unset | custom first-choice compressor model; `off` disables compression |
 | `OPENVIKING_RECALL_COMPRESS_THINKING` | unset | custom `model_reasoning_effort`; `default` means omit override; alias `OPENVIKING_RECALL_COMPRESS_REASONING_EFFORT` |
-| `OPENVIKING_RECALL_COMPRESS_DETECT_ON_STARTUP` | `1` | detect/cache compressor profile during `SessionStart` |
+| `OPENVIKING_RECALL_COMPRESS_DETECT_ON_STARTUP` | `1` | recreate/cache compressor profile during every `SessionStart` |
 | `OPENVIKING_RECALL_COMPRESS_DETECT_TIMEOUT_MS` | `15000` | per-candidate compressor probe timeout |
-| `OPENVIKING_RECALL_COMPRESS_DETECT_TTL_MS` | `604800000` (7 days) | compressor profile cache TTL |
+| `OPENVIKING_RECALL_COMPRESS_DETECT_TTL_MS` | `604800000` (7 days) | cache TTL used by `UserPromptSubmit` reads |
 | `OPENVIKING_RESUME_ARCHIVE_INJECT` | `1` | inject latest archive summary on `source=resume` when no live OV session is open |
 | `OPENVIKING_RESUME_ARCHIVE_TOKEN_BUDGET` | `32000` | token budget for `/sessions/{id}/context` on resume |
 | `OPENVIKING_RESUME_ARCHIVE_MAX_CHARS` | `6000` | max chars injected from latest archive overview |
@@ -264,8 +264,9 @@ codex -m <model> -c 'model_reasoning_effort="low"' exec ...
 `thinking=default` omits the `model_reasoning_effort` override. This is
 important for model families whose default effort is tuned by Codex.
 
-Model availability is probed at `SessionStart`, not in every
-`UserPromptSubmit`. The detector writes
+Model availability is re-probed at every `SessionStart`, not in every
+`UserPromptSubmit`. Recreating the profile on each session start catches
+cross-session env/config changes. The detector writes
 `recall-compressor-profile.json` under `OPENVIKING_CODEX_STATE_DIR` and
 auto-recall reads that cache. Cache misses in auto-recall use the first
 candidate directly and fall back to deterministic digest if `codex exec`
@@ -298,8 +299,8 @@ Configured `off` (`OPENVIKING_RECALL_COMPRESS=0`, model `off`, or thinking
   tool calls/results instead of dropping them or storing full blobs.
 - `auto-recall.mjs` has a whole-hook timeout (default 2 min) in addition
   to per-request timeouts.
-- Recall compression model selection is detected once at startup and cached
-  so each user prompt does not probe Codex model availability.
+- Recall compression model selection is recreated at each SessionStart and
+  cached so each user prompt does not probe Codex model availability.
 - All commit failure paths preserve state instead of clearing.
 - All state writes go through tmpfile + rename for crash safety.
 

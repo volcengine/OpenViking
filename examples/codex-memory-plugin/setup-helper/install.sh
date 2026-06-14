@@ -320,22 +320,6 @@ NODE
 info "Enabled plugin + features.plugin_hooks in $CODEX_CONFIG"
 
 CACHE_DIR="$HOME/.codex/plugins/cache/$MARKETPLACE_NAME/$PLUGIN_NAME/$PLUGIN_VERSION"
-mkdir -p "$(dirname "$CACHE_DIR")"
-rm -rf "$CACHE_DIR"
-cp -R "$PLUGIN_DIR" "$CACHE_DIR"
-
-# Codex 0.130 does not inject CODEX_PLUGIN_ROOT into hook subprocess env and
-# does not let hooks.json declare a cwd, so relative paths in hooks.json
-# resolve against the user's cwd (typically ~). Render the placeholder
-# __OPENVIKING_PLUGIN_ROOT__ into the cache copy's absolute path. The repo's
-# checked-in hooks.json keeps the placeholder; only the cached copy is
-# rewritten at install time.
-HOOKS_JSON="$CACHE_DIR/hooks/hooks.json"
-if [ -f "$HOOKS_JSON" ]; then
-  CACHE_ESC="$(printf '%s' "$CACHE_DIR" | sed -e 's/[\\/&]/\\&/g')"
-  sed -i.bak -e "s/__OPENVIKING_PLUGIN_ROOT__/$CACHE_ESC/g" "$HOOKS_JSON"
-  rm -f "${HOOKS_JSON}.bak"
-fi
 
 # Detect whether the user has an OpenViking API key configured anywhere.
 # When they don't (typical for a local unauth OV), we render .mcp.json
@@ -360,13 +344,32 @@ detect_api_key() {
 }
 HAS_API_KEY="$(detect_api_key)"
 
-# Render the OpenViking /mcp URL into the cached .mcp.json (and drop the
-# bearer_token_env_var line in no-auth mode). The repo's checked-in
-# .mcp.json keeps the placeholder + always-present bearer field; the cache
-# copy is what Codex actually loads.
-MCP_JSON="$CACHE_DIR/.mcp.json"
-if [ -f "$MCP_JSON" ]; then
-  node - "$MCP_JSON" "$MCP_URL" "$HAS_API_KEY" <<'NODE'
+render_plugin_cache() {
+  mkdir -p "$(dirname "$CACHE_DIR")"
+  rm -rf "$CACHE_DIR"
+  cp -R "$PLUGIN_DIR" "$CACHE_DIR"
+
+  # Codex 0.130 does not inject CODEX_PLUGIN_ROOT into hook subprocess env and
+  # does not let hooks.json declare a cwd, so relative paths in hooks.json
+  # resolve against the user's cwd (typically ~). Render the placeholder
+  # __OPENVIKING_PLUGIN_ROOT__ into the cache copy's absolute path. The repo's
+  # checked-in hooks.json keeps the placeholder; only the cached copy is
+  # rewritten at install time.
+  local hooks_json="$CACHE_DIR/hooks/hooks.json"
+  if [ -f "$hooks_json" ]; then
+    local cache_esc
+    cache_esc="$(printf '%s' "$CACHE_DIR" | sed -e 's/[\\/&]/\\&/g')"
+    sed -i.bak -e "s/__OPENVIKING_PLUGIN_ROOT__/$cache_esc/g" "$hooks_json"
+    rm -f "${hooks_json}.bak"
+  fi
+
+  # Render the OpenViking /mcp URL into the cached .mcp.json (and drop the
+  # bearer_token_env_var line in no-auth mode). The repo's checked-in
+  # .mcp.json keeps the placeholder + always-present bearer field; the cache
+  # copy is what Codex actually loads.
+  local mcp_json="$CACHE_DIR/.mcp.json"
+  if [ -f "$mcp_json" ]; then
+    node - "$mcp_json" "$MCP_URL" "$HAS_API_KEY" <<'NODE'
 const fs = require("node:fs");
 const [, , file, url, hasKey] = process.argv;
 const j = JSON.parse(fs.readFileSync(file, "utf8"));
@@ -377,7 +380,10 @@ if (hasKey !== "1") {
 }
 fs.writeFileSync(file, JSON.stringify(j, null, 2) + "\n");
 NODE
-fi
+  fi
+}
+
+render_plugin_cache
 info "Plugin cache: $CACHE_DIR"
 info "MCP auth: $([ "$HAS_API_KEY" = "1" ] && echo "Bearer (OPENVIKING_API_KEY)" || echo "none (unauthenticated)")"
 
@@ -428,7 +434,7 @@ RECALL_COMPRESS_MODEL_SETTING="$(sanitize_marker_value "${OPENVIKING_RECALL_COMP
 RECALL_COMPRESS_THINKING_SETTING="$(sanitize_marker_value "${OPENVIKING_RECALL_COMPRESS_THINKING:-$(read_marker_export OPENVIKING_RECALL_COMPRESS_THINKING)}")"
 
 if [ -t 0 ]; then
-  info 'Recall compressor profile: auto-detect at Codex SessionStart, cached for later UserPromptSubmit hooks.'
+  info 'Recall compressor profile: re-detect at each Codex SessionStart, cached for later UserPromptSubmit hooks.'
   info 'Auto fallback order: configured model/thinking -> gpt-5.3-codex-spark/default -> gpt-5.5/low -> off.'
   if [ -n "$RECALL_COMPRESS_SETTING$RECALL_COMPRESS_MODEL_SETTING$RECALL_COMPRESS_THINKING_SETTING" ]; then
     info "Current recall compressor env: compress=${RECALL_COMPRESS_SETTING:-auto} model=${RECALL_COMPRESS_MODEL_SETTING:-auto} thinking=${RECALL_COMPRESS_THINKING_SETTING:-auto}"
@@ -572,6 +578,99 @@ if [ ! -f "$OVCLI_CONF" ] && [ "$HAS_API_KEY" != "1" ]; then
   warn "$OVCLI_CONF was not found and no OPENVIKING_API_KEY in env."
   warn "Installed in unauthenticated mode targeting $MCP_URL."
   warn 'To enable Bearer auth later, create ovcli.conf with an api_key and re-run.'
+fi
+
+validate_plugin_install() {
+  local issues=()
+  local marketplace_link="$MARKETPLACE_ROOT/$PLUGIN_NAME"
+  local hooks_json="$CACHE_DIR/hooks/hooks.json"
+  local mcp_json="$CACHE_DIR/.mcp.json"
+
+  if [ ! -L "$marketplace_link" ] || [ "$(readlink "$marketplace_link" 2>/dev/null || true)" != "$PLUGIN_DIR" ]; then
+    issues+=("marketplace symlink does not point at $PLUGIN_DIR")
+  fi
+  if ! codex plugin list 2>/dev/null | grep -E -q "${PLUGIN_ID}[[:space:]]+installed, enabled"; then
+    issues+=("codex plugin list does not show $PLUGIN_ID as installed, enabled")
+  fi
+  if [ ! -d "$CACHE_DIR" ]; then
+    issues+=("plugin cache directory missing: $CACHE_DIR")
+  fi
+  if [ ! -f "$hooks_json" ]; then
+    issues+=("cached hooks.json missing")
+  else
+    grep -q "__OPENVIKING_PLUGIN_ROOT__" "$hooks_json" && issues+=("cached hooks.json still contains __OPENVIKING_PLUGIN_ROOT__")
+    grep -q "$CACHE_DIR/scripts/session-start-commit.mjs" "$hooks_json" || issues+=("SessionStart hook path is not rendered to cache dir")
+    grep -q '"matcher": "clear|startup|resume"' "$hooks_json" || issues+=("SessionStart matcher is not clear|startup|resume")
+    grep -q '"timeout": 70' "$hooks_json" || issues+=("SessionStart timeout is not 70s")
+    grep -q '"timeout": 130' "$hooks_json" || issues+=("UserPromptSubmit timeout is not 130s")
+  fi
+  if [ ! -f "$mcp_json" ]; then
+    issues+=("cached .mcp.json missing")
+  else
+    grep -q "__OPENVIKING_MCP_URL__" "$mcp_json" && issues+=("cached .mcp.json still contains __OPENVIKING_MCP_URL__")
+    if [ "$HAS_API_KEY" != "1" ] && grep -q "bearer_token_env_var" "$mcp_json"; then
+      issues+=("cached .mcp.json keeps bearer_token_env_var without configured API key")
+    fi
+  fi
+
+  for script in \
+    auto-recall.mjs \
+    auto-capture.mjs \
+    pre-compact-capture.mjs \
+    session-start-commit.mjs \
+    recall-compressor-profile.mjs \
+    config.mjs
+  do
+    if [ ! -f "$CACHE_DIR/scripts/$script" ]; then
+      issues+=("cached script missing: scripts/$script")
+    elif ! node --check "$CACHE_DIR/scripts/$script" >/dev/null 2>&1; then
+      issues+=("cached script fails node --check: scripts/$script")
+    fi
+  done
+
+  if [ "${#issues[@]}" -eq 0 ]; then
+    return 0
+  fi
+  for issue in "${issues[@]}"; do
+    warn "Install validation: $issue"
+  done
+  return 1
+}
+
+reset_plugin_cache_setup() {
+  rm -f "$MARKETPLACE_ROOT/$PLUGIN_NAME"
+  ln -s "$PLUGIN_DIR" "$MARKETPLACE_ROOT/$PLUGIN_NAME"
+  codex plugin marketplace add "$MARKETPLACE_ROOT" >/dev/null 2>&1 || true
+  render_plugin_cache
+}
+
+heading '6. Install validation'
+if validate_plugin_install; then
+  info 'Plugin install looks valid.'
+else
+  if [ -t 0 ]; then
+    ask 'Reset/reinstall plugin symlink/cache and validate again? [Y/n] '
+    read -r RESET_REPLY || RESET_REPLY=""
+    case "$RESET_REPLY" in
+      n|N|no|No|NO)
+        err 'Plugin install validation failed. Re-run the installer or reset the plugin cache before using Codex.'
+        exit 1
+        ;;
+      *)
+        info 'Resetting plugin symlink/cache.'
+        reset_plugin_cache_setup
+        if validate_plugin_install; then
+          info 'Plugin install looks valid after reset.'
+        else
+          err 'Plugin install validation still failed after reset. Re-run the installer with a clean plugin setup.'
+          exit 1
+        fi
+        ;;
+    esac
+  else
+    err 'Plugin install validation failed in non-interactive mode. Re-run interactively to reset, or clear the plugin cache and reinstall.'
+    exit 1
+  fi
 fi
 
 # ----- Done -----
