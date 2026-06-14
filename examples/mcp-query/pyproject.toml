@@ -7,4 +7,5 @@ requires-python = ">=3.13"
 dependencies = [
     "openviking>=0.1.6",
     "mcp>=1.8.0",
+    "requests>=2.32.5",
 ]
