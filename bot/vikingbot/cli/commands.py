@@ -505,6 +505,9 @@ Reminder message to deliver:
                 OutboundMessage(
                     session_key=session_key,
                     content=response or "",
+                    metadata={
+                        "reply_to": session_key.chat_id,  # 明确设置 reply_to 字段
+                    },
                 )
             )
         return response
