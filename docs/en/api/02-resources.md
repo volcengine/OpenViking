@@ -170,6 +170,7 @@ This endpoint is the core entry point for resource management, supporting adding
 - Other sources with `wait=false` finish source parsing, target resolution, and AGFS writes before returning. Only semantic and embedding queues continue asynchronously.
 - When `watch_interval > 0`, the watch task binds to `to` if provided; otherwise it binds to the `root_uri` returned by this import. If no stable `root_uri` is available, the request fails and asks for an explicit `to`.
 - For local directory inputs, scanning respects `.gitignore` files (root and nested) with standard Git semantics; `ignore_dirs`, `include`, and `exclude` further refine what is ingested.
+- Markdown image embeds are preserved when their targets resolve inside the imported tree: `![alt](./img/a.png)` references and HTML `<img src="./img/a.png">` tags are copied next to the parsed Markdown section and rewritten to `viking://...` URIs after persistence. Remote URLs, existing `viking://` URIs, data URIs, code spans/blocks, and out-of-scope or missing local files are left unchanged.
 - To create or update plain text directly, use [content/write](03-filesystem.md#write) instead of `add_resource`. Semantic processing and embeddings are refreshed automatically after resource ingestion and content writes.
 
 #### 3. Usage Examples

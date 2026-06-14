@@ -163,6 +163,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 - 其他来源在 `wait=false` 时会在响应前完成来源解析、目标解析和 AGFS 写入，仅 semantic 与 embedding 队列继续异步处理。
 - `watch_interval > 0` 时，如果指定了 `to`，监控任务绑定该目标；如果未指定 `to`，监控任务绑定本次导入返回的 `root_uri`。如果无法得到稳定 `root_uri`，请求会报错并要求显式传 `to`。
 - 本地目录输入会遵循 `.gitignore`（根目录和子目录，标准 Git 语义）；`ignore_dirs`、`include`、`exclude` 会在此基础上进一步过滤。
+- 当 Markdown 图片目标能解析到本次导入的目录树内时，系统会保留图片引用：`![alt](./img/a.png)` 和 HTML `<img src="./img/a.png">` 会把图片复制到解析后的 Markdown 分段旁边，并在持久化后改写为 `viking://...` URI。远端 URL、已有 `viking://` URI、data URI、代码行/代码块内引用，以及越界或不存在的本地文件会保持原样。
 - 如果要直接创建或更新纯文本内容，请使用 [content/write](03-filesystem.md#write)，不要使用 `add_resource`。资源导入和内容写入后都会自动刷新语义与 embedding。
 
 #### 3. 使用示例
