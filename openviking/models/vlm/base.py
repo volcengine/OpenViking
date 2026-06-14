@@ -105,6 +105,7 @@ class VLMBase(ABC):
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
+        response_format: Optional[Dict[str, Any]] = None,
     ) -> Union[str, VLMResponse]:
         """Get text completion asynchronously
 
@@ -114,6 +115,9 @@ class VLMBase(ABC):
             tools: Optional list of tool definitions in OpenAI function format
             tool_choice: Optional tool choice mode ("auto", "none", or specific tool name)
             messages: Optional list of message dicts (takes precedence over prompt)
+            response_format: Optional OpenAI-style response_format, e.g.
+                ``{"type": "json_object"}`` to force valid JSON output. Ignored
+                when the backend or model does not support it.
 
         Returns:
             str if no tools provided, VLMResponse if tools provided
@@ -478,6 +482,7 @@ class FailoverVLM(VLMBase):
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
+        response_format: Optional[Dict[str, Any]] = None,
     ) -> Union[str, VLMResponse]:
         """Get text completion asynchronously with failover support."""
         return await self._get_completion_with_failover_async(
@@ -487,6 +492,7 @@ class FailoverVLM(VLMBase):
             tools=tools,
             tool_choice=tool_choice,
             messages=messages,
+            response_format=response_format,
         )
 
     def get_vision_completion(

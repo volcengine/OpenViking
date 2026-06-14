@@ -219,6 +219,7 @@ class OpenAIVLM(VLMBase):
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
         thinking: Optional[bool] = None,
+        response_format: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         effective_thinking = self.thinking if thinking is None else thinking
         kwargs_messages = messages or [{"role": "user", "content": prompt}]
@@ -238,6 +239,8 @@ class OpenAIVLM(VLMBase):
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
+        if response_format:
+            kwargs["response_format"] = response_format
         return kwargs
 
     def _build_vision_kwargs(
@@ -325,11 +328,14 @@ class OpenAIVLM(VLMBase):
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
+        response_format: Optional[Dict[str, Any]] = None,
     ) -> Union[str, VLMResponse]:
         """Get text completion asynchronously"""
         effective_thinking = self.thinking if thinking is None else thinking
         client = self.get_async_client()
-        kwargs = self._build_text_kwargs(prompt, tools, tool_choice, messages, effective_thinking)
+        kwargs = self._build_text_kwargs(
+            prompt, tools, tool_choice, messages, effective_thinking, response_format
+        )
 
         async def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
