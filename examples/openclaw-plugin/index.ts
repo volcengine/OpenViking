@@ -445,9 +445,6 @@ function inferRecallResourceType(uri: string | undefined): RecallResourceType | 
   if (uri.startsWith("viking://session/") || uri.includes("/sessions/")) {
     return "session";
   }
-  if (uri.startsWith("viking://agent/")) {
-    return "agent";
-  }
   if (uri.startsWith("viking://user/")) {
     return "user";
   }
@@ -976,6 +973,7 @@ const contextEnginePlugin = {
           `traceId: ${entry.traceId}`,
           `query: ${entry.trigger.query}`,
           `resourceTypes: ${entry.resourceTypes.join(", ")}`,
+          `searches: ${entry.searches.map((search) => search.contextType ?? search.resourceType).join(", ")}`,
           `stats: candidates=${entry.stats.candidateCount}, selected=${entry.stats.selectedCount}, injected=${entry.stats.injectedCount}`,
           selected ? `selected:\n${selected}` : "selected: (none)",
         ].join("\n");
@@ -1209,6 +1207,7 @@ const contextEnginePlugin = {
             ].slice(0, cfg.traceRecallMaxResultsPerSearch);
             searches.push({
               resourceType,
+              contextType,
               targetUriResolved: targetUri,
               limit,
               durationMs: Date.now() - started,
@@ -1219,6 +1218,7 @@ const contextEnginePlugin = {
           } catch (err) {
             searches.push({
               resourceType,
+              contextType,
               targetUriResolved: targetUri,
               limit,
               durationMs: Date.now() - started,
@@ -1783,6 +1783,7 @@ const contextEnginePlugin = {
                 ].slice(0, cfg.traceRecallMaxResultsPerSearch);
                 memoryRecallSearches.push({
                   resourceType: search.resourceType,
+                  contextType: search.contextType,
                   targetUriInput: search.targetUri,
                   targetUriResolved: search.targetUri,
                   limit: requestLimit,
@@ -1794,6 +1795,7 @@ const contextEnginePlugin = {
               } else {
                 memoryRecallSearches.push({
                   resourceType: search.resourceType,
+                  contextType: search.contextType,
                   targetUriInput: search.targetUri,
                   targetUriResolved: search.targetUri,
                   limit: requestLimit,
@@ -1843,6 +1845,7 @@ const contextEnginePlugin = {
               trigger: boundTraceQuery(query, cfg.traceRecallQueryMaxChars),
               searches: memoryRecallSearches.length > 0 ? memoryRecallSearches : [{
                 resourceType: inferRecallResourceType(targetUri) ?? "user",
+                contextType: targetUri ? undefined : "memory",
                 targetUriInput: targetUri,
                 targetUriResolved: targetUri,
                 limit: requestLimit,

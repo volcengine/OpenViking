@@ -36,6 +36,7 @@ export type RecallTraceEntry = {
   };
   searches: Array<{
     resourceType: RecallResourceType | "archive";
+    contextType?: "memory" | "resource" | "skill";
     targetUriInput?: string;
     targetUriResolved?: string;
     limit: number;
@@ -155,7 +156,7 @@ export function resolveRecallSearchPlan(
     if (resourceType === "resource") {
       searches.push({ resourceType, contextType: "resource" });
     } else if ((resourceType === "user" || resourceType === "agent") && !addedMemorySearch) {
-      searches.push({ resourceType, contextType: "memory" });
+      searches.push({ resourceType: "user", contextType: "memory" });
       addedMemorySearch = true;
     }
   }

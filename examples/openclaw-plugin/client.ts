@@ -288,7 +288,6 @@ export class OpenVikingClient {
           ...detail,
           X_OpenViking_Account: tenantHeaders.accountId ?? null,
           X_OpenViking_User: tenantHeaders.userId ?? null,
-          X_OpenViking_Actor_Peer: null,
           session_vfs_hint: detail.sessionId
             ? userSessionUri(String(detail.sessionId))
             : undefined,

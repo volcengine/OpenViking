@@ -1224,6 +1224,7 @@ describe("Tool: ov_search (behavioral)", () => {
     expect(entry.resourceTypes).toEqual(["resource", "user"]);
     expect(entry.searches.length).toBeGreaterThan(0);
     expect(entry.searches.map((search: any) => search.resourceType).sort()).toEqual(["resource", "user"]);
+    expect(entry.searches.map((search: any) => search.contextType).sort()).toEqual(["resource", "skill"]);
     expect(entry.selected[0].uri).toContain("trace");
   });
 
@@ -1384,6 +1385,7 @@ describe("Tool: ov_search (behavioral)", () => {
     const entry = (result.details.entries as any[])[0];
     expect(entry.resourceTypes).toEqual(["user", "agent"]);
     expect(entry.searches).toHaveLength(1);
+    expect(entry.searches[0].contextType).toBe("memory");
     expect(entry.searches[0].targetUriResolved).toBeUndefined();
     expect(entry.selected).toEqual(expect.arrayContaining([
       expect.objectContaining({

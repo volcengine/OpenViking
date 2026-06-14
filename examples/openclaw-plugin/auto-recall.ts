@@ -259,7 +259,6 @@ function preview(value: string | undefined | null, maxChars: number): string | u
 
 function traceResourceTypeForUri(uri: string | undefined): RecallResourceType {
   if (uri?.startsWith("viking://resources")) return "resource";
-  if (uri?.startsWith("viking://agent/")) return "agent";
   if (uri?.startsWith("viking://session/") || uri?.includes("/sessions/")) return "session";
   return "user";
 }
@@ -581,6 +580,7 @@ export async function buildLongTermMemoryRecallContext(params: {
           allMemories.push(...memories, ...resources);
           traceSearches.push({
             resourceType: s.value.search.resourceType,
+            contextType: s.value.search.contextType,
             targetUriInput: s.value.search.targetUri,
             targetUriResolved: s.value.search.targetUri,
             limit: candidateLimit,
@@ -605,6 +605,7 @@ export async function buildLongTermMemoryRecallContext(params: {
           logger.warn?.(`openviking: auto-recall search failed: ${String(s.reason)}`);
           traceSearches.push({
             resourceType: search.resourceType,
+            contextType: search.contextType,
             targetUriInput: search.targetUri,
             targetUriResolved: search.targetUri,
             limit: candidateLimit,
