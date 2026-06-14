@@ -610,11 +610,19 @@ The final output of the model must strictly follow the JSON Schema format shown 
         if not self._disable_tools_for_iteration and self._tool_schemas:
             tools = self._tool_schemas
             tool_choice = "auto"
+
+        # When tools are disabled the model must emit the final operations as a
+        # JSON object in `content` (there is no tool call to carry structure).
+        # Weak models otherwise reply with plain prose here, which fails parsing
+        # and yields "Extracted 0 memories" (issue #1541). Force JSON output via
+        # response_format on this path; backends that don't support it ignore it.
+        response_format = None if tools else {"type": "json_object"}
         with bind_telemetry_stage("memory_extract"):
             response = await self.vlm.get_completion_async(
                 messages=messages,
                 tools=tools,
                 tool_choice=tool_choice,
+                response_format=response_format,
             )
         tracer.info(f"llm_response={response}")
         # print(f'response={response}')
