@@ -111,6 +111,7 @@ class LocalClient(BaseClient):
         summarize: bool = False,
         telemetry: TelemetryRequest = False,
         watch_interval: float = 0,
+        args: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
@@ -132,6 +133,7 @@ class LocalClient(BaseClient):
                 build_index=build_index,
                 summarize=summarize,
                 watch_interval=watch_interval,
+                args=args,
                 **kwargs,
             ),
         )

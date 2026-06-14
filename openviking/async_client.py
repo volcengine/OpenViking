@@ -271,6 +271,7 @@ class AsyncOpenViking:
         build_index: bool = True,
         summarize: bool = False,
         watch_interval: float = 0,
+        args: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
         **kwargs,
     ) -> Dict[str, Any]:
@@ -305,6 +306,7 @@ class AsyncOpenViking:
             summarize=summarize,
             telemetry=telemetry,
             watch_interval=watch_interval,
+            args=args,
             **kwargs,
         )
 
