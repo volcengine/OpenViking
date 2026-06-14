@@ -34,6 +34,7 @@
 
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
+import { detectRecallCompressorProfile } from "./recall-compressor-profile.mjs";
 import { clearState, deriveOvSessionId, listStates, loadState } from "./session-state.mjs";
 
 const cfg = loadConfig();
@@ -234,6 +235,12 @@ async function main() {
   const source = input.source || "unknown";
   const newSessionId = input.session_id || "unknown";
   log("start", { source, newSessionId, activeWindowMs: ACTIVE_WINDOW_MS, idleTtlMs: IDLE_TTL_MS });
+
+  try {
+    await detectRecallCompressorProfile(cfg, { log, logError });
+  } catch (err) {
+    logError("compress_profile_detect_uncaught", err);
+  }
 
   if (source === "resume") {
     await injectResumeArchive(newSessionId);

@@ -29,6 +29,7 @@
  * Misc env vars:
  *   OPENVIKING_TIMEOUT_MS, OPENVIKING_CAPTURE_TIMEOUT_MS
  *   OPENVIKING_RECALL_TIMEOUT_MS, OPENVIKING_RECALL_COMPRESS_TIMEOUT_MS
+ *   OPENVIKING_RECALL_COMPRESS_MODEL, OPENVIKING_RECALL_COMPRESS_THINKING
  *   OPENVIKING_RECALL_LIMIT, OPENVIKING_SCORE_THRESHOLD
  *   OPENVIKING_DEBUG=1, OPENVIKING_DEBUG_LOG
  */
@@ -58,9 +59,13 @@ function envBool(name) {
   const v = process.env[name];
   if (v == null || v === "") return undefined;
   const lower = v.trim().toLowerCase();
-  if (lower === "0" || lower === "false" || lower === "no") return false;
+  if (lower === "0" || lower === "false" || lower === "no" || lower === "off") return false;
   if (lower === "1" || lower === "true" || lower === "yes") return true;
   return undefined;
+}
+
+function hasOwn(obj, key) {
+  return Object.prototype.hasOwnProperty.call(obj || {}, key);
 }
 
 function tryLoadJson(path) {
@@ -200,6 +205,20 @@ export function loadConfig() {
     process.env.OPENVIKING_RECALL_COMPRESS_TIMEOUT_MS,
     num(cx.recallCompressTimeoutMs, defaultRecallCompressTimeoutMs),
   )));
+  const recallCompressModel = str(
+    process.env.OPENVIKING_RECALL_COMPRESS_MODEL,
+    hasOwn(cx, "recallCompressModel") ? str(cx.recallCompressModel, "") : "",
+  );
+  const cxRecallCompressThinking = hasOwn(cx, "recallCompressThinking")
+    ? cx.recallCompressThinking
+    : (hasOwn(cx, "recallCompressReasoningEffort") ? cx.recallCompressReasoningEffort : "");
+  const recallCompressThinking = str(
+    process.env.OPENVIKING_RECALL_COMPRESS_THINKING,
+    str(
+      process.env.OPENVIKING_RECALL_COMPRESS_REASONING_EFFORT,
+      str(cxRecallCompressThinking, ""),
+    ),
+  );
 
   return {
     configPath,
@@ -228,11 +247,19 @@ export function loadConfig() {
     ))),
     logRankingDetails: envBool("OPENVIKING_LOG_RANKING_DETAILS") ?? (cx.logRankingDetails === true),
     recallCompress: envBool("OPENVIKING_RECALL_COMPRESS") ?? (cx.recallCompress !== false),
-    recallCompressModel: str(
-      process.env.OPENVIKING_RECALL_COMPRESS_MODEL,
-      str(cx.recallCompressModel, "gpt-5.5"),
-    ),
+    recallCompressModel,
+    recallCompressThinking,
+    recallCompressConfigured: Boolean(recallCompressModel || recallCompressThinking),
     recallCompressTimeoutMs,
+    recallCompressDetectOnStartup: envBool("OPENVIKING_RECALL_COMPRESS_DETECT_ON_STARTUP") ?? (cx.recallCompressDetectOnStartup !== false),
+    recallCompressDetectTimeoutMs: Math.max(1000, Math.floor(num(
+      process.env.OPENVIKING_RECALL_COMPRESS_DETECT_TIMEOUT_MS,
+      num(cx.recallCompressDetectTimeoutMs, 15000),
+    ))),
+    recallCompressDetectTtlMs: Math.max(0, Math.floor(num(
+      process.env.OPENVIKING_RECALL_COMPRESS_DETECT_TTL_MS,
+      num(cx.recallCompressDetectTtlMs, 604800000),
+    ))),
     recallCompressMaxInputChars: Math.max(1000, Math.floor(num(
       process.env.OPENVIKING_RECALL_COMPRESS_MAX_INPUT_CHARS,
       num(cx.recallCompressMaxInputChars, 18000),

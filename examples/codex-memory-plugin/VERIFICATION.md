@@ -219,6 +219,18 @@ echo '{"session_id":"any","source":"resume","cwd":"/tmp","model":"x","permission
 # containing "OpenViking session archive digest" and a viking://user/sessions/cx-any/history/ URI.
 ```
 
+### 6f. Compressor profile detect can be disabled for hook smoke tests
+
+```bash
+echo '{"session_id":"any","source":"startup","cwd":"/tmp","model":"x","permission_mode":"default","transcript_path":null,"hook_event_name":"SessionStart"}' \
+  | OPENVIKING_RECALL_COMPRESS_DETECT_ON_STARTUP=0 \
+    OPENVIKING_CONFIG_FILE=$OV_CONF \
+    OPENVIKING_CODEX_STATE_DIR=$STATE_DIR/state \
+    CODEX_PLUGIN_ROOT=$PLUGIN \
+    node $PLUGIN/scripts/session-start-commit.mjs
+# Expect: normal SessionStart behavior without spawning `codex exec` for model probing.
+```
+
 ## 7. Memory extraction landed in user namespace
 
 Wait ~60 s for OV's extractor, then:

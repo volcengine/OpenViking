@@ -7,7 +7,7 @@
           {
             "type": "command",
             "command": "node __OPENVIKING_PLUGIN_ROOT__/scripts/session-start-commit.mjs",
-            "timeout": 30
+            "timeout": 70
           }
         ]
       }

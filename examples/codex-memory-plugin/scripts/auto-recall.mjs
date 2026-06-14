@@ -19,6 +19,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
+import {
+  buildCodexExecArgs,
+  fallbackRecallCompressorProfile,
+  loadCachedRecallCompressorProfile,
+} from "./recall-compressor-profile.mjs";
 
 const cfg = loadConfig();
 const { log, logError } = createLogger("auto-recall");
@@ -342,26 +347,18 @@ function normalizeCompressedContext(text) {
   return truncateText(appendMcpRetrievalHint(value), 4000);
 }
 
-async function runCodexCompressor(prompt) {
+async function getRecallCompressorProfile() {
+  const cached = await loadCachedRecallCompressorProfile(cfg);
+  if (cached) return cached;
+  const fallback = fallbackRecallCompressorProfile(cfg);
+  log("compress_profile_cache_miss", fallback);
+  return fallback;
+}
+
+async function runCodexCompressor(prompt, profile) {
   const tmp = await mkdtemp(join(tmpdir(), "ov-recall-compress-"));
   const outputPath = join(tmp, "last-message.txt");
-  const args = [
-    "-m",
-    cfg.recallCompressModel,
-    "-c",
-    'model_reasoning_effort="low"',
-    "--sandbox",
-    "read-only",
-    "--ask-for-approval",
-    "never",
-    "exec",
-    "--ephemeral",
-    "--ignore-user-config",
-    "--skip-git-repo-check",
-    "--output-last-message",
-    outputPath,
-    "-",
-  ];
+  const args = buildCodexExecArgs(profile, outputPath);
 
   try {
     return await new Promise((resolve) => {
@@ -405,7 +402,10 @@ async function runCodexCompressor(prompt) {
           return;
         }
         if (code !== 0) {
-          logError("compress_exit", stderr.trim().slice(-1000) || `codex exited ${code}`);
+          logError("compress_exit", {
+            profile,
+            error: stderr.trim().slice(-1000) || `codex exited ${code}`,
+          });
           finish(null);
           return;
         }
@@ -425,6 +425,11 @@ async function runCodexCompressor(prompt) {
 
 async function compressMemoryContext(userPrompt, items) {
   if (!cfg.recallCompress) return null;
+  const profile = await getRecallCompressorProfile();
+  if (!profile.enabled) {
+    log("compress_skip", { reason: "profile disabled", profile });
+    return null;
+  }
   const perItemChars = Math.max(500, Math.floor(cfg.recallCompressMaxInputChars / Math.max(1, items.length)));
   const payload = {
     user_prompt: userPrompt,
@@ -453,10 +458,10 @@ Task:
 Input JSON:
 ${JSON.stringify(payload, null, 2)}
 `;
-  const raw = await runCodexCompressor(prompt);
+  const raw = await runCodexCompressor(prompt, profile);
   if (raw === null) return null;
   const compressed = normalizeCompressedContext(raw);
-  log("compressed", { inputCount: items.length, chars: compressed.length });
+  log("compressed", { inputCount: items.length, chars: compressed.length, profile });
   return compressed;
 }
 

@@ -410,6 +410,62 @@ case "${SHELL:-}" in
     ;;
 esac
 
+read_marker_export() {
+  local key="$1"
+  [ -n "$RC" ] && [ -f "$RC" ] || return 0
+  awk -v k="$key" -F"'" '
+    $0 ~ "^export " k "=" { print $2; exit }
+    $0 ~ "^" k "=" { print $2; exit }
+  ' "$RC" 2>/dev/null || true
+}
+
+sanitize_marker_value() {
+  printf '%s' "$1" | tr -d '\r\n' | sed "s/'//g"
+}
+
+RECALL_COMPRESS_SETTING="$(sanitize_marker_value "${OPENVIKING_RECALL_COMPRESS:-$(read_marker_export OPENVIKING_RECALL_COMPRESS)}")"
+RECALL_COMPRESS_MODEL_SETTING="$(sanitize_marker_value "${OPENVIKING_RECALL_COMPRESS_MODEL:-$(read_marker_export OPENVIKING_RECALL_COMPRESS_MODEL)}")"
+RECALL_COMPRESS_THINKING_SETTING="$(sanitize_marker_value "${OPENVIKING_RECALL_COMPRESS_THINKING:-$(read_marker_export OPENVIKING_RECALL_COMPRESS_THINKING)}")"
+
+if [ -t 0 ]; then
+  info 'Recall compressor profile: auto-detect at Codex SessionStart, cached for later UserPromptSubmit hooks.'
+  info 'Auto fallback order: configured model/thinking -> gpt-5.3-codex-spark/default -> gpt-5.5/low -> off.'
+  if [ -n "$RECALL_COMPRESS_SETTING$RECALL_COMPRESS_MODEL_SETTING$RECALL_COMPRESS_THINKING_SETTING" ]; then
+    info "Current recall compressor env: compress=${RECALL_COMPRESS_SETTING:-auto} model=${RECALL_COMPRESS_MODEL_SETTING:-auto} thinking=${RECALL_COMPRESS_THINKING_SETTING:-auto}"
+    ask 'Recall compressor [k=keep, a=auto, c=custom, o=off; default k]: '
+    read -r RECALL_INPUT || RECALL_INPUT=""
+    RECALL_INPUT="${RECALL_INPUT:-k}"
+  else
+    ask 'Recall compressor [a=auto, c=custom, o=off; default a]: '
+    read -r RECALL_INPUT || RECALL_INPUT=""
+    RECALL_INPUT="${RECALL_INPUT:-a}"
+  fi
+  case "$RECALL_INPUT" in
+    k|K|keep|KEEP)
+      :
+      ;;
+    o|O|off|OFF)
+      RECALL_COMPRESS_SETTING="0"
+      RECALL_COMPRESS_MODEL_SETTING=""
+      RECALL_COMPRESS_THINKING_SETTING=""
+      ;;
+    c|C|custom|CUSTOM)
+      ask 'Compressor model [gpt-5.3-codex-spark]: '
+      read -r RECALL_MODEL_INPUT || RECALL_MODEL_INPUT=""
+      ask 'Compressor thinking/reasoning effort [default]: '
+      read -r RECALL_THINKING_INPUT || RECALL_THINKING_INPUT=""
+      RECALL_COMPRESS_SETTING="1"
+      RECALL_COMPRESS_MODEL_SETTING="$(sanitize_marker_value "${RECALL_MODEL_INPUT:-gpt-5.3-codex-spark}")"
+      RECALL_COMPRESS_THINKING_SETTING="$(sanitize_marker_value "${RECALL_THINKING_INPUT:-default}")"
+      ;;
+    *)
+      RECALL_COMPRESS_SETTING=""
+      RECALL_COMPRESS_MODEL_SETTING=""
+      RECALL_COMPRESS_THINKING_SETTING=""
+      ;;
+  esac
+fi
+
 # Extra launch commands to wrap besides `codex` — e.g. a custom wrapper
 # `codex-custom`, or a multi-word launcher matched on its sub-command.
 # Persisted in the rc marker block as OPENVIKING_CODEX_WRAP_EXTRA; the wrapper
@@ -452,6 +508,20 @@ if [ -n "$WRAP_EXTRA" ]; then
   [ -n "$WRAP_EXTRA" ] && info "Will wrap: $WRAP_EXTRA"
 fi
 
+RECALL_ENV_BLOCK=""
+if [ -n "$RECALL_COMPRESS_SETTING" ]; then
+  RECALL_ENV_BLOCK="${RECALL_ENV_BLOCK}export OPENVIKING_RECALL_COMPRESS='$RECALL_COMPRESS_SETTING'
+"
+fi
+if [ -n "$RECALL_COMPRESS_MODEL_SETTING" ]; then
+  RECALL_ENV_BLOCK="${RECALL_ENV_BLOCK}export OPENVIKING_RECALL_COMPRESS_MODEL='$RECALL_COMPRESS_MODEL_SETTING'
+"
+fi
+if [ -n "$RECALL_COMPRESS_THINKING_SETTING" ]; then
+  RECALL_ENV_BLOCK="${RECALL_ENV_BLOCK}export OPENVIKING_RECALL_COMPRESS_THINKING='$RECALL_COMPRESS_THINKING_SETTING'
+"
+fi
+
 # The hook content stays stable across installs (only the absolute path
 # matters), so the marker-replacement logic only triggers the legacy cleanup
 # path once when upgrading from a pre-rc-split install that inlined the full
@@ -459,12 +529,12 @@ fi
 SOURCE_HOOK="[ -f \"$WRAPPER_SRC\" ] && . \"$WRAPPER_SRC\""
 if [ -n "$WRAP_EXTRA" ]; then
   SOURCE_BLOCK="$WRAPPER_MARKER_BEGIN
-OPENVIKING_CODEX_WRAP_EXTRA='$WRAP_EXTRA'
+${RECALL_ENV_BLOCK}OPENVIKING_CODEX_WRAP_EXTRA='$WRAP_EXTRA'
 $SOURCE_HOOK
 $WRAPPER_MARKER_END"
 else
   SOURCE_BLOCK="$WRAPPER_MARKER_BEGIN
-$SOURCE_HOOK
+${RECALL_ENV_BLOCK}$SOURCE_HOOK
 $WRAPPER_MARKER_END"
 fi
 
