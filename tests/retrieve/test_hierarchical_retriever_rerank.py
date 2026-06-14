@@ -300,6 +300,29 @@ def test_merge_starting_points_prefers_rerank_scores_in_thinking_mode(monkeypatc
     assert fake_client.calls == [("hello", ["root A", "root B"])]
 
 
+def test_rerank_scores_preserves_fallbacks_for_empty_documents(monkeypatch):
+    fake_client = FakeRerankClient([0.95, 0.05])
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
+        lambda config: fake_client,
+    )
+
+    retriever = HierarchicalRetriever(
+        storage=DummyStorage(),
+        embedder=DummyEmbedder(),
+        rerank_config=_config(),
+    )
+
+    scores = retriever._rerank_scores(
+        "hello",
+        ["root A", "", "   ", "root D"],
+        [0.2, 0.8, 0.7, 0.4],
+    )
+
+    assert scores == [0.95, 0.8, 0.7, 0.05]
+    assert fake_client.calls == [("hello", ["root A", "root D"])]
+
+
 @pytest.mark.asyncio
 async def test_retrieve_uses_rerank_scores_in_thinking_mode(monkeypatch):
     fake_client = FakeRerankClient([0.95, 0.05, 0.11, 0.95])
