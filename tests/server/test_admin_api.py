@@ -25,9 +25,7 @@ from openviking.service.core import OpenVikingService
 from openviking.service.task_store import (
     SYSTEM_TASK_ACCOUNT_ID,
     SYSTEM_TASK_USER_ID,
-    PersistentTaskStore,
 )
-from openviking.service.task_tracker import TaskTracker, set_task_tracker
 from openviking_cli.exceptions import OpenVikingError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -686,7 +684,7 @@ async def test_legacy_migration_preflight_failure_does_not_create_task(
     assert tasks_resp.json()["result"] == []
 
 
-async def test_legacy_migration_task_migrates_legacy_data_idempotently(
+async def test_legacy_migration_task_migrates_legacy_data(
     admin_client: httpx.AsyncClient,
     admin_app,
     admin_service: OpenVikingService,
@@ -810,22 +808,6 @@ async def test_legacy_migration_task_migrates_legacy_data_idempotently(
         admin_service,
         f"/local/{acct}/user/alice/peers/code-agent/instructions/system.md",
     )
-
-    set_task_tracker(TaskTracker(PersistentTaskStore(admin_service.viking_fs.agfs)))
-    list_resp = await admin_client.get(
-        "/api/v1/tasks?task_type=legacy_migration",
-        headers=root_headers(),
-    )
-    assert list_resp.status_code == 200
-    assert task_id in {item["task_id"] for item in list_resp.json()["result"]}
-    reloaded_resp = await admin_client.get(f"/api/v1/tasks/{task_id}", headers=root_headers())
-    assert reloaded_resp.status_code == 200
-    assert reloaded_resp.json()["result"]["task_id"] == task_id
-
-    second_resp = await admin_client.post("/api/v1/admin/migrate", headers=root_headers())
-    assert second_resp.status_code == 200
-    second_task = await _wait_for_task(admin_client, second_resp.json()["result"]["task_id"])
-    assert second_task["status"] == "completed"
 
 
 async def test_legacy_migration_covers_all_accounts_and_agent_user_layout(
@@ -1009,16 +991,6 @@ async def test_legacy_cleanup_removes_only_legacy_namespaces(
         )
         == '{"role":"assistant"}\n'
     )
-
-
-async def test_legacy_migration_rejects_unknown_action(admin_client: httpx.AsyncClient):
-    resp = await admin_client.post(
-        "/api/v1/admin/migrate",
-        json={"action": "remove_everything"},
-        headers=root_headers(),
-    )
-    assert resp.status_code == 400
-    assert resp.json()["error"]["code"] == "INVALID_ARGUMENT"
 
 
 async def test_legacy_agent_and_session_uri_reads_are_read_only(

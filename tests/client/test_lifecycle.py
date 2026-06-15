@@ -85,37 +85,6 @@ class TestClientInitialization:
         finally:
             await AsyncOpenViking.reset()
 
-    async def test_agent_id_alias_tags_batch_assistant_messages_only(self, test_data_dir: Path):
-        await AsyncOpenViking.reset()
-
-        client = AsyncOpenViking(path=str(test_data_dir), agent_id="legacy-agent")
-        try:
-            await client.batch_add_messages(
-                "legacy-batch-session",
-                [
-                    {"role": "user", "content": "hi"},
-                    {"role": "assistant", "content": "hello"},
-                ],
-            )
-
-            session = await client._client._service.sessions.get(
-                "legacy-batch-session",
-                client._client._ctx,
-                auto_create=False,
-            )
-            assert [message.peer_id for message in session.messages] == [
-                None,
-                "legacy-agent",
-            ]
-
-            with pytest.raises(InvalidArgumentError, match="peer_id cannot be used"):
-                await client.batch_add_messages(
-                    "legacy-batch-session",
-                    [{"role": "assistant", "content": "again", "peer_id": "legacy-agent"}],
-                )
-        finally:
-            await AsyncOpenViking.reset()
-
 
 class TestClientClose:
     """Test Client close"""

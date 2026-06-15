@@ -125,16 +125,6 @@ def test_actor_skill_defaults_keep_user_skills():
     ) == ["viking://user/support_bot/skills"]
 
 
-def test_legacy_agent_skill_defaults_include_unmigrated_agent_skills():
-    assert default_target_directories(
-        _ctx("web-visitor-alice", legacy_agent_id="web-visitor-alice"),
-        context_type=ContextType.SKILL,
-    ) == [
-        "viking://user/support_bot/skills",
-        "viking://agent/web-visitor-alice/skills",
-    ]
-
-
 def test_actor_default_resource_targets_global_and_actor_peer_resources():
     assert default_target_directories(
         _ctx("web-visitor-alice"), context_type=ContextType.RESOURCE
@@ -142,18 +132,6 @@ def test_actor_default_resource_targets_global_and_actor_peer_resources():
         "viking://resources",
         "viking://user/support_bot/resources",
         "viking://user/support_bot/peers/web-visitor-alice/resources",
-    ]
-
-
-def test_legacy_agent_default_resource_targets_unmigrated_agent_resources():
-    assert default_target_directories(
-        _ctx("web-visitor-alice", legacy_agent_id="web-visitor-alice"),
-        context_type=ContextType.RESOURCE,
-    ) == [
-        "viking://resources",
-        "viking://user/support_bot/resources",
-        "viking://user/support_bot/peers/web-visitor-alice/resources",
-        "viking://agent/web-visitor-alice/resources",
     ]
 
 

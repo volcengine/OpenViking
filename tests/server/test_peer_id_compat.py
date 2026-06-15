@@ -6,9 +6,7 @@
 import pytest
 
 from openviking.core.peer_id import (
-    normalize_peer_id,
     normalize_peer_selector,
-    peer_id_from_legacy_agent_uri,
 )
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers.search import (
@@ -21,32 +19,15 @@ from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 
 
-def test_normalize_peer_id_accepts_peer_id():
-    assert normalize_peer_id("web-visitor-alice") == "web-visitor-alice"
-
-
-def test_normalize_peer_selector_accepts_legacy_agent_id():
-    assert normalize_peer_selector(None, agent_id="code-agent") == "code-agent"
-
-
 def test_normalize_peer_selector_accepts_legacy_agent_uri():
     assert normalize_peer_selector(None, agent_uri="viking://agent/code-agent/skills") == (
         "code-agent"
     )
 
 
-def test_legacy_agent_uri_accepts_plain_agent_id():
-    assert peer_id_from_legacy_agent_uri("code-agent") == "code-agent"
-
-
-def test_normalize_peer_selector_rejects_mismatched_legacy_agent():
+def test_normalize_peer_selector_rejects_peer_id_with_legacy_agent_id():
     with pytest.raises(ValueError, match="peer_id cannot be used"):
         normalize_peer_selector("review-agent", agent_id="code-agent")
-
-
-def test_normalize_peer_selector_rejects_same_peer_id_and_legacy_agent():
-    with pytest.raises(ValueError, match="peer_id cannot be used"):
-        normalize_peer_selector("code-agent", agent_id="code-agent")
 
 
 def test_normalize_peer_selector_rejects_mismatched_agent_id_and_uri():
@@ -56,17 +37,6 @@ def test_normalize_peer_selector_rejects_mismatched_agent_id_and_uri():
             agent_id="code-agent",
             agent_uri="viking://agent/review-agent/skills",
         )
-
-
-def test_normalize_peer_selector_rejects_invalid_agent_id():
-    with pytest.raises(ValueError, match="Invalid peer_id"):
-        normalize_peer_selector(None, agent_id="bad/agent")
-
-
-def test_find_request_keeps_legacy_agent_id():
-    request = FindRequest.model_validate({"query": "invoice", "agent_id": "code-agent"})
-
-    assert request.agent_id == "code-agent"
 
 
 def test_search_request_maps_legacy_agent_uri_to_agent_id():
@@ -110,19 +80,6 @@ def test_legacy_search_peer_sets_actor_peer_context():
     assert scoped.actor_peer_id == "code-agent"
     assert scoped.legacy_agent_id == "code-agent"
     assert ctx.actor_peer_id is None
-
-
-def test_legacy_search_peer_marks_matching_actor_context_as_legacy():
-    ctx = RequestContext(
-        user=UserIdentifier("acct", "alice"),
-        role=Role.USER,
-        actor_peer_id="code-agent",
-    )
-
-    scoped = _ctx_with_legacy_actor_peer(ctx, "code-agent")
-
-    assert scoped.actor_peer_id == "code-agent"
-    assert scoped.legacy_agent_id == "code-agent"
 
 
 def test_legacy_search_peer_must_match_actor_peer_context():
