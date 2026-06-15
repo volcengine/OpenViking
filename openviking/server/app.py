@@ -53,6 +53,7 @@ from openviking.server.routers import (
 )
 from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker
+from openviking.storage.errors import EmbeddingRebuildRequiredError
 from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
@@ -117,13 +118,55 @@ async def _initialize_auth_plugin(
     logger.info("Auth plugin initialized: %s", effective_auth_mode)
 
 
+def _format_embedding_rebuild_guidance(exc: EmbeddingRebuildRequiredError) -> str:
+    """Build an operator-facing recovery message for an embedding-incompatible startup.
+
+    The server refuses to start when persisted vectors no longer match the embedding
+    configuration (e.g. after an upgrade that changes the embedding provider/model/
+    dimension). Without this, the only signal is a bare traceback with no recovery
+    path, which pushes operators toward deleting business data (issue #2273).
+    """
+    return (
+        "OpenViking cannot start: the existing vector collection is incompatible "
+        "with the current embedding configuration.\n"
+        f"  Reason: {exc}\n"
+        "\n"
+        "This usually happens after upgrading OpenViking when the embedding "
+        "provider, model, or dimension changed. The server stops on purpose so it "
+        "never mixes vectors from different embedding spaces, which would silently "
+        "corrupt search results.\n"
+        "\n"
+        "Recover WITHOUT deleting business data (resources, memories, and skills are "
+        "stored separately from the vector index and are preserved):\n"
+        "  - Provider/model changed, embedding DIMENSION unchanged:\n"
+        '      1. Add "embedding": {"allow_metadata_override": true} to your ov.conf\n'
+        "      2. Restart openviking-server (it starts and keeps the existing vectors)\n"
+        "      3. Refresh embeddings against the new model once the server is up:\n"
+        "           ov reindex viking:// --mode vectors_only --sudo --wait true\n"
+        "  - Embedding DIMENSION changed: existing vectors cannot be reused, and "
+        "allow_metadata_override does NOT bypass a dimension change. The vector index "
+        "must be rebuilt from scratch; follow the rebuild procedure in the upgrade "
+        "guide below. Source content is preserved and is re-embedded during the "
+        "rebuild.\n"
+        "\n"
+        "Upgrade & troubleshooting guide: "
+        "https://github.com/volcengine/OpenViking/blob/main/docs/en/faq/faq.md"
+    )
+
+
 async def _initialize_runtime_state(
     app: FastAPI,
     service: OpenVikingService,
     config: ServerConfig,
 ) -> None:
     """Initialize service and auth dependencies before traffic is accepted."""
-    await service.initialize()
+    try:
+        await service.initialize()
+    except EmbeddingRebuildRequiredError as exc:
+        # Turn an expected-but-fatal upgrade condition into actionable guidance,
+        # then re-raise so startup still aborts — never serve incompatible vectors.
+        logger.error(_format_embedding_rebuild_guidance(exc))
+        raise
     await _initialize_auth_plugin(app, service, config)
     logger.info("OpenVikingService initialization complete")
 

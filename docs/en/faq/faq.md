@@ -87,6 +87,32 @@ pip install openviking --upgrade --force-reinstall
 
 ```
 
+### After upgrading, the server won't start with `EmbeddingRebuildRequiredError`
+
+`openviking-server` refuses to start when the embedding configuration (provider, model, or dimension) no longer matches the embedding metadata recorded in your existing vector collection — typically after an upgrade that changes the default embedding model. This is a deliberate safety stop so the server never mixes vectors from different embedding spaces, which would silently corrupt search results.
+
+Your business data (resources, memories, and skills) is stored separately from the vector index and is **not** deleted — there is no need to wipe your workspace.
+
+**Case 1 — only the provider/model changed, the embedding dimension is unchanged** (the common upgrade case):
+
+1. Add `allow_metadata_override` to the `embedding` section of your `ov.conf`:
+   ```json
+   {
+     "embedding": {
+       "allow_metadata_override": true
+     }
+   }
+   ```
+2. Restart `openviking-server`. It starts and keeps your existing vectors.
+3. Refresh embeddings against the new model once the server is up:
+   ```bash
+   ov reindex viking:// --mode vectors_only --sudo --wait true
+   ```
+
+**Case 2 — the embedding dimension changed:**
+
+Existing vectors cannot be reused, and `allow_metadata_override` does **not** bypass a dimension change — the vector collection must be rebuilt from scratch. Back up your workspace first, then rebuild the `context` vector collection (this does not touch your source content, which is re-embedded during the rebuild). If you are unsure how to rebuild safely for your storage backend, ask on the [issue tracker](https://github.com/volcengine/OpenViking/issues) before deleting anything.
+
 ### How do I configure OpenViking?
 
 Create an `~/.openviking/ov.conf` configuration file in your project directory:

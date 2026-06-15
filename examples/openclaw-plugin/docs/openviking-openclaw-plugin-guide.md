@@ -1248,11 +1248,9 @@ curl -sS "$OPENVIKING_BASE_URL/api/v1/content/read?uri=$(python3 -c 'import urll
 # 服务端日志，路径以实际部署为准
 tail -f ~/.openviking/data/log/openviking.log
 
-# Web Console
-python -m openviking.console.bootstrap \
-  --host 0.0.0.0 \
-  --port 8020 \
-  --openviking-url http://127.0.0.1:1933
+# Web Studio：由 openviking-server 内置，浏览器打开即可，无需单独进程
+# （独立 console 端口 8020 已在 v0.3.18 移除）
+# 浏览器访问 http://127.0.0.1:1933/studio
 
 # TUI
 ov tui

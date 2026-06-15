@@ -10,8 +10,14 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from openviking.server.app import _initialize_runtime_state, _on_deferred_init_done, create_app
+from openviking.server.app import (
+    _format_embedding_rebuild_guidance,
+    _initialize_runtime_state,
+    _on_deferred_init_done,
+    create_app,
+)
 from openviking.server.config import ServerConfig
+from openviking.storage.errors import EmbeddingRebuildRequiredError
 
 
 class _ExitCalled(Exception):
@@ -327,3 +333,54 @@ async def test_initialize_runtime_state_loads_api_key_manager(monkeypatch):
     assert service._initialized is True
     assert app.state.api_key_manager is not None
     assert app.state.api_key_manager.loaded is True
+
+
+def test_embedding_rebuild_guidance_is_actionable():
+    """The startup guidance must give operators a concrete, non-destructive recovery path."""
+    exc = EmbeddingRebuildRequiredError(
+        "Existing collection embedding dimension (1024) does not match current "
+        "configuration (512). Vectors are incompatible; rebuild is required."
+    )
+    msg = _format_embedding_rebuild_guidance(exc)
+
+    # Echoes the original reason so the operator knows which mismatch occurred.
+    assert "dimension (1024) does not match" in msg
+    # Names the non-destructive flag for the provider/model-only (same dimension) case.
+    assert "allow_metadata_override" in msg
+    # Points to the re-embedding command for refreshing vectors.
+    assert "ov reindex" in msg
+    # Distinguishes the two failure cases (dimension changed vs. provider/model changed).
+    assert msg.lower().count("dimension") >= 2
+    # Links operators to the upgrade/FAQ guidance.
+    assert "faq" in msg.lower() or "upgrade" in msg.lower()
+
+
+async def test_initialize_runtime_state_surfaces_embedding_rebuild_guidance(monkeypatch):
+    """An embedding-incompatible startup must log actionable guidance and still fail loud."""
+
+    class _RebuildService:
+        def __init__(self):
+            self.viking_fs = object()
+
+        async def initialize(self):
+            raise EmbeddingRebuildRequiredError(
+                "Existing collection embedding metadata does not match current configuration."
+            )
+
+    logged: list[str] = []
+    monkeypatch.setattr(
+        "openviking.server.app.logger.error",
+        lambda msg, *args, **kwargs: logged.append(str(msg)),
+    )
+
+    app = SimpleNamespace(state=SimpleNamespace(api_key_manager=None))
+    service = _RebuildService()
+    config = ServerConfig(root_api_key="root-key-for-test")
+
+    # Must re-raise so uvicorn aborts startup — never serve with incompatible vectors.
+    with pytest.raises(EmbeddingRebuildRequiredError):
+        await _initialize_runtime_state(app, service, config)
+
+    joined = "\n".join(logged)
+    assert "allow_metadata_override" in joined
+    assert "ov reindex" in joined
