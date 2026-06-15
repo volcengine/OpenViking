@@ -24,7 +24,7 @@ let _userSpaceCache = null;
  * Duplicated rather than imported to avoid coupling session-start to
  * auto-recall's module-level fetchJSON closure.
  */
-async function resolveUserSpace(fetchJSON) {
+async function resolveUserSpace(fetchJSON, actorPeerId = "") {
   if (_userSpaceCache) return _userSpaceCache;
 
   let fallbackSpace = "default";
@@ -35,6 +35,8 @@ async function resolveUserSpace(fetchJSON) {
 
   const lsRes = await fetchJSON(
     `/api/v1/fs/ls?uri=${encodeURIComponent("viking://user")}&output=original`,
+    {},
+    { actorPeerId },
   );
   if (lsRes.ok && Array.isArray(lsRes.result)) {
     const spaces = lsRes.result
@@ -95,8 +97,12 @@ function tokensToCharsBudget(content, maxTokens) {
   return Math.floor(maxTokens / Math.max(tokensPerChar, 0.25));
 }
 
-async function readProfile(fetchJSON, profileUri) {
-  const res = await fetchJSON(`/api/v1/content/read?uri=${encodeURIComponent(profileUri)}`);
+async function readProfile(fetchJSON, profileUri, actorPeerId = "") {
+  const res = await fetchJSON(
+    `/api/v1/content/read?uri=${encodeURIComponent(profileUri)}`,
+    {},
+    { actorPeerId },
+  );
   if (!res.ok || typeof res.result !== "string") return null;
   const trimmed = res.result.trim();
   return trimmed || null;
@@ -111,9 +117,9 @@ async function readProfile(fetchJSON, profileUri) {
  * `rel_path` (e.g. "zhengxiao.wu/pr_workflow.md") is preserved as display name
  * to keep owner-namespacing visible and unambiguous when multiple owners exist.
  */
-async function lsDir(fetchJSON, dirUri) {
+async function lsDir(fetchJSON, dirUri, actorPeerId = "") {
   const url = `/api/v1/fs/ls?uri=${encodeURIComponent(dirUri)}&output=agent&recursive=true&abs_limit=512&node_limit=512`;
-  const res = await fetchJSON(url);
+  const res = await fetchJSON(url, {}, { actorPeerId });
   if (!res.ok || !Array.isArray(res.result)) return [];
   return res.result
     .filter((e) => !e.isDir)
@@ -233,16 +239,16 @@ function formatListing(headerUri, entries, budgetTokens) {
  *   droppedPref: number, droppedEnt: number,
  * }>}
  */
-export async function buildProfileBlock(fetchJSON, totalBudgetTokens) {
-  const space = await resolveUserSpace(fetchJSON);
+export async function buildProfileBlock(fetchJSON, totalBudgetTokens, actorPeerId = "") {
+  const space = await resolveUserSpace(fetchJSON, actorPeerId);
   const profileUri = `viking://user/${space}/memories/profile.md`;
   const prefUri = `viking://user/${space}/memories/preferences`;
   const entUri = `viking://user/${space}/memories/entities`;
 
   const [profile, prefs, ents] = await Promise.all([
-    readProfile(fetchJSON, profileUri),
-    lsDir(fetchJSON, prefUri),
-    lsDir(fetchJSON, entUri),
+    readProfile(fetchJSON, profileUri, actorPeerId),
+    lsDir(fetchJSON, prefUri, actorPeerId),
+    lsDir(fetchJSON, entUri, actorPeerId),
   ]);
 
   if (!profile && prefs.length === 0 && ents.length === 0) return null;

@@ -10,7 +10,7 @@ import json
 import os
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from openviking.message.part import ToolPart
+from openviking.message.part import TextPart, ToolPart
 from openviking.prompts.manager import PromptManager
 from openviking.server.identity import RequestContext, ToolContext
 from openviking.session.memory.core import ExtractContextProvider
@@ -29,6 +29,9 @@ from openviking.session.memory.tools import (
     get_tool,
 )
 from openviking.session.memory.utils.uri import render_template
+from openviking.session.memory.vision_message_normalizer import (
+    replace_image_parts_with_descriptions,
+)
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import tracer
 from openviking.utils.time_utils import parse_iso_datetime
@@ -58,7 +61,7 @@ class SessionExtractContextProvider(ExtractContextProvider):
         viking_fs: VikingFS = None,
         transaction_handle=None,
     ):
-        self.messages = messages
+        self.messages = list(messages) if isinstance(messages, list) else messages
         self.latest_archive_overview = latest_archive_overview
         self._output_language = self._detect_language()
         self._registry = None  # 延迟加载
@@ -74,6 +77,8 @@ class SessionExtractContextProvider(ExtractContextProvider):
         self._viking_fs = viking_fs
         self._transaction_handle = transaction_handle
         self._link_enabled = config.memory.link_enabled if config.memory else False
+        self._vision_messages_prepared = False
+        self._vision_vlm = None
 
     @property
     def read_file_contents(self) -> Dict[str, MemoryFile]:
@@ -99,12 +104,36 @@ class SessionExtractContextProvider(ExtractContextProvider):
         from openviking.session.memory.memory_updater import ExtractContext
 
         if self._extract_context is None:
-            self._extract_context = ExtractContext(self.messages or [])
+            self._extract_context = ExtractContext(
+                self.messages if isinstance(self.messages, list) else []
+            )
         return self._extract_context
+
+    async def prepare_extraction_messages(self) -> None:
+        """Prepare extraction-only messages before ranges and prompts are built."""
+        if self._vision_messages_prepared:
+            return
+        if isinstance(self.messages, list):
+            self.messages = await replace_image_parts_with_descriptions(
+                self.messages,
+                get_vlm=self._get_vision_vlm,
+                logger=logger,
+            )
+            self._extract_context = None
+            self._output_language = self._detect_language()
+        self._vision_messages_prepared = True
+
+    def _get_vision_vlm(self):
+        if self._vision_vlm is not None:
+            return self._vision_vlm
+        vlm_config = get_openviking_config().vlm
+        if not (vlm_config and vlm_config.is_available()):
+            return None
+        self._vision_vlm = vlm_config.get_vlm_instance()
+        return self._vision_vlm
 
     def _detect_language(self) -> str:
         """检测输出语言"""
-        from openviking.message.part import TextPart
         from openviking.session.memory.utils import resolve_output_language
 
         user_text_parts = []
@@ -180,7 +209,8 @@ from neighboring messages.
         else:
             time_display = session_time_str
 
-        conversation = self._assemble_conversation(self.messages)
+        extract_context = self.get_extract_context()
+        conversation = self._assemble_conversation(extract_context.messages)
 
         return {
             "role": "user",
@@ -409,7 +439,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         pre_fetch_messages = []
         pre_fetch_messages.append(self._build_conversation_message())
 
-        # 触发 registry 加载，过滤掉 agent_only 的 schema（trajectory/experience 只由 agent memory 处理）
+        # 触发 registry 加载，过滤掉 agent_only 的 schema（trajectory/experience 由执行提取处理）
         schemas = [
             s
             for s in self._get_registry().list_all(include_disabled=False)

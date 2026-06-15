@@ -32,6 +32,7 @@ import {
   isBypassed,
   makeFetchJSON,
 } from "./lib/ov-session.mjs";
+import { replayPending } from "./lib/pending-queue.mjs";
 import { buildProfileBlock, estimateTokens } from "./lib/profile-inject.mjs";
 import { writeJsonState } from "./lib/state.mjs";
 
@@ -112,16 +113,8 @@ async function main() {
     return;
   }
 
-  // Short-circuit before the network probe when neither injection path will
-  // run for this source/config combination. Saves a /health call and avoids
-  // misleading "server unreachable" log noise when injection is disabled.
   const willInjectProfile = !cfg.noAutoInject;
   const willInjectArchive = (source === "resume" || source === "compact") && !!sessionId;
-  if (!willInjectProfile && !willInjectArchive) {
-    log("skip", { reason: "no_injection_planned", source, noAutoInject: cfg.noAutoInject });
-    approve();
-    return;
-  }
 
   const health = await fetchJSON("/health");
   if (!health.ok) {
@@ -130,11 +123,29 @@ async function main() {
     return;
   }
 
+  // Pending replay is independent from profile/archive injection. A user may
+  // disable injection but still expect failed writes from prior short-lived
+  // coding sessions to be recovered when OpenViking is healthy again.
+  try {
+    const replayResult = await replayPending(fetchJSON, log);
+    if (replayResult.replayed > 0 || replayResult.failed > 0 || replayResult.deferred > 0) {
+      log("pending-replay", replayResult);
+    }
+  } catch (err) {
+    logError("pending-replay", err);
+  }
+
+  if (!willInjectProfile && !willInjectArchive) {
+    log("skip", { reason: "no_injection_planned", source, noAutoInject: cfg.noAutoInject });
+    approve();
+    return;
+  }
+
   // 1. Profile injection — every source unless explicitly disabled.
   let profile = null;
   if (!cfg.noAutoInject) {
     try {
-      profile = await buildProfileBlock(fetchJSON, cfg.profileTokenBudget);
+      profile = await buildProfileBlock(fetchJSON, cfg.profileTokenBudget, cfg.peerId);
     } catch (err) {
       logError("profile_inject", err);
     }

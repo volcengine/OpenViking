@@ -12,6 +12,12 @@ bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/e
 
 脚本将自动检查依赖项、配置 OpenViking 连接并注册插件。安装过程的每一步均支持幂等操作，可安全地重复执行。
 
+GitHub 访问受限的地区，可改用以下等价命令：
+
+```bash
+bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/codex-memory-plugin/tos-install.sh)
+```
+
 安装完成后，请在当前终端激活 `codex` 的封装函数（或新开一个终端窗口）：
 
 ```bash

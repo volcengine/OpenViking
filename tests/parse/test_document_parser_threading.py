@@ -56,7 +56,7 @@ async def test_word_parser_offloads_docx_conversion(monkeypatch, tmp_path: Path)
     fake_docx = SimpleNamespace()
     monkeypatch.setitem(sys.modules, "docx", fake_docx)
 
-    def convert(path: Path, docx_module) -> str:
+    def convert(path: Path, docx_module, resource_name=None, storage=None) -> str:
         assert docx_module is fake_docx
         return "# converted docx"
 
@@ -66,10 +66,42 @@ async def test_word_parser_offloads_docx_conversion(monkeypatch, tmp_path: Path)
 
     result = await parser.parse(source)
 
-    assert calls == [(convert, (source, fake_docx), {})]
+    # #2429 added resource_name/storage to the offloaded conversion call; assert
+    # the conversion was offloaded with the doc + docx module, without pinning the
+    # identity of the storage singleton.
+    assert len(calls) == 1
+    func, args, _ = calls[0]
+    assert func is convert
+    assert args[0] == source
+    assert args[1] is fake_docx
     assert seen["content"] == "# converted docx"
     assert result.source_format == "docx"
     assert result.parser_name == "WordParser"
+
+
+@pytest.mark.asyncio
+async def test_word_parser_forwards_original_name_to_markdown(
+    monkeypatch, tmp_path: Path
+):
+    # On single-file upload the on-disk path is a temp name (upload_<uuid>.docx)
+    # and the user's original filename arrives via source_name. WordParser must
+    # forward that name to MarkdownParser explicitly; otherwise parse_content can
+    # only fall back to the temp path and the resource ends up named upload_<uuid>.
+    parser = word.WordParser()
+    seen = _stub_markdown_parse(parser)
+    _patch_to_thread(monkeypatch, word)
+    monkeypatch.setitem(sys.modules, "docx", SimpleNamespace())
+    monkeypatch.setattr(
+        parser, "_convert_to_markdown", lambda *args, **kwargs: "# converted docx"
+    )
+
+    upload = tmp_path / "upload_abc123.docx"
+    upload.write_bytes(b"placeholder")
+
+    await parser.parse(upload, source_name="季度报告.docx")
+
+    forwarded = seen["kwargs"].get("source_name") or seen["kwargs"].get("resource_name")
+    assert forwarded == "季度报告.docx", seen["kwargs"]
 
 
 @pytest.mark.asyncio

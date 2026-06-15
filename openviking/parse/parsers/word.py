@@ -58,14 +58,24 @@ class WordParser(BaseParser):
             result = await self._md_parser.parse_content(
                 markdown_content,
                 source_path=str(path),
+                # Forward the original upload name explicitly (mirrors pdf.py) so
+                # the resource is named after it, not the temp upload path. Pass
+                # the raw kwargs values rather than the path.stem-backed local
+                # resource_name, leaving MarkdownParser's naming logic unchanged.
+                resource_name=kwargs.get("resource_name"),
+                source_name=kwargs.get("source_name"),
                 instruction=instruction,
                 base_dir=path.parent,
+                # docx images are extracted into storage.media_dir, so (like pdf)
+                # that is the only derived-media root needed.
                 allowed_media_dirs=[storage.media_dir],
-                **kwargs,
             )
         else:
             result = await self._md_parser.parse_content(
-                str(source), instruction=instruction, **kwargs
+                str(source),
+                instruction=instruction,
+                resource_name=kwargs.get("resource_name"),
+                source_name=kwargs.get("source_name"),
             )
         result.source_format = "docx"
         result.parser_name = "WordParser"

@@ -19,7 +19,7 @@ from typing import Any, Optional
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.utils.uri import VikingURI
 
-OVPACK_FORMAT_VERSION = 2
+OVPACK_FORMAT_VERSION = 3
 OVPACK_KIND = "openviking.ovpack"
 OVPACK_INTERNAL_DIR = "_ovpack"
 OVPACK_FILES_DIR = "files"

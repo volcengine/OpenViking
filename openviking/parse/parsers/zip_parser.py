@@ -22,6 +22,12 @@ from openviking_cli.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _is_zip_metadata_entry(path: Path) -> bool:
+    """Return true for archive metadata that should not define a resource root."""
+    name = path.name
+    return name == "__MACOSX" or name == ".DS_Store" or name.startswith("._")
+
+
 class ZipParser(BaseParser):
     """
     ZIP archive parser for OpenViking.
@@ -75,7 +81,11 @@ class ZipParser(BaseParser):
 
             # Check if extracted content has a single root directory (non-blocking)
             def _list_entries():
-                return [p for p in temp_dir.iterdir() if p.name not in {".", ".."}]
+                return [
+                    p
+                    for p in temp_dir.iterdir()
+                    if p.name not in {".", ".."} and not _is_zip_metadata_entry(p)
+                ]
 
             extracted_entries = await asyncio.to_thread(_list_entries)
 

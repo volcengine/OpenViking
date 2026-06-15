@@ -1242,8 +1242,7 @@ openviking-server --config /path/to/ov.conf
 ```json
 {
   "memory": {
-    "version": "v2",
-    "agent_memory_enabled": false
+    "version": "v2"
   }
 }
 ```
@@ -1251,7 +1250,6 @@ openviking-server --config /path/to/ov.conf
 | 字段 | 说明 | 默认值 |
 |------|------|--------|
 | `version` | 记忆实现版本。仅支持 `"v2"`（#2264 已移除旧版 `"v1"`；传入 `"v1"` 会在配置加载时抛出 `ValueError`）。 | `"v2"` |
-| `agent_memory_enabled` | 在用户记忆抽取之后启用 trajectory/experience 记忆抽取。 | `false` |
 
 ### ovcli.conf
 

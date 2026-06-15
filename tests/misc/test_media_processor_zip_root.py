@@ -9,6 +9,7 @@ Verifies that ZipParser correctly handles:
 """
 
 import zipfile
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock, patch
@@ -47,6 +48,20 @@ class _FakeVikingFS:
 
     async def read(self, uri: str, offset: int = 0, size: int = -1) -> bytes:
         return self.files.get(uri, b"")
+
+    async def read_file(self, uri: str, **_: Any) -> str:
+        return self.files.get(uri, b"").decode("utf-8")
+
+    async def glob(self, pattern: str, uri: str = "viking://", **_: Any) -> Dict[str, Any]:
+        prefix = uri.rstrip("/") + "/"
+        matches = []
+        for key in self.files:
+            if not key.startswith(prefix):
+                continue
+            relative = key[len(prefix) :]
+            if fnmatch(relative, pattern) or fnmatch(Path(relative).name, pattern):
+                matches.append(key)
+        return {"matches": sorted(matches), "count": len(matches)}
 
     async def ls(self, uri: str, **_: Any) -> List[Dict[str, Any]]:
         prefix = uri.rstrip("/") + "/"
@@ -140,6 +155,29 @@ async def test_zip_single_top_level_dir_ignores_zip_source_name(tmp_path: Path):
         called_path = Path(mock_dir_parse.await_args.args[0])
         assert called_path.name == "tt_b"
         # source_name should NOT be passed to DirectoryParser in this case
+        assert "source_name" not in mock_dir_parse.await_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_zip_single_top_level_dir_ignores_macos_metadata(tmp_path: Path):
+    zip_path = tmp_path / "knowledge.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("knowledge/guide.md", "# hello\n")
+        zf.writestr("knowledge/.DS_Store", "")
+        zf.writestr("__MACOSX/._knowledge", "")
+        zf.writestr("__MACOSX/knowledge/._guide.md", "")
+
+    parser = ZipParser()
+
+    with patch("openviking.parse.parsers.directory.DirectoryParser.parse") as mock_dir_parse:
+        mock_result = AsyncMock()
+        mock_result.temp_dir_path = None
+        mock_dir_parse.return_value = mock_result
+
+        await parser.parse(zip_path, instruction="", source_name="knowledge.zip")
+
+        called_path = Path(mock_dir_parse.await_args.args[0])
+        assert called_path.name == "knowledge"
         assert "source_name" not in mock_dir_parse.await_args.kwargs
 
 

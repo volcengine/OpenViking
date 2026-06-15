@@ -10,7 +10,6 @@ import json
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
-from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.utils import add_line_numbers, line_count, slice_content_lines
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.telemetry import tracer

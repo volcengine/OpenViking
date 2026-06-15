@@ -4,10 +4,9 @@ The Admin API manages accounts and users in a multi-tenant environment. It cover
 
 This API is available in both `api_key` and `trusted` deployments:
 - In `api_key` mode, the effective role is always derived from the presented API key.
-- In `trusted` mode, ordinary requests still do not use user-key registration, but a trusted gateway may call Admin API using a registered user with appropriate role (role is looked up from user registry).
+- In `trusted` mode, ordinary requests still do not use user-key registration. When a configured `root_api_key` is presented to `/api/v1/admin/*`, the trusted upstream is authorized as ROOT.
 
-In `trusted` mode, role is determined by looking up `X-OpenViking-Account` + `X-OpenViking-User` from the user registry. If the user doesn't exist, role defaults to `USER`.
-For `/api/v1/admin/*`, trusted mode also permits requests with no explicit identity headers; those requests are treated as ROOT and are intended for trusted upstreams authenticated by the deployment's `root_api_key`.
+For `/api/v1/admin/*`, `trusted` mode permits requests with no explicit identity headers, and also permits target identity headers when they match the account/user in the URL. These requests are treated as ROOT after the deployment's `root_api_key` is verified. For ordinary trusted-mode data APIs, role and identity still come from `X-OpenViking-Account` + `X-OpenViking-User`.
 
 ## Roles and Permissions
 
@@ -48,10 +47,12 @@ Configure `root_api_key` in `~/.openviking/ovcli.conf`:
 - `ov --sudo admin` - Account and user management
 - `ov --sudo system` - System utility commands
 - `ov --sudo reindex` - Rebuild indexes
+- `ov --sudo admin migrate` - Legacy agent/session migration and cleanup
+- `ov --sudo task status/list` - Query root/system background tasks, such as migration tasks
 
 ### Usage Limitations
 
-- `--sudo` only works with admin commands - using it with regular data commands will error
+- `--sudo` only works with the commands above - using it with regular data commands will error
 - Must have `root_api_key` configured to use `--sudo`
 
 ## API Reference
@@ -262,7 +263,7 @@ Delete a workspace and all associated users and data (ROOT only).
 
 **Processing Flow:**
 1. Verify requester has ROOT privileges
-2. Cascade delete all AGFS data for the account (user/, agent/, session/, resources/)
+2. Cascade delete all AGFS data for the account (`user/` and `resources/`; sessions live under `user/`)
 3. Cascade delete all vector DB records for the account
 4. Finally delete account metadata and all user keys
 
@@ -740,6 +741,94 @@ ov --sudo admin regenerate-key acme bob
     "user_key": "e82d4e0f..."
   },
   "time": 0.1
+}
+```
+
+---
+
+### migrate_legacy_data
+
+#### 1. API Implementation Overview
+
+Migrate 0.3.x legacy `viking://agent/...` / `viking://session/...` data into the 0.4.0 user / peer namespace, or clean up old namespaces after migration has been verified. This endpoint is ROOT-only and runs as a background task.
+
+**Processing Flow:**
+1. Verify requester has ROOT privileges
+2. For `action=migrate`, run preflight checks for account registry, session owner metadata, and other prerequisites
+3. Create a root-level background task
+4. During migration, copy files and existing vector records; during cleanup, delete old vector records before deleting old AGFS directories
+
+Migration does not automatically call `reindex`. If retrieval after migration is not as expected, users should manually reindex the new paths.
+
+**Code Entry Points:**
+- `openviking/server/routers/admin.py:migrate_legacy_data` - HTTP route
+- `openviking/service/legacy_migration.py:LegacyDataMigration` - Migration implementation
+
+#### 2. Interface and Parameters
+
+**HTTP API**
+
+```
+POST /api/v1/admin/migrate
+```
+
+**Parameters**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| action | str | No | migrate | `migrate` runs migration; `cleanup` removes old namespaces |
+
+**Migration result fields**
+
+| Field | Description |
+|-------|-------------|
+| migrated.files / migrated.directories | Number of files and directories copied |
+| migrated.vector_records | Number of existing vector records copied |
+| migrated.skipped_vector_records | Number of old records skipped because they had no vector payload |
+| migrated.operations | Operation counts grouped by migration category |
+| skipped / warnings / created_users | Skipped items, warnings, and users created automatically |
+
+**Cleanup result fields**
+
+| Field | Description |
+|-------|-------------|
+| cleanup.directories | Number of legacy directories deleted |
+| cleanup.vector_records | Number of old vector records deleted |
+| cleanup.targets | Legacy scopes that were cleaned |
+| skipped / warnings | Skipped items and warnings |
+
+#### 3. Usage Examples
+
+**Run migration**
+
+```bash
+curl -X POST http://localhost:1933/api/v1/admin/migrate \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: <root-key>" \
+  -d '{"action": "migrate"}'
+```
+
+**Clean old namespaces**
+
+```bash
+curl -X POST http://localhost:1933/api/v1/admin/migrate \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: <root-key>" \
+  -d '{"action": "cleanup"}'
+```
+
+**CLI**
+
+```bash
+ov --sudo admin migrate --output json
+ov --sudo admin migrate --cleanup --output json
+```
+
+**Response Example**
+
+```json
+{
+  "task_id": "legacy_migration_..."
 }
 ```
 

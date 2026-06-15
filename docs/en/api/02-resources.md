@@ -47,7 +47,7 @@ OpenViking supports various resource types, categorized by functionality:
 
 | Type | Description |
 |------|-------------|
-| Feishu/Lark | URL-based, supports docx, wiki, sheets, bitable, requires FEISHU_APP_ID and FEISHU_APP_SECRET configuration |
+| Feishu/Lark | URL-based, supports docx, wiki, sheets, bitable. By default uses app credentials from FEISHU_APP_ID and FEISHU_APP_SECRET; user-token imports can pass `args.feishu_access_token`, and user-token watches also pass `args.feishu_refresh_token` |
 
 ### Resource Processing Pipeline
 
@@ -156,17 +156,25 @@ This endpoint is the core entry point for resource management, supporting adding
 | exclude | string | No | None | File patterns to exclude (glob) |
 | directly_upload_media | bool | No | True | Whether to directly upload media files |
 | preserve_structure | bool | No | None | Whether to preserve directory structure |
+| args | object | No | `{}` | Parser-specific import options forwarded to the source parser/accessor. Core `add_resource` fields such as `path`, `to`, `watch_interval`, `include`, and `exclude` are not allowed inside `args` |
 | watch_interval | float | No | 0 | Scheduled update interval (minutes). >0 creates task; <=0 cancels task; explicit `to` wins, otherwise binds to the imported `root_uri` |
 | telemetry | TelemetryRequest | No | False | Whether to return telemetry data |
 
 **Additional Notes**:
 - `to` and `parent` cannot be specified together. Use `create_parent=true` with `parent` when the parent directory should be created automatically.
+- Resource targets may use public `viking://resources/...`, current-user shorthand `viking://user/resources/...`, explicit user `viking://user/{user_id}/resources/...`, or peer `viking://user/{user_id}/peers/{peer_id}/resources/...` paths. Current-user shorthand is canonicalized with the authenticated request identity.
+- `user_id` and `peer_id` path segments must be safe single-segment identifiers, for example `alice` or `web-visitor-alice`. Values with path separators, `.`, `..`, `:`, or `+` are rejected.
 - `path` and `temp_file_id` cannot be specified together
 - Raw HTTP calls for local files require first uploading via [temp_upload](#temp_upload) to obtain `temp_file_id`
 - When `to` is specified and the target already exists, triggers incremental update
 - Only Git repository sources use full background import when `wait=false`; OpenViking performs repository preflight and target planning before returning the `task_id`.
 - Other sources with `wait=false` finish source parsing, target resolution, and AGFS writes before returning. Only semantic and embedding queues continue asynchronously.
 - When `watch_interval > 0`, the watch task binds to `to` if provided; otherwise it binds to the `root_uri` returned by this import. If no stable `root_uri` is available, the request fails and asks for an explicit `to`.
+- Feishu/Lark app-token imports do not pass `args.feishu_access_token`. OpenViking keeps the existing app credential flow and the SDK obtains an app/tenant token from `app_id` and `app_secret`. This mode supports both one-time imports and `watch_interval > 0`.
+- Feishu/Lark one-time user-token imports pass `args={"feishu_access_token": "u-..."}` with `watch_interval <= 0`. OpenViking uses that user token only for the current import and does not store it.
+- Feishu/Lark user-token watches pass `args={"feishu_access_token": "u-...", "feishu_refresh_token": "r-..."}` with `watch_interval > 0`. OpenViking stores the token state in the private watch task state, refreshes it with the configured Feishu app credentials, and uses the refreshed user token for later watch runs.
+- Feishu/Lark user-token watches require `FEISHU_APP_ID` and `FEISHU_APP_SECRET` (or `feishu.app_id` and `feishu.app_secret` in `ov.conf`) because Feishu refresh tokens are bound to the app that issued them. The supplied user token must come from the same Feishu app configured in OpenViking.
+- Watch task token state is stored in the internal `viking://resources/.watch_tasks.json` control file and is hidden from watch API/MCP/CLI responses. If VikingFS file encryption is enabled, this control file is encrypted at rest; otherwise the server-side control file contains plaintext token state.
 - For local directory inputs, scanning respects `.gitignore` files (root and nested) with standard Git semantics; `ignore_dirs`, `include`, and `exclude` further refine what is ingested.
 - To create or update plain text directly, use [content/write](03-filesystem.md#write) instead of `add_resource`. Semantic processing and embeddings are refreshed automatically after resource ingestion and content writes.
 
@@ -206,6 +214,41 @@ curl -X POST http://localhost:1933/api/v1/resources \
     \"to\": \"viking://resources/guide.md\",
     \"reason\": \"User guide\"
   }"
+
+# Add to the current user's private resource root
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d "{
+    \"temp_file_id\": \"$TEMP_FILE_ID\",
+    \"parent\": \"viking://user/resources/docs\",
+    \"create_parent\": true
+  }"
+
+# Add a Feishu document with a one-time user access token
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "path": "https://example.feishu.cn/docx/doc_token",
+    "args": {
+      "feishu_access_token": "u-..."
+    }
+  }'
+
+# Add a Feishu document with scheduled user-token refresh
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "path": "https://example.feishu.cn/docx/doc_token",
+    "to": "viking://resources/feishu/doc",
+    "watch_interval": 1440,
+    "args": {
+      "feishu_access_token": "u-...",
+      "feishu_refresh_token": "r-..."
+    }
+  }'
 ```
 
 **Python SDK**
@@ -235,6 +278,13 @@ result = client.add_resource(
     reason="External API documentation"
 )
 
+# Add to the current user's private resource root
+result = client.add_resource(
+    "./documents/guide.md",
+    parent="viking://user/resources/docs",
+    create_parent=True,
+)
+
 # Wait for processing to complete
 client.wait_processed()
 
@@ -243,6 +293,23 @@ client.add_resource(
     "./documents/guide.md",
     to="viking://resources/guide.md",
     watch_interval=60  # Update every 60 minutes
+)
+
+# Add a Feishu document with a one-time user access token
+client.add_resource(
+    "https://example.feishu.cn/docx/doc_token",
+    args={"feishu_access_token": "u-..."},
+)
+
+# Add a Feishu document with scheduled user-token refresh
+client.add_resource(
+    "https://example.feishu.cn/docx/doc_token",
+    to="viking://resources/feishu/doc",
+    watch_interval=1440,
+    args={
+        "feishu_access_token": "u-...",
+        "feishu_refresh_token": "r-...",
+    },
 )
 ```
 
@@ -267,8 +334,25 @@ ov add-resource https://github.com/example/repo.git --watch-interval 60
 # Cancel scheduled updates
 ov add-resource https://github.com/example/repo.git --to viking://resources/guide.md --watch-interval 0
 
+# Add a Feishu document with a one-time user access token
+ov add-resource https://example.feishu.cn/docx/doc_token --args feishu_access_token:u-...
+
+# Add a Feishu document with scheduled user-token refresh
+ov add-resource https://example.feishu.cn/docx/doc_token \
+  --to viking://resources/feishu/doc \
+  --watch-interval 1440 \
+  --args feishu_access_token:u-... \
+  --args feishu_refresh_token:r-...
+
 # Add with parent directory (parent must exist)
 ov add-resource ./documents/guide.md --parent viking://resources/docs
+
+# Add under the current user's private resource root
+ov add-resource ./documents/guide.md --parent viking://user/resources/docs
+
+# Add under a specific peer's private resource root
+ov add-resource ./documents/guide.md \
+  --parent viking://user/alice/peers/web-visitor-alice/resources/docs
 
 # Add with parent directory (auto-create parent if it doesn't exist)
 ov add-resource ./documents/guide.md -p viking://resources/docs/2026/05/07
@@ -488,6 +572,11 @@ Skills are special resources used to define operations or tools that agents can 
 | timeout | float | No | None | Timeout in seconds, only effective when `wait=True` |
 | telemetry | TelemetryRequest | No | False | Whether to return telemetry data |
 
+Skills are always installed under the current user's skills root. The public short form
+`viking://user/skills` is accepted for filesystem/search operations and resolves to
+`viking://user/{user_id}/skills`; `add_skill` does not accept `to`, `parent`,
+`root_uri`, or peer-scoped skill targets.
+
 #### 3. Usage Examples
 
 **HTTP API**
@@ -560,8 +649,8 @@ ov add-skill ./skills/my-skill.json --wait
   "status": "ok",
   "result": {
     "status": "success",
-    "root_uri": "viking://user/skills/my-skill",
-    "uri": "viking://user/skills/my-skill",
+    "root_uri": "viking://user/alice/skills/my-skill",
+    "uri": "viking://user/alice/skills/my-skill",
     "name": "my-skill",
     "auxiliary_files": 2,
     "queue_status": {
@@ -582,8 +671,8 @@ ov add-skill ./skills/my-skill.json --wait
 Note: Skill is being processed in the background.
 Use 'ov wait' to wait for completion, or 'ov observer queue' to check status.
 status          success
-root_uri        viking://user/skills/my-skill
-uri             viking://user/skills/my-skill
+root_uri        viking://user/alice/skills/my-skill
+uri             viking://user/alice/skills/my-skill
 name            my-skill
 auxiliary_files 2
 ```
@@ -593,8 +682,8 @@ auxiliary_files 2
 ```json
 {
   "status": "success",
-  "root_uri": "viking://user/skills/my-skill",
-  "uri": "viking://user/skills/my-skill",
+  "root_uri": "viking://user/alice/skills/my-skill",
+  "uri": "viking://user/alice/skills/my-skill",
   "name": "my-skill",
   "auxiliary_files": 2
 }
@@ -605,8 +694,8 @@ auxiliary_files 2
 | Field | Type | Description |
 |-------|------|-------------|
 | `status` | string | Processing status: "success" or "error" |
-| `root_uri` | string | Final URI of the skill in OpenViking (same as `uri`) |
-| `uri` | string | Final URI of the skill in OpenViking (same as `root_uri`) |
+| `root_uri` | string | Canonical final URI of the skill in OpenViking (same as `uri`) |
+| `uri` | string | Canonical final URI of the skill in OpenViking (same as `root_uri`) |
 | `name` | string | Skill name |
 | `auxiliary_files` | number | Number of auxiliary files attached to the skill |
 | `queue_status` | object | (Optional, only when `wait=true`) Queue processing status with `pending`, `processing`, `completed` counts |

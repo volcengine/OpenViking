@@ -5,6 +5,16 @@
 - L1（overview）: 关键决策和总结
 - L2（messages）: 完整消息
 
+会话存储在当前用户命名空间下：
+
+```text
+viking://user/{user_id}/sessions/{session_id}
+```
+
+Session API 按认证用户作用域访问会话，并返回 canonical user session URI。
+基于 URI 的 API 也可以接受向后兼容的 `viking://session/{session_id}` 别名，
+该别名会在同一个用户上下文中解析。
+
 ## API 参考
 
 ### create_session()
@@ -32,7 +42,7 @@
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | session_id | str | 否 | None | 会话 ID。如果为 None，则创建一个自动生成 ID 的新会话 |
-| memory_policy | object | 否 | None | 会话默认的自我/对方记忆抽取策略。对象，包含可选的 `self` 和 `peer` 键，每个为 `{"enabled": <bool>}`（默认：`self.enabled=true`、`peer.enabled=false`）。可在 commit 时覆盖；非对象值会以 `InvalidArgumentError` 拒绝。 |
+| memory_policy | object | 否 | None | 会话默认的记忆抽取策略。可选的 `self` 和 `peer` 开关控制写入目标；可选的顶层 `memory_types` 将抽取限制为指定的 enabled memory schema。未传或为 `null` 时允许所有 enabled memory schema。非法结构或未知 memory type 会以 `InvalidArgumentError` 拒绝。 |
 
 #### 3. 使用示例
 
@@ -85,6 +95,7 @@ ov session new
   "status": "ok",
   "result": {
     "session_id": "a1b2c3d4",
+    "uri": "viking://user/alice/sessions/a1b2c3d4",
     "user": {
       "account_id": "default",
       "user_id": "alice"
@@ -152,12 +163,12 @@ ov session list
   "result": [
     {
       "session_id": "a1b2c3d4",
-      "uri": "viking://session/alice/a1b2c3d4",
+      "uri": "viking://user/alice/sessions/a1b2c3d4",
       "is_dir": true
     },
     {
       "session_id": "e5f6g7h8",
-      "uri": "viking://session/alice/e5f6g7h8",
+      "uri": "viking://user/alice/sessions/e5f6g7h8",
       "is_dir": true
     }
   ],
@@ -910,7 +921,6 @@ await client.session_used(
 |------|------|------|--------|------|
 | session_id | str | 是 | - | 要提交的会话 ID |
 | keep_recent_count | int | 否 | 0 | 提交后保留为 live 状态的最近消息数 (保持 live, 不归档)。`0` (默认) 归档全部消息。 |
-| memory_policy | object | 否 | None | 控制本次 commit 是否运行自我记忆与对方记忆抽取。对象，包含可选的 `self` 和 `peer` 键，每个为 `{"enabled": <bool>}`（默认：`self.enabled=true`、`peer.enabled=false`）。commit 级的值会覆盖会话级策略；非对象值会以 `InvalidArgumentError` 拒绝。 |
 
 #### 3. 使用示例
 
@@ -925,12 +935,6 @@ POST /api/v1/sessions/{session_id}/commit
 curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/commit \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key"
-
-# 提交并额外运行对方记忆抽取（默认关闭）
-curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/commit \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{"memory_policy": {"peer": {"enabled": true}}}'
 
 # 查询任务状态
 curl -X GET http://localhost:1933/api/v1/tasks/{task_id} \
@@ -972,7 +976,7 @@ ov session commit a1b2c3d4
     "session_id": "a1b2c3d4",
     "status": "accepted",
     "task_id": "uuid-xxx",
-    "archive_uri": "viking://session/alice/a1b2c3d4/history/archive_001",
+    "archive_uri": "viking://user/alice/sessions/a1b2c3d4/history/archive_001",
     "archived": true
   }
 }
@@ -1094,7 +1098,7 @@ print(f"Status: {task['status']}")
     "status": "completed",
     "result": {
       "session_id": "a1b2c3d4",
-      "archive_uri": "viking://session/alice/a1b2c3d4/history/archive_001",
+      "archive_uri": "viking://user/alice/sessions/a1b2c3d4/history/archive_001",
       "memories_extracted": {
         "profile": 1,
         "preferences": 2,
@@ -1182,7 +1186,7 @@ curl -X GET "http://localhost:1933/api/v1/tasks?task_type=session_commit&status=
 
 | 属性 | 类型 | 说明 |
 |------|------|------|
-| uri | str | 会话 Viking URI（`viking://session/{session_id}/`） |
+| uri | str | 会话 Viking URI（`viking://user/{user_id}/sessions/{session_id}/`） |
 | messages | List[Message] | 会话中的当前消息 |
 | stats | SessionStats | 会话统计信息 |
 | summary | str | 压缩摘要 |
@@ -1193,7 +1197,7 @@ curl -X GET "http://localhost:1933/api/v1/tasks?task_type=session_commit&status=
 ## 会话存储结构
 
 ```
-viking://session/{user_id}/{session_id}/
+viking://user/{user_id}/sessions/{session_id}/
 ├── .abstract.md              # L0：会话概览
 ├── .overview.md              # L1：关键决策
 ├── .meta.json                # 元数据
@@ -1220,7 +1224,7 @@ viking://session/{user_id}/{session_id}/
 
 ```json
 {
-  "archive_uri": "viking://session/{session_id}/history/archive_001",
+  "archive_uri": "viking://user/{user_id}/sessions/{session_id}/history/archive_001",
   "extracted_at": "2026-04-21T10:00:00Z",
   "operations": {
     "adds": [

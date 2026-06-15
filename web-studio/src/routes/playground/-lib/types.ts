@@ -26,13 +26,35 @@ export type TerminalEntry = {
 
 export type TerminalCommandGroup = 'core' | 'filesystem' | 'search' | 'status'
 
+export type TerminalCommandParameterKey =
+  | 'archiveId'
+  | 'contextChars'
+  | 'contexts'
+  | 'keepRecent'
+  | 'limit'
+  | 'messageContent'
+  | 'messageRole'
+  | 'offset'
+  | 'query'
+  | 'scope'
+  | 'sessionAction'
+  | 'sessionId'
+  | 'skillJson'
+  | 'tokenBudget'
+  | 'toolName'
+  | 'toolResultId'
+  | 'timeout'
+  | 'uri'
+
 export type TerminalCommandSuggestion = {
   adminOnly?: boolean
   command: string
+  examples?: string[]
   group: TerminalCommandGroup
   /** i18n subkey under `playground.terminal.commands`. */
   key: string
   insertText: string
+  parameters?: TerminalCommandParameterKey[]
   executable?: boolean
 }
 

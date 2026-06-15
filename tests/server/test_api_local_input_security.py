@@ -4,6 +4,7 @@
 """Security tests for HTTP server local input handling."""
 
 import threading
+import zipfile
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import httpx
@@ -70,6 +71,38 @@ description: temp uploaded skill
     body = resp.json()
     assert body["status"] == "ok"
     assert body["result"]["uri"].startswith("viking://user/default/skills/")
+
+
+async def test_add_skill_accepts_uploaded_zip_with_windows_separators(
+    client: httpx.AsyncClient,
+    upload_temp_dir,
+):
+    skill_zip = upload_temp_dir / "windows-skill.zip"
+    with zipfile.ZipFile(skill_zip, "w") as zf:
+        zf.writestr(
+            "SKILL.md",
+            """---
+name: windows-skill
+description: uploaded skill with Windows-style zip paths
+---
+
+# Windows Skill
+""",
+        )
+        zf.writestr("scripts\\check_bounding_boxes.py", "print('ok')\n")
+
+    resp = await client.post(
+        "/api/v1/skills",
+        json={"temp_file_id": skill_zip.name, "wait": True},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "ok"
+
+    script_uri = f"{body['result']['uri']}/scripts/check_bounding_boxes.py"
+    read_resp = await client.get("/api/v1/content/read", params={"uri": script_uri})
+    assert read_resp.status_code == 200, read_resp.text
+    assert read_resp.json()["result"] == "print('ok')\n"
 
 
 async def test_add_skill_rejects_direct_local_path(client: httpx.AsyncClient):

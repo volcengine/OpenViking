@@ -167,7 +167,7 @@ All plugin behavior can be set via env vars. Connection / identity vars affect b
 | `OPENVIKING_USER`                                | Multi-tenant user (`X-OpenViking-User` header)                           |
 | `OPENVIKING_PEER_ID`                             | Optional stable peer for recall and captured session messages            |
 
-When `OPENVIKING_PEER_ID` is set, hooks pass it as request-level `peer_id`. Subagent capture falls back to Claude's `agent_id` when no explicit peer is configured, so different subagents can keep separate peer memory by default.
+When `OPENVIKING_PEER_ID` is set, data-plane recall/profile requests send it as `X-OpenViking-Actor-Peer`; captured session messages store it as body `peer_id`. Subagent capture falls back to Claude's `agent_id` when no explicit peer is configured, so different subagents can keep separate peer memory by default.
 
 #### Recall tuning
 
@@ -319,10 +319,10 @@ Claude Code has a built-in `MEMORY.md` file system. This plugin **complements** 
 |--------------|-----------------------------------|----------------------------------------------------|
 | Storage      | Flat markdown                     | Vector DB + structured extraction                  |
 | Search       | Loaded into context wholesale     | Semantic similarity + ranking + token budget       |
-| Scope        | Per-project                       | Cross-project, cross-session, cross-agent          |
+| Scope        | Per-project                       | Cross-project, cross-session, peer-scoped          |
 | Capacity     | ~200 lines (context limit)        | Unlimited (server-side storage)                    |
 | Extraction   | Manual rules                      | LLM-powered entity / preference / event extraction |
-| Subagents    | Same as parent                    | Isolated session + typed agent namespace           |
+| Subagents    | Same as parent                    | Isolated session + peer-scoped capture             |
 
 ---
 

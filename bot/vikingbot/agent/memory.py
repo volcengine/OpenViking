@@ -150,6 +150,7 @@ class MemoryStore:
         current_message: str,
         workspace_id: str,
         sender_id: str,
+        peer_ids: list[str] | None = None,
         user_ids: list[str] | None = None,
         openviking_connection: dict[str, Any] | None = None,
     ) -> str:
@@ -163,6 +164,7 @@ class MemoryStore:
             )
             logger.info(f"workspace_id={workspace_id}")
             logger.info(f"sender_id={sender_id}")
+            logger.info(f"peer_ids={peer_ids}")
             logger.info(f"user_ids={user_ids}")
             logger.info(f"admin_user_id={admin_user_id}")
 
@@ -170,11 +172,12 @@ class MemoryStore:
                 agent_id=workspace_id,
                 connection=openviking_connection,
             )
+            search_peer_ids = [sender_id, *(peer_ids or [])] if sender_id else (peer_ids or None)
             result = await client.search_memory(
                 query=current_message,
-                owner_user_id=sender_id,
-                peer_ids=user_ids,
-                limit=30,
+                user_ids=user_ids,
+                peer_ids=search_peer_ids,
+                limit=10,
             )
             if not result:
                 return ""
@@ -244,7 +247,7 @@ class MemoryStore:
     async def get_viking_user_profile(
         self,
         workspace_id: str,
-        user_id: str,
+        user_id: str | None,
         openviking_connection: dict[str, Any] | None = None,
     ) -> str:
         client = None
@@ -257,6 +260,85 @@ class MemoryStore:
             return result or ""
         except Exception as e:
             logger.error(f"[READ_USER_PROFILE]: user_id={user_id}, error. {e}")
+            return ""
+        finally:
+            if client:
+                try:
+                    await client.close()
+                except Exception as e:
+                    logger.warning(f"Error closing VikingClient: {e}")
+
+    async def get_viking_peer_profile(
+        self,
+        workspace_id: str,
+        peer_id: str | None,
+        openviking_connection: dict[str, Any] | None = None,
+    ) -> str:
+        if not peer_id:
+            return ""
+
+        client = None
+        try:
+            client = await VikingClient.create(
+                agent_id=workspace_id,
+                connection=openviking_connection,
+            )
+            result = await client.read_peer_profile(peer_id)
+            return result or ""
+        except Exception as e:
+            logger.error(f"[READ_PEER_PROFILE]: peer_id={peer_id}, error. {e}")
+            return ""
+        finally:
+            if client:
+                try:
+                    await client.close()
+                except Exception as e:
+                    logger.warning(f"Error closing VikingClient: {e}")
+
+    async def get_viking_peer_profiles(
+        self,
+        workspace_id: str,
+        peer_ids: list[str],
+        openviking_connection: dict[str, Any] | None = None,
+    ) -> str:
+        if not peer_ids:
+            return ""
+
+        client = None
+        try:
+            client = await VikingClient.create(
+                agent_id=workspace_id,
+                connection=openviking_connection,
+            )
+
+            async def fetch_profile(peer_id: str) -> tuple[str, str]:
+                try:
+                    start_time = time.time()
+                    profile = await client.read_peer_profile(peer_id)
+                    cost = round(time.time() - start_time, 2)
+                    logger.info(
+                        f"[READ_PEER_PROFILE]: peer_id={peer_id}, cost {cost}s, "
+                        f"profile={profile[:50] if profile else 'None'}"
+                    )
+                    return (peer_id, profile or "")
+                except Exception as e:
+                    logger.error(f"[READ_PEER_PROFILE]: peer_id={peer_id}, error. {e}")
+                    return (peer_id, "")
+
+            tasks = [fetch_profile(peer_id) for peer_id in peer_ids]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            parts = []
+            for result in results:
+                if isinstance(result, Exception):
+                    continue
+                peer_id, profile = result
+                if profile:
+                    parts.append(f"## Peer profile for {peer_id}: \n{profile}")
+
+            return "\n\n".join(parts) if parts else ""
+        except Exception as e:
+            logger.error(f"[READ_PEER_PROFILES]: error. {e}")
             return ""
         finally:
             if client:

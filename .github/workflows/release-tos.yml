@@ -1,0 +1,166 @@
+name: 20. Release TOS Upload
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to upload (e.g. v0.3.24)'
+        required: true
+        type: string
+      update_latest:
+        description: 'Also overwrite the stable/latest paths'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  upload:
+    name: Upload Release Artifacts to TOS
+    # Skip CLI releases (cli@* / cli-* tags); main releases use v* tags
+    if: github.event_name == 'workflow_dispatch' || !startsWith(github.event.release.tag_name, 'cli')
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Resolve release tag
+        env:
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          if [ -z "${TAG}" ]; then
+            echo "::error::Unable to resolve release tag"
+            exit 1
+          fi
+          echo "RELEASE_TAG=${TAG}" >> "$GITHUB_ENV"
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+
+      - name: Check TOS configuration
+        id: tos_config
+        env:
+          TOS_ACCESS_KEY: ${{ secrets.TOS_ACCESS_KEY }}
+          TOS_SECRET_KEY: ${{ secrets.TOS_SECRET_KEY }}
+          TOS_REGION: ${{ secrets.TOS_REGION }}
+          TOS_RELEASE_BUCKET: ${{ secrets.TOS_RELEASE_BUCKET }}
+          TOS_ENDPOINT: ${{ secrets.TOS_ENDPOINT }}
+        run: |
+          if [ -n "${TOS_ACCESS_KEY}" ] && [ -n "${TOS_SECRET_KEY}" ] && [ -n "${TOS_REGION}" ] && [ -n "${TOS_RELEASE_BUCKET}" ] && [ -n "${TOS_ENDPOINT}" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python
+        if: steps.tos_config.outputs.configured == 'true'
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
+      - name: Install AWS CLI
+        if: steps.tos_config.outputs.configured == 'true'
+        run: |
+          python -m pip install --upgrade awscli
+          aws configure set default.s3.addressing_style virtual
+
+      - name: Build source archive
+        if: steps.tos_config.outputs.configured == 'true'
+        run: |
+          git archive --format=zip --prefix="OpenViking-${RELEASE_TAG}/" \
+            -o "/tmp/openviking-${RELEASE_TAG}-source.zip" HEAD
+
+      - name: Upload release artifacts to TOS
+        if: steps.tos_config.outputs.configured == 'true'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.TOS_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TOS_SECRET_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.TOS_REGION }}
+          TOS_BUCKET: ${{ secrets.TOS_RELEASE_BUCKET }}
+          TOS_ENDPOINT: ${{ secrets.TOS_ENDPOINT }}
+          UPDATE_LATEST: ${{ github.event_name == 'release' || inputs.update_latest }}
+        run: |
+          set -euo pipefail
+
+          TOS_ENDPOINT="${TOS_ENDPOINT#https://}"
+          TOS_ENDPOINT="${TOS_ENDPOINT#http://}"
+          case "${TOS_ENDPOINT}" in
+            tos-s3-*) TOS_S3_ENDPOINT="${TOS_ENDPOINT}" ;;
+            tos-*) TOS_S3_ENDPOINT="tos-s3-${TOS_ENDPOINT#tos-}" ;;
+            *) TOS_S3_ENDPOINT="${TOS_ENDPOINT}" ;;
+          esac
+
+          IMMUTABLE_CACHE_CONTROL="public, max-age=31536000, immutable"
+          NO_CACHE_CONTROL="no-store, no-cache, must-revalidate, max-age=0"
+          SHELL_CONTENT_TYPE="text/plain; charset=utf-8"
+          ZIP_CONTENT_TYPE="application/zip"
+
+          UPLOADED_KEYS=""
+
+          upload() {
+            src="$1"
+            key="$2"
+            content_type="$3"
+            cache_control="$4"
+
+            extra_args=()
+            case "${content_type}" in
+              text/*) extra_args+=(--content-disposition "inline") ;;
+            esac
+            # s3:// source = server-side CopyObject; REPLACE re-applies metadata
+            case "${src}" in
+              s3://*) extra_args+=(--metadata-directive REPLACE) ;;
+            esac
+
+            aws s3 cp "${src}" "s3://${TOS_BUCKET}/${key}" \
+              --endpoint-url "https://${TOS_S3_ENDPOINT}" \
+              --content-type "${content_type}" \
+              --cache-control "${cache_control}" \
+              ${extra_args[@]+"${extra_args[@]}"} \
+              --only-show-errors
+            echo "Uploaded ${key}"
+            UPLOADED_KEYS="${UPLOADED_KEYS}- \`${key}\`"$'\n'
+          }
+
+          SOURCE_ZIP="/tmp/openviking-${RELEASE_TAG}-source.zip"
+          CLAUDE_INSTALL="examples/claude-code-memory-plugin/setup-helper/install.sh"
+          CODEX_INSTALL="examples/codex-memory-plugin/setup-helper/install.sh"
+          CLAUDE_TOS_INSTALL="examples/claude-code-memory-plugin/setup-helper/tos-install.sh"
+          CODEX_TOS_INSTALL="examples/codex-memory-plugin/setup-helper/tos-install.sh"
+
+          # Versioned, immutable copies
+          upload "${SOURCE_ZIP}" "releases/${RELEASE_TAG}/openviking-${RELEASE_TAG}-source.zip" "${ZIP_CONTENT_TYPE}" "${IMMUTABLE_CACHE_CONTROL}"
+          upload "${CLAUDE_INSTALL}" "releases/${RELEASE_TAG}/claude-code-memory-plugin/install.sh" "${SHELL_CONTENT_TYPE}" "${IMMUTABLE_CACHE_CONTROL}"
+          upload "${CODEX_INSTALL}" "releases/${RELEASE_TAG}/codex-memory-plugin/install.sh" "${SHELL_CONTENT_TYPE}" "${IMMUTABLE_CACHE_CONTROL}"
+          upload "${CLAUDE_TOS_INSTALL}" "releases/${RELEASE_TAG}/claude-code-memory-plugin/tos-install.sh" "${SHELL_CONTENT_TYPE}" "${IMMUTABLE_CACHE_CONTROL}"
+          upload "${CODEX_TOS_INSTALL}" "releases/${RELEASE_TAG}/codex-memory-plugin/tos-install.sh" "${SHELL_CONTENT_TYPE}" "${IMMUTABLE_CACHE_CONTROL}"
+
+          # Stable paths, overwritten on every release. The zip is copied
+          # server-side from the versioned key instead of re-transferring it.
+          if [ "${UPDATE_LATEST}" = "true" ]; then
+            upload "s3://${TOS_BUCKET}/releases/${RELEASE_TAG}/openviking-${RELEASE_TAG}-source.zip" "releases/latest/openviking-source.zip" "${ZIP_CONTENT_TYPE}" "${NO_CACHE_CONTROL}"
+            upload "${CLAUDE_INSTALL}" "claude-code-memory-plugin/install.sh" "${SHELL_CONTENT_TYPE}" "${NO_CACHE_CONTROL}"
+            upload "${CODEX_INSTALL}" "codex-memory-plugin/install.sh" "${SHELL_CONTENT_TYPE}" "${NO_CACHE_CONTROL}"
+            upload "${CLAUDE_TOS_INSTALL}" "claude-code-memory-plugin/tos-install.sh" "${SHELL_CONTENT_TYPE}" "${NO_CACHE_CONTROL}"
+            upload "${CODEX_TOS_INSTALL}" "codex-memory-plugin/tos-install.sh" "${SHELL_CONTENT_TYPE}" "${NO_CACHE_CONTROL}"
+          else
+            echo "Skipping stable/latest paths (update_latest=false)"
+          fi
+
+          {
+            echo "## Uploaded to TOS (${RELEASE_TAG})"
+            echo ""
+            printf '%s' "${UPLOADED_KEYS}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report skipped TOS upload
+        if: steps.tos_config.outputs.configured != 'true'
+        run: |
+          {
+            echo "## TOS upload skipped"
+            echo ""
+            echo "TOS secrets are not fully configured for this repository (TOS_ACCESS_KEY / TOS_SECRET_KEY / TOS_REGION / TOS_RELEASE_BUCKET / TOS_ENDPOINT). Upload was skipped without failing the workflow."
+          } >> "$GITHUB_STEP_SUMMARY"

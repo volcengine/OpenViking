@@ -355,7 +355,7 @@ describe("OpenVikingClient resource and skill import", () => {
     });
   });
 
-  it("sends memory_policy when committing a session", async () => {
+  it("does not send memory_policy when committing a session", async () => {
     const fetchMock = vi.fn().mockResolvedValue(okResponse({
       session_id: "s1",
       status: "accepted",
@@ -364,20 +364,10 @@ describe("OpenVikingClient resource and skill import", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const client = new OpenVikingClient("http://127.0.0.1:1933", "", "agent", 5000);
-    await client.commitSession("s1", {
-      memoryPolicy: {
-        self: { enabled: true },
-        peer: { enabled: true },
-      },
-    });
+    await client.commitSession("s1");
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(JSON.parse(String(init.body))).toEqual({
-      memory_policy: {
-        self: { enabled: true },
-        peer: { enabled: true },
-      },
-    });
+    expect(JSON.parse(String(init.body))).toEqual({});
   });
 });
 
@@ -482,13 +472,13 @@ describe("OpenVikingClient canonical user namespace", () => {
       "http://127.0.0.1:1933", "", "my-agent", 5000,
       "", "", undefined,
     );
-    await client.find("test query", { targetUri: "viking://user/memories" }, "my-agent");
+    await client.find("test query", { targetUri: "viking://user/memories" });
 
     const findCall = fetchMock.mock.calls.find((c) =>
       String(c[0]).endsWith("/api/v1/search/find"),
     )!;
     const body = JSON.parse(String((findCall[1] as RequestInit).body));
-    expect(body.target_uri).toBe("viking://user/alice/memories");
+    expect(body.target_uri).toBe("viking://user/memories");
   });
 
   it("expands user memory alias to canonical user root", async () => {
@@ -507,13 +497,13 @@ describe("OpenVikingClient canonical user namespace", () => {
       "http://127.0.0.1:1933", "", "my-agent", 5000,
       "", "", undefined,
     );
-    await client.find("test query", { targetUri: "viking://user/memories" }, "my-agent");
+    await client.find("test query", { targetUri: "viking://user/memories" });
 
     const findCall = fetchMock.mock.calls.find((c) =>
       String(c[0]).endsWith("/api/v1/search/find"),
     )!;
     const body = JSON.parse(String((findCall[1] as RequestInit).body));
-    expect(body.target_uri).toBe("viking://user/alice/memories");
+    expect(body.target_uri).toBe("viking://user/memories");
   });
 
   it("expands user memory alias to canonical user root by default", async () => {
@@ -534,13 +524,13 @@ describe("OpenVikingClient canonical user namespace", () => {
       false,
       true,
     );
-    await client.find("test", { targetUri: "viking://user/memories" }, "shared-agent");
+    await client.find("test", { targetUri: "viking://user/memories" });
 
     const findCall = fetchMock.mock.calls.find((c) =>
       String(c[0]).endsWith("/api/v1/search/find"),
     )!;
     const body = JSON.parse(String((findCall[1] as RequestInit).body));
-    expect(body.target_uri).toBe("viking://user/alice/memories");
+    expect(body.target_uri).toBe("viking://user/memories");
   });
 
   it("expands user skill alias to canonical user root", async () => {
@@ -561,16 +551,16 @@ describe("OpenVikingClient canonical user namespace", () => {
       false,
       false,
     );
-    await client.find("test", { targetUri: "viking://user/skills" }, "shared-agent");
+    await client.find("test", { targetUri: "viking://user/skills" });
 
     const findCall = fetchMock.mock.calls.find((c) =>
       String(c[0]).endsWith("/api/v1/search/find"),
     )!;
     const body = JSON.parse(String((findCall[1] as RequestInit).body));
-    expect(body.target_uri).toBe("viking://user/alice/skills");
+    expect(body.target_uri).toBe("viking://user/skills");
   });
 
-  it("includes peer_id when find receives peerId", async () => {
+  it("sends actor peer header when find receives peerId", async () => {
     const fetchMock = vi.fn(async (url: string) => {
       if (url.endsWith("/api/v1/system/status")) {
         return okResponse({ user: "alice" });
@@ -585,14 +575,16 @@ describe("OpenVikingClient canonical user namespace", () => {
     const client = new OpenVikingClient("http://127.0.0.1:1933", "", "shared-agent", 5000);
     await client.find("test", {
       targetUri: "viking://user/memories",
-      peerId: "telegram_12345",
-    }, "shared-agent");
+      actorPeerId: "telegram_12345",
+    });
 
     const findCall = fetchMock.mock.calls.find((c) =>
       String(c[0]).endsWith("/api/v1/search/find"),
     )!;
     const body = JSON.parse(String((findCall[1] as RequestInit).body));
-    expect(body.peer_id).toBe("telegram_12345");
+    const headers = new Headers((findCall[1] as RequestInit).headers);
+    expect(body.peer_id).toBeUndefined();
+    expect(headers.get("X-OpenViking-Actor-Peer")).toBe("telegram_12345");
   });
 
   it("includes peer_id when addSessionMessage receives one", async () => {
@@ -604,7 +596,6 @@ describe("OpenVikingClient canonical user namespace", () => {
       "s1",
       "user",
       [{ type: "text", text: "hello" }],
-      "agent",
       "2026-04-20T00:00:00.000Z",
       "telegram_12345",
     );
@@ -612,5 +603,22 @@ describe("OpenVikingClient canonical user namespace", () => {
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const body = JSON.parse(String(init.body));
     expect(body.peer_id).toBe("telegram_12345");
+  });
+
+  it("greps session archives through the user session alias", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse({ matches: [], count: 0 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new OpenVikingClient("http://127.0.0.1:1933", "", "agent", 5000);
+    await client.grepSessionArchives("s1", "needle", {
+      archiveId: "archive_001",
+      caseInsensitive: true,
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(String(init.body));
+    expect(body.uri).toBe("viking://user/sessions/s1/history/archive_001");
+    expect(body.pattern).toBe("needle");
+    expect(body.case_insensitive).toBe(true);
   });
 });
