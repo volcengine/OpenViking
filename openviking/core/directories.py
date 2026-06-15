@@ -14,6 +14,7 @@ from openviking.core.context import Context, Vectorize
 from openviking.core.namespace import (
     canonical_user_root,
     context_type_for_uri,
+    is_session_uri,
     user_space_fragment,
 )
 from openviking.server.identity import RequestContext
@@ -258,7 +259,7 @@ class DirectoryInitializer:
 
         # 2. Seed directory L0/L1 vectors only during fresh initialization.
         owner_space = self._owner_space_for_scope(scope=scope, ctx=ctx)
-        if agfs_created:
+        if agfs_created and not is_session_uri(uri):
             await self._ensure_directory_l0_l1_vectors(
                 uri=uri,
                 parent_uri=parent_uri,
