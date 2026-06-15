@@ -183,25 +183,39 @@ class DirectoryInitializer:
         return count
 
     async def initialize_user_directories(self, ctx: RequestContext) -> int:
-        """Initialize only the user namespace root for the current user.
+        """Initialize the current user's root and first-level entry directories.
 
-        Child directories under ``viking://user/{user_space}`` are created lazily on
-        first write. This avoids materializing empty namespaces such as
-        ``memories/patterns`` or ``skills`` before any actual content exists.
+        Concrete leaf namespaces under entries such as ``memories`` or ``sessions``
+        are still created lazily when content is written. This keeps a new user
+        root discoverable without materializing the full empty taxonomy.
         """
         if "user" not in PRESET_DIRECTORIES:
             return 0
         user_space_root = canonical_user_root(ctx)
         user_tree = PRESET_DIRECTORIES["user"]
         parent_uri = "viking://user"
-        created = await self._ensure_directory(
+        count = 0
+        if await self._ensure_directory(
             uri=user_space_root,
             parent_uri=parent_uri,
             defn=user_tree,
             scope="user",
             ctx=ctx,
-        )
-        return 1 if created else 0
+        ):
+            count += 1
+
+        for child in user_tree.children:
+            child_uri = f"{user_space_root}/{child.path}"
+            if await self._ensure_directory(
+                uri=child_uri,
+                parent_uri=user_space_root,
+                defn=child,
+                scope="user",
+                ctx=ctx,
+            ):
+                count += 1
+
+        return count
 
     async def initialize_agent_directories(self, ctx: RequestContext) -> int:
         """Deprecated compatibility hook; agent directories are no longer initialized."""
