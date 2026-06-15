@@ -279,31 +279,6 @@ def main():
     workers_info = f" (workers: {config.workers})" if config.workers > 1 else ""
     print(f"OpenViking HTTP Server is running on {config.host}:{config.port}{workers_info}")
 
-    # Start Active Daemon if enabled
-    daemon_service = None
-    daemon_config = config.daemon
-    if not daemon_config.enabled:
-        # Also check env var as fallback
-        daemon_config = DaemonConfig.from_env()
-
-    if daemon_config.enabled:
-        try:
-            from openviking.daemon.service import DaemonService
-            from openviking.server.dependencies import get_service
-            resource_service = get_service().resource
-            daemon_service = DaemonService(
-                resource_service=resource_service,
-                watch_dir=daemon_config.watch_dir,
-                db_path=daemon_config.db_path,
-                batch_trigger_lines=daemon_config.batch_trigger_lines,
-                batch_trigger_seconds=daemon_config.batch_trigger_seconds,
-            )
-            import asyncio
-            asyncio.get_event_loop().run_until_complete(daemon_service.start())
-            print("Active Daemon started, watching:", daemon_service.watch_dir)
-        except Exception as e:
-            print(f"Warning: Failed to start Active Daemon: {e}", file=sys.stderr)
-
     try:
         workers = config.workers
         if workers > 1:
@@ -322,14 +297,6 @@ def main():
         else:
             uvicorn.run(app, host=config.host, port=config.port, log_config=None)
     finally:
-        # Stop Active Daemon on shutdown
-        if daemon_service is not None:
-            try:
-                import asyncio
-                asyncio.get_event_loop().run_until_complete(daemon_service.stop())
-            except Exception as e:
-                print(f"Error stopping Active Daemon: {e}", file=sys.stderr)
-
         # Cleanup vikingbot process on shutdown
         if bot_process is not None:
             _stop_vikingbot_gateway(bot_process)

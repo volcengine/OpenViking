@@ -276,6 +276,32 @@ def create_app(
         task_tracker = get_task_tracker()
         task_tracker.start_cleanup_loop()
 
+        # Start Active Daemon if enabled
+        daemon_service = None
+        if config.daemon.enabled:
+            try:
+                from openviking.daemon.service import DaemonService
+                from openviking.server.config import DaemonConfig
+
+                # Check env var override
+                daemon_config = config.daemon
+                if not daemon_config.enabled:
+                    daemon_config = DaemonConfig.from_env()
+
+                if daemon_config.enabled:
+                    resource_service = service.resource
+                    daemon_service = DaemonService(
+                        resource_service=resource_service,
+                        watch_dir=daemon_config.watch_dir,
+                        db_path=daemon_config.db_path,
+                        batch_trigger_lines=daemon_config.batch_trigger_lines,
+                        batch_trigger_seconds=daemon_config.batch_trigger_seconds,
+                    )
+                    await daemon_service.start()
+                    logger.info("Active Daemon started, watching: %s", daemon_service.watch_dir)
+            except Exception as e:
+                logger.warning("Failed to start Active Daemon: %s", e)
+
         # Initialize tracing and OTLP log export from server.observability.
         from openviking.telemetry import tracer_module
 
@@ -289,6 +315,14 @@ def create_app(
             if service is not None:
                 await _initialize_runtime_state(app, service, config)
             yield
+
+        # Stop Active Daemon on shutdown
+        if daemon_service is not None:
+            try:
+                await daemon_service.stop()
+                logger.info("Active Daemon stopped")
+            except Exception as e:
+                logger.warning("Failed to stop Active Daemon: %s", e)
 
         # Cleanup
         from openviking.metrics.global_api import shutdown_metrics_async
