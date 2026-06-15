@@ -289,8 +289,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             },
         ],
         subcommands: &[],
-=======
->>>>>>> main
         next_steps: &[
             HelpItem {
                 label: "ov ls <parent-uri>",
