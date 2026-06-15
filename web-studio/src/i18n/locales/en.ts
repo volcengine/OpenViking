@@ -301,6 +301,18 @@ const en = {
     usageDisabled:
       'Usage/Audit is not initialized, so live usage stats are unavailable.',
   },
+  daemon: {
+    status: 'Active Daemon',
+    enabled: 'Enabled',
+    disabled: 'Disabled',
+    running: 'Running',
+    stopped: 'Stopped',
+    watchDir: 'Watch Directory',
+    batchLines: 'Batch Lines',
+    batchSeconds: 'Batch Seconds',
+    cursorCount: 'Tracked Files',
+    lastFlush: 'Last Flush',
+  },
   operations: {
     page: {
       placeholder: 'Operations dashboard is under construction.',

@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { createFileRoute } from '@tanstack/react-router'
 
 import { ContextCommitsPanel } from './-components/context-commits-panel'
+import { DaemonStatusCard } from './-components/daemon-status-card'
 import {
   ContextDataPanel,
   TodayRetrievalsPanel,
@@ -89,6 +90,8 @@ function HomePage() {
           t={t}
         />
       </div>
+
+      <DaemonStatusCard />
 
       <TokenTrendPanel
         data={tokenSeries.data}
