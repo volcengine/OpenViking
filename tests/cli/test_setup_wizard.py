@@ -507,14 +507,14 @@ class TestQueryPlanner:
         assert "prompts" not in config_dict
         assert not (config_path.parent / "prompts").exists()
 
-    def test_wizard_v1_sets_planner_and_returns_none(self, tmp_path):
+    def test_wizard_v4_sets_planner_and_returns_none(self, tmp_path):
         config_dict: dict = {"embedding": {}, "vlm": {}}
         config_path = tmp_path / "ov.conf"
         with (
             patch.dict(os.environ, {"OPENVIKING_CONFIG_FILE": str(config_path)}, clear=False),
             patch("openviking_cli.setup_wizard._prompt_confirm", return_value=True),
             patch("openviking_cli.setup_wizard.get_ollama_models", return_value=[]),
-            patch("openviking_cli.setup_wizard._prompt_choice", return_value=2),  # v1_q8
+            patch("openviking_cli.setup_wizard._prompt_choice", return_value=2),  # v4_q8
             patch("openviking_cli.setup_wizard.is_model_available", return_value=True),
             patch("builtins.print"),
         ):

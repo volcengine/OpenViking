@@ -662,12 +662,12 @@ LiteLLM 的 Bedrock bearer-token API-key 鉴权，请设置 `forward_api_key=tru
 
 > 在 `openviking-server init` 里可勾选启用本地轻量 query planner，向导会自动拉取 Ollama 模型并写入 `query_planner` 配置。对于已知的 query planner 模型，`search()` 会在运行时自动选择匹配的内置 prompt；不在映射表中的模型继续使用 `retrieval.intent_analysis`。
 
-推荐优先使用本地 Ollama 模型 [`guoxuter/ov_intent_analysis_sft:v4_q8`](https://ollama.com/guoxuter/ov_intent_analysis_sft:v4_q8)。该模型基于 Qwen3.5-0.8B 进行微调，可本地部署，适合用小模型承担检索规划：在闲聊、问候或上下文已足够的场景下拒绝检索，从而减少不必要的记忆注入和 token 消耗；需要检索时，再生成面向 `skill`、`resource`、`memory` 的结构化查询。
+推荐优先使用本地 Ollama 模型 [`guoxuter/ov_intent_analysis_sft:v7_q8`](https://ollama.com/guoxuter/ov_intent_analysis_sft:v7_q8)。该模型基于 Qwen3.5-0.8B 进行微调，可本地部署，适合用小模型承担检索规划：在闲聊、问候或上下文已足够的场景下拒绝检索，从而减少不必要的记忆注入和 token 消耗；需要检索时，再生成面向 `skill`、`resource`、`memory` 的结构化查询。此前的 [`v4_q8`](https://ollama.com/guoxuter/ov_intent_analysis_sft:v4_q8) 版本仍作为可选项继续支持。
 
 使用前请先拉取模型，并确保 Ollama 服务可访问：
 
 ```bash
-ollama pull guoxuter/ov_intent_analysis_sft:v4_q8
+ollama pull guoxuter/ov_intent_analysis_sft:v7_q8
 ```
 
 然后在 OpenViking 配置中添加：
@@ -676,7 +676,7 @@ ollama pull guoxuter/ov_intent_analysis_sft:v4_q8
 {
   "query_planner": {
     "provider": "litellm",
-    "model": "ollama/guoxuter/ov_intent_analysis_sft:v4_q8",
+    "model": "ollama/guoxuter/ov_intent_analysis_sft:v7_q8",
     "api_base": "http://127.0.0.1:11434",
     "temperature": 0.0,
     "timeout": 60,
@@ -687,7 +687,7 @@ ollama pull guoxuter/ov_intent_analysis_sft:v4_q8
 }
 ```
 
-对于 `ollama/guoxuter/ov_intent_analysis_sft:v4_q8`，OpenViking 会在 search 阶段自动使用内置的 `retrieval.ov_intent_analysis_sft_v4` prompt，不需要替换 prompt 文件，也不需要设置 `prompts.templates_dir`。如果使用未映射的模型，OpenViking 会继续使用默认的 `retrieval.intent_analysis` prompt；`v1_q8` 与该默认 prompt 兼容。
+对于 `ollama/guoxuter/ov_intent_analysis_sft:v7_q8`（以及 `v4_q8`），OpenViking 会在 search 阶段自动使用对应的内置 prompt（分别为 `retrieval.ov_intent_analysis_sft_v7` 和 `retrieval.ov_intent_analysis_sft_v4`），不需要替换 prompt 文件，也不需要设置 `prompts.templates_dir`。如果使用未映射的模型，OpenViking 会继续使用默认的 `retrieval.intent_analysis` prompt。
 
 这样可以用小模型承担检索规划，降低延迟，同时保留更强的 `vlm` 处理语义提取、记忆提取和多模态内容。
 
