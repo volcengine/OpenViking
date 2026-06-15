@@ -6,7 +6,11 @@ import sys
 from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
+
 from openviking.parse.accessors.feishu_accessor import FeishuAccessor
+
+_FAKE_CLIENT_BUILDERS = []
 
 
 class _SuccessResponse:
@@ -87,6 +91,41 @@ class _FakeGetNodeSpaceRequestBuilder:
         return self._request
 
 
+class _FakeClient:
+    @staticmethod
+    def builder():
+        builder = _FakeClientBuilder()
+        _FAKE_CLIENT_BUILDERS.append(builder)
+        return builder
+
+
+class _FakeClientBuilder:
+    def __init__(self):
+        self.app_id_value = None
+        self.app_secret_value = None
+        self.domain_value = None
+        self.enable_set_token_value = False
+
+    def app_id(self, app_id):
+        self.app_id_value = app_id
+        return self
+
+    def app_secret(self, app_secret):
+        self.app_secret_value = app_secret
+        return self
+
+    def domain(self, domain):
+        self.domain_value = domain
+        return self
+
+    def enable_set_token(self, enable_set_token):
+        self.enable_set_token_value = enable_set_token
+        return self
+
+    def build(self):
+        return SimpleNamespace(builder=self)
+
+
 def _package(name):
     module = ModuleType(name)
     module.__path__ = []
@@ -94,6 +133,7 @@ def _package(name):
 
 
 def _install_fake_lark_modules(monkeypatch):
+    _FAKE_CLIENT_BUILDERS.clear()
     modules = {
         "lark_oapi": _package("lark_oapi"),
         "lark_oapi.api": _package("lark_oapi.api"),
@@ -114,8 +154,36 @@ def _install_fake_lark_modules(monkeypatch):
             "lark_oapi.core.model": core_model,
         }
     )
+    modules["lark_oapi"].Client = _FakeClient
     for name, module in modules.items():
         monkeypatch.setitem(sys.modules, name, module)
+
+
+def test_user_token_client_does_not_require_app_credentials(monkeypatch):
+    _install_fake_lark_modules(monkeypatch)
+    monkeypatch.delenv("FEISHU_APP_ID", raising=False)
+    monkeypatch.delenv("FEISHU_APP_SECRET", raising=False)
+    accessor = FeishuAccessor()
+    accessor._config = SimpleNamespace(app_id="", app_secret="", domain="")
+
+    client = accessor._get_client(use_user_token=True)
+
+    assert client.builder is _FAKE_CLIENT_BUILDERS[-1]
+    assert client.builder.domain_value == "https://open.feishu.cn"
+    assert client.builder.app_id_value is None
+    assert client.builder.app_secret_value is None
+    assert client.builder.enable_set_token_value is True
+
+
+def test_app_token_client_requires_app_credentials(monkeypatch):
+    _install_fake_lark_modules(monkeypatch)
+    monkeypatch.delenv("FEISHU_APP_ID", raising=False)
+    monkeypatch.delenv("FEISHU_APP_SECRET", raising=False)
+    accessor = FeishuAccessor()
+    accessor._config = SimpleNamespace(app_id="", app_secret="", domain="")
+
+    with pytest.raises(ValueError, match="Feishu credentials not configured"):
+        accessor._get_client()
 
 
 def test_fetch_all_blocks_uses_user_access_token_option(monkeypatch):

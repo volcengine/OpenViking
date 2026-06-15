@@ -52,8 +52,9 @@ class FeishuAccessor(DataAccessor):
 
     Requires:
     - lark-oapi package
-    - FEISHU_APP_ID and FEISHU_APP_SECRET environment variables,
-      or configuration in ov.conf
+    - FEISHU_APP_ID and FEISHU_APP_SECRET environment variables, or
+      configuration in ov.conf, for app-token imports. One-time user-token
+      imports can pass feishu_access_token instead.
     """
 
     PRIORITY = 100  # Higher than Git/HTTP, very specific
@@ -325,13 +326,15 @@ class FeishuAccessor(DataAccessor):
             config = self._get_config()
             app_id = config.app_id or os.getenv("FEISHU_APP_ID", "")
             app_secret = config.app_secret or os.getenv("FEISHU_APP_SECRET", "")
-            if not app_id or not app_secret:
+            if (not app_id or not app_secret) and not use_user_token:
                 raise ValueError(
                     "Feishu credentials not configured. Set FEISHU_APP_ID and "
                     "FEISHU_APP_SECRET environment variables, or configure in ov.conf."
                 )
             domain = config.domain or "https://open.feishu.cn"
-            builder = lark.Client.builder().app_id(app_id).app_secret(app_secret).domain(domain)
+            builder = lark.Client.builder().domain(domain)
+            if app_id and app_secret:
+                builder = builder.app_id(app_id).app_secret(app_secret)
             if use_user_token:
                 builder = builder.enable_set_token(True)
             client = builder.build()
