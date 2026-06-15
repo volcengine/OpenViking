@@ -23,24 +23,24 @@ tools = create_openviking_tools(
 
 When `url` is omitted, the adapters load connection settings from the OpenViking CLI config. Embedding and VLM providers are configured in OpenViking, not in your app.
 
-## Peer identity
+## Peer Identity
 
-All adapters that read or write session memory accept `peer_id`. Use it when one OpenViking user interacts with multiple stable external peers, such as different agents, bots, or people in shared sessions.
+Pass `actor_peer_id` to filter the current user's peer collection for filesystem and retrieval operations. Session message capture can still use `peer_id` for per-message speaker attribution.
 
 ```python
 retriever = OpenVikingRetriever(
     url="http://localhost:1933",
-    peer_id="assistant-a",
+    actor_peer_id="assistant-a",
 )
 
 chain = with_openviking_context(
     runnable,
     session_id="support-thread-1",
-    peer_id="assistant-a",
+    actor_peer_id="assistant-a",
 )
 ```
 
-For dynamic runs, `with_openviking_context()` also reads `config["configurable"]["peer_id"]` by default:
+For dynamic runs, `with_openviking_context()` still reads `config["configurable"]["peer_id"]` by default for captured message attribution:
 
 ```python
 chain.invoke(

@@ -70,10 +70,10 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts/acme/users \
 
 Trusted deployments can also call Admin API through a trusted gateway. There are two supported patterns:
 
-- Present only the trusted deployment's `root_api_key`. For `/api/v1/admin/*`, the server treats the request as ROOT even without `X-OpenViking-Account` / `X-OpenViking-User`.
-- Present `X-OpenViking-Account` + `X-OpenViking-User` for a registered gateway user. In that case the server looks up the effective role from the user registry.
+- Present the trusted deployment's `root_api_key`. For `/api/v1/admin/*`, the server treats the request as ROOT after validating that key.
+- Optionally also present `X-OpenViking-Account` + `X-OpenViking-User` when the admin route targets a specific account/user. Those headers must match the target URL and are kept as the request identity, but authorization still comes from the trusted `root_api_key`.
 
-Example using a registered gateway user:
+Example using a trusted upstream identity:
 
 ```bash
 # First, register the gateway admin (do this once in api_key mode)
@@ -217,10 +217,10 @@ Rules in trusted mode:
 
 - Normal data access does not require user registration or user-key provisioning first.
 - `X-OpenViking-Account` and `X-OpenViking-User` are required on tenant-scoped requests.
-- Use request-level `peer_id` for stable interaction peers in session memory and retrieval APIs.
-- `/api/v1/admin/*` is special: when no explicit identity is provided, trusted mode treats the request as ROOT. This is intended for trusted upstreams that authenticate only with the deployment's root API key.
-- Role is determined by looking up the account/user in APIKeyManager. If the user exists, their configured role is used; otherwise it defaults to `USER`.
-- Trusted identity comes from the headers, not from a user key. If `root_api_key` is configured, it still acts as proof that the caller is an approved trusted upstream.
+- Use `peer_id` in session-message bodies for stable speaker attribution. Use `X-OpenViking-Actor-Peer` to filter the current user's peer collection for filesystem and retrieval operations.
+- `/api/v1/admin/*` is special: when a configured `root_api_key` is presented, trusted mode treats the request as ROOT. Explicit account/user headers are allowed only when they are complete and match the target URL.
+- For ordinary trusted data APIs, role is determined by looking up the account/user in APIKeyManager. If the user exists, their configured role is used; otherwise it defaults to `USER`.
+- Trusted identity comes from the headers, not from a user key. If `root_api_key` is configured, it acts as proof that the caller is an approved trusted upstream.
 - If `root_api_key` is also configured, every request must still provide a matching API key.
 - Only expose this mode behind a trusted network boundary or an identity-injecting gateway.
 
@@ -228,10 +228,10 @@ Implications:
 
 - Trusted mode is not development mode.
 - Trusted mode does not use the Admin API as a prerequisite for ordinary reads, writes, search, or session access.
-- Admin API remains available in trusted mode for users that have been registered with appropriate roles (root/admin).
+- Admin API remains available in trusted mode to upstreams authenticated with the configured `root_api_key`.
 - Trusted Admin API responses omit `user_key` from account creation and user registration results.
 - `root` can create/delete accounts and change roles; `admin` can manage users inside its own account; `user` cannot call Admin API.
-- To use Admin API in trusted mode, first register the gateway's service account with the appropriate role using the Admin API in api_key mode.
+- To use Admin API in trusted mode on non-localhost deployments, configure `root_api_key` and pass it with each admin request.
 
 **curl**
 

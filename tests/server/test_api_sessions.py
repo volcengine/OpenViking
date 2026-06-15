@@ -12,7 +12,7 @@ import pytest
 from fastapi import FastAPI
 from starlette.requests import Request
 
-from openviking.message import Message, TextPart
+from openviking.message import ImagePart, Message, TextPart
 from openviking.server.app import create_app
 from openviking.server.config import ServerConfig, ToolOutputExternalizationConfig
 from openviking.server.dependencies import set_service
@@ -365,6 +365,169 @@ async def test_add_message(client: httpx.AsyncClient):
     body = resp.json()
     assert body["status"] == "ok"
     assert body["result"]["message_count"] == 1
+
+
+async def test_add_message_accepts_image_part(client: httpx.AsyncClient, service):
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+
+    resp = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json=_message_request(
+            "user",
+            parts=[
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "https://example.com/image.png",
+                        "detail": "auto",
+                    },
+                }
+            ],
+        ),
+    )
+
+    assert resp.status_code == 200
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    session = service.sessions.session(ctx, session_id)
+    await session.load()
+    assert isinstance(session.messages[0].parts[0], ImagePart)
+    assert session.messages[0].parts[0].url == "https://example.com/image.png"
+    assert session.messages[0].parts[0].detail == "auto"
+
+    context_resp = await client.get(f"/api/v1/sessions/{session_id}/context")
+    assert context_resp.status_code == 200
+    assert context_resp.json()["result"]["messages"][0]["parts"][0] == {
+        "type": "image_url",
+        "image_url": {
+            "url": "https://example.com/image.png",
+            "detail": "auto",
+        },
+    }
+
+
+async def test_add_message_resolves_image_part_url_path_variables(
+    client: httpx.AsyncClient,
+    service,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "openviking.server.routers.sessions.resolve_path_variables",
+        lambda value: value.replace("{calendar:today}", "2026/06/15"),
+    )
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+
+    resp = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json=_message_request(
+            "user",
+            parts=[
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "viking://resources/images/{calendar:today}/photo.png"},
+                }
+            ],
+        ),
+    )
+
+    assert resp.status_code == 200
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    session = service.sessions.session(ctx, session_id)
+    await session.load()
+    assert isinstance(session.messages[0].parts[0], ImagePart)
+    assert session.messages[0].parts[0].url == "viking://resources/images/2026/06/15/photo.png"
+
+
+async def test_add_message_accepts_mixed_parts(client: httpx.AsyncClient, service):
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+
+    resp = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json=_message_request(
+            "user",
+            parts=[
+                {"type": "text", "text": "Look at this"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "https://example.com/image.png"},
+                },
+            ],
+        ),
+    )
+
+    assert resp.status_code == 200
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    session = service.sessions.session(ctx, session_id)
+    await session.load()
+    assert isinstance(session.messages[0].parts[0], TextPart)
+    assert session.messages[0].parts[0].text == "Look at this"
+    assert isinstance(session.messages[0].parts[1], ImagePart)
+    assert session.messages[0].parts[1].url == "https://example.com/image.png"
+
+
+async def test_add_message_rejects_image_part_without_url(client: httpx.AsyncClient):
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+
+    resp = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json=_message_request(
+            "user",
+            parts=[{"type": "image_url", "image_url": {}}],
+        ),
+    )
+
+    assert resp.status_code == 400
+    assert "image_url part requires a non-empty URL" in resp.text
+
+
+async def test_add_message_rejects_openai_style_image_content(client: httpx.AsyncClient):
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+
+    resp = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={
+            "role": "user",
+            "content": {
+                "type": "image_url",
+            },
+        },
+    )
+
+    assert resp.status_code == 400
+
+
+async def test_batch_add_message_accepts_mixed_parts(client: httpx.AsyncClient, service):
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+
+    resp = await client.post(
+        f"/api/v1/sessions/{session_id}/messages/batch",
+        json={
+            "messages": [
+                _message_request(
+                    "user",
+                    parts=[
+                        {"type": "text", "text": "Look at this"},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "https://example.com/image.png"},
+                        },
+                    ],
+                )
+            ]
+        },
+    )
+
+    assert resp.status_code == 200
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    session = service.sessions.session(ctx, session_id)
+    await session.load()
+    assert isinstance(session.messages[0].parts[0], TextPart)
+    assert isinstance(session.messages[0].parts[1], ImagePart)
 
 
 async def test_add_message_splits_tool_result_aggregate(client: httpx.AsyncClient):

@@ -309,6 +309,7 @@ class SessionCompressorV2:
                 viking_fs=viking_fs,
                 transaction_handle=transaction_handle,
             )
+            await context_provider.prepare_extraction_messages()
             extract_context = context_provider.get_extract_context()
             isolation_handler = MemoryIsolationHandler(
                 ctx,
@@ -717,6 +718,8 @@ class SessionCompressorV2:
 
         # Use the provider's extraction context so prompt ranges and memory
         # rendering resolve against the same message list.
+        await provider.prepare_extraction_messages()
+
         extract_context = provider.get_extract_context()
         isolation_handler = MemoryIsolationHandler(
             ctx,

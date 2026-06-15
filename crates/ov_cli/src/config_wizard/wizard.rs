@@ -749,6 +749,7 @@ async fn status_box_runtime(active: Option<&Config>) -> StatusBoxRuntime {
         auth.api_key,
         auth.account,
         auth.user,
+        config.actor_peer_id.clone(),
         STATUS_BOX_PROBE_TIMEOUT_SECS,
         config.profile,
         config.extra_headers.clone(),

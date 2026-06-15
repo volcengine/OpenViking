@@ -38,6 +38,14 @@ session.add_message(
         ContextPart(uri="viking://user/memories/profile.md"),
     ]
 )
+
+session.add_message(
+    "user",
+    [
+        TextPart("Remember this studio layout."),
+        ImagePart(url="https://example.com/studio.png", detail="auto"),
+    ]
+)
 ```
 
 ### used
@@ -90,6 +98,7 @@ class Message:
 | Type | Description |
 |------|-------------|
 | `TextPart` | Text content |
+| `ImagePart` | Image URL content. During memory extraction, OpenViking can describe it with the configured VLM. |
 | `ContextPart` | Context reference (URI + abstract) |
 | `ToolPart` | Tool call (input + output) |
 

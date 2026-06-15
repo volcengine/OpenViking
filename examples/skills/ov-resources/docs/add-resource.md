@@ -1,6 +1,6 @@
 # Resource Ingestion (`ov add-resource`)
 
-The `ov add-resource` command imports external resources into OpenViking's context database under `viking://resources/`.
+The `ov add-resource` command imports external resources into OpenViking's context database. By default it writes shared account resources under `viking://resources/`, and it can also target current-user or peer-scoped resource roots.
 
 ## Supported Sources
 
@@ -33,7 +33,7 @@ ov add-resource ./docs-of-project.zip
 
 ## Target Location
 
-By default resources go under `viking://resources/`. Use `--to` or `--parent` to override:
+By default resources go under shared `viking://resources/`. Use `--to` or `--parent` to override:
 
 ```bash
 # Exact target (must not exist)
@@ -42,10 +42,18 @@ ov add-resource ./docs --to "viking://resources/2026/2026-01-01/"
 # Place under existing parent directory
 ov add-resource ./docs --parent "viking://resources/docs/"
 
+# Place under the current user's private resource root
+ov add-resource ./docs --parent "viking://user/resources/docs/"
+
+# Place under a specific peer's private resource root
+ov add-resource ./docs --parent "viking://user/alice/peers/web-visitor-alice/resources/docs/"
+
 # Auto-create parent if missing
 ov add-resource ./docs --parent-auto-create "viking://resources/docs/2026/05/07"
 ov add-resource ./docs -p "viking://resources/docs/{calendar:today}"
 ```
+
+`viking://user/resources/...` is current-user shorthand and resolves to `viking://user/{user_id}/resources/...`. `peer_id` path segments must be safe single-segment identifiers such as `web-visitor-alice`; values with `:`, `+`, `.`, `..`, or path separators are rejected.
 
 ## Async Processing Control
 

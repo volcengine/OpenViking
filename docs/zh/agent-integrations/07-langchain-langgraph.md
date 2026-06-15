@@ -25,22 +25,22 @@ tools = create_openviking_tools(
 
 ## Peer 身份
 
-所有会读写 session memory 的适配器都支持 `peer_id`。当同一个 OpenViking user 需要和多个稳定外部对象交互时使用它，例如不同 agent、机器人，或共享会话中的不同人。
+传入 `actor_peer_id` 可以在文件系统和检索操作中过滤当前用户的 peer 集合。session message capture 仍可使用 `peer_id` 表达每条消息的说话人归属。
 
 ```python
 retriever = OpenVikingRetriever(
     url="http://localhost:1933",
-    peer_id="assistant-a",
+    actor_peer_id="assistant-a",
 )
 
 chain = with_openviking_context(
     runnable,
     session_id="support-thread-1",
-    peer_id="assistant-a",
+    actor_peer_id="assistant-a",
 )
 ```
 
-动态运行时，`with_openviking_context()` 默认也会读取 `config["configurable"]["peer_id"]`：
+动态运行时，`with_openviking_context()` 默认仍会读取 `config["configurable"]["peer_id"]`，用于 captured message 的归属：
 
 ```python
 chain.invoke(

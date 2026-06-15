@@ -3,6 +3,23 @@
 All notable changes to OpenViking will be documented in this file.
 This changelog is automatically generated from [GitHub Releases](https://github.com/volcengine/OpenViking/releases).
 
+## v0.3.24 (2026-06-05)
+
+### Highlights
+
+- **CLI configuration UX and non-interactive setup**: `ov config` ships a refreshed wizard and clearer result output, and new non-interactive config commands let configuration be scripted in automation without interactive prompts.
+- **Durable async resource imports**: asynchronous `add_resource` tasks are now persisted, so an in-progress import survives a server restart instead of being dropped.
+- **Storage internals**: the snapshot tree function is optimized, and the deprecated agfs HTTP-mode client has been removed.
+- **MiniMax default model upgraded to M3**: the default MiniMax model is now M3.
+- **More precise embedding error classification**: `classify_api_error` uses word-boundary matching for numeric error patterns, reducing misclassification of provider error codes.
+
+### Upgrade Notes
+
+- The agfs HTTP-mode client has been removed; switch to the supported agfs access path if you relied on HTTP mode.
+- The default MiniMax model is now M3 — pin an explicit model in your config if you need the previous default.
+
+[Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.3.23...v0.3.24)
+
 ## v0.3.23 (2026-06-03)
 
 ### Highlights

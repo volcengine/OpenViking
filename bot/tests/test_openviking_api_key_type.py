@@ -1374,9 +1374,262 @@ async def test_viking_memory_context_keeps_legacy_users_separate_from_peers(
             "query": "hello",
             "user_ids": ["legacy-user"],
             "peer_ids": ["sender-1", "speaker-a"],
-            "limit": 10,
+            "limit": 35,
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_viking_memory_type_quota_groups_with_event_summaries_and_uris(
+    monkeypatch, tmp_path
+):
+    clients = []
+    base_uri = "viking://user/default/peers/sender-1/memories"
+
+    class _FakeClient:
+        def __init__(self):
+            self.find_calls = []
+            self.contents = {
+                f"{base_uri}/events/e1.md": "short event",
+                f"{base_uri}/events/e2.md": (
+                    "Summary: long event summary\n"
+                    "2023-01-01 (Sunday) ChatLog:\n"
+                    "full long event details "
+                    + ("x" * 800)
+                ),
+                f"{base_uri}/events/e3.md": "legacy event without summary",
+                f"{base_uri}/entities/en1.md": "short entity",
+                f"{base_uri}/entities/en2.md": "long entity " + ("y" * 500),
+                f"{base_uri}/preferences/p1.md": "first preference " + ("z" * 700),
+                f"{base_uri}/preferences/p2.md": "second preference",
+            }
+
+        def build_current_memory_target_uris(self, *, peer_ids=None, include_self=True):
+            return [base_uri]
+
+        async def find(self, *, query, target_uri, limit):
+            self.find_calls.append((query, target_uri, limit))
+            if target_uri.endswith("/events/"):
+                return {
+                    "memories": [
+                        {"uri": f"{base_uri}/events/e2.md", "score": 0.8},
+                        {"uri": f"{base_uri}/events/e1.md", "score": 0.9},
+                        {"uri": f"{base_uri}/events/e3.md", "score": 0.7},
+                    ]
+                }
+            if target_uri.endswith("/entities/"):
+                return {
+                    "memories": [
+                        {"uri": f"{base_uri}/entities/en2.md", "score": 0.8},
+                        {"uri": f"{base_uri}/entities/en1.md", "score": 0.9},
+                    ]
+                }
+            if target_uri.endswith("/preferences/"):
+                return {
+                    "memories": [
+                        {"uri": f"{base_uri}/preferences/p1.md", "score": 0.9},
+                        {"uri": f"{base_uri}/preferences/p2.md", "score": 0.8},
+                    ]
+                }
+            return {"memories": []}
+
+        async def read_content(self, uri, level="read"):
+            return self.contents[uri]
+
+        async def close(self):
+            return None
+
+    async def _fake_create(**_kwargs):
+        client = _FakeClient()
+        clients.append(client)
+        return client
+
+    monkeypatch.setattr(
+        "vikingbot.agent.memory.load_config",
+        lambda: _make_config("root", memory_recall_max_chars=1100),
+    )
+    monkeypatch.setattr("vikingbot.agent.memory.VikingClient.create", _fake_create)
+
+    store = MemoryStore(tmp_path)
+    result = await store.get_viking_memory_context(
+        current_message="hello",
+        workspace_id="workspace",
+        sender_id="sender-1",
+    )
+
+    assert clients[0].find_calls == [
+        ("hello", f"{base_uri}/events/", 10),
+        ("hello", f"{base_uri}/entities/", 10),
+        ("hello", f"{base_uri}/preferences/", 3),
+    ]
+    assert 'type="snippet"' not in result
+    assert result.count('type="full"') == 3
+    assert result.count('type="summary"') == 1
+    assert result.count('type="uri"') == 3
+    assert '<memory_group type="events">' in result
+    assert '<memory_group type="entities">' in result
+    assert '<memory_group type="preferences">' in result
+    assert "Event memories. The URI path includes the event date." in result
+    assert result.index('<memory_group type="events"') < result.index(
+        '<memory_group type="entities"'
+    )
+    assert result.index('<memory_group type="entities"') < result.index(
+        '<memory_group type="preferences"'
+    )
+    assert result.index("/events/e1.md") < result.index("/events/e2.md")
+    assert result.index("/events/e2.md") < result.index("/events/e3.md")
+    assert result.index("/events/e3.md") < result.index("/entities/en1.md")
+    assert result.index("/entities/en1.md") < result.index("/entities/en2.md")
+    assert result.index("/entities/en2.md") < result.index("/preferences/p1.md")
+    assert result.index("/preferences/p1.md") < result.index("/preferences/p2.md")
+    assert '<memory index="1" type="full">' in result
+    assert '<memory index="2" type="summary">' in result
+    assert '<memory index="3" type="full">' in result
+    assert '<memory index="4" type="full">' in result
+    assert '<memory index="5" type="uri">' in result
+    assert '<memory index="6" type="uri">' in result
+    assert '<memory index="7" type="uri">' in result
+    assert "long event summary" in result
+    assert "full long event details" not in result
+    assert "legacy event without summary" in result
+    assert "long entity " not in result
+    assert "first preference " not in result
+    assert "second preference" not in result
+
+
+@pytest.mark.asyncio
+async def test_viking_memory_type_quota_continues_after_oversized_entity(
+    monkeypatch, tmp_path
+):
+    base_uri = "viking://user/default/peers/sender-1/memories"
+
+    class _FakeClient:
+        def build_current_memory_target_uris(self, *, peer_ids=None, include_self=True):
+            return [base_uri]
+
+        async def find(self, *, query, target_uri, limit):
+            if target_uri.endswith("/entities/"):
+                return {
+                    "memories": [
+                        {"uri": f"{base_uri}/entities/long.md", "score": 0.9},
+                        {"uri": f"{base_uri}/entities/short.md", "score": 0.8},
+                    ]
+                }
+            return {"memories": []}
+
+        async def read_content(self, uri, level="read"):
+            if uri.endswith("/long.md"):
+                return "long fact " + ("x" * 500)
+            return "short fact"
+
+        async def close(self):
+            return None
+
+    async def _fake_create(**_kwargs):
+        return _FakeClient()
+
+    monkeypatch.setattr(
+        "vikingbot.agent.memory.load_config",
+        lambda: _make_config("root", memory_recall_max_chars=1200),
+    )
+    monkeypatch.setattr("vikingbot.agent.memory.VikingClient.create", _fake_create)
+
+    store = MemoryStore(tmp_path)
+    result = await store.get_viking_memory_context(
+        current_message="hello",
+        workspace_id="workspace",
+        sender_id="sender-1",
+    )
+
+    assert '<memory index="1" type="uri">' in result
+    assert '<uri>viking://user/default/peers/sender-1/memories/entities/long.md</uri>' in result
+    assert '<memory index="2" type="full">' in result
+    assert '<uri>viking://user/default/peers/sender-1/memories/entities/short.md</uri>' in result
+    assert "<content>short fact</content>" in result
+    assert "long fact " not in result
+
+
+@pytest.mark.asyncio
+async def test_viking_memory_type_quota_does_not_overflow_preference_budget(
+    monkeypatch, tmp_path
+):
+    base_uri = "viking://user/default/peers/sender-1/memories"
+
+    class _FakeClient:
+        def build_current_memory_target_uris(self, *, peer_ids=None, include_self=True):
+            return [base_uri]
+
+        async def find(self, *, query, target_uri, limit):
+            if target_uri.endswith("/preferences/"):
+                return {
+                    "memories": [
+                        {"uri": f"{base_uri}/preferences/long.md", "score": 0.9},
+                        {"uri": f"{base_uri}/preferences/short.md", "score": 0.8},
+                    ]
+                }
+            return {"memories": []}
+
+        async def read_content(self, uri, level="read"):
+            if uri.endswith("/long.md"):
+                return "very long preference " + ("x" * 500)
+            return "short preference"
+
+        async def close(self):
+            return None
+
+    async def _fake_create(**_kwargs):
+        return _FakeClient()
+
+    monkeypatch.setattr(
+        "vikingbot.agent.memory.load_config",
+        lambda: _make_config("root", memory_recall_max_chars=100),
+    )
+    monkeypatch.setattr("vikingbot.agent.memory.VikingClient.create", _fake_create)
+
+    store = MemoryStore(tmp_path)
+    result = await store.get_viking_memory_context(
+        current_message="hello",
+        workspace_id="workspace",
+        sender_id="sender-1",
+    )
+
+    assert 'type="full"' not in result
+    assert result.count('type="uri"') == 2
+    assert "very long preference" not in result
+    assert "short preference" not in result
+
+
+@pytest.mark.asyncio
+async def test_viking_memory_context_returns_empty_after_profile_filter(
+    monkeypatch, tmp_path
+):
+    class _FakeClient:
+        async def search_memory(self, **_kwargs):
+            return [
+                {
+                    "uri": "viking://user/default/peers/sender-1/memories/profile.md",
+                    "score": 0.9,
+                }
+            ]
+
+        async def close(self):
+            return None
+
+    async def _fake_create(**_kwargs):
+        return _FakeClient()
+
+    monkeypatch.setattr("vikingbot.agent.memory.load_config", lambda: _make_config("root"))
+    monkeypatch.setattr("vikingbot.agent.memory.VikingClient.create", _fake_create)
+
+    store = MemoryStore(tmp_path)
+    result = await store.get_viking_memory_context(
+        current_message="hello",
+        workspace_id="workspace",
+        sender_id="sender-1",
+        user_ids=["legacy-user"],
+    )
+
+    assert result == ""
 
 
 @pytest.mark.asyncio
@@ -1612,7 +1865,47 @@ async def test_context_reminds_agent_to_search_current_memory_question(tmp_path)
 
     assert "OpenViking Memory Retrieval" in user_info
     assert "use openviking_search for the current question" in user_info
-    assert "A previous empty search result does not prove" in user_info
+    assert "search again when the requested fact changes" in user_info
+    assert "grouped by memory_type" in user_info
+    assert "events contain atomic time-based facts" in user_info
+    assert "entities contain stable topic/entity facts" in user_info
+    assert "preferences contain likes, habits, and recurring tendencies" in user_info
+    assert "full means the full memory content is already shown" in user_info
+    assert "summary means only a summary is shown" in user_info
+    assert "uri means only the URI is shown" in user_info
+    assert "openviking_multi_read" in user_info
+
+
+@pytest.mark.asyncio
+async def test_context_memory_prefix_tells_agent_to_read_summary_and_uri_details(tmp_path):
+    class _Memory:
+        async def get_viking_memory_context(self, **_kwargs):
+            return (
+                "### user memories:\n"
+                '<memory index="1" type="summary">\n'
+                "  <uri>viking://user/default/peers/sender-1/memories/events/e.md</uri>\n"
+                "  <summary>important clue</summary>\n"
+                "</memory>"
+            )
+
+    context = ContextBuilder(workspace=tmp_path, sender_id="sender-1")
+    context._memory = _Memory()
+
+    user_info = await context._build_user_memory(
+        session_key=SessionKey(type="cli", channel_id="default", chat_id="chat-1"),
+        current_message="问题",
+        sender_id="sender-1",
+        ov_tools_enable=True,
+        is_first_round=False,
+    )
+
+    assert "## openviking_search(query=[user_query])" in user_info
+    assert "grouped by memory_type" in user_info
+    assert "full means the full memory content is already shown" in user_info
+    assert "summary means only a summary is shown" in user_info
+    assert "uri means only the URI is shown" in user_info
+    assert "openviking_multi_read" in user_info
+    assert "important clue" in user_info
 
 
 @pytest.mark.asyncio

@@ -52,6 +52,20 @@ fn ignore_dirs_filter<'a>(
     }
 }
 
+fn normalize_zip_entry_name(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
+fn zip_entry_name(relative_path: &Path) -> Result<String> {
+    let name = relative_path.to_str().ok_or_else(|| {
+        Error::InvalidPath(format!(
+            "Non-UTF-8 path: {}",
+            relative_path.to_string_lossy()
+        ))
+    })?;
+    Ok(normalize_zip_entry_name(name))
+}
+
 pub fn api_error_from_envelope(json: &Value, status: StatusCode) -> String {
     let error_code = json
         .get("error")
@@ -145,6 +159,7 @@ pub struct BaseClient {
     pub(crate) api_key: Option<String>,
     pub(crate) account: Option<String>,
     pub(crate) user: Option<String>,
+    pub(crate) actor_peer_id: Option<String>,
     pub(crate) profile_enabled: bool,
     pub(crate) extra_headers: Option<std::collections::HashMap<String, String>>,
 }
@@ -155,6 +170,7 @@ impl BaseClient {
         api_key: Option<String>,
         account: Option<String>,
         user: Option<String>,
+        actor_peer_id: Option<String>,
         timeout_secs: f64,
         profile_enabled: bool,
         extra_headers: Option<std::collections::HashMap<String, String>>,
@@ -170,6 +186,7 @@ impl BaseClient {
             api_key,
             account,
             user,
+            actor_peer_id,
             profile_enabled,
             extra_headers,
         }
@@ -185,6 +202,10 @@ impl BaseClient {
 
     pub fn user_id(&self) -> Option<&str> {
         self.user.as_deref()
+    }
+
+    pub fn actor_peer_id(&self) -> Option<&str> {
+        self.actor_peer_id.as_deref()
     }
 
     pub fn api_key(&self) -> Option<&str> {
@@ -210,6 +231,11 @@ impl BaseClient {
         if let Some(user) = &self.user {
             if let Ok(value) = reqwest::header::HeaderValue::from_str(user) {
                 headers.insert("X-OpenViking-User", value);
+            }
+        }
+        if let Some(actor_peer_id) = &self.actor_peer_id {
+            if let Ok(value) = reqwest::header::HeaderValue::from_str(actor_peer_id) {
+                headers.insert("X-OpenViking-Actor-Peer", value);
             }
         }
         if let Some(extra_headers) = &self.extra_headers {
@@ -574,7 +600,16 @@ mod tests {
 
     #[test]
     fn append_profile_query_adds_flag_when_enabled() {
-        let client = BaseClient::new("http://localhost:1933", None, None, None, 5.0, true, None);
+        let client = BaseClient::new(
+            "http://localhost:1933",
+            None,
+            None,
+            None,
+            None,
+            5.0,
+            true,
+            None,
+        );
 
         let params =
             client.append_profile_query(&[("to_uri".to_string(), "viking://x".to_string())]);
@@ -590,11 +625,36 @@ mod tests {
 
     #[test]
     fn append_profile_query_keeps_existing_profile_flag() {
-        let client = BaseClient::new("http://localhost:1933", None, None, None, 5.0, true, None);
+        let client = BaseClient::new(
+            "http://localhost:1933",
+            None,
+            None,
+            None,
+            None,
+            5.0,
+            true,
+            None,
+        );
 
         let params = client.append_profile_query(&[("profile".to_string(), "1".to_string())]);
 
         assert_eq!(params, vec![("profile".to_string(), "1".to_string())]);
+    }
+
+    #[test]
+    fn zip_entry_name_normalizes_windows_separators() {
+        let entry = zip_entry_name(Path::new("scripts\\check_bounding_boxes.py"))
+            .expect("path should be utf-8");
+
+        assert_eq!(entry, "scripts/check_bounding_boxes.py");
+    }
+
+    #[test]
+    fn zip_entry_name_preserves_posix_separators() {
+        let entry = zip_entry_name(Path::new("scripts/check_bounding_boxes.py"))
+            .expect("path should be utf-8");
+
+        assert_eq!(entry, "scripts/check_bounding_boxes.py");
     }
 }
 
@@ -647,9 +707,7 @@ impl<'a> FileUploader<'a> {
             let path = entry.path();
             if path.is_file() {
                 let name = path.strip_prefix(dir_path).unwrap_or(path);
-                let name_str = name.to_str().ok_or_else(|| {
-                    Error::InvalidPath(format!("Non-UTF-8 path: {}", name.to_string_lossy()))
-                })?;
+                let name_str = zip_entry_name(name)?;
                 zip.start_file(name_str, options)?;
                 let mut file = File::open(path)?;
                 std::io::copy(&mut file, &mut zip)?;
@@ -722,9 +780,7 @@ impl<'a> FileUploader<'a> {
             let path = entry.path();
             if path.is_file() {
                 let name = path.strip_prefix(dir_path).unwrap_or(path);
-                let name_str = name.to_str().ok_or_else(|| {
-                    Error::InvalidPath(format!("Non-UTF-8 path: {}", name.to_string_lossy()))
-                })?;
+                let name_str = zip_entry_name(name)?;
                 if verbose {
                     eprintln!("  Adding: {}", name_str);
                 }

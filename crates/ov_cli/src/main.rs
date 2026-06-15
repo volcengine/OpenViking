@@ -1,4 +1,5 @@
 mod base_client;
+mod cli_arg_scan;
 mod client;
 mod commands;
 mod config;
@@ -18,7 +19,7 @@ mod theme;
 mod tui;
 mod utils;
 
-use clap::{ArgAction, Args, Parser, Subcommand};
+use clap::{ArgAction, Args, CommandFactory, Parser, Subcommand};
 use colored::Colorize;
 use config::Config;
 use error::{Error, Result};
@@ -49,6 +50,7 @@ impl CliContext {
         compact: bool,
         account: Option<String>,
         user: Option<String>,
+        actor_peer_id: Option<String>,
         sudo: bool,
         show_progress: Option<bool>,
         verbose: Option<bool>,
@@ -59,6 +61,10 @@ impl CliContext {
         }
         if user.is_some() {
             config.user = user;
+        }
+        if actor_peer_id.is_some() {
+            config.actor_peer_id = actor_peer_id;
+            config.agent_id = None;
         }
         Self {
             config,
@@ -92,6 +98,8 @@ impl CliContext {
             auth.api_key,
             auth.account,
             auth.user,
+            self.config.effective_actor_peer_id(),
+            self.config.agent_id.clone(),
             timeout_secs.unwrap_or(self.config.timeout),
             self.profile.unwrap_or(self.config.profile),
             self.config.extra_headers.clone(),
@@ -105,30 +113,46 @@ impl CliContext {
 #[command(version = env!("OPENVIKING_CLI_VERSION"))]
 #[command(arg_required_else_help = true)]
 struct Cli {
-    /// Output format
+    /// Choose human table output or machine-readable JSON
     #[arg(
         short,
         long,
         value_enum,
         default_value = "table",
         global = true,
-        hide = true
+        hide = true,
+        value_name = "table|json"
     )]
     output: OutputFormat,
 
-    /// Compact representation, defaults to true - compacts JSON output or uses simplified representation for Table output
-    #[arg(short, long, global = true, default_value = "true", hide = true)]
+    /// Use compact table/JSON rendering
+    #[arg(
+        short,
+        long,
+        global = true,
+        default_value = "true",
+        default_missing_value = "true",
+        hide = true,
+        num_args = 0..=1,
+        require_equals = true,
+        action = ArgAction::Set,
+        value_name = "bool"
+    )]
     compact: bool,
 
-    /// Account identifier to send as X-OpenViking-Account
+    /// Override X-OpenViking-Account for this command
     #[arg(long, global = true, hide = true)]
     account: Option<String>,
 
-    /// User identifier to send as X-OpenViking-User
+    /// Override X-OpenViking-User for this command
     #[arg(long, global = true, hide = true)]
     user: Option<String>,
 
-    /// Use root API key for admin commands
+    /// Peer actor scope to send as X-OpenViking-Actor-Peer
+    #[arg(long = "actor-peer-id", global = true, hide = true)]
+    actor_peer_id: Option<String>,
+
+    /// Use root API key for admin, system, reindex, and task status/list commands
     #[arg(long, global = true, hide = true)]
     sudo: bool,
 
@@ -155,15 +179,23 @@ struct Cli {
 #[derive(Args, Debug, Clone, Copy, Default)]
 struct UploadCliOptions {
     /// Show local file upload progress (overrides config file)
-    #[arg(long, conflicts_with = "no_progress")]
+    #[arg(
+        long,
+        conflicts_with = "no_progress",
+        help_heading = "Advanced options"
+    )]
     progress: bool,
 
     /// Disable local file upload progress (overrides config file)
-    #[arg(long = "no-progress", conflicts_with = "progress")]
+    #[arg(
+        long = "no-progress",
+        conflicts_with = "progress",
+        help_heading = "Advanced options"
+    )]
     no_progress: bool,
 
     /// Print extra diagnostics during local file upload
-    #[arg(short, long)]
+    #[arg(short, long, help_heading = "Advanced options")]
     verbose: bool,
 }
 
@@ -221,58 +253,91 @@ enum Commands {
     /// [Data] Add resources into OpenViking
     AddResource {
         /// Local path or URL to import
+        #[arg(value_name = "path-or-url")]
         path: String,
         /// Exact target URI (must not exist yet) (cannot be used with --parent)
-        #[arg(long)]
+        #[arg(long, value_name = "uri", help_heading = "Common options")]
         to: Option<String>,
         /// Target parent URI (must already exist and be a directory) (cannot be used with --to)
-        #[arg(long)]
+        #[arg(long, value_name = "uri", help_heading = "Common options")]
         parent: Option<String>,
         /// Target parent URI (create parent directory if it does not exist) (cannot be used with --to or --parent)
-        #[arg(short = 'p', long = "parent-auto-create")]
+        #[arg(
+            short = 'p',
+            long = "parent-auto-create",
+            value_name = "uri",
+            help_heading = "Common options"
+        )]
         parent_auto_create: Option<String>,
         /// Reason for import
-        #[arg(long, default_value = "")]
+        #[arg(
+            long,
+            default_value = "",
+            value_name = "text",
+            help_heading = "Advanced options"
+        )]
         reason: String,
         /// Additional instruction
-        #[arg(long, default_value = "")]
+        #[arg(
+            long,
+            default_value = "",
+            value_name = "text",
+            help_heading = "Advanced options"
+        )]
         instruction: String,
         /// Wait until processing is complete
-        #[arg(long)]
+        #[arg(long, help_heading = "Common options")]
         wait: bool,
         /// Wait timeout in seconds (only used with --wait)
-        #[arg(long)]
+        #[arg(long, value_name = "seconds", help_heading = "Common options")]
         timeout: Option<f64>,
         /// Enable strict mode for directory scanning (fail if any unsupported files found)
-        #[arg(long = "strict", action = ArgAction::SetTrue)]
+        #[arg(
+            long = "strict",
+            action = ArgAction::SetTrue,
+            help_heading = "Advanced options"
+        )]
         strict_mode: bool,
         /// Ignore directories, e.g. --ignore-dirs "node_modules,dist"
-        #[arg(long)]
+        #[arg(long, value_name = "dirs", help_heading = "Advanced options")]
         ignore_dirs: Option<String>,
         /// Include files extensions, e.g. --include "*.pdf,*.md"
-        #[arg(long)]
+        #[arg(long, value_name = "pattern", help_heading = "Common options")]
         include: Option<String>,
         /// Exclude files extensions, e.g. --exclude "*.tmp,*.log"
-        #[arg(long)]
+        #[arg(long, value_name = "pattern", help_heading = "Common options")]
         exclude: Option<String>,
         /// Do not directly upload media files
-        #[arg(long = "no-directly-upload-media", default_value_t = false)]
+        #[arg(
+            long = "no-directly-upload-media",
+            default_value_t = false,
+            help_heading = "Advanced options"
+        )]
         no_directly_upload_media: bool,
         /// Watch interval in minutes for automatic resource monitoring (0 = no monitoring)
-        #[arg(long, default_value = "0")]
+        #[arg(
+            long,
+            default_value = "0",
+            value_name = "minutes",
+            help_heading = "Advanced options"
+        )]
         watch_interval: f64,
+        /// Parser-specific import options, e.g. --args feishu_access_token:u-xxx
+        #[arg(long = "args")]
+        resource_args: Option<String>,
         #[command(flatten)]
         upload_options: UploadCliOptions,
     },
     /// [Data] Add a skill into OpenViking
     AddSkill {
         /// Skill directory, SKILL.md, or raw content
+        #[arg(value_name = "skill-path-or-content")]
         data: String,
         /// Wait until processing is complete
-        #[arg(long)]
+        #[arg(long, help_heading = "Common options")]
         wait: bool,
         /// Wait timeout in seconds
-        #[arg(long)]
+        #[arg(long, value_name = "seconds", help_heading = "Common options")]
         timeout: Option<f64>,
         #[command(flatten)]
         upload_options: UploadCliOptions,
@@ -286,229 +351,355 @@ enum Commands {
     #[command(alias = "list")]
     Ls {
         /// Viking URI to list (default: viking://)
-        #[arg(default_value = "viking://")]
+        #[arg(default_value = "viking://", value_name = "uri")]
         uri: String,
         /// Simple path output (just paths, no table)
-        #[arg(short, long)]
+        #[arg(short, long, help_heading = "Common options")]
         simple: bool,
         /// List all subdirectories recursively
-        #[arg(short, long)]
+        #[arg(short, long, help_heading = "Common options")]
         recursive: bool,
         /// Abstract content limit (only for agent output)
-        #[arg(long = "abs-limit", short = 'l', default_value = "256")]
+        #[arg(
+            long = "abs-limit",
+            short = 'l',
+            default_value = "256",
+            value_name = "n",
+            help_heading = "Advanced options"
+        )]
         abs_limit: i32,
         /// Show all hidden files
-        #[arg(short, long)]
+        #[arg(short, long, help_heading = "Common options")]
         all: bool,
         /// Maximum number of nodes to list
         #[arg(
             long = "node-limit",
             short = 'n',
             alias = "limit",
-            default_value = "256"
+            default_value = "256",
+            value_name = "n",
+            help_heading = "Common options"
         )]
         node_limit: i32,
     },
     /// [Data] Get directory tree
     Tree {
         /// Viking URI to get tree for
+        #[arg(value_name = "uri")]
         uri: String,
         /// Abstract content limit (only for agent output)
-        #[arg(long = "abs-limit", short = 'l', default_value = "128")]
+        #[arg(
+            long = "abs-limit",
+            short = 'l',
+            default_value = "128",
+            value_name = "n",
+            help_heading = "Advanced options"
+        )]
         abs_limit: i32,
         /// Show all hidden files
-        #[arg(short, long)]
+        #[arg(short, long, help_heading = "Common options")]
         all: bool,
         /// Maximum number of nodes to list
         #[arg(
             long = "node-limit",
             short = 'n',
             alias = "limit",
-            default_value = "256"
+            default_value = "256",
+            value_name = "n",
+            help_heading = "Common options"
         )]
         node_limit: i32,
         /// Maximum depth level to traverse (default: 3)
-        #[arg(short = 'L', long = "level-limit", default_value = "3")]
+        #[arg(
+            short = 'L',
+            long = "level-limit",
+            default_value = "3",
+            value_name = "n",
+            help_heading = "Common options"
+        )]
         level_limit: i32,
     },
     /// [Data] Create directory
     Mkdir {
         /// Directory URI to create
+        #[arg(value_name = "uri")]
         uri: String,
         /// Initial directory description
-        #[arg(long)]
+        #[arg(long, value_name = "text", help_heading = "Common options")]
         description: Option<String>,
     },
     /// [Data] Remove resource
     #[command(alias = "del", alias = "delete")]
     Rm {
         /// Viking URI to remove
+        #[arg(value_name = "uri")]
         uri: String,
         /// Remove recursively
-        #[arg(short, long)]
+        #[arg(short, long, help_heading = "Common options")]
         recursive: bool,
     },
     /// [Data] Move or rename resource
     #[command(alias = "rename")]
     Mv {
         /// Source URI
+        #[arg(value_name = "from-uri")]
         from_uri: String,
         /// Target URI
+        #[arg(value_name = "to-uri")]
         to_uri: String,
     },
     /// [Data] Get resource metadata
     Stat {
         /// Viking URI to get metadata for
+        #[arg(value_name = "uri")]
         uri: String,
     },
     /// [Data] Read file content (Level 2)
     Read {
         /// Viking URI
+        #[arg(value_name = "uri")]
         uri: String,
     },
     /// [Data] Read abstract content (Level 0)
     Abstract {
         /// Directory URI
+        #[arg(value_name = "directory-uri")]
         uri: String,
     },
     /// [Data] Read overview content (Level 1)
     Overview {
         /// Directory URI
+        #[arg(value_name = "directory-uri")]
         uri: String,
     },
     /// [Data] Write text content to an existing file
     Write {
         /// Viking URI
+        #[arg(value_name = "uri")]
         uri: String,
         /// Content to write
-        #[arg(long, conflicts_with = "from_file")]
+        #[arg(
+            long,
+            conflicts_with = "from_file",
+            value_name = "text",
+            help_heading = "Common options"
+        )]
         content: Option<String>,
         /// Read content from a local file
-        #[arg(long = "from-file", conflicts_with = "content")]
+        #[arg(
+            long = "from-file",
+            conflicts_with = "content",
+            value_name = "path",
+            help_heading = "Common options"
+        )]
         from_file: Option<String>,
         /// Append instead of replacing the file
-        #[arg(long)]
+        #[arg(long, help_heading = "Common options")]
         append: bool,
         /// Write mode: replace, append, or create (default: replace)
-        #[arg(long, value_name = "MODE", conflicts_with = "append")]
+        #[arg(
+            long,
+            value_name = "replace|append|create",
+            conflicts_with = "append",
+            help_heading = "Advanced options"
+        )]
         mode: Option<String>,
         /// Wait for async processing to finish
-        #[arg(long, default_value = "false")]
+        #[arg(long, default_value = "false", help_heading = "Common options")]
         wait: bool,
         /// Optional wait timeout in seconds
-        #[arg(long)]
+        #[arg(long, value_name = "seconds", help_heading = "Common options")]
         timeout: Option<f64>,
     },
     /// [Data] Download file to local path (supports binaries/images)
     Get {
         /// Viking URI
+        #[arg(value_name = "uri")]
         uri: String,
         /// Local path (must not exist yet)
+        #[arg(value_name = "local-path")]
         local_path: String,
     },
     /// [Data] Run semantic retrieval
     Find {
         /// Search query
+        #[arg(value_name = "query")]
         query: String,
         /// Target URI
-        #[arg(short, long, default_value = "")]
+        #[arg(
+            short,
+            long,
+            default_value = "",
+            value_name = "uri",
+            help_heading = "Common options"
+        )]
         uri: String,
-        /// Maximum number of results
+        /// Maximum final results returned
         #[arg(
             short = 'n',
             long = "node-limit",
             alias = "limit",
-            default_value = "10"
+            default_value = "10",
+            value_name = "n",
+            help_heading = "Common options"
         )]
         node_limit: i32,
         /// Score threshold
-        #[arg(short, long)]
+        #[arg(short, long, value_name = "score", help_heading = "Common options")]
         threshold: Option<f64>,
         /// Only include results on or after this time (e.g. 48h, 7d, 2026-03-10, ISO-8601)
-        #[arg(long = "after")]
+        #[arg(long = "after", value_name = "time", help_heading = "Advanced options")]
         after: Option<String>,
         /// Only include results on or before this time (e.g. 24h, 2026-03-15, ISO-8601)
-        #[arg(long = "before")]
+        #[arg(
+            long = "before",
+            value_name = "time",
+            help_heading = "Advanced options"
+        )]
         before: Option<String>,
         /// Only include results with specific level(s) (0=abstract, 1=overview, 2=file)
-        #[arg(short = 'L', long = "level", value_delimiter = ',')]
+        #[arg(
+            short = 'L',
+            long = "level",
+            value_delimiter = ',',
+            value_name = "0,1,2",
+            help_heading = "Common options"
+        )]
         level: Option<Vec<i32>>,
-        /// Limit memory retrieval to this peer plus the current user memory
-        #[arg(long = "peer-id")]
-        peer_id: Option<String>,
+        /// Only include results with specific context type(s) (memory, resource, skill)
+        #[arg(
+            long = "context-type",
+            value_delimiter = ',',
+            value_name = "type",
+            help_heading = "Common options"
+        )]
+        context_type: Option<Vec<String>>,
     },
     /// [Experimental][Data] Run context-aware retrieval
     Search {
         /// Search query
+        #[arg(value_name = "query")]
         query: String,
         /// Target URI
-        #[arg(short, long, default_value = "")]
+        #[arg(
+            short,
+            long,
+            default_value = "",
+            value_name = "uri",
+            help_heading = "Common options"
+        )]
         uri: String,
         /// Session ID for context-aware search
-        #[arg(long)]
+        #[arg(long, value_name = "id", help_heading = "Common options")]
         session_id: Option<String>,
-        /// Maximum number of results
+        /// Maximum results per search pass. Search may merge multiple passes.
         #[arg(
             short = 'n',
             long = "node-limit",
             alias = "limit",
-            default_value = "10"
+            default_value = "10",
+            value_name = "n",
+            help_heading = "Common options"
         )]
         node_limit: i32,
         /// Score threshold
-        #[arg(short, long)]
+        #[arg(short, long, value_name = "score", help_heading = "Advanced options")]
         threshold: Option<f64>,
         /// Only include results on or after this time (e.g. 48h, 7d, 2026-03-10, ISO-8601)
-        #[arg(long = "after")]
+        #[arg(long = "after", value_name = "time", help_heading = "Advanced options")]
         after: Option<String>,
         /// Only include results on or before this time (e.g. 24h, 2026-03-15, ISO-8601)
-        #[arg(long = "before")]
+        #[arg(
+            long = "before",
+            value_name = "time",
+            help_heading = "Advanced options"
+        )]
         before: Option<String>,
         /// Only include results with specific level(s) (0=abstract, 1=overview, 2=file)
-        #[arg(short = 'L', long = "level", value_delimiter = ',')]
+        #[arg(
+            short = 'L',
+            long = "level",
+            value_delimiter = ',',
+            value_name = "0,1,2",
+            help_heading = "Advanced options"
+        )]
         level: Option<Vec<i32>>,
-        /// Limit memory retrieval to this peer plus the current user memory
-        #[arg(long = "peer-id")]
-        peer_id: Option<String>,
+        /// Only include results with specific context type(s) (memory, resource, skill)
+        #[arg(
+            long = "context-type",
+            value_delimiter = ',',
+            value_name = "type",
+            help_heading = "Advanced options"
+        )]
+        context_type: Option<Vec<String>>,
     },
     /// [Data] Run content pattern search
     Grep {
         /// Target URI
-        #[arg(short, long, default_value = "viking://")]
+        #[arg(
+            short,
+            long,
+            default_value = "viking://",
+            value_name = "uri",
+            help_heading = "Common options"
+        )]
         uri: String,
         /// Excluded URI range. Any entry whose URI falls under this URI prefix is skipped
-        #[arg(short = 'x', long = "exclude-uri")]
+        #[arg(
+            short = 'x',
+            long = "exclude-uri",
+            value_name = "uri",
+            help_heading = "Advanced options"
+        )]
         exclude_uri: Option<String>,
         /// Search pattern
+        #[arg(value_name = "pattern")]
         pattern: String,
         /// Case insensitive
-        #[arg(short, long)]
+        #[arg(short, long, help_heading = "Common options")]
         ignore_case: bool,
         /// Maximum number of results
         #[arg(
             short = 'n',
             long = "node-limit",
             alias = "limit",
-            default_value = "256"
+            default_value = "256",
+            value_name = "n",
+            help_heading = "Common options"
         )]
         node_limit: i32,
         /// Maximum depth level to traverse (default: 10)
-        #[arg(short = 'L', long = "level-limit", default_value = "10")]
+        #[arg(
+            short = 'L',
+            long = "level-limit",
+            default_value = "10",
+            value_name = "n",
+            help_heading = "Advanced options"
+        )]
         level_limit: i32,
     },
     /// [Data] Run file glob pattern search
     Glob {
         /// Glob pattern
+        #[arg(value_name = "pattern")]
         pattern: String,
         /// Search root URI
-        #[arg(short, long, default_value = "viking://")]
+        #[arg(
+            short,
+            long,
+            default_value = "viking://",
+            value_name = "uri",
+            help_heading = "Common options"
+        )]
         uri: String,
         /// Maximum number of results
         #[arg(
             short = 'n',
             long = "node-limit",
             alias = "limit",
-            default_value = "256"
+            default_value = "256",
+            value_name = "n",
+            help_heading = "Common options"
         )]
         node_limit: i32,
     },
@@ -522,6 +713,7 @@ enum Commands {
         /// Content to memorize. Plain string (treated as user message),
         /// JSON {"role":"...","content":"..."} for a single message,
         /// or JSON array of such objects for multiple messages.
+        #[arg(value_name = "content")]
         content: String,
     },
     /// [Data] Privacy config management commands
@@ -532,93 +724,139 @@ enum Commands {
     /// [Experimental][Data] List relations of a resource
     Relations {
         /// Viking URI
+        #[arg(value_name = "uri")]
         uri: String,
     },
     /// [Experimental][Data] Create relation links from one URI to one or more targets
     Link {
         /// Source URI
+        #[arg(value_name = "from-uri")]
         from_uri: String,
         /// One or more target URIs
+        #[arg(value_name = "to-uri")]
         to_uris: Vec<String>,
         /// Reason for linking
-        #[arg(long, default_value = "")]
+        #[arg(
+            long,
+            default_value = "",
+            value_name = "text",
+            help_heading = "Common options"
+        )]
         reason: String,
     },
     /// [Experimental][Data] Remove a relation link
     Unlink {
         /// Source URI
+        #[arg(value_name = "from-uri")]
         from_uri: String,
         /// Target URI to unlink
+        #[arg(value_name = "to-uri")]
         to_uri: String,
     },
     /// [Data] Export context as .ovpack
     Export {
         /// Source URI
+        #[arg(value_name = "uri")]
         uri: String,
         /// Output .ovpack file path
+        #[arg(value_name = "output.ovpack")]
         to: String,
         /// Include dense vector snapshot when compatible metadata is available
-        #[arg(long, default_value_t = false)]
+        #[arg(long, default_value_t = false, help_heading = "Common options")]
         include_vectors: bool,
     },
     /// [Data] Back up public OpenViking scopes as a restore-only .ovpack
     Backup {
         /// Output .ovpack file path
+        #[arg(value_name = "output.ovpack")]
         to: String,
         /// Include dense vector snapshot when compatible metadata is available
-        #[arg(long, default_value_t = false)]
+        #[arg(long, default_value_t = false, help_heading = "Common options")]
         include_vectors: bool,
     },
     /// [Data] Import .ovpack into target URI
     Import {
         /// Input .ovpack file path
+        #[arg(value_name = "file.ovpack")]
         file_path: String,
         /// Target parent URI
+        #[arg(value_name = "target-uri")]
         target_uri: String,
         /// Conflict policy: fail, overwrite, or skip
-        #[arg(long, value_parser = ["fail", "overwrite", "skip"])]
+        #[arg(
+            long,
+            value_parser = ["fail", "overwrite", "skip"],
+            value_name = "policy",
+            help_heading = "Common options"
+        )]
         on_conflict: Option<String>,
         /// Vector handling: auto restores compatible snapshots, recompute ignores them, require fails if unavailable
-        #[arg(long, value_parser = ["auto", "recompute", "require"])]
+        #[arg(
+            long,
+            value_parser = ["auto", "recompute", "require"],
+            value_name = "mode",
+            help_heading = "Common options"
+        )]
         vector_mode: Option<String>,
     },
     /// [Data] Restore a backup .ovpack to original public scope roots
     Restore {
         /// Input backup .ovpack file path
+        #[arg(value_name = "backup.ovpack")]
         file_path: String,
         /// Conflict policy: fail, overwrite, or skip
-        #[arg(long, value_parser = ["fail", "overwrite", "skip"])]
+        #[arg(
+            long,
+            value_parser = ["fail", "overwrite", "skip"],
+            value_name = "policy",
+            help_heading = "Common options"
+        )]
         on_conflict: Option<String>,
         /// Vector handling: auto restores compatible snapshots, recompute ignores them, require fails if unavailable
-        #[arg(long, value_parser = ["auto", "recompute", "require"])]
+        #[arg(
+            long,
+            value_parser = ["auto", "recompute", "require"],
+            value_name = "mode",
+            help_heading = "Common options"
+        )]
         vector_mode: Option<String>,
     },
     // --- Interactive Tools ---
     /// [Interactive] Interactive TUI file explorer
     Tui {
         /// Viking URI to start browsing (default: /)
-        #[arg(default_value = "/")]
+        #[arg(default_value = "/", value_name = "uri")]
         uri: String,
     },
     /// [Interactive] Chat with vikingbot agent
     Chat {
         /// Message to send to the agent
-        #[arg(short, long)]
+        #[arg(short, long, value_name = "text", help_heading = "Common options")]
         message: Option<String>,
         /// Session ID (defaults to machine unique ID)
-        #[arg(short, long)]
+        #[arg(short, long, value_name = "id", help_heading = "Common options")]
         session: Option<String>,
         /// Sender ID
-        #[arg(short, long, default_value = "user")]
+        #[arg(
+            long,
+            default_value = "user",
+            value_name = "id",
+            help_heading = "Advanced options"
+        )]
         sender: String,
         /// Stream the response (default: true)
-        #[arg(long, default_value_t = true)]
+        #[arg(
+            long,
+            default_value_t = true,
+            value_name = "bool",
+            help_heading = "Advanced options"
+        )]
         stream: bool,
         /// Disable rich formatting / markdown rendering
-        #[arg(long)]
+        #[arg(long, help_heading = "Common options")]
         no_format: bool,
         /// Disable command history
-        #[arg(long)]
+        #[arg(long, help_heading = "Advanced options")]
         no_history: bool,
     },
 
@@ -626,7 +864,7 @@ enum Commands {
     /// [Status] Wait for queued async processing to complete
     Wait {
         /// Wait timeout in seconds
-        #[arg(long)]
+        #[arg(long, value_name = "seconds", help_heading = "Common options")]
         timeout: Option<f64>,
     },
     /// [Status] Track async resource processing tasks
@@ -637,7 +875,7 @@ enum Commands {
     /// [Status] All OpenViking Server components status
     Status {
         /// Show full component tables
-        #[arg(long)]
+        #[arg(long, help_heading = "Common options")]
         verbose: bool,
     },
     /// [Status] Observe OpenViking Server components status
@@ -656,6 +894,7 @@ enum Commands {
     #[command(alias = "lang")]
     Language {
         /// Language code: en or zh-CN
+        #[arg(value_name = "en|zh-CN")]
         language: Option<String>,
     },
     /// [Status] Show CLI version
@@ -675,23 +914,39 @@ enum Commands {
     /// [Admin] Reindex semantic/vector artifacts for a URI
     Reindex {
         /// Viking URI
+        #[arg(value_name = "uri")]
         uri: String,
         /// Reindex mode
-        #[arg(long, default_value = "vectors_only")]
+        #[arg(
+            long,
+            default_value = "vectors_only",
+            value_name = "mode",
+            help_heading = "Common options"
+        )]
         mode: String,
         /// Wait for reindex to complete
-        #[arg(long, default_value_t = true, action = ArgAction::Set)]
+        #[arg(
+            long,
+            default_value_t = true,
+            action = ArgAction::Set,
+            value_name = "bool",
+            help_heading = "Common options"
+        )]
         wait: bool,
     },
 }
 
 impl Commands {
-    /// Returns true if this is an admin command that supports --sudo
-    fn is_admin_command(&self) -> bool {
-        matches!(
-            self,
-            Self::Admin { .. } | Self::System { .. } | Self::Reindex { .. }
-        )
+    /// Returns true if this command supports running with the root API key.
+    fn supports_sudo(&self) -> bool {
+        match self {
+            Self::Admin { .. } | Self::System { .. } | Self::Reindex { .. } => true,
+            Self::Task { action } => matches!(
+                action,
+                TaskCommands::Status { .. } | TaskCommands::List { .. }
+            ),
+            _ => false,
+        }
     }
 
     fn supports_upload_options(&self) -> bool {
@@ -717,15 +972,16 @@ enum TaskCommands {
     /// Show status of a specific task
     Status {
         /// Task ID returned by add-resource/add-skill
+        #[arg(value_name = "task-id")]
         task_id: String,
     },
     /// List all tracked tasks
     List {
         /// Filter by task type (e.g. add_resource, add_skill, session_commit, reindex)
-        #[arg(long)]
+        #[arg(long, value_name = "type")]
         task_type: Option<String>,
         /// Filter by status (pending, running, completed, failed)
-        #[arg(long)]
+        #[arg(long, value_name = "status")]
         status: Option<String>,
     },
     /// Watch task management (auto-refresh subscriptions)
@@ -740,7 +996,7 @@ enum SystemCommands {
     /// Wait for queued async processing to complete
     Wait {
         /// Wait timeout in seconds
-        #[arg(long)]
+        #[arg(long, value_name = "seconds")]
         timeout: Option<f64>,
     },
     /// Show component status
@@ -750,6 +1006,7 @@ enum SystemCommands {
     /// Check filesystem and vector-index consistency for a URI subtree
     Consistency {
         /// Viking URI to check
+        #[arg(value_name = "uri")]
         uri: String,
     },
     /// Cryptographic key management commands
@@ -770,12 +1027,14 @@ enum SystemBackendCommands {
     #[command(name = "sync-status")]
     SyncStatus {
         /// Viking URI to inspect
+        #[arg(value_name = "uri")]
         uri: String,
     },
     /// Retry pending multi-write backend sync work for a URI subtree
     #[command(name = "sync-retry")]
     SyncRetry {
         /// Viking URI to repair
+        #[arg(value_name = "uri")]
         uri: String,
     },
 }
@@ -807,52 +1066,61 @@ enum SessionCommands {
     /// Get session details
     Get {
         /// Session ID
+        #[arg(value_name = "session-id")]
         session_id: String,
     },
     /// Get full merged session context
     GetSessionContext {
         /// Session ID
+        #[arg(value_name = "session-id")]
         session_id: String,
         /// Token budget for latest archive overview inclusion
-        #[arg(long = "token-budget", default_value = "128000")]
+        #[arg(long = "token-budget", default_value = "128000", value_name = "tokens")]
         token_budget: i32,
     },
     /// Get one completed archive for a session
     GetSessionArchive {
         /// Session ID
+        #[arg(value_name = "session-id")]
         session_id: String,
         /// Archive ID
+        #[arg(value_name = "archive-id")]
         archive_id: String,
     },
     /// Delete a session
     Delete {
         /// Session ID
+        #[arg(value_name = "session-id")]
         session_id: String,
     },
     /// Add one message to a session
     AddMessage {
         /// Session ID
+        #[arg(value_name = "session-id")]
         session_id: String,
         /// Message role, e.g. user/assistant
-        #[arg(long)]
+        #[arg(long, value_name = "role")]
         role: String,
         /// Message content
-        #[arg(long)]
+        #[arg(long, value_name = "content")]
         content: String,
         /// Stable interaction peer id. Omit for self memory.
-        #[arg(long = "peer-id")]
+        #[arg(long = "peer-id", value_name = "peer-id")]
         peer_id: Option<String>,
     },
     /// Add multiple messages to a session
     AddMessages {
         /// Session ID
+        #[arg(value_name = "session-id")]
         session_id: String,
         /// Messages as JSON array of {role, content} objects
+        #[arg(value_name = "messages-json")]
         messages: String,
     },
     /// Commit a session (archive messages and extract memories)
     Commit {
         /// Session ID
+        #[arg(value_name = "session-id")]
         session_id: String,
     },
 }
@@ -862,6 +1130,7 @@ enum SkillCommands {
     /// Add skills from a source
     Add {
         /// Skill source
+        #[arg(value_name = "source")]
         source: String,
         /// Install only the named skill(s); use '*' to install all skills in a source
         #[arg(short = 's', long = "skill", value_name = "NAME", num_args = 1.., value_delimiter = ',')]
@@ -884,35 +1153,49 @@ enum SkillCommands {
             short = 'n',
             long = "node-limit",
             alias = "limit",
-            default_value = "1000"
+            default_value = "1000",
+            value_name = "n"
         )]
         node_limit: i32,
     },
     /// Find installed agent skills semantically
     Find {
         /// Search query
+        #[arg(value_name = "query")]
         query: String,
         /// Maximum number of results
         #[arg(
             short = 'n',
             long = "node-limit",
             alias = "limit",
-            default_value = "10"
+            default_value = "10",
+            value_name = "n"
         )]
         node_limit: i32,
         /// Score threshold
-        #[arg(short, long)]
+        #[arg(short, long, value_name = "score")]
         threshold: Option<f64>,
         /// Only include results with specific level(s) (0=abstract, 1=overview, 2=file)
-        #[arg(short = 'L', long = "level", value_delimiter = ',')]
+        #[arg(
+            short = 'L',
+            long = "level",
+            value_delimiter = ',',
+            value_name = "0,1,2"
+        )]
         level: Option<Vec<i32>>,
     },
     /// Show one installed skill
     Show {
         /// Skill name
+        #[arg(value_name = "name")]
         name: String,
         /// Detail level to show (0=abstract, 1=overview, 2=SKILL.md content)
-        #[arg(short = 'L', long = "level", value_parser = clap::value_parser!(i32).range(0..=2))]
+        #[arg(
+            short = 'L',
+            long = "level",
+            value_parser = clap::value_parser!(i32).range(0..=2),
+            value_name = "0|1|2"
+        )]
         level: Option<i32>,
         /// Include files under the skill directory
         #[arg(short = 'f', long = "files")]
@@ -921,7 +1204,7 @@ enum SkillCommands {
         #[arg(long = "source")]
         source: bool,
         /// Output format for this command
-        #[arg(long = "format", value_parser = ["table", "json"])]
+        #[arg(long = "format", value_parser = ["table", "json"], value_name = "table|json")]
         format: Option<String>,
         /// Include full SKILL.md content (legacy alias for --level 2)
         #[arg(long, hide = true)]
@@ -930,6 +1213,7 @@ enum SkillCommands {
     /// Update installed skills from their recorded source
     Update {
         /// Skill name(s) to update; omit to update all installed skills
+        #[arg(value_name = "skill")]
         skills: Vec<String>,
         /// Wait until processing is complete
         #[arg(short = 'w', long)]
@@ -942,6 +1226,7 @@ enum SkillCommands {
     #[command(alias = "rm", alias = "delete")]
     Remove {
         /// Skill name(s) to remove
+        #[arg(value_name = "skill")]
         skills: Vec<String>,
         /// Remove all installed skills
         #[arg(long = "all")]
@@ -953,6 +1238,7 @@ enum SkillCommands {
     /// Validate a local SKILL.md file or skill directory
     Validate {
         /// SKILL.md file or skill directory path
+        #[arg(value_name = "path")]
         path: String,
         /// Strict mode; warnings such as name mismatch are reported as errors
         #[arg(long = "strict")]
@@ -971,44 +1257,50 @@ enum WatchCommands {
     /// Show details of a single watch task
     Show {
         /// task_id (UUID) or to_uri (viking:// URI)
+        #[arg(value_name = "task-or-uri")]
         key: String,
     },
     /// Delete a watch task
     Rm {
         /// task_id (UUID) or to_uri (viking:// URI)
+        #[arg(value_name = "task-or-uri")]
         key: String,
     },
     /// Pause a watch task (preserves cadence, stops scheduling)
     Pause {
         /// task_id (UUID) or to_uri (viking:// URI)
+        #[arg(value_name = "task-or-uri")]
         key: String,
     },
     /// Resume a paused watch task
     Resume {
         /// task_id (UUID) or to_uri (viking:// URI)
+        #[arg(value_name = "task-or-uri")]
         key: String,
     },
     /// Update one or more mutable fields of a watch task.
     /// At least one flag is required.
     Update {
         /// task_id (UUID) or to_uri (viking:// URI)
+        #[arg(value_name = "task-or-uri")]
         key: String,
         /// New refresh interval in minutes (must be > 0)
-        #[arg(long)]
+        #[arg(long, value_name = "minutes")]
         interval: Option<f64>,
         /// Set active (true) / paused (false) — alternative to pause/resume shortcuts
-        #[arg(long)]
+        #[arg(long, value_name = "bool")]
         active: Option<bool>,
         /// Human-readable reason for the watch task
-        #[arg(long)]
+        #[arg(long, value_name = "text")]
         reason: Option<String>,
         /// Processing instruction forwarded to the refresh handler
-        #[arg(long)]
+        #[arg(long, value_name = "text")]
         instruction: Option<String>,
     },
     /// Trigger an immediate refresh, bypassing the schedule
     Trigger {
         /// task_id (UUID) or to_uri (viking:// URI)
+        #[arg(value_name = "task-or-uri")]
         key: String,
     },
 }
@@ -1020,60 +1312,77 @@ enum PrivacyCommands {
     /// List targets by category
     List {
         /// Privacy config category
+        #[arg(value_name = "category")]
         category: String,
     },
     /// Get current active config for target
     Get {
         /// Privacy config category
+        #[arg(value_name = "category")]
         category: String,
         /// Privacy config target key
+        #[arg(value_name = "target-key")]
         target_key: String,
     },
     /// Upsert privacy config values
     Upsert {
         /// Privacy config category
+        #[arg(value_name = "category")]
         category: String,
         /// Privacy config target key
+        #[arg(value_name = "target-key")]
         target_key: String,
         /// JSON object string for values
-        #[arg(long, conflicts_with = "values_file")]
+        #[arg(long, conflicts_with = "values_file", value_name = "json")]
         values_json: Option<String>,
         /// JSON file path for values
-        #[arg(long = "values-file", conflicts_with = "values_json")]
+        #[arg(
+            long = "values-file",
+            conflicts_with = "values_json",
+            value_name = "path"
+        )]
         values_file: Option<String>,
         /// Existing key updates in key=value format (repeatable)
-        #[arg(long = "key")]
+        #[arg(long = "key", value_name = "key=value")]
         key: Vec<String>,
         /// Change reason
-        #[arg(long, default_value = "")]
+        #[arg(long, default_value = "", value_name = "text")]
         change_reason: String,
         /// Optional labels JSON object string
-        #[arg(long = "labels-json")]
+        #[arg(long = "labels-json", value_name = "json")]
         labels_json: Option<String>,
     },
     /// List versions for target
     Versions {
         /// Privacy config category
+        #[arg(value_name = "category")]
         category: String,
         /// Privacy config target key
+        #[arg(value_name = "target-key")]
         target_key: String,
     },
     /// Get one version by number
     Version {
         /// Privacy config category
+        #[arg(value_name = "category")]
         category: String,
         /// Privacy config target key
+        #[arg(value_name = "target-key")]
         target_key: String,
         /// Version number
+        #[arg(value_name = "version")]
         version: i32,
     },
     /// Activate a version
     Activate {
         /// Privacy config category
+        #[arg(value_name = "category")]
         category: String,
         /// Privacy config target key
+        #[arg(value_name = "target-key")]
         target_key: String,
         /// Version number
+        #[arg(value_name = "version")]
         version: i32,
     },
 }
@@ -1083,9 +1392,10 @@ enum AdminCommands {
     /// Create a new account with its first admin user
     CreateAccount {
         /// Account ID to create
+        #[arg(value_name = "account-id")]
         account_id: String,
         /// First admin user ID
-        #[arg(long = "admin")]
+        #[arg(long = "admin", value_name = "user-id")]
         admin_user_id: String,
     },
     /// List all accounts (ROOT only)
@@ -1093,53 +1403,70 @@ enum AdminCommands {
     /// Delete an account and all associated users (ROOT only)
     DeleteAccount {
         /// Account ID to delete
+        #[arg(value_name = "account-id")]
         account_id: String,
+    },
+    /// Migrate legacy agent/session data to user-owned namespaces (ROOT only)
+    Migrate {
+        /// Remove legacy agent/session directories after migration is verified
+        #[arg(long)]
+        cleanup: bool,
     },
     /// Register a new user in an account
     RegisterUser {
         /// Account ID
+        #[arg(value_name = "account-id")]
         account_id: String,
         /// User ID to register
+        #[arg(value_name = "user-id")]
         user_id: String,
         /// Role: admin or user
-        #[arg(long, default_value = "user")]
+        #[arg(long, default_value = "user", value_name = "role")]
         role: String,
     },
     /// List all users in an account
     ListUsers {
         /// Account ID
+        #[arg(value_name = "account-id")]
         account_id: String,
         /// Maximum number of users to list (default: 100)
-        #[arg(long, default_value = "100")]
+        #[arg(long, default_value = "100", value_name = "n")]
         limit: u32,
         /// Filter users by name (supports wildcard * and ?)
-        #[arg(long)]
+        #[arg(long, value_name = "pattern")]
         name: Option<String>,
         /// Filter users by role
-        #[arg(long)]
+        #[arg(long, value_name = "role")]
         role: Option<String>,
     },
     /// Remove a user from an account
     RemoveUser {
         /// Account ID
+        #[arg(value_name = "account-id")]
         account_id: String,
         /// User ID to remove
+        #[arg(value_name = "user-id")]
         user_id: String,
     },
     /// Change a user's role (ROOT only)
     SetRole {
         /// Account ID
+        #[arg(value_name = "account-id")]
         account_id: String,
         /// User ID
+        #[arg(value_name = "user-id")]
         user_id: String,
         /// New role: admin or user
+        #[arg(value_name = "role")]
         role: String,
     },
     /// Regenerate a user's API key (old key immediately invalidated)
     RegenerateKey {
         /// Account ID
+        #[arg(value_name = "account-id")]
         account_id: String,
         /// User ID
+        #[arg(value_name = "user-id")]
         user_id: String,
     },
 }
@@ -1173,6 +1500,7 @@ enum ConfigCommands {
     /// Switch between saved configs
     Switch {
         /// Saved config name to activate. Omit to open the interactive selector.
+        #[arg(value_name = "name")]
         name: Option<String>,
     },
     /// List saved configs
@@ -1199,129 +1527,205 @@ enum ConfigAddTarget {
 #[derive(Args, Debug, Clone)]
 struct ConfigAddOvServiceArgs {
     /// Saved config name. Agents should pass this for idempotent retries; generated when omitted.
-    #[arg(long)]
+    #[arg(long, value_name = "name", help_heading = "Common options")]
     name: Option<String>,
     /// Read API key from stdin
-    #[arg(long, conflicts_with = "api_key_env")]
+    #[arg(long, conflicts_with = "api_key_env", help_heading = "Common options")]
     api_key_stdin: bool,
     /// Read API key from an environment variable
-    #[arg(long, conflicts_with = "api_key_stdin")]
+    #[arg(
+        long,
+        conflicts_with = "api_key_stdin",
+        value_name = "env",
+        help_heading = "Common options"
+    )]
     api_key_env: Option<String>,
     /// Account identifier to send as X-OpenViking-Account
-    #[arg(long)]
+    #[arg(long, value_name = "account", help_heading = "Advanced options")]
     account: Option<String>,
     /// User identifier to send as X-OpenViking-User
-    #[arg(long)]
+    #[arg(long, value_name = "user", help_heading = "Advanced options")]
     user: Option<String>,
+    /// Peer actor scope to send as X-OpenViking-Actor-Peer
+    #[arg(long = "actor-peer-id", hide = true)]
+    actor_peer_id: Option<String>,
     /// Make the saved config active after validation
-    #[arg(long)]
+    #[arg(long, help_heading = "Common options")]
     activate: bool,
     /// Replace an existing saved config
-    #[arg(long)]
+    #[arg(long, help_heading = "Common options")]
     force: bool,
 }
 
 #[derive(Args, Debug, Clone)]
 struct ConfigAddCustomArgs {
     /// Saved config name. Agents should pass this for idempotent retries; generated when omitted.
-    #[arg(long)]
+    #[arg(long, value_name = "name", help_heading = "Common options")]
     name: Option<String>,
     /// OpenViking server URL
-    #[arg(long)]
+    #[arg(long, value_name = "url", help_heading = "Common options")]
     url: Option<String>,
     /// Read API key from stdin
-    #[arg(long, conflicts_with_all = ["api_key_env", "root_api_key_stdin"])]
+    #[arg(
+        long,
+        conflicts_with_all = ["api_key_env", "root_api_key_stdin"],
+        help_heading = "Common options"
+    )]
     api_key_stdin: bool,
     /// Read API key from an environment variable
-    #[arg(long, conflicts_with = "api_key_stdin")]
+    #[arg(
+        long,
+        conflicts_with = "api_key_stdin",
+        value_name = "env",
+        help_heading = "Common options"
+    )]
     api_key_env: Option<String>,
     /// Read root API key from stdin
-    #[arg(long, conflicts_with_all = ["root_api_key_env", "api_key_stdin"])]
+    #[arg(
+        long,
+        conflicts_with_all = ["root_api_key_env", "api_key_stdin"],
+        help_heading = "Common options"
+    )]
     root_api_key_stdin: bool,
     /// Read root API key from an environment variable
-    #[arg(long, conflicts_with = "root_api_key_stdin")]
+    #[arg(
+        long,
+        conflicts_with = "root_api_key_stdin",
+        value_name = "env",
+        help_heading = "Common options"
+    )]
     root_api_key_env: Option<String>,
     /// Account identifier to send as X-OpenViking-Account
-    #[arg(long)]
+    #[arg(long, value_name = "account", help_heading = "Advanced options")]
     account: Option<String>,
     /// User identifier to send as X-OpenViking-User
-    #[arg(long)]
+    #[arg(long, value_name = "user", help_heading = "Advanced options")]
     user: Option<String>,
+    /// Peer actor scope to send as X-OpenViking-Actor-Peer
+    #[arg(long = "actor-peer-id", hide = true)]
+    actor_peer_id: Option<String>,
     /// Make the saved config active after validation
-    #[arg(long)]
+    #[arg(long, help_heading = "Common options")]
     activate: bool,
     /// Replace an existing saved config
-    #[arg(long)]
+    #[arg(long, help_heading = "Common options")]
     force: bool,
 }
 
 #[derive(Args, Debug, Clone)]
 struct ConfigEditArgs {
     /// Saved config name to edit
+    #[arg(value_name = "name")]
     name: String,
     /// Rename the saved config
-    #[arg(long)]
+    #[arg(long, value_name = "name", help_heading = "Common options")]
     new_name: Option<String>,
     /// New server URL. OpenViking Service configs use a fixed URL.
-    #[arg(long)]
+    #[arg(long, value_name = "url", help_heading = "Common options")]
     url: Option<String>,
     /// Read replacement API key from stdin
-    #[arg(long, conflicts_with_all = ["api_key_env", "clear_api_key", "root_api_key_stdin"])]
+    #[arg(
+        long,
+        conflicts_with_all = ["api_key_env", "clear_api_key", "root_api_key_stdin"],
+        help_heading = "Common options"
+    )]
     api_key_stdin: bool,
     /// Read replacement API key from an environment variable
-    #[arg(long, conflicts_with_all = ["api_key_stdin", "clear_api_key"])]
+    #[arg(
+        long,
+        conflicts_with_all = ["api_key_stdin", "clear_api_key"],
+        value_name = "env",
+        help_heading = "Common options"
+    )]
     api_key_env: Option<String>,
     /// Remove the API key
-    #[arg(long, conflicts_with_all = ["api_key_stdin", "api_key_env"])]
+    #[arg(
+        long,
+        conflicts_with_all = ["api_key_stdin", "api_key_env"],
+        help_heading = "Common options"
+    )]
     clear_api_key: bool,
     /// Read replacement root API key from stdin
-    #[arg(long, conflicts_with_all = ["root_api_key_env", "clear_root_api_key", "api_key_stdin"])]
+    #[arg(
+        long,
+        conflicts_with_all = ["root_api_key_env", "clear_root_api_key", "api_key_stdin"],
+        help_heading = "Common options"
+    )]
     root_api_key_stdin: bool,
     /// Read replacement root API key from an environment variable
-    #[arg(long, conflicts_with_all = ["root_api_key_stdin", "clear_root_api_key"])]
+    #[arg(
+        long,
+        conflicts_with_all = ["root_api_key_stdin", "clear_root_api_key"],
+        value_name = "env",
+        help_heading = "Common options"
+    )]
     root_api_key_env: Option<String>,
     /// Remove the root API key
-    #[arg(long, conflicts_with_all = ["root_api_key_stdin", "root_api_key_env"])]
+    #[arg(
+        long,
+        conflicts_with_all = ["root_api_key_stdin", "root_api_key_env"],
+        help_heading = "Common options"
+    )]
     clear_root_api_key: bool,
     /// Account identifier to send as X-OpenViking-Account
-    #[arg(long)]
+    #[arg(long, value_name = "account", help_heading = "Advanced options")]
     account: Option<String>,
     /// User identifier to send as X-OpenViking-User
-    #[arg(long)]
+    #[arg(long, value_name = "user", help_heading = "Advanced options")]
     user: Option<String>,
+    /// Peer actor scope to send as X-OpenViking-Actor-Peer
+    #[arg(
+        long = "actor-peer-id",
+        hide = true,
+        conflicts_with = "clear_actor_peer_id"
+    )]
+    actor_peer_id: Option<String>,
+    /// Remove the peer actor scope
+    #[arg(
+        long = "clear-actor-peer-id",
+        hide = true,
+        conflicts_with = "actor_peer_id"
+    )]
+    clear_actor_peer_id: bool,
     /// Make the saved config active after validation
-    #[arg(long)]
+    #[arg(long, help_heading = "Common options")]
     activate: bool,
     /// Replace an existing saved config when renaming
-    #[arg(long)]
+    #[arg(long, help_heading = "Common options")]
     force: bool,
 }
 
 #[derive(Args, Debug, Clone)]
 struct ConfigDeleteArgs {
     /// Saved config name to delete
+    #[arg(value_name = "name")]
     name: String,
-    /// Delete even when the saved file cannot be parsed
-    #[arg(long)]
+    /// Delete even when the saved config file cannot be parsed
+    #[arg(long, help_heading = "Common options")]
     force: bool,
 }
 
 fn find_command_index(args: &[OsString]) -> Option<usize> {
+    let root_value_options = cli_root_value_options();
     let mut i = 1;
     while i < args.len() {
         let token = args[i].to_string_lossy();
-        match token.as_ref() {
-            "--output" | "-o" | "--compact" | "--account" | "--user" => {
-                i += 2;
-            }
-            "--sudo" | "--progress" | "--no-progress" | "--verbose" | "-v" => {
-                i += 1;
-            }
-            _ if token.starts_with('-') => {
-                i += 1;
-            }
-            _ => return Some(i),
+        let token_ref = token.as_ref();
+
+        if token_ref == "--compact" || token_ref == "-c" {
+            i += compact_option_width(args, i);
+            continue;
         }
+        if token_ref.starts_with('-') {
+            i += if root_value_options.consumes_value(token_ref) && !token_ref.contains('=') {
+                2
+            } else {
+                1
+            };
+            continue;
+        }
+
+        return Some(i);
     }
     None
 }
@@ -1384,12 +1788,14 @@ fn plain_help_misuse(args: &[OsString]) -> Option<PlainHelpMisuse> {
 }
 
 fn command_tokens_for_plain_help(args: &[OsString]) -> Vec<String> {
+    let value_options = cli_value_options();
+
     let mut tokens = Vec::new();
     let mut i = 1;
     while i < args.len() {
         let token = args[i].to_string_lossy();
         let token_ref = token.as_ref();
-        if consumes_plain_help_value(token_ref) {
+        if value_options.consumes_value(token_ref) {
             i += if token_ref.contains('=') { 1 } else { 2 };
             continue;
         }
@@ -1403,83 +1809,16 @@ fn command_tokens_for_plain_help(args: &[OsString]) -> Vec<String> {
     tokens
 }
 
-fn consumes_plain_help_value(token: &str) -> bool {
-    matches!(
-        token,
-        "-o" | "--output"
-            | "-c"
-            | "--compact"
-            | "--account"
-            | "--user"
-            | "-u"
-            | "--uri"
-            | "-x"
-            | "--exclude-uri"
-            | "--to"
-            | "--parent"
-            | "-p"
-            | "--parent-auto-create"
-            | "--reason"
-            | "--instruction"
-            | "--timeout"
-            | "--ignore-dirs"
-            | "--include"
-            | "--exclude"
-            | "-n"
-            | "--node-limit"
-            | "--limit"
-            | "-l"
-            | "--abs-limit"
-            | "-L"
-            | "--level"
-            | "--level-limit"
-            | "-s"
-            | "--skill"
-            | "--session"
-            | "--sender"
-            | "--message"
-            | "--role"
-            | "--content"
-            | "--mode"
-            | "--on-conflict"
-            | "--vector-mode"
-            | "--token-budget"
-            | "--interval"
-            | "--active"
-            | "--format"
-    ) || token.starts_with("--output=")
-        || token.starts_with("--compact=")
-        || token.starts_with("--account=")
-        || token.starts_with("--user=")
-        || token.starts_with("--uri=")
-        || token.starts_with("--exclude-uri=")
-        || token.starts_with("--to=")
-        || token.starts_with("--parent=")
-        || token.starts_with("--parent-auto-create=")
-        || token.starts_with("--reason=")
-        || token.starts_with("--instruction=")
-        || token.starts_with("--timeout=")
-        || token.starts_with("--ignore-dirs=")
-        || token.starts_with("--include=")
-        || token.starts_with("--exclude=")
-        || token.starts_with("--node-limit=")
-        || token.starts_with("--limit=")
-        || token.starts_with("--abs-limit=")
-        || token.starts_with("--level=")
-        || token.starts_with("--level-limit=")
-        || token.starts_with("--skill=")
-        || token.starts_with("--session=")
-        || token.starts_with("--sender=")
-        || token.starts_with("--message=")
-        || token.starts_with("--role=")
-        || token.starts_with("--content=")
-        || token.starts_with("--mode=")
-        || token.starts_with("--on-conflict=")
-        || token.starts_with("--vector-mode=")
-        || token.starts_with("--token-budget=")
-        || token.starts_with("--interval=")
-        || token.starts_with("--active=")
-        || token.starts_with("--format=")
+fn cli_value_options() -> cli_arg_scan::ValueOptions {
+    let mut command = Cli::command();
+    command.build();
+    cli_arg_scan::ValueOptions::from_command(&command)
+}
+
+fn cli_root_value_options() -> cli_arg_scan::ValueOptions {
+    let mut command = Cli::command();
+    command.build();
+    cli_arg_scan::ValueOptions::from_command_arguments(&command)
 }
 
 fn canonical_plain_help_token(token: &str) -> &str {
@@ -1570,6 +1909,8 @@ fn is_config_agent_command_request(args: &[OsString]) -> bool {
 }
 
 fn command_tokens_for_config_gate(args: &[OsString]) -> Vec<String> {
+    let value_options = cli_value_options();
+    let root_value_options = cli_root_value_options();
     let mut tokens = Vec::new();
     let mut seen_command = false;
     let mut i = 1;
@@ -1589,18 +1930,11 @@ fn command_tokens_for_config_gate(args: &[OsString]) -> Vec<String> {
 
         if !seen_command {
             if token_ref == "--compact" || token_ref == "-c" {
-                i += if args
-                    .get(i + 1)
-                    .is_some_and(|value| is_bool_arg(&value.to_string_lossy()))
-                {
-                    2
-                } else {
-                    1
-                };
+                i += compact_option_width(args, i);
                 continue;
             }
             if token_ref.starts_with("--") {
-                i += if global_option_takes_value(token_ref) && !token_ref.contains('=') {
+                i += if root_value_options.consumes_value(token_ref) && !token_ref.contains('=') {
                     2
                 } else {
                     1
@@ -1608,7 +1942,7 @@ fn command_tokens_for_config_gate(args: &[OsString]) -> Vec<String> {
                 continue;
             }
             if token_ref.starts_with('-') {
-                i += if global_short_option_takes_value(token_ref) {
+                i += if root_value_options.consumes_value(token_ref) && !token_ref.contains('=') {
                     2
                 } else {
                     1
@@ -1622,17 +1956,10 @@ fn command_tokens_for_config_gate(args: &[OsString]) -> Vec<String> {
         }
 
         if token_ref == "--compact" || token_ref == "-c" {
-            i += if args
-                .get(i + 1)
-                .is_some_and(|value| is_bool_arg(&value.to_string_lossy()))
-            {
-                2
-            } else {
-                1
-            };
+            i += compact_option_width(args, i);
             continue;
         }
-        if consumes_plain_help_value(token_ref) {
+        if value_options.consumes_value(token_ref) {
             i += if token_ref.contains('=') { 1 } else { 2 };
             continue;
         }
@@ -1727,6 +2054,7 @@ fn is_admin_subcommand(token: &str) -> bool {
         "create-account"
             | "list-accounts"
             | "delete-account"
+            | "migrate"
             | "register-user"
             | "list-users"
             | "remove-user"
@@ -1847,6 +2175,43 @@ fn preprocess_privacy_upsert_key_flags(args: Vec<OsString>) -> Vec<OsString> {
     converted
 }
 
+fn preprocess_compact_args(args: Vec<OsString>) -> Vec<OsString> {
+    if args.is_empty() {
+        return args;
+    }
+
+    let mut converted = Vec::with_capacity(args.len());
+    converted.push(args[0].clone());
+    let mut i = 1;
+
+    while i < args.len() {
+        let token = args[i].to_string_lossy();
+        if token == "--compact" || token == "-c" {
+            if let Some(next) = args.get(i + 1) {
+                let next_value = next.to_string_lossy();
+                if is_bool_arg(&next_value) {
+                    converted.push(OsString::from(format!("--compact={next_value}")));
+                    i += 2;
+                    continue;
+                }
+            }
+            converted.push(OsString::from("--compact=true"));
+            i += 1;
+            continue;
+        }
+
+        converted.push(args[i].clone());
+        i += 1;
+    }
+
+    converted
+}
+
+fn preprocess_cli_args(args: Vec<OsString>) -> Vec<OsString> {
+    let args = preprocess_compact_args(args);
+    preprocess_privacy_args(args)
+}
+
 fn preprocess_privacy_args(args: Vec<OsString>) -> Vec<OsString> {
     let args = preprocess_privacy_get_shortcut(args);
     preprocess_privacy_upsert_key_flags(args)
@@ -1902,6 +2267,7 @@ fn is_language_command_request(args: &[OsString]) -> bool {
 }
 
 fn first_command_token(args: &[OsString]) -> Option<String> {
+    let root_value_options = cli_root_value_options();
     let mut index = 1usize;
 
     while index < args.len() {
@@ -1912,18 +2278,11 @@ fn first_command_token(args: &[OsString]) -> Option<String> {
                 .map(|value| value.to_string_lossy().to_string());
         }
         if token == "--compact" || token == "-c" {
-            index += if args
-                .get(index + 1)
-                .is_some_and(|value| is_bool_arg(&value.to_string_lossy()))
-            {
-                2
-            } else {
-                1
-            };
+            index += compact_option_width(args, index);
             continue;
         }
         if token.starts_with("--") {
-            index += if global_option_takes_value(&token) && !token.contains('=') {
+            index += if root_value_options.consumes_value(&token) && !token.contains('=') {
                 2
             } else {
                 1
@@ -1931,7 +2290,7 @@ fn first_command_token(args: &[OsString]) -> Option<String> {
             continue;
         }
         if token.starts_with('-') {
-            index += if global_short_option_takes_value(&token) {
+            index += if root_value_options.consumes_value(&token) && !token.contains('=') {
                 2
             } else {
                 1
@@ -1944,12 +2303,15 @@ fn first_command_token(args: &[OsString]) -> Option<String> {
     None
 }
 
-fn global_option_takes_value(option: &str) -> bool {
-    matches!(option, "--output" | "--account" | "--user")
-}
-
-fn global_short_option_takes_value(option: &str) -> bool {
-    matches!(option, "-o")
+fn compact_option_width(args: &[OsString], index: usize) -> usize {
+    if args
+        .get(index + 1)
+        .is_some_and(|value| is_bool_arg(&value.to_string_lossy()))
+    {
+        2
+    } else {
+        1
+    }
 }
 
 fn is_bool_arg(value: &str) -> bool {
@@ -1976,7 +2338,7 @@ fn language_command_can_run_picker(has_language_value: bool, is_interactive: boo
 
 #[tokio::main]
 async fn main() {
-    let args = preprocess_privacy_args(std::env::args_os().collect());
+    let args = preprocess_cli_args(std::env::args_os().collect());
     let command_display = error_ui::display_command(&args);
     match ensure_language_selected_before_command(&args).await {
         Ok(true) => {}
@@ -2050,25 +2412,27 @@ async fn main() {
     }
 
     // Check this before loading config so misplaced --sudo reports the command rule directly.
-    if cli.sudo && !cli.command.is_admin_command() {
+    if cli.sudo && !cli.command.supports_sudo() {
         let language = i18n::Language::current();
         let (title, message, actions) = match language {
             i18n::Language::En => (
                 "Command Error",
-                "--sudo is only supported for admin, system, and reindex commands.",
+                "--sudo is only supported for admin, system, reindex, task status, and task list commands.",
                 vec![
                     error_ui::ErrorAction::new("ov admin --help", "Show admin commands"),
                     error_ui::ErrorAction::new("ov system --help", "Show system commands"),
                     error_ui::ErrorAction::new("ov reindex --help", "Show reindex options"),
+                    error_ui::ErrorAction::new("ov task --help", "Show task commands"),
                 ],
             ),
             i18n::Language::ZhCn => (
                 "命令错误",
-                "--sudo 只支持 admin、system 和 reindex 命令。",
+                "--sudo 只支持 admin、system、reindex、task status 和 task list 命令。",
                 vec![
                     error_ui::ErrorAction::new("ov admin --help", "查看管理命令"),
                     error_ui::ErrorAction::new("ov system --help", "查看系统命令"),
                     error_ui::ErrorAction::new("ov reindex --help", "查看重建索引选项"),
+                    error_ui::ErrorAction::new("ov task --help", "查看任务命令"),
                 ],
             ),
         };
@@ -2115,6 +2479,7 @@ async fn main() {
         compact,
         cli.account.clone(),
         cli.user.clone(),
+        cli.actor_peer_id.clone(),
         cli.sudo,
         None,
         None,
@@ -2164,6 +2529,7 @@ async fn main() {
             exclude,
             no_directly_upload_media,
             watch_interval,
+            resource_args,
             upload_options,
         } => {
             let ctx =
@@ -2183,6 +2549,7 @@ async fn main() {
                 exclude,
                 no_directly_upload_media,
                 watch_interval,
+                resource_args,
                 ctx,
             )
             .await
@@ -2509,10 +2876,18 @@ async fn main() {
             after,
             before,
             level,
-            peer_id,
+            context_type,
         } => {
             handlers::handle_find(
-                query, uri, node_limit, threshold, after, before, level, peer_id, ctx,
+                query,
+                uri,
+                node_limit,
+                threshold,
+                after,
+                before,
+                level,
+                context_type,
+                ctx,
             )
             .await
         }
@@ -2525,10 +2900,19 @@ async fn main() {
             after,
             before,
             level,
-            peer_id,
+            context_type,
         } => {
             handlers::handle_search(
-                query, uri, session_id, node_limit, threshold, after, before, level, peer_id, ctx,
+                query,
+                uri,
+                session_id,
+                node_limit,
+                threshold,
+                after,
+                before,
+                level,
+                context_type,
+                ctx,
             )
             .await
         }
@@ -2572,14 +2956,14 @@ async fn main() {
 mod tests {
     use super::{
         Cli, CliContext, Commands, ConfigAddTarget, ConfigCommands, LanguageGateAction,
-        PrivacyCommands, SkillCommands, UploadCliOptions, first_command_token,
+        PrivacyCommands, SkillCommands, UploadCliOptions, find_command_index, first_command_token,
         is_language_command_request, language_command_can_run_picker, language_gate_action,
         language_required_message, legacy_upload_option_error, plain_help_misuse,
-        pre_parse_requires_cli_config_file, preprocess_privacy_args,
+        pre_parse_requires_cli_config_file, preprocess_cli_args, preprocess_privacy_args,
     };
     use crate::config::{Config, DEFAULT_CUSTOM_URL};
     use crate::output::OutputFormat;
-    use crate::{SystemBackendCommands, SystemCommands, handlers};
+    use crate::{AdminCommands, SystemBackendCommands, SystemCommands, handlers};
     use clap::{CommandFactory, Parser};
     use std::ffi::OsString;
 
@@ -2589,37 +2973,102 @@ mod tests {
 
     #[test]
     fn cli_parses_global_identity_override_flags() {
-        let cli = Cli::try_parse_from(["ov", "--account", "acme", "--user", "alice", "ls"])
-            .expect("cli should parse");
+        let cli = Cli::try_parse_from([
+            "ov",
+            "--account",
+            "acme",
+            "--user",
+            "alice",
+            "--actor-peer-id",
+            "peer-a",
+            "ls",
+        ])
+        .expect("cli should parse");
 
         assert_eq!(cli.account.as_deref(), Some("acme"));
         assert_eq!(cli.user.as_deref(), Some("alice"));
+        assert_eq!(cli.actor_peer_id.as_deref(), Some("peer-a"));
     }
 
     #[test]
-    fn cli_parses_find_peer_id() {
-        let cli = Cli::try_parse_from(["ov", "find", "invoice", "--peer-id", "web:visitor:alice"])
-            .expect("find peer id should parse");
+    fn cli_parses_find_context_type() {
+        let cli =
+            Cli::try_parse_from(["ov", "find", "invoice", "--context-type", "memory,resource"])
+                .expect("find context type should parse");
 
         match cli.command {
-            Commands::Find { peer_id, .. } => {
-                assert_eq!(peer_id.as_deref(), Some("web:visitor:alice"));
+            Commands::Find { context_type, .. } => {
+                assert_eq!(
+                    context_type,
+                    Some(vec!["memory".to_string(), "resource".to_string()])
+                );
             }
             _ => panic!("expected find command"),
         }
     }
 
     #[test]
-    fn cli_parses_search_peer_id() {
-        let cli =
-            Cli::try_parse_from(["ov", "search", "invoice", "--peer-id", "web:visitor:alice"])
-                .expect("search peer id should parse");
+    fn cli_parses_admin_migrate_cleanup_flag() {
+        let migrate = Cli::try_parse_from(["ov", "--sudo", "admin", "migrate"])
+            .expect("admin migrate should parse");
+        match migrate.command {
+            Commands::Admin { action } => match action {
+                AdminCommands::Migrate { cleanup } => assert!(!cleanup),
+                _ => panic!("expected admin migrate command"),
+            },
+            _ => panic!("expected admin command"),
+        }
+
+        let cleanup = Cli::try_parse_from(["ov", "--sudo", "admin", "migrate", "--cleanup"])
+            .expect("admin migrate cleanup should parse");
+
+        assert!(cleanup.sudo);
+        match cleanup.command {
+            Commands::Admin { action } => match action {
+                AdminCommands::Migrate { cleanup } => assert!(cleanup),
+                _ => panic!("expected admin migrate command"),
+            },
+            _ => panic!("expected admin command"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_search_context_type() {
+        let cli = Cli::try_parse_from(["ov", "search", "invoice", "--context-type", "skill"])
+            .expect("search context type should parse");
 
         match cli.command {
-            Commands::Search { peer_id, .. } => {
-                assert_eq!(peer_id.as_deref(), Some("web:visitor:alice"));
+            Commands::Search { context_type, .. } => {
+                assert_eq!(context_type, Some(vec!["skill".to_string()]));
             }
             _ => panic!("expected search command"),
+        }
+    }
+
+    #[test]
+    fn cli_chat_sender_uses_long_flag_and_session_keeps_short_s() {
+        Cli::command().debug_assert();
+
+        let cli = Cli::try_parse_from([
+            "ov",
+            "chat",
+            "-s",
+            "session-1",
+            "--sender",
+            "agent-1",
+            "--message",
+            "hello",
+        ])
+        .expect("chat flags should parse without short alias conflicts");
+
+        match cli.command {
+            Commands::Chat {
+                session, sender, ..
+            } => {
+                assert_eq!(session.as_deref(), Some("session-1"));
+                assert_eq!(sender, "agent-1");
+            }
+            _ => panic!("expected chat command"),
         }
     }
 
@@ -2703,6 +3152,8 @@ mod tests {
             "https://ov.example.com",
             "--api-key-env",
             "OV_KEY",
+            "--actor-peer-id",
+            "peer-a",
         ])
         .expect("custom add should parse");
         let Commands::Config {
@@ -2716,6 +3167,7 @@ mod tests {
         };
         assert_eq!(custom.url.as_deref(), Some("https://ov.example.com"));
         assert_eq!(custom.api_key_env.as_deref(), Some("OV_KEY"));
+        assert_eq!(custom.actor_peer_id.as_deref(), Some("peer-a"));
 
         let edit = Cli::try_parse_from([
             "ov",
@@ -2723,6 +3175,7 @@ mod tests {
             "edit",
             "prod",
             "--clear-api-key",
+            "--clear-actor-peer-id",
             "--activate",
         ])
         .expect("config edit should parse");
@@ -2734,6 +3187,7 @@ mod tests {
         };
         assert_eq!(edit.name, "prod");
         assert!(edit.clear_api_key);
+        assert!(edit.clear_actor_peer_id);
         assert!(edit.activate);
 
         assert!(
@@ -2852,6 +3306,7 @@ mod tests {
             &["ov", "admin", "create-account"],
             &["ov", "admin", "list-accounts"],
             &["ov", "admin", "delete-account"],
+            &["ov", "admin", "migrate"],
             &["ov", "admin", "register-user"],
             &["ov", "admin", "list-users"],
             &["ov", "admin", "remove-user"],
@@ -3255,6 +3710,31 @@ mod tests {
     }
 
     #[test]
+    fn sudo_supports_task_status_and_list_only() {
+        let status = Cli::try_parse_from(["ov", "--sudo", "task", "status", "task-123"])
+            .expect("sudo task status should parse");
+        assert!(status.sudo);
+        assert!(status.command.supports_sudo());
+
+        let list = Cli::try_parse_from([
+            "ov",
+            "--sudo",
+            "task",
+            "list",
+            "--task-type",
+            "legacy_migration",
+        ])
+        .expect("sudo task list should parse");
+        assert!(list.sudo);
+        assert!(list.command.supports_sudo());
+
+        let watch = Cli::try_parse_from(["ov", "--sudo", "task", "watch", "ls"])
+            .expect("sudo task watch should still parse before runtime validation");
+        assert!(watch.sudo);
+        assert!(!watch.command.supports_sudo());
+    }
+
+    #[test]
     fn cli_config_without_subcommand_parses_as_setup_entrypoint() {
         Cli::try_parse_from(["ov", "config"]).expect("bare config command should parse");
     }
@@ -3379,6 +3859,8 @@ mod tests {
                 "--output",
                 "json",
                 "--account=acme",
+                "--actor-peer-id",
+                "peer-a",
                 "--sudo",
                 "admin",
             ]))
@@ -3388,6 +3870,31 @@ mod tests {
         assert_eq!(
             first_command_token(&os_args(&["ov", "--help"])).as_deref(),
             None
+        );
+    }
+
+    #[test]
+    fn find_command_index_skips_root_value_options() {
+        assert_eq!(
+            find_command_index(&os_args(&[
+                "ov",
+                "--output",
+                "json",
+                "--account=acme",
+                "--actor-peer-id",
+                "peer-a",
+                "privacy",
+                "sample-policy",
+            ])),
+            Some(6)
+        );
+        assert_eq!(
+            find_command_index(&os_args(&["ov", "--compact", "privacy", "sample-policy"])),
+            Some(2)
+        );
+        assert_eq!(
+            find_command_index(&os_args(&["ov", "-c", "false", "privacy", "sample-policy"])),
+            Some(3)
         );
     }
 
@@ -3462,6 +3969,54 @@ mod tests {
             .is_none()
         );
         assert!(plain_help_misuse(&os_args(&["ov", "grep", "--uri", "help", "TODO",])).is_none());
+
+        for args in [
+            &["ov", "mkdir", "--description", "help", "viking://notes"][..],
+            &[
+                "ov",
+                "write",
+                "viking://notes/todo.md",
+                "--from-file",
+                "help",
+            ],
+            &[
+                "ov",
+                "session",
+                "add-message",
+                "abc",
+                "--peer-id",
+                "help",
+                "--role",
+                "user",
+                "--content",
+                "hi",
+            ],
+            &[
+                "ov",
+                "privacy",
+                "upsert",
+                "cat",
+                "target",
+                "--values-json",
+                "help",
+            ],
+            &["ov", "admin", "create-account", "acct", "--admin", "help"],
+            &["ov", "config", "add", "custom", "--url", "help"],
+            &["ov", "task", "list", "--status", "help"],
+            &[
+                "ov",
+                "system",
+                "crypto",
+                "init-key",
+                "--output-file",
+                "help",
+            ],
+        ] {
+            assert!(
+                plain_help_misuse(&os_args(args)).is_none(),
+                "{args:?} should treat help as an option value"
+            );
+        }
     }
 
     #[test]
@@ -3472,6 +4027,8 @@ mod tests {
             root_api_key: None,
             account: Some("from-config-account".to_string()),
             user: Some("from-config-user".to_string()),
+            actor_peer_id: Some("from-config-peer".to_string()),
+            agent_id: None,
             timeout: 60.0,
             output: "table".to_string(),
             echo_command: true,
@@ -3488,6 +4045,7 @@ mod tests {
             true,
             Some("from-cli-account".to_string()),
             Some("from-cli-user".to_string()),
+            Some("from-cli-peer".to_string()),
             false,
             None,
             None,
@@ -3496,6 +4054,46 @@ mod tests {
 
         assert_eq!(ctx.config.account.as_deref(), Some("from-cli-account"));
         assert_eq!(ctx.config.user.as_deref(), Some("from-cli-user"));
+        assert_eq!(ctx.config.actor_peer_id.as_deref(), Some("from-cli-peer"));
+        assert!(ctx.config.agent_id.is_none());
+    }
+
+    #[test]
+    fn cli_context_maps_legacy_agent_id_to_actor_peer_scope() {
+        let config = Config {
+            url: DEFAULT_CUSTOM_URL.to_string(),
+            api_key: Some("test-key".to_string()),
+            root_api_key: None,
+            account: None,
+            user: None,
+            actor_peer_id: None,
+            agent_id: Some("legacy-agent".to_string()),
+            timeout: 60.0,
+            output: "table".to_string(),
+            echo_command: true,
+            show_progress: false,
+            verbose: false,
+            upload: Default::default(),
+            extra_headers: None,
+            profile: false,
+        };
+
+        let ctx = CliContext::from_config(
+            config,
+            OutputFormat::Json,
+            true,
+            None,
+            None,
+            None,
+            false,
+            None,
+            None,
+            None,
+        );
+        let client = ctx.get_client();
+
+        assert_eq!(client.actor_peer_id(), Some("legacy-agent"));
+        assert_eq!(client.legacy_agent_id(), Some("legacy-agent"));
     }
 
     #[test]
@@ -3506,6 +4104,8 @@ mod tests {
             root_api_key: Some("root-key".to_string()),
             account: None,
             user: None,
+            actor_peer_id: Some("peer-a".to_string()),
+            agent_id: None,
             timeout: 60.0,
             output: "table".to_string(),
             echo_command: true,
@@ -3523,6 +4123,7 @@ mod tests {
             true,
             None,
             None,
+            None,
             false,
             None,
             None,
@@ -3530,12 +4131,14 @@ mod tests {
         );
         let client = ctx.get_client();
         assert_eq!(client.api_key(), Some("user-key"));
+        assert_eq!(client.actor_peer_id(), Some("peer-a"));
 
         // With sudo: use root_api_key
         let ctx = CliContext::from_config(
             config,
             OutputFormat::Json,
             true,
+            None,
             None,
             None,
             true,
@@ -3703,5 +4306,43 @@ mod tests {
             },
             _ => panic!("expected privacy command"),
         }
+    }
+
+    #[test]
+    fn cli_parses_privacy_shortcut_after_compact_without_value() {
+        let cli = Cli::try_parse_from(preprocess_cli_args(vec![
+            OsString::from("ov"),
+            OsString::from("--compact"),
+            OsString::from("privacy"),
+            OsString::from("skill"),
+            OsString::from("demo"),
+        ]))
+        .expect("--compact without a value should not consume the privacy command");
+
+        assert!(cli.compact);
+        match cli.command {
+            Commands::Privacy { action } => match action {
+                PrivacyCommands::Get {
+                    category,
+                    target_key,
+                } => {
+                    assert_eq!(category, "skill");
+                    assert_eq!(target_key, "demo");
+                }
+                _ => panic!("expected privacy get"),
+            },
+            _ => panic!("expected privacy command"),
+        }
+
+        let explicit_false = Cli::try_parse_from(preprocess_cli_args(vec![
+            OsString::from("ov"),
+            OsString::from("-c"),
+            OsString::from("false"),
+            OsString::from("privacy"),
+            OsString::from("skill"),
+            OsString::from("demo"),
+        ]))
+        .expect("-c false should keep its explicit bool value");
+        assert!(!explicit_false.compact);
     }
 }

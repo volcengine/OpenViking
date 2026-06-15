@@ -8,6 +8,7 @@ use crate::error::{Error, Result};
 use crate::theme;
 use crate::tui;
 use colored::Colorize;
+use serde_json::{Map, Value};
 
 pub async fn handle_add_resource(
     mut path: String,
@@ -24,6 +25,7 @@ pub async fn handle_add_resource(
     exclude: Option<String>,
     no_directly_upload_media: bool,
     watch_interval: f64,
+    resource_args: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
     let is_url =
@@ -68,6 +70,7 @@ pub async fn handle_add_resource(
         merge_csv_options(ctx.config.upload.ignore_dirs.clone(), ignore_dirs);
     let effective_include = merge_csv_options(ctx.config.upload.include.clone(), include);
     let effective_exclude = merge_csv_options(ctx.config.upload.exclude.clone(), exclude);
+    let add_resource_args = parse_add_resource_args(resource_args.as_deref())?;
 
     let effective_timeout = if wait {
         timeout.unwrap_or(60.0).max(ctx.config.timeout)
@@ -80,6 +83,8 @@ pub async fn handle_add_resource(
         auth.api_key,
         auth.account,
         auth.user,
+        ctx.config.effective_actor_peer_id(),
+        ctx.config.agent_id.clone(),
         effective_timeout,
         ctx.profile.unwrap_or(ctx.config.profile),
         ctx.config.extra_headers.clone(),
@@ -100,12 +105,130 @@ pub async fn handle_add_resource(
         effective_exclude,
         directly_upload_media,
         watch_interval,
+        add_resource_args,
         ctx.output_format,
         ctx.compact,
         ctx.should_show_progress(),
         ctx.is_verbose(),
     )
     .await
+}
+
+fn parse_add_resource_args(raw: Option<&str>) -> Result<Option<Map<String, Value>>> {
+    let Some(raw) = raw.map(str::trim).filter(|raw| !raw.is_empty()) else {
+        return Ok(None);
+    };
+
+    if raw.starts_with('{') {
+        let value: Value = serde_json::from_str(raw)
+            .map_err(|e| Error::Client(format!("Invalid --args JSON object: {e}")))?;
+        return match value {
+            Value::Object(map) => Ok(Some(map)),
+            _ => Err(Error::Client(
+                "--args JSON form must be an object, e.g. '{\"feishu_access_token\":\"u-...\"}'"
+                    .to_string(),
+            )),
+        };
+    }
+
+    let mut args = Map::new();
+    for item in split_add_resource_args(raw)? {
+        let Some((key, value)) = item.split_once(':') else {
+            return Err(Error::Client(format!(
+                "Invalid --args item '{item}'. Expected key:value."
+            )));
+        };
+        let key = key.trim();
+        if key.is_empty() {
+            return Err(Error::Client(
+                "Invalid --args item with empty key.".to_string(),
+            ));
+        }
+        args.insert(key.to_string(), parse_add_resource_arg_value(value.trim()));
+    }
+    Ok(Some(args))
+}
+
+fn split_add_resource_args(raw: &str) -> Result<Vec<String>> {
+    let mut items = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    let mut escape = false;
+    let mut depth = 0_i32;
+
+    for ch in raw.chars() {
+        if escape {
+            current.push(ch);
+            escape = false;
+            continue;
+        }
+        if ch == '\\' {
+            current.push(ch);
+            escape = true;
+            continue;
+        }
+        if let Some(q) = quote {
+            current.push(ch);
+            if ch == q {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '"' | '\'' => {
+                quote = Some(ch);
+                current.push(ch);
+            }
+            '{' | '[' => {
+                depth += 1;
+                current.push(ch);
+            }
+            '}' | ']' => {
+                depth -= 1;
+                if depth < 0 {
+                    return Err(Error::Client("Invalid --args nesting.".to_string()));
+                }
+                current.push(ch);
+            }
+            ',' if depth == 0 => {
+                let item = current.trim();
+                if !item.is_empty() {
+                    items.push(item.to_string());
+                }
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    if quote.is_some() || depth != 0 {
+        return Err(Error::Client(
+            "Invalid --args quoting or nesting.".to_string(),
+        ));
+    }
+    let item = current.trim();
+    if !item.is_empty() {
+        items.push(item.to_string());
+    }
+    Ok(items)
+}
+
+fn parse_add_resource_arg_value(raw: &str) -> Value {
+    if raw.is_empty() {
+        return Value::String(String::new());
+    }
+    if let Ok(value) = serde_json::from_str::<Value>(raw) {
+        return value;
+    }
+    let unquoted = raw
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .or_else(|| {
+            raw.strip_prefix('\'')
+                .and_then(|value| value.strip_suffix('\''))
+        })
+        .unwrap_or(raw);
+    Value::String(unquoted.to_string())
 }
 
 pub async fn handle_add_skill(
@@ -397,6 +520,9 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
         AdminCommands::DeleteAccount { account_id } => {
             commands::admin::delete_account(&client, &account_id, ctx.output_format, ctx.compact)
                 .await
+        }
+        AdminCommands::Migrate { cleanup } => {
+            commands::admin::migrate(&client, cleanup, ctx.output_format, ctx.compact).await
         }
         AdminCommands::RegisterUser {
             account_id,
@@ -1116,7 +1242,7 @@ pub async fn handle_find(
     after: Option<String>,
     before: Option<String>,
     level: Option<Vec<i32>>,
-    peer_id: Option<String>,
+    context_type: Option<Vec<String>>,
     ctx: CliContext,
 ) -> Result<()> {
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
@@ -1133,8 +1259,8 @@ pub async fn handle_find(
                 .join(",")
         ));
     }
-    if let Some(ref p) = peer_id {
-        params.push(format!("--peer-id {}", p));
+    if let Some(ref context_types) = context_type {
+        params.push(format!("--context-type {}", context_types.join(",")));
     }
     params.push(format!("\"{}\"", query));
     print_command_echo("ov find", &params.join(" "), ctx.config.echo_command);
@@ -1149,7 +1275,7 @@ pub async fn handle_find(
         before.as_deref(),
         None,
         level,
-        peer_id.as_deref(),
+        context_type,
         ctx.output_format,
         ctx.compact,
     )
@@ -1165,7 +1291,7 @@ pub async fn handle_search(
     after: Option<String>,
     before: Option<String>,
     level: Option<Vec<i32>>,
-    peer_id: Option<String>,
+    context_type: Option<Vec<String>>,
     ctx: CliContext,
 ) -> Result<()> {
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
@@ -1185,8 +1311,8 @@ pub async fn handle_search(
                 .join(",")
         ));
     }
-    if let Some(ref p) = peer_id {
-        params.push(format!("--peer-id {}", p));
+    if let Some(ref context_types) = context_type {
+        params.push(format!("--context-type {}", context_types.join(",")));
     }
     params.push(format!("\"{}\"", query));
     print_command_echo("ov search", &params.join(" "), ctx.config.echo_command);
@@ -1202,7 +1328,7 @@ pub async fn handle_search(
         before.as_deref(),
         None,
         level,
-        peer_id.as_deref(),
+        context_type,
         ctx.output_format,
         ctx.compact,
     )

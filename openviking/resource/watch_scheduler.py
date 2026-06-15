@@ -8,8 +8,15 @@ Provides scheduled task execution for watch tasks.
 
 import asyncio
 from datetime import datetime
-from typing import Any, Optional, Set
+from typing import Any, Dict, Optional, Set
 
+from openviking.resource.feishu_watch_auth import (
+    FeishuOAuthClient,
+    FeishuTokenRefreshError,
+    apply_feishu_refreshed_token,
+    feishu_auth_state_needs_refresh,
+    is_feishu_auth_state,
+)
 from openviking.resource.watch_manager import WatchManager
 from openviking.server.identity import RequestContext, Role
 from openviking.service.resource_service import ResourceService
@@ -58,6 +65,7 @@ class WatchScheduler:
         self._scheduler_task: Optional[asyncio.Task] = None
         self._executing_tasks: Set[str] = set()
         self._lock = asyncio.Lock()
+        self._feishu_oauth_client: Optional[Any] = None
 
     @property
     def watch_manager(self) -> Optional[WatchManager]:
@@ -244,24 +252,41 @@ class WatchScheduler:
                 processor_kwargs = dict(getattr(task, "processor_kwargs", {}) or {})
                 processor_kwargs.pop("build_index", None)
                 processor_kwargs.pop("summarize", None)
-                result = await self._resource_service.add_resource(
-                    path=task.path,
-                    ctx=ctx,
-                    to=task.to_uri,
-                    parent=task.parent_uri,
-                    reason=task.reason,
-                    instruction=task.instruction,
-                    build_index=getattr(task, "build_index", True),
-                    summarize=getattr(task, "summarize", False),
-                    watch_interval=task.watch_interval,
-                    skip_watch_management=True,
-                    **processor_kwargs,
-                )
+                auth_state = getattr(task, "auth_state", None)
+                if is_feishu_auth_state(auth_state):
+                    try:
+                        auth_state = await self._prepare_feishu_auth_state(task, auth_state)
+                        processor_kwargs["feishu_access_token"] = auth_state["access_token"]
+                    except FeishuTokenRefreshError as e:
+                        if e.permanent:
+                            should_deactivate = True
+                            deactivation_reason = str(e)
+                            logger.error(
+                                f"[WatchScheduler] Task {task.task_id} permanent Feishu "
+                                f"token refresh failure: {e}. Deactivating task."
+                            )
+                        else:
+                            raise
 
-                logger.info(
-                    f"[WatchScheduler] Task {task.task_id} executed successfully, "
-                    f"result: {result.get('root_uri', 'N/A')}"
-                )
+                if not should_deactivate:
+                    result = await self._resource_service.add_resource(
+                        path=task.path,
+                        ctx=ctx,
+                        to=task.to_uri,
+                        parent=task.parent_uri,
+                        reason=task.reason,
+                        instruction=task.instruction,
+                        build_index=getattr(task, "build_index", True),
+                        summarize=getattr(task, "summarize", False),
+                        watch_interval=task.watch_interval,
+                        skip_watch_management=True,
+                        **processor_kwargs,
+                    )
+
+                    logger.info(
+                        f"[WatchScheduler] Task {task.task_id} executed successfully, "
+                        f"result: {result.get('root_uri', 'N/A')}"
+                    )
 
         except asyncio.CancelledError:
             cancelled = True
@@ -317,6 +342,26 @@ class WatchScheduler:
     async def _discard_executing(self, task_id: str) -> None:
         async with self._lock:
             self._executing_tasks.discard(task_id)
+
+    async def _prepare_feishu_auth_state(
+        self,
+        task,
+        auth_state: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        if not feishu_auth_state_needs_refresh(auth_state):
+            return auth_state
+
+        refresh_token = auth_state.get("refresh_token")
+        refreshed = await self._get_feishu_oauth_client().refresh_user_access_token(refresh_token)
+        updated = apply_feishu_refreshed_token(auth_state, refreshed)
+        if self._watch_manager is not None:
+            await self._watch_manager.update_auth_state(task.task_id, updated)
+        return updated
+
+    def _get_feishu_oauth_client(self):
+        if self._feishu_oauth_client is None:
+            self._feishu_oauth_client = FeishuOAuthClient.from_config()
+        return self._feishu_oauth_client
 
     def _check_resource_exists(self, path: str) -> bool:
         """Check if a resource path exists.

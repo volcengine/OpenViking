@@ -44,10 +44,8 @@ class InMemoryOpenVikingClient:
         limit: int = 10,
         score_threshold: float | None = None,
         filter: dict[str, Any] | None = None,
-        peer_id: str | None = None,
         **_: Any,
     ) -> dict[str, Any]:
-        normalized_peer_id = normalize_peer_id(peer_id)
         self.find_calls.append(
             {
                 "query": query,
@@ -55,7 +53,6 @@ class InMemoryOpenVikingClient:
                 "limit": limit,
                 "score_threshold": score_threshold,
                 "filter": filter,
-                "peer_id": normalized_peer_id,
             }
         )
         return self._search(query, target_uri, limit, score_threshold)
@@ -68,10 +65,8 @@ class InMemoryOpenVikingClient:
         limit: int = 10,
         score_threshold: float | None = None,
         filter: dict[str, Any] | None = None,
-        peer_id: str | None = None,
         **_: Any,
     ) -> dict[str, Any]:
-        normalized_peer_id = normalize_peer_id(peer_id)
         self.search_calls.append(
             {
                 "query": query,
@@ -80,7 +75,6 @@ class InMemoryOpenVikingClient:
                 "limit": limit,
                 "score_threshold": score_threshold,
                 "filter": filter,
-                "peer_id": normalized_peer_id,
             }
         )
         session_text = " ".join(

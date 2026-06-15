@@ -725,6 +725,32 @@ async def test_admin_reindex_requests_use_key_owner_in_api_key_mode():
     assert ctx.user.user_id == "admin"
 
 
+async def test_actor_peer_header_sets_request_context_scope():
+    request = _make_request("/api/v1/search/find", auth_enabled=True)
+    identity = ResolvedIdentity(role=Role.USER, account_id="acme", user_id="alice")
+
+    ctx = await get_request_context(request, identity, "web-visitor-alice")
+
+    assert ctx.actor_peer_id == "web-visitor-alice"
+
+
+async def test_empty_actor_peer_header_is_unset():
+    request = _make_request("/api/v1/search/find", auth_enabled=True)
+    identity = ResolvedIdentity(role=Role.USER, account_id="acme", user_id="alice")
+
+    ctx = await get_request_context(request, identity, "  ")
+
+    assert ctx.actor_peer_id is None
+
+
+async def test_actor_peer_header_rejects_path_separators():
+    request = _make_request("/api/v1/search/find", auth_enabled=True)
+    identity = ResolvedIdentity(role=Role.USER, account_id="acme", user_id="alice")
+
+    with pytest.raises(InvalidArgumentError, match="path separators"):
+        await get_request_context(request, identity, "bad/peer")
+
+
 async def test_root_monitoring_requests_allow_implicit_default_identity():
     """Observer/debug endpoints keep the existing ROOT monitoring flow."""
     observer_request = _make_request("/api/v1/observer/system", auth_enabled=True)

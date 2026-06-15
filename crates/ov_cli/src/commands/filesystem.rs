@@ -3,6 +3,7 @@ use crate::client::HttpClient;
 use crate::error::Result;
 use crate::output::{OutputFormat, output_success};
 use crate::theme;
+use chrono::{DateTime, Local};
 use colored::Colorize;
 use serde_json::Value;
 use std::io::IsTerminal;
@@ -156,7 +157,7 @@ fn filesystem_entries(value: &Value) -> Option<(Vec<&Value>, Option<&Value>)> {
 
 fn render_ls_entry(rank: usize, entry: &Value, text_width: usize, lines: &mut Vec<String>) {
     let object = entry.as_object();
-    let metadata = entry_metadata(object, false);
+    let metadata = entry_metadata(object);
     lines.push(format!(
         "{}. {}",
         theme::command(rank.to_string()).bold(),
@@ -207,10 +208,7 @@ fn render_tree_entry(rank: usize, entry: &Value, text_width: usize, lines: &mut 
     ));
 }
 
-fn entry_metadata(
-    object: Option<&serde_json::Map<String, Value>>,
-    compact_directory: bool,
-) -> Vec<String> {
+fn entry_metadata(object: Option<&serde_json::Map<String, Value>>) -> Vec<String> {
     let mut metadata = vec![
         theme::heading(if entry_is_dir(object) { "dir" } else { "file" })
             .bold()
@@ -225,11 +223,7 @@ fn entry_metadata(
         metadata.push(theme::value(format_size(size)).bold().to_string());
     }
 
-    if !compact_directory || !entry_is_dir(object) {
-        if let Some(mod_time) = entry_string(object, "modTime") {
-            metadata.push(theme::muted(mod_time).to_string());
-        }
-    } else if let Some(mod_time) = entry_string(object, "modTime") {
+    if let Some(mod_time) = entry_mod_time(object) {
         metadata.push(theme::muted(mod_time).to_string());
     }
 
@@ -265,8 +259,8 @@ fn tree_metadata(object: Option<&serde_json::Map<String, Value>>) -> Vec<String>
         metadata.push(format_size(size));
     }
 
-    if let Some(mod_time) = entry_string(object, "modTime") {
-        metadata.push(mod_time.to_string());
+    if let Some(mod_time) = entry_mod_time(object) {
+        metadata.push(mod_time);
     }
 
     metadata
@@ -321,6 +315,21 @@ fn entry_string<'a>(
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
+}
+
+fn entry_mod_time(object: Option<&serde_json::Map<String, Value>>) -> Option<String> {
+    entry_string(object, "modTime").map(format_mod_time_for_display)
+}
+
+fn format_mod_time_for_display(value: &str) -> String {
+    // Agent output already contains compact dates/times; leave those unchanged.
+    DateTime::parse_from_rfc3339(value)
+        .map(|dt| {
+            dt.with_timezone(&Local)
+                .format("%Y-%m-%d %H:%M")
+                .to_string()
+        })
+        .unwrap_or_else(|_| value.to_string())
 }
 
 fn is_directory_abstract_placeholder(value: &str) -> bool {
@@ -511,6 +520,44 @@ mod tests {
     }
 
     #[test]
+    fn ls_table_output_renders_original_iso_modtime_in_local_timezone() {
+        let _tz = ScopedEnvVar::set("TZ", "Asia/Singapore");
+        let result = json!([
+            {
+                "uri": "viking://resources/hermes-agent/CONTRIBUTING.md",
+                "size": 44394,
+                "isDir": false,
+                "modTime": "2026-06-09T07:47:22Z",
+                "abstract": ""
+            }
+        ]);
+
+        let rendered = strip_ansi(&render_ls_entries_for_table(&result).expect("ls"));
+
+        assert!(rendered.contains("1. file · 43.4 KB · 2026-06-09 15:47"));
+        assert!(!rendered.contains("2026-06-09T07:47:22Z"));
+    }
+
+    #[test]
+    fn ls_table_output_renders_compact_raw_modtime_in_local_timezone() {
+        let _tz = ScopedEnvVar::set("TZ", "Asia/Singapore");
+        let result = json!([
+            {
+                "uri": "viking://resources/hermes-agent/CONTRIBUTING.md",
+                "size": 44394,
+                "isDir": false,
+                "modTime": "2026-06-10T16:30:17Z",
+                "abstract": ""
+            }
+        ]);
+
+        let rendered = strip_ansi(&render_ls_entries_for_table(&result).expect("ls"));
+
+        assert!(rendered.contains("1. file · 43.4 KB · 2026-06-11 00:30"));
+        assert!(!rendered.contains("2026-06-10T16:30:17Z"));
+    }
+
+    #[test]
     fn tree_table_output_renders_indented_tree() {
         let result = json!([
             {
@@ -596,5 +643,33 @@ mod tests {
             }
         }
         output
+    }
+
+    struct ScopedEnvVar {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl ScopedEnvVar {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var(key).ok();
+            // Test-only process environment override; Drop restores the prior value.
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for ScopedEnvVar {
+        fn drop(&mut self) {
+            unsafe {
+                if let Some(previous) = &self.previous {
+                    std::env::set_var(self.key, previous);
+                } else {
+                    std::env::remove_var(self.key);
+                }
+            }
+        }
     }
 }
