@@ -80,6 +80,11 @@ impl CachedFileSystem {
         Arc::clone(&self.provider)
     }
 
+    /// Return the wrapped filesystem for mount-stack capability discovery.
+    pub(crate) fn inner_fs(&self) -> &dyn FileSystem {
+        self.backend.as_ref()
+    }
+
     /// Invalidate cache objects affected by a write that bypassed this wrapper.
     pub(crate) async fn invalidate_external_write(&self, path: &str) {
         self.invalidate_path_objects(path).await;

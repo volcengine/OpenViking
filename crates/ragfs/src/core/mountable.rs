@@ -105,7 +105,11 @@ impl MountableFS {
 
     /// Try to unwrap a mounted filesystem stack to the underlying multi-write wrapper.
     fn as_multiwrite(fs: &Arc<dyn FileSystem>) -> Option<&MultiWriteWrappedFS> {
-        let any = fs.as_ref() as &dyn std::any::Any;
+        Self::as_multiwrite_ref(fs.as_ref())
+    }
+
+    fn as_multiwrite_ref(fs: &dyn FileSystem) -> Option<&MultiWriteWrappedFS> {
+        let any = fs as &dyn std::any::Any;
         if let Some(mw) = any.downcast_ref::<MultiWriteWrappedFS>() {
             return Some(mw);
         }
@@ -114,6 +118,14 @@ impl MountableFS {
         }
         if let Some(enc) = any.downcast_ref::<EncryptionWrappedFS>() {
             return Self::as_multiwrite(enc.inner_fs());
+        }
+        #[cfg(feature = "cache")]
+        if let Some(cache) = any.downcast_ref::<CachedFileSystem>() {
+            return Self::as_multiwrite_ref(cache.inner_fs());
+        }
+        #[cfg(feature = "cache")]
+        if let Some(arc) = any.downcast_ref::<ArcFileSystem>() {
+            return Self::as_multiwrite(&arc.0);
         }
         None
     }
@@ -1372,6 +1384,55 @@ mod tests {
                 .is_some(),
             "encrypted multi-write must not install a plaintext cache outside MultiWriteWrappedFS"
         );
+    }
+
+    #[cfg(feature = "cache")]
+    #[tokio::test]
+    async fn cached_unencrypted_multiwrite_keeps_admin_and_copy_fast_paths() {
+        use crate::cache::{CacheNamespace, CachePolicy, MemoryCacheProvider};
+        use crate::core::{FsContextInner, FS_CTX};
+        use crate::plugins::MemFSPlugin;
+
+        let mfs = MountableFS::with_cache(
+            Arc::new(MemoryCacheProvider::new()),
+            CacheNamespace::new("cached-multiwrite-test"),
+            CachePolicy::default(),
+        );
+        mfs.register_plugin(MemFSPlugin).await;
+
+        let mut config = multiwrite_test_config("memfs", "memfs", "/local");
+        config.backups.as_mut().unwrap().items[0].name = "backup1".to_string();
+        mfs.mount(config).await.unwrap();
+
+        let ctx = Arc::new(FsContextInner::new("acct"));
+        FS_CTX
+            .scope(ctx.clone(), async {
+                let status = mfs.system_sync_status("/local").await.unwrap();
+                assert_eq!(status["path"], "/");
+                assert_eq!(status["entry_count"], 0);
+
+                let retry = mfs.system_sync_retry("/local").await.unwrap();
+                assert_eq!(retry["path"], "/");
+                assert_eq!(retry["retried"], 0);
+
+                mfs.mkdir("/local/docs", 0o755).await.unwrap();
+                mfs.write("/local/docs/src.md", b"copied", 0, WriteFlag::Create)
+                    .await
+                    .unwrap();
+
+                assert!(mfs
+                    .copy_within_mount("/local/docs/src.md", "/local/docs/dst.md")
+                    .await
+                    .unwrap());
+                assert_eq!(
+                    mfs.read("/local/docs/dst.md", 0, 0).await.unwrap(),
+                    b"copied"
+                );
+            })
+            .await;
+
+        mfs.unmount("/local").await.unwrap();
+        assert!(mfs.list_mounts().await.is_empty());
     }
 
     #[tokio::test]
