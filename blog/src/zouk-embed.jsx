@@ -1229,6 +1229,15 @@ export function ZoukInteractiveBlog({ route }) {
       ) : null}
 
       {showBottomComposer ? (
+        <button
+          type="button"
+          className="zouk-reader-edge-toggle"
+          aria-label={launcherLabel}
+          onClick={() => openChat()}
+        />
+      ) : null}
+
+      {showBottomComposer ? (
         <form className="zouk-reader-bottom-composer" onSubmit={onSubmit} aria-label="Ask OpenViking">
           <div className="zouk-reader-input-shell">
             <textarea

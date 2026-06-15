@@ -431,9 +431,8 @@ a.b-tag:hover { color: var(--th-ink); border-color: var(--th-ink); }
 .b-post__sidebar { display: none; }
 @media (min-width: 1100px) {
   .b-post__sidebar { display: block; align-self: stretch; min-width: 0; grid-column: 2; grid-row: 1; }
-  .b-post__sidebar .b-toc { position: sticky; top: 88px; display: flex; flex-direction: column; max-height: calc(100vh - 100px); padding-left: 8px; }
-  .b-post__sidebar .b-toc__head { flex: 0 0 auto; }
-  .b-post__sidebar .b-toc__list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+  .b-post__sidebar .b-toc { position: sticky; top: 88px; padding-left: 8px; overflow: visible; }
+  .b-post__sidebar .b-toc__list { overflow: visible; }
   .b-post__body { grid-column: 1; grid-row: 1; align-self: start; }
 }
 .b-post__body { min-width: 0; }
@@ -608,6 +607,7 @@ html[lang="zh"] :is(.b-hero__title, .b-post__title, .b-card__title, .b-post__nav
 
 html {
   --zouk-reader-rail: min(33.333vw, 460px);
+  --zouk-reader-panel-width: min(420px, calc(100vw - 48px));
 }
 
 .zouk-selection-action svg,
@@ -682,7 +682,7 @@ html {
   z-index: 84;
   right: 24px;
   bottom: calc(24px + env(safe-area-inset-bottom, 0px));
-  width: min(160px, calc(100vw - 48px));
+  width: var(--zouk-reader-panel-width);
   padding: 0;
   border: 0;
   background: transparent;
@@ -696,7 +696,7 @@ html {
   right: 24px;
   top: 88px;
   bottom: 24px;
-  width: min(420px, calc(100vw - 48px));
+  width: var(--zouk-reader-panel-width);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -776,7 +776,38 @@ html {
 }
 
 .zouk-reader-edge-toggle {
+  position: fixed;
+  z-index: 83;
+  top: 88px;
+  right: 0;
+  bottom: 32px;
   display: none;
+  align-items: center;
+  justify-content: flex-end;
+  width: 26px;
+  padding: 0 5px 0 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.zouk-reader-edge-toggle::before {
+  content: "";
+  display: block;
+  width: 2px;
+  height: 88px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--th-mute) 42%, transparent);
+  opacity: 0.42;
+  transition: background 150ms ease, opacity 150ms ease, transform 150ms ease;
+}
+
+.zouk-reader-edge-toggle:hover::before,
+.zouk-reader-edge-toggle:focus-visible::before {
+  background: color-mix(in oklab, var(--th-accent) 70%, var(--th-mute));
+  opacity: 0.92;
+  transform: scaleY(1.16);
 }
 
 .zouk-reader-close {
@@ -1406,39 +1437,14 @@ html {
     pointer-events: none;
   }
 
-  .zouk-reader-edge-toggle::before {
-    content: "";
-    display: block;
-    width: 2px;
-    height: 108px;
-    border-radius: 999px;
-    background: color-mix(in oklab, var(--th-mute) 44%, transparent);
-    transition: background 150ms ease, opacity 150ms ease, transform 150ms ease;
-    opacity: 0.56;
-  }
-
-  .zouk-reader-edge-toggle:hover::before,
-  .zouk-reader-edge-toggle:focus-visible::before {
-    background: color-mix(in oklab, var(--th-accent) 68%, var(--th-mute));
-    opacity: 0.9;
-    transform: scaleY(1.08);
-  }
-
   .zouk-reader-edge-toggle {
-    position: absolute;
-    z-index: 3;
-    left: -24px;
-    top: 0;
-    bottom: 0;
-    width: 24px;
     display: flex;
-    align-items: center;
-    justify-content: center;
-    border: 0;
-    border-radius: 0;
-    background: transparent;
-    cursor: pointer;
-    padding: 0;
+  }
+
+  .zouk-reader-bottom-composer {
+    right: clamp(18px, 2.2vw, 32px);
+    width: calc(var(--zouk-reader-rail) - clamp(38px, 4vw, 58px));
+    max-width: 428px;
   }
 
   .zouk-reader-close {
@@ -1498,7 +1504,7 @@ html {
   .zouk-reader-bottom-composer {
     right: 24px;
     bottom: calc(24px + env(safe-area-inset-bottom, 0px));
-    width: min(160px, calc(100vw - 48px));
+    width: var(--zouk-reader-panel-width);
   }
 
   .zouk-reader-panel {
