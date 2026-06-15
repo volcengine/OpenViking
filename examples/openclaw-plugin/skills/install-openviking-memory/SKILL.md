@@ -13,7 +13,7 @@ description: >
   The user does NOT need to know any CLI commands — the agent runs everything and only asks for a few values.
   This skill assumes the OpenViking server is already running. If the server is not ready, the skill
   tells the user to contact their admin or set it up via the OpenViking docs — it does NOT install the server.
-version: 2.0.1
+version: 2026.6.12
 metadata:
   openclaw:
     requires:
@@ -109,7 +109,7 @@ Send this message:
 > 我需要 3 条信息，不知道的可以问你的管理员：
 > 1. **OpenViking 服务地址** —— 例如 `https://ov.example.com` 或 `http://192.168.1.100:1933`，本机服务可以直接说"本机"
 > 2. **API Key** —— 用来鉴权；服务没开认证可以说"没有"
-> 3. **Agent 标识前缀**（可选） —— 用于区分多个 agent 的记忆命名空间，留空就用默认
+> 3. **Peer 标识设置**（可选） —— 需要区分多个 assistant/sender 时才配置；默认不用填
 >
 > 先告诉我服务地址吧？
 
@@ -118,7 +118,7 @@ Send this message:
 > I need 3 things (ask your admin if unsure):
 > 1. **OpenViking server URL** — e.g. `https://ov.example.com` or `http://192.168.1.100:1933`. For a local server, just say "local".
 > 2. **API Key** — for auth. Say "none" if the server has no auth.
-> 3. **Agent prefix** (optional) — used to namespace memories across agents. Leave blank for default.
+> 3. **Peer identity settings** (optional) — configure only if you need to separate multiple assistants/senders. Leave blank for default.
 >
 > What's the server URL?
 
@@ -141,16 +141,21 @@ Collect 3 values through natural conversation. Be flexible: if the user gives se
 > (CN) API Key 是什么？服务没开认证就直接说"没有"。
 > (EN) What's the API Key? Say "none" if the server has no auth.
 
-- "no" / "none" / "没有" / "空" / empty → `API_KEY=""` (you will skip the flag later).
-- Otherwise store as-is.
+- If the user says "none", "no key", "没有", or "不开认证", leave it empty.
+- If they paste a key, keep it in memory only for command execution. Do **not** echo it back.
+- If they are unsure whether the key is a root key, continue. STEP 7 detects that and asks for tenant IDs if needed.
 
-### 4c. `AGENT_PREFIX` (OPTIONAL)
+### 4c. `PEER_ROLE` / `PEER_PREFIX` (OPTIONAL)
 
-> (CN) 想给这个 agent 一个记忆前缀吗？留空就用默认。只能用字母、数字、`_`、`-`。
-> (EN) Want to set an agent prefix? Leave blank for the default. Letters, digits, `_`, `-` only.
+Default to no peer scoping: `peer_role=none` and empty `peer_prefix`.
 
-- Empty / "default" / "默认" → leave unset (plugin defaults to `""`).
-- Otherwise validate against `/^[A-Za-z0-9_-]+$/`. If invalid, ask again.
+Only collect peer settings when the user explicitly wants multiple OpenClaw assistants or senders to be separated:
+
+- For assistant-specific memory routing, use `--peer-role assistant`.
+- If they provide a prefix such as `openclaw-prod`, pass it as `--peer-prefix openclaw-prod`.
+- `peer_prefix` may contain only letters, digits, `_`, and `-`.
+
+Do not use legacy agent routing flags. Current plugin config uses `peer_role` / `peer_prefix`.
 
 ### 4d. (Conditional) Multi-Tenant Root-Key Fields
 
@@ -262,14 +267,14 @@ Tell the user:
 Run the installer with `npx` (no global install needed):
 
 ```bash
-npx -y openclaw-openviking-setup-helper@latest --base-url BASE_URL [--api-key API_KEY] [--agent-prefix AGENT_PREFIX] [--account-id ACCOUNT_ID] [--user-id USER_ID]
+npx -y openclaw-openviking-setup-helper@latest --base-url BASE_URL [--api-key API_KEY] [--peer-role PEER_ROLE] [--peer-prefix PEER_PREFIX] [--account-id ACCOUNT_ID] [--user-id USER_ID]
 ```
 
 Build the flag list according to what the user gave you:
 
 - Always pass `--base-url BASE_URL`.
 - Pass `--api-key API_KEY` only if `API_KEY` is non-empty.
-- Pass `--agent-prefix AGENT_PREFIX` only if the user gave one.
+- Pass `--peer-role` / `--peer-prefix` only if the user explicitly wants peer IDs. Default is no peer IDs.
 - `--account-id` / `--user-id` only if the root-key path requires them.
 
 `ov-install` will, in one shot:
@@ -290,14 +295,14 @@ If `ov-install` exits non-zero, capture the last 30 lines of its output, show th
 Run the setup wizard non-interactively. Build flags from collected values:
 
 ```bash
-openclaw openviking setup --base-url BASE_URL --json [--api-key API_KEY] [--agent-prefix AGENT_PREFIX] [--account-id ACCOUNT_ID] [--user-id USER_ID] [--allow-offline] [--force-slot]
+openclaw openviking setup --base-url BASE_URL --json [--api-key API_KEY] [--peer-role PEER_ROLE] [--peer-prefix PEER_PREFIX] [--account-id ACCOUNT_ID] [--user-id USER_ID] [--allow-offline] [--force-slot]
 ```
 
 Rules:
 
 - `--base-url BASE_URL` is **required** under `--json`. Without it, the wizard prints `--json requires --base-url for non-interactive mode`.
 - `--api-key` only if `API_KEY` is non-empty.
-- `--agent-prefix` only if the user gave one. Use **`--agent-prefix`**, not `--agent-id` (deprecated and removed).
+- `--peer-role` / `--peer-prefix` only if the user explicitly wants peer IDs. Default is `--peer-role none`.
 - `--account-id` / `--user-id` only after STEP 7 root-key detection (see below).
 - `--allow-offline` only if the user explicitly approved it in STEP 5.
 - `--force-slot` **never** in the first attempt. Add only after the user confirms (see slot_blocked handling below).
@@ -310,7 +315,7 @@ The wizard prints a single JSON object:
 {
   "success": true | false,
   "action": "configured" | "existing" | "error" | "slot_blocked",
-  "config": { "mode": "remote", "baseUrl": "...", "apiKey": "...", "agent_prefix": "...", "accountId": "...", "userId": "..." },
+  "config": { "mode": "remote", "baseUrl": "...", "apiKey": "...", "peer_role": "none|assistant|person", "peer_prefix": "...", "accountId": "...", "userId": "..." },
   "health": { "ok": true, "status": 200 },
   "keyProbe": { "keyType": "user_key" | "root_key" | "none", "ok": true },
   "slot": { "ok": true, "owner": "openviking" },
@@ -397,7 +402,7 @@ Expected output:
   "configured": true,
   "slotActive": true,
   "health": { "ok": true },
-  "config": { "baseUrl": "...", "agent_prefix": "..." }
+  "config": { "baseUrl": "...", "peer_role": "none", "peer_prefix": "..." }
 }
 ```
 
@@ -504,7 +509,8 @@ These are the keys under `plugins.entries.openviking.config` in `openclaw.json`.
 | `mode` | `"remote"` (forced by plugin) | Always remote in this skill. Don't set manually. |
 | `baseUrl` | `http://127.0.0.1:1933` | OpenViking server URL. |
 | `apiKey` | — | API key. Optional if server has no auth. |
-| `agent_prefix` | `""` | Prefix for routing memories per agent. Letters / digits / `_` / `-`. |
+| `peer_role` | `"none"` | Controls whether session messages include `peer_id`: `none`, `assistant`, or `person`. |
+| `peer_prefix` | `""` | Optional prefix for assistant `peer_id` values when `peer_role=assistant`. |
 | `accountId` | — | Required when `apiKey` is a root key. |
 | `userId` | — | Required when `apiKey` is a root key. |
 | `targetUri` | `viking://user/memories` | Default search scope URI. |
@@ -513,14 +519,12 @@ These are the keys under `plugins.entries.openviking.config` in `openclaw.json`.
 | `captureMode` | `"semantic"` | Filter mode used by the server-side extraction pipeline: `semantic` or `keyword`. |
 | `captureMaxLength` | `24000` | Max text length per archived turn. |
 | `autoRecall` | `true` | Auto-recall and inject memories before reply. |
+| `autoRecallTimeoutMs` | `5000` | Outer timeout for the whole auto-recall flow. Increase for slow local embedding hardware. |
 | `recallLimit` | `6` | Max memories injected per recall. |
 | `recallScoreThreshold` | `0.15` | Min relevance score to inject. |
 | `recallMaxInjectedChars` | (plugin default) | Hard cap on injected character count. |
 | `recallPreferAbstract` | (plugin default) | Prefer abstract memories over raw. |
 | `recallTokenBudget` | (plugin default) | Token budget for injected memories. |
-| `isolateUserScopeByAgent` | (plugin default) | Multi-tenant scoping toggle. |
-| `isolateAgentScopeByUser` | (plugin default) | Multi-tenant scoping toggle. |
-| `agentScopeMode` | (plugin default) | Agent scope strategy. |
 | `bypassSessionPatterns` | — | Glob patterns for sessions skipped by capture. |
 | `ingestReplyAssist` | (plugin default) | Reply-assist ingestion toggle. |
 | `emitStandardDiagnostics` | (plugin default) | Verbose diagnostic logs. |
@@ -659,7 +663,7 @@ Match against actual stderr / JSON `error` strings.
 | `Server unreachable: …. Use --allow-offline to save config anyway.` | Setup couldn't reach server | Offer `--allow-offline`. |
 | `contextEngine slot is owned by "<x>". … Use --force-slot to replace.` | Slot conflict | Ask user, then retry with `--force-slot`. |
 | `Root API key detected. Missing: --account-id, --user-id` | Multi-tenant key | Collect both, retry with `--account-id` `--user-id`. |
-| `openviking: config parse failed` (in gateway log) | Bad value in `openclaw.json` | Show user; check `agent_prefix` charset, URL format. |
+| `openviking: config parse failed` (in gateway log) | Bad value in `openclaw.json` | Show user; check `peer_role`, `peer_prefix` charset, URL format. |
 | `extracted 0 memories` after a turn | Server VLM/embedding misconfigured | **Out of scope.** Tell user this is a server-side issue — ask their OpenViking admin to check VLM / embedding config. |
 | `401` / `403` on plugin requests, but `/health` works | Server requires auth on API endpoints | Re-run STEP 7 with the correct `--api-key`. |
 | Plugin doesn't appear in `openclaw plugins list` after Path A | Install didn't actually finish | Re-run Path A; use Path B only if the failure is registry/rate-limit related. |
@@ -671,7 +675,7 @@ Match against actual stderr / JSON `error` strings.
 3. **Never silently use `--force-slot`.** Slot replacement disables another plugin — always confirm with the user first.
 4. **Never invent values.** If the user can't provide a required value, stop and tell them what to ask their admin.
 5. **Never claim success without STEP 10.** Only after `openclaw openviking status --json` shows `configured: true && slotActive: true && health.ok: true` may you tell the user it's done.
-6. **Use `--agent-prefix`, not `--agent-id`.** The latter is deprecated and removed from the schema.
+6. **Use `--peer-role` / `--peer-prefix` only for explicit peer routing.**
 7. **For Windows, use PowerShell equivalents.** Don't rely on `nohup`, `&`, `mkdir -p`, `source`, etc.
 8. **Switch to Path B (ov-install) only for ClawHub/rate-limit/registry availability failures.** Don't use it to hide version conflicts or package validation errors.
 9. **Do NOT install or operate the OpenViking server.** This skill assumes the server is already running. If it isn't, tell the user to contact their admin or follow the OpenViking docs.

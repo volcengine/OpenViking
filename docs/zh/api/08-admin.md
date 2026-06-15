@@ -4,10 +4,9 @@ Admin API 用于多租户环境下的账户和用户管理。包括工作区（a
 
 该 API 适用于 `api_key` 和 `trusted` 两种模式下的管理链路：
 - 在 `api_key` 模式下，角色始终从 API Key 推导。
-- 在 `trusted` 模式下，普通请求仍然不依赖 user key 注册流程；但受信任网关可以使用已注册且具有适当角色的用户调用 Admin API（角色从用户注册表查询）。
+- 在 `trusted` 模式下，普通请求仍然不依赖 user key 注册流程；当请求 `/api/v1/admin/*` 并携带已配置的 `root_api_key` 时，受信上游会按 ROOT 授权。
 
-在 `trusted` 模式下，角色通过查询 `X-OpenViking-Account` + `X-OpenViking-User` 从用户注册表确定。如果用户不存在，角色默认为 `USER`。
-对于 `/api/v1/admin/*`，`trusted` 模式还允许不携带显式身份头；这类请求会被视为 ROOT，适用于仅通过部署级 `root_api_key` 认证的受信上游。
+对于 `/api/v1/admin/*`，`trusted` 模式允许不携带显式身份头；也允许携带与 URL 中 account/user 匹配的目标身份头。只要部署级 `root_api_key` 校验通过，这类请求都会按 ROOT 处理。普通 trusted 数据 API 的身份和角色仍然来自 `X-OpenViking-Account` + `X-OpenViking-User`。
 
 ## 角色与权限
 
@@ -22,7 +21,7 @@ Admin API 用于多租户环境下的账户和用户管理。包括工作区（a
 | 创建/删除工作区 | Y | N | N |
 | 列出工作区 | Y | N | N |
 | 注册/移除用户 | Y | Y（本 account） | N |
-| 列出 agent namespace | Y | Y（本 account） | N |
+| 列出 agents（已废弃，返回空列表） | Y | Y（本 account） | N |
 | 重新生成 User Key | Y | Y（本 account） | N |
 | 修改用户角色 | Y | N | N |
 
@@ -48,10 +47,12 @@ Admin API 用于多租户环境下的账户和用户管理。包括工作区（a
 - `ov --sudo admin` - 账户和用户管理
 - `ov --sudo system` - 系统工具命令
 - `ov --sudo reindex` - 重建索引
+- `ov --sudo admin migrate` - legacy agent/session 迁移和 cleanup
+- `ov --sudo task status/list` - 查询 root/system 后台任务，例如迁移任务
 
 ### 使用限制
 
-- `--sudo` 仅适用于管理类命令，用于普通数据命令会报错
+- `--sudo` 仅适用于上面的命令，用于普通数据命令会报错
 - 必须配置 `root_api_key` 才能使用 `--sudo`
 
 ## API 参考
@@ -82,12 +83,10 @@ Admin API 用于多租户环境下的账户和用户管理。包括工作区（a
 |------|------|------|--------|------|
 | account_id | str | 是 | - | 工作区 ID |
 | admin_user_id | str | 是 | - | 首个管理员用户 ID |
-| isolate_user_scope_by_agent | bool | 否 | false | 是否按 agent 进一步隔离 user scope |
-| isolate_agent_scope_by_user | bool | 否 | false | 是否按 user 进一步隔离 agent scope |
 
 **说明：**
 - 在 `trusted` 模式下，响应中不会包含 `user_key` 字段
-- `isolate_user_scope_by_agent` 和 `isolate_agent_scope_by_user` 仅可通过 HTTP API 设置，Python SDK 和 CLI 暂不支持
+- 不再支持 account 级 namespace 隔离配置。用户记忆使用 user-scoped namespace，一对多外部参与者通过 `peer_id` 表达。
 
 #### 3. 使用示例
 
@@ -103,9 +102,7 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts \
   -H "X-API-Key: <root-key>" \
   -d '{
     "account_id": "acme",
-    "admin_user_id": "alice",
-    "isolate_user_scope_by_agent": true,
-    "isolate_agent_scope_by_user": false
+    "admin_user_id": "alice"
   }'
 ```
 
@@ -135,9 +132,7 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts \
   -H "X-OpenViking-User: gateway-admin" \
   -d '{
     "account_id": "acme",
-    "admin_user_id": "alice",
-    "isolate_user_scope_by_agent": true,
-    "isolate_agent_scope_by_user": false
+    "admin_user_id": "alice"
   }'
 ```
 
@@ -182,9 +177,7 @@ ov --sudo admin create-account acme --admin alice
   "result": {
     "account_id": "acme",
     "admin_user_id": "alice",
-    "user_key": "7f3a9c1e...",
-    "isolate_user_scope_by_agent": true,
-    "isolate_agent_scope_by_user": false
+    "user_key": "7f3a9c1e..."
   },
   "time": 0.1
 }
@@ -268,7 +261,7 @@ ov --sudo admin list-accounts
 
 **处理流程：**
 1. 验证请求者具有 ROOT 权限
-2. 级联删除账户下的所有 AGFS 数据（user/、agent/、session/、resources/）
+2. 级联删除账户下的所有 AGFS 数据（`user/` 和 `resources/`；sessions 位于 `user/` 下）
 3. 级联删除向量数据库中该账户的所有记录
 4. 最后删除账户元数据和所有用户密钥
 
@@ -512,75 +505,6 @@ ov --sudo admin list-users acme
 
 ---
 
-### list_agents
-
-#### 1. API 实现介绍
-
-列出工作区中已经存在的 agent namespace。这是管理侧发现接口，不改变普通 `viking://agent/...` 文件系统语义。
-
-**处理流程：**
-1. 验证请求者具有 ROOT 权限，或为本账户的 ADMIN
-2. 验证 account 存在
-3. 扫描该 account 的 `viking://agent` namespace 根目录
-4. 返回按 agent_id 排序的 agent namespace 列表
-
-**代码入口：**
-- `openviking/server/routers/admin.py:list_agents` - HTTP 路由
-- `crates/ov_cli/src/client.rs:HttpClient.admin_list_agents` - CLI HTTP 客户端
-- `crates/ov_cli/src/commands/admin.rs:list_agents` - CLI 命令
-
-#### 2. 接口和参数说明
-
-**参数**
-
-| 参数 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| account_id | str | 是 | - | 工作区 ID |
-
-**说明：**
-- ROOT 可以列出任意 account 的 agents
-- ADMIN 只能列出自己所属 account 的 agents
-- USER 不能调用该接口
-- 返回的是存储中已经存在的 agent namespace；新建 account 会包含初始化出的 `default` agent namespace
-
-#### 3. 使用示例
-
-**HTTP API**
-
-```
-GET /api/v1/admin/accounts/{account_id}/agents
-```
-
-```bash
-curl -X GET http://localhost:1933/api/v1/admin/accounts/acme/agents \
-  -H "X-API-Key: <root-or-admin-key>"
-```
-
-**CLI**
-
-```bash
-# ROOT 或本账户的 ADMIN 都可以执行
-# 如果使用普通用户的 api_key 但该用户是 acme 的 ADMIN：
-ov admin list-agents acme
-# 如果使用 root_api_key（--sudo）：
-ov --sudo admin list-agents acme
-```
-
-**响应示例**
-
-```json
-{
-  "status": "ok",
-  "result": [
-    {"agent_id": "default", "uri": "viking://agent/default"},
-    {"agent_id": "openclaw", "uri": "viking://agent/openclaw"}
-  ],
-  "time": 0.1
-}
-```
-
----
-
 ### remove_user
 
 #### 1. API 实现介绍
@@ -814,6 +738,94 @@ ov --sudo admin regenerate-key acme bob
     "user_key": "e82d4e0f..."
   },
   "time": 0.1
+}
+```
+
+---
+
+### migrate_legacy_data
+
+#### 1. API 实现介绍
+
+将 0.3.x legacy `viking://agent/...` / `viking://session/...` 数据迁移到 0.4.0 的 user / peer namespace，或在确认迁移结果后清理旧 namespace。该接口仅 ROOT 可调用，并以后台 task 执行。
+
+**处理流程：**
+1. 验证请求者具有 ROOT 权限
+2. `action=migrate` 时执行 preflight，检查 account registry、session owner 等前置条件
+3. 创建 root 级后台 task
+4. 迁移时复制文件和已有向量记录；cleanup 时先删除旧向量记录，再删除旧 AGFS 目录
+
+迁移不会自动调用 `reindex`。如果迁移后的检索结果不符合预期，需要用户对新路径手动执行 reindex。
+
+**代码入口：**
+- `openviking/server/routers/admin.py:migrate_legacy_data` - HTTP 路由
+- `openviking/service/legacy_migration.py:LegacyDataMigration` - 迁移实现
+
+#### 2. 接口和参数说明
+
+**HTTP API**
+
+```
+POST /api/v1/admin/migrate
+```
+
+**参数**
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| action | str | 否 | migrate | `migrate` 执行迁移；`cleanup` 清理旧 namespace |
+
+**迁移结果字段**
+
+| 字段 | 说明 |
+|------|------|
+| migrated.files / migrated.directories | 复制的文件和目录数量 |
+| migrated.vector_records | 复制的已有向量记录数量 |
+| migrated.skipped_vector_records | 因没有向量 payload 而跳过的旧记录数量 |
+| migrated.operations | 按迁移类别统计的操作数量 |
+| skipped / warnings / created_users | 跳过项、告警、自动创建的用户 |
+
+**Cleanup 结果字段**
+
+| 字段 | 说明 |
+|------|------|
+| cleanup.directories | 删除的 legacy 目录数量 |
+| cleanup.vector_records | 删除的旧向量记录数量 |
+| cleanup.targets | 已清理的 legacy scope |
+| skipped / warnings | 跳过项和告警 |
+
+#### 3. 使用示例
+
+**执行迁移**
+
+```bash
+curl -X POST http://localhost:1933/api/v1/admin/migrate \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: <root-key>" \
+  -d '{"action": "migrate"}'
+```
+
+**清理旧 namespace**
+
+```bash
+curl -X POST http://localhost:1933/api/v1/admin/migrate \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: <root-key>" \
+  -d '{"action": "cleanup"}'
+```
+
+**CLI**
+
+```bash
+ov --sudo admin migrate --output json
+ov --sudo admin migrate --cleanup --output json
+```
+
+**响应示例**
+
+```json
+{
+  "task_id": "legacy_migration_..."
 }
 ```
 

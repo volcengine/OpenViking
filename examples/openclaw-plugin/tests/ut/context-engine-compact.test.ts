@@ -15,12 +15,16 @@ function makeLogger() {
   };
 }
 
-function makeEngine(commitResult: unknown, opts?: { throwError?: Error }) {
+function makeEngine(
+  commitResult: unknown,
+  opts?: { throwError?: Error; cfgOverrides?: Record<string, unknown> },
+) {
   const cfg = memoryOpenVikingConfigSchema.parse({
     mode: "remote",
     baseUrl: "http://127.0.0.1:1933",
     autoCapture: false,
     autoRecall: false,
+    ...(opts?.cfgOverrides ?? {}),
   });
   const logger = makeLogger();
 
@@ -116,6 +120,24 @@ describe("context-engine commitOVSession()", () => {
     expect(client.commitSession.mock.calls[0][1]).toMatchObject({ wait: true });
   });
 
+  it("does not pass memory policy when committing peer-role sessions", async () => {
+    const { engine, client } = makeEngine(
+      {
+        status: "completed",
+        archived: false,
+        memories_extracted: {},
+      },
+      { cfgOverrides: { peer_role: "person" } },
+    );
+
+    await engine.commitOVSession({ sessionId: "s1" });
+
+    expect(client.commitSession.mock.calls[0][1]).toMatchObject({
+      wait: true,
+    });
+    expect(client.commitSession.mock.calls[0][1]).not.toHaveProperty("memoryPolicy");
+  });
+
   it("uses sessionKey-derived OV session ID for commitOVSession", async () => {
     const { engine, client, resolveAgentId } = makeEngine({
       status: "completed",
@@ -130,7 +152,7 @@ describe("context-engine commitOVSession()", () => {
 
     const ovSessionId = openClawSessionToOvStorageId("plain-session", "agent:main:main");
     expect(client.commitSession.mock.calls[0][0]).toBe(ovSessionId);
-    expect(resolveAgentId).toHaveBeenCalledWith("plain-session", "agent:main:main", ovSessionId);
+    expect(resolveAgentId).not.toHaveBeenCalled();
   });
 
   it("logs memories extracted count", async () => {
@@ -303,6 +325,24 @@ describe("context-engine compact()", () => {
     expect(client.commitSession.mock.calls[0][1]).toMatchObject({ wait: true });
   });
 
+  it("compact does not pass memory policy when committing peer-role sessions", async () => {
+    const { engine, client } = makeEngine(
+      {
+        status: "completed",
+        archived: true,
+        memories_extracted: {},
+      },
+      { cfgOverrides: { peer_role: "person" } },
+    );
+
+    await engine.compact({ sessionId: "s1", sessionFile: "" });
+
+    expect(client.commitSession.mock.calls[0][1]).toMatchObject({
+      wait: true,
+    });
+    expect(client.commitSession.mock.calls[0][1]).not.toHaveProperty("memoryPolicy");
+  });
+
   it("logs memory extraction count on success", async () => {
     const { engine, logger } = makeEngine({
       status: "completed",
@@ -396,7 +436,7 @@ describe("context-engine compact()", () => {
     expect(resolveAgentId).toHaveBeenCalledWith("plain-session", "agent:top:main", ovSessionId);
   });
 
-  it("passes agentId to commitSession", async () => {
+  it("does not pass agentId to commitSession", async () => {
     const { engine, client } = makeEngine({
       status: "completed",
       archived: false,
@@ -406,8 +446,10 @@ describe("context-engine compact()", () => {
     await engine.compact({ sessionId: "s1", sessionFile: "" });
 
     expect(client.commitSession.mock.calls[0][1]).toMatchObject({
-      agentId: "test-agent",
+      wait: true,
+      keepRecentCount: 0,
     });
+    expect(client.commitSession.mock.calls[0][1]).not.toHaveProperty("agentId");
   });
 
   it("returns ok=false with reason=commit_error when commit throws", async () => {

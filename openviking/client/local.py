@@ -7,6 +7,7 @@ Implements BaseClient interface using direct service calls (embedded mode).
 
 from typing import Any, Dict, List, Optional, Union
 
+from openviking.core.peer_id import normalize_peer_id, normalize_peer_selector
 from openviking.server.identity import RequestContext, Role
 from openviking.service import OpenVikingService
 from openviking.telemetry import TelemetryRequest
@@ -14,8 +15,9 @@ from openviking.telemetry.execution import (
     attach_telemetry_payload,
     run_with_telemetry,
 )
-from openviking.utils.search_filters import merge_time_filter
+from openviking.utils.search_filters import SearchContextTypeInput, merge_search_filter
 from openviking_cli.client.base import BaseClient
+from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import run_async
 
@@ -34,13 +36,15 @@ def _to_jsonable(value: Any) -> Any:
 
 def _resolve_search_filter(
     filter: Optional[Dict[str, Any]],
+    context_type: Optional[SearchContextTypeInput],
     since: Optional[str],
     until: Optional[str],
     time_field: Optional[str],
 ) -> Optional[Dict[str, Any]]:
-    """Merge optional retrieval time bounds into the metadata filter."""
-    return merge_time_filter(
+    """Merge public retrieval filter shortcuts into the metadata filter."""
+    return merge_search_filter(
         filter,
+        context_type=context_type,
         since=since,
         until=until,
         time_field=time_field,
@@ -57,19 +61,31 @@ class LocalClient(BaseClient):
         self,
         path: Optional[str] = None,
         user: Optional[UserIdentifier] = None,
+        actor_peer_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
     ):
         """Initialize LocalClient.
 
         Args:
             path: Local storage path (overrides ov.conf storage path)
-            user: Explicit user/account/agent identity for embedded mode
+            user: Explicit account/user identity for embedded mode
+            actor_peer_id: Optional view filter for the current user's peer collection.
+            agent_id: Legacy alias for actor_peer_id.
         """
         self._service = OpenVikingService(
             path=path,
             user=user or UserIdentifier.the_default_user(),
         )
         self._user = self._service.user
-        self._ctx = RequestContext(user=self._user, role=Role.USER)
+        if actor_peer_id and agent_id:
+            raise ValueError("actor_peer_id cannot be used with legacy agent_id")
+        self._legacy_agent_id = normalize_peer_selector(None, agent_id=agent_id)
+        self._ctx = RequestContext(
+            user=self._user,
+            role=Role.USER,
+            actor_peer_id=normalize_peer_selector(actor_peer_id, agent_id=agent_id),
+            legacy_agent_id=self._legacy_agent_id,
+        )
 
     @property
     def service(self) -> OpenVikingService:
@@ -101,6 +117,7 @@ class LocalClient(BaseClient):
         summarize: bool = False,
         telemetry: TelemetryRequest = False,
         watch_interval: float = 0,
+        args: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
@@ -122,6 +139,7 @@ class LocalClient(BaseClient):
                 build_index=build_index,
                 summarize=summarize,
                 watch_interval=watch_interval,
+                args=args,
                 **kwargs,
             ),
         )
@@ -294,6 +312,7 @@ class LocalClient(BaseClient):
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
+        context_type: Optional[SearchContextTypeInput] = None,
         telemetry: TelemetryRequest = False,
         since: Optional[str] = None,
         until: Optional[str] = None,
@@ -301,7 +320,7 @@ class LocalClient(BaseClient):
         level: Optional[List[int]] = None,
     ) -> Any:
         """Semantic search without session context."""
-        resolved_filter = _resolve_search_filter(filter, since, until, time_field)
+        resolved_filter = _resolve_search_filter(filter, context_type, since, until, time_field)
         execution = await run_with_telemetry(
             operation="search.find",
             telemetry=telemetry,
@@ -328,6 +347,7 @@ class LocalClient(BaseClient):
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
+        context_type: Optional[SearchContextTypeInput] = None,
         telemetry: TelemetryRequest = False,
         since: Optional[str] = None,
         until: Optional[str] = None,
@@ -335,7 +355,7 @@ class LocalClient(BaseClient):
         level: Optional[List[int]] = None,
     ) -> Any:
         """Semantic search with optional session context."""
-        resolved_filter = _resolve_search_filter(filter, since, until, time_field)
+        resolved_filter = _resolve_search_filter(filter, context_type, since, until, time_field)
 
         async def _search():
             session = None
@@ -404,7 +424,10 @@ class LocalClient(BaseClient):
     # ============= Sessions =============
 
     async def create_session(
-        self, session_id: Optional[str] = None, telemetry: TelemetryRequest = False
+        self,
+        session_id: Optional[str] = None,
+        telemetry: TelemetryRequest = False,
+        memory_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Create a new session.
 
@@ -415,19 +438,27 @@ class LocalClient(BaseClient):
         execution = await run_with_telemetry(
             operation="session.create",
             telemetry=telemetry,
-            fn=lambda: self._create_session_impl(session_id),
+            fn=lambda: self._create_session_impl(session_id, memory_policy),
         )
         return attach_telemetry_payload(
             execution.result,
             execution.telemetry,
         )
 
-    async def _create_session_impl(self, session_id: Optional[str]) -> Dict[str, Any]:
+    async def _create_session_impl(
+        self,
+        session_id: Optional[str],
+        memory_policy: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
         await self._service.initialize_user_directories(self._ctx)
-        await self._service.initialize_agent_directories(self._ctx)
-        session = await self._service.sessions.create(self._ctx, session_id)
+        session = await self._service.sessions.create(
+            self._ctx,
+            session_id,
+            memory_policy=memory_policy,
+        )
         return {
             "session_id": session.session_id,
+            "uri": session.uri,
             "user": session.user.to_dict(),
         }
 
@@ -439,6 +470,7 @@ class LocalClient(BaseClient):
         """Get session details."""
         session = await self._service.sessions.get(session_id, self._ctx, auto_create=auto_create)
         result = session.meta.to_dict()
+        result["uri"] = session.uri
         result["user"] = session.user.to_dict()
         return result
 
@@ -446,15 +478,13 @@ class LocalClient(BaseClient):
         self, session_id: str, token_budget: int = 128_000
     ) -> Dict[str, Any]:
         """Get assembled session context."""
-        session = self._service.sessions.session(self._ctx, session_id)
-        await session.load()
+        session = await self._service.sessions.get(session_id, self._ctx, auto_create=False)
         result = await session.get_session_context(token_budget=token_budget)
         return _to_jsonable(result)
 
     async def get_session_archive(self, session_id: str, archive_id: str) -> Dict[str, Any]:
         """Get one completed archive for a session."""
-        session = self._service.sessions.session(self._ctx, session_id)
-        await session.load()
+        session = await self._service.sessions.get(session_id, self._ctx, auto_create=False)
         result = await session.get_session_archive(archive_id)
         return _to_jsonable(result)
 
@@ -495,7 +525,7 @@ class LocalClient(BaseClient):
         content: Optional[str] = None,
         parts: Optional[List[Dict[str, Any]]] = None,
         created_at: Optional[str] = None,
-        role_id: Optional[str] = None,
+        peer_id: Optional[str] = None,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add a message to a session.
@@ -506,7 +536,7 @@ class LocalClient(BaseClient):
             content: Text content (simple mode, backward compatible)
             parts: Parts array (full Part support mode)
             created_at: Message creation time (ISO format string)
-            role_id: Optional explicit actor identity. Omit to derive it from the local context.
+            peer_id: Optional stable interaction peer identity.
 
         If both content and parts are provided, parts takes precedence.
         """
@@ -519,7 +549,7 @@ class LocalClient(BaseClient):
                 content,
                 parts,
                 created_at,
-                role_id,
+                peer_id,
             ),
         )
         return attach_telemetry_payload(
@@ -534,7 +564,7 @@ class LocalClient(BaseClient):
         content: Optional[str],
         parts: Optional[List[Dict[str, Any]]],
         created_at: Optional[str],
-        role_id: Optional[str],
+        peer_id: Optional[str],
     ) -> Dict[str, Any]:
         from openviking.message.part import Part, TextPart, part_from_dict
 
@@ -548,12 +578,12 @@ class LocalClient(BaseClient):
         else:
             raise ValueError("Either content or parts must be provided")
 
-        if role_id is None and role == "user":
-            role_id = self._ctx.user.user_id
-        elif role_id is None and role == "assistant":
-            role_id = self._ctx.user.agent_id
-
-        session.add_message(role, message_parts, role_id=role_id, created_at=created_at)
+        session.add_message(
+            role,
+            message_parts,
+            peer_id=self._resolve_message_peer_id(role, peer_id),
+            created_at=created_at,
+        )
         return {
             "session_id": session_id,
             "message_count": len(session.messages),
@@ -597,19 +627,16 @@ class LocalClient(BaseClient):
             elif message.get("content") is not None:
                 message_parts = [TextPart(text=str(message["content"]))]
             else:
-                raise ValueError(f"messages[{index}]: either content or parts must be provided")
-
-            role_id = message.get("role_id")
-            if role_id is None and role == "user":
-                role_id = self._ctx.user.user_id
-            elif role_id is None and role == "assistant":
-                role_id = self._ctx.user.agent_id
+                raise ValueError(f"messages[{index}]: Either content or parts must be provided")
 
             specs.append(
                 {
                     "role": role,
                     "parts": message_parts,
-                    "role_id": role_id,
+                    "peer_id": self._resolve_message_peer_id(
+                        role,
+                        message.get("peer_id"),
+                    ),
                     "created_at": message.get("created_at"),
                 }
             )
@@ -620,6 +647,17 @@ class LocalClient(BaseClient):
             "message_count": len(session.messages),
             "added": len(added),
         }
+
+    def _resolve_message_peer_id(self, role: str, peer_id: Optional[str]) -> Optional[str]:
+        if self._legacy_agent_id is None:
+            return normalize_peer_id(peer_id)
+        if peer_id is not None:
+            raise InvalidArgumentError(
+                "peer_id cannot be used when client is configured with legacy agent_id"
+            )
+        if role == "assistant":
+            return self._legacy_agent_id
+        return None
 
     # ============= Pack =============
 
@@ -698,14 +736,17 @@ class LocalClient(BaseClient):
             Session object if exists, None otherwise.
         """
 
-        session = self._service.sessions.session(self._ctx, session_id)
-        if not run_async(session.exists()):
-            if must_exist and session_id:
-                from openviking_cli.exceptions import NotFoundError
+        if session_id:
+            try:
+                return run_async(
+                    self._service.sessions.get(session_id, self._ctx, auto_create=False)
+                )
+            except NotFoundError:
+                if must_exist:
+                    raise NotFoundError(session_id, "session")
 
-                raise NotFoundError(session_id, "session")
-            else:
-                run_async(session.ensure_exists())
+        session = self._service.sessions.session(self._ctx, session_id)
+        run_async(session.ensure_exists())
         return session
 
     async def session_exists(self, session_id: str) -> bool:
@@ -717,8 +758,11 @@ class LocalClient(BaseClient):
         Returns:
             True if the session exists, False otherwise
         """
-        session = self._service.sessions.session(self._ctx, session_id)
-        return await session.exists()
+        try:
+            await self._service.sessions.get(session_id, self._ctx, auto_create=False)
+            return True
+        except NotFoundError:
+            return False
 
     def get_status(self) -> Any:
         """Get system status.

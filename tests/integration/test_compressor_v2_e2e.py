@@ -199,15 +199,13 @@ class TestCompressorV2EndToEnd:
                             print(f"  Failed to read {uri}: {e}")
 
         try:
-            # Try to list agent memories
-            agent_memories = await client.ls("viking://agent/memories", recursive=True)
-            print(f"Agent memories entries: {len(agent_memories)}")
-            for entry in agent_memories[:20]:  # Show first 20
+            user_memories = await client.ls("viking://user/memories", recursive=True)
+            print(f"User memories entries: {len(user_memories)}")
+            for entry in user_memories[:20]:
                 print(f"  - {entry['name']} ({'dir' if entry['isDir'] else 'file'})")
-            # Read and print memory files
-            await print_memory_files("viking://agent/memories", agent_memories)
+            await print_memory_files("viking://user/memories", user_memories)
         except Exception as e:
-            print(f"Could not list agent memories: {e}")
+            print(f"Could not list user memories: {e}")
 
         try:
             # Try to list user memories

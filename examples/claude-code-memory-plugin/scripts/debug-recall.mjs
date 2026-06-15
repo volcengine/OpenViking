@@ -62,7 +62,7 @@ try {
 // fetchJSON (verbose version — shows response details on error)
 // ---------------------------------------------------------------------------
 
-async function fetchJSON(path, init = {}) {
+async function fetchJSON(path, init = {}, options = {}) {
   const url = `${cfg.baseUrl}${path}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), cfg.timeoutMs);
@@ -71,7 +71,8 @@ async function fetchJSON(path, init = {}) {
     if (cfg.apiKey) headers["Authorization"] = `Bearer ${cfg.apiKey}`;
     if (cfg.accountId) headers["X-OpenViking-Account"] = cfg.accountId;
     if (cfg.userId) headers["X-OpenViking-User"] = cfg.userId;
-    if (cfg.agentId) headers["X-OpenViking-Agent"] = cfg.agentId;
+    const actorPeerId = options.actorPeerId ?? "";
+    if (actorPeerId) headers["X-OpenViking-Actor-Peer"] = actorPeerId;
     const res = await fetch(url, { ...init, headers, signal: controller.signal });
     const body = await res.json();
     if (!res.ok || body.status === "error") {
@@ -192,7 +193,7 @@ function postProcess(items, limit, threshold) {
 // ---------------------------------------------------------------------------
 
 const USER_RESERVED_DIRS = new Set(["memories"]);
-const AGENT_RESERVED_DIRS = new Set(["memories", "skills", "instructions", "workspaces"]);
+const AGENT_RESERVED_DIRS = new Set(["memories", "skills"]);
 const _spaceCache = {};
 
 async function resolveScopeSpace(scope) {
@@ -208,7 +209,11 @@ async function resolveScopeSpace(scope) {
 
   const reservedDirs = scope === "user" ? USER_RESERVED_DIRS : AGENT_RESERVED_DIRS;
   try {
-    const entries = await fetchJSON(`/api/v1/fs/ls?uri=${encodeURIComponent(`viking://${scope}`)}&output=original`);
+    const entries = await fetchJSON(
+      `/api/v1/fs/ls?uri=${encodeURIComponent(`viking://${scope}`)}&output=original`,
+      {},
+      { actorPeerId: cfg.peerId },
+    );
     if (Array.isArray(entries)) {
       const spaces = entries
         .filter(e => e?.isDir)
@@ -248,25 +253,22 @@ async function resolveTargetUri(targetUri) {
 async function searchScope(queryText, targetUri, limit) {
   const resolvedUri = await resolveTargetUri(targetUri);
   dim(`  target: ${targetUri} -> ${resolvedUri}`);
+  const body = { query: queryText, target_uri: resolvedUri, limit, score_threshold: 0 };
   const result = await fetchJSON("/api/v1/search/find", {
     method: "POST",
-    body: JSON.stringify({ query: queryText, target_uri: resolvedUri, limit, score_threshold: 0 }),
-  });
+    body: JSON.stringify(body),
+  }, { actorPeerId: cfg.peerId });
   return result?.memories || [];
 }
 
-async function searchBothScopes(queryText, limit) {
+async function searchUserScope(queryText, limit) {
   console.log(`${C.dim}Searching user scope...${C.reset}`);
   const userMems = await searchScope(queryText, "viking://user/memories", limit);
-  console.log(`${C.dim}Searching agent scope...${C.reset}`);
-  const agentMems = await searchScope(queryText, "viking://agent/memories", limit);
 
-  const all = [...userMems, ...agentMems];
   const uriSet = new Set();
   return {
     userMems,
-    agentMems,
-    combined: all.filter(m => {
+    combined: userMems.filter(m => {
       if (uriSet.has(m.uri)) return false;
       uriSet.add(m.uri);
       return true;
@@ -276,7 +278,11 @@ async function searchBothScopes(queryText, limit) {
 
 async function readMemoryContent(uri) {
   try {
-    const result = await fetchJSON(`/api/v1/content/read?uri=${encodeURIComponent(uri)}`);
+    const result = await fetchJSON(
+      `/api/v1/content/read?uri=${encodeURIComponent(uri)}`,
+      {},
+      { actorPeerId: cfg.peerId },
+    );
     if (result && typeof result === "string" && result.trim()) return result.trim();
   } catch (err) {
     warn(`  Failed to read content for ${uri}: ${err?.message || err}`);
@@ -313,7 +319,6 @@ async function main() {
   console.log(`  recallLimit:    ${cfg.recallLimit}`);
   console.log(`  scoreThreshold: ${cfg.scoreThreshold}`);
   console.log(`  timeoutMs:      ${cfg.timeoutMs}`);
-  console.log(`  agentId:        ${cfg.agentId}`);
   console.log(`  debug:          ${cfg.debug}`);
   console.log(`  configPath:     ${C.dim}${cfg.configPath}${C.reset}`);
   console.log(`\n  Query: ${C.bold}${query}${C.reset}`);
@@ -340,12 +345,10 @@ async function main() {
   const candidateLimit = Math.max(cfg.recallLimit * 4, 20);
   dim(`  candidateLimit: ${candidateLimit}`);
 
-  const { userMems, agentMems, combined } = await searchBothScopes(query, candidateLimit);
+  const { userMems, combined } = await searchUserScope(query, candidateLimit);
 
   console.log();
   printSearchResults("User scope (viking://user/memories)", userMems);
-  console.log();
-  printSearchResults("Agent scope (viking://agent/memories)", agentMems);
   console.log();
   dim(`  Combined (deduplicated): ${combined.length} result${combined.length === 1 ? "" : "s"}`);
 

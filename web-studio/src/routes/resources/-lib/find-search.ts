@@ -1,5 +1,5 @@
 import type { VikingFsEntry } from '../-types/viking-fm'
-import { normalizeDirUri } from './normalize'
+import { normalizeDirUri, normalizeFileUri, parentUri } from './normalize'
 
 const VIKING_URI_PREFIX = 'viking://'
 
@@ -14,6 +14,16 @@ export type ResourceSearchSpec =
       query: string
       rootUri: string
     }
+
+function rootUriForPathSearch(query: string): string {
+  if (query === VIKING_URI_PREFIX) {
+    return VIKING_URI_PREFIX
+  }
+  if (query.endsWith('/')) {
+    return normalizeDirUri(query)
+  }
+  return parentUri(normalizeFileUri(query))
+}
 
 export function isVikingPathSearchQuery(query: string): boolean {
   return query.trimStart().toLowerCase().startsWith(VIKING_URI_PREFIX)
@@ -46,10 +56,11 @@ export function getResourceSearchSpec(
   }
 
   if (isVikingPathSearchQuery(trimmed)) {
+    const normalizedQuery = normalizeVikingPathSearchQuery(trimmed)
     return {
       mode: 'path',
-      query: normalizeVikingPathSearchQuery(trimmed),
-      rootUri: VIKING_URI_PREFIX,
+      query: normalizedQuery,
+      rootUri: rootUriForPathSearch(normalizedQuery),
     }
   }
 
@@ -69,7 +80,12 @@ export function matchesResourceSearch(
   }
 
   if (spec.mode === 'path') {
-    return entry.uri.startsWith(spec.query)
+    const dirPrefix = normalizeDirUri(spec.query)
+    return (
+      entry.uri === spec.query ||
+      entry.uri === dirPrefix ||
+      entry.uri.startsWith(dirPrefix)
+    )
   }
 
   return entry.name.toLowerCase().includes(spec.query)

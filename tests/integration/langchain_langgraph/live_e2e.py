@@ -515,7 +515,6 @@ def _build_real_client():
         url=os.environ.get("OPENVIKING_URL") or None,
         api_key=os.environ.get("OPENVIKING_API_KEY"),
         user_id=os.environ.get("OPENVIKING_USER_ID"),
-        agent_id=os.environ.get("OPENVIKING_AGENT_ID"),
     )
     client.initialize()
     return client

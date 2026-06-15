@@ -14,10 +14,12 @@ OpenViking supports multiple skill definition formats:
 
 ### Skill Storage Structure
 
-Skills are stored at `viking://agent/skills/`:
+Skills are stored under the current user's skills root. The short URI
+`viking://user/skills/` resolves to `viking://user/{user_id}/skills/` for the
+authenticated request:
 
 ```
-viking://agent/skills/
+viking://user/{user_id}/skills/
 +-- search-web/
 |   +-- .abstract.md      # L0: Brief description
 |   +-- .overview.md      # L1: Parameters and usage overview
@@ -152,7 +154,7 @@ Skills are a special type of resource that define actions or tools agents can pe
 1. Receive skill data or uploaded temporary file
 2. Detect data format (structured data, SKILL.md content, MCP format)
 3. Parse skill definition
-4. Store to `viking://agent/skills/` path
+4. Store to the current user's `viking://user/{user_id}/skills/` path
 5. If `wait=true`, wait for vectorization to complete
 
 **Code Entry Points**:
@@ -183,6 +185,11 @@ Skills are a special type of resource that define actions or tools agents can pe
     - First call `POST /api/v1/resources/temp_upload` to upload a local `SKILL.md` file/zip directory, then call `POST /api/v1/skills` with `temp_file_id`
     - `temp_upload` defaults to local temporary storage; pass `upload_mode=shared` only when you explicitly need distributed shared temporary uploads. In Python HTTP client / CLI flows, this can also be driven by `ovcli.conf` via `upload.mode = "shared"`
   - `POST /api/v1/skills` does not accept direct host filesystem paths in `data`.
+
+- **Targeting**:
+  - Skills are always user-scoped. `add_skill` does not accept `to`, `parent`, or `root_uri`.
+  - Peer-scoped skill roots are not supported; actor peer filtering only applies to peer memories/resources, not peer skills.
+  - Use `viking://user/skills/...` as current-user shorthand when listing, reading, deleting, or searching skills.
 
 - **Supported data formats**:
   1. **Dict (Skill format)**: Includes `name`, `description`, `content`, etc.
@@ -337,8 +344,8 @@ ov add-skill ./skills/my-skill/ -o json
   "status": "ok",
   "result": {
     "status": "success",
-    "root_uri": "viking://agent/skills/my-skill/",
-    "uri": "viking://agent/skills/my-skill/",
+    "root_uri": "viking://user/alice/skills/my-skill",
+    "uri": "viking://user/alice/skills/my-skill",
     "name": "my-skill",
     "auxiliary_files": 2,
     "queue_status": {
@@ -359,8 +366,8 @@ ov add-skill ./skills/my-skill/ -o json
 Note: Skill is being processed in the background.
 Use 'ov wait' to wait for completion, or 'ov observer queue' to check status.
 status          success
-root_uri        viking://agent/skills/my-skill
-uri             viking://agent/skills/my-skill
+root_uri        viking://user/alice/skills/my-skill
+uri             viking://user/alice/skills/my-skill
 name            my-skill
 auxiliary_files 2
 ```
@@ -369,8 +376,8 @@ auxiliary_files 2
 ```json
 {
   "status": "success",
-  "root_uri": "viking://agent/skills/my-skill",
-  "uri": "viking://agent/skills/my-skill",
+  "root_uri": "viking://user/alice/skills/my-skill",
+  "uri": "viking://user/alice/skills/my-skill",
   "name": "my-skill",
   "auxiliary_files": 2
 }
@@ -381,8 +388,8 @@ auxiliary_files 2
 | Field | Type | Description |
 |-------|------|-------------|
 | `status` | string | Processing status: `success` or `error` |
-| `root_uri` | string | Final URI of the skill in OpenViking (same as `uri`) |
-| `uri` | string | Final URI of the skill in OpenViking (same as `root_uri`) |
+| `root_uri` | string | Canonical final URI of the skill in OpenViking (same as `uri`) |
+| `uri` | string | Canonical final URI of the skill in OpenViking (same as `root_uri`) |
 | `name` | string | Skill name |
 | `auxiliary_files` | number | Number of auxiliary files included with the skill |
 | `queue_status` | object | (Optional, only when `wait=true`) Queue processing status with `pending`, `processing`, `completed` counts |
@@ -413,19 +420,19 @@ The Python HTTP SDK raises the corresponding mapped exception for this response.
 
 ```python
 # List all skills
-skills = client.ls("viking://agent/skills/")
+skills = client.ls("viking://user/skills/")
 for skill in skills:
     print(f"{skill['name']}")
 
 # Simple list (names only
-names = client.ls("viking://agent/skills/", simple=True)
+names = client.ls("viking://user/skills/", simple=True)
 print(names)
 ```
 
 **HTTP API**
 
 ```bash
-curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://agent/skills/" \
+curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://user/skills/" \
   -H "X-API-Key: your-key"
 ```
 
@@ -434,7 +441,7 @@ curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://agent/skills/" \
 **Python SDK**
 
 ```python
-uri = "viking://agent/skills/search-web/"
+uri = "viking://user/skills/search-web/"
 
 # L0: Brief description
 abstract = client.abstract(uri)
@@ -453,15 +460,15 @@ print(f"Content: {content}")
 
 ```bash
 # L0: Brief description
-curl -X GET "http://localhost:1933/api/v1/content/abstract?uri=viking://agent/skills/search-web/" \
+curl -X GET "http://localhost:1933/api/v1/content/abstract?uri=viking://user/skills/search-web/" \
   -H "X-API-Key: your-key"
 
 # L1: Parameters and usage overview
-curl -X GET "http://localhost:1933/api/v1/content/overview?uri=viking://agent/skills/search-web/" \
+curl -X GET "http://localhost:1933/api/v1/content/overview?uri=viking://user/skills/search-web/" \
   -H "X-API-Key: your-key"
 
 # L2: Full skill documentation
-curl -X GET "http://localhost:1933/api/v1/content/read?uri=viking://agent/skills/search-web/" \
+curl -X GET "http://localhost:1933/api/v1/content/read?uri=viking://user/skills/search-web/" \
   -H "X-API-Key: your-key"
 ```
 
@@ -473,7 +480,7 @@ curl -X GET "http://localhost:1933/api/v1/content/read?uri=viking://agent/skills
 # Semantic search for skills
 results = client.find(
     "search the internet",
-    target_uri="viking://agent/skills/",
+    target_uri="viking://user/skills/",
     limit=5
 )
 
@@ -491,7 +498,7 @@ curl -X POST http://localhost:1933/api/v1/search/find \
   -H "X-API-Key: your-key" \
   -d '{
     "query": "search the internet",
-    "target_uri": "viking://agent/skills/",
+    "target_uri": "viking://user/skills/",
     "limit": 5
   }'
 ```
@@ -501,13 +508,13 @@ curl -X POST http://localhost:1933/api/v1/search/find \
 **Python SDK**
 
 ```python
-client.rm("viking://agent/skills/old-skill/", recursive=True)
+client.rm("viking://user/skills/old-skill/", recursive=True)
 ```
 
 **HTTP API**
 
 ```bash
-curl -X DELETE "http://localhost:1933/api/v1/fs?uri=viking://agent/skills/old-skill/&recursive=true" \
+curl -X DELETE "http://localhost:1933/api/v1/fs?uri=viking://user/skills/old-skill/&recursive=true" \
   -H "X-API-Key: your-key"
 ```
 

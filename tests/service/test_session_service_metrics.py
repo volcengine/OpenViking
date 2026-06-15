@@ -14,7 +14,7 @@ from openviking_cli.session.user_id import UserIdentifier
 
 def _make_ctx() -> RequestContext:
     return RequestContext(
-        user=UserIdentifier("acme", "alice", "agent1"),
+        user=UserIdentifier("acme", "alice"),
         role=Role.ADMIN,
     )
 
@@ -82,4 +82,45 @@ async def test_sessions_returns_empty_and_logs_when_storage_listing_fails(
     result = await service.sessions(ctx)
 
     assert result == []
-    debug.assert_called_once()
+    assert debug.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_sessions_merges_canonical_and_legacy_session_scope():
+    service = SessionService(viking_fs=Mock())
+    ctx = _make_ctx()
+
+    async def _ls(uri, ctx):
+        if uri == "viking://user/alice/sessions":
+            return [
+                {"name": "duplicate", "isDir": True},
+                {"name": "new-session", "isDir": True},
+            ]
+        if uri == "viking://session":
+            return [
+                {"name": "duplicate", "uri": "viking://session/duplicate", "isDir": True},
+                {"name": "legacy-session", "uri": "viking://session/legacy-session", "isDir": True},
+            ]
+        raise AssertionError(uri)
+
+    service._viking_fs.ls = AsyncMock(side_effect=_ls)
+
+    result = await service.sessions(ctx)
+
+    assert result == [
+        {
+            "session_id": "duplicate",
+            "uri": "viking://user/alice/sessions/duplicate",
+            "is_dir": True,
+        },
+        {
+            "session_id": "new-session",
+            "uri": "viking://user/alice/sessions/new-session",
+            "is_dir": True,
+        },
+        {
+            "session_id": "legacy-session",
+            "uri": "viking://session/legacy-session",
+            "is_dir": True,
+        },
+    ]

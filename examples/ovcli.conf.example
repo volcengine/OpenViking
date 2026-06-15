@@ -4,7 +4,6 @@
   "root_api_key": null,
   "account": null,
   "user": null,
-  "agent_id": null,
   "timeout": 60.0,
   "output": "table",
   "echo_command": true,

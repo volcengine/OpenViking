@@ -5,7 +5,10 @@
 
 from pathlib import Path
 
+import pytest
+
 from openviking import AsyncOpenViking
+from openviking_cli.exceptions import InvalidArgumentError
 
 
 class TestClientInitialization:
@@ -26,6 +29,61 @@ class TestClientInitialization:
         """Test initialization creates client"""
         await uninitialized_client.initialize()
         assert uninitialized_client._client is not None
+
+    async def test_agent_id_alias_sets_actor_peer_scope(self, test_data_dir: Path):
+        await AsyncOpenViking.reset()
+
+        client = AsyncOpenViking(path=str(test_data_dir), agent_id="legacy-agent")
+
+        assert client._client._ctx.actor_peer_id == "legacy-agent"
+        assert client._client._ctx.legacy_agent_id == "legacy-agent"
+
+        await AsyncOpenViking.reset()
+
+    async def test_agent_id_alias_must_match_actor_peer_id(self, test_data_dir: Path):
+        await AsyncOpenViking.reset()
+
+        try:
+            try:
+                AsyncOpenViking(
+                    path=str(test_data_dir),
+                    actor_peer_id="actor-a",
+                    agent_id="actor-b",
+                )
+            except ValueError as exc:
+                assert "actor_peer_id cannot be used with legacy agent_id" in str(exc)
+            else:
+                raise AssertionError("mismatched agent_id should fail")
+        finally:
+            await AsyncOpenViking.reset()
+
+    async def test_agent_id_alias_tags_assistant_messages_only(self, test_data_dir: Path):
+        await AsyncOpenViking.reset()
+
+        client = AsyncOpenViking(path=str(test_data_dir), agent_id="legacy-agent")
+        try:
+            await client.add_message("legacy-session", "user", content="hi")
+            await client.add_message("legacy-session", "assistant", content="hello")
+
+            session = await client._client._service.sessions.get(
+                "legacy-session",
+                client._client._ctx,
+                auto_create=False,
+            )
+            assert [message.peer_id for message in session.messages] == [
+                None,
+                "legacy-agent",
+            ]
+
+            with pytest.raises(InvalidArgumentError, match="peer_id cannot be used"):
+                await client.add_message(
+                    "legacy-session",
+                    "assistant",
+                    content="again",
+                    peer_id="legacy-agent",
+                )
+        finally:
+            await AsyncOpenViking.reset()
 
 
 class TestClientClose:

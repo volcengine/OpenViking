@@ -13,7 +13,9 @@ from typing import Any, Dict, List, Optional, Union
 
 import httpx
 
+from openviking.core.peer_id import normalize_peer_selector
 from openviking.telemetry import TelemetryRequest, normalize_telemetry_request
+from openviking.utils.search_filters import SearchContextTypeInput
 from openviking_cli.client.base import BaseClient
 from openviking_cli.exceptions import (
     AbortedError,
@@ -39,7 +41,7 @@ from openviking_cli.exceptions import (
 )
 from openviking_cli.retrieve.types import FindResult
 from openviking_cli.session.user_id import UserIdentifier
-from openviking_cli.utils import run_async
+from openviking_cli.utils import get_logger, run_async
 from openviking_cli.utils.config.ovcli_config import load_ovcli_config
 from openviking_cli.utils.uri import VikingURI
 
@@ -66,6 +68,8 @@ ERROR_CODE_TO_EXCEPTION = {
     "SESSION_EXPIRED": SessionExpiredError,
     "UNKNOWN": OpenVikingError,
 }
+
+logger = get_logger(__name__)
 
 
 class _HTTPObserver:
@@ -139,9 +143,10 @@ class AsyncHTTPClient(BaseClient):
         url: Optional[str] = None,
         api_key: Optional[str] = None,
         user_id: Optional[str] = None,
-        agent_id: Optional[str] = None,
         account: Optional[str] = None,
         user: Optional[str] = None,
+        actor_peer_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
         timeout: float = 60.0,
         extra_headers: Optional[Dict[str, str]] = None,
         profile_enabled: Optional[bool] = None,
@@ -152,22 +157,21 @@ class AsyncHTTPClient(BaseClient):
             url: OpenViking Server URL. If not provided, reads from ovcli.conf.
             api_key: API key for authentication. If not provided, reads from ovcli.conf.
             user_id: User identifier. If not provided, defaults to "default".
-            agent_id: Agent identifier. If not provided, reads from ovcli.conf.
-            account: Account identifier for multi-tenant auth. Required when using root key
-                     to access tenant-scoped APIs. If not provided, reads from ovcli.conf.
-            user: User identifier for multi-tenant auth. Required when using root key
-                  to access tenant-scoped APIs. If not provided, reads from ovcli.conf.
+            account: Optional account identity header for trusted deployments.
+            user: Optional user identity header for trusted deployments.
+            actor_peer_id: Optional peer actor scope header.
+            agent_id: Legacy alias for actor_peer_id.
             timeout: HTTP request timeout in seconds. Default 60.0.
             extra_headers: Additional HTTP headers to send with requests. If not provided, reads from ovcli.conf.
         """
         effective_user = user if user is not None else user_id
         profile_load_requested = profile_enabled is None
-        should_load_cli_config = (
+        should_load_cli_config = profile_enabled is not False and (
             url is None
             or api_key is None
-            or agent_id is None
             or account is None
             or effective_user is None
+            or (actor_peer_id is None and agent_id is None)
             or timeout == 60.0
             or extra_headers is None
         )
@@ -177,9 +181,11 @@ class AsyncHTTPClient(BaseClient):
             if cli_config is not None:
                 url = url or cli_config.url
                 api_key = api_key or cli_config.api_key
-                agent_id = agent_id or cli_config.agent_id
                 account = account or cli_config.account
                 effective_user = effective_user or cli_config.user
+                if actor_peer_id is None and agent_id is None:
+                    actor_peer_id = cli_config.actor_peer_id
+                    agent_id = cli_config.agent_id
                 if timeout == 60.0:  # only override default with config value
                     timeout = cli_config.timeout
                 if extra_headers is None:
@@ -196,9 +202,12 @@ class AsyncHTTPClient(BaseClient):
             )
         self._url = url.rstrip("/")
         self._api_key = api_key
-        self._agent_id = agent_id
         self._account = account
         self._user_id = effective_user
+        if actor_peer_id and agent_id:
+            raise ValueError("actor_peer_id cannot be used with legacy agent_id")
+        self._legacy_agent_id = normalize_peer_selector(None, agent_id=agent_id)
+        self._actor_peer_id = normalize_peer_selector(actor_peer_id, agent_id=agent_id)
         self._user = UserIdentifier.the_default_user()
         self._timeout = timeout
         self._extra_headers = extra_headers
@@ -216,12 +225,12 @@ class AsyncHTTPClient(BaseClient):
         headers = {}
         if self._api_key:
             headers["X-API-Key"] = self._api_key
-        if self._agent_id:
-            headers["X-OpenViking-Agent"] = self._agent_id
         if self._account:
             headers["X-OpenViking-Account"] = self._account
         if self._user_id:
             headers["X-OpenViking-User"] = self._user_id
+        if self._actor_peer_id:
+            headers["X-OpenViking-Actor-Peer"] = self._actor_peer_id
         if self._extra_headers:
             headers.update(self._extra_headers)
         self._http = httpx.AsyncClient(
@@ -304,6 +313,31 @@ class AsyncHTTPClient(BaseClient):
 
         return result
 
+    def _attach_legacy_agent_scope(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        if self._legacy_agent_id:
+            payload["agent_id"] = self._legacy_agent_id
+        return payload
+
+    def _attach_legacy_message_scope(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        if not self._legacy_agent_id:
+            return payload
+        if payload.get("peer_id") is not None:
+            raise InvalidArgumentError(
+                "peer_id cannot be used when client is configured with legacy agent_id"
+            )
+        if payload.get("role") == "assistant":
+            payload["agent_id"] = self._legacy_agent_id
+        return payload
+
+    def _batch_message_payloads(self, messages: list[dict]) -> list[dict]:
+        if not self._legacy_agent_id:
+            return messages
+        scoped_messages = []
+        for message in messages:
+            payload = dict(message)
+            scoped_messages.append(self._attach_legacy_message_scope(payload))
+        return scoped_messages
+
     def _raise_exception(self, error: Dict[str, Any]) -> None:
         """Raise appropriate exception based on error code."""
         code = error.get("code", "UNKNOWN")
@@ -344,15 +378,26 @@ class AsyncHTTPClient(BaseClient):
         if not dir_path.is_dir():
             raise ValueError(f"Path {dir_path} is not a directory")
 
+        root = dir_path.resolve()
         temp_dir = tempfile.gettempdir()
         zip_path = Path(temp_dir) / f"temp_upload_{uuid.uuid4().hex}.zip"
 
+        entry_count = 0
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
             for file_path in dir_path.rglob("*"):
+                if file_path.is_symlink():
+                    continue
                 if file_path.is_file():
-                    arcname = file_path.relative_to(dir_path)
-                    arcname = str(arcname).replace("\\", "/")
+                    # Defense-in-depth: drop files whose real path escapes the selected root
+                    # if traversal behavior changes or this walk implementation is replaced.
+                    if not file_path.resolve().is_relative_to(root):
+                        continue
+                    arcname = str(file_path.relative_to(dir_path)).replace("\\", "/")
                     zipf.write(file_path, arcname=arcname)
+                    entry_count += 1
+
+        if entry_count == 0:
+            logger.warning("Created empty directory upload archive for %s", dir_path)
 
         return str(zip_path)
 
@@ -388,6 +433,8 @@ class AsyncHTTPClient(BaseClient):
         exclude: Optional[str] = None,
         directly_upload_media: bool = True,
         preserve_structure: Optional[bool] = None,
+        watch_interval: float = 0,
+        args: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
@@ -407,6 +454,8 @@ class AsyncHTTPClient(BaseClient):
             "include": include,
             "exclude": exclude,
             "directly_upload_media": directly_upload_media,
+            "watch_interval": watch_interval,
+            "args": args or {},
             "telemetry": telemetry,
         }
         if preserve_structure is not None:
@@ -450,14 +499,14 @@ class AsyncHTTPClient(BaseClient):
         Args:
             session_id: Session ID
             messages: List of message dicts, each with "role" and optionally
-                      "content", "parts", "created_at", "role_id".
+                      "content", "parts", "created_at", "peer_id".
             telemetry: Whether to attach operation telemetry data to the result.
 
         Returns:
             Result dict with session_id, message_count, and added count.
         """
         telemetry = self._validate_telemetry(telemetry)
-        payload: Dict[str, Any] = {"messages": messages}
+        payload: Dict[str, Any] = {"messages": self._batch_message_payloads(messages)}
         if telemetry is not False:
             payload["telemetry"] = telemetry
 
@@ -681,23 +730,25 @@ class AsyncHTTPClient(BaseClient):
         node_limit: Optional[int] = None,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
+        context_type: Optional[SearchContextTypeInput] = None,
         telemetry: TelemetryRequest = False,
     ) -> FindResult:
         """Semantic search without session context."""
         telemetry = self._validate_telemetry(telemetry)
         normalized_target = self._normalize_target_uri(target_uri)
         actual_limit = node_limit if node_limit is not None else limit
-        response = await self._http.post(
-            "/api/v1/search/find",
-            json={
+        payload = self._attach_legacy_agent_scope(
+            {
                 "query": query,
                 "target_uri": normalized_target,
                 "limit": actual_limit,
                 "score_threshold": score_threshold,
                 "filter": filter,
+                "context_type": context_type,
                 "telemetry": telemetry,
-            },
+            }
         )
+        response = await self._http.post("/api/v1/search/find", json=payload)
         response_data = self._handle_response_data(response)
         return FindResult.from_dict(response_data.get("result") or {})
 
@@ -711,6 +762,7 @@ class AsyncHTTPClient(BaseClient):
         node_limit: Optional[int] = None,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
+        context_type: Optional[SearchContextTypeInput] = None,
         telemetry: TelemetryRequest = False,
     ) -> FindResult:
         """Semantic search with optional session context."""
@@ -718,18 +770,19 @@ class AsyncHTTPClient(BaseClient):
         normalized_target = self._normalize_target_uri(target_uri)
         actual_limit = node_limit if node_limit is not None else limit
         sid = session_id or (session.session_id if session else None)
-        response = await self._http.post(
-            "/api/v1/search/search",
-            json={
+        payload = self._attach_legacy_agent_scope(
+            {
                 "query": query,
                 "target_uri": normalized_target,
                 "session_id": sid,
                 "limit": actual_limit,
                 "score_threshold": score_threshold,
                 "filter": filter,
+                "context_type": context_type,
                 "telemetry": telemetry,
-            },
+            }
         )
+        response = await self._http.post("/api/v1/search/search", json=payload)
         response_data = self._handle_response_data(response)
         return FindResult.from_dict(response_data.get("result") or {})
 
@@ -805,7 +858,10 @@ class AsyncHTTPClient(BaseClient):
     # ============= Sessions =============
 
     async def create_session(
-        self, session_id: Optional[str] = None, telemetry: TelemetryRequest = False
+        self,
+        session_id: Optional[str] = None,
+        telemetry: TelemetryRequest = False,
+        memory_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Create a new session.
 
@@ -817,6 +873,8 @@ class AsyncHTTPClient(BaseClient):
         json_body: Dict[str, Any] = {}
         if session_id is not None:
             json_body["session_id"] = session_id
+        if memory_policy is not None:
+            json_body["memory_policy"] = memory_policy
         if telemetry is not False:
             json_body["telemetry"] = telemetry
         response = await self._http.post(
@@ -884,12 +942,13 @@ class AsyncHTTPClient(BaseClient):
     ) -> Dict[str, Any]:
         """Commit a session (archive and extract memories)."""
         telemetry = self._validate_telemetry(telemetry)
+        payload: Dict[str, Any] = {
+            "keep_recent_count": keep_recent_count,
+            "telemetry": telemetry,
+        }
         response = await self._http.post(
             f"/api/v1/sessions/{session_id}/commit",
-            json={
-                "keep_recent_count": keep_recent_count,
-                "telemetry": telemetry,
-            },
+            json=payload,
         )
         response_data = self._handle_response_data(response)
         return self._attach_telemetry(response_data.get("result"), response_data)
@@ -901,7 +960,7 @@ class AsyncHTTPClient(BaseClient):
         content: str | None = None,
         parts: list[dict] | None = None,
         created_at: str | None = None,
-        role_id: str | None = None,
+        peer_id: str | None = None,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add a message to a session.
@@ -912,7 +971,7 @@ class AsyncHTTPClient(BaseClient):
             content: Text content (simple mode, backward compatible)
             parts: Parts array (full Part support mode)
             created_at: Message creation time (ISO format string)
-            role_id: Optional explicit actor identity. Omit to let the server derive it.
+            peer_id: Optional stable interaction peer identity.
 
         If both content and parts are provided, parts takes precedence.
         """
@@ -927,10 +986,11 @@ class AsyncHTTPClient(BaseClient):
 
         if created_at is not None:
             payload["created_at"] = created_at
-        if role_id is not None:
-            payload["role_id"] = role_id
+        if peer_id is not None:
+            payload["peer_id"] = peer_id
         if telemetry is not False:
             payload["telemetry"] = telemetry
+        payload = self._attach_legacy_message_scope(payload)
 
         response = await self._http.post(
             f"/api/v1/sessions/{session_id}/messages",
@@ -1182,6 +1242,12 @@ class AsyncHTTPClient(BaseClient):
         response = await self._http.post(
             f"/api/v1/admin/accounts/{account_id}/users/{user_id}/key",
         )
+        return self._handle_response(response)
+
+    async def admin_migrate(self, cleanup: bool = False) -> Dict[str, Any]:
+        """Start legacy data migration or legacy namespace cleanup."""
+        action = "cleanup" if cleanup else "migrate"
+        response = await self._http.post("/api/v1/admin/migrate", json={"action": action})
         return self._handle_response(response)
 
     # ============= New methods for BaseClient interface =============

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Integration tests for ResourceService watch functionality."""
 
+from types import SimpleNamespace
 from typing import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock
 
@@ -10,8 +11,9 @@ import pytest_asyncio
 
 from openviking.resource.watch_manager import WatchManager
 from openviking.server.identity import RequestContext, Role
+from openviking.service import resource_service as resource_service_module
 from openviking.service.resource_service import ResourceService
-from openviking_cli.exceptions import ConflictError, InvalidArgumentError
+from openviking_cli.exceptions import ConflictError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -21,15 +23,18 @@ async def get_task_by_uri(service: ResourceService, to_uri: str, ctx: RequestCon
         account_id=ctx.account_id,
         user_id=ctx.user.user_id,
         role=ctx.role.value,
-        agent_id=ctx.user.agent_id,
     )
 
 
 class MockResourceProcessor:
     """Mock ResourceProcessor for testing."""
 
+    def __init__(self):
+        self.calls = []
+
     async def process_resource(self, **kwargs):
-        return {"root_uri": kwargs.get("to", "viking://resources/test")}
+        self.calls.append(kwargs)
+        return {"root_uri": kwargs.get("to") or "viking://resources/test"}
 
 
 class MockSkillProcessor:
@@ -49,6 +54,24 @@ class MockVikingDB:
     """Mock VikingDBManager for testing."""
 
     pass
+
+
+class NoopTaskTracker:
+    async def create(self, *_args, **_kwargs):
+        return SimpleNamespace(task_id="test-task")
+
+    async def start(self, *_args, **_kwargs):
+        pass
+
+    async def complete(self, *_args, **_kwargs):
+        pass
+
+
+def disable_task_tracker(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "openviking.service.task_tracker.get_task_tracker",
+        lambda: NoopTaskTracker(),
+    )
 
 
 @pytest_asyncio.fixture
@@ -79,7 +102,7 @@ async def resource_service(watch_manager: WatchManager) -> AsyncGenerator[Resour
 def request_context() -> RequestContext:
     """Create request context for testing."""
     return RequestContext(
-        user=UserIdentifier("test_account", "test_user", "test_agent"),
+        user=UserIdentifier("test_account", "test_user"),
         role=Role.USER,
     )
 
@@ -116,16 +139,24 @@ class TestWatchTaskCreation:
         assert task.is_active is True
 
     @pytest.mark.asyncio
-    async def test_watch_interval_requires_to_when_watch_enabled(
+    async def test_watch_interval_auto_binds_root_uri_when_to_omitted(
         self, resource_service: ResourceService, request_context: RequestContext
     ):
-        with pytest.raises(InvalidArgumentError, match="requires 'to'"):
-            await resource_service.add_resource(
-                path="/test/path",
-                ctx=request_context,
-                to=None,
-                watch_interval=30.0,
-            )
+        result = await resource_service.add_resource(
+            path="/test/path",
+            ctx=request_context,
+            to=None,
+            watch_interval=30.0,
+        )
+
+        assert result["root_uri"] == "viking://resources/test"
+
+        task = await get_task_by_uri(resource_service, "viking://resources/test", request_context)
+        assert task is not None
+        assert task.path == "/test/path"
+        assert task.to_uri == "viking://resources/test"
+        assert task.parent_uri is None
+        assert task.watch_interval == 30.0
 
     @pytest.mark.asyncio
     async def test_watch_task_aligns_processor_params(
@@ -202,6 +233,69 @@ class TestWatchTaskCreation:
         assert task is None
 
 
+class TestAddResourceArgs:
+    """Tests for parser-specific add_resource args."""
+
+    @pytest.mark.asyncio
+    async def test_forwards_args_to_resource_processor(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        resource_service: ResourceService,
+        request_context: RequestContext,
+    ):
+        disable_task_tracker(monkeypatch)
+
+        await resource_service.add_resource(
+            path="/test/path",
+            ctx=request_context,
+            args={"feishu_access_token": " u-test "},
+        )
+
+        processor = resource_service._resource_processor
+        assert processor.calls[-1]["feishu_access_token"] == "u-test"
+
+    @pytest.mark.asyncio
+    async def test_feishu_user_token_watch_stores_private_auth_state(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        resource_service: ResourceService,
+        request_context: RequestContext,
+    ):
+        monkeypatch.setattr(
+            resource_service_module,
+            "load_feishu_app_credentials",
+            lambda: object(),
+        )
+        disable_task_tracker(monkeypatch)
+        to_uri = "viking://resources/feishu_user_watch"
+
+        await resource_service.add_resource(
+            path="https://example.feishu.cn/docx/doc_token",
+            ctx=request_context,
+            to=to_uri,
+            watch_interval=30,
+            args={
+                "feishu_access_token": " u-test ",
+                "feishu_refresh_token": " r-test ",
+            },
+        )
+
+        processor = resource_service._resource_processor
+        assert processor.calls[-1]["feishu_access_token"] == "u-test"
+        assert "feishu_refresh_token" not in processor.calls[-1]
+
+        task = await get_task_by_uri(resource_service, to_uri, request_context)
+        assert task is not None
+        assert task.processor_kwargs == {}
+        assert task.auth_state == {
+            "provider": "feishu",
+            "access_token": "u-test",
+            "refresh_token": "r-test",
+            "expires_at": None,
+        }
+        assert "auth_state" not in task.to_dict()
+
+
 class TestWatchTaskConflict:
     """Tests for watch task conflict detection."""
 
@@ -264,7 +358,7 @@ class TestWatchTaskConflict:
     ):
         to_uri = "viking://resources/cross_user_conflict"
         other_user_ctx = RequestContext(
-            user=UserIdentifier("test_account", "other_user", "other_agent"),
+            user=UserIdentifier("test_account", "other_user"),
             role=Role.USER,
         )
 
@@ -293,13 +387,12 @@ class TestWatchTaskConflict:
         assert task is not None
 
     @pytest.mark.asyncio
-    async def test_conflict_when_task_exists_but_hidden_by_other_agent(
+    async def test_same_user_context_sees_existing_task(
         self, resource_service: ResourceService, request_context: RequestContext
     ):
-        to_uri = "viking://resources/cross_agent_conflict"
-        other_agent_ctx = RequestContext(
-            user=UserIdentifier("test_account", "test_user", "other_agent"),
-            role=Role.USER,
+        to_uri = "viking://resources/same_user_conflict"
+        same_user_ctx = RequestContext(
+            user=UserIdentifier("test_account", "test_user"), role=Role.USER
         )
 
         await resource_service.add_resource(
@@ -309,18 +402,18 @@ class TestWatchTaskConflict:
             watch_interval=30.0,
         )
 
-        hidden_task = await get_task_by_uri(resource_service, to_uri, other_agent_ctx)
-        assert hidden_task is None
+        visible_task = await get_task_by_uri(resource_service, to_uri, same_user_ctx)
+        assert visible_task is not None
 
         with pytest.raises(ConflictError) as exc_info:
             await resource_service.add_resource(
                 path="/test/path2",
-                ctx=other_agent_ctx,
+                ctx=same_user_ctx,
                 to=to_uri,
                 watch_interval=45.0,
             )
 
-        assert "already used by another task" in str(exc_info.value)
+        assert "already being monitored" in str(exc_info.value)
         assert to_uri in str(exc_info.value)
 
         original_task = await get_task_by_uri(resource_service, to_uri, request_context)
@@ -349,7 +442,6 @@ class TestWatchTaskConflict:
             account_id=request_context.account_id,
             user_id=request_context.user.user_id,
             role=request_context.role.value,
-            agent_id=request_context.user.agent_id,
             is_active=False,
         )
 
@@ -444,13 +536,12 @@ class TestWatchTaskCancellation:
         assert result is not None
 
     @pytest.mark.asyncio
-    async def test_cancel_does_not_touch_other_agent_task(
+    async def test_same_user_can_cancel_existing_task(
         self, resource_service: ResourceService, request_context: RequestContext
     ):
-        to_uri = "viking://resources/cancel_other_agent"
-        other_agent_ctx = RequestContext(
-            user=UserIdentifier("test_account", "test_user", "other_agent"),
-            role=Role.USER,
+        to_uri = "viking://resources/cancel_same_user"
+        same_user_ctx = RequestContext(
+            user=UserIdentifier("test_account", "test_user"), role=Role.USER
         )
 
         await resource_service.add_resource(
@@ -462,14 +553,14 @@ class TestWatchTaskCancellation:
 
         await resource_service.add_resource(
             path="/test/path",
-            ctx=other_agent_ctx,
+            ctx=same_user_ctx,
             to=to_uri,
             watch_interval=0,
         )
 
         original_task = await get_task_by_uri(resource_service, to_uri, request_context)
         assert original_task is not None
-        assert original_task.is_active is True
+        assert original_task.is_active is False
 
 
 class TestWatchTaskUpdate:
@@ -500,7 +591,6 @@ class TestWatchTaskUpdate:
             account_id=request_context.account_id,
             user_id=request_context.user.user_id,
             role=request_context.role.value,
-            agent_id=request_context.user.agent_id,
             is_active=False,
         )
 

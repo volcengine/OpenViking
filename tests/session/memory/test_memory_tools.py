@@ -6,8 +6,8 @@ Tests for memory tools.
 
 import pytest
 
-from openviking.session.memory.dataclass import MemoryFile
 from openviking.server.identity import RequestContext, Role, ToolContext
+from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.tools import (
     MEMORY_TOOLS_REGISTRY,
     MemoryLsTool,
@@ -45,7 +45,7 @@ class TestMemoryTools:
                     "Gina values [emotional support](../../events/2023/03/23/mutual_business_support.md) "
                     "with Jon.\n\n"
                     "<!-- MEMORY_FIELDS\n"
-                    "{\"memory_type\": \"experiences\"}\n"
+                    '{"memory_type": "experiences"}\n'
                     "-->"
                 )
 
@@ -114,7 +114,9 @@ class TestMemoryTools:
 
         class MockVikingFS:
             async def read_file(self, uri, ctx=None, **kwargs):
-                return "line1\nline2\nline3\n\n<!-- MEMORY_FIELDS\n{\"memory_type\": \"experiences\"}\n-->"
+                return (
+                    'line1\nline2\nline3\n\n<!-- MEMORY_FIELDS\n{"memory_type": "experiences"}\n-->'
+                )
 
         tool_ctx = ToolContext(
             viking_fs=MockVikingFS(),
@@ -142,7 +144,7 @@ class TestMemoryTools:
 
         class MockVikingFS:
             async def read_file(self, uri, ctx=None, **kwargs):
-                return "line1\nline2\n\n<!-- MEMORY_FIELDS\n{\"memory_type\": \"experiences\"}\n-->"
+                return 'line1\nline2\n\n<!-- MEMORY_FIELDS\n{"memory_type": "experiences"}\n-->'
 
         tool_ctx = ToolContext(
             viking_fs=MockVikingFS(),
@@ -199,14 +201,12 @@ class TestMemoryTools:
                 self.received_ctx = ctx
                 self.received_target_uri = target_uri
                 self.received_limit = limit
-                _ = ctx.namespace_policy
                 return MockSearchResult()
 
         request_ctx = RequestContext(
             user=UserIdentifier(
                 account_id="test-account",
                 user_id="test-user",
-                agent_id="test-agent",
             ),
             role=Role.USER,
         )

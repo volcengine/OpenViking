@@ -71,7 +71,7 @@ export function buildAddResourceBody(args, source, tempFileId) {
   return body
 }
 
-export async function uploadLocalResource(config, source, abortSignal) {
+export async function uploadLocalResource(config, source, abortSignal, actorPeerId) {
   const bytes = await fs.promises.readFile(source.path)
   const form = new FormData()
   form.append("file", new Blob([bytes], { type: "application/octet-stream" }), source.filename)
@@ -81,6 +81,7 @@ export async function uploadLocalResource(config, source, abortSignal) {
     endpoint: "/api/v1/resources/temp_upload",
     body: form,
     abortSignal,
+    actorPeerId,
   })
   const tempFileId = unwrapResponse(uploadResponse)?.temp_file_id
   if (!tempFileId) {
@@ -89,11 +90,13 @@ export async function uploadLocalResource(config, source, abortSignal) {
   return tempFileId
 }
 
-export async function addMemaddResource(config, args, projectDirectory, abortSignal) {
+export async function addMemaddResource(config, args, projectDirectory, abortSignal, actorPeerId) {
   const source = resolveMemaddSource(args.path, projectDirectory)
   if (source.kind === "error") return { error: source.error }
 
-  const tempFileId = source.kind === "local" ? await uploadLocalResource(config, source, abortSignal) : undefined
+  const tempFileId = source.kind === "local"
+    ? await uploadLocalResource(config, source, abortSignal, actorPeerId)
+    : undefined
   const body = buildAddResourceBody(args, source, tempFileId)
   const addResponse = await makeRequest(config, {
     method: "POST",
@@ -101,6 +104,7 @@ export async function addMemaddResource(config, args, projectDirectory, abortSig
     body,
     abortSignal,
     timeoutMs: args.wait ? Math.max(config.timeoutMs, (args.timeout ?? 300) * 1000) : config.timeoutMs,
+    actorPeerId,
   })
   return { addResponse, source }
 }

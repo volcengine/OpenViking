@@ -12,10 +12,13 @@
   },
   "contracts": {
     "tools": [
-      "add_resource",
       "add_skill",
       "ov_search",
+      "ov_read",
+      "ov_multi_read",
+      "ov_list",
       "memory_recall",
+      "ov_recall_trace",
       "memory_store",
       "memory_forget",
       "ov_archive_search",
@@ -44,7 +47,8 @@
     ]
   },
   "skills": [
-    "./skills/install-openviking-memory"
+    "./skills/install-openviking-memory",
+    "./skills/openviking-context-database"
   ],
   "setup": {
     "providers": [
@@ -78,10 +82,15 @@
       "placeholder": "http://127.0.0.1:1933",
       "help": "HTTP URL when mode is remote (or ${OPENVIKING_BASE_URL})"
     },
-    "agent_prefix": {
-      "label": "Agent Prefix",
+    "peer_role": {
+      "label": "Peer Role",
+      "placeholder": "none",
+      "help": "Controls which messages include peer_id: none, assistant, or person. New installs default to none."
+    },
+    "peer_prefix": {
+      "label": "Peer Prefix",
       "placeholder": "optional-prefix",
-      "help": "Optional OpenViking agent prefix. Empty: follow OpenClaw ctx.agentId directly. Non-empty: use `<prefix>_<OpenClaw ctx.agentId>` (sanitized to letters/digits/_/-). If OpenClaw ctx.agentId is unavailable, use OpenClaw default agent `main`."
+      "help": "Optional prefix for assistant peer_id values derived from OpenClaw runtime agent IDs."
     },
     "apiKey": {
       "label": "OpenViking API Key",
@@ -99,24 +108,6 @@
       "label": "User ID",
       "placeholder": "(derived from API key)",
       "help": "Advanced option. Tenant user ID. Only needed when explicitly sending identity headers.",
-      "advanced": true
-    },
-    "isolateUserScopeByAgent": {
-      "label": "Isolate User Scope By Agent",
-      "placeholder": "false",
-      "help": "Canonical namespace policy. false (default): user alias expands to viking://user/<user_id>/... . true: expands to viking://user/<user_id>/agent/<agent_id>/... . Must match the server-side account namespace policy.",
-      "advanced": true
-    },
-    "isolateAgentScopeByUser": {
-      "label": "Isolate Agent Scope By User",
-      "placeholder": "false",
-      "help": "Canonical namespace policy. false (default): agent alias expands to viking://agent/<agent_id>/... . true: expands to viking://agent/<agent_id>/user/<user_id>/... . Must match the server-side account namespace policy.",
-      "advanced": true
-    },
-    "agentScopeMode": {
-      "label": "Deprecated Agent Scope Mode",
-      "placeholder": "agent",
-      "help": "Deprecated compatibility alias for older routing. Prefer isolateUserScopeByAgent / isolateAgentScopeByUser. Explicit user_agent => false/true, explicit agent => false/false. When fully unset, the plugin defaults to false/false to match the current server-side policy.",
       "advanced": true
     },
     "targetUri": {
@@ -149,9 +140,21 @@
       "label": "Auto-Recall",
       "help": "Inject relevant OpenViking memories into agent context"
     },
+    "autoRecallTimeoutMs": {
+      "label": "Auto-Recall Timeout (ms)",
+      "placeholder": "5000",
+      "advanced": true,
+      "help": "Outer time budget for the whole auto-recall flow, including search, ranking, and memory reads."
+    },
     "recallResources": {
       "label": "Recall Resources",
       "help": "Include resources (viking://resources) in auto-recall and default memory_recall search. Enables account-level shared knowledge retrieval.",
+      "advanced": true
+    },
+    "recallTargetTypes": {
+      "label": "Recall Target Types",
+      "placeholder": "user,agent",
+      "help": "Comma-separated auto-recall and default memory_recall targets: user, agent, resource. Session history is available through ov_archive_search and ov_archive_expand.",
       "advanced": true
     },
     "recallLimit": {
@@ -214,6 +217,42 @@
       "label": "Log find requests",
       "help": "Log tenant routing: /search/find + session messages/commit (X-OpenViking-*; not apiKey). Or set env OPENVIKING_LOG_ROUTING=1 or OPENVIKING_DEBUG=1.",
       "advanced": true
+    },
+    "traceRecall": {
+      "label": "Trace Recall",
+      "placeholder": "false",
+      "help": "Enable best-effort recall trace recording for debugging recall and search decisions.",
+      "advanced": true
+    },
+    "traceRecallPersist": {
+      "label": "Persist Recall Trace",
+      "placeholder": "false",
+      "help": "Persist recall traces to local JSONL files. Disabled by default.",
+      "advanced": true
+    },
+    "traceRecallDir": {
+      "label": "Recall Trace Directory",
+      "placeholder": "~/.openclaw/openviking/recall-traces",
+      "help": "Directory for persisted recall trace JSONL files.",
+      "advanced": true
+    },
+    "enableAddResourceTool": {
+      "label": "Enable Add Resource Tool",
+      "placeholder": "false",
+      "help": "Disabled by default so search and read flows cannot call add_resource. Set true only when agents should import resources; manual /add-resource remains available.",
+      "advanced": true
+    },
+    "enabledTools": {
+      "label": "Enabled Tools",
+      "placeholder": "default",
+      "help": "Agent-visible tool allowlist. Accepts tool names or groups: default, all, memory, resource_query, import, recall_trace, archive, tool_result. add_resource also requires enableAddResourceTool=true.",
+      "advanced": true
+    },
+    "disabledTools": {
+      "label": "Disabled Tools",
+      "placeholder": "memory",
+      "help": "Agent-visible tool blocklist applied after enabledTools. Accepts the same tool names or groups.",
+      "advanced": true
     }
   },
   "configSchema": {
@@ -227,12 +266,19 @@
       "baseUrl": {
         "type": "string"
       },
-      "agent_prefix": {
-        "type": "string"
-      },
-      "agentId": {
+      "peer_role": {
         "type": "string",
-        "description": "Deprecated: use agent_prefix instead"
+        "enum": [
+          "none",
+          "assistant",
+          "person"
+        ],
+        "default": "none",
+        "description": "Controls which session messages include peer_id."
+      },
+      "peer_prefix": {
+        "type": "string",
+        "description": "Optional prefix for assistant peer_id values."
       },
       "serverAuthMode": {
         "type": "string",
@@ -245,15 +291,6 @@
         "type": "string"
       },
       "userId": {
-        "type": "string"
-      },
-      "isolateUserScopeByAgent": {
-        "type": "boolean"
-      },
-      "isolateAgentScopeByUser": {
-        "type": "boolean"
-      },
-      "agentScopeMode": {
         "type": "string"
       },
       "targetUri": {
@@ -274,8 +311,31 @@
       "autoRecall": {
         "type": "boolean"
       },
+      "autoRecallTimeoutMs": {
+        "type": "number",
+        "minimum": 1000,
+        "maximum": 300000
+      },
       "recallResources": {
         "type": "boolean"
+      },
+      "recallTargetTypes": {
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "resource",
+                "user",
+                "agent"
+              ]
+            }
+          }
+        ]
       },
       "recallLimit": {
         "type": "number"
@@ -329,6 +389,108 @@
       },
       "logFindRequests": {
         "type": "boolean"
+      },
+      "traceRecall": {
+        "type": "boolean"
+      },
+      "traceRecallPersist": {
+        "type": "boolean"
+      },
+      "traceRecallDir": {
+        "type": "string"
+      },
+      "traceRecallRetentionDays": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 3650
+      },
+      "traceRecallLoadRecentDays": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 3650
+      },
+      "traceRecallMaxEntries": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 1000000
+      },
+      "traceRecallMaxResultsPerSearch": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 1000
+      },
+      "traceRecallPreviewChars": {
+        "type": "number",
+        "minimum": 20,
+        "maximum": 10000
+      },
+      "traceRecallQueryMaxChars": {
+        "type": "number",
+        "minimum": 200,
+        "maximum": 200000
+      },
+      "traceRecallQueryMaxDays": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 3650
+      },
+      "traceRecallIncludeContentByDefault": {
+        "type": "boolean"
+      },
+      "traceRecallIncludeRawUserPreview": {
+        "type": "boolean"
+      },
+      "enableAddResourceTool": {
+        "type": "boolean"
+      },
+      "enabledTools": {
+        "oneOf": [
+          {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "disabledTools": {
+        "oneOf": [
+          {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "agentExperience": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false,
+            "description": "Enable agent experience memory recall. Default is false for conservative rollout."
+          },
+          "recallLimit": {
+            "type": "number"
+          },
+          "scoreThreshold": {
+            "type": "number"
+          },
+          "maxInjectedChars": {
+            "type": "number"
+          },
+          "minQueryChars": {
+            "type": "number"
+          }
+        }
       }
     }
   }

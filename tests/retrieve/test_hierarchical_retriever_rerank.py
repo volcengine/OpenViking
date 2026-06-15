@@ -19,8 +19,14 @@ class DummyEmbedResult:
 
 
 class DummyEmbedder:
+    def prepare_embedding_input(self, text: str) -> str:
+        return text
+
     def embed(self, _query: str, is_query: bool = False) -> DummyEmbedResult:
         return DummyEmbedResult()
+
+    async def embed_async(self, text: str, is_query: bool = False) -> DummyEmbedResult:
+        return self.embed(text, is_query=is_query)
 
 
 class DummyStorage:
@@ -226,7 +232,7 @@ class FakeRerankClient:
 
 
 def _ctx() -> RequestContext:
-    return RequestContext(user=UserIdentifier("acc1", "user1", "agent1"), role=Role.USER)
+    return RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
 
 
 def _query() -> TypedQuery:
@@ -235,11 +241,6 @@ def _query() -> TypedQuery:
 
 def _config() -> RerankConfig:
     return RerankConfig(ak="ak", sk="sk", threshold=0.1)
-
-
-@pytest.fixture(autouse=True)
-def _disable_viking_fs(monkeypatch):
-    monkeypatch.setattr("openviking.retrieve.hierarchical_retriever.get_viking_fs", lambda: None)
 
 
 def test_retriever_initializes_rerank_client(monkeypatch):
@@ -325,7 +326,7 @@ async def test_retrieve_uses_rerank_scores_in_thinking_mode(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_retrieve_reranks_level_two_initial_candidates_in_thinking_mode(monkeypatch):
-    fake_client = FakeRerankClient([0.05, 0.95])
+    fake_client = FakeRerankClient([0.11, 0.95])
     monkeypatch.setattr(
         "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
         lambda config: fake_client,
@@ -475,3 +476,27 @@ async def test_retrieval_hotness_alpha_blends_when_configured(monkeypatch):
     )
 
     assert result[0].score == pytest.approx(0.9)
+
+
+@pytest.mark.asyncio
+async def test_convert_to_matched_contexts_returns_empty_relations():
+    retriever = HierarchicalRetriever(
+        storage=DummyStorage(),
+        embedder=None,
+        rerank_config=None,
+    )
+
+    result = await retriever._convert_to_matched_contexts(
+        [
+            {
+                "uri": "viking://resources/file-a",
+                "abstract": "child A",
+                "_score": 1.0,
+                "level": 2,
+                "context_type": "resource",
+            }
+        ],
+        ctx=_ctx(),
+    )
+
+    assert result[0].relations == []

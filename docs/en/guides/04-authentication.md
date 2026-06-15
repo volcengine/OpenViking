@@ -8,8 +8,8 @@ OpenViking uses a two-layer API key system:
 
 | Key Type | Created By | Role | Purpose |
 |----------|-----------|------|---------|
-| Root Key | Server config (`root_api_key`) | ROOT | Full access + admin operations |
-| User Key | Admin API | ADMIN or USER | Per-account access |
+| Root Key | Server config (`root_api_key`) | ROOT | Account management + selected system/monitoring operations |
+| User Key | Admin API | ADMIN or USER | Per-account data access; ADMIN can also manage users in its account |
 
 All API keys are plain random tokens with no embedded identity. The server resolves identity by first comparing against the root key, then looking up the user key index.
 
@@ -17,8 +17,8 @@ All API keys are plain random tokens with no embedded identity. The server resol
 
 | Mode | `server.auth_mode` | Identity Source | Typical Use |
 |------|--------------------|-----------------|-------------|
-| API key mode | `"api_key"` | API key, with optional tenant headers for root requests | Standard multi-tenant deployment |
-| Trusted mode | `"trusted"` | `X-OpenViking-Account` / `X-OpenViking-User` / optional `X-OpenViking-Agent`, plus `root_api_key` on non-localhost deployments. Role is looked up from APIKeyManager if the user exists. | Behind a trusted gateway or internal network boundary |
+| API key mode | `"api_key"` | API key. Data ownership is resolved from the user/admin key. | Standard multi-tenant deployment |
+| Trusted mode | `"trusted"` | `X-OpenViking-Account` / `X-OpenViking-User`, plus `root_api_key` on non-localhost deployments. Role is looked up from APIKeyManager if the user exists. | Behind a trusted gateway or internal network boundary |
 | Dev mode | `"dev"` | No authentication, always ROOT | Local development only |
 
 If `auth_mode` is not explicitly configured:
@@ -70,10 +70,10 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts/acme/users \
 
 Trusted deployments can also call Admin API through a trusted gateway. There are two supported patterns:
 
-- Present only the trusted deployment's `root_api_key`. For `/api/v1/admin/*`, the server treats the request as ROOT even without `X-OpenViking-Account` / `X-OpenViking-User`.
-- Present `X-OpenViking-Account` + `X-OpenViking-User` for a registered gateway user. In that case the server looks up the effective role from the user registry.
+- Present the trusted deployment's `root_api_key`. For `/api/v1/admin/*`, the server treats the request as ROOT after validating that key.
+- Optionally also present `X-OpenViking-Account` + `X-OpenViking-User` when the admin route targets a specific account/user. Those headers must match the target URL and are kept as the request identity, but authorization still comes from the trusted `root_api_key`.
 
-Example using a registered gateway user:
+Example using a trusted upstream identity:
 
 ```bash
 # First, register the gateway admin (do this once in api_key mode)
@@ -96,9 +96,7 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts \
   -H "Content-Type: application/json" \
   -d '{
     "account_id": "acme",
-    "admin_user_id": "alice",
-    "isolate_user_scope_by_agent": true,
-    "isolate_agent_scope_by_user": false
+    "admin_user_id": "alice"
   }'
 ```
 
@@ -128,7 +126,6 @@ import openviking as ov
 client = ov.SyncHTTPClient(
     url="http://localhost:1933",
     api_key="<user-key>",
-    agent_id="my-agent"
 )
 ```
 
@@ -137,19 +134,18 @@ client = ov.SyncHTTPClient(
 ```json
 {
   "url": "http://localhost:1933",
-  "api_key": "<user-key>",
-  "account": "acme",
-  "user": "alice",
-  "agent_id": "my-agent"
+  "api_key": "<user-key>"
 }
 ```
 
-When you use a regular user key, `account` and `user` are optional because the server can derive them from the key. They are recommended when you use `trusted` mode or a root key against tenant-scoped APIs.
+When you use a user key or admin key, the server derives `account` and `user`
+from the key. Do not send `X-OpenViking-Account` / `X-OpenViking-User` in
+`api_key` mode; those identity headers are accepted only in `trusted` mode.
 
 **CLI override flags**
 
 ```bash
-openviking --account acme --user alice --agent-id my-agent ls viking://
+openviking ls viking://
 ```
 
 ### Using --sudo with Root API Key
@@ -160,10 +156,7 @@ The CLI supports configuring both `api_key` (for regular user operations) and `r
 {
   "url": "http://localhost:1933",
   "api_key": "<user-key>",
-  "root_api_key": "<root-key>",
-  "account": "acme",
-  "user": "alice",
-  "agent_id": "my-agent"
+  "root_api_key": "<root-key>"
 }
 ```
 
@@ -173,54 +166,37 @@ When you need to perform admin commands (`admin`, `system`, `reindex`), use the 
 # List all accounts (requires root privileges)
 ov --sudo admin list-accounts
 
-# Reindex content
-ov --sudo reindex viking://
-
 # System commands
 ov --sudo system status
 ```
 
 The `--sudo` flag:
-- Only works with admin commands: `admin`, `system`, `reindex`
+- Only works with management/system commands: `admin`, `system`
 - Will error if used with non-admin commands
 - Will error if `root_api_key` is not configured in `ovcli.conf`
 - Uses `root_api_key` instead of `api_key` for the request
 
-### Accessing Tenant Data with Root Key
+### Tenant Data Access
 
-When using the root key to access tenant-scoped data APIs (e.g. `ls`, `find`, `sessions`), you must specify the target account and user. The server will reject the request otherwise. Admin API and system status endpoints are not affected.
+Tenant-scoped data APIs (for example `ls`, `find`, resources, and sessions)
+must use a key that is bound to an account/user in `api_key` mode. That can be
+a `USER` key or an `ADMIN` key; an `ADMIN` key accesses data as its own user and
+cannot switch identity with `X-OpenViking-Account` / `X-OpenViking-User`.
 
-**curl**
-
-```bash
-curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
-  -H "X-API-Key: your-secret-root-key" \
-  -H "X-OpenViking-Account: acme" \
-  -H "X-OpenViking-User: alice"
-```
-
-**Python SDK**
-
-```python
-import openviking as ov
-
-client = ov.SyncHTTPClient(
-    url="http://localhost:1933",
-    api_key="your-secret-root-key",
-    account="acme",
-    user="alice",
-)
-```
+A `ROOT` key is not bound to a tenant user, so it cannot access tenant-scoped
+data APIs in `api_key` mode. If a deployment needs an upstream gateway to assert
+`account` / `user`, use `trusted` mode instead of passing identity headers with a
+root key.
 
 **ovcli.conf**
 
 ```json
 {
   "url": "http://localhost:1933",
-  "api_key": "your-secret-root-key",
+  "auth_mode": "trusted",
+  "api_key": "your-trusted-server-key",
   "account": "acme",
-  "user": "alice",
-  "agent_id": "my-agent"
+  "user": "alice"
 }
 ```
 
@@ -241,10 +217,10 @@ Rules in trusted mode:
 
 - Normal data access does not require user registration or user-key provisioning first.
 - `X-OpenViking-Account` and `X-OpenViking-User` are required on tenant-scoped requests.
-- `X-OpenViking-Agent` is optional and defaults to `default`.
-- `/api/v1/admin/*` is special: when no explicit identity is provided, trusted mode treats the request as ROOT. This is intended for trusted upstreams that authenticate only with the deployment's root API key.
-- Role is determined by looking up the account/user in APIKeyManager. If the user exists, their configured role is used; otherwise it defaults to `USER`.
-- Trusted identity comes from the headers, not from a user key. If `root_api_key` is configured, it still acts as proof that the caller is an approved trusted upstream.
+- Use `peer_id` in session-message bodies for stable speaker attribution. Use `X-OpenViking-Actor-Peer` to filter the current user's peer collection for filesystem and retrieval operations.
+- `/api/v1/admin/*` is special: when a configured `root_api_key` is presented, trusted mode treats the request as ROOT. Explicit account/user headers are allowed only when they are complete and match the target URL.
+- For ordinary trusted data APIs, role is determined by looking up the account/user in APIKeyManager. If the user exists, their configured role is used; otherwise it defaults to `USER`.
+- Trusted identity comes from the headers, not from a user key. If `root_api_key` is configured, it acts as proof that the caller is an approved trusted upstream.
 - If `root_api_key` is also configured, every request must still provide a matching API key.
 - Only expose this mode behind a trusted network boundary or an identity-injecting gateway.
 
@@ -252,18 +228,17 @@ Implications:
 
 - Trusted mode is not development mode.
 - Trusted mode does not use the Admin API as a prerequisite for ordinary reads, writes, search, or session access.
-- Admin API remains available in trusted mode for users that have been registered with appropriate roles (root/admin).
+- Admin API remains available in trusted mode to upstreams authenticated with the configured `root_api_key`.
 - Trusted Admin API responses omit `user_key` from account creation and user registration results.
 - `root` can create/delete accounts and change roles; `admin` can manage users inside its own account; `user` cannot call Admin API.
-- To use Admin API in trusted mode, first register the gateway's service account with the appropriate role using the Admin API in api_key mode.
+- To use Admin API in trusted mode on non-localhost deployments, configure `root_api_key` and pass it with each admin request.
 
 **curl**
 
 ```bash
 curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
   -H "X-OpenViking-Account: acme" \
-  -H "X-OpenViking-User: alice" \
-  -H "X-OpenViking-Agent: my-agent"
+  -H "X-OpenViking-User: alice"
 ```
 
 **Python SDK**
@@ -275,7 +250,6 @@ client = ov.SyncHTTPClient(
     url="http://localhost:1933",
     account="acme",
     user="alice",
-    agent_id="my-agent",
 )
 ```
 

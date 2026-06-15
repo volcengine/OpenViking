@@ -144,73 +144,108 @@ ov chat --no-format
 > 修改配置后（直接编辑文件），
 > 您需要重启网关服务以使更改生效。
 
-### Openviking Server配置
-bot将连接远程的OpenViking服务器，使用前需启动Openviking Server。 默认使用`ov.conf`中配置的OpenViking server信息
-- Openviking默认启动地址为 127.0.0.1:1933
-- 如果配置了 root_api_key，则开启多租户模式。详见 [多租户](https://github.com/volcengine/OpenViking/blob/main/examples/multi_tenant/README.md)
-- Openviking Server配置示例
+### OpenViking Server 配置
+bot 将连接到远程 OpenViking Server，使用前请先启动 OpenViking Server。默认使用 `ov.conf` 中配置的 OpenViking Server 信息。
+- OpenViking 默认启动地址为 `127.0.0.1:1933`
+- 新部署的 bot 默认应使用 OpenViking User API key。`root_api_key` 仅作为旧 root-key 部署的废弃兼容字段保留。
+- OpenViking Server 配置示例
 ```json
 {
   "server": {
-    
     "host": "127.0.0.1",
-    "port": 1933,
-    "root_api_key": "test"
+    "port": 1933
+  },
+  "bot": {
+    "ov_server": {
+      "api_key": "<your-openviking-user-api-key>",
+      "api_key_type": "user"
+    }
   }
 }
 ```
 
-### bot配置
-全部配置在`ov.conf`中`bot`字段下，配置项自带默认值。可选手动配置项说明如下：
+### Bot 配置
+所有配置都位于 `ov.conf` 的 `bot` 字段下，且各配置项都带有默认值。可选手动配置项说明如下：
 - `agents`：Agent 配置
-  - max_tool_iterations：单轮对话任务最大循环次数，超过则直接返回结果
-  - memory_window：自动提交session到Openviking的对话轮次上限
-  - gen_image_model：生成图片的模型
-- gateway：Gateway 配置
+  - `model`：bot 使用的 LLM 模型名。当设置了 `provider` 时，建议直接使用 provider 原生模型名（例如 `doubao-seed-2-0-pro-260215`）。
+  - `provider`：可选的模型 provider 名称。设置后，vikingbot 会通过 OpenViking 的 `VLMFactory` + adapter 路径直接创建后端（例如 `volcengine`、`openai`、`deepseek`）。
+  - `api_key`：可选，Agent 模型 provider 的 API Key。若希望 bot 使用独立凭证，可直接在这里配置。
+  - `api_base`：可选，Agent 模型 provider 的 API Base。适用于 provider 网关或自定义端点，例如 VolcEngine Ark。
+  - `extra_headers`：可选，透传给模型 provider 的额外 HTTP 请求头。
+  - `max_tool_iterations`：单轮对话任务最大循环次数，超过则直接返回结果。
+  - `memory_window`：自动提交 session 到 OpenViking 的对话轮次上限。
+  - `gen_image_model`：生成图片使用的模型。
+- `gateway`：Gateway 配置
   - host：Gateway 监听地址，默认值为 `0.0.0.0`
   - port：Gateway 监听端口，默认值为 `18790`
-- sandbox：沙箱配置
-  - mode：沙箱模式，可选值为 `shared`（所有session共享工作空间）或 `private`（私有，按Channel、session隔离工作空间）。默认值为 `shared`。
-- ov_server：OpenViking Server 配置。
-  - 不配置，默认使用`ov.conf`中配置的OpenViking server信息
-  - 若不使用本地启动的OpenViking Server，可在此配置url和对应的root user的API Key
-    - root_api_key: 多租户场景API KEY必须有root权限，否则bot无法自动注册多个OpenViking用户，用于实现memory的隔离
-    - account_id: 默认default，ov的账号ID，OpenViking account下所有user共享resources
-    - api_key_type: 可选 `root` 或 `user`，默认 `root`。`root` 保留原有的 root-key fanout 行为；`user` 切换 bot 走 user-key 流程调用 OpenViking 客户端。完整客户端流程详见 #1994。
-    - exp_write_tools: 可选，触发经验记忆注入的工具名列表（自演化 agent memory 循环，详见 #2007）。默认 `["write_file", "edit_file"]`。注入仅在 OpenViking server 启用 `memory.agent_memory_enabled` 时生效，否则此列表无作用。
-- channels：消息平台配置，详见 [消息平台配置](bot/docs/CHANNEL.md)
+  - token：Gateway 鉴权 token。当 `host` 为非 localhost 地址（例如默认的 `0.0.0.0`）时必须设置——否则网关会拒绝启动（`SECURITY: bot.gateway.token is required when gateway.host is non-localhost`）。请设置为随机密钥；客户端通过 `X-Gateway-Token` 请求头携带。
+- `sandbox`：沙箱配置
+  - `mode`：沙箱模式，可选值为 `shared`（所有 session 共享工作空间）或 `private`（私有，按 Channel、session 隔离工作空间）。默认值为 `shared`。
+- `ov_server`：OpenViking Server 配置
+  - 若不配置，默认使用 `ov.conf` 中配置的 OpenViking Server 信息。
+  - 如果你使用远端 OpenViking Server，可以在这里配置目标服务地址和 API Key。
+    - `server_url`：OpenViking Server 基础地址，例如 `https://api.vikingdb.cn-beijing.volces.com/openviking` 或 `http://localhost:1933`。
+    - `api_key`：bot 调用 OpenViking Server 时使用的 API Key。新配置应填写 OpenViking User key。
+    - `root_api_key`：旧 root-key 部署的废弃兼容字段；新配置不要再使用。
+    - `account_id`：默认值为 `default`，即 OpenViking 的账号 ID。同一 OpenViking account 下的所有 user 共享 resources。
+    - `api_key_type`：可选 `root` 或 `user`，默认 `user`。`user` 使用 OpenViking User-key 流程，并将 bot sender 映射为该 User 下的 peer。`root` 仅用于旧 root-key fanout 行为，如仍需使用必须显式配置。
+      旧配置如果把 root key 填在 `api_key`，需要补充 `api_key_type: "root"`，或迁移到 `root_api_key`；否则 `api_key` 会按 User key 解释。
+    - `exp_write_tools`：可选，触发经验记忆注入的工具名列表（自演化 agent memory 循环，详见 #2007）。默认 `["write_file", "edit_file"]`。该配置只控制 bot 侧注入触发时机；已存储 experience 的生成由 OpenViking 记忆抽取和当前 session 的 `memory_policy.memory_types` 白名单控制。
+    - `recall_exp_first_round_only`：可选。为 `true` 时，`ContextBuilder._build_user_memory` 跳过每轮 user/agent 经验召回，仅在首个 user turn 注入一次经验。默认 `false`。
+    - `exp_recall_limit`：可选。召回时每个任务检索的经验条数。默认 `5`。
+    - `exp_recall_max_chars`：可选。注入到上下文的格式化经验块的字符预算。默认 `2000`。
+- `channels`：消息平台配置，详见 [消息平台配置](bot/docs/CHANNEL.md)
 
 ```json
 {
   "bot": {
     "agents": {
+      "model": "doubao-seed-2-0-pro-260215",
+      "api_key": "<your-ark-api-key>",
+      "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+      "provider": "volcengine",
       "max_tool_iterations": 50,
-      "memory_window": 50,
-      "gen_image_model": "openai/doubao-seedream-4-5-251128"
+      "memory_window": 50
     },
     "gateway": {
       "host": "0.0.0.0",
-      "port": 18790
+      "port": 18790,
+      "token": "<set-a-random-gateway-token>"
     },
     "sandbox": {
       "mode": "shared"
     },
     "ov_server": {
-      "server_url": "http://127.0.0.1:1933",
-      "root_api_key": "test"
+      "server_url": "https://api.vikingdb.cn-beijing.volces.com/openviking",
+      "api_key": "<your-openviking-user-api-key>",
+      "account_id": "default",
+      "api_key_type": "user"
     },
     "channels": [
       {
         "type": "feishu",
         "enabled": true,
         "ov_tools_enable": true,
-        "appId": "",
-        "appSecret": "",
+        "appId": "<your-feishu-app-id>",
+        "appSecret": "<your-feishu-app-secret>",
         "allowFrom": []
       }
     ]
   }
 }
+```
+
+如果你只是想通过 `vikingbot gateway` 或 `vikingbot chat` 体验 bot，可以将 `channels` 设置为空数组（`[]`）。
+
+使用上述配置时，你可以直接体验 bot，或者同时配置飞书：
+
+```bash
+# 启动 HTTP Gateway
+vikingbot gateway
+
+# 或直接在 CLI 中与 bot 对话
+vikingbot chat
+vikingbot chat -m "Hello"
 ```
 
 ### OpenViking Agent 工具
@@ -305,6 +340,7 @@ Provider 配置从 OpenViking 配置（`ov.conf` 的 `vlm` 部分）读取。
 > - **Groq** 通过 Whisper 提供免费的语音转录。如果已配置，Telegram 语音消息将自动转录。
 > - **智谱编码计划**：如果您使用智谱的编码计划，请在您的 zhipu 提供商配置中设置 `"apiBase": "https://open.bigmodel.cn/api/coding/paas/v4"`。
 > - **MiniMax（中国大陆）**：如果您的 API 密钥来自 MiniMax 的中国大陆平台（minimaxi.com），请在您的 minimax 提供商配置中设置 `"apiBase": "https://api.minimaxi.com/v1"`。
+> - **MiniMax 推荐模型**：`MiniMax-M2.7`（性能更强）和 `MiniMax-M2.7-highspeed`（速度更快、更灵活）。可在 agent 配置中通过 `"model": "MiniMax-M2.7"` 使用。
 
 | 提供商 | 用途 | 获取 API 密钥 |
 |----------|---------|-------------|

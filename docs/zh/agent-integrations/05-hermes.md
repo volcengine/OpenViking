@@ -12,7 +12,7 @@ hermes memory setup
 
 向导会询问：
 
-- **OpenViking 服务 URL** — 自托管服务器（默认 `http://127.0.0.1:1933`）或火山引擎 OpenViking Cloud
+- **OpenViking 服务 URL** — 自托管服务器（默认 `http://127.0.0.1:1933`）或 OpenViking Service（火山引擎云）
 - **API Key** — 本地开发模式留空
 - **租户 account / user / agent ID** — 多租户部署时使用
 

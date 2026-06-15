@@ -79,12 +79,31 @@ def check_config() -> tuple[bool, str, Optional[str]]:
     except json.JSONDecodeError as exc:
         return False, f"Invalid JSON in {config_path}", f"Fix syntax error: {exc}"
 
-    missing = [key for key in () if key not in data]
-    if missing:
+    if not isinstance(data, dict):
         return (
             False,
-            f"{config_path} missing required sections: {', '.join(missing)}",
-            "Add the missing sections (see examples/ov.conf.example)",
+            f"{config_path} must contain a JSON object",
+            "The top-level config must be a JSON object",
+        )
+
+    # Validate the parsed config the same way the server does on startup, so
+    # `doctor` reports unknown or invalid fields instead of passing a config
+    # that would actually fail to load on `openviking-server` startup (#2373).
+    from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
+
+    try:
+        OpenVikingConfig.from_dict(data)
+    except ValueError as exc:
+        first_error = next((line for line in str(exc).splitlines() if line.strip()), "")
+        detail = (
+            f"{config_path}: {first_error}"
+            if first_error
+            else f"Invalid configuration in {config_path}"
+        )
+        return (
+            False,
+            detail,
+            "Fix the reported field(s); run `openviking-server` to see full details",
         )
 
     return True, str(config_path), None
@@ -369,19 +388,25 @@ def check_ollama() -> tuple[bool, str, Optional[str]]:
     # Detect whether config uses Ollama
     dense = data.get("embedding", {}).get("dense", {})
     vlm = data.get("vlm", {})
+    query_planner = data.get("query_planner") or {}
     uses_embedding = dense.get("provider") == "ollama"
     uses_vlm = vlm.get("provider") == "litellm" and (vlm.get("model", "")).startswith("ollama/")
+    uses_query_planner = query_planner.get("provider") == "litellm" and (
+        query_planner.get("model", "")
+    ).startswith("ollama/")
 
-    if not uses_embedding and not uses_vlm:
+    if not uses_embedding and not uses_vlm and not uses_query_planner:
         return True, "not configured", None
 
     from openviking_cli.utils.ollama import check_ollama_running, parse_ollama_url
 
-    # Determine host/port from config
+    # Determine host/port from config (embedding -> vlm -> query_planner)
     if uses_embedding:
         host, port = parse_ollama_url(dense.get("api_base"))
-    else:
+    elif uses_vlm:
         host, port = parse_ollama_url(vlm.get("api_base"))
+    else:
+        host, port = parse_ollama_url(query_planner.get("api_base"))
 
     if check_ollama_running(host, port):
         return True, f"running at {host}:{port}", None

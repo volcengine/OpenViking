@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-06-01",
+  "updatedAt": "2026-06-02",
   "cdnBaseUrl": "https://docs.openviking.net/",
   "accessMethods": [
     {
@@ -14,8 +14,15 @@
       "id": "cli",
       "name": "CLI Integration",
       "icon": "terminal",
-      "summary": "Connect agents through the OpenViking command line.",
+      "summary": "Install, configure, and use OpenViking CLI directly from a terminal.",
       "detailPath": "https://docs.openviking.net/agents/en/cli.md"
+    },
+    {
+      "id": "agent-cli",
+      "name": "Agent CLI Integration",
+      "icon": "paperclip",
+      "summary": "Send setup instructions to an AI agent so it can learn and remember the CLI workflow.",
+      "detailPath": "https://docs.openviking.net/agents/en/agent-cli.md"
     },
     {
       "id": "api",
@@ -43,7 +50,7 @@
     },
     {
       "id": "hermes",
-      "name": "Hermes",
+      "name": "Hermes Agent",
       "tags": ["Provider"],
       "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/Hermes-Agent.png",
       "summary": "Hermes includes OpenViking as a native memory provider. Point Hermes to your OpenViking service to enable storage, recall, and extraction.",
@@ -83,7 +90,7 @@
     },
     {
       "id": "opencode",
-      "name": "Opencode",
+      "name": "OpenCode",
       "tags": ["Plugin"],
       "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/OpenCode.png",
       "summary": "Provides OpenCode plugins that can expose OpenViking either as model-selected tools or injected context.",

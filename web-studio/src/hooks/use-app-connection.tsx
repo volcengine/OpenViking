@@ -1,14 +1,17 @@
 import * as React from 'react'
 import { useQueryClient } from '@tanstack/react-query'
+import { useNavigate, useRouterState } from '@tanstack/react-router'
 
 import { isOvClientError, ovClient } from '#/lib/ov-client'
 
 import { detectServerMode, normalizeBaseUrl } from './use-server-mode'
 import type { ServerMode } from './use-server-mode'
 
+export type ConnectionRole = 'admin' | 'root' | 'unknown' | 'user'
+
 export type ConnectionDraft = {
   accountId: string
-  agentId: string
+  adminApiKey: string
   apiKey: string
   baseUrl: string
   userId: string
@@ -23,14 +26,15 @@ export type ConnectionIdentitySummary = {
 
 type AppConnectionContextValue = {
   connection: ConnectionDraft
-  isConnectionDialogOpen: boolean
-  openConnectionDialog: () => void
+  connectionRole: ConnectionRole
+  isConnectionRoleLoading: boolean
+  openConnectionSettings: () => void
   saveConnection: (next: ConnectionDraft) => void
   serverMode: ServerMode
-  setConnectionDialogOpen: (open: boolean) => void
 }
 
 const CONNECTION_STORAGE_KEY = 'ov_console_connection'
+const AUTH_PROMPT_SUPPRESSION_MS = 10000
 
 const ENV_BASE_URL =
   typeof import.meta.env.VITE_OV_BASE_URL === 'string'
@@ -40,13 +44,13 @@ const ENV_API_KEY =
   typeof import.meta.env.VITE_OV_API_KEY === 'string'
     ? import.meta.env.VITE_OV_API_KEY.trim()
     : ''
+const ENV_ADMIN_API_KEY =
+  typeof import.meta.env.VITE_OV_ADMIN_API_KEY === 'string'
+    ? import.meta.env.VITE_OV_ADMIN_API_KEY.trim()
+    : ''
 const ENV_ACCOUNT =
   typeof import.meta.env.VITE_OV_ACCOUNT === 'string'
     ? import.meta.env.VITE_OV_ACCOUNT.trim()
-    : ''
-const ENV_AGENT =
-  typeof import.meta.env.VITE_OV_AGENT === 'string'
-    ? import.meta.env.VITE_OV_AGENT.trim()
     : ''
 const ENV_USER =
   typeof import.meta.env.VITE_OV_USER === 'string'
@@ -55,7 +59,7 @@ const ENV_USER =
 
 const DEFAULT_CONNECTION: ConnectionDraft = {
   accountId: ENV_ACCOUNT || 'default',
-  agentId: ENV_AGENT || 'web-studio',
+  adminApiKey: ENV_ADMIN_API_KEY,
   apiKey: ENV_API_KEY,
   baseUrl: ovClient.getOptions().baseUrl,
   userId: ENV_USER || 'default',
@@ -66,6 +70,15 @@ const AppConnectionContext =
 
 function isBrowser(): boolean {
   return typeof window !== 'undefined'
+}
+
+function isConnectionRole(value: unknown): value is ConnectionRole {
+  return (
+    value === 'root' ||
+    value === 'admin' ||
+    value === 'user' ||
+    value === 'unknown'
+  )
 }
 
 function readStoredConnection(): Partial<ConnectionDraft> {
@@ -107,42 +120,88 @@ function normalizeConnectionDraft(
 ): ConnectionDraft {
   return {
     accountId: connection.accountId.trim(),
-    agentId: connection.agentId.trim() || DEFAULT_CONNECTION.agentId,
+    adminApiKey: connection.adminApiKey.trim(),
     apiKey: connection.apiKey.trim(),
     baseUrl: normalizeBaseUrl(connection.baseUrl),
     userId: connection.userId.trim(),
   }
 }
 
-function applyConnection(connection: ConnectionDraft): void {
+function resolveIdentityField(
+  envValue: string,
+  storedValue: string | undefined,
+  defaultValue: string,
+): string {
+  if (envValue) {
+    return envValue
+  }
+  return storedValue || defaultValue
+}
+
+function applyConnection(
+  connection: ConnectionDraft,
+  serverMode: ServerMode,
+): void {
   ovClient.setOptions({
     baseUrl: connection.baseUrl,
   })
   ovClient.setConnection({
     accountId: connection.accountId,
-    agentId: connection.agentId,
+    adminApiKey: connection.adminApiKey,
     apiKey: connection.apiKey,
+    identityHeaders: serverMode === 'trusted',
     userId: connection.userId,
   })
 }
 
+async function detectConnectionRole(
+  connection: ConnectionDraft,
+): Promise<ConnectionRole> {
+  const headers: Record<string, string> = {}
+  const apiKey = connection.adminApiKey || connection.apiKey
+  if (apiKey) {
+    headers['X-API-Key'] = apiKey
+  }
+
+  const response = await fetch(`${connection.baseUrl}/health`, { headers })
+  if (!response.ok) {
+    return 'unknown'
+  }
+
+  const data = (await response.json().catch(() => null)) as {
+    role?: unknown
+  } | null
+  return isConnectionRole(data?.role) ? data.role : 'unknown'
+}
+
 function readInitialConnection(): ConnectionDraft {
   const storedConnection = readStoredConnection()
+  const adminApiKey =
+    ENV_ADMIN_API_KEY ||
+    storedConnection.adminApiKey ||
+    DEFAULT_CONNECTION.adminApiKey
+  const apiKey =
+    ENV_API_KEY ||
+    ovClient.getConnection().apiKey ||
+    storedConnection.apiKey ||
+    DEFAULT_CONNECTION.apiKey
   return normalizeConnectionDraft({
     ...DEFAULT_CONNECTION,
     ...storedConnection,
-    accountId:
-      ENV_ACCOUNT || storedConnection.accountId || DEFAULT_CONNECTION.accountId,
-    agentId:
-      ENV_AGENT || storedConnection.agentId || DEFAULT_CONNECTION.agentId,
-    apiKey:
-      ENV_API_KEY ||
-      ovClient.getConnection().apiKey ||
-      storedConnection.apiKey ||
-      DEFAULT_CONNECTION.apiKey,
+    accountId: resolveIdentityField(
+      ENV_ACCOUNT,
+      storedConnection.accountId,
+      DEFAULT_CONNECTION.accountId,
+    ),
+    adminApiKey,
+    apiKey,
     baseUrl:
       ENV_BASE_URL || storedConnection.baseUrl || DEFAULT_CONNECTION.baseUrl,
-    userId: ENV_USER || storedConnection.userId || DEFAULT_CONNECTION.userId,
+    userId: resolveIdentityField(
+      ENV_USER,
+      storedConnection.userId,
+      DEFAULT_CONNECTION.userId,
+    ),
   })
 }
 
@@ -154,11 +213,7 @@ export function summarizeConnectionIdentity(
     return { labelKey: 'identitySummary.dev' }
   }
 
-  const segments = [
-    connection.accountId,
-    connection.userId,
-    connection.agentId,
-  ].filter(Boolean)
+  const segments = [connection.accountId, connection.userId].filter(Boolean)
   if (!segments.length) {
     return { labelKey: 'identitySummary.unset' }
   }
@@ -188,24 +243,43 @@ export function AppConnectionProvider({
   children: React.ReactNode
 }) {
   const queryClient = useQueryClient()
+  const authPromptSuppressedUntilRef = React.useRef(0)
+  const navigate = useNavigate()
+  const pathname = useRouterState({
+    select: (state) => state.location.pathname,
+  })
   const initialConnectionRef = React.useRef<ConnectionDraft | null>(null)
   if (initialConnectionRef.current === null) {
     initialConnectionRef.current = readInitialConnection()
-    applyConnection(initialConnectionRef.current)
+    applyConnection(initialConnectionRef.current, 'checking')
   }
 
   const [connection, setConnection] = React.useState<ConnectionDraft>(
     initialConnectionRef.current,
   )
-  const [isConnectionDialogOpen, setConnectionDialogOpen] =
-    React.useState(false)
+  const [connectionRole, setConnectionRole] =
+    React.useState<ConnectionRole>('unknown')
+  const [isConnectionRoleLoading, setConnectionRoleLoading] = React.useState(
+    () =>
+      Boolean(
+        initialConnectionRef.current?.baseUrl &&
+          (initialConnectionRef.current.adminApiKey ||
+            initialConnectionRef.current.apiKey),
+      ),
+  )
   const [serverMode, setServerMode] = React.useState<ServerMode>('checking')
 
+  const openConnectionSettings = React.useCallback(() => {
+    if (pathname !== '/settings') {
+      void navigate({ to: '/settings' })
+    }
+  }, [navigate, pathname])
+
   React.useEffect(() => {
-    applyConnection(connection)
+    applyConnection(connection, serverMode)
     persistConnection(connection)
     void queryClient.invalidateQueries()
-  }, [connection, queryClient])
+  }, [connection, queryClient, serverMode])
 
   React.useEffect(() => {
     let cancelled = false
@@ -223,14 +297,53 @@ export function AppConnectionProvider({
   }, [connection.baseUrl])
 
   React.useEffect(() => {
+    let cancelled = false
+    const apiKey = connection.adminApiKey || connection.apiKey
+
+    setConnectionRole('unknown')
+    setConnectionRoleLoading(Boolean(connection.baseUrl && apiKey))
+    if (!connection.baseUrl || !apiKey) {
+      return () => {
+        cancelled = true
+      }
+    }
+
+    void detectConnectionRole(connection)
+      .then((role) => {
+        if (cancelled) {
+          return
+        }
+        setConnectionRole(role)
+        setConnectionRoleLoading(false)
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setConnectionRole('unknown')
+          setConnectionRoleLoading(false)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    connection.accountId,
+    connection.adminApiKey,
+    connection.apiKey,
+    connection.baseUrl,
+    connection.userId,
+  ])
+
+  React.useEffect(() => {
     const interceptorId = ovClient.instance.interceptors.response.use(
       (response) => response,
       (error) => {
         if (
           isOvClientError(error) &&
-          (error.statusCode === 401 || error.statusCode === 403)
+          (error.statusCode === 401 || error.statusCode === 403) &&
+          Date.now() >= authPromptSuppressedUntilRef.current
         ) {
-          setConnectionDialogOpen(true)
+          openConnectionSettings()
         }
         return Promise.reject(error)
       },
@@ -239,18 +352,30 @@ export function AppConnectionProvider({
     return () => {
       ovClient.instance.interceptors.response.eject(interceptorId)
     }
-  }, [])
+  }, [openConnectionSettings])
 
   const value = React.useMemo<AppConnectionContextValue>(
     () => ({
       connection,
-      isConnectionDialogOpen,
-      openConnectionDialog: () => setConnectionDialogOpen(true),
-      saveConnection: (next) => setConnection(normalizeConnectionDraft(next)),
+      connectionRole,
+      isConnectionRoleLoading,
+      openConnectionSettings,
+      saveConnection: (next) => {
+        authPromptSuppressedUntilRef.current =
+          Date.now() + AUTH_PROMPT_SUPPRESSION_MS
+        void queryClient.cancelQueries()
+        setConnection(normalizeConnectionDraft(next))
+      },
       serverMode,
-      setConnectionDialogOpen,
     }),
-    [connection, isConnectionDialogOpen, serverMode],
+    [
+      connection,
+      connectionRole,
+      isConnectionRoleLoading,
+      openConnectionSettings,
+      queryClient,
+      serverMode,
+    ],
   )
 
   return (

@@ -11,19 +11,22 @@ import pytest_asyncio
 
 from openviking_cli.client.http import AsyncHTTPClient
 from openviking_cli.exceptions import ConflictError, FailedPreconditionError, ProcessingError
-from tests.server.conftest import SAMPLE_MD_CONTENT, SDK_ROOT_API_KEY, TEST_TMP_DIR
+from tests.server.conftest import SAMPLE_MD_CONTENT, TEST_TMP_DIR
 from tests.server.ovpack_test_helpers import build_ovpack_bytes
 
 
 @pytest_asyncio.fixture()
 async def http_client(running_server):
     """Create an AsyncHTTPClient connected to the running server."""
-    port, svc = running_server
+    port, svc, sdk_user_key = running_server
     client = AsyncHTTPClient(
         url=f"http://127.0.0.1:{port}",
-        api_key=SDK_ROOT_API_KEY,
-        account="default",
-        user="sdk_test_user",
+        api_key=sdk_user_key,
+        account="",
+        user="",
+        timeout=33.0,
+        extra_headers={},
+        profile_enabled=False,
     )
     await client.initialize()
     yield client, svc
@@ -113,7 +116,7 @@ description: SDK localhost upload test
     assert "root_uri" in result
     assert "uri" in result
     assert result["root_uri"] == result["uri"]
-    assert result["uri"].startswith("viking://agent/default/skills/")
+    assert result["uri"].startswith("viking://user/sdk_test_user/skills/")
 
 
 async def test_sdk_import_ovpack_from_local_file(http_client):
@@ -213,13 +216,13 @@ async def test_sdk_batch_add_messages_and_commit_keep_recent_count(http_client):
         [
             {
                 "role": "user",
-                "role_id": "sdk-user-1",
+                "peer_id": "sdk-user-1",
                 "created_at": "2026-05-01T12:00:00Z",
                 "parts": [{"type": "text", "text": "Batch hello"}],
             },
             {
                 "role": "assistant",
-                "role_id": "sdk-bot-1",
+                "peer_id": "sdk-bot-1",
                 "created_at": "2026-05-01T12:00:05Z",
                 "parts": [
                     {"type": "text", "text": "Batch answer"},
@@ -241,7 +244,7 @@ async def test_sdk_batch_add_messages_and_commit_keep_recent_count(http_client):
 
     pre_commit = await client.get_session_context(session_id)
     assert [m["role"] for m in pre_commit["messages"]] == ["user", "assistant", "user"]
-    assert pre_commit["messages"][0]["role_id"] == "sdk-user-1"
+    assert pre_commit["messages"][0]["peer_id"] == "sdk-user-1"
     assert pre_commit["messages"][0]["created_at"] == "2026-05-01T12:00:00Z"
     assert pre_commit["messages"][1]["parts"][1]["type"] == "context"
     assert pre_commit["messages"][1]["parts"][1]["abstract"] == "SDK doc abstract"

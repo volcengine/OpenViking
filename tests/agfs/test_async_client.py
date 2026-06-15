@@ -32,16 +32,29 @@ async def test_async_agfs_client_hides_threadpool(monkeypatch):
     agfs = AsyncAGFSClient(sync_agfs)
 
     assert agfs.sync_client is sync_agfs
-    assert await agfs.write("/tasks/1", b"data") == ("write", "/tasks/1", b"data", {})
-    assert await agfs.read("/queue/dequeue") == ("read", "/queue/dequeue", {})
+    assert await agfs.write("/tasks/1", b"data") == (
+        "write",
+        "/tasks/1",
+        b"data",
+        {"ctx": {"account_id": "_system"}},
+    )
+    assert await agfs.read("/queue/dequeue") == (
+        "read",
+        "/queue/dequeue",
+        {"ctx": {"account_id": "_system"}},
+    )
     assert await agfs.rm("/redo/id", recursive=True) == (
         "rm",
         "/redo/id",
-        {"recursive": True},
+        {"recursive": True, "ctx": {"account_id": "_system"}},
     )
 
     assert to_thread_calls == [
-        ("write", ("/tasks/1", b"data"), {}),
-        ("read", ("/queue/dequeue",), {}),
-        ("rm", ("/redo/id",), {"recursive": True}),
+        ("write", ("/tasks/1", b"data"), {"ctx": {"account_id": "_system"}}),
+        ("read", ("/queue/dequeue",), {"ctx": {"account_id": "_system"}}),
+        (
+            "rm",
+            ("/redo/id",),
+            {"recursive": True, "ctx": {"account_id": "_system"}},
+        ),
     ]

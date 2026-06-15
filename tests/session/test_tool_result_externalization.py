@@ -7,7 +7,7 @@ import pytest
 
 import openviking.session.session as session_module
 import openviking.session.tool_result_store as tool_result_store
-from openviking.message import Message, ToolPart
+from openviking.message import ToolPart
 from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.session import Session
 from openviking.session.tool_result_store import ToolResultStore
@@ -97,11 +97,12 @@ async def test_add_message_externalizes_large_tool_output(session: Session):
                 tool_status="completed",
             )
         ],
+        peer_id="web-visitor-alice",
     )
 
     part = msg.get_tool_parts()[0]
     assert part.tool_output_truncated is True
-    assert part.tool_output_ref.startswith(f"viking://session/{session.session_id}/tool-results/")
+    assert part.tool_output_ref.startswith(f"{session.uri}/tool-results/")
     assert part.tool_output_original_chars == len(raw)
     assert part.tool_output_externalized_reason == "single_threshold"
     assert raw not in part.tool_output
@@ -109,6 +110,8 @@ async def test_add_message_externalizes_large_tool_output(session: Session):
     stored = await session.read_tool_result(part.tool_output_ref.rsplit("/", 1)[-1], limit=-1)
     assert stored["content"] == raw
     assert stored["offset_unit"] == "unicode_code_point"
+    assert stored["metadata"]["user_id"] == session.ctx.user.user_id
+    assert stored["metadata"]["peer_id"] == "web-visitor-alice"
 
 
 async def test_hydrate_tool_outputs_for_extraction_uses_memory_copy(session: Session):
@@ -457,7 +460,7 @@ async def test_assistant_turn_budget_uses_rendered_stub_length(session: Session)
     raw_b = _json_items_payload(40)
     raw_c = _json_items_payload(1)
     ref_a = (
-        f"viking://session/{session.session_id}/tool-results/"
+        f"{session.uri}/tool-results/"
         f"{tool_result_store.build_tool_result_id('call_a', tool_result_store.sha256_text(raw_a))}"
     )
     stub_a = tool_result_store.make_preview(

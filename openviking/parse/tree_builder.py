@@ -25,6 +25,7 @@ from typing import Optional
 
 from openviking.core.building_tree import BuildingTree
 from openviking.core.context import Context
+from openviking.core.namespace import is_content_root_uri
 from openviking.parse.parsers.media.utils import get_media_base_uri, get_media_type
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import get_viking_fs
@@ -75,12 +76,72 @@ class TreeBuilder:
         if scope == "user":
             # user resources go to memories (no separate resources dir)
             return "viking://user"
-        # Agent scope
-        return "viking://agent"
+        raise ValueError(f"unsupported tree scope: {scope}")
 
     # ============================================================================
     # v5.0 Methods (temporary directory + SemanticQueue architecture)
     # ============================================================================
+
+    async def resolve_target_uri(
+        self,
+        *,
+        ctx: RequestContext,
+        doc_name: str,
+        scope: str = "resources",
+        to_uri: Optional[str] = None,
+        parent_uri: Optional[str] = None,
+        source_path: Optional[str] = None,
+        source_format: Optional[str] = None,
+        create_parent: bool = False,
+    ) -> tuple[str, Optional[str]]:
+        """Resolve the final target URI and optional unique-name candidate."""
+
+        final_doc_name = VikingURI.sanitize_segment(doc_name)
+        if source_path and source_format == "repository":
+            parsed_org_repo = parse_code_hosting_url(source_path)
+            if parsed_org_repo:
+                final_doc_name = parsed_org_repo
+
+        auto_base_uri = self._get_base_uri(scope, source_path, source_format)
+        base_uri = parent_uri or auto_base_uri
+        use_to_as_parent = bool(to_uri and is_content_root_uri(to_uri, ctx, kind="resource"))
+        if to_uri and not use_to_as_parent:
+            return to_uri, None
+
+        effective_parent_uri = (parent_uri or to_uri) if use_to_as_parent else parent_uri
+        if effective_parent_uri:
+            effective_parent_uri = effective_parent_uri.rstrip("/")
+        if effective_parent_uri:
+            viking_fs = get_viking_fs()
+            parent_is_content_root = is_content_root_uri(
+                effective_parent_uri,
+                ctx,
+                kind="resource",
+            )
+            try:
+                parent_exists = await viking_fs.exists(effective_parent_uri, ctx=ctx)
+                if not parent_exists:
+                    if create_parent or parent_is_content_root:
+                        logger.info(
+                            f"[TreeBuilder] Parent URI does not exist, creating: {effective_parent_uri}"
+                        )
+                        await viking_fs.mkdir(effective_parent_uri, exist_ok=True, ctx=ctx)
+                    else:
+                        raise FileNotFoundError(
+                            f"Parent URI does not exist: {effective_parent_uri}. "
+                            f"Use --parent-auto-create/-p to automatically create it."
+                        )
+                stat_result = await viking_fs.stat(effective_parent_uri, ctx=ctx)
+            except FileNotFoundError:
+                raise
+            except Exception as e:
+                raise FileNotFoundError(f"Parent URI does not exist: {effective_parent_uri}") from e
+            if not stat_result.get("isDir"):
+                raise ValueError(f"Parent URI is not a directory: {effective_parent_uri}")
+            base_uri = effective_parent_uri
+
+        planned_uri = VikingURI(base_uri).join(final_doc_name).uri
+        return planned_uri, planned_uri
 
     async def finalize_from_temp(
         self,
@@ -105,9 +166,6 @@ class TreeBuilder:
         viking_fs = get_viking_fs()
         temp_uri = temp_dir_path
 
-        def is_resources_root(uri: Optional[str]) -> bool:
-            return (uri or "").rstrip("/") == "viking://resources"
-
         # 1. Find document root directory
         entries = await viking_fs.ls(temp_uri, ctx=ctx)
         doc_dirs = [e for e in entries if e.get("isDir") and e["name"] not in [".", ".."]]
@@ -126,72 +184,27 @@ class TreeBuilder:
         if original_name != doc_name:
             logger.debug(f"[TreeBuilder] Sanitized doc name: {original_name!r} -> {doc_name!r}")
 
-        # Check if source_path is a GitHub/GitLab URL and extract org/repo
-        # This is critical for getting the full "org/repo" path instead of just repo name!
-        # For example:
-        #   - source_path = "https://github.com/volcengine/OpenViking"
-        #   - parsed_org_repo = "volcengine/OpenViking"
-        #   - final root_uri = "viking://resources/volcengine/OpenViking"
-        #
-        # Without this, we'd just get "viking://resources/OpenViking" without the org prefix
-        final_doc_name = doc_name
-        if source_path and source_format == "repository":
-            parsed_org_repo = parse_code_hosting_url(source_path)
-            if parsed_org_repo:
-                final_doc_name = parsed_org_repo
-
-        # 2. Determine base_uri and final document name with org/repo for GitHub/GitLab
-        auto_base_uri = self._get_base_uri(scope, source_path, source_format)
-        base_uri = parent_uri or auto_base_uri
-        use_to_as_parent = is_resources_root(to_uri)
-        # 3. Determine candidate_uri
-        if to_uri and not use_to_as_parent:
-            candidate_uri = to_uri
-        else:
-            effective_parent_uri = parent_uri or to_uri if use_to_as_parent else parent_uri
-            if effective_parent_uri:
-                effective_parent_uri = effective_parent_uri.rstrip("/")
-            if effective_parent_uri:
-                # Parent URI must exist and be a directory, or create it if requested
-                try:
-                    # First check if parent exists
-                    parent_exists = await viking_fs.exists(effective_parent_uri, ctx=ctx)
-                    if not parent_exists:
-                        if create_parent:
-                            # Automatically create parent directory
-                            logger.info(
-                                f"[TreeBuilder] Parent URI does not exist, creating: {effective_parent_uri}"
-                            )
-                            await viking_fs.mkdir(effective_parent_uri, exist_ok=True, ctx=ctx)
-                        else:
-                            raise FileNotFoundError(
-                                f"Parent URI does not exist: {effective_parent_uri}. "
-                                f"Use --parent-auto-create/-p to automatically create it."
-                            )
-                    # Now get stat result
-                    stat_result = await viking_fs.stat(effective_parent_uri, ctx=ctx)
-                except FileNotFoundError:
-                    # Re-raise without wrapping
-                    raise
-                except Exception as e:
-                    raise FileNotFoundError(
-                        f"Parent URI does not exist: {effective_parent_uri}"
-                    ) from e
-                if not stat_result.get("isDir"):
-                    raise ValueError(f"Parent URI is not a directory: {effective_parent_uri}")
-                base_uri = effective_parent_uri
-            candidate_uri = VikingURI(base_uri).join(final_doc_name).uri
+        planned_uri, unique_candidate_uri = await self.resolve_target_uri(
+            ctx=ctx,
+            doc_name=original_name,
+            scope=scope,
+            to_uri=to_uri,
+            parent_uri=parent_uri,
+            source_path=source_path,
+            source_format=source_format,
+            create_parent=create_parent,
+        )
 
         tree = BuildingTree(
             source_path=source_path,
             source_format=source_format,
         )
-        tree._root_uri = candidate_uri
-        if not to_uri or use_to_as_parent:
-            tree._candidate_uri = candidate_uri
+        tree._root_uri = planned_uri
+        if unique_candidate_uri:
+            tree._candidate_uri = unique_candidate_uri
 
         # Create a minimal Context object for the root so that tree.root is not None
-        root_context = Context(uri=candidate_uri, temp_uri=temp_doc_uri)
+        root_context = Context(uri=planned_uri, temp_uri=temp_doc_uri)
         tree.add_context(root_context)
 
         return tree

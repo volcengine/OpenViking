@@ -3,7 +3,7 @@
 """
 Recording AGFS Client wrapper.
 
-Wraps AGFSClient to record all IO operations for later playback.
+Wraps an AGFS binding client to record all IO operations for later playback.
 """
 
 import time
@@ -25,13 +25,13 @@ class RecordingAGFSClient:
     to a file for later playback and performance analysis.
 
     Usage:
-        from openviking.pyagfs import AGFSClient
-        from openviking.eval.recorder.recording_client import RecordingAGFSClient
+        from openviking.pyagfs import get_binding_client
 
-        base_client = AGFSClient(api_base_url="http://localhost:1833")
+        BindingClient, _ = get_binding_client()
+        base_client = BindingClient()
         recording_client = RecordingAGFSClient(base_client, "./records/io_recorder.jsonl")
 
-        # Use recording_client as you would use AGFSClient
+        # Use recording_client as you would use the binding client
         result = recording_client.ls("/")
 
         # Stop recording when done

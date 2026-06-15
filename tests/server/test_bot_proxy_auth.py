@@ -10,6 +10,7 @@ import pytest
 from fastapi import FastAPI
 
 import openviking.server.routers.bot as bot_router_module
+from openviking.server.config import ServerConfig
 from openviking.server.identity import AuthMode
 
 
@@ -81,3 +82,102 @@ async def test_feedback_proxy_forwards_request(monkeypatch):
     assert forwarded["json"]["response_id"] == "resp-123"
     assert forwarded["headers"]["X-Gateway-Token"] == "gateway-secret"
     assert forwarded["timeout"] == 30.0
+
+
+@pytest.mark.asyncio
+async def test_chat_proxy_attaches_authenticated_openviking_connection(monkeypatch):
+    forwarded = {}
+
+    class FakeResponse:
+        status_code = 200
+        text = '{"session_id": "session-1", "message": "ok"}'
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"session_id": "session-1", "message": "ok"}
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url, json, headers, timeout):
+            forwarded["url"] = url
+            forwarded["json"] = json
+            forwarded["headers"] = headers
+            forwarded["timeout"] = timeout
+            return FakeResponse()
+
+    monkeypatch.setattr(bot_router_module, "BOT_API_URL", "http://127.0.0.1:18790")
+    monkeypatch.setattr(bot_router_module, "BOT_API_KEY", "gateway-secret")
+    monkeypatch.setattr(bot_router_module, "_create_bot_proxy_client", lambda: FakeClient())
+
+    app = FastAPI()
+    app.state.config = ServerConfig(auth_mode="trusted")
+    app.include_router(bot_router_module.router, prefix="/bot/v1")
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/bot/v1/chat",
+            headers={
+                "X-API-Key": "active-user-key",
+                "X-OpenViking-Account": "acct",
+                "X-OpenViking-User": "alice",
+            },
+            json={"message": "hello", "user_id": "ignored-by-proxy-identity"},
+        )
+
+    assert response.status_code == 200
+    assert forwarded["url"] == "http://127.0.0.1:18790/bot/v1/chat"
+    assert forwarded["json"]["openviking_connection"] == {
+        "api_key": "active-user-key",
+        "account_id": "acct",
+        "user_id": "alice",
+        "agent_id": "web-playground",
+        "role": "user",
+        "namespace_policy": {
+            "isolate_user_scope_by_agent": False,
+            "isolate_agent_scope_by_user": False,
+        },
+    }
+    assert forwarded["headers"]["X-Gateway-Token"] == "gateway-secret"
+    assert forwarded["timeout"] == 300.0
+
+
+@pytest.mark.asyncio
+async def test_chat_proxy_rejects_authenticated_request_without_forwardable_api_key(monkeypatch):
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, *args, **kwargs):
+            raise AssertionError("bot gateway should not be called without a forwardable key")
+
+    monkeypatch.setattr(bot_router_module, "BOT_API_URL", "http://127.0.0.1:18790")
+    monkeypatch.setattr(bot_router_module, "_create_bot_proxy_client", lambda: FakeClient())
+
+    app = FastAPI()
+    app.state.config = ServerConfig(auth_mode="trusted")
+    app.include_router(bot_router_module.router, prefix="/bot/v1")
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/bot/v1/chat",
+            headers={
+                "X-OpenViking-Account": "acct",
+                "X-OpenViking-User": "alice",
+            },
+            json={"message": "hello"},
+        )
+
+    assert response.status_code == 401
+    assert "forwardable OpenViking API key" in response.text

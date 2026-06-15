@@ -19,16 +19,17 @@ class VikingURI:
 
     Scopes:
     - resources: Independent resource scope (viking://resources/{project}/...)
-    - user: User scope (viking://user/...)
-    - agent: Agent scope (viking://agent/...)
-    - session: Session scope (viking://session/{session_id}/...)
+    - user: User scope (viking://user/...), including sessions under
+      viking://user/{user_id}/sessions/{session_id}
+    - session: Legacy alias for user sessions (viking://session/{session_id}/...)
+    - agent: Legacy read-only agent scope (viking://agent/{agent_id}/...)
     - queue: Queue scope (viking://queue/...)
 
     Examples:
     - viking://resources/my_project/docs/api
     - viking://user/memories/preferences/code_style
-    - viking://agent/skills/pdf
-    - viking://session/session123/messages
+    - viking://user/skills/pdf
+    - viking://user/alice/sessions/session123/messages.jsonl
     """
 
     SCHEME = "viking"
@@ -36,14 +37,13 @@ class VikingURI:
     LISTABLE_SCOPES = {
         "resources",
         "user",
-        "agent",
-        "session",
     }
     PUBLIC_SCOPES = frozenset(LISTABLE_SCOPES)
+    LEGACY_SCOPES = frozenset({"agent", "session"})
     INTERNAL_SCOPES = frozenset({"temp", "queue", "upload"})
     # All valid scopes that can be addressed by the URI parser/storage internals.
     # Public API handlers must not use this as their external whitelist.
-    VISITABLE_SCOPES = PUBLIC_SCOPES | INTERNAL_SCOPES
+    VISITABLE_SCOPES = PUBLIC_SCOPES | LEGACY_SCOPES | INTERNAL_SCOPES
 
     def __init__(self, uri: str):
         """
@@ -189,7 +189,7 @@ class VikingURI:
         Build a Viking URI from components.
 
         Args:
-            scope: Scope (resources, user, agent, session, queue, temp)
+            scope: Scope (resources, user, session, queue, temp)
             *path_parts: Additional path components
 
         Returns:

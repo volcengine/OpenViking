@@ -12,8 +12,6 @@ from typing import TYPE_CHECKING, Dict, List, Optional
 
 from openviking.core.context import Context, Vectorize
 from openviking.core.namespace import (
-    agent_space_fragment,
-    canonical_agent_root,
     canonical_user_root,
     context_type_for_uri,
     user_space_fragment,
@@ -38,11 +36,6 @@ class DirectoryDefinition:
 
 # Preset directory tree - each scope has a root DirectoryDefinition
 PRESET_DIRECTORIES: Dict[str, DirectoryDefinition] = {
-    "session": DirectoryDefinition(
-        path="",
-        abstract="Session scope. Stores complete context for a single conversation, including original messages and compressed summaries.",
-        overview="Session-level temporary data storage, can be archived or cleaned after session ends.",
-    ),
     "user": DirectoryDefinition(
         path="",
         abstract="User scope. Stores user's long-term memory, persisted across sessions.",
@@ -78,52 +71,63 @@ PRESET_DIRECTORIES: Dict[str, DirectoryDefinition] = {
                         "Examples: decided to refactor memory system, completed a project, attended an event. "
                         "Events are historical records, not updated once created.",
                     ),
+                    DirectoryDefinition(
+                        path="cases",
+                        abstract="User's case memories. Stores concrete problem contexts and resolutions learned from sessions.",
+                        overview="Access when handling similar future problems. Cases are specific examples, separate from reusable patterns.",
+                    ),
+                    DirectoryDefinition(
+                        path="patterns",
+                        abstract="User's pattern memories. Stores reusable methods, workflows, and SOP-like lessons.",
+                        overview="Access when applying accumulated methods to new tasks. Patterns are generalized from cases and interactions.",
+                    ),
+                    DirectoryDefinition(
+                        path="tools",
+                        abstract="User's tool usage memories. Stores tool behavior, parameter experience, and failure modes.",
+                        overview="Access when deciding how to call tools or diagnosing tool failures.",
+                    ),
+                    DirectoryDefinition(
+                        path="skills",
+                        abstract="User's skill execution memories. Stores experience about using configured skills.",
+                        overview="Access when choosing or executing skills. This is memory about skill usage, not the skill definition itself.",
+                    ),
+                    DirectoryDefinition(
+                        path="trajectories",
+                        abstract="User's execution trajectory records. Stores end-to-end task execution traces when trajectory memory is enabled.",
+                        overview="Access when reviewing how a previous task was executed.",
+                    ),
+                    DirectoryDefinition(
+                        path="experiences",
+                        abstract="User's generalized experience memories distilled from execution trajectories.",
+                        overview="Access when applying lessons learned from repeated execution trajectories.",
+                    ),
                 ],
+            ),
+            DirectoryDefinition(
+                path="resources",
+                abstract="User-owned resource storage. Contains private documents and knowledge resources owned by the current User.",
+                overview="Use this directory for resources scoped to the current User. Project and document directories are created lazily as content is added.",
             ),
             DirectoryDefinition(
                 path="privacy",
                 abstract="User privacy config root. Stores user-scoped sensitive configuration snapshots by category and target key.",
                 overview="Use this directory to access privacy-managed configuration values such as skill secrets. Concrete category and target-key subdirectories are created lazily by the privacy config service.",
             ),
-        ],
-    ),
-    "agent": DirectoryDefinition(
-        path="",
-        abstract="Agent scope. Stores Agent's learning memories, instructions, and skills.",
-        overview="Agent-level global data storage. "
-        "Contains three main categories: memories-learning memories, instructions-directives, skills-capability registry.",
-        children=[
             DirectoryDefinition(
-                path="memories",
-                abstract="Agent's long-term memory storage. Contains trajectories and experiences, managed hierarchically by type.",
-                overview="Use this directory to access Agent's learning memories. Contains two main categories: "
-                "1) trajectories-task execution records, 2) experiences-generalized lessons from trajectories.",
-                children=[
-                    DirectoryDefinition(
-                        path="trajectories",
-                        abstract="Agent's execution trajectory records. Stores end-to-end task execution traces from each interaction, each trajectory is independent and not updated.",
-                        overview="Access when reviewing how the agent handled past tasks or diagnosing execution history. "
-                        "Trajectories are records of specific task executions, each independent and not updated once created.",
-                    ),
-                    DirectoryDefinition(
-                        path="experiences",
-                        abstract="Agent's generalized experience memories. Reusable insights and lessons distilled from execution trajectories, updated as new evidence accumulates.",
-                        overview="Access when the agent encounters recurring situations or needs guidance from past lessons. "
-                        "Experiences are distilled from trajectories and updated incrementally as more supporting evidence accumulates.",
-                    ),
-                ],
-            ),
-            DirectoryDefinition(
-                path="instructions",
-                abstract="Agent instruction set. Contains Agent's behavioral directives, rules, and constraints.",
-                overview="Access when Agent needs to follow specific rules. "
-                "Examples: planner agent has specific planning process requirements, executor agent has execution standards, etc.",
+                path="peers",
+                abstract="User peer memory root. Stores the current User's long-term memory about stable interaction peers.",
+                overview="Use this directory when the current User needs to distinguish long-term interaction objects such as visitors, teammates, or external contacts. Peer directories are created lazily from session peer_id values.",
             ),
             DirectoryDefinition(
                 path="skills",
-                abstract="Agent's skill registry. Uses Claude Skills protocol format, flat storage of callable skill definitions.",
-                overview="Access when Agent needs to execute specific tasks. Skills categorized by tags, "
+                abstract="User skill registry. Uses Claude Skills protocol format, flat storage of callable skill definitions owned by the current User.",
+                overview="Access when the current User or a proxy acting with the current User's API key needs to execute specific tasks. Skills categorized by tags, "
                 "should retrieve relevant skills before executing tasks, select most appropriate skill to execute.",
+            ),
+            DirectoryDefinition(
+                path="sessions",
+                abstract="User session registry. Stores conversation state, live messages, tool outputs, and session history owned by the current User.",
+                overview="Use this directory to inspect or migrate user-owned session records. Session entries are created lazily when sessions are started.",
             ),
         ],
     ),
@@ -155,13 +159,15 @@ class DirectoryInitializer:
         return get_viking_fs()
 
     async def initialize_account_directories(self, ctx: RequestContext) -> int:
-        """Initialize account-shared scope roots."""
+        """Initialize account-shared scope roots.
+
+        ``viking://user`` is a current-user shorthand at API boundaries. Its
+        concrete metadata belongs to ``viking://user/{user_id}`` and is created
+        by ``initialize_user_directories``.
+        """
         count = 0
         scope_roots = {
-            "user": PRESET_DIRECTORIES["user"],
-            "agent": PRESET_DIRECTORIES["agent"],
             "resources": PRESET_DIRECTORIES["resources"],
-            "session": PRESET_DIRECTORIES["session"],
         }
         for scope, defn in scope_roots.items():
             root_uri = f"viking://{scope}"
@@ -177,16 +183,17 @@ class DirectoryInitializer:
         return count
 
     async def initialize_user_directories(self, ctx: RequestContext) -> int:
-        """Initialize user-space tree lazily for the current user."""
+        """Initialize only the user namespace root for the current user.
+
+        Child directories under ``viking://user/{user_space}`` are created lazily on
+        first write. This avoids materializing empty namespaces such as
+        ``memories/patterns`` or ``skills`` before any actual content exists.
+        """
         if "user" not in PRESET_DIRECTORIES:
             return 0
         user_space_root = canonical_user_root(ctx)
         user_tree = PRESET_DIRECTORIES["user"]
         parent_uri = "viking://user"
-        if ctx.namespace_policy.isolate_user_scope_by_agent:
-            container_uri = f"viking://user/{ctx.user.user_id}"
-            await self._ensure_container_directory(container_uri, parent_uri=parent_uri, ctx=ctx)
-            parent_uri = container_uri
         created = await self._ensure_directory(
             uri=user_space_root,
             parent_uri=parent_uri,
@@ -194,36 +201,11 @@ class DirectoryInitializer:
             scope="user",
             ctx=ctx,
         )
-        count = 1 if created else 0
-        count += await self._initialize_children(
-            "user", user_tree.children, user_space_root, ctx=ctx
-        )
-        return count
+        return 1 if created else 0
 
     async def initialize_agent_directories(self, ctx: RequestContext) -> int:
-        """Initialize agent-space tree lazily for the current user+agent."""
-        if "agent" not in PRESET_DIRECTORIES:
-            return 0
-        agent_space_root = canonical_agent_root(ctx)
-        agent_tree = PRESET_DIRECTORIES["agent"]
-        parent_uri = "viking://agent"
-        if ctx.namespace_policy.isolate_agent_scope_by_user:
-            container_uri = f"viking://agent/{ctx.user.agent_id}"
-            await self._ensure_container_directory(container_uri, parent_uri=parent_uri, ctx=ctx)
-            parent_uri = container_uri
-        created = await self._ensure_directory(
-            uri=agent_space_root,
-            parent_uri=parent_uri,
-            defn=agent_tree,
-            scope="agent",
-            ctx=ctx,
-        )
-        count = 1 if created else 0
-        count += await self._initialize_children(
-            "agent", agent_tree.children, agent_space_root, ctx=ctx
-        )
-
-        return count
+        """Deprecated compatibility hook; agent directories are no longer initialized."""
+        return 0
 
     async def _ensure_container_directory(
         self,
@@ -313,8 +295,6 @@ class DirectoryInitializer:
     def _owner_space_for_scope(scope: str, ctx: RequestContext) -> str:
         if scope in {"user", "session"}:
             return user_space_fragment(ctx)
-        if scope == "agent":
-            return agent_space_fragment(ctx)
         return ""
 
     async def _check_agfs_files_exist(self, uri: str, ctx: RequestContext) -> bool:

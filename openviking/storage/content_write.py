@@ -57,6 +57,7 @@ class ContentWriteCoordinator:
             raise InvalidArgumentError(str(exc)) from exc
         self._validate_mode(mode)
         self._validate_target_uri(normalized_uri)
+        self._viking_fs._ensure_mutable_access(normalized_uri, ctx)
 
         if mode == "create":
             return await self._create_and_write(
@@ -380,7 +381,7 @@ class ContentWriteCoordinator:
             context_type=context_type,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
-            agent_id=ctx.user.agent_id,
+            peer_id=ctx.user.user_id,
             role=ctx.role.value,
             skip_vectorization=False,
             telemetry_id=telemetry.telemetry_id,
@@ -390,7 +391,7 @@ class ContentWriteCoordinator:
                     uri=root_uri,
                     account_id=ctx.account_id,
                     user_id=ctx.user.user_id,
-                    agent_id=ctx.user.agent_id,
+                    peer_id=ctx.user.user_id,
                 )
                 if context_type in {"resource", "skill"}
                 else ""
@@ -421,7 +422,7 @@ class ContentWriteCoordinator:
             context_type="memory",
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
-            agent_id=ctx.user.agent_id,
+            peer_id=ctx.user.user_id,
             role=ctx.role.value,
             skip_vectorization=False,
             telemetry_id=telemetry.telemetry_id,
@@ -430,7 +431,7 @@ class ContentWriteCoordinator:
                 uri=root_uri,
                 account_id=ctx.account_id,
                 user_id=ctx.user.user_id,
-                agent_id=ctx.user.agent_id,
+                peer_id=ctx.user.user_id,
             ),
             changes={"modified": [modified_uri]},
         )
@@ -549,25 +550,6 @@ class ContentWriteCoordinator:
                     f"memory write target must be inside a memory type directory: {uri}"
                 )
             root_uri = VikingURI.build(*parts[: memories_idx + 2])
-        elif parts[0] == "agent":
-            try:
-                skills_idx = parts.index("skills")
-            except ValueError:
-                skills_idx = -1
-            if skills_idx >= 0 and len(parts) > skills_idx + 1:
-                root_uri = VikingURI.build(*parts[: skills_idx + 2])
-            else:
-                try:
-                    memories_idx = parts.index("memories")
-                except ValueError as exc:
-                    raise InvalidArgumentError(
-                        f"write only supports memory or skill files under agent scope: {uri}"
-                    ) from exc
-                if len(parts) <= memories_idx + 1:
-                    raise InvalidArgumentError(
-                        f"memory write target must be inside a memory type directory: {uri}"
-                    )
-                root_uri = VikingURI.build(*parts[: memories_idx + 2])
 
         stat = await self._safe_stat(root_uri, ctx=ctx, allow_not_found=_allow_not_found)
         if stat.get("not_found") or not stat.get("isDir"):

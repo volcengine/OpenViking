@@ -18,7 +18,7 @@ from openviking import AsyncOpenViking
 from openviking.crypto.config import bootstrap_encryption
 from openviking.crypto.encryptor import FileEncryptor
 from openviking.crypto.providers import LocalFileProvider
-from openviking.server.api_keys import APIKeyManager
+from openviking.server.api_keys import APIKeyManager, is_new_format_key
 from openviking.service.core import OpenVikingService
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
@@ -279,9 +279,7 @@ class TestVikingFSEncryptionWithAccounts:
         await svc.initialize()
 
         # Create APIKeyManager using VikingFS to ensure system file encryption
-        api_key_manager = APIKeyManager(
-            root_key=self.ROOT_KEY, viking_fs=svc.viking_fs, encryption_enabled=True
-        )
+        api_key_manager = APIKeyManager(root_key=self.ROOT_KEY, viking_fs=svc.viking_fs)
         await api_key_manager.load()
 
         yield {"service": svc, "api_key_manager": api_key_manager, "test_data_dir": test_data_dir}
@@ -309,7 +307,31 @@ class TestVikingFSEncryptionWithAccounts:
         except Exception:
             return False
 
-    def _check_all_files_encrypted(self, svc, ctx, base_uri: str, print_paths: bool = True) -> None:
+    def _agfs_data_root(self, test_data_dir: Path) -> Path:
+        """Return the mounted localfs root used by integration tests."""
+        return test_data_dir / "viking" / "viking"
+
+    def _backend_file_path(self, svc, ctx, test_data_dir: Path, uri: str) -> Path:
+        """Map one Viking URI to the underlying backend file path."""
+        agfs_path = svc.viking_fs._uri_to_path(uri, ctx=ctx)
+        rel_path = agfs_path.removeprefix("/local/").lstrip("/")
+        return self._agfs_data_root(test_data_dir) / rel_path
+
+    def _backend_file_bytes(self, svc, ctx, test_data_dir: Path, uri: str) -> bytes:
+        """Read the underlying backend bytes for one Viking URI."""
+        file_path = self._backend_file_path(svc, ctx, test_data_dir, uri)
+        assert file_path.exists(), f"Backend file missing for {uri}: {file_path}"
+        return file_path.read_bytes()
+
+    def _assert_uri_encrypted(self, svc, ctx, test_data_dir: Path, uri: str) -> bytes:
+        """Assert one Viking URI is stored as ciphertext on disk."""
+        raw_content = self._backend_file_bytes(svc, ctx, test_data_dir, uri)
+        assert raw_content.startswith(b"OVE1"), f"File not encrypted: {uri}"
+        return raw_content
+
+    def _check_all_files_encrypted(
+        self, svc, ctx, test_data_dir: Path, base_uri: str, print_paths: bool = True
+    ) -> None:
         """
         Recursively check if all files in a directory are encrypted.
 
@@ -319,7 +341,6 @@ class TestVikingFSEncryptionWithAccounts:
             base_uri: Base URI to check
             print_paths: Whether to print encrypted file paths
         """
-        agfs_client = svc._agfs_client
 
         async def _check_recursive(uri: str):
             try:
@@ -333,16 +354,16 @@ class TestVikingFSEncryptionWithAccounts:
                         if ".relations.json" in entry.get("name", ""):
                             continue
                         try:
-                            agfs_path = svc.viking_fs._uri_to_path(entry_uri, ctx=ctx)
-                            raw_content = agfs_client.read(agfs_path)
-                            assert raw_content.startswith(b"OVE1"), (
-                                f"File not encrypted: {entry_uri}"
-                            )
+                            self._assert_uri_encrypted(svc, ctx, test_data_dir, entry_uri)
                             if print_paths:
                                 print(f"[ENCRYPTED] {entry_uri}")
+                        except AssertionError:
+                            raise
                         except Exception as e:
                             if print_paths:
                                 print(f"[SKIP] Skip file {entry_uri}: {e}")
+            except AssertionError:
+                raise
             except Exception as e:
                 print(f"[WARNING] Error checking {uri}: {e}")
 
@@ -372,7 +393,7 @@ class TestVikingFSEncryptionWithAccounts:
 
         # Verify account created successfully
         assert user_key is not None
-        assert len(user_key) == 64
+        assert is_new_format_key(user_key)
 
         # RAGFS /local/... paths map to test_data_dir/viking/viking/...
         # because OpenVikingService path is test_data_dir/viking,
@@ -418,7 +439,7 @@ class TestVikingFSEncryptionWithAccounts:
 
         # Verify user registered successfully
         assert new_user_key is not None
-        assert len(new_user_key) == 64
+        assert is_new_format_key(new_user_key)
 
         # AGFS /local/... paths map to test_data_dir/viking/viking/...
         agfs_data_root = test_data_dir / "viking" / "viking"
@@ -445,7 +466,7 @@ class TestVikingFSEncryptionWithAccounts:
         from openviking.server.identity import RequestContext, Role
         from openviking_cli.session.user_id import UserIdentifier
 
-        default_user = UserIdentifier("default", "default", "default")
+        default_user = UserIdentifier("default", "default")
         ctx = RequestContext(user=default_user, role=Role.ROOT)
 
         # Write test file directly via VikingFS
@@ -458,10 +479,8 @@ class TestVikingFSEncryptionWithAccounts:
         read_content = await svc.viking_fs.read_file(test_uri, ctx=ctx)
         assert read_content == test_content, "Read content does not match original content"
 
-        # Verify encryption by reading raw file content directly via AGFS
-        agfs_client = svc._agfs_client
-        agfs_path = svc.viking_fs._uri_to_path(test_uri, ctx=ctx)
-        raw_content = agfs_client.read(agfs_path)
+        # Verify encryption by reading backend file content directly
+        raw_content = self._backend_file_bytes(svc, ctx, data["test_data_dir"], test_uri)
         assert raw_content.startswith(b"OVE1"), (
             f"File not encrypted, raw content start: {raw_content[:10]}"
         )
@@ -514,7 +533,7 @@ class TestVikingFSEncryptionWithAccounts:
         from openviking.server.identity import RequestContext, Role
         from openviking_cli.session.user_id import UserIdentifier
 
-        default_user = UserIdentifier("default", "default", "default")
+        default_user = UserIdentifier("default", "default")
         ctx = RequestContext(user=default_user, role=Role.ROOT)
 
         # Create skill directory and files directly via VikingFS
@@ -546,10 +565,8 @@ This is a test skill for verifying encryption functionality.
         assert "Test Skill" in skill_content
 
         # Verify encryption by reading raw file content directly via AGFS
-        agfs_client = svc._agfs_client
         skill_md_uri = f"{skill_uri}/SKILL.md"
-        agfs_path = svc.viking_fs._uri_to_path(skill_md_uri, ctx=ctx)
-        raw_content = agfs_client.read(agfs_path)
+        raw_content = self._backend_file_bytes(svc, ctx, data["test_data_dir"], skill_md_uri)
         assert raw_content.startswith(b"OVE1"), (
             f"Skill file not encrypted, raw content start: {raw_content[:10]}"
         )
@@ -557,7 +574,9 @@ This is a test skill for verifying encryption functionality.
             "Skill file content is plaintext, not encrypted"
         )
 
-    async def _check_all_files_encrypted(self, root_uri, ctx, svc, agfs_client, prefix="  "):
+    async def _check_all_files_encrypted(
+        self, root_uri, ctx, svc, test_data_dir: Path, prefix="  "
+    ):
         """
         Recursively check if all files are encrypted
 
@@ -565,17 +584,16 @@ This is a test skill for verifying encryption functionality.
             root_uri: Root URI
             ctx: Request context
             svc: OpenVikingService instance
-            agfs_client: AGFS client
+            test_data_dir: Integration test data directory
             prefix: Output prefix
         """
         try:
             # First try to get URI path to see if it's a file
             try:
-                agfs_path = svc.viking_fs._uri_to_path(root_uri, ctx=ctx)
-                if agfs_client.exists(agfs_path) and not agfs_client.isdir(agfs_path):
+                stat_info = await svc.viking_fs.stat(root_uri, ctx=ctx)
+                if not stat_info["isDir"]:
                     # This is a file, check directly
-                    raw_content = agfs_client.read(agfs_path)
-                    assert raw_content.startswith(b"OVE1"), f"File not encrypted: {root_uri}"
+                    self._assert_uri_encrypted(svc, ctx, test_data_dir, root_uri)
                     print(f"{prefix}✓ [ENCRYPTED] {root_uri}")
                     return
             except Exception:
@@ -587,13 +605,11 @@ This is a test skill for verifying encryption functionality.
                 if entry["isDir"]:
                     # Recursively check subdirectories
                     await self._check_all_files_encrypted(
-                        entry["uri"], ctx, svc, agfs_client, prefix + "  "
+                        entry["uri"], ctx, svc, test_data_dir, prefix + "  "
                     )
                 else:
                     # Check file encryption
-                    agfs_path = svc.viking_fs._uri_to_path(entry["uri"], ctx=ctx)
-                    raw_content = agfs_client.read(agfs_path)
-                    assert raw_content.startswith(b"OVE1"), f"File not encrypted: {entry['uri']}"
+                    self._assert_uri_encrypted(svc, ctx, test_data_dir, entry["uri"])
                     print(f"{prefix}✓ [ENCRYPTED] {entry['uri']}")
         except Exception as e:
             print(f"{prefix}[WARNING] Error checking {root_uri}: {e}")
@@ -608,6 +624,7 @@ This is a test skill for verifying encryption functionality.
         data = openviking_service_with_encryption
         svc = data["service"]
         api_key_manager = data["api_key_manager"]
+        test_data_dir = data["test_data_dir"]
 
         # ========== Prerequisites ==========
         print("\n" + "=" * 80)
@@ -622,7 +639,7 @@ This is a test skill for verifying encryption functionality.
 
         admin_user_key = await api_key_manager.create_account(test_account_id, test_admin_user_id)
         assert admin_user_key is not None
-        assert len(admin_user_key) == 64
+        assert is_new_format_key(admin_user_key)
 
         # 2. Verify list-accounts operation (via accessing APIKeyManager internal data)
         print("[2] Verify list-accounts operation")
@@ -636,7 +653,7 @@ This is a test skill for verifying encryption functionality.
         print(f"[3] Register test user: {test_user_id}")
         test_user_key = await api_key_manager.register_user(test_account_id, test_user_id, "user")
         assert test_user_key is not None
-        assert len(test_user_key) == 64
+        assert is_new_format_key(test_user_key)
 
         # 4. Verify list-users operation
         print("[4] Verify list-users operation")
@@ -651,14 +668,13 @@ This is a test skill for verifying encryption functionality.
         from openviking.server.identity import RequestContext, Role
         from openviking_cli.session.user_id import UserIdentifier
 
-        test_user = UserIdentifier(test_account_id, test_user_id, "default")
+        test_user = UserIdentifier(test_account_id, test_user_id)
         ctx = RequestContext(user=test_user, role=Role.USER)
         root_ctx = RequestContext(user=test_user, role=Role.ROOT)
 
-        agfs_client = svc._agfs_client
         account_root_uri = f"viking://{test_account_id}"
 
-        await self._check_all_files_encrypted(account_root_uri, ctx, svc, agfs_client)
+        await self._check_all_files_encrypted(account_root_uri, ctx, svc, test_data_dir)
 
         # ========== Execute tests ==========
         print("\n" + "=" * 80)
@@ -686,7 +702,7 @@ This is a test skill for verifying encryption functionality.
         # Check all files in resources directory are encrypted
         print("[1.1] Check files in resources directory are encrypted")
         resources_dir_uri = "viking://resources"
-        await self._check_all_files_encrypted(resources_dir_uri, ctx, svc, agfs_client)
+        await self._check_all_files_encrypted(resources_dir_uri, ctx, svc, test_data_dir)
 
         # 1.2 Execute various operations to verify returns unencrypted
         print("[1.2] Verify various operations return unencrypted content")
@@ -723,12 +739,10 @@ This is a test skill for verifying encryption functionality.
 
         # grep operation
         print("  Executing grep operation...")
-        try:
-            grep_result = await svc.viking_fs.grep(resources_dir_uri, "OpenViking", ctx=ctx)
-            assert grep_result is not None
-            print("  ✓ grep operation successful")
-        except Exception as e:
-            print(f"  [WARNING] grep operation may not be supported: {e}")
+        grep_result = await svc.viking_fs.grep(resources_dir_uri, "OpenViking", ctx=ctx)
+        assert grep_result["count"] > 0
+        assert any("OpenViking" in match["content"] for match in grep_result["matches"])
+        print("  ✓ grep operation successful")
 
         # abstract operation
         print("  Executing abstract operation...")
@@ -777,31 +791,30 @@ This is a test skill for verifying encryption functionality.
 - Verify file storage
 """
 
-        # Create test file directly using VikingFS (using root_ctx to access agent directory)
-        test_skill_uri = "viking://agent/test_encryption_skill/SKILL.md"
-        test_skill_dir_uri = "viking://agent/test_encryption_skill"
+        # Create test file directly using VikingFS.
+        test_skill_uri = "viking://user/default/skills/test_encryption_skill/SKILL.md"
+        test_skill_dir_uri = "viking://user/default/skills/test_encryption_skill"
         await svc.viking_fs.mkdir(test_skill_dir_uri, ctx=root_ctx)
         await svc.viking_fs.write_file(test_skill_uri, skill_content, ctx=root_ctx)
         print(f"  ✓ Test skill created successfully: {test_skill_uri}")
 
-        # Check all files in agent directory are encrypted
-        print("[2.1] Check files in agent directory are encrypted")
-        agent_dir_uri = "viking://agent"
-        await self._check_all_files_encrypted(agent_dir_uri, root_ctx, svc, agfs_client)
+        # Check all files in the skill directory are encrypted
+        print("[2.1] Check files in skill directory are encrypted")
+        await self._check_all_files_encrypted(test_skill_dir_uri, root_ctx, svc, test_data_dir)
 
         # 2.2 Verify various operations return unencrypted
         print("[2.2] Verify various operations return unencrypted content")
 
         # ls operation
         print("  Executing ls operation...")
-        skill_ls_entries = await svc.viking_fs.ls(agent_dir_uri, ctx=root_ctx)
+        skill_ls_entries = await svc.viking_fs.ls(test_skill_dir_uri, ctx=root_ctx)
         assert len(skill_ls_entries) > 0
         print("  ✓ ls operation successful")
 
         # tree operation
         print("  Executing tree operation...")
         try:
-            skill_tree_entries = await svc.viking_fs.tree(agent_dir_uri, ctx=root_ctx)
+            skill_tree_entries = await svc.viking_fs.tree(test_skill_dir_uri, ctx=root_ctx)
             assert len(skill_tree_entries) > 0
             print("  ✓ tree operation successful")
         except Exception as e:
@@ -822,7 +835,11 @@ This is a test skill for verifying encryption functionality.
         # grep operation
         print("  Executing grep operation...")
         try:
-            skill_grep_result = await svc.viking_fs.grep(agent_dir_uri, "Test Skill", ctx=root_ctx)
+            skill_grep_result = await svc.viking_fs.grep(
+                test_skill_dir_uri,
+                "Test Skill",
+                ctx=root_ctx,
+            )
             assert skill_grep_result is not None
             print("  ✓ grep operation successful")
         except Exception as e:
@@ -878,7 +895,7 @@ This is a test skill for verifying encryption functionality.
         # Check all files in user directory are encrypted
         print("[3.1] Check files in user directory are encrypted")
         user_dir_uri = f"viking://{test_account_id}/user/{test_user_id}"
-        await self._check_all_files_encrypted(user_dir_uri, ctx, svc, agfs_client)
+        await self._check_all_files_encrypted(user_dir_uri, ctx, svc, test_data_dir)
 
         # 3.2 Verify various operations return unencrypted
         print("[3.2] Verify various operations return unencrypted content")
@@ -912,12 +929,10 @@ This is a test skill for verifying encryption functionality.
 
         # grep operation
         print("  Executing grep operation...")
-        try:
-            memory_grep_result = await svc.viking_fs.grep(user_dir_uri, "dark theme", ctx=ctx)
-            assert memory_grep_result is not None
-            print("  ✓ grep operation successful")
-        except Exception as e:
-            print(f"  [WARNING] grep operation may not be supported: {e}")
+        memory_grep_result = await svc.viking_fs.grep(user_dir_uri, "dark theme", ctx=ctx)
+        assert memory_grep_result["count"] > 0
+        assert any("dark theme" in match["content"] for match in memory_grep_result["matches"])
+        print("  ✓ grep operation successful")
 
         # abstract operation
         print("  Executing abstract operation...")
@@ -952,7 +967,7 @@ This is a test skill for verifying encryption functionality.
         # Check session directory files are encrypted
         print("[4.1] Check files in session directory are encrypted")
         session_dir_uri = f"viking://{test_account_id}/session"
-        await self._check_all_files_encrypted(session_dir_uri, ctx, svc, agfs_client)
+        await self._check_all_files_encrypted(session_dir_uri, ctx, svc, test_data_dir)
 
         # 4.2 Verify various operations return unencrypted
         print("[4.2] Verify various operations return unencrypted content")
@@ -976,12 +991,10 @@ This is a test skill for verifying encryption functionality.
             print("  ✓ get operation returns unencrypted content")
 
             # grep operation
-            try:
-                grep_result = await svc.viking_fs.grep(session_dir_uri, "session", ctx=ctx)
-                assert grep_result is not None
-                print("  ✓ grep operation successful")
-            except Exception as e:
-                print(f"  [WARNING] grep operation may not be supported: {e}")
+            grep_result = await svc.viking_fs.grep(session_dir_uri, "session", ctx=ctx)
+            assert grep_result["count"] > 0
+            assert any("session" in match["content"] for match in grep_result["matches"])
+            print("  ✓ grep operation successful")
 
             # abstract operation (on session directory)
             try:
@@ -1016,7 +1029,7 @@ This is a test skill for verifying encryption functionality.
 
         # Check message.jsonl file encryption
         print("[4.3] Check messages file encryption")
-        await self._check_all_files_encrypted(session_dir_uri, ctx, svc, agfs_client)
+        await self._check_all_files_encrypted(session_dir_uri, ctx, svc, test_data_dir)
 
         # 4.4 Verify read operation returns unencrypted
         print("[4.4] Re-read session to verify message")
@@ -1067,8 +1080,9 @@ This is a test skill for verifying encryption functionality.
         print("[5.2] Check relation.json file encryption")
         try:
             relation_file_uri = f"{dir_a_uri}/.relations.json"
-            agfs_path = svc.viking_fs._uri_to_path(relation_file_uri, ctx=ctx)
-            raw_content = agfs_client.read(agfs_path)
+            raw_content = self._backend_file_bytes(
+                svc, ctx, data["test_data_dir"], relation_file_uri
+            )
             assert raw_content.startswith(b"OVE1"), (
                 f"relation.json not encrypted: {relation_file_uri}"
             )
@@ -1106,7 +1120,7 @@ This is a test skill for verifying encryption functionality.
         from openviking.server.identity import RequestContext, Role
         from openviking_cli.session.user_id import UserIdentifier
 
-        default_user = UserIdentifier("default", "default", "default")
+        default_user = UserIdentifier("default", "default")
         ctx = RequestContext(user=default_user, role=Role.ROOT)
 
         # Write a multi-line test file
@@ -1139,9 +1153,7 @@ This is a test skill for verifying encryption functionality.
         assert from_line_3.rstrip("\n") == expected_from_line_3, "Read from offset failed"
 
         # Verify file is encrypted on disk
-        agfs_client = svc._agfs_client
-        agfs_path = svc.viking_fs._uri_to_path(test_uri, ctx=ctx)
-        raw_content = agfs_client.read(agfs_path)
+        raw_content = self._backend_file_bytes(svc, ctx, data["test_data_dir"], test_uri)
         assert raw_content.startswith(b"OVE1"), "File should be encrypted"
 
         print("\n" + "=" * 80)
@@ -1160,7 +1172,7 @@ This is a test skill for verifying encryption functionality.
         from openviking.server.identity import RequestContext, Role
         from openviking_cli.session.user_id import UserIdentifier
 
-        default_user = UserIdentifier("default", "default", "default")
+        default_user = UserIdentifier("default", "default")
         ctx = RequestContext(user=default_user, role=Role.ROOT)
 
         # Write a test file
@@ -1187,9 +1199,7 @@ This is a test skill for verifying encryption functionality.
         assert from_byte_10.rstrip(b"\n") == expected_from_byte_10, "Read from offset failed"
 
         # Verify file is encrypted on disk
-        agfs_client = svc._agfs_client
-        agfs_path = svc.viking_fs._uri_to_path(test_uri, ctx=ctx)
-        raw_content = agfs_client.read(agfs_path)
+        raw_content = self._backend_file_bytes(svc, ctx, data["test_data_dir"], test_uri)
         assert raw_content.startswith(b"OVE1"), "File should be encrypted"
 
         print("\n" + "=" * 80)
@@ -1247,9 +1257,7 @@ class TestAddResourceWithSemanticProcessing:
         await svc.initialize()
 
         # Create APIKeyManager using VikingFS to ensure system file encryption
-        api_key_manager = APIKeyManager(
-            root_key=self.ROOT_KEY, viking_fs=svc.viking_fs, encryption_enabled=True
-        )
+        api_key_manager = APIKeyManager(root_key=self.ROOT_KEY, viking_fs=svc.viking_fs)
         await api_key_manager.load()
 
         yield {
@@ -1282,20 +1290,18 @@ class TestAddResourceWithSemanticProcessing:
         print(f"[1] Create test account: {test_account_id}")
         admin_user_key = await api_key_manager.create_account(test_account_id, test_admin_user_id)
         assert admin_user_key is not None
-        assert len(admin_user_key) == 64
+        assert is_new_format_key(admin_user_key)
 
         print(f"[2] Register test user: {test_user_id}")
         test_user_key = await api_key_manager.register_user(test_account_id, test_user_id, "user")
         assert test_user_key is not None
-        assert len(test_user_key) == 64
+        assert is_new_format_key(test_user_key)
 
         from openviking.server.identity import RequestContext, Role
         from openviking_cli.session.user_id import UserIdentifier
 
-        test_user = UserIdentifier(test_account_id, test_user_id, "default")
+        test_user = UserIdentifier(test_account_id, test_user_id)
         ctx = RequestContext(user=test_user, role=Role.USER)
-
-        agfs_client = svc._agfs_client
 
         print("[3] Create test resource files (including directory structure)")
         test_dir = tmp_path / "test_abstract_dir"
@@ -1350,8 +1356,9 @@ This is a file in subdir2.
                         if ".relations.json" in entry_name:
                             continue
                         try:
-                            agfs_path = svc.viking_fs._uri_to_path(entry_uri, ctx=ctx)
-                            raw_content = agfs_client.read(agfs_path)
+                            raw_content = self._backend_file_bytes(
+                                svc, ctx, data["test_data_dir"], entry_uri
+                            )
                             assert raw_content.startswith(b"OVE1"), (
                                 f"File not encrypted: {entry_uri}"
                             )
@@ -1410,8 +1417,9 @@ This is a file in subdir2.
             if entry.get("isDir"):
                 try:
                     abstract_md_uri = f"{entry['uri']}/.abstract.md"
-                    agfs_path = svc.viking_fs._uri_to_path(abstract_md_uri, ctx=ctx)
-                    raw_content = agfs_client.read(agfs_path)
+                    raw_content = self._backend_file_bytes(
+                        svc, ctx, data["test_data_dir"], abstract_md_uri
+                    )
                     assert raw_content.startswith(b"OVE1"), (
                         f".abstract.md not encrypted: {abstract_md_uri}"
                     )

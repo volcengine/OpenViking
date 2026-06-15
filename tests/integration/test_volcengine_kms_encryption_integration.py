@@ -20,7 +20,7 @@ import pytest_asyncio
 from openviking import AsyncOpenViking
 from openviking.crypto.encryptor import FileEncryptor
 from openviking.crypto.providers import VolcengineKMSProvider
-from openviking.server.api_keys import APIKeyManager
+from openviking.server.api_keys import APIKeyManager, is_new_format_key
 from openviking.service.core import OpenVikingService
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
@@ -375,9 +375,7 @@ class TestVikingFSEncryptionWithVolcengineKMS:
         )
         await svc.initialize()
 
-        api_key_manager = APIKeyManager(
-            root_key=self.ROOT_KEY, viking_fs=svc.viking_fs, encryption_enabled=True
-        )
+        api_key_manager = APIKeyManager(root_key=self.ROOT_KEY, viking_fs=svc.viking_fs)
         await api_key_manager.load()
 
         yield {"service": svc, "api_key_manager": api_key_manager, "test_data_dir": test_data_dir}
@@ -397,11 +395,26 @@ class TestVikingFSEncryptionWithVolcengineKMS:
         except Exception:
             return False
 
+    def _agfs_data_root(self, test_data_dir: Path) -> Path:
+        """Return the mounted localfs root used by integration tests."""
+        return test_data_dir / "viking" / "viking"
+
+    def _backend_file_path(self, svc, ctx, test_data_dir: Path, uri: str) -> Path:
+        """Map one Viking URI to the underlying backend file path."""
+        agfs_path = svc.viking_fs._uri_to_path(uri, ctx=ctx)
+        rel_path = agfs_path.removeprefix("/local/").lstrip("/")
+        return self._agfs_data_root(test_data_dir) / rel_path
+
+    def _assert_uri_encrypted(self, svc, ctx, test_data_dir: Path, uri: str) -> None:
+        """Assert one Viking URI is stored as ciphertext on disk."""
+        file_path = self._backend_file_path(svc, ctx, test_data_dir, uri)
+        assert file_path.exists(), f"Backend file missing for {uri}: {file_path}"
+        assert self._is_file_encrypted(file_path), f"File {uri} is not encrypted"
+
     async def _check_all_files_encrypted(
-        self, svc, ctx, base_uri: str, print_paths: bool = True
+        self, svc, ctx, test_data_dir: Path, base_uri: str, print_paths: bool = True
     ) -> None:
         """Recursively check if all files in directory are encrypted"""
-        agfs_client = svc._agfs_client
 
         async def _check_recursive(uri: str):
             try:
@@ -411,10 +424,7 @@ class TestVikingFSEncryptionWithVolcengineKMS:
                     if entry["isDir"]:
                         await _check_recursive(entry_uri)
                     else:
-                        # Use VikingFS's _uri_to_path method to get file path
-                        agfs_path = svc.viking_fs._uri_to_path(entry_uri, ctx=ctx)
-                        raw_content = agfs_client.read(agfs_path)
-                        assert raw_content.startswith(b"OVE1"), f"File {entry_uri} is not encrypted"
+                        self._assert_uri_encrypted(svc, ctx, test_data_dir, entry_uri)
                         if print_paths:
                             print(f"✓ File is encrypted: {entry_uri}")
             except Exception as e:
@@ -439,7 +449,7 @@ class TestVikingFSEncryptionWithVolcengineKMS:
         user_key = await api_key_manager.create_account(account_id, admin_user_id)
 
         assert user_key is not None
-        assert len(user_key) == 64
+        assert is_new_format_key(user_key)
 
         agfs_data_root = test_data_dir / "viking" / "viking"
 
@@ -463,7 +473,7 @@ class TestVikingFSEncryptionWithVolcengineKMS:
 
         from openviking.server.identity import RequestContext, Role
 
-        user = UserIdentifier(account_id, admin_user_id, admin_user_id)
+        user = UserIdentifier(account_id, admin_user_id)
         ctx = RequestContext(user=user, role=Role.ADMIN)
 
         test_content = "Test content with Volcengine KMS encryption"
@@ -482,7 +492,9 @@ class TestVikingFSEncryptionWithVolcengineKMS:
 
             assert resources_dir.exists()
 
-            await self._check_all_files_encrypted(svc, ctx, f"viking:///{account_id}/resources")
+            await self._check_all_files_encrypted(
+                svc, ctx, test_data_dir, f"viking:///{account_id}/resources"
+            )
 
         finally:
             import os
@@ -497,6 +509,7 @@ class TestVikingFSEncryptionWithVolcengineKMS:
         data = openviking_service_with_volcengine_encryption
         svc = data["service"]
         api_key_manager = data["api_key_manager"]
+        test_data_dir = data["test_data_dir"]
 
         # Create test account
         account_id = "test-account-resources"
@@ -505,7 +518,7 @@ class TestVikingFSEncryptionWithVolcengineKMS:
 
         from openviking.server.identity import RequestContext, Role
 
-        user = UserIdentifier(account_id, admin_user_id, admin_user_id)
+        user = UserIdentifier(account_id, admin_user_id)
         ctx = RequestContext(user=user, role=Role.ADMIN)
 
         # Create test resource file
@@ -520,10 +533,7 @@ class TestVikingFSEncryptionWithVolcengineKMS:
         assert read_content == test_content
 
         # Verify file is encrypted
-        agfs_client = svc._agfs_client
-        agfs_path = svc.viking_fs._uri_to_path(test_uri, ctx=ctx)
-        raw_content = agfs_client.read(agfs_path)
-        assert raw_content.startswith(b"OVE1")
+        self._assert_uri_encrypted(svc, ctx, test_data_dir, test_uri)
 
         # Test various operations
         resources_dir_uri = f"viking://{account_id}/resources"
@@ -537,11 +547,9 @@ class TestVikingFSEncryptionWithVolcengineKMS:
         assert len(tree_entries) > 0
 
         # grep operation
-        try:
-            grep_result = await svc.viking_fs.grep(resources_dir_uri, "Volcengine", ctx=ctx)
-            assert grep_result is not None
-        except Exception as e:
-            print(f"[WARNING] grep operation may not be supported: {e}")
+        grep_result = await svc.viking_fs.grep(resources_dir_uri, "Volcengine", ctx=ctx)
+        assert grep_result["count"] > 0
+        assert any("Volcengine" in match["content"] for match in grep_result["matches"])
 
         # abstract operation
         try:
@@ -567,6 +575,7 @@ class TestVikingFSEncryptionWithVolcengineKMS:
         data = openviking_service_with_volcengine_encryption
         svc = data["service"]
         api_key_manager = data["api_key_manager"]
+        test_data_dir = data["test_data_dir"]
 
         # Create test account
         account_id = "test-account-skills"
@@ -575,11 +584,11 @@ class TestVikingFSEncryptionWithVolcengineKMS:
 
         from openviking.server.identity import RequestContext, Role
 
-        user = UserIdentifier(account_id, admin_user_id, admin_user_id)
+        user = UserIdentifier(account_id, admin_user_id)
         ctx = RequestContext(user=user, role=Role.ADMIN)
 
         # Create skill directory and file
-        skill_dir_uri = f"viking://{account_id}/agent/test-skill"
+        skill_dir_uri = f"viking://user/{admin_user_id}/skills/test-skill"
         skill_md_uri = f"{skill_dir_uri}/SKILL.md"
 
         # Create directory
@@ -603,10 +612,7 @@ This is a test skill for verifying Volcengine KMS encryption.
         assert "Test Skill" in read_content
 
         # Verify file is encrypted
-        agfs_client = svc._agfs_client
-        agfs_path = svc.viking_fs._uri_to_path(skill_md_uri, ctx=ctx)
-        raw_content = agfs_client.read(agfs_path)
-        assert raw_content.startswith(b"OVE1")
+        self._assert_uri_encrypted(svc, ctx, test_data_dir, skill_md_uri)
 
         # Test various operations
         agent_dir_uri = f"viking://{account_id}/agent"
@@ -630,6 +636,7 @@ This is a test skill for verifying Volcengine KMS encryption.
         data = openviking_service_with_volcengine_encryption
         svc = data["service"]
         api_key_manager = data["api_key_manager"]
+        test_data_dir = data["test_data_dir"]
 
         # Create test account
         account_id = "test-account-memories"
@@ -638,7 +645,7 @@ This is a test skill for verifying Volcengine KMS encryption.
 
         from openviking.server.identity import RequestContext, Role
 
-        user = UserIdentifier(account_id, user_id, user_id)
+        user = UserIdentifier(account_id, user_id)
         ctx = RequestContext(user=user, role=Role.USER)
 
         # Create memory directory and file
@@ -660,10 +667,7 @@ This is a test skill for verifying Volcengine KMS encryption.
         assert "User Preferences" in read_content
 
         # Verify file is encrypted
-        agfs_client = svc._agfs_client
-        agfs_path = svc.viking_fs._uri_to_path(memory_file_uri, ctx=ctx)
-        raw_content = agfs_client.read(agfs_path)
-        assert raw_content.startswith(b"OVE1")
+        self._assert_uri_encrypted(svc, ctx, test_data_dir, memory_file_uri)
 
     @pytest.mark.asyncio
     async def test_session_operations_with_encryption(
@@ -673,6 +677,7 @@ This is a test skill for verifying Volcengine KMS encryption.
         data = openviking_service_with_volcengine_encryption
         svc = data["service"]
         api_key_manager = data["api_key_manager"]
+        test_data_dir = data["test_data_dir"]
 
         # Create test account
         account_id = "test-account-sessions"
@@ -681,7 +686,7 @@ This is a test skill for verifying Volcengine KMS encryption.
 
         from openviking.server.identity import RequestContext, Role
 
-        user = UserIdentifier(account_id, user_id, user_id)
+        user = UserIdentifier(account_id, user_id)
         ctx = RequestContext(user=user, role=Role.USER)
 
         # Create session
@@ -691,7 +696,9 @@ This is a test skill for verifying Volcengine KMS encryption.
 
         # Check if session directory files are encrypted
         session_dir_uri = f"viking://{account_id}/session"
-        await self._check_all_files_encrypted(svc, ctx, session_dir_uri, print_paths=False)
+        await self._check_all_files_encrypted(
+            svc, ctx, test_data_dir, session_dir_uri, print_paths=False
+        )
 
     @pytest.mark.asyncio
     async def test_complete_encryption_workflow(
@@ -701,6 +708,7 @@ This is a test skill for verifying Volcengine KMS encryption.
         data = openviking_service_with_volcengine_encryption
         svc = data["service"]
         api_key_manager = data["api_key_manager"]
+        test_data_dir = data["test_data_dir"]
 
         # Generate random account name
         import secrets
@@ -714,7 +722,7 @@ This is a test skill for verifying Volcengine KMS encryption.
 
         from openviking.server.identity import RequestContext, Role
 
-        user = UserIdentifier(test_account_id, test_user_id, test_user_id)
+        user = UserIdentifier(test_account_id, test_user_id)
         ctx = RequestContext(user=user, role=Role.ADMIN)
 
         print(f"\n✓ Created test account: {test_account_id}")
@@ -730,7 +738,7 @@ This is a test skill for verifying Volcengine KMS encryption.
 
         # 2. Skill operations
         print("\n2. Testing skill operations...")
-        skill_dir_uri = f"viking://{test_account_id}/agent/test-workflow-skill"
+        skill_dir_uri = "viking://user/admin/skills/test-workflow-skill"
         skill_md_uri = f"{skill_dir_uri}/SKILL.md"
         await svc.viking_fs.mkdir(skill_dir_uri, ctx=ctx)
         skill_content = """---
@@ -769,7 +777,9 @@ description: Test skill for complete workflow
         # 5. Verify all files are encrypted
         print("\n5. Verifying all files are encrypted...")
         account_root_uri = f"viking://{test_account_id}"
-        await self._check_all_files_encrypted(svc, ctx, account_root_uri, print_paths=False)
+        await self._check_all_files_encrypted(
+            svc, ctx, test_data_dir, account_root_uri, print_paths=False
+        )
         print("✓ All files are encrypted")
 
         print("\n✓ Complete Volcengine KMS encryption workflow test passed!")

@@ -9,31 +9,38 @@ use url::Url;
 
 use crate::{
     base_client::BaseClient,
-    config::{Config, DEFAULT_SELF_MANAGED_PORT, default_config_path},
+    config::{Config, DEFAULT_CUSTOM_PORT, default_config_path},
     error::{Error, Result},
 };
 
-pub const VOLCENGINE_CLOUD_URL: &str = "https://api.vikingdb.cn-beijing.volces.com/openviking";
+pub const OPENVIKING_SERVICE_URL: &str = "https://api.vikingdb.cn-beijing.volces.com/openviking";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfigKind {
-    VolcengineCloud,
-    SelfManaged,
+    OpenVikingService,
+    Custom,
 }
 
 impl ConfigKind {
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Self::VolcengineCloud => "Volcengine Cloud",
-            Self::SelfManaged => "Self-Managed",
+            Self::OpenVikingService => "OpenViking Service (VolcEngine Cloud)",
+            Self::Custom => "Custom",
+        }
+    }
+
+    pub(crate) fn compact_label(self) -> &'static str {
+        match self {
+            Self::OpenVikingService => "OpenViking Service",
+            Self::Custom => "Custom",
         }
     }
 
     pub(crate) fn from_config(config: &Config) -> Self {
-        if config.url.trim_end_matches('/') == VOLCENGINE_CLOUD_URL {
-            Self::VolcengineCloud
+        if config.url.trim_end_matches('/') == OPENVIKING_SERVICE_URL {
+            Self::OpenVikingService
         } else {
-            Self::SelfManaged
+            Self::Custom
         }
     }
 }
@@ -44,12 +51,19 @@ pub(crate) enum ApiKeyRole {
     Regular,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IdentityField {
+    Account,
+    User,
+}
+
 #[derive(Debug, Clone)]
 pub struct ConfigDraft {
     pub name: String,
     pub kind: ConfigKind,
     pub url: String,
     pub api_key: Option<String>,
+    pub root_api_key: Option<String>,
     pub account: Option<String>,
     pub user: Option<String>,
 }
@@ -60,6 +74,18 @@ pub struct ConfigEntry {
     pub config: Config,
     pub is_active: bool,
     pub kind: ConfigKind,
+}
+
+#[derive(Debug, Clone)]
+pub struct InvalidSavedConfig {
+    pub name: String,
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConfigListReport {
+    pub configs: Vec<ConfigEntry>,
+    pub invalid_configs: Vec<InvalidSavedConfig>,
 }
 
 #[derive(Debug, Clone)]
@@ -111,11 +137,35 @@ impl ConfigStore {
         )?))
     }
 
+    pub(crate) fn load_saved_config(&self, name: &str) -> Result<Config> {
+        let path = self.saved_config_path(name)?;
+        if !path.exists() {
+            return Err(Error::Config(format!("Config '{name}' does not exist")));
+        }
+        Config::from_file(&path.to_string_lossy())
+            .map_err(|e| Error::Config(format!("Failed to read config '{name}': {e}")))
+    }
+
     pub fn list_configs(&self) -> Result<Vec<ConfigEntry>> {
+        let report = self.list_configs_report()?;
+        for invalid in &report.invalid_configs {
+            eprintln!(
+                "Warning: skipped invalid OpenViking config '{}'",
+                invalid.path.display()
+            );
+        }
+        Ok(report.configs)
+    }
+
+    pub fn list_configs_report(&self) -> Result<ConfigListReport> {
         let mut configs = Vec::new();
+        let mut invalid_configs = Vec::new();
 
         if !self.config_dir.exists() {
-            return Ok(configs);
+            return Ok(ConfigListReport {
+                configs,
+                invalid_configs,
+            });
         }
 
         for entry in fs::read_dir(&self.config_dir)? {
@@ -136,10 +186,10 @@ impl ConfigStore {
             }
 
             let Ok(config) = Config::from_file(&path.to_string_lossy()) else {
-                eprintln!(
-                    "Warning: skipped invalid OpenViking config '{}'",
-                    path.display()
-                );
+                invalid_configs.push(InvalidSavedConfig {
+                    name: name.to_string(),
+                    path,
+                });
                 continue;
             };
 
@@ -162,8 +212,12 @@ impl ConfigStore {
         }
 
         configs.sort_by(|left, right| left.name.cmp(&right.name));
+        invalid_configs.sort_by(|left, right| left.name.cmp(&right.name));
         normalize_active_config(&mut configs);
-        Ok(configs)
+        Ok(ConfigListReport {
+            configs,
+            invalid_configs,
+        })
     }
 
     pub fn save_named_config(&self, name: &str, config: &Config) -> Result<()> {
@@ -337,6 +391,53 @@ pub fn validate_config_name(name: &str) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn validate_account_id_value(value: &str) -> Result<()> {
+    validate_identity_value(value, IdentityField::Account)
+}
+
+pub(crate) fn validate_user_id_value(value: &str) -> Result<()> {
+    validate_identity_value(value, IdentityField::User)
+}
+
+pub(crate) fn validate_identity_value(value: &str, field: IdentityField) -> Result<()> {
+    let field_name = match field {
+        IdentityField::Account => "Account ID",
+        IdentityField::User => "User ID",
+    };
+    let identifier_name = match field {
+        IdentityField::Account => "account_id",
+        IdentityField::User => "user_id",
+    };
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(Error::Config(format!("{field_name} cannot be empty")));
+    }
+    if trimmed != value {
+        return Err(Error::Config(format!(
+            "{field_name} cannot start or end with whitespace"
+        )));
+    }
+    if matches!(field, IdentityField::Account) && trimmed.starts_with('_') {
+        return Err(Error::Config(
+            "Account ID cannot start with '_'".to_string(),
+        ));
+    }
+    if !trimmed
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | '@'))
+    {
+        return Err(Error::Config(format!(
+            "{field_name} can only contain letters, numbers, '_', '-', '.', and '@'"
+        )));
+    }
+    if trimmed.matches('@').count() > 1 {
+        return Err(Error::Config(format!(
+            "{identifier_name} must have at most one '@'"
+        )));
+    }
+    Ok(())
+}
+
 pub fn build_config(draft: &ConfigDraft) -> Result<Config> {
     validate_config_name(&draft.name)?;
 
@@ -344,30 +445,36 @@ pub fn build_config(draft: &ConfigDraft) -> Result<Config> {
     let account = non_empty_option(draft.account.as_deref());
     let user = non_empty_option(draft.user.as_deref());
     match draft.kind {
-        ConfigKind::VolcengineCloud => {
+        ConfigKind::OpenVikingService => {
             let api_key = non_empty_option(draft.api_key.as_deref()).ok_or_else(|| {
-                Error::Config("Volcengine Cloud configs require an API key".to_string())
+                Error::Config(
+                    "OpenViking Service (VolcEngine Cloud) configs require an API key".to_string(),
+                )
             })?;
-            config.url = VOLCENGINE_CLOUD_URL.to_string();
+            config.url = OPENVIKING_SERVICE_URL.to_string();
             config.api_key = Some(api_key);
+            config.root_api_key = None;
             config.account = account;
             config.user = user;
         }
-        ConfigKind::SelfManaged => {
-            let url = normalize_self_managed_url(&draft.url);
+        ConfigKind::Custom => {
+            let url = normalize_custom_url(&draft.url);
             if url.is_empty() {
                 return Err(Error::Config(
-                    "Self-managed configs require a server URL".to_string(),
+                    "Custom configs require a server URL".to_string(),
                 ));
             }
-            let api_key = non_empty_option(draft.api_key.as_deref());
-            if api_key.is_none() && self_managed_requires_api_key(&url) {
+            let root_api_key = non_empty_option(draft.root_api_key.as_deref());
+            let api_key =
+                non_empty_option(draft.api_key.as_deref()).or_else(|| root_api_key.clone());
+            if api_key.is_none() && custom_requires_api_key(&url) {
                 return Err(Error::Config(
-                    "Remote self-managed configs require an API key".to_string(),
+                    "Remote custom configs require an API key".to_string(),
                 ));
             }
             config.url = url.trim_end_matches('/').to_string();
             config.api_key = api_key;
+            config.root_api_key = root_api_key;
             config.account = account;
             config.user = user;
         }
@@ -376,12 +483,12 @@ pub fn build_config(draft: &ConfigDraft) -> Result<Config> {
     Ok(config)
 }
 
-pub(crate) fn self_managed_requires_api_key(url: &str) -> bool {
-    !self_managed_allows_empty_api_key(url)
+pub(crate) fn custom_requires_api_key(url: &str) -> bool {
+    !custom_allows_empty_api_key(url)
 }
 
-pub(crate) fn self_managed_allows_empty_api_key(url: &str) -> bool {
-    let normalized = normalize_self_managed_url(url);
+pub(crate) fn custom_allows_empty_api_key(url: &str) -> bool {
+    let normalized = normalize_custom_url(url);
     let Ok(parsed) = Url::parse(&normalized) else {
         return false;
     };
@@ -391,20 +498,20 @@ pub(crate) fn self_managed_allows_empty_api_key(url: &str) -> bool {
     )
 }
 
-pub(crate) fn normalize_self_managed_url(url: &str) -> String {
+pub(crate) fn normalize_custom_url(url: &str) -> String {
     let trimmed = url.trim().trim_end_matches('/');
     if trimmed.eq_ignore_ascii_case("::1") || trimmed.eq_ignore_ascii_case("[::1]") {
-        return format!("http://[::1]:{DEFAULT_SELF_MANAGED_PORT}");
+        return format!("http://[::1]:{DEFAULT_CUSTOM_PORT}");
     }
-    if let Some(port) = trimmed.strip_prefix("[::1]:") {
-        if !port.trim().is_empty() {
-            return format!("http://[::1]:{port}");
-        }
+    if let Some(port) = trimmed.strip_prefix("[::1]:")
+        && !port.trim().is_empty()
+    {
+        return format!("http://[::1]:{port}");
     }
-    if let Some(port) = trimmed.strip_prefix("::1:") {
-        if !port.trim().is_empty() {
-            return format!("http://[::1]:{port}");
-        }
+    if let Some(port) = trimmed.strip_prefix("::1:")
+        && !port.trim().is_empty()
+    {
+        return format!("http://[::1]:{port}");
     }
 
     if Url::parse(trimmed).is_ok() {
@@ -417,7 +524,7 @@ pub(crate) fn normalize_self_managed_url(url: &str) -> String {
         "localhost" | "127.0.0.1"
     ) {
         if port.trim().is_empty() {
-            format!("http://{host}:{DEFAULT_SELF_MANAGED_PORT}")
+            format!("http://{host}:{DEFAULT_CUSTOM_PORT}")
         } else {
             format!("http://{host}:{port}")
         }
@@ -461,12 +568,13 @@ pub(crate) async fn validate_candidate_config_with_role(
     }
 
     let timeout = config.timeout.clamp(1.0, 10.0);
+    let auth = config.effective_auth(false);
     let client = BaseClient::new(
         &config.url,
-        api_key.clone(),
-        config.agent_id.clone(),
-        config.account.clone(),
-        config.user.clone(),
+        auth.api_key.clone(),
+        auth.account,
+        auth.user,
+        config.actor_peer_id.clone(),
         timeout,
         config.profile,
         config.extra_headers.clone(),
@@ -483,11 +591,11 @@ pub(crate) async fn validate_candidate_config_with_role(
         ));
     }
 
-    if should_run_authenticated_probe(&value, require_api_key, api_key.is_some()) {
+    if should_run_authenticated_probe(&value, require_api_key, auth.api_key.is_some()) {
         let _: Value = client.get("/api/v1/system/status", &[]).await?;
     }
 
-    if api_key.is_some() {
+    if auth.api_key.is_some() {
         return detect_api_key_role(&client).await.map(Some);
     }
 
@@ -497,9 +605,30 @@ pub(crate) async fn validate_candidate_config_with_role(
 async fn detect_api_key_role(client: &BaseClient) -> Result<ApiKeyRole> {
     match client.get::<Value>("/api/v1/admin/accounts", &[]).await {
         Ok(_) => Ok(ApiKeyRole::Root),
-        Err(Error::Api(_)) => Ok(ApiKeyRole::Regular),
+        Err(Error::Api {
+            status: Some(status),
+            ..
+        }) if admin_probe_regular_key_status(status) => Ok(ApiKeyRole::Regular),
+        Err(Error::Api { message, status }) => Err(Error::Api { message, status }),
         Err(error) => Err(error),
     }
+}
+
+fn admin_probe_regular_key_status(status: u16) -> bool {
+    matches!(
+        status,
+        // 401/403 means the key works but does not have admin access.
+        401 | 403
+            // Some custom deployments may not expose the admin endpoint.
+            // Treat explicit absence as regular access rather than blocking a
+            // valid non-admin setup.
+            | 404
+    )
+}
+
+#[cfg(test)]
+fn admin_probe_ambiguous_status(status: u16) -> bool {
+    matches!(status, 408 | 429 | 500..=599)
 }
 
 fn should_run_authenticated_probe(
@@ -507,20 +636,23 @@ fn should_run_authenticated_probe(
     require_api_key: bool,
     has_api_key: bool,
 ) -> bool {
-    require_api_key
-        || has_api_key
-        || matches!(
-            health.get("auth_mode").and_then(Value::as_str),
-            Some("api_key" | "trusted")
-        )
+    if require_api_key || has_api_key {
+        return true;
+    }
+
+    match health.get("auth_mode").and_then(Value::as_str) {
+        Some("dev") => false,
+        Some("api_key" | "trusted") | None => true,
+        Some(_) => false,
+    }
 }
 
 pub(crate) fn validation_error_copy(kind: ConfigKind, _error: &Error) -> String {
     match kind {
-        ConfigKind::VolcengineCloud => {
+        ConfigKind::OpenVikingService => {
             "Validation failed. Check your API key and try again.".to_string()
         }
-        ConfigKind::SelfManaged => {
+        ConfigKind::Custom => {
             "Validation failed. Check the server URL and API key if required.".to_string()
         }
     }
@@ -560,7 +692,7 @@ fn write_file_atomically(path: &Path, content: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn configs_equivalent(left: &Config, right: &Config) -> Result<bool> {
+pub(crate) fn configs_equivalent(left: &Config, right: &Config) -> Result<bool> {
     Ok(serde_json::to_value(left)? == serde_json::to_value(right)?)
 }
 
@@ -574,7 +706,8 @@ fn non_empty_option(value: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ApiKeyRole, ConfigDraft, ConfigKind, ConfigStore, VOLCENGINE_CLOUD_URL, build_config,
+        ApiKeyRole, ConfigDraft, ConfigKind, ConfigStore, OPENVIKING_SERVICE_URL,
+        admin_probe_ambiguous_status, admin_probe_regular_key_status, build_config,
         should_run_authenticated_probe, validate_candidate_config,
         validate_candidate_config_with_role, validate_config_name, validation_error_copy,
     };
@@ -598,6 +731,18 @@ mod tests {
         config.url = url.to_string();
         config.api_key = api_key.map(ToString::to_string);
         config
+    }
+
+    #[test]
+    fn openviking_service_provider_label_uses_product_casing() {
+        assert_eq!(
+            ConfigKind::OpenVikingService.label(),
+            "OpenViking Service (VolcEngine Cloud)"
+        );
+        assert_eq!(
+            ConfigKind::OpenVikingService.compact_label(),
+            "OpenViking Service"
+        );
     }
 
     fn write_config(path: &Path, config: &Config) {
@@ -687,19 +832,19 @@ mod tests {
     }
 
     #[test]
-    fn cloud_config_listing_marks_only_one_duplicate_as_active() {
-        let dir = unique_dir("duplicate-cloud-active");
+    fn openviking_service_config_listing_marks_only_one_duplicate_as_active() {
+        let dir = unique_dir("duplicate-ov-service-active");
         let store = ConfigStore::for_config_dir(dir.clone());
-        let config = sample_config(VOLCENGINE_CLOUD_URL, Some("cloud-key"));
+        let config = sample_config(OPENVIKING_SERVICE_URL, Some("service-key"));
         store
-            .save_named_config("cloud", &config)
-            .expect("cloud config should save");
+            .save_named_config("ov-service", &config)
+            .expect("ov-service config should save");
         store
-            .save_named_config("cloud-copy", &config)
-            .expect("cloud copy config should save");
+            .save_named_config("ov-service-copy", &config)
+            .expect("ov-service copy config should save");
         store
-            .activate_config("cloud")
-            .expect("cloud config should become active");
+            .activate_config("ov-service")
+            .expect("ov-service config should become active");
 
         let configs = store.list_configs().expect("configs should load");
         let active = configs
@@ -708,11 +853,15 @@ mod tests {
             .map(|entry| entry.name.as_str())
             .collect::<Vec<_>>();
 
-        assert_eq!(active, vec!["cloud"]);
-        assert!(store.is_config_name_active("cloud").expect("active check"));
+        assert_eq!(active, vec!["ov-service"]);
+        assert!(
+            store
+                .is_config_name_active("ov-service")
+                .expect("active check")
+        );
         assert!(
             !store
-                .is_config_name_active("cloud-copy")
+                .is_config_name_active("ov-service-copy")
                 .expect("copy active check")
         );
     }
@@ -728,12 +877,13 @@ mod tests {
     }
 
     #[test]
-    fn volcengine_config_uses_fixed_url_and_requires_api_key() {
+    fn openviking_service_config_uses_fixed_url_and_requires_api_key() {
         let missing_key = ConfigDraft {
-            name: "cloud".to_string(),
-            kind: ConfigKind::VolcengineCloud,
+            name: "ov-service".to_string(),
+            kind: ConfigKind::OpenVikingService,
             url: String::new(),
             api_key: None,
+            root_api_key: None,
             account: None,
             user: None,
         };
@@ -743,23 +893,24 @@ mod tests {
             api_key: Some("viking-key".to_string()),
             ..missing_key
         };
-        let config = build_config(&draft).expect("cloud config should build");
+        let config = build_config(&draft).expect("ov-service config should build");
 
-        assert_eq!(config.url, VOLCENGINE_CLOUD_URL);
+        assert_eq!(config.url, OPENVIKING_SERVICE_URL);
         assert_eq!(config.api_key.as_deref(), Some("viking-key"));
     }
 
     #[test]
-    fn self_managed_config_accepts_custom_url_and_optional_key() {
+    fn custom_config_accepts_custom_url_and_optional_key() {
         let draft = ConfigDraft {
             name: "local".to_string(),
-            kind: ConfigKind::SelfManaged,
+            kind: ConfigKind::Custom,
             url: "http://127.0.0.1:1933".to_string(),
             api_key: None,
+            root_api_key: None,
             account: Some("default".to_string()),
             user: Some("default".to_string()),
         };
-        let without_key = build_config(&draft).expect("self-managed config should build");
+        let without_key = build_config(&draft).expect("custom config should build");
         assert_eq!(without_key.url, "http://127.0.0.1:1933");
         assert!(without_key.api_key.is_none());
         assert_eq!(without_key.account.as_deref(), Some("default"));
@@ -767,34 +918,36 @@ mod tests {
 
         let with_key = build_config(&ConfigDraft {
             api_key: Some("local-key".to_string()),
+            root_api_key: None,
             account: None,
             user: None,
             ..draft
         })
-        .expect("self-managed config with key should build");
+        .expect("custom config with key should build");
         assert_eq!(with_key.api_key.as_deref(), Some("local-key"));
         assert!(with_key.account.is_none());
         assert!(with_key.user.is_none());
     }
 
     #[test]
-    fn remote_self_managed_config_requires_api_key() {
+    fn remote_custom_config_requires_api_key() {
         let draft = ConfigDraft {
             name: "remote".to_string(),
-            kind: ConfigKind::SelfManaged,
+            kind: ConfigKind::Custom,
             url: "https://openviking.example.com".to_string(),
             api_key: None,
+            root_api_key: None,
             account: Some("default".to_string()),
             user: Some("default".to_string()),
         };
 
-        let error = build_config(&draft).expect_err("remote self-managed requires key");
+        let error = build_config(&draft).expect_err("remote custom requires key");
 
         assert!(error.to_string().contains("API key"));
     }
 
     #[test]
-    fn bare_loopback_self_managed_urls_are_local_and_get_default_port() {
+    fn bare_loopback_custom_urls_are_local_and_get_default_port() {
         for (input, expected) in [
             ("127.0.0.1", "http://127.0.0.1:1933"),
             ("localhost", "http://localhost:1933"),
@@ -805,9 +958,10 @@ mod tests {
         ] {
             let draft = ConfigDraft {
                 name: "local".to_string(),
-                kind: ConfigKind::SelfManaged,
+                kind: ConfigKind::Custom,
                 url: input.to_string(),
                 api_key: None,
+                root_api_key: None,
                 account: Some("default".to_string()),
                 user: Some("default".to_string()),
             };
@@ -837,15 +991,45 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn self_managed_config_with_api_key_validates_authenticated_probe() {
+    async fn api_key_role_detection_fails_on_ambiguous_admin_probe_errors() {
+        let url = spawn_admin_probe_500_server("maybe-root").await;
+        let config = sample_config(&url, Some("maybe-root"));
+
+        let error = validate_candidate_config_with_role(&config, true)
+            .await
+            .expect_err("admin probe 500 should not be classified as regular");
+
+        assert!(matches!(
+            error,
+            crate::error::Error::Api {
+                status: Some(500),
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn custom_config_with_api_key_validates_authenticated_probe() {
         let url = spawn_auth_probe_server("good-key").await;
         let config = sample_config(&url, Some("bad-key"));
 
         let error = validate_candidate_config(&config, false)
             .await
-            .expect_err("bad self-managed API key should fail validation");
+            .expect_err("bad custom API key should fail validation");
 
-        assert!(matches!(error, crate::error::Error::Api(_)));
+        assert!(matches!(error, crate::error::Error::Api { .. }));
+    }
+
+    #[tokio::test]
+    async fn local_empty_key_without_health_auth_mode_probes_status() {
+        let url = spawn_status_auth_probe_server().await;
+        let config = sample_config(&url, None);
+
+        let error = validate_candidate_config(&config, false)
+            .await
+            .expect_err("auth-required local server should reject empty API key");
+
+        assert!(matches!(error, crate::error::Error::Api { .. }));
     }
 
     #[test]
@@ -870,25 +1054,37 @@ mod tests {
     }
 
     #[test]
+    fn admin_probe_status_classification_is_explicit() {
+        assert!(admin_probe_regular_key_status(401));
+        assert!(admin_probe_regular_key_status(403));
+        assert!(admin_probe_regular_key_status(404));
+        assert!(admin_probe_ambiguous_status(408));
+        assert!(admin_probe_ambiguous_status(429));
+        assert!(admin_probe_ambiguous_status(500));
+        assert!(admin_probe_ambiguous_status(503));
+        assert!(!admin_probe_regular_key_status(500));
+    }
+
+    #[test]
     fn validation_error_copy_hides_raw_backend_details() {
-        let error = crate::error::Error::Api(
+        let error = crate::error::Error::api(
             "[AuthenticationError] invalid key. Request ID: 02177930089909800000000000000000ffff"
                 .to_string(),
         );
 
-        let cloud = validation_error_copy(ConfigKind::VolcengineCloud, &error);
-        let self_managed = validation_error_copy(ConfigKind::SelfManaged, &error);
+        let cloud = validation_error_copy(ConfigKind::OpenVikingService, &error);
+        let custom = validation_error_copy(ConfigKind::Custom, &error);
 
         assert_eq!(
             cloud,
             "Validation failed. Check your API key and try again."
         );
         assert_eq!(
-            self_managed,
+            custom,
             "Validation failed. Check the server URL and API key if required."
         );
         assert!(!cloud.contains("Request ID"));
-        assert!(!self_managed.contains("AuthenticationError"));
+        assert!(!custom.contains("AuthenticationError"));
     }
 
     #[test]
@@ -1022,6 +1218,37 @@ mod tests {
         format!("http://{addr}")
     }
 
+    async fn spawn_status_auth_probe_server() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test server should bind");
+        let addr = listener.local_addr().expect("test server should have addr");
+        tokio::spawn(async move {
+            for _ in 0..2 {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let mut buffer = vec![0; 4096];
+                let Ok(read) = stream.read(&mut buffer).await else {
+                    return;
+                };
+                let request = String::from_utf8_lossy(&buffer[..read]);
+                let response = if request.starts_with("GET /health ") {
+                    http_response(200, r#"{"healthy":true}"#)
+                } else if request.starts_with("GET /api/v1/system/status ") {
+                    http_response(
+                        401,
+                        r#"{"error":{"code":"AuthenticationError","message":"missing key"}}"#,
+                    )
+                } else {
+                    http_response(404, r#"{"error":{"message":"not found"}}"#)
+                };
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+        format!("http://{addr}")
+    }
+
     async fn spawn_role_probe_server(
         root_api_key: &'static str,
         regular_api_key: &'static str,
@@ -1074,10 +1301,53 @@ mod tests {
         format!("http://{addr}")
     }
 
+    async fn spawn_admin_probe_500_server(api_key: &'static str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test server should bind");
+        let addr = listener.local_addr().expect("test server should have addr");
+        tokio::spawn(async move {
+            for _ in 0..3 {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let mut buffer = vec![0; 4096];
+                let Ok(read) = stream.read(&mut buffer).await else {
+                    return;
+                };
+                let request = String::from_utf8_lossy(&buffer[..read]);
+                let lower_request = request.to_ascii_lowercase();
+                let api_header = format!("x-api-key: {api_key}");
+                let response = if request.starts_with("GET /health ") {
+                    http_response(200, r#"{"healthy":true,"auth_mode":"api_key"}"#)
+                } else if request.starts_with("GET /api/v1/system/status ") {
+                    if lower_request.contains(&api_header) {
+                        http_response(200, r#"{"status":"ok","result":{"initialized":true}}"#)
+                    } else {
+                        http_response(
+                            401,
+                            r#"{"error":{"code":"AuthenticationError","message":"invalid key"}}"#,
+                        )
+                    }
+                } else if request.starts_with("GET /api/v1/admin/accounts ") {
+                    http_response(
+                        500,
+                        r#"{"error":{"code":"INTERNAL","message":"admin probe failed"}}"#,
+                    )
+                } else {
+                    http_response(404, r#"{"error":{"message":"not found"}}"#)
+                };
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+        format!("http://{addr}")
+    }
+
     fn http_response(status: u16, body: &str) -> String {
         let reason = match status {
             200 => "OK",
             401 => "Unauthorized",
+            500 => "Internal Server Error",
             404 => "Not Found",
             _ => "OK",
         };

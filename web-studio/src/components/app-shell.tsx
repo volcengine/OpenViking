@@ -4,7 +4,6 @@ import {
   BlocksIcon,
   BookOpenIcon,
   ChevronRightIcon,
-  FolderTreeIcon,
   HomeIcon,
   GithubIcon,
   KeyRoundIcon,
@@ -26,8 +25,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from '#/components/ui/collapsible'
-import { ConnectionDialog } from '#/components/connection-dialog'
-import { OAuthSetupDialog } from '#/components/oauth-setup-dialog'
+import { CrossDeviceVerifyDialog } from '#/components/cross-device-verify-dialog'
 import { ScrollArea } from '#/components/ui/scroll-area'
 import {
   Sidebar,
@@ -47,7 +45,10 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from '#/components/ui/sidebar'
-import { AppConnectionProvider } from '#/hooks/use-app-connection'
+import {
+  AppConnectionProvider,
+  useAppConnection,
+} from '#/hooks/use-app-connection'
 import { cn } from '#/lib/utils'
 import {
   useSessionList,
@@ -91,15 +92,9 @@ const NAV_ITEMS: readonly NavItem[] = [
   },
   {
     icon: PlugZapIcon,
-    id: 'studio',
-    titleKey: 'navigation.studio.title',
-    to: '/studio',
-  },
-  {
-    icon: FolderTreeIcon,
-    id: 'resources',
-    titleKey: 'navigation.resources.title',
-    to: '/resources',
+    id: 'playground',
+    titleKey: 'navigation.playground.title',
+    to: '/playground',
   },
   {
     icon: SearchIcon,
@@ -351,16 +346,27 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
     select: (state) => state.location.pathname,
   })
   const { setTheme, resolvedTheme } = useTheme()
+  const { connectionRole } = useAppConnection()
   const currentLanguage = resolveLanguage(
     i18n.resolvedLanguage ?? i18n.language,
   )
-  const [oauthSetupOpen, setOauthSetupOpen] = React.useState(false)
+  const [crossDeviceVerifyOpen, setCrossDeviceVerifyOpen] =
+    React.useState(false)
   const settingsActive = pathname === '/settings'
-  const oauthSetupActive =
-    pathname === '/oauth/setup' || pathname.startsWith('/oauth/setup/')
+  const crossDeviceVerifyActive =
+    pathname === '/oauth/verify' || pathname.startsWith('/oauth/verify/')
+  const visibleNavItems = React.useMemo(
+    () =>
+      connectionRole === 'admin' || connectionRole === 'root'
+        ? NAV_ITEMS
+        : NAV_ITEMS.filter(
+            (item) => item.id !== 'home' && item.id !== 'requestLogs',
+          ),
+    [connectionRole],
+  )
 
-  function openOAuthSetup(): void {
-    if (oauthSetupActive) {
+  function openCrossDeviceVerify(): void {
+    if (crossDeviceVerifyActive) {
       return
     }
     // Desktop: open the dialog so the user keeps the current page underneath.
@@ -371,9 +377,9 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
       typeof window.matchMedia === 'function' &&
       window.matchMedia('(min-width: 768px)').matches
     if (useDialog) {
-      setOauthSetupOpen(true)
+      setCrossDeviceVerifyOpen(true)
     } else {
-      void navigate({ to: '/oauth/setup' })
+      void navigate({ to: '/oauth/verify' })
     }
   }
 
@@ -383,9 +389,9 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
       className="flex h-svh overflow-hidden bg-sidebar"
     >
       <Sidebar variant="sidebar" collapsible="icon" className="!border-r-0">
-        <SidebarHeader className="border-b border-sidebar-border/70 p-2">
-          <div className="flex items-center justify-between gap-2 group-data-[collapsible=icon]:justify-center">
-            <span className="truncate px-2 text-base font-semibold group-data-[collapsible=icon]:hidden">
+        <SidebarHeader className="h-12 border-b border-sidebar-border/70 px-2 py-0">
+          <div className="flex h-full items-center justify-between gap-2 group-data-[collapsible=icon]:justify-center">
+            <span className="flex h-8 min-w-0 items-center truncate px-2 text-base font-semibold leading-none group-data-[collapsible=icon]:hidden">
               {t('sidebar.workspaceGroupLabel', { ns: 'appShell' })}
             </span>
             <SidebarTrigger className="hidden shrink-0 md:inline-flex" />
@@ -396,7 +402,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
           <SidebarGroup>
             <SidebarGroupContent>
               <SidebarMenu>
-                {NAV_ITEMS.map((item) => {
+                {visibleNavItems.map((item) => {
                   const isActive =
                     pathname === item.to || pathname.startsWith(`${item.to}/`)
                   const title = t(item.titleKey, { ns: 'appShell' })
@@ -461,14 +467,16 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
             </SidebarMenuItem>
             <SidebarMenuItem>
               <SidebarMenuButton
-                onClick={openOAuthSetup}
-                isActive={oauthSetupActive}
-                tooltip={t('navigation.oauthSetup.title', { ns: 'appShell' })}
+                onClick={openCrossDeviceVerify}
+                isActive={crossDeviceVerifyActive}
+                tooltip={t('navigation.crossDeviceVerify.title', {
+                  ns: 'appShell',
+                })}
                 className="text-base"
               >
                 <KeyRoundIcon className="size-5" />
                 <span>
-                  {t('navigation.oauthSetup.title', { ns: 'appShell' })}
+                  {t('navigation.crossDeviceVerify.title', { ns: 'appShell' })}
                 </span>
               </SidebarMenuButton>
             </SidebarMenuItem>
@@ -578,10 +586,9 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
         </ScrollArea>
       </SidebarInset>
 
-      <ConnectionDialog />
-      <OAuthSetupDialog
-        open={oauthSetupOpen}
-        onOpenChange={setOauthSetupOpen}
+      <CrossDeviceVerifyDialog
+        open={crossDeviceVerifyOpen}
+        onOpenChange={setCrossDeviceVerifyOpen}
       />
     </SidebarProvider>
   )

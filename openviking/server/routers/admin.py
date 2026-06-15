@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Admin endpoints for OpenViking multi-tenant HTTP Server."""
 
+import asyncio
+
 from fastapi import APIRouter, Depends, Path, Request
 from pydantic import BaseModel
 
@@ -13,10 +15,22 @@ from openviking.server.auth import (
 )
 from openviking.server.config import ServerConfig
 from openviking.server.dependencies import get_service
-from openviking.server.identity import AccountNamespacePolicy, RequestContext, Role
+from openviking.server.identity import RequestContext, Role
 from openviking.server.models import Response
+from openviking.service.legacy_migration import LegacyDataMigration
+from openviking.service.task_store import (
+    SYSTEM_TASK_ACCOUNT_ID,
+    SYSTEM_TASK_USER_ID,
+)
+from openviking.service.task_tracker import (
+    get_task_tracker,
+)
 from openviking.storage.viking_fs import get_viking_fs
-from openviking_cli.exceptions import InvalidArgumentError, NotFoundError, PermissionDeniedError
+from openviking_cli.exceptions import (
+    FailedPreconditionError,
+    InvalidArgumentError,
+    PermissionDeniedError,
+)
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.logger import get_logger
 
@@ -28,8 +42,6 @@ router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 class CreateAccountRequest(BaseModel):
     account_id: str
     admin_user_id: str
-    isolate_user_scope_by_agent: bool = False
-    isolate_agent_scope_by_user: bool = False
 
 
 class RegisterUserRequest(BaseModel):
@@ -39,6 +51,10 @@ class RegisterUserRequest(BaseModel):
 
 class SetRoleRequest(BaseModel):
     role: str
+
+
+class MigrateLegacyDataRequest(BaseModel):
+    action: str = "migrate"
 
 
 def _get_api_key_manager(request: Request):
@@ -79,6 +95,28 @@ def _validate_register_user_role(ctx: RequestContext, role: str) -> Role:
     return resolved_role
 
 
+async def _run_legacy_migration_task(
+    task_id: str,
+    migration: LegacyDataMigration,
+    *,
+    action: str,
+    account_id: str,
+    user_id: str,
+) -> None:
+    tracker = get_task_tracker()
+    await tracker.start(task_id, account_id=account_id, user_id=user_id, stage="running")
+    try:
+        if action == "cleanup":
+            result = await migration.cleanup()
+        else:
+            result = await migration.run()
+    except Exception as exc:
+        await tracker.fail(task_id, str(exc), account_id=account_id, user_id=user_id)
+        logger.exception("Legacy %s task %s failed", action, task_id)
+        return
+    await tracker.complete(task_id, result, account_id=account_id, user_id=user_id)
+
+
 # ---- Account endpoints ----
 
 
@@ -91,27 +129,20 @@ async def create_account(
 ):
     """Create a new account (workspace) with its first admin user."""
     manager = _get_api_key_manager(request)
-    policy = AccountNamespacePolicy(
-        isolate_user_scope_by_agent=body.isolate_user_scope_by_agent,
-        isolate_agent_scope_by_user=body.isolate_agent_scope_by_user,
-    )
     user_key = await manager.create_account(
         body.account_id,
         body.admin_user_id,
-        namespace_policy=policy,
     )
     service = get_service()
     account_ctx = RequestContext(
-        user=UserIdentifier(body.account_id, body.admin_user_id, "default"),
+        user=UserIdentifier(body.account_id, body.admin_user_id),
         role=Role.ADMIN,
-        namespace_policy=policy,
     )
     await service.initialize_account_directories(account_ctx)
     await service.initialize_user_directories(account_ctx)
     result = {
         "account_id": body.account_id,
         "admin_user_id": body.admin_user_id,
-        **policy.to_dict(),
     }
     if _should_expose_user_key(request):
         result["user_key"] = user_key
@@ -130,6 +161,56 @@ async def list_accounts(
     return Response(status="ok", result=accounts)
 
 
+@router.post("/migrate")
+@require_auth_root
+async def migrate_legacy_data(
+    request: Request,
+    body: MigrateLegacyDataRequest | None = None,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Preflight and enqueue legacy agent/session data migration or cleanup."""
+    manager = _get_api_key_manager(request)
+    service = get_service()
+    if service.viking_fs is None:
+        raise FailedPreconditionError("OpenViking service is not initialized.")
+    action = (body.action if body else "migrate").strip().lower()
+    if action not in {"migrate", "cleanup"}:
+        raise InvalidArgumentError("Migration action must be 'migrate' or 'cleanup'.")
+
+    migration = LegacyDataMigration(
+        viking_fs=service.viking_fs,
+        api_key_manager=manager,
+        service=service,
+    )
+    if action == "migrate":
+        plan = await migration.preflight()
+        if plan.errors:
+            raise FailedPreconditionError(
+                "Legacy migration preflight failed.",
+                details=plan.to_preflight_result(),
+            )
+
+    tracker = get_task_tracker()
+    task_type = "legacy_cleanup" if action == "cleanup" else "legacy_migration"
+    resource_id = "legacy-data-cleanup" if action == "cleanup" else "legacy-data"
+    task = await tracker.create(
+        task_type,
+        resource_id=resource_id,
+        account_id=SYSTEM_TASK_ACCOUNT_ID,
+        user_id=SYSTEM_TASK_USER_ID,
+    )
+    asyncio.create_task(
+        _run_legacy_migration_task(
+            task.task_id,
+            migration,
+            action=action,
+            account_id=SYSTEM_TASK_ACCOUNT_ID,
+            user_id=SYSTEM_TASK_USER_ID,
+        )
+    )
+    return Response(status="ok", result={"task_id": task.task_id})
+
+
 @router.delete("/accounts/{account_id}")
 @require_auth_root
 async def delete_account(
@@ -142,7 +223,7 @@ async def delete_account(
 
     # Build a ROOT-level context scoped to the target account for cleanup
     cleanup_ctx = RequestContext(
-        user=UserIdentifier(account_id, "system", "system"),
+        user=UserIdentifier(account_id, "system"),
         role=Role.ROOT,
     )
 
@@ -150,8 +231,6 @@ async def delete_account(
     viking_fs = get_viking_fs()
     account_prefixes = [
         "viking://user/",
-        "viking://agent/",
-        "viking://session/",
         "viking://resources/",
     ]
     for prefix in account_prefixes:
@@ -192,9 +271,8 @@ async def register_user(
     user_key = await manager.register_user(account_id, body.user_id, resolved_role.value)
     service = get_service()
     user_ctx = RequestContext(
-        user=UserIdentifier(account_id, body.user_id, "default"),
+        user=UserIdentifier(account_id, body.user_id),
         role=Role.USER,
-        namespace_policy=manager.get_account_policy(account_id),
     )
     await service.initialize_user_directories(user_ctx)
     result = {
@@ -224,48 +302,6 @@ async def list_users(
         account_id, limit=limit, name_filter=name, role_filter=role, expose_key=expose_key
     )
     return Response(status="ok", result=users)
-
-
-@router.get("/accounts/{account_id}/agents")
-@require_auth_root_or_admin
-async def list_agents(
-    request: Request,
-    account_id: str = Path(..., description="Account ID"),
-    ctx: RequestContext = Depends(get_request_context),
-):
-    """List agent namespaces that have data under an account."""
-    _check_account_access(ctx, account_id)
-    manager = _get_api_key_manager(request)
-    manager.get_users(account_id, limit=1, expose_key=False)
-    policy = manager.get_account_policy(account_id)
-    viking_fs = get_viking_fs()
-    list_ctx = RequestContext(
-        user=UserIdentifier(account_id, "system", "system"),
-        role=Role.ROOT,
-        namespace_policy=policy,
-    )
-
-    try:
-        entries = await viking_fs.ls("viking://agent", ctx=list_ctx, output="original")
-    except NotFoundError:
-        entries = []
-
-    agents = []
-    for entry in entries:
-        if not entry.get("isDir", False):
-            continue
-        agent_id = str(entry.get("name", "")).strip()
-        if not agent_id:
-            continue
-        agents.append(
-            {
-                "agent_id": agent_id,
-                "uri": f"viking://agent/{agent_id}",
-            }
-        )
-
-    agents.sort(key=lambda item: item["agent_id"])
-    return Response(status="ok", result=agents)
 
 
 @router.delete("/accounts/{account_id}/users/{user_id}")

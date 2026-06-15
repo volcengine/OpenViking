@@ -7,7 +7,7 @@ export const DEFAULT_CONFIG = {
   apiKey: "",
   account: "",
   user: "",
-  agentId: "",
+  peerId: "",
   enabled: true,
   timeoutMs: 30000,
   runtime: {
@@ -35,7 +35,7 @@ function cloneDefaultConfig() {
 
 function mergeConfig(fileConfig = {}) {
   const config = cloneDefaultConfig()
-  for (const key of ["endpoint", "apiKey", "account", "user", "agentId", "enabled", "timeoutMs"]) {
+  for (const key of ["endpoint", "apiKey", "account", "user", "peerId", "enabled", "timeoutMs"]) {
     if (fileConfig[key] !== undefined) config[key] = fileConfig[key]
   }
   config.runtime = {
@@ -54,8 +54,8 @@ function mergeConfig(fileConfig = {}) {
   if (process.env.OPENVIKING_USER) {
     config.user = process.env.OPENVIKING_USER
   }
-  if (process.env.OPENVIKING_AGENT_ID) {
-    config.agentId = process.env.OPENVIKING_AGENT_ID
+  if (process.env.OPENVIKING_PEER_ID) {
+    config.peerId = process.env.OPENVIKING_PEER_ID
   }
 
   config.timeoutMs = normalizeNumber(config.timeoutMs, DEFAULT_CONFIG.timeoutMs, 1000, 300000)
@@ -179,9 +179,17 @@ export function normalizeEndpoint(endpoint) {
   return endpoint.replace(/\/+$/, "")
 }
 
+export function effectivePeerId(config) {
+  return String(config.peerId || "").trim() || null
+}
+
 export async function makeRequest(config, options) {
   const url = `${normalizeEndpoint(config.endpoint)}${options.endpoint}`
-  const headers = makeAuthHeaders(config, { "Content-Type": "application/json", ...(options.headers ?? {}) })
+  const headers = makeAuthHeaders(
+    config,
+    { "Content-Type": "application/json", ...(options.headers ?? {}) },
+    options.actorPeerId,
+  )
 
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? config.timeoutMs)
@@ -232,7 +240,7 @@ export async function makeRequest(config, options) {
 
 export async function makeMultipartRequest(config, options) {
   const url = `${normalizeEndpoint(config.endpoint)}${options.endpoint}`
-  const headers = makeAuthHeaders(config, options.headers ?? {})
+  const headers = makeAuthHeaders(config, options.headers ?? {}, options.actorPeerId)
 
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? config.timeoutMs)
@@ -281,12 +289,13 @@ export async function makeMultipartRequest(config, options) {
   }
 }
 
-function makeAuthHeaders(config, headers = {}) {
+function makeAuthHeaders(config, headers = {}, actorPeerId = "") {
   const result = { ...headers }
   if (config.apiKey) result["X-API-Key"] = config.apiKey
   if (config.account) result["X-OpenViking-Account"] = config.account
   if (config.user) result["X-OpenViking-User"] = config.user
-  if (config.agentId) result["X-OpenViking-Agent"] = config.agentId
+  const peerId = String(actorPeerId || "").trim()
+  if (peerId) result["X-OpenViking-Actor-Peer"] = peerId
   return result
 }
 

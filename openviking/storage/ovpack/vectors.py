@@ -9,7 +9,7 @@ import struct
 import zipfile
 from typing import Any
 
-from openviking.core.namespace import context_type_for_uri, owner_fields_for_uri
+from openviking.core.namespace import context_type_for_uri, is_session_uri, owner_fields_for_uri
 from openviking.server.identity import RequestContext
 from openviking.storage.ovpack.format import (
     OVPACK_DENSE_PATH,
@@ -19,12 +19,10 @@ from openviking.storage.ovpack.format import (
     sha256_hex,
 )
 from openviking.storage.ovpack.manifest import manifest_dense_info
-from openviking.storage.ovpack.policy import NON_VECTOR_SCOPES
 from openviking.storage.ovpack.validation import dense_record_count, record_dense_ref
 from openviking.utils.time_utils import get_current_timestamp
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.utils.logger import get_logger
-from openviking_cli.utils.uri import VikingURI
 
 logger = get_logger(__name__)
 
@@ -289,7 +287,6 @@ async def _upsert_vector_snapshot_record(
         "active_count": 0,
         "account_id": ctx.account_id,
         "owner_user_id": owner_fields.get("owner_user_id"),
-        "owner_agent_id": owner_fields.get("owner_agent_id"),
         "vector": dense_vector,
     }
     if not payload.get("abstract"):
@@ -316,7 +313,7 @@ async def restore_vector_snapshot(
         if not isinstance(rel_path, str):
             continue
         target_uri = join_uri(root_uri, rel_path)
-        if VikingURI(target_uri).scope in NON_VECTOR_SCOPES:
+        if is_session_uri(target_uri):
             continue
         await _upsert_vector_snapshot_record(
             vector_store,

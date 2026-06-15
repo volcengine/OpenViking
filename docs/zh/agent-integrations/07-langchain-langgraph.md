@@ -23,6 +23,32 @@ tools = create_openviking_tools(
 
 省略 `url` 时，适配器自动从 OpenViking CLI 配置加载连接信息。Embedding 和 VLM 在 OpenViking 侧配置，不在你的应用中。
 
+## Peer 身份
+
+传入 `actor_peer_id` 可以在文件系统和检索操作中过滤当前用户的 peer 集合。session message capture 仍可使用 `peer_id` 表达每条消息的说话人归属。
+
+```python
+retriever = OpenVikingRetriever(
+    url="http://localhost:1933",
+    actor_peer_id="assistant-a",
+)
+
+chain = with_openviking_context(
+    runnable,
+    session_id="support-thread-1",
+    actor_peer_id="assistant-a",
+)
+```
+
+动态运行时，`with_openviking_context()` 默认仍会读取 `config["configurable"]["peer_id"]`，用于 captured message 的归属：
+
+```python
+chain.invoke(
+    {"messages": [...]},
+    config={"configurable": {"session_id": "support-thread-1", "peer_id": "assistant-a"}},
+)
+```
+
 ## 选哪个适配器？
 
 | 我想… | 用这个 |

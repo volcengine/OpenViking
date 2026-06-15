@@ -41,23 +41,15 @@ class DummyFS:
 class DummyUser:
     account_id = "default"
     user_id = "default"
-    agent_id = "default-agent"
 
     def user_space_name(self):
-        return "user/default"
-
-    def agent_space_name(self):
-        return "agent/default"
+        return "default"
 
 
 class DummyReq:
     def __init__(self):
         self.user = DummyUser()
         self.account_id = "default"
-        self.namespace_policy = types.SimpleNamespace(
-            isolate_user_scope_by_agent=False,
-            isolate_agent_scope_by_user=False,
-        )
 
 
 @pytest.mark.asyncio

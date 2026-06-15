@@ -110,7 +110,6 @@ If server authentication is enabled, use a `user_key` for normal data access:
 client = ov.SyncHTTPClient(
     url="http://localhost:1933",
     api_key="<user-key>",
-    agent_id="my-agent",
 )
 ```
 
@@ -153,8 +152,7 @@ This same URI model applies to memories and skills as well:
 
 - `viking://resources/`
 - `viking://user/memories/`
-- `viking://agent/memories/`
-- `viking://agent/skills/`
+- `viking://user/skills/`
 
 ### Retrieval
 

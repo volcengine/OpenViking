@@ -204,3 +204,4 @@ specs/
 .trae/
 .codex/
 .ttadk/
+tests/integration/.tmp_*/

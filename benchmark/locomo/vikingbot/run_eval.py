@@ -1,11 +1,11 @@
 import argparse
-import json
-import subprocess
-import time
 import csv
+import json
 import os
 import re
+import subprocess
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -153,17 +153,21 @@ def load_locomo_qa(
     else:
         samples = data
 
-    for s_idx, sample in enumerate(samples):
-        original_id = sample.get("sample_id", "")
+    for sample in samples:
+        original_sample_id = sample.get("sample_id", "")
         # Find the sample's index in the full dataset
         if sample_index is not None:
             try:
                 data_idx = int(sample_index)
             except ValueError:
-                data_idx = next(i for i, s in enumerate(data) if s.get("sample_id") == original_id)
+                data_idx = next(
+                    i for i, s in enumerate(data) if s.get("sample_id") == original_sample_id
+                )
         else:
-            data_idx = next(i for i, s in enumerate(data) if s.get("sample_id") == original_id)
-        sample_id = f"sample_{data_idx}"
+            data_idx = next(
+                i for i, s in enumerate(data) if s.get("sample_id") == original_sample_id
+            )
+        benchmark_sample_id = f"sample_{data_idx}"
         question_time = get_sample_question_time(sample)
         qa_items = sample.get("qa", [])
 
@@ -183,10 +187,10 @@ def load_locomo_qa(
                 )
             qa = qa_items[question_index]
             evidence_list = qa.get("evidence", [])
-            question_id = f"{sample_id}_qa{question_index}"
+            question_id = f"{benchmark_sample_id}_qa{question_index}"
             qa_list.append(
                 {
-                    "sample_id": sample_id,
+                    "sample_id": benchmark_sample_id,
                     "question_id": question_id,
                     "question_index": question_index,
                     "question": qa["question"],
@@ -196,7 +200,7 @@ def load_locomo_qa(
                     "evidence_text": get_evidence_text(evidence_list, sample),
                     "question_time": question_time,
                     "speakers": speakers,
-                    "original_sample_id": original_id,
+                    "original_sample_id": original_sample_id,
                     "is_invalid": qa["question"] in invalid_questions
                     if invalid_questions
                     else False,
@@ -205,10 +209,10 @@ def load_locomo_qa(
         else:
             for q_idx, qa in enumerate(qa_items):
                 evidence_list = qa.get("evidence", [])
-                question_id = f"{sample_id}_qa{q_idx}"
+                question_id = f"{benchmark_sample_id}_qa{q_idx}"
                 qa_list.append(
                     {
-                        "sample_id": sample_id,
+                        "sample_id": benchmark_sample_id,
                         "question_id": question_id,
                         "question_index": q_idx,
                         "question": qa["question"],
@@ -218,7 +222,7 @@ def load_locomo_qa(
                         "evidence_text": get_evidence_text(evidence_list, sample),
                         "question_time": question_time,
                         "speakers": speakers,
-                        "original_sample_id": original_id,
+                        "original_sample_id": original_sample_id,
                         "is_invalid": qa["question"] in invalid_questions
                         if invalid_questions
                         else False,
@@ -233,32 +237,39 @@ def load_locomo_qa(
 def run_vikingbot_chat(
     question: str,
     question_time: str | None = None,
-    sample_id: str | None = None,
+    sender_peer_id: str | None = None,
     question_id: str | None = None,
     config: str | None = None,
-    memory_users: list[str] | None = None,
-) -> tuple[str, dict, float, int, list]:
+    memory_peer_ids: list[str] | None = None,
+) -> tuple[str, dict, float, int, list, str]:
     """执行vikingbot chat命令，返回回答、token使用情况、耗时（秒）、迭代次数、使用的工具列表"""
+    bot_log_file = build_bot_log_file(question_id)
+    env = os.environ.copy()
+    if bot_log_file:
+        env["VIKINGBOT_LOG_FILE"] = bot_log_file
+
     # 先执行 /new 命令清除会话
-    if sample_id:
+    if sender_peer_id:
         new_cmd = ["vikingbot", "chat"]
         if config:
             new_cmd.extend(["--config", config])
-        new_cmd.extend([
-            "-m",
-            "/new",
-            "-e",
-            "--sender",
-            sample_id,
-            "--session",
-            question_id,
-        ])
-        if memory_users:
-            for user in memory_users:
-                new_cmd.extend(["--memory-user", user])
+        new_cmd.extend(
+            [
+                "-m",
+                "/new",
+                "-e",
+                "--sender",
+                sender_peer_id,
+                "--session",
+                question_id,
+            ]
+        )
+        if memory_peer_ids:
+            for peer_id in memory_peer_ids:
+                new_cmd.extend(["--memory-peer", peer_id])
         try:
             # print(f'new_cmd={new_cmd}')
-            subprocess.run(new_cmd, capture_output=True, text=True, timeout=300)
+            subprocess.run(new_cmd, capture_output=True, text=True, timeout=300, env=env)
         except Exception:
             # 忽略 /new 命令的错误
             pass
@@ -273,17 +284,19 @@ def run_vikingbot_chat(
     if config:
         cmd.extend(["--config", config])
     cmd.extend(["-m", input, "-e"])
-    # 添加 --sender 作为 user_id，--session 作为 agent_id，实现访问独立 userspace
-    if sample_id:
-        cmd.extend(["--sender", sample_id, "--session", question_id])
-    # 添加 --memory-user 参数，指定检索哪些用户的记忆
-    if memory_users:
-        for user in memory_users:
-            cmd.extend(["--memory-user", user])
+    # 添加 --sender 作为当前 peer，--session 作为会话隔离标识
+    if sender_peer_id:
+        cmd.extend(["--sender", sender_peer_id, "--session", question_id])
+    # 添加 --memory-peer 参数，指定当前 User 下需要一并检索的额外 peer 记忆
+    if memory_peer_ids:
+        for peer_id in memory_peer_ids:
+            cmd.extend(["--memory-peer", peer_id])
     start_time = time.time()
     try:
         # print(f'cmd={cmd}')
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=600)
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, check=True, timeout=600, env=env
+        )
         end_time = time.time()
         time_cost = end_time - start_time
 
@@ -298,12 +311,12 @@ def run_vikingbot_chat(
             time_cost = resp_json.get("time_cost", time_cost)
             iteration = resp_json.get("iteration", 0)
             tools_used_names = resp_json.get("tools_used_names", [])
-        except (json.JSONDecodeError, ValueError) as e:
+        except (json.JSONDecodeError, ValueError):
             response = f"[PARSE ERROR] {output}"
             token_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
             iteration = 0
             tools_used_names = []
-        return response, token_usage, time_cost, iteration, tools_used_names
+        return response, token_usage, time_cost, iteration, tools_used_names, bot_log_file
     except subprocess.CalledProcessError as e:
         return (
             f"[CMD ERROR] {e.stderr}",
@@ -311,6 +324,7 @@ def run_vikingbot_chat(
             0,
             0,
             [],
+            bot_log_file,
         )
     except subprocess.TimeoutExpired:
         time_cost = 0
@@ -320,7 +334,23 @@ def run_vikingbot_chat(
             time_cost,
             0,
             [],
+            bot_log_file,
         )
+
+
+def sanitize_log_name(value: str | None) -> str:
+    text = value or f"qa_{int(time.time() * 1000)}"
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", text).strip("._") or "qa"
+
+
+def build_bot_log_file(question_id: str | None) -> str:
+    log_dir = os.environ.get("LOCOMO_VIKINGBOT_LOG_DIR")
+    if not log_dir:
+        return ""
+
+    path = Path(log_dir).expanduser()
+    path.mkdir(parents=True, exist_ok=True)
+    return str(path / f"vikingbot.{sanitize_log_name(question_id)}.log")
 
 
 def load_processed_questions(output_path: str, skip_done: bool = False) -> set[str]:
@@ -336,9 +366,25 @@ def load_processed_questions(output_path: str, skip_done: bool = False) -> set[s
             if question:
                 processed_questions.add(question)
     return processed_questions
+
+
 def append_row_to_csv(output_path: str, fieldnames: list[str], row: dict) -> None:
     """追加单行结果到 CSV。"""
     file_exists = os.path.exists(output_path)
+    if file_exists:
+        with open(output_path, "r", encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            existing_fieldnames = reader.fieldnames or []
+            existing_rows = list(reader)
+        missing_fields = [field for field in fieldnames if field not in existing_fieldnames]
+        if missing_fields:
+            merged_fieldnames = [*existing_fieldnames, *missing_fields]
+            with open(output_path, "w", encoding="utf-8", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=merged_fieldnames)
+                writer.writeheader()
+                writer.writerows(existing_rows)
+            fieldnames = merged_fieldnames
+
     with open(output_path, "a", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         if not file_exists:
@@ -399,9 +445,9 @@ def main():
     )
     parser.add_argument(
         "--group-chat",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=False,
-        help="Group-chat mode: pass --memory-user to vikingbot chat. Default is group-chat mode.",
+        help="Group-chat mode: use speaker peers for sender/memory-peer (default: false).",
     )
     parser.add_argument(
         "--retry-wrong",
@@ -450,7 +496,9 @@ def main():
                 if row.get("result") == "WRONG":
                     retry_wrong_questions.add(row["question"])
                     retry_wrong_samples.add(row["sample_id"])
-        print(f"[retry-wrong] Found {len(retry_wrong_questions)} valid wrong questions from {args.retry_wrong}")
+        print(
+            f"[retry-wrong] Found {len(retry_wrong_questions)} valid wrong questions from {args.retry_wrong}"
+        )
         if retry_wrong_samples:
             print(f"[retry-wrong] Affected samples: {', '.join(sorted(retry_wrong_samples))}")
 
@@ -497,6 +545,7 @@ def main():
         "time_cost",
         "iteration",
         "tools_used_names",
+        "bot_log_file",
     ]
 
     # 创建线程锁，确保多线程写文件安全
@@ -522,22 +571,35 @@ def main():
         answer = qa_item["answer"]
         question_time = qa_item.get("question_time")
         # 使用 question_id 作为 session_id，实现完全独立并行
-        sample_id = qa_item.get("sample_id")
         question_id = qa_item.get("question_id")
         speakers = qa_item.get("speakers", [])
+        source_sample_id = qa_item.get("original_sample_id")
+        sender_peer_id = source_sample_id
+        memory_peer_ids = None
+        if args.group_chat:
+            sender_peer_id = speakers[0] if speakers else source_sample_id
+            memory_peer_ids = speakers[1:] if len(speakers) > 1 else None
         print(f"Processing {idx}/{total_count}: {question[:60]}...")
         if question_time:
             print(f"  [time context: {question_time}]")
+        if source_sample_id:
+            print(f"  [sample peer: {source_sample_id}]")
         if speakers:
-            print(f"  [memory users: {speakers}]")
+            print(f"  [speakers: {speakers}]")
+        if sender_peer_id:
+            print(f"  [sender peer: {sender_peer_id}]")
+        if memory_peer_ids:
+            print(f"  [memory peers: {memory_peer_ids}]")
 
-        response, token_usage, time_cost, iteration, tools_used_names = run_vikingbot_chat(
-            question,
-            question_time,
-            qa_item.get("original_sample_id"),
-            question_id,
-            args.config,
-            None if not args.group_chat else speakers,
+        response, token_usage, time_cost, iteration, tools_used_names, bot_log_file = (
+            run_vikingbot_chat(
+                question,
+                question_time,
+                sender_peer_id,
+                question_id,
+                args.config,
+                memory_peer_ids,
+            )
         )
 
         row = {
@@ -555,6 +617,7 @@ def main():
             "time_cost": round(time_cost, 2),
             "iteration": iteration,
             "tools_used_names": json.dumps(tools_used_names, ensure_ascii=False),
+            "bot_log_file": bot_log_file,
             "is_invalid": qa_item.get("is_invalid", False),
         }
 
@@ -567,6 +630,8 @@ def main():
                         reader = csv.DictReader(f)
                         existing_rows = list(reader)
                         existing_fieldnames = reader.fieldnames or fieldnames
+                    if "bot_log_file" not in existing_fieldnames:
+                        existing_fieldnames.append("bot_log_file")
 
                     q_idx = str(row.get("question_index", ""))
                     found = False

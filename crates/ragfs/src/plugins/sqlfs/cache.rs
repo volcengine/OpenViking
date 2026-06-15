@@ -147,9 +147,7 @@ impl ListDirCache {
         let to_invalidate: Vec<String> = inner
             .cache
             .iter()
-            .filter(|(path, _)| {
-                *path == prefix || is_descendant(path, prefix)
-            })
+            .filter(|(path, _)| *path == prefix || is_descendant(path, prefix))
             .map(|(path, _)| path.clone())
             .collect();
 

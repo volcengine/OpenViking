@@ -28,9 +28,10 @@ class OVCLIConfig(BaseModel):
 
     url: Optional[str] = None
     api_key: Optional[str] = None
-    agent_id: Optional[str] = None
     account: Optional[str] = None
     user: Optional[str] = None
+    actor_peer_id: Optional[str] = None
+    agent_id: Optional[str] = None
     timeout: float = 60.0
     profile: bool = False
     upload: Optional[OVCLIUploadConfig] = None
@@ -42,16 +43,18 @@ class OVCLIConfig(BaseModel):
     @classmethod
     def handle_extra_headers_aliases(cls, data: Any) -> Any:
         if isinstance(data, dict):
+            data = dict(data)
             # 支持 extra_header 作为 extra_headers 的别名
-            if "extra_header" in data and "extra_headers" not in data:
-                # 复制字典并移除 extra_header，避免 extra: "forbid" 报错
-                new_data = {k: v for k, v in data.items() if k != "extra_header"}
-                new_data["extra_headers"] = data["extra_header"]
-                data = new_data
-            elif "extra_headers" in data and "extra_header" in data:
-                # 优先使用 extra_headers，移除 extra_header
-                data = {k: v for k, v in data.items() if k != "extra_header"}
+            extra_header = data.pop("extra_header", None)
+            if extra_header is not None and "extra_headers" not in data:
+                data["extra_headers"] = extra_header
         return data
+
+    @model_validator(mode="after")
+    def reject_mixed_actor_and_agent_identity(self) -> "OVCLIConfig":
+        if self.actor_peer_id is not None and self.agent_id is not None:
+            raise ValueError("actor_peer_id cannot be used with legacy agent_id")
+        return self
 
 
 def load_ovcli_config(config_path: Optional[str] = None) -> Optional[OVCLIConfig]:

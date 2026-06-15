@@ -37,8 +37,7 @@ Easiest path — write `~/.openviking/ovcli.conf` (the same file `ov` CLI uses):
   "url": "https://your-openviking-server.example.com",
   "api_key": "<your-api-key>",
   "account": "my-team",
-  "user": "alice",
-  "agent_id": "claude-code"
+  "user": "alice"
 }
 ```
 
@@ -71,8 +70,7 @@ claude mcp add --scope user --transport http openviking \
   '${OPENVIKING_URL:-http://127.0.0.1:1933}/mcp' \
   --header 'Authorization: Bearer ${OPENVIKING_API_KEY:-}' \
   --header 'X-OpenViking-Account: ${OPENVIKING_ACCOUNT:-}' \
-  --header 'X-OpenViking-User: ${OPENVIKING_USER:-}' \
-  --header 'X-OpenViking-Agent: ${OPENVIKING_AGENT_ID:-}'
+  --header 'X-OpenViking-User: ${OPENVIKING_USER:-}'
 
 # Merge plugin hooks into ~/.claude/settings.json (with backup).
 mkdir -p ~/.claude && [ -f ~/.claude/settings.json ] || echo '{}' > ~/.claude/settings.json
@@ -129,6 +127,8 @@ claude() {
 
 Re-source your rc (`source ~/.zshrc`, or `source ~/.bashrc` on bash) and restart `claude` — `/mcp` should then show your remote URL with valid auth.
 
+**Wrapping extra launch commands.** If you start Claude Code through a different command — a custom wrapper like `cc-custom`, or a multi-word launcher (a base command plus a sub-command) — the installer can wrap those too. Answer its "Extra launch commands" prompt, or pass `OPENVIKING_CC_WRAP_EXTRA='cc-custom'` when running it. The list is stored in the same rc marker block (read by the wrapper as `$OPENVIKING_CC_WRAP_EXTRA`); for a multi-word entry, only invocations whose leading args match the sub-command get credentials injected, so every *other* use of that command passes through untouched. List the *real* launch command, never a shell alias of it: an alias expands to its target before the wrapper runs, so wrap what it points at — `alias cc=claude` already rides the base `claude` wrapper (add nothing), while `alias cc=claude-custom` is covered by listing `claude-custom`. Alias names are skipped if listed.
+
 > **Why a function instead of `export`?** A globally exported API key leaks into every child process spawned from your shell — npm scripts, build tools, crash dumps, `/proc/<pid>/environ`. The function wrapper limits the secret to the `claude` process tree only.
 >
 > Don't have `ovcli.conf` yet? See the [Deployment Guide → CLI](../../docs/en/guides/03-deployment.md#cli) to set one up.
@@ -147,7 +147,7 @@ Re-source your rc (`source ~/.zshrc`, or `source ~/.bashrc` on bash) and restart
 Every plugin field follows this chain (highest → lowest):
 
 1. **Environment variables** (`OPENVIKING_*` — see tables below)
-2. **`ovcli.conf`** — CLI client config (`~/.openviking/ovcli.conf` or `OPENVIKING_CLI_CONFIG_FILE`); only carries connection fields (`url`, `api_key`, `account`, `user`, `agent_id`)
+2. **`ovcli.conf`** — CLI client config (`~/.openviking/ovcli.conf` or `OPENVIKING_CLI_CONFIG_FILE`); only carries connection fields (`url`, `api_key`, `account`, `user`)
 3. **`ov.conf`** — server config (`~/.openviking/ov.conf` or `OPENVIKING_CONFIG_FILE`); the plugin reads `server.url`, `server.root_api_key`, and a legacy `claude_code` block if present (see [Legacy `claude_code` block](#legacy-claude_code-block-in-ovconf))
 4. **Built-in defaults** (`http://127.0.0.1:1933`, no auth)
 
@@ -165,7 +165,9 @@ All plugin behavior can be set via env vars. Connection / identity vars affect b
 | `OPENVIKING_API_KEY` / `OPENVIKING_BEARER_TOKEN` | API key; sent as `Authorization: Bearer <key>`                           |
 | `OPENVIKING_ACCOUNT`                             | Multi-tenant account (`X-OpenViking-Account` header)                     |
 | `OPENVIKING_USER`                                | Multi-tenant user (`X-OpenViking-User` header)                           |
-| `OPENVIKING_AGENT_ID`                            | Agent identity, default `claude-code` (`X-OpenViking-Agent` header)      |
+| `OPENVIKING_PEER_ID`                             | Optional stable peer for recall and captured session messages            |
+
+When `OPENVIKING_PEER_ID` is set, data-plane recall/profile requests send it as `X-OpenViking-Actor-Peer`; captured session messages store it as body `peer_id`. Subagent capture falls back to Claude's `agent_id` when no explicit peer is configured, so different subagents can keep separate peer memory by default.
 
 #### Recall tuning
 
@@ -317,10 +319,10 @@ Claude Code has a built-in `MEMORY.md` file system. This plugin **complements** 
 |--------------|-----------------------------------|----------------------------------------------------|
 | Storage      | Flat markdown                     | Vector DB + structured extraction                  |
 | Search       | Loaded into context wholesale     | Semantic similarity + ranking + token budget       |
-| Scope        | Per-project                       | Cross-project, cross-session, cross-agent          |
+| Scope        | Per-project                       | Cross-project, cross-session, peer-scoped          |
 | Capacity     | ~200 lines (context limit)        | Unlimited (server-side storage)                    |
 | Extraction   | Manual rules                      | LLM-powered entity / preference / event extraction |
-| Subagents    | Same as parent                    | Isolated session + typed agent namespace           |
+| Subagents    | Same as parent                    | Isolated session + peer-scoped capture             |
 
 ---
 
@@ -362,7 +364,7 @@ A persistent OpenViking session is created on first contact and reused for the e
 | `PreCompact`          | Before Claude Code rewrites the transcript | Commit pending messages so they become an archive before CC mutates the transcript                |
 | `SessionEnd`          | Claude Code session closes               | Final commit so the last window is archived                                                       |
 | `SubagentStart`       | Parent spawns a subagent via Task tool   | Derive an isolated OV session ID for the subagent, persist start state                            |
-| `SubagentStop`        | Subagent finishes                        | Read subagent transcript → push to isolated session with subagent-typed agent header → commit     |
+| `SubagentStop`        | Subagent finishes                        | Read subagent transcript → push to an isolated session with subagent peer identity → commit       |
 
 ### Async write path
 

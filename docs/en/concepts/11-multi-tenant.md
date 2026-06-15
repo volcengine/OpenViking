@@ -1,11 +1,11 @@
 # Multi-Tenant
 
-OpenViking multi-tenancy does not mean "deploy one isolated server per team." Instead, a single OpenViking Server uses three identity boundaries, `account`, `user`, and `agent`, to control sharing and isolation.
+OpenViking multi-tenancy does not mean "deploy one isolated server per team." Instead, a single OpenViking Server uses `account` and `user` identity boundaries to control sharing and isolation.
 
 This model fits two common scenarios:
 
 - Multiple teams or customers share one OpenViking service, but their data must stay isolated
-- Multiple users and multiple agents inside one team need shared resources but isolated memories
+- Multiple users inside one team need shared resources but isolated memories
 
 ## What It Enables
 
@@ -15,7 +15,6 @@ With multi-tenancy enabled, you can:
 - Isolate different teams with `account`
 - Share `resources` within the same `account`
 - Isolate user memories and sessions with `user`
-- Further separate agent memories, skills, and instructions with `agent_id`
 - Manage permissions with ROOT / ADMIN / USER roles
 - Support different integration patterns such as OpenClaw plugin, Vikingbot, CLI, and HTTP SDKs
 
@@ -27,7 +26,7 @@ With multi-tenancy enabled, you can:
 
 - Data is isolated across different `account` values by default
 - ROOT can create and delete `account`s
-- `resources`, `user`, `agent`, and `session` all live inside an `account`
+- `resources`, `user`, and `session` all live inside an `account`
 
 ### `user_id`
 
@@ -37,21 +36,13 @@ With multi-tenancy enabled, you can:
 - A normal user can only access its own user space
 - An admin can manage users inside the same `account`
 
-### `agent_id`
-
-`agent_id` separates agent-level space.
-
-- Agent URI shape is controlled by per-account namespace policy
-- `isolate_agent_scope_by_user = false` means `viking://agent/{agent_id}/...`
-- `isolate_agent_scope_by_user = true` means `viking://agent/{agent_id}/user/{user_id}/...`
-
 ### Roles
 
 | Role | Scope | Typical capabilities |
 |------|-------|----------------------|
 | ROOT | Global | Create/delete accounts, cross-tenant access, user management |
 | ADMIN | Single account | Manage users in the same account, regenerate user keys |
-| USER | Single account | Access its own user/agent/session data and shared resources in the same account |
+| USER | Single account | Access its own user/peer/session data and shared resources in the same account |
 
 ## Authentication Modes
 
@@ -73,7 +64,7 @@ Once `server.root_api_key` is configured, OpenViking enters formal multi-tenant 
 If `auth_mode = "api_key"` and `root_api_key` is not configured, the server runs in dev mode:
 
 - All requests are treated as ROOT
-- The default identity is `default/default/default`
+- The default identity is `default/default`
 - This is only allowed on localhost
 
 ## Sharing and Isolation Boundaries
@@ -82,10 +73,12 @@ If `auth_mode = "api_key"` and `root_api_key` is not configured, the server runs
 
 | Data type | Shared across accounts | Shared inside one account | Default isolation boundary |
 |-----------|------------------------|---------------------------|----------------------------|
-| `resources` | No | Yes | account |
-| `user` | No | No | user |
-| `agent` | No | Depends on account namespace policy | Default: `agent` |
-| `session` | No | No | user / session |
+| Shared resources (`viking://resources`) | No | Yes | account |
+| User resources (`viking://user/{user_id}/resources`) | No | No | user |
+| Peer resources (`viking://user/{user_id}/peers/{peer_id}/resources`) | No | No | user / peer |
+| Memories | No | No | user / peer |
+| Skills | No | No | user |
+| Sessions | No | No | user / session |
 
 ### Storage Layer
 
@@ -94,7 +87,8 @@ For users, URIs still look like normal `viking://...` paths:
 ```text
 viking://resources/project-a/
 viking://user/alice/memories/
-viking://agent/91f3ab12cd34/memories/
+viking://user/alice/resources/
+viking://user/alice/peers/web-visitor-alice/resources/
 ```
 
 But the underlying storage automatically gains an account prefix:
@@ -102,20 +96,36 @@ But the underlying storage automatically gains an account prefix:
 ```text
 /local/{account_id}/resources/project-a/
 /local/{account_id}/user/alice/memories/
-/local/{account_id}/agent/91f3ab12cd34/memories/
+/local/{account_id}/user/alice/resources/
+/local/{account_id}/user/alice/peers/web-visitor-alice/resources/
 ```
 
-So multi-tenant isolation does not rely on a special public URI format. It relies on request context, `account_id`, `user_id`, and `agent_id`, applied consistently through the stack.
+So multi-tenant isolation does not rely on a special public URI format. It relies on request context, `account_id` and `user_id`, applied consistently through the stack.
 
-### Retrieval Layer
+### Filesystem And Retrieval Layer
 
-Semantic retrieval is tenant-aware as well:
+Filesystem operations and semantic retrieval are tenant-aware:
 
 - Non-ROOT requests are automatically filtered by `account_id`
 - `resources` can include account-shared resources
-- `memory` and `skill` are further filtered by the current `user space` and `agent space`
+- `memory`, user resources, and `skill` are further filtered by the current user space
+- An actor peer filters `viking://user/{user}/peers` to one peer for filesystem and retrieval operations
 
 This keeps "what you can search" aligned with "what you can read."
+
+### Peer Collection Filter
+
+`peer_id` is a content scope inside the current user boundary. It never changes the
+tenant or user identity.
+
+Set `X-OpenViking-Actor-Peer: <peer_id>` (or SDK/CLI `actor_peer_id`) when a request
+should only see one peer from the current user's peer collection:
+
+- Empty-target retrieval still includes the current user root and shared `viking://resources`.
+- When retrieval resolves `viking://user/{user}/peers`, only that peer's memories/resources are selected.
+- Filesystem operations cannot read, list/tree, grep/find/search, write, move, or delete another peer under `viking://user/{user}/peers`.
+- User-scoped memories, resources, skills, shared resources, and session ownership are otherwise unchanged.
+- The peer ID must be a safe single path segment, for example `web-visitor-alice`.
 
 ## Standard Usage Flow
 
@@ -160,23 +170,29 @@ For normal reads, writes, searches, and session commits, prefer a user key:
 
 ```bash
 curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
-  -H "X-API-Key: <bob-user-key>" \
-  -H "X-OpenViking-Agent: coding-agent"
+  -H "X-API-Key: <bob-user-key>"
 ```
 
 This lets the server resolve identity directly from the key, without extra tenant headers.
 
-### 5. Only ROOT uses explicit tenant headers for tenant-scoped data APIs
+### 5. Data API identity comes from the user or admin key
 
-ROOT does not need tenant headers for Admin APIs, but it does need them for tenant-scoped data APIs such as `ls`, `find`, and `sessions`:
+In `api_key` mode, tenant-scoped data APIs such as `ls`, `find`, and `sessions`
+resolve the effective account and user from the API key itself. Do not send
+`X-OpenViking-Account` or `X-OpenViking-User` in this mode; header-based identity
+assertion belongs to trusted mode.
+
+An `ADMIN` key can call data APIs as its own account/user:
 
 ```bash
 curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
-  -H "X-API-Key: <root-key>" \
-  -H "X-OpenViking-Account: acme" \
-  -H "X-OpenViking-User: alice" \
-  -H "X-OpenViking-Agent: coding-agent"
+  -H "X-API-Key: <admin-user-key>"
 ```
+
+A `ROOT` key is for Admin APIs and selected system/monitoring APIs. It cannot
+access tenant-scoped data APIs in `api_key` mode because it is not bound to a
+tenant user. Use a user/admin key for data access, or trusted mode for upstream
+identity assertion.
 
 ## Integration Patterns
 
@@ -184,10 +200,10 @@ curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
 
 The current OpenClaw plugin follows a "plugin holds one user identity" model:
 
-- Remote mode config is `baseUrl + apiKey + agent_prefix`
+- Remote mode config is `baseUrl + apiKey`, with optional `peer_role` / `peer_prefix`
 - `apiKey` should normally be a user key
 - The server resolves `account_id` and `user_id` from that user key
-- The plugin explicitly passes `X-OpenViking-Agent`
+- The plugin keeps OpenClaw agent identity in peer/session metadata, not tenant headers
 
 Typical config:
 
@@ -195,25 +211,28 @@ Typical config:
 openclaw config set plugins.entries.openviking.config.mode remote
 openclaw config set plugins.entries.openviking.config.baseUrl "http://your-server:1933"
 openclaw config set plugins.entries.openviking.config.apiKey "<user-api-key>"
-openclaw config set plugins.entries.openviking.config.agent_prefix "<agent-prefix>"
+openclaw config set plugins.entries.openviking.config.peer_role assistant
+openclaw config set plugins.entries.openviking.config.peer_prefix "<peer-prefix>"
 ```
 
 Characteristics of this model:
 
 - Simple integration, because the plugin does not manage account/user lifecycle
 - Best for "one OpenClaw instance maps to one OpenViking user identity"
-- `agent_prefix` distinguishes different OpenClaw instances or agent roles
-- `resources` can be shared inside the same account, while `user` and `agent` memory stay identity-scoped
+- `peer_prefix` distinguishes OpenClaw runtime identities when building peer/session metadata
+- `resources` can be shared inside the same account, while user memory stays user-scoped
 
 ### Why the OpenClaw plugin usually does not set `account` / `user`
 
 In `api_key` mode, a user key is already enough to express identity:
 
 - `account` and `user` are resolved server-side from the key
-- The plugin only needs to provide `agent_prefix`
-- Internally, the plugin derives default `user` and `agent` memory scopes from the runtime identity
+- The plugin can provide `peer_prefix` for runtime identity labeling
+- Internally, the plugin writes user-scoped memory and uses `peer_id` for per-message speaker identity
 
-If you give the plugin a root key directly, normal tenant-scoped data APIs will lack `X-OpenViking-Account` and `X-OpenViking-User`, so that is not a good default for day-to-day access.
+If you give the plugin a root key directly, normal tenant-scoped data APIs will
+not have a key-bound tenant user, so that is not a good default for day-to-day
+access.
 
 ### Vikingbot: root key manages many end users
 
@@ -266,15 +285,19 @@ The root key is mainly for:
 - Regenerating keys
 - Operations and diagnostics
 
-Normal application traffic should prefer user keys.
+Normal application traffic should use user keys or admin keys, depending on the
+caller identity it should run as.
 
-### 2. `agentId` does not define the tenant
+### 2. `peer_id` does not define the tenant
 
-`agentId` only defines the agent-level space.
+`peer_id` identifies an interaction peer under the current user. It does not create a tenant,
+but peer content can be selected through explicit peer URIs or the peer collection filter, such as
+`viking://user/{user_id}/peers/{peer_id}/memories` or
+`viking://user/{user_id}/peers/{peer_id}/resources`.
 
 - The tenant boundary is `account_id`
 - The user boundary is `user_id`
-- The agent boundary is `agent_id`
+- Peer content remains inside that user boundary
 
 ### 3. No `root_api_key` does not mean "formal single-tenant production mode"
 
@@ -291,10 +314,10 @@ That is only dev mode:
 ## Related Documentation
 
 - [Authentication](../guides/04-authentication.md) - Auth modes, headers, and key rules
-- [Configuration](../guides/01-configuration.md) - `root_api_key`, `auth_mode`, and `agent_id`
+- [Configuration](../guides/01-configuration.md) - `root_api_key` and `auth_mode`
 - [Admin API](../api/08-admin.md) - Admin API reference
 - [API Overview](../api/01-overview.md) - CLI and HTTP connection patterns
 - [Data Encryption](./10-encryption.md) - At-rest encryption in multi-tenant deployments
-- [Multi-tenant Example](../../../examples/multi_tenant/README.md) - End-to-end management workflow
-- [OpenClaw Plugin](../../../examples/openclaw-plugin/README.md) - OpenClaw integration
-- [Vikingbot](../../../bot/README.md) - Bot-side multi-user integration
+- [Multi-tenant Example](https://github.com/volcengine/OpenViking/blob/main/examples/multi_tenant/README.md) - End-to-end management workflow
+- [OpenClaw Plugin](https://github.com/volcengine/OpenViking/blob/main/examples/openclaw-plugin/README.md) - OpenClaw integration
+- [Vikingbot](https://github.com/volcengine/OpenViking/blob/main/bot/README.md) - Bot-side multi-user integration

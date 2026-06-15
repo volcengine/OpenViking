@@ -10,14 +10,18 @@ and service dependency, avoiding MCP protocol complexity.
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
+from fastapi import FastAPI
+from starlette.routing import Route
 
 import openviking.server.mcp_endpoint as mcp_endpoint
 from openviking.server.dependencies import set_service
-from openviking.server.identity import RequestContext, Role
+from openviking.server.identity import AuthMode, RequestContext, Role
 from openviking.server.mcp_endpoint import (
     StoreMessage,
     _get_ctx,
+    _IdentityASGIMiddleware,
     _mcp_ctx,
     add_resource,
     cancel_watch,
@@ -183,6 +187,55 @@ async def test_search_tool_calls_context_aware_search_with_session(service, monk
     assert captured["score_threshold"] == 0.1
 
 
+async def test_mcp_middleware_sets_actor_peer_context():
+    async def downstream(scope, receive, send):
+        ctx = _get_ctx()
+        assert ctx.actor_peer_id == "peer-a"
+        response = httpx.Response(200, json={"ok": True})
+        await send(
+            {
+                "type": "http.response.start",
+                "status": response.status_code,
+                "headers": [(b"content-type", b"application/json")],
+            }
+        )
+        await send({"type": "http.response.body", "body": response.content})
+
+    app = FastAPI()
+    app.state.config = SimpleNamespace(get_effective_auth_mode=lambda: AuthMode.DEV)
+    app.routes.append(Route("/mcp", endpoint=_IdentityASGIMiddleware(downstream), methods=["POST"]))
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://ov.test") as client:
+        response = await client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "ping"},
+            headers={"X-OpenViking-Actor-Peer": "peer-a"},
+        )
+
+    assert response.status_code == 200
+
+
+async def test_mcp_middleware_rejects_invalid_actor_peer_header():
+    async def downstream(scope, receive, send):
+        raise AssertionError("invalid actor peer header should not reach downstream app")
+
+    app = FastAPI()
+    app.state.config = SimpleNamespace(get_effective_auth_mode=lambda: AuthMode.DEV)
+    app.routes.append(Route("/mcp", endpoint=_IdentityASGIMiddleware(downstream), methods=["POST"]))
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://ov.test") as client:
+        response = await client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "ping"},
+            headers={"X-OpenViking-Actor-Peer": "bad/peer"},
+        )
+
+    assert response.status_code == 400
+    assert "path separators" in response.text
+
+
 # ---------------------------------------------------------------------------
 # read tool
 # ---------------------------------------------------------------------------
@@ -245,23 +298,16 @@ async def test_store_batch_messages(service):
     assert "2 message" in result
 
 
-async def test_store_populates_role_id_from_ctx(service, monkeypatch):
-    """Regression: MCP store used to persist role_id=None because it skipped the
-    HTTP router's fallback resolver. With ctx.resolve_role_id, user msgs should
-    get user.user_id and assistant msgs should get user.agent_id.
-
-    We capture role_id at the add_message boundary instead of reading it back from
-    storage, because store() commits the session synchronously and committed
-    messages move out of session.messages into archive files.
-    """
+async def test_store_does_not_autofill_peer_id_from_ctx(service, monkeypatch):
+    """MCP store should not create synthetic peer_id values."""
     from openviking.session.session import Session
 
     captured: list[tuple[str, str | None]] = []
     original = Session.add_message
 
-    def _spy(self, role, parts, role_id=None, created_at=None):
-        captured.append((role, role_id))
-        return original(self, role, parts, role_id=role_id, created_at=created_at)
+    def _spy(self, role, parts, peer_id=None, created_at=None):
+        captured.append((role, peer_id))
+        return original(self, role, parts, peer_id=peer_id, created_at=created_at)
 
     monkeypatch.setattr(Session, "add_message", _spy)
 
@@ -273,8 +319,8 @@ async def test_store_populates_role_id_from_ctx(service, monkeypatch):
     )
 
     assert captured == [
-        ("user", DEFAULT_CTX.user.user_id),
-        ("assistant", DEFAULT_CTX.user.agent_id),
+        ("user", None),
+        ("assistant", None),
     ]
 
 
@@ -283,8 +329,8 @@ async def test_store_skips_empty_message_content(service, monkeypatch):
         def __init__(self):
             self.messages = []
 
-        def add_message(self, role, parts, role_id=None, created_at=None):
-            self.messages.append((role, parts, role_id, created_at))
+        def add_message(self, role, parts, peer_id=None, created_at=None):
+            self.messages.append((role, parts, peer_id, created_at))
 
     fake_session = FakeSession()
     monkeypatch.setattr(service.sessions, "get", AsyncMock(return_value=fake_session))
@@ -299,10 +345,10 @@ async def test_store_skips_empty_message_content(service, monkeypatch):
 
     assert "2 message" in result
     assert len(fake_session.messages) == 1
-    role, parts, role_id, created_at = fake_session.messages[0]
+    role, parts, peer_id, created_at = fake_session.messages[0]
     assert role == "assistant"
     assert parts[0].text == "Noted."
-    assert role_id == DEFAULT_CTX.user.agent_id
+    assert peer_id is None
     assert created_at is None
     service.sessions.commit_async.assert_awaited_once()
 
@@ -442,22 +488,32 @@ async def test_add_resource_temp_file_id_branch_resolves_and_ingests(
     upload_token_store.clear()
 
 
-async def test_add_resource_watch_requires_to(service):
-    """watch_interval > 0 without `to` returns hint about deterministic URI."""
+async def test_add_resource_watch_without_to_is_forwarded(service, monkeypatch):
+    """watch_interval > 0 may omit `to`; the service binds to the created root_uri."""
+    captured = {}
+
+    async def fake_add_resource(*, path, ctx, **kwargs):
+        captured["path"] = path
+        captured.update(kwargs)
+        return {"root_uri": "viking://resources/foo"}
+
+    monkeypatch.setattr(service.resources, "add_resource", fake_add_resource)
+
     result = await add_resource(
         path="https://example.com/foo",
         watch_interval=1440,
     )
-    assert "error" in result.lower()
-    assert "watch_interval > 0 requires `to`" in result
+    assert "Resource added" in result
+    assert captured["path"] == "https://example.com/foo"
+    assert captured["to"] is None
+    assert captured["watch_interval"] == 1440
 
 
 async def test_add_resource_rejects_negative_watch_interval(service):
     """watch_interval < 0 is rejected at the MCP boundary, even when `to` is given.
 
-    Without this guard, a negative value would bypass the `> 0 requires to`
-    check (passing the `> 0` comparison as false) and be forwarded into
-    the service layer with undefined semantics.
+    Without this guard, a negative value would bypass watch creation and be
+    forwarded into the service layer with cancellation-like semantics.
     """
     result = await add_resource(
         path="https://example.com/foo",
@@ -479,7 +535,6 @@ async def _seed_watch(service, to_uri="viking://resources/test/foo"):
         path="https://example.com/foo",
         account_id=DEFAULT_CTX.account_id,
         user_id=DEFAULT_CTX.user.user_id,
-        agent_id=DEFAULT_CTX.user.agent_id,
         original_role="root",
         to_uri=to_uri,
         watch_interval=1440.0,

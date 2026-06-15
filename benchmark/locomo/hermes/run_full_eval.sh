@@ -50,7 +50,7 @@ Environment:
   IMPORT_ERROR_RETRIES, QA_ERROR_RETRIES, JUDGE_ERROR_RETRIES, QUEUE_MAX_WAIT_SEC
   PYTHON, HERMES_STATE_DB, OPENVIKING_CONFIG_FILE, OPENVIKING_STATE_SOURCE, SNAPSHOT_ROOT, RESULT_DIR
   E2E_PREFLIGHT, SKIP_IMPORT, IMPORT_CSV_OVERRIDE
-  OPENVIKING_ACCOUNT, OPENVIKING_USER, OPENVIKING_AGENT, OPENVIKING_API_KEY
+  OPENVIKING_ACCOUNT, OPENVIKING_USER, OPENVIKING_API_KEY
 
 Dataset:
   By default this expects ../data/locomo10.json from benchmark/locomo/hermes.
@@ -66,7 +66,6 @@ HERMES_MODEL="${HERMES_MODEL:-hermes-agent}"
 OPENVIKING_URL="${OPENVIKING_URL:-http://127.0.0.1:1933}"
 OPENVIKING_ACCOUNT="${OPENVIKING_ACCOUNT:-default}"
 OPENVIKING_USER="${OPENVIKING_USER:-default}"
-OPENVIKING_AGENT="${OPENVIKING_AGENT:-hermes}"
 OPENVIKING_API_KEY="${OPENVIKING_API_KEY:-}"
 JUDGE_BASE_URL="${JUDGE_BASE_URL:-https://ark.cn-beijing.volces.com/api/v3}"
 JUDGE_TOKEN="${JUDGE_TOKEN:-${ARK_API_KEY:-}}"
@@ -223,7 +222,7 @@ SNAPSHOT_DIR="${SNAPSHOT_RUN_DIR}/openviking_workspace"
 SNAPSHOT_MANIFEST="${SNAPSHOT_RUN_DIR}/manifest.txt"
 RESULT_MANIFEST="${RESULT_DIR}/openviking_checkpoint_manifest.txt"
 RESOLVED_OPENVIKING_CONFIG_FILE=""
-export OPENVIKING_ACCOUNT OPENVIKING_USER OPENVIKING_AGENT OPENVIKING_API_KEY
+export OPENVIKING_ACCOUNT OPENVIKING_USER OPENVIKING_API_KEY
 
 if [[ ! -f "$LOCOMO_JSON" ]]; then
     echo "Error: LoCoMo dataset not found: $LOCOMO_JSON" >&2
@@ -614,7 +613,6 @@ resolved_session_id = response.headers.get("X-Hermes-Session-Id") or session_id
 ov_headers = {
     "X-OpenViking-Account": os.environ.get("OPENVIKING_ACCOUNT", "default"),
     "X-OpenViking-User": os.environ.get("OPENVIKING_USER", "default"),
-    "X-OpenViking-Agent": os.environ.get("OPENVIKING_AGENT", "hermes"),
 }
 api_key = os.environ.get("OPENVIKING_API_KEY", "")
 if api_key:
@@ -665,7 +663,7 @@ fail(
     "Hermes completed the probe, but the configured OpenViking target did not receive it. "
     f"Expected OPENVIKING_URL={openviking_url}, session={resolved_session_id}, "
     f"namespace={ov_headers.get('X-OpenViking-Account')}/"
-    f"{ov_headers.get('X-OpenViking-User')}/{ov_headers.get('X-OpenViking-Agent')}; "
+    f"{ov_headers.get('X-OpenViking-User')}; "
     f"last observed: {last_observed}"
 )
 PY
@@ -733,8 +731,8 @@ write_run_command() {
             "$IMPORT_PARALLEL" "$QA_PARALLEL" "$JUDGE_PARALLEL"
         printf 'IMPORT_ERROR_RETRIES=%q QA_ERROR_RETRIES=%q JUDGE_ERROR_RETRIES=%q QUEUE_MAX_WAIT_SEC=%q ' \
             "$IMPORT_ERROR_RETRIES" "$QA_ERROR_RETRIES" "$JUDGE_ERROR_RETRIES" "$QUEUE_MAX_WAIT_SEC"
-        printf 'OPENVIKING_ACCOUNT=%q OPENVIKING_USER=%q OPENVIKING_AGENT=%q E2E_PREFLIGHT=%q ' \
-            "$OPENVIKING_ACCOUNT" "$OPENVIKING_USER" "$OPENVIKING_AGENT" "$E2E_PREFLIGHT"
+        printf 'OPENVIKING_ACCOUNT=%q OPENVIKING_USER=%q E2E_PREFLIGHT=%q ' \
+            "$OPENVIKING_ACCOUNT" "$OPENVIKING_USER" "$E2E_PREFLIGHT"
         [[ -n "${HERMES_STATE_DB:-}" ]] && printf 'HERMES_STATE_DB=%q ' "$HERMES_STATE_DB"
         printf './run_full_eval.sh --suite %q' "$SUITE_LABEL"
         [[ "$CHECKPOINT_OPENVIKING" == "1" ]] && printf ' -cp'
@@ -815,7 +813,6 @@ else
             --openviking-url "$OPENVIKING_URL"
             --account "$OPENVIKING_ACCOUNT"
             --user "$OPENVIKING_USER"
-            --agent "$OPENVIKING_AGENT"
             --parallel "$IMPORT_PARALLEL"
             --error-retries "$IMPORT_ERROR_RETRIES"
             --queue-max-wait-sec "$QUEUE_MAX_WAIT_SEC"

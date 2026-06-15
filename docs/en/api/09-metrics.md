@@ -85,6 +85,6 @@ If your deployment protects `/metrics` at the gateway layer, configure the scrap
 ## Related Documentation
 
 - [Metrics](../concepts/12-metrics.md) - Metric families, labels, feedback metrics, and PromQL examples
-- [VikingBot Feedback Observability Design](../../../bot/docs/vikingbot-feedback-observability-design.md) - feedback observability design background and rollout plan (Chinese)
+- [VikingBot Feedback Observability Design](https://github.com/volcengine/OpenViking/blob/main/bot/docs/vikingbot-feedback-observability-design.md) - feedback observability design background and rollout plan (Chinese)
 - [System and Monitoring](07-system.md) - Health checks, system status, and Observer APIs
 - [API Overview](01-overview.md) - Shared conventions for all API endpoints

@@ -4,7 +4,7 @@
  * Status report for the OpenViking memory plugin — invoked by the `/ov`
  * slash command. Prints a tight human-readable summary covering:
  *   - Server URL + /health probe
- *   - Resolved identity (account/user/agent)
+ *   - Resolved identity (account/user)
  *   - Last session-start injection (size, age, audit path)
  *   - Last auto-recall (item count, top score, token budget use)
  *   - Toggle state for the three injection paths
@@ -73,7 +73,7 @@ async function main() {
   console.log(`OpenViking — ${cfg.baseUrl}  (${health.ok ? "✓" : "✗"} /health ${latency}ms)`);
   console.log(
     `Identity: account=${cfg.accountId || "(unset)"}  ` +
-    `user=${cfg.userId || "(server-resolved)"}  agent=${cfg.agentId}`,
+    `user=${cfg.userId || "(server-resolved)"}`,
   );
   console.log("");
 

@@ -136,7 +136,7 @@ def admin_api(base_url: str, root_key: str):
 
     # ── 9. Use user key to access data ──
     print("== 9. Access Data with User Key ==")
-    bob_client = ov.SyncHTTPClient(url=base_url, api_key=bob_key, agent_id="demo-agent")
+    bob_client = ov.SyncHTTPClient(url=base_url, api_key=bob_key)
     bob_client.initialize()
     try:
         entries = bob_client.ls("viking://")

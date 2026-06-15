@@ -60,7 +60,7 @@ class OpenVikingStore(BaseStore):
         account: str | None = None,
         user: str | None = None,
         user_id: str | None = None,
-        agent_id: str | None = None,
+        actor_peer_id: str | None = None,
         path: str | None = None,
         root_uri: str = "viking://user/memories/langgraph_store",
         index: bool | list[str] | None = None,
@@ -79,7 +79,7 @@ class OpenVikingStore(BaseStore):
             account=account,
             user=user,
             user_id=user_id,
-            agent_id=agent_id,
+            actor_peer_id=actor_peer_id,
             path=path,
             auto_initialize=auto_initialize,
         )
@@ -463,7 +463,7 @@ def _parse_canonicalized_record_uri(
 
 
 def _identity_relative_root_tail(classification: UriClassification) -> tuple[str, ...] | None:
-    if classification.scope not in {"user", "agent"}:
+    if classification.scope != "user":
         return None
     if classification.content_index != 1:
         return None

@@ -97,11 +97,10 @@ server-rendered HTML page at `/oauth/authorize/page`: it displays a 6-char
 `display_code`, which you type at `/studio/oauth/verify` on another device
 that's already signed in to Studio.
 
-The "push" OTP endpoint `POST /api/v1/auth/otp` is still available for
-CLI / scripted scenarios — and the **OAuth client OTP** block in the
-Studio sidebar footer's **OAuth setup** entry (opens a dialog on desktop,
-routes to `/studio/oauth/setup` on phone) gives you a one-click way to
-mint a short-lived OTP to hand to an MCP client.
+The Studio sidebar footer's **OAuth verify** entry opens this cross-device
+verify form directly (a dialog on desktop, the `/studio/oauth/verify` page on
+phone), so you can confirm from an already-signed-in device without first
+visiting the authorize page.
 
 ---
 
@@ -141,9 +140,9 @@ endpoints, so this mode is only useful for local testing with tools like
 4. **Connect a local MCP client** (e.g. MCP Inspector) to
    `http://127.0.0.1:1933/mcp`. The client will hit the OAuth flow above and
    the browser will land on `/studio/oauth/consent?pending=...`; click
-   Authorize and the client will receive a token. For push-style scenarios,
-   use the **OAuth client OTP** block in the sidebar footer's **OAuth
-   setup** entry (`/studio/oauth/setup` on phone).
+   Authorize and the client will receive a token. To confirm from a different
+   already-signed-in device, use the sidebar footer's **OAuth verify** entry
+   (`/studio/oauth/verify` on phone).
 
 For Claude.ai / Claude Desktop on the public internet, see the
 [Public Access Guide](12-public-access.md).
@@ -266,7 +265,6 @@ curl -X POST -H "Authorization: Bearer ovat_..." \
     "access_token_ttl_seconds": 3600,       // 1 hour
     "refresh_token_ttl_seconds": 2592000,   // 30 days
     "auth_code_ttl_seconds": 300,           // 5 minutes
-    "otp_ttl_seconds": 300,                 // 5 minutes
     "db_filename": "oauth.db"               // relative to storage.workspace
   }
 }
@@ -314,8 +312,8 @@ The practical effects:
 - **Removing** a user (`remove_user`) has the same effect: the fingerprint
   lookup returns `None` and all the user's OAuth tokens stop working.
 - **ROOT** keys and **trusted-mode** identities cannot issue OAuth state
-  (no per-user key to bind to). `/api/v1/auth/otp` and
-  `/api/v1/auth/oauth-verify` reject these callers with 400.
+  (no per-user key to bind to). `/api/v1/auth/oauth-verify` rejects these
+  callers with 400.
 
 The fingerprint is `sha256(stored_key_value)`, where the stored value is
 either the plaintext key (when API key hashing is disabled) or its

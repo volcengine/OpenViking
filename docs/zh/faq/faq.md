@@ -45,10 +45,10 @@ viking://
 ├── resources/              # 知识库：文档、代码、网页等
 │   └── my_project/
 ├── user/                   # 用户上下文
-│   └── memories/           # 用户记忆（偏好、实体、事件）
-└── agent/                  # Agent 上下文
-    ├── skills/             # 可调用技能
-    └── memories/           # Agent 记忆（案例、模式）
+│   ├── skills/             # 可调用技能
+│   ├── memories/           # 用户记忆（偏好、实体、事件）
+│   └── peers/              # 针对稳定 peer 的一对多记忆
+└── session/                # 会话与历史归档
 ```
 
 ## 安装与配置
@@ -62,18 +62,16 @@ viking://
   - VLM（视觉语言模型）：用于多模态内容处理和语义提取
   - Rerank 模型：用于提升检索精度
 
-### 什么是 `binding-client` 和 `http-client`？我该选哪个？
+### OpenViking 是如何访问 AGFS 文件系统的？
 
-- **`binding-client`（默认值）**：通过 CGO 绑定直接在 Python 进程内运行 AGFS 逻辑。优点是性能极高，无网络延迟；缺点是需要本地有编译好的 AGFS 共享库。
-- **`http-client`**：通过 HTTP 协议与独立的 `agfs-server` 通信。优点是部署解耦，不需要本地编译 Go 代码；缺点是有一定的网络通信开销。
+OpenViking 通过 Rust 绑定（`ragfs_python` / `RAGFSBindingClient`）在 Python 进程内直接运行 RAGFS 文件系统逻辑。优点是性能极高、无网络延迟；前提是本地需要有编译好的 RAGFS 共享库（预编译 Wheel 包内置，或从源码编译）。
 
-如果你的环境支持编译 Go 代码，或者安装了包含预编译库的 Wheel 包，推荐使用默认的 `binding-client`。
+> [!WARNING]
+> OpenViking 已不再支持 AGFS HTTP client 模式。当前 AGFS / RAGFS 文件系统访问仅通过 Rust binding（`RAGFSBindingClient`）在进程内完成。这不影响 OpenViking server 的 HTTP API、`ov` CLI，或 `AsyncHTTPClient` / `SyncHTTPClient` 访问 OpenViking 服务端的能力。
 
 ### 遇到 "AGFS binding library not found" 错误怎么办？
 
-这通常是因为本地没有编译好的 AGFS 共享库。你可以：
-1. **重新编译安装**：在项目根目录运行 `pip install -e . --force-reinstall`（需要 Go 环境）。
-2. **切换到 HTTP 模式**：在 `ov.conf` 中设置 `storage.agfs.mode = "http-client"`，并确保有一个正在运行的 `agfs-server`。
+这通常是因为本地没有可用的 RAGFS 共享库。在项目根目录运行 `pip install -e . --force-reinstall` 重新编译安装即可（需要 Rust 工具链）。
 
 ### 如何安装 OpenViking？
 

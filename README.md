@@ -59,7 +59,9 @@ With OpenViking, developers can build an Agent's brain just like managing local 
 
 ## Quick Start
 
-### Prerequisites
+### Local Deployment
+
+#### Prerequisites
 
 Before starting with OpenViking, please ensure your environment meets the following requirements:
 
@@ -69,15 +71,15 @@ Before starting with OpenViking, please ensure your environment meets the follow
 - **Operating System**: Linux, macOS, Windows
 - **Network Connection**: A stable network connection is required (for downloading dependencies and accessing model services)
 
-### 1. Installation
+#### 1. Installation
 
-#### Python Package
+##### Python Package
 
 ```bash
 pip install openviking --upgrade --force-reinstall
 ```
 
-#### Rust CLI (Optional)
+##### Rust CLI (Optional)
 
 ```bash
 npm i -g @openviking/cli
@@ -89,14 +91,14 @@ Or build from source:
 cargo install --git https://github.com/volcengine/OpenViking ov_cli
 ```
 
-### 2. Model Preparation
+#### 2. Model Preparation
 
 OpenViking requires the following model capabilities:
 
 - **VLM Model**: For image and content understanding
 - **Embedding Model**: For vectorization and semantic retrieval
 
-#### Supported VLM Providers
+##### Supported VLM Providers
 
 OpenViking supports multiple VLM providers:
 
@@ -108,7 +110,7 @@ OpenViking supports multiple VLM providers:
 | `kimi`         | Kimi Code Membership     | Use `openviking-server init`                                                                                                                                                                                       |
 | `glm`          | GLM Coding Plan          | Use `openviking-server init`                                                                                                                                                                                       |
 
-#### Provider-Specific Notes
+##### Provider-Specific Notes
 
 <details>
 <summary><b>Volcengine (Doubao)</b></summary>
@@ -267,9 +269,9 @@ openviking-server doctor
 
 </details>
 
-### 3. Environment Configuration
+#### 3. Environment Configuration
 
-#### Quick Setup for Local Models (Ollama)
+##### Quick Setup for Local Models (Ollama)
 
 If you want to run OpenViking with local models via [Ollama](https://ollama.ai), the interactive setup wizard handles everything automatically:
 
@@ -293,7 +295,7 @@ openviking-server doctor
 
 > For cloud API providers (Volcengine, OpenAI, Gemini, etc.), continue with the manual configuration below.
 
-#### Server Configuration Template
+##### Server Configuration Template
 
 The recommended first-time flow is:
 
@@ -332,14 +334,14 @@ If you prefer manual configuration, create `~/.openviking/ov.conf`, remove the c
     "api_key"  : "<your-api-key>",     // Model service API Key (optional for openai-codex)
     "provider" : "<provider-type>",    // Provider type (volcengine, openai, openai-codex, kimi, glm, etc.)
     "model"    : "<model-name>",       // VLM model name (e.g., doubao-seed-2-0-pro-260215 or gpt-4-vision-preview)
-    "max_concurrent": 100              // Max concurrent LLM calls for semantic processing (default: 100)
+    "max_concurrent": 64              // Max concurrent LLM calls for semantic processing (default: 64)
   }
 }
 ```
 
 > **Note**: For embedding models, supported providers are `volcengine` (Doubao), `openai`, `azure`, `jina`, `ollama`, `voyage`, `dashscope`, `minimax`, `cohere`, `vikingdb`, `gemini` (requires `pip install "google-genai>=1.0.0"`), `litellm`, and `local`. For VLM models, common providers include `volcengine`, `openai`, `openai-codex`, `kimi`, and `glm`.
 
-#### Server Configuration Examples
+##### Server Configuration Examples
 
 👇 Expand to see the configuration example for your model service:
 
@@ -370,7 +372,7 @@ If you prefer manual configuration, create `~/.openviking/ov.conf`, remove the c
     "api_key"  : "your-volcengine-api-key",
     "provider" : "volcengine",
     "model"    : "doubao-seed-2-0-pro-260215",
-    "max_concurrent": 100
+    "max_concurrent": 64
   }
 }
 ```
@@ -404,7 +406,7 @@ If you prefer manual configuration, create `~/.openviking/ov.conf`, remove the c
     "api_key"  : "your-openai-api-key",
     "provider" : "openai",
     "model"    : "gpt-4-vision-preview",
-    "max_concurrent": 100
+    "max_concurrent": 64
   }
 }
 ```
@@ -439,7 +441,7 @@ pip install "google-genai>=1.0.0"
     "api_key"  : "your-openai-api-key",
     "provider" : "openai",
     "model"    : "gpt-4o",
-    "max_concurrent": 100
+    "max_concurrent": 64
   }
 }
 ```
@@ -471,14 +473,14 @@ Use `openviking-server init` and choose `OpenAI Codex`, then run `openviking-ser
     "api_base" : "https://chatgpt.com/backend-api/codex",
     "provider" : "openai-codex",
     "model"    : "gpt-5.3-codex",
-    "max_concurrent": 100
+    "max_concurrent": 64
   }
 }
 ```
 
 </details>
 
-#### Set Server Configuration Environment Variable
+##### Set Server Configuration Environment Variable
 
 After creating the configuration file, set the environment variable to point to it (Linux/macOS):
 
@@ -502,7 +504,7 @@ set "OPENVIKING_CONFIG_FILE=%USERPROFILE%\.openviking\ov.conf"
 
 > 💡 **Tip**: You can also place the configuration file in other locations, just specify the correct path in the environment variable.
 
-#### CLI/Client Configuration Examples
+##### CLI/Client Configuration Examples
 
 You can initialize the configuration of the CLI/client interactively through the `ov config` command. If you have multiple openviking servers, you can also switch to other configurations using the `ov config switch` command.
 
@@ -539,13 +541,13 @@ set "OPENVIKING_CLI_CONFIG_FILE=%USERPROFILE%\.openviking\ovcli.conf"
 ```
 </details>
 
-### 4. Run Your First Example
+#### 4. Run Your First Example
 
 > 📝 **Prerequisite**: Ensure you have completed the configuration (ov.conf and ovcli.conf) in the previous step.
 
 Now let's run a complete example to experience the core features of OpenViking.
 
-#### Launch Server
+##### Launch Server
 
 ```bash
 openviking-server doctor
@@ -560,7 +562,7 @@ or you can run in background
 nohup openviking-server > /data/log/openviking.log 2>&1 &
 ```
 
-#### Run the CLI
+##### Run the CLI
 
 ```bash
 ov status
@@ -573,6 +575,10 @@ ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/zh
 ```
 
 Congratulations! You have successfully run OpenViking 🎉
+
+### Commercial Access
+
+OpenViking Personal is now officially available. Compared with the open-source edition, the Service version is officially hosted and ready to use, scales far beyond local hardware with VikingDB, and comes with richer integrations plus professional support. It includes a free trial for up to 50 files, and existing open-source users can move over smoothly with our migration tool.
 
 ### VikingBot Quick Start
 
@@ -609,7 +615,7 @@ To ensure optimal storage performance and data security, we recommend deploying 
 
 ## Evaluation Highlights
 
-OpenViking 1.0 has been evaluated across three scenarios: long-conversation user memory, agent experience memory, and knowledge-base QA.
+OpenViking 0.3.22 has been evaluated across three scenarios: long-conversation user memory, agent experience memory, and knowledge-base QA.
 
 ### 1. User Memory on LoCoMo
 
@@ -699,18 +705,21 @@ viking://
 │   │   └── src/
 │   └── ...
 ├── user/                   # User: personal preferences, habits, etc.
-│   └── memories/
-│       ├── preferences/
-│       │   ├── writing_style
-│       │   └── coding_habits
-│       └── ...
-└── agent/                  # Agent: skills, instructions, task memories, etc.
-    ├── skills/
-    │   ├── search_code
-    │   ├── analyze_data
-    │   └── ...
-    ├── memories/
-    └── instructions/
+│   └── {user_id}/
+│       ├── memories/
+│       │   ├── preferences/
+│       │   │   ├── writing_style
+│       │   │   └── coding_habits
+│       │   └── ...
+│       ├── resources/
+│       │   └── private_project/
+│       ├── skills/
+│       │   ├── search_code
+│       │   └── analyze_data
+│       └── peers/
+│           └── web-visitor-alice/
+│               ├── memories/
+│               └── resources/
 ```
 
 ### 2. Tiered Context Loading → Reduces Token Consumption

@@ -125,7 +125,7 @@ OpenViking 的 `get_session_context()` 返回的不是纯摘要，而是：
 第一版建议：
 
 - 请求继续使用当前合法的 bot/account/user 身份
-- 每条消息的真实说话人通过 `role_id` 记录
+- 每条消息的真实说话人通过 `peer_id` 记录
 
 不要把“当前 `sender_id`”直接等同于每次请求的 OpenViking user 身份，否则会和现有权限/命名空间语义冲突。
 
@@ -266,12 +266,12 @@ OpenViking 的 `get_session_context()` 返回的不是纯摘要，而是：
 
 - 一个聊天房间对应一个稳定 `ov_session_id`
 - OpenViking request identity 继续按当前 bot/account 配置走
-- 每条 user/assistant message 的实际说话者写入 `role_id`
+- 每条 user/assistant message 的实际说话者写入 `peer_id`
 
 建议映射：
 
-- user message: `role="user"`, `role_id=<真实 sender_id>`
-- assistant message: `role="assistant"`, `role_id=<bot/agent id 或默认 assistant 标识>`
+- user message: `role="user"`, `peer_id=<真实 sender_id>`
+- assistant message: `role="assistant"`, `peer_id=<bot/agent id 或默认 assistant 标识>`
 
 这样可以同时满足：
 
@@ -288,7 +288,7 @@ OpenViking 的 `get_session_context()` 返回的不是纯摘要，而是：
 建议新增或重构为以下接口：
 
 - `ensure_session(session_id: str) -> dict`
-- `append_messages(session_id: str, messages: list[dict], role_id_resolver=...) -> dict`
+- `append_messages(session_id: str, messages: list[dict], peer_id_resolver=...) -> dict`
 - `get_session(session_id: str) -> dict`
 - `get_session_context(session_id: str, token_budget: int) -> dict`
 - `commit_session(session_id: str, keep_recent_count: int = 0) -> dict`
@@ -449,9 +449,9 @@ OpenViking 的 `get_session_context()` 返回的不是纯摘要，而是：
 
 ### 3. 群聊身份映射风险
 
-如果直接把 `sender_id` 当作每次 OV 请求 user 身份，容易与当前 account/user/agent 权限语义冲突。
+如果直接把 `sender_id` 当作每次 OV 请求 user 身份，容易与当前 account/user/peer 权限语义冲突。
 
-应优先通过 `role_id` 保留真实说话人。
+应优先通过 `peer_id` 保留真实说话人。
 
 ### 4. 提取异步性的认知风险
 

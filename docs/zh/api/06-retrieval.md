@@ -56,6 +56,7 @@ OpenViking 提供多种检索方法，包括简单的向量相似度搜索、带
 |------|------|------|--------|------|
 | query | str | 是 | - | 搜索查询字符串 |
 | target_uri | str \| List[str] | 否 | "" | 限制搜索范围到指定的 URI 前缀 |
+| context_type | str \| List[str] | 否 | None | 限定一个或多个 `ContextType` 取值：`memory`、`resource` 或 `skill` |
 | limit | int | 否 | 10 | 最大返回结果数 |
 | node_limit | int | 否 | None | 可选 HTTP 别名；如果提供，会覆盖 limit |
 | score_threshold | float | 否 | None | 最低相关性分数阈值 |
@@ -66,6 +67,11 @@ OpenViking 提供多种检索方法，包括简单的向量相似度搜索、带
 | level | str | 否 | None | 限定结果的层级范围，例如 `0`、`1`、`2` 或 `0,1,2`。CLI `--level`/`-L` 会映射到这个字段 |
 | include_provenance | bool | 否 | False | 在序列化结果中附带 provenance / query-plan 细节 |
 | telemetry | bool \| object | 否 | False | 在响应中附带遥测数据 |
+
+**目标解析说明**：
+- `target_uri` 为空时，非 ROOT 检索默认搜索当前用户根 `viking://user/{user}` 和公共 `viking://resources`。
+- 如需在文件系统和检索操作中把当前用户的 peer 集合过滤到某一个 peer，发送 `X-OpenViking-Actor-Peer: <peer_id>`，或用 SDK/CLI client 的 `actor_peer_id` 初始化。见 [多租户：Peer 集合过滤](../concepts/11-multi-tenant.md#peer-restricted-view)。
+- `viking://user/memories`、`viking://user/resources`、`viking://user/skills` 等当前用户短写 target URI 会按认证请求身份 canonicalize。
 
 **FindResult 结构**
 
@@ -126,10 +132,23 @@ curl -X POST http://localhost:1933/api/v1/search/find \
     }'
 ```
 
+**按 Context Type 搜索**
+
+```bash
+curl -X POST http://localhost:1933/api/v1/search/find \
+    -H "Content-Type: application/json" \
+    -H "X-API-Key: your-key" \
+    -d '{
+        "query": "authentication",
+        "context_type": ["memory", "resource"]
+    }'
+```
+
 **Python SDK**
 
 ```python
 import openviking as ov
+from openviking.retrieve import ContextType
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
@@ -143,6 +162,12 @@ recent_emails = client.find(
     target_uri="viking://resources/email",
     since="7d",
     time_field="created_at",
+)
+
+# 仅搜索 memories 和 resources
+typed_results = client.find(
+    "authentication",
+    context_type=[ContextType.MEMORY, ContextType.RESOURCE],
 )
 
 # 遍历结果
@@ -169,10 +194,24 @@ results = client.find(
     target_uri="viking://user/memories"
 )
 
+# 仅在当前用户资源中搜索
+results = client.find(
+    "private docs",
+    target_uri="viking://user/resources"
+)
+
+# 检索时把 peer 集合过滤到一个 peer
+peer_client = ov.SyncHTTPClient(
+    url="http://localhost:1933",
+    api_key="your-key",
+    actor_peer_id="web-visitor-alice",
+)
+peer_results = peer_client.find("invoice follow-up")
+
 # 仅在技能中搜索
 results = client.find(
     "web search",
-    target_uri="viking://agent/skills"
+    target_uri="viking://user/skills"
 )
 
 # 在特定项目中搜索
@@ -190,6 +229,9 @@ openviking find "how to authenticate users"
 
 # 指定 URI 范围
 openviking find "how to authenticate users" --uri "viking://resources"
+
+# 限定上下文类型
+openviking find "authentication" --context-type memory,resource
 
 # 带时间过滤
 openviking find "invoice" --after 7d
@@ -274,6 +316,7 @@ openviking find "how to authenticate users" -L 1,2
 | target_uri | str \| List[str] | 否 | "" | 限制搜索范围到指定的 URI 前缀 |
 | session | Session | 否 | None | 用于上下文感知搜索的会话（SDK）|
 | session_id | str | 否 | None | 用于上下文感知搜索的会话 ID（HTTP）|
+| context_type | str \| List[str] | 否 | None | 限定一个或多个 `ContextType` 取值：`memory`、`resource` 或 `skill` |
 | limit | int | 否 | 10 | 最大返回结果数 |
 | node_limit | int | 否 | None | 可选 HTTP 别名；如果提供，会覆盖 limit |
 | score_threshold | float | 否 | None | 最低相关性分数阈值 |
@@ -284,6 +327,8 @@ openviking find "how to authenticate users" -L 1,2
 | level | str | 否 | None | 限定结果的层级范围，例如 `0`、`1`、`2` 或 `0,1,2`。CLI `--level`/`-L` 会映射到这个字段 |
 | include_provenance | bool | 否 | False | 在序列化结果中附带 provenance / query-plan 细节 |
 | telemetry | bool \| object | 否 | False | 在响应中附带遥测数据 |
+
+`search()` 使用和 `find()` 相同的目标解析规则，包括由 `X-OpenViking-Actor-Peer` 或 SDK `actor_peer_id` 选择的 peer 集合过滤。
 
 #### 3. 使用示例
 
@@ -300,6 +345,7 @@ curl -X POST http://localhost:1933/api/v1/search/search \
     -d '{
         "query": "best practices",
         "session_id": "abc123",
+        "context_type": "skill",
         "since": "2h",
         "time_field": "updated_at",
         "limit": 10
@@ -321,6 +367,7 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 
 ```python
 import openviking as ov
+from openviking.retrieve import ContextType
 from openviking.message import TextPart
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
@@ -339,6 +386,7 @@ session.add_message("assistant", [
 results = client.search(
     "best practices",
     session=session,
+    context_type=ContextType.SKILL,
     since="2h"
 )
 
@@ -365,6 +413,9 @@ for ctx in results.resources:
 ```bash
 # 带会话 ID 的搜索
 openviking search "best practices" --session-id abc123
+
+# 限定上下文类型
+openviking search "best practices" --context-type skill
 
 # 带时间过滤的搜索
 openviking search "watch vs scheduled" --after 2026-03-15 --before 2026-03-20

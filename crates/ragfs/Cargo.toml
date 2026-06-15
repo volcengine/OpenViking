@@ -15,10 +15,6 @@ name = "ragfs"
 path = "src/lib.rs"
 
 [[bin]]
-name = "ragfs-server"
-path = "src/server/main.rs"
-
-[[bin]]
 name = "ragfs-shell"
 path = "src/shell/main.rs"
 
@@ -27,23 +23,12 @@ path = "src/shell/main.rs"
 tokio = { version = "1.38", features = ["full"] }
 async-trait = "0.1"
 
-# HTTP server
-axum = "0.7"
-tower = "0.5"
-tower-http = { version = "0.5", features = ["trace", "cors"] }
-hyper = "1.0"
-
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-serde_yaml = "0.9"
-
-# Configuration
-clap = { version = "4.5", features = ["derive", "env"] }
 
 # Logging
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 # Path handling and filesystem
 path-clean = "1.0"
@@ -78,6 +63,12 @@ lru = "0.12"
 
 # Regular expressions for grep
 regex = "1.10"
+
+# Encryption (envelope encryption: AES-256-GCM + HKDF-SHA256)
+aes-gcm = "0.10"
+hkdf = "0.12"
+sha2 = "0.10"
+rand = "0.8"
 
 # Stream combinators for concurrent I/O
 futures = "0.3"

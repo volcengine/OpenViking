@@ -9,7 +9,7 @@ viking://{scope}/{path}
 ```
 
 - **scheme**: 始终为 `viking`
-- **scope**: 顶级命名空间（`resources`、`user`、`agent`、`session`；`temp` 和 `queue` 为内部作用域）
+- **scope**: 顶级命名空间（`resources`、`user`；`temp`、`queue` 和 `upload` 为内部作用域）
 - **path**: 作用域内的资源路径
 
 ## 作用域
@@ -17,15 +17,16 @@ viking://{scope}/{path}
 | 作用域 | 说明 | 生命周期 | 可见性 |
 |--------|------|----------|--------|
 | **resources** | 独立资源 | 长期 | 全局 |
-| **user** | 用户级数据 | 长期 | 全局 |
-| **agent** | Agent 级数据 | 长期 | 全局 |
-| **session** | 会话级数据 | 会话生命周期 | 当前会话 |
+| **user** | 用户级数据，包括 session | 长期 / 会话生命周期 | 当前用户 |
 | **queue** | 处理队列 | 临时 | 内部 |
 | **temp** | 临时文件 | 解析期间 | 内部 |
+| **upload** | 临时上传文件 | 临时 | 内部 |
 
-公开 API 和 CLI 的文件系统/内容操作只接受公开作用域：
-`resources`、`user`、`agent`、`session`，以及根 URI `viking://`。
-`temp` 和 `queue` 是内部实现作用域，不能通过公开 API 的 URI 参数直接访问。
+公开 API 和 CLI 的文件系统/内容操作接受公开作用域 `resources` 和 `user`，
+以及根 URI `viking://`。`session` 保留为 user session 路径的向后兼容别名；
+新 session 数据位于 `viking://user/{user_id}/sessions`。`agent` 已废弃，但仍作为
+legacy agent 数据的只读兼容入口。
+`temp`、`queue` 和 `upload` 是内部实现作用域，不能通过公开 API 的 URI 参数直接访问。
 
 ## 初始目录
 
@@ -33,33 +34,24 @@ viking://{scope}/{path}
 
 ```
 viking://
-├── session/{session_id}/
-│   ├── .abstract.md          # L0: 会话一句话摘要
-│   ├── .overview.md          # L1: 会话概览
-│   ├── .meta.json            # 会话元数据
-│   ├── messages.json         # 结构化消息存储
-│   ├── checkpoints/          # 版本快照
-│   ├── summaries/            # 压缩摘要历史
-│   └── .relations.json       # 关联表
-│
 ├── user/
-│   ├── .abstract.md          # L0: 内容摘要
-│   ├── .overview.md          # 用户画像
-│   └── memories/             # 用户记忆存储
-│       ├── .overview.md      # 记忆概览
-│       ├── preferences/      # 用户偏好
-│       ├── entities/         # 实体记忆
-│       └── events/           # 事件记录
-│
-├── agent/
-│   ├── .abstract.md          # L0: 内容摘要
-│   ├── .overview.md          # Agent概览
-│   ├── memories/             # Agent学习记忆
-│   │   ├── .overview.md
-│   │   ├── cases/            # 案例
-│   │   └── patterns/         # 模式
-│   ├── instructions/         # Agent指令
-│   └── skills/               # 技能目录
+│   └── {user_id}/
+│       ├── profile.md        # 用户画像
+│       ├── memories/         # 用户记忆
+│       ├── resources/        # 用户私有资源
+│       ├── skills/           # 用户技能
+│       ├── peers/
+│       │   └── {peer_id}/
+│       │       ├── memories/  # 关于某个交互对象的记忆
+│       │       └── resources/ # 归属于该 peer 的资源
+│       └── sessions/         # 用户会话
+│           └── {session_id}/
+│               ├── .abstract.md
+│               ├── .overview.md
+│               ├── .meta.json
+│               ├── messages.jsonl
+│               ├── tools/
+│               └── history/
 │
 └── resources/{project}/      # 资源工作区
 ```
@@ -84,32 +76,40 @@ viking://user/memories/preferences/           # 用户偏好
 viking://user/memories/preferences/coding     # 具体偏好
 viking://user/memories/entities/              # 实体记忆
 viking://user/memories/events/                # 事件记忆
+viking://user/resources/                      # 当前用户资源
+viking://user/resources/docs/                 # 当前用户资源目录
 ```
 
-### Agent 数据
+### 用户技能和 peer 内容
 
 ```
-viking://agent/                               # Agent 根目录
-viking://agent/skills/                        # 所有技能
-viking://agent/skills/search-web              # 具体技能
-viking://agent/memories/                      # Agent 记忆
-viking://agent/memories/cases/                # 学习的案例
-viking://agent/memories/patterns/             # 学习的模式
-viking://agent/instructions/                  # Agent 指令
+viking://user/skills/                         # 当前用户的技能
+viking://user/skills/search-web               # 某个技能
+viking://user/memories/                       # 当前用户的记忆
+viking://user/memories/cases/                 # 学习的案例
+viking://user/memories/patterns/              # 学习的模式
+viking://user/{user_id}/peers/{peer_id}/memories/
+viking://user/{user_id}/peers/{peer_id}/resources/
 ```
 
-上面的 `viking://user/...` 和 `viking://agent/...` 短路径会按当前请求身份解析。
-OpenViking 会在存储和检索前将它们展开为显式命名空间路径，例如
-`viking://user/{user_id}/...` 和 `viking://agent/{agent_id}/...`。
+上面的 `viking://user/...` 短路径会按当前请求身份解析。
+OpenViking 会在存储和检索前将它展开为显式命名空间路径，例如
+`viking://user/{user_id}/...`。
+`{user_id}` 和 `{peer_id}` 等身份路径片段必须是安全的单段标识，例如
+`alice` 或 `web-visitor-alice`。
 
 ### 会话数据
 
 ```
-viking://session/{session_id}/                # 会话根目录
-viking://session/{session_id}/messages/       # 会话消息
-viking://session/{session_id}/tools/          # 工具执行
-viking://session/{session_id}/history/        # 归档历史
+viking://user/{user_id}/sessions/{session_id}/          # 会话根目录
+viking://user/{user_id}/sessions/{session_id}/messages  # 会话消息
+viking://user/{user_id}/sessions/{session_id}/tools     # 工具执行
+viking://user/{user_id}/sessions/{session_id}/history   # 归档历史
+viking://user/sessions/{session_id}/                    # 当前用户短路径
 ```
+
+`viking://session/{session_id}` 会作为当前用户 session 路径的向后兼容别名被接受。
+它不是新会话数据的独立存储根。
 
 ## 路径变量
 
@@ -196,37 +196,27 @@ viking://
 │       ├── .overview.md          # 概述
 │       └── {files...}
 │
-├── user/
-│   ├── profile.md              	# 用户基本信息
-│   └── memories/
-│       ├── preferences/          # 按主题
-│       ├── entities/             # 每条独立
-│       └── events/               # 每条独立
-│
-├── agent/{agent_id}/             # isolate_agent_scope_by_user = false 时的 agent 根目录
-│   ├── skills/                   # 技能定义
+├── user/{user_id}/
+│   ├── profile.md                # 用户基本信息
 │   ├── memories/
-│   │   ├── cases/
-│   │   └── patterns/
-│   └── instructions/
-│
-├── agent/{agent_id}/user/{user_id}/   # isolate_agent_scope_by_user = true 时的 agent 根目录
+│   │   ├── preferences/          # 按主题
+│   │   ├── entities/             # 每条独立
+│   │   └── events/               # 每条独立
+│   ├── resources/
+│   │   └── {project}/
 │   ├── skills/
-│   ├── memories/
-│   └── instructions/
+│   └── peers/{peer_id}/
+│       ├── memories/
+│       └── resources/
 │
-└── session/{session_id}/
-    ├── messages/
+└── user/{user_id}/sessions/{session_id}/
+    ├── messages.jsonl
     ├── tools/
     └── history/
 ```
 
-其中 agent 命名空间形状由 account 级 namespace policy 决定：
-
-- `isolate_agent_scope_by_user = false`：`viking://agent/{agent_id}/...`
-- `isolate_agent_scope_by_user = true`：`viking://agent/{agent_id}/user/{user_id}/...`
-
-`memory.agent_scope_mode` 已废弃且被忽略。
+`viking://agent/...` 已废弃，仅保留 legacy agent 数据的只读兼容；新数据应写入
+`viking://user/{user_id}/peers/{peer_id}/...`。
 
 ## URI 操作
 
@@ -263,6 +253,12 @@ results = client.find(
     target_uri="viking://resources/"
 )
 
+# 仅在当前用户资源中搜索
+results = client.find(
+    "私有项目笔记",
+    target_uri="viking://user/resources/"
+)
+
 # 仅在用户记忆中搜索
 results = client.find(
     "编码偏好",
@@ -272,7 +268,7 @@ results = client.find(
 # 仅在技能中搜索
 results = client.find(
     "网络搜索",
-    target_uri="viking://agent/skills/"
+    target_uri="viking://user/skills/"
 )
 ```
 
@@ -318,11 +314,14 @@ overview = await client.overview("viking://resources/docs/")
 ### 作用域特定操作
 
 ```python
-# 资源只添加到 resources 作用域
+# 添加到 account 共享资源作用域
 await client.add_resource(url, to="viking://resources/project/")
 
-# 技能添加到 agent 作用域
-await client.add_skill(skill)  # 自动到 viking://agent/skills/
+# 添加到当前用户私有资源根
+await client.add_resource(path, parent="viking://user/resources/project/")
+
+# 技能始终添加到当前用户技能根
+await client.add_skill(skill)  # canonical root: viking://user/{user_id}/skills/
 ```
 
 ## 相关文档

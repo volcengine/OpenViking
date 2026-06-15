@@ -209,7 +209,7 @@ class TestSessionDetailFields:
             if session_id:
                 api_client.delete_session(session_id)
 
-    def test_session_participant_ids_are_lists(self, api_client):
+    def test_session_participant_ids_are_not_returned(self, api_client):
         session_id = None
         try:
             create_resp = api_client.create_session()
@@ -220,12 +220,7 @@ class TestSessionDetailFields:
             assert get_resp.status_code == 200
             result = get_resp.json().get("result", {})
 
-            assert isinstance(result.get("participant_user_ids"), (list, type(None))), (
-                "participant_user_ids should be a list or None"
-            )
-            assert isinstance(result.get("participant_agent_ids"), (list, type(None))), (
-                "participant_agent_ids should be a list or None"
-            )
+            assert "participant_user_ids" not in result
         finally:
             if session_id:
                 api_client.delete_session(session_id)
@@ -251,9 +246,10 @@ class TestSessionDetailFields:
             assert target is not None, f"newly created session {session_id} should appear in list"
             assert "session_id" in target, "session list item should have session_id"
             assert "uri" in target, "session list item should have uri"
-            assert target["uri"].startswith("viking://session/"), (
-                f"session uri should start with viking://session/, got {target['uri']}"
+            assert target["uri"].startswith("viking://user/"), (
+                f"session uri should start with viking://user/, got {target['uri']}"
             )
+            assert f"/sessions/{session_id}" in target["uri"]
         finally:
             if session_id:
                 api_client.delete_session(session_id)

@@ -37,8 +37,7 @@ curl http://localhost:1933/health   # 或者你的远程 URL
   "url": "https://your-openviking-server.example.com",
   "api_key": "<your-api-key>",
   "account": "my-team",
-  "user": "alice",
-  "agent_id": "claude-code"
+  "user": "alice"
 }
 ```
 
@@ -71,8 +70,7 @@ claude mcp add --scope user --transport http openviking \
   '${OPENVIKING_URL:-http://127.0.0.1:1933}/mcp' \
   --header 'Authorization: Bearer ${OPENVIKING_API_KEY:-}' \
   --header 'X-OpenViking-Account: ${OPENVIKING_ACCOUNT:-}' \
-  --header 'X-OpenViking-User: ${OPENVIKING_USER:-}' \
-  --header 'X-OpenViking-Agent: ${OPENVIKING_AGENT_ID:-}'
+  --header 'X-OpenViking-User: ${OPENVIKING_USER:-}'
 
 # 把插件 hooks 合并进 ~/.claude/settings.json（自动备份）
 mkdir -p ~/.claude && [ -f ~/.claude/settings.json ] || echo '{}' > ~/.claude/settings.json
@@ -129,6 +127,8 @@ claude() {
 
 重新 source rc（`source ~/.zshrc`，bash 用户改成 `source ~/.bashrc`）后重启 `claude`——`/mcp` 应该显示远程 URL 且认证有效。
 
+**封装其他启动命令。** 如果你通过别的命令启动 Claude Code——比如自定义包装脚本 `cc-custom`，或“基础命令 + 子命令”形式的多词启动器——安装脚本也能一并封装：在它的“Extra launch commands”提示里填写，或运行时传入 `OPENVIKING_CC_WRAP_EXTRA='cc-custom'`。该列表存在同一段 rc 标记块里（wrapper 读取为 `$OPENVIKING_CC_WRAP_EXTRA`）；对多词条目，只有前导参数匹配该子命令的调用才会注入凭据，该命令的其他用法原样放行。**填的是真实命令名，绝不是它的 shell 别名**：别名会在 wrapper 运行前先展开成目标命令，所以封装它指向的那个——`alias cc=claude` 本就走 base `claude` 封装（无需配置），而 `alias cc=claude-custom` 则把 `claude-custom` 填进去即可；别名名若被填入会被跳过。
+
 > **为什么用 function 而不是 `export`？** 全局 export 的 API Key 会被该 shell 派生的所有子进程继承——npm 脚本、构建工具、崩溃 dump、`/proc/<pid>/environ` 都会带上。函数包装把秘钥限定在 `claude` 进程树内。
 >
 > 还没有 `ovcli.conf`？先按 [部署指南 → CLI 章节](../../docs/zh/guides/03-deployment.md#cli) 创建一份。
@@ -147,7 +147,7 @@ claude() {
 每个插件字段按从高到低：
 
 1. **环境变量**（`OPENVIKING_*`——见下方表格）
-2. **`ovcli.conf`** — CLI 客户端配置（`~/.openviking/ovcli.conf` 或 `OPENVIKING_CLI_CONFIG_FILE`）；只承载连接字段（`url`、`api_key`、`account`、`user`、`agent_id`）
+2. **`ovcli.conf`** — CLI 客户端配置（`~/.openviking/ovcli.conf` 或 `OPENVIKING_CLI_CONFIG_FILE`）；只承载连接字段（`url`、`api_key`、`account`、`user`）
 3. **`ov.conf`** — 服务器配置（`~/.openviking/ov.conf` 或 `OPENVIKING_CONFIG_FILE`）；插件读 `server.url`、`server.root_api_key`，以及可选的遗留 `claude_code` 块（见 [遗留 `claude_code` 块](#遗留-claude_code-块在-ovconf-里)）
 4. **内置默认值**（`http://127.0.0.1:1933`，无鉴权）
 
@@ -165,7 +165,9 @@ claude() {
 | `OPENVIKING_API_KEY` / `OPENVIKING_BEARER_TOKEN` | API key；以 `Authorization: Bearer <key>` 发送                     |
 | `OPENVIKING_ACCOUNT`                             | 多租户 account（`X-OpenViking-Account` 头）                        |
 | `OPENVIKING_USER`                                | 多租户 user（`X-OpenViking-User` 头）                              |
-| `OPENVIKING_AGENT_ID`                            | Agent 身份，默认 `claude-code`（`X-OpenViking-Agent` 头）           |
+| `OPENVIKING_PEER_ID`                             | 可选的稳定 peer，用于自动召回和 session message 写入               |
+
+设置 `OPENVIKING_PEER_ID` 后，数据面的 recall/profile 请求会把它作为 `X-OpenViking-Actor-Peer` 发送；捕获到 session message 时仍写入 body `peer_id`。未显式配置 peer 时，subagent 捕获会回退到 Claude 的 `agent_id`，让不同 subagent 默认落到不同 peer memory。
 
 #### 召回调优
 
@@ -317,10 +319,10 @@ Claude Code 自带 `MEMORY.md` 文件系统，本插件**与之互补**：
 |----------|-----------------------------|-----------------------------------------------|
 | 存储     | 扁平 markdown               | 向量数据库 + 结构化抽取                        |
 | 搜索     | 整体加载进上下文            | 语义相似度 + 排序 + token 预算                |
-| 范围     | 单项目                      | 跨项目、跨会话、跨 agent                       |
+| 范围     | 单项目                      | 跨项目、跨会话、peer 维度                      |
 | 容量     | ~200 行（受上下文限制）     | 不受限（服务端存储）                           |
 | 抽取     | 手写规则                    | LLM 驱动的实体 / 偏好 / 事件抽取               |
-| 子 agent | 与父共享                    | 隔离 session + 类型化 agent namespace          |
+| 子 agent | 与父共享                    | 隔离 session + peer 维度捕获                   |
 
 ---
 
@@ -362,7 +364,7 @@ Claude Code 自带 `MEMORY.md` 文件系统，本插件**与之互补**：
 | `PreCompact`          | Claude Code 重写 transcript 之前      | 在 CC 改 transcript 之前先把 pending 提交为归档                                                  |
 | `SessionEnd`          | Claude Code 会话关闭                  | 最后一次 commit                                                                                  |
 | `SubagentStart`       | 父 session 通过 Task 工具孵化子 agent | 为子 agent 派生隔离的 OV session ID，写 start state                                              |
-| `SubagentStop`        | 子 agent 结束                         | 读子 agent transcript → 推到隔离 session（带子 agent 类型 header）→ commit                       |
+| `SubagentStop`        | 子 agent 结束                         | 读子 agent transcript → 推到带子 agent peer 身份的隔离 session → commit                          |
 
 ### 异步写路径
 

@@ -16,10 +16,13 @@
 #      ~/.claude/settings.json.
 #
 # Env overrides:
-#   OPENVIKING_HOME        default: $HOME/.openviking
-#   OPENVIKING_REPO_DIR    default: $OPENVIKING_HOME/openviking-repo
-#   OPENVIKING_REPO_URL    default: https://github.com/volcengine/OpenViking.git
-#   OPENVIKING_REPO_BRANCH default: main
+#   OPENVIKING_HOME            default: $HOME/.openviking
+#   OPENVIKING_REPO_DIR        default: $OPENVIKING_HOME/openviking-repo
+#   OPENVIKING_REPO_URL        default: https://github.com/volcengine/OpenViking.git
+#   OPENVIKING_REPO_BRANCH     default: main
+#   OPENVIKING_REPO_ARCHIVE_URL  when set, fetch the source from this zip instead
+#                                of git clone (used by the TOS bootstrap for users
+#                                who can't reach GitHub). Requires `unzip`.
 #
 # Targets bash 3.2+ (macOS /bin/bash) and Linux.
 
@@ -29,6 +32,10 @@ OV_HOME="${OPENVIKING_HOME:-$HOME/.openviking}"
 REPO_DIR="${OPENVIKING_REPO_DIR:-$OV_HOME/openviking-repo}"
 REPO_URL="${OPENVIKING_REPO_URL:-https://github.com/volcengine/OpenViking.git}"
 REPO_BRANCH="${OPENVIKING_REPO_BRANCH:-main}"
+REPO_ARCHIVE_URL="${OPENVIKING_REPO_ARCHIVE_URL:-}"
+# Marks a $REPO_DIR populated from an archive (no .git). Lets re-runs refresh it
+# safely while refusing to clobber a git checkout or unrelated user data.
+ARCHIVE_MARKER='.openviking-archive-source'
 # Honor OPENVIKING_CLI_CONFIG_FILE (the env var the `ov` CLI itself reads —
 # crates/ov_cli/src/config.rs:6) so this installer matches CLI behavior.
 OVCLI_CONF="${OPENVIKING_CLI_CONFIG_FILE:-$OV_HOME/ovcli.conf}"
@@ -46,6 +53,31 @@ warn()    { printf '%s!!%s  %s\n' "$YELLOW" "$RESET" "$*"; }
 err()     { printf '%sxx%s  %s\n' "$RED" "$RESET" "$*" >&2; }
 ask()     { printf '%s??%s  %s' "$CYAN" "$RESET" "$*"; }
 heading() { printf '\n%s%s%s\n' "$BOLD" "$*" "$RESET"; }
+
+# Download a source zip and lay it out at $REPO_DIR (used for the GitHub-free
+# TOS install path). The archive is `git archive` output: a single top-level
+# OpenViking-<ref>/ dir, identical to a checkout minus .git.
+fetch_archive() {
+  local url="$1" dest="$2" tmp_zip tmp_dir top
+  command -v unzip >/dev/null 2>&1 || { err 'unzip not found; required to install from an archive.'; exit 1; }
+  tmp_zip=$(mktemp "${TMPDIR:-/tmp}/ov-src.XXXXXX") || { err 'mktemp failed'; exit 1; }
+  tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/ov-src.XXXXXX") || { err 'mktemp failed'; rm -f "$tmp_zip"; exit 1; }
+  info "Downloading source archive"
+  info "  $url"
+  curl -fsSL -o "$tmp_zip" "$url" || { err "download failed: $url"; rm -rf "$tmp_zip" "$tmp_dir"; exit 1; }
+  unzip -q "$tmp_zip" -d "$tmp_dir" || { err 'unzip failed (corrupt download?)'; rm -rf "$tmp_zip" "$tmp_dir"; exit 1; }
+  top=$(find "$tmp_dir" -mindepth 1 -maxdepth 1 -type d | head -n 1)
+  if [ -z "$top" ] || [ ! -d "$top/examples" ]; then
+    err 'unexpected archive layout (no top-level dir containing examples/)'
+    rm -rf "$tmp_zip" "$tmp_dir"; exit 1
+  fi
+  rm -rf "$dest"
+  mkdir -p "$(dirname "$dest")"
+  mv "$top" "$dest"
+  : > "$dest/$ARCHIVE_MARKER"
+  rm -rf "$tmp_zip" "$tmp_dir"
+  info "Source ready at $dest"
+}
 
 # ----- 1. Environment check -----
 
@@ -144,7 +176,14 @@ fi
 
 heading "3. OpenViking source repository ($REPO_DIR)"
 
-if [ -d "$REPO_DIR/.git" ]; then
+if [ -n "$REPO_ARCHIVE_URL" ]; then
+  # Archive mode (GitHub-free): refuse to overwrite anything we didn't create.
+  if [ -e "$REPO_DIR" ] && [ ! -f "$REPO_DIR/$ARCHIVE_MARKER" ]; then
+    err "$REPO_DIR exists and was not created from an archive. Move it aside or set OPENVIKING_REPO_DIR."
+    exit 1
+  fi
+  fetch_archive "$REPO_ARCHIVE_URL" "$REPO_DIR"
+elif [ -d "$REPO_DIR/.git" ]; then
   info "Updating existing checkout"
   git -C "$REPO_DIR" fetch --depth 1 origin "$REPO_BRANCH"
   git -C "$REPO_DIR" reset --hard "FETCH_HEAD"
@@ -184,15 +223,63 @@ case "${SHELL:-}" in
     ;;
 esac
 
+# Extra launch commands to wrap besides `claude` — e.g. a custom wrapper
+# `cc-custom`, or a multi-word launcher matched on its sub-command.
+# Persisted in the rc marker block as OPENVIKING_CC_WRAP_EXTRA; the wrapper
+# reads it and injects credentials into matching invocations only.
+heading '4b. Extra launch commands (optional)'
+# Seed from this run's env var (automation path), else the value already in
+# the rc (re-run path). The interactive prompt below can still override it.
+WRAP_EXTRA="${OPENVIKING_CC_WRAP_EXTRA:-}"
+if [ -z "$WRAP_EXTRA" ] && [ -n "$RC" ] && [ -f "$RC" ]; then
+  WRAP_EXTRA=$(awk -F"'" '/^OPENVIKING_CC_WRAP_EXTRA=/{print $2; exit}' "$RC" 2>/dev/null || true)
+fi
+info 'Inject OpenViking creds into other launch commands too? e.g. a custom'
+info 'wrapper `cc-custom`. A multi-word launcher (a base command plus a'
+info 'sub-command) is matched on that sub-command; other uses of the command'
+info 'pass through untouched.'
+if [ -n "$WRAP_EXTRA" ]; then
+  info "Currently: $WRAP_EXTRA"
+  ask 'Commands (;-separated; empty = keep, "-" = clear): '
+else
+  ask 'Commands (;-separated, e.g. "cc-custom"; empty to skip): '
+fi
+read -r WRAP_INPUT || WRAP_INPUT=""
+case "$WRAP_INPUT" in
+  "") : ;;
+  -)  WRAP_EXTRA="" ;;
+  *)  WRAP_EXTRA="$WRAP_INPUT" ;;
+esac
+# Normalize each ';'-entry: strip single quotes (keep the rc line safely
+# single-quotable), trim, collapse internal whitespace, drop empties.
+if [ -n "$WRAP_EXTRA" ]; then
+  WRAP_EXTRA=$(printf '%s' "$WRAP_EXTRA" | awk -F';' '{
+    out="";
+    for (i = 1; i <= NF; i++) {
+      s = $i; gsub(/\047/, "", s); gsub(/^[ \t]+|[ \t]+$/, "", s); gsub(/[ \t]+/, " ", s);
+      if (s != "") out = (out == "" ? s : out ";" s);
+    }
+    print out;
+  }')
+  [ -n "$WRAP_EXTRA" ] && info "Will wrap: $WRAP_EXTRA"
+fi
+
 # The user's shell rc gets a single one-line source hook pointing at the
 # wrapper source in the cloned plugin checkout. Hook content stays stable
 # across installs (only the absolute path matters), so the marker
 # replacement only triggers a legacy-cleanup pass once when upgrading from
 # a pre-split install that inlined the full wrapper into the rc.
 SOURCE_HOOK="[ -f \"$WRAPPER_SRC\" ] && . \"$WRAPPER_SRC\""
-SOURCE_BLOCK="$MARKER_BEGIN
+if [ -n "$WRAP_EXTRA" ]; then
+  SOURCE_BLOCK="$MARKER_BEGIN
+OPENVIKING_CC_WRAP_EXTRA='$WRAP_EXTRA'
 $SOURCE_HOOK
 $MARKER_END"
+else
+  SOURCE_BLOCK="$MARKER_BEGIN
+$SOURCE_HOOK
+$MARKER_END"
+fi
 
 if [ -z "$RC" ]; then
   warn 'Could not detect shell rc. Add this snippet to your rc manually:'
@@ -253,8 +340,7 @@ install_legacy() {
     '${OPENVIKING_URL:-http://127.0.0.1:1933}/mcp' \
     --header 'Authorization: Bearer ${OPENVIKING_API_KEY:-}' \
     --header 'X-OpenViking-Account: ${OPENVIKING_ACCOUNT:-}' \
-    --header 'X-OpenViking-User: ${OPENVIKING_USER:-}' \
-    --header 'X-OpenViking-Agent: ${OPENVIKING_AGENT_ID:-}' || {
+    --header 'X-OpenViking-User: ${OPENVIKING_USER:-}' || {
       err 'claude mcp add failed'
       return 1
     }

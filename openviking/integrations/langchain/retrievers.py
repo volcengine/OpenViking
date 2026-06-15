@@ -38,7 +38,7 @@ class OpenVikingRetriever(BaseRetriever):
     account: str | None = None
     user: str | None = None
     user_id: str | None = None
-    agent_id: str | None = None
+    actor_peer_id: str | None = None
     path: str | None = None
     timeout: float = 60.0
     extra_headers: dict[str, str] | None = None
@@ -68,7 +68,7 @@ class OpenVikingRetriever(BaseRetriever):
                     account=self.account,
                     user=self.user,
                     user_id=self.user_id,
-                    agent_id=self.agent_id,
+                    actor_peer_id=self.actor_peer_id,
                     path=self.path,
                     timeout=self.timeout,
                     extra_headers=self.extra_headers,

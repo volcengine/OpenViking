@@ -1,7 +1,5 @@
-## 步骤 1 选择 API Key
-复制页面中展示的 API Key 到你的 Agent 终端
 
-## 步骤 2 写入资源
+## 步骤 1： 写入资源
 参考 GitHub 提供的资源写入示例，自动填入 API Key 和域名
 
 ```python
@@ -10,9 +8,8 @@ from pathlib import Path
 
 import requests
 
-url = " `https://api.vikingdb.cn-beijing.volces.com/openviking` "
+url = "https://api.vikingdb.cn-beijing.volces.com/openviking"
 api_key = "[TODO]your-api-key"
-agent_id = "[TODO]your-agent-id"
 file_path = Path("[TODO]your-file-path") # e.g. test.txt
 resource_to = "[TODO]your-resource-path" # e.g. viking://resources/test.txt
 reason = "[TODO]your-reason" # e.g. External API documentation
@@ -21,7 +18,6 @@ reason = "[TODO]your-reason" # e.g. External API documentation
 headers = {
     "Content-Type": "application/json",
     "Authorization": "Bearer " + api_key,
-    "X-OpenViking-Agent": agent_id,
 }
 
 def post_json(path: str, payload: dict, timeout: float):
@@ -36,7 +32,6 @@ with file_path.open("rb") as file:
         f"{url}/api/v1/resources/temp_upload",
         headers={
             "Authorization": "Bearer " + api_key,
-            "X-OpenViking-Agent": agent_id,
         },
         files={"file": (file_path.name, file, "application/octet-stream")},
         timeout=120.0,
@@ -60,7 +55,7 @@ result = post_json(
 print(json.dumps(result, ensure_ascii=False, indent=2))
 ```
 
-## 步骤 3 写入记忆
+## 步骤 2： 写入记忆
 参考 GitHub 提供的记忆写入示例，自动填入 API Key 和域名
 
 ```python

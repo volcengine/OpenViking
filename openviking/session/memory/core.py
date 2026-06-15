@@ -12,7 +12,6 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List
 
 from openviking.server.identity import RequestContext
-from openviking.storage.viking_fs import VikingFS
 
 
 class ExtractContextProvider(ABC):

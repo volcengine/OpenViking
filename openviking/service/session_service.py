@@ -10,12 +10,18 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.core.namespace import canonical_session_uri
 from openviking.server.config import ToolOutputExternalizationConfig
-from openviking.server.identity import RequestContext, Role
+from openviking.server.identity import RequestContext
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
+from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
+from openviking.session.memory_policy import MemoryPolicy
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import VikingFS
-from openviking_cli.exceptions import AlreadyExistsError, NotFoundError, NotInitializedError
+from openviking_cli.exceptions import (
+    AlreadyExistsError,
+    NotFoundError,
+    NotInitializedError,
+)
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -89,7 +95,13 @@ class SessionService:
                 exc_info=True,
             )
 
-    def session(self, ctx: RequestContext, session_id: Optional[str] = None) -> Session:
+    def session(
+        self,
+        ctx: RequestContext,
+        session_id: Optional[str] = None,
+        *,
+        session_uri: Optional[str] = None,
+    ) -> Session:
         """Create a new session or load an existing one.
 
         Args:
@@ -106,16 +118,23 @@ class SessionService:
             user=ctx.user,
             ctx=ctx,
             session_id=session_id,
+            session_uri=session_uri,
             tool_output_externalization_config=self._tool_output_externalization_config,
         )
 
-    async def create(self, ctx: RequestContext, session_id: Optional[str] = None) -> Session:
+    async def create(
+        self,
+        ctx: RequestContext,
+        session_id: Optional[str] = None,
+        memory_policy: Optional[Dict[str, Any]] = None,
+    ) -> Session:
         """Create a session and persist its root path.
 
         Args:
             ctx: Request context
             session_id: Optional session ID. If provided, creates a session with the given ID.
                        If None, creates a new session with auto-generated ID.
+            memory_policy: Optional default extraction policy for future commits.
 
         Raises:
             AlreadyExistsError: If a session with the given ID already exists
@@ -127,6 +146,12 @@ class SessionService:
                 if await existing.exists():
                     raise AlreadyExistsError(f"Session '{session_id}' already exists")
             session = self.session(ctx, session_id)
+            if memory_policy is not None:
+                policy = MemoryPolicy.from_dict(memory_policy)
+                policy.validate_memory_types(
+                    set(MemoryTypeRegistry().list_names(include_disabled=False))
+                )
+                session.meta.memory_policy = policy.to_dict()
             await session.ensure_exists()
             self._record_lifecycle_metric("create", "ok")
             return session
@@ -165,26 +190,37 @@ class SessionService:
             List of session info dicts
         """
         self._ensure_initialized()
-        session_base_uri = canonical_session_uri()
+        session_base_uri = canonical_session_uri(ctx)
+        sessions_by_id: Dict[str, Dict[str, Any]] = {}
 
         try:
             entries = await self._viking_fs.ls(session_base_uri, ctx=ctx)
-            sessions = []
             for entry in entries:
                 name = entry.get("name", "")
                 if name in [".", ".."]:
                     continue
-                sessions.append(
-                    {
-                        "session_id": name,
-                        "uri": f"{session_base_uri}/{name}",
-                        "is_dir": entry.get("isDir", False),
-                    }
-                )
-            return sessions
+                sessions_by_id[name] = {
+                    "session_id": name,
+                    "uri": f"{session_base_uri}/{name}",
+                    "is_dir": entry.get("isDir", False),
+                }
         except Exception:
             logger.debug("Failed to list sessions", exc_info=True)
-            return []
+
+        try:
+            entries = await self._viking_fs.ls("viking://session", ctx=ctx)
+            for entry in entries:
+                name = entry.get("name", "")
+                if name in [".", ".."] or name in sessions_by_id:
+                    continue
+                sessions_by_id[name] = {
+                    "session_id": name,
+                    "uri": entry.get("uri", f"viking://session/{name}"),
+                    "is_dir": entry.get("isDir", False),
+                }
+        except Exception:
+            logger.debug("Failed to list legacy sessions", exc_info=True)
+        return list(sessions_by_id.values())
 
     async def delete(self, session_id: str, ctx: RequestContext) -> bool:
         """Delete a session.
@@ -196,22 +232,17 @@ class SessionService:
             True if deleted successfully
         """
         self._ensure_initialized()
-        if ctx.role not in {Role.ADMIN, Role.ROOT}:
-            from openviking_cli.exceptions import PermissionDeniedError
 
-            raise PermissionDeniedError("Deleting shared sessions requires ADMIN or ROOT role")
-
-        session_uri = canonical_session_uri(session_id)
-
-        try:
-            await self._viking_fs.rm(session_uri, recursive=True, ctx=ctx)
-            logger.info(f"Deleted session: {session_id}")
-            self._record_lifecycle_metric("delete", "ok")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to delete session {session_id}: {e}")
+        session_uri = canonical_session_uri(ctx, session_id)
+        session = await self.get(session_id, ctx)
+        if not await session.exists():
             self._record_lifecycle_metric("delete", "error")
             raise NotFoundError(session_id, "session")
+
+        await self._viking_fs.rm(session_uri, recursive=True, ctx=ctx)
+        logger.info(f"Deleted session: {session_id}")
+        self._record_lifecycle_metric("delete", "ok")
+        return True
 
     async def commit(
         self,
@@ -230,7 +261,11 @@ class SessionService:
         Returns:
             Commit result
         """
-        return await self.commit_async(session_id, ctx, keep_recent_count=keep_recent_count)
+        return await self.commit_async(
+            session_id,
+            ctx,
+            keep_recent_count=keep_recent_count,
+        )
 
     async def commit_async(
         self,
@@ -279,11 +314,10 @@ class SessionService:
         """
         self._ensure_initialized()
         if not self._session_compressor:
-            raise NotInitializedError("SessionCompressor")
+            raise NotInitializedError("SessionCompressorV2")
 
         session = await self.get(session_id, ctx)
-        session_uri = canonical_session_uri(session_id)
-        archive_uri = f"{session_uri}/manual_extract"
+        archive_uri = f"{session.uri}/manual_extract"
 
         memories = await self._session_compressor.extract_long_term_memories(
             messages=session.messages,

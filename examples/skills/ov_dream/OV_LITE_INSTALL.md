@@ -7,7 +7,6 @@ This guide installs OV Lite for OpenClaw through the `ov_dream` skill. It syncs 
 Set these values before running sync or recall:
 
 - `OPENVIKING_API_KEY`: OpenViking serverless API key
-- `OPENVIKING_AGENT_ID`: OpenViking serverless agent ID
 
 Do not print API keys in logs, shell history snippets, or replies.
 
@@ -46,13 +45,12 @@ If any check fails, the downloaded `dream.py` is not the expected OV Lite versio
 
 ## Configure Serverless Auth
 
-Create `~/.openclaw/ov_dream.env` if it does not exist. If it already exists, keep real `OPENVIKING_API_KEY` and `OPENVIKING_AGENT_ID` values and only add missing non-secret defaults.
+Create `~/.openclaw/ov_dream.env` if it does not exist. If it already exists, keep the real `OPENVIKING_API_KEY` value and only add missing non-secret defaults.
 
 ```bash
 cat > ~/.openclaw/ov_dream.env <<'EOF'
 OPENVIKING_BASE_URL=https://api.vikingdb.cn-beijing.volces.com/openviking
 OPENVIKING_API_KEY=<replace with OpenViking serverless API key>
-OPENVIKING_AGENT_ID=<replace with OpenViking agent ID>
 OPENVIKING_AUTH_MODE=serverless
 EOF
 chmod 600 ~/.openclaw/ov_dream.env

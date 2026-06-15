@@ -9,7 +9,7 @@ polled via the /tasks API to check completion status, results, or errors.
 
 Design decisions:
   - Thread-safe (QueueManager workers run in separate threads).
-  - TTL-based cleanup still applies to in-memory cache.
+  - TTL-based cleanup applies to the process-local cache.
   - Error messages are sanitized to avoid leaking sensitive data.
 """
 
@@ -24,7 +24,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from openviking.service.task_store import InMemoryTaskStore, TaskStore
+from openviking.service.task_store import TaskStore
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -51,6 +51,7 @@ class TaskRecord:
     resource_id: Optional[str] = None  # e.g. session_id
     account_id: Optional[str] = None
     user_id: Optional[str] = None
+    stage: Optional[str] = None
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
 
@@ -60,6 +61,7 @@ class TaskRecord:
         d["status"] = self.status.value
         d["created_at_iso"] = datetime.fromtimestamp(self.created_at, tz=timezone.utc).isoformat()
         d["updated_at_iso"] = datetime.fromtimestamp(self.updated_at, tz=timezone.utc).isoformat()
+        d["result"] = _sanitize_task_result(d.get("result"))
         d.pop("account_id", None)
         d.pop("user_id", None)
         return d
@@ -72,12 +74,12 @@ _init_lock = threading.Lock()
 
 
 def get_task_tracker() -> "TaskTracker":
-    """Get or create the global TaskTracker singleton."""
+    """Get or create the global persistent TaskTracker singleton."""
     global _instance
     if _instance is None:
         with _init_lock:
             if _instance is None:
-                _instance = TaskTracker()
+                _instance = _build_default_task_tracker()
     return _instance
 
 
@@ -102,6 +104,7 @@ _SENSITIVE_PATTERNS = re.compile(
 )
 
 _MAX_ERROR_LEN = 500
+_SENSITIVE_RESULT_KEYS = {"user_key"}
 
 
 def _sanitize_error(error: str) -> str:
@@ -112,11 +115,24 @@ def _sanitize_error(error: str) -> str:
     return sanitized
 
 
+def _sanitize_task_result(result: Any) -> Any:
+    """Remove sensitive fields from task results before exposing snapshots."""
+    if isinstance(result, dict):
+        return {
+            key: _sanitize_task_result(value)
+            for key, value in result.items()
+            if key not in _SENSITIVE_RESULT_KEYS
+        }
+    if isinstance(result, list):
+        return [_sanitize_task_result(item) for item in result]
+    return result
+
+
 # ── TaskTracker ──
 
 
 class TaskTracker:
-    """Async task tracker with pluggable storage and in-memory compatibility cache.
+    """Async task tracker with persistent storage and a process-local cache.
 
     Async lifecycle operations are serialized by ``_async_lock``. The thread
     lock only protects sync snapshot reads of the local cache.
@@ -127,8 +143,8 @@ class TaskTracker:
     TTL_FAILED = 604_800  # 7 days
     CLEANUP_INTERVAL = 300  # 5 minutes
 
-    def __init__(self, store: Optional[TaskStore] = None) -> None:
-        self._store = store or InMemoryTaskStore()
+    def __init__(self, store: TaskStore) -> None:
+        self._store = store
         self._tasks: Dict[str, TaskRecord] = {}
         self._lock = threading.Lock()
         self._async_lock = asyncio.Lock()
@@ -172,7 +188,6 @@ class TaskTracker:
         """Remove expired tasks and enforce MAX_TASKS."""
         now = time.time()
         async with self._async_lock:
-            deleted_tasks: List[TaskRecord] = []
             with self._lock:
                 expired_ids = []
                 for tid, t in self._tasks.items():
@@ -185,25 +200,13 @@ class TaskTracker:
                         expired_ids.append(tid)
 
                 for tid in expired_ids:
-                    task = self._tasks.pop(tid, None)
-                    if task is not None:
-                        deleted_tasks.append(task)
+                    self._tasks.pop(tid, None)
 
                 if len(self._tasks) > self.MAX_TASKS:
                     sorted_tasks = sorted(self._tasks.items(), key=lambda x: x[1].created_at)
                     excess = len(self._tasks) - self.MAX_TASKS
                     for tid, _ in sorted_tasks[:excess]:
-                        task = self._tasks.pop(tid, None)
-                        if task is not None:
-                            deleted_tasks.append(task)
-
-            for task in deleted_tasks:
-                if isinstance(self._store, InMemoryTaskStore) and task.account_id:
-                    await self._store.delete(
-                        task.task_id,
-                        account_id=task.account_id,
-                        user_id=task.user_id,
-                    )
+                        self._tasks.pop(tid, None)
 
             if expired_ids:
                 logger.debug("[TaskTracker] Evicted %d expired tasks", len(expired_ids))
@@ -311,12 +314,32 @@ class TaskTracker:
         task_id: str,
         account_id: Optional[str] = None,
         user_id: Optional[str] = None,
+        stage: Optional[str] = None,
     ) -> None:
         """Transition task to RUNNING."""
         async with self._async_lock:
             task = await self._load_for_update(task_id, account_id, user_id)
             if task:
                 task.status = TaskStatus.RUNNING
+                if stage is not None:
+                    task.stage = stage
+                task.updated_at = time.time()
+                await self._store.update(task)
+                with self._lock:
+                    self._tasks[task.task_id] = task
+
+    async def update_stage(
+        self,
+        task_id: str,
+        stage: str,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> None:
+        """Update task stage without changing its lifecycle status."""
+        async with self._async_lock:
+            task = await self._load_for_update(task_id, account_id, user_id)
+            if task:
+                task.stage = stage
                 task.updated_at = time.time()
                 await self._store.update(task)
                 with self._lock:
@@ -334,6 +357,7 @@ class TaskTracker:
             task = await self._load_for_update(task_id, account_id, user_id)
             if task:
                 task.status = TaskStatus.COMPLETED
+                task.stage = "completed"
                 task.result = result
                 task.updated_at = time.time()
                 await self._store.update(task)
@@ -353,6 +377,7 @@ class TaskTracker:
             task = await self._load_for_update(task_id, account_id, user_id)
             if task:
                 task.status = TaskStatus.FAILED
+                task.stage = "failed"
                 task.error = _sanitize_error(error)
                 task.updated_at = time.time()
                 await self._store.update(task)
@@ -475,7 +500,9 @@ class TaskTracker:
     @staticmethod
     def _copy(task: TaskRecord) -> TaskRecord:
         """Return a defensive copy of a TaskRecord."""
-        return deepcopy(task)
+        copied = deepcopy(task)
+        copied.result = _sanitize_task_result(copied.result)
+        return copied
 
     def count(self) -> int:
         """Return total task count."""
@@ -492,3 +519,13 @@ class TaskTracker:
         for t in tasks:
             grouped[t.task_type][t.status.value] += 1
         return {k: dict(v) for k, v in grouped.items()}
+
+
+def _build_default_task_tracker() -> TaskTracker:
+    """Build the default persistent tracker from the active storage config."""
+    from openviking.utils.agfs_utils import RagfsBindingConfig, create_agfs_client
+    from openviking_cli.utils.config import get_openviking_config
+
+    config = get_openviking_config()
+    agfs = create_agfs_client(RagfsBindingConfig(agfs=config.storage.agfs))
+    return config.storage.build_task_tracker(agfs)

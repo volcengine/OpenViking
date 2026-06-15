@@ -4,6 +4,10 @@ from typing import Any, Dict
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from openviking_cli.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 
 class MemoryConfig(BaseModel):
     """Memory configuration for OpenViking."""
@@ -12,14 +16,6 @@ class MemoryConfig(BaseModel):
         default="v2",
         description="Memory implementation version. Only 'v2' is supported.",
     )
-    agent_scope_mode: str = Field(
-        default="user+agent",
-        description=(
-            "Deprecated and ignored. Kept only for backward compatibility with older ov.conf files. "
-            "Agent/user namespace behavior is now controlled by per-account namespace policy."
-        ),
-    )
-
     custom_templates_dir: str = Field(
         default="",
         description="Custom memory templates directory. If set, templates from this directory will be loaded in addition to built-in templates",
@@ -40,21 +36,11 @@ class MemoryConfig(BaseModel):
             "0 means unlimited retries."
         ),
     )
-    agent_memory_enabled: bool = Field(
-        default=False,
-        description=(
-            "Enable agent-scope trajectory/experience memory extraction. When true, "
-            "a two-phase pipeline runs after user-memory extraction: Phase 1 extracts "
-            "execution trajectories from the conversation; Phase 2 consolidates them "
-            "into higher-level experience memories."
-        ),
-    )
     experimental_memory_switch: bool = Field(
         default=False,
         description=(
             "Experimental memory switch for experimental testing. When enabled, "
-            "experimental memory templates are loaded and agent_memory_enabled defaults "
-            "to true unless explicitly configured."
+            "experimental memory templates are loaded."
         ),
     )
     eager_prefetch: bool = Field(
@@ -87,16 +73,8 @@ class MemoryConfig(BaseModel):
         default=False,
         description=(
             "When enabled, session commit also extracts reusable skills from the archived "
-            "conversation and writes them into the agent skill directory. Disabled by "
+            "conversation and writes them into the current user's skill directory. Disabled by "
             "default."
-        ),
-    )
-    role_id_memory_isolation_enabled: bool = Field(
-        default=False,
-        description=(
-            "When enabled, memory extraction uses role_id from messages to determine "
-            "which user/agent the memory belongs to. When disabled (default), role_id "
-            "is ignored and the login user from the request context is used instead."
         ),
     )
     link_enabled: bool = Field(
@@ -112,18 +90,15 @@ class MemoryConfig(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def default_agent_memory_for_experimental_switch(cls, data: Any) -> Any:
-        if isinstance(data, dict) and data.get("experimental_memory_switch") is True:
-            data = data.copy()
-            data.setdefault("agent_memory_enabled", True)
+    def drop_deprecated_agent_memory_enabled(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "agent_memory_enabled" in data:
+            data = dict(data)
+            data.pop("agent_memory_enabled", None)
+            logger.warning(
+                "memory.agent_memory_enabled is deprecated and ignored; "
+                "use session memory_policy.memory_types to control trajectory/experience extraction"
+            )
         return data
-
-    @field_validator("agent_scope_mode")
-    @classmethod
-    def validate_agent_scope_mode(cls, value: str) -> str:
-        if value not in {"user+agent", "agent"}:
-            raise ValueError("memory.agent_scope_mode must be 'user+agent' or 'agent'")
-        return value
 
     @field_validator("version")
     @classmethod

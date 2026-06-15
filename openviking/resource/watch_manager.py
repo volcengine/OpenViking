@@ -24,6 +24,8 @@ from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+_UNSET = object()
+
 
 class WatchTask(BaseModel):
     """Resource monitoring task data model."""
@@ -42,13 +44,15 @@ class WatchTask(BaseModel):
     processor_kwargs: Dict[str, Any] = Field(
         default_factory=dict, description="Extra kwargs forwarded to processor"
     )
+    auth_state: Optional[Dict[str, Any]] = Field(
+        default=None, description="Private authentication state for scheduled re-processing"
+    )
     created_at: datetime = Field(default_factory=datetime.now, description="Task creation time")
     last_execution_time: Optional[datetime] = Field(None, description="Last execution time")
     next_execution_time: Optional[datetime] = Field(None, description="Next execution time")
     is_active: bool = Field(default=True, description="Whether the task is active")
     account_id: str = Field(default="default", description="Account ID (tenant)")
     user_id: str = Field(default="default", description="User ID who created this task")
-    agent_id: str = Field(default="default", description="Agent ID who created this task")
     original_role: str = Field(default="user", description="Role used to execute this task")
 
     class Config:
@@ -56,7 +60,7 @@ class WatchTask(BaseModel):
         extra = "ignore"
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert task to dictionary."""
+        """Convert task to public dictionary."""
         return {
             "task_id": self.task_id,
             "path": self.path,
@@ -78,13 +82,20 @@ class WatchTask(BaseModel):
             "is_active": self.is_active,
             "account_id": self.account_id,
             "user_id": self.user_id,
-            "agent_id": self.agent_id,
             "original_role": self.original_role,
         }
+
+    def to_storage_dict(self) -> Dict[str, Any]:
+        """Convert task to dictionary for watch-task persistence."""
+        data = self.to_dict()
+        if self.auth_state is not None:
+            data["auth_state"] = self.auth_state
+        return data
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "WatchTask":
         """Create task from dictionary."""
+        data = dict(data)
         if isinstance(data.get("created_at"), str):
             data["created_at"] = datetime.fromisoformat(data["created_at"])
         if isinstance(data.get("last_execution_time"), str):
@@ -93,6 +104,8 @@ class WatchTask(BaseModel):
             data["next_execution_time"] = datetime.fromisoformat(data["next_execution_time"])
         if data.get("processor_kwargs") is None:
             data["processor_kwargs"] = {}
+        if data.get("auth_state") is not None and not isinstance(data.get("auth_state"), dict):
+            data["auth_state"] = None
         return cls(**data)
 
     def calculate_next_execution_time(self) -> datetime:
@@ -233,7 +246,7 @@ class WatchManager:
             ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
 
             data = {
-                "tasks": [task.to_dict() for task in self._tasks.values()],
+                "tasks": [task.to_storage_dict() for task in self._tasks.values()],
                 "updated_at": datetime.now().isoformat(),
             }
 
@@ -275,7 +288,6 @@ class WatchManager:
         task: WatchTask,
         account_id: str,
         user_id: str,
-        agent_id: str,
         role: str,
     ) -> bool:
         """Check if user has permission to access/modify a task.
@@ -284,7 +296,6 @@ class WatchManager:
             task: The task to check permission for
             account_id: Requester's account ID
             user_id: Requester's user ID
-            agent_id: Requester's agent ID
             role: Requester's role (ROOT/ADMIN/USER)
 
         Returns:
@@ -293,7 +304,7 @@ class WatchManager:
         Notes:
             - ROOT can access all tasks.
             - ADMIN can access tasks within the same account.
-            - USER can only access tasks they created within the same account and agent.
+            - USER can only access tasks they created within the same account.
         """
         role_value = (role or "").lower()
         if role_value == "root":
@@ -305,7 +316,7 @@ class WatchManager:
         if role_value == "admin":
             return True
 
-        return task.user_id == user_id and task.agent_id == agent_id
+        return task.user_id == user_id
 
     def _check_uri_conflict(
         self, to_uri: Optional[str], exclude_task_id: Optional[str] = None
@@ -336,7 +347,6 @@ class WatchManager:
         path: str,
         account_id: str = "default",
         user_id: str = "default",
-        agent_id: str = "default",
         original_role: str = "user",
         to_uri: Optional[str] = None,
         parent_uri: Optional[str] = None,
@@ -346,6 +356,7 @@ class WatchManager:
         build_index: bool = True,
         summarize: bool = False,
         processor_kwargs: Optional[Dict[str, Any]] = None,
+        auth_state: Optional[Dict[str, Any]] = None,
     ) -> WatchTask:
         """Create a new monitoring task.
 
@@ -353,7 +364,6 @@ class WatchManager:
             path: Resource path to monitor
             account_id: Account ID (tenant)
             user_id: User ID who creates this task
-            agent_id: Agent ID who creates this task
             to_uri: Target URI
             parent_uri: Parent URI
             reason: Reason for monitoring
@@ -389,9 +399,9 @@ class WatchManager:
                 build_index=build_index,
                 summarize=summarize,
                 processor_kwargs=processor_kwargs or {},
+                auth_state=auth_state,
                 account_id=account_id,
                 user_id=user_id,
-                agent_id=agent_id,
                 original_role=original_role,
             )
 
@@ -423,8 +433,8 @@ class WatchManager:
         build_index: Optional[bool] = None,
         summarize: Optional[bool] = None,
         processor_kwargs: Optional[Dict[str, Any]] = None,
+        auth_state: Any = _UNSET,
         is_active: Optional[bool] = None,
-        agent_id: str = "default",
     ) -> WatchTask:
         """Update an existing monitoring task.
 
@@ -433,7 +443,6 @@ class WatchManager:
             account_id: Requester's account ID
             user_id: Requester's user ID
             role: Requester's role (ROOT/ADMIN/USER)
-            agent_id: Requester's agent ID
             path: New resource path
             to_uri: New target URI
             parent_uri: New parent URI
@@ -455,9 +464,9 @@ class WatchManager:
             if not task:
                 raise ValueError(f"Task {task_id} not found")
 
-            if not self._check_permission(task, account_id, user_id, agent_id, role):
+            if not self._check_permission(task, account_id, user_id, role):
                 raise PermissionDeniedError(
-                    f"User {account_id}/{user_id}/{agent_id} does not have permission to update task {task_id}"
+                    f"User {account_id}/{user_id} does not have permission to update task {task_id}"
                 )
 
             if self._check_uri_conflict(to_uri, exclude_task_id=task_id):
@@ -493,6 +502,8 @@ class WatchManager:
                 task.summarize = summarize
             if processor_kwargs is not None:
                 task.processor_kwargs = processor_kwargs
+            if auth_state is not _UNSET:
+                task.auth_state = auth_state
             if is_active is not None:
                 task.is_active = is_active
 
@@ -521,13 +532,25 @@ class WatchManager:
             logger.info(f"[WatchManager] Updated task {task_id} by user {account_id}/{user_id}")
             return task
 
+    async def update_auth_state(
+        self,
+        task_id: str,
+        auth_state: Optional[Dict[str, Any]],
+    ) -> None:
+        """Update private auth state for an existing watch task."""
+        async with self._lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                return
+            task.auth_state = auth_state
+            await self._save_tasks()
+
     async def delete_task(
         self,
         task_id: str,
         account_id: str,
         user_id: str,
         role: str,
-        agent_id: str = "default",
     ) -> bool:
         """Delete a monitoring task.
 
@@ -536,7 +559,6 @@ class WatchManager:
             account_id: Requester's account ID
             user_id: Requester's user ID
             role: Requester's role (ROOT/ADMIN/USER)
-            agent_id: Requester's agent ID
 
         Returns:
             True if task was deleted, False if not found
@@ -549,9 +571,9 @@ class WatchManager:
             if not task:
                 return False
 
-            if not self._check_permission(task, account_id, user_id, agent_id, role):
+            if not self._check_permission(task, account_id, user_id, role):
                 raise PermissionDeniedError(
-                    f"User {account_id}/{user_id}/{agent_id} does not have permission to delete task {task_id}"
+                    f"User {account_id}/{user_id} does not have permission to delete task {task_id}"
                 )
 
             self._tasks.pop(task_id, None)
@@ -569,7 +591,6 @@ class WatchManager:
         account_id: str = "default",
         user_id: str = "default",
         role: str = "root",
-        agent_id: str = "default",
     ) -> Optional[WatchTask]:
         """Get a monitoring task by ID.
 
@@ -578,7 +599,6 @@ class WatchManager:
             account_id: Requester's account ID
             user_id: Requester's user ID
             role: Requester's role (ROOT/ADMIN/USER)
-            agent_id: Requester's agent ID
 
         Returns:
             WatchTask if found and accessible, None otherwise
@@ -588,7 +608,7 @@ class WatchManager:
             if not task:
                 return None
 
-            if not self._check_permission(task, account_id, user_id, agent_id, role):
+            if not self._check_permission(task, account_id, user_id, role):
                 return None
 
             return task
@@ -599,7 +619,6 @@ class WatchManager:
         user_id: str,
         role: str,
         active_only: bool = False,
-        agent_id: str = "default",
     ) -> List[WatchTask]:
         """Get all monitoring tasks accessible by the user.
 
@@ -607,7 +626,6 @@ class WatchManager:
             account_id: Requester's account ID
             user_id: Requester's user ID
             role: Requester's role (ROOT/ADMIN/USER)
-            agent_id: Requester's agent ID
             active_only: If True, only return active tasks
 
         Returns:
@@ -616,7 +634,7 @@ class WatchManager:
         async with self._lock:
             tasks = []
             for task in self._tasks.values():
-                if not self._check_permission(task, account_id, user_id, agent_id, role):
+                if not self._check_permission(task, account_id, user_id, role):
                     continue
                 if active_only and not task.is_active:
                     continue
@@ -629,7 +647,6 @@ class WatchManager:
         account_id: str,
         user_id: str,
         role: str,
-        agent_id: str = "default",
     ) -> Optional[WatchTask]:
         """Get a monitoring task by target URI.
 
@@ -638,7 +655,6 @@ class WatchManager:
             account_id: Requester's account ID
             user_id: Requester's user ID
             role: Requester's role (ROOT/ADMIN/USER)
-            agent_id: Requester's agent ID
 
         Returns:
             WatchTask if found and accessible, None otherwise
@@ -652,7 +668,7 @@ class WatchManager:
             if not task:
                 return None
 
-            if not self._check_permission(task, account_id, user_id, agent_id, role):
+            if not self._check_permission(task, account_id, user_id, role):
                 return None
 
             return task

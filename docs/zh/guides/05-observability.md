@@ -135,7 +135,8 @@ ov tui viking://resources
 
 这个 TUI 适合做两类观测：
 
-- 看 `viking://resources`、`viking://user`、`viking://agent`、`viking://session` 下实际落了哪些数据
+- 看 `viking://resources` 和 `viking://user` 下实际落了哪些数据
+  （session 位于 `viking://user/{user_id}/sessions`）
 - 看某个 URI 对应的向量记录是否已经写入，以及数量是否符合预期
 
 常用按键：
@@ -366,8 +367,8 @@ scrape_configs:
 
 OpenViking 仓库里已经提供了可直接导入的 dashboard JSON：
 
-- [openviking_demo_dashboard.json](../../../examples/grafana/openviking_demo_dashboard.json)
-- [openviking_token_demo_dashboard.json](../../../examples/grafana/openviking_token_demo_dashboard.json) （注意，该 dashboard 依赖 `tim012432-calendarheatmap-panel` grafana 插件，需要先安装才能正常工作）
+- [openviking_demo_dashboard.json](https://github.com/volcengine/OpenViking/blob/main/examples/grafana/openviking_demo_dashboard.json)
+- [openviking_token_demo_dashboard.json](https://github.com/volcengine/OpenViking/blob/main/examples/grafana/openviking_token_demo_dashboard.json) （注意，该 dashboard 依赖 `tim012432-calendarheatmap-panel` grafana 插件，需要先安装才能正常工作）
 
 导入步骤可以按下面做：
 

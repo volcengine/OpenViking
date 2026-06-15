@@ -5,12 +5,13 @@
 import pytest
 
 from openviking.utils.model_retry import (
+    ERROR_CLASS_AUTH,
+    ERROR_CLASS_CONTENT_SAFETY,
     ERROR_CLASS_INPUT_TOO_LARGE,
     ERROR_CLASS_PERMANENT,
     ERROR_CLASS_QUOTA_EXCEEDED,
     ERROR_CLASS_TRANSIENT,
     classify_api_error,
-    is_quota_exceeded_api_error,
     retry_async,
     retry_sync,
 )
@@ -82,14 +83,58 @@ def test_quota_exceeded_takes_precedence_over_transient():
     assert classify_api_error(error) == ERROR_CLASS_QUOTA_EXCEEDED
 
 
-def test_permanent_still_takes_precedence_over_quota():
-    """Permanent errors (e.g. 403) still take highest precedence."""
-    assert classify_api_error(RuntimeError("403 AccountQuotaExceeded")) == ERROR_CLASS_PERMANENT
+def test_auth_takes_precedence_over_quota():
+    """Auth errors (e.g. 403) take precedence over the quota substring."""
+    assert classify_api_error(RuntimeError("403 AccountQuotaExceeded")) == ERROR_CLASS_AUTH
 
 
-def test_is_quota_exceeded_api_error():
-    assert is_quota_exceeded_api_error(RuntimeError("AccountQuotaExceeded")) is True
-    assert is_quota_exceeded_api_error(RuntimeError("429 TooManyRequests")) is False
+# --- permanent vs auth split (400 vs 401/403) ---
+
+
+def test_classify_400_is_permanent():
+    """A 400 parameter error is request-level permanent (fail-fast)."""
+    error = RuntimeError("Error code: 400 - invalid parameter `model`")
+    assert classify_api_error(error) == ERROR_CLASS_PERMANENT
+
+
+def test_classify_401_is_auth():
+    """A 401 is a credential-level auth error (advances in multi-credential mode)."""
+    assert classify_api_error(RuntimeError("Error code: 401 - Incorrect API key")) == (
+        ERROR_CLASS_AUTH
+    )
+
+
+def test_classify_403_is_auth():
+    """A 403 forbidden is a credential-level auth error."""
+    assert classify_api_error(RuntimeError("403 forbidden")) == ERROR_CLASS_AUTH
+
+
+def test_classify_unauthorized_is_auth():
+    assert classify_api_error(RuntimeError("Unauthorized")) == ERROR_CLASS_AUTH
+
+
+def test_classify_account_overdue_is_auth():
+    assert classify_api_error(RuntimeError("AccountOverdue")) == ERROR_CLASS_AUTH
+
+
+# --- content safety classification ---
+
+
+def test_classify_content_filter_is_content_safety():
+    assert classify_api_error(RuntimeError("content_filter triggered")) == (
+        ERROR_CLASS_CONTENT_SAFETY
+    )
+
+
+def test_classify_content_policy_is_content_safety():
+    error = RuntimeError("The response was rejected by the content policy")
+    assert classify_api_error(error) == ERROR_CLASS_CONTENT_SAFETY
+
+
+def test_content_safety_takes_precedence_over_400():
+    """A moderation rejection containing '400' is content_safety, not permanent."""
+    error = RuntimeError("Error code: 400 - content_filter: sensitive content detected")
+    assert classify_api_error(error) == ERROR_CLASS_CONTENT_SAFETY
 
 
 def test_retry_sync_does_not_retry_quota_exceeded():
@@ -154,3 +199,43 @@ def test_retry_sync_does_not_retry_input_too_large():
         retry_sync(_call, max_retries=5)
 
     assert attempts["count"] == 1
+
+
+# --- numeric pattern word-boundary tests ---
+
+
+def test_429_with_request_id_containing_413_is_transient():
+    """A 429 error whose request ID happens to contain '413' must NOT be
+    misclassified as INPUT_TOO_LARGE (the original bug)."""
+    error = RuntimeError(
+        "Volcengine hybrid embedding failed: Error code: 429 - "
+        "{'error': {'code': 'ModelAccountRpmRateLimitExceeded', "
+        "'message': 'RPM limit exceeded', 'param': '', "
+        "'type': 'TooManyRequests'}, "
+        "'request_id': '0217801248873024288fe53d7c9130f34413480585e683685bc95'}"
+    )
+    assert classify_api_error(error) == ERROR_CLASS_TRANSIENT
+
+
+def test_429_with_hyphenated_request_id_containing_413_is_transient():
+    """Numeric status codes must not match hyphen-delimited request ID fragments."""
+    error = RuntimeError(
+        "Volcengine hybrid embedding failed: Error code: 429 - "
+        "{'error': {'code': 'ModelAccountRpmRateLimitExceeded', "
+        "'message': 'RPM limit exceeded', 'type': 'TooManyRequests'}, "
+        "'request_id': 'req-413-abcd'}"
+    )
+    assert classify_api_error(error) == ERROR_CLASS_TRANSIENT
+
+
+def test_numeric_status_code_inside_longer_number_is_not_matched():
+    """Status code patterns must not match inside longer numbers
+    (e.g. '400' must not match '1400')."""
+    assert classify_api_error(RuntimeError("status: 1400 OK")) == "unknown"
+    assert classify_api_error(RuntimeError("status: 5020 OK")) == "unknown"
+
+
+def test_numeric_status_code_with_compact_error_code_context_still_matches():
+    assert classify_api_error(RuntimeError("Error code:413-Payload Too Large")) == (
+        ERROR_CLASS_INPUT_TOO_LARGE
+    )

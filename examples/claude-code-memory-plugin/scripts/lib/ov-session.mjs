@@ -8,7 +8,7 @@
  *
  * Format:
  *   parent:    cc-<ccSessionId>
- *   subagent:  cc-<ccSessionId>__agent-<agentId>
+ *   subagent:  cc-<ccSessionId>__subagent-<subagentId>
  *
  * The CC session_id is preserved verbatim so the OV id is human-readable and
  * the parent/subagent lineage is visible at a glance.
@@ -63,8 +63,8 @@ export function isBypassed(cfg, { sessionId, cwd } = {}) {
 /**
  * Derive a stable OV session ID from a CC session_id.
  *
- * Optionally append a suffix (e.g. subagent agent_id) for isolation. The suffix
- * is normalized: `:` → `-` (so `agent:abc123` → `agent-abc123`) and any
+ * Optionally append a suffix (e.g. subagent_id) for session isolation. The suffix
+ * is normalized: `:` → `-` (so `subagent:abc123` → `subagent-abc123`) and any
  * characters outside [A-Za-z0-9._-] become `-`. Result: `cc-<uuid>__<suffix>`.
  */
 export function deriveOvSessionId(ccSessionId, suffix = "") {
@@ -83,7 +83,7 @@ export function deriveOvSessionId(ccSessionId, suffix = "") {
  */
 export function makeFetchJSON(cfg, timeoutKey = "timeoutMs") {
   const timeoutMs = Math.max(1000, cfg[timeoutKey] || cfg.timeoutMs || 10000);
-  return async function fetchJSON(path, init = {}) {
+  return async function fetchJSON(path, init = {}, options = {}) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -91,7 +91,8 @@ export function makeFetchJSON(cfg, timeoutKey = "timeoutMs") {
       if (cfg.apiKey) headers["Authorization"] = `Bearer ${cfg.apiKey}`;
       if (cfg.accountId) headers["X-OpenViking-Account"] = cfg.accountId;
       if (cfg.userId) headers["X-OpenViking-User"] = cfg.userId;
-      if (cfg.agentId) headers["X-OpenViking-Agent"] = cfg.agentId;
+      const actorPeerId = options.actorPeerId ?? "";
+      if (actorPeerId) headers["X-OpenViking-Actor-Peer"] = actorPeerId;
       const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
       const body = await res.json().catch(() => ({}));
       if (!res.ok || body.status === "error") {
@@ -106,6 +107,31 @@ export function makeFetchJSON(cfg, timeoutKey = "timeoutMs") {
   };
 }
 
+export function isRetryableFailure(res) {
+  if (!res || res.ok) return false;
+  const status = Number(res.status || 0);
+  return !status || status >= 500 || status === 408 || status === 429;
+}
+
+function warnNonRetryable(operation, res) {
+  const status = res?.status || "unknown";
+  const msg = res?.error?.message || res?.error?.code || "";
+  process.stderr.write(
+    `[ov] ${operation} failed with non-retryable status ${status}; not enqueuing pending retry` +
+      (msg ? ` (${msg})` : "") +
+      "\n",
+  );
+}
+
+export async function enqueuePendingDirectly(type, sessionId, payload = {}) {
+  try {
+    const { enqueue } = await import("./pending-queue.mjs");
+    return await enqueue(type, sessionId, payload);
+  } catch {
+    return { ok: false };
+  }
+}
+
 /**
  * Add a message to the persistent OV session. The server auto-creates the
  * session on first message via /sessions/{id}/messages (see add_message in
@@ -115,10 +141,20 @@ export function makeFetchJSON(cfg, timeoutKey = "timeoutMs") {
  * { role, parts: [...] } (parts-mode, for tier-1 structured capture).
  */
 export async function addMessage(fetchJSON, sessionId, payload) {
-  return fetchJSON(`/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`, {
+  const res = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`, {
     method: "POST",
     body: JSON.stringify(payload),
   });
+  if (!res.ok) {
+    if (isRetryableFailure(res)) {
+      const queued = await enqueuePendingDirectly("addMessage", sessionId, payload);
+      if (queued.ok) res.pendingQueued = true;
+      else res.pendingEnqueueFailed = true;
+    } else {
+      warnNonRetryable("addMessage", res);
+    }
+  }
+  return res;
 }
 
 /**
@@ -126,10 +162,20 @@ export async function addMessage(fetchJSON, sessionId, payload) {
  * call repeatedly: if there are no pending messages the server is a no-op.
  */
 export async function commitSession(fetchJSON, sessionId) {
-  return fetchJSON(`/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`, {
+  const res = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`, {
     method: "POST",
     body: JSON.stringify({}),
   });
+  if (!res.ok) {
+    if (isRetryableFailure(res)) {
+      const queued = await enqueuePendingDirectly("commitSession", sessionId, {});
+      if (queued.ok) res.pendingQueued = true;
+      else res.pendingEnqueueFailed = true;
+    } else {
+      warnNonRetryable("commitSession", res);
+    }
+  }
+  return res;
 }
 
 /**

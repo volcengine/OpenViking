@@ -1,4 +1,4 @@
-import { log, makeRequest, unwrapResponse } from "./utils.mjs"
+import { effectivePeerId, log, makeRequest, unwrapResponse } from "./utils.mjs"
 
 const AUTO_RECALL_TIMEOUT_MS = 5000
 const RECALL_STOPWORDS = new Set([
@@ -42,11 +42,13 @@ export function createMemoryRecall({ config }) {
 
   async function performRecallSearch(query) {
     try {
+      const body = { query: query.slice(0, 4000), limit: 20, mode: "auto" }
       const response = await makeRequest(config, {
         method: "POST",
         endpoint: "/api/v1/search/find",
-        body: { query: query.slice(0, 4000), limit: 20, mode: "auto" },
+        body,
         timeoutMs: AUTO_RECALL_TIMEOUT_MS,
+        actorPeerId: effectivePeerId(config),
       })
       const result = unwrapResponse(response)
       return result?.memories ?? result?.results ?? []

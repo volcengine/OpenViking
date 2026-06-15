@@ -215,7 +215,7 @@ class IOPlayback:
 
         from openviking.storage.viking_fs import init_viking_fs
         from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
-        from openviking.utils.agfs_utils import create_agfs_client
+        from openviking.utils.agfs_utils import RagfsBindingConfig, create_agfs_client
         from openviking_cli.utils.config import get_openviking_config
         from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
 
@@ -223,7 +223,7 @@ class IOPlayback:
         agfs_config = config.storage.agfs
 
         # Create RAGFS client using utility
-        agfs_client = create_agfs_client(agfs_config)
+        agfs_client = create_agfs_client(RagfsBindingConfig(agfs=agfs_config))
 
         vector_store = None
         if self.enable_vikingdb:

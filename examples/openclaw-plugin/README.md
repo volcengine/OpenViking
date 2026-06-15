@@ -39,20 +39,26 @@ Once installed, the plugin provides these agent tools:
 | `memory_forget` | Delete memories by URI or query |
 | `ov_archive_search` | Search across archives by keyword |
 | `ov_archive_expand` | Expand an archive back to raw messages |
-| `add_resource` | Import documents, URLs, or Git repos |
-| `add_skill` | Import agent skills |
+| `ov_recall_trace` | Inspect why recall/search returned or injected specific results |
+| `add_resource` | Import documents, URLs, or Git repos when explicitly enabled |
+| `add_skill` | Import OpenViking skills |
 | `ov_search` | Search imported resources and skills |
+| `ov_read` | Read the full original content of one exact OpenViking URI |
+| `ov_multi_read` | Read the full original content of multiple OpenViking URIs |
+| `ov_list` | List OpenViking directories after search to inspect sibling chunks and overview files |
 | `openviking_tool_result_read` | Restore the full original content of an externalized tool result |
 | `openviking_tool_result_search` | Search inside an externalized tool result by keyword |
 | `openviking_tool_result_list` | List externalized tool results in the current session |
+
+`add_resource` is hidden from agents by default (`enableAddResourceTool=false`), while manual `/add-resource` remains available. Configure `recallTargetTypes` to choose default recall targets (`user`, `agent`, `resource`); legacy `recallResources=true` appends `resource` only when `recallTargetTypes` is unset.
 
 ## Data Flow & Privacy
 
 - **What is sent**: User/assistant message text from each turn (after stripping injected memory blocks and metadata noise).
 - **Where it goes**: Your configured OpenViking server (`baseUrl`). The plugin only sends data to that server; downstream model/provider data handling (embedding, VLM) depends on the server's configuration.
-- **Storage**: All data lives on your OpenViking server under `viking://user/*`, `viking://agent/*`, and `viking://session/*`.
-- **API Key**: Sent as `X-OpenViking-Key` header over your configured connection. Never logged or forwarded.
-- **Multi-tenant isolation**: Supports `accountId`, `userId`, and `agent_prefix` for per-tenant scoping.
+- **Storage**: All data lives on your OpenViking server under `viking://user/*` (including `viking://user/sessions/*`) and `viking://resources/*`.
+- **API Key**: Sent as `X-API-Key` header over your configured connection. Never logged or forwarded.
+- **Multi-tenant isolation**: Supports `accountId` and `userId`. Optional `peer_role` / `peer_prefix` controls whether OpenClaw speakers are written as OpenViking `peer_id`.
 
 ## Verify
 
@@ -68,6 +74,7 @@ openclaw config get plugins.slots.contextEngine  # should output: openviking
 | [INSTALL.md](./INSTALL.md) | Full install, upgrade, and uninstall guide |
 | [INSTALL-ZH.md](./INSTALL-ZH.md) | Chinese install guide |
 | [INSTALL-AGENT.md](./INSTALL-AGENT.md) | Agent-oriented operator guide |
+| [docs/openviking-openclaw-plugin-guide.md](./docs/openviking-openclaw-plugin-guide.md) | Comprehensive Chinese guide for usage, configuration, debugging, testing, build, release, deployment, and rollback |
 
 > **Plugin vs Skill**: This page is for `@openviking/openclaw-plugin` (the context-engine plugin). Do **not** use `clawhub install openviking` — that installs a different AgentSkill.
 
@@ -99,53 +106,45 @@ The diagram above reflects the current implementation boundary:
 
 - OpenClaw remains the primary runtime on the left. The plugin does not take over agent execution.
 - The middle layer combines hooks, the context engine, tools, and runtime management in one plugin registration.
-- All HTTP traffic goes through `OpenVikingClient`, which centralizes `X-OpenViking-*` headers and routing logs.
-- The OpenViking service owns sessions, memories, archives, and Phase 2 extraction, with storage under `viking://user/*`, `viking://agent/*`, and `viking://session/*`.
+- All HTTP traffic goes through `OpenVikingClient`, which centralizes tenant headers and routing logs.
+- The OpenViking service owns sessions, memories, archives, and Phase 2 extraction, with storage under `viking://user/*` (including `viking://user/sessions/*`) and `viking://resources/*`.
 
 That split lets OpenClaw stay focused on reasoning and orchestration while OpenViking becomes the source of truth for long-lived context.
 
 ## Identity and Routing
 
-The plugin does not send one fixed agent ID to OpenViking. It tries to keep OpenClaw session identity and OpenViking routing aligned.
+The plugin keeps OpenClaw session identity in session and peer metadata. It does not send an OpenViking agent identity or create an agent namespace.
 
 The main rules are:
 
 - reuse `sessionId` directly when it is already a UUID
 - prefer `sessionKey` when deriving a stable `ovSessionId`
 - normalize unsafe path characters, or fall back to a stable SHA-256 when needed
-- resolve `X-OpenViking-Agent` per session, not per process
-- when `plugins.entries.openviking.config.agent_prefix` is non-empty, prefix the session agent as `<agent_prefix>_<sessionAgent>`
-- when OpenClaw does not provide a session agent, use its default agent `main`
-- send `X-OpenViking-Agent` on OpenViking requests, including startup health checks
+- `peer_role=none` is the default and does not write `peer_id` on session messages
+- `peer_role=assistant` writes assistant messages with `peer_id=<sessionAgent>`; if `peer_prefix` is set, the value becomes `<peer_prefix>_<sessionAgent>`
+- `peer_role=person` writes user messages with `peer_id` derived from OpenClaw sender identity; assistant messages do not get `peer_id`
+- data-plane recall/search/read/import/delete sends the same resolved peer identity as `X-OpenViking-Actor-Peer` when `peer_role` is `assistant` or `person`
+- when OpenClaw does not provide a session agent, use its default agent `main` for local session and assistant peer metadata
 - only add `X-OpenViking-Account` / `X-OpenViking-User` when `accountId` / `userId` are explicitly configured
 
-This matters because the plugin is built to support multi-agent and multi-session OpenClaw usage without mixing memories across sessions.
+This matters because OpenViking tenant identity is account/user-scoped, while OpenClaw agent identity is runtime metadata.
 
 The recommended remote-mode configuration only needs:
 
 - `baseUrl`
 - `apiKey`
-- `agent_prefix`
+- optionally `peer_role`
+- optionally `peer_prefix` when `peer_role=assistant`
 
 In this setup:
 
 - `apiKey` should usually be a user key
+- new installs default to `peer_role=none`
 - `accountId` / `userId` are advanced options only when the deployment needs explicit identity headers, such as root-key or trusted-server flows
-- `isolateUserScopeByAgent` / `isolateAgentScopeByUser` must match the server-side account namespace policy when using the PR #1356 canonical namespace model
-- `agentScopeMode` is a deprecated compatibility alias for older hash-based routing and should only be used against older servers
 
-### Canonical namespace policy
+### User namespace
 
-For OpenViking servers that include PR #1356, the plugin no longer treats agent or user scope as a locally computed hash. Instead it expands shorthand aliases into canonical URIs using the configured namespace policy:
-
-- `viking://user/memories`
-  - `viking://user/<user_id>/memories` when `isolateUserScopeByAgent=false`
-  - `viking://user/<user_id>/agent/<agent_id>/memories` when `isolateUserScopeByAgent=true`
-- `viking://agent/memories`
-  - `viking://agent/<agent_id>/memories` when `isolateAgentScopeByUser=false`
-  - `viking://agent/<agent_id>/user/<user_id>/memories` when `isolateAgentScopeByUser=true`
-
-The plugin cannot auto-discover this policy today because `/api/v1/system/status` does not expose it. Configure the two booleans explicitly so they stay aligned with the server-side account policy.
+The plugin writes and searches user-scoped memory through `viking://user/...`; OpenViking resolves that alias from the request tenant and actor-peer context. `viking://agent/...` is deprecated by OpenViking and is not used by the plugin.
 
 ## assemble Recall Flow
 
@@ -161,9 +160,9 @@ During recall, the plugin:
 1. Extracts query text from the latest user message.
 2. Resolves the agent routing for the current `sessionId/sessionKey`.
 3. Runs a quick availability precheck so model requests do not stall when OpenViking is unavailable.
-4. Queries both `viking://user/memories` and `viking://agent/memories` in parallel.
+4. Queries the configured `recallTargetTypes` (`user,agent` by default; optionally `resource`; use `ov_archive_search` and `ov_archive_expand` for session history).
 5. Deduplicates, threshold-filters, reranks, and trims the results under a token budget.
-6. Prepends the selected memories as a `<relevant-memories>` block to the current user message; it does not append a standalone synthetic user message.
+6. Prepends the selected memories as a `## Long-term Memories` section inside `<openviking-context>` to the current user message; it does not append a standalone synthetic user message.
 
 The reranking logic is not pure vector-score sorting. The current implementation also considers:
 
@@ -198,7 +197,7 @@ That means OpenClaw sees "compressed history summary + archive index + active me
 - it slices only the newly added messages
 - it keeps only `user` / `assistant` capture text
 - it preserves `toolCall` / `toolResult` content in the serialized turn text
-- it strips injected `<relevant-memories>` blocks and metadata noise before capture
+- it strips injected `<openviking-context>` blocks, historical `<relevant-memories>` blocks, and metadata noise before capture
 - it appends the sanitized turn text into the OpenViking session
 
 After that, the plugin checks `pending_tokens`. Once the session crosses `commitTokenThreshold`, it triggers `commit(wait=false)`:
@@ -232,15 +231,19 @@ So `afterTurn()` is closer to "incremental append plus threshold-triggered async
 
 ## Tools and Expandability
 
-Beyond automatic behavior, the plugin exposes seven tools directly:
+Beyond automatic behavior, the plugin exposes these tools directly:
 
 - `memory_recall`: explicit long-term memory search
 - `memory_store`: write explicit long-term facts into an OpenViking session and trigger commit
 - `memory_forget`: delete by URI, or search first and remove a single strong match
 - `ov_archive_expand`: expand a concrete archive back into raw messages
-- `add_resource`: import a document, directory, URL, or Git repository as an OpenViking resource
-- `add_skill`: import or register an OpenViking agent skill
+- `ov_recall_trace`: inspect recent recall/search trace records when `traceRecall` is enabled
+- `add_resource`: import a document, directory, URL, or Git repository as an OpenViking resource when explicitly enabled
+- `add_skill`: import or register an OpenViking skill
 - `ov_search`: search OpenViking resources and skills, especially after importing them
+- `ov_read`: read one exact `viking://` URI returned by `ov_search` or `ov_list`
+- `ov_multi_read`: read multiple exact `viking://` URIs, useful for an overview plus sibling chunks
+- `ov_list`: list a hit's parent directory after `ov_search` to recover sibling chunks, `.overview.md`, and related split-document context
 
 They serve different roles:
 
@@ -251,6 +254,9 @@ They serve different roles:
 - `add_resource` lets the agent save explicit document or repository import requests without asking the user to remember slash commands
 - `add_skill` imports skills into OpenViking, while `add_resource` imports resources
 - `ov_search` closes the loop after import by letting the user or agent confirm and consume resources and skills
+- `ov_read` turns a ranked hit into original evidence before answering precise documentation, codebase, configuration, or procedural questions
+- `ov_multi_read` reads overview and sibling chunks together when a split document needs more context than a single hit
+- `ov_list` complements `ov_search` when a ranked hit is only one chunk of a larger procedure or document
 
 `ov_archive_expand` is especially important because `assemble()` normally returns archive summaries and indexes, not the full raw transcript.
 
@@ -259,7 +265,7 @@ They serve different roles:
 Resource and skill imports are intentionally separate because they land in different OpenViking namespaces and use different server APIs:
 
 - resources go through `/api/v1/resources` and land under `viking://resources/...`
-- skills go through `/api/v1/skills` and land under `viking://agent/skills/...`
+- skills go through `/api/v1/skills` and land under `viking://user/skills/...`
 
 The plugin also registers explicit slash commands for manual imports:
 
@@ -267,7 +273,7 @@ The plugin also registers explicit slash commands for manual imports:
 /add-resource ./README.md --to viking://resources/openviking-readme --wait
 /add-skill ./skills/install-openviking-memory --wait
 /ov-search "OpenViking install" --uri viking://resources/openviking-readme
-/ov-search "memory install skill" --uri viking://agent/skills
+/ov-search "memory install skill" --uri viking://user/skills
 ```
 
 Resource import supports remote URLs, Git URLs, local files, local directories, and uploaded zip files. OpenViking's built-in parsers cover common documents and media such as Markdown, text, PDF, HTML, Word, PowerPoint, Excel, EPUB, images, audio, and video. Directory imports also accept common code, documentation, and config file extensions such as `.py`, `.js`, `.ts`, `.go`, `.rs`, `.java`, `.cpp`, `.json`, `.yaml`, `.toml`, `.csv`, `.rst`, `.proto`, `.tf`, and `.vue`.

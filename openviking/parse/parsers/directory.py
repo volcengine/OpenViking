@@ -26,8 +26,10 @@ from openviking.parse.base import (
     ResourceNode,
     create_parse_result,
 )
+from openviking.parse.image_rewrite import IMAGE_MAPPINGS_FILENAME
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.media.constants import MEDIA_EXTENSIONS
+from openviking.storage.viking_fs import LS_ALL_NODES
 from openviking_cli.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -35,6 +37,10 @@ if TYPE_CHECKING:
     from openviking.parse.registry import ParserRegistry
 
 logger = get_logger(__name__)
+
+# Hidden files a parser's temp tree is allowed to carry through the merge.
+# Everything else hidden stays filtered, like a default ls.
+_MERGE_SIDECAR_ALLOWLIST = frozenset({IMAGE_MAPPINGS_FILENAME})
 
 
 class DirectoryParser(BaseParser):
@@ -197,6 +203,7 @@ class DirectoryParser(BaseParser):
                         viking_fs,
                         warnings,
                         preserve_structure=preserve_structure,
+                        import_root=str(source_path),
                     )
 
                 if ok:
@@ -350,6 +357,7 @@ class DirectoryParser(BaseParser):
         viking_fs: Any,
         warnings: List[str],
         preserve_structure: bool = True,
+        import_root: Optional[str] = None,
     ) -> bool:
         """Process one file into the VikingFS directory temp.
 
@@ -370,7 +378,17 @@ class DirectoryParser(BaseParser):
 
         if parser:
             try:
-                sub_result = await parser.parse(str(src_file))
+                sub_result = await parser.parse(
+                    str(src_file),
+                    # Rewrite only makes sense when relative structure is preserved;
+                    # in flat mode link targets don't exist at their original paths.
+                    enable_link_rewrite=preserve_structure,
+                    link_rewrite_root=import_root,
+                    # The whole ingested tree is fair game for image ingestion:
+                    # an md may reference shared images outside its own directory
+                    # (e.g. ../images/x.gif) that still live inside the import.
+                    allowed_media_dirs=[Path(import_root)] if import_root else None,
+                )
                 if sub_result.temp_dir_path:
                     if preserve_structure:
                         parent = str(PurePosixPath(rel_path).parent)
@@ -451,12 +469,21 @@ class DirectoryParser(BaseParser):
     ) -> None:
         """Move all content from a parser's temp directory into *dest_uri*.
 
-        After the move the source temp is deleted.
+        After the move the source temp is deleted. Hidden files stay filtered,
+        except the sidecars in :data:`_MERGE_SIDECAR_ALLOWLIST` that downstream
+        steps depend on (e.g. ``.image_mappings.json`` for the post-commit
+        image rewrite).
         """
-        entries = await viking_fs.ls(src_temp_uri)
+        entries = await viking_fs.ls(src_temp_uri, show_all_hidden=True, node_limit=LS_ALL_NODES)
         for entry in entries:
             name = entry.get("name", "")
             if not name or name in (".", ".."):
+                continue
+            if (
+                not DirectoryParser._is_dir_entry(entry)
+                and name.startswith(".")
+                and name not in _MERGE_SIDECAR_ALLOWLIST
+            ):
                 continue
             src = entry.get("uri", f"{src_temp_uri.rstrip('/')}/{name}")
             dst = f"{dest_uri.rstrip('/')}/{name}"
@@ -520,12 +547,19 @@ class DirectoryParser(BaseParser):
         src_uri: str,
         dst_uri: str,
     ) -> None:
-        """Recursively move a VikingFS directory tree."""
+        """Recursively move a VikingFS directory tree (hidden files filtered,
+        allowlisted sidecars carried)."""
         await viking_fs.mkdir(dst_uri, exist_ok=True)
-        entries = await viking_fs.ls(src_uri)
+        entries = await viking_fs.ls(src_uri, show_all_hidden=True, node_limit=LS_ALL_NODES)
         for entry in entries:
             name = entry.get("name", "")
             if not name or name in (".", ".."):
+                continue
+            if (
+                not DirectoryParser._is_dir_entry(entry)
+                and name.startswith(".")
+                and name not in _MERGE_SIDECAR_ALLOWLIST
+            ):
                 continue
             s = f"{src_uri.rstrip('/')}/{name}"
             d = f"{dst_uri.rstrip('/')}/{name}"

@@ -32,7 +32,7 @@ class _FakeVikingFS:
         self._tree = tree
         self.writes = []
 
-    async def ls(self, uri, ctx=None):
+    async def ls(self, uri, node_limit=None, ctx=None):
         return self._tree.get(uri, [])
 
     async def write_file(self, path, content, ctx=None):
@@ -87,10 +87,16 @@ class _DummyTracker:
 
 
 @pytest.mark.asyncio
-async def test_messages_jsonl_excluded_from_summary(monkeypatch):
+@pytest.mark.parametrize(
+    "root_uri",
+    [
+        "viking://session/test-session",
+        "viking://user/user1/sessions/test-session",
+    ],
+)
+async def test_messages_jsonl_excluded_from_summary(monkeypatch, root_uri):
     """messages.jsonl should be skipped by _list_dir and never summarized."""
     _mock_transaction_layer(monkeypatch)
-    root_uri = "viking://session/test-session"
     tree = {
         root_uri: [
             {"name": "messages.jsonl", "isDir": False},
@@ -106,7 +112,7 @@ async def test_messages_jsonl_excluded_from_summary(monkeypatch):
     )
 
     processor = _FakeProcessor()
-    ctx = RequestContext(user=UserIdentifier("acc1", "user1", "agent1"), role=Role.USER)
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
     executor = SemanticDagExecutor(
         processor=processor,
         context_type="session",
@@ -122,10 +128,16 @@ async def test_messages_jsonl_excluded_from_summary(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_messages_jsonl_excluded_in_subdirectory(monkeypatch):
+@pytest.mark.parametrize(
+    "root_uri",
+    [
+        "viking://session/test-session",
+        "viking://user/user1/sessions/test-session",
+    ],
+)
+async def test_messages_jsonl_excluded_in_subdirectory(monkeypatch, root_uri):
     """messages.jsonl in a subdirectory should also be skipped."""
     _mock_transaction_layer(monkeypatch)
-    root_uri = "viking://session/test-session"
     tree = {
         root_uri: [
             {"name": "subdir", "isDir": True},
@@ -143,7 +155,7 @@ async def test_messages_jsonl_excluded_in_subdirectory(monkeypatch):
     )
 
     processor = _FakeProcessor()
-    ctx = RequestContext(user=UserIdentifier("acc1", "user1", "agent1"), role=Role.USER)
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
     executor = SemanticDagExecutor(
         processor=processor,
         context_type="session",
