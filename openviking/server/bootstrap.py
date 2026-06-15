@@ -170,6 +170,12 @@ def main():
         help="Enable Bot API proxy to Vikingbot (requires Vikingbot running)",
     )
     parser.add_argument(
+        "--with-daemon",
+        action="store_true",
+        dest="with_daemon",
+        help="Enable Active Daemon for automatic knowledge extraction from Claude Code logs",
+    )
+    parser.add_argument(
         "--bot-port",
         type=int,
         default=VIKINGBOT_DEFAULT_PORT,
@@ -243,6 +249,8 @@ def main():
         config.workers = args.workers
     if args.with_bot:
         config.with_bot = True
+    if args.with_daemon:
+        config.daemon.enabled = True
 
     # Configure logging for Uvicorn
     configure_uvicorn_logging()
