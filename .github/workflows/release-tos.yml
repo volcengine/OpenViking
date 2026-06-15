@@ -128,11 +128,15 @@ jobs:
           SOURCE_ZIP="/tmp/openviking-${RELEASE_TAG}-source.zip"
           CLAUDE_INSTALL="examples/claude-code-memory-plugin/setup-helper/install.sh"
           CODEX_INSTALL="examples/codex-memory-plugin/setup-helper/install.sh"
+          CLAUDE_TOS_INSTALL="examples/claude-code-memory-plugin/setup-helper/tos-install.sh"
+          CODEX_TOS_INSTALL="examples/codex-memory-plugin/setup-helper/tos-install.sh"
 
           # Versioned, immutable copies
           upload "${SOURCE_ZIP}" "releases/${RELEASE_TAG}/openviking-${RELEASE_TAG}-source.zip" "${ZIP_CONTENT_TYPE}" "${IMMUTABLE_CACHE_CONTROL}"
           upload "${CLAUDE_INSTALL}" "releases/${RELEASE_TAG}/claude-code-memory-plugin/install.sh" "${SHELL_CONTENT_TYPE}" "${IMMUTABLE_CACHE_CONTROL}"
           upload "${CODEX_INSTALL}" "releases/${RELEASE_TAG}/codex-memory-plugin/install.sh" "${SHELL_CONTENT_TYPE}" "${IMMUTABLE_CACHE_CONTROL}"
+          upload "${CLAUDE_TOS_INSTALL}" "releases/${RELEASE_TAG}/claude-code-memory-plugin/tos-install.sh" "${SHELL_CONTENT_TYPE}" "${IMMUTABLE_CACHE_CONTROL}"
+          upload "${CODEX_TOS_INSTALL}" "releases/${RELEASE_TAG}/codex-memory-plugin/tos-install.sh" "${SHELL_CONTENT_TYPE}" "${IMMUTABLE_CACHE_CONTROL}"
 
           # Stable paths, overwritten on every release. The zip is copied
           # server-side from the versioned key instead of re-transferring it.
@@ -140,6 +144,8 @@ jobs:
             upload "s3://${TOS_BUCKET}/releases/${RELEASE_TAG}/openviking-${RELEASE_TAG}-source.zip" "releases/latest/openviking-source.zip" "${ZIP_CONTENT_TYPE}" "${NO_CACHE_CONTROL}"
             upload "${CLAUDE_INSTALL}" "claude-code-memory-plugin/install.sh" "${SHELL_CONTENT_TYPE}" "${NO_CACHE_CONTROL}"
             upload "${CODEX_INSTALL}" "codex-memory-plugin/install.sh" "${SHELL_CONTENT_TYPE}" "${NO_CACHE_CONTROL}"
+            upload "${CLAUDE_TOS_INSTALL}" "claude-code-memory-plugin/tos-install.sh" "${SHELL_CONTENT_TYPE}" "${NO_CACHE_CONTROL}"
+            upload "${CODEX_TOS_INSTALL}" "codex-memory-plugin/tos-install.sh" "${SHELL_CONTENT_TYPE}" "${NO_CACHE_CONTROL}"
           else
             echo "Skipping stable/latest paths (update_latest=false)"
           fi
