@@ -291,6 +291,10 @@ function main() {
     process.stdout.write(resolveOpenVikingCredentials().hasApiKey ? "1" : "0");
     return;
   }
+  if (cmd === "has-peer-id") {
+    process.stdout.write(resolveOpenVikingCredentials().peerId ? "1" : "0");
+    return;
+  }
   if (cmd === "sync-mcp") {
     const file = process.argv[3];
     if (!file) {
@@ -301,7 +305,7 @@ function main() {
     syncMcpConfig(file);
     return;
   }
-  process.stderr.write("usage: ov-credentials.mjs <shell-env|mcp-url|has-api-key|sync-mcp>\n");
+  process.stderr.write("usage: ov-credentials.mjs <shell-env|mcp-url|has-api-key|has-peer-id|sync-mcp>\n");
   process.exitCode = 2;
 }
 
