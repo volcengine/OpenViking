@@ -32,7 +32,7 @@ from progress_utils import (
 )
 
 
-TRACE_ID_RE = re.compile(r"\btrace_id=([^,\s:]+)")
+TRACE_ID_RE = re.compile(r"\btrace_?id[=:\s]+([^,\s:)\]]+)")
 
 
 def _get_session_number(session_key: str) -> int:
@@ -254,10 +254,22 @@ def extract_trace_id_from_error(error: str) -> str:
     return match.group(1) if match else ""
 
 
-def record_failed_trace_id(result: Dict[str, Any], failed_trace_ids: list[str]) -> None:
+def record_failed_session(
+    result: Dict[str, Any],
+    failed_sessions: list[Dict[str, str]],
+) -> None:
     trace_id = result.get("trace_id") or extract_trace_id_from_error(result.get("error", ""))
-    if trace_id:
-        failed_trace_ids.append(str(trace_id))
+    session = result.get("session") or result.get("session_key") or ""
+    sample_id = result.get("sample_id") or ""
+    error_msg = str(result.get("error", ""))[:120]
+    failed_sessions.append(
+        {
+            "session": str(session),
+            "sample_id": str(sample_id),
+            "trace_id": str(trace_id) if trace_id else "",
+            "error": error_msg,
+        }
+    )
 
 
 def record_success_trace_id(result: Dict[str, Any], success_trace_ids: list[str]) -> None:
@@ -686,7 +698,7 @@ async def run_import(args: argparse.Namespace) -> None:
     total_cache_tokens = 0
     total_reasoning_tokens = 0
     total_llm_output_tokens = 0
-    failed_trace_ids: list[str] = []
+    failed_sessions: list[dict[str, str]] = []
     success_trace_ids: list[str] = []
     tasks = []
     progress_tracker: AsyncProgressTracker | None = None
@@ -1071,9 +1083,17 @@ async def run_import(args: argparse.Namespace) -> None:
     print(f"Failed: {error_count}", file=sys.stderr)
     print(f"Skipped (already imported): {skipped_count}", file=sys.stderr)
     if success_trace_ids:
-        print(f"Success trace IDs: {' '.join(success_trace_ids)}", file=sys.stderr)
-    if failed_trace_ids:
-        print(f"Failed trace IDs: {' '.join(failed_trace_ids)}", file=sys.stderr)
+        preview = success_trace_ids[:10]
+        suffix = " ..." if len(success_trace_ids) > 10 else ""
+        print(f"Success trace IDs ({len(success_trace_ids)}): {' '.join(preview)}{suffix}", file=sys.stderr)
+    if failed_sessions:
+        print(f"\nFailed sessions ({len(failed_sessions)}):", file=sys.stderr)
+        for idx, s in enumerate(failed_sessions, 1):
+            session_label = s.get("session") or s.get("sample_id") or "unknown"
+            trace = s.get("trace_id", "")
+            trace_part = f", trace_id={trace}" if trace else ", trace_id=(none)"
+            error_part = s.get("error", "")
+            print(f"  [{idx}] {session_label}{trace_part} — {error_part}", file=sys.stderr)
     print("\n=== Token usage summary ===", file=sys.stderr)
     print(f"Total Embedding tokens: {total_embedding_tokens}", file=sys.stderr)
     print(f"Total VLM tokens: {total_vlm_tokens}", file=sys.stderr)
