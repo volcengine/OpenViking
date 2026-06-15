@@ -80,7 +80,8 @@ pub async fn handle_add_resource(
         auth.api_key,
         auth.account,
         auth.user,
-        ctx.config.actor_peer_id.clone(),
+        ctx.config.effective_actor_peer_id(),
+        ctx.config.agent_id.clone(),
         effective_timeout,
         ctx.profile.unwrap_or(ctx.config.profile),
         ctx.config.extra_headers.clone(),
@@ -398,6 +399,9 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
         AdminCommands::DeleteAccount { account_id } => {
             commands::admin::delete_account(&client, &account_id, ctx.output_format, ctx.compact)
                 .await
+        }
+        AdminCommands::Migrate { cleanup } => {
+            commands::admin::migrate(&client, cleanup, ctx.output_format, ctx.compact).await
         }
         AdminCommands::RegisterUser {
             account_id,

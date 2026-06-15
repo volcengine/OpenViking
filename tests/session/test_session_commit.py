@@ -395,6 +395,10 @@ class TestCommit:
     ):
         """Second commit should pass the latest completed archive overview into Phase 2."""
         session = client.session(session_id="latest_overview_threading_test")
+        session._meta.memory_policy = {
+            "peer": {"enabled": False},
+            "memory_types": ["profile"],
+        }
 
         session.add_message("user", [TextPart("First round message")])
         session.add_message("assistant", [TextPart("First round response")])

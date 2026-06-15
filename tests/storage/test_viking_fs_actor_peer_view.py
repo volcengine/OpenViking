@@ -5,7 +5,7 @@ import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.viking_fs import VikingFS
-from openviking_cli.exceptions import PermissionDeniedError
+from openviking_cli.exceptions import NotFoundError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 
 _MOD_TIME = "2026-01-01T00:00:00Z"
@@ -14,11 +14,32 @@ _MOD_TIME = "2026-01-01T00:00:00Z"
 class _MemoryAGFS:
     def __init__(self):
         self.files = {
+            "/local/acct/agent/customer-wang-yue/memories/profile.md": b"legacy-wang",
+            "/local/acct/agent/customer-zhang-xiaoxiao/memories/profile.md": b"legacy-zhang",
             "/local/acct/user/support_bot/peers/customer-wang-yue/memories/profile.md": b"wang",
             "/local/acct/user/support_bot/peers/customer-zhang-xiaoxiao/memories/profile.md": (
                 b"zhang"
             ),
             "/local/acct/user/support_bot/resources/guide.md": b"guide",
+            "/local/acct/user/support_bot/sessions/duplicate/messages.jsonl": (
+                b'{"role":"user","content":"new"}\n'
+            ),
+            "/local/acct/user/support_bot/sessions/new-session/messages.jsonl": (
+                b'{"role":"user","content":"new only"}\n'
+            ),
+            "/local/acct/session/duplicate/messages.jsonl": (
+                b'{"role":"user","content":"legacy duplicate"}\n'
+            ),
+            "/local/acct/session/legacy-session/messages.jsonl": (
+                b'{"role":"user","content":"legacy"}\n'
+            ),
+            "/local/acct/session/other-owned/.meta.json": b'{"created_by_user_id":"other"}',
+            "/local/acct/session/other-owned/messages.jsonl": (
+                b'{"role":"user","content":"other"}\n'
+            ),
+            "/local/acct/session/support_bot/nested-session/messages.jsonl": (
+                b'{"role":"user","content":"nested"}\n'
+            ),
         }
         self.dirs = set()
         for path in self.files:
@@ -161,6 +182,52 @@ async def test_actor_peer_view_filters_ls_peer_collection(fs, actor_ctx):
     assert [entry["uri"] for entry in entries] == [
         "viking://user/support_bot/peers/customer-wang-yue"
     ]
+
+
+@pytest.mark.asyncio
+async def test_actor_peer_view_filters_legacy_agent_collection(fs, actor_ctx):
+    entries = await fs.ls("viking://agent", ctx=actor_ctx)
+
+    assert [entry["uri"] for entry in entries] == ["viking://agent/customer-wang-yue"]
+    assert (
+        await fs.read_file(
+            "viking://agent/customer-wang-yue/memories/profile.md",
+            ctx=actor_ctx,
+        )
+        == "legacy-wang"
+    )
+    with pytest.raises(PermissionDeniedError):
+        await fs.read_file(
+            "viking://agent/customer-zhang-xiaoxiao/memories/profile.md",
+            ctx=actor_ctx,
+        )
+
+
+@pytest.mark.asyncio
+async def test_legacy_session_scope_merges_new_and_unmigrated_sessions(fs, actor_ctx):
+    entries = await fs.ls("viking://session", ctx=actor_ctx)
+
+    assert [entry["uri"] for entry in entries] == [
+        "viking://session/duplicate",
+        "viking://session/new-session",
+        "viking://session/legacy-session",
+        "viking://session/nested-session",
+    ]
+
+    assert (
+        await fs.read_file("viking://session/duplicate/messages.jsonl", ctx=actor_ctx)
+        == '{"role":"user","content":"new"}\n'
+    )
+    assert (
+        await fs.read_file("viking://session/legacy-session/messages.jsonl", ctx=actor_ctx)
+        == '{"role":"user","content":"legacy"}\n'
+    )
+    assert (
+        await fs.read_file("viking://session/nested-session/messages.jsonl", ctx=actor_ctx)
+        == '{"role":"user","content":"nested"}\n'
+    )
+    with pytest.raises(NotFoundError):
+        await fs.read_file("viking://session/other-owned/messages.jsonl", ctx=actor_ctx)
 
 
 @pytest.mark.asyncio

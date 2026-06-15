@@ -124,6 +124,11 @@ PRESET_DIRECTORIES: Dict[str, DirectoryDefinition] = {
                 overview="Access when the current User or a proxy acting with the current User's API key needs to execute specific tasks. Skills categorized by tags, "
                 "should retrieve relevant skills before executing tasks, select most appropriate skill to execute.",
             ),
+            DirectoryDefinition(
+                path="sessions",
+                abstract="User session registry. Stores conversation state, live messages, tool outputs, and session history owned by the current User.",
+                overview="Use this directory to inspect or migrate user-owned session records. Session entries are created lazily when sessions are started.",
+            ),
         ],
     ),
     "resources": DirectoryDefinition(
