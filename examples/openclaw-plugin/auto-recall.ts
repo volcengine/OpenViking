@@ -12,9 +12,15 @@ import { estimateTextTokens } from "./token-estimator.js";
 import type {
   RecallResourceType,
   RecallTraceEntry,
-  RecallTraceResult,
 } from "./recall-trace.js";
 import { resolveRecallSearchPlan } from "./recall-trace.js";
+import {
+  boundTraceQuery,
+  createTraceId,
+  inferRecallResourceType,
+  toTraceSelectedItem,
+  traceResultsFromFindResult,
+} from "./recall-trace-utils.js";
 
 const RECALL_QUERY_MAX_CHARS = 4_000;
 export const AUTO_RECALL_SOURCE_MARKER = "Source: openviking-auto-recall";
@@ -245,40 +251,8 @@ export function buildOpenVikingContextBlock(params: {
   ].join("\n");
 }
 
-function newTraceId(): string {
-  return `auto_recall_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
-}
-
-function preview(value: string | undefined | null, maxChars: number): string | undefined {
-  const normalized = typeof value === "string" ? value.trim().replace(/\s+/g, " ") : "";
-  if (!normalized) {
-    return undefined;
-  }
-  return normalized.length > maxChars ? normalized.slice(0, maxChars) : normalized;
-}
-
 function traceResourceTypeForUri(uri: string | undefined): RecallResourceType {
-  if (uri?.startsWith("viking://resources")) return "resource";
-  if (uri?.startsWith("viking://session/") || uri?.includes("/sessions/")) return "session";
-  return "user";
-}
-
-function toTraceResults(items: FindResultItem[], resourceType: RecallResourceType): RecallTraceResult[] {
-  return items.map((item) => ({
-    uri: item.uri,
-    resourceType,
-    category: item.category,
-    score: item.score,
-    level: item.level,
-    abstractPreview: preview(item.abstract ?? item.overview, 240),
-    resultType: resourceType === "resource" ? "resource" : "memory",
-  }));
-}
-
-function boundTraceQuery(query: string, maxChars: number): { query: string; queryTruncated?: boolean } {
-  return query.length <= maxChars
-    ? { query }
-    : { query: query.slice(0, maxChars), queryTruncated: true };
+  return inferRecallResourceType(uri) ?? "user";
 }
 
 function runtimeFlag(runtimeContext: unknown, key: string): unknown {
@@ -578,8 +552,9 @@ export async function buildLongTermMemoryRecallContext(params: {
           const memories = result.memories ?? [];
           const resources = result.resources ?? [];
           allMemories.push(...memories, ...resources);
+          const resourceType = s.value.search.resourceType;
           traceSearches.push({
-            resourceType: s.value.search.resourceType,
+            resourceType,
             contextType: s.value.search.contextType,
             targetUriInput: s.value.search.targetUri,
             targetUriResolved: s.value.search.targetUri,
@@ -587,19 +562,10 @@ export async function buildLongTermMemoryRecallContext(params: {
             scoreThreshold: 0,
             durationMs: s.value.durationMs,
             total: result.total ?? memories.length + resources.length + (result.skills?.length ?? 0),
-            results: [
-              ...toTraceResults(memories, s.value.search.resourceType),
-              ...toTraceResults(resources, "resource"),
-              ...(result.skills ?? []).map((item): RecallTraceResult => ({
-                uri: item.uri,
-                resourceType: s.value.search.resourceType,
-                category: item.category,
-                score: item.score,
-                level: item.level,
-                abstractPreview: preview(item.abstract ?? item.overview, 240),
-                resultType: "skill",
-              })),
-            ].slice(0, cfg.traceRecallMaxResultsPerSearch),
+            results: traceResultsFromFindResult(result, 240, cfg.traceRecallMaxResultsPerSearch, {
+              memory: resourceType,
+              skill: resourceType,
+            }),
           });
         } else {
           logger.warn?.(`openviking: auto-recall search failed: ${String(s.reason)}`);
@@ -630,7 +596,7 @@ export async function buildLongTermMemoryRecallContext(params: {
       const recordTrace = (injectedMemories: FindResultItem[], injectedCount: number, estimatedTokens?: number) => {
         params.traceRecorder?.record({
           schemaVersion: "1.0",
-          traceId: newTraceId(),
+          traceId: createTraceId("auto_recall"),
           ts: Date.now(),
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
@@ -645,12 +611,8 @@ export async function buildLongTermMemoryRecallContext(params: {
             queryTruncated: params.queryTruncated || queryText.length > cfg.traceRecallQueryMaxChars,
           },
           searches: traceSearches,
-          selected: injectedMemories.map((memory) => ({
-            uri: memory.uri,
+          selected: injectedMemories.map((memory) => toTraceSelectedItem(memory, cfg.traceRecallPreviewChars, {
             resourceType: traceResourceTypeForUri(memory.uri),
-            category: memory.category,
-            score: memory.score,
-            abstractPreview: preview(memory.abstract ?? memory.overview, cfg.traceRecallPreviewChars),
             injected: true,
           })),
           stats: {
