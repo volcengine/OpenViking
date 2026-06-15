@@ -8,6 +8,7 @@ Wraps AsyncHTTPClient with synchronous methods.
 from typing import Any, Dict, List, Optional, Union
 
 from openviking.telemetry import TelemetryRequest
+from openviking.utils.search_filters import SearchContextTypeInput
 from openviking_cli.client.http import AsyncHTTPClient
 from openviking_cli.utils import run_async
 
@@ -35,6 +36,7 @@ class SyncHTTPClient:
         user_id: Optional[str] = None,
         account: Optional[str] = None,
         user: Optional[str] = None,
+        actor_peer_id: Optional[str] = None,
         timeout: float = 60.0,
         extra_headers: Optional[Dict[str, str]] = None,
         profile_enabled: Optional[bool] = None,
@@ -45,6 +47,7 @@ class SyncHTTPClient:
             user_id=user_id,
             account=account,
             user=user,
+            actor_peer_id=actor_peer_id,
             timeout=timeout,
             extra_headers=extra_headers,
             profile_enabled=profile_enabled,
@@ -285,8 +288,8 @@ class SyncHTTPClient:
         node_limit: Optional[int] = None,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        context_type: Optional[SearchContextTypeInput] = None,
         telemetry: TelemetryRequest = False,
-        peer_id: Optional[str] = None,
     ):
         """Semantic search with optional session context."""
         return run_async(
@@ -299,8 +302,8 @@ class SyncHTTPClient:
                 node_limit=node_limit,
                 score_threshold=score_threshold,
                 filter=filter,
+                context_type=context_type,
                 telemetry=telemetry,
-                peer_id=peer_id,
             )
         )
 
@@ -312,8 +315,8 @@ class SyncHTTPClient:
         node_limit: Optional[int] = None,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        context_type: Optional[SearchContextTypeInput] = None,
         telemetry: TelemetryRequest = False,
-        peer_id: Optional[str] = None,
     ):
         """Semantic search without session context."""
         return run_async(
@@ -324,8 +327,8 @@ class SyncHTTPClient:
                 node_limit,
                 score_threshold,
                 filter,
+                context_type,
                 telemetry=telemetry,
-                peer_id=peer_id,
             )
         )
 

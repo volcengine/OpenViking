@@ -217,7 +217,7 @@ Rules in trusted mode:
 
 - Normal data access does not require user registration or user-key provisioning first.
 - `X-OpenViking-Account` and `X-OpenViking-User` are required on tenant-scoped requests.
-- Use request-level `peer_id` for stable interaction peers in session memory and retrieval APIs.
+- Use `peer_id` in session-message bodies for stable speaker attribution. Use `X-OpenViking-Actor-Peer` to filter the current user's peer collection for filesystem and retrieval operations.
 - `/api/v1/admin/*` is special: when no explicit identity is provided, trusted mode treats the request as ROOT. This is intended for trusted upstreams that authenticate only with the deployment's root API key.
 - Role is determined by looking up the account/user in APIKeyManager. If the user exists, their configured role is used; otherwise it defaults to `USER`.
 - Trusted identity comes from the headers, not from a user key. If `root_api_key` is configured, it still acts as proof that the caller is an approved trusted upstream.

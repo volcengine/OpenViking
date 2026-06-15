@@ -47,16 +47,22 @@ async def test_reindex_rejects_unsupported_uri(admin_client: httpx.AsyncClient):
     assert body["error"]["code"] == "UNSUPPORTED_URI"
 
 
-async def test_reindex_rejects_session_uri(admin_client: httpx.AsyncClient):
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "viking://session/test/demo",
+        "viking://user/default/sessions/test/demo",
+    ],
+)
+async def test_reindex_rejects_session_uri(admin_client: httpx.AsyncClient, uri: str):
     resp = await admin_client.post(
         "/api/v1/content/reindex",
-        json={"uri": "viking://session/test/demo", "mode": "vectors_only"},
+        json={"uri": uri, "mode": "vectors_only"},
         headers=ROOT_ACCOUNT_HEADERS,
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 403
     body = resp.json()
     assert body["status"] == "error"
-    assert body["error"]["code"] == "UNSUPPORTED_URI"
 
 
 async def test_reindex_rejects_reason_field(admin_client: httpx.AsyncClient):
@@ -1178,8 +1184,11 @@ async def test_reindex_user_namespace_partitions_memory_skill_and_resource(monke
                 {"uri": "viking://user/default/memories/preferences", "isDir": True},
                 {"uri": "viking://user/default/skills", "isDir": True},
                 {"uri": "viking://user/default/skills/my_skill", "isDir": True},
+                {"uri": "viking://user/default/sessions", "isDir": True},
+                {"uri": "viking://user/default/sessions/s1", "isDir": True},
                 {"uri": "viking://user/default/resources", "isDir": True},
                 {"uri": "viking://user/default/resources/doc.md", "isDir": False},
+                {"uri": "viking://user/default/sessions/s1/messages.jsonl", "isDir": False},
                 {"uri": "viking://user/default/profile.md", "isDir": False},
                 {"uri": "viking://user/default/memories/preferences/theme.md", "isDir": False},
                 {"uri": "viking://user/default/skills/my_skill/SKILL.md", "isDir": False},
@@ -1232,6 +1241,7 @@ async def test_reindex_user_namespace_partitions_memory_skill_and_resource(monke
     assert "viking://user/default/resources" in seen["resource_dirs"]
     assert "viking://user/default/memories" not in seen["resource_dirs"]
     assert "viking://user/default/skills" not in seen["resource_dirs"]
+    assert "viking://user/default/sessions" not in seen["resource_dirs"]
     assert seen["resource_files"] == [
         "viking://user/default/resources/doc.md",
         "viking://user/default/profile.md",

@@ -66,6 +66,7 @@ class OpenVikingContextMiddleware(AgentMiddleware):
         account: str | None = None,
         user: str | None = None,
         user_id: str | None = None,
+        actor_peer_id: str | None = None,
         path: str | None = None,
         target_uri: str | list[str] = "",
         limit: int = 5,
@@ -89,6 +90,7 @@ class OpenVikingContextMiddleware(AgentMiddleware):
             account=account,
             user=user,
             user_id=user_id,
+            actor_peer_id=actor_peer_id,
             path=path,
         )
         self.retriever = retriever or OpenVikingRetriever(
@@ -98,9 +100,9 @@ class OpenVikingContextMiddleware(AgentMiddleware):
             account=account,
             user=user,
             user_id=user_id,
+            actor_peer_id=actor_peer_id,
             path=path,
             target_uri=target_uri,
-            peer_id=peer_id,
             limit=limit,
             score_threshold=score_threshold,
             search_mode="search",
@@ -113,9 +115,9 @@ class OpenVikingContextMiddleware(AgentMiddleware):
             account=account,
             user=user,
             user_id=user_id,
+            actor_peer_id=actor_peer_id,
             path=path,
             target_uri=target_uri,
-            peer_id=peer_id,
             limit=limit,
             score_threshold=score_threshold,
             token_budget=token_budget,
@@ -125,7 +127,7 @@ class OpenVikingContextMiddleware(AgentMiddleware):
             recall_header=recall_header,
         )
         self.session_id_resolver = session_id_resolver
-        self.peer_id = peer_id if peer_id is not None else getattr(self.retriever, "peer_id", None)
+        self.peer_id = peer_id
         self.peer_id_resolver = peer_id_resolver
         self.capture_on_after_agent = capture_on_after_agent
         self.commit_policy = commit_policy
@@ -152,7 +154,6 @@ class OpenVikingContextMiddleware(AgentMiddleware):
         assembled = self.assembler.assemble(
             session_id=session_id,
             query=query,
-            peer_id=peer_id,
         )
         context_block = assembled.block
         if not context_block:

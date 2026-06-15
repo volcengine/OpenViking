@@ -705,18 +705,21 @@ viking://
 │   │   └── src/
 │   └── ...
 ├── user/                   # User: personal preferences, habits, etc.
-│   └── memories/
-│       ├── preferences/
-│       │   ├── writing_style
-│       │   └── coding_habits
-│       └── ...
-└── agent/                  # Agent: skills, instructions, task memories, etc.
-    ├── skills/
-    │   ├── search_code
-    │   ├── analyze_data
-    │   └── ...
-    ├── memories/
-    └── instructions/
+│   └── {user_id}/
+│       ├── memories/
+│       │   ├── preferences/
+│       │   │   ├── writing_style
+│       │   │   └── coding_habits
+│       │   └── ...
+│       ├── resources/
+│       │   └── private_project/
+│       ├── skills/
+│       │   ├── search_code
+│       │   └── analyze_data
+│       └── peers/
+│           └── web-visitor-alice/
+│               ├── memories/
+│               └── resources/
 ```
 
 ### 2. Tiered Context Loading → Reduces Token Consumption

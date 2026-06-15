@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from openviking_cli.client.http import AsyncHTTPClient
+from openviking_cli.retrieve.types import ContextType
 from openviking_cli.utils.config import OPENVIKING_CLI_CONFIG_ENV
 
 
@@ -39,6 +40,7 @@ def test_async_http_client_loads_missing_fields_from_ovcli_config(tmp_path, monk
                 "api_key": "config-key",
                 "account": "config-account",
                 "user": "config-user",
+                "actor_peer_id": "config-actor",
                 "timeout": 12.5,
                 "profile": True,
             }
@@ -52,6 +54,7 @@ def test_async_http_client_loads_missing_fields_from_ovcli_config(tmp_path, monk
     assert client._api_key == "config-key"
     assert client._account == "config-account"
     assert client._user_id == "config-user"
+    assert client._actor_peer_id == "config-actor"
     assert client._timeout == 12.5
     assert client._profile_enabled is True
 
@@ -131,6 +134,7 @@ async def test_async_http_client_sends_configured_identity_headers(tmp_path, mon
         api_key="explicit-key",
         account="explicit-account",
         user_id="explicit-user",
+        actor_peer_id="explicit-actor",
         timeout=33.0,
         extra_headers={},
     )
@@ -141,6 +145,7 @@ async def test_async_http_client_sends_configured_identity_headers(tmp_path, mon
         "X-API-Key": "explicit-key",
         "X-OpenViking-Account": "explicit-account",
         "X-OpenViking-User": "explicit-user",
+        "X-OpenViking-Actor-Peer": "explicit-actor",
     }
 
 
@@ -299,7 +304,7 @@ def test_async_http_client_prefers_extra_headers_over_alias(tmp_path, monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_async_http_client_find_sends_peer_id(tmp_path, monkeypatch):
+async def test_async_http_client_find_does_not_send_peer_id(tmp_path, monkeypatch):
     config_path = tmp_path / "ovcli.conf"
     config_path.write_text("{}")
     monkeypatch.setenv(OPENVIKING_CLI_CONFIG_ENV, str(config_path))
@@ -311,7 +316,6 @@ async def test_async_http_client_find_sends_peer_id(tmp_path, monkeypatch):
     await client.find(
         "invoice",
         target_uri="viking://user/memories",
-        peer_id="web:visitor:alice",
     )
 
     assert http.calls == [
@@ -323,15 +327,15 @@ async def test_async_http_client_find_sends_peer_id(tmp_path, monkeypatch):
                 "limit": 10,
                 "score_threshold": None,
                 "filter": None,
+                "context_type": None,
                 "telemetry": False,
-                "peer_id": "web:visitor:alice",
             },
         )
     ]
 
 
 @pytest.mark.asyncio
-async def test_async_http_client_search_sends_peer_id(tmp_path, monkeypatch):
+async def test_async_http_client_search_does_not_send_peer_id(tmp_path, monkeypatch):
     config_path = tmp_path / "ovcli.conf"
     config_path.write_text("{}")
     monkeypatch.setenv(OPENVIKING_CLI_CONFIG_ENV, str(config_path))
@@ -344,7 +348,6 @@ async def test_async_http_client_search_sends_peer_id(tmp_path, monkeypatch):
         "invoice",
         target_uri="viking://user/memories",
         session_id="session-1",
-        peer_id="web:visitor:alice",
     )
 
     assert http.calls == [
@@ -357,8 +360,71 @@ async def test_async_http_client_search_sends_peer_id(tmp_path, monkeypatch):
                 "limit": 10,
                 "score_threshold": None,
                 "filter": None,
+                "context_type": None,
                 "telemetry": False,
-                "peer_id": "web:visitor:alice",
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_async_http_client_find_sends_context_type(tmp_path, monkeypatch):
+    config_path = tmp_path / "ovcli.conf"
+    config_path.write_text("{}")
+    monkeypatch.setenv(OPENVIKING_CLI_CONFIG_ENV, str(config_path))
+
+    http = FakeSearchHTTP()
+    client = AsyncHTTPClient(url="http://explicit-host:1933", api_key="key")
+    client._http = http
+
+    await client.find(
+        "invoice",
+        context_type=[ContextType.MEMORY, ContextType.RESOURCE],
+    )
+
+    assert http.calls == [
+        (
+            "/api/v1/search/find",
+            {
+                "query": "invoice",
+                "target_uri": "",
+                "limit": 10,
+                "score_threshold": None,
+                "filter": None,
+                "context_type": ["memory", "resource"],
+                "telemetry": False,
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_async_http_client_search_sends_context_type(tmp_path, monkeypatch):
+    config_path = tmp_path / "ovcli.conf"
+    config_path.write_text("{}")
+    monkeypatch.setenv(OPENVIKING_CLI_CONFIG_ENV, str(config_path))
+
+    http = FakeSearchHTTP()
+    client = AsyncHTTPClient(url="http://explicit-host:1933", api_key="key")
+    client._http = http
+
+    await client.search(
+        "invoice",
+        context_type="skill",
+    )
+
+    assert http.calls == [
+        (
+            "/api/v1/search/search",
+            {
+                "query": "invoice",
+                "target_uri": "",
+                "session_id": None,
+                "limit": 10,
+                "score_threshold": None,
+                "filter": None,
+                "context_type": "skill",
+                "telemetry": False,
             },
         )
     ]

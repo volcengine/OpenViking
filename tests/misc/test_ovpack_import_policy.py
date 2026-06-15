@@ -169,7 +169,7 @@ class FakeBackupVikingFS:
     def __init__(self) -> None:
         self.binary_files = {
             "viking://resources/README.md": b"hello",
-            "viking://session/sess_1/.meta.json": b'{"session_id":"sess_1"}',
+            "viking://user/alice/sessions/sess_1/.meta.json": b'{"session_id":"sess_1"}',
         }
 
     async def tree(
@@ -192,17 +192,29 @@ class FakeBackupVikingFS:
                     "size": 5,
                 }
             ]
-        if uri == "viking://session":
+        if uri == "viking://user":
             return [
                 {
-                    "rel_path": "sess_1",
-                    "uri": "viking://session/sess_1",
+                    "rel_path": "alice",
+                    "uri": "viking://user/alice",
                     "isDir": True,
                     "size": 0,
                 },
                 {
-                    "rel_path": "sess_1/.meta.json",
-                    "uri": "viking://session/sess_1/.meta.json",
+                    "rel_path": "alice/sessions",
+                    "uri": "viking://user/alice/sessions",
+                    "isDir": True,
+                    "size": 0,
+                },
+                {
+                    "rel_path": "alice/sessions/sess_1",
+                    "uri": "viking://user/alice/sessions/sess_1",
+                    "isDir": True,
+                    "size": 0,
+                },
+                {
+                    "rel_path": "alice/sessions/sess_1/.meta.json",
+                    "uri": "viking://user/alice/sessions/sess_1/.meta.json",
                     "isDir": False,
                     "size": 23,
                 },
@@ -418,7 +430,7 @@ def _manifest_for_files(root_name: str, files: dict[str, str]) -> dict[str, obje
 
     manifest: dict[str, object] = {
         "kind": "openviking.ovpack",
-        "format_version": 2,
+        "format_version": 3,
         "root": {
             "name": root_name,
             "uri": f"viking://resources/{root_name}",
@@ -513,7 +525,7 @@ def test_index_consistency_report_limits_public_and_error_records():
 
 
 @pytest.mark.asyncio
-async def test_export_ovpack_writes_v2_manifest_with_semantic_sidecars(
+async def test_export_ovpack_writes_v3_manifest_with_semantic_sidecars(
     temp_ovpack_path: Path, request_ctx: RequestContext
 ):
     await export_ovpack(
@@ -533,7 +545,7 @@ async def test_export_ovpack_writes_v2_manifest_with_semantic_sidecars(
 
     assert "demo/files/notes.txt" in names
     assert "demo/files/.overview.md" in names
-    assert manifest["format_version"] == 2
+    assert manifest["format_version"] == 3
     assert manifest["kind"] == "openviking.ovpack"
     note_entry = next(entry for entry in manifest["entries"] if entry["path"] == "notes.txt")
     note_sha256 = hashlib.sha256(b"hello").hexdigest()
@@ -588,14 +600,14 @@ async def test_backup_restore_contract(temp_ovpack_path: Path, request_ctx: Requ
         manifest = json.loads(zf.read("openviking-backup/_ovpack/manifest.json").decode("utf-8"))
 
     assert "openviking-backup/files/resources/README.md" in names
-    assert "openviking-backup/files/session/sess_1/.meta.json" in names
+    assert "openviking-backup/files/user/alice/sessions/sess_1/.meta.json" in names
     assert manifest["root"] == {
         "name": "openviking-backup",
         "uri": "viking://",
         "scope": "root",
         "package_type": "backup",
     }
-    assert manifest["scopes"] == ["resources", "user", "session"]
+    assert manifest["scopes"] == ["resources", "user"]
 
     with pytest.raises(InvalidArgumentError, match=r"must be restored"):
         await import_ovpack(FakeVikingFS(), str(temp_ovpack_path), "viking://", request_ctx)
@@ -604,7 +616,7 @@ async def test_backup_restore_contract(temp_ovpack_path: Path, request_ctx: Requ
     assert await restore_ovpack(fake_fs, str(temp_ovpack_path), request_ctx) == "viking://"
     assert fake_fs.written_files == [
         "viking://resources/README.md",
-        "viking://session/sess_1/.meta.json",
+        "viking://user/alice/sessions/sess_1/.meta.json",
     ]
     assert fake_fs.tree_calls == ["viking://resources", "viking://user"]
 
@@ -883,15 +895,15 @@ async def test_import_ovpack_rejects_manifest_file_hash_mismatch(
 
 
 @pytest.mark.asyncio
-async def test_import_ovpack_rejects_legacy_manifest_version(
+async def test_import_ovpack_rejects_previous_manifest_version(
     temp_ovpack_path: Path, request_ctx: RequestContext
 ):
     manifest = _manifest_for_files("demo", {"notes.txt": "hello"})
-    manifest["format_version"] = 1
+    manifest["format_version"] = 2
     _write_ovpack_with_manifest(temp_ovpack_path, "demo", {"notes.txt": "hello"}, manifest=manifest)
     fake_fs = FakeVikingFS()
 
-    with pytest.raises(InvalidArgumentError, match=r"Unsupported ovpack format_version 1"):
+    with pytest.raises(InvalidArgumentError, match=r"Unsupported ovpack format_version 2"):
         await import_ovpack(fake_fs, str(temp_ovpack_path), "viking://resources", request_ctx)
 
     assert fake_fs.written_files == []
@@ -924,7 +936,7 @@ async def test_import_ovpack_rejects_manifest_unexpected_directory(
 
 
 @pytest.mark.asyncio
-async def test_import_ovpack_restores_session_without_vectorization(
+async def test_import_ovpack_restores_user_session_without_vectorization(
     temp_ovpack_path: Path, request_ctx: RequestContext
 ):
     files = {
@@ -934,8 +946,8 @@ async def test_import_ovpack_restores_session_without_vectorization(
     manifest = _manifest_for_files("victim", files)
     manifest["root"] = {
         "name": "victim",
-        "uri": "viking://session/victim",
-        "scope": "session",
+        "uri": "viking://user/alice/sessions/victim",
+        "scope": "user",
     }
     _write_ovpack_with_manifest(
         temp_ovpack_path,
@@ -945,12 +957,17 @@ async def test_import_ovpack_restores_session_without_vectorization(
     )
     fake_fs = FakeVikingFS()
 
-    result = await import_ovpack(fake_fs, str(temp_ovpack_path), "viking://session", request_ctx)
+    result = await import_ovpack(
+        fake_fs,
+        str(temp_ovpack_path),
+        "viking://user/alice/sessions",
+        request_ctx,
+    )
 
-    assert result == "viking://session/victim"
+    assert result == "viking://user/alice/sessions/victim"
     assert fake_fs.written_files == [
-        "viking://session/victim/.meta.json",
-        "viking://session/victim/messages.jsonl",
+        "viking://user/alice/sessions/victim/.meta.json",
+        "viking://user/alice/sessions/victim/messages.jsonl",
     ]
     assert fake_fs.tree_calls == []
 
@@ -961,21 +978,21 @@ async def test_import_ovpack_restores_session_without_vectorization(
         await import_ovpack(
             invalid_fs,
             str(temp_ovpack_path),
-            "viking://session/victim",
+            "viking://user/alice/sessions/victim",
             request_ctx,
         )
     assert invalid_fs.written_files == []
 
 
 @pytest.mark.asyncio
-async def test_import_ovpack_rejects_scope_mismatch(
+async def test_import_ovpack_rejects_legacy_session_scope(
     temp_ovpack_path: Path, request_ctx: RequestContext
 ):
     manifest = _manifest_for_files("demo", {"notes.txt": "hello"})
     _write_ovpack_with_manifest(temp_ovpack_path, "demo", {"notes.txt": "hello"}, manifest=manifest)
     fake_fs = FakeVikingFS()
 
-    with pytest.raises(InvalidArgumentError, match=r"source scope does not match target scope"):
+    with pytest.raises(InvalidArgumentError, match=r"scope: session"):
         await import_ovpack(fake_fs, str(temp_ovpack_path), "viking://session", request_ctx)
 
     assert fake_fs.written_files == []

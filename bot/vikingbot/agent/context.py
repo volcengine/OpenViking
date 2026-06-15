@@ -235,6 +235,7 @@ Skills with available="false" need dependencies installed first - you can try in
                 "## OpenViking Memory Retrieval\n"
                 "- For questions about the user's remembered facts, preferences, profile, or personal context, use openviking_search for the current question before saying there is no relevant record.\n"
                 "- A previous empty search result does not prove that a different follow-up question has no memory; search again when the requested fact changes.\n"
+                "- Injected memories are grouped by memory_type: events contain atomic time-based facts; entities contain stable topic/entity facts; preferences contain likes, habits, and recurring tendencies.\n"
                 "- Injected memory entries use three types: full means the full memory content is already shown; summary means only a summary is shown and the URI has more detail; uri means only the URI is shown and it may still point to key facts.\n"
                 "- For relevant summary or uri entries, use openviking_multi_read on their URIs to fetch full details to help you to resolve the query. "
             )

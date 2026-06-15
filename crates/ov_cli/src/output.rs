@@ -60,29 +60,6 @@ fn compact_success_value<T: Serialize>(result: T) -> Value {
     json!({ "status": "ok", "result": result, "profile": profile })
 }
 
-#[allow(dead_code)]
-pub fn output_error(code: &str, message: &str, format: OutputFormat, compact: bool) {
-    if matches!(format, OutputFormat::Json) && compact {
-        eprintln!(
-            "{}",
-            json!({
-                "ok": false,
-                "error": {
-                    "code": code,
-                    "message": message
-                }
-            })
-        );
-    } else {
-        eprintln!(
-            "{}[{}]: {}",
-            theme::error("ERROR").bold(),
-            theme::error(code),
-            theme::body(message)
-        );
-    }
-}
-
 fn print_table<T: Serialize>(result: T, compact: bool) {
     // Convert to json Value for processing
     let value = match serde_json::to_value(&result) {

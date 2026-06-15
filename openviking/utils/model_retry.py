@@ -145,11 +145,6 @@ def classify_api_error(error: Exception) -> str:
     return ERROR_CLASS_UNKNOWN
 
 
-def is_quota_exceeded_api_error(error: Exception) -> bool:
-    """Return True if the error indicates an account quota has been exceeded."""
-    return classify_api_error(error) == ERROR_CLASS_QUOTA_EXCEEDED
-
-
 def is_retryable_api_error(error: Exception) -> bool:
     """Return True if the error should be retried."""
     return classify_api_error(error) == ERROR_CLASS_TRANSIENT

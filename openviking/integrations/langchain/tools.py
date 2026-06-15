@@ -52,6 +52,7 @@ def create_openviking_tools(
     account: str | None = None,
     user: str | None = None,
     user_id: str | None = None,
+    actor_peer_id: str | None = None,
     path: str | None = None,
     timeout: float = 60.0,
     extra_headers: dict[str, str] | None = None,
@@ -81,6 +82,7 @@ def create_openviking_tools(
                     account=account,
                     user=user,
                     user_id=user_id,
+                    actor_peer_id=actor_peer_id,
                     path=path,
                     timeout=timeout,
                     extra_headers=extra_headers,
@@ -108,7 +110,6 @@ def create_openviking_tools(
             "find",
             query=query,
             target_uri=target_uri,
-            peer_id=peer_id,
             limit=limit,
             score_threshold=min_score,
         )
@@ -138,7 +139,6 @@ def create_openviking_tools(
             query=query,
             target_uri=target_uri,
             session_id=session_id,
-            peer_id=peer_id,
             limit=limit,
             score_threshold=min_score,
         )
@@ -755,7 +755,9 @@ def _grep_session_history(
     query: str,
     max_matches: int,
 ) -> dict[str, Any]:
-    history_uri = f"viking://session/{session_id}/history"
+    session = call_openviking(client, "get_session", session_id=session_id, auto_create=False)
+    session_uri = item_value(session, "uri", f"viking://user/sessions/{session_id}")
+    history_uri = f"{str(session_uri).rstrip('/')}/history"
     tokens = _archive_query_tokens(query)
     try:
         result = call_openviking(

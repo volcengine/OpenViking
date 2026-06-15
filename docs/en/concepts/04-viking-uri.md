@@ -9,7 +9,7 @@ viking://{scope}/{path}
 ```
 
 - **scheme**: Always `viking`
-- **scope**: Top-level namespace (`resources`, `user`, `agent`, `session`; `temp` and `queue` are internal)
+- **scope**: Top-level namespace (`resources`, `user`; `temp`, `queue`, and `upload` are internal)
 - **path**: Resource path within the scope
 
 ## Scopes
@@ -17,16 +17,17 @@ viking://{scope}/{path}
 | Scope | Description | Lifecycle | Visibility |
 |-------|-------------|-----------|------------|
 | **resources** | Independent resources | Long-term | Global |
-| **user** | User-level data | Long-term | Global |
-| **agent** | Agent-level data | Long-term | Global |
-| **session** | Session-level data | Session lifetime | Current session |
+| **user** | User-level data, including sessions | Long-term / session lifetime | Current user |
 | **queue** | Processing queue | Temporary | Internal |
 | **temp** | Temporary files | During parsing | Internal |
+| **upload** | Temporary upload files | Temporary | Internal |
 
-Public API and CLI filesystem/content operations accept only the public scopes:
-`resources`, `user`, `agent`, and `session` (plus the root URI `viking://`).
-`temp` and `queue` are internal implementation scopes and cannot be addressed
-directly through public API URI parameters.
+Public API and CLI filesystem/content operations accept the public scopes
+`resources` and `user` (plus the root URI `viking://`). `session` is retained
+as a backward-compatible alias for user session paths; new session data lives
+under `viking://user/{user_id}/sessions`.
+`agent` is deprecated. `temp`, `queue`, and `upload` are internal implementation
+scopes and cannot be addressed directly through public API URI parameters.
 
 ## Initial Directory Structure
 
@@ -34,33 +35,24 @@ Moving away from traditional flat database thinking, all context is organized as
 
 ```
 viking://
-├── session/{session_id}/
-│   ├── .abstract.md          # L0: One-line session summary
-│   ├── .overview.md          # L1: Session overview
-│   ├── .meta.json            # Session metadata
-│   ├── messages.json         # Structured message storage
-│   ├── checkpoints/          # Version snapshots
-│   ├── summaries/            # Compression summary history
-│   └── .relations.json       # Relations table
-│
 ├── user/
-│   ├── .abstract.md          # L0: Content summary
-│   ├── .overview.md          # User profile
-│   └── memories/             # User memory storage
-│       ├── .overview.md      # Memory overview
-│       ├── preferences/      # User preferences
-│       ├── entities/         # Entity memories
-│       └── events/           # Event records
-│
-├── agent/
-│   ├── .abstract.md          # L0: Content summary
-│   ├── .overview.md          # Agent overview
-│   ├── memories/             # Agent learning memories
-│   │   ├── .overview.md
-│   │   ├── cases/            # Cases
-│   │   └── patterns/         # Patterns
-│   ├── instructions/         # Agent instructions
-│   └── skills/               # Skills directory
+│   └── {user_id}/
+│       ├── profile.md        # User profile
+│       ├── memories/         # User memory storage
+│       ├── resources/        # User-owned private resources
+│       ├── skills/           # User skills
+│       ├── peers/
+│       │   └── {peer_id}/
+│       │       ├── memories/  # Memory about a specific interaction peer
+│       │       └── resources/ # Resources scoped to that peer
+│       └── sessions/         # User session storage
+│           └── {session_id}/
+│               ├── .abstract.md
+│               ├── .overview.md
+│               ├── .meta.json
+│               ├── messages.jsonl
+│               ├── tools/
+│               └── history/
 │
 └── resources/{project}/      # Resource workspace
 ```
@@ -85,9 +77,11 @@ viking://user/memories/preferences/           # User preferences
 viking://user/memories/preferences/coding     # Specific preference
 viking://user/memories/entities/              # Entity memories
 viking://user/memories/events/                # Event memories
+viking://user/resources/                      # Current user's resources
+viking://user/resources/docs/                 # Current user's resource directory
 ```
 
-### User Skills and Memories
+### User Skills and Peer Content
 
 ```
 viking://user/skills/                         # Current user's skills
@@ -95,20 +89,29 @@ viking://user/skills/search-web               # Specific skill
 viking://user/memories/                       # Current user's memories
 viking://user/memories/cases/                 # Learned cases
 viking://user/memories/patterns/              # Learned patterns
+viking://user/{user_id}/peers/{peer_id}/memories/
+viking://user/{user_id}/peers/{peer_id}/resources/
 ```
 
 The short `viking://user/...` form is relative to the current request identity.
 OpenViking expands it internally to explicit namespace paths such as
 `viking://user/{user_id}/...` before storage and retrieval.
+Identity path segments such as `{user_id}` and `{peer_id}` must be safe single
+segments, for example `alice` or `web-visitor-alice`.
 
 ### Session Data
 
 ```
-viking://session/{session_id}/                # Session root
-viking://session/{session_id}/messages/       # Session messages
-viking://session/{session_id}/tools/          # Tool executions
-viking://session/{session_id}/history/        # Archived history
+viking://user/{user_id}/sessions/{session_id}/          # Session root
+viking://user/{user_id}/sessions/{session_id}/messages  # Session messages
+viking://user/{user_id}/sessions/{session_id}/tools     # Tool executions
+viking://user/{user_id}/sessions/{session_id}/history   # Archived history
+viking://user/sessions/{session_id}/                    # Current-user short form
 ```
+
+`viking://session/{session_id}` is accepted as a backward-compatible alias for
+the current user's session path. It is not a separate storage root for new
+session data.
 
 ## Path Variables
 
@@ -197,13 +200,19 @@ viking://
 │
 ├── user/{user_id}/
 │   ├── profile.md                # User basic info
-│   └── memories/
-│       ├── preferences/          # By topic
-│       ├── entities/             # Each independent
-│       └── events/               # Each independent
+│   ├── memories/
+│   │   ├── preferences/          # By topic
+│   │   ├── entities/             # Each independent
+│   │   └── events/               # Each independent
+│   ├── resources/
+│   │   └── {project}/
+│   ├── skills/
+│   └── peers/{peer_id}/
+│       ├── memories/
+│       └── resources/
 │
-└── session/{user_space}/{session_id}/
-    ├── messages/
+└── user/{user_id}/sessions/{session_id}/
+    ├── messages.jsonl
     ├── tools/
     └── history/
 ```
@@ -243,6 +252,12 @@ parent = VikingURI(uri).parent.uri  # viking://resources/docs
 results = client.find(
     "authentication",
     target_uri="viking://resources/"
+)
+
+# Search only in current-user resources
+results = client.find(
+    "private project notes",
+    target_uri="viking://user/resources/"
 )
 
 # Search only in user memories
@@ -300,11 +315,14 @@ Each directory may contain special files:
 ### Scope-Specific Operations
 
 ```python
-# Add resources only to resources scope
+# Add resources to the shared account resource scope
 await client.add_resource(url, to="viking://resources/project/")
 
-# Skills go to user scope
-await client.add_skill(skill)  # Automatically to viking://user/skills/
+# Add private resources to the current user's resource root
+await client.add_resource(path, parent="viking://user/resources/project/")
+
+# Skills always go to the current user's skills root
+await client.add_skill(skill)  # Canonical root: viking://user/{user_id}/skills/
 ```
 
 ## Related Documents

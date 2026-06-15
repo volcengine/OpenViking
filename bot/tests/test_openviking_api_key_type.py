@@ -1803,6 +1803,36 @@ async def test_context_loads_profiles_for_memory_peers(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_context_loads_profiles_for_memory_peers(tmp_path):
+    calls = {"sender": [], "peers": []}
+
+    class _ProfileMemory:
+        async def get_viking_peer_profile(self, **kwargs):
+            calls["sender"].append(kwargs["peer_id"])
+            return "sender profile"
+
+        async def get_viking_peer_profiles(self, **kwargs):
+            calls["peers"].append(kwargs["peer_ids"])
+            return "\n".join(f"profile for {peer_id}" for peer_id in kwargs["peer_ids"])
+
+    context = ContextBuilder(workspace=tmp_path, sender_id="sender-1")
+    context._memory = _ProfileMemory()
+
+    system_prompt = await context.build_system_prompt(
+        session_key=SessionKey(type="cli", channel_id="default", chat_id="chat-1"),
+        ov_tools_enable=True,
+        profile_user_list=["speaker-a"],
+        memory_peer_ids=["sender-1", "speaker-a", "speaker-b"],
+    )
+
+    assert calls["sender"] == ["sender-1"]
+    assert calls["peers"] == [["speaker-a", "speaker-b"]]
+    assert "sender profile" in system_prompt
+    assert "profile for speaker-a" in system_prompt
+    assert "profile for speaker-b" in system_prompt
+
+
+@pytest.mark.asyncio
 async def test_openviking_memory_commit_prefers_sender_in_static_multi_user_bot(monkeypatch):
     tool = VikingMemoryCommitTool()
     calls = []

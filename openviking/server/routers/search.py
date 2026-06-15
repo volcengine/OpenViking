@@ -6,10 +6,9 @@ import math
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, ConfigDict
 
 from openviking.core.path_variables import resolve_path_variables
-from openviking.core.peer_id import normalize_peer_id
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
@@ -18,7 +17,11 @@ from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
-from openviking.utils.search_filters import _resolve_levels, merge_time_filter
+from openviking.utils.search_filters import (
+    SearchContextTypeInput,
+    _resolve_levels,
+    merge_search_filter,
+)
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 
 
@@ -45,13 +48,15 @@ def _resolve_search_limit(limit: int, node_limit: Optional[int]) -> int:
 
 def _resolve_search_filter(
     request_filter: Optional[Dict[str, Any]],
+    context_type: Optional[SearchContextTypeInput],
     since: Optional[str],
     until: Optional[str],
     time_field: Optional[TimeField],
 ) -> Optional[Dict[str, Any]]:
     try:
-        return merge_time_filter(
+        return merge_search_filter(
             request_filter,
+            context_type=context_type,
             since=since,
             until=until,
             time_field=time_field,
@@ -70,9 +75,11 @@ def _resolve_uri_or_uris(uri: Union[str, List[str]]) -> Union[str, List[str]]:
 class FindRequest(BaseModel):
     """Request model for find."""
 
+    model_config = ConfigDict(extra="forbid")
+
     query: str
     target_uri: Union[str, List[str]] = ""
-    peer_id: Optional[str] = None
+    context_type: Optional[Union[str, List[str]]] = None
     limit: int = 10
     node_limit: Optional[int] = None
     score_threshold: Optional[float] = None
@@ -84,18 +91,15 @@ class FindRequest(BaseModel):
     level: Optional[Union[int, str, List[int]]] = None
     telemetry: TelemetryRequest = False
 
-    @model_validator(mode="after")
-    def normalize_request_peer_id(self) -> "FindRequest":
-        self.peer_id = normalize_peer_id(self.peer_id)
-        return self
-
 
 class SearchRequest(BaseModel):
     """Request model for search with session."""
 
+    model_config = ConfigDict(extra="forbid")
+
     query: str
     target_uri: Union[str, List[str]] = ""
-    peer_id: Optional[str] = None
+    context_type: Optional[Union[str, List[str]]] = None
     session_id: Optional[str] = None
     limit: int = 10
     node_limit: Optional[int] = None
@@ -108,11 +112,6 @@ class SearchRequest(BaseModel):
     time_field: Optional[TimeField] = None
     level: Optional[Union[int, str, List[int]]] = None
     telemetry: TelemetryRequest = False
-
-    @model_validator(mode="after")
-    def normalize_request_peer_id(self) -> "SearchRequest":
-        self.peer_id = normalize_peer_id(self.peer_id)
-        return self
 
 
 class GrepRequest(BaseModel):
@@ -144,6 +143,7 @@ async def find(
     actual_limit = _resolve_search_limit(request.limit, request.node_limit)
     effective_filter = _resolve_search_filter(
         request.filter,
+        request.context_type,
         request.since,
         request.until,
         request.time_field,
@@ -156,7 +156,6 @@ async def find(
             query=request.query,
             ctx=_ctx,
             target_uri=resolved_target_uri,
-            peer_id=request.peer_id,
             limit=actual_limit,
             score_threshold=request.score_threshold,
             filter=effective_filter,
@@ -184,6 +183,7 @@ async def search(
     actual_limit = _resolve_search_limit(request.limit, request.node_limit)
     effective_filter = _resolve_search_filter(
         request.filter,
+        request.context_type,
         request.since,
         request.until,
         request.time_field,
@@ -199,7 +199,6 @@ async def search(
             query=request.query,
             ctx=_ctx,
             target_uri=resolved_target_uri,
-            peer_id=request.peer_id,
             session=session,
             limit=actual_limit,
             score_threshold=request.score_threshold,

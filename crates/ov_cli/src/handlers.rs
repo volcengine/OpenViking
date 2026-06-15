@@ -80,6 +80,7 @@ pub async fn handle_add_resource(
         auth.api_key,
         auth.account,
         auth.user,
+        ctx.config.actor_peer_id.clone(),
         effective_timeout,
         ctx.profile.unwrap_or(ctx.config.profile),
         ctx.config.extra_headers.clone(),
@@ -1116,7 +1117,7 @@ pub async fn handle_find(
     after: Option<String>,
     before: Option<String>,
     level: Option<Vec<i32>>,
-    peer_id: Option<String>,
+    context_type: Option<Vec<String>>,
     ctx: CliContext,
 ) -> Result<()> {
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
@@ -1133,8 +1134,8 @@ pub async fn handle_find(
                 .join(",")
         ));
     }
-    if let Some(ref p) = peer_id {
-        params.push(format!("--peer-id {}", p));
+    if let Some(ref context_types) = context_type {
+        params.push(format!("--context-type {}", context_types.join(",")));
     }
     params.push(format!("\"{}\"", query));
     print_command_echo("ov find", &params.join(" "), ctx.config.echo_command);
@@ -1149,7 +1150,7 @@ pub async fn handle_find(
         before.as_deref(),
         None,
         level,
-        peer_id.as_deref(),
+        context_type,
         ctx.output_format,
         ctx.compact,
     )
@@ -1165,7 +1166,7 @@ pub async fn handle_search(
     after: Option<String>,
     before: Option<String>,
     level: Option<Vec<i32>>,
-    peer_id: Option<String>,
+    context_type: Option<Vec<String>>,
     ctx: CliContext,
 ) -> Result<()> {
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
@@ -1185,8 +1186,8 @@ pub async fn handle_search(
                 .join(",")
         ));
     }
-    if let Some(ref p) = peer_id {
-        params.push(format!("--peer-id {}", p));
+    if let Some(ref context_types) = context_type {
+        params.push(format!("--context-type {}", context_types.join(",")));
     }
     params.push(format!("\"{}\"", query));
     print_command_echo("ov search", &params.join(" "), ctx.config.echo_command);
@@ -1202,7 +1203,7 @@ pub async fn handle_search(
         before.as_deref(),
         None,
         level,
-        peer_id.as_deref(),
+        context_type,
         ctx.output_format,
         ctx.compact,
     )

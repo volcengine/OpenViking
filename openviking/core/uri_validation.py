@@ -5,11 +5,18 @@
 import re
 from collections.abc import Collection
 
-from openviking_cli.exceptions import InvalidURIError
+from openviking.core.namespace import (
+    NamespaceShapeError,
+    canonicalize_uri,
+    classify_uri,
+    is_accessible,
+    uri_parts,
+)
+from openviking_cli.exceptions import InvalidURIError, PermissionDeniedError
 from openviking_cli.utils.uri import VikingURI
 
 _URI_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
-_PUBLIC_API_SCOPES = frozenset({"", *VikingURI.PUBLIC_SCOPES})
+_PUBLIC_API_SCOPES = frozenset({"", *VikingURI.PUBLIC_SCOPES, *VikingURI.LEGACY_SCOPES})
 _ALL_API_SCOPES = frozenset({"", *VikingURI.VISITABLE_SCOPES})
 
 
@@ -107,6 +114,61 @@ def validate_optional_viking_uri(
         allow_internal=allow_internal,
         allowed_scopes=allowed_scopes,
     )
+
+
+def validate_content_target_uri(
+    uri: str,
+    ctx,
+    *,
+    kind: str,
+    field_name: str = "uri",
+) -> str:
+    """Validate and canonicalize add-resource/add-skill target URIs."""
+    raw_uri = uri.strip() if isinstance(uri, str) else ""
+    if not raw_uri:
+        raise InvalidURIError(str(uri), f"{field_name} must not be empty")
+
+    try:
+        canonical_uri = canonicalize_uri(raw_uri, ctx)
+    except (ValueError, NamespaceShapeError) as exc:
+        raise InvalidURIError(raw_uri, str(exc)) from exc
+
+    if _matches_content_kind(canonical_uri, kind):
+        if is_accessible(canonical_uri, ctx):
+            return canonical_uri
+        raise PermissionDeniedError(f"Access denied for {canonical_uri}", resource=canonical_uri)
+
+    raise InvalidURIError(raw_uri, f"{field_name} must target {kind} content")
+
+
+def validate_optional_content_target_uri(
+    uri: str | None,
+    ctx,
+    *,
+    kind: str,
+    field_name: str = "uri",
+) -> str:
+    if uri is None:
+        return ""
+    raw_uri = uri.strip() if isinstance(uri, str) else ""
+    if not raw_uri:
+        return ""
+    return validate_content_target_uri(
+        raw_uri,
+        ctx,
+        kind=kind,
+        field_name=field_name,
+    )
+
+
+def _matches_content_kind(uri: str, kind: str) -> bool:
+    if kind not in {"resource", "skill"}:
+        raise ValueError(f"Unsupported content target kind: {kind}")
+    parts = uri_parts(uri)
+    if kind == "resource" and parts[:1] == ["resources"]:
+        return True
+    classification = classify_uri(uri)
+    return classification.context_type == kind and classification.content_index is not None
 
 
 def validate_optional_viking_uris(

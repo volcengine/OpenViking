@@ -24,7 +24,11 @@ from datetime import datetime, timezone
 from pathlib import PurePath
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
-from openviking.core.namespace import canonicalize_uri
+from openviking.core.namespace import (
+    canonicalize_uri,
+    is_hidden_by_actor_peer_view,
+    may_include_hidden_actor_peers,
+)
 from openviking.core.namespace import (
     is_accessible as namespace_is_accessible,
 )
@@ -45,7 +49,7 @@ from openviking.storage.internal_names import (
     STORAGE_INTERNAL_ENTRY_NAMES,
 )
 from openviking.telemetry import get_current_telemetry
-from openviking.utils.time_utils import format_simplified, get_current_timestamp, parse_iso_datetime
+from openviking.utils.time_utils import format_iso8601, get_current_timestamp, parse_iso_datetime
 from openviking_cli.exceptions import (
     FailedPreconditionError,
     InvalidArgumentError,
@@ -330,6 +334,10 @@ class VikingFS:
         self._ensure_access(uri, ctx)
         real_ctx = self._ctx_or_default(ctx)
         normalized_uri, _ = self._normalized_uri_parts(uri)
+        if is_hidden_by_actor_peer_view(normalized_uri, real_ctx) or may_include_hidden_actor_peers(
+            normalized_uri, real_ctx
+        ):
+            raise PermissionDeniedError(f"Access denied for {uri}", resource=normalized_uri)
         if real_ctx.role != Role.ROOT and normalized_uri.rstrip("/") == "viking://temp":
             raise PermissionDeniedError(
                 "Temp root is read-only for non-root users",
@@ -802,6 +810,7 @@ class VikingFS:
         matches = result.get("matches", [])
         results = []
         files_scanned_set = set()
+        real_ctx = self._ctx_or_default(ctx)
 
         for match in matches:
             match_file = match.get("file", "")
@@ -811,6 +820,8 @@ class VikingFS:
             agfs_file_path = self._resolve_grep_match_agfs_path(path, match_file)
 
             file_uri = self._path_to_uri(agfs_file_path, ctx=ctx)
+            if not self._is_accessible(file_uri, real_ctx):
+                continue
 
             files_scanned_set.add(file_uri)
 
@@ -829,7 +840,9 @@ class VikingFS:
         # counting files that produced at least one match (best-effort).
         backend_files_scanned = result.get("files_scanned")
         if isinstance(backend_files_scanned, int) and backend_files_scanned >= 0:
-            files_scanned = backend_files_scanned
+            files_scanned = (
+                len(files_scanned_set) if real_ctx.actor_peer_id else backend_files_scanned
+            )
         else:
             files_scanned = len(files_scanned_set)
 
@@ -881,8 +894,12 @@ class VikingFS:
                         target_canonical_uri = canonicalize_uri(
                             self._path_to_uri(path, ctx=real_ctx), real_ctx
                         )
-                        filter_expr = PathScope("uri", target_canonical_uri, depth=-1)
-                        result["count"] = await vector_store.count(filter=filter_expr, ctx=real_ctx)
+                        if not may_include_hidden_actor_peers(target_canonical_uri, real_ctx):
+                            filter_expr = PathScope("uri", target_canonical_uri, depth=-1)
+                            result["count"] = await vector_store.count(
+                                filter=filter_expr,
+                                ctx=real_ctx,
+                            )
                 except Exception as e:
                     logger.warning(f"[VikingFS] Failed to count nodes for directory stat: {e}")
         return result
@@ -1012,7 +1029,7 @@ class VikingFS:
         [{'name': '.abstract.md', 'size': 100, 'mode': 420, 'modTime': '2026-02-11T16:52:16.256334192+08:00', 'isDir': False, 'rel_path': '.abstract.md', 'uri': 'viking://resources...'}]
 
         output="agent"
-        [{'uri': 'viking://resources...', 'size': 100, 'isDir': False, 'modTime': '2026-02-11 16:52:16', 'rel_path': '.abstract.md', 'abstract': "..."}]
+        [{'uri': 'viking://resources...', 'size': 100, 'isDir': False, 'modTime': '2026-02-11T08:52:16.256Z', 'rel_path': '.abstract.md', 'abstract': "..."}]
         """
         self._ensure_access(uri, ctx)
         if output == "original":
@@ -1068,7 +1085,6 @@ class VikingFS:
     ) -> List[Dict[str, Any]]:
         """Recursively list all contents (agent format with abstracts)."""
         result = []
-        now = datetime.now(timezone.utc)
 
         async for entry, entry_uri in self._iter_visible_tree_entries(
             uri,
@@ -1084,7 +1100,7 @@ class VikingFS:
                     "uri": entry_uri,
                     "size": 0 if is_dir else info["size"],
                     "isDir": is_dir,
-                    "modTime": format_simplified(parse_iso_datetime(info["modTime"]), now),
+                    "modTime": format_iso8601(parse_iso_datetime(info["modTime"])),
                     "rel_path": entry["rel_path"],
                 }
             )
@@ -1232,7 +1248,6 @@ class VikingFS:
         filter: Optional[Dict] = None,
         ctx: Optional[RequestContext] = None,
         level: Optional[List[int]] = None,
-        peer_id: Optional[str] = None,
     ):
         """Semantic search.
 
@@ -1256,7 +1271,7 @@ class VikingFS:
         )
 
         real_ctx = self._ctx_or_default(ctx)
-        retrieval_targets = resolve_retrieval_targets(target_uri, real_ctx, peer_id)
+        retrieval_targets = resolve_retrieval_targets(target_uri, real_ctx)
 
         for target_dir in retrieval_targets.target_directories:
             self._ensure_access(target_dir, ctx)
@@ -1325,7 +1340,6 @@ class VikingFS:
         filter: Optional[Dict] = None,
         ctx: Optional[RequestContext] = None,
         level: Optional[List[int]] = None,
-        peer_id: Optional[str] = None,
     ):
         """Complex search with session context.
 
@@ -1351,7 +1365,7 @@ class VikingFS:
         )
 
         real_ctx = self._ctx_or_default(ctx)
-        retrieval_targets = resolve_retrieval_targets(target_uri, real_ctx, peer_id)
+        retrieval_targets = resolve_retrieval_targets(target_uri, real_ctx)
         primary_target_uri = retrieval_targets.first_explicit_directory
 
         session_summary = (
@@ -1367,19 +1381,21 @@ class VikingFS:
         target_abstract = ""
         if primary_target_uri:
             try:
-                target_abstract = await self.abstract(primary_target_uri, ctx=ctx)
+                with telemetry.measure("search.target_abstract"):
+                    target_abstract = await self.abstract(primary_target_uri, ctx=ctx)
             except Exception:
                 target_abstract = ""
 
         # With session context: intent analysis
         if session_summary or current_messages:
             analyzer = IntentAnalyzer(max_recent_messages=5)
-            query_plan = await analyzer.analyze(
-                compression_summary=session_summary or "",
-                messages=current_messages or [],
-                current_message=query,
-                target_abstract=target_abstract,
-            )
+            with telemetry.measure("search.intent_analysis"):
+                query_plan = await analyzer.analyze(
+                    compression_summary=session_summary or "",
+                    messages=current_messages or [],
+                    current_message=query,
+                    target_abstract=target_abstract,
+                )
             typed_queries = query_plan.queries
             for tq in typed_queries:
                 tq.target_directories = retrieval_targets.target_directories
@@ -1667,9 +1683,6 @@ class VikingFS:
             prefix = prefix[:-1]
         return f"{prefix}_{hash_suffix}"
 
-    _USER_STRUCTURE_DIRS = {"memories"}
-    _AGENT_STRUCTURE_DIRS = {"memories", "skills", "instructions", "workspaces"}
-
     def _uri_to_path(self, uri: str, ctx: Optional[RequestContext] = None) -> str:
         """Map virtual URI to account-isolated AGFS path.
 
@@ -1736,40 +1749,13 @@ class VikingFS:
             return True
         return not self._looks_like_legacy_temp_leaf(parts[2])
 
-    def _extract_space_from_uri(self, uri: str) -> Optional[str]:
-        """Extract space segment from URI if present.
-
-        URIs are WYSIWYG: viking://{scope}/{space}/...
-        For user, the second segment is space unless it's a known structure dir.
-        For session, the second segment is always space (when 3+ parts).
-        Legacy temp URIs keep the historical shape viking://temp/<temp-id> and therefore
-        intentionally have no space segment.
-        """
-        _, parts = self._normalized_uri_parts(uri)
-        if len(parts) < 2:
-            return None
-        scope = parts[0]
-        second = parts[1]
-        # Treat scope-root metadata files as not having a tenant space segment.
-        if len(parts) == 2 and second in {".abstract.md", ".overview.md"}:
-            return None
-        if self._is_legacy_temp_uri_parts(parts):
-            return None
-        if scope == "upload":
-            return None
-        if scope == "user" and second not in self._USER_STRUCTURE_DIRS:
-            return second
-        if scope == "agent" and second not in self._AGENT_STRUCTURE_DIRS:
-            return second
-        if scope == "session" and len(parts) >= 2:
-            return second
-        return None
-
     def _is_accessible(self, uri: str, ctx: RequestContext) -> bool:
         """Check whether a URI is visible/accessible under current request context."""
         normalized_uri, parts = self._normalized_uri_parts(uri)
         if ctx.role == Role.ROOT:
             return True
+        if is_hidden_by_actor_peer_view(normalized_uri, ctx):
+            return False
         if not parts:
             return True
         if is_watch_task_control_uri(normalized_uri):
@@ -2082,7 +2068,7 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> None:
         """Write file directly."""
-        self._ensure_access(uri, ctx)
+        self._ensure_mutable_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         await self._ensure_parent_dirs(path, ctx=ctx)
 
@@ -2170,7 +2156,7 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> None:
         """Write single binary file."""
-        self._ensure_access(uri, ctx)
+        self._ensure_mutable_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         await self._ensure_parent_dirs(path, ctx=ctx)
 
@@ -2183,7 +2169,7 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> None:
         """Append content to file."""
-        self._ensure_access(uri, ctx)
+        self._ensure_mutable_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
 
         try:
@@ -2230,7 +2216,7 @@ class VikingFS:
         [{'name': '.abstract.md', 'size': 100, 'mode': 420, 'modTime': '2026-02-11T16:52:16.256334192+08:00', 'isDir': False, 'meta': {'Name': 'localfs', 'Type': 'local', 'Content': None}, 'uri': 'viking://resources/.abstract.md'}]
 
         output="agent"
-        [{'name': '.abstract.md', 'size': 100, 'modTime': '2026-02-11(or 16:52:16 for today)', 'isDir': False, 'uri': 'viking://resources/.abstract.md', 'abstract': "..."}]
+        [{'name': '.abstract.md', 'size': 100, 'modTime': '2026-02-11T08:52:16.256Z', 'isDir': False, 'uri': 'viking://resources/.abstract.md', 'abstract': "..."}]
         """
         self._ensure_access(uri, ctx)
         if output == "original":
@@ -2256,14 +2242,14 @@ class VikingFS:
         except Exception:
             raise NotFoundError(uri, "directory")
         # basic info
-        now = datetime.now(timezone.utc)
+        fallback_time = datetime.now(timezone.utc)
         all_entries = []
         for entry in entries:
             if len(all_entries) >= node_limit:
                 break
             name = entry.get("name", "")
             raw_time = entry.get("modTime", "")
-            parsed_time = now
+            parsed_time = fallback_time
             if isinstance(raw_time, (int, float)):
                 parsed_time = datetime.fromtimestamp(raw_time, tz=timezone.utc)
             elif raw_time:
@@ -2278,7 +2264,7 @@ class VikingFS:
                 "uri": self._path_to_uri(f"{path}/{name}", ctx=ctx),
                 "size": 0 if is_dir else entry.get("size", 0),
                 "isDir": is_dir,
-                "modTime": format_simplified(parsed_time, now),
+                "modTime": format_iso8601(parsed_time),
             }
             if not self._is_accessible(new_entry["uri"], real_ctx):
                 continue
@@ -2390,10 +2376,11 @@ class VikingFS:
     async def get_relations(self, uri: str, ctx: Optional[RequestContext] = None) -> List[str]:
         """Get all related URIs (backward compatible)."""
         entries = await self.get_relation_table(uri, ctx=ctx)
+        real_ctx = self._ctx_or_default(ctx)
         all_uris = []
         for entry in entries:
             for related in entry.uris:
-                if self._is_accessible(related, self._ctx_or_default(ctx)):
+                if self._is_accessible(related, real_ctx):
                     all_uris.append(related)
         return all_uris
 

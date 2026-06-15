@@ -10,7 +10,6 @@ from openviking.utils.model_retry import (
     ERROR_CLASS_QUOTA_EXCEEDED,
     ERROR_CLASS_TRANSIENT,
     classify_api_error,
-    is_quota_exceeded_api_error,
     retry_async,
     retry_sync,
 )
@@ -85,11 +84,6 @@ def test_quota_exceeded_takes_precedence_over_transient():
 def test_permanent_still_takes_precedence_over_quota():
     """Permanent errors (e.g. 403) still take highest precedence."""
     assert classify_api_error(RuntimeError("403 AccountQuotaExceeded")) == ERROR_CLASS_PERMANENT
-
-
-def test_is_quota_exceeded_api_error():
-    assert is_quota_exceeded_api_error(RuntimeError("AccountQuotaExceeded")) is True
-    assert is_quota_exceeded_api_error(RuntimeError("429 TooManyRequests")) is False
 
 
 def test_retry_sync_does_not_retry_quota_exceeded():

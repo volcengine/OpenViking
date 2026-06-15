@@ -45,6 +45,8 @@ pub struct Config {
     pub account: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", alias = "user_id")]
     pub user: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actor_peer_id: Option<String>,
     #[serde(
         default = "default_timeout",
         skip_serializing_if = "is_default_timeout"
@@ -149,6 +151,7 @@ impl Default for Config {
             root_api_key: None,
             account: None,
             user: None,
+            actor_peer_id: None,
             timeout: 60.0,
             output: "table".to_string(),
             echo_command: true,
@@ -355,13 +358,15 @@ mod tests {
                 "url": "http://127.0.0.1:1933",
                 "api_key": "test-key",
                 "account": "acme",
-                "user": "alice"
+                "user": "alice",
+                "actor_peer_id": "peer-a"
             }"#,
         )
         .expect("config should deserialize");
 
         assert_eq!(config.account.as_deref(), Some("acme"));
         assert_eq!(config.user.as_deref(), Some("alice"));
+        assert_eq!(config.actor_peer_id.as_deref(), Some("peer-a"));
         assert!(config.upload.ignore_dirs.is_none());
         assert!(config.upload.include.is_none());
         assert!(config.upload.exclude.is_none());

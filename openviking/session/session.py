@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from uuid import uuid4
 
 from openviking.core.namespace import canonical_session_uri
-from openviking.core.peer_id import normalize_peer_id, safe_peer_id
+from openviking.core.peer_id import normalize_peer_id
 from openviking.message import Message, Part
 from openviking.message.part import ContextPart, TextPart, ToolPart
 from openviking.server.config import ToolOutputExternalizationConfig
@@ -83,11 +83,33 @@ def _default_memory_counts() -> Dict[str, int]:
 
 
 def _message_peer_ids(messages: List[Message]) -> set[str]:
-    return {
-        peer_id
-        for message in messages
-        if (peer_id := safe_peer_id(getattr(message, "peer_id", None)))
-    }
+    return {peer_id for message in messages if (peer_id := getattr(message, "peer_id", None))}
+
+
+@dataclass(frozen=True)
+class _MemoryExtractionScope:
+    allow_self_memory: bool
+    allowed_peer_ids: set[str]
+    include_session_skills: bool
+    memory_types: Optional[set[str]]
+
+
+def _resolve_memory_extraction_scope(
+    ctx: RequestContext,
+    policy: MemoryPolicy,
+    messages: List[Message],
+    *,
+    config_session_skill_extraction_enabled: bool,
+) -> _MemoryExtractionScope:
+    allow_self_memory = policy.self_enabled
+    allowed_peer_ids = _message_peer_ids(messages) if policy.peer_enabled else set()
+
+    return _MemoryExtractionScope(
+        allow_self_memory=allow_self_memory,
+        allowed_peer_ids=allowed_peer_ids,
+        include_session_skills=config_session_skill_extraction_enabled and allow_self_memory,
+        memory_types=policy.memory_types,
+    )
 
 
 # =====================================================================
@@ -211,7 +233,6 @@ class SessionMeta:
     updated_at: str = ""
     created_by_account_id: str = ""
     created_by_user_id: str = ""
-    participant_user_ids: List[str] = field(default_factory=list)
     message_count: int = 0
     total_message_count: Optional[int] = 0
     commit_count: int = 0
@@ -250,7 +271,6 @@ class SessionMeta:
             "updated_at": self.updated_at,
             "created_by_account_id": self.created_by_account_id,
             "created_by_user_id": self.created_by_user_id,
-            "participant_user_ids": list(self.participant_user_ids),
             "message_count": self.message_count,
             "commit_count": self.commit_count,
             "memories_extracted": dict(self.memories_extracted),
@@ -285,7 +305,6 @@ class SessionMeta:
             created_by_account_id=data.get("created_by_account_id", "")
             or data.get("account_id", ""),
             created_by_user_id=data.get("created_by_user_id", ""),
-            participant_user_ids=list(data.get("participant_user_ids", [])),
             message_count=data.get("message_count", 0),
             total_message_count=data.get("total_message_count"),
             commit_count=data.get("commit_count", 0),
@@ -331,6 +350,7 @@ class Session:
         user: Optional["UserIdentifier"] = None,
         ctx: Optional[RequestContext] = None,
         session_id: Optional[str] = None,
+        session_uri: Optional[str] = None,
         auto_commit_threshold: int = 8000,
         tool_output_externalization_config: Optional[ToolOutputExternalizationConfig] = None,
     ):
@@ -342,7 +362,7 @@ class Session:
         self.session_id = session_id or str(uuid4())
         self.created_at = int(datetime.now(timezone.utc).timestamp() * 1000)
         self._auto_commit_threshold = auto_commit_threshold
-        self._session_uri = canonical_session_uri(self.session_id)
+        self._session_uri = session_uri or canonical_session_uri(self.ctx, self.session_id)
 
         self._messages: List[Message] = []
         self._usage_records: List[Usage] = []
@@ -353,7 +373,6 @@ class Session:
             created_at=get_current_timestamp(),
             created_by_account_id=self.ctx.account_id,
             created_by_user_id=self.ctx.user.user_id,
-            participant_user_ids=[self.ctx.user.user_id],
         )
         self._loaded = False
         self._tool_output_externalization_config = (
@@ -412,8 +431,6 @@ class Session:
             self._meta.created_by_account_id = self.ctx.account_id
         if not self._meta.created_by_user_id:
             self._meta.created_by_user_id = self.ctx.user.user_id
-        if not self._meta.participant_user_ids:
-            self._meta.participant_user_ids = [self._meta.created_by_user_id]
         # WM v2: always rebuild pending_tokens from current messages so the
         # counter stays consistent across restarts and is also backfilled for
         # legacy sessions whose .meta.json predates these fields. O(n) once,
@@ -527,7 +544,12 @@ class Session:
     def _tool_result_store(self) -> Optional[ToolResultStore]:
         if not self._viking_fs:
             return None
-        return ToolResultStore(self._viking_fs, self._session_uri, self.session_id, self.ctx)
+        return ToolResultStore(
+            self._viking_fs,
+            self._session_uri,
+            self.session_id,
+            self.ctx,
+        )
 
     async def _hydrate_tool_outputs_for_extraction(
         self,
@@ -1344,15 +1366,18 @@ class Session:
                         ov_config.memory.session_skill_extraction_enabled
                     )
                     effective_policy = MemoryPolicy.from_dict(memory_policy)
-                    self_memory_enabled = effective_policy.self_enabled
-                    peer_memory_enabled = effective_policy.peer_enabled
-                    allowed_peer_ids = (
-                        _message_peer_ids(extraction_messages) if peer_memory_enabled else set()
+                    extraction_scope = _resolve_memory_extraction_scope(
+                        self.ctx,
+                        effective_policy,
+                        extraction_messages,
+                        config_session_skill_extraction_enabled=(
+                            config_session_skill_extraction_enabled
+                        ),
                     )
-                    session_skill_extraction_enabled = (
-                        config_session_skill_extraction_enabled and self_memory_enabled
-                    )
-                    memory_type_filter = effective_policy.memory_types
+                    self_memory_enabled = extraction_scope.allow_self_memory
+                    allowed_peer_ids = extraction_scope.allowed_peer_ids
+                    session_skill_extraction_enabled = extraction_scope.include_session_skills
+                    memory_type_filter = extraction_scope.memory_types
                     long_term_memory_types, execution_memory_types = _split_policy_memory_types(
                         memory_type_filter
                     )
@@ -3154,10 +3179,18 @@ class Session:
         )
 
         run_async(
-            viking_fs.write_file(uri=f"{archive_uri}/.abstract.md", content=abstract, ctx=self.ctx)
+            viking_fs.write_file(
+                uri=f"{archive_uri}/.abstract.md",
+                content=abstract,
+                ctx=self.ctx,
+            )
         )
         run_async(
-            viking_fs.write_file(uri=f"{archive_uri}/.overview.md", content=overview, ctx=self.ctx)
+            viking_fs.write_file(
+                uri=f"{archive_uri}/.overview.md",
+                content=overview,
+                ctx=self.ctx,
+            )
         )
 
         logger.debug(f"Written archive: {archive_uri}")

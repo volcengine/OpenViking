@@ -307,7 +307,7 @@ OpenViking 在插件侧暴露两个独立的 archive 回查工具。
 
 - **插件工具**：`ov_archive_search`，参数 `query: string` + 可选 `archiveId: string`
 - **客户端封装**：`client.grepSessionArchives(sessionId, pattern, options)`
-- **服务端 API**：`POST /api/v1/search/grep`，body `{uri, pattern, case_insensitive}`。`uri` 默认 `viking://session/{sessionId}/history`（覆盖所有 archive）；指定 `archiveId` 时收窄为 `viking://session/{sessionId}/history/{archiveId}`
+- **服务端 API**：`POST /api/v1/search/grep`，body `{uri, pattern, case_insensitive}`。`uri` 默认 `viking://user/sessions/{sessionId}/history`（覆盖所有 archive）；指定 `archiveId` 时收窄为 `viking://user/sessions/{sessionId}/history/{archiveId}`
 - **工具输出给 LLM**：最多 12 条命中消息，每条最多 1500 字符，附 archive 标签（如 `archive_005`）和行号
 - **行为约束**：
   - 默认遍历所有 archive（新到旧）

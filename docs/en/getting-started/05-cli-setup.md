@@ -53,6 +53,8 @@ Choose this only when the user wants to connect to a custom OpenViking server on
 - API key is usually not needed for a local unauthenticated server.
 - Agents should not probe local ports, curl local health endpoints, or start server commands unless the user chose local custom setup.
 
+> **Note:** Recent CLI versions (v0.3.23+) require a saved display language before most commands will run. In an interactive terminal the CLI prompts you on first use; in a non-interactive shell (agent or CI) any non-exempt command exits `2` until you run `ov language en` or `ov language zh-CN`. Only `ov language`/`ov lang`, `ov config add|edit|delete|list`, and `ov config switch <name>` are exempt, so run `ov language <code>` before the `ov config validate`, `ov health`, and `ov status` checks above.
+
 ## Before You Start
 
 You need:
@@ -212,7 +214,7 @@ Agents should branch on the process exit code and the JSON `error.code`, not on 
 | Exit code | Meaning |
 |-----------|---------|
 | `0` | Success, or already in the desired state |
-| `2` | Bad input, missing value, invalid name, or unreadable secret source |
+| `2` | Bad input, missing value, invalid name, unreadable secret source, or no display language selected in a non-interactive shell (run `ov language <code>` first) |
 | `3` | A config with that name already exists with different values; pass `--force` only if replacement is intended |
 | `4` | Server unreachable or config validation failed |
 | `5` | Authentication or key-role mismatch, such as passing a root key where a user key is expected |

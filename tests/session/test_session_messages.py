@@ -57,7 +57,7 @@ class TestAddMessage:
         tool_part = ToolPart(
             tool_id="tool_123",
             tool_name="search_tool",
-            tool_uri="viking://session/test/tools/tool_123",
+            tool_uri=f"{session.uri}/tools/tool_123",
             skill_uri="viking://user/skills/search",
             tool_input={"query": "test"},
             tool_status="running",
@@ -71,11 +71,11 @@ class TestAddMessage:
         msg = session.add_message(
             "user",
             [TextPart("Message from Alice")],
-            peer_id="web:visitor:alice",
+            peer_id="web-visitor-alice",
         )
 
-        assert msg.peer_id == "web:visitor:alice"
-        assert msg.to_dict()["peer_id"] == "web:visitor:alice"
+        assert msg.peer_id == "web-visitor-alice"
+        assert msg.to_dict()["peer_id"] == "web-visitor-alice"
 
     async def test_add_message_rejects_peer_id_with_path_separator(self, session: Session):
         """Test direct session usage validates peer_id path safety."""
@@ -99,7 +99,8 @@ class TestAddMessage:
         self, client: AsyncOpenViking
     ):
         session_id = "batch_message_preservation_test"
-        await client.create_session(session_id=session_id)
+        created = await client.create_session(session_id=session_id)
+        session_uri = created["uri"]
 
         result = await client.batch_add_messages(
             session_id,
@@ -128,7 +129,7 @@ class TestAddMessage:
                             "type": "tool",
                             "tool_id": "tool_123",
                             "tool_name": "search_tool",
-                            "tool_uri": f"viking://session/test/{session_id}/tools/tool_123",
+                            "tool_uri": f"{session_uri}/tools/tool_123",
                             "skill_uri": "viking://user/skills/search",
                             "tool_status": "completed",
                             "tool_output": "Found a result",

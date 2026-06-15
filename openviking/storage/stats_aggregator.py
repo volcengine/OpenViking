@@ -140,8 +140,7 @@ class StatsAggregator:
         Returns:
             Dictionary with session extraction statistics.
         """
-        session = service.sessions.session(ctx, session_id)
-        await session.load()
+        session = await service.sessions.get(session_id, ctx, auto_create=False)
 
         stats = session.stats
         return {

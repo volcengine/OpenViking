@@ -20,6 +20,7 @@ import {
   trimForLog,
   toJsonLog,
 } from "./memory-ranking.js";
+import type { RecallTraceEntry } from "./recall-trace.js";
 import { sanitizeToolUseResultPairing } from "./session-transcript-repair.js";
 import {
   estimateAgentMessageTokens,
@@ -71,10 +72,10 @@ export function resolveMessagePeerId(params: {
   assistantPeerId?: string;
 }): string | undefined {
   if (params.peerRole === "person" && params.role === "user") {
-    return params.personPeerId;
+    return toPeerId(params.personPeerId);
   }
   if (params.peerRole === "assistant" && params.role === "assistant") {
-    return params.assistantPeerId;
+    return toPeerId(params.assistantPeerId);
   }
   return undefined;
 }
@@ -1037,7 +1038,6 @@ const PHASE2_POLL_MAX_MS = DEFAULT_PHASE2_POLL_TIMEOUT_MS;
 async function pollPhase2ExtractionOutcome(
   getClient: () => Promise<OpenVikingClient>,
   taskId: string,
-  agentId: string,
   logger: Logger,
   sessionLabel: string,
 ): Promise<void> {
@@ -1046,7 +1046,7 @@ async function pollPhase2ExtractionOutcome(
     const client = await getClient();
     while (Date.now() < deadline) {
       await sleep(PHASE2_POLL_INTERVAL_MS);
-      const task = await client.getTask(taskId, agentId).catch((e) => {
+      const task = await client.getTask(taskId).catch((e) => {
         logger.warn?.(`openviking: phase2 getTask failed task_id=${taskId}: ${String(e)}`);
         return null;
       });
@@ -1092,6 +1092,7 @@ export function createMemoryOpenVikingContextEngine(params: {
     sessionKey?: string;
     ovSessionId?: string;
   }) => void;
+  traceRecorder?: { record(entry: RecallTraceEntry): void };
 }): ContextEngineWithCommit {
   const {
     id,
@@ -1102,6 +1103,7 @@ export function createMemoryOpenVikingContextEngine(params: {
     getClient,
     resolveAgentId,
     rememberSessionAgentId,
+    traceRecorder,
   } = params;
 
   const diagEnabled = cfg.emitStandardDiagnostics;
@@ -1133,10 +1135,8 @@ export function createMemoryOpenVikingContextEngine(params: {
         sessionKey,
         ovSessionId: ovId,
       });
-      const agentId = resolveAgentId(sessionId, sessionKey, ovId);
       const commitResult = await client.commitSession(ovId, {
         wait: true,
-        agentId,
         keepRecentCount: 0,
       });
       const memCount = totalExtractedMemories(commitResult.memories_extracted);
@@ -1412,6 +1412,7 @@ export function createMemoryOpenVikingContextEngine(params: {
                 cfg,
                 client,
                 agentId,
+                peerId,
                 queryText: recallQuery.query,
                 sessionKey,
                 runtimeContext: assembleParams.runtimeContext,
@@ -1428,6 +1429,12 @@ export function createMemoryOpenVikingContextEngine(params: {
                 queryText: recallQuery.query,
                 logger,
                 verbose: (message) => logger.info(message),
+                traceRecorder,
+                sessionId: assembleParams.sessionId,
+                sessionKey,
+                ovSessionId: OVSessionId,
+                rawUserTextPreview: recallQuery.query,
+                queryTruncated: recallQuery.truncated,
               })
             : { memoryCount: 0, estimatedTokens: 0 };
           const longTermRecallWithQuery: AssembleRecall = { ...longTermRecall, queryChars: recallQuery.finalChars };
@@ -1467,9 +1474,7 @@ export function createMemoryOpenVikingContextEngine(params: {
 
       try {
         const client = await getClient();
-        const routingRef = assembleParams.sessionId ?? sessionKey ?? OVSessionId;
-        const agentId = resolveAgentId(routingRef, sessionKey, OVSessionId);
-        const ctx = await client.getSessionContext(OVSessionId, tokenBudget, agentId);
+        const ctx = await client.getSessionContext(OVSessionId, tokenBudget);
 
         const preAbstracts = ctx?.pre_archive_abstracts ?? [];
         const hasArchives = !!ctx?.latest_archive_overview || preAbstracts.length > 0;
@@ -1559,10 +1564,10 @@ export function createMemoryOpenVikingContextEngine(params: {
       try {
         const sender = extractRuntimeSenderId(afterTurnParams.runtimeContext);
         const { sessionKey, ovSessionId: OVSessionId } = resolveSessionIdentity(afterTurnParams);
-        const runtimeAgentId = extractRuntimeAgentId(afterTurnParams.runtimeContext);
-        if (runtimeAgentId) {
+        const runtimeAgentPeerSource = extractRuntimeAgentId(afterTurnParams.runtimeContext);
+        if (runtimeAgentPeerSource) {
           rememberSessionAgentId?.({
-            agentId: runtimeAgentId,
+            agentId: runtimeAgentPeerSource,
             sessionId: afterTurnParams.sessionId,
             sessionKey,
             ovSessionId: OVSessionId,
@@ -1638,7 +1643,6 @@ export function createMemoryOpenVikingContextEngine(params: {
           await client.ensureSession(
             OVSessionId,
             { memoryPolicy: defaultMemoryPolicy },
-            agentId,
           );
         }
         // 发送结构化消息：统一 role 为 user，通过 parts 区分类型
@@ -1671,14 +1675,13 @@ export function createMemoryOpenVikingContextEngine(params: {
               OVSessionId,
               msg.role,
               ovParts,
-              agentId,
               createdAt,
               peerId,
             );
           }
         }
 
-        const session = await client.getSession(OVSessionId, agentId);
+        const session = await client.getSession(OVSessionId);
         const pendingTokens = session.pending_tokens ?? 0;
 
         if (pendingTokens < cfg.commitTokenThreshold) {
@@ -1694,7 +1697,6 @@ export function createMemoryOpenVikingContextEngine(params: {
 
         const commitResult = await client.commitSession(OVSessionId, {
           wait: false,
-          agentId,
           keepRecentCount: cfg.commitKeepRecentCount,
         });
         logger.info(
@@ -1721,7 +1723,6 @@ export function createMemoryOpenVikingContextEngine(params: {
           void pollPhase2ExtractionOutcome(
             getClient,
             commitResult.task_id,
-            agentId,
             logger,
             OVSessionId,
           );
@@ -1768,7 +1769,7 @@ export function createMemoryOpenVikingContextEngine(params: {
       let preCommitEstimatedTokens: number | undefined;
       if (typeof tokensBeforeOriginal !== "number") {
         try {
-          const preCtx = await client.getSessionContext(OVSessionId, tokenBudget, agentId);
+          const preCtx = await client.getSessionContext(OVSessionId, tokenBudget);
           if (
             typeof preCtx.estimatedTokens === "number" &&
             Number.isFinite(preCtx.estimatedTokens)
@@ -1791,7 +1792,6 @@ export function createMemoryOpenVikingContextEngine(params: {
         );
         const commitResult = await client.commitSession(OVSessionId, {
           wait: true,
-          agentId,
           keepRecentCount: 0,
         });
         const memCount = totalExtractedMemories(commitResult.memories_extracted);
@@ -1894,7 +1894,7 @@ export function createMemoryOpenVikingContextEngine(params: {
 
         let ctx: Awaited<ReturnType<typeof client.getSessionContext>> | undefined;
         try {
-          ctx = await client.getSessionContext(OVSessionId, tokenBudget, agentId);
+          ctx = await client.getSessionContext(OVSessionId, tokenBudget);
           // 打印完整的 getSessionContext 结果
           logger.info(
             `openviking: compact getSessionContext raw result for ${OVSessionId}: ` +

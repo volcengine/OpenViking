@@ -12,8 +12,8 @@ from pathlib import Path
 
 from openviking_cli.utils.config.config_loader import resolve_config_path
 from openviking_cli.utils.config.consts import (
-    DEFAULT_OVCLI_CONF,
     DEFAULT_OV_CONF,
+    DEFAULT_OVCLI_CONF,
     OPENVIKING_CLI_CONFIG_ENV,
     OPENVIKING_CONFIG_ENV,
 )
@@ -219,8 +219,7 @@ def _parse_health_identity(body: str) -> tuple[str, str, str]:
     role = str(payload.get("role") or "").strip().lower()
     if not account_id or not user_id or not role:
         raise UserKeyValidationError(
-            "API key 未解析出有效身份，请检查 key 是否正确。"
-            f"/health 返回: {payload}"
+            f"API key 未解析出有效身份，请检查 key 是否正确。/health 返回: {payload}"
         )
     return account_id, user_id, role
 
@@ -254,9 +253,7 @@ def _admin_request(
             raw = resp.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as exc:
         detail = _read_http_error(exc)
-        raise UserKeyValidationError(
-            f"Admin API 请求失败（HTTP {exc.code}）: {detail}"
-        ) from exc
+        raise UserKeyValidationError(f"Admin API 请求失败（HTTP {exc.code}）: {detail}") from exc
     except Exception as exc:
         raise UserKeyValidationError(f"Admin API 请求失败: {exc}") from exc
 
@@ -291,12 +288,15 @@ def _ensure_default_user_key(url: str, root_api_key: str) -> tuple[str, str, str
             {"account_id": account_id, "admin_user_id": admin_user_id},
         )
 
-    users = _admin_request(
-        url,
-        root_api_key,
-        "GET",
-        f"/api/v1/admin/accounts/{quoted_account}/users",
-    ).get("items") or []
+    users = (
+        _admin_request(
+            url,
+            root_api_key,
+            "GET",
+            f"/api/v1/admin/accounts/{quoted_account}/users",
+        ).get("items")
+        or []
+    )
     default_user = next(
         (item for item in users if isinstance(item, dict) and item.get("user_id") == user_id),
         None,
@@ -361,9 +361,7 @@ def _ensure_server_and_user_key_ready(
 
     account_id, user_id, role = _parse_health_identity(body)
     if role != "user":
-        raise UserKeyValidationError(
-            f"当前 API key 解析为 role={role}。评测需要普通 User key。"
-        )
+        raise UserKeyValidationError(f"当前 API key 解析为 role={role}。评测需要普通 User key。")
 
     if selected_account and selected_account != "default" and selected_account != account_id:
         _log(
@@ -395,8 +393,7 @@ def _resolve_ready_user_identity(
         except UserKeyValidationError as exc:
             _error(str(exc))
             prompt = (
-                "[preflight] 当前 User key 不可用，"
-                "是否使用 Root key 自动生成 default User API key"
+                "[preflight] 当前 User key 不可用，是否使用 Root key 自动生成 default User API key"
             )
     else:
         _error("未配置 OpenViking User API key。")
