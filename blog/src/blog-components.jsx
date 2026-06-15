@@ -390,8 +390,11 @@ export function TOC({ minLevel = 2, maxLevel = 3, title, lang, foldable = false 
                 window.scrollTo({ top: y, behavior: 'smooth' });
                 history.replaceState(null, '', `${location.pathname}${location.search}#${it.id}`);
               }
-            }}>
-              <span className="b-toc__text">{it.text}</span>
+            }} aria-label={it.text}>
+              <span className="b-toc__text">
+                <span className="b-toc__text-label">{it.text}</span>
+                <span className="b-toc__popover" aria-hidden="true">{it.text}</span>
+              </span>
             </a>
           </li>
         ))}

@@ -66,6 +66,15 @@ function currentSourceUrl() {
   return window.location.href;
 }
 
+function currentUiLanguage() {
+  if (!browserAvailable()) return 'en';
+  return document.documentElement.lang === 'zh' ? 'zh' : 'en';
+}
+
+function currentComposerPlaceholder() {
+  return 'Ask AI';
+}
+
 function currentGuestPictureUrl() {
   if (!browserAvailable()) return 'https://blog.openviking.ai/assets/logo.png';
   try {
@@ -502,6 +511,15 @@ function MessageIcon() {
   );
 }
 
+function CloseIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M6 6 18 18" />
+      <path d="M18 6 6 18" />
+    </svg>
+  );
+}
+
 function SendIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -729,13 +747,16 @@ export function ZoukInteractiveBlog({ route }) {
   const isPostRoute = route?.name === 'post';
   const panelVisible = open || closing;
   const showBottomComposer = isPostRoute && !panelVisible;
-  const composerPlaceholder = `Ask OpenViking about this post...`;
+  const showLauncher = !isPostRoute && !panelVisible;
+  const composerPlaceholder = currentComposerPlaceholder();
   const referencedText = compactText(selectedText);
   const contextUrlChanged = Boolean(sourceUrl && sourceUrl !== lastContextUrl);
   const includeContextUrl = contextUrlChanged || Boolean(referencedText);
   const shouldInjectContext = includeContextUrl || Boolean(referencedText);
   const composerTrimmed = composer.trim();
   const submitDisabled = !composerTrimmed || status === 'sending' || sendWhenReady;
+  const launcherLabel = currentUiLanguage() === 'zh' ? '打开 OpenViking 助手' : 'Open OpenViking assistant';
+  const closeLabel = currentUiLanguage() === 'zh' ? '关闭助手' : 'Close assistant';
 
   const authHeaders = useMemo(() => ({
     'Content-Type': 'application/json',
@@ -1196,6 +1217,17 @@ export function ZoukInteractiveBlog({ route }) {
         </button>
       ) : null}
 
+      {showLauncher ? (
+        <button
+          type="button"
+          className="zouk-reader-launcher"
+          aria-label={launcherLabel}
+          onClick={() => openChat()}
+        >
+          <MessageIcon />
+        </button>
+      ) : null}
+
       {showBottomComposer ? (
         <form className="zouk-reader-bottom-composer" onSubmit={onSubmit} aria-label="Ask OpenViking">
           <div className="zouk-reader-input-shell">
@@ -1233,10 +1265,12 @@ export function ZoukInteractiveBlog({ route }) {
         >
           <button
             type="button"
-            className="zouk-reader-edge-toggle"
-            aria-label="Close chat"
+            className="zouk-reader-close"
+            aria-label={closeLabel}
             onClick={closeChat}
-          />
+          >
+            <CloseIcon />
+          </button>
 
           <div
             className="zouk-reader-drag"
