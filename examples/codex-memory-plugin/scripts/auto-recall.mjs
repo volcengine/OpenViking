@@ -22,6 +22,7 @@ import { createLogger } from "./debug-log.mjs";
 import {
   buildCodexExecArgs,
   fallbackRecallCompressorProfile,
+  invalidateRecallCompressorProfileCache,
   loadCachedRecallCompressorProfile,
 } from "./recall-compressor-profile.mjs";
 
@@ -373,11 +374,17 @@ async function runCodexCompressor(prompt, profile) {
       let stderr = "";
       const child = spawn("codex", args, { env, stdio: ["pipe", "ignore", "pipe"] });
       activeCompressor = child;
-      const finish = (value) => {
+      const finish = (value, { invalidate = false } = {}) => {
         if (done) return;
         done = true;
         if (activeCompressor === child) activeCompressor = null;
         clearTimeout(timer);
+        if (invalidate) {
+          // Forget cached profile so next SessionStart / UserPromptSubmit
+          // re-resolves against the current models_cache.json. Cheap fire-
+          // and-forget; failure to delete is fine, the next save overwrites.
+          invalidateRecallCompressorProfileCache().catch(() => {});
+        }
         resolve(value);
       };
       const timer = setTimeout(() => {
@@ -394,11 +401,11 @@ async function runCodexCompressor(prompt, profile) {
       });
       child.on("error", (err) => {
         logError("compress_spawn", err);
-        finish(null);
+        finish(null, { invalidate: true });
       });
       child.on("close", async (code) => {
         if (timedOut) {
-          finish(null);
+          finish(null, { invalidate: true });
           return;
         }
         if (code !== 0) {
@@ -406,14 +413,14 @@ async function runCodexCompressor(prompt, profile) {
             profile,
             error: stderr.trim().slice(-1000) || `codex exited ${code}`,
           });
-          finish(null);
+          finish(null, { invalidate: true });
           return;
         }
         try {
           finish(await readFile(outputPath, "utf-8"));
         } catch (err) {
           logError("compress_read", err);
-          finish(null);
+          finish(null, { invalidate: true });
         }
       });
       child.stdin.end(prompt);

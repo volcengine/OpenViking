@@ -1,12 +1,13 @@
-import { spawn } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, rm } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join } from "node:path";
+import { mkdir, rename, writeFile } from "node:fs/promises";
 import { getStateDir } from "./session-state.mjs";
 
 const DEFAULT_PRIMARY = { model: "gpt-5.3-codex-spark", thinking: "default", source: "default_primary" };
 const DEFAULT_FALLBACK = { model: "gpt-5.5", thinking: "low", source: "default_fallback" };
-const PROFILE_SCHEMA_VERSION = 1;
+const PROFILE_SCHEMA_VERSION = 2;
+const DEFAULT_CODEX_HOME = join(homedir(), ".codex");
 
 function isOff(value) {
   return /^(?:0|false|no|off|none|disabled)$/i.test(String(value || "").trim());
@@ -72,6 +73,43 @@ export function buildRecallCompressorCandidates(cfg) {
   });
 }
 
+function codexHomeDir(env = process.env) {
+  const fromEnv = String(env.CODEX_HOME || "").trim();
+  return fromEnv || DEFAULT_CODEX_HOME;
+}
+
+function modelsCachePath(env = process.env) {
+  return join(codexHomeDir(env), "models_cache.json");
+}
+
+/**
+ * Read codex's local model catalogue. Codex CLI maintains this file using
+ * its own etag-backed fetch; reading it is the cheapest way to know which
+ * model slugs `codex exec` can actually invoke. Missing or unreadable cache
+ * → empty result, callers should treat that as "unknown availability" and
+ * fall back to best effort.
+ */
+export async function loadCodexModelsCache(env = process.env) {
+  try {
+    const raw = await readFile(modelsCachePath(env), "utf-8");
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed?.models)) return { slugs: new Set(), fetchedAt: null, present: false };
+    const slugs = new Set();
+    for (const entry of parsed.models) {
+      if (entry && typeof entry.slug === "string" && entry.slug.trim()) {
+        slugs.add(entry.slug.trim());
+      }
+    }
+    return {
+      slugs,
+      fetchedAt: typeof parsed.fetched_at === "string" ? parsed.fetched_at : null,
+      present: true,
+    };
+  } catch {
+    return { slugs: new Set(), fetchedAt: null, present: false };
+  }
+}
+
 export function fallbackRecallCompressorProfile(cfg) {
   const candidates = buildRecallCompressorCandidates(cfg);
   if (candidates.length === 0) {
@@ -123,71 +161,28 @@ async function saveRecallCompressorProfile(cfg, profile) {
   await rename(tmp, final);
 }
 
-async function probeCandidate(candidate, cfg, { logError }) {
-  const tmp = await mkdtemp(join(tmpdir(), "ov-recall-profile-"));
-  const outputPath = join(tmp, "last-message.txt");
-  const args = buildCodexExecArgs(candidate, outputPath);
-
+/**
+ * Forget the cached compressor profile. Called when the actual `codex exec`
+ * compress run fails (exit non-zero, timeout, missing model). Next caller
+ * re-resolves from the current models_cache.json.
+ */
+export async function invalidateRecallCompressorProfileCache() {
   try {
-    return await new Promise((resolve) => {
-      const env = {
-        ...process.env,
-        OPENVIKING_AUTO_RECALL: "0",
-        OPENVIKING_AUTO_CAPTURE: "0",
-        OPENVIKING_RECALL_COMPRESS: "0",
-      };
-      let done = false;
-      let stderr = "";
-      let timer;
-      const child = spawn("codex", args, { env, stdio: ["pipe", "ignore", "pipe"] });
-      const finish = (ok, error = "") => {
-        if (done) return;
-        done = true;
-        if (timer) clearTimeout(timer);
-        resolve({ ok, error });
-      };
-      timer = setTimeout(() => {
-        try {
-          child.kill("SIGKILL");
-        } catch { /* best effort */ }
-        finish(false, `timed out after ${cfg.recallCompressDetectTimeoutMs}ms`);
-      }, cfg.recallCompressDetectTimeoutMs);
-
-      child.stderr.on("data", (chunk) => {
-        stderr += chunk.toString();
-        if (stderr.length > 4000) stderr = stderr.slice(-4000);
-      });
-      child.on("error", (err) => {
-        logError?.("compress_profile_probe_spawn", err);
-        finish(false, String(err?.message || err));
-      });
-      child.on("close", async (code) => {
-        if (done) return;
-        if (code !== 0) {
-          finish(false, stderr.trim().slice(-1000) || `codex exited ${code}`);
-          return;
-        }
-        try {
-          const text = await readFile(outputPath, "utf-8");
-          finish(/\bOK\b/i.test(text), /\bOK\b/i.test(text) ? "" : "probe output missing OK");
-        } catch (err) {
-          finish(false, String(err?.message || err));
-        }
-      });
-      child.stdin.end("Reply exactly: OK");
-    });
-  } finally {
-    await rm(tmp, { recursive: true, force: true }).catch(() => {});
-  }
+    await rm(profilePath(), { force: true });
+  } catch { /* best effort */ }
 }
 
-export async function detectRecallCompressorProfile(cfg, logger = {}) {
-  const { log, logError } = logger;
-  if (!cfg.recallCompressDetectOnStartup) {
-    log?.("compress_profile_skip", { reason: "detect disabled" });
-    return loadCachedRecallCompressorProfile(cfg);
-  }
-  log?.("compress_profile_recreate", { reason: "session_start" });
+/**
+ * Pick a compressor profile by consulting codex's local model catalogue.
+ *
+ * No subprocess: we read `~/.codex/models_cache.json` (codex CLI maintains
+ * it via its own etag fetch) and pick the first candidate whose slug is
+ * present. When the catalogue is absent (codex 0.130 pre-cache, fresh
+ * install, etc.) we optimistically pick the first candidate and rely on
+ * the runtime compress path to invalidate the cache on failure.
+ */
+export async function resolveRecallCompressorProfile(cfg, logger = {}, env = process.env) {
+  const { log } = logger;
 
   if (recallCompressionExplicitlyOff(cfg)) {
     const profile = { enabled: false, source: "configured_off" };
@@ -196,20 +191,59 @@ export async function detectRecallCompressorProfile(cfg, logger = {}) {
     return profile;
   }
 
-  for (const candidate of buildRecallCompressorCandidates(cfg)) {
-    log?.("compress_profile_probe", candidate);
-    const result = await probeCandidate(candidate, cfg, { logError });
-    if (result.ok) {
-      const profile = { enabled: true, detected: true, ...candidate };
-      await saveRecallCompressorProfile(cfg, profile);
-      log?.("compress_profile_selected", profile);
-      return profile;
-    }
-    logError?.("compress_profile_probe_failed", { candidate, error: result.error });
+  const candidates = buildRecallCompressorCandidates(cfg);
+  if (candidates.length === 0) {
+    const profile = { enabled: false, source: "no_candidates" };
+    await saveRecallCompressorProfile(cfg, profile);
+    log?.("compress_profile_selected", profile);
+    return profile;
   }
 
-  const profile = { enabled: false, source: "no_available_model" };
+  const catalogue = await loadCodexModelsCache(env);
+  log?.("compress_profile_catalogue", {
+    present: catalogue.present,
+    count: catalogue.slugs.size,
+    fetchedAt: catalogue.fetchedAt,
+  });
+
+  let pick = null;
+  if (catalogue.present && catalogue.slugs.size > 0) {
+    pick = candidates.find((c) => catalogue.slugs.has(c.model));
+  }
+  if (!pick) {
+    // Catalogue missing or none of our candidates appear in it. Pick the
+    // first candidate optimistically; if `codex exec` later fails, the
+    // runtime compress path invalidates this cache and re-resolves.
+    pick = candidates[0];
+  }
+
+  const detected = catalogue.present && catalogue.slugs.has(pick.model);
+  const profile = { enabled: true, ...pick, detected };
   await saveRecallCompressorProfile(cfg, profile);
   log?.("compress_profile_selected", profile);
   return profile;
+}
+
+/**
+ * Cache-first profile lookup used by SessionStart and UserPromptSubmit.
+ *
+ * SessionStart no longer probes models with a subprocess on every fire.
+ * Instead it loads the cached profile and only resolves (a cheap
+ * models_cache.json read) when nothing is cached or the cache is stale.
+ * The runtime compress path invalidates the cache on failure, which is
+ * what triggers the next re-resolve.
+ */
+export async function detectRecallCompressorProfile(cfg, logger = {}, env = process.env) {
+  const { log } = logger;
+  const cached = await loadCachedRecallCompressorProfile(cfg);
+  if (cached) {
+    log?.("compress_profile_cache_hit", cached);
+    return cached;
+  }
+  if (!cfg.recallCompressDetectOnStartup) {
+    log?.("compress_profile_skip", { reason: "detect disabled and no cache" });
+    return null;
+  }
+  log?.("compress_profile_resolve", { reason: "cache_miss" });
+  return resolveRecallCompressorProfile(cfg, logger, env);
 }
