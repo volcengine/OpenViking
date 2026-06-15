@@ -17,7 +17,7 @@ from openviking.parse.parsers.constants import (
     TEXT_ENCODINGS,
     UTF8_VARIANTS,
 )
-from openviking.utils.path_safety import sanitize_relative_viking_path
+from openviking.utils.path_safety import safe_join_viking_uri, sanitize_relative_viking_path
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -166,8 +166,7 @@ async def upload_text_files(
 
     for file_path, rel_path in file_paths:
         try:
-            safe_rel = _sanitize_rel_path(rel_path)
-            target_uri = f"{viking_uri_base}/{safe_rel}"
+            target_uri = safe_join_viking_uri(viking_uri_base, rel_path)
             content = file_path.read_bytes()
             content = detect_and_convert_encoding(content, file_path)
             await viking_fs.write_file_bytes(target_uri, content)
@@ -242,13 +241,12 @@ async def upload_directory(
 
             rel_path_str = str(file_path.relative_to(local_dir)).replace(os.sep, "/")
             try:
-                safe_rel = _sanitize_rel_path(rel_path_str)
+                target_uri = safe_join_viking_uri(viking_uri_base, rel_path_str)
             except ValueError as exc:
                 warning = f"Skipping {file_path}: {exc}"
                 warnings.append(warning)
                 logger.warning(warning)
                 continue
-            target_uri = f"{viking_uri_base}/{safe_rel}"
             files_to_upload.append((file_path, target_uri))
             parent_uris.add(target_uri.rsplit("/", 1)[0])
 

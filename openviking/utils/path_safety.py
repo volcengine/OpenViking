@@ -4,6 +4,8 @@
 
 import re
 
+from openviking_cli.utils.uri import VikingURI
+
 _UNSAFE_REL_PATH_RE = re.compile(r"(^|[\\/])\.\.($|[\\/])")
 _WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:")
 
@@ -24,3 +26,9 @@ def sanitize_relative_viking_path(rel_path: str) -> str:
     if _UNSAFE_REL_PATH_RE.search(rel_path):
         raise ValueError(f"Unsafe relative path rejected: {rel_path}")
     return rel_path.replace("\\", "/")
+
+
+def safe_join_viking_uri(base_uri: str, rel_path: str) -> str:
+    """Join a Viking URI base with a sanitized relative child path."""
+    safe_rel_path = sanitize_relative_viking_path(rel_path)
+    return VikingURI(base_uri).join(safe_rel_path).uri
