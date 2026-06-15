@@ -406,6 +406,39 @@ async def test_add_message_accepts_image_part(client: httpx.AsyncClient, service
     }
 
 
+async def test_add_message_resolves_image_part_url_path_variables(
+    client: httpx.AsyncClient,
+    service,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "openviking.server.routers.sessions.resolve_path_variables",
+        lambda value: value.replace("{calendar:today}", "2026/06/15"),
+    )
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+
+    resp = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json=_message_request(
+            "user",
+            parts=[
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "viking://resources/images/{calendar:today}/photo.png"},
+                }
+            ],
+        ),
+    )
+
+    assert resp.status_code == 200
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    session = service.sessions.session(ctx, session_id)
+    await session.load()
+    assert isinstance(session.messages[0].parts[0], ImagePart)
+    assert session.messages[0].parts[0].url == "viking://resources/images/2026/06/15/photo.png"
+
+
 async def test_add_message_accepts_mixed_parts(client: httpx.AsyncClient, service):
     create_resp = await client.post("/api/v1/sessions", json={})
     session_id = create_resp.json()["result"]["session_id"]

@@ -140,6 +140,14 @@ def _part_request_to_part(raw_part: Dict[str, Any]) -> Part:
             part_copy["tool_uri"] = resolve_path_variables(part_copy["tool_uri"])
         if "skill_uri" in part_copy:
             part_copy["skill_uri"] = resolve_path_variables(part_copy["skill_uri"])
+    if part_copy.get("type") == "image_url":
+        image_url = part_copy.get("image_url")
+        if isinstance(image_url, dict) and "url" in image_url:
+            image_url = dict(image_url)
+            image_url["url"] = resolve_path_variables(image_url["url"])
+            part_copy["image_url"] = image_url
+        elif isinstance(image_url, str):
+            part_copy["image_url"] = resolve_path_variables(image_url)
     try:
         return part_from_dict(part_copy)
     except ValueError as exc:
