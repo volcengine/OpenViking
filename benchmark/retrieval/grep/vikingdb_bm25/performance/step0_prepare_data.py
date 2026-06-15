@@ -10,20 +10,22 @@ Directory layout:
   <output>/dir_001/wiki_000.txt ... dir_001/wiki_999.txt
   ...
 
-Each dir_xxx contains 1000 files. Default: 100 directories (100,000 files).
+Each dir_xxx contains 1000 files. Default: 200 directories (200,000 files).
 
 Target words are injected by replacing a random word in the text.
 All target words must NOT exist in the original source text.
 
-Default target words and probabilities (12 words, 4 tiers):
-  50%   : quantumnexus, synapseflow, deepvector
-  10%   : bm25engine, vikingcore, retrievex
-  0.1%  : zephyrhash, cryptolattice, nebulalink
-  0.01% : xenoform, quarkpulse, omegabind
+Default target words and probabilities (15 words, 5 tiers):
+  1%     : heliofract, prismcache, fluxkernel
+  0.1%   : auroracode, kiteshade, glyphvector
+  0.1%   : cortexmint, latticewave, spiralsync
+  0.05%  : ripplehash, embertrace, novaframe
+  0.01%  : zephyrloom, quartzrelay, nebulaindex
 
 Usage:
   python3 step0_prepare_data.py
   python3 step0_prepare_data.py --num-dirs 50 --seed 42
+  python3 step0_prepare_data.py --start-dir 100 --num-dirs 100  # append dir_100..dir_199
 """
 
 from __future__ import annotations
@@ -39,19 +41,20 @@ DEFAULT_SOURCE = os.path.join(SCRIPT_DIR, "..", "ai_wiki.txt")
 DEFAULT_OUTPUT = os.path.expanduser("~/.openviking/data/benchmark/synthetic")
 FILES_PER_DIR = 1000
 
-TARGET_WORDS = {
-    0.50: ["quantumnexus", "synapseflow", "deepvector"],
-    0.10: ["bm25engine", "vikingcore", "retrievex"],
-    0.001: ["zephyrhash", "cryptolattice", "nebulalink"],
-    0.0001: ["xenoform", "quarkpulse", "omegabind"],
-}
+TARGET_GROUPS: list[tuple[float, list[str]]] = [
+    (0.01, ["heliofract", "prismcache", "fluxkernel"]),
+    (0.001, ["auroracode", "kiteshade", "glyphvector"]),
+    (0.001, ["cortexmint", "latticewave", "spiralsync"]),
+    (0.0005, ["ripplehash", "embertrace", "novaframe"]),
+    (0.0001, ["zephyrloom", "quartzrelay", "nebulaindex"]),
+]
 
 
 def verify_target_words(text: str) -> None:
     """Verify that no target word appears in the source text."""
     text_lower = text.lower()
     conflicts = []
-    for prob, words in TARGET_WORDS.items():
+    for prob, words in TARGET_GROUPS:
         for word in words:
             if word.lower() in text_lower:
                 conflicts.append((word, prob))
@@ -77,19 +80,23 @@ def generate_dataset(
     source_text: str,
     output_dir: str,
     num_dirs: int,
+    start_dir: int = 0,
     seed: int = 42,
 ) -> dict:
-    rng = random.Random(seed)
+    rng = random.Random(seed + start_dir)
     total_files = num_dirs * FILES_PER_DIR
-    injection_stats = {word: 0 for prob_words in TARGET_WORDS.values() for word in prob_words}
+    injection_stats = {word: 0 for _prob, words in TARGET_GROUPS for word in words}
 
+    end_dir = start_dir + num_dirs - 1 if num_dirs > 0 else start_dir
     print(f"  Generating {num_dirs} dirs x {FILES_PER_DIR} files = {total_files} files")
+    print(f"  Directory range: dir_{start_dir:03d} .. dir_{end_dir:03d}")
     print(f"  Output: {output_dir}")
     print()
 
     t0 = time.monotonic()
 
-    for dir_idx in range(num_dirs):
+    for offset in range(num_dirs):
+        dir_idx = start_dir + offset
         dir_name = f"dir_{dir_idx:03d}"
         dir_path = os.path.join(output_dir, dir_name)
         os.makedirs(dir_path, exist_ok=True)
@@ -99,7 +106,7 @@ def generate_dataset(
             file_path = os.path.join(dir_path, file_name)
             content = source_text
 
-            for prob, words in TARGET_WORDS.items():
+            for prob, words in TARGET_GROUPS:
                 for word in words:
                     if rng.random() < prob:
                         content = inject_word(content, word)
@@ -108,13 +115,14 @@ def generate_dataset(
             with open(file_path, "w") as f:
                 f.write(content)
 
-        if (dir_idx + 1) % 10 == 0 or dir_idx == num_dirs - 1:
+        if (offset + 1) % 10 == 0 or offset == num_dirs - 1:
             elapsed = time.monotonic() - t0
-            print(f"  [{dir_idx + 1}/{num_dirs}] dirs created  ({elapsed:.1f}s)")
+            print(f"  [{offset + 1}/{num_dirs}] dirs created  ({elapsed:.1f}s)")
 
     elapsed = time.monotonic() - t0
     return {
         "total_files": total_files,
+        "start_dir": start_dir,
         "num_dirs": num_dirs,
         "files_per_dir": FILES_PER_DIR,
         "elapsed_s": round(elapsed, 1),
@@ -133,7 +141,13 @@ def main():
         "--output", default=DEFAULT_OUTPUT, help=f"Output directory (default: {DEFAULT_OUTPUT})"
     )
     parser.add_argument(
-        "--num-dirs", type=int, default=100, help="Number of directories (default: 100)"
+        "--num-dirs", type=int, default=200, help="Number of directories (default: 200)"
+    )
+    parser.add_argument(
+        "--start-dir",
+        type=int,
+        default=0,
+        help="Starting directory index for append/scale-out runs (default: 0)",
     )
     parser.add_argument("--seed", type=int, default=42, help="Random seed (default: 42)")
     args = parser.parse_args()
@@ -146,6 +160,7 @@ def main():
     print("=" * 80)
     print(f"  Source:   {source}")
     print(f"  Output:   {output}")
+    print(f"  StartDir: {args.start_dir}")
     print(f"  Dirs:     {args.num_dirs}")
     print(f"  Seed:     {args.seed}")
     print()
@@ -168,25 +183,26 @@ def main():
     print("  All target words verified OK.")
     print()
     print("  Target words and injection probabilities:")
-    for prob in sorted(TARGET_WORDS.keys(), reverse=True):
-        words = TARGET_WORDS[prob]
-        pct = f"{prob * 100:.2f}%"
+    for prob, words in sorted(TARGET_GROUPS, key=lambda item: item[0], reverse=True):
+        pct = f"{prob * 100:.3f}%"
         print(f"    {pct:>8s} : {', '.join(words)}")
     print()
 
-    summary = generate_dataset(source_text, output, args.num_dirs, seed=args.seed)
+    summary = generate_dataset(
+        source_text, output, args.num_dirs, start_dir=args.start_dir, seed=args.seed
+    )
 
     print()
     print("=" * 80)
     print("Summary:")
     print(f"  Total files:  {summary['total_files']:,}")
+    print(f"  Start dir:    {summary['start_dir']}")
     print(f"  Directories:  {summary['num_dirs']}")
     print(f"  Elapsed:      {summary['elapsed_s']}s")
     print()
     print("  Target word injection counts:")
     total_files = summary["total_files"]
-    for prob in sorted(TARGET_WORDS.keys(), reverse=True):
-        words = TARGET_WORDS[prob]
+    for prob, words in sorted(TARGET_GROUPS, key=lambda item: item[0], reverse=True):
         for word in words:
             actual = summary["injection_stats"][word]
             expected = total_files * prob
@@ -194,7 +210,7 @@ def main():
             print(
                 f"    {word:<18s}  actual={actual:>6d}  "
                 f"expected~{expected:>8.1f}  "
-                f"rate={pct:.3f}%  (target={prob * 100:.2f}%)"
+                f"rate={pct:.3f}%  (target={prob * 100:.3f}%)"
             )
 
     print()

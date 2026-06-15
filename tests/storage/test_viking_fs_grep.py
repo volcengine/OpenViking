@@ -7,10 +7,20 @@ import pytest
 
 import openviking.storage.viking_fs as viking_fs_module
 from openviking.storage.viking_fs import _DEFAULT_GREP_FILE_CONCURRENCY, VikingFS
+from openviking_cli.utils.config.grep_config import GrepConfig
 
 
 class _DummyAgfs:
     pass
+
+
+class _DummyVectorStore:
+    def __init__(self):
+        self.calls = []
+
+    async def search_by_keywords(self, **kwargs):
+        self.calls.append(kwargs)
+        return []
 
 
 @pytest.fixture
@@ -32,6 +42,41 @@ def fs(monkeypatch):
 
 async def _fake_stat(uri, ctx=None, skip_count=False):
     return {"name": uri.rsplit("/", 1)[-1], "isDir": True}
+
+
+def test_grep_config_default_switch_to_remote_threshold_is_10000():
+    assert GrepConfig().switch_to_remote_threshold == 10000
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("node_limit", "expected_remote_limit"),
+    [
+        (7, 35),
+        (None, 100000),
+        (50000, 100000),
+    ],
+)
+async def test_grep_vikingdb_auto_remote_limit_uses_five_times_node_limit(
+    monkeypatch, node_limit, expected_remote_limit
+):
+    fs = VikingFS(agfs=_DummyAgfs())
+    vector_store = _DummyVectorStore()
+    monkeypatch.setattr(fs, "_get_vector_store", lambda: vector_store)
+
+    result = await fs._grep_vikingdb_then_fs(
+        uri="viking://resources",
+        pattern="needle",
+        exclude_uri=None,
+        case_insensitive=False,
+        node_limit=node_limit,
+        level_limit=10,
+        remote_return_limit=0,
+        ctx=None,
+    )
+
+    assert result == {"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
+    assert vector_store.calls[0]["limit"] == expected_remote_limit
 
 
 @pytest.mark.asyncio

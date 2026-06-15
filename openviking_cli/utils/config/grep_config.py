@@ -21,7 +21,7 @@ class GrepConfig(BaseModel):
     )
 
     switch_to_remote_threshold: int = Field(
-        default=1000,
+        default=10000,
         ge=0,
         description=(
             "L2 record count threshold to switch to vikingdb; 0 means always use vikingdb."

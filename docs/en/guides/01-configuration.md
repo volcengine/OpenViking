@@ -888,7 +888,7 @@ Grep engine configuration for content pattern search. These settings are server-
 {
   "grep": {
     "engine": "auto",
-    "switch_to_remote_threshold": 1000
+    "switch_to_remote_threshold": 10000
   }
 }
 ```
@@ -896,9 +896,7 @@ Grep engine configuration for content pattern search. These settings are server-
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `engine` | str | Search engine mode: `"auto"` uses VikingDB BM25 recall when available and falls back to local filesystem search; `"fs"` forces local filesystem search only. | `"auto"` |
-| `switch_to_remote_threshold` | int | L2 record count threshold to switch to VikingDB BM25 recall. When the number of L2 files under the search scope exceeds this threshold, VikingDB BM25 is used for phase-1 recall; otherwise local filesystem search is used. Set to `0` to always use VikingDB BM25. Must be ≥ 0. | `1000` |
-
-The per-request parameter `remote_return_limit` (0–100000, default `0` = auto-adapt to 100000) controls the maximum number of files recalled by VikingDB BM25 in a single grep call.
+| `switch_to_remote_threshold` | int | L2 record count threshold to switch to VikingDB BM25 recall. When the number of L2 files under the search scope exceeds this threshold, VikingDB BM25 is used for phase-1 recall; otherwise local filesystem search is used. Set to `0` to always use VikingDB BM25. Must be ≥ 0. | `10000` |
 
 ### storage
 

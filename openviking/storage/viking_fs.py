@@ -929,12 +929,11 @@ class VikingFS:
         query = " ".join(kw.strip() for kw in pattern.split("|") if kw.strip())
         filter_expr = PathScope("uri", uri, depth=level_limit)
 
-        # Auto-adapt remote_return_limit: when 0 (default), use the maximum
-        # limit (100000) so that search_by_keywords returns all matching
-        # documents without truncation. The real cost is in phase 2 (local
-        # regex on recalled files), not in the bm25 recall itself.
+        # Auto-adapt remote_return_limit: when 0 (default), recall up to
+        # 5x requested matches while capping at VikingDB's max limit. If
+        # node_limit is unset, use the maximum limit to avoid truncation.
         if remote_return_limit == 0:
-            remote_return_limit = 100000
+            remote_return_limit = min(node_limit * 5, 100000) if node_limit else 100000
 
         # Step 1: vikingdb recall candidate files
         try:

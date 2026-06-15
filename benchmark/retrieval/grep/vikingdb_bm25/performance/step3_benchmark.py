@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
-"""Step 3 (Performance): Benchmark grep performance and recall.
+"""Step 3 (Performance): Benchmark grep latency and match count.
 
-Runs grep queries against the synthetic dataset, measuring both latency
-and recall. Ground truth (match counts per word) is obtained by running
-grep with engine=fs on first run, then cached.
+Runs grep queries against the synthetic dataset, measuring latency and
+returned match count with a fixed node_limit.
 
 Run twice with different ov.conf engine settings to compare:
   1. Set ov.conf: "grep": {"engine": "fs"}, restart, then:
      python3 step3_benchmark.py --engine-label fs
-     (This also generates the ground truth cache)
   2. Set ov.conf: "grep": {"engine": "auto", "switch_to_remote_threshold": 0}, restart, then:
      python3 step3_benchmark.py --engine-label auto --compare step3_result_fs.json
 
@@ -18,142 +16,31 @@ Results are saved to step3_result_{engine_label}.json.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
-import re
 import time
 
 from openviking_cli.client.sync_http import SyncHTTPClient
 
 BASE_URI = "viking://resources/benchmark/performance"
-DATA_DIR = os.path.expanduser("~/.openviking/data/benchmark/performance")
-GROUND_TRUTH_DIR = os.path.join(DATA_DIR, ".ground_truth")
-MISS_DIR = os.path.join(DATA_DIR, ".miss")
 SYNTHETIC_DIR = os.path.expanduser("~/.openviking/data/benchmark/synthetic")
 
 # Same target words as step0_prepare_data.py
-TARGET_WORDS = {
-    0.50: ["quantumnexus", "synapseflow", "deepvector"],
-    0.10: ["bm25engine", "vikingcore", "retrievex"],
-    0.001: ["zephyrhash", "cryptolattice", "nebulalink"],
-    0.0001: ["xenoform", "quarkpulse", "omegabind"],
-}
+TARGET_GROUPS: list[tuple[float, list[str]]] = [
+    (0.01, ["heliofract", "prismcache", "fluxkernel"]),
+    (0.001, ["auroracode", "kiteshade", "glyphvector"]),
+    (0.001, ["cortexmint", "latticewave", "spiralsync"]),
+    (0.0005, ["ripplehash", "embertrace", "novaframe"]),
+    (0.0001, ["zephyrloom", "quartzrelay", "nebulaindex"]),
+]
 
 RUNS = 3
 WARMUP = 1
-
-GROUND_TRUTH_DIR = os.path.join(DATA_DIR, ".ground_truth")
-MISS_DIR = os.path.join(DATA_DIR, ".miss")
-SYNTHETIC_DIR = os.path.expanduser("~/.openviking/data/benchmark/synthetic")
+GREP_NODE_LIMIT = 256
 
 
-def _sanitize_filename(s: str, max_len: int = 40) -> str:
-    s = re.sub(r"[^a-zA-Z0-9_\-]", "_", s)
-    s = s.strip("_")
-    return s[:max_len]
-
-
-def _perf_cache_path(uri: str) -> str:
-    h = hashlib.sha256(uri.encode("utf-8")).hexdigest()[:8]
-    return os.path.join(GROUND_TRUTH_DIR, f"perf_{h}.json")
-
-
-def _load_ground_truth_cache(uri: str) -> dict[str, int] | None:
-    path = _perf_cache_path(uri)
-    if not os.path.isfile(path):
-        # Fallback: try old-style filename
-        old_h = hashlib.sha256(SYNTHETIC_DIR.encode("utf-8"))
-        for prob in sorted(TARGET_WORDS.keys()):
-            for word in TARGET_WORDS[prob]:
-                old_h.update(word.encode("utf-8"))
-        old_key = old_h.hexdigest()[:16]
-        old_path = os.path.join(GROUND_TRUTH_DIR, f"perf_{old_key}.json")
-        if os.path.isfile(old_path):
-            with open(old_path, encoding="utf-8") as f:
-                data = json.load(f)
-            return data.get("word_counts")
-        return None
-    with open(path, encoding="utf-8") as f:
-        data = json.load(f)
-    return data.get("word_counts")
-
-
-def _save_ground_truth_cache(uri: str, word_counts: dict[str, int]) -> None:
-    os.makedirs(GROUND_TRUTH_DIR, exist_ok=True)
-    path = _perf_cache_path(uri)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump({"uri": uri, "word_counts": word_counts}, f, indent=2, ensure_ascii=False)
-
-
-def _perf_miss_path(engine_label: str) -> str:
-    h = hashlib.sha256(BASE_URI.encode("utf-8")).hexdigest()[:8]
-    safe_label = _sanitize_filename(engine_label)
-    return os.path.join(MISS_DIR, f"perf_{safe_label}_{h}.json")
-
-
-def _save_perf_miss(
-    engine_label: str,
-    results: list[dict],
-    ground_truth: dict[str, int],
-) -> None:
-    """Save miss analysis (count diff per word) for performance benchmark."""
-    miss_data: list[dict] = []
-    has_miss = False
-    for r in results:
-        if "error" in r or "word" not in r:
-            continue
-        word = r["word"]
-        found = r.get("matches", 0)
-        expected = ground_truth.get(word, 0)
-        if found != expected or expected > 0:
-            miss_data.append(
-                {
-                    "word": word,
-                    "probability": r.get("probability"),
-                    "expected": expected,
-                    "found": found,
-                    "diff": found - expected,
-                    "recall_approx": r.get("recall_approx"),
-                }
-            )
-            if found < expected:
-                has_miss = True
-    if not has_miss:
-        return
-    os.makedirs(MISS_DIR, exist_ok=True)
-    path = _perf_miss_path(engine_label)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(
-            {"engine_label": engine_label, "uri": BASE_URI, "misses": miss_data},
-            f,
-            indent=2,
-            ensure_ascii=False,
-        )
-
-
-def compute_ground_truth(client: SyncHTTPClient, uri: str) -> tuple[dict[str, int], float]:
-    """Compute ground truth via OV grep (fs engine). Returns word -> match count."""
-    cached = _load_ground_truth_cache(uri)
-    if cached is not None:
-        return cached, 0.0
-
-    all_words = []
-    for prob in sorted(TARGET_WORDS.keys()):
-        all_words.extend(TARGET_WORDS[prob])
-
-    word_counts: dict[str, int] = {}
-    t0 = time.monotonic()
-    for w in all_words:
-        result = client.grep(uri=uri, pattern=w, node_limit=100000)
-        count = 0
-        if isinstance(result, dict):
-            count = len(result.get("matches", []))
-        word_counts[w] = count
-    elapsed = time.monotonic() - t0
-
-    _save_ground_truth_cache(uri, word_counts)
-    return word_counts, elapsed
+def _format_probability(probability: float) -> str:
+    return f"{probability * 100:.3f}%"
 
 
 def count_local_files() -> int:
@@ -170,7 +57,7 @@ def count_local_files() -> int:
 
 def run_grep(client: SyncHTTPClient, pattern: str, uri: str) -> tuple[float, int, set[str]]:
     start = time.monotonic()
-    result = client.grep(uri=uri, pattern=pattern, node_limit=100000)
+    result = client.grep(uri=uri, pattern=pattern, node_limit=GREP_NODE_LIMIT)
     elapsed = time.monotonic() - start
     match_uris: set[str] = set()
     if isinstance(result, dict):
@@ -181,16 +68,13 @@ def run_grep(client: SyncHTTPClient, pattern: str, uri: str) -> tuple[float, int
     return elapsed, len(match_uris), match_uris
 
 
-def benchmark_engine(
-    client: SyncHTTPClient, total_files: int, ground_truth: dict[str, int]
-) -> list[dict]:
+def benchmark_engine(client: SyncHTTPClient, total_files: int) -> list[dict]:
     results = []
 
-    for prob in sorted(TARGET_WORDS.keys(), reverse=True):
-        words = TARGET_WORDS[prob]
+    for prob, words in sorted(TARGET_GROUPS, key=lambda item: item[0], reverse=True):
         for word in words:
-            expected = ground_truth.get(word, int(total_files * prob))
-            label = f"{word} (p={prob * 100:.2f}%, expect~{expected})"
+            expected = int(total_files * prob)
+            label = f"{word} (p={_format_probability(prob)}, expect~{expected})"
 
             print(f"  {label} ...", end=" ", flush=True)
 
@@ -221,12 +105,7 @@ def benchmark_engine(
                 avg_ms = sum(times) / len(times) * 1000
                 min_ms = min(times) * 1000
                 max_ms = max(times) * 1000
-                # Recall: how many of the expected files were found
-                # This is approximate since injection is probabilistic
-                recall = match_count / expected if expected > 0 else 1.0
-                print(
-                    f"avg={avg_ms:.1f}ms  matches={match_count}  expected~{expected}  recall~{recall:.2f}"
-                )
+                print(f"avg={avg_ms:.1f}ms  matches={match_count}  expected~{expected}")
                 results.append(
                     {
                         "label": label,
@@ -237,7 +116,6 @@ def benchmark_engine(
                         "max_ms": round(max_ms, 1),
                         "matches": match_count,
                         "expected_approx": expected,
-                        "recall_approx": round(recall, 4),
                     }
                 )
 
@@ -308,14 +186,14 @@ def print_comparison(
         cmp = compare_by_word.get(word)
         if not cmp:
             print(
-                f"{word:<20} {r.get('probability', 0) * 100:>7.2f}% {'N/A':>14} {cur_ms:>14.1f} {'---':>10}"
+                f"{word:<20} {_format_probability(r.get('probability', 0)):>8} {'N/A':>14} {cur_ms:>14.1f} {'---':>10}"
             )
             continue
         cmp_ms = cmp["avg_ms"]
         speedup = cmp_ms / cur_ms if cur_ms > 0 else float("inf")
         speedup_str = f"{speedup:.1f}x"
         print(
-            f"{word:<20} {r.get('probability', 0) * 100:>7.2f}% "
+            f"{word:<20} {_format_probability(r.get('probability', 0)):>8} "
             f"{cmp_ms:>14.1f} {cur_ms:>14.1f} {speedup_str:>10} "
             f"{cmp.get('matches', '?'):>12} {r.get('matches', '?'):>12}"
         )
@@ -341,55 +219,51 @@ def main():
     client = SyncHTTPClient()
     client.initialize()
 
-    print("Computing ground truth (OV grep, fs engine)...")
-    ground_truth, gt_elapsed = compute_ground_truth(client, BASE_URI)
-    if gt_elapsed > 0:
-        print(f"  Ground truth computed in {gt_elapsed:.1f}s")
-    else:
-        print("  Ground truth loaded from cache")
-
     print("=" * 80)
     print(f"Step 3 (Performance): Grep Benchmark — engine={args.engine_label}")
     print("=" * 80)
     print(f"  URI:          {BASE_URI}")
     print(f"  Total files:  {total_files:,}")
+    print(f"  Grep limit:   {GREP_NODE_LIMIT}")
     print(f"  Runs per test: {RUNS} (warmup: {WARMUP})")
     print()
     print("Ensure ov.conf has the desired grep config and the server is restarted.")
     print()
 
     try:
-        results = benchmark_engine(client, total_files, ground_truth)
+        results = benchmark_engine(client, total_files)
     finally:
         client.close()
 
     output_file = f"step3_result_{args.engine_label}.json"
     with open(output_file, "w", encoding="utf-8") as f:
         json.dump(
-            {"engine_label": args.engine_label, "total_files": total_files, "results": results},
+            {
+                "engine_label": args.engine_label,
+                "total_files": total_files,
+                "grep_node_limit": GREP_NODE_LIMIT,
+                "results": results,
+            },
             f,
             indent=2,
             ensure_ascii=False,
         )
     print(f"\nResults saved to {output_file}")
 
-    # Save miss analysis
-    _save_perf_miss(args.engine_label, results, ground_truth)
-
     print()
     print(
-        f"{'Word':<20} {'Prob':>8} {'Avg(ms)':>10} {'Min(ms)':>10} {'Max(ms)':>10} {'Matches':>10} {'Expect~':>10} {'Recall~':>10}"
+        f"{'Word':<20} {'Prob':>8} {'Avg(ms)':>10} {'Min(ms)':>10} {'Max(ms)':>10} {'Matches':>10} {'Expect~':>10}"
     )
-    print("-" * 108)
+    print("-" * 96)
     for r in results:
         if "error" in r:
             print(f"{r.get('word', '?'):<20} {'FAILED':>10}")
         else:
             print(
-                f"{r['word']:<20} {r.get('probability', 0) * 100:>7.2f}% "
+                f"{r['word']:<20} {_format_probability(r.get('probability', 0)):>8} "
                 f"{r['avg_ms']:>10.1f} {r['min_ms']:>10.1f} "
                 f"{r['max_ms']:>10.1f} {r['matches']:>10} "
-                f"{r.get('expected_approx', '?'):>10} {r.get('recall_approx', '?'):>10}"
+                f"{r.get('expected_approx', '?'):>10}"
             )
     print()
 
@@ -402,9 +276,6 @@ def main():
             prev_label = prev.get("engine_label", "previous")
             prev_results = prev.get("results", [])
             print_comparison(args.engine_label, results, prev_label, prev_results)
-
-    print(f"\nMiss analysis saved to: {MISS_DIR}/")
-    print(f"Ground truth cache:     {GROUND_TRUTH_DIR}/")
 
 
 if __name__ == "__main__":

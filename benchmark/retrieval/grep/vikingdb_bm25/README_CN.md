@@ -49,9 +49,9 @@ python3 step2_quality.py
 # 可选参数：--regenerate-ground-truth  （强制重算，需 engine=fs）
 ```
 
-## Performance — 检索性能
+## Performance — 检索延迟
 
-在大规模合成数据集（默认 10 万文件）上测试 grep 速度和召回率。
+在大规模合成数据集（默认 20 万文件）上测试 grep 速度和返回匹配数。
 
 **数据来源：** 从 `ai_wiki.txt` 生成，按已知概率注入目标单词。
 
@@ -60,26 +60,31 @@ python3 step2_quality.py
 | 0 | `step0_prepare_data.py` | 生成合成数据集（dir_xxx/wiki_xxx.txt） |
 | 1 | `step1_add_resource.py` | 导入数据（不建索引，速度快） |
 | 2 | `step2_reindex.py` | 通过 openviking-server 异步构建索引（并发=16，轮询） |
-| 3 | `step3_benchmark.py` | 测量延迟和召回率（ground truth 来自 fs 引擎，缓存） |
+| 3 | `step3_benchmark.py` | 使用 `node_limit=256` 测量延迟和返回匹配数 |
 
 ### 目标单词
 
-12 个单词，分 4 个概率层级：
+15 个单词，分 5 个概率层级：
 
-| 概率 | 单词 | 预期命中数（每 10 万文件） |
+| 概率 | 单词 | 预期命中数（每 20 万文件） |
 |------|------|---------------------------|
 | 50% | quantumnexus, synapseflow, deepvector | ~50,000 |
-| 10% | bm25engine, vikingcore, retrievex | ~10,000 |
-| 0.1% | zephyrhash, cryptolattice, nebulalink | ~100 |
-| 0.01% | xenoform, quarkpulse, omegabind | ~10 |
+| 1% | heliofract, prismcache, fluxkernel | ~2,000 |
+| 0.1% | auroracode, kiteshade, glyphvector | ~200 |
+| 0.1% | cortexmint, latticewave, spiralsync | ~200 |
+| 0.05% | ripplehash, embertrace, novaframe | ~100 |
+| 0.01% | zephyrloom, quartzrelay, nebulaindex | ~20 |
 
 ### 使用方法
 
 ```bash
 cd performance/
 
-# 步骤 0：生成数据（默认：100 目录 x 1000 文件 = 10 万文件）
+# 步骤 0：生成数据（默认：200 目录 x 1000 文件 = 20 万文件）
 python3 step0_prepare_data.py
+
+# 可选：追加更多数据，用于水平扩容，不覆盖已有目录
+python3 step0_prepare_data.py --start-dir 100 --num-dirs 100
 
 # 步骤 1：导入数据（不建索引，速度快）
 python3 step1_add_resource.py
@@ -89,7 +94,7 @@ python3 step2_reindex.py
 # 可选参数：--concurrency N  （默认：16）
 
 # 步骤 3：基准测试 — 用不同引擎配置各跑一次
-#   运行 A：fs 引擎（首次运行同时生成 ground truth 缓存）
+#   运行 A：fs 引擎
 #     1. 设置 ov.conf: "grep": {"engine": "fs"}
 #     2. 重启服务
 python3 step3_benchmark.py --engine-label fs
@@ -103,9 +108,8 @@ python3 step3_benchmark.py --engine-label auto --compare step3_result_fs.json
 ## 核心概念
 
 - **Effectiveness（效果测试）** 将 grep 结果与 fs 引擎的 ground truth 对比（本地缓存）
-- **Performance（性能测试）** 对比不同引擎的延迟和匹配数（ground truth 来自 fs 引擎，本地缓存）
-- 两个 ground truth 缓存均存储在 `~/.openviking/data/benchmark/.ground_truth/`
-- 每个 step3 首次运行必须使用 ov.conf 的 `engine=fs` 来生成 ground truth；后续运行可使用任意引擎
+- **Performance（性能测试）** 对比不同引擎的延迟和返回匹配数，不生成 ground truth
 - 两者遵循相同流程：导入（含建索引）→ 评估/测试
 - 两者均支持**断点续传**（导入和索引各有独立进度文件）
 - 切换 grep 引擎需修改 `ov.conf` 并重启服务，在不同运行之间对比
+- 如需水平扩展合成数据集，可用新的 `--start-dir` 再运行步骤 0，然后重跑步骤 1 和步骤 2。
