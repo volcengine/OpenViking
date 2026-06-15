@@ -811,11 +811,6 @@ class MultiCredentialVLM(VLMBase):
             return self._credential_ids[idx]
         return "exhausted"
 
-    @property
-    def is_exhausted(self) -> bool:
-        """Check if all credentials are exhausted."""
-        return self._switcher.is_exhausted
-
     def get_token_usage(self) -> Dict[str, Any]:
         """Get combined token usage from all credential instances."""
         from openviking.models.vlm.token_usage import TokenUsageTracker

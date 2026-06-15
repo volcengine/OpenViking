@@ -919,11 +919,6 @@ class FailoverEmbedder(EmbedderBase):
         return "exhausted"
 
     @property
-    def is_exhausted(self) -> bool:
-        """Check if all credentials are exhausted."""
-        return self._switcher.is_exhausted
-
-    @property
     def is_dense(self) -> bool:
         """Check if the first embedder is dense."""
         return self._embedders[0].is_dense
