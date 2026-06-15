@@ -12,7 +12,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/e
 
 The installer checks dependencies, configures your OpenViking connection, and installs the plugin. Every step is idempotent—re-running it is entirely safe.
 
-In regions where GitHub is hard to reach, use the equivalent command that pulls from Volcengine TOS instead (both the installer and the source come from TOS — no GitHub access required):
+In regions where GitHub is hard to reach, use the equivalent command below:
 
 ```bash
 bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/claude-code-memory-plugin/tos-install.sh)
