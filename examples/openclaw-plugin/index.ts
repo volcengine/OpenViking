@@ -250,6 +250,11 @@ function getPositiveInteger(value: unknown, fallback: number): number {
   return Math.max(1, getOptionalInteger(value, fallback));
 }
 
+function textResult(text: string, details?: Record<string, unknown>) {
+  const content = [{ type: "text" as const, text }];
+  return details === undefined ? { content } : { content, details };
+}
+
 type OpenClawPluginApi = {
   pluginConfig?: unknown;
   logger: PluginLogger;
@@ -429,19 +434,15 @@ const contextEnginePlugin = {
       sessionKey?: string;
     }): boolean => shouldBypassSession(ctx ?? {}, bypassSessionPatterns);
 
-    const makeBypassedToolResult = (toolName: string) => ({
-      content: [
+    const makeBypassedToolResult = (toolName: string) =>
+      textResult(
+        `OpenViking is bypassed for this session by bypassSessionPatterns; ${toolName} was skipped.`,
         {
-          type: "text" as const,
-          text: `OpenViking is bypassed for this session by bypassSessionPatterns; ${toolName} was skipped.`,
+          action: "bypassed",
+          reason: "session_bypassed",
+          toolName,
         },
-      ],
-      details: {
-        action: "bypassed",
-        reason: "session_bypassed",
-        toolName,
-      },
-    });
+      );
 
     const resolvePluginSessionRouting = (ctx?: SessionAgentLookup): PluginSessionRouting => {
       const sessionId = typeof ctx?.sessionId === "string" ? ctx.sessionId.trim() : "";
@@ -612,25 +613,19 @@ const contextEnginePlugin = {
     const importResource = async (input: AddResourceInput, actorPeerId?: string) => {
       const client = await getClient();
       const result = await client.addResource(input, actorPeerId);
-      return {
-        content: [{ type: "text" as const, text: formatResourceImportText(result) }],
-        details: {
-          action: "resource_imported",
-          ...result,
-        },
-      };
+      return textResult(formatResourceImportText(result), {
+        action: "resource_imported",
+        ...result,
+      });
     };
 
     const importSkill = async (input: AddSkillInput, actorPeerId?: string) => {
       const client = await getClient();
       const result = await client.addSkill(input, actorPeerId);
-      return {
-        content: [{ type: "text" as const, text: formatSkillImportText(result) }],
-        details: {
-          action: "skill_imported",
-          ...result,
-        },
-      };
+      return textResult(formatSkillImportText(result), {
+        action: "skill_imported",
+        ...result,
+      });
     };
 
     const addResourceOpenViking = (input: AddResourceToolInput, actorPeerId?: string) =>
@@ -775,9 +770,7 @@ const contextEnginePlugin = {
           injectedCount: 0,
         },
       });
-      return {
-        content: [{ type: "text" as const, text: formatOVSearchText(query, input.uri, result) }],
-        details: {
+      return textResult(formatOVSearchText(query, input.uri, result), {
           action: "searched",
           query,
           uri: input.uri,
@@ -786,8 +779,7 @@ const contextEnginePlugin = {
           resources: result.resources ?? [],
           skills: result.skills ?? [],
           total: result.total ?? 0,
-        },
-      };
+      });
     };
 
     const readOpenViking = async (
@@ -800,14 +792,11 @@ const contextEnginePlugin = {
       }
       const client = await getClient();
       const content = await client.read(uri, actorPeerId);
-      return {
-        content: [{ type: "text" as const, text: formatOVReadText(uri, content) }],
-        details: {
+      return textResult(formatOVReadText(uri, content), {
           action: "read",
           uri,
           chars: content.length,
-        },
-      };
+      });
     };
 
     const multiReadOpenViking = async (
@@ -842,15 +831,12 @@ const contextEnginePlugin = {
           }
         }),
       );
-      return {
-        content: [{ type: "text" as const, text: formatOVMultiReadText(results) }],
-        details: {
+      return textResult(formatOVMultiReadText(results), {
           action: "multi_read",
           count: results.length,
           success_count: results.filter((result) => result.success).length,
           results,
-        },
-      };
+      });
     };
 
     const listOpenViking = async (
@@ -872,17 +858,14 @@ const contextEnginePlugin = {
           actorPeerId,
         },
       );
-      return {
-        content: [{ type: "text" as const, text: formatOVListText(uri, entries) }],
-        details: {
+      return textResult(formatOVListText(uri, entries), {
           action: "listed",
           uri,
           recursive: input.recursive ?? false,
           simple: input.simple ?? false,
           count: entries.length,
           entries,
-        },
-      };
+      });
     };
 
     if (cfg.enableAddResourceTool) {
@@ -1250,10 +1233,6 @@ const contextEnginePlugin = {
                   s.value,
                   cfg.traceRecallPreviewChars,
                   cfg.traceRecallMaxResultsPerSearch,
-                  {
-                    memory: search.resourceType,
-                    skill: search.resourceType,
-                  },
                 );
                 memoryRecallSearches.push({
                   resourceType: search.resourceType,
@@ -1343,10 +1322,7 @@ const contextEnginePlugin = {
           };
           if (memories.length === 0) {
             await recordMemoryRecallTrace(new Set());
-            return {
-              content: [{ type: "text", text: "No relevant OpenViking memories found." }],
-              details: { count: 0, total: result.total ?? 0, scoreThreshold },
-            };
+            return textResult("No relevant OpenViking memories found.", { count: 0, total: result.total ?? 0, scoreThreshold });
           }
           const { lines: memoryLines } = await buildMemoryLinesWithBudget(
             memories,
@@ -1358,40 +1334,24 @@ const contextEnginePlugin = {
           );
           if (memoryLines.length === 0) {
             await recordMemoryRecallTrace(new Set());
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `No complete OpenViking memories fit recallMaxInjectedChars=${cfg.recallMaxInjectedChars}.`,
-                },
-              ],
-              details: {
+            return textResult(`No complete OpenViking memories fit recallMaxInjectedChars=${cfg.recallMaxInjectedChars}.`, {
                 count: 0,
                 memories,
                 total: result.total ?? memories.length,
                 scoreThreshold,
                 requestLimit,
                 recallMaxInjectedChars: cfg.recallMaxInjectedChars,
-              },
-            };
+            });
           }
           await recordMemoryRecallTrace(new Set(memories.slice(0, memoryLines.length).map((item) => item.uri)));
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Found ${memoryLines.length} memories:\n\n${memoryLines.join("\n")}`,
-              },
-            ],
-            details: {
+          return textResult(`Found ${memoryLines.length} memories:\n\n${memoryLines.join("\n")}`, {
               count: memoryLines.length,
               memories,
               total: result.total ?? memories.length,
               scoreThreshold,
               requestLimit,
               recallMaxInjectedChars: cfg.recallMaxInjectedChars,
-            },
-          };
+          });
         },
       }),
       { name: "memory_recall" },
@@ -1425,16 +1385,13 @@ const contextEnginePlugin = {
             session,
             resolveToolSearchPeerId(ctx, session),
           );
-          return {
-            content: [{ type: "text" as const, text: formatRecallTraceText(result) }],
-            details: {
+          return textResult(formatRecallTraceText(result), {
               action: "queried",
               count: result.entries.length,
               lookupLayer: result.lookupLayer,
               warnings: result.warnings,
               entries: result.entries,
-            },
-          };
+          });
         },
       }),
       { name: "ov_recall_trace" },
@@ -1550,47 +1507,35 @@ const contextEnginePlugin = {
               api.logger.warn(
                 `openviking: memory_store commit failed (sessionId=${sessionId}): ${commitResult.error ?? "unknown"}`,
               );
-              return {
-                content: [{ type: "text", text: `Memory extraction failed for session ${sessionId}: ${commitResult.error ?? "unknown"}` }],
-                details: {
-                  action: "failed",
-                  sessionId,
-                  status: "failed",
-                  error: commitResult.error,
-                  usedTempSession,
-                },
-              };
+              return textResult(`Memory extraction failed for session ${sessionId}: ${commitResult.error ?? "unknown"}`, {
+                action: "failed",
+                sessionId,
+                status: "failed",
+                error: commitResult.error,
+                usedTempSession,
+              });
             }
             if (commitResult.status === "timeout") {
               api.logger.warn(
                 `openviking: memory_store commit timed out (sessionId=${sessionId}), task_id=${commitResult.task_id ?? "none"}. Memories may still be extracting in background.`,
               );
-              return {
-                content: [{ type: "text", text: `Memory extraction timed out for session ${sessionId}. It may still complete in the background (task_id=${commitResult.task_id ?? "none"}).` }],
-                details: {
-                  action: "timeout",
-                  sessionId,
-                  status: "timeout",
-                  taskId: commitResult.task_id,
-                  usedTempSession,
-                },
-              };
+              return textResult(`Memory extraction timed out for session ${sessionId}. It may still complete in the background (task_id=${commitResult.task_id ?? "none"}).`, {
+                action: "timeout",
+                sessionId,
+                status: "timeout",
+                taskId: commitResult.task_id,
+                usedTempSession,
+              });
             }
             if (memoriesCount === 0) {
               api.logger.warn(
                 `openviking: memory_store committed but 0 memories extracted (sessionId=${sessionId}). ` +
                   "No OpenViking-managed long-term memory was created. Check memory.extraction_enabled, VLM configuration/API keys, or whether the text was judged not durable.",
               );
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text:
-                      `Memory extraction completed for session ${sessionId}, but produced 0 memories. ` +
-                      "No OpenViking-managed long-term memory was stored. Check memory.extraction_enabled, VLM configuration/API keys, or whether the text is durable enough to remember.",
-                  },
-                ],
-                details: {
+              return textResult(
+                `Memory extraction completed for session ${sessionId}, but produced 0 memories. ` +
+                  "No OpenViking-managed long-term memory was stored. Check memory.extraction_enabled, VLM configuration/API keys, or whether the text is durable enough to remember.",
+                {
                   action: "failed",
                   sessionId,
                   status: commitResult.status,
@@ -1599,26 +1544,18 @@ const contextEnginePlugin = {
                   archived: commitResult.archived ?? false,
                   usedTempSession,
                 },
-              };
+              );
             } else {
               api.logger.info?.(`openviking: memory_store committed, memories=${memoriesCount}`);
             }
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Stored in OpenViking session ${sessionId} and committed ${memoriesCount} memories.`,
-                },
-              ],
-              details: {
+            return textResult(`Stored in OpenViking session ${sessionId} and committed ${memoriesCount} memories.`, {
                 action: "stored",
                 sessionId,
                 memoriesCount,
                 status: commitResult.status,
                 archived: commitResult.archived ?? false,
                 usedTempSession,
-              },
-            };
+            });
           } catch (err) {
             api.logger.warn(`openviking: memory_store failed: ${String(err)}`);
             throw err;
@@ -1655,24 +1592,15 @@ const contextEnginePlugin = {
           const uri = (params as { uri?: string }).uri;
           if (uri) {
             if (!isMemoryUri(uri)) {
-              return {
-                content: [{ type: "text", text: `Refusing to delete non-memory URI: ${uri}` }],
-                details: { action: "rejected", uri },
-              };
+              return textResult(`Refusing to delete non-memory URI: ${uri}`, { action: "rejected", uri });
             }
             await client.deleteUri(uri, peerId);
-            return {
-              content: [{ type: "text", text: `Forgotten: ${uri}` }],
-              details: { action: "deleted", uri },
-            };
+            return textResult(`Forgotten: ${uri}`, { action: "deleted", uri });
           }
 
           const query = (params as { query?: string }).query;
           if (!query) {
-            return {
-              content: [{ type: "text", text: "Provide uri or query." }],
-              details: { error: "missing_param" },
-            };
+            return textResult("Provide uri or query.", { error: "missing_param" });
           }
 
           const limit =
@@ -1704,38 +1632,19 @@ const contextEnginePlugin = {
             leafOnly: true,
           }).filter((item) => isMemoryUri(item.uri));
           if (candidates.length === 0) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: "No matching leaf memory candidates found. Try a more specific query.",
-                },
-              ],
-              details: { action: "none", scoreThreshold },
-            };
+            return textResult("No matching leaf memory candidates found. Try a more specific query.", { action: "none", scoreThreshold });
           }
           const top = candidates[0];
           if (candidates.length === 1 && clampScore(top.score) >= 0.85) {
             await client.deleteUri(top.uri, peerId);
-            return {
-              content: [{ type: "text", text: `Forgotten: ${top.uri}` }],
-              details: { action: "deleted", uri: top.uri, score: top.score ?? 0 },
-            };
+            return textResult(`Forgotten: ${top.uri}`, { action: "deleted", uri: top.uri, score: top.score ?? 0 });
           }
 
           const list = candidates
             .map((item) => `- ${item.uri} (${(clampScore(item.score) * 100).toFixed(0)}%)`)
             .join("\n");
 
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Found ${candidates.length} candidates. Specify uri:\n${list}`,
-              },
-            ],
-            details: { action: "candidates", candidates, scoreThreshold, requestLimit },
-          };
+          return textResult(`Found ${candidates.length} candidates. Specify uri:\n${list}`, { action: "candidates", candidates, scoreThreshold, requestLimit });
         },
       }),
       { name: "memory_forget" },
@@ -1771,20 +1680,14 @@ const contextEnginePlugin = {
           const sessionId = ctx.sessionId ?? "";
           const sessionKey = ctx.sessionKey ?? "";
           if (!sessionId && !sessionKey) {
-            return {
-              content: [{ type: "text", text: "Error: no active session." }],
-              details: { error: "no_session" },
-            };
+            return textResult("Error: no active session.", { error: "no_session" });
           }
           const ovSessionId = openClawSessionToOvStorageId(ctx.sessionId, ctx.sessionKey);
           const query = String((params as { query?: string }).query ?? "").trim();
           const archiveId = (params as { archiveId?: string }).archiveId;
 
           if (!query) {
-            return {
-              content: [{ type: "text", text: "Error: query is required." }],
-              details: { error: "missing_param", param: "query" },
-            };
+            return textResult("Error: query is required.", { error: "missing_param", param: "query" });
           }
 
           const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -1850,15 +1753,12 @@ const contextEnginePlugin = {
 
             if (!result.matches || result.matches.length === 0) {
               await recordArchiveTrace([]);
-              return {
-                content: [{
-                  type: "text",
-                  text: `No matches found for "${query}". Try a different keyword — ` +
-                    "the original conversation may use different wording than the question. " +
-                    "Try synonyms, related terms, or shorter fragments.",
-                }],
-                details: { query, matchCount: 0 },
-              };
+              return textResult(
+                `No matches found for "${query}". Try a different keyword — ` +
+                  "the original conversation may use different wording than the question. " +
+                  "Try synonyms, related terms, or shorter fragments.",
+                { query, matchCount: 0 },
+              );
             }
 
             const MAX_MATCHES = 12;
@@ -1876,17 +1776,11 @@ const contextEnginePlugin = {
             const header = `Found ${result.matches.length} match(es) for "${query}"` +
               (result.matches.length > MAX_MATCHES ? ` (showing first ${MAX_MATCHES})` : "") + ":";
 
-            return {
-              content: [{ type: "text", text: header + "\n\n" + blocks.join("\n\n") }],
-              details: { query, matchCount: result.matches.length },
-            };
+            return textResult(header + "\n\n" + blocks.join("\n\n"), { query, matchCount: result.matches.length });
           } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : String(err);
             api.logger.error?.(`openviking: ov_archive_search error: ${msg}`);
-            return {
-              content: [{ type: "text", text: `Archive search failed: ${msg}` }],
-              details: { error: msg },
-            };
+            return textResult(`Archive search failed: ${msg}`, { error: msg });
           }
         },
       }),
@@ -1918,17 +1812,11 @@ const contextEnginePlugin = {
 
         if (!archiveId) {
           api.logger.warn?.(`openviking: ov_archive_expand missing archiveId`);
-          return {
-            content: [{ type: "text", text: "Error: archiveId is required." }],
-            details: { error: "missing_param", param: "archiveId" },
-          };
+          return textResult("Error: archiveId is required.", { error: "missing_param", param: "archiveId" });
         }
 
         if (!session.ovSessionId) {
-          return {
-            content: [{ type: "text", text: "Error: no active session." }],
-            details: { error: "no_session" },
-          };
+          return textResult("Error: no active session.", { error: "no_session" });
         }
 
         try {
@@ -1950,23 +1838,17 @@ const contextEnginePlugin = {
             .join("\n\n");
 
           api.logger.info?.(`openviking: ov_archive_expand expanded ${detail.archive_id}, messages=${detail.messages.length}, chars=${body.length}, sessionId=${sessionId}`);
-          return {
-            content: [{ type: "text", text: `${header}\n${body}` }],
-            details: {
+          return textResult(`${header}\n${body}`, {
               action: "expanded",
               archiveId: detail.archive_id,
               messageCount: detail.messages.length,
               sessionId,
               ovSessionId: session.ovSessionId,
-            },
-          };
+          });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           api.logger.warn?.(`openviking: ov_archive_expand failed (archiveId=${archiveId}, sessionId=${sessionId}): ${msg}`);
-          return {
-            content: [{ type: "text", text: `Failed to expand ${archiveId}: ${msg}` }],
-            details: { error: msg, archiveId, sessionId, ovSessionId: session.ovSessionId },
-          };
+          return textResult(`Failed to expand ${archiveId}: ${msg}`, { error: msg, archiveId, sessionId, ovSessionId: session.ovSessionId });
         }
       },
     }), { name: "ov_archive_expand" });
@@ -1996,37 +1878,25 @@ const contextEnginePlugin = {
           }
           const session = resolvePluginSessionRouting(ctx);
           if (!session.ovSessionId) {
-            return {
-              content: [{ type: "text", text: "Error: no active session." }],
-              details: { error: "no_session" },
-            };
+            return textResult("Error: no active session.", { error: "no_session" });
           }
 
           const parsed = parseToolResultRef(params.tool_output_ref ?? params.ref ?? params.uri);
           if (!parsed) {
-            return {
-              content: [{ type: "text", text: "Error: tool_output_ref must be a viking://user/sessions/.../tool-results/... URI." }],
-              details: { error: "invalid_tool_output_ref" },
-            };
+            return textResult("Error: tool_output_ref must be a viking://user/sessions/.../tool-results/... URI.", { error: "invalid_tool_output_ref" });
           }
           if (parsed.sessionId !== session.ovSessionId) {
-            return {
-              content: [{ type: "text", text: "Error: refusing to read a tool result from another session." }],
-              details: {
+            return textResult("Error: refusing to read a tool result from another session.", {
                 error: "session_mismatch",
                 requestedSessionId: parsed.sessionId,
                 currentSessionId: session.ovSessionId,
-              },
-            };
+            });
           }
 
           const offset = Math.max(0, getOptionalInteger(params.offset, 0));
           const limit = getOptionalInteger(params.limit, 20_000);
           if (limit < -1) {
-            return {
-              content: [{ type: "text", text: "Error: limit must be -1 or greater than or equal to 0." }],
-              details: { error: "invalid_limit", limit },
-            };
+            return textResult("Error: limit must be -1 or greater than or equal to 0.", { error: "invalid_limit", limit });
           }
 
           try {
@@ -2039,9 +1909,7 @@ const contextEnginePlugin = {
             const returnedChars = result.content.length;
             const nextOffset = result.offset + returnedChars;
             const text = result.content || "(empty tool result chunk)";
-            return {
-              content: [{ type: "text", text }],
-              details: {
+            return textResult(text, {
                 action: "read",
                 tool_output_ref: parsed.ref,
                 tool_result_id: result.tool_result_id,
@@ -2052,15 +1920,11 @@ const contextEnginePlugin = {
                 has_more: result.has_more,
                 next_offset: result.has_more ? nextOffset : null,
                 metadata: result.metadata ?? null,
-              },
-            };
+            });
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             api.logger.warn?.(`openviking: openviking_tool_result_read failed: ${msg}`);
-            return {
-              content: [{ type: "text", text: `Failed to read tool result: ${msg}` }],
-              details: { error: msg, tool_output_ref: parsed.ref },
-            };
+            return textResult(`Failed to read tool result: ${msg}`, { error: msg, tool_output_ref: parsed.ref });
           }
         },
       }),
@@ -2091,36 +1955,24 @@ const contextEnginePlugin = {
           }
           const session = resolvePluginSessionRouting(ctx);
           if (!session.ovSessionId) {
-            return {
-              content: [{ type: "text", text: "Error: no active session." }],
-              details: { error: "no_session" },
-            };
+            return textResult("Error: no active session.", { error: "no_session" });
           }
 
           const parsed = parseToolResultRef(params.tool_output_ref ?? params.ref ?? params.uri);
           if (!parsed) {
-            return {
-              content: [{ type: "text", text: "Error: tool_output_ref must be a viking://user/sessions/.../tool-results/... URI." }],
-              details: { error: "invalid_tool_output_ref" },
-            };
+            return textResult("Error: tool_output_ref must be a viking://user/sessions/.../tool-results/... URI.", { error: "invalid_tool_output_ref" });
           }
           if (parsed.sessionId !== session.ovSessionId) {
-            return {
-              content: [{ type: "text", text: "Error: refusing to search a tool result from another session." }],
-              details: {
+            return textResult("Error: refusing to search a tool result from another session.", {
                 error: "session_mismatch",
                 requestedSessionId: parsed.sessionId,
                 currentSessionId: session.ovSessionId,
-              },
-            };
+            });
           }
 
           const query = String(params.query ?? "").trim();
           if (!query) {
-            return {
-              content: [{ type: "text", text: "Error: query is required." }],
-              details: { error: "missing_param", param: "query" },
-            };
+            return textResult("Error: query is required.", { error: "missing_param", param: "query" });
           }
           const limit = getPositiveInteger(params.limit, 20);
           const contextChars = Math.max(
@@ -2146,24 +1998,18 @@ const contextEnginePlugin = {
                   ),
                 ].join("\n")
               : `No matches found for "${query}" in ${parsed.ref}.`;
-            return {
-              content: [{ type: "text", text }],
-              details: {
+            return textResult(text, {
                 action: "searched",
                 tool_output_ref: parsed.ref,
                 tool_result_id: result.tool_result_id,
                 query,
                 match_count: matches.length,
                 matches,
-              },
-            };
+            });
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             api.logger.warn?.(`openviking: openviking_tool_result_search failed: ${msg}`);
-            return {
-              content: [{ type: "text", text: `Failed to search tool result: ${msg}` }],
-              details: { error: msg, tool_output_ref: parsed.ref, query },
-            };
+            return textResult(`Failed to search tool result: ${msg}`, { error: msg, tool_output_ref: parsed.ref, query });
           }
         },
       }),
@@ -2188,10 +2034,7 @@ const contextEnginePlugin = {
           }
           const session = resolvePluginSessionRouting(ctx);
           if (!session.ovSessionId) {
-            return {
-              content: [{ type: "text", text: "Error: no active session." }],
-              details: { error: "no_session" },
-            };
+            return textResult("Error: no active session.", { error: "no_session" });
           }
 
           const toolName =
@@ -2224,23 +2067,17 @@ const contextEnginePlugin = {
               : toolName
                 ? `No externalized tool results found for tool "${toolName}" in current session.`
                 : "No externalized tool results found in current session.";
-            return {
-              content: [{ type: "text", text }],
-              details: {
+            return textResult(text, {
                 action: "listed",
                 session_id: session.ovSessionId,
                 tool_name: toolName ?? null,
                 count: items.length,
                 tool_results: items,
-              },
-            };
+            });
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             api.logger.warn?.(`openviking: openviking_tool_result_list failed: ${msg}`);
-            return {
-              content: [{ type: "text", text: `Failed to list tool results: ${msg}` }],
-              details: { error: msg, session_id: session.ovSessionId, tool_name: toolName ?? null },
-            };
+            return textResult(`Failed to list tool results: ${msg}`, { error: msg, session_id: session.ovSessionId, tool_name: toolName ?? null });
           }
         },
       }),
