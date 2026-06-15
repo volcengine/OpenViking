@@ -12,9 +12,9 @@ from typing import TYPE_CHECKING, Union
 if TYPE_CHECKING:
     from openviking.parse.accessors.base import LocalResource
 
-from openviking_cli.utils.logger import get_logger
 from openviking.parse.base import ParseResult
 from openviking.parse.registry import ParserRegistry
+from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 

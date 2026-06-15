@@ -12,18 +12,18 @@ Workflow:
 6. Return ParseResult for downstream TreeBuilder/SemanticQueue processing
 """
 
-import json
 import asyncio
+import json
 import mimetypes
 import tempfile
 import zipfile
 from pathlib import Path
-from urllib.parse import urlparse
 from typing import Any, Dict, List, Optional, Union
+from urllib.parse import urlparse
 
 import httpx
 
-from openviking.parse.base import ParseResult, ResourceNode, NodeType
+from openviking.parse.base import NodeType, ParseResult, ResourceNode
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.utils.logger import get_logger
