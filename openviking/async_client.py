@@ -48,6 +48,7 @@ class AsyncOpenViking:
         self,
         path: Optional[str] = None,
         actor_peer_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
     ):
         """
         Initialize OpenViking client (embedded mode).
@@ -55,6 +56,7 @@ class AsyncOpenViking:
         Args:
             path: Local storage path (overrides ov.conf storage path).
             actor_peer_id: Optional view filter for the current user's peer collection.
+            agent_id: Legacy alias for actor_peer_id.
         """
         # Singleton guard for repeated initialization
         if hasattr(self, "_singleton_initialized") and self._singleton_initialized:
@@ -68,6 +70,7 @@ class AsyncOpenViking:
         self._client: BaseClient = LocalClient(
             path=path,
             actor_peer_id=actor_peer_id,
+            agent_id=agent_id,
         )
         self._singleton_initialized = True
 

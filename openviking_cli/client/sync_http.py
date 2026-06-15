@@ -37,6 +37,7 @@ class SyncHTTPClient:
         account: Optional[str] = None,
         user: Optional[str] = None,
         actor_peer_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
         timeout: float = 60.0,
         extra_headers: Optional[Dict[str, str]] = None,
         profile_enabled: Optional[bool] = None,
@@ -48,6 +49,7 @@ class SyncHTTPClient:
             account=account,
             user=user,
             actor_peer_id=actor_peer_id,
+            agent_id=agent_id,
             timeout=timeout,
             extra_headers=extra_headers,
             profile_enabled=profile_enabled,
@@ -552,6 +554,10 @@ class SyncHTTPClient:
     def admin_regenerate_key(self, account_id: str, user_id: str) -> Dict[str, Any]:
         """Regenerate a user's API key. Old key is immediately invalidated."""
         return run_async(self._async_client.admin_regenerate_key(account_id, user_id))
+
+    def admin_migrate(self, cleanup: bool = False) -> Dict[str, Any]:
+        """Start legacy data migration or legacy namespace cleanup."""
+        return run_async(self._async_client.admin_migrate(cleanup=cleanup))
 
     # ============= Debug =============
 

@@ -23,8 +23,17 @@ class SyncOpenViking:
     Wraps AsyncOpenViking with synchronous methods.
     """
 
-    def __init__(self, path: Optional[str] = None, actor_peer_id: Optional[str] = None):
-        self._async_client = AsyncOpenViking(path=path, actor_peer_id=actor_peer_id)
+    def __init__(
+        self,
+        path: Optional[str] = None,
+        actor_peer_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+    ):
+        self._async_client = AsyncOpenViking(
+            path=path,
+            actor_peer_id=actor_peer_id,
+            agent_id=agent_id,
+        )
         self._initialized = False
 
     def initialize(self) -> None:

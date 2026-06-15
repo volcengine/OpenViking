@@ -31,6 +31,7 @@ class OVCLIConfig(BaseModel):
     account: Optional[str] = None
     user: Optional[str] = None
     actor_peer_id: Optional[str] = None
+    agent_id: Optional[str] = None
     timeout: float = 60.0
     profile: bool = False
     upload: Optional[OVCLIUploadConfig] = None
@@ -48,6 +49,12 @@ class OVCLIConfig(BaseModel):
             if extra_header is not None and "extra_headers" not in data:
                 data["extra_headers"] = extra_header
         return data
+
+    @model_validator(mode="after")
+    def reject_mixed_actor_and_agent_identity(self) -> "OVCLIConfig":
+        if self.actor_peer_id is not None and self.agent_id is not None:
+            raise ValueError("actor_peer_id cannot be used with legacy agent_id")
+        return self
 
 
 def load_ovcli_config(config_path: Optional[str] = None) -> Optional[OVCLIConfig]:

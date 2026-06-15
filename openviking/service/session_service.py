@@ -191,7 +191,7 @@ class SessionService:
         """
         self._ensure_initialized()
         session_base_uri = canonical_session_uri(ctx)
-        sessions = []
+        sessions_by_id: Dict[str, Dict[str, Any]] = {}
 
         try:
             entries = await self._viking_fs.ls(session_base_uri, ctx=ctx)
@@ -199,16 +199,28 @@ class SessionService:
                 name = entry.get("name", "")
                 if name in [".", ".."]:
                     continue
-                sessions.append(
-                    {
-                        "session_id": name,
-                        "uri": f"{session_base_uri}/{name}",
-                        "is_dir": entry.get("isDir", False),
-                    }
-                )
+                sessions_by_id[name] = {
+                    "session_id": name,
+                    "uri": f"{session_base_uri}/{name}",
+                    "is_dir": entry.get("isDir", False),
+                }
         except Exception:
             logger.debug("Failed to list sessions", exc_info=True)
-        return sessions
+
+        try:
+            entries = await self._viking_fs.ls("viking://session", ctx=ctx)
+            for entry in entries:
+                name = entry.get("name", "")
+                if name in [".", ".."] or name in sessions_by_id:
+                    continue
+                sessions_by_id[name] = {
+                    "session_id": name,
+                    "uri": entry.get("uri", f"viking://session/{name}"),
+                    "is_dir": entry.get("isDir", False),
+                }
+        except Exception:
+            logger.debug("Failed to list legacy sessions", exc_info=True)
+        return list(sessions_by_id.values())
 
     async def delete(self, session_id: str, ctx: RequestContext) -> bool:
         """Delete a session.

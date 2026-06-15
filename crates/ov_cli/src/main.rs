@@ -63,6 +63,7 @@ impl CliContext {
         }
         if actor_peer_id.is_some() {
             config.actor_peer_id = actor_peer_id;
+            config.agent_id = None;
         }
         Self {
             config,
@@ -96,7 +97,8 @@ impl CliContext {
             auth.api_key,
             auth.account,
             auth.user,
-            self.config.actor_peer_id.clone(),
+            self.config.effective_actor_peer_id(),
+            self.config.agent_id.clone(),
             timeout_secs.unwrap_or(self.config.timeout),
             self.profile.unwrap_or(self.config.profile),
             self.config.extra_headers.clone(),
@@ -146,7 +148,7 @@ struct Cli {
     #[arg(long = "actor-peer-id", global = true, hide = true)]
     actor_peer_id: Option<String>,
 
-    /// Use root API key for admin, system, and reindex commands
+    /// Use root API key for admin, system, reindex, and task status/list commands
     #[arg(long, global = true, hide = true)]
     sudo: bool,
 
@@ -928,12 +930,16 @@ enum Commands {
 }
 
 impl Commands {
-    /// Returns true if this is an admin command that supports --sudo
-    fn is_admin_command(&self) -> bool {
-        matches!(
-            self,
-            Self::Admin { .. } | Self::System { .. } | Self::Reindex { .. }
-        )
+    /// Returns true if this command supports running with the root API key.
+    fn supports_sudo(&self) -> bool {
+        match self {
+            Self::Admin { .. } | Self::System { .. } | Self::Reindex { .. } => true,
+            Self::Task { action } => matches!(
+                action,
+                TaskCommands::Status { .. } | TaskCommands::List { .. }
+            ),
+            _ => false,
+        }
     }
 
     fn supports_upload_options(&self) -> bool {
@@ -1392,6 +1398,12 @@ enum AdminCommands {
         /// Account ID to delete
         #[arg(value_name = "account-id")]
         account_id: String,
+    },
+    /// Migrate legacy agent/session data to user-owned namespaces (ROOT only)
+    Migrate {
+        /// Remove legacy agent/session directories after migration is verified
+        #[arg(long)]
+        cleanup: bool,
     },
     /// Register a new user in an account
     RegisterUser {
@@ -2159,6 +2171,7 @@ fn is_admin_subcommand(token: &str) -> bool {
         "create-account"
             | "list-accounts"
             | "delete-account"
+            | "migrate"
             | "register-user"
             | "list-users"
             | "remove-user"
@@ -2485,25 +2498,27 @@ async fn main() {
     }
 
     // Check this before loading config so misplaced --sudo reports the command rule directly.
-    if cli.sudo && !cli.command.is_admin_command() {
+    if cli.sudo && !cli.command.supports_sudo() {
         let language = i18n::Language::current();
         let (title, message, actions) = match language {
             i18n::Language::En => (
                 "Command Error",
-                "--sudo is only supported for admin, system, and reindex commands.",
+                "--sudo is only supported for admin, system, reindex, task status, and task list commands.",
                 vec![
                     error_ui::ErrorAction::new("ov admin --help", "Show admin commands"),
                     error_ui::ErrorAction::new("ov system --help", "Show system commands"),
                     error_ui::ErrorAction::new("ov reindex --help", "Show reindex options"),
+                    error_ui::ErrorAction::new("ov task --help", "Show task commands"),
                 ],
             ),
             i18n::Language::ZhCn => (
                 "命令错误",
-                "--sudo 只支持 admin、system 和 reindex 命令。",
+                "--sudo 只支持 admin、system、reindex、task status 和 task list 命令。",
                 vec![
                     error_ui::ErrorAction::new("ov admin --help", "查看管理命令"),
                     error_ui::ErrorAction::new("ov system --help", "查看系统命令"),
                     error_ui::ErrorAction::new("ov reindex --help", "查看重建索引选项"),
+                    error_ui::ErrorAction::new("ov task --help", "查看任务命令"),
                 ],
             ),
         };
@@ -3032,7 +3047,7 @@ mod tests {
     };
     use crate::config::{Config, DEFAULT_CUSTOM_URL};
     use crate::output::OutputFormat;
-    use crate::{SystemBackendCommands, SystemCommands, handlers};
+    use crate::{AdminCommands, SystemBackendCommands, SystemCommands, handlers};
     use clap::{CommandFactory, Parser};
     use std::ffi::OsString;
 
@@ -3073,6 +3088,31 @@ mod tests {
                 );
             }
             _ => panic!("expected find command"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_admin_migrate_cleanup_flag() {
+        let migrate = Cli::try_parse_from(["ov", "--sudo", "admin", "migrate"])
+            .expect("admin migrate should parse");
+        match migrate.command {
+            Commands::Admin { action } => match action {
+                AdminCommands::Migrate { cleanup } => assert!(!cleanup),
+                _ => panic!("expected admin migrate command"),
+            },
+            _ => panic!("expected admin command"),
+        }
+
+        let cleanup = Cli::try_parse_from(["ov", "--sudo", "admin", "migrate", "--cleanup"])
+            .expect("admin migrate cleanup should parse");
+
+        assert!(cleanup.sudo);
+        match cleanup.command {
+            Commands::Admin { action } => match action {
+                AdminCommands::Migrate { cleanup } => assert!(cleanup),
+                _ => panic!("expected admin migrate command"),
+            },
+            _ => panic!("expected admin command"),
         }
     }
 
@@ -3350,6 +3390,7 @@ mod tests {
             &["ov", "admin", "create-account"],
             &["ov", "admin", "list-accounts"],
             &["ov", "admin", "delete-account"],
+            &["ov", "admin", "migrate"],
             &["ov", "admin", "register-user"],
             &["ov", "admin", "list-users"],
             &["ov", "admin", "remove-user"],
@@ -3753,6 +3794,31 @@ mod tests {
     }
 
     #[test]
+    fn sudo_supports_task_status_and_list_only() {
+        let status = Cli::try_parse_from(["ov", "--sudo", "task", "status", "task-123"])
+            .expect("sudo task status should parse");
+        assert!(status.sudo);
+        assert!(status.command.supports_sudo());
+
+        let list = Cli::try_parse_from([
+            "ov",
+            "--sudo",
+            "task",
+            "list",
+            "--task-type",
+            "legacy_migration",
+        ])
+        .expect("sudo task list should parse");
+        assert!(list.sudo);
+        assert!(list.command.supports_sudo());
+
+        let watch = Cli::try_parse_from(["ov", "--sudo", "task", "watch", "ls"])
+            .expect("sudo task watch should still parse before runtime validation");
+        assert!(watch.sudo);
+        assert!(!watch.command.supports_sudo());
+    }
+
+    #[test]
     fn cli_config_without_subcommand_parses_as_setup_entrypoint() {
         Cli::try_parse_from(["ov", "config"]).expect("bare config command should parse");
     }
@@ -4021,6 +4087,7 @@ mod tests {
             account: Some("from-config-account".to_string()),
             user: Some("from-config-user".to_string()),
             actor_peer_id: Some("from-config-peer".to_string()),
+            agent_id: None,
             timeout: 60.0,
             output: "table".to_string(),
             echo_command: true,
@@ -4047,6 +4114,45 @@ mod tests {
         assert_eq!(ctx.config.account.as_deref(), Some("from-cli-account"));
         assert_eq!(ctx.config.user.as_deref(), Some("from-cli-user"));
         assert_eq!(ctx.config.actor_peer_id.as_deref(), Some("from-cli-peer"));
+        assert!(ctx.config.agent_id.is_none());
+    }
+
+    #[test]
+    fn cli_context_maps_legacy_agent_id_to_actor_peer_scope() {
+        let config = Config {
+            url: DEFAULT_CUSTOM_URL.to_string(),
+            api_key: Some("test-key".to_string()),
+            root_api_key: None,
+            account: None,
+            user: None,
+            actor_peer_id: None,
+            agent_id: Some("legacy-agent".to_string()),
+            timeout: 60.0,
+            output: "table".to_string(),
+            echo_command: true,
+            show_progress: false,
+            verbose: false,
+            upload: Default::default(),
+            extra_headers: None,
+            profile: false,
+        };
+
+        let ctx = CliContext::from_config(
+            config,
+            OutputFormat::Json,
+            true,
+            None,
+            None,
+            None,
+            false,
+            None,
+            None,
+            None,
+        );
+        let client = ctx.get_client();
+
+        assert_eq!(client.actor_peer_id(), Some("legacy-agent"));
+        assert_eq!(client.legacy_agent_id(), Some("legacy-agent"));
     }
 
     #[test]
@@ -4058,6 +4164,7 @@ mod tests {
             account: None,
             user: None,
             actor_peer_id: Some("peer-a".to_string()),
+            agent_id: None,
             timeout: 60.0,
             output: "table".to_string(),
             echo_command: true,
