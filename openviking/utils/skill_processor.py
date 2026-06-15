@@ -32,6 +32,7 @@ from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConve
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
+from openviking.utils.path_safety import sanitize_relative_viking_path
 from openviking.utils.zip_safe import safe_extract_zip
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.utils import get_logger
@@ -526,11 +527,10 @@ class SkillProcessor:
         for aux_file in auxiliary_files:
             if base_path:
                 rel_path = aux_file.relative_to(base_path)
-                rel_uri_path = rel_path.as_posix().replace("\\", "/")
-                aux_uri = f"{skill_dir_uri}/{rel_uri_path}"
+                rel_uri_path = sanitize_relative_viking_path(rel_path.as_posix())
             else:
-                rel_uri_path = aux_file.name.replace("\\", "/")
-                aux_uri = f"{skill_dir_uri}/{rel_uri_path}"
+                rel_uri_path = sanitize_relative_viking_path(aux_file.name)
+            aux_uri = f"{skill_dir_uri}/{rel_uri_path}"
 
             file_bytes = aux_file.read_bytes()
             try:
