@@ -6,7 +6,9 @@
 import json
 from datetime import datetime, timezone
 
-from openviking.message import ContextPart, Message, TextPart, ToolPart
+import pytest
+
+from openviking.message import ContextPart, ImagePart, Message, TextPart, ToolPart
 from openviking.message.part import part_from_dict
 
 
@@ -106,6 +108,29 @@ class TestContextPart:
         )
 
         assert part.context_type == "resource"
+
+
+class TestImagePart:
+    """Test ImagePart dataclass."""
+
+    def test_default_values(self):
+        """Test default values."""
+        part = ImagePart()
+
+        assert part.url == ""
+        assert part.detail is None
+        assert part.type == "image_url"
+
+    def test_custom_values(self):
+        """Test custom values."""
+        part = ImagePart(
+            url="https://example.com/image.png",
+            detail="auto",
+        )
+
+        assert part.url == "https://example.com/image.png"
+        assert part.detail == "auto"
+        assert part.type == "image_url"
 
 
 class TestToolPart:
@@ -257,6 +282,37 @@ class TestPartFromDict:
         assert part.tool_output_original_chars == 1000
         assert part.tool_output_preview_chars == 100
         assert part.tool_output_sha256 == "abc123"
+
+    def test_image_part_from_openai_style_dict(self):
+        """Test creating ImagePart from OpenAI-style image_url dict."""
+        data = {
+            "type": "image_url",
+            "image_url": {"url": "https://example.com/image.png", "detail": "high"},
+        }
+
+        part = part_from_dict(data)
+
+        assert isinstance(part, ImagePart)
+        assert part.url == "https://example.com/image.png"
+        assert part.detail == "high"
+
+    def test_image_part_rejects_flat_dict(self):
+        """OpenAI-style image_url payloads require the nested image_url shape."""
+        data = {"type": "image_url", "url": "https://example.com/image.png"}
+
+        with pytest.raises(ValueError, match="image_url part requires a non-empty URL"):
+            part_from_dict(data)
+
+    def test_image_part_rejects_missing_url(self):
+        """Test image_url parts require a non-empty URL."""
+        data = {"type": "image_url", "image_url": {}}
+
+        try:
+            part_from_dict(data)
+        except ValueError as exc:
+            assert "image_url part requires a non-empty URL" in str(exc)
+        else:
+            raise AssertionError("Expected ValueError for missing image URL")
 
     def test_unknown_type_defaults_to_text(self):
         """Test unknown type defaults to TextPart."""
@@ -473,6 +529,30 @@ class TestMessageToDict:
         assert d["parts"][0]["tool_output_preview_chars"] == 100
         assert d["parts"][0]["tool_output_externalized_reason"] == "single_threshold"
 
+    def test_to_dict_with_image_part(self):
+        """Test to_dict with ImagePart."""
+        msg = Message(
+            id="msg-1",
+            role="user",
+            parts=[
+                TextPart(text="Look at this"),
+                ImagePart(
+                    url="https://example.com/image.png",
+                    detail="auto",
+                ),
+            ],
+        )
+
+        d = msg.to_dict()
+
+        assert d["parts"][1] == {
+            "type": "image_url",
+            "image_url": {
+                "url": "https://example.com/image.png",
+                "detail": "auto",
+            },
+        }
+
     def test_to_dict_timestamp_format(self):
         """Test timestamp format in to_dict."""
         now = datetime(2026, 3, 26, 10, 30, 0, tzinfo=timezone.utc)
@@ -560,6 +640,31 @@ class TestMessageFromDict:
         assert msg.parts[0].tool_output_original_chars == 1000
         assert msg.parts[0].tool_output_preview_chars == 100
         assert msg.parts[0].tool_output_externalized_reason == "single_threshold"
+
+    def test_from_dict_with_image_part(self):
+        """Test from_dict with ImagePart."""
+        d = {
+            "id": "msg-1",
+            "role": "user",
+            "parts": [
+                {"type": "text", "text": "Look at this"},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "https://example.com/image.png",
+                        "detail": "auto",
+                    },
+                },
+            ],
+            "created_at": "2026-03-26T10:30:00Z",
+        }
+
+        msg = Message.from_dict(d)
+
+        assert isinstance(msg.parts[0], TextPart)
+        assert isinstance(msg.parts[1], ImagePart)
+        assert msg.parts[1].url == "https://example.com/image.png"
+        assert msg.parts[1].detail == "auto"
 
     def test_from_dict_supports_legacy_content_only_messages(self):
         """Legacy messages with only content should load as a TextPart."""

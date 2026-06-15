@@ -171,19 +171,30 @@ def _normalize_image_urls(value: Any) -> List[str]:
     return [str(value)]
 
 
-def build_openviking_message_parts(msg: Dict[str, Any]) -> List[Dict[str, Any]]:
+def build_openviking_message_parts(
+    msg: Dict[str, Any],
+    *,
+    use_image_url: bool = False,
+) -> List[Dict[str, Any]]:
     """Build OpenViking message parts from a LoCoMo message."""
     parts: List[Dict[str, Any]] = [{"type": "text", "text": msg["text"]}]
     caption = str(msg.get("blip_caption", "") or "")
 
     for image_url in _normalize_image_urls(msg.get("img_url")):
-        image_part: Dict[str, Any] = {
-            "type": "image_url",
-            "image_url": {"url": image_url},
-        }
-        if caption:
-            image_part["caption"] = caption
-        parts.append(image_part)
+        if use_image_url:
+            parts.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": image_url},
+                }
+            )
+        else:
+            parts.append(
+                {
+                    "type": "text",
+                    "text": f"[Image URL: {image_url}; BLIP caption: {caption}]",
+                }
+            )
 
     return parts
 
@@ -342,6 +353,7 @@ async def viking_ingest(
     session_time: Optional[str] = None,
     user_id: Optional[str] = None,
     agent_id: Optional[str] = None,
+    use_image_url: bool = False,
 ) -> Dict[str, int]:
     """Save messages to OpenViking via OpenViking SDK client.
     Returns token usage dict with embedding and vlm token counts.
@@ -384,7 +396,10 @@ async def viking_ingest(
             await client.add_message(
                 session_id=session_id,
                 role=msg["role"],
-                parts=build_openviking_message_parts(msg),
+                parts=build_openviking_message_parts(
+                    msg,
+                    use_image_url=use_image_url,
+                ),
                 created_at=msg_created_at,
             )
 
@@ -455,6 +470,7 @@ async def process_single_session(
                 meta.get("date_time"),
                 user_id=str(sample_id),
                 agent_id=str(sample_id),
+                use_image_url=args.use_image_url,
             )
             chunk_usage = result["token_usage"]
             for key in token_usage:
@@ -786,6 +802,12 @@ def main():
         action="store_true",
         default=False,
         help="Clear all existing ingest records before running",
+    )
+    parser.add_argument(
+        "--use-image-url",
+        action="store_true",
+        default=False,
+        help="Import LoCoMo images as structured image_url parts. Default: false; use blip_caption text for compatibility.",
     )
     args = parser.parse_args()
 

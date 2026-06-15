@@ -11,6 +11,7 @@ import openviking_cli.client.http as http_module
 import openviking_cli.utils.async_utils as async_utils
 from openviking import AsyncOpenViking, SyncOpenViking
 from openviking.client.local import LocalClient
+from openviking.message import ImagePart, TextPart
 from openviking_cli.client.http import AsyncHTTPClient
 from openviking_cli.client.sync_http import SyncHTTPClient
 from openviking_cli.utils.config import OPENVIKING_CLI_CONFIG_ENV
@@ -178,6 +179,50 @@ async def test_local_client_batch_add_messages_forwards_to_session():
     assert fake_session.messages[1]["role"] == "assistant"
     assert fake_session.messages[1]["peer_id"] is None
     assert fake_session.messages[1]["parts"][0].text == "hi"
+
+
+async def test_local_client_add_message_accepts_image_parts():
+    class FakeSession:
+        def __init__(self):
+            self.messages = []
+
+        def add_message(self, role, parts, peer_id=None, created_at=None):
+            self.messages.append(
+                {
+                    "role": role,
+                    "parts": parts,
+                    "peer_id": peer_id,
+                    "created_at": created_at,
+                }
+            )
+
+    fake_session = FakeSession()
+
+    class FakeSessions:
+        async def get(self, session_id, ctx, auto_create=False):
+            assert session_id == "image-session"
+            assert ctx is client._ctx
+            assert auto_create is True
+            return fake_session
+
+    client = LocalClient.__new__(LocalClient)
+    client._service = SimpleNamespace(sessions=FakeSessions())
+    client._ctx = SimpleNamespace(user=SimpleNamespace(user_id="user-1"))
+
+    result = await LocalClient.add_message(
+        client,
+        "image-session",
+        "user",
+        parts=[
+            {"type": "text", "text": "Look at this"},
+            {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}},
+        ],
+    )
+
+    assert result == {"session_id": "image-session", "message_count": 1}
+    assert isinstance(fake_session.messages[0]["parts"][0], TextPart)
+    assert isinstance(fake_session.messages[0]["parts"][1], ImagePart)
+    assert fake_session.messages[0]["parts"][1].url == "https://example.com/image.png"
 
 
 async def test_async_http_client_batch_add_messages_posts_batch_payload():

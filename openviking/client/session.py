@@ -48,7 +48,7 @@ class Session:
         Args:
             role: Message role (e.g., "user", "assistant")
             content: Text content (simple mode)
-            parts: Parts list (TextPart, ContextPart, ToolPart)
+            parts: Parts list (TextPart, ContextPart, ImagePart, ToolPart)
             created_at: Message creation time (ISO format string). If not provided, current time is used.
             peer_id: Optional stable interaction peer identity.
 
