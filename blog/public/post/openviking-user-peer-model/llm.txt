@@ -1,0 +1,204 @@
+# OpenViking User / Peer: Separating Data Owners From Interaction Objects
+
+Published: 2026-06-15
+
+Canonical human page: https://blog.openviking.ai/post/openviking-user-peer-model/
+Agent-readable page: https://blog.openviking.ai/post/openviking-user-peer-model/llm.txt
+Repository: https://github.com/volcengine/OpenViking
+
+## Thesis
+
+OpenViking's User / Peer model separates two concepts that were previously easy to mix together:
+
+- `user`: the OpenViking service-layer data owner, also called the data subject of a user-scoped data space.
+- `peer`: an interaction object under that user.
+
+The user can be a natural person, but it can also be an agent, bot service, support desk, or fixed integration instance. The peer can be a customer, visitor, group member, runtime agent, sender, or any other object interacting with that user.
+
+The model answers two questions separately:
+
+1. Who owns this data space?
+2. Who is the current interaction with?
+
+## Why The Earlier User / Agent Mental Model Was Awkward
+
+Earlier OpenViking usage was closer to an account / user / agent mental model:
+
+- `user_id` was the formal data identity and was usually bound by a user key.
+- `agent_id` was easier to pass as runtime context and could distinguish assistants, tools, or environments.
+
+That shape worked for one person using several agents. It became awkward for one-to-many agent services that needed to serve many external people or objects and persist personal memory for each of them.
+
+Two old paths were uncomfortable:
+
+1. Register every external object as an OpenViking user.
+   - This can make the semantics look clean.
+   - It creates many user keys and forces the platform to manage registration, distribution, rotation, delegation, and permission boundaries for objects that may only be served participants.
+2. Put the external object into `agent_id`.
+   - This is lightweight to pass.
+   - It has the wrong semantics because customers and group members are not agents.
+   - It mixes data owner, interaction object, and retrieval scope.
+
+The stable rule is to keep data owner and interaction object as separate dimensions.
+
+## New Model
+
+User / Peer turns the boundary into one simple relationship:
+
+```text
+account
+└── user
+    ├── memories
+    ├── resources
+    ├── skills
+    ├── sessions
+    └── peers
+        ├── customer-alice
+        │   ├── memories
+        │   └── resources
+        └── customer-bob
+            ├── memories
+            └── resources
+```
+
+In this model:
+
+- `account` is the tenant or workspace boundary.
+- `user` is the data owner inside OpenViking.
+- `peer` is an interaction object under that user.
+
+A peer does not change the tenant, authentication identity, or user boundary. It narrows the content scope inside the current user's data space.
+
+## Support Bot Example
+
+In a support bot scenario:
+
+```text
+account = acme
+user    = support-bot
+peer    = customer-alice
+peer    = customer-bob
+```
+
+The support bot owns the OpenViking data space. Alice and Bob are objects it serves. The bot may remember Alice's preferences and Bob's historical issues without registering Alice and Bob as OpenViking users or distributing separate user keys to them.
+
+Peer memory can be stored under:
+
+```text
+viking://user/{user_id}/peers/customer-alice/memories
+viking://user/{user_id}/peers/customer-bob/memories
+```
+
+## Personal User Example
+
+A natural person can still be the OpenViking user:
+
+```text
+user = alice
+peer = coding-agent
+peer = life-agent
+```
+
+If Alice owns the data space, different agents can be represented as peers under Alice. The rule is not "user must be a person" or "peer must be an agent." The rule is: identify the data owner first, then identify the interaction object.
+
+## Developer Usage
+
+Step 1: use a user key to select the data owner.
+
+```python
+import openviking as ov
+
+client = ov.SyncHTTPClient(
+    url="http://localhost:1933",
+    api_key="<support-bot-user-key>",
+)
+client.initialize()
+```
+
+Step 2: attach `peer_id` to session messages and enable peer memory in `memory_policy`.
+
+```python
+session = client.create_session(
+    memory_policy={
+        "self": {"enabled": True},
+        "peer": {"enabled": True},
+    }
+)
+session_id = session["session_id"]
+
+client.add_message(
+    session_id,
+    role="user",
+    content="Please issue invoices under Volcano Engine.",
+    peer_id="customer-alice",
+)
+
+client.add_message(
+    session_id,
+    role="assistant",
+    content="Got it. I will remember this invoice preference.",
+    peer_id="customer-alice",
+)
+
+client.commit_session(session_id)
+```
+
+Step 3: use `actor_peer_id` for a peer-restricted retrieval or filesystem view.
+
+```python
+alice_view = ov.SyncHTTPClient(
+    url="http://localhost:1933",
+    api_key="<support-bot-user-key>",
+    actor_peer_id="customer-alice",
+)
+alice_view.initialize()
+
+results = alice_view.find("invoice preference")
+```
+
+`actor_peer_id` filters the current user's peer collection to `customer-alice`. It does not authenticate the request as Alice, and it does not switch account or user.
+
+Peer URIs:
+
+```text
+viking://user/{user_id}/peers/{peer_id}/memories
+viking://user/{user_id}/peers/{peer_id}/resources
+```
+
+`peer_id` must be a safe single path segment such as:
+
+```text
+customer-alice
+telegram_12345
+web-visitor-abc
+```
+
+Values containing path separators, such as `a/b`, are rejected.
+
+## Platform Impact
+
+The biggest change is that platform integrations no longer need to decide whether every external object must become an OpenViking user.
+
+Recommended modeling:
+
+- Support bot: OpenViking user = `support-bot`; customers = peers.
+- Developer tool plugin: OpenViking user = natural person or fixed tool instance; runtime speakers or agents = peers.
+- Messaging bot: OpenViking user = bot service; sender or group member = `peer_id`.
+
+Benefits:
+
+- The data owner becomes more stable.
+- Authentication and key management stay smaller.
+- One-to-many participants can be isolated naturally.
+- Retrieval and filesystem views follow the same peer filter.
+- The main data path becomes the user-scoped `viking://user/...` space.
+
+## Assets
+
+The article uses these local assets:
+
+- `/assets/covers/openviking-user-peer-model.png`
+- `/post/openviking-user-peer-model/images/figure-01-user-data-subject.png`
+- `/post/openviking-user-peer-model/images/figure-02-old-user-agent-pain.png`
+- `/post/openviking-user-peer-model/images/figure-03-support-bot-peer-flow.png`
+- `/post/openviking-user-peer-model/images/figure-04-api-quickstart.png`
