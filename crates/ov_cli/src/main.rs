@@ -435,10 +435,10 @@ enum Commands {
         #[arg(short, long, help_heading = "Common options")]
         recursive: bool,
         /// Wait until semantic refresh is complete
-        #[arg(long)]
+        #[arg(long, help_heading = "Common options")]
         wait: bool,
         /// Wait timeout in seconds (only used with --wait)
-        #[arg(long)]
+        #[arg(long, value_name = "seconds", help_heading = "Common options")]
         timeout: Option<f64>,
     },
     /// [Data] Move or rename resource

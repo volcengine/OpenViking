@@ -270,25 +270,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Remove a subtree and wait for generated overviews to refresh.",
             },
         ],
-        arguments: &[HelpItem {
-            label: "<uri>",
-            description: "Resource URI to remove.",
-        }],
-        common_options: &[HelpItem {
-            label: "-r, --recursive",
-            description: "Required for directory/subtree removal.",
-        }],
-        advanced_options: &[
-            HelpItem {
-                label: "--wait",
-                description: "Wait for semantic refresh after deletion.",
-            },
-            HelpItem {
-                label: "--timeout <seconds>",
-                description: "Maximum time to wait with --wait.",
-            },
-        ],
-        subcommands: &[],
         next_steps: &[
             HelpItem {
                 label: "ov ls <parent-uri>",
@@ -2546,6 +2527,7 @@ mod tests {
         for args in [
             ["ov", "add-resource", "--help"],
             ["ov", "add-skill", "--help"],
+            ["ov", "rm", "--help"],
             ["ov", "write", "--help"],
         ] {
             let rendered = strip_ansi(
