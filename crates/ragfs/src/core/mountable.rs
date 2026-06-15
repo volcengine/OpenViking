@@ -147,6 +147,9 @@ impl MountableFS {
     }
 
     /// Create a new MountableFS that transparently wraps mounted backends with cache.
+    ///
+    /// Encrypted multi-write mounts skip the mount-level cache because their encryption boundary
+    /// lives inside `MultiWriteWrappedFS`; caching outside it would store plaintext.
     #[cfg(feature = "cache")]
     pub fn with_cache(
         provider: Arc<dyn CacheProvider>,
@@ -227,17 +230,21 @@ impl MountableFS {
         // Validate configuration
         plugin.validate(&config).await?;
 
+        let (enc_root_key, enc_provider_type) = self.get_encryption_config().await;
+        #[cfg(feature = "cache")]
+        let encryption_enabled = enc_root_key.is_some() && enc_provider_type.is_some();
+
         // Branch: multi-write vs single backend
         let (inner_fs, raw_fs): (Arc<dyn FileSystem>, Option<Arc<dyn FileSystem>>) = match &config
             .backups
         {
             None => {
-                // Single backend: initialize plugin, optionally wrap with encryption.
+                // Single backend: initialize plugin, optionally wrap raw storage with cache, then
+                // wrap with encryption. This keeps shared cache providers ciphertext-only.
                 // Control plugins (queuefs, serverinfofs) are never encrypted.
                 let raw = plugin.initialize(config.clone()).await?;
                 let raw_arc: Arc<dyn FileSystem> = Arc::from(raw);
                 let is_control_plugin = matches!(config.name.as_str(), "queuefs" | "serverinfofs");
-                let (enc_root_key, enc_provider_type) = self.get_encryption_config().await;
                 if !is_control_plugin {
                     ensure_backend_shape(
                         &raw_arc,
@@ -248,14 +255,19 @@ impl MountableFS {
                     )
                     .await?;
                 }
+                #[cfg(feature = "cache")]
+                let storage_fs = self.maybe_wrap_cache(raw_arc.clone(), &normalized_path);
+                #[cfg(not(feature = "cache"))]
+                let storage_fs = raw_arc.clone();
+
                 let inner: Arc<dyn FileSystem> = if is_control_plugin {
-                    raw_arc.clone()
+                    storage_fs
                 } else {
                     match (enc_root_key, enc_provider_type) {
                         (Some(rk), Some(pt)) => {
-                            Arc::new(EncryptionWrappedFS::new(raw_arc.clone(), rk, pt))
+                            Arc::new(EncryptionWrappedFS::new(storage_fs, rk, pt))
                         }
-                        _ => raw_arc.clone(),
+                        _ => storage_fs,
                     }
                 };
                 (inner, Some(raw_arc))
@@ -267,12 +279,21 @@ impl MountableFS {
                 );
                 let mw = self.build_multi_write_fs(&config, bc).await?;
                 let arc: Arc<dyn FileSystem> = Arc::new(mw);
+                #[cfg(feature = "cache")]
+                let arc = if encryption_enabled {
+                    // Multi-write owns per-backend encryption internally. A mount-level cache
+                    // would sit outside that boundary and store plaintext, so skip it.
+                    warn!(
+                        "cache is disabled for encrypted multi-write mount '{}': mount-level cache would store plaintext",
+                        normalized_path
+                    );
+                    arc
+                } else {
+                    self.maybe_wrap_cache(arc, &normalized_path)
+                };
                 (arc, None)
             }
         };
-
-        #[cfg(feature = "cache")]
-        let inner_fs = self.maybe_wrap_cache(inner_fs, &normalized_path);
 
         // Wrap with statistics
         let wrapped_fs = StatsWrappedFS::with_arc(inner_fs);
@@ -1168,6 +1189,114 @@ mod tests {
             b"backend:/file.txt"
         );
         assert_eq!(reads.load(Ordering::Relaxed), 1);
+    }
+
+    #[cfg(feature = "cache")]
+    #[tokio::test]
+    async fn encrypted_mount_caches_ciphertext_below_account_validation() {
+        use crate::cache::{CacheNamespace, CachePolicy, CacheProvider, MemoryCacheProvider};
+        use crate::core::{FsContextInner, FS_CTX};
+        use crate::plugins::MemFSPlugin;
+
+        let provider = Arc::new(MemoryCacheProvider::new());
+        let mfs = MountableFS::with_cache(
+            provider.clone(),
+            CacheNamespace::new("encrypted-mount-test"),
+            CachePolicy::default(),
+        );
+        mfs.register_plugin(MemFSPlugin).await;
+        mfs.set_encryption_config(Some([9u8; 32]), Some(1)).await;
+        mfs.mount(test_config("memfs", "/local")).await.unwrap();
+        mfs.mkdir("/local/shared", 0o755).await.unwrap();
+
+        let tenant_a = Arc::new(FsContextInner::new("tenant-a"));
+        let tenant_b = Arc::new(FsContextInner::new("tenant-b"));
+        FS_CTX
+            .scope(tenant_a.clone(), async {
+                mfs.write(
+                    "/local/shared/doc.md",
+                    b"tenant-a-secret",
+                    0,
+                    WriteFlag::Create,
+                )
+                .await
+                .unwrap();
+            })
+            .await;
+
+        assert_eq!(
+            FS_CTX
+                .scope(tenant_a, mfs.read("/local/shared/doc.md", 0, 0))
+                .await
+                .unwrap(),
+            b"tenant-a-secret"
+        );
+        assert!(
+            FS_CTX
+                .scope(tenant_b, mfs.read("/local/shared/doc.md", 0, 0))
+                .await
+                .is_err(),
+            "a different account must not receive cached plaintext"
+        );
+        assert!(
+            mfs.read("/local/shared/doc.md", 0, 0).await.is_err(),
+            "missing account context must not receive cached plaintext"
+        );
+
+        let file_key = provider
+            .keys()
+            .await
+            .into_iter()
+            .find(|key| key.contains(":file:"))
+            .expect("encrypted read should populate one file cache object");
+        let encoded = provider
+            .get(&file_key)
+            .await
+            .unwrap()
+            .expect("file cache object should exist");
+        let envelope: Value = serde_json::from_slice(&encoded).unwrap();
+        let payload = envelope["payload"]["File"]
+            .as_array()
+            .expect("file payload should be a byte array")
+            .iter()
+            .map(|value| value.as_u64().unwrap() as u8)
+            .collect::<Vec<_>>();
+        assert!(
+            payload.starts_with(b"OVE1"),
+            "shared cache providers must store encrypted file envelopes"
+        );
+    }
+
+    #[cfg(feature = "cache")]
+    #[tokio::test]
+    async fn encrypted_multiwrite_mount_does_not_install_plaintext_cache() {
+        use crate::cache::{CacheNamespace, CachePolicy, MemoryCacheProvider};
+
+        let mfs = MountableFS::with_cache(
+            Arc::new(MemoryCacheProvider::new()),
+            CacheNamespace::new("encrypted-multiwrite-test"),
+            CachePolicy::default(),
+        );
+        mfs.register_plugin(MockPlugin::new("primary")).await;
+        mfs.register_plugin(MockPlugin::new("backupfs")).await;
+        mfs.set_encryption_config(Some([9u8; 32]), Some(1)).await;
+
+        let mut config = multiwrite_test_config("primary", "backupfs", "/local");
+        config.server_encryption_enabled = true;
+        config.primary_encryption_enabled = true;
+        mfs.mount(config).await.unwrap();
+
+        let mounts = mfs.mounts.read().await;
+        let mount_info = mounts.get("/local").expect("mounted entry should exist");
+        let stats = (mount_info.fs.as_ref() as &dyn std::any::Any)
+            .downcast_ref::<StatsWrappedFS>()
+            .expect("stats wrapper should be outermost");
+        assert!(
+            (stats.inner_fs().as_ref() as &dyn std::any::Any)
+                .downcast_ref::<MultiWriteWrappedFS>()
+                .is_some(),
+            "encrypted multi-write must not install a plaintext cache outside MultiWriteWrappedFS"
+        );
     }
 
     #[tokio::test]
