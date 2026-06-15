@@ -247,8 +247,19 @@ export function syncMcpConfig(file, env = process.env) {
   const expectedHeaders = {
     "X-OpenViking-Account": "OPENVIKING_ACCOUNT",
     "X-OpenViking-User": "OPENVIKING_USER",
-    "X-OpenViking-Actor-Peer": "OPENVIKING_PEER_ID",
   };
+  // Actor-peer is only mapped when a peer is actually configured. Codex's MCP
+  // runtime treats unset env vars in env_http_headers as empty-string headers,
+  // which the OV side then has to disambiguate from "no peer scope". Match
+  // the bearer_token_env_var pattern: present only when there's something to
+  // send. The wrapper.sh strips empty OPENVIKING_PEER_ID before exec'ing
+  // codex, so without this guard the header would silently flip to "".
+  if (creds.peerId) {
+    expectedHeaders["X-OpenViking-Actor-Peer"] = "OPENVIKING_PEER_ID";
+  } else if (headers["X-OpenViking-Actor-Peer"]) {
+    delete headers["X-OpenViking-Actor-Peer"];
+    changed = true;
+  }
   for (const [header, envName] of Object.entries(expectedHeaders)) {
     if (headers[header] !== envName) {
       headers[header] = envName;

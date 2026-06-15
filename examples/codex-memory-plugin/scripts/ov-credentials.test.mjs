@@ -92,10 +92,11 @@ test("ovcli config without api_key does not inherit stale env key", async () => 
   }
 });
 
-test("syncMcpConfig matches resolved auth and actor peer header", async () => {
-  const { dir, path } = await tempJson("ov-creds-mcp-", {
+test("syncMcpConfig with peerId maps actor-peer header", async () => {
+  const { dir, path } = await tempJson("ov-creds-mcp-peer-", {
     url: "https://ov.example.com",
     api_key: "cli-key",
+    actor_peer_id: "peer-a",
   });
   const mcpPath = join(dir, ".mcp.json");
   await writeFile(mcpPath, JSON.stringify({
@@ -120,6 +121,77 @@ test("syncMcpConfig matches resolved auth and actor peer header", async () => {
       "X-OpenViking-User": "OPENVIKING_USER",
       "X-OpenViking-Actor-Peer": "OPENVIKING_PEER_ID",
     });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("syncMcpConfig without peerId omits actor-peer header (symmetric to bearer)", async () => {
+  const { dir, path } = await tempJson("ov-creds-mcp-nopeer-", {
+    url: "https://ov.example.com",
+    api_key: "cli-key",
+  });
+  const mcpPath = join(dir, ".mcp.json");
+  await writeFile(mcpPath, JSON.stringify({
+    mcpServers: {
+      "openviking-memory": {
+        url: "__OPENVIKING_MCP_URL__",
+        bearer_token_env_var: "STALE_KEY",
+        env_http_headers: {},
+      },
+    },
+  }, null, 2) + "\n");
+
+  try {
+    syncMcpConfig(mcpPath, { OPENVIKING_CLI_CONFIG_FILE: path });
+    const rendered = JSON.parse(await readFile(mcpPath, "utf-8"));
+    const server = rendered.mcpServers["openviking-memory"];
+
+    assert.equal(server.url, "https://ov.example.com/mcp");
+    assert.equal(server.bearer_token_env_var, "OPENVIKING_API_KEY");
+    assert.deepEqual(server.env_http_headers, {
+      "X-OpenViking-Account": "OPENVIKING_ACCOUNT",
+      "X-OpenViking-User": "OPENVIKING_USER",
+    });
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(server.env_http_headers, "X-OpenViking-Actor-Peer"),
+      false,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("syncMcpConfig drops stale actor-peer header when peer is unset", async () => {
+  const { dir, path } = await tempJson("ov-creds-mcp-drop-peer-", {
+    url: "https://ov.example.com",
+    api_key: "cli-key",
+  });
+  const mcpPath = join(dir, ".mcp.json");
+  await writeFile(mcpPath, JSON.stringify({
+    mcpServers: {
+      "openviking-memory": {
+        url: "__OPENVIKING_MCP_URL__",
+        bearer_token_env_var: "STALE_KEY",
+        env_http_headers: {
+          "X-OpenViking-Account": "OPENVIKING_ACCOUNT",
+          "X-OpenViking-User": "OPENVIKING_USER",
+          "X-OpenViking-Actor-Peer": "OPENVIKING_PEER_ID",
+        },
+      },
+    },
+  }, null, 2) + "\n");
+
+  try {
+    const changed = syncMcpConfig(mcpPath, { OPENVIKING_CLI_CONFIG_FILE: path });
+    assert.equal(changed, true);
+    const rendered = JSON.parse(await readFile(mcpPath, "utf-8"));
+    const server = rendered.mcpServers["openviking-memory"];
+
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(server.env_http_headers, "X-OpenViking-Actor-Peer"),
+      false,
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
