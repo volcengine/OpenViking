@@ -318,6 +318,7 @@ async fn add_ov_service(
         "OpenViking Service API key",
     )?;
     validate_optional_identity(args.account.as_deref(), args.user.as_deref())?;
+    validate_optional_actor_peer_id(args.actor_peer_id.as_deref())?;
 
     let config = Config {
         url: OPENVIKING_SERVICE_URL.to_string(),
@@ -325,6 +326,7 @@ async fn add_ov_service(
         root_api_key: None,
         account: args.account,
         user: args.user,
+        actor_peer_id: args.actor_peer_id,
         ..Config::default()
     };
 
@@ -354,6 +356,7 @@ async fn add_ov_service(
 async fn add_custom(store: &ConfigStore, args: ConfigAddCustomArgs) -> AgentResult<AddEditResult> {
     let name = config_name_or_generate(store, args.name, ConfigKind::Custom)?;
     validate_optional_identity(args.account.as_deref(), args.user.as_deref())?;
+    validate_optional_actor_peer_id(args.actor_peer_id.as_deref())?;
     let api_key = read_optional_secret(
         secret_input(args.api_key_stdin, args.api_key_env.as_deref()),
         "API key",
@@ -364,7 +367,14 @@ async fn add_custom(store: &ConfigStore, args: ConfigAddCustomArgs) -> AgentResu
     )?;
     let url = normalize_custom_url(args.url.as_deref().unwrap_or(DEFAULT_CUSTOM_URL));
 
-    let config = build_custom_config(url, api_key, root_api_key, args.account, args.user)?;
+    let config = build_custom_config(
+        url,
+        api_key,
+        root_api_key,
+        args.account,
+        args.user,
+        args.actor_peer_id,
+    )?;
 
     if let Some(result) = existing_add_preflight(
         store,
@@ -409,6 +419,7 @@ async fn edit_saved_config(
     let new_name = args.new_name.clone().unwrap_or_else(|| args.name.clone());
     validate_config_name(&new_name).map_err(config_error)?;
     validate_optional_identity(args.account.as_deref(), args.user.as_deref())?;
+    validate_optional_actor_peer_id(args.actor_peer_id.as_deref())?;
 
     if old_kind == ConfigKind::OpenVikingService && args.url.is_some() {
         return Err(AgentError::bad_input(
@@ -453,6 +464,12 @@ async fn edit_saved_config(
     if args.user.is_some() {
         edited.user = args.user;
     }
+    if args.clear_actor_peer_id {
+        edited.actor_peer_id = None;
+    }
+    if args.actor_peer_id.is_some() {
+        edited.actor_peer_id = args.actor_peer_id;
+    }
     if !api_key_touched
         && !root_key_touched
         && existing_root_as_normal
@@ -483,6 +500,7 @@ fn build_custom_config(
     root_api_key: Option<String>,
     mut account: Option<String>,
     mut user: Option<String>,
+    actor_peer_id: Option<String>,
 ) -> AgentResult<Config> {
     if api_key.is_none() && root_api_key.is_none() && custom_requires_api_key(&url) {
         return Err(AgentError::bad_input(
@@ -501,6 +519,7 @@ fn build_custom_config(
         root_api_key,
         account,
         user,
+        actor_peer_id,
         ..Config::default()
     };
 
@@ -883,6 +902,21 @@ fn validate_optional_identity(account: Option<&str>, user: Option<&str>) -> Agen
     Ok(())
 }
 
+fn validate_optional_actor_peer_id(actor_peer_id: Option<&str>) -> AgentResult<()> {
+    let Some(actor_peer_id) = actor_peer_id else {
+        return Ok(());
+    };
+    if actor_peer_id.trim().is_empty() {
+        return Err(AgentError::bad_input("actor_peer_id cannot be empty."));
+    }
+    if actor_peer_id.contains('/') || actor_peer_id.contains('\\') {
+        return Err(AgentError::bad_input(
+            "actor_peer_id cannot contain path separators.",
+        ));
+    }
+    Ok(())
+}
+
 fn validation_error(kind: ConfigKind, error: Error) -> AgentError {
     match error {
         Error::Api { message, .. } => AgentError::auth(format!(
@@ -958,6 +992,8 @@ mod tests {
             clear_root_api_key: false,
             account: None,
             user: None,
+            actor_peer_id: None,
+            clear_actor_peer_id: false,
             activate: false,
             force: false,
         }
@@ -1033,8 +1069,8 @@ mod tests {
         assert!(name.starts_with("ov-service-"));
         validate_config_name(&name).expect("generated name should be valid");
 
-        let name =
-            config_name_or_generate(&store, None, ConfigKind::Custom).expect("name should generate");
+        let name = config_name_or_generate(&store, None, ConfigKind::Custom)
+            .expect("name should generate");
         assert!(name.starts_with("custom-"));
         validate_config_name(&name).expect("generated name should be valid");
     }
@@ -1117,6 +1153,7 @@ mod tests {
             Some("root-key".to_string()),
             Some("acme".to_string()),
             Some("alice".to_string()),
+            Some("peer-a".to_string()),
         )
         .expect("root-only custom config should build");
 
@@ -1124,6 +1161,18 @@ mod tests {
         assert_eq!(config.root_api_key.as_deref(), Some("root-key"));
         assert_eq!(config.account.as_deref(), Some("acme"));
         assert_eq!(config.user.as_deref(), Some("alice"));
+        assert_eq!(config.actor_peer_id.as_deref(), Some("peer-a"));
+    }
+
+    #[test]
+    fn actor_peer_id_validation_rejects_path_separators() {
+        validate_optional_actor_peer_id(Some("peer-a")).expect("plain peer id should validate");
+
+        let error = validate_optional_actor_peer_id(Some("peer/a"))
+            .expect_err("path-like actor peer id should fail");
+
+        assert_eq!(error.exit_code(), EXIT_BAD_INPUT);
+        assert!(error.message.contains("path separators"));
     }
 
     #[test]
@@ -1134,6 +1183,7 @@ mod tests {
             Some("root-key".to_string()),
             Some("acme".to_string()),
             Some("alice".to_string()),
+            None,
         )
         .expect("custom config with both keys should build");
 
@@ -1149,6 +1199,7 @@ mod tests {
             Some("root-key".to_string()),
             None,
             Some("alice".to_string()),
+            None,
         )
         .expect_err("root key without account should fail");
 
@@ -1188,6 +1239,7 @@ mod tests {
             Some("root-key".to_string()),
             Some("acme".to_string()),
             Some("alice".to_string()),
+            None,
         )
         .expect("add path should build root-as-normal config");
 

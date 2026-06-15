@@ -42,7 +42,7 @@ class MemoryPolicy:
     """Effective memory policy for one commit."""
 
     self_enabled: bool = True
-    peer_enabled: bool = False
+    peer_enabled: bool = True
     memory_types: Optional[set[str]] = None
 
     @classmethod
@@ -64,7 +64,7 @@ class MemoryPolicy:
             )
         return cls(
             self_enabled=_target_enabled(data.get("self"), default_enabled=True),
-            peer_enabled=_target_enabled(data.get("peer"), default_enabled=False),
+            peer_enabled=_target_enabled(data.get("peer"), default_enabled=True),
             memory_types=_parse_memory_types(data.get("memory_types")),
         )
 

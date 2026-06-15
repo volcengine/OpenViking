@@ -118,7 +118,7 @@ It is recommended to provide the API key through an environment variable instead
 export OPENVIKING_API_KEY="your-api-key-here"
 ```
 
-`apiKey` is sent as `X-API-Key`. `account` and `user` are trusted-mode identity headers sent as `X-OpenViking-Account` and `X-OpenViking-User`; leave them empty when using API-key mode with user/admin API keys. `peerId` is sent as request-level `peer_id` for memory recall/search and captured session messages; configure it explicitly when peer-scoped memory routing is needed.
+`apiKey` is sent as `X-API-Key`. `account` and `user` are trusted-mode identity headers sent as `X-OpenViking-Account` and `X-OpenViking-User`; leave them empty when using API-key mode with user/admin API keys. `peerId` is sent as `X-OpenViking-Actor-Peer` on data-plane memory/resource requests; captured session messages store it as body `peer_id`. Configure it explicitly when peer-scoped memory routing is needed.
 
 `OPENVIKING_API_KEY`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, and `OPENVIKING_PEER_ID` take precedence over the corresponding values in `openviking-config.json`.
 

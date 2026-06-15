@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
 from openviking.async_client import AsyncOpenViking
 from openviking.telemetry import TelemetryRequest
+from openviking.utils.search_filters import SearchContextTypeInput
 from openviking_cli.utils import run_async
 
 
@@ -22,8 +23,17 @@ class SyncOpenViking:
     Wraps AsyncOpenViking with synchronous methods.
     """
 
-    def __init__(self, path: Optional[str] = None):
-        self._async_client = AsyncOpenViking(path=path)
+    def __init__(
+        self,
+        path: Optional[str] = None,
+        actor_peer_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+    ):
+        self._async_client = AsyncOpenViking(
+            path=path,
+            actor_peer_id=actor_peer_id,
+            agent_id=agent_id,
+        )
         self._initialized = False
 
     def initialize(self) -> None:
@@ -230,12 +240,12 @@ class SyncOpenViking:
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        context_type: Optional[SearchContextTypeInput] = None,
         telemetry: TelemetryRequest = False,
         since: Optional[str] = None,
         until: Optional[str] = None,
         time_field: Optional[str] = None,
         level: Optional[List[int]] = None,
-        peer_id: Optional[str] = None,
     ):
         """Execute complex retrieval (intent analysis, hierarchical retrieval)."""
         return run_async(
@@ -247,12 +257,12 @@ class SyncOpenViking:
                 limit=limit,
                 score_threshold=score_threshold,
                 filter=filter,
+                context_type=context_type,
                 telemetry=telemetry,
                 since=since,
                 until=until,
                 time_field=time_field,
                 level=level,
-                peer_id=peer_id,
             )
         )
 
@@ -263,12 +273,12 @@ class SyncOpenViking:
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        context_type: Optional[SearchContextTypeInput] = None,
         telemetry: TelemetryRequest = False,
         since: Optional[str] = None,
         until: Optional[str] = None,
         time_field: Optional[str] = None,
         level: Optional[List[int]] = None,
-        peer_id: Optional[str] = None,
     ):
         """Quick retrieval"""
         return run_async(
@@ -278,12 +288,12 @@ class SyncOpenViking:
                 limit,
                 score_threshold,
                 filter,
+                context_type,
                 telemetry,
                 since,
                 until,
                 time_field,
                 level,
-                peer_id=peer_id,
             )
         )
 

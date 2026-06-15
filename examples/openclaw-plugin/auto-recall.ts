@@ -9,6 +9,12 @@ import {
 import { quickRecallPrecheck, withTimeout } from "./process-manager.js";
 import { sanitizeUserTextForCapture } from "./text-utils.js";
 import { estimateTextTokens } from "./token-estimator.js";
+import type {
+  RecallResourceType,
+  RecallTraceEntry,
+  RecallTraceResult,
+} from "./recall-trace.js";
+import { resolveRecallSearchPlan } from "./recall-trace.js";
 
 const RECALL_QUERY_MAX_CHARS = 4_000;
 export const AUTO_RECALL_SOURCE_MARKER = "Source: openviking-auto-recall";
@@ -239,6 +245,42 @@ export function buildOpenVikingContextBlock(params: {
   ].join("\n");
 }
 
+function newTraceId(): string {
+  return `auto_recall_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function preview(value: string | undefined | null, maxChars: number): string | undefined {
+  const normalized = typeof value === "string" ? value.trim().replace(/\s+/g, " ") : "";
+  if (!normalized) {
+    return undefined;
+  }
+  return normalized.length > maxChars ? normalized.slice(0, maxChars) : normalized;
+}
+
+function traceResourceTypeForUri(uri: string | undefined): RecallResourceType {
+  if (uri?.startsWith("viking://resources")) return "resource";
+  if (uri?.startsWith("viking://session/") || uri?.includes("/sessions/")) return "session";
+  return "user";
+}
+
+function toTraceResults(items: FindResultItem[], resourceType: RecallResourceType): RecallTraceResult[] {
+  return items.map((item) => ({
+    uri: item.uri,
+    resourceType,
+    category: item.category,
+    score: item.score,
+    level: item.level,
+    abstractPreview: preview(item.abstract ?? item.overview, 240),
+    resultType: resourceType === "resource" ? "resource" : "memory",
+  }));
+}
+
+function boundTraceQuery(query: string, maxChars: number): { query: string; queryTruncated?: boolean } {
+  return query.length <= maxChars
+    ? { query }
+    : { query: query.slice(0, maxChars), queryTruncated: true };
+}
+
 function runtimeFlag(runtimeContext: unknown, key: string): unknown {
   return runtimeContext && typeof runtimeContext === "object"
     ? (runtimeContext as Record<string, unknown>)[key]
@@ -352,18 +394,19 @@ export async function buildAgentExperienceRecallContext(params: {
   cfg: ParsedMemoryOpenVikingConfig;
   client: OpenVikingClient;
   agentId: string;
+  peerId?: string;
   queryText: string;
   trigger: ExperienceRecallTrigger;
   logger: Logger;
   verbose?: (message: string) => void;
 }): Promise<{ block?: string; count: number; estimatedTokens: number; skippedReason?: string }> {
-  const { cfg, client, agentId, queryText, trigger, logger, verbose } = params;
+  const { cfg, client, agentId, peerId, queryText, trigger, logger, verbose } = params;
   const expCfg = cfg.agentExperience;
   if (!expCfg.enabled) {
     return { count: 0, estimatedTokens: 0, skippedReason: "disabled" };
   }
 
-  const precheck = await quickRecallPrecheck(client, agentId);
+  const precheck = await quickRecallPrecheck(client);
   if (!precheck.ok) {
     verbose?.(`openviking: skipping agent experience recall because precheck failed (${precheck.reason})`);
     return { count: 0, estimatedTokens: 0, skippedReason: precheck.reason };
@@ -375,7 +418,8 @@ export async function buildAgentExperienceRecallContext(params: {
         targetUri: "viking://user/memories/experiences",
         limit: Math.max(expCfg.recallLimit * 4, 12),
         scoreThreshold: expCfg.scoreThreshold,
-      }, agentId);
+        actorPeerId: peerId,
+      });
 
       const candidates = (result.memories ?? [])
         .filter(isExperienceMemory)
@@ -390,7 +434,7 @@ export async function buildAgentExperienceRecallContext(params: {
       let chars = 0;
       for (const item of candidates) {
         const content = item.level === 2
-          ? await client.read(item.uri, agentId).catch(() => item.abstract ?? item.uri)
+          ? await client.read(item.uri, peerId).catch(() => item.abstract ?? item.uri)
           : item.abstract ?? item.overview ?? item.uri;
         const exp = renderExperience(item, content);
         if (!exp) continue;
@@ -426,13 +470,14 @@ export async function buildGatedAgentExperienceRecallContext(params: {
   cfg: ParsedMemoryOpenVikingConfig;
   client: OpenVikingClient;
   agentId: string;
+  peerId?: string;
   queryText: string;
   sessionKey?: string;
   runtimeContext?: unknown;
   logger: Logger;
   verbose?: (message: string) => void;
 }): Promise<{ block?: string; count: number; estimatedTokens: number; skippedReason?: string }> {
-  const { cfg, client, agentId, queryText, sessionKey, runtimeContext, logger, verbose } = params;
+  const { cfg, client, agentId, peerId, queryText, sessionKey, runtimeContext, logger, verbose } = params;
   if (!cfg.agentExperience.enabled) {
     return { count: 0, estimatedTokens: 0, skippedReason: "disabled" };
   }
@@ -456,6 +501,7 @@ export async function buildGatedAgentExperienceRecallContext(params: {
     cfg,
     client,
     agentId,
+    peerId,
     queryText,
     trigger: decision.trigger ?? "task_start",
     logger,
@@ -471,6 +517,12 @@ export async function buildLongTermMemoryRecallContext(params: {
   queryText: string;
   logger: Logger;
   verbose?: (message: string) => void;
+  traceRecorder?: { record(entry: RecallTraceEntry): void };
+  sessionId?: string;
+  sessionKey?: string;
+  ovSessionId?: string;
+  rawUserTextPreview?: string;
+  queryTruncated?: boolean;
 }): Promise<{ section?: string; memoryCount: number; estimatedTokens: number }> {
   const { cfg, client, agentId, peerId, queryText, logger, verbose } = params;
 
@@ -478,7 +530,7 @@ export async function buildLongTermMemoryRecallContext(params: {
     return { memoryCount: 0, estimatedTokens: 0 };
   }
 
-  const precheck = await quickRecallPrecheck(client, agentId);
+  const precheck = await quickRecallPrecheck(client);
   if (!precheck.ok) {
     verbose?.(`openviking: skipping auto-recall because precheck failed (${precheck.reason})`);
     return { memoryCount: 0, estimatedTokens: 0 };
@@ -487,32 +539,82 @@ export async function buildLongTermMemoryRecallContext(params: {
   return withTimeout(
     (async () => {
       const candidateLimit = Math.max(cfg.recallLimit * 4, 20);
-      const autoRecallPromises: Promise<FindResult>[] = [
-        client.find(queryText, {
-          targetUri: "viking://user/memories",
+      const searchPlan = resolveRecallSearchPlan(cfg.recallTargetTypes, {
+        ovSessionId: params.ovSessionId,
+        agentId,
+      });
+      const autoRecallPromises = searchPlan.searches.map(async (search) => {
+        const started = Date.now();
+        const result = await client.find(queryText, {
+          targetUri: search.targetUri,
           limit: candidateLimit,
           scoreThreshold: 0,
-          peerId,
-        }, agentId),
-      ];
-      if (cfg.recallResources) {
-        autoRecallPromises.push(
-          client.find(queryText, {
-            targetUri: "viking://resources",
-            limit: candidateLimit,
-            scoreThreshold: 0,
-            peerId,
-          }, agentId),
-        );
-      }
+          contextType: search.contextType,
+          actorPeerId: peerId,
+        });
+        return {
+          search,
+          result,
+          durationMs: Date.now() - started,
+        };
+      });
+      const traceSearches: RecallTraceEntry["searches"] = searchPlan.skipped.map((skipped) => ({
+        resourceType: skipped.resourceType,
+        limit: candidateLimit,
+        scoreThreshold: 0,
+        durationMs: 0,
+        total: 0,
+        results: [],
+        error: skipped.reason,
+      }));
       const autoRecallSettled = await Promise.allSettled(autoRecallPromises);
 
       const allMemories: FindResultItem[] = [];
-      for (const s of autoRecallSettled) {
+      for (let index = 0; index < autoRecallSettled.length; index += 1) {
+        const s = autoRecallSettled[index]!;
+        const search = searchPlan.searches[index]!;
         if (s.status === "fulfilled") {
-          allMemories.push(...(s.value.memories ?? []), ...(s.value.resources ?? []));
+          const result = s.value.result;
+          const memories = result.memories ?? [];
+          const resources = result.resources ?? [];
+          allMemories.push(...memories, ...resources);
+          traceSearches.push({
+            resourceType: s.value.search.resourceType,
+            contextType: s.value.search.contextType,
+            targetUriInput: s.value.search.targetUri,
+            targetUriResolved: s.value.search.targetUri,
+            limit: candidateLimit,
+            scoreThreshold: 0,
+            durationMs: s.value.durationMs,
+            total: result.total ?? memories.length + resources.length + (result.skills?.length ?? 0),
+            results: [
+              ...toTraceResults(memories, s.value.search.resourceType),
+              ...toTraceResults(resources, "resource"),
+              ...(result.skills ?? []).map((item): RecallTraceResult => ({
+                uri: item.uri,
+                resourceType: s.value.search.resourceType,
+                category: item.category,
+                score: item.score,
+                level: item.level,
+                abstractPreview: preview(item.abstract ?? item.overview, 240),
+                resultType: "skill",
+              })),
+            ].slice(0, cfg.traceRecallMaxResultsPerSearch),
+          });
         } else {
           logger.warn?.(`openviking: auto-recall search failed: ${String(s.reason)}`);
+          traceSearches.push({
+            resourceType: search.resourceType,
+            contextType: search.contextType,
+            targetUriInput: search.targetUri,
+            targetUriResolved: search.targetUri,
+            limit: candidateLimit,
+            scoreThreshold: 0,
+            durationMs: 0,
+            total: 0,
+            results: [],
+            error: String(s.reason),
+          });
         }
       }
 
@@ -525,14 +627,49 @@ export async function buildLongTermMemoryRecallContext(params: {
         scoreThreshold: cfg.recallScoreThreshold,
       });
       const memories = pickMemoriesForInjection(processed, cfg.recallLimit, queryText);
+      const recordTrace = (injectedMemories: FindResultItem[], injectedCount: number, estimatedTokens?: number) => {
+        params.traceRecorder?.record({
+          schemaVersion: "1.0",
+          traceId: newTraceId(),
+          ts: Date.now(),
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          ovSessionId: params.ovSessionId,
+          agentId,
+          source: "auto_recall",
+          operationType: "semantic_find",
+          resourceTypes: searchPlan.resourceTypes,
+          trigger: {
+            rawUserTextPreview: params.rawUserTextPreview,
+            ...boundTraceQuery(queryText, cfg.traceRecallQueryMaxChars),
+            queryTruncated: params.queryTruncated || queryText.length > cfg.traceRecallQueryMaxChars,
+          },
+          searches: traceSearches,
+          selected: injectedMemories.map((memory) => ({
+            uri: memory.uri,
+            resourceType: traceResourceTypeForUri(memory.uri),
+            category: memory.category,
+            score: memory.score,
+            abstractPreview: preview(memory.abstract ?? memory.overview, cfg.traceRecallPreviewChars),
+            injected: true,
+          })),
+          stats: {
+            candidateCount: allMemories.length,
+            selectedCount: injectedMemories.length,
+            injectedCount,
+            estimatedTokens,
+          },
+        });
+      };
 
       if (memories.length === 0) {
+        recordTrace([], 0, 0);
         return { memoryCount: 0, estimatedTokens: 0 };
       }
 
       const { lines: memoryLines, estimatedTokens } = await buildMemoryLinesWithBudget(
         memories,
-        (uri) => client.read(uri, agentId),
+        (uri) => client.read(uri, peerId),
         {
           recallPreferAbstract: cfg.recallPreferAbstract,
           recallMaxInjectedChars: cfg.recallMaxInjectedChars,
@@ -544,6 +681,7 @@ export async function buildLongTermMemoryRecallContext(params: {
         verbose?.(
           `openviking: skipping auto-recall injection; no complete memories fit maxInjectedChars=${cfg.recallMaxInjectedChars}`,
         );
+        recordTrace([], 0, 0);
         return { memoryCount: 0, estimatedTokens: 0 };
       }
 
@@ -555,6 +693,7 @@ export async function buildLongTermMemoryRecallContext(params: {
         `openviking: inject-detail ${toJsonLog({ count: memories.length, memories: summarizeInjectionMemories(memories) })}`,
       );
 
+      recordTrace(memories.slice(0, memoryLines.length), memoryLines.length, estimatedTokens);
       return { section, memoryCount: memoryLines.length, estimatedTokens };
     })(),
     cfg.autoRecallTimeoutMs,

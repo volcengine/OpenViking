@@ -37,6 +37,9 @@ def test_context_type_for_uri_uses_path_segments():
         context_type_for_uri("viking://user/support_bot/peers/web-visitor-alice/resources/faq.md")
         == "resource"
     )
+    assert context_type_for_uri("viking://agent/code-agent/memories/profile.md") == "memory"
+    assert context_type_for_uri("viking://agent/code-agent/resources/faq.md") == "resource"
+    assert context_type_for_uri("viking://agent/code-agent/skills/demo") == "skill"
     assert context_type_for_uri("viking://resources/memories-report.md") == "resource"
     assert context_type_for_uri("viking://user/alice/resources/skills-report.md") == "resource"
 

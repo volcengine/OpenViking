@@ -188,7 +188,7 @@ This tool wraps the MCP tool `search-web`. Call this when the user needs functio
 
 - **目标规则**：
   - Skills 始终是 user-scoped；`add_skill` 不接受 `to`、`parent` 或 `root_uri`。
-  - 不支持 peer-scoped skill 根；带 `peer_id` 的检索只额外加入 peer memories/resources，不加入 peer skills。
+  - 不支持 peer-scoped skill 根；actor peer 过滤只作用于 peer memories/resources，不作用于 peer skills。
   - 列出、读取、删除或搜索技能时，可以使用 `viking://user/skills/...` 作为当前用户短写。
 
 - **支持的数据格式**：

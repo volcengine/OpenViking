@@ -167,7 +167,7 @@ claude() {
 | `OPENVIKING_USER`                                | 多租户 user（`X-OpenViking-User` 头）                              |
 | `OPENVIKING_PEER_ID`                             | 可选的稳定 peer，用于自动召回和 session message 写入               |
 
-设置 `OPENVIKING_PEER_ID` 后，hook 会把它作为请求级 `peer_id` 发送。未显式配置 peer 时，subagent 捕获会回退到 Claude 的 `agent_id`，让不同 subagent 默认落到不同 peer memory。
+设置 `OPENVIKING_PEER_ID` 后，数据面的 recall/profile 请求会把它作为 `X-OpenViking-Actor-Peer` 发送；捕获到 session message 时仍写入 body `peer_id`。未显式配置 peer 时，subagent 捕获会回退到 Claude 的 `agent_id`，让不同 subagent 默认落到不同 peer memory。
 
 #### 召回调优
 
@@ -319,10 +319,10 @@ Claude Code 自带 `MEMORY.md` 文件系统，本插件**与之互补**：
 |----------|-----------------------------|-----------------------------------------------|
 | 存储     | 扁平 markdown               | 向量数据库 + 结构化抽取                        |
 | 搜索     | 整体加载进上下文            | 语义相似度 + 排序 + token 预算                |
-| 范围     | 单项目                      | 跨项目、跨会话、跨 agent                       |
+| 范围     | 单项目                      | 跨项目、跨会话、peer 维度                      |
 | 容量     | ~200 行（受上下文限制）     | 不受限（服务端存储）                           |
 | 抽取     | 手写规则                    | LLM 驱动的实体 / 偏好 / 事件抽取               |
-| 子 agent | 与父共享                    | 隔离 session + 类型化 agent namespace          |
+| 子 agent | 与父共享                    | 隔离 session + peer 维度捕获                   |
 
 ---
 

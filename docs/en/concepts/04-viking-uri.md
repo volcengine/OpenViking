@@ -26,7 +26,8 @@ Public API and CLI filesystem/content operations accept the public scopes
 `resources` and `user` (plus the root URI `viking://`). `session` is retained
 as a backward-compatible alias for user session paths; new session data lives
 under `viking://user/{user_id}/sessions`.
-`agent` is deprecated. `temp`, `queue`, and `upload` are internal implementation
+`agent` is deprecated but remains as a read-only compatibility entry for legacy
+agent data. `temp`, `queue`, and `upload` are internal implementation
 scopes and cannot be addressed directly through public API URI parameters.
 
 ## Initial Directory Structure
@@ -217,7 +218,9 @@ viking://
     └── history/
 ```
 
-`viking://agent/...` is deprecated and rejected by current namespace resolution.
+`viking://agent/...` is deprecated and only kept for read-only legacy agent
+compatibility. New data should be written under
+`viking://user/{user_id}/peers/{peer_id}/...`.
 
 ## URI Operations
 

@@ -178,7 +178,8 @@ def verify_isolation(url: str, api_key: str, account: str):
         )
         sc.initialize()
 
-        results = sc.find(query, limit=5, peer_id=search_agent)
+        target_uri = f"viking://user/{search_user}/peers/{search_agent}/memories"
+        results = sc.find(query, target_uri=target_uri, limit=5)
         found = False
         if hasattr(results, "memories") and results.memories:
             for m in results.memories:
@@ -333,7 +334,7 @@ def main():
         Panel(
             f"[bold green]测试完成![/bold green]\n\n"
             f"Trace IDs:\n{trace_info}\n\n"
-            "预期：当前登录 user 命中自己的记忆；peer 记忆由 peer_id 路由。",
+            "预期：当前登录 user 命中自己的记忆；peer 记忆由显式 peer memory URI 路由。",
             style="green",
             width=PANEL_WIDTH,
         )

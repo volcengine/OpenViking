@@ -62,7 +62,7 @@ try {
 // fetchJSON (verbose version — shows response details on error)
 // ---------------------------------------------------------------------------
 
-async function fetchJSON(path, init = {}) {
+async function fetchJSON(path, init = {}, options = {}) {
   const url = `${cfg.baseUrl}${path}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), cfg.timeoutMs);
@@ -71,6 +71,8 @@ async function fetchJSON(path, init = {}) {
     if (cfg.apiKey) headers["Authorization"] = `Bearer ${cfg.apiKey}`;
     if (cfg.accountId) headers["X-OpenViking-Account"] = cfg.accountId;
     if (cfg.userId) headers["X-OpenViking-User"] = cfg.userId;
+    const actorPeerId = options.actorPeerId ?? "";
+    if (actorPeerId) headers["X-OpenViking-Actor-Peer"] = actorPeerId;
     const res = await fetch(url, { ...init, headers, signal: controller.signal });
     const body = await res.json();
     if (!res.ok || body.status === "error") {
@@ -207,7 +209,11 @@ async function resolveScopeSpace(scope) {
 
   const reservedDirs = scope === "user" ? USER_RESERVED_DIRS : AGENT_RESERVED_DIRS;
   try {
-    const entries = await fetchJSON(`/api/v1/fs/ls?uri=${encodeURIComponent(`viking://${scope}`)}&output=original`);
+    const entries = await fetchJSON(
+      `/api/v1/fs/ls?uri=${encodeURIComponent(`viking://${scope}`)}&output=original`,
+      {},
+      { actorPeerId: cfg.peerId },
+    );
     if (Array.isArray(entries)) {
       const spaces = entries
         .filter(e => e?.isDir)
@@ -248,11 +254,10 @@ async function searchScope(queryText, targetUri, limit) {
   const resolvedUri = await resolveTargetUri(targetUri);
   dim(`  target: ${targetUri} -> ${resolvedUri}`);
   const body = { query: queryText, target_uri: resolvedUri, limit, score_threshold: 0 };
-  if (cfg.peerId) body.peer_id = cfg.peerId;
   const result = await fetchJSON("/api/v1/search/find", {
     method: "POST",
     body: JSON.stringify(body),
-  });
+  }, { actorPeerId: cfg.peerId });
   return result?.memories || [];
 }
 
@@ -273,7 +278,11 @@ async function searchUserScope(queryText, limit) {
 
 async function readMemoryContent(uri) {
   try {
-    const result = await fetchJSON(`/api/v1/content/read?uri=${encodeURIComponent(uri)}`);
+    const result = await fetchJSON(
+      `/api/v1/content/read?uri=${encodeURIComponent(uri)}`,
+      {},
+      { actorPeerId: cfg.peerId },
+    );
     if (result && typeof result === "string" && result.trim()) return result.trim();
   } catch (err) {
     warn(`  Failed to read content for ${uri}: ${err?.message || err}`);

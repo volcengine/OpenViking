@@ -1,4 +1,5 @@
 mod base_client;
+mod cli_arg_scan;
 mod client;
 mod commands;
 mod config;
@@ -18,7 +19,7 @@ mod theme;
 mod tui;
 mod utils;
 
-use clap::{ArgAction, Args, Parser, Subcommand};
+use clap::{ArgAction, Args, CommandFactory, Parser, Subcommand};
 use colored::Colorize;
 use config::Config;
 use error::{Error, Result};
@@ -49,6 +50,7 @@ impl CliContext {
         compact: bool,
         account: Option<String>,
         user: Option<String>,
+        actor_peer_id: Option<String>,
         sudo: bool,
         show_progress: Option<bool>,
         verbose: Option<bool>,
@@ -59,6 +61,10 @@ impl CliContext {
         }
         if user.is_some() {
             config.user = user;
+        }
+        if actor_peer_id.is_some() {
+            config.actor_peer_id = actor_peer_id;
+            config.agent_id = None;
         }
         Self {
             config,
@@ -92,6 +98,8 @@ impl CliContext {
             auth.api_key,
             auth.account,
             auth.user,
+            self.config.effective_actor_peer_id(),
+            self.config.agent_id.clone(),
             timeout_secs.unwrap_or(self.config.timeout),
             self.profile.unwrap_or(self.config.profile),
             self.config.extra_headers.clone(),
@@ -123,7 +131,10 @@ struct Cli {
         long,
         global = true,
         default_value = "true",
+        default_missing_value = "true",
         hide = true,
+        num_args = 0..=1,
+        require_equals = true,
         action = ArgAction::Set,
         value_name = "bool"
     )]
@@ -137,7 +148,11 @@ struct Cli {
     #[arg(long, global = true, hide = true)]
     user: Option<String>,
 
-    /// Use root API key for admin, system, and reindex commands
+    /// Peer actor scope to send as X-OpenViking-Actor-Peer
+    #[arg(long = "actor-peer-id", global = true, hide = true)]
+    actor_peer_id: Option<String>,
+
+    /// Use root API key for admin, system, reindex, and task status/list commands
     #[arg(long, global = true, hide = true)]
     sudo: bool,
 
@@ -551,9 +566,14 @@ enum Commands {
             help_heading = "Common options"
         )]
         level: Option<Vec<i32>>,
-        /// Limit memory retrieval to this peer plus the current user memory
-        #[arg(long = "peer-id", value_name = "id", help_heading = "Advanced options")]
-        peer_id: Option<String>,
+        /// Only include results with specific context type(s) (memory, resource, skill)
+        #[arg(
+            long = "context-type",
+            value_delimiter = ',',
+            value_name = "type",
+            help_heading = "Common options"
+        )]
+        context_type: Option<Vec<String>>,
     },
     /// [Experimental][Data] Run context-aware retrieval
     Search {
@@ -604,9 +624,14 @@ enum Commands {
             help_heading = "Advanced options"
         )]
         level: Option<Vec<i32>>,
-        /// Limit memory retrieval to this peer plus the current user memory
-        #[arg(long = "peer-id", value_name = "id", help_heading = "Advanced options")]
-        peer_id: Option<String>,
+        /// Only include results with specific context type(s) (memory, resource, skill)
+        #[arg(
+            long = "context-type",
+            value_delimiter = ',',
+            value_name = "type",
+            help_heading = "Advanced options"
+        )]
+        context_type: Option<Vec<String>>,
     },
     /// [Data] Run content pattern search
     Grep {
@@ -912,12 +937,16 @@ enum Commands {
 }
 
 impl Commands {
-    /// Returns true if this is an admin command that supports --sudo
-    fn is_admin_command(&self) -> bool {
-        matches!(
-            self,
-            Self::Admin { .. } | Self::System { .. } | Self::Reindex { .. }
-        )
+    /// Returns true if this command supports running with the root API key.
+    fn supports_sudo(&self) -> bool {
+        match self {
+            Self::Admin { .. } | Self::System { .. } | Self::Reindex { .. } => true,
+            Self::Task { action } => matches!(
+                action,
+                TaskCommands::Status { .. } | TaskCommands::List { .. }
+            ),
+            _ => false,
+        }
     }
 
     fn supports_upload_options(&self) -> bool {
@@ -1377,6 +1406,12 @@ enum AdminCommands {
         #[arg(value_name = "account-id")]
         account_id: String,
     },
+    /// Migrate legacy agent/session data to user-owned namespaces (ROOT only)
+    Migrate {
+        /// Remove legacy agent/session directories after migration is verified
+        #[arg(long)]
+        cleanup: bool,
+    },
     /// Register a new user in an account
     RegisterUser {
         /// Account ID
@@ -1511,6 +1546,9 @@ struct ConfigAddOvServiceArgs {
     /// User identifier to send as X-OpenViking-User
     #[arg(long, value_name = "user", help_heading = "Advanced options")]
     user: Option<String>,
+    /// Peer actor scope to send as X-OpenViking-Actor-Peer
+    #[arg(long = "actor-peer-id", hide = true)]
+    actor_peer_id: Option<String>,
     /// Make the saved config active after validation
     #[arg(long, help_heading = "Common options")]
     activate: bool,
@@ -1563,6 +1601,9 @@ struct ConfigAddCustomArgs {
     /// User identifier to send as X-OpenViking-User
     #[arg(long, value_name = "user", help_heading = "Advanced options")]
     user: Option<String>,
+    /// Peer actor scope to send as X-OpenViking-Actor-Peer
+    #[arg(long = "actor-peer-id", hide = true)]
+    actor_peer_id: Option<String>,
     /// Make the saved config active after validation
     #[arg(long, help_heading = "Common options")]
     activate: bool,
@@ -1632,6 +1673,20 @@ struct ConfigEditArgs {
     /// User identifier to send as X-OpenViking-User
     #[arg(long, value_name = "user", help_heading = "Advanced options")]
     user: Option<String>,
+    /// Peer actor scope to send as X-OpenViking-Actor-Peer
+    #[arg(
+        long = "actor-peer-id",
+        hide = true,
+        conflicts_with = "clear_actor_peer_id"
+    )]
+    actor_peer_id: Option<String>,
+    /// Remove the peer actor scope
+    #[arg(
+        long = "clear-actor-peer-id",
+        hide = true,
+        conflicts_with = "actor_peer_id"
+    )]
+    clear_actor_peer_id: bool,
     /// Make the saved config active after validation
     #[arg(long, help_heading = "Common options")]
     activate: bool,
@@ -1651,21 +1706,26 @@ struct ConfigDeleteArgs {
 }
 
 fn find_command_index(args: &[OsString]) -> Option<usize> {
+    let root_value_options = cli_root_value_options();
     let mut i = 1;
     while i < args.len() {
         let token = args[i].to_string_lossy();
-        match token.as_ref() {
-            "--output" | "-o" | "--compact" | "--account" | "--user" => {
-                i += 2;
-            }
-            "--sudo" | "--progress" | "--no-progress" | "--verbose" | "-v" => {
-                i += 1;
-            }
-            _ if token.starts_with('-') => {
-                i += 1;
-            }
-            _ => return Some(i),
+        let token_ref = token.as_ref();
+
+        if token_ref == "--compact" || token_ref == "-c" {
+            i += compact_option_width(args, i);
+            continue;
         }
+        if token_ref.starts_with('-') {
+            i += if root_value_options.consumes_value(token_ref) && !token_ref.contains('=') {
+                2
+            } else {
+                1
+            };
+            continue;
+        }
+
+        return Some(i);
     }
     None
 }
@@ -1728,12 +1788,14 @@ fn plain_help_misuse(args: &[OsString]) -> Option<PlainHelpMisuse> {
 }
 
 fn command_tokens_for_plain_help(args: &[OsString]) -> Vec<String> {
+    let value_options = cli_value_options();
+
     let mut tokens = Vec::new();
     let mut i = 1;
     while i < args.len() {
         let token = args[i].to_string_lossy();
         let token_ref = token.as_ref();
-        if consumes_plain_help_value(token_ref) {
+        if value_options.consumes_value(token_ref) {
             i += if token_ref.contains('=') { 1 } else { 2 };
             continue;
         }
@@ -1747,131 +1809,16 @@ fn command_tokens_for_plain_help(args: &[OsString]) -> Vec<String> {
     tokens
 }
 
-fn consumes_plain_help_value(token: &str) -> bool {
-    matches!(
-        token,
-        "-o" | "--output"
-            | "-c"
-            | "--compact"
-            | "--account"
-            | "--user"
-            | "-u"
-            | "--uri"
-            | "-x"
-            | "--exclude-uri"
-            | "--to"
-            | "--parent"
-            | "-p"
-            | "--parent-auto-create"
-            | "--reason"
-            | "--instruction"
-            | "--timeout"
-            | "--watch-interval"
-            | "--ignore-dirs"
-            | "--include"
-            | "--exclude"
-            | "--description"
-            | "-n"
-            | "--node-limit"
-            | "--limit"
-            | "-l"
-            | "--abs-limit"
-            | "-L"
-            | "--level"
-            | "--level-limit"
-            | "-t"
-            | "--threshold"
-            | "--after"
-            | "--before"
-            | "--peer-id"
-            | "-s"
-            | "--skill"
-            | "--session"
-            | "--session-id"
-            | "-m"
-            | "--sender"
-            | "--message"
-            | "--role"
-            | "--content"
-            | "--from-file"
-            | "--mode"
-            | "--stream"
-            | "--on-conflict"
-            | "--vector-mode"
-            | "--task-type"
-            | "--status"
-            | "--token-budget"
-            | "--interval"
-            | "--active"
-            | "--values-json"
-            | "--values-file"
-            | "--key"
-            | "--change-reason"
-            | "--labels-json"
-            | "--admin"
-            | "--name"
-            | "--new-name"
-            | "--url"
-            | "--api-key-env"
-            | "--root-api-key-env"
-            | "--output-file"
-            | "--format"
-    ) || token.starts_with("--output=")
-        || token.starts_with("--compact=")
-        || token.starts_with("--account=")
-        || token.starts_with("--user=")
-        || token.starts_with("--uri=")
-        || token.starts_with("--exclude-uri=")
-        || token.starts_with("--to=")
-        || token.starts_with("--parent=")
-        || token.starts_with("--parent-auto-create=")
-        || token.starts_with("--reason=")
-        || token.starts_with("--instruction=")
-        || token.starts_with("--timeout=")
-        || token.starts_with("--watch-interval=")
-        || token.starts_with("--ignore-dirs=")
-        || token.starts_with("--include=")
-        || token.starts_with("--exclude=")
-        || token.starts_with("--description=")
-        || token.starts_with("--node-limit=")
-        || token.starts_with("--limit=")
-        || token.starts_with("--abs-limit=")
-        || token.starts_with("--level=")
-        || token.starts_with("--level-limit=")
-        || token.starts_with("--threshold=")
-        || token.starts_with("--after=")
-        || token.starts_with("--before=")
-        || token.starts_with("--peer-id=")
-        || token.starts_with("--skill=")
-        || token.starts_with("--session=")
-        || token.starts_with("--session-id=")
-        || token.starts_with("--sender=")
-        || token.starts_with("--message=")
-        || token.starts_with("--role=")
-        || token.starts_with("--content=")
-        || token.starts_with("--from-file=")
-        || token.starts_with("--mode=")
-        || token.starts_with("--stream=")
-        || token.starts_with("--on-conflict=")
-        || token.starts_with("--vector-mode=")
-        || token.starts_with("--task-type=")
-        || token.starts_with("--status=")
-        || token.starts_with("--token-budget=")
-        || token.starts_with("--interval=")
-        || token.starts_with("--active=")
-        || token.starts_with("--values-json=")
-        || token.starts_with("--values-file=")
-        || token.starts_with("--key=")
-        || token.starts_with("--change-reason=")
-        || token.starts_with("--labels-json=")
-        || token.starts_with("--admin=")
-        || token.starts_with("--name=")
-        || token.starts_with("--new-name=")
-        || token.starts_with("--url=")
-        || token.starts_with("--api-key-env=")
-        || token.starts_with("--root-api-key-env=")
-        || token.starts_with("--output-file=")
-        || token.starts_with("--format=")
+fn cli_value_options() -> cli_arg_scan::ValueOptions {
+    let mut command = Cli::command();
+    command.build();
+    cli_arg_scan::ValueOptions::from_command(&command)
+}
+
+fn cli_root_value_options() -> cli_arg_scan::ValueOptions {
+    let mut command = Cli::command();
+    command.build();
+    cli_arg_scan::ValueOptions::from_command_arguments(&command)
 }
 
 fn canonical_plain_help_token(token: &str) -> &str {
@@ -1962,6 +1909,8 @@ fn is_config_agent_command_request(args: &[OsString]) -> bool {
 }
 
 fn command_tokens_for_config_gate(args: &[OsString]) -> Vec<String> {
+    let value_options = cli_value_options();
+    let root_value_options = cli_root_value_options();
     let mut tokens = Vec::new();
     let mut seen_command = false;
     let mut i = 1;
@@ -1981,18 +1930,11 @@ fn command_tokens_for_config_gate(args: &[OsString]) -> Vec<String> {
 
         if !seen_command {
             if token_ref == "--compact" || token_ref == "-c" {
-                i += if args
-                    .get(i + 1)
-                    .is_some_and(|value| is_bool_arg(&value.to_string_lossy()))
-                {
-                    2
-                } else {
-                    1
-                };
+                i += compact_option_width(args, i);
                 continue;
             }
             if token_ref.starts_with("--") {
-                i += if global_option_takes_value(token_ref) && !token_ref.contains('=') {
+                i += if root_value_options.consumes_value(token_ref) && !token_ref.contains('=') {
                     2
                 } else {
                     1
@@ -2000,7 +1942,7 @@ fn command_tokens_for_config_gate(args: &[OsString]) -> Vec<String> {
                 continue;
             }
             if token_ref.starts_with('-') {
-                i += if global_short_option_takes_value(token_ref) {
+                i += if root_value_options.consumes_value(token_ref) && !token_ref.contains('=') {
                     2
                 } else {
                     1
@@ -2014,17 +1956,10 @@ fn command_tokens_for_config_gate(args: &[OsString]) -> Vec<String> {
         }
 
         if token_ref == "--compact" || token_ref == "-c" {
-            i += if args
-                .get(i + 1)
-                .is_some_and(|value| is_bool_arg(&value.to_string_lossy()))
-            {
-                2
-            } else {
-                1
-            };
+            i += compact_option_width(args, i);
             continue;
         }
-        if consumes_plain_help_value(token_ref) {
+        if value_options.consumes_value(token_ref) {
             i += if token_ref.contains('=') { 1 } else { 2 };
             continue;
         }
@@ -2119,6 +2054,7 @@ fn is_admin_subcommand(token: &str) -> bool {
         "create-account"
             | "list-accounts"
             | "delete-account"
+            | "migrate"
             | "register-user"
             | "list-users"
             | "remove-user"
@@ -2239,6 +2175,43 @@ fn preprocess_privacy_upsert_key_flags(args: Vec<OsString>) -> Vec<OsString> {
     converted
 }
 
+fn preprocess_compact_args(args: Vec<OsString>) -> Vec<OsString> {
+    if args.is_empty() {
+        return args;
+    }
+
+    let mut converted = Vec::with_capacity(args.len());
+    converted.push(args[0].clone());
+    let mut i = 1;
+
+    while i < args.len() {
+        let token = args[i].to_string_lossy();
+        if token == "--compact" || token == "-c" {
+            if let Some(next) = args.get(i + 1) {
+                let next_value = next.to_string_lossy();
+                if is_bool_arg(&next_value) {
+                    converted.push(OsString::from(format!("--compact={next_value}")));
+                    i += 2;
+                    continue;
+                }
+            }
+            converted.push(OsString::from("--compact=true"));
+            i += 1;
+            continue;
+        }
+
+        converted.push(args[i].clone());
+        i += 1;
+    }
+
+    converted
+}
+
+fn preprocess_cli_args(args: Vec<OsString>) -> Vec<OsString> {
+    let args = preprocess_compact_args(args);
+    preprocess_privacy_args(args)
+}
+
 fn preprocess_privacy_args(args: Vec<OsString>) -> Vec<OsString> {
     let args = preprocess_privacy_get_shortcut(args);
     preprocess_privacy_upsert_key_flags(args)
@@ -2294,6 +2267,7 @@ fn is_language_command_request(args: &[OsString]) -> bool {
 }
 
 fn first_command_token(args: &[OsString]) -> Option<String> {
+    let root_value_options = cli_root_value_options();
     let mut index = 1usize;
 
     while index < args.len() {
@@ -2304,18 +2278,11 @@ fn first_command_token(args: &[OsString]) -> Option<String> {
                 .map(|value| value.to_string_lossy().to_string());
         }
         if token == "--compact" || token == "-c" {
-            index += if args
-                .get(index + 1)
-                .is_some_and(|value| is_bool_arg(&value.to_string_lossy()))
-            {
-                2
-            } else {
-                1
-            };
+            index += compact_option_width(args, index);
             continue;
         }
         if token.starts_with("--") {
-            index += if global_option_takes_value(&token) && !token.contains('=') {
+            index += if root_value_options.consumes_value(&token) && !token.contains('=') {
                 2
             } else {
                 1
@@ -2323,7 +2290,7 @@ fn first_command_token(args: &[OsString]) -> Option<String> {
             continue;
         }
         if token.starts_with('-') {
-            index += if global_short_option_takes_value(&token) {
+            index += if root_value_options.consumes_value(&token) && !token.contains('=') {
                 2
             } else {
                 1
@@ -2336,12 +2303,15 @@ fn first_command_token(args: &[OsString]) -> Option<String> {
     None
 }
 
-fn global_option_takes_value(option: &str) -> bool {
-    matches!(option, "--output" | "--account" | "--user")
-}
-
-fn global_short_option_takes_value(option: &str) -> bool {
-    matches!(option, "-o")
+fn compact_option_width(args: &[OsString], index: usize) -> usize {
+    if args
+        .get(index + 1)
+        .is_some_and(|value| is_bool_arg(&value.to_string_lossy()))
+    {
+        2
+    } else {
+        1
+    }
 }
 
 fn is_bool_arg(value: &str) -> bool {
@@ -2368,7 +2338,7 @@ fn language_command_can_run_picker(has_language_value: bool, is_interactive: boo
 
 #[tokio::main]
 async fn main() {
-    let args = preprocess_privacy_args(std::env::args_os().collect());
+    let args = preprocess_cli_args(std::env::args_os().collect());
     let command_display = error_ui::display_command(&args);
     match ensure_language_selected_before_command(&args).await {
         Ok(true) => {}
@@ -2442,25 +2412,27 @@ async fn main() {
     }
 
     // Check this before loading config so misplaced --sudo reports the command rule directly.
-    if cli.sudo && !cli.command.is_admin_command() {
+    if cli.sudo && !cli.command.supports_sudo() {
         let language = i18n::Language::current();
         let (title, message, actions) = match language {
             i18n::Language::En => (
                 "Command Error",
-                "--sudo is only supported for admin, system, and reindex commands.",
+                "--sudo is only supported for admin, system, reindex, task status, and task list commands.",
                 vec![
                     error_ui::ErrorAction::new("ov admin --help", "Show admin commands"),
                     error_ui::ErrorAction::new("ov system --help", "Show system commands"),
                     error_ui::ErrorAction::new("ov reindex --help", "Show reindex options"),
+                    error_ui::ErrorAction::new("ov task --help", "Show task commands"),
                 ],
             ),
             i18n::Language::ZhCn => (
                 "命令错误",
-                "--sudo 只支持 admin、system 和 reindex 命令。",
+                "--sudo 只支持 admin、system、reindex、task status 和 task list 命令。",
                 vec![
                     error_ui::ErrorAction::new("ov admin --help", "查看管理命令"),
                     error_ui::ErrorAction::new("ov system --help", "查看系统命令"),
                     error_ui::ErrorAction::new("ov reindex --help", "查看重建索引选项"),
+                    error_ui::ErrorAction::new("ov task --help", "查看任务命令"),
                 ],
             ),
         };
@@ -2507,6 +2479,7 @@ async fn main() {
         compact,
         cli.account.clone(),
         cli.user.clone(),
+        cli.actor_peer_id.clone(),
         cli.sudo,
         None,
         None,
@@ -2903,10 +2876,18 @@ async fn main() {
             after,
             before,
             level,
-            peer_id,
+            context_type,
         } => {
             handlers::handle_find(
-                query, uri, node_limit, threshold, after, before, level, peer_id, ctx,
+                query,
+                uri,
+                node_limit,
+                threshold,
+                after,
+                before,
+                level,
+                context_type,
+                ctx,
             )
             .await
         }
@@ -2919,10 +2900,19 @@ async fn main() {
             after,
             before,
             level,
-            peer_id,
+            context_type,
         } => {
             handlers::handle_search(
-                query, uri, session_id, node_limit, threshold, after, before, level, peer_id, ctx,
+                query,
+                uri,
+                session_id,
+                node_limit,
+                threshold,
+                after,
+                before,
+                level,
+                context_type,
+                ctx,
             )
             .await
         }
@@ -2966,14 +2956,14 @@ async fn main() {
 mod tests {
     use super::{
         Cli, CliContext, Commands, ConfigAddTarget, ConfigCommands, LanguageGateAction,
-        PrivacyCommands, SkillCommands, UploadCliOptions, first_command_token,
+        PrivacyCommands, SkillCommands, UploadCliOptions, find_command_index, first_command_token,
         is_language_command_request, language_command_can_run_picker, language_gate_action,
         language_required_message, legacy_upload_option_error, plain_help_misuse,
-        pre_parse_requires_cli_config_file, preprocess_privacy_args,
+        pre_parse_requires_cli_config_file, preprocess_cli_args, preprocess_privacy_args,
     };
     use crate::config::{Config, DEFAULT_CUSTOM_URL};
     use crate::output::OutputFormat;
-    use crate::{SystemBackendCommands, SystemCommands, handlers};
+    use crate::{AdminCommands, SystemBackendCommands, SystemCommands, handlers};
     use clap::{CommandFactory, Parser};
     use std::ffi::OsString;
 
@@ -2983,35 +2973,73 @@ mod tests {
 
     #[test]
     fn cli_parses_global_identity_override_flags() {
-        let cli = Cli::try_parse_from(["ov", "--account", "acme", "--user", "alice", "ls"])
-            .expect("cli should parse");
+        let cli = Cli::try_parse_from([
+            "ov",
+            "--account",
+            "acme",
+            "--user",
+            "alice",
+            "--actor-peer-id",
+            "peer-a",
+            "ls",
+        ])
+        .expect("cli should parse");
 
         assert_eq!(cli.account.as_deref(), Some("acme"));
         assert_eq!(cli.user.as_deref(), Some("alice"));
+        assert_eq!(cli.actor_peer_id.as_deref(), Some("peer-a"));
     }
 
     #[test]
-    fn cli_parses_find_peer_id() {
-        let cli = Cli::try_parse_from(["ov", "find", "invoice", "--peer-id", "web-visitor-alice"])
-            .expect("find peer id should parse");
+    fn cli_parses_find_context_type() {
+        let cli =
+            Cli::try_parse_from(["ov", "find", "invoice", "--context-type", "memory,resource"])
+                .expect("find context type should parse");
 
         match cli.command {
-            Commands::Find { peer_id, .. } => {
-                assert_eq!(peer_id.as_deref(), Some("web-visitor-alice"));
+            Commands::Find { context_type, .. } => {
+                assert_eq!(
+                    context_type,
+                    Some(vec!["memory".to_string(), "resource".to_string()])
+                );
             }
             _ => panic!("expected find command"),
         }
     }
 
     #[test]
-    fn cli_parses_search_peer_id() {
-        let cli =
-            Cli::try_parse_from(["ov", "search", "invoice", "--peer-id", "web-visitor-alice"])
-                .expect("search peer id should parse");
+    fn cli_parses_admin_migrate_cleanup_flag() {
+        let migrate = Cli::try_parse_from(["ov", "--sudo", "admin", "migrate"])
+            .expect("admin migrate should parse");
+        match migrate.command {
+            Commands::Admin { action } => match action {
+                AdminCommands::Migrate { cleanup } => assert!(!cleanup),
+                _ => panic!("expected admin migrate command"),
+            },
+            _ => panic!("expected admin command"),
+        }
+
+        let cleanup = Cli::try_parse_from(["ov", "--sudo", "admin", "migrate", "--cleanup"])
+            .expect("admin migrate cleanup should parse");
+
+        assert!(cleanup.sudo);
+        match cleanup.command {
+            Commands::Admin { action } => match action {
+                AdminCommands::Migrate { cleanup } => assert!(cleanup),
+                _ => panic!("expected admin migrate command"),
+            },
+            _ => panic!("expected admin command"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_search_context_type() {
+        let cli = Cli::try_parse_from(["ov", "search", "invoice", "--context-type", "skill"])
+            .expect("search context type should parse");
 
         match cli.command {
-            Commands::Search { peer_id, .. } => {
-                assert_eq!(peer_id.as_deref(), Some("web-visitor-alice"));
+            Commands::Search { context_type, .. } => {
+                assert_eq!(context_type, Some(vec!["skill".to_string()]));
             }
             _ => panic!("expected search command"),
         }
@@ -3124,6 +3152,8 @@ mod tests {
             "https://ov.example.com",
             "--api-key-env",
             "OV_KEY",
+            "--actor-peer-id",
+            "peer-a",
         ])
         .expect("custom add should parse");
         let Commands::Config {
@@ -3137,6 +3167,7 @@ mod tests {
         };
         assert_eq!(custom.url.as_deref(), Some("https://ov.example.com"));
         assert_eq!(custom.api_key_env.as_deref(), Some("OV_KEY"));
+        assert_eq!(custom.actor_peer_id.as_deref(), Some("peer-a"));
 
         let edit = Cli::try_parse_from([
             "ov",
@@ -3144,6 +3175,7 @@ mod tests {
             "edit",
             "prod",
             "--clear-api-key",
+            "--clear-actor-peer-id",
             "--activate",
         ])
         .expect("config edit should parse");
@@ -3155,6 +3187,7 @@ mod tests {
         };
         assert_eq!(edit.name, "prod");
         assert!(edit.clear_api_key);
+        assert!(edit.clear_actor_peer_id);
         assert!(edit.activate);
 
         assert!(
@@ -3273,6 +3306,7 @@ mod tests {
             &["ov", "admin", "create-account"],
             &["ov", "admin", "list-accounts"],
             &["ov", "admin", "delete-account"],
+            &["ov", "admin", "migrate"],
             &["ov", "admin", "register-user"],
             &["ov", "admin", "list-users"],
             &["ov", "admin", "remove-user"],
@@ -3696,6 +3730,31 @@ mod tests {
     }
 
     #[test]
+    fn sudo_supports_task_status_and_list_only() {
+        let status = Cli::try_parse_from(["ov", "--sudo", "task", "status", "task-123"])
+            .expect("sudo task status should parse");
+        assert!(status.sudo);
+        assert!(status.command.supports_sudo());
+
+        let list = Cli::try_parse_from([
+            "ov",
+            "--sudo",
+            "task",
+            "list",
+            "--task-type",
+            "legacy_migration",
+        ])
+        .expect("sudo task list should parse");
+        assert!(list.sudo);
+        assert!(list.command.supports_sudo());
+
+        let watch = Cli::try_parse_from(["ov", "--sudo", "task", "watch", "ls"])
+            .expect("sudo task watch should still parse before runtime validation");
+        assert!(watch.sudo);
+        assert!(!watch.command.supports_sudo());
+    }
+
+    #[test]
     fn cli_config_without_subcommand_parses_as_setup_entrypoint() {
         Cli::try_parse_from(["ov", "config"]).expect("bare config command should parse");
     }
@@ -3820,6 +3879,8 @@ mod tests {
                 "--output",
                 "json",
                 "--account=acme",
+                "--actor-peer-id",
+                "peer-a",
                 "--sudo",
                 "admin",
             ]))
@@ -3829,6 +3890,31 @@ mod tests {
         assert_eq!(
             first_command_token(&os_args(&["ov", "--help"])).as_deref(),
             None
+        );
+    }
+
+    #[test]
+    fn find_command_index_skips_root_value_options() {
+        assert_eq!(
+            find_command_index(&os_args(&[
+                "ov",
+                "--output",
+                "json",
+                "--account=acme",
+                "--actor-peer-id",
+                "peer-a",
+                "privacy",
+                "sample-policy",
+            ])),
+            Some(6)
+        );
+        assert_eq!(
+            find_command_index(&os_args(&["ov", "--compact", "privacy", "sample-policy"])),
+            Some(2)
+        );
+        assert_eq!(
+            find_command_index(&os_args(&["ov", "-c", "false", "privacy", "sample-policy"])),
+            Some(3)
         );
     }
 
@@ -3961,6 +4047,8 @@ mod tests {
             root_api_key: None,
             account: Some("from-config-account".to_string()),
             user: Some("from-config-user".to_string()),
+            actor_peer_id: Some("from-config-peer".to_string()),
+            agent_id: None,
             timeout: 60.0,
             output: "table".to_string(),
             echo_command: true,
@@ -3977,6 +4065,7 @@ mod tests {
             true,
             Some("from-cli-account".to_string()),
             Some("from-cli-user".to_string()),
+            Some("from-cli-peer".to_string()),
             false,
             None,
             None,
@@ -3985,6 +4074,46 @@ mod tests {
 
         assert_eq!(ctx.config.account.as_deref(), Some("from-cli-account"));
         assert_eq!(ctx.config.user.as_deref(), Some("from-cli-user"));
+        assert_eq!(ctx.config.actor_peer_id.as_deref(), Some("from-cli-peer"));
+        assert!(ctx.config.agent_id.is_none());
+    }
+
+    #[test]
+    fn cli_context_maps_legacy_agent_id_to_actor_peer_scope() {
+        let config = Config {
+            url: DEFAULT_CUSTOM_URL.to_string(),
+            api_key: Some("test-key".to_string()),
+            root_api_key: None,
+            account: None,
+            user: None,
+            actor_peer_id: None,
+            agent_id: Some("legacy-agent".to_string()),
+            timeout: 60.0,
+            output: "table".to_string(),
+            echo_command: true,
+            show_progress: false,
+            verbose: false,
+            upload: Default::default(),
+            extra_headers: None,
+            profile: false,
+        };
+
+        let ctx = CliContext::from_config(
+            config,
+            OutputFormat::Json,
+            true,
+            None,
+            None,
+            None,
+            false,
+            None,
+            None,
+            None,
+        );
+        let client = ctx.get_client();
+
+        assert_eq!(client.actor_peer_id(), Some("legacy-agent"));
+        assert_eq!(client.legacy_agent_id(), Some("legacy-agent"));
     }
 
     #[test]
@@ -3995,6 +4124,8 @@ mod tests {
             root_api_key: Some("root-key".to_string()),
             account: None,
             user: None,
+            actor_peer_id: Some("peer-a".to_string()),
+            agent_id: None,
             timeout: 60.0,
             output: "table".to_string(),
             echo_command: true,
@@ -4012,6 +4143,7 @@ mod tests {
             true,
             None,
             None,
+            None,
             false,
             None,
             None,
@@ -4019,12 +4151,14 @@ mod tests {
         );
         let client = ctx.get_client();
         assert_eq!(client.api_key(), Some("user-key"));
+        assert_eq!(client.actor_peer_id(), Some("peer-a"));
 
         // With sudo: use root_api_key
         let ctx = CliContext::from_config(
             config,
             OutputFormat::Json,
             true,
+            None,
             None,
             None,
             true,
@@ -4192,5 +4326,43 @@ mod tests {
             },
             _ => panic!("expected privacy command"),
         }
+    }
+
+    #[test]
+    fn cli_parses_privacy_shortcut_after_compact_without_value() {
+        let cli = Cli::try_parse_from(preprocess_cli_args(vec![
+            OsString::from("ov"),
+            OsString::from("--compact"),
+            OsString::from("privacy"),
+            OsString::from("skill"),
+            OsString::from("demo"),
+        ]))
+        .expect("--compact without a value should not consume the privacy command");
+
+        assert!(cli.compact);
+        match cli.command {
+            Commands::Privacy { action } => match action {
+                PrivacyCommands::Get {
+                    category,
+                    target_key,
+                } => {
+                    assert_eq!(category, "skill");
+                    assert_eq!(target_key, "demo");
+                }
+                _ => panic!("expected privacy get"),
+            },
+            _ => panic!("expected privacy command"),
+        }
+
+        let explicit_false = Cli::try_parse_from(preprocess_cli_args(vec![
+            OsString::from("ov"),
+            OsString::from("-c"),
+            OsString::from("false"),
+            OsString::from("privacy"),
+            OsString::from("skill"),
+            OsString::from("demo"),
+        ]))
+        .expect("-c false should keep its explicit bool value");
+        assert!(!explicit_false.compact);
     }
 }

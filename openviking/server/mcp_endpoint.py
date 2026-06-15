@@ -37,7 +37,7 @@ from openviking.parse.parsers.code.ast.code_tools import (
     search_symbols,
 )
 from openviking.parse.parsers.code.ast.extractor import get_extractor
-from openviking.server.auth import resolve_identity
+from openviking.server.auth import normalize_actor_peer_header, resolve_identity
 from openviking.server.dependencies import get_server_config, get_service
 from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import (
@@ -146,6 +146,9 @@ class _IdentityASGIMiddleware:
                 x_openviking_account=request.headers.get("x-openviking-account"),
                 x_openviking_user=request.headers.get("x-openviking-user"),
             )
+            actor_peer_id = normalize_actor_peer_header(
+                request.headers.get("x-openviking-actor-peer")
+            )
         except (UnauthenticatedError, PermissionDeniedError, InvalidArgumentError) as exc:
             status = (
                 401
@@ -176,6 +179,8 @@ class _IdentityASGIMiddleware:
                 identity.user_id or "default",
             ),
             role=identity.role,
+            actor_peer_id=actor_peer_id,
+            from_oauth=identity.from_oauth,
         )
         url_info = {
             "x_forwarded_proto": request.headers.get("x-forwarded-proto"),
@@ -211,7 +216,6 @@ async def find(
     limit: int = 10,
     min_score: float = 0.35,
     level: Optional[List[int]] = None,
-    peer_id: Optional[str] = None,
 ) -> str:
     """Fast semantic retrieval without session context. Returns ranked memories, resources, and skills with URI, abstract, and score."""
     service = get_service()
@@ -219,7 +223,6 @@ async def find(
         query=query,
         ctx=_get_ctx(),
         target_uri=target_uri,
-        peer_id=peer_id,
         limit=limit,
         score_threshold=min_score,
         level=level,
@@ -235,7 +238,6 @@ async def search(
     limit: int = 10,
     min_score: float = 0.35,
     level: Optional[List[int]] = None,
-    peer_id: Optional[str] = None,
 ) -> str:
     """Deep semantic retrieval with optional session context and intent analysis. Returns ranked memories, resources, and skills with URI, abstract, and score."""
     service = get_service()
@@ -248,7 +250,6 @@ async def search(
         query=query,
         ctx=ctx,
         target_uri=target_uri,
-        peer_id=peer_id,
         session=session,
         limit=limit,
         score_threshold=min_score,

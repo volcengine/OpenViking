@@ -141,7 +141,7 @@ If another context engine already owns the slot, setup will not replace it by de
 openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --force-slot --json
 ```
 
-If you want assistant messages to carry a prefixed `peer_id` (optional; most users keep the default `none`):
+If you want assistant messages to carry a prefixed `peer_id` and data-plane recall/search requests to use the matching actor peer view (optional; most users keep the default `none`):
 
 ```bash
 openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --peer-role assistant --peer-prefix <PREFIX> --json
@@ -205,8 +205,8 @@ Core fields:
 | `mode` | `remote` | Legacy compatibility field. Only remote mode is supported. |
 | `baseUrl` | `http://127.0.0.1:1933` | OpenViking HTTP endpoint |
 | `apiKey` | empty | OpenViking API key |
-| `peer_role` | `none` | Controls session `peer_id` writes and recall/search `peer_id`: `none`, `assistant`, or `person`. |
-| `peer_prefix` | empty | Optional prefix for assistant `peer_id` values when `peer_role=assistant`. |
+| `peer_role` | `none` | Peer identity mode: `none`, `assistant`, or `person`. Session messages use body `peer_id`; data-plane recall/search uses `X-OpenViking-Actor-Peer`. |
+| `peer_prefix` | empty | Optional prefix for assistant `peer_id` / actor peer values when `peer_role=assistant`. |
 | `accountId` | empty | Required when using a root API key |
 | `userId` | empty | Required when using a root API key |
 
@@ -273,7 +273,7 @@ Useful backup/source flags:
 | `--base-url URL` | OpenViking server URL (enables non-interactive mode) |
 | `--api-key KEY` | OpenViking API key |
 | `--peer-role ROLE` | Peer role: `none`, `assistant`, or `person` |
-| `--peer-prefix PREFIX` | Prefix for assistant `peer_id` values |
+| `--peer-prefix PREFIX` | Prefix for assistant `peer_id` / actor peer values |
 | `--update` | Update an existing helper-managed install |
 
 For user-facing installs, use `openclaw plugins install clawhub:@openviking/openclaw-plugin` first. Choose `ov-install` only as the backup path.
@@ -317,8 +317,8 @@ The plugin connects to an existing remote OpenViking server.
 | --- | --- | --- |
 | `baseUrl` | `http://127.0.0.1:1933` | Remote OpenViking HTTP endpoint |
 | `apiKey` | empty | Optional OpenViking API key |
-| `peer_role` | `none` | Controls session `peer_id` writes and recall/search `peer_id`: `none`, `assistant`, or `person` |
-| `peer_prefix` | empty | Optional prefix for assistant `peer_id` values when `peer_role=assistant` |
+| `peer_role` | `none` | Peer identity mode: `none`, `assistant`, or `person`; session messages use body `peer_id`, while data-plane recall/search uses `X-OpenViking-Actor-Peer` |
+| `peer_prefix` | empty | Optional prefix for assistant `peer_id` / actor peer values when `peer_role=assistant` |
 
 Common settings:
 

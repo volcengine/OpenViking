@@ -1,15 +1,24 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+from datetime import datetime, timezone
+
 import pytest
 
 from openviking.server.identity import RequestContext, Role
+from openviking.storage import viking_fs as viking_fs_module
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.session.user_id import UserIdentifier
 
 
 class _DummyAgfs:
     pass
+
+
+class _FixedDatetime(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return cls(2026, 6, 11, 1, 0, 0, tzinfo=timezone.utc)
 
 
 def _default_ctx() -> RequestContext:
@@ -490,15 +499,71 @@ async def test_tree_agent_non_dir_abstract_empty(monkeypatch, fs):
 
 
 @pytest.mark.asyncio
-async def test_tree_agent_modtime_formatted(monkeypatch, fs):
-    """PY-AGENT-003: modTime is formatted via format_simplified."""
+async def test_tree_agent_modtime_is_raw_utc_iso(monkeypatch, fs):
+    """PY-AGENT-003: modTime is returned as a raw UTC timestamp."""
     entries = [
         make_entry("/local/test_account/resources/a", "a", size=100, mode=0o644, is_dir=False)
     ]
     patch_tree_env(monkeypatch, fs, entries, batch_fetch=default_batch_fetch)
 
     result = await fs._tree_agent("viking://resources", abs_limit=256, ctx=_default_ctx())
-    assert result[0]["modTime"] == "2026-01-01"
+    assert result[0]["modTime"] == "2026-01-01T00:00:00.000Z"
+
+
+@pytest.mark.asyncio
+async def test_tree_agent_normalizes_modtime_to_utc(monkeypatch, fs):
+    entries = [
+        make_entry(
+            "/local/test_account/resources/a",
+            "a",
+            size=100,
+            mode=0o644,
+            mod_time="2026-06-11T00:30:17+08:00",
+            is_dir=False,
+        )
+    ]
+    patch_tree_env(monkeypatch, fs, entries, batch_fetch=default_batch_fetch)
+    monkeypatch.setattr(viking_fs_module, "datetime", _FixedDatetime)
+
+    result = await fs._tree_agent(
+        "viking://resources",
+        abs_limit=256,
+        ctx=_default_ctx(),
+    )
+
+    assert set(result[0].keys()) == {"uri", "size", "isDir", "modTime", "rel_path", "abstract"}
+    assert result[0]["modTime"] == "2026-06-10T16:30:17.000Z"
+
+
+@pytest.mark.asyncio
+async def test_ls_agent_modtime_is_raw_utc_iso(monkeypatch, fs):
+    async def fake_ls_entries(_path, **_kwargs):
+        return [
+            {
+                "name": "a.md",
+                "size": 100,
+                "mode": 0o644,
+                "modTime": "2026-06-11T00:30:17+08:00",
+                "isDir": False,
+            }
+        ]
+
+    monkeypatch.setattr(fs, "_uri_to_path", lambda _uri, **_kwargs: "/local/test_account/resources")
+    monkeypatch.setattr(fs, "_ls_entries", fake_ls_entries)
+    monkeypatch.setattr(fs, "_path_to_uri", _std_path_to_uri)
+    monkeypatch.setattr(fs, "_is_accessible", lambda _uri, _ctx: True)
+    monkeypatch.setattr(fs, "_batch_fetch_abstracts", default_batch_fetch)
+    monkeypatch.setattr(viking_fs_module, "datetime", _FixedDatetime)
+
+    result = await fs._ls_agent(
+        "viking://resources",
+        abs_limit=256,
+        show_all_hidden=False,
+        ctx=_default_ctx(),
+    )
+
+    assert set(result[0].keys()) == {"uri", "size", "isDir", "modTime", "abstract"}
+    assert result[0]["modTime"] == "2026-06-10T16:30:17.000Z"
 
 
 @pytest.mark.asyncio

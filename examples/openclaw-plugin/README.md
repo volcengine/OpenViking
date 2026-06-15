@@ -39,8 +39,9 @@ Once installed, the plugin provides these agent tools:
 | `memory_forget` | Delete memories by URI or query |
 | `ov_archive_search` | Search across archives by keyword |
 | `ov_archive_expand` | Expand an archive back to raw messages |
-| `add_resource` | Import documents, URLs, or Git repos |
-| `add_skill` | Import agent skills |
+| `ov_recall_trace` | Inspect why recall/search returned or injected specific results |
+| `add_resource` | Import documents, URLs, or Git repos when explicitly enabled |
+| `add_skill` | Import OpenViking skills |
 | `ov_search` | Search imported resources and skills |
 | `ov_read` | Read the full original content of one exact OpenViking URI |
 | `ov_multi_read` | Read the full original content of multiple OpenViking URIs |
@@ -49,12 +50,14 @@ Once installed, the plugin provides these agent tools:
 | `openviking_tool_result_search` | Search inside an externalized tool result by keyword |
 | `openviking_tool_result_list` | List externalized tool results in the current session |
 
+`add_resource` is hidden from agents by default (`enableAddResourceTool=false`), while manual `/add-resource` remains available. Configure `recallTargetTypes` to choose default recall targets (`user`, `agent`, `resource`); legacy `recallResources=true` appends `resource` only when `recallTargetTypes` is unset.
+
 ## Data Flow & Privacy
 
 - **What is sent**: User/assistant message text from each turn (after stripping injected memory blocks and metadata noise).
 - **Where it goes**: Your configured OpenViking server (`baseUrl`). The plugin only sends data to that server; downstream model/provider data handling (embedding, VLM) depends on the server's configuration.
 - **Storage**: All data lives on your OpenViking server under `viking://user/*` (including `viking://user/sessions/*`) and `viking://resources/*`.
-- **API Key**: Sent as `X-OpenViking-Key` header over your configured connection. Never logged or forwarded.
+- **API Key**: Sent as `X-API-Key` header over your configured connection. Never logged or forwarded.
 - **Multi-tenant isolation**: Supports `accountId` and `userId`. Optional `peer_role` / `peer_prefix` controls whether OpenClaw speakers are written as OpenViking `peer_id`.
 
 ## Verify
@@ -71,6 +74,7 @@ openclaw config get plugins.slots.contextEngine  # should output: openviking
 | [INSTALL.md](./INSTALL.md) | Full install, upgrade, and uninstall guide |
 | [INSTALL-ZH.md](./INSTALL-ZH.md) | Chinese install guide |
 | [INSTALL-AGENT.md](./INSTALL-AGENT.md) | Agent-oriented operator guide |
+| [docs/openviking-openclaw-plugin-guide.md](./docs/openviking-openclaw-plugin-guide.md) | Comprehensive Chinese guide for usage, configuration, debugging, testing, build, release, deployment, and rollback |
 
 > **Plugin vs Skill**: This page is for `@openviking/openclaw-plugin` (the context-engine plugin). Do **not** use `clawhub install openviking` — that installs a different AgentSkill.
 
@@ -119,7 +123,7 @@ The main rules are:
 - `peer_role=none` is the default and does not write `peer_id` on session messages
 - `peer_role=assistant` writes assistant messages with `peer_id=<sessionAgent>`; if `peer_prefix` is set, the value becomes `<peer_prefix>_<sessionAgent>`
 - `peer_role=person` writes user messages with `peer_id` derived from OpenClaw sender identity; assistant messages do not get `peer_id`
-- recall/search requests also send the same resolved `peer_id` when `peer_role` is `assistant` or `person`
+- data-plane recall/search/read/import/delete sends the same resolved peer identity as `X-OpenViking-Actor-Peer` when `peer_role` is `assistant` or `person`
 - when OpenClaw does not provide a session agent, use its default agent `main` for local session and assistant peer metadata
 - only add `X-OpenViking-Account` / `X-OpenViking-User` when `accountId` / `userId` are explicitly configured
 
@@ -138,9 +142,9 @@ In this setup:
 - new installs default to `peer_role=none`
 - `accountId` / `userId` are advanced options only when the deployment needs explicit identity headers, such as root-key or trusted-server flows
 
-### Canonical user namespace
+### User namespace
 
-The plugin writes and searches user-scoped memory. `viking://user/memories` is expanded to `viking://user/<user_id>/memories` using the identity resolved from the configured user key. `viking://agent/...` is deprecated by OpenViking and is not used by the plugin.
+The plugin writes and searches user-scoped memory through `viking://user/...`; OpenViking resolves that alias from the request tenant and actor-peer context. `viking://agent/...` is deprecated by OpenViking and is not used by the plugin.
 
 ## assemble Recall Flow
 
@@ -156,7 +160,7 @@ During recall, the plugin:
 1. Extracts query text from the latest user message.
 2. Resolves the agent routing for the current `sessionId/sessionKey`.
 3. Runs a quick availability precheck so model requests do not stall when OpenViking is unavailable.
-4. Queries `viking://user/memories` and optionally `viking://resources`.
+4. Queries the configured `recallTargetTypes` (`user,agent` by default; optionally `resource`; use `ov_archive_search` and `ov_archive_expand` for session history).
 5. Deduplicates, threshold-filters, reranks, and trims the results under a token budget.
 6. Prepends the selected memories as a `## Long-term Memories` section inside `<openviking-context>` to the current user message; it does not append a standalone synthetic user message.
 
@@ -233,8 +237,9 @@ Beyond automatic behavior, the plugin exposes these tools directly:
 - `memory_store`: write explicit long-term facts into an OpenViking session and trigger commit
 - `memory_forget`: delete by URI, or search first and remove a single strong match
 - `ov_archive_expand`: expand a concrete archive back into raw messages
-- `add_resource`: import a document, directory, URL, or Git repository as an OpenViking resource
-- `add_skill`: import or register an OpenViking agent skill
+- `ov_recall_trace`: inspect recent recall/search trace records when `traceRecall` is enabled
+- `add_resource`: import a document, directory, URL, or Git repository as an OpenViking resource when explicitly enabled
+- `add_skill`: import or register an OpenViking skill
 - `ov_search`: search OpenViking resources and skills, especially after importing them
 - `ov_read`: read one exact `viking://` URI returned by `ov_search` or `ov_list`
 - `ov_multi_read`: read multiple exact `viking://` URIs, useful for an overview plus sibling chunks

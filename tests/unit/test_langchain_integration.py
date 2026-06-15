@@ -83,19 +83,19 @@ def test_retriever_returns_langchain_documents():
     assert all(doc.page_content for doc in docs)
 
 
-def test_retriever_passes_peer_id_to_retrieval():
+def test_retriever_keeps_peer_id_out_of_retrieval():
     client = InMemoryOpenVikingClient(
         {"viking://user/memories/preferences.md": "The peer prefers azure deploys."}
     )
     retriever = OpenVikingRetriever(
         client=client,
         target_uri="viking://user/memories",
-        peer_id="peer-1",
+        actor_peer_id="peer-1",
     )
 
     retriever.invoke("azure")
 
-    assert client.find_calls[-1]["peer_id"] == "peer-1"
+    assert "peer_id" not in client.find_calls[-1]
 
 
 def test_create_openviking_tools_exposes_common_viking_primitives():
@@ -152,7 +152,7 @@ def test_create_openviking_tools_exposes_common_viking_primitives():
     assert "VikingDB is internal vector/index storage" in health
 
 
-def test_create_openviking_tools_passes_peer_id_without_exposing_tool_arg():
+def test_create_openviking_tools_uses_peer_id_only_for_message_attribution():
     client = InMemoryOpenVikingClient(
         {"viking://user/memories/profile.md": "The peer likes LangGraph agents."}
     )
@@ -171,8 +171,8 @@ def test_create_openviking_tools_passes_peer_id_without_exposing_tool_arg():
         }
     )
 
-    assert client.find_calls[-1]["peer_id"] == "peer-tools"
-    assert client.search_calls[-1]["peer_id"] == "peer-tools"
+    assert "peer_id" not in client.find_calls[-1]
+    assert "peer_id" not in client.search_calls[-1]
     assert any(
         messages and messages[0].get("peer_id") == "peer-tools"
         for messages in client.sessions.values()
@@ -432,8 +432,9 @@ def test_ensure_client_keeps_local_path_clients_direct(monkeypatch, tmp_path):
     created = {}
 
     class FakeLocalClient:
-        def __init__(self, path):
+        def __init__(self, path, actor_peer_id=None):
             created["path"] = path
+            created["actor_peer_id"] = actor_peer_id
             self._initialized = False
 
         def initialize(self):
@@ -448,6 +449,7 @@ def test_ensure_client_keeps_local_path_clients_direct(monkeypatch, tmp_path):
     assert isinstance(client, FakeLocalClient)
     assert client._initialized is True
     assert created["path"] == str(tmp_path)
+    assert created["actor_peer_id"] is None
 
 
 def test_openviking_client_retries_recoverable_read_with_fresh_client(monkeypatch):
@@ -741,19 +743,19 @@ def test_session_context_assembler_uses_archive_active_messages_and_recall():
     assert assembled.context_parts[0]["type"] == "context"
 
 
-def test_session_context_assembler_passes_peer_id_to_recall():
+def test_session_context_assembler_keeps_peer_id_out_of_recall():
     client = InMemoryOpenVikingClient(
         {"viking://user/memories/peer.md": "Peer memory mentions azure."}
     )
     assembler = OpenVikingSessionContextAssembler(
         client=client,
         target_uri="viking://user/memories",
-        peer_id="peer-assembler",
+        actor_peer_id="peer-assembler",
     )
 
     assembler.assemble(session_id="assembler-peer-session", query="azure")
 
-    assert client.search_calls[-1]["peer_id"] == "peer-assembler"
+    assert "peer_id" not in client.search_calls[-1]
 
 
 def test_with_openviking_context_wraps_runnable_with_history():
@@ -856,7 +858,7 @@ def test_with_openviking_context_dynamic_peer_uses_config_for_recall_and_history
 
     assert result.content == "peer ok"
     assert client.search_calls[-1]["session_id"] == "thread-peer-session"
-    assert client.search_calls[-1]["peer_id"] == "peer-dynamic"
+    assert "peer_id" not in client.search_calls[-1]
     assert [message.get("peer_id") for message in client.sessions["thread-peer-session"]] == [
         "peer-dynamic",
         "peer-dynamic",
@@ -1082,14 +1084,14 @@ def test_langgraph_store_round_trip_and_semantic_search():
     assert store.list_namespaces(prefix=("users",)) == [("users", "ada")]
 
 
-def test_langgraph_store_semantic_search_passes_peer_id():
+def test_langgraph_store_semantic_search_keeps_peer_id_out_of_retrieval():
     client = InMemoryOpenVikingClient()
-    store = OpenVikingStore(client=client, peer_id="peer-store")
+    store = OpenVikingStore(client=client, actor_peer_id="peer-store")
 
     store.put(("users",), "ada", {"color": "azure"})
     store.search(("users",), query="azure", limit=5)
 
-    assert client.find_calls[-1]["peer_id"] == "peer-store"
+    assert "peer_id" not in client.find_calls[-1]
 
 
 def test_langgraph_store_rejects_ttl_writes():
@@ -1298,7 +1300,7 @@ def test_langgraph_middleware_injects_recall_and_captures_messages():
     assert any(part["type"] == "context" for part in assistant_parts)
 
 
-def test_langgraph_middleware_passes_peer_id_to_recall_and_capture():
+def test_langgraph_middleware_uses_peer_id_only_for_message_capture():
     client = InMemoryOpenVikingClient(
         {"viking://user/memories/profile.md": "The middleware peer prefers azure."}
     )
@@ -1332,7 +1334,7 @@ def test_langgraph_middleware_passes_peer_id_to_recall_and_capture():
         runtime=None,
     )
 
-    assert client.search_calls[-1]["peer_id"] == "peer-middleware"
+    assert "peer_id" not in client.search_calls[-1]
     assert [message.get("peer_id") for message in client.sessions["middleware-peer-session"]] == [
         "peer-middleware",
         "peer-middleware",

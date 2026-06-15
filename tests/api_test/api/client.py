@@ -174,19 +174,19 @@ class OpenVikingAPIClient:
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
-        peer_id: Optional[str] = None,
+        context_type: Optional[str | list[str]] = None,
     ) -> requests.Response:
         endpoint = "/api/v1/search/find"
         url = self._build_url(self.server_url, endpoint)
         payload = {"query": query, "limit": limit}
         if target_uri:
             payload["target_uri"] = target_uri
-        if peer_id is not None:
-            payload["peer_id"] = peer_id
         if score_threshold is not None:
             payload["score_threshold"] = score_threshold
         if filter:
             payload["filter"] = filter
+        if context_type:
+            payload["context_type"] = context_type
         return self._request_with_retry("POST", url, json=payload)
 
     def search(
@@ -197,7 +197,7 @@ class OpenVikingAPIClient:
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
-        peer_id: Optional[str] = None,
+        context_type: Optional[str | list[str]] = None,
     ) -> requests.Response:
         endpoint = "/api/v1/search/search"
         url = self._build_url(self.server_url, endpoint)
@@ -206,12 +206,12 @@ class OpenVikingAPIClient:
             payload["target_uri"] = target_uri
         if session_id:
             payload["session_id"] = session_id
-        if peer_id is not None:
-            payload["peer_id"] = peer_id
         if score_threshold is not None:
             payload["score_threshold"] = score_threshold
         if filter:
             payload["filter"] = filter
+        if context_type:
+            payload["context_type"] = context_type
         return self._request_with_retry("POST", url, json=payload)
 
     def grep(

@@ -188,7 +188,7 @@ Skills are a special type of resource that define actions or tools agents can pe
 
 - **Targeting**:
   - Skills are always user-scoped. `add_skill` does not accept `to`, `parent`, or `root_uri`.
-  - Peer-scoped skill roots are not supported; peer-aware retrieval only adds peer memories/resources, not peer skills.
+  - Peer-scoped skill roots are not supported; actor peer filtering only applies to peer memories/resources, not peer skills.
   - Use `viking://user/skills/...` as current-user shorthand when listing, reading, deleting, or searching skills.
 
 - **Supported data formats**:

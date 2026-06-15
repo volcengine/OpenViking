@@ -197,7 +197,7 @@ describe("context-engine afterTurn()", () => {
     // user + assistant + toolResult(→user) = 3 calls (toolResult merges with no adjacent user)
     expect(client.addSessionMessage).toHaveBeenCalled();
     const lastCallIdx = client.addSessionMessage.mock.calls.length - 1;
-    const createdAt = client.addSessionMessage.mock.calls[lastCallIdx][4] as string;
+    const createdAt = client.addSessionMessage.mock.calls[lastCallIdx][3] as string;
     expect(createdAt).toBe("2026-04-01T10:03:00.000Z");
   });
 
@@ -235,7 +235,7 @@ describe("context-engine afterTurn()", () => {
     });
 
     expect(client.addSessionMessage).toHaveBeenCalledTimes(1);
-    expect(client.addSessionMessage.mock.calls[0][5]).toBeUndefined();
+    expect(client.addSessionMessage.mock.calls[0][4]).toBeUndefined();
   });
 
   it("passes sanitized senderId as peer_id when peer_role is person", async () => {
@@ -252,7 +252,7 @@ describe("context-engine afterTurn()", () => {
     });
 
     expect(client.addSessionMessage).toHaveBeenCalledTimes(1);
-    expect(client.addSessionMessage.mock.calls[0][5]).toBe("telegram_12345");
+    expect(client.addSessionMessage.mock.calls[0][4]).toBe("telegram_12345");
     expect(client.ensureSession).toHaveBeenCalledWith(
       "s1",
       {
@@ -261,7 +261,6 @@ describe("context-engine afterTurn()", () => {
           peer: { enabled: true },
         },
       },
-      "test-agent",
     );
   });
 
@@ -283,9 +282,9 @@ describe("context-engine afterTurn()", () => {
 
     expect(client.addSessionMessage).toHaveBeenCalledTimes(2);
     expect(client.addSessionMessage.mock.calls[0][1]).toBe("user");
-    expect(client.addSessionMessage.mock.calls[0][5]).toBeUndefined();
+    expect(client.addSessionMessage.mock.calls[0][4]).toBeUndefined();
     expect(client.addSessionMessage.mock.calls[1][1]).toBe("assistant");
-    expect(client.addSessionMessage.mock.calls[1][5]).toBe("test-agent");
+    expect(client.addSessionMessage.mock.calls[1][4]).toBe("test-agent");
   });
 
   it("sanitizes injected context blocks from user content", async () => {
@@ -485,7 +484,7 @@ describe("context-engine afterTurn()", () => {
     expect(assistantParts.map(p => p.text).join(" ")).toContain("export const x = 1");
   });
 
-  it("passes agentId to addSessionMessage", async () => {
+  it("does not pass agentId to addSessionMessage by default", async () => {
     const { engine, client } = makeEngine();
 
     await engine.afterTurn!({
@@ -496,8 +495,8 @@ describe("context-engine afterTurn()", () => {
     });
 
     expect(client.addSessionMessage).toHaveBeenCalledTimes(1);
-    const agentId = client.addSessionMessage.mock.calls[0][3] as string;
-    expect(agentId).toBe("test-agent");
+    expect(client.addSessionMessage.mock.calls[0][3]).toBeUndefined();
+    expect(client.addSessionMessage.mock.calls[0][4]).toBeUndefined();
   });
 
   it("checks pending tokens after addSessionMessage", async () => {

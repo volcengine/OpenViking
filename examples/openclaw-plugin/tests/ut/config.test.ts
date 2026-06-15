@@ -27,6 +27,19 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.peer_role).toBe("none");
     expect(cfg.peer_prefix).toBe("");
     expect(cfg.emitStandardDiagnostics).toBe(false);
+    expect(cfg.traceRecall).toBe(false);
+    expect(cfg.traceRecallPersist).toBe(false);
+    expect(cfg.traceRecallDir).toContain(".openclaw/openviking/recall-traces");
+    expect(cfg.traceRecallRetentionDays).toBe(14);
+    expect(cfg.traceRecallLoadRecentDays).toBe(2);
+    expect(cfg.traceRecallMaxEntries).toBe(1000);
+    expect(cfg.traceRecallMaxResultsPerSearch).toBe(20);
+    expect(cfg.traceRecallPreviewChars).toBe(240);
+    expect(cfg.traceRecallQueryMaxChars).toBe(4000);
+    expect(cfg.traceRecallQueryMaxDays).toBe(14);
+    expect(cfg.traceRecallIncludeContentByDefault).toBe(false);
+    expect(cfg.traceRecallIncludeRawUserPreview).toBe(false);
+    expect(cfg.recallTargetTypes).toEqual(["user", "agent"]);
     expect(cfg.enableAddResourceTool).toBe(false);
     expect(cfg.enabledTools).toContain("ov_search");
     expect(cfg.enabledTools).toContain("ov_read");
@@ -75,6 +88,36 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(() =>
       memoryOpenVikingConfigSchema.parse({ disabledTools: "nope" }),
     ).toThrow("unknown tool selectors");
+  });
+
+  it("parses and clamps recall trace settings", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({
+      traceRecall: true,
+      traceRecallPersist: true,
+      traceRecallDir: "~/custom-traces",
+      traceRecallRetentionDays: 0,
+      traceRecallLoadRecentDays: -1,
+      traceRecallMaxEntries: 2_000_000,
+      traceRecallMaxResultsPerSearch: 0,
+      traceRecallPreviewChars: 5,
+      traceRecallQueryMaxChars: 100,
+      traceRecallQueryMaxDays: 9999,
+      traceRecallIncludeContentByDefault: true,
+      traceRecallIncludeRawUserPreview: true,
+    });
+
+    expect(cfg.traceRecall).toBe(true);
+    expect(cfg.traceRecallPersist).toBe(true);
+    expect(cfg.traceRecallDir).toContain("custom-traces");
+    expect(cfg.traceRecallRetentionDays).toBe(1);
+    expect(cfg.traceRecallLoadRecentDays).toBe(0);
+    expect(cfg.traceRecallMaxEntries).toBe(1_000_000);
+    expect(cfg.traceRecallMaxResultsPerSearch).toBe(1);
+    expect(cfg.traceRecallPreviewChars).toBe(20);
+    expect(cfg.traceRecallQueryMaxChars).toBe(200);
+    expect(cfg.traceRecallQueryMaxDays).toBe(3650);
+    expect(cfg.traceRecallIncludeContentByDefault).toBe(true);
+    expect(cfg.traceRecallIncludeRawUserPreview).toBe(true);
   });
 
   it("defaults recallMaxInjectedChars to the 4000-character memory budget", () => {
@@ -320,5 +363,42 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg1.recallResources).toBe(false);
     const cfg2 = memoryOpenVikingConfigSchema.parse({ recallResources: 1 });
     expect(cfg2.recallResources).toBe(false);
+  });
+
+  it("normalizes recallTargetTypes from arrays and comma-separated strings", () => {
+    const fromArray = memoryOpenVikingConfigSchema.parse({
+      recallTargetTypes: [" user ", "agent", "user", ""],
+    });
+    expect(fromArray.recallTargetTypes).toEqual(["user", "agent"]);
+
+    const fromString = memoryOpenVikingConfigSchema.parse({
+      recallTargetTypes: "resource, user\nagent",
+    });
+    expect(fromString.recallTargetTypes).toEqual(["resource", "user", "agent"]);
+  });
+
+  it("rejects unknown recallTargetTypes instead of falling back to defaults", () => {
+    expect(() =>
+      memoryOpenVikingConfigSchema.parse({ recallTargetTypes: ["user", "project"] }),
+    ).toThrow("recallTargetTypes contains unknown resource types: project");
+  });
+
+  it("rejects session recallTargetTypes because session history is not a semantic recall target", () => {
+    expect(() =>
+      memoryOpenVikingConfigSchema.parse({ recallTargetTypes: ["session"] }),
+    ).toThrow("recallTargetTypes contains unknown resource types: session");
+  });
+
+  it("keeps deprecated recallResources as an additive compatibility switch when recallTargetTypes is unset", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ recallResources: true });
+    expect(cfg.recallTargetTypes).toEqual(["user", "agent", "resource"]);
+  });
+
+  it("does not let deprecated recallResources override explicit resource-only recallTargetTypes", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({
+      recallResources: true,
+      recallTargetTypes: ["resource"],
+    });
+    expect(cfg.recallTargetTypes).toEqual(["resource"]);
   });
 });

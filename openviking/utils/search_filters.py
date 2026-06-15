@@ -8,11 +8,91 @@ from datetime import datetime, time, timedelta, timezone
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from openviking.utils.time_utils import format_iso8601, parse_iso_datetime
+from openviking_cli.retrieve.types import ContextType
 
+_CONTEXT_TYPE_INPUT_ERROR = (
+    "context_type must be a ContextType, string, or list of ContextType/string values"
+)
 _DATE_ONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _RELATIVE_RE = re.compile(r"^(?P<value>\d+)(?P<unit>[smhdw])$")
 TimeField = Literal["updated_at", "created_at"]
 VALID_TIME_FIELDS = {"updated_at", "created_at"}
+SearchContextTypeValue = Union[ContextType, str]
+SearchContextTypeInput = Union[SearchContextTypeValue, List[SearchContextTypeValue]]
+
+
+def merge_search_filter(
+    existing_filter: Optional[Dict[str, Any]],
+    *,
+    context_type: Optional[SearchContextTypeInput] = None,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    time_field: Optional[TimeField] = None,
+    now: Optional[datetime] = None,
+) -> Optional[Dict[str, Any]]:
+    """Merge public search filter shortcuts into one metadata filter tree."""
+    merged = merge_context_type_filter(existing_filter, context_type)
+    return merge_time_filter(
+        merged,
+        since=since,
+        until=until,
+        time_field=time_field,
+        now=now,
+    )
+
+
+def merge_context_type_filter(
+    existing_filter: Optional[Dict[str, Any]],
+    context_type: Optional[SearchContextTypeInput] = None,
+) -> Optional[Dict[str, Any]]:
+    """Merge context type shortcut into an existing metadata filter tree."""
+    context_types = resolve_context_types(context_type)
+    if not context_types:
+        return existing_filter
+    context_filter = {"op": "must", "field": "context_type", "conds": context_types}
+    return _and_filters(existing_filter, context_filter)
+
+
+def resolve_context_types(context_type: Optional[SearchContextTypeInput]) -> List[str]:
+    """Resolve context_type parameter into normalized retrieval context types."""
+    if context_type is None:
+        return []
+
+    values: List[str] = []
+    if isinstance(context_type, ContextType):
+        values = [context_type.value]
+    elif isinstance(context_type, str):
+        values = context_type.split(",")
+    elif isinstance(context_type, list):
+        for item in context_type:
+            if isinstance(item, ContextType):
+                values.append(item.value)
+            elif isinstance(item, str):
+                values.extend(item.split(","))
+            else:
+                raise ValueError(_CONTEXT_TYPE_INPUT_ERROR)
+    else:
+        raise ValueError(_CONTEXT_TYPE_INPUT_ERROR)
+
+    normalized_values: List[str] = []
+    invalid_values: List[str] = []
+    for value in values:
+        normalized = value.strip().lower()
+        if not normalized:
+            continue
+        try:
+            resolved = ContextType(normalized).value
+        except ValueError:
+            invalid_values.append(value)
+            continue
+        if resolved not in normalized_values:
+            normalized_values.append(resolved)
+
+    if invalid_values:
+        valid_values = ", ".join(sorted(context_type.value for context_type in ContextType))
+        raise ValueError(f"context_type must be one or more of: {valid_values}")
+
+    return normalized_values
 
 
 def merge_time_filter(
@@ -41,7 +121,24 @@ def merge_time_filter(
         return time_filter
     # Preserve any caller-supplied metadata predicates by AND-ing the time range
     # into the existing filter tree instead of replacing it.
-    return {"op": "and", "conds": [existing_filter, time_filter]}
+    return _and_filters(existing_filter, time_filter)
+
+
+def _and_filters(
+    left: Optional[Dict[str, Any]],
+    right: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    if not left:
+        return right
+    if not right:
+        return left
+    conds: List[Dict[str, Any]] = []
+    for item in (left, right):
+        if item.get("op") == "and" and isinstance(item.get("conds"), list):
+            conds.extend(item["conds"])
+        else:
+            conds.append(item)
+    return {"op": "and", "conds": conds}
 
 
 def _resolve_levels(level: Optional[Union[int, str, List[int], List[str]]]) -> List[int]:

@@ -61,6 +61,7 @@ class TaskRecord:
         d["status"] = self.status.value
         d["created_at_iso"] = datetime.fromtimestamp(self.created_at, tz=timezone.utc).isoformat()
         d["updated_at_iso"] = datetime.fromtimestamp(self.updated_at, tz=timezone.utc).isoformat()
+        d["result"] = _sanitize_task_result(d.get("result"))
         d.pop("account_id", None)
         d.pop("user_id", None)
         return d
@@ -103,6 +104,7 @@ _SENSITIVE_PATTERNS = re.compile(
 )
 
 _MAX_ERROR_LEN = 500
+_SENSITIVE_RESULT_KEYS = {"user_key"}
 
 
 def _sanitize_error(error: str) -> str:
@@ -111,6 +113,19 @@ def _sanitize_error(error: str) -> str:
     if len(sanitized) > _MAX_ERROR_LEN:
         sanitized = sanitized[:_MAX_ERROR_LEN] + "...[truncated]"
     return sanitized
+
+
+def _sanitize_task_result(result: Any) -> Any:
+    """Remove sensitive fields from task results before exposing snapshots."""
+    if isinstance(result, dict):
+        return {
+            key: _sanitize_task_result(value)
+            for key, value in result.items()
+            if key not in _SENSITIVE_RESULT_KEYS
+        }
+    if isinstance(result, list):
+        return [_sanitize_task_result(item) for item in result]
+    return result
 
 
 # ── TaskTracker ──
@@ -342,6 +357,7 @@ class TaskTracker:
             task = await self._load_for_update(task_id, account_id, user_id)
             if task:
                 task.status = TaskStatus.COMPLETED
+                task.stage = "completed"
                 task.result = result
                 task.updated_at = time.time()
                 await self._store.update(task)
@@ -361,6 +377,7 @@ class TaskTracker:
             task = await self._load_for_update(task_id, account_id, user_id)
             if task:
                 task.status = TaskStatus.FAILED
+                task.stage = "failed"
                 task.error = _sanitize_error(error)
                 task.updated_at = time.time()
                 await self._store.update(task)
@@ -483,7 +500,9 @@ class TaskTracker:
     @staticmethod
     def _copy(task: TaskRecord) -> TaskRecord:
         """Return a defensive copy of a TaskRecord."""
-        return deepcopy(task)
+        copied = deepcopy(task)
+        copied.result = _sanitize_task_result(copied.result)
+        return copied
 
     def count(self) -> int:
         """Return total task count."""

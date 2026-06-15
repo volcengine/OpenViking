@@ -9,6 +9,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Union
 
 from openviking.telemetry import TelemetryRequest
+from openviking.utils.search_filters import SearchContextTypeInput
 
 
 class BaseClient(ABC):
@@ -168,8 +169,8 @@ class BaseClient(ABC):
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        context_type: Optional[SearchContextTypeInput] = None,
         telemetry: TelemetryRequest = False,
-        peer_id: Optional[str] = None,
     ) -> Any:
         """Semantic search without session context."""
         ...
@@ -183,8 +184,8 @@ class BaseClient(ABC):
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        context_type: Optional[SearchContextTypeInput] = None,
         telemetry: TelemetryRequest = False,
-        peer_id: Optional[str] = None,
     ) -> Any:
         """Semantic search with optional session context."""
         ...
