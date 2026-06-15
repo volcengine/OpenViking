@@ -409,6 +409,6 @@ export default {
     tags: ['openviking', 'memory', 'multi-tenant', 'agents'],
     languages: ['en', 'zh'],
     llmPath: LLM_PATH,
-    authors: [{ name: 'OpenViking Team', github: 'volcengine' }],
+    authors: [{ name: 'qin-ctx', github: 'qin-ctx' }],
   },
 };
