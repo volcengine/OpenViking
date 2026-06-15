@@ -526,9 +526,11 @@ class SkillProcessor:
         for aux_file in auxiliary_files:
             if base_path:
                 rel_path = aux_file.relative_to(base_path)
-                aux_uri = f"{skill_dir_uri}/{rel_path}"
+                rel_uri_path = rel_path.as_posix().replace("\\", "/")
+                aux_uri = f"{skill_dir_uri}/{rel_uri_path}"
             else:
-                aux_uri = f"{skill_dir_uri}/{aux_file.name}"
+                rel_uri_path = aux_file.name.replace("\\", "/")
+                aux_uri = f"{skill_dir_uri}/{rel_uri_path}"
 
             file_bytes = aux_file.read_bytes()
             try:
