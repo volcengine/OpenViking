@@ -196,7 +196,7 @@ bot 将连接到远程 OpenViking Server，使用前请先启动 OpenViking Serv
     - `memory_recall_events_limit`：可选。每轮召回的 `events/` 记忆条数。默认 `10`。
     - `memory_recall_entities_limit`：可选。每轮召回的 `entities/` 记忆条数。默认 `10`。
     - `memory_recall_preferences_limit`：可选。每轮召回的 `preferences/` 记忆条数。默认 `3`。
-    - `memory_recall_max_chars`：可选。注入到上下文的 user/peer 记忆全文字符预算。默认 `6500`。
+    - `memory_recall_max_chars`：可选。注入到上下文的 user/peer 记忆全文字符预算。默认 `4000`。
     - `exp_recall_limit`：可选。召回时每个任务检索的经验条数。默认 `5`。
     - `exp_recall_max_chars`：可选。注入到上下文的格式化经验块的字符预算。默认 `2000`。
 - `channels`：消息平台配置，详见 [消息平台配置](bot/docs/CHANNEL.md)

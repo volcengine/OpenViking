@@ -277,9 +277,6 @@ class MemoryStore:
         grouped_memories: dict[str, list[str]] = {}
         total_chars = 0
         type_chars = {memory_type: 0 for memory_type in _TYPE_QUOTA_MEMORY_TYPES}
-        type_budget_exhausted = {
-            memory_type: False for memory_type in _TYPE_QUOTA_MEMORY_TYPES
-        }
         preference_full_count = 0
         seen_content_hashes = set()
         full_limit = len(filtered_memories) if full_limit is None else max(0, full_limit)
@@ -294,7 +291,6 @@ class MemoryStore:
             if use_type_budgets:
                 should_try_full = (
                     memory_type in type_char_budgets
-                    and not type_budget_exhausted.get(memory_type, False)
                 ) or (
                     memory_type == "preferences"
                     and preference_full_count < max(0, preference_full_limit)
@@ -322,15 +318,20 @@ class MemoryStore:
 
                 if use_type_budgets and memory_type in type_char_budgets:
                     budget = max(0, int(type_char_budgets[memory_type]))
-                    if type_chars[memory_type] + full_chars <= budget:
+                    if (
+                        type_chars[memory_type] + full_chars <= budget
+                        and total_chars + full_chars <= max_chars
+                    ):
                         grouped_memories.setdefault(memory_type, []).append(full_memory_str)
                         type_chars[memory_type] += full_chars
+                        total_chars += full_chars
                         continue
-                    type_budget_exhausted[memory_type] = True
                 elif use_type_budgets and memory_type == "preferences":
-                    grouped_memories.setdefault(memory_type, []).append(full_memory_str)
                     preference_full_count += 1
-                    continue
+                    if total_chars + full_chars <= max_chars:
+                        grouped_memories.setdefault(memory_type, []).append(full_memory_str)
+                        total_chars += full_chars
+                        continue
                 elif total_chars + full_chars <= max_chars:
                     grouped_memories.setdefault(memory_type, []).append(full_memory_str)
                     total_chars += full_chars
@@ -462,6 +463,8 @@ class MemoryStore:
                 for memory in result
                 if not self._get_uri(memory).rstrip("/").endswith("/profile.md")
             ]
+            if not result:
+                return ""
             if not use_type_quota:
                 result = self._limit_memories(result, limit=_LEGACY_MEMORY_RECALL_LIMIT)
 

@@ -194,7 +194,7 @@ All configurations are under the `bot` field in `ov.conf`, with default values f
     - `memory_recall_events_limit`: Optional. Number of `events/` memories retrieved per turn. Defaults to `10`.
     - `memory_recall_entities_limit`: Optional. Number of `entities/` memories retrieved per turn. Defaults to `10`.
     - `memory_recall_preferences_limit`: Optional. Number of `preferences/` memories retrieved per turn. Defaults to `3`.
-    - `memory_recall_max_chars`: Optional. Character budget for injected user/peer full memories. Defaults to `6500`.
+    - `memory_recall_max_chars`: Optional. Character budget for injected user/peer full memories. Defaults to `4000`.
     - `exp_recall_limit`: Optional. Number of experiences to retrieve per task during recall. Defaults to `5`.
     - `exp_recall_max_chars`: Optional. Character budget for the formatted experience block injected into context. Defaults to `2000`.
 - `channels`: Message platform configuration, see [Message Platform Configuration](bot/docs/CHANNEL.md) for details
