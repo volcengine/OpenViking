@@ -436,9 +436,10 @@ class VikingClient:
         query: str,
         target_uri: Optional[str] = None,
         peer_id: Optional[str] = None,
+        limit: int = 10,
     ):
         """搜索资源"""
-        kwargs: Dict[str, Any] = {}
+        kwargs: Dict[str, Any] = {"limit": limit}
         if peer_id is not None:
             kwargs["peer_id"] = peer_id
         if target_uri:

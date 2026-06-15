@@ -6,12 +6,15 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 
-config_module = types.ModuleType("vikingbot.config")
-loader_module = types.ModuleType("vikingbot.config.loader")
-loader_module.load_config = lambda: None
-config_module.load_config = loader_module.load_config
-sys.modules.setdefault("vikingbot.config", config_module)
-sys.modules.setdefault("vikingbot.config.loader", loader_module)
+try:
+    import vikingbot.config.loader  # noqa: F401
+except Exception:
+    config_module = types.ModuleType("vikingbot.config")
+    loader_module = types.ModuleType("vikingbot.config.loader")
+    loader_module.load_config = lambda: None
+    config_module.load_config = loader_module.load_config
+    sys.modules.setdefault("vikingbot.config", config_module)
+    sys.modules.setdefault("vikingbot.config.loader", loader_module)
 
 from vikingbot.openviking_mount.ov_server import VikingClient  # noqa: E402
 

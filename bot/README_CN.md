@@ -192,6 +192,11 @@ bot 将连接到远程 OpenViking Server，使用前请先启动 OpenViking Serv
       旧配置如果把 root key 填在 `api_key`，需要补充 `api_key_type: "root"`，或迁移到 `root_api_key`；否则 `api_key` 会按 User key 解释。
     - `exp_write_tools`：可选，触发经验记忆注入的工具名列表（自演化 agent memory 循环，详见 #2007）。默认 `["write_file", "edit_file"]`。该配置只控制 bot 侧注入触发时机；已存储 experience 的生成由 OpenViking 记忆抽取和当前 session 的 `memory_policy.memory_types` 白名单控制。
     - `recall_exp_first_round_only`：可选。为 `true` 时，`ContextBuilder._build_user_memory` 跳过每轮 user/agent 经验召回，仅在首个 user turn 注入一次经验。默认 `false`。
+    - 每轮 user/peer 记忆召回默认使用 type-quota 检索。`profile.md` 仍由 profile 链路单独注入，不占自动检索候选位。
+    - `memory_recall_events_limit`：可选。每轮召回的 `events/` 记忆条数。默认 `10`。
+    - `memory_recall_entities_limit`：可选。每轮召回的 `entities/` 记忆条数。默认 `10`。
+    - `memory_recall_preferences_limit`：可选。每轮召回的 `preferences/` 记忆条数。默认 `3`。
+    - `memory_recall_max_chars`：可选。注入到上下文的 user/peer 记忆全文字符预算。默认 `4000`。
     - `exp_recall_limit`：可选。召回时每个任务检索的经验条数。默认 `5`。
     - `exp_recall_max_chars`：可选。注入到上下文的格式化经验块的字符预算。默认 `2000`。
 - `channels`：消息平台配置，详见 [消息平台配置](bot/docs/CHANNEL.md)
