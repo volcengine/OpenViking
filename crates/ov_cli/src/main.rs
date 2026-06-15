@@ -1,4 +1,5 @@
 mod base_client;
+mod cli_arg_scan;
 mod client;
 mod commands;
 mod config;
@@ -18,7 +19,7 @@ mod theme;
 mod tui;
 mod utils;
 
-use clap::{ArgAction, Args, Parser, Subcommand};
+use clap::{ArgAction, Args, CommandFactory, Parser, Subcommand};
 use colored::Colorize;
 use config::Config;
 use error::{Error, Result};
@@ -1764,12 +1765,14 @@ fn plain_help_misuse(args: &[OsString]) -> Option<PlainHelpMisuse> {
 }
 
 fn command_tokens_for_plain_help(args: &[OsString]) -> Vec<String> {
+    let value_options = cli_value_options();
+
     let mut tokens = Vec::new();
     let mut i = 1;
     while i < args.len() {
         let token = args[i].to_string_lossy();
         let token_ref = token.as_ref();
-        if consumes_plain_help_value(token_ref) {
+        if value_options.consumes_value(token_ref) {
             i += if token_ref.contains('=') { 1 } else { 2 };
             continue;
         }
@@ -1783,135 +1786,16 @@ fn command_tokens_for_plain_help(args: &[OsString]) -> Vec<String> {
     tokens
 }
 
-fn consumes_plain_help_value(token: &str) -> bool {
-    matches!(
-        token,
-        "-o" | "--output"
-            | "-c"
-            | "--compact"
-            | "--account"
-            | "--user"
-            | "--actor-peer-id"
-            | "-u"
-            | "--uri"
-            | "-x"
-            | "--exclude-uri"
-            | "--to"
-            | "--parent"
-            | "-p"
-            | "--parent-auto-create"
-            | "--reason"
-            | "--instruction"
-            | "--timeout"
-            | "--watch-interval"
-            | "--ignore-dirs"
-            | "--include"
-            | "--exclude"
-            | "--description"
-            | "-n"
-            | "--node-limit"
-            | "--limit"
-            | "-l"
-            | "--abs-limit"
-            | "-L"
-            | "--level"
-            | "--level-limit"
-            | "-t"
-            | "--threshold"
-            | "--after"
-            | "--before"
-            | "--context-type"
-            | "--peer-id"
-            | "-s"
-            | "--skill"
-            | "--session"
-            | "--session-id"
-            | "-m"
-            | "--sender"
-            | "--message"
-            | "--role"
-            | "--content"
-            | "--from-file"
-            | "--mode"
-            | "--stream"
-            | "--on-conflict"
-            | "--vector-mode"
-            | "--task-type"
-            | "--status"
-            | "--token-budget"
-            | "--interval"
-            | "--active"
-            | "--values-json"
-            | "--values-file"
-            | "--key"
-            | "--change-reason"
-            | "--labels-json"
-            | "--admin"
-            | "--name"
-            | "--new-name"
-            | "--url"
-            | "--api-key-env"
-            | "--root-api-key-env"
-            | "--output-file"
-            | "--format"
-    ) || token.starts_with("--output=")
-        || token.starts_with("--compact=")
-        || token.starts_with("--account=")
-        || token.starts_with("--user=")
-        || token.starts_with("--actor-peer-id=")
-        || token.starts_with("--uri=")
-        || token.starts_with("--exclude-uri=")
-        || token.starts_with("--to=")
-        || token.starts_with("--parent=")
-        || token.starts_with("--parent-auto-create=")
-        || token.starts_with("--reason=")
-        || token.starts_with("--instruction=")
-        || token.starts_with("--timeout=")
-        || token.starts_with("--watch-interval=")
-        || token.starts_with("--ignore-dirs=")
-        || token.starts_with("--include=")
-        || token.starts_with("--exclude=")
-        || token.starts_with("--description=")
-        || token.starts_with("--node-limit=")
-        || token.starts_with("--limit=")
-        || token.starts_with("--abs-limit=")
-        || token.starts_with("--level=")
-        || token.starts_with("--level-limit=")
-        || token.starts_with("--threshold=")
-        || token.starts_with("--after=")
-        || token.starts_with("--before=")
-        || token.starts_with("--context-type=")
-        || token.starts_with("--peer-id=")
-        || token.starts_with("--skill=")
-        || token.starts_with("--session=")
-        || token.starts_with("--session-id=")
-        || token.starts_with("--sender=")
-        || token.starts_with("--message=")
-        || token.starts_with("--role=")
-        || token.starts_with("--content=")
-        || token.starts_with("--from-file=")
-        || token.starts_with("--mode=")
-        || token.starts_with("--stream=")
-        || token.starts_with("--on-conflict=")
-        || token.starts_with("--vector-mode=")
-        || token.starts_with("--task-type=")
-        || token.starts_with("--status=")
-        || token.starts_with("--token-budget=")
-        || token.starts_with("--interval=")
-        || token.starts_with("--active=")
-        || token.starts_with("--values-json=")
-        || token.starts_with("--values-file=")
-        || token.starts_with("--key=")
-        || token.starts_with("--change-reason=")
-        || token.starts_with("--labels-json=")
-        || token.starts_with("--admin=")
-        || token.starts_with("--name=")
-        || token.starts_with("--new-name=")
-        || token.starts_with("--url=")
-        || token.starts_with("--api-key-env=")
-        || token.starts_with("--root-api-key-env=")
-        || token.starts_with("--output-file=")
-        || token.starts_with("--format=")
+fn cli_value_options() -> cli_arg_scan::ValueOptions {
+    let mut command = Cli::command();
+    command.build();
+    cli_arg_scan::ValueOptions::from_command(&command)
+}
+
+fn cli_root_value_options() -> cli_arg_scan::ValueOptions {
+    let mut command = Cli::command();
+    command.build();
+    cli_arg_scan::ValueOptions::from_command_arguments(&command)
 }
 
 fn canonical_plain_help_token(token: &str) -> &str {
@@ -2002,6 +1886,8 @@ fn is_config_agent_command_request(args: &[OsString]) -> bool {
 }
 
 fn command_tokens_for_config_gate(args: &[OsString]) -> Vec<String> {
+    let value_options = cli_value_options();
+    let root_value_options = cli_root_value_options();
     let mut tokens = Vec::new();
     let mut seen_command = false;
     let mut i = 1;
@@ -2032,7 +1918,7 @@ fn command_tokens_for_config_gate(args: &[OsString]) -> Vec<String> {
                 continue;
             }
             if token_ref.starts_with("--") {
-                i += if global_option_takes_value(token_ref) && !token_ref.contains('=') {
+                i += if root_value_options.consumes_value(token_ref) && !token_ref.contains('=') {
                     2
                 } else {
                     1
@@ -2040,7 +1926,7 @@ fn command_tokens_for_config_gate(args: &[OsString]) -> Vec<String> {
                 continue;
             }
             if token_ref.starts_with('-') {
-                i += if global_short_option_takes_value(token_ref) {
+                i += if root_value_options.consumes_value(token_ref) && !token_ref.contains('=') {
                     2
                 } else {
                     1
@@ -2064,7 +1950,7 @@ fn command_tokens_for_config_gate(args: &[OsString]) -> Vec<String> {
             };
             continue;
         }
-        if consumes_plain_help_value(token_ref) {
+        if value_options.consumes_value(token_ref) {
             i += if token_ref.contains('=') { 1 } else { 2 };
             continue;
         }
@@ -2334,6 +2220,7 @@ fn is_language_command_request(args: &[OsString]) -> bool {
 }
 
 fn first_command_token(args: &[OsString]) -> Option<String> {
+    let root_value_options = cli_root_value_options();
     let mut index = 1usize;
 
     while index < args.len() {
@@ -2355,7 +2242,7 @@ fn first_command_token(args: &[OsString]) -> Option<String> {
             continue;
         }
         if token.starts_with("--") {
-            index += if global_option_takes_value(&token) && !token.contains('=') {
+            index += if root_value_options.consumes_value(&token) && !token.contains('=') {
                 2
             } else {
                 1
@@ -2363,7 +2250,7 @@ fn first_command_token(args: &[OsString]) -> Option<String> {
             continue;
         }
         if token.starts_with('-') {
-            index += if global_short_option_takes_value(&token) {
+            index += if root_value_options.consumes_value(&token) && !token.contains('=') {
                 2
             } else {
                 1
@@ -2374,17 +2261,6 @@ fn first_command_token(args: &[OsString]) -> Option<String> {
     }
 
     None
-}
-
-fn global_option_takes_value(option: &str) -> bool {
-    matches!(
-        option,
-        "--output" | "--account" | "--user" | "--actor-peer-id"
-    )
-}
-
-fn global_short_option_takes_value(option: &str) -> bool {
-    matches!(option, "-o")
 }
 
 fn is_bool_arg(value: &str) -> bool {

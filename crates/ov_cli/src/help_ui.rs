@@ -6,6 +6,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::{
     Cli,
+    cli_arg_scan::ValueOptions,
     i18n::{Language, copy},
     theme,
 };
@@ -2002,12 +2003,13 @@ fn command_help_path(args: &[OsString]) -> Option<Vec<String>> {
         return None;
     }
 
+    let value_options = cli_value_options();
     let has_help_flag = tokens.iter().skip(1).any(|token| is_help_flag(token));
     if has_help_flag {
-        if has_invalid_config_add_provider(&tokens) {
+        if has_invalid_config_add_provider(&tokens, &value_options) {
             return None;
         }
-        if let Some(path) = config_help_path(&tokens) {
+        if let Some(path) = config_help_path(&tokens, &value_options) {
             return Some(path);
         }
     }
@@ -2023,7 +2025,7 @@ fn command_help_path(args: &[OsString]) -> Option<Vec<String>> {
             i += 1;
             continue;
         }
-        if consumes_value(token) {
+        if value_options.consumes_value(token) {
             i += if token.contains('=') { 1 } else { 2 };
             continue;
         }
@@ -2038,7 +2040,8 @@ fn command_help_path(args: &[OsString]) -> Option<Vec<String>> {
                 // Explicit help for this top-level command.
             } else if !next.starts_with('-') {
                 if has_help_flag && path.len() == 1 && is_bare_group_help_command(&path[0]) {
-                    let nested_path = command_path_until_help_flag(&tokens, i + 1, path);
+                    let nested_path =
+                        command_path_until_help_flag(&tokens, i + 1, path, &value_options);
                     return if command_spec(&nested_path).is_some() {
                         Some(nested_path)
                     } else {
@@ -2068,6 +2071,7 @@ fn command_path_until_help_flag(
     tokens: &[String],
     mut i: usize,
     mut path: Vec<String>,
+    value_options: &ValueOptions,
 ) -> Vec<String> {
     while i < tokens.len() {
         let token = &tokens[i];
@@ -2078,7 +2082,7 @@ fn command_path_until_help_flag(
             i += 1;
             continue;
         }
-        if consumes_value(token) {
+        if value_options.consumes_value(token) {
             i += if token.contains('=') { 1 } else { 2 };
             continue;
         }
@@ -2093,7 +2097,7 @@ fn command_path_until_help_flag(
     path
 }
 
-fn config_help_path(tokens: &[String]) -> Option<Vec<String>> {
+fn config_help_path(tokens: &[String], value_options: &ValueOptions) -> Option<Vec<String>> {
     let mut i = 1;
     while i < tokens.len() {
         let token = &tokens[i];
@@ -2104,7 +2108,7 @@ fn config_help_path(tokens: &[String]) -> Option<Vec<String>> {
             i += 1;
             continue;
         }
-        if consumes_value(token) {
+        if value_options.consumes_value(token) {
             i += if token.contains('=') { 1 } else { 2 };
             continue;
         }
@@ -2124,19 +2128,7 @@ fn config_help_path(tokens: &[String]) -> Option<Vec<String>> {
             if is_help_flag(token) {
                 return Some(path);
             }
-            if consumes_value(token)
-                || matches!(
-                    token.as_str(),
-                    "--name"
-                        | "--new-name"
-                        | "--url"
-                        | "--api-key-env"
-                        | "--root-api-key-env"
-                        | "--account"
-                        | "--user"
-                        | "--actor-peer-id"
-                )
-            {
+            if value_options.consumes_value(token) {
                 i += if token.contains('=') { 1 } else { 2 };
                 continue;
             }
@@ -2166,7 +2158,7 @@ fn config_help_path(tokens: &[String]) -> Option<Vec<String>> {
     None
 }
 
-fn has_invalid_config_add_provider(tokens: &[String]) -> bool {
+fn has_invalid_config_add_provider(tokens: &[String], value_options: &ValueOptions) -> bool {
     let mut i = 1;
     let mut saw_config = false;
     let mut saw_add = false;
@@ -2180,19 +2172,7 @@ fn has_invalid_config_add_provider(tokens: &[String]) -> bool {
             i += 1;
             continue;
         }
-        if consumes_value(token)
-            || matches!(
-                token.as_str(),
-                "--name"
-                    | "--new-name"
-                    | "--url"
-                    | "--api-key-env"
-                    | "--root-api-key-env"
-                    | "--account"
-                    | "--user"
-                    | "--actor-peer-id"
-            )
-        {
+        if value_options.consumes_value(token) {
             i += if token.contains('=') { 1 } else { 2 };
             continue;
         }
@@ -2262,15 +2242,10 @@ fn is_help_flag(token: &str) -> bool {
     matches!(token, "--help" | "-h" | "-help")
 }
 
-fn consumes_value(token: &str) -> bool {
-    matches!(
-        token,
-        "-o" | "--output" | "-c" | "--compact" | "--account" | "--user" | "--actor-peer-id"
-    ) || token.starts_with("--output=")
-        || token.starts_with("--compact=")
-        || token.starts_with("--account=")
-        || token.starts_with("--user=")
-        || token.starts_with("--actor-peer-id=")
+fn cli_value_options() -> ValueOptions {
+    let mut root = Cli::command();
+    root.build();
+    ValueOptions::from_command(&root)
 }
 
 #[cfg(test)]
