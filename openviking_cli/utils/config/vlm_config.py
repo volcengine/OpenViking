@@ -33,6 +33,10 @@ class VLMConfig(BaseModel):
         ),
     )
     api_base: Optional[str] = Field(default=None, description="API base URL")
+    base_url: Optional[str] = Field(
+        default=None,
+        description="Legacy alias for `api_base` (accepted for backward compatibility)",
+    )
     temperature: float = Field(default=0.0, description="Generation temperature")
     max_retries: int = Field(default=3, description="Maximum retry attempts")
     timeout: float = Field(
@@ -154,6 +158,9 @@ class VLMConfig(BaseModel):
 
     def _migrate_legacy_config(self):
         """Migrate legacy config to providers structure."""
+        if self.base_url and not self.api_base:
+            self.api_base = self.base_url
+
         if self.provider and (
             self.api_key
             or self.api_base
