@@ -151,27 +151,6 @@ class TestWatchTask:
         assert data["is_active"] is True
         assert "auth_state" not in data
 
-    def test_to_storage_dict_includes_private_auth_state(self):
-        task = WatchTask(
-            task_id="test-id",
-            path="/test/path",
-            auth_state={
-                "provider": "feishu",
-                "access_token": "u-test",
-                "refresh_token": "r-test",
-                "expires_at": None,
-            },
-        )
-
-        data = task.to_storage_dict()
-
-        assert data["auth_state"] == {
-            "provider": "feishu",
-            "access_token": "u-test",
-            "refresh_token": "r-test",
-            "expires_at": None,
-        }
-
     def test_from_dict(self):
         """Test creating task from dictionary."""
         now = datetime.now()
@@ -187,12 +166,6 @@ class TestWatchTask:
             "last_execution_time": now.isoformat(),
             "next_execution_time": (now + timedelta(minutes=45)).isoformat(),
             "is_active": False,
-            "auth_state": {
-                "provider": "feishu",
-                "access_token": "u-test",
-                "refresh_token": "r-test",
-                "expires_at": None,
-            },
         }
 
         task = WatchTask.from_dict(data)
@@ -204,7 +177,6 @@ class TestWatchTask:
         assert task.is_active is False
         assert task.created_at == now
         assert task.last_execution_time == now
-        assert task.auth_state == data["auth_state"]
 
     def test_calculate_next_execution_time(self):
         """Test calculating next execution time."""

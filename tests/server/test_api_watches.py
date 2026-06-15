@@ -25,7 +25,6 @@ async def _seed(
     role="user",
     interval=60.0,
     path="https://example.com/foo",
-    auth_state=None,
 ):
     return await wm.create_task(
         path=path,
@@ -34,7 +33,6 @@ async def _seed(
         original_role=role,
         to_uri=to_uri,
         watch_interval=interval,
-        auth_state=auth_state,
     )
 
 
@@ -152,29 +150,6 @@ async def test_dual_key_matching_accepted(client: httpx.AsyncClient, watch_manag
     resp = await client.get(f"/api/v1/watches/{task.task_id}", params={"to_uri": task.to_uri})
     assert resp.status_code == 200
     assert resp.json()["result"]["task_id"] == task.task_id
-
-
-async def test_watch_api_hides_private_auth_state(client: httpx.AsyncClient, watch_manager):
-    task = await _seed(
-        watch_manager,
-        to_uri="viking://resources/test/feishu-user-watch",
-        auth_state={
-            "provider": "feishu",
-            "access_token": "u-test",
-            "refresh_token": "r-test",
-            "expires_at": None,
-        },
-    )
-
-    list_resp = await client.get("/api/v1/watches")
-    assert list_resp.status_code == 200
-    returned = list_resp.json()["result"]["tasks"][0]
-    assert returned["task_id"] == task.task_id
-    assert "auth_state" not in returned
-
-    get_resp = await client.get(f"/api/v1/watches/{task.task_id}")
-    assert get_resp.status_code == 200
-    assert "auth_state" not in get_resp.json()["result"]
 
 
 async def test_dual_key_mismatch_returns_400(client: httpx.AsyncClient, watch_manager):

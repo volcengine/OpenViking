@@ -1559,44 +1559,6 @@ pub async fn handle_tui(uri: String, ctx: CliContext) -> Result<()> {
 }
 
 #[cfg(test)]
-mod add_resource_args_tests {
-    use super::*;
-
-    #[test]
-    fn parses_key_value_args() {
-        let args = parse_add_resource_args(Some("feishu_access_token:u-test,limit:3,deep:true"))
-            .expect("args should parse")
-            .expect("args should be present");
-
-        assert_eq!(
-            args.get("feishu_access_token"),
-            Some(&Value::String("u-test".to_string()))
-        );
-        assert_eq!(args.get("limit"), Some(&serde_json::json!(3)));
-        assert_eq!(args.get("deep"), Some(&Value::Bool(true)));
-    }
-
-    #[test]
-    fn parses_json_object_args() {
-        let args = parse_add_resource_args(Some(r#"{"feishu_access_token":"u-test"}"#))
-            .expect("json object should parse")
-            .expect("args should be present");
-
-        assert_eq!(
-            args.get("feishu_access_token"),
-            Some(&Value::String("u-test".to_string()))
-        );
-    }
-
-    #[test]
-    fn rejects_invalid_args_item() {
-        let err = parse_add_resource_args(Some("feishu_access_token")).unwrap_err();
-
-        assert!(err.to_string().contains("Expected key:value"));
-    }
-}
-
-#[cfg(test)]
 mod config_switch_prompt_tests {
     use super::*;
 

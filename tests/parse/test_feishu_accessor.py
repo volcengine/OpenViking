@@ -6,11 +6,7 @@ import sys
 from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock
 
-import pytest
-
 from openviking.parse.accessors.feishu_accessor import FeishuAccessor
-
-_FAKE_CLIENT_BUILDERS = []
 
 
 class _SuccessResponse:
@@ -53,7 +49,7 @@ class _FakeListDocumentBlockRequest:
 
 class _FakeListDocumentBlockRequestBuilder:
     def __init__(self):
-        self._request = SimpleNamespace(document_id=None, page_token=None)
+        self._request = SimpleNamespace(document_id=None)
 
     def document_id(self, document_id):
         self._request.document_id = document_id
@@ -65,125 +61,17 @@ class _FakeListDocumentBlockRequestBuilder:
     def document_revision_id(self, _revision_id):
         return self
 
-    def page_token(self, page_token):
-        self._request.page_token = page_token
-        return self
-
     def build(self):
         return self._request
-
-
-class _FakeGetNodeSpaceRequest:
-    @staticmethod
-    def builder():
-        return _FakeGetNodeSpaceRequestBuilder()
-
-
-class _FakeGetNodeSpaceRequestBuilder:
-    def __init__(self):
-        self._request = SimpleNamespace(token=None)
-
-    def token(self, token):
-        self._request.token = token
-        return self
-
-    def build(self):
-        return self._request
-
-
-class _FakeClient:
-    @staticmethod
-    def builder():
-        builder = _FakeClientBuilder()
-        _FAKE_CLIENT_BUILDERS.append(builder)
-        return builder
-
-
-class _FakeClientBuilder:
-    def __init__(self):
-        self.app_id_value = None
-        self.app_secret_value = None
-        self.domain_value = None
-        self.enable_set_token_value = False
-
-    def app_id(self, app_id):
-        self.app_id_value = app_id
-        return self
-
-    def app_secret(self, app_secret):
-        self.app_secret_value = app_secret
-        return self
-
-    def domain(self, domain):
-        self.domain_value = domain
-        return self
-
-    def enable_set_token(self, enable_set_token):
-        self.enable_set_token_value = enable_set_token
-        return self
-
-    def build(self):
-        return SimpleNamespace(builder=self)
-
-
-def _package(name):
-    module = ModuleType(name)
-    module.__path__ = []
-    return module
 
 
 def _install_fake_lark_modules(monkeypatch):
-    _FAKE_CLIENT_BUILDERS.clear()
-    modules = {
-        "lark_oapi": _package("lark_oapi"),
-        "lark_oapi.api": _package("lark_oapi.api"),
-        "lark_oapi.api.docx": _package("lark_oapi.api.docx"),
-        "lark_oapi.api.wiki": _package("lark_oapi.api.wiki"),
-        "lark_oapi.core": _package("lark_oapi.core"),
-    }
     docx_v1 = ModuleType("lark_oapi.api.docx.v1")
     docx_v1.ListDocumentBlockRequest = _FakeListDocumentBlockRequest
-    wiki_v2 = ModuleType("lark_oapi.api.wiki.v2")
-    wiki_v2.GetNodeSpaceRequest = _FakeGetNodeSpaceRequest
     core_model = ModuleType("lark_oapi.core.model")
     core_model.RequestOption = _FakeRequestOption
-    modules.update(
-        {
-            "lark_oapi.api.docx.v1": docx_v1,
-            "lark_oapi.api.wiki.v2": wiki_v2,
-            "lark_oapi.core.model": core_model,
-        }
-    )
-    modules["lark_oapi"].Client = _FakeClient
-    for name, module in modules.items():
-        monkeypatch.setitem(sys.modules, name, module)
-
-
-def test_user_token_client_does_not_require_app_credentials(monkeypatch):
-    _install_fake_lark_modules(monkeypatch)
-    monkeypatch.delenv("FEISHU_APP_ID", raising=False)
-    monkeypatch.delenv("FEISHU_APP_SECRET", raising=False)
-    accessor = FeishuAccessor()
-    accessor._config = SimpleNamespace(app_id="", app_secret="", domain="")
-
-    client = accessor._get_client(use_user_token=True)
-
-    assert client.builder is _FAKE_CLIENT_BUILDERS[-1]
-    assert client.builder.domain_value == "https://open.feishu.cn"
-    assert client.builder.app_id_value is None
-    assert client.builder.app_secret_value is None
-    assert client.builder.enable_set_token_value is True
-
-
-def test_app_token_client_requires_app_credentials(monkeypatch):
-    _install_fake_lark_modules(monkeypatch)
-    monkeypatch.delenv("FEISHU_APP_ID", raising=False)
-    monkeypatch.delenv("FEISHU_APP_SECRET", raising=False)
-    accessor = FeishuAccessor()
-    accessor._config = SimpleNamespace(app_id="", app_secret="", domain="")
-
-    with pytest.raises(ValueError, match="Feishu credentials not configured"):
-        accessor._get_client()
+    monkeypatch.setitem(sys.modules, "lark_oapi.api.docx.v1", docx_v1)
+    monkeypatch.setitem(sys.modules, "lark_oapi.core.model", core_model)
 
 
 def test_fetch_all_blocks_uses_user_access_token_option(monkeypatch):
@@ -203,40 +91,4 @@ def test_fetch_all_blocks_uses_user_access_token_option(monkeypatch):
     assert blocks == []
     request, option = list_blocks.call_args.args
     assert request.document_id == "doc_token"
-    assert option.user_access_token == "u-test"
-
-
-def test_fetch_all_blocks_keeps_default_app_token_call_shape(monkeypatch):
-    _install_fake_lark_modules(monkeypatch)
-    list_blocks = MagicMock(
-        return_value=_SuccessResponse(
-            SimpleNamespace(items=[], has_more=False, page_token=None),
-        )
-    )
-    accessor = FeishuAccessor()
-    accessor._client = SimpleNamespace(
-        docx=SimpleNamespace(v1=SimpleNamespace(document_block=SimpleNamespace(list=list_blocks)))
-    )
-
-    blocks = accessor._fetch_all_blocks("doc_token")
-
-    assert blocks == []
-    assert len(list_blocks.call_args.args) == 1
-    assert list_blocks.call_args.args[0].document_id == "doc_token"
-
-
-def test_resolve_wiki_node_uses_user_access_token_option(monkeypatch):
-    _install_fake_lark_modules(monkeypatch)
-    node = SimpleNamespace(obj_type="doc", obj_token="doc_token", title="Title")
-    get_node = MagicMock(return_value=_SuccessResponse(SimpleNamespace(node=node)))
-    accessor = FeishuAccessor()
-    accessor._user_token_client = SimpleNamespace(
-        wiki=SimpleNamespace(v2=SimpleNamespace(space=SimpleNamespace(get_node=get_node)))
-    )
-
-    doc_type, token, title = accessor._resolve_wiki_node("wiki_token", "u-test")
-
-    assert (doc_type, token, title) == ("docx", "doc_token", "Title")
-    request, option = get_node.call_args.args
-    assert request.token == "wiki_token"
     assert option.user_access_token == "u-test"

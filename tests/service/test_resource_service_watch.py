@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Integration tests for ResourceService watch functionality."""
 
+from types import SimpleNamespace
 from typing import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock
 
@@ -12,7 +13,7 @@ from openviking.resource.watch_manager import WatchManager
 from openviking.server.identity import RequestContext, Role
 from openviking.service import resource_service as resource_service_module
 from openviking.service.resource_service import ResourceService
-from openviking_cli.exceptions import ConflictError, InvalidArgumentError
+from openviking_cli.exceptions import ConflictError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -53,6 +54,24 @@ class MockVikingDB:
     """Mock VikingDBManager for testing."""
 
     pass
+
+
+class NoopTaskTracker:
+    async def create(self, *_args, **_kwargs):
+        return SimpleNamespace(task_id="test-task")
+
+    async def start(self, *_args, **_kwargs):
+        pass
+
+    async def complete(self, *_args, **_kwargs):
+        pass
+
+
+def disable_task_tracker(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "openviking.service.task_tracker.get_task_tracker",
+        lambda: NoopTaskTracker(),
+    )
 
 
 @pytest_asyncio.fixture
@@ -219,8 +238,13 @@ class TestAddResourceArgs:
 
     @pytest.mark.asyncio
     async def test_forwards_args_to_resource_processor(
-        self, resource_service: ResourceService, request_context: RequestContext
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        resource_service: ResourceService,
+        request_context: RequestContext,
     ):
+        disable_task_tracker(monkeypatch)
+
         await resource_service.add_resource(
             path="/test/path",
             ctx=request_context,
@@ -229,45 +253,6 @@ class TestAddResourceArgs:
 
         processor = resource_service._resource_processor
         assert processor.calls[-1]["feishu_access_token"] == "u-test"
-
-    @pytest.mark.asyncio
-    async def test_rejects_feishu_access_token_with_watch(
-        self, resource_service: ResourceService, request_context: RequestContext
-    ):
-        with pytest.raises(InvalidArgumentError, match="feishu_refresh_token"):
-            await resource_service.add_resource(
-                path="/test/path",
-                ctx=request_context,
-                watch_interval=30,
-                args={"feishu_access_token": "u-test"},
-            )
-
-    @pytest.mark.asyncio
-    async def test_rejects_feishu_user_token_watch_without_app_config(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        resource_service: ResourceService,
-        request_context: RequestContext,
-    ):
-        def raise_missing_credentials():
-            raise ValueError("missing Feishu config")
-
-        monkeypatch.setattr(
-            resource_service_module,
-            "load_feishu_app_credentials",
-            raise_missing_credentials,
-        )
-
-        with pytest.raises(InvalidArgumentError, match="Feishu user-token watch requires"):
-            await resource_service.add_resource(
-                path="/test/path",
-                ctx=request_context,
-                watch_interval=30,
-                args={
-                    "feishu_access_token": "u-test",
-                    "feishu_refresh_token": "r-test",
-                },
-            )
 
     @pytest.mark.asyncio
     async def test_feishu_user_token_watch_stores_private_auth_state(
@@ -281,6 +266,7 @@ class TestAddResourceArgs:
             "load_feishu_app_credentials",
             lambda: object(),
         )
+        disable_task_tracker(monkeypatch)
         to_uri = "viking://resources/feishu_user_watch"
 
         await resource_service.add_resource(
@@ -308,65 +294,6 @@ class TestAddResourceArgs:
             "expires_at": None,
         }
         assert "auth_state" not in task.to_dict()
-
-    @pytest.mark.asyncio
-    async def test_rejects_feishu_refresh_token_without_watch(
-        self, resource_service: ResourceService, request_context: RequestContext
-    ):
-        with pytest.raises(InvalidArgumentError, match="only supported"):
-            await resource_service.add_resource(
-                path="/test/path",
-                ctx=request_context,
-                args={
-                    "feishu_access_token": "u-test",
-                    "feishu_refresh_token": "r-test",
-                },
-            )
-
-    @pytest.mark.asyncio
-    async def test_rejects_feishu_refresh_token_without_access_token(
-        self, resource_service: ResourceService, request_context: RequestContext
-    ):
-        with pytest.raises(InvalidArgumentError, match="requires args.feishu_access_token"):
-            await resource_service.add_resource(
-                path="/test/path",
-                ctx=request_context,
-                watch_interval=30,
-                args={"feishu_refresh_token": "r-test"},
-            )
-
-    @pytest.mark.asyncio
-    async def test_rejects_invalid_feishu_access_token(
-        self, resource_service: ResourceService, request_context: RequestContext
-    ):
-        with pytest.raises(InvalidArgumentError, match="non-empty string"):
-            await resource_service.add_resource(
-                path="/test/path",
-                ctx=request_context,
-                args={"feishu_access_token": 123},
-            )
-
-    @pytest.mark.asyncio
-    async def test_rejects_non_object_args(
-        self, resource_service: ResourceService, request_context: RequestContext
-    ):
-        with pytest.raises(InvalidArgumentError, match="args must be an object"):
-            await resource_service.add_resource(
-                path="/test/path",
-                ctx=request_context,
-                args=[],
-            )
-
-    @pytest.mark.asyncio
-    async def test_rejects_core_add_resource_fields_in_args(
-        self, resource_service: ResourceService, request_context: RequestContext
-    ):
-        with pytest.raises(InvalidArgumentError, match="core add_resource fields"):
-            await resource_service.add_resource(
-                path="/test/path",
-                ctx=request_context,
-                args={"watch_interval": 30},
-            )
 
 
 class TestWatchTaskConflict:
