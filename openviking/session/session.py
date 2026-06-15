@@ -90,6 +90,32 @@ def _message_peer_ids(messages: List[Message]) -> set[str]:
     }
 
 
+@dataclass(frozen=True)
+class _MemoryExtractionScope:
+    allow_self_memory: bool
+    allowed_peer_ids: set[str]
+    include_session_skills: bool
+    memory_types: Optional[set[str]]
+
+
+def _resolve_memory_extraction_scope(
+    ctx: RequestContext,
+    policy: MemoryPolicy,
+    messages: List[Message],
+    *,
+    config_session_skill_extraction_enabled: bool,
+) -> _MemoryExtractionScope:
+    allow_self_memory = policy.self_enabled
+    allowed_peer_ids = _message_peer_ids(messages) if policy.peer_enabled else set()
+
+    return _MemoryExtractionScope(
+        allow_self_memory=allow_self_memory,
+        allowed_peer_ids=allowed_peer_ids,
+        include_session_skills=config_session_skill_extraction_enabled and allow_self_memory,
+        memory_types=policy.memory_types,
+    )
+
+
 # =====================================================================
 # Working Memory v2
 # ---------------------------------------------------------------------
@@ -522,7 +548,12 @@ class Session:
     def _tool_result_store(self) -> Optional[ToolResultStore]:
         if not self._viking_fs:
             return None
-        return ToolResultStore(self._viking_fs, self._session_uri, self.session_id, self.ctx)
+        return ToolResultStore(
+            self._viking_fs,
+            self._session_uri,
+            self.session_id,
+            self.ctx,
+        )
 
     async def _hydrate_tool_outputs_for_extraction(
         self,
@@ -1339,15 +1370,18 @@ class Session:
                         ov_config.memory.session_skill_extraction_enabled
                     )
                     effective_policy = MemoryPolicy.from_dict(memory_policy)
-                    self_memory_enabled = effective_policy.self_enabled
-                    peer_memory_enabled = effective_policy.peer_enabled
-                    allowed_peer_ids = (
-                        _message_peer_ids(extraction_messages) if peer_memory_enabled else set()
+                    extraction_scope = _resolve_memory_extraction_scope(
+                        self.ctx,
+                        effective_policy,
+                        extraction_messages,
+                        config_session_skill_extraction_enabled=(
+                            config_session_skill_extraction_enabled
+                        ),
                     )
-                    session_skill_extraction_enabled = (
-                        config_session_skill_extraction_enabled and self_memory_enabled
-                    )
-                    memory_type_filter = effective_policy.memory_types
+                    self_memory_enabled = extraction_scope.allow_self_memory
+                    allowed_peer_ids = extraction_scope.allowed_peer_ids
+                    session_skill_extraction_enabled = extraction_scope.include_session_skills
+                    memory_type_filter = extraction_scope.memory_types
                     long_term_memory_types, execution_memory_types = _split_policy_memory_types(
                         memory_type_filter
                     )
@@ -3149,10 +3183,18 @@ class Session:
         )
 
         run_async(
-            viking_fs.write_file(uri=f"{archive_uri}/.abstract.md", content=abstract, ctx=self.ctx)
+            viking_fs.write_file(
+                uri=f"{archive_uri}/.abstract.md",
+                content=abstract,
+                ctx=self.ctx,
+            )
         )
         run_async(
-            viking_fs.write_file(uri=f"{archive_uri}/.overview.md", content=overview, ctx=self.ctx)
+            viking_fs.write_file(
+                uri=f"{archive_uri}/.overview.md",
+                content=overview,
+                ctx=self.ctx,
+            )
         )
 
         logger.debug(f"Written archive: {archive_uri}")

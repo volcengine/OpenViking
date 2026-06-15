@@ -13,7 +13,9 @@ config_module.load_config = loader_module.load_config
 sys.modules.setdefault("vikingbot.config", config_module)
 sys.modules.setdefault("vikingbot.config.loader", loader_module)
 
-from vikingbot.openviking_mount.ov_server import VikingClient
+from vikingbot.openviking_mount.ov_server import VikingClient  # noqa: E402
+
+TELEGRAM_ALICE_PEER_ID = "ext-dGVsZWdyYW06YWxpY2U"
 
 
 def _client(api_key_type: str = "user") -> VikingClient:
@@ -35,12 +37,12 @@ def test_normalize_session_messages_maps_sender_to_peer_only_for_user_messages()
 
     messages = [
         {"role": "user", "content": "hello", "sender_id": "telegram:alice"},
-        {"role": "assistant", "content": "hi", "sender_id": "telegram:alice"},
+        {"role": "assistant", "content": "hi", "sender_id": "agent-1"},
     ]
 
     normalized = client._normalize_session_messages(messages)
 
-    assert normalized[0]["peer_id"] == "telegram:alice"
+    assert normalized[0]["peer_id"] == TELEGRAM_ALICE_PEER_ID
     assert "peer_id" not in normalized[1]
 
 
@@ -68,7 +70,7 @@ async def test_read_peer_profile_uses_current_user_peer_alias(monkeypatch):
     profile = await client.read_peer_profile("telegram:alice")
 
     assert profile == "Alice profile"
-    assert calls == [("viking://user/peers/telegram:alice/memories/profile.md", "read")]
+    assert calls == [(f"viking://user/peers/{TELEGRAM_ALICE_PEER_ID}/memories/profile.md", "read")]
 
 
 @pytest.mark.asyncio
@@ -86,7 +88,7 @@ async def test_read_peer_profile_uses_explicit_user_namespace_for_root_key(monke
 
     assert profile == "Alice profile"
     assert calls == [
-        ("viking://user/bot-user/peers/telegram:alice/memories/profile.md", "read")
+        (f"viking://user/bot-user/peers/{TELEGRAM_ALICE_PEER_ID}/memories/profile.md", "read")
     ]
 
 
@@ -147,7 +149,7 @@ async def test_commit_uses_current_user_key_session_and_sender_peer(monkeypatch)
     )
 
     assert calls["append"]["session_user_id"] is None
-    assert calls["append"]["default_user_peer_id"] == "telegram:alice"
+    assert calls["append"]["default_user_peer_id"] == TELEGRAM_ALICE_PEER_ID
     assert calls["commit"]["user_id"] is None
     assert calls["commit"]["memory_policy"] is None
 
@@ -185,7 +187,7 @@ async def test_commit_keeps_root_owner_user_explicit(monkeypatch):
     )
 
     assert calls["append"]["session_user_id"] == "bot-user"
-    assert calls["append"]["default_user_peer_id"] == "telegram:alice"
+    assert calls["append"]["default_user_peer_id"] == TELEGRAM_ALICE_PEER_ID
     assert calls["commit"]["user_id"] == "bot-user"
     assert calls["commit"]["memory_policy"] is None
 

@@ -6,6 +6,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::{
     Cli,
+    cli_arg_scan::ValueOptions,
     i18n::{Language, copy},
     theme,
 };
@@ -1067,6 +1068,14 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 label: "ov admin register-user <account> <user>",
                 description: "Register a user in an account.",
             },
+            HelpItem {
+                label: "ov admin migrate --sudo",
+                description: "Start legacy agent/session migration.",
+            },
+            HelpItem {
+                label: "ov admin migrate --cleanup --sudo",
+                description: "Remove legacy agent/session directories after verifying migration.",
+            },
         ],
         next_steps: &[
             HelpItem {
@@ -1670,7 +1679,7 @@ fn localized_help_item_description<'a>(
         "-c, --compact <bool>" => "使用紧凑的表格或 JSON 输出。",
         "--account <account>" => "覆盖本次命令的 X-OpenViking-Account。",
         "--user <user>" => "覆盖本次命令的 X-OpenViking-User。",
-        "--sudo" => "使用 root API Key 执行管理命令。",
+        "--sudo" => "使用 root API Key 执行支持的管理和任务查询命令。",
         _ => description,
     }
 }
@@ -1893,7 +1902,7 @@ fn localized_global_option_description<'a>(
         "compact" => "紧凑输出",
         "account" => "覆盖账户",
         "user" => "覆盖用户",
-        "sudo" => "admin、system 和 reindex 使用 root API Key",
+        "sudo" => "admin、system、reindex、task status/list 使用 root API Key",
         _ => description,
     }
 }
@@ -2027,12 +2036,13 @@ fn command_help_path(args: &[OsString]) -> Option<Vec<String>> {
         return None;
     }
 
+    let value_options = cli_value_options();
     let has_help_flag = tokens.iter().skip(1).any(|token| is_help_flag(token));
     if has_help_flag {
-        if has_invalid_config_add_provider(&tokens) {
+        if has_invalid_config_add_provider(&tokens, &value_options) {
             return None;
         }
-        if let Some(path) = config_help_path(&tokens) {
+        if let Some(path) = config_help_path(&tokens, &value_options) {
             return Some(path);
         }
     }
@@ -2044,16 +2054,8 @@ fn command_help_path(args: &[OsString]) -> Option<Vec<String>> {
         if is_help_flag(token) {
             break;
         }
-        if token == "--sudo" || token == "--progress" || token == "--no-progress" || token == "-v" {
-            i += 1;
-            continue;
-        }
-        if consumes_value(token) {
-            i += if token.contains('=') { 1 } else { 2 };
-            continue;
-        }
-        if token.starts_with('-') {
-            i += 1;
+        if let Some(width) = option_token_width(&tokens, i, &value_options) {
+            i += width;
             continue;
         }
 
@@ -2063,7 +2065,8 @@ fn command_help_path(args: &[OsString]) -> Option<Vec<String>> {
                 // Explicit help for this top-level command.
             } else if !next.starts_with('-') {
                 if has_help_flag && path.len() == 1 && is_bare_group_help_command(&path[0]) {
-                    let nested_path = command_path_until_help_flag(&tokens, i + 1, path);
+                    let nested_path =
+                        command_path_until_help_flag(&tokens, i + 1, path, &value_options);
                     return if command_spec(&nested_path).is_some() {
                         Some(nested_path)
                     } else {
@@ -2093,22 +2096,15 @@ fn command_path_until_help_flag(
     tokens: &[String],
     mut i: usize,
     mut path: Vec<String>,
+    value_options: &ValueOptions,
 ) -> Vec<String> {
     while i < tokens.len() {
         let token = &tokens[i];
         if is_help_flag(token) {
             break;
         }
-        if token == "--sudo" || token == "--progress" || token == "--no-progress" || token == "-v" {
-            i += 1;
-            continue;
-        }
-        if consumes_value(token) {
-            i += if token.contains('=') { 1 } else { 2 };
-            continue;
-        }
-        if token.starts_with('-') {
-            i += 1;
+        if let Some(width) = option_token_width(tokens, i, value_options) {
+            i += width;
             continue;
         }
 
@@ -2118,23 +2114,15 @@ fn command_path_until_help_flag(
     path
 }
 
-fn config_help_path(tokens: &[String]) -> Option<Vec<String>> {
+fn config_help_path(tokens: &[String], value_options: &ValueOptions) -> Option<Vec<String>> {
     let mut i = 1;
     while i < tokens.len() {
         let token = &tokens[i];
         if is_help_flag(token) {
             return None;
         }
-        if token == "--sudo" || token == "--progress" || token == "--no-progress" || token == "-v" {
-            i += 1;
-            continue;
-        }
-        if consumes_value(token) {
-            i += if token.contains('=') { 1 } else { 2 };
-            continue;
-        }
-        if token.starts_with('-') {
-            i += 1;
+        if let Some(width) = option_token_width(tokens, i, value_options) {
+            i += width;
             continue;
         }
 
@@ -2149,23 +2137,8 @@ fn config_help_path(tokens: &[String]) -> Option<Vec<String>> {
             if is_help_flag(token) {
                 return Some(path);
             }
-            if consumes_value(token)
-                || matches!(
-                    token.as_str(),
-                    "--name"
-                        | "--new-name"
-                        | "--url"
-                        | "--api-key-env"
-                        | "--root-api-key-env"
-                        | "--account"
-                        | "--user"
-                )
-            {
-                i += if token.contains('=') { 1 } else { 2 };
-                continue;
-            }
-            if token.starts_with('-') {
-                i += 1;
+            if let Some(width) = option_token_width(tokens, i, value_options) {
+                i += width;
                 continue;
             }
 
@@ -2190,7 +2163,7 @@ fn config_help_path(tokens: &[String]) -> Option<Vec<String>> {
     None
 }
 
-fn has_invalid_config_add_provider(tokens: &[String]) -> bool {
+fn has_invalid_config_add_provider(tokens: &[String], value_options: &ValueOptions) -> bool {
     let mut i = 1;
     let mut saw_config = false;
     let mut saw_add = false;
@@ -2200,27 +2173,8 @@ fn has_invalid_config_add_provider(tokens: &[String]) -> bool {
         if is_help_flag(token) {
             return false;
         }
-        if token == "--sudo" || token == "--progress" || token == "--no-progress" || token == "-v" {
-            i += 1;
-            continue;
-        }
-        if consumes_value(token)
-            || matches!(
-                token.as_str(),
-                "--name"
-                    | "--new-name"
-                    | "--url"
-                    | "--api-key-env"
-                    | "--root-api-key-env"
-                    | "--account"
-                    | "--user"
-            )
-        {
-            i += if token.contains('=') { 1 } else { 2 };
-            continue;
-        }
-        if token.starts_with('-') {
-            i += 1;
+        if let Some(width) = option_token_width(tokens, i, value_options) {
+            i += width;
             continue;
         }
 
@@ -2285,14 +2239,49 @@ fn is_help_flag(token: &str) -> bool {
     matches!(token, "--help" | "-h" | "-help")
 }
 
-fn consumes_value(token: &str) -> bool {
+fn option_token_width(
+    tokens: &[String],
+    index: usize,
+    value_options: &ValueOptions,
+) -> Option<usize> {
+    let token = &tokens[index];
+    if matches!(
+        token.as_str(),
+        "--sudo" | "--progress" | "--no-progress" | "--verbose" | "-v"
+    ) {
+        return Some(1);
+    }
+    if token == "--compact" || token == "-c" {
+        return Some(compact_option_width(tokens, index));
+    }
+    if value_options.consumes_value(token) {
+        return Some(if token.contains('=') { 1 } else { 2 });
+    }
+    token.starts_with('-').then_some(1)
+}
+
+fn compact_option_width(tokens: &[String], index: usize) -> usize {
+    if tokens
+        .get(index + 1)
+        .is_some_and(|value| is_bool_arg(value))
+    {
+        2
+    } else {
+        1
+    }
+}
+
+fn is_bool_arg(value: &str) -> bool {
     matches!(
-        token,
-        "-o" | "--output" | "-c" | "--compact" | "--account" | "--user"
-    ) || token.starts_with("--output=")
-        || token.starts_with("--compact=")
-        || token.starts_with("--account=")
-        || token.starts_with("--user=")
+        value,
+        "true" | "false" | "True" | "False" | "TRUE" | "FALSE"
+    )
+}
+
+fn cli_value_options() -> ValueOptions {
+    let mut root = Cli::command();
+    root.build();
+    ValueOptions::from_command(&root)
 }
 
 #[cfg(test)]
@@ -2360,7 +2349,9 @@ mod tests {
         assert!(rendered.contains("ov status"));
         assert!(rendered.contains("ov tui"));
         assert!(rendered.contains("-c, --compact <true|false>"));
-        assert!(rendered.contains("Use root API key for admin, system, and reindex"));
+        assert!(
+            rendered.contains("Use root API key for admin, system, reindex, and task status/list")
+        );
     }
 
     #[test]
@@ -2574,7 +2565,7 @@ mod tests {
     }
 
     #[test]
-    fn curated_help_lists_upload_filters_peer_id_and_limit_aliases() {
+    fn curated_help_lists_upload_filters_and_limit_aliases() {
         let add_resource = strip_ansi(
             &render_command_help_request(&os_args(&["ov", "add-resource", "--help"]))
                 .expect("add-resource help should render"),
@@ -2605,15 +2596,14 @@ mod tests {
                 "missing --limit alias for {command} in:\n{rendered}"
             );
         }
-
         for command in ["find", "search"] {
             let rendered = strip_ansi(
                 &render_command_help_request(&os_args(&["ov", command, "--help"]))
                     .expect("help should render"),
             );
             assert!(
-                rendered.contains("--peer-id <id>"),
-                "missing --peer-id for {command} in:\n{rendered}"
+                rendered.contains("--context-type <type>"),
+                "missing --context-type for {command} in:\n{rendered}"
             );
         }
     }
@@ -2830,6 +2820,18 @@ mod tests {
                 "{args:?} should fall back to clap help"
             );
         }
+        assert!(
+            render_command_help_request(&os_args(&[
+                "ov",
+                "--compact",
+                "privacy",
+                "get",
+                "sample-policy",
+                "--help",
+            ]))
+            .is_none(),
+            "--compact without a value should not hide the privacy command from help detection"
+        );
     }
 
     #[test]

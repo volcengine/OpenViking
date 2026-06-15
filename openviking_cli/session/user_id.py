@@ -1,41 +1,20 @@
-import re
-
+from openviking.core.identifiers import (
+    normalize_identifier_part,
+    validate_account_id,
+    validate_identifier_part,
+    validate_user_id,
+)
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 
-# Validation pattern reused across different modules
-# Note: hyphen (-) must be at the end or escaped to avoid being interpreted as a range
-_VALIDATION_PATTERN = re.compile(r"^[a-zA-Z0-9_.@-]+$")
-
-
-def validate_identifier_part(part: str, part_name: str) -> str | None:
-    """Validate a single part of an identifier (account_id or user_id).
-
-    Returns an error message if invalid, None if valid.
-    """
-    if not part:
-        return f"{part_name} is empty"
-    if not _VALIDATION_PATTERN.match(part):
-        return f"{part_name} must be alpha_numeric string."
-    if part.count("@") > 1:
-        return f"{part_name} must have at most one @."
-    return None
-
-
-def validate_account_id(account_id: str) -> str | None:
-    """Validate an account_id. Returns an error message if invalid, None if valid."""
-    verr = validate_identifier_part(account_id, "account_id")
-    if verr:
-        return verr
-    if account_id.startswith("_"):
-        return "account_id cannot start with underscore _."
-    return None
-
-
-def validate_user_id(user_id: str) -> str | None:
-    """Validate a user_id. Returns an error message if invalid, None if valid."""
-    return validate_identifier_part(user_id, "user_id")
+__all__ = [
+    "UserIdentifier",
+    "normalize_identifier_part",
+    "validate_account_id",
+    "validate_identifier_part",
+    "validate_user_id",
+]
 
 
 class UserIdentifier(object):
@@ -78,9 +57,6 @@ class UserIdentifier(object):
 
     def memory_space_uri(self) -> str:
         return f"viking://user/{self.user_space_name()}/memories"
-
-    def work_space_uri(self) -> str:
-        return f"viking://user/{self.user_space_name()}/workspaces"
 
     def to_dict(self):
         return {

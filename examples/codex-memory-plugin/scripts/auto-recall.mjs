@@ -47,6 +47,7 @@ async function fetchJSON(path, init = {}) {
     }
     if (cfg.account) headers["X-OpenViking-Account"] = cfg.account;
     if (cfg.user) headers["X-OpenViking-User"] = cfg.user;
+    if (cfg.peerId) headers["X-OpenViking-Actor-Peer"] = cfg.peerId;
     const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
     const body = await res.json().catch(() => null);
     if (!body) return null;
@@ -218,7 +219,6 @@ async function resolveTargetUri(targetUri) {
 async function searchScope(query, targetUri, limit, bucket = "memories") {
   const resolvedUri = await resolveTargetUri(targetUri);
   const body = { query, target_uri: resolvedUri, limit, score_threshold: 0 };
-  if (cfg.peerId) body.peer_id = cfg.peerId;
   const result = await fetchJSON("/api/v1/search/find", {
     method: "POST",
     body: JSON.stringify(body),

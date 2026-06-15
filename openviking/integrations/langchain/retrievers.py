@@ -38,6 +38,7 @@ class OpenVikingRetriever(BaseRetriever):
     account: str | None = None
     user: str | None = None
     user_id: str | None = None
+    actor_peer_id: str | None = None
     path: str | None = None
     timeout: float = 60.0
     extra_headers: dict[str, str] | None = None
@@ -46,7 +47,6 @@ class OpenVikingRetriever(BaseRetriever):
     target_uri: str | list[str] = ""
     search_mode: Literal["find", "search"] = "find"
     session_id: str | None = None
-    peer_id: str | None = None
     limit: int = 10
     score_threshold: float | None = None
     filter: dict[str, Any] | None = None
@@ -68,6 +68,7 @@ class OpenVikingRetriever(BaseRetriever):
                     account=self.account,
                     user=self.user,
                     user_id=self.user_id,
+                    actor_peer_id=self.actor_peer_id,
                     path=self.path,
                     timeout=self.timeout,
                     extra_headers=self.extra_headers,
@@ -85,7 +86,6 @@ class OpenVikingRetriever(BaseRetriever):
             query=query,
             target_uri=self.target_uri,
             session_id=self.session_id,
-            peer_id=self.peer_id,
             limit=self.limit,
             score_threshold=self.score_threshold,
             filter=self.filter,

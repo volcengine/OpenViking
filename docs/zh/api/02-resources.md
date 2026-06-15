@@ -157,6 +157,8 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 
 **补充说明**：
 - `to` 和 `parent` 不能同时使用；如果使用 `parent` 且希望父目录不存在时自动创建，请传 `create_parent=true`。指定 `to` 且目标已存在时，触发增量更新。
+- 资源目标可以使用公共 `viking://resources/...`、当前用户短写 `viking://user/resources/...`、显式用户 `viking://user/{user_id}/resources/...`，或 peer 级 `viking://user/{user_id}/peers/{peer_id}/resources/...`。当前用户短写会按请求身份 canonicalize。
+- `user_id` 和 `peer_id` 路径片段必须是安全的单段标识，例如 `alice` 或 `web-visitor-alice`。包含路径分隔符、`.`、`..`、`:` 或 `+` 的值会被拒绝。
 - `path` 和 `temp_file_id` 不能同时指定，上传本地文件需要先通过 [temp_upload](#temp_upload) 上传获取 `temp_file_id`，在 SDK 和 CLI 中已经封装好。
 - 只有 Git 仓库来源在 `wait=false` 时使用完整后台导入；OpenViking 会先完成仓库 preflight 和目标规划，再返回 `task_id`。
 - `reason` 触发的记忆生成复用 `session.commit` 的抽取链路，只使用 `reason`、`viking://resources/...` URI、可用的资源名称和目录摘要，不会读取或展开完整资源正文；系统会写入 `entities`、`events`、`preferences` 等已有记忆类型，不创建独立的资源记忆目录。
@@ -202,6 +204,16 @@ curl -X POST http://localhost:1933/api/v1/resources \
     \"to\": \"viking://resources/guide.md\",
     \"reason\": \"User guide\"
   }"
+
+# 添加到当前用户私有资源根
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d "{
+    \"temp_file_id\": \"$TEMP_FILE_ID\",
+    \"parent\": \"viking://user/resources/docs\",
+    \"create_parent\": true
+  }"
 ```
 
 **Python SDK**
@@ -229,6 +241,13 @@ result = client.add_resource(
     "https://example.com/api-docs.md",
     to="viking://resources/external/api-docs.md",
     reason="External API docs"
+)
+
+## 添加到当前用户私有资源根
+result = client.add_resource(
+    "./documents/guide.md",
+    parent="viking://user/resources/docs",
+    create_parent=True,
 )
 
 ## 等待处理完成
@@ -265,6 +284,13 @@ ov add-resource https://github.com/example/repo.git --to viking://resources/my_r
 
 # 添加到指定父目录（父目录必须存在）
 ov add-resource ./documents/guide.md --parent viking://resources/docs
+
+# 添加到当前用户私有资源根
+ov add-resource ./documents/guide.md --parent viking://user/resources/docs
+
+# 添加到指定 peer 的私有资源根
+ov add-resource ./documents/guide.md \
+  --parent viking://user/alice/peers/web-visitor-alice/resources/docs
 
 # 添加到指定父目录（父目录不存在时自动创建）
 ov add-resource ./documents/guide.md -p viking://resources/docs/2026/05/07
@@ -485,6 +511,10 @@ cancel_watch(to_uri="viking://resources/guide.md")        # 按 URI 幂等删除
 | timeout | float | 否 | None | 超时时间（秒），仅 `wait=true` 时生效 |
 | telemetry | TelemetryRequest | 否 | False | 是否返回遥测数据 |
 
+技能始终安装到当前用户的 skills 根。公共短写 `viking://user/skills` 可用于文件系统和检索操作，
+会解析为 `viking://user/{user_id}/skills`；`add_skill` 不接受 `to`、`parent`、`root_uri`
+或 peer-scoped skill 目标。
+
 #### 3. 使用示例
 
 **HTTP API**
@@ -557,8 +587,8 @@ ov add-skill ./skills/my-skill.json --wait
   "status": "ok",
   "result": {
     "status": "success",
-    "root_uri": "viking://user/skills/my-skill",
-    "uri": "viking://user/skills/my-skill",
+    "root_uri": "viking://user/alice/skills/my-skill",
+    "uri": "viking://user/alice/skills/my-skill",
     "name": "my-skill",
     "auxiliary_files": 2,
     "queue_status": {
@@ -579,8 +609,8 @@ ov add-skill ./skills/my-skill.json --wait
 Note: Skill is being processed in the background.
 Use 'ov wait' to wait for completion, or 'ov observer queue' to check status.
 status          success
-root_uri        viking://user/skills/my-skill
-uri             viking://user/skills/my-skill
+root_uri        viking://user/alice/skills/my-skill
+uri             viking://user/alice/skills/my-skill
 name            my-skill
 auxiliary_files 2
 ```
@@ -590,8 +620,8 @@ auxiliary_files 2
 ```json
 {
   "status": "success",
-  "root_uri": "viking://user/skills/my-skill",
-  "uri": "viking://user/skills/my-skill",
+  "root_uri": "viking://user/alice/skills/my-skill",
+  "uri": "viking://user/alice/skills/my-skill",
   "name": "my-skill",
   "auxiliary_files": 2
 }
@@ -602,8 +632,8 @@ auxiliary_files 2
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `status` | string | 处理状态："success" 成功，"error" 失败 |
-| `root_uri` | string | 技能在 OpenViking 中的最终 URI（同 `uri`） |
-| `uri` | string | 技能在 OpenViking 中的最终 URI（同 `root_uri`） |
+| `root_uri` | string | 技能在 OpenViking 中的 canonical 最终 URI（同 `uri`） |
+| `uri` | string | 技能在 OpenViking 中的 canonical 最终 URI（同 `root_uri`） |
 | `name` | string | 技能名称 |
 | `auxiliary_files` | number | 技能附带的辅助文件数量 |
 | `queue_status` | object | （可选，仅当 `wait=true` 时）队列处理状态，包含 `pending`、`processing`、`completed` 计数 |

@@ -222,12 +222,12 @@ class TestCommit:
         session.add_message(
             "user",
             [TextPart("我是 Alice，后续发票问题请优先邮件联系我，邮箱是 alice@example.com。")],
-            peer_id="web:visitor:alice",
+            peer_id="web-visitor-alice",
         )
         session.add_message(
             "assistant",
             [TextPart("收到，我会优先通过邮件联系你，并继续跟进发票问题。")],
-            peer_id="web:visitor:alice",
+            peer_id="web-visitor-alice",
         )
 
         session._meta.memory_policy = {
@@ -247,9 +247,9 @@ class TestCommit:
                     "profile",
                 },
                 "allow_self_memory": False,
-                "allowed_peer_ids": {"web:visitor:alice"},
+                "allowed_peer_ids": {"web-visitor-alice"},
                 "roles": ["user", "assistant"],
-                "peer_ids": ["web:visitor:alice", "web:visitor:alice"],
+                "peer_ids": ["web-visitor-alice", "web-visitor-alice"],
             },
         ]
         assert execution_calls == []
@@ -395,6 +395,10 @@ class TestCommit:
     ):
         """Second commit should pass the latest completed archive overview into Phase 2."""
         session = client.session(session_id="latest_overview_threading_test")
+        session._meta.memory_policy = {
+            "peer": {"enabled": False},
+            "memory_types": ["profile"],
+        }
 
         session.add_message("user", [TextPart("First round message")])
         session.add_message("assistant", [TextPart("First round response")])

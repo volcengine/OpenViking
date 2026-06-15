@@ -328,6 +328,52 @@ async def test_add_resource_with_resources_root_to_uses_child_uri(
     assert body["result"]["root_uri"] == "viking://resources/tt_b"
 
 
+async def test_add_resource_with_user_resources_short_parent_initializes_root(
+    client: httpx.AsyncClient,
+    upload_temp_dir,
+):
+    archive_path = upload_temp_dir / "user_short_docs.zip"
+    with zipfile.ZipFile(archive_path, "w") as zf:
+        zf.writestr("user_short_docs/readme.md", "# hello\n")
+
+    resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "temp_file_id": archive_path.name,
+            "parent": "viking://user/resources",
+            "reason": "test user resource short parent import",
+            "wait": True,
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["result"]["root_uri"] == "viking://user/default/resources/user_short_docs"
+
+
+async def test_add_resource_with_peer_resources_root_to_uses_child_uri(
+    client: httpx.AsyncClient,
+    upload_temp_dir,
+):
+    archive_path = upload_temp_dir / "peer_docs.zip"
+    with zipfile.ZipFile(archive_path, "w") as zf:
+        zf.writestr("peer_docs/readme.md", "# hello\n")
+
+    resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "temp_file_id": archive_path.name,
+            "to": "viking://user/default/peers/alice/resources",
+            "reason": "test peer resource root import",
+            "wait": True,
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["result"]["root_uri"] == "viking://user/default/peers/alice/resources/peer_docs"
+
+
 async def test_add_resource_with_resources_root_to_trailing_slash_uses_child_uri(
     client: httpx.AsyncClient,
     upload_temp_dir,

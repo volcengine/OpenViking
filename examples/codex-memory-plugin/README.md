@@ -94,7 +94,7 @@ The shell function wrapper handles step 1 for you by promoting ovcli.conf fields
 
 Auth is sent as `Authorization: Bearer <api_key>` to both the REST API (used by hooks) and the `/mcp` endpoint (used by the model).
 
-Set `OPENVIKING_PEER_ID` when multiple Codex peers share the same OpenViking user and should keep separate peer memory. Hooks pass it as request-level `peer_id` for auto-recall and captured session messages. The legacy `codex.peerId` / `codex.peer_id` fields in `ov.conf` are also honored, but env vars are preferred.
+Set `OPENVIKING_PEER_ID` when multiple Codex peers share the same OpenViking user and should keep separate peer memory. Recall passes it as `X-OpenViking-Actor-Peer`; captured session messages store it as `peer_id`. The legacy `codex.peerId` / `codex.peer_id` fields in `ov.conf` are also honored, but env vars are preferred.
 
 For **unauthenticated local OV** (`ovcli.conf` without `api_key`, or no ovcli.conf at all), `.mcp.json` is rendered *without* `bearer_token_env_var`. Codex 0.130 hard-fails MCP startup with `Environment variable ... is empty` if `bearer_token_env_var` points at an empty/unset env var, so it must be omitted entirely when there's no key.
 

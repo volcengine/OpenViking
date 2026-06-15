@@ -3235,6 +3235,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "bytes",
+ "chrono",
  "clap",
  "colored",
  "crossterm 0.28.1",

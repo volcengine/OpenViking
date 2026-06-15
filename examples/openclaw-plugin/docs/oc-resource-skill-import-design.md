@@ -1,6 +1,6 @@
 # [RFC] OpenClaw Plugin 支持通过 OpenViking 导入/查询 Resource 与 Skill
 
-> 当前实现已调整：Agent 可见工具不再使用统一的 `ov_import(kind=...)`，而是拆为 `add_resource` 和 `add_skill`；手动 slash command 也对应拆为 `/add-resource` 和 `/add-skill`，不再保留 `/ov-import`。
+> 当前实现已调整：Agent 可见工具不再使用统一的 `ov_import(kind=...)`；`add_skill` 默认可用，`add_resource` 默认禁用并只能通过 `enableAddResourceTool=true` 显式开启。手动 slash command 保留 `/add-resource` 和 `/add-skill`，不再保留 `/ov-import`。
 
 ## 背景
 
@@ -18,7 +18,7 @@
 1. 在 OpenClaw 中支持通过插件导入 OpenViking resource。
 2. 在 OpenClaw 中支持通过插件导入 OpenViking skill。
 3. 对外拆成两个明确入口：
-   - resource：LLM tool `add_resource`，slash command `/add-resource`
+   - resource：默认使用手动 slash command `/add-resource`；LLM tool `add_resource` 仅在 `enableAddResourceTool=true` 时暴露
    - skill：LLM tool `add_skill`，slash command `/add-skill`
 4. 不再通过 `kind: "resource" | "skill"` 在一个入口里分流。
 5. 保持 HTTP server 的本地路径安全边界：不把本地路径直接发给 OpenViking 服务端。
@@ -79,7 +79,7 @@ HTTP 安全边界是：直接通过 HTTP 调 `/api/v1/skills` 时，不能传宿
 
 Resource 和 skill 的落点、参数和服务端 API 不同，对外暴露两个入口：
 
-- resource：LLM tool `add_resource`，slash command `/add-resource`
+- resource：默认使用手动 slash command `/add-resource`；LLM tool `add_resource` 仅在 `enableAddResourceTool=true` 时暴露
 - skill：LLM tool `add_skill`，slash command `/add-skill`
 
 Resource 导入：
@@ -96,7 +96,7 @@ Skill 导入：
 
 ### 2. 为什么拆成两个入口
 
-- 工具名直接对应 OV 已有能力名：`add_resource` / `add_skill`
+- 工具名直接对应 OV 已有能力名：`add_resource` / `add_skill`；其中 `add_resource` 是 opt-in agent tool，默认不注册，避免搜索阶段误触发导入
 - schema 不再混入 `kind`、`data`、`to`、`parent` 这类互斥参数
 - 用户手动命令也不再靠 `--kind skill` 切换语义
 - 底层仍复用 `OpenVikingClient.addResource()` / `addSkill()`，不复制上传逻辑
@@ -108,9 +108,11 @@ Skill 导入：
 新增工具：
 
 ```text
-add_resource
-add_skill
+add_skill                    # 默认注册
+add_resource                 # 默认禁用；仅 enableAddResourceTool=true 时注册
 ```
+
+`add_resource` 禁用默认值是安全边界：搜索、检索、URI 读取和搜索结果优化阶段只能使用 `ov_search` / `ov_read`，不能为了“补齐召回”自动导入新资源。
 
 参数：
 
@@ -474,7 +476,7 @@ v1 应检索 `resources` 和 `skills`，所以用户可见文本按分桶展示 
 v1 建议只返回检索结果摘要和 URI，不直接返回完整文件内容。原因：
 
 - 避免把大文档直接塞进上下文。
-- 用户或 LLM 可以基于 URI 再决定是否需要后续 `/ov-read` 或未来的 `ov_read`。
+- 用户或 LLM 可以基于 URI 再决定是否需要通过 `ov_read` 读取完整内容。
 - 保持 `ov_search` 作为导入后的最小消费闭环，而不是完整文件浏览器。
 
 #### 是否同时检索 memory/resource/skill
@@ -495,12 +497,11 @@ targetTypes?: Array<"memory" | "resource" | "skill">;
 
 #### 读取与树形查看
 
-`ov_search` 只解决“查到相关上下文”的问题。若用户需要更明确的文件浏览能力，后续可以再讨论：
+`ov_search` 只解决“查到相关上下文”的问题。当前实现增加了轻量 `ov_read` tool，用来读取精确 `viking://...` 命中 URI 的完整内容，避免模型把 OpenViking 虚拟 URI 当成本地文件路径。若用户需要更完整的文件浏览能力，后续可以再讨论：
 
-- `/ov-read <uri>`
 - `/ov-tree <uri>`
 
-v1 暂不加入，避免把导入 RFC 扩展成完整 OpenViking CLI replica。
+暂不加入通用 tree/list/move 等能力，避免把导入 RFC 扩展成完整 OpenViking CLI replica。
 
 ## 测试计划
 
@@ -522,7 +523,7 @@ v1 暂不加入，避免把导入 RFC 扩展成完整 OpenViking CLI replica。
 
 覆盖 `add_resource` / `add_skill`：
 
-- 注册 tool：`add_resource` / `add_skill`
+- 默认只注册 tool：`add_skill`；`add_resource` 仅在 `enableAddResourceTool=true` 时注册
 - 注册 command：`/add-resource` / `/add-skill`
 - quoted args
 - `--flag`
@@ -531,12 +532,15 @@ v1 暂不加入，避免把导入 RFC 扩展成完整 OpenViking CLI replica。
 - `--to` 与 `--parent` 冲突
 - `/add-skill` 拒绝 `to`、`parent`、`reason`、`instruction`
 
-覆盖 `ov_search`：
+覆盖 `ov_search` / `ov_read`：
 
 - 注册单个 tool：`ov_search`
 - 注册单个 command：`/ov-search`
 - 未指定 `uri` 时默认检索 `viking://resources` 和 `viking://user/skills`
 - 指定 `--uri` 时只检索该范围
+- `ov_search` 文本结果明确说明 `viking://...` 是 OpenViking 虚拟 URI，不是本地路径
+- 搜索、检索、URI 读取和搜索结果优化阶段不得调用 `add_resource`
+- 注册 `ov_read` tool，并验证它通过 `/api/v1/content/read?uri=...` 读取精确 `viking://...` URI
 - OpenViking error response 透传为可读错误
 - 查询为空时返回 usage error
 
@@ -573,4 +577,4 @@ v1 暂不加入，避免把导入 RFC 扩展成完整 OpenViking CLI replica。
 5. `ov_search` v1 是否默认检索 `viking://resources` 和 `viking://user/skills`？
    - 当前建议是。memory 仍交给既有 `memory_recall`，避免职责重叠。
 6. 是否需要在 v1 同时提供 `/ov-read` 或 `/ov-tree`？
-   - 当前建议不加，先用 `ov_search` 完成导入后的最小消费闭环。
+   - 当前实现提供 `ov_read` tool 解决 LLM 读取 OpenViking 命中 URI 的歧义；暂不加 `/ov-tree` 或通用文件浏览器能力。

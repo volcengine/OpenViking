@@ -98,6 +98,7 @@ describe("OpenClaw 5.5 package runtime contract", () => {
       "tsconfig.build.json",
       "package.json",
       "openclaw.plugin.json",
+      "recall-trace.ts",
     ]));
     expect(installManifest.compatibility?.minOpenclawVersion).toBe("2026.4.8");
   });

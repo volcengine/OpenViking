@@ -142,14 +142,14 @@ class TestSkillToolCallExposure:
                 id="m1",
                 role="user",
                 parts=[TextPart("My invoice is still missing.")],
-                peer_id="web:visitor:alice",
+                peer_id="web-visitor-alice",
             )
         ]
         provider = SessionExtractContextProvider(messages=messages)
 
         conversation = provider._assemble_conversation(messages)
 
-        assert "[0][user][web:visitor:alice]" in conversation
+        assert "[0][user][web-visitor-alice]" in conversation
         assert "[0][user][default]" not in conversation
 
     def test_detect_language_only_uses_text_parts(self):
