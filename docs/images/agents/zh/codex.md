@@ -5,7 +5,7 @@
 ## 步骤 1：安装
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/codex-memory-plugin/setup-helper/install.sh)
+bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/codex-memory-plugin/tos-install.sh)
 ```
 
 该脚本会自动检查依赖、配置 OpenViking 连接并注册插件。所有步骤均具有幂等性，可安全地重复执行。

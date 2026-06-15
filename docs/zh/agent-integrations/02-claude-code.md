@@ -12,6 +12,12 @@ bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/e
 
 该脚本将自动检查依赖项、配置 OpenViking 连接并完成插件安装，支持重复运行（幂等操作）。
 
+GitHub 访问受限的地区，可改用从火山引擎 TOS 拉取的等价命令（源码与安装器均经由 TOS，全程无需访问 GitHub）：
+
+```bash
+bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/claude-code-memory-plugin/tos-install.sh)
+```
+
 安装完成后，需在当前终端激活 `claude` 的封装函数（wrapper），或者直接打开一个新的终端窗口：
 
 ```bash
