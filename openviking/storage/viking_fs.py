@@ -22,7 +22,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import PurePath
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from openviking.core.namespace import (
     canonicalize_uri,
@@ -2381,19 +2381,22 @@ class VikingFS:
     async def read_batch(
         self, uris: List[str], level: str = "l0", ctx: Optional[RequestContext] = None
     ) -> Dict[str, str]:
-        """Batch read content from multiple URIs."""
-        results = {}
-        for uri in uris:
+        """Batch read content from multiple URIs concurrently."""
+        async def _read_one(uri: str) -> Tuple[str, str]:
             try:
-                content = ""
                 if level == "l0":
                     content = await self.abstract(uri, ctx=ctx)
                 elif level == "l1":
                     content = await self.overview(uri, ctx=ctx)
-                results[uri] = content
+                else:
+                    content = ""
+                return uri, content
             except Exception:
-                pass
-        return results
+                return uri, ""
+
+        tasks = [_read_one(uri) for uri in uris]
+        gathered = await asyncio.gather(*tasks)
+        return {uri: content for uri, content in gathered}
 
     # ========== Other Preserved Methods ==========
 
