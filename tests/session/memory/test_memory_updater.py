@@ -131,7 +131,9 @@ class TestMemoryUpdater:
             f"2026-06-12，用户保存了粉丝创作的越前龙马动漫插画资源，资源URI为{resource_uri}。",
         )
 
-        assert content == f"2026-06-12，[用户保存了粉丝创作的越前龙马动漫插画资源]({resource_uri})。"
+        assert (
+            content == f"2026-06-12，[用户保存了粉丝创作的越前龙马动漫插画资源]({resource_uri})。"
+        )
         assert "Resource URI" not in content
         assert "Added at" not in content
         assert "Resource abstract" not in content

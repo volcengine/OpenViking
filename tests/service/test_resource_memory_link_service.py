@@ -342,8 +342,7 @@ async def test_before_resource_delete_cleans_visible_uri_without_resource_refs(
         MemoryFile(
             uri=memory_uri,
             content=(
-                "今天是清明节。\n"
-                f"用户昨晚查看了[越前龙马照片]({resource_uri})，之后可参考该资源。"
+                f"今天是清明节。\n用户昨晚查看了[越前龙马照片]({resource_uri})，之后可参考该资源。"
             ),
             extra_fields={"memory_type": "events"},
         )
@@ -379,8 +378,7 @@ async def test_before_resource_delete_exact_keeps_child_resource_refs(
         MemoryFile(
             uri=memory_uri,
             content=(
-                f"用户保存了[相册资源]({resource_uri})。\n"
-                f"用户保存了[相册里的子图]({child_uri})。"
+                f"用户保存了[相册资源]({resource_uri})。\n用户保存了[相册里的子图]({child_uri})。"
             ),
             extra_fields={
                 "resource_refs": [

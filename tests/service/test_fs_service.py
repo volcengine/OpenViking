@@ -233,9 +233,7 @@ async def test_resource_rm_refreshes_memory_overview_for_cleaned_memories(
 ):
     cleanup = {
         "status": "success",
-        "memory_uris": [
-            "viking://user/ryoma/memories/entities/动漫角色/不二周助-write-test.md"
-        ],
+        "memory_uris": ["viking://user/ryoma/memories/entities/动漫角色/不二周助-write-test.md"],
         "deleted_memory_uris": [
             "viking://user/ryoma/memories/entities/动漫角色/不二周助-link-test2.md"
         ],
@@ -261,9 +259,7 @@ async def test_resource_rm_refreshes_memory_overview_for_cleaned_memories(
     uri = "viking://resources/images/2026/06/11/不二周助_jpeg"
     result = await service.rm(uri, ctx=request_context, recursive=True)
 
-    assert link_service.calls == [
-        {"ctx": request_context, "resource_uri": uri, "recursive": True}
-    ]
+    assert link_service.calls == [{"ctx": request_context, "resource_uri": uri, "recursive": True}]
     assert refreshed == [
         {
             "viking_fs": viking_fs,

@@ -357,7 +357,9 @@ class FSService:
                 raise DeadlineExceededError("queue processing", timeout) from exc
             return get_request_wait_tracker().build_queue_status(telemetry_id)
         try:
-            return build_queue_status_payload(await get_queue_manager().wait_complete(timeout=timeout))
+            return build_queue_status_payload(
+                await get_queue_manager().wait_complete(timeout=timeout)
+            )
         except TimeoutError as exc:
             raise DeadlineExceededError("queue processing", timeout) from exc
 

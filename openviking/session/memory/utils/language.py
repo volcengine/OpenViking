@@ -81,20 +81,40 @@ _LOCALE_LANGUAGE_PREFIXES = {
 # Use Timezone as a weak fallback signal.
 _TIMEZONE_LANGUAGE_GROUPS = {
     "zh-CN": (
-        "asia/shanghai", "asia/chongqing", "asia/harbin", "asia/urumqi",
-        "asia/hong_kong", "asia/macau", "asia/taipei", "prc", "roc", "hongkong",
-        "china standard time", "taipei standard time",
+        "asia/shanghai",
+        "asia/chongqing",
+        "asia/harbin",
+        "asia/urumqi",
+        "asia/hong_kong",
+        "asia/macau",
+        "asia/taipei",
+        "prc",
+        "roc",
+        "hongkong",
+        "china standard time",
+        "taipei standard time",
     ),
     "ja": ("asia/tokyo", "japan", "tokyo standard time"),
     "ko": ("asia/seoul", "rok", "korea standard time"),
     "ru": (
-        "europe/moscow", "europe/kaliningrad", "asia/yekaterinburg", "asia/vladivostok",
+        "europe/moscow",
+        "europe/kaliningrad",
+        "asia/yekaterinburg",
+        "asia/vladivostok",
         "russian standard time",
     ),
     "ar": (
-        "asia/riyadh", "asia/dubai", "asia/qatar", "asia/kuwait",
-        "asia/baghdad", "africa/cairo", "africa/algiers", "africa/tunis",
-        "arab standard time", "arabian standard time", "egypt standard time",
+        "asia/riyadh",
+        "asia/dubai",
+        "asia/qatar",
+        "asia/kuwait",
+        "asia/baghdad",
+        "africa/cairo",
+        "africa/algiers",
+        "africa/tunis",
+        "arab standard time",
+        "arabian standard time",
+        "egypt standard time",
     ),
     "it": ("europe/rome",),
     "fr": ("europe/paris",),
@@ -102,13 +122,34 @@ _TIMEZONE_LANGUAGE_GROUPS = {
     "de": ("europe/berlin",),
     "pt": ("europe/lisbon", "america/sao_paulo"),
     "en": (
-        "america/new_york", "america/chicago", "america/denver", "america/los_angeles",
-        "america/phoenix", "america/anchorage", "pacific/honolulu", "us/eastern",
-        "us/central", "us/mountain", "us/pacific", "europe/london", "europe/dublin",
-        "gb", "gb-eire", "america/toronto", "america/vancouver", "canada/eastern",
-        "canada/pacific", "australia/sydney", "australia/melbourne",
-        "australia/brisbane", "australia/perth", "pacific/auckland", "nz",
-        "eastern standard time", "pacific standard time", "gmt standard time",
+        "america/new_york",
+        "america/chicago",
+        "america/denver",
+        "america/los_angeles",
+        "america/phoenix",
+        "america/anchorage",
+        "pacific/honolulu",
+        "us/eastern",
+        "us/central",
+        "us/mountain",
+        "us/pacific",
+        "europe/london",
+        "europe/dublin",
+        "gb",
+        "gb-eire",
+        "america/toronto",
+        "america/vancouver",
+        "canada/eastern",
+        "canada/pacific",
+        "australia/sydney",
+        "australia/melbourne",
+        "australia/brisbane",
+        "australia/perth",
+        "pacific/auckland",
+        "nz",
+        "eastern standard time",
+        "pacific standard time",
+        "gmt standard time",
     ),
 }
 
@@ -128,7 +169,11 @@ def _language_allowed_by_fallback(language: str, fallback_language: str) -> bool
 
 
 def _is_strong_dominant(count: int, total: int) -> bool:
-    return count >= _STRONG_DOMINANT_MIN_CHARS and total > 0 and count / total >= _STRONG_DOMINANT_RATIO
+    return (
+        count >= _STRONG_DOMINANT_MIN_CHARS
+        and total > 0
+        and count / total >= _STRONG_DOMINANT_RATIO
+    )
 
 
 def _language_from_locale_value(value: str) -> str:

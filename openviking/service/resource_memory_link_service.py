@@ -458,7 +458,9 @@ class ResourceMemoryLinkService:
             for ref in self._coerce_resource_refs(mf.extra_fields.get("resource_refs")):
                 if self._resource_ref_matches(ref.get("resource_uri"), resource_uri, recursive):
                     matches.append(_MemoryRefMatch(uri, mf, ref))
-            if not any(match.memory_uri == uri for match in matches) and content_references_resource(
+            if not any(
+                match.memory_uri == uri for match in matches
+            ) and content_references_resource(
                 mf.content,
                 resource_uri,
                 recursive=recursive,

@@ -203,10 +203,7 @@ class TestSkillToolCallExposure:
                 id="m1",
                 role="user",
                 parts=[
-                    TextPart(
-                        "这是越前龙马的照片 "
-                        "viking://resources/images/2026/06/12/yueqian_jpeg"
-                    )
+                    TextPart("这是越前龙马的照片 viking://resources/images/2026/06/12/yueqian_jpeg")
                 ],
             )
         ]

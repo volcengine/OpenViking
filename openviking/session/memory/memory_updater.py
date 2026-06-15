@@ -834,7 +834,11 @@ class MemoryUpdater:
         viking_fs = self._get_viking_fs()
         deleted_uris = set(result.deleted_uris)
         for uri in dict.fromkeys(result.written_uris + result.edited_uris):
-            if uri in deleted_uris or uri.endswith("/.overview.md") or uri.endswith("/.abstract.md"):
+            if (
+                uri in deleted_uris
+                or uri.endswith("/.overview.md")
+                or uri.endswith("/.abstract.md")
+            ):
                 continue
             try:
                 raw = await viking_fs.read_file(uri, ctx=ctx)
