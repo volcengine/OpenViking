@@ -140,7 +140,7 @@ finally:
 
 ```bash
 # Check system health
-openviking observer system
+openviking system status
 
 # Add a resource to memory
 openviking add-resource https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md
@@ -347,7 +347,7 @@ vim ~/.openviking/ovcli.conf
 ```
 - 执行系统观察命令，监控系统健康状态：
 ```
-openviking observer system
+openviking system status
 ```
 - 功能测试（上传与查找）
 ```

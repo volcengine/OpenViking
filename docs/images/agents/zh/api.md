@@ -60,7 +60,7 @@ print(json.dumps(result, ensure_ascii=False, indent=2))
 
 ```python
 text = "[TODO]your-message-text" # e.g. I am a developer
-    
+
 def post_json(path: str, payload: dict, timeout: float):
     response = requests.post(f"{url}{path}", headers=headers, json=payload, timeout=timeout)
     response.raise_for_status()

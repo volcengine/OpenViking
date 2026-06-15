@@ -936,7 +936,7 @@ impl Commands {
     fn is_admin_command(&self) -> bool {
         matches!(
             self,
-            Self::Admin { .. } | Self::System { .. } | Self::Reindex { .. }
+            Self::Admin { .. } | Self::System { .. } | Self::Observer { .. } | Self::Reindex { .. }
         )
     }
 
