@@ -90,6 +90,8 @@ class _ReindexCounters:
     rebuilt_records: int = 0
     unsupported_records: int = 0
     failed_records: int = 0
+    indexed_files: int = 0
+    skipped_files: int = 0
     warnings: list[str] = field(default_factory=list)
 
 
@@ -460,6 +462,8 @@ class ReindexExecutor:
             "rebuilt_records": counters.rebuilt_records,
             "unsupported_records": counters.unsupported_records,
             "failed_records": counters.failed_records,
+            "indexed_files": counters.indexed_files,
+            "skipped_files": counters.skipped_files,
             "duration_ms": int((time.perf_counter() - started_at) * 1000),
             "warnings": counters.warnings,
         }
@@ -599,7 +603,9 @@ class ReindexExecutor:
                     continue
                 if entry.get("isDir"):
                     directories.append(entry_uri)
-                elif not self._is_hidden_meta_file(entry_uri):
+                elif self._is_hidden_meta_file(entry_uri):
+                    counters.skipped_files += 1
+                else:
                     files.append(entry_uri)
         else:
             directories = []
@@ -688,6 +694,7 @@ class ReindexExecutor:
             vector_text = await self._best_resource_file_vector_text(file_uri, summary, ctx=ctx)
             if not vector_text:
                 counters.unsupported_records += 1
+                counters.skipped_files += 1
                 counters.warnings.append(f"No vector source found for {file_uri}")
                 continue
             abstract = self._prefer_non_empty(summary, vector_text)
@@ -703,6 +710,7 @@ class ReindexExecutor:
                     ctx=ctx,
                 )
                 counters.rebuilt_records += 1
+                counters.indexed_files += 1
             except Exception as exc:
                 counters.failed_records += 1
                 counters.warnings.append(f"Failed to reindex {file_uri} vector: {exc}")
@@ -763,7 +771,9 @@ class ReindexExecutor:
                 continue
             if entry.get("isDir"):
                 resource_directories.append(entry_uri)
-            elif not self._is_hidden_meta_file(entry_uri):
+            elif self._is_hidden_meta_file(entry_uri):
+                counters.skipped_files += 1
+            else:
                 resource_files.append(entry_uri)
 
         for memory_root in sorted(set(memory_roots)):
@@ -842,7 +852,9 @@ class ReindexExecutor:
                 continue
             if entry.get("isDir"):
                 resource_directories.append(entry_uri)
-            elif not self._is_hidden_meta_file(entry_uri):
+            elif self._is_hidden_meta_file(entry_uri):
+                counters.skipped_files += 1
+            else:
                 resource_files.append(entry_uri)
 
         for user_root in sorted(set(user_roots)):
