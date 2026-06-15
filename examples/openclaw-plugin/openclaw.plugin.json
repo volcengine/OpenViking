@@ -84,8 +84,8 @@
     },
     "peer_role": {
       "label": "Peer Role",
-      "placeholder": "none",
-      "help": "Controls which messages include peer_id: none, assistant, or person. New installs default to none."
+      "placeholder": "assistant",
+      "help": "Controls which messages include peer_id: none, assistant, or person. New installs default to assistant."
     },
     "peer_prefix": {
       "label": "Peer Prefix",
@@ -273,7 +273,7 @@
           "assistant",
           "person"
         ],
-        "default": "none",
+        "default": "assistant",
         "description": "Controls which session messages include peer_id."
       },
       "peer_prefix": {

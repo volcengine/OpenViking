@@ -147,11 +147,13 @@ Collect 3 values through natural conversation. Be flexible: if the user gives se
 
 ### 4c. `PEER_ROLE` / `PEER_PREFIX` (OPTIONAL)
 
-Default to no peer scoping: `peer_role=none` and empty `peer_prefix`.
+Default to assistant peer scoping: `peer_role=assistant` and empty `peer_prefix`.
 
 Only collect peer settings when the user explicitly wants multiple OpenClaw assistants or senders to be separated:
 
 - For assistant-specific memory routing, use `--peer-role assistant`.
+- To disable peer routing, use `--peer-role none`.
+- For sender-specific memory routing, use `--peer-role person`.
 - If they provide a prefix such as `openclaw-prod`, pass it as `--peer-prefix openclaw-prod`.
 - `peer_prefix` may contain only letters, digits, `_`, and `-`.
 
@@ -402,7 +404,7 @@ Expected output:
   "configured": true,
   "slotActive": true,
   "health": { "ok": true },
-  "config": { "baseUrl": "...", "peer_role": "none", "peer_prefix": "..." }
+  "config": { "baseUrl": "...", "peer_role": "assistant", "peer_prefix": "..." }
 }
 ```
 
@@ -509,7 +511,7 @@ These are the keys under `plugins.entries.openviking.config` in `openclaw.json`.
 | `mode` | `"remote"` (forced by plugin) | Always remote in this skill. Don't set manually. |
 | `baseUrl` | `http://127.0.0.1:1933` | OpenViking server URL. |
 | `apiKey` | — | API key. Optional if server has no auth. |
-| `peer_role` | `"none"` | Controls whether session messages include `peer_id`: `none`, `assistant`, or `person`. |
+| `peer_role` | `"assistant"` | Controls whether session messages include `peer_id`: `none`, `assistant`, or `person`. |
 | `peer_prefix` | `""` | Optional prefix for assistant `peer_id` values when `peer_role=assistant`. |
 | `accountId` | — | Required when `apiKey` is a root key. |
 | `userId` | — | Required when `apiKey` is a root key. |

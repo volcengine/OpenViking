@@ -119,8 +119,8 @@ openclaw config get plugins.slots.contextEngine  # 应输出：openviking
 - `sessionId` 是 UUID 时直接复用。
 - `sessionKey` 存在时优先用它生成稳定的 `ovSessionId`。
 - 非安全路径字符会被规整或退化成稳定的 SHA-256。
-- `peer_role=none` 是默认值，session message 不写 `peer_id`。
-- `peer_role=assistant` 时，assistant message 写入 `peer_id=<sessionAgent>`；如果配置了 `peer_prefix`，则写入 `<peer_prefix>_<sessionAgent>`。
+- `peer_role=assistant` 是默认值，assistant message 写入 `peer_id=<sessionAgent>`；如果配置了 `peer_prefix`，则写入 `<peer_prefix>_<sessionAgent>`。
+- `peer_role=none` 会关闭 peer message 归因和 actor-peer 路由。
 - `peer_role=person` 时，user message 使用 OpenClaw sender 身份派生 `peer_id`；assistant message 不写 `peer_id`。
 - 数据面的 recall/search/read/import/delete 会在 `peer_role=assistant` 或 `peer_role=person` 时把同一个解析后的 peer 身份作为 `X-OpenViking-Actor-Peer` 发送。
 - OpenClaw 没有提供 session agent 时，使用其默认 agent `main` 作为本地 session 和 assistant peer metadata。
@@ -138,7 +138,7 @@ openclaw config get plugins.slots.contextEngine  # 应输出：openviking
 其中：
 
 - `apiKey` 推荐使用某个 user 的 user key
-- 新安装默认 `peer_role=none`
+- 新安装默认 `peer_role=assistant`
 - `accountId` / `userId` 仅在部署需要显式身份 header 时作为高级选项使用，例如 root key 或 trusted server 流程
 
 ### User namespace

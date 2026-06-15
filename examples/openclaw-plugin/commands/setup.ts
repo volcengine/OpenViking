@@ -79,6 +79,7 @@ const CONFIG_KEYS_TO_PRESERVE = [
 ] as const;
 
 type PeerRole = "none" | "assistant" | "person";
+const DEFAULT_SETUP_PEER_ROLE: PeerRole = "assistant";
 type RecallTargetType = "resource" | "user" | "agent";
 const ALLOWED_RECALL_TARGET_TYPES = ["resource", "user", "agent"] as const;
 
@@ -121,7 +122,7 @@ function normalizePeerRole(value: unknown): PeerRole | undefined {
 function resolveExistingPeerRole(existing: Record<string, unknown> | null | undefined): PeerRole {
   const explicit = normalizePeerRole(existing?.peer_role);
   if (explicit) return explicit;
-  return "none";
+  return DEFAULT_SETUP_PEER_ROLE;
 }
 
 function resolveExistingPeerPrefix(existing: Record<string, unknown> | null | undefined): string {
@@ -132,7 +133,7 @@ function resolveExistingPeerPrefix(existing: Record<string, unknown> | null | un
 }
 
 function resolveSetupPeerRole(value: unknown): PeerRole {
-  if (value === undefined) return "none";
+  if (value === undefined) return DEFAULT_SETUP_PEER_ROLE;
   const role = normalizePeerRole(value);
   if (role) return role;
   throw new Error('peer_role must be "none", "assistant", or "person"');
@@ -911,7 +912,7 @@ function printSetupResult(zh: boolean, result: SetupResult): void {
       console.log(`  mode:    ${result.config.mode}`);
       console.log(`  baseUrl: ${result.config.baseUrl}`);
       if (result.config.apiKey) console.log(`  apiKey:  ${result.config.apiKey}`);
-      console.log(`  peer_role: ${result.config.peer_role ?? "none"}`);
+      console.log(`  peer_role: ${result.config.peer_role ?? DEFAULT_SETUP_PEER_ROLE}`);
       if (result.config.peer_prefix) console.log(`  peer_prefix: ${result.config.peer_prefix}`);
       if (result.config.accountId) console.log(`  accountId: ${result.config.accountId}`);
       if (result.config.userId) console.log(`  userId:  ${result.config.userId}`);

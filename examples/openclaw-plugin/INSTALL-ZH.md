@@ -200,7 +200,7 @@ openclaw openviking setup \
 openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --force-slot --json
 ```
 
-如需给 assistant message 写入带前缀的 `peer_id`，并让数据面 recall/search 使用对应 actor peer 视图（可选；多数用户保持默认 `none` 即可）：
+如需给默认 assistant peer 路由增加前缀，可以额外传：
 
 ```bash
 openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --peer-role assistant --peer-prefix <PREFIX> --json
@@ -264,7 +264,7 @@ plugins.entries.openviking.config
 | `mode` | `remote` | 兼容旧配置的字段。当前只支持 remote。 |
 | `baseUrl` | `http://127.0.0.1:1933` | OpenViking HTTP 地址 |
 | `apiKey` | 空 | OpenViking API key |
-| `peer_role` | `none` | Peer 身份模式：`none`、`assistant` 或 `person`。Session message 使用 body `peer_id`；数据面 recall/search 使用 `X-OpenViking-Actor-Peer`。 |
+| `peer_role` | `assistant` | Peer 身份模式：`none`、`assistant` 或 `person`。Session message 使用 body `peer_id`；数据面 recall/search 使用 `X-OpenViking-Actor-Peer`。 |
 | `peer_prefix` | 空 | `peer_role=assistant` 时 assistant `peer_id` / actor peer 值的可选前缀。 |
 | `accountId` | 空 | 使用 root API key 时需要 |
 | `userId` | 空 | 使用 root API key 时需要 |
@@ -289,7 +289,7 @@ openclaw config get plugins.entries.openviking.config
 | --- | --- | --- |
 | `baseUrl` | `http://127.0.0.1:1933` | 远端 OpenViking 服务地址 |
 | `apiKey` | 空 | 远端 OpenViking API Key；服务端未开启认证时可不填 |
-| `peer_role` | `none` | Peer 身份模式：`none`、`assistant` 或 `person`；session message 使用 body `peer_id`，数据面 recall/search 使用 `X-OpenViking-Actor-Peer` |
+| `peer_role` | `assistant` | Peer 身份模式：`none`、`assistant` 或 `person`；session message 使用 body `peer_id`，数据面 recall/search 使用 `X-OpenViking-Actor-Peer` |
 | `peer_prefix` | 空 | `peer_role=assistant` 时 assistant `peer_id` / actor peer 值的可选前缀 |
 
 常见设置：

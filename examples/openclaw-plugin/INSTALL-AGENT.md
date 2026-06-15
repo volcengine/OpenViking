@@ -268,7 +268,7 @@ Core fields:
 | `mode` | Legacy compatibility field. Expected value: `remote`. |
 | `baseUrl` | OpenViking HTTP endpoint |
 | `apiKey` | OpenViking API key |
-| `peer_role` | Peer identity mode: `none`, `assistant`, or `person`. New installs default to `none`. Session messages use body `peer_id`; data-plane recall/search uses `X-OpenViking-Actor-Peer`. |
+| `peer_role` | Peer identity mode: `none`, `assistant`, or `person`. New installs default to `assistant`. Session messages use body `peer_id`; data-plane recall/search uses `X-OpenViking-Actor-Peer`. |
 | `peer_prefix` | Optional prefix for assistant `peer_id` / actor peer values when `peer_role=assistant`. |
 | `accountId` | Required for root API keys |
 | `userId` | Required for root API keys |
@@ -331,7 +331,7 @@ Existing config fields are preserved during migration. The new plugin reads old 
 
 - `baseUrl`
 - `apiKey`
-- `peer_role`: optional; default `none`; selects the peer identity mode
+- `peer_role`: optional; default `assistant`; selects the peer identity mode
 - `peer_prefix`: optional assistant `peer_id` / actor peer prefix when `peer_role=assistant`
 
 ## Backup Path: ov-install

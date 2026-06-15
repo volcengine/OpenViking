@@ -63,7 +63,7 @@ Core config lives under `plugins.entries.openviking.config`:
 |---|---:|---|
 | `baseUrl` | `http://127.0.0.1:1933` | OpenViking HTTP endpoint. Can also come from `OPENVIKING_BASE_URL` / `OPENVIKING_URL`. |
 | `apiKey` | empty | Optional API key. Can also come from `OPENVIKING_API_KEY`. |
-| `peer_role` | `none` | Controls which speaker identity is sent as OpenViking `peer_id`: `none`, `assistant`, or `person`. |
+| `peer_role` | `assistant` | Controls which speaker identity is sent as OpenViking `peer_id`: `none`, `assistant`, or `person`. |
 | `peer_prefix` | empty | Optional prefix for assistant `peer_id` values when `peer_role=assistant`; final value is `<prefix>_<OpenClaw ctx.agentId>`, sanitized. |
 | `accountId` / `userId` | empty | Advanced tenant identity headers for root-key or trusted deployments. |
 | `targetUri` | `viking://user/memories` | Default search scope for legacy targeted memory search. |

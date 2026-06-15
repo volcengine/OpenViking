@@ -24,7 +24,7 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.captureMaxLength).toBe(24000);
     expect(cfg.autoRecallTimeoutMs).toBe(5000);
     expect(cfg.recallMaxContentChars).toBe(5000);
-    expect(cfg.peer_role).toBe("none");
+    expect(cfg.peer_role).toBe("assistant");
     expect(cfg.peer_prefix).toBe("");
     expect(cfg.emitStandardDiagnostics).toBe(false);
     expect(cfg.traceRecall).toBe(false);
@@ -293,7 +293,7 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
 
   it("resolves peer_prefix from configured value", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({ peer_prefix: "  my-agent  " });
-    expect(cfg.peer_role).toBe("none");
+    expect(cfg.peer_role).toBe("assistant");
     expect(cfg.peer_prefix).toBe("my-agent");
   });
 

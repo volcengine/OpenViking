@@ -247,7 +247,7 @@ describe("context-engine assemble()", () => {
     expect(client.find).toHaveBeenCalledTimes(1);
     expect(client.find.mock.calls[0]![1]).toMatchObject({ contextType: "memory" });
     expect(client.find.mock.calls[0]![1].targetUri).toBeUndefined();
-    expect(client.find.mock.calls[0]![1].actorPeerId).toBeUndefined();
+    expect(client.find.mock.calls[0]![1].actorPeerId).toBe("agent_session-transform-default-targets");
 
     const recorded = traces.query({
       turn: "latest",
