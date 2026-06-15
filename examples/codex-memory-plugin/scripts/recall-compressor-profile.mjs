@@ -173,6 +173,26 @@ export async function invalidateRecallCompressorProfileCache() {
 }
 
 /**
+ * Record a runtime compress failure as a disabled profile. UserPromptSubmit
+ * reads the cached profile directly, so writing `enabled: false` here makes
+ * subsequent UPS calls within the same codex session skip compress (and
+ * fall back to deterministic digest) instead of paying ~recallCompressTimeoutMs
+ * per turn on a guaranteed-to-fail spawn. The next SessionStart's cache-
+ * first detect treats `source === "runtime_failed"` as a cache miss and
+ * re-resolves from the current catalogue, so a transient failure does not
+ * permanently disable compress across codex restarts.
+ */
+export async function markRecallCompressorRuntimeFailed(cfg, { failedModel = "" } = {}) {
+  try {
+    await saveRecallCompressorProfile(cfg, {
+      enabled: false,
+      source: "runtime_failed",
+      failedModel: String(failedModel || ""),
+    });
+  } catch { /* best effort */ }
+}
+
+/**
  * Pick a compressor profile by consulting codex's local model catalogue.
  *
  * No subprocess: we read `~/.codex/models_cache.json` (codex CLI maintains
@@ -236,14 +256,17 @@ export async function resolveRecallCompressorProfile(cfg, logger = {}, env = pro
 export async function detectRecallCompressorProfile(cfg, logger = {}, env = process.env) {
   const { log } = logger;
   const cached = await loadCachedRecallCompressorProfile(cfg);
-  if (cached) {
+  if (cached && cached.source !== "runtime_failed") {
     log?.("compress_profile_cache_hit", cached);
     return cached;
   }
-  if (!cfg.recallCompressDetectOnStartup) {
-    log?.("compress_profile_skip", { reason: "detect disabled and no cache" });
-    return null;
+  if (cached && cached.source === "runtime_failed") {
+    log?.("compress_profile_recover", { failedModel: cached.failedModel || "" });
   }
-  log?.("compress_profile_resolve", { reason: "cache_miss" });
+  if (!cfg.recallCompressDetectOnStartup) {
+    log?.("compress_profile_skip", { reason: "detect disabled and no usable cache" });
+    return cached || null;
+  }
+  log?.("compress_profile_resolve", { reason: cached ? "runtime_failed_recover" : "cache_miss" });
   return resolveRecallCompressorProfile(cfg, logger, env);
 }

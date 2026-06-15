@@ -7,7 +7,9 @@ import test from "node:test";
 import {
   detectRecallCompressorProfile,
   invalidateRecallCompressorProfileCache,
+  loadCachedRecallCompressorProfile,
   loadCodexModelsCache,
+  markRecallCompressorRuntimeFailed,
   resolveRecallCompressorProfile,
 } from "./recall-compressor-profile.mjs";
 
@@ -213,5 +215,61 @@ test("detectRecallCompressorProfile with detect_on_startup=false returns null on
       { CODEX_HOME: codexHome },
     );
     assert.equal(profile, null);
+  });
+});
+
+test("markRecallCompressorRuntimeFailed writes a disabled profile cached for UPS skip", async () => {
+  await withTempState(async ({ codexHome }) => {
+    await writeModelsCache(codexHome, ["gpt-5.5"]);
+    await resolveRecallCompressorProfile(baseCfg(), {}, { CODEX_HOME: codexHome });
+
+    await markRecallCompressorRuntimeFailed(baseCfg(), { failedModel: "gpt-5.3-codex-spark" });
+    const cached = await loadCachedRecallCompressorProfile(baseCfg());
+    assert.ok(cached, "expected cached profile to exist");
+    assert.equal(cached.enabled, false);
+    assert.equal(cached.source, "runtime_failed");
+    assert.equal(cached.failedModel, "gpt-5.3-codex-spark");
+  });
+});
+
+test("detectRecallCompressorProfile recovers across SessionStart after runtime_failed marker", async () => {
+  await withTempState(async ({ codexHome }) => {
+    // Initial healthy resolve.
+    await writeModelsCache(codexHome, ["gpt-5.3-codex-spark", "gpt-5.5"]);
+    const initial = await detectRecallCompressorProfile(baseCfg(), {}, { CODEX_HOME: codexHome });
+    assert.equal(initial.model, "gpt-5.3-codex-spark");
+
+    // Runtime compress failure marks the cache disabled. UPS within the
+    // same session would now read this disabled profile and skip compress.
+    await markRecallCompressorRuntimeFailed(baseCfg(), { failedModel: "gpt-5.3-codex-spark" });
+    const within = await loadCachedRecallCompressorProfile(baseCfg());
+    assert.equal(within.enabled, false);
+
+    // Next codex SessionStart: catalogue shrinks (the failed slug went
+    // away). Detect should treat runtime_failed as cache miss and
+    // re-resolve against the current catalogue, picking gpt-5.5.
+    await writeModelsCache(codexHome, ["gpt-5.5"]);
+    const recovered = await detectRecallCompressorProfile(baseCfg(), {}, { CODEX_HOME: codexHome });
+    assert.equal(recovered.enabled, true);
+    assert.equal(recovered.model, "gpt-5.5");
+  });
+});
+
+test("detectRecallCompressorProfile with detect_on_startup=false honors runtime_failed marker", async () => {
+  await withTempState(async ({ codexHome }) => {
+    await writeModelsCache(codexHome, ["gpt-5.5"]);
+    await resolveRecallCompressorProfile(baseCfg(), {}, { CODEX_HOME: codexHome });
+    await markRecallCompressorRuntimeFailed(baseCfg(), { failedModel: "gpt-5.5" });
+
+    const profile = await detectRecallCompressorProfile(
+      baseCfg({ recallCompressDetectOnStartup: false }),
+      {},
+      { CODEX_HOME: codexHome },
+    );
+    // With detect-on-startup disabled, we respect the marker (don't auto-
+    // recover); UPS keeps skipping compress until manual intervention.
+    assert.ok(profile);
+    assert.equal(profile.enabled, false);
+    assert.equal(profile.source, "runtime_failed");
   });
 });

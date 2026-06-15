@@ -22,8 +22,8 @@ import { createLogger } from "./debug-log.mjs";
 import {
   buildCodexExecArgs,
   fallbackRecallCompressorProfile,
-  invalidateRecallCompressorProfileCache,
   loadCachedRecallCompressorProfile,
+  markRecallCompressorRuntimeFailed,
 } from "./recall-compressor-profile.mjs";
 
 const cfg = loadConfig();
@@ -374,16 +374,21 @@ async function runCodexCompressor(prompt, profile) {
       let stderr = "";
       const child = spawn("codex", args, { env, stdio: ["pipe", "ignore", "pipe"] });
       activeCompressor = child;
-      const finish = (value, { invalidate = false } = {}) => {
+      const finish = (value, { runtimeFailed = false } = {}) => {
         if (done) return;
         done = true;
         if (activeCompressor === child) activeCompressor = null;
         clearTimeout(timer);
-        if (invalidate) {
-          // Forget cached profile so next SessionStart / UserPromptSubmit
-          // re-resolves against the current models_cache.json. Cheap fire-
-          // and-forget; failure to delete is fine, the next save overwrites.
-          invalidateRecallCompressorProfileCache().catch(() => {});
+        if (runtimeFailed) {
+          // Mark the profile as runtime_failed so subsequent UPS calls in
+          // this same codex session skip compress (avoids burning
+          // ~recallCompressTimeoutMs per turn on a guaranteed-to-fail
+          // spawn). Next SessionStart's cache-first detect treats this
+          // marker as a cache miss and re-resolves against the current
+          // catalogue, so a transient failure self-recovers across codex
+          // restarts. Best-effort write; failure is non-fatal.
+          markRecallCompressorRuntimeFailed(cfg, { failedModel: profile.model || "" })
+            .catch(() => {});
         }
         resolve(value);
       };
@@ -401,11 +406,11 @@ async function runCodexCompressor(prompt, profile) {
       });
       child.on("error", (err) => {
         logError("compress_spawn", err);
-        finish(null, { invalidate: true });
+        finish(null, { runtimeFailed: true });
       });
       child.on("close", async (code) => {
         if (timedOut) {
-          finish(null, { invalidate: true });
+          finish(null, { runtimeFailed: true });
           return;
         }
         if (code !== 0) {
@@ -413,14 +418,14 @@ async function runCodexCompressor(prompt, profile) {
             profile,
             error: stderr.trim().slice(-1000) || `codex exited ${code}`,
           });
-          finish(null, { invalidate: true });
+          finish(null, { runtimeFailed: true });
           return;
         }
         try {
           finish(await readFile(outputPath, "utf-8"));
         } catch (err) {
           logError("compress_read", err);
-          finish(null, { invalidate: true });
+          finish(null, { runtimeFailed: true });
         }
       });
       child.stdin.end(prompt);
