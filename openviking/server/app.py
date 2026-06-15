@@ -33,6 +33,7 @@ from openviking.server.routers import (
     bot_router,
     console_router,
     content_router,
+    daemon_router,
     debug_router,
     filesystem_router,
     metrics_router,
@@ -537,6 +538,7 @@ def create_app(
     app.include_router(watches_router)
     app.include_router(webdav_router)
     app.include_router(bot_router, prefix="/bot/v1")
+    app.include_router(daemon_router)
 
     # OAuth 2.1: when enabled, mount the official MCP SDK auth routes
     # (DCR / authorize / token / metadata) plus our authorize page + consent /
