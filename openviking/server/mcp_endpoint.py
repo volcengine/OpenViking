@@ -21,7 +21,7 @@ import contextvars
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import List, Literal, Optional
+from typing import Any, List, Literal, Optional
 from urllib.parse import quote
 
 from mcp.server.fastmcp import FastMCP
@@ -440,6 +440,7 @@ async def add_resource(
     description: str = "",
     watch_interval: float = 0,
     to: str = "",
+    args: Optional[dict[str, Any]] = None,
 ) -> str:
     """Add a resource to OpenViking. Asynchronous — processing happens in the background.
 
@@ -473,6 +474,9 @@ async def add_resource(
         to: Target URI under viking://resources/ (e.g.
             "viking://resources/volcengine/OpenViking"). Leave empty to let the
             system derive a URI from the source.
+        args: Parser-specific import options. For Feishu one-time user-token imports,
+            pass {"feishu_access_token": "..."}. For Feishu user-token watches,
+            pass {"feishu_access_token": "...", "feishu_refresh_token": "..."}.
     """
     from openviking.server.local_input_guard import require_remote_resource_source
 
@@ -506,6 +510,7 @@ async def add_resource(
                     wait=False,
                     allow_local_path_resolution=True,
                     enforce_public_remote_targets=True,
+                    args=args,
                 )
             except Exception as exc:
                 await store.mark_failed(resolved, ctx)
@@ -542,6 +547,7 @@ async def add_resource(
                 wait=False,
                 watch_interval=watch_interval,
                 enforce_public_remote_targets=True,
+                args=args,
             )
         except Exception as exc:
             return f"Error adding resource: {exc}"

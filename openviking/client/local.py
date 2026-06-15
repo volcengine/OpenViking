@@ -7,7 +7,7 @@ Implements BaseClient interface using direct service calls (embedded mode).
 
 from typing import Any, Dict, List, Optional, Union
 
-from openviking.core.peer_id import normalize_peer_id
+from openviking.core.peer_id import normalize_peer_id, normalize_peer_selector
 from openviking.server.identity import RequestContext, Role
 from openviking.service import OpenVikingService
 from openviking.telemetry import TelemetryRequest
@@ -17,7 +17,7 @@ from openviking.telemetry.execution import (
 )
 from openviking.utils.search_filters import SearchContextTypeInput, merge_search_filter
 from openviking_cli.client.base import BaseClient
-from openviking_cli.exceptions import NotFoundError
+from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import run_async
 
@@ -62,6 +62,7 @@ class LocalClient(BaseClient):
         path: Optional[str] = None,
         user: Optional[UserIdentifier] = None,
         actor_peer_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
     ):
         """Initialize LocalClient.
 
@@ -69,16 +70,21 @@ class LocalClient(BaseClient):
             path: Local storage path (overrides ov.conf storage path)
             user: Explicit account/user identity for embedded mode
             actor_peer_id: Optional view filter for the current user's peer collection.
+            agent_id: Legacy alias for actor_peer_id.
         """
         self._service = OpenVikingService(
             path=path,
             user=user or UserIdentifier.the_default_user(),
         )
         self._user = self._service.user
+        if actor_peer_id and agent_id:
+            raise ValueError("actor_peer_id cannot be used with legacy agent_id")
+        self._legacy_agent_id = normalize_peer_selector(None, agent_id=agent_id)
         self._ctx = RequestContext(
             user=self._user,
             role=Role.USER,
-            actor_peer_id=normalize_peer_id(actor_peer_id),
+            actor_peer_id=normalize_peer_selector(actor_peer_id, agent_id=agent_id),
+            legacy_agent_id=self._legacy_agent_id,
         )
 
     @property
@@ -111,6 +117,7 @@ class LocalClient(BaseClient):
         summarize: bool = False,
         telemetry: TelemetryRequest = False,
         watch_interval: float = 0,
+        args: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
@@ -132,6 +139,7 @@ class LocalClient(BaseClient):
                 build_index=build_index,
                 summarize=summarize,
                 watch_interval=watch_interval,
+                args=args,
                 **kwargs,
             ),
         )
@@ -573,7 +581,7 @@ class LocalClient(BaseClient):
         session.add_message(
             role,
             message_parts,
-            peer_id=peer_id,
+            peer_id=self._resolve_message_peer_id(role, peer_id),
             created_at=created_at,
         )
         return {
@@ -625,7 +633,8 @@ class LocalClient(BaseClient):
                 {
                     "role": role,
                     "parts": message_parts,
-                    "peer_id": normalize_peer_id(
+                    "peer_id": self._resolve_message_peer_id(
+                        role,
                         message.get("peer_id"),
                     ),
                     "created_at": message.get("created_at"),
@@ -638,6 +647,17 @@ class LocalClient(BaseClient):
             "message_count": len(session.messages),
             "added": len(added),
         }
+
+    def _resolve_message_peer_id(self, role: str, peer_id: Optional[str]) -> Optional[str]:
+        if self._legacy_agent_id is None:
+            return normalize_peer_id(peer_id)
+        if peer_id is not None:
+            raise InvalidArgumentError(
+                "peer_id cannot be used when client is configured with legacy agent_id"
+            )
+        if role == "assistant":
+            return self._legacy_agent_id
+        return None
 
     # ============= Pack =============
 

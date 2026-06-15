@@ -1,5 +1,5 @@
 use serde::de::DeserializeOwned;
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::env;
 use std::path::Path;
 
@@ -13,6 +13,7 @@ use crate::error::{Error, Result};
 #[derive(Clone)]
 pub struct HttpClient {
     base: BaseClient,
+    legacy_agent_id: Option<String>,
 }
 
 impl HttpClient {
@@ -22,6 +23,7 @@ impl HttpClient {
         account: Option<String>,
         user: Option<String>,
         actor_peer_id: Option<String>,
+        legacy_agent_id: Option<String>,
         timeout_secs: f64,
         profile_enabled: bool,
         extra_headers: Option<std::collections::HashMap<String, String>>,
@@ -37,6 +39,7 @@ impl HttpClient {
                 profile_enabled,
                 extra_headers,
             ),
+            legacy_agent_id,
         }
     }
 
@@ -46,6 +49,10 @@ impl HttpClient {
 
     pub fn actor_peer_id(&self) -> Option<&str> {
         self.base.actor_peer_id()
+    }
+
+    pub fn legacy_agent_id(&self) -> Option<&str> {
+        self.legacy_agent_id.as_deref()
     }
 
     pub fn api_key(&self) -> Option<&str> {
@@ -394,7 +401,7 @@ impl HttpClient {
         level: Option<Vec<i32>>,
         context_type: Option<Vec<String>>,
     ) -> Result<serde_json::Value> {
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "query": query,
             "target_uri": uri,
             "limit": node_limit,
@@ -405,6 +412,7 @@ impl HttpClient {
             "level": level,
             "context_type": context_type,
         });
+        self.attach_legacy_agent_scope(&mut body);
         self.post("/api/v1/search/find", &body).await
     }
 
@@ -421,7 +429,7 @@ impl HttpClient {
         level: Option<Vec<i32>>,
         context_type: Option<Vec<String>>,
     ) -> Result<serde_json::Value> {
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "query": query,
             "target_uri": uri,
             "session_id": session_id,
@@ -433,7 +441,14 @@ impl HttpClient {
             "level": level,
             "context_type": context_type,
         });
+        self.attach_legacy_agent_scope(&mut body);
         self.post("/api/v1/search/search", &body).await
+    }
+
+    fn attach_legacy_agent_scope(&self, body: &mut Value) {
+        if let Some(agent_id) = self.legacy_agent_id() {
+            body["agent_id"] = serde_json::json!(agent_id);
+        }
     }
 
     pub async fn grep(
@@ -488,10 +503,12 @@ impl HttpClient {
         exclude: Option<String>,
         directly_upload_media: bool,
         watch_interval: f64,
+        resource_args: Option<Map<String, Value>>,
         show_progress: bool,
         verbose: bool,
     ) -> Result<serde_json::Value> {
         let path_obj = Path::new(path);
+        let args = Value::Object(resource_args.unwrap_or_default());
 
         // Determine effective parent and create_parent flag.
         // Only send create_parent when the user explicitly selected
@@ -547,6 +564,7 @@ impl HttpClient {
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
                     "watch_interval": watch_interval,
+                    "args": args.clone(),
                 }));
 
                 let dynamic_timeout =
@@ -581,6 +599,7 @@ impl HttpClient {
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
                     "watch_interval": watch_interval,
+                    "args": args.clone(),
                 }));
 
                 let dynamic_timeout =
@@ -603,6 +622,7 @@ impl HttpClient {
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
                     "watch_interval": watch_interval,
+                    "args": args.clone(),
                 }));
 
                 self.post("/api/v1/resources", &body).await
@@ -622,6 +642,7 @@ impl HttpClient {
                 "exclude": exclude,
                 "directly_upload_media": directly_upload_media,
                 "watch_interval": watch_interval,
+                "args": args,
             }));
 
             self.post("/api/v1/resources", &body).await
@@ -1178,6 +1199,15 @@ impl HttpClient {
         self.post(&path, &serde_json::json!({})).await
     }
 
+    pub async fn admin_migrate(&self, cleanup: bool) -> Result<Value> {
+        let action = if cleanup { "cleanup" } else { "migrate" };
+        self.post(
+            "/api/v1/admin/migrate",
+            &serde_json::json!({ "action": action }),
+        )
+        .await
+    }
+
     // ============ Debug Vector Methods ============
 
     /// Get paginated vector records
@@ -1465,7 +1495,7 @@ mod tests {
     #[tokio::test]
     async fn ls_does_not_send_display_time_query() {
         let (base_url, request_rx) = spawn_request_capture_server().await;
-        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+        let client = HttpClient::new(base_url, None, None, None, None, None, 5.0, false, None);
 
         client
             .ls("viking://resources", false, false, "agent", 256, false, 1)
@@ -1481,7 +1511,7 @@ mod tests {
     #[tokio::test]
     async fn tree_does_not_send_display_time_query() {
         let (base_url, request_rx) = spawn_request_capture_server().await;
-        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+        let client = HttpClient::new(base_url, None, None, None, None, None, 5.0, false, None);
 
         client
             .tree("viking://resources", "agent", 256, false, 1, 3)
@@ -1492,6 +1522,26 @@ mod tests {
         assert!(request.starts_with("GET /api/v1/fs/tree?"));
         assert!(!request.contains("tz="));
         assert!(!request.contains("include_mod_time_iso="));
+    }
+
+    #[test]
+    fn search_body_includes_legacy_agent_id() {
+        let client = HttpClient::new(
+            "http://localhost:1933",
+            None,
+            None,
+            None,
+            Some("legacy-agent".to_string()),
+            Some("legacy-agent".to_string()),
+            5.0,
+            false,
+            None,
+        );
+        let mut body = json!({"query": "invoice"});
+
+        client.attach_legacy_agent_scope(&mut body);
+
+        assert_eq!(body["agent_id"], json!("legacy-agent"));
     }
 
     #[test]

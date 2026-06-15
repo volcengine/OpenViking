@@ -139,7 +139,7 @@ describe("context-engine assemble()", () => {
       messages: sourceMessages,
     });
 
-    expect(client.healthCheck).toHaveBeenCalledWith("agent:session-transform", 500);
+    expect(client.healthCheck).toHaveBeenCalledWith(500);
     expect(client.getSessionContext).not.toHaveBeenCalled();
     expect(result.messages).toHaveLength(sourceMessages.length);
     expect(result.messages[0]).toBe(sourceMessages[0]);
@@ -201,6 +201,64 @@ describe("context-engine assemble()", () => {
     expect(recorded.resourceTypes).toEqual(["user"]);
   });
 
+  it("uses one memory context-type search for default auto-recall targets", async () => {
+    const traces = new RecallTraceMemoryStore(10);
+    const { engine, client } = makeEngine(
+      {
+        latest_archive_overview: "unused",
+        pre_archive_abstracts: [],
+        messages: [],
+        estimatedTokens: 0,
+        stats: makeStats(),
+      },
+      {
+        traceRecorder: traces,
+        cfgOverrides: {
+          autoRecall: true,
+          recallPreferAbstract: true,
+        },
+      },
+    );
+    client.find.mockImplementation(async (_query: string, options: { contextType?: string; targetUri?: string }) => {
+      if (options.contextType === "memory" && options.targetUri === undefined) {
+        return {
+          memories: [
+            {
+              uri: "viking://user/default/memories/gateway-docs",
+              level: 2,
+              category: "memory",
+              abstract: "Gateway plugin docs live in the user memory store.",
+              score: 0.9,
+            },
+          ],
+          total: 1,
+        };
+      }
+      throw new Error(
+        `unexpected auto-recall target: ${options.targetUri ?? "none"} contextType=${options.contextType ?? "none"}`,
+      );
+    });
+
+    await engine.assemble({
+      sessionId: "session-transform-default-targets",
+      messages: [{ role: "user", content: "where are the gateway plugin docs?" }],
+    });
+
+    expect(client.find).toHaveBeenCalledTimes(1);
+    expect(client.find.mock.calls[0]![1]).toMatchObject({ contextType: "memory" });
+    expect(client.find.mock.calls[0]![1].targetUri).toBeUndefined();
+    expect(client.find.mock.calls[0]![1].actorPeerId).toBeUndefined();
+
+    const recorded = traces.query({
+      turn: "latest",
+      sessionId: "session-transform-default-targets",
+      limit: 10,
+    }).entries[0]!;
+    expect(recorded.searches).toHaveLength(1);
+    expect(recorded.searches[0]).toMatchObject({ contextType: "memory" });
+    expect(recorded.searches[0]!.targetUriResolved).toBeUndefined();
+  });
+
   it("passes sender peer_id to transformContext auto-recall when peer_role is person", async () => {
     vi.stubGlobal(
       "fetch",
@@ -238,9 +296,10 @@ describe("context-engine assemble()", () => {
         messages: sourceMessages,
       });
 
-      expect(client.find).toHaveBeenCalledTimes(2);
+      expect(client.find).toHaveBeenCalledTimes(1);
       for (const call of client.find.mock.calls) {
-        expect(call[1]).toMatchObject({ peerId: "wx_user-01_abc" });
+        expect(call[1]).toMatchObject({ actorPeerId: "wx_user-01_abc", contextType: "memory" });
+        expect(call[1].targetUri).toBeUndefined();
       }
     } finally {
       vi.unstubAllGlobals();
@@ -415,9 +474,10 @@ describe("context-engine assemble()", () => {
         messages: sourceMessages,
       });
 
-      expect(client.find).toHaveBeenCalledTimes(2);
+      expect(client.find).toHaveBeenCalledTimes(1);
       for (const call of client.find.mock.calls) {
-        expect(call[1]).toMatchObject({ peerId: "agent:session-assistant-peer" });
+        expect(call[1]).toMatchObject({ actorPeerId: "agent_session-assistant-peer", contextType: "memory" });
+        expect(call[1].targetUri).toBeUndefined();
       }
     } finally {
       vi.unstubAllGlobals();
@@ -772,15 +832,9 @@ describe("context-engine assemble()", () => {
       availableTools: new Set(),
     });
 
-    expect(resolveAgentId).toHaveBeenCalledWith(
-      "session-main-no-prompt",
-      undefined,
-      "session-main-no-prompt",
-    );
     expect(client.getSessionContext).toHaveBeenCalledWith(
       "session-main-no-prompt",
       4096,
-      "agent:session-main-no-prompt",
     );
     expect(client.find).not.toHaveBeenCalled();
     expect(result.messages[0]).toEqual({
@@ -840,8 +894,7 @@ describe("context-engine assemble()", () => {
       tokenBudget: 4096,
     });
 
-    expect(resolveAgentId).toHaveBeenCalledWith("session-1", undefined, "session-1");
-    expect(client.getSessionContext).toHaveBeenCalledWith("session-1", 4096, "agent:session-1");
+    expect(client.getSessionContext).toHaveBeenCalledWith("session-1", 4096);
     expect(result.estimatedTokens).toBe(
       roughEstimate(result.messages) + systemPromptTokens(result.systemPromptAddition),
     );

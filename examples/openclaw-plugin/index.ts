@@ -445,9 +445,6 @@ function inferRecallResourceType(uri: string | undefined): RecallResourceType | 
   if (uri.startsWith("viking://session/") || uri.includes("/sessions/")) {
     return "session";
   }
-  if (uri.startsWith("viking://agent/")) {
-    return "agent";
-  }
   if (uri.startsWith("viking://user/")) {
     return "user";
   }
@@ -857,7 +854,7 @@ const contextEnginePlugin = {
     const enrichTraceEntriesWithContent = async (
       result: { entries: RecallTraceEntry[]; lookupLayer: "memory" | "persistent"; warnings: string[] },
       includeContent: boolean,
-      agentId?: string,
+      actorPeerId?: string,
     ): Promise<{ entries: RecallTraceEntry[]; lookupLayer: "memory" | "persistent"; warnings: string[] }> => {
       if (!includeContent || result.entries.length === 0) {
         return result;
@@ -867,7 +864,7 @@ const contextEnginePlugin = {
       const entries = await Promise.all(result.entries.map(async (entry) => {
         const selected = await Promise.all(entry.selected.map(async (item) => {
           try {
-            const content = await client.read(item.uri, agentId);
+            const content = await client.read(item.uri, actorPeerId);
             return {
               ...item,
               contentPreview: previewText(content, cfg.recallMaxContentChars),
@@ -886,11 +883,12 @@ const contextEnginePlugin = {
     const queryRecallTraces = async (
       input: RecallTraceToolInput,
       session: PluginSessionRouting,
+      actorPeerId?: string,
     ): Promise<{ entries: RecallTraceEntry[]; lookupLayer: "memory" | "persistent"; warnings: string[] }> => {
       const base = traceRecorder
         ? await traceRecorder.queryWithFallback(parseRecallTraceInput(input, session))
         : { entries: [], lookupLayer: "memory" as const, warnings: ["traceRecall is disabled"] };
-      return enrichTraceEntriesWithContent(base, shouldIncludeTraceContent(input), session.agentId);
+      return enrichTraceEntriesWithContent(base, shouldIncludeTraceContent(input), actorPeerId);
     };
 
     const registerRecallTraceRoutes = (ctx?: unknown): boolean => {
@@ -944,7 +942,7 @@ const contextEnginePlugin = {
           until: toNumber(query.until),
           includeContent: toBoolean(query.includeContent),
           limit: toNumber(query.limit),
-        }, session);
+        }, session, resolveToolSearchPeerId(query, session));
         return { status: 200, body: { ok: true, ...result } };
       };
       routeAdapter.registerRoute({ method: "GET", path: "/api/openviking/recall-traces", handler: handle });
@@ -975,6 +973,7 @@ const contextEnginePlugin = {
           `traceId: ${entry.traceId}`,
           `query: ${entry.trigger.query}`,
           `resourceTypes: ${entry.resourceTypes.join(", ")}`,
+          `searches: ${entry.searches.map((search) => search.contextType ?? search.resourceType).join(", ")}`,
           `stats: candidates=${entry.stats.candidateCount}, selected=${entry.stats.selectedCount}, injected=${entry.stats.injectedCount}`,
           selected ? `selected:\n${selected}` : "selected: (none)",
         ].join("\n");
@@ -997,9 +996,9 @@ const contextEnginePlugin = {
       return `Imported OpenViking skill${name}.${uri}`.trim();
     };
 
-    const importResource = async (input: AddResourceInput, agentId?: string) => {
+    const importResource = async (input: AddResourceInput, actorPeerId?: string) => {
       const client = await getClient();
-      const result = await client.addResource(input, agentId);
+      const result = await client.addResource(input, actorPeerId);
       return {
         content: [{ type: "text" as const, text: formatResourceImportText(result) }],
         details: {
@@ -1009,9 +1008,9 @@ const contextEnginePlugin = {
       };
     };
 
-    const importSkill = async (input: AddSkillInput, agentId?: string) => {
+    const importSkill = async (input: AddSkillInput, actorPeerId?: string) => {
       const client = await getClient();
-      const result = await client.addSkill(input, agentId);
+      const result = await client.addSkill(input, actorPeerId);
       return {
         content: [{ type: "text" as const, text: formatSkillImportText(result) }],
         details: {
@@ -1021,7 +1020,7 @@ const contextEnginePlugin = {
       };
     };
 
-    const addResourceOpenViking = (input: AddResourceToolInput, agentId?: string) =>
+    const addResourceOpenViking = (input: AddResourceToolInput, actorPeerId?: string) =>
       importResource({
         pathOrUrl: input.source ?? "",
         to: input.to,
@@ -1030,15 +1029,15 @@ const contextEnginePlugin = {
         instruction: input.instruction,
         wait: input.wait,
         timeout: input.timeout,
-      }, agentId);
+      }, actorPeerId);
 
-    const addSkillOpenViking = (input: AddSkillToolInput, agentId?: string) =>
+    const addSkillOpenViking = (input: AddSkillToolInput, actorPeerId?: string) =>
       importSkill({
         path: input.source,
         data: input.data,
         wait: input.wait,
         timeout: input.timeout,
-      }, agentId);
+      }, actorPeerId);
 
     const mergeFindResults = (results: FindResult[]): FindResult => {
       const deduplicate = (items: FindResultItem[]): FindResultItem[] => {
@@ -1164,9 +1163,8 @@ const contextEnginePlugin = {
 
     const searchOpenViking = async (
       input: OVSearchInput,
-      agentId?: string,
-      peerId?: string,
       traceCtx?: PluginSessionRouting,
+      actorPeerId?: string,
     ) => {
       const query = input.query.trim();
       if (!query) {
@@ -1178,7 +1176,7 @@ const contextEnginePlugin = {
       const searches: RecallTraceEntry["searches"] = [];
       if (input.uri) {
         const started = Date.now();
-        result = await client.find(query, { targetUri: input.uri, limit, peerId }, agentId);
+        result = await client.find(query, { targetUri: input.uri, limit, actorPeerId });
         const items = [
           ...(result.memories ?? []).map((item) => toTraceResult(item, "memory")),
           ...(result.resources ?? []).map((item) => toTraceResult(item, "resource")),
@@ -1194,17 +1192,22 @@ const contextEnginePlugin = {
           results: items,
         });
       } else {
-        const runSearch = async (targetUri: string): Promise<FindResult> => {
+        const runSearch = async (
+          targetUri: string | undefined,
+          contextType: "resource" | "skill",
+        ): Promise<FindResult> => {
+          const resourceType: RecallResourceType = contextType === "skill" ? "user" : "resource";
           const started = Date.now();
           try {
-            const found = await client.find(query, { targetUri, limit, peerId }, agentId);
+            const found = await client.find(query, { targetUri, limit, contextType, actorPeerId });
             const items = [
               ...(found.memories ?? []).map((item) => toTraceResult(item, "memory")),
               ...(found.resources ?? []).map((item) => toTraceResult(item, "resource")),
               ...(found.skills ?? []).map((item) => toTraceResult(item, "skill")),
             ].slice(0, cfg.traceRecallMaxResultsPerSearch);
             searches.push({
-              resourceType: inferRecallResourceType(targetUri) ?? "resource",
+              resourceType,
+              contextType,
               targetUriResolved: targetUri,
               limit,
               durationMs: Date.now() - started,
@@ -1214,7 +1217,8 @@ const contextEnginePlugin = {
             return found;
           } catch (err) {
             searches.push({
-              resourceType: inferRecallResourceType(targetUri) ?? "resource",
+              resourceType,
+              contextType,
               targetUriResolved: targetUri,
               limit,
               durationMs: Date.now() - started,
@@ -1226,8 +1230,8 @@ const contextEnginePlugin = {
           }
         };
         const [resourcesSettled, skillsSettled] = await Promise.allSettled([
-          runSearch("viking://resources"),
-          runSearch("viking://user/skills"),
+          runSearch(undefined, "resource"),
+          runSearch(undefined, "skill"),
         ]);
         const successful: FindResult[] = [];
         if (resourcesSettled.status === "fulfilled") {
@@ -1286,7 +1290,7 @@ const contextEnginePlugin = {
         sessionId: traceCtx?.sessionId,
         sessionKey: traceCtx?.sessionKey,
         ovSessionId: traceCtx?.ovSessionId,
-        agentId,
+        agentId: traceCtx?.agentId,
         source: "ov_search",
         operationType: "semantic_find",
         resourceTypes: [...new Set(searches
@@ -1307,7 +1311,7 @@ const contextEnginePlugin = {
           action: "searched",
           query,
           uri: input.uri,
-          peer_id: peerId ?? null,
+          peer_id: actorPeerId ?? null,
           memories: result.memories ?? [],
           resources: result.resources ?? [],
           skills: result.skills ?? [],
@@ -1316,13 +1320,16 @@ const contextEnginePlugin = {
       };
     };
 
-    const readOpenViking = async (input: OVReadInput, agentId?: string) => {
+    const readOpenViking = async (
+      input: OVReadInput,
+      actorPeerId?: string,
+    ) => {
       const uri = input.uri.trim();
       if (!uri) {
         throw new Error("uri is required");
       }
       const client = await getClient();
-      const content = await client.read(uri, agentId);
+      const content = await client.read(uri, actorPeerId);
       return {
         content: [{ type: "text" as const, text: formatOVReadText(uri, content) }],
         details: {
@@ -1333,7 +1340,10 @@ const contextEnginePlugin = {
       };
     };
 
-    const multiReadOpenViking = async (input: OVMultiReadInput, agentId?: string) => {
+    const multiReadOpenViking = async (
+      input: OVMultiReadInput,
+      actorPeerId?: string,
+    ) => {
       const uris = input.uris
         .map((uri) => (typeof uri === "string" ? uri.trim() : ""))
         .filter((uri) => uri.length > 0);
@@ -1344,7 +1354,7 @@ const contextEnginePlugin = {
       const results = await Promise.all(
         uris.map(async (uri) => {
           try {
-            const content = await client.read(uri, agentId);
+            const content = await client.read(uri, actorPeerId);
             return {
               uri,
               content,
@@ -1373,7 +1383,10 @@ const contextEnginePlugin = {
       };
     };
 
-    const listOpenViking = async (input: OVListInput, agentId?: string) => {
+    const listOpenViking = async (
+      input: OVListInput,
+      actorPeerId?: string,
+    ) => {
       const uri = input.uri.trim();
       if (!uri) {
         throw new Error("uri is required");
@@ -1386,8 +1399,8 @@ const contextEnginePlugin = {
           recursive: input.recursive ?? false,
           simple: input.simple ?? false,
           nodeLimit: limit,
+          actorPeerId,
         },
-        agentId,
       );
       return {
         content: [{ type: "text" as const, text: formatOVListText(uri, entries) }],
@@ -1435,7 +1448,7 @@ const contextEnginePlugin = {
               instruction: typeof params.instruction === "string" ? params.instruction : undefined,
               wait: typeof params.wait === "boolean" ? params.wait : undefined,
               timeout: typeof params.timeout === "number" ? params.timeout : undefined,
-            }, session.agentId);
+            }, resolveToolSearchPeerId(ctx, session));
           },
         }),
         { name: "add_resource" },
@@ -1460,12 +1473,15 @@ const contextEnginePlugin = {
             return makeBypassedToolResult("add_skill");
           }
           const session = resolvePluginSessionRouting(ctx);
-          return addSkillOpenViking({
-            source: typeof params.source === "string" ? params.source : undefined,
-            data: params.data,
-            wait: typeof params.wait === "boolean" ? params.wait : undefined,
-            timeout: typeof params.timeout === "number" ? params.timeout : undefined,
-          }, session.agentId);
+          return addSkillOpenViking(
+            {
+              source: typeof params.source === "string" ? params.source : undefined,
+              data: params.data,
+              wait: typeof params.wait === "boolean" ? params.wait : undefined,
+              timeout: typeof params.timeout === "number" ? params.timeout : undefined,
+            },
+            resolveToolSearchPeerId(ctx, session),
+          );
         },
       }),
       { name: "add_skill" },
@@ -1481,7 +1497,7 @@ const contextEnginePlugin = {
           "When a result is part of a split document or a multi-step procedure, call ov_list on the parent URI to inspect sibling chunks and overview files before answering.",
         parameters: Type.Object({
           query: Type.String({ description: "Search query" }),
-          uri: Type.Optional(Type.String({ description: "Optional search URI. Defaults to resources plus user skills." })),
+          uri: Type.Optional(Type.String({ description: "Optional search URI. Defaults to all resource and skill contexts." })),
           limit: Type.Optional(Type.Number({ description: "Max results per search scope. Default: 10" })),
         }),
         async execute(_toolCallId: string, params: Record<string, unknown>) {
@@ -1494,7 +1510,7 @@ const contextEnginePlugin = {
             query: String((params as { query?: unknown }).query ?? ""),
             uri: typeof params.uri === "string" ? params.uri : undefined,
             limit: typeof params.limit === "number" ? params.limit : undefined,
-          }, session.agentId, peerId, session);
+          }, session, peerId);
         },
       }),
       { name: "ov_search" },
@@ -1516,9 +1532,10 @@ const contextEnginePlugin = {
             return makeBypassedToolResult("ov_read");
           }
           const session = resolvePluginSessionRouting(ctx);
+          const actorPeerId = resolveToolSearchPeerId(ctx, session);
           return readOpenViking({
             uri: String((params as { uri?: unknown }).uri ?? ""),
-          }, session.agentId);
+          }, actorPeerId);
         },
       }),
       { name: "ov_read" },
@@ -1541,10 +1558,11 @@ const contextEnginePlugin = {
             return makeBypassedToolResult("ov_multi_read");
           }
           const session = resolvePluginSessionRouting(ctx);
+          const actorPeerId = resolveToolSearchPeerId(ctx, session);
           const uris = Array.isArray((params as { uris?: unknown }).uris)
             ? (params as { uris: unknown[] }).uris.map((uri) => String(uri))
             : [];
-          return multiReadOpenViking({ uris }, session.agentId);
+          return multiReadOpenViking({ uris }, actorPeerId);
         },
       }),
       { name: "ov_multi_read" },
@@ -1567,12 +1585,13 @@ const contextEnginePlugin = {
             return makeBypassedToolResult("ov_list");
           }
           const session = resolvePluginSessionRouting(ctx);
+          const actorPeerId = resolveToolSearchPeerId(ctx, session);
           return listOpenViking({
             uri: String((params as { uri?: unknown }).uri ?? ""),
             recursive: typeof params.recursive === "boolean" ? params.recursive : undefined,
             simple: typeof params.simple === "boolean" ? params.simple : undefined,
             limit: typeof params.limit === "number" ? params.limit : undefined,
-          }, session.agentId);
+          }, actorPeerId);
         },
       }),
       { name: "ov_list" },
@@ -1590,7 +1609,7 @@ const contextEnginePlugin = {
           }
           const session = resolvePluginSessionRouting(ctx);
           const input = parseAddResourceCommandArgs(ctx.args ?? "");
-          const result = await addResourceOpenViking(input, session.agentId);
+          const result = await addResourceOpenViking(input, resolveToolSearchPeerId(ctx, session));
           return { text: result.content[0]!.text, details: result.details };
         } catch (err) {
           return { text: `OpenViking add resource failed: ${err instanceof Error ? err.message : String(err)}` };
@@ -1610,7 +1629,7 @@ const contextEnginePlugin = {
           }
           const session = resolvePluginSessionRouting(ctx);
           const input = parseAddSkillCommandArgs(ctx.args ?? "");
-          const result = await addSkillOpenViking(input, session.agentId);
+          const result = await addSkillOpenViking(input, resolveToolSearchPeerId(ctx, session));
           return { text: result.content[0]!.text, details: result.details };
         } catch (err) {
           return { text: `OpenViking add skill failed: ${err instanceof Error ? err.message : String(err)}` };
@@ -1631,7 +1650,7 @@ const contextEnginePlugin = {
           const session = resolvePluginSessionRouting(ctx);
           const input = parseOVSearchCommandArgs(ctx.args ?? "");
           const peerId = resolveToolSearchPeerId(ctx, session);
-          const result = await searchOpenViking(input, session.agentId, peerId, session);
+          const result = await searchOpenViking(input, session, peerId);
           return { text: result.content[0]!.text, details: result.details };
         } catch (err) {
           return { text: `OpenViking search failed: ${err instanceof Error ? err.message : String(err)}` };
@@ -1687,14 +1706,15 @@ const contextEnginePlugin = {
           const recallClient = await getClient();
           if (cfg.logFindRequests) {
             api.logger.info(
-              `openviking: memory_recall runtime_agent_id="${session.agentId}" ` +
+              `openviking: memory_recall assistant_peer_id="${session.agentId}" ` +
                 `peer_id="${peerId ?? ""}" ` +
-                `(plugin defaultAgentId="${recallClient.getDefaultAgentId()}" is unused when session context is present)`,
+                `(plugin defaultAgentId="${recallClient.getDefaultAgentId()}" is not sent as an OpenViking agent identity)`,
             );
           }
 
           let result: FindResult;
           let memoryRecallSearches: RecallTraceEntry["searches"] = [];
+          let requestedTraceResourceTypes: RecallResourceType[] | undefined;
           if (targetUri) {
             // 如果指定了目标 URI，只检索该位置
             const started = Date.now();
@@ -1704,9 +1724,8 @@ const contextEnginePlugin = {
                 targetUri,
                 limit: requestLimit,
                 scoreThreshold: 0,
-                peerId,
+                actorPeerId: peerId,
               },
-              session.agentId,
             );
             const traceResults = [
               ...(result.memories ?? []).map((item) => toTraceResult(item, "memory")),
@@ -1728,6 +1747,7 @@ const contextEnginePlugin = {
               ovSessionId: session.ovSessionId,
               agentId: session.agentId,
             });
+            requestedTraceResourceTypes = searchPlan.resourceTypes;
             memoryRecallSearches.push(...searchPlan.skipped.map((skipped) => ({
               resourceType: skipped.resourceType,
               limit: requestLimit,
@@ -1744,9 +1764,9 @@ const contextEnginePlugin = {
                   targetUri: search.targetUri,
                   limit: requestLimit,
                   scoreThreshold: 0,
-                  peerId,
+                  contextType: search.contextType,
+                  actorPeerId: peerId,
                 },
-                session.agentId,
               ),
             );
             const settled = await Promise.allSettled(searchPromises);
@@ -1763,6 +1783,7 @@ const contextEnginePlugin = {
                 ].slice(0, cfg.traceRecallMaxResultsPerSearch);
                 memoryRecallSearches.push({
                   resourceType: search.resourceType,
+                  contextType: search.contextType,
                   targetUriInput: search.targetUri,
                   targetUriResolved: search.targetUri,
                   limit: requestLimit,
@@ -1774,6 +1795,7 @@ const contextEnginePlugin = {
               } else {
                 memoryRecallSearches.push({
                   resourceType: search.resourceType,
+                  contextType: search.contextType,
                   targetUriInput: search.targetUri,
                   targetUriResolved: search.targetUri,
                   limit: requestLimit,
@@ -1805,7 +1827,7 @@ const contextEnginePlugin = {
             .map((item) => toTraceResult(item, inferRecallResourceType(item.uri) === "resource" ? "resource" : "memory"))
             .slice(0, cfg.traceRecallMaxResultsPerSearch);
           const traceResourceTypes = [...new Set(
-            (targetUri ? [inferRecallResourceType(targetUri)] : memoryRecallSearches.map((search) => search.resourceType))
+            (requestedTraceResourceTypes ?? (targetUri ? [inferRecallResourceType(targetUri)] : memoryRecallSearches.map((search) => search.resourceType)))
               .filter((resourceType): resourceType is RecallResourceType => Boolean(resourceType) && resourceType !== "archive"),
           )];
           const recordMemoryRecallTrace = async (injectedUris: Set<string>) => {
@@ -1823,8 +1845,9 @@ const contextEnginePlugin = {
               trigger: boundTraceQuery(query, cfg.traceRecallQueryMaxChars),
               searches: memoryRecallSearches.length > 0 ? memoryRecallSearches : [{
                 resourceType: inferRecallResourceType(targetUri) ?? "user",
+                contextType: targetUri ? undefined : "memory",
                 targetUriInput: targetUri,
-                targetUriResolved: targetUri ?? "viking://user/memories",
+                targetUriResolved: targetUri,
                 limit: requestLimit,
                 scoreThreshold,
                 durationMs: 0,
@@ -1856,7 +1879,7 @@ const contextEnginePlugin = {
           }
           const { lines: memoryLines } = await buildMemoryLinesWithBudget(
             memories,
-            (uri) => recallClient.read(uri, session.agentId),
+            (uri) => recallClient.read(uri, peerId),
             {
               recallPreferAbstract: false,
               recallMaxInjectedChars: cfg.recallMaxInjectedChars,
@@ -1926,7 +1949,11 @@ const contextEnginePlugin = {
             return makeBypassedToolResult("ov_recall_trace");
           }
           const session = resolvePluginSessionRouting(ctx);
-          const result = await queryRecallTraces(params as RecallTraceToolInput, session);
+          const result = await queryRecallTraces(
+            params as RecallTraceToolInput,
+            session,
+            resolveToolSearchPeerId(ctx, session),
+          );
           return {
             content: [{ type: "text" as const, text: formatRecallTraceText(result) }],
             details: {
@@ -1967,7 +1994,7 @@ const contextEnginePlugin = {
             includeContent: getBoolFlag(flags, "include-content"),
             limit: getNumberFlag(flags, "limit"),
           };
-          const result = await queryRecallTraces(input, session);
+          const result = await queryRecallTraces(input, session, resolveToolSearchPeerId(ctx, session));
           return {
             text: formatRecallTraceText(result),
             details: {
@@ -2034,20 +2061,17 @@ const contextEnginePlugin = {
               await c.ensureSession(
                 sessionId,
                 { memoryPolicy: defaultMemoryPolicy },
-                session.agentId,
               );
             }
             await c.addSessionMessage(
               sessionId,
               role,
               [{ type: "text" as const, text }],
-              session.agentId,
               undefined,
               peerId,
             );
             const commitResult = await c.commitSession(sessionId, {
               wait: true,
-              agentId: session.agentId,
               keepRecentCount: 0,
             });
             const memoriesCount = totalCommitMemories(commitResult);
@@ -2165,7 +2189,7 @@ const contextEnginePlugin = {
                 details: { action: "rejected", uri },
               };
             }
-            await client.deleteUri(uri, session.agentId);
+            await client.deleteUri(uri, peerId);
             return {
               content: [{ type: "text", text: `Forgotten: ${uri}` }],
               details: { action: "deleted", uri },
@@ -2200,9 +2224,8 @@ const contextEnginePlugin = {
               targetUri,
               limit: requestLimit,
               scoreThreshold: 0,
-              peerId,
+              actorPeerId: peerId,
             },
-            session.agentId,
           );
           const candidates = postProcessMemories(result.memories ?? [], {
             limit: requestLimit,
@@ -2222,7 +2245,7 @@ const contextEnginePlugin = {
           }
           const top = candidates[0];
           if (candidates.length === 1 && clampScore(top.score) >= 0.85) {
-            await client.deleteUri(top.uri, session.agentId);
+            await client.deleteUri(top.uri, peerId);
             return {
               content: [{ type: "text", text: `Forgotten: ${top.uri}` }],
               details: { action: "deleted", uri: top.uri, score: top.score ?? 0 },
@@ -2298,12 +2321,10 @@ const contextEnginePlugin = {
 
           try {
             const client = await getClient();
-            const agentId = resolveAgentId(ctx.sessionId, ctx.sessionKey);
             const started = Date.now();
             const result = await client.grepSessionArchives(ovSessionId, escapedQuery, {
               archiveId,
               caseInsensitive: true,
-              agentId,
             });
             const traceResults: RecallTraceResult[] = (result.matches ?? [])
               .slice(0, cfg.traceRecallMaxResultsPerSearch)
@@ -2321,7 +2342,7 @@ const contextEnginePlugin = {
                 sessionId: ctx.sessionId,
                 sessionKey: ctx.sessionKey,
                 ovSessionId,
-                agentId,
+                agentId: ctx.agentId,
                 source: "ov_archive_search",
                 operationType: "archive_grep",
                 resourceTypes: ["session"],
@@ -2444,7 +2465,6 @@ const contextEnginePlugin = {
           const detail = await client.getSessionArchive(
             session.ovSessionId,
             archiveId,
-            session.agentId,
           );
 
           const header = [
@@ -2544,7 +2564,6 @@ const contextEnginePlugin = {
               session.ovSessionId,
               parsed.toolResultId,
               { offset, limit, includeMetadata: true },
-              session.agentId,
             );
             const returnedChars = result.content.length;
             const nextOffset = result.offset + returnedChars;
@@ -2645,7 +2664,6 @@ const contextEnginePlugin = {
               parsed.toolResultId,
               query,
               { limit, contextChars },
-              session.agentId,
             );
             const matches = result.matches ?? [];
             const text = matches.length
@@ -2718,7 +2736,6 @@ const contextEnginePlugin = {
             const result = await client.listToolResults(
               session.ovSessionId,
               { toolName, limit },
-              session.agentId,
             );
             const items = result.tool_results ?? [];
             const text = items.length

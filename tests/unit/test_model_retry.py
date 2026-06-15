@@ -5,6 +5,8 @@
 import pytest
 
 from openviking.utils.model_retry import (
+    ERROR_CLASS_AUTH,
+    ERROR_CLASS_CONTENT_SAFETY,
     ERROR_CLASS_INPUT_TOO_LARGE,
     ERROR_CLASS_PERMANENT,
     ERROR_CLASS_QUOTA_EXCEEDED,
@@ -81,9 +83,58 @@ def test_quota_exceeded_takes_precedence_over_transient():
     assert classify_api_error(error) == ERROR_CLASS_QUOTA_EXCEEDED
 
 
-def test_permanent_still_takes_precedence_over_quota():
-    """Permanent errors (e.g. 403) still take highest precedence."""
-    assert classify_api_error(RuntimeError("403 AccountQuotaExceeded")) == ERROR_CLASS_PERMANENT
+def test_auth_takes_precedence_over_quota():
+    """Auth errors (e.g. 403) take precedence over the quota substring."""
+    assert classify_api_error(RuntimeError("403 AccountQuotaExceeded")) == ERROR_CLASS_AUTH
+
+
+# --- permanent vs auth split (400 vs 401/403) ---
+
+
+def test_classify_400_is_permanent():
+    """A 400 parameter error is request-level permanent (fail-fast)."""
+    error = RuntimeError("Error code: 400 - invalid parameter `model`")
+    assert classify_api_error(error) == ERROR_CLASS_PERMANENT
+
+
+def test_classify_401_is_auth():
+    """A 401 is a credential-level auth error (advances in multi-credential mode)."""
+    assert classify_api_error(RuntimeError("Error code: 401 - Incorrect API key")) == (
+        ERROR_CLASS_AUTH
+    )
+
+
+def test_classify_403_is_auth():
+    """A 403 forbidden is a credential-level auth error."""
+    assert classify_api_error(RuntimeError("403 forbidden")) == ERROR_CLASS_AUTH
+
+
+def test_classify_unauthorized_is_auth():
+    assert classify_api_error(RuntimeError("Unauthorized")) == ERROR_CLASS_AUTH
+
+
+def test_classify_account_overdue_is_auth():
+    assert classify_api_error(RuntimeError("AccountOverdue")) == ERROR_CLASS_AUTH
+
+
+# --- content safety classification ---
+
+
+def test_classify_content_filter_is_content_safety():
+    assert classify_api_error(RuntimeError("content_filter triggered")) == (
+        ERROR_CLASS_CONTENT_SAFETY
+    )
+
+
+def test_classify_content_policy_is_content_safety():
+    error = RuntimeError("The response was rejected by the content policy")
+    assert classify_api_error(error) == ERROR_CLASS_CONTENT_SAFETY
+
+
+def test_content_safety_takes_precedence_over_400():
+    """A moderation rejection containing '400' is content_safety, not permanent."""
+    error = RuntimeError("Error code: 400 - content_filter: sensitive content detected")
+    assert classify_api_error(error) == ERROR_CLASS_CONTENT_SAFETY
 
 
 def test_retry_sync_does_not_retry_quota_exceeded():

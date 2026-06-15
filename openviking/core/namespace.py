@@ -12,6 +12,7 @@ from openviking_cli.utils.uri import VikingURI
 
 _CONTENT_TYPES_BY_SCOPE = {
     "user": {"memories": "memory", "resources": "resource", "skills": "skill"},
+    "agent": {"memories": "memory", "resources": "resource", "skills": "skill"},
 }
 _PEER_CONTENT_SEGMENTS = frozenset({"memories", "resources"})
 _USER_RELATIVE_ROOT_SEGMENTS = frozenset({"peers", "privacy", "sessions"})
@@ -55,7 +56,7 @@ class UriClassification:
 
     @property
     def is_agent_namespace_root(self) -> bool:
-        return False
+        return self.scope == "agent" and len(self.parts) == 2
 
     @property
     def is_memory_root(self) -> bool:
@@ -114,6 +115,8 @@ def relative_uri_path(root_uri: str, uri: str) -> str:
 
 def _content_segment_index(parts: tuple[str, ...]) -> Optional[int]:
     """Return the first content segment after a user namespace root."""
+    if len(parts) >= 3 and parts[0] == "agent" and parts[2] in _CONTENT_TYPES_BY_SCOPE["agent"]:
+        return 2
     if len(parts) < 2 or parts[0] != "user":
         return None
     if parts[1] in _CONTENT_TYPES_BY_SCOPE["user"]:
@@ -247,7 +250,7 @@ def resolve_uri(
     if scope == "user":
         return _resolve_user_uri(parts, ctx=ctx, require_canonical=require_canonical)
     if scope == "agent":
-        raise NamespaceShapeError("viking://agent is deprecated; use viking://user instead")
+        return ResolvedNamespace(uri=VikingURI.normalize(uri).rstrip("/"), scope=scope)
     if scope == "session":
         return _resolve_session_uri(parts, ctx=ctx, require_canonical=require_canonical)
     if scope in {"resources", "temp", "queue", "upload"}:
@@ -274,6 +277,11 @@ def is_accessible(uri: str, ctx: RequestContext) -> bool:
         return False
     if target.scope == "user":
         if target.owner_user_id and target.owner_user_id != ctx.user.user_id:
+            return False
+        return True
+    if target.scope == "agent":
+        parts = uri_parts(target.uri)
+        if ctx.actor_peer_id and len(parts) >= 2 and parts[1] != ctx.actor_peer_id:
             return False
         return True
     return True

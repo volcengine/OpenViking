@@ -11,6 +11,7 @@ import {
 const z = tool.schema
 
 export function createMemoryTools({ config, sessionManager, projectDirectory }) {
+  const actorPeerId = effectivePeerId(config)
   return {
     memsearch: tool({
       description:
@@ -38,14 +39,12 @@ export function createMemoryTools({ config, sessionManager, projectDirectory }) 
           if (args.target_uri) body.target_uri = args.target_uri
           if (args.score_threshold !== undefined) body.score_threshold = args.score_threshold
           if (mode === "deep" && sessionId) body.session_id = sessionId
-          const peerId = effectivePeerId(config)
-          if (peerId) body.peer_id = peerId
-
           const response = await makeRequest(config, {
             method: "POST",
             endpoint: mode === "deep" ? "/api/v1/search/search" : "/api/v1/search/find",
             body,
             abortSignal: context.abort,
+            actorPeerId,
           })
           return formatSearchResults(unwrapResponse(response), args.query, { mode })
         } catch (error) {
@@ -69,12 +68,13 @@ export function createMemoryTools({ config, sessionManager, projectDirectory }) 
         try {
           let level = args.level ?? "auto"
           if (level === "auto") {
-            level = await resolveReadLevel(config, args.uri, context.abort)
+            level = await resolveReadLevel(config, args.uri, context.abort, actorPeerId)
           }
           const response = await makeRequest(config, {
             method: "GET",
             endpoint: `/api/v1/content/${level}?uri=${encodeURIComponent(args.uri)}`,
             abortSignal: context.abort,
+            actorPeerId,
           })
           const content = unwrapResponse(response)
           return typeof content === "string" ? content : JSON.stringify(content, null, 2)
@@ -109,7 +109,12 @@ export function createMemoryTools({ config, sessionManager, projectDirectory }) 
           } else {
             endpoint = `/api/v1/fs/ls?uri=${encodedUri}&recursive=${args.recursive ? "true" : "false"}&simple=${args.simple ? "true" : "false"}`
           }
-          const response = await makeRequest(config, { method: "GET", endpoint, abortSignal: context.abort })
+          const response = await makeRequest(config, {
+            method: "GET",
+            endpoint,
+            abortSignal: context.abort,
+            actorPeerId,
+          })
           return JSON.stringify({ view, result: unwrapResponse(response) }, null, 2)
         } catch (error) {
           log("ERROR", "membrowse", "Browse failed", { error: error?.message, uri: args.uri })
@@ -168,6 +173,7 @@ export function createMemoryTools({ config, sessionManager, projectDirectory }) 
             endpoint: "/api/v1/search/grep",
             body,
             abortSignal: context.abort,
+            actorPeerId,
           })
           return JSON.stringify(unwrapResponse(response), null, 2)
         } catch (error) {
@@ -198,6 +204,7 @@ export function createMemoryTools({ config, sessionManager, projectDirectory }) 
             endpoint: "/api/v1/search/glob",
             body,
             abortSignal: context.abort,
+            actorPeerId,
           })
           return JSON.stringify(unwrapResponse(response), null, 2)
         } catch (error) {
@@ -226,7 +233,7 @@ export function createMemoryTools({ config, sessionManager, projectDirectory }) 
         if (args.parent && !args.parent.startsWith("viking://resources")) return "Error: `parent` must be under viking://resources/."
 
         try {
-          const result = await addMemaddResource(config, args, projectDirectory, context.abort)
+          const result = await addMemaddResource(config, args, projectDirectory, context.abort, actorPeerId)
           if (result.error) return result.error
           const queue = await getQueueStatus(config, context.abort)
           return JSON.stringify({ add_resource: unwrapResponse(result.addResponse), queue }, null, 2)
@@ -257,6 +264,7 @@ export function createMemoryTools({ config, sessionManager, projectDirectory }) 
             method: "DELETE",
             endpoint: `/api/v1/fs?uri=${encodeURIComponent(args.uri)}&recursive=${args.recursive ? "true" : "false"}`,
             abortSignal: context.abort,
+            actorPeerId,
           })
           return JSON.stringify(unwrapResponse(response), null, 2)
         } catch (error) {
@@ -282,12 +290,13 @@ export function createMemoryTools({ config, sessionManager, projectDirectory }) 
   }
 }
 
-async function resolveReadLevel(config, uri, abortSignal) {
+async function resolveReadLevel(config, uri, abortSignal, actorPeerId) {
   try {
     const statResponse = await makeRequest(config, {
       method: "GET",
       endpoint: `/api/v1/fs/stat?uri=${encodeURIComponent(uri)}`,
       abortSignal,
+      actorPeerId,
     })
     return unwrapResponse(statResponse)?.isDir ? "overview" : "read"
   } catch {

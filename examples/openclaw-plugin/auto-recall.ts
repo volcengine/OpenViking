@@ -259,7 +259,6 @@ function preview(value: string | undefined | null, maxChars: number): string | u
 
 function traceResourceTypeForUri(uri: string | undefined): RecallResourceType {
   if (uri?.startsWith("viking://resources")) return "resource";
-  if (uri?.startsWith("viking://agent/")) return "agent";
   if (uri?.startsWith("viking://session/") || uri?.includes("/sessions/")) return "session";
   return "user";
 }
@@ -395,18 +394,19 @@ export async function buildAgentExperienceRecallContext(params: {
   cfg: ParsedMemoryOpenVikingConfig;
   client: OpenVikingClient;
   agentId: string;
+  peerId?: string;
   queryText: string;
   trigger: ExperienceRecallTrigger;
   logger: Logger;
   verbose?: (message: string) => void;
 }): Promise<{ block?: string; count: number; estimatedTokens: number; skippedReason?: string }> {
-  const { cfg, client, agentId, queryText, trigger, logger, verbose } = params;
+  const { cfg, client, agentId, peerId, queryText, trigger, logger, verbose } = params;
   const expCfg = cfg.agentExperience;
   if (!expCfg.enabled) {
     return { count: 0, estimatedTokens: 0, skippedReason: "disabled" };
   }
 
-  const precheck = await quickRecallPrecheck(client, agentId);
+  const precheck = await quickRecallPrecheck(client);
   if (!precheck.ok) {
     verbose?.(`openviking: skipping agent experience recall because precheck failed (${precheck.reason})`);
     return { count: 0, estimatedTokens: 0, skippedReason: precheck.reason };
@@ -418,7 +418,8 @@ export async function buildAgentExperienceRecallContext(params: {
         targetUri: "viking://user/memories/experiences",
         limit: Math.max(expCfg.recallLimit * 4, 12),
         scoreThreshold: expCfg.scoreThreshold,
-      }, agentId);
+        actorPeerId: peerId,
+      });
 
       const candidates = (result.memories ?? [])
         .filter(isExperienceMemory)
@@ -433,7 +434,7 @@ export async function buildAgentExperienceRecallContext(params: {
       let chars = 0;
       for (const item of candidates) {
         const content = item.level === 2
-          ? await client.read(item.uri, agentId).catch(() => item.abstract ?? item.uri)
+          ? await client.read(item.uri, peerId).catch(() => item.abstract ?? item.uri)
           : item.abstract ?? item.overview ?? item.uri;
         const exp = renderExperience(item, content);
         if (!exp) continue;
@@ -469,13 +470,14 @@ export async function buildGatedAgentExperienceRecallContext(params: {
   cfg: ParsedMemoryOpenVikingConfig;
   client: OpenVikingClient;
   agentId: string;
+  peerId?: string;
   queryText: string;
   sessionKey?: string;
   runtimeContext?: unknown;
   logger: Logger;
   verbose?: (message: string) => void;
 }): Promise<{ block?: string; count: number; estimatedTokens: number; skippedReason?: string }> {
-  const { cfg, client, agentId, queryText, sessionKey, runtimeContext, logger, verbose } = params;
+  const { cfg, client, agentId, peerId, queryText, sessionKey, runtimeContext, logger, verbose } = params;
   if (!cfg.agentExperience.enabled) {
     return { count: 0, estimatedTokens: 0, skippedReason: "disabled" };
   }
@@ -499,6 +501,7 @@ export async function buildGatedAgentExperienceRecallContext(params: {
     cfg,
     client,
     agentId,
+    peerId,
     queryText,
     trigger: decision.trigger ?? "task_start",
     logger,
@@ -527,7 +530,7 @@ export async function buildLongTermMemoryRecallContext(params: {
     return { memoryCount: 0, estimatedTokens: 0 };
   }
 
-  const precheck = await quickRecallPrecheck(client, agentId);
+  const precheck = await quickRecallPrecheck(client);
   if (!precheck.ok) {
     verbose?.(`openviking: skipping auto-recall because precheck failed (${precheck.reason})`);
     return { memoryCount: 0, estimatedTokens: 0 };
@@ -546,8 +549,9 @@ export async function buildLongTermMemoryRecallContext(params: {
           targetUri: search.targetUri,
           limit: candidateLimit,
           scoreThreshold: 0,
-          peerId,
-        }, agentId);
+          contextType: search.contextType,
+          actorPeerId: peerId,
+        });
         return {
           search,
           result,
@@ -576,6 +580,7 @@ export async function buildLongTermMemoryRecallContext(params: {
           allMemories.push(...memories, ...resources);
           traceSearches.push({
             resourceType: s.value.search.resourceType,
+            contextType: s.value.search.contextType,
             targetUriInput: s.value.search.targetUri,
             targetUriResolved: s.value.search.targetUri,
             limit: candidateLimit,
@@ -600,6 +605,7 @@ export async function buildLongTermMemoryRecallContext(params: {
           logger.warn?.(`openviking: auto-recall search failed: ${String(s.reason)}`);
           traceSearches.push({
             resourceType: search.resourceType,
+            contextType: search.contextType,
             targetUriInput: search.targetUri,
             targetUriResolved: search.targetUri,
             limit: candidateLimit,
@@ -663,7 +669,7 @@ export async function buildLongTermMemoryRecallContext(params: {
 
       const { lines: memoryLines, estimatedTokens } = await buildMemoryLinesWithBudget(
         memories,
-        (uri) => client.read(uri, agentId),
+        (uri) => client.read(uri, peerId),
         {
           recallPreferAbstract: cfg.recallPreferAbstract,
           recallMaxInjectedChars: cfg.recallMaxInjectedChars,

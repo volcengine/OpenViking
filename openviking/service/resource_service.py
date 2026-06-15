@@ -18,6 +18,12 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.core.content_targets import ContentTargetSpec
 from openviking.core.uri_validation import validate_optional_content_target_uri
+from openviking.resource.feishu_watch_auth import (
+    FEISHU_ACCESS_TOKEN_ARG,
+    FEISHU_REFRESH_TOKEN_ARG,
+    create_feishu_auth_state,
+    load_feishu_app_credentials,
+)
 from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import (
     is_remote_resource_source,
@@ -56,11 +62,50 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
+_ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
+    {
+        "path",
+        "ctx",
+        "to",
+        "parent",
+        "reason",
+        "instruction",
+        "wait",
+        "timeout",
+        "build_index",
+        "summarize",
+        "watch_interval",
+        "skip_watch_management",
+        "allow_local_path_resolution",
+        "enforce_public_remote_targets",
+        "resource_lock",
+        "stage_callback",
+        "args",
+        "strict",
+        "source_name",
+        "ignore_dirs",
+        "include",
+        "exclude",
+        "directly_upload_media",
+        "preserve_structure",
+        "create_parent",
+        "telemetry",
+        "request_validator",
+    }
+)
+
+
 @dataclass
 class _ResourceSourceInfo:
     source_name: Optional[str] = None
     source_path: Optional[str] = None
     source_format: Optional[str] = None
+
+
+@dataclass
+class _NormalizedAddResourceArgs:
+    processor_kwargs: Dict[str, Any]
+    watch_auth_state: Optional[Dict[str, Any]] = None
 
 
 class ResourceService:
@@ -111,6 +156,63 @@ class ResourceService:
             sanitized[key] = value
         return sanitized
 
+    def _normalize_add_resource_args(
+        self,
+        args: Optional[Dict[str, Any]],
+        *,
+        watch_interval: float,
+    ) -> _NormalizedAddResourceArgs:
+        if args is None:
+            return _NormalizedAddResourceArgs({})
+        if not isinstance(args, dict):
+            raise InvalidArgumentError("args must be an object.")
+        if not args:
+            return _NormalizedAddResourceArgs({})
+
+        reserved = sorted(set(args).intersection(_ADD_RESOURCE_ARGS_RESERVED_FIELDS))
+        if reserved:
+            raise InvalidArgumentError(
+                "args cannot contain core add_resource fields: " + ", ".join(reserved)
+            )
+
+        normalized = dict(args)
+        token = normalized.get(FEISHU_ACCESS_TOKEN_ARG)
+        refresh_token = normalized.pop(FEISHU_REFRESH_TOKEN_ARG, None)
+        watch_auth_state = None
+        if token is not None:
+            if not isinstance(token, str) or not token.strip():
+                raise InvalidArgumentError("args.feishu_access_token must be a non-empty string.")
+            token = token.strip()
+            normalized[FEISHU_ACCESS_TOKEN_ARG] = token
+            if watch_interval > 0:
+                if not isinstance(refresh_token, str) or not refresh_token.strip():
+                    raise InvalidArgumentError(
+                        "args.feishu_refresh_token must be a non-empty string when "
+                        "args.feishu_access_token is used with watch_interval > 0."
+                    )
+                self._ensure_feishu_credentials_for_watch()
+                watch_auth_state = create_feishu_auth_state(token, refresh_token.strip())
+            elif refresh_token is not None:
+                raise InvalidArgumentError(
+                    "args.feishu_refresh_token is only supported with "
+                    "args.feishu_access_token and watch_interval > 0."
+                )
+        elif refresh_token is not None:
+            raise InvalidArgumentError(
+                "args.feishu_refresh_token requires args.feishu_access_token."
+            )
+
+        return _NormalizedAddResourceArgs(normalized, watch_auth_state)
+
+    def _ensure_feishu_credentials_for_watch(self) -> None:
+        try:
+            load_feishu_app_credentials()
+        except Exception as exc:
+            raise InvalidArgumentError(
+                "Feishu user-token watch requires FEISHU_APP_ID and "
+                "FEISHU_APP_SECRET, or feishu.app_id and feishu.app_secret in ov.conf."
+            ) from exc
+
     def _ensure_initialized(self) -> None:
         """Ensure all dependencies are initialized."""
         if not self._resource_processor:
@@ -145,10 +247,13 @@ class ResourceService:
         skip_watch_management: bool = False,
         allow_local_path_resolution: bool = True,
         enforce_public_remote_targets: bool = False,
+        args: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Start background ingestion for Git repositories while reserving the target URI."""
         self._ensure_initialized()
+        normalized_args = self._normalize_add_resource_args(args, watch_interval=watch_interval)
+        kwargs.update(normalized_args.processor_kwargs)
 
         target = ContentTargetSpec.from_fields(
             ctx=ctx,
@@ -411,6 +516,7 @@ class ResourceService:
         enforce_public_remote_targets: bool = False,
         resource_lock: Optional[LockLease] = None,
         stage_callback: Optional[Callable[[str], Any]] = None,
+        args: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking (only supports resources scope).
@@ -440,6 +546,7 @@ class ResourceService:
                 avoid recursive watch task creation during scheduled execution)
             enforce_public_remote_targets: When True, reject non-public remote hosts and
                 validate each outbound HTTP request URL during fetch.
+            args: Parser-specific options forwarded to the parser chain.
             **kwargs: Extra options forwarded to the parser chain
 
         Returns:
@@ -450,6 +557,8 @@ class ResourceService:
             InvalidArgumentError: If the URI scope is not 'resources'
         """
         self._ensure_initialized()
+        normalized_args = self._normalize_add_resource_args(args, watch_interval=watch_interval)
+        kwargs.update(normalized_args.processor_kwargs)
         if not wait and is_git_repo_url(path):
             return await self.enqueue_git_add_resource(
                 path=path,
@@ -581,6 +690,8 @@ class ResourceService:
                             )
                         try:
                             processor_kwargs = self._sanitize_watch_processor_kwargs(kwargs)
+                            if normalized_args.watch_auth_state is not None:
+                                processor_kwargs.pop(FEISHU_ACCESS_TOKEN_ARG, None)
                             await self._handle_watch_task_creation(
                                 path=path,
                                 to_uri=watch_to,
@@ -591,6 +702,7 @@ class ResourceService:
                                 build_index=build_index,
                                 summarize=summarize,
                                 processor_kwargs=processor_kwargs,
+                                auth_state=normalized_args.watch_auth_state,
                                 ctx=ctx,
                             )
                         except ConflictError:
@@ -704,6 +816,7 @@ class ResourceService:
         build_index: bool,
         summarize: bool,
         processor_kwargs: Dict[str, Any],
+        auth_state: Optional[Dict[str, Any]],
         ctx: RequestContext,
     ) -> None:
         """Handle creation or update of watch task.
@@ -751,6 +864,7 @@ class ResourceService:
                 build_index=build_index,
                 summarize=summarize,
                 processor_kwargs=processor_kwargs,
+                auth_state=auth_state,
                 is_active=True,
             )
             logger.info(
@@ -770,6 +884,7 @@ class ResourceService:
                 build_index=build_index,
                 summarize=summarize,
                 processor_kwargs=processor_kwargs,
+                auth_state=auth_state,
             )
             logger.info(f"[ResourceService] Created watch task {task.task_id} for {to_uri}")
 

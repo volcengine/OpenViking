@@ -63,7 +63,7 @@ When credentials are forced from env, the wrapper materializes a mode-0600 runti
 
 Auth is sent as `Authorization: Bearer <api_key>` to both the REST API (used by hooks) and the `/mcp` endpoint (used by the model).
 
-Set `actor_peer_id` in `ovcli.conf` (or `OPENVIKING_PEER_ID` with `OPENVIKING_CREDENTIAL_SOURCE=env`) when multiple Codex peers share the same OpenViking user and should keep separate peer memory. Hooks pass it as `peer_id` for captured session messages and as `X-OpenViking-Actor-Peer` for retrieval/filesystem calls; MCP gets the same header mapping.
+Set `actor_peer_id` in `ovcli.conf` (or `OPENVIKING_PEER_ID` with `OPENVIKING_CREDENTIAL_SOURCE=env`) when multiple Codex peers share the same OpenViking user and should keep separate peer memory. Hooks pass it as `peer_id` for captured session messages and as `X-OpenViking-Actor-Peer` for retrieval/filesystem calls; MCP gets the same header mapping. The legacy `codex.peerId` / `codex.peer_id` fields in `ov.conf` still resolve as a fallback.
 
 For **unauthenticated local OV** (`ovcli.conf` without `api_key`, or no ovcli.conf at all), `.mcp.json` is rendered *without* `bearer_token_env_var`. Codex 0.130 hard-fails MCP startup with `Environment variable ... is empty` if `bearer_token_env_var` points at an empty/unset env var, so it must be omitted entirely when there's no key.
 

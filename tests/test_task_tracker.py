@@ -151,7 +151,28 @@ async def test_complete_task(tracker: TaskTracker):
     retrieved = await tracker.get(task.task_id)
     assert retrieved is not None
     assert retrieved.status == TaskStatus.COMPLETED
+    assert retrieved.stage == "completed"
     assert retrieved.result == {"memories_extracted": 3}
+
+
+async def test_task_result_redacts_user_key(tracker: TaskTracker):
+    task = await tracker.create("legacy_migration", **_owner_kwargs())
+    await tracker.complete(
+        task.task_id,
+        {
+            "created_users": [{"account_id": "acme", "user_id": "bob", "user_key": "secret-key"}],
+            "nested": {"user_key": "nested-secret"},
+        },
+    )
+
+    retrieved = await tracker.get(task.task_id)
+
+    assert retrieved is not None
+    assert retrieved.result == {
+        "created_users": [{"account_id": "acme", "user_id": "bob"}],
+        "nested": {},
+    }
+    assert "user_key" not in json.dumps(retrieved.to_dict())
 
 
 async def test_fail_task(tracker: TaskTracker):
@@ -161,6 +182,7 @@ async def test_fail_task(tracker: TaskTracker):
     retrieved = await tracker.get(task.task_id)
     assert retrieved is not None
     assert retrieved.status == TaskStatus.FAILED
+    assert retrieved.stage == "failed"
     assert "LLM timeout" in retrieved.error
 
 

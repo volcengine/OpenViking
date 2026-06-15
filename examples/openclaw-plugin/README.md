@@ -123,7 +123,7 @@ The main rules are:
 - `peer_role=none` is the default and does not write `peer_id` on session messages
 - `peer_role=assistant` writes assistant messages with `peer_id=<sessionAgent>`; if `peer_prefix` is set, the value becomes `<peer_prefix>_<sessionAgent>`
 - `peer_role=person` writes user messages with `peer_id` derived from OpenClaw sender identity; assistant messages do not get `peer_id`
-- recall/search requests also send the same resolved `peer_id` when `peer_role` is `assistant` or `person`
+- data-plane recall/search/read/import/delete sends the same resolved peer identity as `X-OpenViking-Actor-Peer` when `peer_role` is `assistant` or `person`
 - when OpenClaw does not provide a session agent, use its default agent `main` for local session and assistant peer metadata
 - only add `X-OpenViking-Account` / `X-OpenViking-User` when `accountId` / `userId` are explicitly configured
 
@@ -142,9 +142,9 @@ In this setup:
 - new installs default to `peer_role=none`
 - `accountId` / `userId` are advanced options only when the deployment needs explicit identity headers, such as root-key or trusted-server flows
 
-### Canonical user namespace
+### User namespace
 
-The plugin writes and searches user-scoped memory. `viking://user/memories` is expanded to `viking://user/<user_id>/memories` using the identity resolved from the configured user key. `viking://agent/...` is deprecated by OpenViking and is not used by the plugin.
+The plugin writes and searches user-scoped memory through `viking://user/...`; OpenViking resolves that alias from the request tenant and actor-peer context. `viking://agent/...` is deprecated by OpenViking and is not used by the plugin.
 
 ## assemble Recall Flow
 

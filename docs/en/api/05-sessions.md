@@ -556,10 +556,11 @@ ov session delete a1b2c3d4
 
 #### 1. API Implementation Introduction
 
-Add a message to the session. Supports two modes: simple text mode and Parts mode (supporting text, context references, tool calls, etc.).
+Add a message to the session. Supports two modes: simple text mode and Parts mode (supporting text, image URLs, context references, tool calls, etc.).
 
 **Part Types:**
 - `TextPart`: Pure text content
+- `ImagePart`: OpenAI-style image URL content. During memory extraction, OpenViking can use the configured VLM to turn images into text descriptions.
 - `ContextPart`: Context reference pointing to resources or memories
 - `ToolPart`: Tool call and result
 
@@ -591,10 +592,13 @@ Add a message to the session. Supports two modes: simple text mode and Parts mod
 **Part Types (Python SDK)**
 
 ```python
-from openviking.message import TextPart, ContextPart, ToolPart
+from openviking.message import TextPart, ImagePart, ContextPart, ToolPart
 
 # Text content
 TextPart(text="Hello, how can I help?")
+
+# Image URL content
+ImagePart(url="https://example.com/photo.png", detail="auto")
 
 # Context reference
 ContextPart(
@@ -661,13 +665,25 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/messages \
       {"type": "tool", "tool_id": "call_123", "tool_name": "search_web", "tool_input": {"query": "OAuth"}, "tool_status": "completed", "tool_output": "Results..."}
     ]
   }'
+
+# Add user message with an image URL
+curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/messages \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "role": "user",
+    "parts": [
+      {"type": "text", "text": "Remember this studio layout."},
+      {"type": "image_url", "image_url": {"url": "https://example.com/studio.png", "detail": "auto"}}
+    ]
+  }'
 ```
 
 **Python SDK**
 
 ```python
 import openviking as ov
-from openviking.message import TextPart, ContextPart
+from openviking.message import TextPart, ImagePart, ContextPart
 
 client = ov.Client(base_url="http://localhost:1933", api_key="your-key")
 
@@ -689,6 +705,16 @@ await client.add_message(
             context_type="resource",
             abstract="Authentication guide"
         )
+    ]
+)
+
+# Parts mode: Add user message with an image URL
+await client.add_message(
+    session_id="a1b2c3d4",
+    role="user",
+    parts=[
+        TextPart(text="Remember this studio layout."),
+        ImagePart(url="https://example.com/studio.png", detail="auto"),
     ]
 )
 ```

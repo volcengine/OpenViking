@@ -113,10 +113,15 @@ class TreeBuilder:
             effective_parent_uri = effective_parent_uri.rstrip("/")
         if effective_parent_uri:
             viking_fs = get_viking_fs()
+            parent_is_content_root = is_content_root_uri(
+                effective_parent_uri,
+                ctx,
+                kind="resource",
+            )
             try:
                 parent_exists = await viking_fs.exists(effective_parent_uri, ctx=ctx)
                 if not parent_exists:
-                    if create_parent:
+                    if create_parent or parent_is_content_root:
                         logger.info(
                             f"[TreeBuilder] Parent URI does not exist, creating: {effective_parent_uri}"
                         )

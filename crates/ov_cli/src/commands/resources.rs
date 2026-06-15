@@ -1,6 +1,7 @@
 use crate::client::HttpClient;
 use crate::error::Result;
 use crate::output::{OutputFormat, output_success};
+use serde_json::{Map, Value};
 
 pub async fn add_resource(
     client: &HttpClient,
@@ -18,6 +19,7 @@ pub async fn add_resource(
     exclude: Option<String>,
     directly_upload_media: bool,
     watch_interval: f64,
+    resource_args: Option<Map<String, Value>>,
     format: OutputFormat,
     compact: bool,
     show_progress: bool,
@@ -39,6 +41,7 @@ pub async fn add_resource(
             exclude,
             directly_upload_media,
             watch_interval,
+            resource_args,
             show_progress,
             verbose,
         )

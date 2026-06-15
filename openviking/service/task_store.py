@@ -11,6 +11,9 @@ from typing import Any, Dict, List, Optional, Protocol
 from openviking.pyagfs import AsyncAGFSClient
 from openviking.pyagfs.exceptions import AGFSAlreadyExistsError
 
+SYSTEM_TASK_ACCOUNT_ID = "_system"
+SYSTEM_TASK_USER_ID = "root"
+
 
 class TaskStore(Protocol):
     async def create(self, task: Any) -> None: ...
@@ -122,6 +125,8 @@ class PersistentTaskStore:
         return f"{self.ROOT_PREFIX}/{account_id}"
 
     def _system_dir(self, account_id: str) -> str:
+        if account_id == SYSTEM_TASK_ACCOUNT_ID:
+            return self._account_dir(account_id)
         return f"{self._account_dir(account_id)}/{self.SYSTEM_DIRNAME}"
 
     def _task_root_dir(self, account_id: str) -> str:

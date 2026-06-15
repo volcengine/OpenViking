@@ -48,6 +48,7 @@ class AsyncOpenViking:
         self,
         path: Optional[str] = None,
         actor_peer_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
     ):
         """
         Initialize OpenViking client (embedded mode).
@@ -55,6 +56,7 @@ class AsyncOpenViking:
         Args:
             path: Local storage path (overrides ov.conf storage path).
             actor_peer_id: Optional view filter for the current user's peer collection.
+            agent_id: Legacy alias for actor_peer_id.
         """
         # Singleton guard for repeated initialization
         if hasattr(self, "_singleton_initialized") and self._singleton_initialized:
@@ -68,6 +70,7 @@ class AsyncOpenViking:
         self._client: BaseClient = LocalClient(
             path=path,
             actor_peer_id=actor_peer_id,
+            agent_id=agent_id,
         )
         self._singleton_initialized = True
 
@@ -192,7 +195,7 @@ class AsyncOpenViking:
             session_id: Session ID
             role: Message role ("user" or "assistant")
             content: Text content (simple mode)
-            parts: Parts array (full Part support: TextPart, ContextPart, ToolPart)
+            parts: Parts array (full Part support: TextPart, ContextPart, ImagePart, ToolPart)
             created_at: Message creation time (ISO format string)
             peer_id: Optional stable interaction peer identity.
 
@@ -271,6 +274,7 @@ class AsyncOpenViking:
         build_index: bool = True,
         summarize: bool = False,
         watch_interval: float = 0,
+        args: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
         **kwargs,
     ) -> Dict[str, Any]:
@@ -305,6 +309,7 @@ class AsyncOpenViking:
             summarize=summarize,
             telemetry=telemetry,
             watch_interval=watch_interval,
+            args=args,
             **kwargs,
         )
 

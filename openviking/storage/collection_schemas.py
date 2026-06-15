@@ -145,10 +145,25 @@ def _get_active_embedding_model_config(config: "OpenVikingConfig") -> Any:
 
 def _build_embedding_metadata(config: "OpenVikingConfig") -> Dict[str, Any]:
     model_cfg = _get_active_embedding_model_config(config)
+    # When credentials are configured, the first credential drives the actual
+    # provider/model used at request time (see EmbeddingConfig._effective_*),
+    # so the metadata signature must reflect the credential rather than the
+    # parent's possibly-default provider/model. Otherwise a credential-only
+    # OpenAI config would still be signed as ``provider=volcengine`` (the parent
+    # default), masking real vector-space changes.
+    first_cred = None
+    creds = getattr(model_cfg, "credentials", None) or []
+    if creds:
+        first_cred = creds[0]
+    cred_provider = getattr(first_cred, "provider", None) if first_cred else None
+    cred_model = getattr(first_cred, "model", None) if first_cred else None
     provider = (
-        getattr(model_cfg, "provider", None) or getattr(model_cfg, "backend", None) or ""
+        cred_provider
+        or getattr(model_cfg, "provider", None)
+        or getattr(model_cfg, "backend", None)
+        or ""
     ).lower()
-    model = getattr(model_cfg, "model", None) or ""
+    model = cred_model or getattr(model_cfg, "model", None) or ""
     dimension = config.embedding.dimension
     model_path = getattr(model_cfg, "model_path", None)
     model_identity = model
@@ -284,9 +299,53 @@ async def init_context_collection(storage) -> bool:
         )
         return False
 
+    # Embedding metadata differs from current config and the collection is
+    # non-empty. Decide whether the user has explicitly opted in to keep the
+    # existing vectors despite the metadata drift.
+    existing_dimension = (
+        existing_embedding_meta.get("dimension") if existing_embedding_meta else None
+    )
+    current_dimension = embedding_meta.get("dimension")
+    dimension_changed = (
+        existing_dimension is not None
+        and current_dimension is not None
+        and existing_dimension != current_dimension
+    )
+
+    allow_override = bool(getattr(config.embedding, "allow_metadata_override", False))
+    if (
+        allow_override
+        and not dimension_changed
+        and hasattr(storage, "update_collection_description")
+    ):
+        logger.warning(
+            "Embedding metadata changed (provider/model) but dimension is "
+            "unchanged; embedding.allow_metadata_override=true, so the existing "
+            "collection metadata will be rewritten and existing vectors kept. "
+            "old=%s new=%s",
+            existing_embedding_meta,
+            embedding_meta,
+        )
+        await storage.update_collection_description(
+            _encode_collection_description(
+                base_description or "Unified context collection",
+                embedding_meta,
+            )
+        )
+        return False
+
+    if dimension_changed:
+        raise EmbeddingRebuildRequiredError(
+            "Existing collection embedding dimension "
+            f"({existing_dimension}) does not match current configuration "
+            f"({current_dimension}). Vectors are incompatible; rebuild is required."
+        )
+
     raise EmbeddingRebuildRequiredError(
         "Existing collection embedding metadata does not match current configuration. "
-        "Rebuild is required before using the current embedding model."
+        "Rebuild is required before using the current embedding model, or set "
+        "embedding.allow_metadata_override=true to keep existing vectors when "
+        "only provider/model changed (dimension must remain the same)."
     )
 
 
@@ -446,7 +505,9 @@ class TextEmbeddingHandler(DequeueHandlerBase):
 
                 # Process string (text) or list (multimodal) messages
                 if not isinstance(embedding_msg.message, (str, list)):
-                    logger.debug(f"Skipping unsupported message type: {type(embedding_msg.message)}")
+                    logger.debug(
+                        f"Skipping unsupported message type: {type(embedding_msg.message)}"
+                    )
                     self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
                     self._record_request_success(embedding_msg)
                     report_success = True

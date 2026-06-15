@@ -75,7 +75,7 @@ $OPENCLAW_STATE_DIR/openclaw.json
 
 | 参数 | 类型 | 默认值 | 环境变量 | 说明 |
 | --- | --- | --- | --- | --- |
-| `peer_role` | `"none"` \| `"assistant"` \| `"person"` | `"none"` | — | 控制 session message 和 recall/search 请求是否写入 `peer_id`。 |
+| `peer_role` | `"none"` \| `"assistant"` \| `"person"` | `"none"` | — | 控制哪些 session message 写入 `peer_id`，并为数据面 recall/search/read/import/delete 提供 actor peer 视图。 |
 | `peer_prefix` | string | 空 | — | `peer_role=assistant` 时 assistant `peer_id` 的可选前缀；仅允许字母、数字、`_`、`-`。 |
 
 ### 3.3 自动捕获与提交
@@ -94,7 +94,7 @@ $OPENCLAW_STATE_DIR/openclaw.json
 | --- | --- | --- | --- | --- |
 | `autoRecall` | boolean | `true` | — | 是否在 assemble 阶段自动召回并注入上下文。 |
 | `targetUri` | string | `viking://user/memories` | — | `memory_recall` / `memory_forget` 默认搜索范围。 |
-| `recallTargetTypes` | string[] | `["user", "agent"]` | — | 自动召回和默认 `memory_recall` 的搜索类型。允许 `resource`、`user`、`agent`。 |
+| `recallTargetTypes` | string[] | `["user", "agent"]` | — | 自动召回和默认 `memory_recall` 的搜索类型。允许 `resource`、`user`、`agent`；`user` / `agent` 为兼容项，当前合并为一次 `context_type=memory` 检索。 |
 | `recallResources` | boolean | `false` | `OPENVIKING_RECALL_RESOURCES` | 旧兼容开关；仅在未显式配置 `recallTargetTypes` 时追加 `resource`。 |
 | `recallLimit` | number | `6` | — | 最终召回条数下限为 `1`。内部请求通常放大为 `max(limit * 4, 20)`。 |
 | `recallScoreThreshold` | number | `0.15` | — | 召回结果分数阈值，范围 `0` 到 `1`。 |
@@ -502,7 +502,7 @@ curl 'http://127.0.0.1:<gateway-port>/api/openviking/recall-traces/ov_search-178
 | `X-OpenViking-Account` | `accountId` | 租户 account。 |
 | `X-OpenViking-User` | `userId` | 租户 user。 |
 
-`peer_role=assistant/person` 时，插件通过请求 body 的 `peer_id` 字段隔离 session 写入和 recall/search；当前实现不发送 `X-OpenViking-Agent` header。
+`peer_role=assistant/person` 时，插件通过请求 body 的 `peer_id` 字段做 session message 归因；recall/search/read/import/delete 等数据面请求通过 `X-OpenViking-Actor-Peer` 进入当前 actor peer 视图。当前实现不发送 `X-OpenViking-Agent` header。
 
 后端 API 封装清单：
 

@@ -109,7 +109,7 @@ claude mcp add --transport http openviking \
 | `read` | 读取一个或多个 `viking://` URI 的内容 | `uris`（单个字符串或数组） |
 | `list` | 列出 `viking://` 目录下的条目 | `uri`, `recursive`(可选) |
 | `store` | 存储消息到长期记忆（触发记忆提取） | `messages`（`{role, content}` 列表） |
-| `add_resource` | 添加本地文件或 URL 作为资源(本地文件触发渐进式上传流) | `path`, `temp_file_id`(可选), `description`(可选), `watch_interval`(可选,分钟数 — 远程 URL 的自动刷新周期), `to`(可选,目标 `viking://resources/...` URI；`watch_interval > 0` 时若省略 `to`,watch 将自动绑定到本次 add 创建的资源 URI) |
+| `add_resource` | 添加本地文件或 URL 作为资源(本地文件触发渐进式上传流) | `path`, `temp_file_id`(可选), `description`(可选), `watch_interval`(可选,分钟数 — 远程 URL 的自动刷新周期), `to`(可选,目标 `viking://resources/...` URI；`watch_interval > 0` 时若省略 `to`,watch 将自动绑定到本次 add 创建的资源 URI), `args`(可选,特定 parser 参数，例如飞书一次性用户 token 导入使用 `{"feishu_access_token":"u-..."}`，飞书用户 token watch 使用 `{"feishu_access_token":"u-...","feishu_refresh_token":"r-..."}`) |
 | `list_watches` | 列出当前 Agent 可见的 watch 任务（自动刷新订阅），每行显示目标 URI、刷新间隔（分钟）、active/paused 状态以及下一次调度时间 | 无 |
 | `cancel_watch` | 按目标 URI 取消（删除）watch 任务。若需调整刷新周期或临时暂停，请取消后使用新的 `watch_interval` 重新添加 | `to_uri`（必须匹配 watch 任务的 `to` 值，例如 `viking://resources/...`） |
 | `grep` | 在 `viking://` 文件中进行正则内容搜索 | `uri`, `pattern`（字符串）, `case_insensitive` |
@@ -121,6 +121,8 @@ claude mcp add --transport http openviking \
 | `health` | 检查 OpenViking 服务健康状态 | 无 |
 
 > **注**：MCP 仅暴露 watch 管理的最小闭包（`list_watches` + `cancel_watch`）。pause / resume / trigger 和统一的 `update` 动作刻意不在此处暴露，请通过 REST `/api/v1/watches/*` 接口或 `ov task watch` CLI 使用上述操作。
+
+> 未传 `args.feishu_access_token` 的飞书/Lark 导入保持现有应用/tenant token 行为，也支持 watch。飞书/Lark 一次性用户 token 导入只传 `args.feishu_access_token`；飞书/Lark 用户 token watch 还必须传 `args.feishu_refresh_token`，并要求 OpenViking 服务端配置同一个飞书应用凭证。
 
 ### 添加本地文件资源(渐进式上传)
 

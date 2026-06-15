@@ -36,6 +36,7 @@ export type RecallTraceEntry = {
   };
   searches: Array<{
     resourceType: RecallResourceType | "archive";
+    contextType?: "memory" | "resource" | "skill";
     targetUriInput?: string;
     targetUriResolved?: string;
     limit: number;
@@ -143,20 +144,20 @@ export function resolveRecallSearchPlan(
   _ctx: { ovSessionId?: string; agentId?: string },
 ): {
   resourceTypes: RecallResourceType[];
-  searches: Array<{ resourceType: RecallResourceType; targetUri: string }>;
+  searches: Array<{ resourceType: RecallResourceType; targetUri?: string; contextType: "memory" | "resource" }>;
   skipped: Array<{ resourceType: RecallResourceType; reason: "missing_session" }>;
 } {
   const normalized = normalizeResourceTypes(resourceTypes);
-  const searches: Array<{ resourceType: RecallResourceType; targetUri: string }> = [];
+  const searches: Array<{ resourceType: RecallResourceType; targetUri?: string; contextType: "memory" | "resource" }> = [];
   const skipped: Array<{ resourceType: RecallResourceType; reason: "missing_session" }> = [];
+  let addedMemorySearch = false;
 
   for (const resourceType of normalized) {
     if (resourceType === "resource") {
-      searches.push({ resourceType, targetUri: "viking://resources" });
-    } else if (resourceType === "user") {
-      searches.push({ resourceType, targetUri: "viking://user/memories" });
-    } else if (resourceType === "agent") {
-      searches.push({ resourceType, targetUri: "viking://agent/memories" });
+      searches.push({ resourceType, contextType: "resource" });
+    } else if ((resourceType === "user" || resourceType === "agent") && !addedMemorySearch) {
+      searches.push({ resourceType: "user", contextType: "memory" });
+      addedMemorySearch = true;
     }
   }
 

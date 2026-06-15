@@ -23,8 +23,17 @@ class SyncOpenViking:
     Wraps AsyncOpenViking with synchronous methods.
     """
 
-    def __init__(self, path: Optional[str] = None, actor_peer_id: Optional[str] = None):
-        self._async_client = AsyncOpenViking(path=path, actor_peer_id=actor_peer_id)
+    def __init__(
+        self,
+        path: Optional[str] = None,
+        actor_peer_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+    ):
+        self._async_client = AsyncOpenViking(
+            path=path,
+            actor_peer_id=actor_peer_id,
+            agent_id=agent_id,
+        )
         self._initialized = False
 
     def initialize(self) -> None:
@@ -98,7 +107,7 @@ class SyncOpenViking:
             session_id: Session ID
             role: Message role ("user" or "assistant")
             content: Text content (simple mode)
-            parts: Parts array (full Part support: TextPart, ContextPart, ToolPart)
+            parts: Parts array (full Part support: TextPart, ContextPart, ImagePart, ToolPart)
             created_at: Message creation time (ISO format string). If not provided, current time is used.
             peer_id: Optional stable interaction peer identity.
 
@@ -177,6 +186,7 @@ class SyncOpenViking:
         timeout: float = None,
         build_index: bool = True,
         summarize: bool = False,
+        args: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
         **kwargs,
     ) -> Dict[str, Any]:
@@ -203,6 +213,7 @@ class SyncOpenViking:
                 timeout=timeout,
                 build_index=build_index,
                 summarize=summarize,
+                args=args,
                 telemetry=telemetry,
                 **kwargs,
             )

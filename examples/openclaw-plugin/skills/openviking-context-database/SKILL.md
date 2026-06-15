@@ -71,7 +71,7 @@ Core config lives under `plugins.entries.openviking.config`:
 | `captureMode` | `semantic` | `semantic` or `keyword`; affects server-side extraction filtering. |
 | `captureMaxLength` | `24000` | Max sanitized text length per captured turn. |
 | `autoRecall` | `true` | Run recall before replies and inject relevant context. |
-| `recallTargetTypes` | `user,agent` | Default target types when `targetUri` is omitted. Allowed: `resource`, `user`, `agent`. Use archive tools for session history. |
+| `recallTargetTypes` | `user,agent` | Default target types when `targetUri` is omitted. Allowed: `resource`, `user`, `agent`; `user` and `agent` are compatibility values that merge into a `context_type=memory` search under the current actor peer view. Use archive tools for session history. |
 | `recallResources` | `false` | Compatibility shortcut that appends `resource` to default recall targets when `recallTargetTypes` is unset. |
 | `recallLimit` | `6` | Max selected recall items. |
 | `recallScoreThreshold` | `0.15` | Min score after post-processing. |
@@ -132,7 +132,7 @@ Semantic search over memories/resources. Session history is not a semantic recal
 | `targetUri` | No | Exact search URI. If set, only this URI is searched. |
 | `resourceTypes` | No | Array of `resource`, `user`, `agent`; used only when `targetUri` is omitted. |
 
-Notes: when `targetUri` is omitted, the plugin resolves a search plan from `resourceTypes` or configured `recallTargetTypes`, fetches more candidates than requested, deduplicates, filters leaf memories, reranks, and respects `recallMaxInjectedChars`.
+Notes: when `targetUri` is omitted, the plugin resolves a search plan from `resourceTypes` or configured `recallTargetTypes`, uses `context_type` filters for memory/resource searches, fetches more candidates than requested, deduplicates, filters leaf memories, reranks, and respects `recallMaxInjectedChars`.
 
 ### `memory_store`
 
@@ -150,7 +150,7 @@ Delete a memory.
 
 | Parameter | Required | Description |
 |---|---|---|
-| `uri` | No | Exact `viking://user/.../memories/...` or `viking://agent/.../memories/...` memory URI. Non-memory URIs are refused. |
+| `uri` | No | Exact `viking://user/.../memories/...` memory URI. Non-memory URIs are refused. |
 | `query` | No | Search query when `uri` is unknown. |
 | `targetUri` | No | Search scope URI, default `targetUri`. |
 | `limit` | No | Search limit, default `5`. |

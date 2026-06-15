@@ -12,6 +12,12 @@ bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/e
 
 The installer checks dependencies, configures the OpenViking connection, and registers the plugin. Every step is idempotent.
 
+In regions where GitHub is hard to reach, use the equivalent command below:
+
+```bash
+bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/codex-memory-plugin/tos-install.sh)
+```
+
 After installation, activate the `codex` wrapper in your current terminal (or open a new terminal window):
 
 ```bash

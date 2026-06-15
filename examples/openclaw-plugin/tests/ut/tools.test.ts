@@ -189,22 +189,21 @@ describe("Tool: memory_recall (registration)", () => {
 
       if (requestUrl.pathname === "/api/v1/search/find") {
         const body = JSON.parse(String(init?.body ?? "{}"));
-        const targetUri = String(body.target_uri ?? "");
+        expect(body.context_type).toBe("memory");
+        expect(body.target_uri).toBeUndefined();
         const memories =
-          targetUri.includes("user")
-            ? [
-                makeMemory({
-                  uri: "viking://user/default/memories/high",
-                  abstract: "Abstract only text",
-                  score: 0.92,
-                }),
-                makeMemory({
-                  uri: "viking://user/default/memories/low",
-                  abstract: "Low score text",
-                  score: 0.05,
-                }),
-              ]
-            : [];
+          [
+            makeMemory({
+              uri: "viking://user/default/memories/high",
+              abstract: "Abstract only text",
+              score: 0.92,
+            }),
+            makeMemory({
+              uri: "viking://user/default/memories/low",
+              abstract: "Low score text",
+              score: 0.05,
+            }),
+          ];
         return okResponse({ memories, total: memories.length });
       }
 
@@ -240,21 +239,17 @@ describe("Tool: memory_recall (registration)", () => {
     const findCalls = fetchMock.mock.calls.filter(([calledUrl]) =>
       String(calledUrl).includes("/api/v1/search/find")
     );
-    expect(findCalls).toHaveLength(2);
-    const targetUris = findCalls.map(([, init]) =>
-      JSON.parse(String((init as RequestInit).body)).target_uri,
-    );
-    expect(targetUris).toHaveLength(2);
-    expect(targetUris).toContain("viking://agent/memories");
-    expect(targetUris.some((uri) => String(uri).endsWith("/memories") && String(uri).includes("viking://user/"))).toBe(true);
+    expect(findCalls).toHaveLength(1);
     for (const [, init] of findCalls) {
       const body = JSON.parse(String((init as RequestInit).body));
       expect(body.limit).toBe(20);
       expect(body.score_threshold).toBe(0);
+      expect(body.context_type).toBe("memory");
+      expect(body.target_uri).toBeUndefined();
     }
   });
 
-  it("passes sender peer_id to memory_recall when peer_role is person", async () => {
+  it("passes sender actor peer header to memory_recall when peer_role is person", async () => {
     const fetchMock = vi.fn(async (url: string) => {
       const requestUrl = new URL(url);
       if (requestUrl.pathname === "/api/v1/system/status") {
@@ -280,12 +275,15 @@ describe("Tool: memory_recall (registration)", () => {
       query: "backend preference",
     }) as ToolResult;
 
-    const findBodies = fetchMock.mock.calls
+    const findRequests = fetchMock.mock.calls
       .filter(([calledUrl]) => String(calledUrl).includes("/api/v1/search/find"))
-      .map((call) => JSON.parse(String((call[1] as RequestInit).body)));
-    expect(findBodies).toHaveLength(2);
-    for (const body of findBodies) {
-      expect(body.peer_id).toBe("wx_user-01_abc");
+      .map((call) => call[1] as RequestInit);
+    expect(findRequests).toHaveLength(1);
+    for (const init of findRequests) {
+      const body = JSON.parse(String(init.body));
+      const headers = new Headers(init.headers);
+      expect(body.peer_id).toBeUndefined();
+      expect(headers.get("X-OpenViking-Actor-Peer")).toBe("wx_user-01_abc");
     }
   });
 
@@ -297,7 +295,8 @@ describe("Tool: memory_recall (registration)", () => {
       }
       if (requestUrl.pathname === "/api/v1/search/find") {
         const body = JSON.parse(String(init?.body ?? "{}"));
-        expect(body.target_uri).toBe("viking://resources");
+        expect(body.context_type).toBe("resource");
+        expect(body.target_uri).toBeUndefined();
         return okResponse({
           memories: [],
           resources: [
@@ -346,22 +345,21 @@ describe("Tool: memory_recall (registration)", () => {
 
       if (requestUrl.pathname === "/api/v1/search/find") {
         const body = JSON.parse(String(init?.body ?? "{}"));
-        const targetUri = String(body.target_uri ?? "");
+        expect(body.context_type).toBe("memory");
+        expect(body.target_uri).toBeUndefined();
         const memories =
-          targetUri.includes("user")
-            ? [
-                makeMemory({
-                  uri: "viking://user/default/memories/large",
-                  abstract: "Large abstract",
-                  score: 0.95,
-                }),
-                makeMemory({
-                  uri: "viking://user/default/memories/small",
-                  abstract: "Small abstract",
-                  score: 0.9,
-                }),
-              ]
-            : [];
+          [
+            makeMemory({
+              uri: "viking://user/default/memories/large",
+              abstract: "Large abstract",
+              score: 0.95,
+            }),
+            makeMemory({
+              uri: "viking://user/default/memories/small",
+              abstract: "Small abstract",
+              score: 0.9,
+            }),
+          ];
         return okResponse({ memories, total: memories.length });
       }
 
@@ -1106,7 +1104,7 @@ describe("Tool: ov_search (behavioral)", () => {
       }
       if (url.endsWith("/api/v1/search/find")) {
         const body = JSON.parse(String(init?.body ?? "{}"));
-        if (body.target_uri === "viking://resources") {
+        if (body.context_type === "resource") {
           return okResponse({
             memories: [],
             resources: [
@@ -1126,6 +1124,7 @@ describe("Tool: ov_search (behavioral)", () => {
             total: 1,
           });
         }
+        expect(body.context_type).toBe("skill");
         return okResponse({
           memories: [],
           resources: [],
@@ -1166,8 +1165,9 @@ describe("Tool: ov_search (behavioral)", () => {
     const findBodies = fetchMock.mock.calls
       .filter((call) => String(call[0]).endsWith("/api/v1/search/find"))
       .map((call) => JSON.parse(String((call[1] as RequestInit).body)));
-    expect(findBodies.some((body) => body.target_uri === "viking://resources")).toBe(true);
-    expect(findBodies.some((body) => String(body.target_uri).startsWith("viking://user/") && String(body.target_uri).endsWith("/skills"))).toBe(true);
+    expect(findBodies).toHaveLength(2);
+    expect(findBodies.map((body) => body.context_type).sort()).toEqual(["resource", "skill"]);
+    expect(findBodies.every((body) => body.target_uri === undefined)).toBe(true);
   });
 
   it("records ov_search recall traces when traceRecall is enabled", async () => {
@@ -1182,12 +1182,10 @@ describe("Tool: ov_search (behavioral)", () => {
         const body = JSON.parse(String(init?.body ?? "{}"));
         return okResponse({
           memories: [],
-          resources: [
+          resources: body.context_type === "resource" ? [
             {
               context_type: "resource",
-              uri: body.target_uri === "viking://resources"
-                ? "viking://resources/trace-design.md"
-                : "viking://user/skills/trace-skill",
+              uri: "viking://resources/trace-design.md",
               level: 2,
               score: 0.88,
               category: "",
@@ -1196,8 +1194,12 @@ describe("Tool: ov_search (behavioral)", () => {
               abstract: "Trace design note",
               overview: null,
             },
-          ],
-          skills: [],
+          ] : [],
+          skills: body.context_type === "skill" ? [makeMemory({
+            uri: "viking://user/skills/trace-skill",
+            abstract: "Trace skill",
+            score: 0.75,
+          })] : [],
           total: 1,
         });
       }
@@ -1219,7 +1221,10 @@ describe("Tool: ov_search (behavioral)", () => {
     expect(result.details.count).toBe(1);
     const entry = (result.details.entries as any[])[0];
     expect(entry.source).toBe("ov_search");
+    expect(entry.resourceTypes).toEqual(["resource", "user"]);
     expect(entry.searches.length).toBeGreaterThan(0);
+    expect(entry.searches.map((search: any) => search.resourceType).sort()).toEqual(["resource", "user"]);
+    expect(entry.searches.map((search: any) => search.contextType).sort()).toEqual(["resource", "skill"]);
     expect(entry.selected[0].uri).toContain("trace");
   });
 
@@ -1340,9 +1345,11 @@ describe("Tool: ov_search (behavioral)", () => {
       }
       if (requestUrl.pathname === "/api/v1/search/find") {
         const body = JSON.parse(String(init?.body ?? "{}"));
+        expect(body.context_type).toBe("memory");
+        expect(body.target_uri).toBeUndefined();
         return okResponse({
           memories: [makeMemory({
-            uri: `${body.target_uri}/backend-pref`,
+            uri: "viking://user/default/memories/backend-pref",
             abstract: "Backend preference",
             score: 0.91,
           })],
@@ -1366,11 +1373,9 @@ describe("Tool: ov_search (behavioral)", () => {
     const findBodies = fetchMock.mock.calls
       .filter(([calledUrl]) => String(calledUrl).includes("/api/v1/search/find"))
       .map(([, fetchInit]) => JSON.parse(String((fetchInit as RequestInit).body)));
-    expect(findBodies).toHaveLength(2);
-    const targetUris = findBodies.map((body) => body.target_uri);
-    expect(new Set(targetUris).size).toBe(2);
-    expect(targetUris).toContain("viking://agent/memories");
-    expect(targetUris).toContain("viking://user/default/memories");
+    expect(findBodies).toHaveLength(1);
+    expect(findBodies[0]).toMatchObject({ context_type: "memory" });
+    expect(findBodies[0].target_uri).toBeUndefined();
 
     const trace = factoryTools.get("ov_recall_trace")!({ sessionId: "test-session" });
     const result = await trace.execute("tc-trace", { source: "memory_recall", limit: 10 }) as ToolResult;
@@ -1379,11 +1384,9 @@ describe("Tool: ov_search (behavioral)", () => {
 
     const entry = (result.details.entries as any[])[0];
     expect(entry.resourceTypes).toEqual(["user", "agent"]);
-    expect(entry.searches).toHaveLength(2);
-    expect(entry.searches.map((search: any) => search.targetUriResolved)).toEqual([
-      "viking://user/memories",
-      "viking://agent/memories",
-    ]);
+    expect(entry.searches).toHaveLength(1);
+    expect(entry.searches[0].contextType).toBe("memory");
+    expect(entry.searches[0].targetUriResolved).toBeUndefined();
     expect(entry.selected).toEqual(expect.arrayContaining([
       expect.objectContaining({
         uri: "viking://user/default/memories/backend-pref",
@@ -1438,7 +1441,7 @@ describe("Tool: ov_search (behavioral)", () => {
     ]));
   });
 
-  it("passes assistant peer_id to ov_search when peer_role is assistant", async () => {
+  it("passes assistant actor peer header to ov_search when peer_role is assistant", async () => {
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       if (url.endsWith("/api/v1/system/status")) {
         return okResponse({ user: "default" });
@@ -1462,12 +1465,15 @@ describe("Tool: ov_search (behavioral)", () => {
 
     await search.execute("tc-ov-search-peer", { query: "OpenViking install" }) as ToolResult;
 
-    const findBodies = fetchMock.mock.calls
+    const findRequests = fetchMock.mock.calls
       .filter((call) => String(call[0]).endsWith("/api/v1/search/find"))
-      .map((call) => JSON.parse(String((call[1] as RequestInit).body)));
-    expect(findBodies).toHaveLength(2);
-    for (const body of findBodies) {
-      expect(body.peer_id).toBe("worker");
+      .map((call) => call[1] as RequestInit);
+    expect(findRequests).toHaveLength(2);
+    for (const init of findRequests) {
+      const body = JSON.parse(String(init.body));
+      const headers = new Headers(init.headers);
+      expect(body.peer_id).toBeUndefined();
+      expect(headers.get("X-OpenViking-Actor-Peer")).toBe("worker");
     }
   });
 
@@ -1481,7 +1487,7 @@ describe("Tool: ov_search (behavioral)", () => {
       }
       if (url.endsWith("/api/v1/search/find")) {
         const body = JSON.parse(String(init?.body ?? "{}"));
-        if (body.target_uri === "viking://resources") {
+        if (body.context_type === "resource") {
           return okResponse({
             memories: [],
             resources: [

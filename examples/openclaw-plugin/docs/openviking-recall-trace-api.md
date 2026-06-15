@@ -91,9 +91,9 @@ Trace 会记录实际召回范围，但召回范围本身由 `recallTargetTypes`
 
 | resourceType | target URI | 说明 |
 | --- | --- | --- |
-| `resource` | `viking://resources` | 全局资源库。 |
-| `user` | `viking://user/memories` | 当前用户长期记忆。 |
-| `agent` | `viking://agent/memories` | 当前 Agent 长期记忆。 |
+| `resource` | `context_type=resource` | resource 知识库；target URI 可为空，由服务端解析当前可检索 resource 范围。 |
+| `user` | `context_type=memory` | 兼容目标类型；与 `agent` 合并为一次 memory 类型检索。 |
+| `agent` | `context_type=memory` + `X-OpenViking-Actor-Peer` | 兼容目标类型；不再依赖废弃的 `viking://agent/...` 目录。 |
 
 Session history is not a semantic recall target because the server does not vector-index session archives. Use `ov_archive_search` and `ov_archive_expand` for exact session-history recovery.
 
@@ -541,7 +541,7 @@ curl 'http://127.0.0.1:<gateway-port>/api/openviking/recall-traces/ov_search-178
 /ov-recall-trace --turn all --source memory_recall --limit 5
 ```
 
-重点查看 `resourceTypes` 和 `searches[].targetUriResolved`，确认是否默认查了 `viking://user/memories` 与 `viking://agent/memories`，或是否按请求 `resourceTypes` 改变范围。
+重点查看 `resourceTypes`、`searches[].contextType` 和 `searches[].targetUriResolved`，确认是否使用 `context_type=memory` / `context_type=resource`，或是否按请求 `resourceTypes` 改变范围。
 
 ### 9.3 排查 `/ov-search` 或 `ov_search` 为什么结果不符合预期
 

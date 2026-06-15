@@ -24,7 +24,8 @@ viking://{scope}/{path}
 
 公开 API 和 CLI 的文件系统/内容操作接受公开作用域 `resources` 和 `user`，
 以及根 URI `viking://`。`session` 保留为 user session 路径的向后兼容别名；
-新 session 数据位于 `viking://user/{user_id}/sessions`。`agent` 已废弃。
+新 session 数据位于 `viking://user/{user_id}/sessions`。`agent` 已废弃，但仍作为
+legacy agent 数据的只读兼容入口。
 `temp`、`queue` 和 `upload` 是内部实现作用域，不能通过公开 API 的 URI 参数直接访问。
 
 ## 初始目录
@@ -214,7 +215,8 @@ viking://
     └── history/
 ```
 
-`viking://agent/...` 已废弃，当前 namespace 解析会拒绝该路径。
+`viking://agent/...` 已废弃，仅保留 legacy agent 数据的只读兼容；新数据应写入
+`viking://user/{user_id}/peers/{peer_id}/...`。
 
 ## URI 操作
 

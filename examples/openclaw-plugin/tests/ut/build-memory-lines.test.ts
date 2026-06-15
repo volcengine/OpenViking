@@ -317,9 +317,10 @@ describe("buildLongTermMemoryRecallContext trace", () => {
     expect(recorded.searches).toHaveLength(1);
     expect(recorded.searches[0]).toMatchObject({
       resourceType: "user",
-      targetUriInput: "viking://user/memories",
       total: 1,
     });
+    expect(recorded.searches[0]!.targetUriInput).toBeUndefined();
+    expect(recorded.searches[0]!.targetUriResolved).toBeUndefined();
     expect(recorded.searches[0]!.results[0]).toMatchObject({
       uri: "viking://user/memories/rust-pref",
       resourceType: "user",
@@ -366,14 +367,16 @@ describe("buildLongTermMemoryRecallContext trace", () => {
     expect(recorded.searches).toHaveLength(2);
     expect(recorded.searches[0]).toMatchObject({
       resourceType: "user",
-      targetUriInput: "viking://user/memories",
       error: "Error: user search failed",
     });
+    expect(recorded.searches[0]!.targetUriInput).toBeUndefined();
+    expect(recorded.searches[0]!.targetUriResolved).toBeUndefined();
     expect(recorded.searches[1]).toMatchObject({
       resourceType: "resource",
-      targetUriInput: "viking://resources",
       total: 1,
     });
+    expect(recorded.searches[1]!.targetUriInput).toBeUndefined();
+    expect(recorded.searches[1]!.targetUriResolved).toBeUndefined();
     expect(recorded.selected[0]).toMatchObject({ injected: true });
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("auto-recall search failed"));
   });

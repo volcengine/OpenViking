@@ -39,6 +39,7 @@ _API_KEY_ROOT_ALLOWED_PREFIXES = (
     "/api/v1/admin",
     "/api/v1/observer",
     "/api/v1/console",
+    "/api/v1/tasks",
     "/api/v1/system/backend",
     "/api/v1/system/sync",
 )
@@ -274,6 +275,12 @@ async def resolve_identity(
                     "Trusted mode requests must include "
                     "X-OpenViking-Account or explicit account_id in the URL and "
                     "X-OpenViking-User or explicit user_id in the URL."
+                )
+            if configured_root_api_key:
+                return ResolvedIdentity(
+                    role=Role.ROOT,
+                    account_id=effective_account_id or "trusted",
+                    user_id=effective_user_id or "trusted",
                 )
             if not effective_account_id and not effective_user_id:
                 return ResolvedIdentity(

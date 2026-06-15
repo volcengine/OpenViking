@@ -13,6 +13,9 @@
 #   OPENVIKING_HOME, OPENVIKING_REPO_DIR, OPENVIKING_REPO_URL,
 #   OPENVIKING_REPO_REF / OPENVIKING_REPO_BRANCH, OPENVIKING_CLI_CONFIG_FILE,
 #   OPENVIKING_CODEX_WRAP_EXTRA (extra launch commands to wrap).
+#   OPENVIKING_REPO_ARCHIVE_URL  when set, fetch the source from this zip instead
+#                                of git clone (used by the TOS bootstrap for users
+#                                who can't reach GitHub). Requires `unzip`.
 
 set -euo pipefail
 
@@ -22,6 +25,10 @@ REPO_DIR="${OPENVIKING_REPO_DIR:-$OV_HOME/openviking-repo}"
 # Accept both OPENVIKING_REPO_REF and OPENVIKING_REPO_BRANCH so users can
 # reuse the same env var across the claude-code and codex installers.
 REPO_REF="${OPENVIKING_REPO_REF:-${OPENVIKING_REPO_BRANCH:-main}}"
+REPO_ARCHIVE_URL="${OPENVIKING_REPO_ARCHIVE_URL:-}"
+# Marks a $REPO_DIR populated from an archive (no .git). Lets re-runs refresh it
+# safely while refusing to clobber a git checkout or unrelated user data.
+ARCHIVE_MARKER='.openviking-archive-source'
 MARKETPLACE_NAME="${OPENVIKING_CODEX_MARKETPLACE_NAME:-openviking-plugins-local}"
 MARKETPLACE_ROOT="${OPENVIKING_CODEX_MARKETPLACE_ROOT:-$HOME/.codex/${MARKETPLACE_NAME}-marketplace}"
 PLUGIN_NAME="openviking-memory"
@@ -42,6 +49,31 @@ warn()    { printf '%s!!%s  %s\n' "$YELLOW" "$RESET" "$*"; }
 err()     { printf '%sxx%s  %s\n' "$RED" "$RESET" "$*" >&2; }
 ask()     { printf '%s??%s  %s' "$CYAN" "$RESET" "$*"; }
 heading() { printf '\n%s%s%s\n' "$BOLD" "$*" "$RESET"; }
+
+# Download a source zip and lay it out at $REPO_DIR (used for the GitHub-free
+# TOS install path). The archive is `git archive` output: a single top-level
+# OpenViking-<ref>/ dir, identical to a checkout minus .git.
+fetch_archive() {
+  local url="$1" dest="$2" tmp_zip tmp_dir top
+  command -v unzip >/dev/null 2>&1 || { err 'unzip not found; required to install from an archive.'; exit 1; }
+  tmp_zip=$(mktemp "${TMPDIR:-/tmp}/ov-src.XXXXXX") || { err 'mktemp failed'; exit 1; }
+  tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/ov-src.XXXXXX") || { err 'mktemp failed'; rm -f "$tmp_zip"; exit 1; }
+  info "Downloading source archive"
+  info "  $url"
+  curl -fsSL -o "$tmp_zip" "$url" || { err "download failed: $url"; rm -rf "$tmp_zip" "$tmp_dir"; exit 1; }
+  unzip -q "$tmp_zip" -d "$tmp_dir" || { err 'unzip failed (corrupt download?)'; rm -rf "$tmp_zip" "$tmp_dir"; exit 1; }
+  top=$(find "$tmp_dir" -mindepth 1 -maxdepth 1 -type d | head -n 1)
+  if [ -z "$top" ] || [ ! -d "$top/examples" ]; then
+    err 'unexpected archive layout (no top-level dir containing examples/)'
+    rm -rf "$tmp_zip" "$tmp_dir"; exit 1
+  fi
+  rm -rf "$dest"
+  mkdir -p "$(dirname "$dest")"
+  mv "$top" "$dest"
+  : > "$dest/$ARCHIVE_MARKER"
+  rm -rf "$tmp_zip" "$tmp_dir"
+  info "Source ready at $dest"
+}
 
 # ----- 1. Environment check -----
 
@@ -169,7 +201,14 @@ heading "3. OpenViking source repository ($REPO_DIR)"
 
 mkdir -p "$(dirname "$REPO_DIR")" "$HOME/.codex"
 
-if [ ! -e "$REPO_DIR/.git" ]; then
+if [ -n "$REPO_ARCHIVE_URL" ]; then
+  # Archive mode (GitHub-free): refuse to overwrite anything we didn't create.
+  if [ -e "$REPO_DIR" ] && [ ! -f "$REPO_DIR/$ARCHIVE_MARKER" ]; then
+    err "$REPO_DIR exists and was not created from an archive. Move it aside or set OPENVIKING_REPO_DIR."
+    exit 1
+  fi
+  fetch_archive "$REPO_ARCHIVE_URL" "$REPO_DIR"
+elif [ ! -e "$REPO_DIR/.git" ]; then
   if [ -e "$REPO_DIR" ]; then
     err "$REPO_DIR exists but is not a git checkout."
     exit 1
