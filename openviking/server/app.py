@@ -289,7 +289,7 @@ def create_app(
                     daemon_config = DaemonConfig.from_env()
 
                 if daemon_config.enabled:
-                    resource_service = service.resource
+                    resource_service = service.resources
                     daemon_service = DaemonService(
                         resource_service=resource_service,
                         watch_dir=daemon_config.watch_dir,
