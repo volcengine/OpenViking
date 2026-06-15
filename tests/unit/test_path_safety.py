@@ -13,6 +13,13 @@ def test_sanitize_relative_viking_path_normalizes_windows_separators():
     )
 
 
+def test_sanitize_relative_viking_path_preserves_posix_separators():
+    assert (
+        sanitize_relative_viking_path("scripts/check_bounding_boxes.py")
+        == "scripts/check_bounding_boxes.py"
+    )
+
+
 @pytest.mark.parametrize(
     "rel_path",
     [
@@ -35,6 +42,16 @@ def test_safe_join_viking_uri_sanitizes_relative_path():
         safe_join_viking_uri(
             "viking://user/default/skills/pdf/",
             "scripts\\check_bounding_boxes.py",
+        )
+        == "viking://user/default/skills/pdf/scripts/check_bounding_boxes.py"
+    )
+
+
+def test_safe_join_viking_uri_preserves_posix_relative_path():
+    assert (
+        safe_join_viking_uri(
+            "viking://user/default/skills/pdf/",
+            "scripts/check_bounding_boxes.py",
         )
         == "viking://user/default/skills/pdf/scripts/check_bounding_boxes.py"
     )

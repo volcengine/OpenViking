@@ -648,6 +648,14 @@ mod tests {
 
         assert_eq!(entry, "scripts/check_bounding_boxes.py");
     }
+
+    #[test]
+    fn zip_entry_name_preserves_posix_separators() {
+        let entry = zip_entry_name(Path::new("scripts/check_bounding_boxes.py"))
+            .expect("path should be utf-8");
+
+        assert_eq!(entry, "scripts/check_bounding_boxes.py");
+    }
 }
 
 // ============ FileUploader ============
