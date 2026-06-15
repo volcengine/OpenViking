@@ -256,33 +256,60 @@ class VLMConfig(BaseModel):
 
         # Step 1: Migrate legacy backup config
         if self.backup is not None and self.backup._has_any_config():
-            # Primary credential from top-level
+            # Primary credential: resolve via _match_provider() so legacy
+            # ``providers: {openai: {...}}`` configs (without top-level
+            # provider/api_key) are migrated correctly.
+            primary_cfg, primary_provider = self._match_provider()
+            primary_cfg = primary_cfg or {}
             primary_cred = VLMCredential(
                 id="legacy-primary",
-                provider=self.provider,
+                provider=primary_provider or self.provider,
                 model=self.model,
-                api_key=self.api_key,
-                api_base=self.api_base,
-                api_version=self.api_version,
-                forward_api_key=self.forward_api_key,
-                extra_headers=self.extra_headers,
-                extra_request_body=self.extra_request_body,
-                stream=self.stream,
+                api_key=primary_cfg.get("api_key") or self.api_key,
+                api_base=primary_cfg.get("api_base") or self.api_base,
+                api_version=primary_cfg.get("api_version") or self.api_version,
+                forward_api_key=(
+                    primary_cfg.get("forward_api_key")
+                    if primary_cfg.get("forward_api_key") is not None
+                    else self.forward_api_key
+                ),
+                extra_headers=primary_cfg.get("extra_headers") or self.extra_headers,
+                extra_request_body=(
+                    primary_cfg.get("extra_request_body") or self.extra_request_body
+                ),
+                stream=(
+                    primary_cfg.get("stream")
+                    if primary_cfg.get("stream") is not None
+                    else self.stream
+                ),
             )
             migrated_credentials.append(primary_cred)
 
-            # Backup credential
+            # Backup credential: same resolution rules so backup using
+            # providers/default_provider also gets a usable api_key/provider.
+            backup_cfg, backup_provider = self.backup._match_provider()
+            backup_cfg = backup_cfg or {}
             backup_cred = VLMCredential(
                 id="legacy-backup",
-                provider=self.backup.provider,
+                provider=backup_provider or self.backup.provider,
                 model=self.backup.model,
-                api_key=self.backup.api_key,
-                api_base=self.backup.api_base,
-                api_version=self.backup.api_version,
-                forward_api_key=self.backup.forward_api_key,
-                extra_headers=self.backup.extra_headers,
-                extra_request_body=self.backup.extra_request_body,
-                stream=self.backup.stream,
+                api_key=backup_cfg.get("api_key") or self.backup.api_key,
+                api_base=backup_cfg.get("api_base") or self.backup.api_base,
+                api_version=backup_cfg.get("api_version") or self.backup.api_version,
+                forward_api_key=(
+                    backup_cfg.get("forward_api_key")
+                    if backup_cfg.get("forward_api_key") is not None
+                    else self.backup.forward_api_key
+                ),
+                extra_headers=backup_cfg.get("extra_headers") or self.backup.extra_headers,
+                extra_request_body=(
+                    backup_cfg.get("extra_request_body") or self.backup.extra_request_body
+                ),
+                stream=(
+                    backup_cfg.get("stream")
+                    if backup_cfg.get("stream") is not None
+                    else self.backup.stream
+                ),
             )
             migrated_credentials.append(backup_cred)
 

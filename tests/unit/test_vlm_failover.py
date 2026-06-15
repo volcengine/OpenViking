@@ -233,6 +233,122 @@ class TestLegacyProvidersDictMigration:
         assert cfg.credentials[0].id == "explicit"
         assert cfg.credentials[0].api_key == "sk-explicit"
 
+    def test_legacy_backup_with_primary_providers_dict_resolves_via_match_provider(self):
+        """Primary side: ``providers={openai: {...}}`` + backup must yield a usable legacy-primary.
+
+        Regression: previously, backup migration only read top-level
+        ``self.provider/self.api_key`` and produced a credential with
+        provider=None / api_key=None when the primary used the providers dict.
+        """
+        cfg = VLMConfig(
+            model="gpt-4o",
+            providers={"openai": {"api_key": "sk-primary"}},
+            backup=VLMConfig(model="gpt-4o-mini", provider="openai", api_key="sk-backup"),
+        )
+
+        assert len(cfg.credentials) == 2
+        primary = cfg.credentials[0]
+        assert primary.id == "legacy-primary"
+        assert primary.provider == "openai"
+        assert primary.api_key == "sk-primary"
+        assert primary.model == "gpt-4o"
+
+        backup = cfg.credentials[1]
+        assert backup.id == "legacy-backup"
+        assert backup.provider == "openai"
+        assert backup.api_key == "sk-backup"
+        assert backup.model == "gpt-4o-mini"
+
+        # is_available() must return True
+        assert cfg.is_available() is True
+
+    def test_legacy_backup_with_backup_providers_dict_resolves_via_match_provider(self):
+        """Backup side: backup using ``providers={...}`` must produce usable legacy-backup."""
+        cfg = VLMConfig(
+            model="gpt-4o",
+            provider="openai",
+            api_key="sk-primary",
+            backup=VLMConfig(
+                model="gpt-4o-mini",
+                providers={"openai": {"api_key": "sk-backup"}},
+            ),
+        )
+
+        assert len(cfg.credentials) == 2
+        primary = cfg.credentials[0]
+        assert primary.provider == "openai"
+        assert primary.api_key == "sk-primary"
+
+        backup = cfg.credentials[1]
+        assert backup.id == "legacy-backup"
+        assert backup.provider == "openai"
+        assert backup.api_key == "sk-backup"
+
+        assert cfg.is_available() is True
+
+    def test_legacy_backup_with_default_provider_resolves(self):
+        """Backup using ``default_provider`` to disambiguate is migrated correctly."""
+        cfg = VLMConfig(
+            model="gpt-4o",
+            providers={"openai": {"api_key": "sk-primary"}},
+            backup=VLMConfig(
+                model="gpt-4o-mini",
+                default_provider="azure",
+                providers={
+                    "openai": {"api_key": "sk-bk-openai"},
+                    "azure": {
+                        "api_key": "sk-bk-azure",
+                        "api_base": "https://azure.example.com",
+                        "api_version": "2024-01-01",
+                    },
+                },
+            ),
+        )
+
+        assert len(cfg.credentials) == 2
+        backup = cfg.credentials[1]
+        assert backup.provider == "azure"
+        assert backup.api_key == "sk-bk-azure"
+        assert backup.api_base == "https://azure.example.com"
+        assert backup.api_version == "2024-01-01"
+
+        assert cfg.is_available() is True
+
+    def test_legacy_backup_propagates_extra_fields_via_match_provider(self):
+        """Backup migration via providers dict propagates extra_headers / stream / etc."""
+        cfg = VLMConfig(
+            model="gpt-4o",
+            providers={
+                "openai": {
+                    "api_key": "sk-primary",
+                    "extra_headers": {"X-Trace": "p"},
+                    "stream": True,
+                }
+            },
+            backup=VLMConfig(
+                model="gpt-4o-mini",
+                providers={
+                    "openai": {
+                        "api_key": "sk-backup",
+                        "extra_headers": {"X-Trace": "b"},
+                        "extra_request_body": {"foo": "bar"},
+                        "stream": False,
+                    }
+                },
+            ),
+        )
+
+        primary = cfg.credentials[0]
+        assert primary.api_key == "sk-primary"
+        assert primary.extra_headers == {"X-Trace": "p"}
+        assert primary.stream is True
+
+        backup = cfg.credentials[1]
+        assert backup.api_key == "sk-backup"
+        assert backup.extra_headers == {"X-Trace": "b"}
+        assert backup.extra_request_body == {"foo": "bar"}
+        assert backup.stream is False
+
 
 class TestFailoverVLM:
     """Tests for FailoverVLM wrapper."""
