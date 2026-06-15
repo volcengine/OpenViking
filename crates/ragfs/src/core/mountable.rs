@@ -118,6 +118,28 @@ impl MountableFS {
         None
     }
 
+    #[cfg(feature = "cache")]
+    fn as_cached(fs: &Arc<dyn FileSystem>) -> Option<&CachedFileSystem> {
+        let any = fs.as_ref() as &dyn std::any::Any;
+        if let Some(cache) = any.downcast_ref::<CachedFileSystem>() {
+            return Some(cache);
+        }
+        if let Some(stats) = any.downcast_ref::<StatsWrappedFS>() {
+            return Self::as_cached(stats.inner_fs());
+        }
+        if let Some(enc) = any.downcast_ref::<EncryptionWrappedFS>() {
+            return Self::as_cached(enc.inner_fs());
+        }
+        None
+    }
+
+    #[cfg(feature = "cache")]
+    async fn invalidate_cache_after_raw_write(mount_info: &MountInfo, rel_path: &str) {
+        if let Some(cache) = Self::as_cached(&mount_info.fs) {
+            cache.invalidate_external_write(rel_path).await;
+        }
+    }
+
     /// Query multi-write sync status for a mounted path.
     pub async fn system_sync_status(&self, path: &str) -> Result<Value> {
         let (mount_info, rel_path) = self.find_mount(path).await?;
@@ -469,6 +491,8 @@ impl MountableFS {
         };
 
         Self::copy_raw_within_mount(raw_backend, &src_rel_path, &dst_rel_path).await?;
+        #[cfg(feature = "cache")]
+        Self::invalidate_cache_after_raw_write(&dst_mount, &dst_rel_path).await;
         Ok(true)
     }
 
@@ -1189,6 +1213,57 @@ mod tests {
             b"backend:/file.txt"
         );
         assert_eq!(reads.load(Ordering::Relaxed), 1);
+    }
+
+    #[cfg(feature = "cache")]
+    #[tokio::test]
+    async fn copy_within_mount_overwrite_invalidates_cached_destination() {
+        use crate::cache::{CacheNamespace, CachePolicy, MemoryCacheProvider};
+        use crate::plugins::MemFSPlugin;
+
+        let mfs = MountableFS::with_cache(
+            Arc::new(MemoryCacheProvider::new()),
+            CacheNamespace::new("copy-cache-test"),
+            CachePolicy::default(),
+        );
+        mfs.register_plugin(MemFSPlugin).await;
+        mfs.mount(test_config("memfs", "/local")).await.unwrap();
+        mfs.mkdir("/local/dir", 0o755).await.unwrap();
+        mfs.write("/local/dir/a.md", b"new-content", 0, WriteFlag::Create)
+            .await
+            .unwrap();
+        mfs.write("/local/dir/b.md", b"old", 0, WriteFlag::Create)
+            .await
+            .unwrap();
+
+        assert_eq!(mfs.read("/local/dir/b.md", 0, 0).await.unwrap(), b"old");
+        assert_eq!(
+            mfs.read_dir("/local/dir")
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|entry| entry.name == "b.md")
+                .unwrap()
+                .size,
+            3
+        );
+
+        assert!(mfs
+            .copy_within_mount("/local/dir/a.md", "/local/dir/b.md")
+            .await
+            .unwrap());
+
+        let copied = mfs.read("/local/dir/b.md", 0, 0).await.unwrap();
+        let copied_size = mfs
+            .read_dir("/local/dir")
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|entry| entry.name == "b.md")
+            .unwrap()
+            .size;
+        assert_eq!(copied, b"new-content");
+        assert_eq!(copied_size, b"new-content".len() as u64);
     }
 
     #[cfg(feature = "cache")]

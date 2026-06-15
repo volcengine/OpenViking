@@ -80,6 +80,12 @@ impl CachedFileSystem {
         Arc::clone(&self.provider)
     }
 
+    /// Invalidate cache objects affected by a write that bypassed this wrapper.
+    pub(crate) async fn invalidate_external_write(&self, path: &str) {
+        self.invalidate_path_objects(path).await;
+        self.invalidate_parent_directory(path).await;
+    }
+
     async fn cache_get(&self, key: &str) -> CacheResult<Option<Bytes>> {
         let started = Instant::now();
         let result = self.provider.get(key).await;
