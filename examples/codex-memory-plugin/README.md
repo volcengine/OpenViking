@@ -24,9 +24,9 @@ The installer:
 1. Checks `codex`, `git`, and Node.js 22+
 2. Clones or refreshes `~/.openviking/openviking-repo`
 3. Registers a local `openviking-plugins-local` marketplace, enables `openviking-memory@openviking-plugins-local`, sets `features.plugin_hooks = true`
-4. Renders the cached `.mcp.json` URL from `ovcli.conf` (or `OPENVIKING_URL`)
+4. Renders the cached `.mcp.json` URL using the shared credential resolver
 5. Renders the cached `hooks.json` with absolute script paths (Codex 0.130 doesn't inject `CODEX_PLUGIN_ROOT` into hook env)
-6. Appends a `codex()` shell function to your rc that pulls `OPENVIKING_API_KEY` / `OPENVIKING_ACCOUNT` / `OPENVIKING_USER` from `ovcli.conf` at invocation — keeps the key out of `.mcp.json` on disk
+6. Appends a `codex()` shell function to your rc that resolves the active OpenViking CLI config at invocation, injects the matching env for Codex/MCP, and strips stale inherited credential env vars
 
 After install:
 
@@ -39,42 +39,11 @@ codex             # first run: review /hooks once
 
 If you don't want the installer touching your rc, do these three things yourself:
 
-1. **Wire a `codex()` shell function** that injects OpenViking creds at invocation time. The installer-emitted version (see `setup-helper/install.sh`) additionally re-renders the cached `.mcp.json` bearer field on each launch — required if you swap `OPENVIKING_CLI_CONFIG_FILE` between configs with and without `api_key`. A simpler equivalent for a fixed config:
+1. **Wire the plugin shell wrapper** so Codex gets the same active credentials as the `ov` CLI. The wrapper calls `scripts/ov-credentials.mjs`, re-renders the cached `.mcp.json` bearer field on each launch, and launches Codex with stale credential env vars stripped before the resolved values are added back:
 
    ```bash
-   codex() {
-     local _ov_conf="${OPENVIKING_CLI_CONFIG_FILE:-$HOME/.openviking/ovcli.conf}"
-     local _ov_url _ov_key _ov_account _ov_user
-     if [ -f "$_ov_conf" ] && command -v node >/dev/null 2>&1; then
-       local _ov_env
-       _ov_env=$(node -e '
-         try {
-           const c = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
-           const out = (k, v) => v ? `${k}=${JSON.stringify(String(v))}\n` : "";
-           process.stdout.write(
-             out("OV_URL", c.url) +
-             out("OV_KEY", c.api_key) +
-             out("OV_ACCOUNT", c.account) +
-             out("OV_USER", c.user)
-           );
-         } catch {}
-       ' "$_ov_conf" 2>/dev/null)
-       eval "$_ov_env"
-     fi
-     _ov_url="${OPENVIKING_URL:-${OV_URL:-}}"
-     _ov_key="${OPENVIKING_API_KEY:-${OV_KEY:-}}"
-     _ov_account="${OPENVIKING_ACCOUNT:-${OV_ACCOUNT:-}}"
-     _ov_user="${OPENVIKING_USER:-${OV_USER:-}}"
-     unset OV_URL OV_KEY OV_ACCOUNT OV_USER
-     # Build env-prefix dynamically so empty values are NOT passed as empty
-     # strings — Codex hard-fails on empty bearer_token_env_var targets.
-     local -a _env_args=()
-     [ -n "$_ov_url" ]     && _env_args+=("OPENVIKING_URL=$_ov_url")
-     [ -n "$_ov_key" ]     && _env_args+=("OPENVIKING_API_KEY=$_ov_key")
-     [ -n "$_ov_account" ] && _env_args+=("OPENVIKING_ACCOUNT=$_ov_account")
-     [ -n "$_ov_user" ]    && _env_args+=("OPENVIKING_USER=$_ov_user")
-     env "${_env_args[@]}" codex "$@"
-   }
+   [ -f "$HOME/.openviking/openviking-repo/examples/codex-memory-plugin/setup-helper/wrapper.sh" ] \
+     && . "$HOME/.openviking/openviking-repo/examples/codex-memory-plugin/setup-helper/wrapper.sh"
    ```
 
 2. **Add the plugin** via a local marketplace pointing at this directory. See `setup-helper/install.sh` for the exact `codex plugin marketplace add` invocation.
@@ -83,22 +52,22 @@ If you don't want the installer touching your rc, do these three things yourself
 
 ## Configuration
 
-Connection / identity resolution order (highest to lowest, applies to both hooks and MCP):
+Connection / identity source (applies to hooks, MCP, and `ov` commands run inside Codex):
 
-1. **Environment variables**: `OPENVIKING_URL` / `OPENVIKING_BASE_URL`, `OPENVIKING_API_KEY` / `OPENVIKING_BEARER_TOKEN`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, `OPENVIKING_PEER_ID`
-2. **`ovcli.conf`**: `~/.openviking/ovcli.conf` or `OPENVIKING_CLI_CONFIG_FILE`
-3. **`ov.conf`**: `~/.openviking/ov.conf` or `OPENVIKING_CONFIG_FILE` (only `server.url` / `server.root_api_key` as connection fallback; tuning fields under a legacy `codex.*` block are honored but deprecated — see [Tuning the plugin](#tuning-the-plugin))
-4. **Built-in defaults**: `http://127.0.0.1:1933`, unauthenticated
+1. **Default**: active `ovcli.conf` wins when present: `OPENVIKING_CLI_CONFIG_FILE` or `~/.openviking/ovcli.conf`. Use `ov config switch <name>` to change the active credentials for the CLI, hooks, MCP, and child `ov` commands together.
+2. **Env-forced**: set `OPENVIKING_CREDENTIAL_SOURCE=env` to force `OPENVIKING_URL` / `OPENVIKING_BASE_URL`, `OPENVIKING_API_KEY` / `OPENVIKING_BEARER_TOKEN`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, and `OPENVIKING_PEER_ID`.
+3. **Fallback**: without an ovcli config, env vars are used; then `ov.conf` (`server.url` / `server.root_api_key` plus legacy `codex.*` tuning); then `http://127.0.0.1:1933` unauthenticated.
 
-The shell function wrapper handles step 1 for you by promoting ovcli.conf fields into env vars before exec'ing codex. Hooks then re-resolve the full chain inside Node; the MCP server URL is baked into `.mcp.json` at install time and the API key flows in via `OPENVIKING_API_KEY` (referenced by `bearer_token_env_var` in `.mcp.json`).
+The shell wrapper promotes the resolved ovcli credentials into env vars before exec'ing Codex because Codex's MCP runtime can only read auth from env. Hooks call the same resolver directly. The wrapper also exports `OPENVIKING_CLI_CONFIG_FILE`, so an `ov ...` command run inside Codex uses the same active config.
+When credentials are forced from env, the wrapper materializes a mode-0600 runtime ovcli config under `~/.openviking/codex-plugin-state/` and points `OPENVIKING_CLI_CONFIG_FILE` at it, so child `ov` commands still use the same credentials as hooks and MCP.
 
 Auth is sent as `Authorization: Bearer <api_key>` to both the REST API (used by hooks) and the `/mcp` endpoint (used by the model).
 
-Set `OPENVIKING_PEER_ID` when multiple Codex peers share the same OpenViking user and should keep separate peer memory. Hooks pass it as request-level `peer_id` for auto-recall and captured session messages. The legacy `codex.peerId` / `codex.peer_id` fields in `ov.conf` are also honored, but env vars are preferred.
+Set `actor_peer_id` in `ovcli.conf` (or `OPENVIKING_PEER_ID` with `OPENVIKING_CREDENTIAL_SOURCE=env`) when multiple Codex peers share the same OpenViking user and should keep separate peer memory. Hooks pass it as `peer_id` for captured session messages and as `X-OpenViking-Actor-Peer` for retrieval/filesystem calls; MCP gets the same header mapping.
 
 For **unauthenticated local OV** (`ovcli.conf` without `api_key`, or no ovcli.conf at all), `.mcp.json` is rendered *without* `bearer_token_env_var`. Codex 0.130 hard-fails MCP startup with `Environment variable ... is empty` if `bearer_token_env_var` points at an empty/unset env var, so it must be omitted entirely when there's no key.
 
-The `codex()` shell-function wrapper **re-renders this field on every codex launch** based on the currently-active `ovcli.conf` (the one `OPENVIKING_CLI_CONFIG_FILE` points at, falling back to `~/.openviking/ovcli.conf`). That means you can switch between authenticated and unauthenticated OV — e.g. to isolate a benchmark run from production memory — by just changing `OPENVIKING_CLI_CONFIG_FILE` before invoking `codex`, with no re-install needed. The wrapper also omits empty env-var assignments entirely (so `OPENVIKING_API_KEY=` is never passed to codex), keeping `env_http_headers` for identity (`X-OpenViking-Account` / `X-OpenViking-User`) intact.
+The `codex()` shell-function wrapper **re-renders this field on every codex launch** based on the currently-active `ovcli.conf` (the one `OPENVIKING_CLI_CONFIG_FILE` points at, falling back to `~/.openviking/ovcli.conf`). That means you can switch between authenticated and unauthenticated OV — e.g. to isolate a benchmark run from production memory — with `ov config switch <name>` or by changing `OPENVIKING_CLI_CONFIG_FILE` before invoking `codex`, with no re-install needed. The wrapper omits empty env-var assignments and strips stale credential env vars first, so `OPENVIKING_API_KEY=` or an inherited key for another user is never accidentally passed to Codex.
 
 **Wrapping extra launch commands.** If you start Codex through a different command — a custom wrapper like `codex-custom`, or a multi-word launcher (a base command plus a sub-command) — the installer can wrap those too. Answer its "Extra launch commands" prompt, or pass `OPENVIKING_CODEX_WRAP_EXTRA='codex-custom'` when running it (the env-var form is also what to use when piping the installer through a non-interactive shell). The list is stored in the same rc marker block (read by the wrapper as `$OPENVIKING_CODEX_WRAP_EXTRA`); for a multi-word entry, only invocations whose leading args match the sub-command get the credential injection + `.mcp.json` re-render, so every *other* use of that command passes through untouched. List the *real* launch command, never a shell alias of it: an alias expands to its target before the wrapper runs, so wrap what it points at — `alias cx=codex` already rides the base `codex` wrapper (add nothing), while `alias cx=codex-custom` is covered by listing `codex-custom`. Alias names are skipped if listed.
 
@@ -118,7 +87,7 @@ export OPENVIKING_AUTO_COMMIT_ON_COMPACT=1
 export OPENVIKING_DEBUG=1
 ```
 
-Full list: see the `Misc env vars` block in `scripts/config.mjs`. Every field has a `OPENVIKING_*` counterpart and env vars always win.
+Full list: see the `Misc env vars` block in `scripts/config.mjs`. Tuning fields have `OPENVIKING_*` counterparts and env vars win for those tuning fields.
 
 #### Legacy `codex` block in `ov.conf`
 

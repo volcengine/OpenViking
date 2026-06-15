@@ -187,6 +187,11 @@ if [ ! -d "$PLUGIN_DIR/.codex-plugin" ]; then
   err "Codex plugin not found at $PLUGIN_DIR"
   exit 1
 fi
+CREDS_SCRIPT="$PLUGIN_DIR/scripts/ov-credentials.mjs"
+if [ ! -f "$CREDS_SCRIPT" ]; then
+  err "Credential resolver not found at $CREDS_SCRIPT"
+  exit 1
+fi
 
 PLUGIN_VERSION="$(node -e 'const p=require(process.argv[1]); console.log(p.version || "0.0.0")' "$PLUGIN_DIR/.codex-plugin/plugin.json")"
 
@@ -194,34 +199,11 @@ PLUGIN_VERSION="$(node -e 'const p=require(process.argv[1]); console.log(p.versi
 
 heading "4. Plugin install ($PLUGIN_ID, version $PLUGIN_VERSION)"
 
-# Resolve the OpenViking /mcp endpoint at install time. Priority:
-#   OPENVIKING_MCP_URL (env, full /mcp URL) > OPENVIKING_URL (env, base URL) >
-#   ovcli.conf .url > default localhost.
+# Resolve the OpenViking /mcp endpoint at install time using the same
+# credential resolver that hooks and the shell wrapper use. By default the
+# active ovcli.conf wins; set OPENVIKING_CREDENTIAL_SOURCE=env to force env.
 resolve_mcp_url() {
-  if [ -n "${OPENVIKING_MCP_URL:-}" ]; then
-    printf '%s' "$OPENVIKING_MCP_URL"
-    return
-  fi
-  if [ -n "${OPENVIKING_URL:-}" ]; then
-    printf '%s/mcp' "${OPENVIKING_URL%/}"
-    return
-  fi
-  if [ -f "$OVCLI_CONF" ] && command -v node >/dev/null 2>&1; then
-    local from_conf
-    from_conf="$(node -e '
-      try {
-        const c = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
-        if (typeof c.url === "string" && c.url) {
-          process.stdout.write(c.url.replace(/\/+$/, "") + "/mcp");
-        }
-      } catch {}
-    ' "$OVCLI_CONF" 2>/dev/null || true)"
-    if [ -n "$from_conf" ]; then
-      printf '%s' "$from_conf"
-      return
-    fi
-  fi
-  printf '%s' "$DEFAULT_MCP_URL"
+  OPENVIKING_CLI_CONFIG_FILE="$OVCLI_CONF" node "$CREDS_SCRIPT" mcp-url 2>/dev/null || printf '%s' "$DEFAULT_MCP_URL"
 }
 
 MCP_URL="$(resolve_mcp_url)"
@@ -327,20 +309,7 @@ CACHE_DIR="$HOME/.codex/plugins/cache/$MARKETPLACE_NAME/$PLUGIN_NAME/$PLUGIN_VER
 # OPENVIKING_API_KEY at MCP launch and trigger its OAuth fallback for
 # what should be an unauthenticated server.
 detect_api_key() {
-  if [ -n "${OPENVIKING_API_KEY:-}" ] || [ -n "${OPENVIKING_BEARER_TOKEN:-}" ]; then
-    echo "1"
-    return
-  fi
-  if [ -f "$OVCLI_CONF" ]; then
-    node -e '
-      try {
-        const c = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
-        process.stdout.write(c.api_key ? "1" : "0");
-      } catch { process.stdout.write("0"); }
-    ' "$OVCLI_CONF" 2>/dev/null || echo "0"
-    return
-  fi
-  echo "0"
+  OPENVIKING_CLI_CONFIG_FILE="$OVCLI_CONF" node "$CREDS_SCRIPT" has-api-key 2>/dev/null || echo "0"
 }
 HAS_API_KEY="$(detect_api_key)"
 
@@ -369,17 +338,8 @@ render_plugin_cache() {
   # copy is what Codex actually loads.
   local mcp_json="$CACHE_DIR/.mcp.json"
   if [ -f "$mcp_json" ]; then
-    node - "$mcp_json" "$MCP_URL" "$HAS_API_KEY" <<'NODE'
-const fs = require("node:fs");
-const [, , file, url, hasKey] = process.argv;
-const j = JSON.parse(fs.readFileSync(file, "utf8"));
-const s = j.mcpServers["openviking-memory"];
-s.url = url;
-if (hasKey !== "1") {
-  delete s.bearer_token_env_var;
-}
-fs.writeFileSync(file, JSON.stringify(j, null, 2) + "\n");
-NODE
+    OPENVIKING_CLI_CONFIG_FILE="$OVCLI_CONF" OPENVIKING_MCP_URL="$MCP_URL" \
+      node "$CREDS_SCRIPT" sync-mcp "$mcp_json"
   fi
 }
 
@@ -390,7 +350,7 @@ info "MCP auth: $([ "$HAS_API_KEY" = "1" ] && echo "Bearer (OPENVIKING_API_KEY)"
 # ----- 5. Shell rc wrapper -----
 #
 # The MCP server reads OPENVIKING_API_KEY (and OPENVIKING_ACCOUNT / _USER /
-# _AGENT_ID) from the process env at codex launch. Install a `codex` shell
+# _PEER_ID) from the process env at codex launch. Install a `codex` shell
 # function that pulls these from ovcli.conf at invocation time, so the user
 # doesn't have to `export` secrets globally.
 #
@@ -611,6 +571,7 @@ validate_plugin_install() {
     if [ "$HAS_API_KEY" != "1" ] && grep -q "bearer_token_env_var" "$mcp_json"; then
       issues+=("cached .mcp.json keeps bearer_token_env_var without configured API key")
     fi
+    grep -q '"X-OpenViking-Actor-Peer"' "$mcp_json" || issues+=("cached .mcp.json is missing X-OpenViking-Actor-Peer header mapping")
   fi
 
   for script in \
