@@ -1311,6 +1311,10 @@ html {
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 
+.zouk-reader-panel .zouk-reader-composer .zouk-reader-input-shell {
+  border-radius: 22px;
+}
+
 .zouk-reader-input-shell:focus-within {
   border-color: color-mix(in oklab, var(--th-accent) 65%, var(--th-line));
   box-shadow: 0 0 0 3px color-mix(in oklab, var(--th-accent) 18%, transparent);
