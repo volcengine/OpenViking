@@ -11,6 +11,7 @@ Workflow:
 5. Materialize the result into VikingFS temp directory
 6. Return ParseResult for downstream TreeBuilder/SemanticQueue processing
 """
+
 import json
 import asyncio
 import mimetypes
@@ -99,7 +100,9 @@ class UnderstandingAPI(BaseParser):
             file_obj = await self._create_file(local_path=local_path)
             file_id = file_obj.get("id")
             if not file_id:
-                raise RuntimeError(f"files api missing file_id: {self._safe_error_summary(file_obj)}")
+                raise RuntimeError(
+                    f"files api missing file_id: {self._safe_error_summary(file_obj)}"
+                )
             task_meta["file_id"] = file_id
             response_obj = await self._create_response_for_file(file_id=file_id)
         else:
@@ -109,7 +112,9 @@ class UnderstandingAPI(BaseParser):
 
         response_id = response_obj.get("id")
         if not response_id:
-            raise RuntimeError(f"responses api missing id: {self._safe_error_summary(response_obj)}")
+            raise RuntimeError(
+                f"responses api missing id: {self._safe_error_summary(response_obj)}"
+            )
         task_meta["response_id"] = response_id
 
         response_obj = await self._poll_response(response_id=response_id)
@@ -232,7 +237,9 @@ class UnderstandingAPI(BaseParser):
             "tools": [{"type": "understanding"}],
             "store": True,
         }
-        async with httpx.AsyncClient(timeout=self._http_timeout_sec, follow_redirects=True) as client:
+        async with httpx.AsyncClient(
+            timeout=self._http_timeout_sec, follow_redirects=True
+        ) as client:
             rsp = await client.post(
                 f"{self._api_base}/responses",
                 content=self._json_bytes(payload),
@@ -257,7 +264,9 @@ class UnderstandingAPI(BaseParser):
             "tools": [{"type": "understanding"}],
             "store": True,
         }
-        async with httpx.AsyncClient(timeout=self._http_timeout_sec, follow_redirects=True) as client:
+        async with httpx.AsyncClient(
+            timeout=self._http_timeout_sec, follow_redirects=True
+        ) as client:
             rsp = await client.post(
                 f"{self._api_base}/responses",
                 content=self._json_bytes(payload),
@@ -271,7 +280,9 @@ class UnderstandingAPI(BaseParser):
     async def _poll_response(self, *, response_id: str) -> Dict[str, Any]:
         deadline = asyncio.get_running_loop().time() + float(self._timeout_sec)
         last_status = None
-        async with httpx.AsyncClient(timeout=self._http_timeout_sec, follow_redirects=True) as client:
+        async with httpx.AsyncClient(
+            timeout=self._http_timeout_sec, follow_redirects=True
+        ) as client:
             while True:
                 rsp = await client.get(
                     f"{self._api_base}/responses/{response_id}",
@@ -279,7 +290,9 @@ class UnderstandingAPI(BaseParser):
                 )
                 rsp.raise_for_status()
                 body = rsp.json()
-                self._raise_if_error(body, context=f"responses api error: response_id={response_id}")
+                self._raise_if_error(
+                    body, context=f"responses api error: response_id={response_id}"
+                )
                 status = body.get("status")
                 if status != last_status:
                     logger.info(f"[UnderstandingAPI] response_id={response_id} status={status}")
@@ -376,11 +389,17 @@ class UnderstandingAPI(BaseParser):
         init_obj = await self._uploads_init(file_path=file_path)
         upload_id = init_obj.get("upload_id") or init_obj.get("uploadId")
         object_key = init_obj.get("object_key") or init_obj.get("objectKey")
-        part_size = int(init_obj.get("part_size") or init_obj.get("partSize") or self._upload_part_size_bytes)
+        part_size = int(
+            init_obj.get("part_size") or init_obj.get("partSize") or self._upload_part_size_bytes
+        )
         if not upload_id:
-            raise RuntimeError(f"uploads init missing upload_id: {self._safe_error_summary(init_obj)}")
+            raise RuntimeError(
+                f"uploads init missing upload_id: {self._safe_error_summary(init_obj)}"
+            )
         if not object_key:
-            raise RuntimeError(f"uploads init missing object_key: {self._safe_error_summary(init_obj)}")
+            raise RuntimeError(
+                f"uploads init missing object_key: {self._safe_error_summary(init_obj)}"
+            )
 
         status_obj = await self._uploads_status(upload_id=upload_id, object_key=object_key)
         uploaded_parts = status_obj.get("parts") or []
@@ -457,7 +476,9 @@ class UnderstandingAPI(BaseParser):
                     await viking_fs.mkdir(sub_uri)
                     await self._copy_dir_to_fs(child, sub_uri)
                 else:
-                    await viking_fs.write_file_bytes(f"{temp_doc_uri}/{child.name}", child.read_bytes())
+                    await viking_fs.write_file_bytes(
+                        f"{temp_doc_uri}/{child.name}", child.read_bytes()
+                    )
 
         return temp_uri
 

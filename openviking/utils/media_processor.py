@@ -105,6 +105,7 @@ class UnifiedResourceProcessor:
         if not hasattr(self, "_parser_router"):
             from openviking.parse.registry import get_registry
             from openviking.parse.parser_router import ParserRouter
+
             self._parser_router = ParserRouter(get_registry())
         return self._parser_router
 

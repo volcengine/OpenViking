@@ -5,6 +5,7 @@ ParserRouter: Route parsing requests between ParserRegistry and UnderstandingAPI
 
 Routing is controlled by ov.conf (OpenVikingConfig.parser_api).
 """
+
 from pathlib import Path
 from typing import TYPE_CHECKING, Union
 
@@ -16,7 +17,6 @@ from openviking.parse.base import ParseResult
 from openviking.parse.registry import ParserRegistry
 
 logger = get_logger(__name__)
-
 
 
 class ParserRouter:
