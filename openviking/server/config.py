@@ -156,6 +156,30 @@ class ToolOutputExternalizationConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class DaemonConfig(BaseModel):
+    """Configuration for OpenViking Active Daemon."""
+
+    enabled: bool = False
+    watch_dir: Optional[str] = None
+    db_path: Optional[str] = None
+    batch_trigger_lines: int = Field(50, gt=0)
+    batch_trigger_seconds: int = Field(300, gt=0)
+
+    model_config = {"extra": "forbid"}
+
+    @classmethod
+    def from_env(cls) -> "DaemonConfig":
+        """Load configuration from OV_DAEMON_* environment variables."""
+        import os
+        return cls(
+            enabled=os.getenv("OV_DAEMON_ENABLED", "false").lower() == "true",
+            watch_dir=os.getenv("OV_DAEMON_WATCH_DIR"),
+            db_path=os.getenv("OV_DAEMON_DB_PATH"),
+            batch_trigger_lines=int(os.getenv("OV_DAEMON_BATCH_LINES", "50")),
+            batch_trigger_seconds=int(os.getenv("OV_DAEMON_BATCH_SECONDS", "300")),
+        )
+
+
 class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 1933
@@ -180,6 +204,7 @@ class ServerConfig(BaseModel):
     tool_output_externalization: ToolOutputExternalizationConfig = Field(
         default_factory=ToolOutputExternalizationConfig
     )
+    daemon: DaemonConfig = Field(default_factory=DaemonConfig)
 
     model_config = {"extra": "forbid"}
 
