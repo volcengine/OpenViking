@@ -15,7 +15,8 @@ describe("OpenClaw plugin package and install contract", () => {
 
     expect(packageJson.openclaw.extensions).toEqual(["./dist/index.js"]);
     expect(packageJson.openclaw.setupEntry).toBe("./dist/commands/setup.js");
-    expect(packageJson.scripts.build).toBe("tsc -p tsconfig.build.json");
+    expect(packageJson.scripts.build).toContain("rmSync('dist'");
+    expect(packageJson.scripts.build).toContain("tsc -p tsconfig.build.json");
   });
 
   it("keeps source install manifest aligned with required source files", () => {
@@ -40,7 +41,14 @@ describe("OpenClaw plugin package and install contract", () => {
       "session-transcript-repair.ts",
       "runtime-utils.ts",
       "recall-trace.ts",
+      "query-config.ts",
+      "adapters/",
+      "registries/",
+      "routing/",
+      "plugin/",
+      "services/",
       "commands/setup.ts",
+      "config/feature-gates.json",
       "tsconfig.json",
       "tsconfig.build.json",
       "package.json",
@@ -57,7 +65,13 @@ describe("OpenClaw plugin package and install contract", () => {
     expect(packageJson.files).toEqual(expect.arrayContaining([
       "dist/",
       "*.ts",
+      "adapters/",
       "commands/setup.ts",
+      "config/feature-gates.json",
+      "registries/",
+      "routing/",
+      "plugin/",
+      "services/",
       "install-manifest.json",
       "openclaw.plugin.json",
       "package.json",
