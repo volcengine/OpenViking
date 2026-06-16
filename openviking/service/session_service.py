@@ -6,18 +6,22 @@ Session Service for OpenViking.
 Provides session management operations: session, sessions, add_message, commit, delete.
 """
 
-import json
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.core.namespace import canonical_session_uri
 from openviking.server.config import ToolOutputExternalizationConfig
-from openviking.server.identity import RequestContext, Role
+from openviking.server.identity import RequestContext
 from openviking.service.task_tracker import get_task_tracker
-from openviking.session import Session, SessionMeta
+from openviking.session import Session
+from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory_policy import MemoryPolicy
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import VikingFS
-from openviking_cli.exceptions import AlreadyExistsError, NotFoundError, NotInitializedError
+from openviking_cli.exceptions import (
+    AlreadyExistsError,
+    NotFoundError,
+    NotInitializedError,
+)
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -91,7 +95,13 @@ class SessionService:
                 exc_info=True,
             )
 
-    def session(self, ctx: RequestContext, session_id: Optional[str] = None) -> Session:
+    def session(
+        self,
+        ctx: RequestContext,
+        session_id: Optional[str] = None,
+        *,
+        session_uri: Optional[str] = None,
+    ) -> Session:
         """Create a new session or load an existing one.
 
         Args:
@@ -108,60 +118,9 @@ class SessionService:
             user=ctx.user,
             ctx=ctx,
             session_id=session_id,
+            session_uri=session_uri,
             tool_output_externalization_config=self._tool_output_externalization_config,
         )
-
-    @staticmethod
-    def _session_account_id(meta: SessionMeta) -> str:
-        return getattr(meta, "created_by_account_id", "") or getattr(meta, "account_id", "")
-
-    def _session_is_visible_in_account(self, ctx: RequestContext, meta: SessionMeta) -> bool:
-        if ctx.role == Role.ROOT:
-            return True
-
-        account_id = self._session_account_id(meta)
-        return bool(account_id and account_id == ctx.account_id)
-
-    async def _read_session_meta(self, session_id: str, ctx: RequestContext) -> SessionMeta:
-        self._ensure_initialized()
-        raw = await self._viking_fs.read_file(
-            f"{canonical_session_uri(session_id)}/.meta.json",
-            ctx=ctx,
-        )
-        data = json.loads(raw)
-        if not data.get("created_by_account_id") and data.get("account_id"):
-            data["created_by_account_id"] = data["account_id"]
-        return SessionMeta.from_dict(data)
-
-    async def _load_session_meta_for_visibility(
-        self, session_id: str, ctx: RequestContext
-    ) -> SessionMeta:
-        """Read persisted metadata, deriving legacy fields without writing side effects."""
-        try:
-            meta = await self._read_session_meta(session_id, ctx)
-        except Exception:
-            session = self.session(ctx, session_id)
-            await session.load()
-            meta = session.meta
-            if not meta.session_id:
-                meta.session_id = session_id
-        if not meta.created_by_account_id:
-            session = self.session(ctx, session_id)
-            await session.load()
-            meta = session.meta
-            if not meta.session_id:
-                meta.session_id = session_id
-        return meta
-
-    async def _assert_session_visible(self, session_id: str, ctx: RequestContext) -> None:
-        if ctx.role == Role.ROOT:
-            return
-        try:
-            meta = await self._load_session_meta_for_visibility(session_id, ctx)
-        except Exception as exc:
-            raise NotFoundError(session_id, "session") from exc
-        if not self._session_is_visible_in_account(ctx, meta):
-            raise NotFoundError(session_id, "session")
 
     async def create(
         self,
@@ -189,6 +148,9 @@ class SessionService:
             session = self.session(ctx, session_id)
             if memory_policy is not None:
                 policy = MemoryPolicy.from_dict(memory_policy)
+                policy.validate_memory_types(
+                    set(MemoryTypeRegistry().list_names(include_disabled=False))
+                )
                 session.meta.memory_policy = policy.to_dict()
             await session.ensure_exists()
             self._record_lifecycle_metric("create", "ok")
@@ -214,8 +176,6 @@ class SessionService:
                 if not auto_create:
                     raise NotFoundError(session_id, "session")
                 await session.ensure_exists()
-            else:
-                await self._assert_session_visible(session_id, ctx)
             await session.load()
             self._record_lifecycle_metric("get", "ok")
             return session
@@ -230,33 +190,37 @@ class SessionService:
             List of session info dicts
         """
         self._ensure_initialized()
-        session_base_uri = canonical_session_uri()
+        session_base_uri = canonical_session_uri(ctx)
+        sessions_by_id: Dict[str, Dict[str, Any]] = {}
 
         try:
             entries = await self._viking_fs.ls(session_base_uri, ctx=ctx)
-            sessions = []
             for entry in entries:
                 name = entry.get("name", "")
                 if name in [".", ".."]:
                     continue
-                if ctx.role != Role.ROOT:
-                    try:
-                        meta = await self._load_session_meta_for_visibility(name, ctx)
-                    except Exception:
-                        continue
-                    if not self._session_is_visible_in_account(ctx, meta):
-                        continue
-                sessions.append(
-                    {
-                        "session_id": name,
-                        "uri": f"{session_base_uri}/{name}",
-                        "is_dir": entry.get("isDir", False),
-                    }
-                )
-            return sessions
+                sessions_by_id[name] = {
+                    "session_id": name,
+                    "uri": f"{session_base_uri}/{name}",
+                    "is_dir": entry.get("isDir", False),
+                }
         except Exception:
             logger.debug("Failed to list sessions", exc_info=True)
-            return []
+
+        try:
+            entries = await self._viking_fs.ls("viking://session", ctx=ctx)
+            for entry in entries:
+                name = entry.get("name", "")
+                if name in [".", ".."] or name in sessions_by_id:
+                    continue
+                sessions_by_id[name] = {
+                    "session_id": name,
+                    "uri": entry.get("uri", f"viking://session/{name}"),
+                    "is_dir": entry.get("isDir", False),
+                }
+        except Exception:
+            logger.debug("Failed to list legacy sessions", exc_info=True)
+        return list(sessions_by_id.values())
 
     async def delete(self, session_id: str, ctx: RequestContext) -> bool:
         """Delete a session.
@@ -268,29 +232,23 @@ class SessionService:
             True if deleted successfully
         """
         self._ensure_initialized()
-        if ctx.role not in {Role.ADMIN, Role.ROOT}:
-            from openviking_cli.exceptions import PermissionDeniedError
 
-            raise PermissionDeniedError("Deleting shared sessions requires ADMIN or ROOT role")
-
-        session_uri = canonical_session_uri(session_id)
-
-        try:
-            await self._viking_fs.rm(session_uri, recursive=True, ctx=ctx)
-            logger.info(f"Deleted session: {session_id}")
-            self._record_lifecycle_metric("delete", "ok")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to delete session {session_id}: {e}")
+        session_uri = canonical_session_uri(ctx, session_id)
+        session = await self.get(session_id, ctx)
+        if not await session.exists():
             self._record_lifecycle_metric("delete", "error")
             raise NotFoundError(session_id, "session")
+
+        await self._viking_fs.rm(session_uri, recursive=True, ctx=ctx)
+        logger.info(f"Deleted session: {session_id}")
+        self._record_lifecycle_metric("delete", "ok")
+        return True
 
     async def commit(
         self,
         session_id: str,
         ctx: RequestContext,
         keep_recent_count: int = 0,
-        memory_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Commit a session (archive messages and extract memories).
 
@@ -307,7 +265,6 @@ class SessionService:
             session_id,
             ctx,
             keep_recent_count=keep_recent_count,
-            memory_policy=memory_policy,
         )
 
     async def commit_async(
@@ -315,7 +272,6 @@ class SessionService:
         session_id: str,
         ctx: RequestContext,
         keep_recent_count: int = 0,
-        memory_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Async commit a session.
 
@@ -333,10 +289,7 @@ class SessionService:
         """
         self._ensure_initialized()
         session = await self.get(session_id, ctx)
-        result = await session.commit_async(
-            keep_recent_count=keep_recent_count,
-            memory_policy=memory_policy,
-        )
+        result = await session.commit_async(keep_recent_count=keep_recent_count)
         self._record_lifecycle_metric("commit", "ok" if result.get("status") else "error")
         self._record_archive_metric("ok" if result.get("archived") else "skip")
         return result
@@ -364,8 +317,7 @@ class SessionService:
             raise NotInitializedError("SessionCompressorV2")
 
         session = await self.get(session_id, ctx)
-        session_uri = canonical_session_uri(session_id)
-        archive_uri = f"{session_uri}/manual_extract"
+        archive_uri = f"{session.uri}/manual_extract"
 
         memories = await self._session_compressor.extract_long_term_memories(
             messages=session.messages,

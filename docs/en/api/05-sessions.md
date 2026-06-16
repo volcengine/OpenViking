@@ -5,6 +5,16 @@ Sessions manage conversation state, track context usage, and extract long-term m
 - L1 (overview): Key decisions
 - L2 (messages): Complete messages
 
+Sessions are stored under the current user's namespace:
+
+```text
+viking://user/{user_id}/sessions/{session_id}
+```
+
+Session APIs are scoped to the authenticated user and return canonical user
+session URIs. URI-based APIs may also accept the backward-compatible
+`viking://session/{session_id}` alias, resolved in the same user context.
+
 ## API Reference
 
 ### create_session()
@@ -32,6 +42,7 @@ Create a new session. Sessions are containers for conversations, storing message
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | session_id | str | No | None | Session ID. Creates new session with auto-generated ID if None |
+| memory_policy | object | No | None | Default memory extraction policy for the session. Optional `self` and `peer` switches control write targets, and optional top-level `memory_types` limits extraction to specific enabled memory schemas. When `memory_types` is omitted or `null`, all enabled memory schemas are allowed. Invalid shapes or unknown memory types are rejected with `InvalidArgumentError`. |
 
 #### 3. Usage Examples
 
@@ -84,6 +95,7 @@ ov session new
   "status": "ok",
   "result": {
     "session_id": "a1b2c3d4",
+    "uri": "viking://user/alice/sessions/a1b2c3d4",
     "user": {
       "account_id": "default",
       "user_id": "alice"
@@ -151,12 +163,12 @@ ov session list
   "result": [
     {
       "session_id": "a1b2c3d4",
-      "uri": "viking://session/alice/a1b2c3d4",
+      "uri": "viking://user/alice/sessions/a1b2c3d4",
       "is_dir": true
     },
     {
       "session_id": "e5f6g7h8",
-      "uri": "viking://session/alice/e5f6g7h8",
+      "uri": "viking://user/alice/sessions/e5f6g7h8",
       "is_dir": true
     }
   ],
@@ -544,10 +556,11 @@ ov session delete a1b2c3d4
 
 #### 1. API Implementation Introduction
 
-Add a message to the session. Supports two modes: simple text mode and Parts mode (supporting text, context references, tool calls, etc.).
+Add a message to the session. Supports two modes: simple text mode and Parts mode (supporting text, image URLs, context references, tool calls, etc.).
 
 **Part Types:**
 - `TextPart`: Pure text content
+- `ImagePart`: OpenAI-style image URL content. During memory extraction, OpenViking can use the configured VLM to turn images into text descriptions.
 - `ContextPart`: Context reference pointing to resources or memories
 - `ToolPart`: Tool call and result
 
@@ -579,10 +592,13 @@ Add a message to the session. Supports two modes: simple text mode and Parts mod
 **Part Types (Python SDK)**
 
 ```python
-from openviking.message import TextPart, ContextPart, ToolPart
+from openviking.message import TextPart, ImagePart, ContextPart, ToolPart
 
 # Text content
 TextPart(text="Hello, how can I help?")
+
+# Image URL content
+ImagePart(url="https://example.com/photo.png", detail="auto")
 
 # Context reference
 ContextPart(
@@ -649,13 +665,25 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/messages \
       {"type": "tool", "tool_id": "call_123", "tool_name": "search_web", "tool_input": {"query": "OAuth"}, "tool_status": "completed", "tool_output": "Results..."}
     ]
   }'
+
+# Add user message with an image URL
+curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/messages \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "role": "user",
+    "parts": [
+      {"type": "text", "text": "Remember this studio layout."},
+      {"type": "image_url", "image_url": {"url": "https://example.com/studio.png", "detail": "auto"}}
+    ]
+  }'
 ```
 
 **Python SDK**
 
 ```python
 import openviking as ov
-from openviking.message import TextPart, ContextPart
+from openviking.message import TextPart, ImagePart, ContextPart
 
 client = ov.Client(base_url="http://localhost:1933", api_key="your-key")
 
@@ -677,6 +705,16 @@ await client.add_message(
             context_type="resource",
             abstract="Authentication guide"
         )
+    ]
+)
+
+# Parts mode: Add user message with an image URL
+await client.add_message(
+    session_id="a1b2c3d4",
+    role="user",
+    parts=[
+        TextPart(text="Remember this studio layout."),
+        ImagePart(url="https://example.com/studio.png", detail="auto"),
     ]
 )
 ```
@@ -964,7 +1002,7 @@ ov session commit a1b2c3d4
     "session_id": "a1b2c3d4",
     "status": "accepted",
     "task_id": "uuid-xxx",
-    "archive_uri": "viking://session/alice/a1b2c3d4/history/archive_001",
+    "archive_uri": "viking://user/alice/sessions/a1b2c3d4/history/archive_001",
     "archived": true
   }
 }
@@ -1086,7 +1124,7 @@ print(f"Status: {task['status']}")
     "status": "completed",
     "result": {
       "session_id": "a1b2c3d4",
-      "archive_uri": "viking://session/alice/a1b2c3d4/history/archive_001",
+      "archive_uri": "viking://user/alice/sessions/a1b2c3d4/history/archive_001",
       "memories_extracted": {
         "profile": 1,
         "preferences": 2,
@@ -1176,7 +1214,7 @@ curl -X GET "http://localhost:1933/api/v1/tasks?task_type=session_commit&status=
 
 | Property | Type | Description |
 |----------|------|-------------|
-| uri | str | Session Viking URI (`viking://session/{session_id}/`) |
+| uri | str | Session Viking URI (`viking://user/{user_id}/sessions/{session_id}/`) |
 | messages | List[Message] | Current messages in the session |
 | stats | SessionStats | Session statistics |
 | summary | str | Compression summary |
@@ -1187,7 +1225,7 @@ curl -X GET "http://localhost:1933/api/v1/tasks?task_type=session_commit&status=
 ## Session Storage Structure
 
 ```
-viking://session/{user_id}/{session_id}/
+viking://user/{user_id}/sessions/{session_id}/
 +-- .abstract.md              # L0: Session overview
 +-- .overview.md              # L1: Key decisions
 +-- messages.jsonl            # Current messages
@@ -1214,7 +1252,7 @@ Each commit writes a `memory_diff.json` to the archive directory, recording all 
 
 ```json
 {
-  "archive_uri": "viking://session/{session_id}/history/archive_001",
+  "archive_uri": "viking://user/{user_id}/sessions/{session_id}/history/archive_001",
   "extracted_at": "2026-04-21T10:00:00Z",
   "operations": {
     "adds": [

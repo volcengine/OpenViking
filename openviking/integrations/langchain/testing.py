@@ -44,10 +44,8 @@ class InMemoryOpenVikingClient:
         limit: int = 10,
         score_threshold: float | None = None,
         filter: dict[str, Any] | None = None,
-        peer_id: str | None = None,
         **_: Any,
     ) -> dict[str, Any]:
-        normalized_peer_id = normalize_peer_id(peer_id)
         self.find_calls.append(
             {
                 "query": query,
@@ -55,7 +53,6 @@ class InMemoryOpenVikingClient:
                 "limit": limit,
                 "score_threshold": score_threshold,
                 "filter": filter,
-                "peer_id": normalized_peer_id,
             }
         )
         return self._search(query, target_uri, limit, score_threshold)
@@ -68,10 +65,8 @@ class InMemoryOpenVikingClient:
         limit: int = 10,
         score_threshold: float | None = None,
         filter: dict[str, Any] | None = None,
-        peer_id: str | None = None,
         **_: Any,
     ) -> dict[str, Any]:
-        normalized_peer_id = normalize_peer_id(peer_id)
         self.search_calls.append(
             {
                 "query": query,
@@ -80,7 +75,6 @@ class InMemoryOpenVikingClient:
                 "limit": limit,
                 "score_threshold": score_threshold,
                 "filter": filter,
-                "peer_id": normalized_peer_id,
             }
         )
         session_text = " ".join(
@@ -229,7 +223,11 @@ class InMemoryOpenVikingClient:
     def create_session(self, session_id: str | None = None) -> dict[str, Any]:
         session_id = session_id or f"session-{uuid.uuid4().hex[:12]}"
         self.sessions.setdefault(session_id, [])
-        return {"session_id": session_id}
+        return {"session_id": session_id, "uri": self._session_uri(session_id)}
+
+    @staticmethod
+    def _session_uri(session_id: str) -> str:
+        return f"viking://user/default/sessions/{session_id}"
 
     def add_message(
         self,
@@ -287,6 +285,7 @@ class InMemoryOpenVikingClient:
             self.create_session(session_id=session_id)
         return {
             "session_id": session_id,
+            "uri": self._session_uri(session_id),
             "message_count": len(self.sessions.get(session_id, [])),
             "pending_tokens": self.pending_tokens.get(session_id, 0),
         }
@@ -338,7 +337,7 @@ class InMemoryOpenVikingClient:
         archive_id = f"archive_{len(self.archives[session_id]) + 1:03d}"
         overview = "\n".join(_message_text(message) for message in messages)
         if messages:
-            archive_uri = f"viking://session/{session_id}/history/{archive_id}"
+            archive_uri = f"{self._session_uri(session_id)}/history/{archive_id}"
             self.archives[session_id].append(
                 {
                     "archive_id": archive_id,
@@ -366,7 +365,7 @@ class InMemoryOpenVikingClient:
         self.sessions.pop(session_id, None)
         self.archives.pop(session_id, None)
         self.pending_tokens.pop(session_id, None)
-        session_uri = f"viking://session/{session_id}"
+        session_uri = self._session_uri(session_id)
         for uri in list(self.records):
             if uri == session_uri or uri.startswith(f"{session_uri}/"):
                 del self.records[uri]

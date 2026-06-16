@@ -3,6 +3,23 @@
 OpenViking 的所有重要变更都将记录在此文件中。
 此更新日志从 [GitHub Releases](https://github.com/volcengine/OpenViking/releases) 自动生成。
 
+## v0.3.24 (2026-06-05)
+
+### 重点更新
+
+- **CLI 配置体验与非交互式配置**：`ov config` 重构配置向导并优化结果输出，同时新增非交互式配置命令，可在自动化场景中无需交互提示即可脚本化完成配置。
+- **异步资源导入持久化**：异步执行的 `add_resource` 任务现在会被持久化，进行中的导入在服务重启后不再丢失。
+- **存储内部优化**：优化快照 tree 函数，并移除已废弃的 agfs HTTP 模式客户端。
+- **MiniMax 默认模型升级为 M3**：MiniMax 默认模型现为 M3。
+- **更精确的 embedding 错误分类**：`classify_api_error` 对数字错误码采用词边界匹配，减少对服务商错误码的误判。
+
+### 升级说明
+
+- agfs HTTP 模式客户端已移除；如果你依赖 HTTP 模式，请改用受支持的 agfs 接入方式。
+- MiniMax 默认模型现为 M3；如需此前的默认模型，请在配置中显式指定模型。
+
+[完整变更记录](https://github.com/volcengine/OpenViking/compare/v0.3.23...v0.3.24)
+
 ## v0.3.23 (2026-06-03)
 
 ### 重点更新

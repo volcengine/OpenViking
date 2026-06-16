@@ -20,6 +20,7 @@
       "tool-call-id.ts",
       "session-transcript-repair.ts",
       "runtime-utils.ts",
+      "recall-trace.ts",
       "commands/setup.ts",
       "tsconfig.json",
       "tsconfig.build.json",
@@ -30,6 +31,7 @@
       "package-lock.json",
       ".gitignore",
       "skills/install-openviking-memory/SKILL.md",
+      "skills/openviking-context-database/SKILL.md",
       "INSTALL-AGENT.md"
     ]
   },

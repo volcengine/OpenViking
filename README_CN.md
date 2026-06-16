@@ -749,18 +749,21 @@ viking://
 │   │   └── src/
 │   └── ...
 ├── user/                   # 用户：个人偏好、习惯等
-│   └── memories/
-│       ├── preferences/
-│       │   ├── writing_style
-│       │   └── coding_habits
-│       └── ...
-└── agent/                  # 智能体：技能、指令、任务记忆等
-    ├── skills/
-    │   ├── search_code
-    │   ├── analyze_data
-    │   └── ...
-    ├── memories/
-    └── instructions/
+│   └── {user_id}/
+│       ├── memories/
+│       │   ├── preferences/
+│       │   │   ├── writing_style
+│       │   │   └── coding_habits
+│       │   └── ...
+│       ├── resources/
+│       │   └── private_project/
+│       ├── skills/
+│       │   ├── search_code
+│       │   └── analyze_data
+│       └── peers/
+│           └── web-visitor-alice/
+│               ├── memories/
+│               └── resources/
 ```
 
 ### 2. 分层上下文加载 → 降低 Token 消耗

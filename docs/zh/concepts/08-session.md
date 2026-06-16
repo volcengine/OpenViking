@@ -38,6 +38,14 @@ session.add_message(
         ContextPart(uri="viking://user/memories/profile.md"),
     ]
 )
+
+session.add_message(
+    "user",
+    [
+        TextPart("Remember this studio layout."),
+        ImagePart(url="https://example.com/studio.png", detail="auto"),
+    ]
+)
 ```
 
 ### used
@@ -62,7 +70,7 @@ result = session.commit()
 # {
 #   "status": "accepted",
 #   "task_id": "uuid-xxx",
-#   "archive_uri": "viking://session/.../history/archive_001",
+#   "archive_uri": "viking://user/{user_id}/sessions/.../history/archive_001",
 #   "archived": True
 # }
 
@@ -90,6 +98,7 @@ class Message:
 | 类型 | 说明 |
 |------|------|
 | `TextPart` | 文本内容 |
+| `ImagePart` | 图片 URL 内容。记忆提取时，OpenViking 可以使用已配置的 VLM 将其描述为文本。 |
 | `ContextPart` | 上下文引用（URI + 摘要） |
 | `ToolPart` | 工具调用（输入 + 输出） |
 
@@ -175,7 +184,7 @@ LLM 去重决策 → candidate(skip/create/none) + item(merge/delete)
 
 ```json
 {
-  "archive_uri": "viking://session/{session_id}/history/archive_001",
+  "archive_uri": "viking://user/{user_id}/sessions/{session_id}/history/archive_001",
   "extracted_at": "2026-04-21T10:00:00Z",
   "operations": {
     "adds": [
@@ -223,7 +232,7 @@ LLM 去重决策 → candidate(skip/create/none) + item(merge/delete)
 ## 存储结构
 
 ```
-viking://session/{session_id}/
+viking://user/{user_id}/sessions/{session_id}/
 ├── messages.jsonl            # 当前消息
 ├── .abstract.md              # 当前摘要
 ├── .overview.md              # 当前概览
@@ -250,6 +259,11 @@ viking://user/memories/
 ├── tools/
 └── skills/
 ```
+
+`viking://user/sessions/{session_id}` 是相对当前请求用户的短路径，服务端会将其
+规范化为 `viking://user/{user_id}/sessions/{session_id}`。
+`viking://session/{session_id}` 会作为同一个当前用户 session 路径的向后兼容别名
+被接受，不是独立的存储根。
 
 ## 相关文档
 

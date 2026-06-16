@@ -586,10 +586,10 @@ async def test_cross_tenant_session_get_returns_not_found(auth_client: httpx.Asy
     assert cross_get.json()["error"]["code"] == "NOT_FOUND"
 
 
-async def test_sessions_are_visible_to_users_within_account(
+async def test_sessions_are_isolated_between_users_within_account(
     auth_client: httpx.AsyncClient, auth_app
 ):
-    """Session access is account-scoped, not user-isolated within an account."""
+    """Session access is user-scoped even within the same account."""
     manager = auth_app.state.api_key_manager
     account_id = _uid()
     admin_key = await manager.create_account(account_id, "admin_user")
@@ -619,7 +619,7 @@ async def test_sessions_are_visible_to_users_within_account(
     assert alice_list.status_code == 200
     alice_ids = {item["session_id"] for item in alice_list.json()["result"]}
     assert alice_session in alice_ids
-    assert bob_session in alice_ids
+    assert bob_session not in alice_ids
 
     bob_list = await auth_client.get(
         "/api/v1/sessions",
@@ -628,7 +628,7 @@ async def test_sessions_are_visible_to_users_within_account(
     assert bob_list.status_code == 200
     bob_ids = {item["session_id"] for item in bob_list.json()["result"]}
     assert bob_session in bob_ids
-    assert alice_session in bob_ids
+    assert alice_session not in bob_ids
 
     admin_list = await auth_client.get(
         "/api/v1/sessions",
@@ -636,20 +636,35 @@ async def test_sessions_are_visible_to_users_within_account(
     )
     assert admin_list.status_code == 200
     admin_ids = {item["session_id"] for item in admin_list.json()["result"]}
-    assert {alice_session, bob_session}.issubset(admin_ids)
+    assert alice_session not in admin_ids
+    assert bob_session not in admin_ids
 
     bob_get_alice = await auth_client.get(
         f"/api/v1/sessions/{alice_session}",
         headers={"X-API-Key": bob_key},
     )
-    assert bob_get_alice.status_code == 200
+    assert bob_get_alice.status_code == 404
 
     bob_write_alice = await auth_client.post(
         f"/api/v1/sessions/{alice_session}/messages",
-        json={"role": "user", "content": "bob writes in same account session"},
+        json={"role": "user", "content": "bob writes same id in his own namespace"},
         headers={"X-API-Key": bob_key},
     )
     assert bob_write_alice.status_code == 200
+
+    alice_get_after_bob_write = await auth_client.get(
+        f"/api/v1/sessions/{alice_session}",
+        headers={"X-API-Key": alice_key},
+    )
+    assert alice_get_after_bob_write.status_code == 200
+    assert alice_get_after_bob_write.json()["result"]["message_count"] == 0
+
+    bob_get_same_id = await auth_client.get(
+        f"/api/v1/sessions/{alice_session}",
+        headers={"X-API-Key": bob_key},
+    )
+    assert bob_get_same_id.status_code == 200
+    assert bob_get_same_id.json()["result"]["message_count"] == 1
 
 
 async def test_root_tenant_scoped_requests_rejected_in_api_key_mode():
@@ -708,6 +723,32 @@ async def test_admin_reindex_requests_use_key_owner_in_api_key_mode():
     assert ctx.role == Role.ADMIN
     assert ctx.user.account_id == "acme"
     assert ctx.user.user_id == "admin"
+
+
+async def test_actor_peer_header_sets_request_context_scope():
+    request = _make_request("/api/v1/search/find", auth_enabled=True)
+    identity = ResolvedIdentity(role=Role.USER, account_id="acme", user_id="alice")
+
+    ctx = await get_request_context(request, identity, "web-visitor-alice")
+
+    assert ctx.actor_peer_id == "web-visitor-alice"
+
+
+async def test_empty_actor_peer_header_is_unset():
+    request = _make_request("/api/v1/search/find", auth_enabled=True)
+    identity = ResolvedIdentity(role=Role.USER, account_id="acme", user_id="alice")
+
+    ctx = await get_request_context(request, identity, "  ")
+
+    assert ctx.actor_peer_id is None
+
+
+async def test_actor_peer_header_rejects_path_separators():
+    request = _make_request("/api/v1/search/find", auth_enabled=True)
+    identity = ResolvedIdentity(role=Role.USER, account_id="acme", user_id="alice")
+
+    with pytest.raises(InvalidArgumentError, match="path separators"):
+        await get_request_context(request, identity, "bad/peer")
 
 
 async def test_root_monitoring_requests_allow_implicit_default_identity():

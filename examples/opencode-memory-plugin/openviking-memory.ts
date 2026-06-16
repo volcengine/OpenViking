@@ -502,9 +502,14 @@ interface HttpRequestOptions {
   body?: any
   timeoutMs?: number
   abortSignal?: AbortSignal
+  actorPeerId?: string
 }
 
-function buildOpenVikingHeaders(config: OpenVikingConfig, includeContentType = true): Record<string, string> {
+function buildOpenVikingHeaders(
+  config: OpenVikingConfig,
+  includeContentType = true,
+  actorPeerId = "",
+): Record<string, string> {
   const headers: Record<string, string> = {}
 
   if (includeContentType) {
@@ -520,13 +525,17 @@ function buildOpenVikingHeaders(config: OpenVikingConfig, includeContentType = t
   if (config.user) {
     headers["X-OpenViking-User"] = config.user
   }
+  const peerId = actorPeerId.trim()
+  if (peerId) {
+    headers["X-OpenViking-Actor-Peer"] = peerId
+  }
 
   return headers
 }
 
 async function makeRequest<T = any>(config: OpenVikingConfig, options: HttpRequestOptions): Promise<T> {
   const url = `${config.endpoint}${options.endpoint}`
-  const headers = buildOpenVikingHeaders(config)
+  const headers = buildOpenVikingHeaders(config, true, options.actorPeerId)
 
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? config.timeoutMs)
@@ -1655,14 +1664,10 @@ function extractMessageText(parts: { type: string; text?: string }[]): string | 
 /** Perform search against OpenViking with a timeout guard. Returns empty on any failure. */
 async function performRecallSearch(config: OpenVikingConfig, query: string): Promise<RecallSearchItem[]> {
   try {
-    const body: { query: string; limit: number; mode: string; peer_id?: string } = {
+    const body: { query: string; limit: number; mode: string } = {
       query: query.slice(0, 4000),
       limit: 20,
       mode: "auto",
-    }
-    const peerId = config.peerId.trim()
-    if (peerId) {
-      body.peer_id = peerId
     }
     const response = await makeRequest<OpenVikingResponse<{ memories?: RecallSearchItem[]; results?: RecallSearchItem[] }>>(
       config,
@@ -1671,6 +1676,7 @@ async function performRecallSearch(config: OpenVikingConfig, query: string): Pro
         endpoint: "/api/v1/search/find",
         body,
         timeoutMs: AUTO_RECALL_TIMEOUT_MS,
+        actorPeerId: config.peerId.trim(),
       },
     )
     const result = unwrapResponse(response)
@@ -2053,6 +2059,7 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
                   method: "GET",
                   endpoint: `/api/v1/fs/stat?uri=${encodeURIComponent(args.uri)}`,
                   abortSignal: context.abort,
+                  actorPeerId: config.peerId.trim(),
                 })
                 const statResult = unwrapResponse(statResponse)
                 level = statResult?.isDir ? "overview" : "read"
@@ -2065,6 +2072,7 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
               method: "GET",
               endpoint: `/api/v1/content/${level}?uri=${encodeURIComponent(args.uri)}`,
               abortSignal: context.abort,
+              actorPeerId: config.peerId.trim(),
             })
 
             const content = unwrapResponse(response)
@@ -2114,6 +2122,7 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
                 method: "GET",
                 endpoint: `/api/v1/fs/stat?uri=${encodedUri}`,
                 abortSignal: context.abort,
+                actorPeerId: config.peerId.trim(),
               })
               const result = unwrapResponse(response)
               return JSON.stringify({ view, item: result }, null, 2)
@@ -2126,6 +2135,7 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
               method: "GET",
               endpoint,
               abortSignal: context.abort,
+              actorPeerId: config.peerId.trim(),
             })
 
             const result = unwrapResponse(response)
@@ -2331,7 +2341,6 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
               target_uri?: string
               session_id?: string
               score_threshold?: number
-              peer_id?: string
             } = {
               query: args.query,
               limit: args.limit ?? 10,
@@ -2339,8 +2348,6 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
             if (args.target_uri) requestBody.target_uri = args.target_uri
             if (args.score_threshold !== undefined) requestBody.score_threshold = args.score_threshold
             if (mode === "deep" && sessionId) requestBody.session_id = sessionId
-            const peerId = config.peerId.trim()
-            if (peerId) requestBody.peer_id = peerId
 
             try {
               const response = await makeRequest<OpenVikingResponse<SearchResult>>(config, {
@@ -2348,6 +2355,7 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
                 endpoint: mode === "deep" ? "/api/v1/search/search" : "/api/v1/search/find",
                 body: requestBody,
                 abortSignal: context.abort,
+                actorPeerId: config.peerId.trim(),
               })
 
               const result = unwrapResponse(response) ?? { memories: [], resources: [], skills: [], total: 0 }

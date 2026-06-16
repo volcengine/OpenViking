@@ -2,7 +2,11 @@
 # SPDX-License-Identifier: AGPL-3.0
 from typing import Any, Dict
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from openviking_cli.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class MemoryConfig(BaseModel):
@@ -30,15 +34,6 @@ class MemoryConfig(BaseModel):
         description=(
             "Maximum retries for SessionCompressorV2 memory lock acquisition. "
             "0 means unlimited retries."
-        ),
-    )
-    agent_memory_enabled: bool = Field(
-        default=True,
-        description=(
-            "Enable trajectory/experience memory extraction. When true (default), "
-            "a two-phase pipeline runs after user-memory extraction: Phase 1 extracts "
-            "execution trajectories from the conversation; Phase 2 consolidates them "
-            "into higher-level experience memories."
         ),
     )
     experimental_memory_switch: bool = Field(
@@ -92,6 +87,18 @@ class MemoryConfig(BaseModel):
     )
 
     model_config = {"extra": "forbid"}
+
+    @model_validator(mode="before")
+    @classmethod
+    def drop_deprecated_agent_memory_enabled(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "agent_memory_enabled" in data:
+            data = dict(data)
+            data.pop("agent_memory_enabled", None)
+            logger.warning(
+                "memory.agent_memory_enabled is deprecated and ignored; "
+                "use session memory_policy.memory_types to control trajectory/experience extraction"
+            )
+        return data
 
     @field_validator("version")
     @classmethod

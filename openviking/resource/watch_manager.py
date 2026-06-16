@@ -24,6 +24,8 @@ from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+_UNSET = object()
+
 
 class WatchTask(BaseModel):
     """Resource monitoring task data model."""
@@ -42,6 +44,9 @@ class WatchTask(BaseModel):
     processor_kwargs: Dict[str, Any] = Field(
         default_factory=dict, description="Extra kwargs forwarded to processor"
     )
+    auth_state: Optional[Dict[str, Any]] = Field(
+        default=None, description="Private authentication state for scheduled re-processing"
+    )
     created_at: datetime = Field(default_factory=datetime.now, description="Task creation time")
     last_execution_time: Optional[datetime] = Field(None, description="Last execution time")
     next_execution_time: Optional[datetime] = Field(None, description="Next execution time")
@@ -55,7 +60,7 @@ class WatchTask(BaseModel):
         extra = "ignore"
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert task to dictionary."""
+        """Convert task to public dictionary."""
         return {
             "task_id": self.task_id,
             "path": self.path,
@@ -80,9 +85,17 @@ class WatchTask(BaseModel):
             "original_role": self.original_role,
         }
 
+    def to_storage_dict(self) -> Dict[str, Any]:
+        """Convert task to dictionary for watch-task persistence."""
+        data = self.to_dict()
+        if self.auth_state is not None:
+            data["auth_state"] = self.auth_state
+        return data
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "WatchTask":
         """Create task from dictionary."""
+        data = dict(data)
         if isinstance(data.get("created_at"), str):
             data["created_at"] = datetime.fromisoformat(data["created_at"])
         if isinstance(data.get("last_execution_time"), str):
@@ -91,6 +104,8 @@ class WatchTask(BaseModel):
             data["next_execution_time"] = datetime.fromisoformat(data["next_execution_time"])
         if data.get("processor_kwargs") is None:
             data["processor_kwargs"] = {}
+        if data.get("auth_state") is not None and not isinstance(data.get("auth_state"), dict):
+            data["auth_state"] = None
         return cls(**data)
 
     def calculate_next_execution_time(self) -> datetime:
@@ -231,7 +246,7 @@ class WatchManager:
             ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
 
             data = {
-                "tasks": [task.to_dict() for task in self._tasks.values()],
+                "tasks": [task.to_storage_dict() for task in self._tasks.values()],
                 "updated_at": datetime.now().isoformat(),
             }
 
@@ -341,6 +356,7 @@ class WatchManager:
         build_index: bool = True,
         summarize: bool = False,
         processor_kwargs: Optional[Dict[str, Any]] = None,
+        auth_state: Optional[Dict[str, Any]] = None,
     ) -> WatchTask:
         """Create a new monitoring task.
 
@@ -383,6 +399,7 @@ class WatchManager:
                 build_index=build_index,
                 summarize=summarize,
                 processor_kwargs=processor_kwargs or {},
+                auth_state=auth_state,
                 account_id=account_id,
                 user_id=user_id,
                 original_role=original_role,
@@ -416,6 +433,7 @@ class WatchManager:
         build_index: Optional[bool] = None,
         summarize: Optional[bool] = None,
         processor_kwargs: Optional[Dict[str, Any]] = None,
+        auth_state: Any = _UNSET,
         is_active: Optional[bool] = None,
     ) -> WatchTask:
         """Update an existing monitoring task.
@@ -484,6 +502,8 @@ class WatchManager:
                 task.summarize = summarize
             if processor_kwargs is not None:
                 task.processor_kwargs = processor_kwargs
+            if auth_state is not _UNSET:
+                task.auth_state = auth_state
             if is_active is not None:
                 task.is_active = is_active
 
@@ -511,6 +531,19 @@ class WatchManager:
 
             logger.info(f"[WatchManager] Updated task {task_id} by user {account_id}/{user_id}")
             return task
+
+    async def update_auth_state(
+        self,
+        task_id: str,
+        auth_state: Optional[Dict[str, Any]],
+    ) -> None:
+        """Update private auth state for an existing watch task."""
+        async with self._lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                return
+            task.auth_state = auth_state
+            await self._save_tasks()
 
     async def delete_task(
         self,

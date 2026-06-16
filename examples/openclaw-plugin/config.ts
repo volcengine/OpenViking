@@ -1,3 +1,5 @@
+import { homedir } from "node:os";
+
 import { getEnv } from "./runtime-utils.js";
 
 export type MemoryOpenVikingConfig = {
@@ -45,6 +47,52 @@ export type MemoryOpenVikingConfig = {
   emitStandardDiagnostics?: boolean;
   /** When true, log tenant routing for semantic find and session writes (messages/commit) to the plugin logger. */
   logFindRequests?: boolean;
+  /** Enable recall trace recording. Default false. */
+  traceRecall?: boolean;
+  /** Persist recall traces to local JSONL files. Default false. */
+  traceRecallPersist?: boolean;
+  /** Directory for JSONL recall trace files. */
+  traceRecallDir?: string;
+  /** Number of days to retain persisted trace files. */
+  traceRecallRetentionDays?: number;
+  /** Number of recent persisted days to preload on startup. */
+  traceRecallLoadRecentDays?: number;
+  /** Maximum in-memory recall trace entries. */
+  traceRecallMaxEntries?: number;
+  /** Maximum candidate results stored per search in trace. */
+  traceRecallMaxResultsPerSearch?: number;
+  /** Preview character limit for persisted trace summaries. */
+  traceRecallPreviewChars?: number;
+  /** Maximum query characters preserved in trace. */
+  traceRecallQueryMaxChars?: number;
+  /** Maximum days to scan when querying persisted traces without explicit time bounds. */
+  traceRecallQueryMaxDays?: number;
+  /** Whether trace queries include full content by default. */
+  traceRecallIncludeContentByDefault?: boolean;
+  /** Whether raw user text preview may be persisted. Default false. */
+  traceRecallIncludeRawUserPreview?: boolean;
+  /** Auto-recall target resource types. Empty means the backward-compatible memory recall set. */
+  recallTargetTypes?: Array<"resource" | "user" | "agent"> | string;
+  /** Agent-visible add_resource tool is disabled by default; manual /add-resource remains available. */
+  enableAddResourceTool?: boolean;
+  /** Agent-visible tool allowlist. Supports exact tool names or groups such as "memory" and "resource_query". */
+  enabledTools?: string[] | string;
+  /** Agent-visible tool blocklist applied after enabledTools. Supports exact tool names or groups. */
+  disabledTools?: string[] | string;
+  agentExperience?: {
+    enabled?: boolean;
+    recallLimit?: number;
+    scoreThreshold?: number;
+    maxInjectedChars?: number;
+    minQueryChars?: number;
+  };
+};
+
+/** Runtime config after memoryOpenVikingConfigSchema.parse() has applied defaults. */
+export type ParsedMemoryOpenVikingConfig = Required<
+  Omit<MemoryOpenVikingConfig, "agentExperience">
+> & {
+  agentExperience: Required<NonNullable<MemoryOpenVikingConfig["agentExperience"]>>;
 };
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:1933";
@@ -62,8 +110,62 @@ const DEFAULT_COMMIT_TOKEN_THRESHOLD = 20000;
 const DEFAULT_COMMIT_KEEP_RECENT_COUNT = 10;
 const DEFAULT_BYPASS_SESSION_PATTERNS: string[] = [];
 const DEFAULT_EMIT_STANDARD_DIAGNOSTICS = false;
-const DEFAULT_PEER_ROLE = "none" as const;
+const DEFAULT_PEER_ROLE = "assistant" as const;
 const DEFAULT_PEER_PREFIX = "";
+const DEFAULT_TRACE_RECALL_DIR = "~/.openclaw/openviking/recall-traces";
+const DEFAULT_TRACE_RECALL_RETENTION_DAYS = 14;
+const DEFAULT_TRACE_RECALL_LOAD_RECENT_DAYS = 2;
+const DEFAULT_TRACE_RECALL_MAX_ENTRIES = 1000;
+const DEFAULT_TRACE_RECALL_MAX_RESULTS_PER_SEARCH = 20;
+const DEFAULT_TRACE_RECALL_PREVIEW_CHARS = 240;
+const DEFAULT_TRACE_RECALL_QUERY_MAX_CHARS = 4000;
+const DEFAULT_TRACE_RECALL_QUERY_MAX_DAYS = 14;
+const ALLOWED_RECALL_TARGET_TYPES = ["resource", "user", "agent"] as const;
+const DEFAULT_RECALL_TARGET_TYPES = ["user", "agent"] as const;
+type RecallTargetType = typeof ALLOWED_RECALL_TARGET_TYPES[number];
+export const OPENVIKING_ADD_RESOURCE_TOOL_NAME = "add_resource" as const;
+export const OPENVIKING_DEFAULT_ENABLED_TOOL_NAMES = [
+  "add_skill",
+  "ov_search",
+  "ov_read",
+  "ov_multi_read",
+  "ov_list",
+  "memory_recall",
+  "ov_recall_trace",
+  "memory_store",
+  "memory_forget",
+  "ov_archive_search",
+  "ov_archive_expand",
+  "openviking_tool_result_read",
+  "openviking_tool_result_search",
+  "openviking_tool_result_list",
+] as const;
+export const OPENVIKING_ALL_TOOL_NAMES = [
+  OPENVIKING_ADD_RESOURCE_TOOL_NAME,
+  ...OPENVIKING_DEFAULT_ENABLED_TOOL_NAMES,
+] as const;
+export type OpenVikingToolName = typeof OPENVIKING_ALL_TOOL_NAMES[number];
+export const OPENVIKING_TOOL_GROUPS: Record<string, readonly OpenVikingToolName[]> = {
+  all: OPENVIKING_ALL_TOOL_NAMES,
+  default: OPENVIKING_DEFAULT_ENABLED_TOOL_NAMES,
+  memory: ["memory_recall", "memory_store", "memory_forget"],
+  resource_query: ["ov_search", "ov_read", "ov_multi_read", "ov_list"],
+  import: ["add_resource", "add_skill"],
+  recall_trace: ["ov_recall_trace"],
+  archive: ["ov_archive_search", "ov_archive_expand"],
+  tool_result: [
+    "openviking_tool_result_read",
+    "openviking_tool_result_search",
+    "openviking_tool_result_list",
+  ],
+};
+const DEFAULT_AGENT_EXPERIENCE = {
+  enabled: false,
+  recallLimit: 3,
+  scoreThreshold: 0.35,
+  maxInjectedChars: 6000,
+  minQueryChars: 12,
+};
 
 function resolvePeerPrefix(configured: unknown): string {
   if (typeof configured === "string" && configured.trim()) {
@@ -97,6 +199,16 @@ function resolveEnvVars(value: string): string {
   });
 }
 
+function expandHomeDir(value: string): string {
+  if (value === "~") {
+    return homedir();
+  }
+  if (value.startsWith("~/")) {
+    return `${homedir()}${value.slice(1)}`;
+  }
+  return value;
+}
+
 function toNumber(value: unknown, fallback: number): number {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
@@ -126,6 +238,101 @@ function toStringArray(value: unknown, fallback: string[]): string[] {
   return fallback;
 }
 
+function toIntegerInRange(value: unknown, fallback: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, Math.floor(toNumber(value, fallback))));
+}
+
+function normalizeRecallTargetTypes(value: unknown, includeResources = false): RecallTargetType[] {
+  const entries = toStringArray(value, [...DEFAULT_RECALL_TARGET_TYPES]);
+  const seen = new Set<RecallTargetType>();
+  const normalized: RecallTargetType[] = [];
+  const unknown: string[] = [];
+
+  for (const entry of entries) {
+    if ((ALLOWED_RECALL_TARGET_TYPES as readonly string[]).includes(entry)) {
+      const typed = entry as RecallTargetType;
+      if (!seen.has(typed)) {
+        seen.add(typed);
+        normalized.push(typed);
+      }
+    } else {
+      unknown.push(entry);
+    }
+  }
+
+  if (unknown.length > 0) {
+    throw new Error(`openviking recallTargetTypes contains unknown resource types: ${unknown.join(", ")}`);
+  }
+
+  const result = normalized.length > 0 ? normalized : [...DEFAULT_RECALL_TARGET_TYPES];
+  if (includeResources && !seen.has("resource")) {
+    result.push("resource");
+  }
+  return result;
+}
+
+function toRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function expandToolSelectors(value: unknown, fallback: string[], label: string): OpenVikingToolName[] {
+  const entries = toStringArray(value, fallback);
+  const seen = new Set<OpenVikingToolName>();
+  const normalized: OpenVikingToolName[] = [];
+  const unknown: string[] = [];
+
+  for (const rawEntry of entries) {
+    const entry = rawEntry.trim();
+    const group = OPENVIKING_TOOL_GROUPS[entry];
+    const tools = group ??
+      ((OPENVIKING_ALL_TOOL_NAMES as readonly string[]).includes(entry)
+        ? [entry as OpenVikingToolName]
+        : undefined);
+    if (!tools) {
+      unknown.push(entry);
+      continue;
+    }
+    for (const tool of tools) {
+      if (!seen.has(tool)) {
+        seen.add(tool);
+        normalized.push(tool);
+      }
+    }
+  }
+
+  if (unknown.length > 0) {
+    throw new Error(`openviking ${label} contains unknown tool selectors: ${unknown.join(", ")}`);
+  }
+  return normalized;
+}
+
+function normalizeEnabledTools(cfg: Record<string, unknown>): {
+  enabledTools: OpenVikingToolName[];
+  disabledTools: OpenVikingToolName[];
+} {
+  const enableAddResourceTool = cfg.enableAddResourceTool === true;
+  const defaultTools = enableAddResourceTool
+    ? [OPENVIKING_ADD_RESOURCE_TOOL_NAME, ...OPENVIKING_DEFAULT_ENABLED_TOOL_NAMES]
+    : [...OPENVIKING_DEFAULT_ENABLED_TOOL_NAMES];
+  const selected = expandToolSelectors(cfg.enabledTools, defaultTools, "enabledTools");
+  const disabled = expandToolSelectors(cfg.disabledTools, [], "disabledTools");
+  const disabledSet = new Set(disabled);
+  if (!enableAddResourceTool) {
+    disabledSet.add(OPENVIKING_ADD_RESOURCE_TOOL_NAME);
+  }
+  const enabledTools = selected.filter((tool) =>
+    !disabledSet.has(tool) &&
+    (tool !== OPENVIKING_ADD_RESOURCE_TOOL_NAME || enableAddResourceTool)
+  );
+
+  return {
+    enabledTools,
+    disabledTools: Array.from(disabledSet),
+  };
+}
+
 /** True when env is 1 / true / yes (case-insensitive). Used for debug flags without editing plugin JSON. */
 function envFlag(name: string): boolean {
   const v = getEnv(name);
@@ -153,7 +360,7 @@ function resolveDefaultBaseUrl(): string {
 }
 
 export const memoryOpenVikingConfigSchema = {
-  parse(value: unknown): Required<MemoryOpenVikingConfig> {
+  parse(value: unknown): ParsedMemoryOpenVikingConfig {
     if (!value || typeof value !== "object" || Array.isArray(value)) {
       value = {};
     }
@@ -192,8 +399,31 @@ export const memoryOpenVikingConfigSchema = {
         "ingestReplyAssistIgnoreSessionPatterns",
         "emitStandardDiagnostics",
         "logFindRequests",
+        "traceRecall",
+        "traceRecallPersist",
+        "traceRecallDir",
+        "traceRecallRetentionDays",
+        "traceRecallLoadRecentDays",
+        "traceRecallMaxEntries",
+        "traceRecallMaxResultsPerSearch",
+        "traceRecallPreviewChars",
+        "traceRecallQueryMaxChars",
+        "traceRecallQueryMaxDays",
+        "traceRecallIncludeContentByDefault",
+        "traceRecallIncludeRawUserPreview",
+        "recallTargetTypes",
+        "enableAddResourceTool",
+        "enabledTools",
+        "disabledTools",
+        "agentExperience",
       ],
       "openviking config",
+    );
+    const agentExperienceRaw = toRecord(cfg.agentExperience);
+    assertAllowedKeys(
+      agentExperienceRaw,
+      ["enabled", "recallLimit", "scoreThreshold", "maxInjectedChars", "minQueryChars"],
+      "openviking config agentExperience",
     );
 
     const mode = "remote" as const;
@@ -232,6 +462,12 @@ export const memoryOpenVikingConfigSchema = {
         ),
       ),
     );
+    const recallResources = cfg.recallResources === true || envFlag("OPENVIKING_RECALL_RESOURCES");
+    const recallTargetTypes = normalizeRecallTargetTypes(
+      cfg.recallTargetTypes,
+      !("recallTargetTypes" in cfg) && recallResources,
+    );
+    const { enabledTools, disabledTools } = normalizeEnabledTools(cfg);
 
     return {
       mode,
@@ -254,7 +490,7 @@ export const memoryOpenVikingConfigSchema = {
         1000,
         Math.min(300_000, Math.floor(toNumber(cfg.autoRecallTimeoutMs, DEFAULT_AUTO_RECALL_TIMEOUT_MS))),
       ),
-      recallResources: cfg.recallResources === true || envFlag("OPENVIKING_RECALL_RESOURCES"),
+      recallResources,
       recallLimit: Math.max(1, Math.floor(toNumber(cfg.recallLimit, DEFAULT_RECALL_LIMIT))),
       recallScoreThreshold: Math.min(
         1,
@@ -296,6 +532,91 @@ export const memoryOpenVikingConfigSchema = {
         cfg.logFindRequests === true ||
         envFlag("OPENVIKING_LOG_ROUTING") ||
         envFlag("OPENVIKING_DEBUG"),
+      traceRecall: cfg.traceRecall === true,
+      traceRecallPersist: cfg.traceRecallPersist === true,
+      traceRecallDir:
+        typeof cfg.traceRecallDir === "string" && cfg.traceRecallDir.trim()
+          ? expandHomeDir(cfg.traceRecallDir.trim())
+          : expandHomeDir(DEFAULT_TRACE_RECALL_DIR),
+      traceRecallRetentionDays: toIntegerInRange(
+        cfg.traceRecallRetentionDays,
+        DEFAULT_TRACE_RECALL_RETENTION_DAYS,
+        1,
+        3650,
+      ),
+      traceRecallLoadRecentDays: toIntegerInRange(
+        cfg.traceRecallLoadRecentDays,
+        DEFAULT_TRACE_RECALL_LOAD_RECENT_DAYS,
+        0,
+        3650,
+      ),
+      traceRecallMaxEntries: toIntegerInRange(
+        cfg.traceRecallMaxEntries,
+        DEFAULT_TRACE_RECALL_MAX_ENTRIES,
+        1,
+        1_000_000,
+      ),
+      traceRecallMaxResultsPerSearch: toIntegerInRange(
+        cfg.traceRecallMaxResultsPerSearch,
+        DEFAULT_TRACE_RECALL_MAX_RESULTS_PER_SEARCH,
+        1,
+        1_000,
+      ),
+      traceRecallPreviewChars: toIntegerInRange(
+        cfg.traceRecallPreviewChars,
+        DEFAULT_TRACE_RECALL_PREVIEW_CHARS,
+        20,
+        10_000,
+      ),
+      traceRecallQueryMaxChars: toIntegerInRange(
+        cfg.traceRecallQueryMaxChars,
+        DEFAULT_TRACE_RECALL_QUERY_MAX_CHARS,
+        200,
+        200_000,
+      ),
+      traceRecallQueryMaxDays: toIntegerInRange(
+        cfg.traceRecallQueryMaxDays,
+        DEFAULT_TRACE_RECALL_QUERY_MAX_DAYS,
+        1,
+        3650,
+      ),
+      traceRecallIncludeContentByDefault: cfg.traceRecallIncludeContentByDefault === true,
+      traceRecallIncludeRawUserPreview: cfg.traceRecallIncludeRawUserPreview === true,
+      recallTargetTypes,
+      enableAddResourceTool: cfg.enableAddResourceTool === true,
+      enabledTools,
+      disabledTools,
+      agentExperience: {
+        enabled:
+          typeof agentExperienceRaw.enabled === "boolean"
+            ? agentExperienceRaw.enabled
+            : DEFAULT_AGENT_EXPERIENCE.enabled,
+        recallLimit: Math.max(
+          1,
+          Math.min(
+            10,
+            Math.floor(toNumber(agentExperienceRaw.recallLimit, DEFAULT_AGENT_EXPERIENCE.recallLimit)),
+          ),
+        ),
+        scoreThreshold: Math.min(
+          1,
+          Math.max(0, toNumber(agentExperienceRaw.scoreThreshold, DEFAULT_AGENT_EXPERIENCE.scoreThreshold)),
+        ),
+        maxInjectedChars: Math.max(
+          500,
+          Math.min(
+            50_000,
+            Math.floor(toNumber(agentExperienceRaw.maxInjectedChars, DEFAULT_AGENT_EXPERIENCE.maxInjectedChars)),
+          ),
+        ),
+        minQueryChars: Math.max(
+          1,
+          Math.min(
+            500,
+            Math.floor(toNumber(agentExperienceRaw.minQueryChars, DEFAULT_AGENT_EXPERIENCE.minQueryChars)),
+          ),
+        ),
+      },
     };
   },
   uiHints: {
@@ -373,6 +694,12 @@ export const memoryOpenVikingConfigSchema = {
       help: "Include resources (viking://resources) in auto-recall and default memory_recall search. Enables account-level shared knowledge retrieval.",
       advanced: true,
     },
+    recallTargetTypes: {
+      label: "Recall Target Types",
+      placeholder: "user,agent",
+      help: "Comma-separated auto-recall and default memory_recall targets: user, agent, resource. Session history is available through ov_archive_search and ov_archive_expand.",
+      advanced: true,
+    },
     recallLimit: {
       label: "Recall Limit",
       placeholder: String(DEFAULT_RECALL_LIMIT),
@@ -436,6 +763,42 @@ export const memoryOpenVikingConfigSchema = {
       help:
         "Log tenant routing: POST /api/v1/search/find (query, target_uri) and session POST .../messages + .../commit (sessionId, X-OpenViking-*). Never logs apiKey. " +
         "Or set env OPENVIKING_LOG_ROUTING=1 or OPENVIKING_DEBUG=1 (no JSON edit).",
+      advanced: true,
+    },
+    traceRecall: {
+      label: "Trace Recall",
+      placeholder: "false",
+      help: "Enable best-effort recall trace recording for debugging recall and search decisions.",
+      advanced: true,
+    },
+    traceRecallPersist: {
+      label: "Persist Recall Trace",
+      placeholder: "false",
+      help: "Persist recall traces to local JSONL files. Disabled by default.",
+      advanced: true,
+    },
+    traceRecallDir: {
+      label: "Recall Trace Directory",
+      placeholder: DEFAULT_TRACE_RECALL_DIR,
+      help: "Directory for persisted recall trace JSONL files.",
+      advanced: true,
+    },
+    enableAddResourceTool: {
+      label: "Enable Add Resource Tool",
+      placeholder: "false",
+      help: "Disabled by default so search and read flows cannot call add_resource. Set true only when agents should import resources; manual /add-resource remains available.",
+      advanced: true,
+    },
+    enabledTools: {
+      label: "Enabled Tools",
+      placeholder: "default",
+      help: "Agent-visible tool allowlist. Accepts tool names or groups: default, all, memory, resource_query, import, recall_trace, archive, tool_result. add_resource also requires enableAddResourceTool=true.",
+      advanced: true,
+    },
+    disabledTools: {
+      label: "Disabled Tools",
+      placeholder: "memory",
+      help: "Agent-visible tool blocklist applied after enabledTools. Accepts the same tool names or groups.",
       advanced: true,
     },
   },

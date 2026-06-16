@@ -5,22 +5,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+from openviking.core.identifiers import validate_user_id
+from openviking.core.peer_id import normalize_peer_id
 from openviking.server.identity import RequestContext
 from openviking_cli.utils.uri import VikingURI
 
-_USER_SHORTHAND_SEGMENTS = {
-    "memories",
-    "peers",
-    "privacy",
-    ".abstract.md",
-    ".overview.md",
-    "profile.md",
-    "skills",
-    "workspaces",
-}
 _CONTENT_TYPES_BY_SCOPE = {
-    "user": {"memories": "memory", "skills": "skill"},
+    "user": {"memories": "memory", "resources": "resource", "skills": "skill"},
+    "agent": {"memories": "memory", "resources": "resource", "skills": "skill"},
 }
+_PEER_CONTENT_SEGMENTS = frozenset({"memories", "resources"})
+_USER_RELATIVE_ROOT_SEGMENTS = frozenset({"peers", "privacy", "sessions"})
+_CONTENT_SEGMENT_BY_KIND = {"resource": "resources", "skill": "skills"}
 
 
 class NamespaceShapeError(ValueError):
@@ -60,7 +56,7 @@ class UriClassification:
 
     @property
     def is_agent_namespace_root(self) -> bool:
-        return False
+        return self.scope == "agent" and len(self.parts) == 2
 
     @property
     def is_memory_root(self) -> bool:
@@ -119,13 +115,15 @@ def relative_uri_path(root_uri: str, uri: str) -> str:
 
 def _content_segment_index(parts: tuple[str, ...]) -> Optional[int]:
     """Return the first content segment after a user namespace root."""
+    if len(parts) >= 3 and parts[0] == "agent" and parts[2] in _CONTENT_TYPES_BY_SCOPE["agent"]:
+        return 2
     if len(parts) < 2 or parts[0] != "user":
         return None
     if parts[1] in _CONTENT_TYPES_BY_SCOPE["user"]:
         return 1
-    if len(parts) >= 4 and parts[1] == "peers" and parts[3] == "memories":
+    if len(parts) >= 4 and parts[1] == "peers" and parts[3] in _PEER_CONTENT_SEGMENTS:
         return 3
-    if len(parts) >= 5 and parts[2] == "peers" and parts[4] == "memories":
+    if len(parts) >= 5 and parts[2] == "peers" and parts[4] in _PEER_CONTENT_SEGMENTS:
         return 4
     if len(parts) >= 3 and parts[2] in _CONTENT_TYPES_BY_SCOPE["user"]:
         return 2
@@ -164,18 +162,76 @@ def user_space_fragment(ctx: RequestContext) -> str:
     return ctx.user.user_id
 
 
-def canonical_session_uri(session_id: Optional[str] = None) -> str:
+def canonical_session_root(ctx: RequestContext) -> str:
+    return f"{canonical_user_root(ctx)}/sessions"
+
+
+def canonical_session_uri(ctx: RequestContext, session_id: Optional[str] = None) -> str:
+    root = canonical_session_root(ctx)
+    if not session_id:
+        return root
+    return f"{root}/{session_id}"
+
+
+def canonical_user_content_root(ctx: RequestContext, kind: str) -> str:
+    segment = _CONTENT_SEGMENT_BY_KIND[kind]
+    return f"{canonical_user_root(ctx)}/{segment}"
+
+
+def legacy_session_uri(session_id: Optional[str] = None) -> str:
     if not session_id:
         return "viking://session"
     return f"viking://session/{session_id}"
 
 
+def is_session_uri(uri: str) -> bool:
+    parts = uri_parts(uri)
+    if parts[:1] == ["session"]:
+        return True
+    if parts[:2] == ["user", "sessions"]:
+        return True
+    return len(parts) >= 3 and parts[0] == "user" and parts[2] == "sessions"
+
+
 def visible_roots(ctx: RequestContext) -> list[str]:
     return [
         "viking://resources",
-        "viking://session",
         canonical_user_root(ctx),
     ]
+
+
+def is_hidden_by_actor_peer_view(uri: str, ctx: RequestContext) -> bool:
+    """Return whether uri points to another peer hidden by the actor peer view."""
+    suffix = _actor_peer_view_user_suffix(uri, ctx)
+    return bool(
+        suffix and len(suffix) >= 2 and suffix[0] == "peers" and suffix[1] != ctx.actor_peer_id
+    )
+
+
+def may_include_hidden_actor_peers(uri: str, ctx: RequestContext) -> bool:
+    """Return whether recursive data under uri may include hidden peers."""
+    suffix = _actor_peer_view_user_suffix(uri, ctx)
+    return suffix is not None and (not suffix or suffix == ["peers"])
+
+
+def _actor_peer_view_user_suffix(uri: str, ctx: RequestContext) -> Optional[list[str]]:
+    """Return uri's suffix under the current user root when actor peer view is active.
+
+    The actor peer view filters only the current user's ``peers`` collection.
+    It applies to filesystem and retrieval views, but does not change
+    tenant/user identity or hide non-peer user content.
+    """
+    if not ctx.actor_peer_id:
+        return None
+    try:
+        canonical_uri = canonicalize_uri(uri, ctx)
+    except NamespaceShapeError:
+        return None
+    parts = uri_parts(canonical_uri)
+    user_root_parts = ["user", ctx.user.user_id]
+    if parts[: len(user_root_parts)] != user_root_parts:
+        return None
+    return parts[len(user_root_parts) :]
 
 
 def resolve_uri(
@@ -194,9 +250,9 @@ def resolve_uri(
     if scope == "user":
         return _resolve_user_uri(parts, ctx=ctx, require_canonical=require_canonical)
     if scope == "agent":
-        raise NamespaceShapeError("viking://agent is deprecated; use viking://user instead")
+        return ResolvedNamespace(uri=VikingURI.normalize(uri).rstrip("/"), scope=scope)
     if scope == "session":
-        return _resolve_session_uri(parts)
+        return _resolve_session_uri(parts, ctx=ctx, require_canonical=require_canonical)
     if scope in {"resources", "temp", "queue", "upload"}:
         return ResolvedNamespace(uri=VikingURI.normalize(uri).rstrip("/"), scope=scope)
     return ResolvedNamespace(uri=VikingURI.normalize(uri).rstrip("/"), scope=scope)
@@ -215,7 +271,7 @@ def is_accessible(uri: str, ctx: RequestContext) -> bool:
     except NamespaceShapeError:
         return False
 
-    if target.scope in {"", "resources", "temp", "queue", "session"}:
+    if target.scope in {"", "resources", "temp", "queue"}:
         return True
     if target.scope == "upload":
         return False
@@ -223,7 +279,63 @@ def is_accessible(uri: str, ctx: RequestContext) -> bool:
         if target.owner_user_id and target.owner_user_id != ctx.user.user_id:
             return False
         return True
+    if target.scope == "agent":
+        parts = uri_parts(target.uri)
+        if ctx.actor_peer_id and len(parts) >= 2 and parts[1] != ctx.actor_peer_id:
+            return False
+        return True
     return True
+
+
+def is_content_root_uri(
+    uri: str,
+    ctx: RequestContext,
+    *,
+    kind: str,
+) -> bool:
+    try:
+        canonical_uri = canonicalize_uri(uri, ctx)
+    except (ValueError, NamespaceShapeError):
+        return False
+    parts = uri_parts(canonical_uri)
+    if kind == "resource" and parts == ["resources"]:
+        return True
+    classification = classify_uri(canonical_uri)
+    return (
+        classification.context_type == kind
+        and classification.content_index is not None
+        and len(parts) == classification.content_index + 1
+    )
+
+
+def is_content_namespace_root_uri(uri: str, ctx: RequestContext) -> bool:
+    try:
+        canonical_uri = canonicalize_uri(uri, ctx)
+    except (ValueError, NamespaceShapeError):
+        return False
+    parts = uri_parts(canonical_uri)
+    if parts == ["resources"]:
+        return True
+    classification = classify_uri(canonical_uri)
+    return (
+        classification.content_index is not None and len(parts) == classification.content_index + 1
+    )
+
+
+def _validate_peer_id_segments(parts: list[str]) -> None:
+    if len(parts) >= 3 and parts[0] == "user" and parts[1] == "peers":
+        _require_peer_id_segment(parts[2])
+        return
+    if len(parts) >= 4 and parts[0] == "user" and parts[2] == "peers":
+        _require_peer_id_segment(parts[3])
+
+
+def _require_peer_id_segment(peer_id: str) -> None:
+    try:
+        if normalize_peer_id(peer_id) is None:
+            raise ValueError("peer_id must not be empty")
+    except ValueError as exc:
+        raise NamespaceShapeError(str(exc)) from exc
 
 
 def owner_fields_for_uri(
@@ -279,16 +391,9 @@ def _resolve_user_uri(
 ) -> ResolvedNamespace:
     normalized = "viking://" + "/".join(parts)
     if len(parts) == 1:
-        if ctx is not None and getattr(ctx.role, "value", ctx.role) != "root":
-            return ResolvedNamespace(
-                uri=canonical_user_root(ctx),
-                scope="user",
-                owner_user_id=ctx.user.user_id,
-            )
         return ResolvedNamespace(uri="viking://user", scope="user", is_container=True)
 
-    second = parts[1]
-    if second in _USER_SHORTHAND_SEGMENTS:
+    if _is_current_user_relative_uri(parts, ctx):
         if require_canonical:
             raise NamespaceShapeError(f"Shorthand user URI is not allowed here: {normalized}")
         if ctx is None:
@@ -298,7 +403,11 @@ def _resolve_user_uri(
             "/".join([canonical_user_root(ctx)[len("viking://") :], *suffix]), ctx=ctx
         )
 
+    second = parts[1]
     user_id = second
+    validation_error = validate_user_id(user_id)
+    if validation_error:
+        raise NamespaceShapeError(f"Invalid user_id: {validation_error}")
     if len(parts) == 2:
         return ResolvedNamespace(
             uri=f"viking://user/{user_id}",
@@ -310,6 +419,7 @@ def _resolve_user_uri(
     canonical = f"viking://user/{user_id}"
     if suffix:
         canonical = f"{canonical}/{'/'.join(suffix)}"
+    _validate_peer_id_segments(parts)
     return ResolvedNamespace(
         uri=canonical,
         scope="user",
@@ -317,7 +427,46 @@ def _resolve_user_uri(
     )
 
 
-def _resolve_session_uri(parts: list[str]) -> ResolvedNamespace:
+def _is_current_user_relative_uri(parts: list[str], ctx: Optional[RequestContext]) -> bool:
+    if len(parts) < 2 or parts[0] != "user":
+        return False
+    if ctx is not None and parts[1] == ctx.user.user_id:
+        return False
+    return _is_user_relative_root_segment(parts[1])
+
+
+def _is_user_relative_root_segment(segment: str) -> bool:
+    return segment in _CONTENT_TYPES_BY_SCOPE["user"] or segment in _USER_RELATIVE_ROOT_SEGMENTS
+
+
+def _resolve_session_uri(
+    parts: list[str],
+    ctx: Optional[RequestContext],
+    *,
+    require_canonical: bool,
+) -> ResolvedNamespace:
+    normalized = "viking://" + "/".join(parts)
+    if require_canonical:
+        raise NamespaceShapeError(f"Legacy session URI is not allowed here: {normalized}")
+    if ctx is not None:
+        if len(parts) == 1:
+            return ResolvedNamespace(
+                uri=canonical_session_uri(ctx),
+                scope="user",
+                owner_user_id=ctx.user.user_id,
+                is_container=True,
+            )
+        session_id = parts[1]
+        suffix = parts[2:]
+        canonical = canonical_session_uri(ctx, session_id)
+        if suffix:
+            canonical = f"{canonical}/{'/'.join(suffix)}"
+        return ResolvedNamespace(
+            uri=canonical,
+            scope="user",
+            owner_user_id=ctx.user.user_id,
+        )
+
     if len(parts) == 1:
         return ResolvedNamespace(uri="viking://session", scope="session", is_container=True)
     session_id = parts[1]

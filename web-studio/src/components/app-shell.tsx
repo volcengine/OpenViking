@@ -25,7 +25,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from '#/components/ui/collapsible'
-import { OAuthSetupDialog } from '#/components/oauth-setup-dialog'
+import { CrossDeviceVerifyDialog } from '#/components/cross-device-verify-dialog'
 import { ScrollArea } from '#/components/ui/scroll-area'
 import {
   Sidebar,
@@ -350,22 +350,23 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
   const currentLanguage = resolveLanguage(
     i18n.resolvedLanguage ?? i18n.language,
   )
-  const [oauthSetupOpen, setOauthSetupOpen] = React.useState(false)
+  const [crossDeviceVerifyOpen, setCrossDeviceVerifyOpen] =
+    React.useState(false)
   const settingsActive = pathname === '/settings'
-  const oauthSetupActive =
-    pathname === '/oauth/setup' || pathname.startsWith('/oauth/setup/')
+  const crossDeviceVerifyActive =
+    pathname === '/oauth/verify' || pathname.startsWith('/oauth/verify/')
   const visibleNavItems = React.useMemo(
     () =>
-      connectionRole === 'user'
-        ? NAV_ITEMS.filter(
+      connectionRole === 'admin' || connectionRole === 'root'
+        ? NAV_ITEMS
+        : NAV_ITEMS.filter(
             (item) => item.id !== 'home' && item.id !== 'requestLogs',
-          )
-        : NAV_ITEMS,
+          ),
     [connectionRole],
   )
 
-  function openOAuthSetup(): void {
-    if (oauthSetupActive) {
+  function openCrossDeviceVerify(): void {
+    if (crossDeviceVerifyActive) {
       return
     }
     // Desktop: open the dialog so the user keeps the current page underneath.
@@ -376,9 +377,9 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
       typeof window.matchMedia === 'function' &&
       window.matchMedia('(min-width: 768px)').matches
     if (useDialog) {
-      setOauthSetupOpen(true)
+      setCrossDeviceVerifyOpen(true)
     } else {
-      void navigate({ to: '/oauth/setup' })
+      void navigate({ to: '/oauth/verify' })
     }
   }
 
@@ -466,14 +467,16 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
             </SidebarMenuItem>
             <SidebarMenuItem>
               <SidebarMenuButton
-                onClick={openOAuthSetup}
-                isActive={oauthSetupActive}
-                tooltip={t('navigation.oauthSetup.title', { ns: 'appShell' })}
+                onClick={openCrossDeviceVerify}
+                isActive={crossDeviceVerifyActive}
+                tooltip={t('navigation.crossDeviceVerify.title', {
+                  ns: 'appShell',
+                })}
                 className="text-base"
               >
                 <KeyRoundIcon className="size-5" />
                 <span>
-                  {t('navigation.oauthSetup.title', { ns: 'appShell' })}
+                  {t('navigation.crossDeviceVerify.title', { ns: 'appShell' })}
                 </span>
               </SidebarMenuButton>
             </SidebarMenuItem>
@@ -583,9 +586,9 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
         </ScrollArea>
       </SidebarInset>
 
-      <OAuthSetupDialog
-        open={oauthSetupOpen}
-        onOpenChange={setOauthSetupOpen}
+      <CrossDeviceVerifyDialog
+        open={crossDeviceVerifyOpen}
+        onOpenChange={setCrossDeviceVerifyOpen}
       />
     </SidebarProvider>
   )

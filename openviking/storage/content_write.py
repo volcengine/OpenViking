@@ -57,6 +57,7 @@ class ContentWriteCoordinator:
             raise InvalidArgumentError(str(exc)) from exc
         self._validate_mode(mode)
         self._validate_target_uri(normalized_uri)
+        self._viking_fs._ensure_mutable_access(normalized_uri, ctx)
 
         if mode == "create":
             return await self._create_and_write(

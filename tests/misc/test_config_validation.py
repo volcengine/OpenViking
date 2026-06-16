@@ -68,6 +68,40 @@ def test_agfs_s3_normalize_encoding_chars_is_forwarded_to_ragfs_plugin_config():
 
     assert plugins["s3fs"]["config"]["normalize_encoding_chars"] == "?#"
 
+
+def test_agfs_s3_auto_detect_content_type_defaults_to_false():
+    config = AGFSConfig(
+        backend="s3",
+        s3=S3Config(
+            bucket="my-bucket",
+            region="us-west-1",
+            access_key="fake-access-key-for-testing",
+            secret_key="fake-secret-key-for-testing-12345",
+            endpoint="https://s3.amazonaws.com",
+        ),
+    )
+
+    assert config.s3.auto_detect_content_type is False
+
+
+def test_agfs_s3_auto_detect_content_type_is_forwarded_to_ragfs_plugin_config():
+    config = AGFSConfig(
+        path="/tmp/ov-test",
+        backend="s3",
+        s3=S3Config(
+            bucket="my-bucket",
+            region="us-west-1",
+            access_key="fake-access-key-for-testing",
+            secret_key="fake-secret-key-for-testing-12345",
+            endpoint="https://s3.amazonaws.com",
+            auto_detect_content_type=True,
+        ),
+    )
+
+    plugins = _generate_plugin_config(config, Path("/tmp/ov-test"))
+
+    assert plugins["s3fs"]["config"]["auto_detect_content_type"] is True
+
     # Test 2: invalid backend
     print("\n2. Test invalid backend...")
     try:
@@ -364,6 +398,7 @@ def test_generate_plugin_config_materializes_multiwrite_backups(tmp_path):
         "directory_marker_mode": None,
         "disable_batch_delete": False,
         "normalize_encoding_chars": "#?",
+        "auto_detect_content_type": False,
     }
 
 

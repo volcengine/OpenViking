@@ -44,7 +44,7 @@ cat $STATE_DIR/state/verify-sess.json
 
 OV side:
 ```bash
-OPENVIKING_CONFIG_FILE=$OV_CONF ov read viking://session/cx-verify-sess/messages.jsonl
+OPENVIKING_CONFIG_FILE=$OV_CONF ov read viking://user/sessions/cx-verify-sess/messages.jsonl
 # 2 JSONL records: user "fuchsia", assistant "noted"
 ```
 
@@ -78,7 +78,7 @@ echo '{"session_id":"verify-sess","transcript_path":"'"$STATE_DIR"'/transcript.j
 ```
 
 Expect: `appended 2 turn(s)` (only the new ones). Re-read
-`viking://session/cx-verify-sess/messages.jsonl` — 4 records now.
+`viking://user/sessions/cx-verify-sess/messages.jsonl` — 4 records now.
 
 ## 4. PreCompact — commit + reset
 
@@ -96,10 +96,10 @@ State file: `ovSessionId` is now `null`, `capturedTurnCount` stays at 4.
 
 OV side:
 ```bash
-OPENVIKING_CONFIG_FILE=$OV_CONF ov ls viking://session/cx-verify-sess
+OPENVIKING_CONFIG_FILE=$OV_CONF ov ls viking://user/sessions/cx-verify-sess
 # messages.jsonl is now size 0 (archived)
 # history/archive_001/ exists with the committed messages
-OPENVIKING_CONFIG_FILE=$OV_CONF ov read viking://session/cx-verify-sess/history/archive_001/messages.jsonl
+OPENVIKING_CONFIG_FILE=$OV_CONF ov read viking://user/sessions/cx-verify-sess/history/archive_001/messages.jsonl
 ```
 
 ## 5. Post-compact Stop — same deterministic OV session id
@@ -124,7 +124,8 @@ Expect: `appended 2 turn(s) to OpenViking session cx-verify-sess`.
 ## 6. SessionStart — active-window heuristic + idle-TTL sweep
 
 `source=startup` and `source=clear` both run the same logic
-(matcher = `clear|startup`). `source=resume` is the only hard no-op.
+(matcher = `clear|startup|resume`). `source=resume` never commits or sweeps;
+it may inject latest archive context if a committed archive exists.
 See `DESIGN.md` §3 + §5 for the full decision tree.
 
 ### 6a. `1 active` → commit
@@ -205,7 +206,7 @@ If `sess-bbb` was in `≥2 active` from 6c, the heuristic on this call sees
 just `sess-bbb` (1 active) and commits it — that's expected and shows the
 heuristic + sweep working together.
 
-### 6e. `source=resume` → hard no-op (no commit, no sweep)
+### 6e. `source=resume` → no commit/sweep; optional archive inject
 
 ```bash
 echo '{"session_id":"any","source":"resume","cwd":"/tmp","model":"x","permission_mode":"default","transcript_path":null,"hook_event_name":"SessionStart"}' \
@@ -213,7 +214,21 @@ echo '{"session_id":"any","source":"resume","cwd":"/tmp","model":"x","permission
     OPENVIKING_CODEX_STATE_DIR=$STATE_DIR/state \
     CODEX_PLUGIN_ROOT=$PLUGIN \
     node $PLUGIN/scripts/session-start-commit.mjs
-# Expect: {} — resume neither commits nor sweeps; short reconnects fire resume too.
+# Expect without an existing archive: {}
+# Expect with an existing archive for cx-any: hookSpecificOutput.additionalContext
+# containing "OpenViking session archive digest" and a viking://user/sessions/cx-any/history/ URI.
+```
+
+### 6f. Compressor profile detect can be disabled for hook smoke tests
+
+```bash
+echo '{"session_id":"any","source":"startup","cwd":"/tmp","model":"x","permission_mode":"default","transcript_path":null,"hook_event_name":"SessionStart"}' \
+  | OPENVIKING_RECALL_COMPRESS_DETECT_ON_STARTUP=0 \
+    OPENVIKING_CONFIG_FILE=$OV_CONF \
+    OPENVIKING_CODEX_STATE_DIR=$STATE_DIR/state \
+    CODEX_PLUGIN_ROOT=$PLUGIN \
+    node $PLUGIN/scripts/session-start-commit.mjs
+# Expect: normal SessionStart behavior without spawning `codex exec` for model probing.
 ```
 
 ## 7. Memory extraction landed in user namespace

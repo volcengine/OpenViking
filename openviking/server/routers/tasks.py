@@ -12,8 +12,9 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 
 from openviking.server.auth import get_request_context
-from openviking.server.identity import RequestContext
+from openviking.server.identity import RequestContext, Role
 from openviking.server.models import Response
+from openviking.service.task_store import SYSTEM_TASK_ACCOUNT_ID, SYSTEM_TASK_USER_ID
 from openviking.service.task_tracker import get_task_tracker
 from openviking_cli.exceptions import OpenVikingError
 
@@ -27,11 +28,20 @@ async def get_task(
 ):
     """Get the status of a single background task."""
     tracker = get_task_tracker()
-    task = await tracker.get(
-        task_id,
-        account_id=_ctx.account_id,
-        user_id=_ctx.user.user_id,
-    )
+    if _ctx.role == Role.ROOT:
+        task = await tracker.get(task_id)
+        if task is None:
+            task = await tracker.get(
+                task_id,
+                account_id=SYSTEM_TASK_ACCOUNT_ID,
+                user_id=SYSTEM_TASK_USER_ID,
+            )
+    else:
+        task = await tracker.get(
+            task_id,
+            account_id=_ctx.account_id,
+            user_id=_ctx.user.user_id,
+        )
     if not task:
         raise OpenVikingError(
             "Task not found or expired",
@@ -53,12 +63,31 @@ async def list_tasks(
 ):
     """List background tasks with optional filters."""
     tracker = get_task_tracker()
-    tasks = await tracker.list_tasks(
-        task_type=task_type,
-        status=status,
-        resource_id=resource_id,
-        limit=limit,
-        account_id=_ctx.account_id,
-        user_id=_ctx.user.user_id,
-    )
+    if _ctx.role == Role.ROOT:
+        system_tasks = await tracker.list_tasks(
+            task_type=task_type,
+            status=status,
+            resource_id=resource_id,
+            limit=limit,
+            account_id=SYSTEM_TASK_ACCOUNT_ID,
+            user_id=SYSTEM_TASK_USER_ID,
+        )
+        cached_tasks = await tracker.list_tasks(
+            task_type=task_type,
+            status=status,
+            resource_id=resource_id,
+            limit=limit,
+        )
+        tasks_by_id = {task.task_id: task for task in cached_tasks}
+        tasks_by_id.update({task.task_id: task for task in system_tasks})
+        tasks = sorted(tasks_by_id.values(), key=lambda task: task.created_at, reverse=True)[:limit]
+    else:
+        tasks = await tracker.list_tasks(
+            task_type=task_type,
+            status=status,
+            resource_id=resource_id,
+            limit=limit,
+            account_id=_ctx.account_id,
+            user_id=_ctx.user.user_id,
+        )
     return Response(status="ok", result=[t.to_dict() for t in tasks])

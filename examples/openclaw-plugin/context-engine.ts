@@ -1,22 +1,26 @@
 import { createHash } from "node:crypto";
 import { DEFAULT_PHASE2_POLL_TIMEOUT_MS } from "./client.js";
 import type { OpenVikingClient, OVMemoryPolicy, OVMessage } from "./client.js";
-import type { MemoryOpenVikingConfig } from "./config.js";
+import type { MemoryOpenVikingConfig, ParsedMemoryOpenVikingConfig } from "./config.js";
 import {
   AUTO_RECALL_SOURCE_MARKER,
-  buildAutoRecallContext,
+  buildGatedAgentExperienceRecallContext,
+  buildLongTermMemoryRecallContext,
+  buildOpenVikingContextBlock,
   prepareRecallQuery,
 } from "./auto-recall.js";
 import {
   compileSessionPatterns,
   getCaptureDecision,
   extractNewTurnMessages,
+  stripOpenVikingContextInjection,
   shouldBypassSession,
 } from "./text-utils.js";
 import {
   trimForLog,
   toJsonLog,
 } from "./memory-ranking.js";
+import type { RecallTraceEntry } from "./recall-trace.js";
 import { sanitizeToolUseResultPairing } from "./session-transcript-repair.js";
 import {
   estimateAgentMessageTokens,
@@ -68,10 +72,10 @@ export function resolveMessagePeerId(params: {
   assistantPeerId?: string;
 }): string | undefined {
   if (params.peerRole === "person" && params.role === "user") {
-    return params.personPeerId;
+    return toPeerId(params.personPeerId);
   }
   if (params.peerRole === "assistant" && params.role === "assistant") {
-    return params.assistantPeerId;
+    return toPeerId(params.assistantPeerId);
   }
   return undefined;
 }
@@ -196,7 +200,7 @@ type RecallQueryInput = {
   source: "latestUserMessage" | "prompt" | "none";
 };
 
-type AssembleRecall = Awaited<ReturnType<typeof buildAutoRecallContext>> & {
+type AssembleRecall = Awaited<ReturnType<typeof buildLongTermMemoryRecallContext>> & {
   queryChars: number;
 };
 
@@ -310,7 +314,11 @@ function extractAgentMessageText(message: AgentMessage | undefined): string {
 }
 
 function hasAutoRecallBlock(message: AgentMessage | undefined): boolean {
-  return extractAgentMessageText(message).includes(AUTO_RECALL_SOURCE_MARKER);
+  const text = extractAgentMessageText(message);
+  return (
+    text.includes(AUTO_RECALL_SOURCE_MARKER) ||
+    /<openviking-context\b/i.test(text)
+  );
 }
 
 function prependTextToMessageContent(content: unknown, text: string): unknown {
@@ -355,26 +363,6 @@ function prependRecallToLatestUserMessage(messages: AgentMessage[], recallBlock:
     return messages;
   }
   return prependRecallAtIndex(messages, messages.length - 1, recallBlock);
-}
-
-function injectRecallIntoContext(messages: AgentMessage[], recallBlock: string): AgentMessage[] {
-  const latest = messages.at(-1);
-  if (latest?.role === "user" && !hasAutoRecallBlock(latest)) {
-    return prependRecallToLatestUserMessage(messages, recallBlock);
-  }
-
-  const firstUserIndex = messages.findIndex((msg) => msg.role === "user" && !hasAutoRecallBlock(msg));
-  if (firstUserIndex >= 0) {
-    return prependRecallAtIndex(messages, firstUserIndex, recallBlock);
-  }
-
-  return [
-    {
-      role: "user",
-      content: recallBlock,
-    },
-    ...messages,
-  ];
 }
 
 function emitDiag(log: Logger, stage: string, sessionId: string, data: Record<string, unknown>, enabled = true): void {
@@ -1050,7 +1038,6 @@ const PHASE2_POLL_MAX_MS = DEFAULT_PHASE2_POLL_TIMEOUT_MS;
 async function pollPhase2ExtractionOutcome(
   getClient: () => Promise<OpenVikingClient>,
   taskId: string,
-  agentId: string,
   logger: Logger,
   sessionLabel: string,
 ): Promise<void> {
@@ -1059,7 +1046,7 @@ async function pollPhase2ExtractionOutcome(
     const client = await getClient();
     while (Date.now() < deadline) {
       await sleep(PHASE2_POLL_INTERVAL_MS);
-      const task = await client.getTask(taskId, agentId).catch((e) => {
+      const task = await client.getTask(taskId).catch((e) => {
         logger.warn?.(`openviking: phase2 getTask failed task_id=${taskId}: ${String(e)}`);
         return null;
       });
@@ -1094,7 +1081,7 @@ export function createMemoryOpenVikingContextEngine(params: {
   id: string;
   name: string;
   version?: string;
-  cfg: Required<MemoryOpenVikingConfig>;
+  cfg: ParsedMemoryOpenVikingConfig;
   logger: Logger;
   getClient: () => Promise<OpenVikingClient>;
   /** Extra args help match hook-populated routing when OpenClaw provides sessionKey / OV session id. */
@@ -1105,6 +1092,7 @@ export function createMemoryOpenVikingContextEngine(params: {
     sessionKey?: string;
     ovSessionId?: string;
   }) => void;
+  traceRecorder?: { record(entry: RecallTraceEntry): void };
 }): ContextEngineWithCommit {
   const {
     id,
@@ -1115,6 +1103,7 @@ export function createMemoryOpenVikingContextEngine(params: {
     getClient,
     resolveAgentId,
     rememberSessionAgentId,
+    traceRecorder,
   } = params;
 
   const diagEnabled = cfg.emitStandardDiagnostics;
@@ -1146,12 +1135,9 @@ export function createMemoryOpenVikingContextEngine(params: {
         sessionKey,
         ovSessionId: ovId,
       });
-      const agentId = resolveAgentId(sessionId, sessionKey, ovId);
       const commitResult = await client.commitSession(ovId, {
         wait: true,
-        agentId,
         keepRecentCount: 0,
-        memoryPolicy: defaultMemoryPolicy,
       });
       const memCount = totalExtractedMemories(commitResult.memories_extracted);
       if (commitResult.status === "failed") {
@@ -1289,43 +1275,6 @@ export function createMemoryOpenVikingContextEngine(params: {
     return { sanitized, archive, session, budgets, instruction };
   }
 
-  async function buildRecallForAssemble(params: {
-    ovSessionId: string;
-    agentId: string;
-    peerId?: string;
-    queryInput: RecallQueryInput;
-    client?: OpenVikingClient;
-  }): Promise<AssembleRecall> {
-    const query = prepareRecallQuery(params.queryInput.text);
-    if (!query.query || query.query.length < 5) {
-      diag("assemble_recall_skip", params.ovSessionId, {
-        reason: "empty_or_short_query",
-        querySource: params.queryInput.source,
-        queryChars: query.finalChars,
-        peerId: params.peerId ?? null,
-      });
-      return { memoryCount: 0, estimatedTokens: 0, queryChars: query.finalChars };
-    }
-
-    if (query.truncated) {
-      logger.info(
-        `openviking: recall query truncated (` +
-          `chars=${query.originalChars}->${query.finalChars})`,
-      );
-    }
-
-    const recall = await buildAutoRecallContext({
-      cfg,
-      client: params.client ?? await getClient(),
-      agentId: params.agentId,
-      peerId: params.peerId,
-      queryText: query.query,
-      logger,
-      verbose: (message) => logger.info(message),
-    });
-    return { ...recall, queryChars: query.finalChars };
-  }
-
   function recallDiagFields(params: {
     recall: AssembleRecall;
     queryInput: RecallQueryInput;
@@ -1354,42 +1303,6 @@ export function createMemoryOpenVikingContextEngine(params: {
       personPeerId: toPeerId(sender.senderId),
       assistantPeerId: agentId,
     });
-  }
-
-  function emptyAssembleRecall(): AssembleRecall {
-    return { memoryCount: 0, estimatedTokens: 0, queryChars: 0 };
-  }
-
-  function assembleRecallOnlyResult(params: {
-    ovSessionId: string;
-    reason: string;
-    baseMessages: AgentMessage[];
-    originalTokens: number;
-    recall: AssembleRecall;
-    recallBlock: string;
-    queryInput: RecallQueryInput;
-    peerId?: string;
-    sender: ResolvedSender;
-    extra?: Record<string, unknown>;
-  }): AssembleResult {
-    const withRecall = injectRecallIntoContext(params.baseMessages, params.recallBlock);
-    const estimatedTokens = roughEstimate(withRecall);
-    diag("assemble_result", params.ovSessionId, {
-      passthrough: false,
-      reason: params.reason,
-      ...(params.extra ?? {}),
-      outputMessagesCount: withRecall.length,
-      inputTokenEstimate: params.originalTokens,
-      estimatedTokens,
-      ...recallDiagFields({
-        recall: params.recall,
-        queryInput: params.queryInput,
-        peerId: params.peerId,
-        sender: params.sender,
-      }),
-      messages: messageDigest(withRecall),
-    });
-    return { messages: withRecall, estimatedTokens };
   }
 
   return {
@@ -1456,7 +1369,9 @@ export function createMemoryOpenVikingContextEngine(params: {
             latestRole: latestMessage?.role ?? null,
           });
         }
-        if (!cfg.autoRecall) {
+        const longTermRecallEnabled = cfg.autoRecall;
+        const experienceRecallEnabled = cfg.agentExperience.enabled;
+        if (!longTermRecallEnabled && !experienceRecallEnabled) {
           return assemblePassthrough(OVSessionId, "transform_context_auto_recall_disabled", messages, originalTokens);
         }
         if (hasAutoRecallBlock(latestMessage)) {
@@ -1472,23 +1387,70 @@ export function createMemoryOpenVikingContextEngine(params: {
         }
 
         try {
+          const client = await getClient();
           const routingRef = assembleParams.sessionId ?? sessionKey ?? OVSessionId;
           const agentId = resolveAgentId(routingRef, sessionKey, OVSessionId);
           const peerId = resolveAssembleRecallPeerId(agentId, sender);
-          const recall = await buildRecallForAssemble({
-            ovSessionId: OVSessionId,
-            agentId,
-            peerId,
-            queryInput: recallQueryInput,
+          const recallQuery = prepareRecallQuery(recallQueryInput.text);
+          if (!recallQuery.query || recallQuery.query.length < 5) {
+            diag("assemble_recall_skip", OVSessionId, {
+              reason: "empty_or_short_query",
+              querySource: recallQueryInput.source,
+              queryChars: recallQuery.finalChars,
+              peerId: peerId ?? null,
+            });
+            return assemblePassthrough(OVSessionId, "transform_context_empty_recall_query", messages, originalTokens);
+          }
+          if (recallQuery.truncated) {
+            logger.info(
+              `openviking: recall query truncated (` +
+                `chars=${recallQuery.originalChars}->${recallQuery.finalChars})`,
+            );
+          }
+          const experienceRecall = experienceRecallEnabled
+            ? await buildGatedAgentExperienceRecallContext({
+                cfg,
+                client,
+                agentId,
+                peerId,
+                queryText: recallQuery.query,
+                sessionKey,
+                runtimeContext: assembleParams.runtimeContext,
+                logger,
+                verbose: (message) => logger.info(message),
+              })
+            : { count: 0, estimatedTokens: 0, skippedReason: "disabled" };
+          const longTermRecall = longTermRecallEnabled
+            ? await buildLongTermMemoryRecallContext({
+                cfg,
+                client,
+                agentId,
+                peerId,
+                queryText: recallQuery.query,
+                logger,
+                verbose: (message) => logger.info(message),
+                traceRecorder,
+                sessionId: assembleParams.sessionId,
+                sessionKey,
+                ovSessionId: OVSessionId,
+                rawUserTextPreview: recallQuery.query,
+                queryTruncated: recallQuery.truncated,
+              })
+            : { memoryCount: 0, estimatedTokens: 0 };
+          const longTermRecallWithQuery: AssembleRecall = { ...longTermRecall, queryChars: recallQuery.finalChars };
+
+          const combinedBlock = buildOpenVikingContextBlock({
+            sections: [experienceRecall.block, longTermRecallWithQuery.section],
           });
 
-          if (!recall.block) {
+          if (!combinedBlock) {
             return assemblePassthrough(OVSessionId, "transform_context_no_recall_hits", messages, originalTokens, {
-              ...recallDiagFields({ recall, queryInput: recallQueryInput, peerId }),
+              ...recallDiagFields({ recall: longTermRecallWithQuery, queryInput: recallQueryInput, peerId }),
+              experienceCount: experienceRecall.count,
             });
           }
 
-          const withRecall = prependRecallToLatestUserMessage(messages, recall.block);
+          const withRecall = prependRecallToLatestUserMessage(messages, combinedBlock);
           const estimatedTokens = roughEstimate(withRecall);
           diag("assemble_result", OVSessionId, {
             passthrough: false,
@@ -1496,7 +1458,9 @@ export function createMemoryOpenVikingContextEngine(params: {
             outputMessagesCount: withRecall.length,
             inputTokenEstimate: originalTokens,
             estimatedTokens,
-            ...recallDiagFields({ recall, queryInput: recallQueryInput, peerId, sender }),
+            ...recallDiagFields({ recall: longTermRecallWithQuery, queryInput: recallQueryInput, peerId, sender }),
+            autoRecallExperienceCount: experienceRecall.count,
+            autoRecallExperienceTokens: experienceRecall.estimatedTokens,
             messages: messageDigest(withRecall),
           });
           return { messages: withRecall, estimatedTokens };
@@ -1510,76 +1474,13 @@ export function createMemoryOpenVikingContextEngine(params: {
 
       try {
         const client = await getClient();
-        const routingRef = assembleParams.sessionId ?? sessionKey ?? OVSessionId;
-        const agentId = resolveAgentId(routingRef, sessionKey, OVSessionId);
-        const peerId = resolveAssembleRecallPeerId(agentId, sender);
-        const recallQueryInput = resolveRecallQueryInput({
-          latestMessage,
-          prompt: assembleParams.prompt,
-          senderName: sender.senderName,
-          preferPrompt: true,
-        });
-        const hasInjectedRecall = messages.some((message) => hasAutoRecallBlock(message));
-        let recall = emptyAssembleRecall();
-        if (cfg.autoRecall && !hasInjectedRecall) {
-          try {
-            recall = await buildRecallForAssemble({
-              ovSessionId: OVSessionId,
-              agentId,
-              peerId,
-              queryInput: recallQueryInput,
-              client,
-            });
-          } catch (recallErr) {
-            logger.warn?.(`openviking: auto-recall failed: ${String(recallErr)}`);
-            diag("assemble_recall_failed", OVSessionId, {
-              error: String(recallErr),
-              querySource: recallQueryInput.source,
-              peerId: peerId ?? null,
-              senderSource: sender.source,
-            });
-          }
-        }
-        let ctx;
-        try {
-          ctx = await client.getSessionContext(OVSessionId, tokenBudget, agentId);
-        } catch (ctxErr) {
-          if (recall.block) {
-            return assembleRecallOnlyResult({
-              ovSessionId: OVSessionId,
-              reason: "recall_only_context_unavailable",
-              baseMessages: messages,
-              originalTokens,
-              recall,
-              recallBlock: recall.block,
-              queryInput: recallQueryInput,
-              peerId,
-              sender,
-              extra: { contextError: String(ctxErr) },
-            });
-          }
-          throw ctxErr;
-        }
+        const ctx = await client.getSessionContext(OVSessionId, tokenBudget);
 
         const preAbstracts = ctx?.pre_archive_abstracts ?? [];
         const hasArchives = !!ctx?.latest_archive_overview || preAbstracts.length > 0;
         const activeCount = ctx?.messages?.length ?? 0;
 
         if (!ctx || (!hasArchives && activeCount === 0)) {
-          if (recall.block) {
-            return assembleRecallOnlyResult({
-              ovSessionId: OVSessionId,
-              reason: "recall_only_no_ov_data",
-              baseMessages: messages,
-              originalTokens,
-              recall,
-              recallBlock: recall.block,
-              queryInput: recallQueryInput,
-              peerId,
-              sender,
-              extra: { archiveCount: 0, activeCount: 0 },
-            });
-          }
           return assemblePassthrough(OVSessionId, "no_ov_data", messages, originalTokens, {
             archiveCount: 0, activeCount: 0,
           });
@@ -1604,9 +1505,7 @@ export function createMemoryOpenVikingContextEngine(params: {
           });
         }
 
-        const outputMessages = recall.block
-          ? injectRecallIntoContext(sanitized, recall.block)
-          : sanitized;
+        const outputMessages = sanitized;
         const assembledTokens = roughEstimate(outputMessages) + instruction.tokens;
         const tokensSaved = originalTokens - assembledTokens;
         const savingPct = originalTokens > 0 ? Math.round((tokensSaved / originalTokens) * 100) : 0;
@@ -1625,7 +1524,9 @@ export function createMemoryOpenVikingContextEngine(params: {
           sessionTokens: session.tokens,
           sessionBudget: budgets.sessionContext,
           reservedBudget: budgets.reserved,
-          ...recallDiagFields({ recall, queryInput: recallQueryInput, peerId, sender }),
+          senderIdFound: sender.found,
+          senderId: sender.senderId ?? null,
+          senderSource: sender.source,
           messages: messageDigest(outputMessages),
         });
 
@@ -1663,10 +1564,10 @@ export function createMemoryOpenVikingContextEngine(params: {
       try {
         const sender = extractRuntimeSenderId(afterTurnParams.runtimeContext);
         const { sessionKey, ovSessionId: OVSessionId } = resolveSessionIdentity(afterTurnParams);
-        const runtimeAgentId = extractRuntimeAgentId(afterTurnParams.runtimeContext);
-        if (runtimeAgentId) {
+        const runtimeAgentPeerSource = extractRuntimeAgentId(afterTurnParams.runtimeContext);
+        if (runtimeAgentPeerSource) {
           rememberSessionAgentId?.({
-            agentId: runtimeAgentId,
+            agentId: runtimeAgentPeerSource,
             sessionId: afterTurnParams.sessionId,
             sessionKey,
             ovSessionId: OVSessionId,
@@ -1742,18 +1643,14 @@ export function createMemoryOpenVikingContextEngine(params: {
           await client.ensureSession(
             OVSessionId,
             { memoryPolicy: defaultMemoryPolicy },
-            agentId,
           );
         }
         // 发送结构化消息：统一 role 为 user，通过 parts 区分类型
         for (const msg of extractedMessages) {
           const ovParts = msg.parts.map((part) => {
             if (part.type === "text") {
-              // 清理 relevant-memories 块
-              const cleaned = part.text
-                .replace(/<relevant-memories>[\s\S]*?<\/relevant-memories>/gi, " ")
-                .replace(/\s+/g, " ")
-                .trim();
+              // Strip OpenViking-injected context blocks.
+              const cleaned = stripOpenVikingContextInjection(part.text);
               return { type: "text" as const, text: cleaned };
             } else {
               return {
@@ -1778,14 +1675,13 @@ export function createMemoryOpenVikingContextEngine(params: {
               OVSessionId,
               msg.role,
               ovParts,
-              agentId,
               createdAt,
               peerId,
             );
           }
         }
 
-        const session = await client.getSession(OVSessionId, agentId);
+        const session = await client.getSession(OVSessionId);
         const pendingTokens = session.pending_tokens ?? 0;
 
         if (pendingTokens < cfg.commitTokenThreshold) {
@@ -1801,9 +1697,7 @@ export function createMemoryOpenVikingContextEngine(params: {
 
         const commitResult = await client.commitSession(OVSessionId, {
           wait: false,
-          agentId,
           keepRecentCount: cfg.commitKeepRecentCount,
-          memoryPolicy: defaultMemoryPolicy,
         });
         logger.info(
           `openviking: committed session=${OVSessionId}, ` +
@@ -1829,7 +1723,6 @@ export function createMemoryOpenVikingContextEngine(params: {
           void pollPhase2ExtractionOutcome(
             getClient,
             commitResult.task_id,
-            agentId,
             logger,
             OVSessionId,
           );
@@ -1876,7 +1769,7 @@ export function createMemoryOpenVikingContextEngine(params: {
       let preCommitEstimatedTokens: number | undefined;
       if (typeof tokensBeforeOriginal !== "number") {
         try {
-          const preCtx = await client.getSessionContext(OVSessionId, tokenBudget, agentId);
+          const preCtx = await client.getSessionContext(OVSessionId, tokenBudget);
           if (
             typeof preCtx.estimatedTokens === "number" &&
             Number.isFinite(preCtx.estimatedTokens)
@@ -1899,9 +1792,7 @@ export function createMemoryOpenVikingContextEngine(params: {
         );
         const commitResult = await client.commitSession(OVSessionId, {
           wait: true,
-          agentId,
           keepRecentCount: 0,
-          memoryPolicy: defaultMemoryPolicy,
         });
         const memCount = totalExtractedMemories(commitResult.memories_extracted);
 
@@ -2003,7 +1894,7 @@ export function createMemoryOpenVikingContextEngine(params: {
 
         let ctx: Awaited<ReturnType<typeof client.getSessionContext>> | undefined;
         try {
-          ctx = await client.getSessionContext(OVSessionId, tokenBudget, agentId);
+          ctx = await client.getSessionContext(OVSessionId, tokenBudget);
           // 打印完整的 getSessionContext 结果
           logger.info(
             `openviking: compact getSessionContext raw result for ${OVSessionId}: ` +

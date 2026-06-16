@@ -2,17 +2,17 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Resource endpoints for OpenViking HTTP Server."""
 
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from openviking.core.path_variables import resolve_path_variables
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.local_input_guard import require_remote_resource_source
 from openviking.server.responses import response_from_result
+from openviking.server.skill_source_metadata import persist_skill_source_metadata
 from openviking.server.telemetry import run_operation
 from openviking.server.temp_upload_store import TempUploadStore
 from openviking.server.upload_token_store import UploadTokenError, upload_token_store
@@ -49,6 +49,9 @@ class AddResourceRequest(BaseModel):
         exclude: Glob pattern for files to exclude during parsing.
         directly_upload_media: Whether to directly upload media files. Default is True.
         preserve_structure: Whether to preserve directory structure when adding directories.
+        args: Parser-specific import options. For Feishu one-time user-token imports,
+            pass {"feishu_access_token": "..."}. For Feishu user-token watches,
+            pass {"feishu_access_token": "...", "feishu_refresh_token": "..."}.
         watch_interval: Watch interval in minutes for automatic resource monitoring.
             - watch_interval > 0: Creates or updates a watch task. The resource will be
               automatically re-processed at the specified interval.
@@ -80,6 +83,7 @@ class AddResourceRequest(BaseModel):
     exclude: Optional[str] = None
     directly_upload_media: bool = True
     preserve_structure: Optional[bool] = None
+    args: Dict[str, Any] = Field(default_factory=dict)
     telemetry: TelemetryRequest = False
     watch_interval: float = 0
 
@@ -107,6 +111,7 @@ class AddSkillRequest(BaseModel):
     temp_file_id: Optional[str] = None
     wait: bool = False
     timeout: Optional[float] = None
+    source_metadata: Optional[Dict[str, Any]] = None
     telemetry: TelemetryRequest = False
 
     @model_validator(mode="after")
@@ -191,8 +196,6 @@ async def add_resource(
 ):
     """Add resource to OpenViking."""
     service = get_service()
-    if request.to and request.parent:
-        raise InvalidArgumentError("Cannot specify both 'to' and 'parent' at the same time.")
 
     path = request.path
     allow_local_path_resolution = False
@@ -225,26 +228,25 @@ async def add_resource(
         "watch_interval": request.watch_interval,
         "create_parent": request.create_parent,
     }
+    if request.temp_file_id:
+        kwargs["temp_file_id"] = request.temp_file_id
     if request.preserve_structure is not None:
         kwargs["preserve_structure"] = request.preserve_structure
-
-    # Resolve path variables before passing to service.
-    to = resolve_path_variables(request.to) if request.to else None
-    parent = resolve_path_variables(request.parent) if request.parent else None
 
     async def _add() -> dict[str, Any]:
         try:
             result = await service.resources.add_resource(
                 path=path,
                 ctx=_ctx,
-                to=to,
-                parent=parent,
+                to=request.to,
+                parent=request.parent,
                 reason=request.reason,
                 instruction=request.instruction,
                 wait=request.wait,
                 timeout=request.timeout,
                 allow_local_path_resolution=allow_local_path_resolution,
                 enforce_public_remote_targets=True,
+                args=request.args,
                 **kwargs,
             )
         except Exception:
@@ -278,12 +280,27 @@ async def add_skill(
     data = request.data
     allow_local_path_resolution = False
     resolved = None
+    source_metadata = request.source_metadata or {
+        "type": "api",
+        "source": "inline_content",
+        "operation": "add",
+    }
     if request.temp_file_id:
         store = TempUploadStore.build(http_request.app.state.config)
         resolved = await store.resolve_for_consume(request.temp_file_id, _ctx)
         data = resolved.local_path
         allow_local_path_resolution = True
+        if request.source_metadata is None:
+            source_metadata = {
+                "type": "api",
+                "source": "temp_upload",
+                "operation": "add",
+                "upload_mode": resolved.mode,
+            }
+        if resolved.original_filename and request.source_metadata is None:
+            source_metadata["original_filename"] = resolved.original_filename
 
+    source_path_hint = resolved.original_filename if resolved else None
     store = TempUploadStore.build(http_request.app.state.config) if resolved else None
 
     async def _add() -> dict[str, Any]:
@@ -294,7 +311,9 @@ async def add_skill(
                 wait=request.wait,
                 timeout=request.timeout,
                 allow_local_path_resolution=allow_local_path_resolution,
+                source_path_hint=source_path_hint,
             )
+            await persist_skill_source_metadata(service, _ctx, result, source_metadata)
         except Exception:
             if resolved and store:
                 await store.mark_failed(resolved, _ctx)

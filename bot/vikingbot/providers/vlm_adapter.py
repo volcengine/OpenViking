@@ -5,6 +5,7 @@ LLMProvider interface, so that bot.agents.provider / bot.agents.model
 configuration semantics are consistent with openviking server's vlm section.
 """
 
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -147,6 +148,7 @@ class VLMProviderAdapter(LLMProvider):
                 "type": "enabled" if getattr(self._vlm, "thinking", False) else "disabled"
             },
             "stream": True,
+            "stream_options": {"include_usage": True},
         }
         if tools:
             kwargs["tools"] = tools
@@ -156,11 +158,17 @@ class VLMProviderAdapter(LLMProvider):
         reasoning_parts: list[str] = []
         tool_calls: dict[int, dict[str, Any]] = {}
         finish_reason = "stop"
+        usage: dict[str, int] = {}
+        start_time = time.perf_counter()
 
         try:
             client = self._vlm.get_async_client()
             response = await client.chat.completions.create(**kwargs)
             async for chunk in response:
+                chunk_usage = self._parse_usage(getattr(chunk, "usage", None))
+                if chunk_usage:
+                    usage = chunk_usage
+
                 choices = getattr(chunk, "choices", None) or []
                 if not choices:
                     continue
@@ -184,6 +192,9 @@ class VLMProviderAdapter(LLMProvider):
                 for delta_tool_call in getattr(delta, "tool_calls", None) or []:
                     merge_stream_tool_call_delta(tool_calls, delta_tool_call)
 
+            if usage:
+                self._record_vlm_usage(usage, time.perf_counter() - start_time)
+
             yield LLMStreamEvent(
                 type="response",
                 response=build_stream_response(
@@ -191,6 +202,7 @@ class VLMProviderAdapter(LLMProvider):
                     reasoning_content="".join(reasoning_parts),
                     raw_tool_calls=tool_calls,
                     finish_reason=finish_reason,
+                    usage=usage,
                 ),
             )
         except Exception as e:
@@ -201,6 +213,61 @@ class VLMProviderAdapter(LLMProvider):
                     finish_reason="error",
                 ),
             )
+
+    @staticmethod
+    def _usage_value(usage: Any, name: str) -> int:
+        if isinstance(usage, dict):
+            return int(usage.get(name, 0) or 0)
+        return int(getattr(usage, name, 0) or 0)
+
+    @classmethod
+    def _parse_usage(cls, raw_usage: Any) -> dict[str, int]:
+        if not raw_usage:
+            return {}
+
+        usage = {
+            "prompt_tokens": cls._usage_value(raw_usage, "prompt_tokens"),
+            "completion_tokens": cls._usage_value(raw_usage, "completion_tokens"),
+            "total_tokens": cls._usage_value(raw_usage, "total_tokens"),
+        }
+        prompt_details = (
+            raw_usage.get("prompt_tokens_details")
+            if isinstance(raw_usage, dict)
+            else getattr(raw_usage, "prompt_tokens_details", None)
+        )
+        completion_details = (
+            raw_usage.get("completion_tokens_details")
+            if isinstance(raw_usage, dict)
+            else getattr(raw_usage, "completion_tokens_details", None)
+        )
+        cached = cls._usage_value(prompt_details, "cached_tokens") if prompt_details else 0
+        reasoning = (
+            cls._usage_value(completion_details, "reasoning_tokens")
+            if completion_details
+            else 0
+        )
+        if cached:
+            usage["cache_read_input_tokens"] = cached
+        if reasoning:
+            usage["reasoning_tokens"] = reasoning
+        return usage
+
+    def _record_vlm_usage(self, usage: dict[str, int], duration_seconds: float) -> None:
+        update_token_usage = getattr(self._vlm, "update_token_usage", None)
+        if not callable(update_token_usage):
+            return
+        try:
+            update_token_usage(
+                model_name=getattr(self._vlm, "model", None) or self._default_model,
+                provider=getattr(self._vlm, "provider", None) or "volcengine",
+                prompt_tokens=usage.get("prompt_tokens", 0),
+                completion_tokens=usage.get("completion_tokens", 0),
+                duration_seconds=duration_seconds,
+                prompt_cached_tokens=usage.get("cache_read_input_tokens", 0),
+                completion_reasoning_tokens=usage.get("reasoning_tokens", 0),
+            )
+        except Exception as e:
+            logger.debug(f"[VLM] Failed to record stream token usage: {e}")
 
     def _convert_response(self, result) -> LLMResponse:
         """Convert VLMResponse (or str) to LLMResponse."""

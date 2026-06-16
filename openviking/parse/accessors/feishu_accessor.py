@@ -52,8 +52,9 @@ class FeishuAccessor(DataAccessor):
 
     Requires:
     - lark-oapi package
-    - FEISHU_APP_ID and FEISHU_APP_SECRET environment variables,
-      or configuration in ov.conf
+    - FEISHU_APP_ID and FEISHU_APP_SECRET environment variables, or
+      configuration in ov.conf, for app-token imports. One-time user-token
+      imports can pass feishu_access_token instead.
     """
 
     PRIORITY = 100  # Higher than Git/HTTP, very specific
@@ -142,6 +143,7 @@ class FeishuAccessor(DataAccessor):
     def __init__(self):
         """Initialize Feishu accessor."""
         self._client = None
+        self._user_token_client = None
         self._config = None
 
     @property
@@ -174,10 +176,14 @@ class FeishuAccessor(DataAccessor):
             LocalResource pointing to the temporary Markdown file
         """
         source_str = str(source)
+        feishu_access_token = kwargs.get("feishu_access_token")
 
         try:
             # Fetch the document and convert to Markdown
-            doc = await self._fetch_document(source_str)
+            doc = await self._fetch_document(
+                source_str,
+                feishu_access_token=feishu_access_token,
+            )
 
             # Create temporary file
             temp_file = tempfile.NamedTemporaryFile(
@@ -209,7 +215,12 @@ class FeishuAccessor(DataAccessor):
             logger.error(f"[FeishuAccessor] Failed to access {source}: {e}", exc_info=True)
             raise
 
-    async def _fetch_document(self, url: str) -> FeishuDocument:
+    async def _fetch_document(
+        self,
+        url: str,
+        *,
+        feishu_access_token: Optional[str] = None,
+    ) -> FeishuDocument:
         """
         Fetch a Feishu document and convert to Markdown.
 
@@ -223,7 +234,11 @@ class FeishuAccessor(DataAccessor):
 
         if doc_type == "wiki":
             # Resolve wiki node to actual document type
-            real_type, real_token, title = await asyncio.to_thread(self._resolve_wiki_node, token)
+            real_type, real_token, title = await asyncio.to_thread(
+                self._resolve_wiki_node,
+                token,
+                feishu_access_token,
+            )
             doc_type, token = real_type, real_token
             meta["wiki_resolved"] = True
 
@@ -235,7 +250,11 @@ class FeishuAccessor(DataAccessor):
             )
 
         # Call the handler (in thread pool since lark-oapi is sync)
-        markdown, doc_title = await asyncio.to_thread(self._parse_docx, token)
+        markdown, doc_title = await asyncio.to_thread(
+            self._parse_docx,
+            token,
+            feishu_access_token,
+        )
 
         if title:
             doc_title = title
@@ -292,9 +311,11 @@ class FeishuAccessor(DataAccessor):
             self._config = get_openviking_config().feishu
         return self._config
 
-    def _get_client(self):
+    def _get_client(self, *, use_user_token: bool = False):
         """Lazy-init lark-oapi client."""
-        if self._client is None:
+        cache_attr = "_user_token_client" if use_user_token else "_client"
+        client = getattr(self, cache_attr)
+        if client is None:
             try:
                 import lark_oapi as lark
             except ImportError:
@@ -305,20 +326,36 @@ class FeishuAccessor(DataAccessor):
             config = self._get_config()
             app_id = config.app_id or os.getenv("FEISHU_APP_ID", "")
             app_secret = config.app_secret or os.getenv("FEISHU_APP_SECRET", "")
-            if not app_id or not app_secret:
+            if (not app_id or not app_secret) and not use_user_token:
                 raise ValueError(
                     "Feishu credentials not configured. Set FEISHU_APP_ID and "
                     "FEISHU_APP_SECRET environment variables, or configure in ov.conf."
                 )
             domain = config.domain or "https://open.feishu.cn"
-            self._client = (
-                lark.Client.builder().app_id(app_id).app_secret(app_secret).domain(domain).build()
-            )
-        return self._client
+            builder = lark.Client.builder().domain(domain)
+            if app_id and app_secret:
+                builder = builder.app_id(app_id).app_secret(app_secret)
+            if use_user_token:
+                builder = builder.enable_set_token(True)
+            client = builder.build()
+            setattr(self, cache_attr, client)
+        return client
+
+    @staticmethod
+    def _user_request_option(feishu_access_token: Optional[str]):
+        if not feishu_access_token:
+            return None
+        from lark_oapi.core.model import RequestOption
+
+        return RequestOption.builder().user_access_token(feishu_access_token).build()
 
     # ========== Wiki Resolution ==========
 
-    def _resolve_wiki_node(self, token: str) -> Tuple[str, str, Optional[str]]:
+    def _resolve_wiki_node(
+        self,
+        token: str,
+        feishu_access_token: Optional[str] = None,
+    ) -> Tuple[str, str, Optional[str]]:
         """
         Resolve wiki token to actual document type, token, and title.
 
@@ -327,9 +364,13 @@ class FeishuAccessor(DataAccessor):
         """
         from lark_oapi.api.wiki.v2 import GetNodeSpaceRequest
 
-        client = self._get_client()
+        client = self._get_client(use_user_token=bool(feishu_access_token))
         request = GetNodeSpaceRequest.builder().token(token).build()
-        response = client.wiki.v2.space.get_node(request)
+        option = self._user_request_option(feishu_access_token)
+        if option is None:
+            response = client.wiki.v2.space.get_node(request)
+        else:
+            response = client.wiki.v2.space.get_node(request, option)
         if not response.success():
             raise RuntimeError(
                 f"Failed to resolve wiki node {token}: code={response.code}, msg={response.msg}"
@@ -346,14 +387,21 @@ class FeishuAccessor(DataAccessor):
 
     # ========== Docx Parsing ==========
 
-    def _parse_docx(self, document_id: str) -> Tuple[str, str]:
+    def _parse_docx(
+        self,
+        document_id: str,
+        feishu_access_token: Optional[str] = None,
+    ) -> Tuple[str, str]:
         """
         Fetch all blocks and convert to Markdown.
 
         Returns:
             (markdown_content, document_title)
         """
-        blocks = self._fetch_all_blocks(document_id)
+        blocks = self._fetch_all_blocks(
+            document_id,
+            feishu_access_token=feishu_access_token,
+        )
         if not blocks:
             return "", "Untitled"
 
@@ -389,11 +437,16 @@ class FeishuAccessor(DataAccessor):
 
         return markdown, doc_title
 
-    def _fetch_all_blocks(self, document_id: str) -> list:
+    def _fetch_all_blocks(
+        self,
+        document_id: str,
+        *,
+        feishu_access_token: Optional[str] = None,
+    ) -> list:
         """Fetch all blocks with pagination. Returns list of SDK block objects."""
         from lark_oapi.api.docx.v1 import ListDocumentBlockRequest
 
-        client = self._get_client()
+        client = self._get_client(use_user_token=bool(feishu_access_token))
         all_blocks = []
         page_token = None
 
@@ -408,7 +461,11 @@ class FeishuAccessor(DataAccessor):
                 builder = builder.page_token(page_token)
 
             request = builder.build()
-            response = client.docx.v1.document_block.list(request)
+            option = self._user_request_option(feishu_access_token)
+            if option is None:
+                response = client.docx.v1.document_block.list(request)
+            else:
+                response = client.docx.v1.document_block.list(request, option)
 
             if not response.success():
                 raise RuntimeError(

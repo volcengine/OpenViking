@@ -193,14 +193,13 @@ class TestMultiSessionIsolation:
         finally:
             api_client.delete_session(sid)
 
-    def test_participant_ids_is_list(self, api_client):
+    def test_participant_ids_are_not_returned(self, api_client):
         r = api_client.create_session()
         sid = r.json()["result"]["session_id"]
         try:
             get_resp = api_client.get_session(sid)
             result = get_resp.json().get("result", {})
-            pids = result.get("participant_ids", None)
-            if pids is not None:
-                assert isinstance(pids, list), f"participant_ids should be list, got {type(pids)}"
+            assert "participant_ids" not in result
+            assert "participant_user_ids" not in result
         finally:
             api_client.delete_session(sid)

@@ -230,6 +230,7 @@ def _serialize_s3_plugin_params(s3_config: Any) -> Dict[str, Any]:
         "normalize_encoding_chars": _get_config_value(
             s3_config, "normalize_encoding_chars", "?#%+@"
         ),
+        "auto_detect_content_type": _get_config_value(s3_config, "auto_detect_content_type", False),
     }
 
 

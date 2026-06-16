@@ -20,7 +20,7 @@ class OVCLIUploadConfig(BaseModel):
     include: Optional[str] = None
     exclude: Optional[str] = None
 
-    model_config = {"extra": "ignore"}
+    model_config = {"extra": "forbid"}
 
 
 class OVCLIConfig(BaseModel):
@@ -30,21 +30,31 @@ class OVCLIConfig(BaseModel):
     api_key: Optional[str] = None
     account: Optional[str] = None
     user: Optional[str] = None
+    actor_peer_id: Optional[str] = None
+    agent_id: Optional[str] = None
     timeout: float = 60.0
     profile: bool = False
     upload: Optional[OVCLIUploadConfig] = None
     extra_headers: Optional[Dict[str, str]] = None
 
-    model_config = {"extra": "ignore"}
+    model_config = {"extra": "forbid"}
 
     @model_validator(mode="before")
     @classmethod
     def handle_extra_headers_aliases(cls, data: Any) -> Any:
         if isinstance(data, dict):
+            data = dict(data)
             # 支持 extra_header 作为 extra_headers 的别名
-            if "extra_header" in data and "extra_headers" not in data:
-                data["extra_headers"] = data["extra_header"]
+            extra_header = data.pop("extra_header", None)
+            if extra_header is not None and "extra_headers" not in data:
+                data["extra_headers"] = extra_header
         return data
+
+    @model_validator(mode="after")
+    def reject_mixed_actor_and_agent_identity(self) -> "OVCLIConfig":
+        if self.actor_peer_id is not None and self.agent_id is not None:
+            raise ValueError("actor_peer_id cannot be used with legacy agent_id")
+        return self
 
 
 def load_ovcli_config(config_path: Optional[str] = None) -> Optional[OVCLIConfig]:

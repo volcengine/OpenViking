@@ -133,6 +133,12 @@ class TestWatchTask:
             task_id="test-id",
             path="/test/path",
             to_uri="viking://test",
+            auth_state={
+                "provider": "feishu",
+                "access_token": "u-test",
+                "refresh_token": "r-test",
+                "expires_at": None,
+            },
             created_at=now,
         )
 
@@ -143,6 +149,7 @@ class TestWatchTask:
         assert data["to_uri"] == "viking://test"
         assert data["created_at"] == now.isoformat()
         assert data["is_active"] is True
+        assert "auth_state" not in data
 
     def test_from_dict(self):
         """Test creating task from dictionary."""
@@ -221,6 +228,32 @@ class TestWatchManager:
         assert task.watch_interval == 30.0
         assert task.is_active is True
         assert task.next_execution_time is not None
+
+    @pytest.mark.asyncio
+    async def test_auth_state_persisted_and_hidden_from_public_dict(
+        self, mock_viking_fs: MockVikingFS
+    ):
+        manager1 = WatchManager(viking_fs=mock_viking_fs)
+        await manager1.initialize()
+        task = await manager1.create_task(
+            path="https://example.feishu.cn/docx/doc_token",
+            to_uri="viking://resources/feishu",
+            watch_interval=30.0,
+            auth_state={
+                "provider": "feishu",
+                "access_token": "u-test",
+                "refresh_token": "r-test",
+                "expires_at": None,
+            },
+        )
+
+        manager2 = WatchManager(viking_fs=mock_viking_fs)
+        await manager2.initialize()
+        loaded = await manager2.get_task(task.task_id)
+
+        assert loaded is not None
+        assert loaded.auth_state == task.auth_state
+        assert "auth_state" not in loaded.to_dict()
 
     @pytest.mark.asyncio
     async def test_create_task_without_path_raises(self, watch_manager: WatchManager):
