@@ -153,6 +153,29 @@ class TestGetReadScope:
         assert "viking://user/support_bot/peers/__self/memories" not in dirs
         assert "viking://user/support_bot/peers/web-visitor-alice/memories" in dirs
 
+    def test_render_schema_directories_peer_routing_false_uses_self_only(self):
+        from openviking.session.memory.dataclass import MemoryTypeSchema
+
+        ctx = create_ctx(user_id="support_bot")
+        messages = [create_message("user", peer_id="web-visitor-alice")]
+        extract_ctx = create_mock_extract_context(messages)
+        handler = MemoryIsolationHandler(
+            ctx,
+            extract_ctx,
+            allow_self=True,
+            allowed_peer_ids={"web-visitor-alice"},
+        )
+        schema = MemoryTypeSchema(
+            memory_type="cases",
+            filename_template="{{ case_name }}.md",
+            directory="viking://user/{{ user_space }}/memories/cases",
+            peer_routing=False,
+        )
+
+        dirs = handler.render_schema_directories(schema)
+
+        assert dirs == ["viking://user/support_bot/memories/cases"]
+
 
 class TestFillIdentityFields:
     """Tests for fill_identity_fields."""
@@ -585,6 +608,87 @@ class TestCalculateMemoryUris:
         ]
         assert operation.memory_fields["user_id"] == "support_bot"
         assert operation.memory_fields["peer_id"] == "web-visitor-bob"
+
+
+    @patch("openviking.session.memory.memory_isolation_handler.generate_uri")
+    def test_peer_routing_false_forces_self_scope_and_strips_peer_id(self, mock_generate_uri):
+        mock_generate_uri.side_effect = lambda **kwargs: (
+            f"viking://user/{kwargs.get('user_space')}/memories/cases/demo"
+        )
+
+        ctx = create_ctx(user_id="support_bot")
+        messages = [create_message("user", peer_id="web-visitor-alice")]
+        extract_ctx = create_mock_extract_context(messages)
+        handler = MemoryIsolationHandler(
+            ctx,
+            extract_ctx,
+            allow_self=True,
+            allowed_peer_ids={"web-visitor-alice"},
+        )
+
+        from openviking.session.memory.dataclass import MemoryTypeSchema, ResolvedOperation
+
+        schema = MemoryTypeSchema(
+            memory_type="cases",
+            filename_template="demo.md",
+            directory="viking://user/{user_space}/memories/cases",
+            peer_routing=False,
+        )
+        operation = ResolvedOperation(
+            old_memory_file_content=None,
+            memory_fields={"case_name": "demo", "peer_id": "web-visitor-alice"},
+            memory_type="cases",
+            uris=[],
+        )
+
+        uris = handler.calculate_memory_uris(schema, operation, extract_ctx)
+
+        assert uris == ["viking://user/support_bot/memories/cases/demo"]
+        assert operation.memory_fields["user_id"] == "support_bot"
+        assert "peer_id" not in operation.memory_fields
+
+    @patch("openviking.session.memory.memory_isolation_handler.generate_uri")
+    def test_peer_routing_false_ignores_ranges_peer_targets(self, mock_generate_uri):
+        mock_generate_uri.side_effect = lambda **kwargs: (
+            f"viking://user/{kwargs.get('user_space')}/memories/cases/demo"
+        )
+
+        ctx = create_ctx(user_id="support_bot")
+        messages = [
+            create_message("user", "self turn"),
+            create_message("user", "peer turn", peer_id="web-visitor-alice"),
+        ]
+        extract_ctx = create_mock_extract_context(messages)
+        mock_range = MagicMock()
+        mock_range.elements = [messages]
+        extract_ctx.read_message_ranges.return_value = mock_range
+        handler = MemoryIsolationHandler(
+            ctx,
+            extract_ctx,
+            allow_self=True,
+            allowed_peer_ids={"web-visitor-alice"},
+        )
+
+        from openviking.session.memory.dataclass import MemoryTypeSchema, ResolvedOperation
+
+        schema = MemoryTypeSchema(
+            memory_type="cases",
+            filename_template="demo.md",
+            directory="viking://user/{user_space}/memories/cases",
+            peer_routing=False,
+        )
+        operation = ResolvedOperation(
+            old_memory_file_content=None,
+            memory_fields={"case_name": "demo", "ranges": "0-1"},
+            memory_type="cases",
+            uris=[],
+        )
+
+        uris = handler.calculate_memory_uris(schema, operation, extract_ctx)
+
+        assert uris == ["viking://user/support_bot/memories/cases/demo"]
+        assert operation.memory_fields["user_id"] == "support_bot"
+        assert "peer_id" not in operation.memory_fields
 
     @patch("openviking.session.memory.memory_isolation_handler.generate_uri")
     def test_calculate_memory_uris_invalid_peer_id_falls_back_to_first_peer(

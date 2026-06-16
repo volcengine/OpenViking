@@ -103,7 +103,7 @@ class SchemaModelGenerator:
         # Skip if schema has "ranges" field (like events) - these are message-based and
         # their self/peer targets are derived from message ranges instead of explicit routing fields.
         has_ranges = any(field.name == "ranges" for field in memory_type.fields)
-        if has_peer_scope and not has_ranges:
+        if has_peer_scope and memory_type.peer_routing and not has_ranges:
             peer_values = ", ".join(role_scope.peer_ids)
             field_definitions["peer_id"] = (
                 Optional[str],

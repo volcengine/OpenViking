@@ -14,7 +14,7 @@ directory: "viking://user/{{ user_space }}/memories/trajectories"
 filename_template: "{{ trajectory_name }}_{{ extract_context.get_session_timestamp() }}.md"
 enabled: true
 operation_mode: "add_only"
-agent_only: true
+stage: agent
 
 fields:
   - name: trajectory_name

@@ -416,11 +416,11 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         pre_fetch_messages = []
         pre_fetch_messages.append(self._build_conversation_message())
 
-        # 触发 registry 加载，过滤掉 agent_only 的 schema（trajectory/experience 由执行提取处理）
+        # 触发 registry 加载，过滤掉 agent stage 的 schema（trajectory/experience 由执行提取处理）
         schemas = [
             s
             for s in self._get_registry().list_all(include_disabled=False)
-            if not getattr(s, "agent_only", False)
+            if getattr(s, "stage", "user") == "user"
         ]
         if self._isolation_handler:
             schemas = [s for s in schemas if self._isolation_handler.allows_schema(s)]
@@ -548,7 +548,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         schemas = [
             s
             for s in self._get_registry().list_all(include_disabled=False)
-            if not getattr(s, "agent_only", False)
+            if getattr(s, "stage", "user") == "user"
         ]
         if self._isolation_handler:
             schemas = [s for s in schemas if self._isolation_handler.allows_schema(s)]

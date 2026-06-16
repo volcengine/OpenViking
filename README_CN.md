@@ -299,6 +299,8 @@ openviking-server doctor
 
 > **Memory 配置**：OpenViking 始终使用 v3 记忆抽取链路。旧的 `memory.version` 配置项已废弃且会被忽略；已有配置中保留该字段仍可正常加载，但不会改变行为。
 
+> **Memory schema 路由**：Memory schema YAML 默认 `stage: "user"` 且 `peer_routing: true`。trajectories/experiences 这类执行派生 schema 使用 `stage: "agent"`；如果某类记忆必须保留在当前用户目录而不是 peer 目录，设置 `peer_routing: false`。
+
 ##### 服务器配置示例
 
 👇 展开查看您的模型服务的配置示例：

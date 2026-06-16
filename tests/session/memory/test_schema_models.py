@@ -83,6 +83,32 @@ class TestSchemaModelGenerator:
         """Create a registry with real schemas."""
         return create_default_registry()
 
+
+    def test_peer_routing_false_omits_peer_id_field(self):
+        memory_type = MemoryTypeSchema(
+            memory_type="cases",
+            description="Case memory",
+            fields=[
+                MemoryField(
+                    name="case_name",
+                    field_type=FieldType.STRING,
+                    description="Case name",
+                    merge_op=MergeOp.IMMUTABLE,
+                )
+            ],
+            filename_template="{{ case_name }}.md",
+            directory="viking://user/{{ user_space }}/memories/cases",
+            peer_routing=False,
+        )
+        role_scope = type("RoleScope", (), {"peer_ids": ["web-visitor-alice"]})()
+
+        model = SchemaModelGenerator([memory_type]).create_flat_data_model(
+            memory_type,
+            role_scope=role_scope,
+        )
+
+        assert "peer_id" not in model.model_fields
+
     def test_render_description_template_with_language(self):
         memory_type = MemoryTypeSchema(
             memory_type="templated",

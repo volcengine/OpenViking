@@ -343,6 +343,8 @@ If you prefer manual configuration, create `~/.openviking/ov.conf`, remove the c
 
 > **Memory config**: OpenViking always uses the v3 memory extraction pipeline. The legacy `memory.version` setting is deprecated and ignored; existing configs that set it still load without changing behavior.
 
+> **Memory schema routing**: Memory schema YAML defaults to `stage: "user"` and `peer_routing: true`. Use `stage: "agent"` for execution-derived schemas such as trajectories/experiences, and set `peer_routing: false` when a schema must stay in the current user's memory directory instead of peer directories.
+
 ##### Server Configuration Examples
 
 👇 Expand to see the configuration example for your model service:

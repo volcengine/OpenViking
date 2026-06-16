@@ -7,7 +7,7 @@ directory: "viking://user/{{ user_space }}/memories/experiences"
 filename_template: "{{ experience_name }}.md"
 enabled: true
 operation_mode: "upsert"
-agent_only: true
+stage: agent
 
 fields:
   - name: experience_name

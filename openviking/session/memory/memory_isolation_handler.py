@@ -105,11 +105,20 @@ class MemoryIsolationHandler:
             peer_ids=sorted(peer_ids),
         )
 
-    def fill_identity_fields(self, item_dict: Dict[str, Any], role_scope: RoleScope) -> None:
+    def fill_identity_fields(
+        self,
+        item_dict: Dict[str, Any],
+        role_scope: RoleScope,
+        memory_type_schema: Optional[MemoryTypeSchema] = None,
+    ) -> None:
         del role_scope
         if self.ctx and self.ctx.user and self.ctx.user.user_id:
             item_dict["user_id"] = self.ctx.user.user_id
         item_dict.pop("user_ids", None)
+
+        if memory_type_schema is not None and not memory_type_schema.peer_routing:
+            item_dict.pop("peer_id", None)
+            return
 
         peer_id = safe_peer_id(item_dict.get("peer_id"))
         if peer_id and peer_id != _SELF_PEER_ID:
@@ -125,6 +134,9 @@ class MemoryIsolationHandler:
             return False
         return True
 
+    def _schema_peer_routing_enabled(self, memory_type_schema: MemoryTypeSchema) -> bool:
+        return bool(getattr(memory_type_schema, "peer_routing", True))
+
     def _can_write_peer(self, peer_id: str) -> bool:
         return self.allow_peer and peer_id in self.allowed_peer_ids
 
@@ -134,7 +146,7 @@ class MemoryIsolationHandler:
         user_spaces: List[str] = []
         if self.allow_self:
             user_spaces.append(user_space)
-        if self.allow_peer:
+        if self.allow_peer and self._schema_peer_routing_enabled(memory_type_schema):
             for peer_id in sorted(self.allowed_peer_ids):
                 user_spaces.append(peer_user_space(user_space, peer_id))
 
@@ -196,7 +208,10 @@ class MemoryIsolationHandler:
 
         target_ids: List[str] = []
         has_ranges = operation.memory_fields.get("ranges") is not None
-        if operation.memory_fields.get("ranges") is not None:
+        if not self._schema_peer_routing_enabled(memory_type_schema):
+            operation.memory_fields.pop("peer_id", None)
+            target_ids = [_SELF_PEER_ID] if self.allow_self else []
+        elif operation.memory_fields.get("ranges") is not None:
             target_ids = self._range_targets(
                 operation.memory_fields.get("ranges"),
             )

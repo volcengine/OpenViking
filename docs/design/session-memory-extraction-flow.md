@@ -24,9 +24,15 @@ is set, extraction is limited to those names for both self and peer writes.
 
 | Group | Types | Target |
 | --- | --- | --- |
-| Long-term memory extraction | Enabled registry schemas without `agent_only` | Self and peer |
+| Long-term memory extraction | Enabled registry schemas with `stage: user` | Self and peer |
 | Execution memory extraction | Execution-derived schemas, currently `trajectories`, `experiences` | Self only |
 | Session skills | `SESSION_SKILL_MEMORY_TYPE` output | Self only |
+
+Memory schemas default to `stage: user` and `peer_routing: true`. Set
+`stage: agent` for schemas that are extracted only by the execution-memory
+providers. Set `peer_routing: false` for user-stage schemas that should ignore
+`peer_id` and `ranges` peer targets and remain under the current user space
+(for example `cases`).
 
 Trajectory/experience extraction is controlled by `memory_types`: omitted or
 `null` allows both, while an explicit list must include those names. Session
@@ -69,6 +75,7 @@ independently:
 | Unsafe `peer_id` | Skip |
 | Safe but unallowed `peer_id` | Skip |
 | `ranges` present | Read the message range; no-peer messages route to self, allowed peer messages route to peer |
+| Schema has `peer_routing: false` | Ignore `peer_id` and `ranges` peer targets; write self if self memory is enabled |
 | Only disabled targets found | Skip |
 
 The router does not rewrite message roles. A `role=user` message remains user

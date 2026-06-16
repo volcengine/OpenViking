@@ -89,6 +89,7 @@ def _registry() -> MemoryTypeRegistry:
             directory="viking://user/{{ user_space }}/memories/cases",
             filename_template="{{ case_name }}.md",
             operation_mode="add_only",
+            peer_routing=False,
             fields=[
                 MemoryField(
                     name="case_name",
@@ -442,7 +443,7 @@ async def test_streaming_memory_updater_batches_non_append_only_submits(monkeypa
 
 def test_split_request_by_merge_group_groups_by_peer_and_memory_type():
     self_op = _note_op("self_note")
-    peer_op = _peer_note_op("peer_note", "web:visitor:alice")
+    peer_op = _peer_note_op("peer_note", "web-visitor-alice")
     case_op = _case_op("case_note")
     link = StoredLink(
         from_uri=self_op.uris[0],
@@ -465,7 +466,7 @@ def test_split_request_by_merge_group_groups_by_peer_and_memory_type():
 
     assert [key for key, _ in grouped] == [
         MemoryMergeGroupKey(peer_id=None, memory_type="notes"),
-        MemoryMergeGroupKey(peer_id="web:visitor:alice", memory_type="notes"),
+        MemoryMergeGroupKey(peer_id="web-visitor-alice", memory_type="notes"),
         MemoryMergeGroupKey(peer_id=None, memory_type="cases"),
     ]
     assert [len(group_request.operations.upsert_operations) for _, group_request in grouped] == [
@@ -549,6 +550,32 @@ def test_enforce_merge_group_self_scope_removes_peer_id():
     assert op.uris == ["viking://user/u/memories/notes/self_note.md"]
 
 
+def test_enforce_merge_group_peer_routing_false_keeps_self_scope():
+    op = ResolvedOperation(
+        old_memory_file_content=None,
+        memory_fields={
+            "case_name": "case_note",
+            "task_signature": "case signature",
+            "input": "{}",
+            "rubric": "{}",
+            "peer_id": "conv-42",
+        },
+        memory_type="cases",
+        uris=["viking://user/u/peers/conv-42/memories/cases/case_note.md"],
+    )
+
+    enforce_merge_group_peer_id(
+        [op],
+        peer_id="conv-42",
+        memory_type="cases",
+        registry=_registry(),
+        ctx=_ctx(),
+    )
+
+    assert "peer_id" not in op.memory_fields
+    assert op.uris == ["viking://user/u/memories/cases/case_note.md"]
+
+
 @pytest.mark.asyncio
 async def test_streaming_memory_updater_batches_per_merge_group(monkeypatch):
     fs = InMemoryVikingFS({})
@@ -572,7 +599,7 @@ async def test_streaming_memory_updater_batches_per_merge_group(monkeypatch):
     )
     note_a = _note_op("note_group_a")
     note_b = _note_op("note_group_b")
-    peer_note = _peer_note_op("note_peer", "web:visitor:alice")
+    peer_note = _peer_note_op("note_peer", "web-visitor-alice")
 
     result1, result2, peer_result = await asyncio.gather(
         updater.submit(
@@ -619,7 +646,7 @@ async def test_streaming_memory_updater_batches_per_merge_group(monkeypatch):
     assert peer_result is not result1
     assert peer_result.request_count == 1
     assert peer_result.metadata["flush_reason"] == "time"
-    assert peer_result.metadata["merge_group"] == "peer=web:visitor:alice,memory_type=notes"
+    assert peer_result.metadata["merge_group"] == "peer=web-visitor-alice,memory_type=notes"
     assert peer_result.apply_result.written_uris == [peer_note.uris[0]]
 
 
@@ -645,7 +672,7 @@ async def test_streaming_memory_updater_submit_waits_for_all_merge_groups(monkey
         ),
     )
     self_op = _note_op("multi_self")
-    peer_op = _peer_note_op("multi_peer", "web:visitor:alice")
+    peer_op = _peer_note_op("multi_peer", "web-visitor-alice")
 
     result = await updater.submit(
         MemoryUpdateRequest(
@@ -688,7 +715,7 @@ async def test_streaming_memory_updater_applies_cross_group_links_after_all_grou
         ),
     )
     self_op = _note_op("linked_self")
-    peer_op = _peer_note_op("linked_peer", "web:visitor:alice")
+    peer_op = _peer_note_op("linked_peer", "web-visitor-alice")
     link = StoredLink(
         from_uri=self_op.uris[0],
         to_uri=peer_op.uris[0],

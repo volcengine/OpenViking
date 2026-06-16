@@ -200,9 +200,13 @@ class MemoryTypeSchema(BaseModel):
     operation_mode: str = Field(
         "upsert", description="Operation mode: 'upsert' (default), 'add_only', or 'update_only'"
     )
-    agent_only: bool = Field(
-        False,
-        description="If true, only used by execution-derived extraction, not long-term memory",
+    stage: str = Field(
+        "user",
+        description="Extraction stage: 'user' for long-term user memory, 'agent' for execution-derived memory.",
+    )
+    peer_routing: bool = Field(
+        True,
+        description="Whether peer_id/ranges may route this memory type into peer directories.",
     )
     overview_template: Optional[str] = Field(
         None, description="Overview template for auto-generating .overview.md files"

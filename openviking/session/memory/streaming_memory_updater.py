@@ -1119,11 +1119,12 @@ def enforce_merge_group_peer_id(
     routing; all merged upserts must therefore be rewritten to that scope.
     """
     schema = registry.get(memory_type)
+    effective_peer_id = peer_id if getattr(schema, "peer_routing", True) else None
     for op in operations or []:
         if op.memory_type != memory_type:
             continue
-        if peer_id:
-            op.memory_fields["peer_id"] = peer_id
+        if effective_peer_id:
+            op.memory_fields["peer_id"] = effective_peer_id
         else:
             op.memory_fields.pop("peer_id", None)
         if schema is not None:
@@ -1131,7 +1132,7 @@ def enforce_merge_group_peer_id(
                 op,
                 schema=schema,
                 ctx=ctx,
-                peer_id=peer_id,
+                peer_id=effective_peer_id,
             )
 
 
