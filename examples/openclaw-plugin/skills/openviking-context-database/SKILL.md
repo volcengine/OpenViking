@@ -2,15 +2,16 @@
 name: openviking-context-database
 description: >
   Use OpenViking from OpenClaw through @openviking/openclaw-plugin: long-term memory,
-  session archives, resource and skill import, semantic recall, recall trace debugging,
+  session archives, resource and Agent Skill import, semantic recall, recall trace debugging,
   and externalized tool-result recovery. Prefer this skill when the user wants to use, query,
   debug, or operate OpenViking context from an OpenClaw agent. For first-time plugin installation,
   use the install-openviking-memory skill instead.
-version: 2026.6.12
+version: 2026.6.5
 metadata:
   openclaw:
     requires:
       plugin: "@openviking/openclaw-plugin"
+  emoji: "🦣"
 tags:
   - openviking
   - context-engine
@@ -28,9 +29,9 @@ Use this skill after `@openviking/openclaw-plugin` is installed and configured. 
 
 - The plugin is **remote-only**. It talks to an existing OpenViking server through HTTP and does not start or manage `openviking-server`.
 - Do not invent OpenViking REST endpoints. Use the registered OpenClaw tools and commands described below.
-- The agent-visible `add_resource` tool is disabled by default (`enableAddResourceTool=false`). Do not use `add_resource` during search, retrieval, URI reading, or search-result optimization. Use `ov_search`, `ov_list`, `ov_read`, and `ov_multi_read` in those flows.
+- The agent-visible `add_resource` tool is disabled by default (`enableAddResourceTool=false`). Do not use `add_resource` during search, retrieval, URI reading, or search-result optimization. Use `ov_search` and `ov_read` in those flows.
 - Use manual `/add-resource`, or `add_resource` only when it is explicitly enabled and the user explicitly asks to import, add, upload, save, or index a resource.
-- Use `add_skill` only when the user explicitly asks to import, add, install, or register a skill into OpenViking.
+- Use `add_skill` only when the user explicitly asks to import, add, install, or register an Agent Skill into OpenViking.
 - For local files and directories, pass the local path to the plugin tool. The plugin uploads them through `/api/v1/resources/temp_upload`; do not send raw local filesystem paths to a remote server yourself.
 - Never log or echo API keys. The plugin sends API keys as `X-API-Key` / setup probe headers and masks them in setup output.
 
@@ -63,15 +64,15 @@ Core config lives under `plugins.entries.openviking.config`:
 |---|---:|---|
 | `baseUrl` | `http://127.0.0.1:1933` | OpenViking HTTP endpoint. Can also come from `OPENVIKING_BASE_URL` / `OPENVIKING_URL`. |
 | `apiKey` | empty | Optional API key. Can also come from `OPENVIKING_API_KEY`. |
-| `peer_role` | `assistant` | Controls which speaker identity is sent as OpenViking `peer_id`: `none`, `assistant`, or `person`. |
-| `peer_prefix` | empty | Optional prefix for assistant `peer_id` values when `peer_role=assistant`; final value is `<prefix>_<OpenClaw ctx.agentId>`, sanitized. |
+| `peer_role` | `assistant` | Peer identity mode: `none`, `assistant`, or `person`. Session messages use body `peer_id`; data-plane recall/search uses `X-OpenViking-Actor-Peer`. |
+| `peer_prefix` | empty | Optional prefix for assistant `peer_id` / actor peer values when `peer_role=assistant`. |
 | `accountId` / `userId` | empty | Advanced tenant identity headers for root-key or trusted deployments. |
 | `targetUri` | `viking://user/memories` | Default search scope for legacy targeted memory search. |
 | `autoCapture` | `true` | Append sanitized turn text to OpenViking sessions. |
 | `captureMode` | `semantic` | `semantic` or `keyword`; affects server-side extraction filtering. |
 | `captureMaxLength` | `24000` | Max sanitized text length per captured turn. |
 | `autoRecall` | `true` | Run recall before replies and inject relevant context. |
-| `recallTargetTypes` | `user,agent` | Default target types when `targetUri` is omitted. Allowed: `resource`, `user`, `agent`; `user` and `agent` are compatibility values that merge into a `context_type=memory` search under the current actor peer view. Use archive tools for session history. |
+| `recallTargetTypes` | `user,agent` | Default target types when `targetUri` is omitted. Allowed: `resource`, `user`, `agent`. |
 | `recallResources` | `false` | Compatibility shortcut that appends `resource` to default recall targets when `recallTargetTypes` is unset. |
 | `recallLimit` | `6` | Max selected recall items. |
 | `recallScoreThreshold` | `0.15` | Min score after post-processing. |
@@ -94,7 +95,7 @@ openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --json
 Useful variants:
 
 ```bash
-openclaw openviking setup --base-url <URL> --api-key <KEY> --peer-role assistant --peer-prefix openclaw-prod --json
+openclaw openviking setup --base-url <URL> --api-key <KEY> --peer-prefix openclaw-prod --json
 openclaw openviking setup --base-url <URL> --api-key <ROOT_KEY> --account-id <ACCOUNT_ID> --user-id <USER_ID> --json
 openclaw openviking setup --base-url <URL> --api-key <KEY> --recall-target-types resource --json
 openclaw openviking setup --base-url <URL> --api-key <KEY> --allow-offline --json
@@ -110,11 +111,9 @@ openclaw openviking setup --base-url <URL> --api-key <KEY> --force-slot --json
 | “Forget X” | `memory_forget` |
 | Summary lacks an exact command/path/snippet from old chat | `ov_archive_search`, then `ov_archive_expand` if needed |
 | Import docs, PDFs, local dirs, URLs, Git repos, media attachments | manual `/add-resource`; `add_resource` only if `enableAddResourceTool=true` |
-| Import/register a skill | `add_skill` |
+| Import/register an Agent Skill | `add_skill` |
 | Search imported resources or skills | `ov_search` |
-| Inspect folders or sibling chunks from a search hit | `ov_list` |
 | Read an exact `viking://...` hit from `ov_search` or recall trace | `ov_read` |
-| Read several exact `viking://...` hits together | `ov_multi_read` |
 | Explain why recall/search returned something | `ov_recall_trace` |
 | A previous tool result shows only a preview/ref | `openviking_tool_result_list`, `openviking_tool_result_search`, `openviking_tool_result_read` |
 
@@ -122,7 +121,7 @@ openclaw openviking setup --base-url <URL> --api-key <KEY> --force-slot --json
 
 ### `memory_recall`
 
-Semantic search over memories/resources. Session history is not a semantic recall target; use `ov_archive_search` and `ov_archive_expand` for archived conversation history.
+Semantic search over memories/resources. Use archive tools for session history.
 
 | Parameter | Required | Description |
 |---|---|---|
@@ -132,7 +131,7 @@ Semantic search over memories/resources. Session history is not a semantic recal
 | `targetUri` | No | Exact search URI. If set, only this URI is searched. |
 | `resourceTypes` | No | Array of `resource`, `user`, `agent`; used only when `targetUri` is omitted. |
 
-Notes: when `targetUri` is omitted, the plugin resolves a search plan from `resourceTypes` or configured `recallTargetTypes`, uses `context_type` filters for memory/resource searches, fetches more candidates than requested, deduplicates, filters leaf memories, reranks, and respects `recallMaxInjectedChars`.
+Notes: when `targetUri` is omitted, the plugin resolves a search plan from `resourceTypes` or configured `recallTargetTypes`, fetches more candidates than requested, deduplicates, filters leaf memories, reranks, and respects `recallMaxInjectedChars`.
 
 ### `memory_store`
 
@@ -197,7 +196,7 @@ The current OpenClaw tool exposes the parameters above. The underlying client al
 
 ### `add_skill`
 
-Import skills into `viking://user/skills/...`.
+Import Agent Skills into `viking://user/skills/...`.
 
 | Parameter | Required | Description |
 |---|---|---|
@@ -206,30 +205,19 @@ Import skills into `viking://user/skills/...`.
 | `wait` | No | Wait for processing completion. |
 | `timeout` | No | Timeout in seconds when `wait=true`. |
 
-Skill best practice: a skill should have precise frontmatter (`name`, trigger-oriented `description`, useful `tags`), clear scope boundaries, explicit “when not to use” guidance if needed, and executable steps with concrete parameters. Keep secrets out of skill content.
+Agent Skill best practice: a skill should have precise frontmatter (`name`, trigger-oriented `description`, useful `tags`), clear scope boundaries, explicit “when not to use” guidance if needed, and executable steps with concrete parameters. Keep secrets out of skill content.
 
 ### `ov_search`
 
 | Parameter | Required | Description |
 |---|---|---|
 | `query` | Yes | Search query. |
-| `uri` | No | Search URI. Defaults to resources plus user skills. |
+| `uri` | No | Search URI. Defaults to resources plus agent skills. |
 | `limit` | No | Max results per scope, default `10`. |
 
 Use after importing resources/skills, or when the user asks to search OpenViking-managed knowledge.
 
 Important: `ov_search` returns OpenViking virtual URIs such as `viking://resources/project-docs/api.md#chunk-3`. These are not local file paths. Do not use filesystem read tools for them; call `ov_read` with the exact URI when full content is needed.
-
-### `ov_list`
-
-List entries under an OpenViking virtual URI. Use it after `ov_search` when a hit is part of a split document or when you need sibling chunks, overview files, or a quick directory inspection before reading exact content.
-
-| Parameter | Required | Description |
-|---|---|---|
-| `uri` | Yes | Exact OpenViking URI to list, usually a parent under `viking://resources` or `viking://user/skills`. |
-| `recursive` | No | Recursively list descendants. Default `false`. |
-| `simple` | No | Request simplified listing output. Default `false`. |
-| `limit` | No | Node limit. Default `100`. |
 
 ### `ov_read`
 
@@ -239,14 +227,6 @@ Read full content for one exact OpenViking virtual URI through `/api/v1/content/
 |---|---|---|
 | `uri` | Yes | Exact `viking://...` URI returned by `ov_search` or recall trace results. `openviking://...` aliases and local file paths are refused. |
 
-### `ov_multi_read`
-
-Read full content for several exact OpenViking virtual URIs. Use it when `ov_search` or `ov_list` returns several sibling chunks that must be read together before answering.
-
-| Parameter | Required | Description |
-|---|---|---|
-| `uris` | Yes | Array of exact `viking://...` URIs. |
-
 ### `ov_recall_trace`
 
 | Parameter | Required | Description |
@@ -255,7 +235,7 @@ Read full content for several exact OpenViking virtual URIs. Use it when `ov_sea
 | `traceId` | No | Exact trace ID. |
 | `sessionId` / `sessionKey` / `ovSessionId` | No | Filter by OpenClaw/OpenViking session. |
 | `source` | No | `auto_recall`, `memory_recall`, `ov_search`, or `ov_archive_search`. |
-| `resourceTypes` | No | Array/string containing `resource`, `user`, or `agent`. Archive traces may still display `session` as a recorded trace category. |
+| `resourceTypes` | No | Array/string containing `resource`, `user`, `agent`. |
 | `since` / `until` | No | Unix timestamp bounds in milliseconds. |
 | `includeContent` | No | Read selected/displayed URI content previews on demand. |
 | `limit` | No | Maximum traces to return, default `20`. |
@@ -264,7 +244,7 @@ Trace records exist only when `traceRecall=true`; persisted lookup requires `tra
 
 ### Externalized tool-result tools
 
-Use when a preview contains `viking://user/sessions/<session_id>/tool-results/<tool_result_id>`.
+Use when a preview contains `viking://session/<session_id>/tool-results/<tool_result_id>`.
 
 | Tool | Parameters |
 |---|---|
