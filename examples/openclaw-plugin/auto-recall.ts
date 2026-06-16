@@ -1,5 +1,6 @@
 import type { FindResult, FindResultItem, OpenVikingClient } from "./client.js";
 import type { ParsedMemoryOpenVikingConfig } from "./config.js";
+import type { EffectiveQueryConfig } from "./query-config.js";
 import {
   pickMemoriesForInjection,
   postProcessMemories,
@@ -523,6 +524,7 @@ export async function buildLongTermMemoryRecallContext(params: {
   ovSessionId?: string;
   rawUserTextPreview?: string;
   queryTruncated?: boolean;
+  queryConfig?: EffectiveQueryConfig;
 }): Promise<{ section?: string; memoryCount: number; estimatedTokens: number }> {
   const { cfg, client, agentId, peerId, queryText, logger, verbose } = params;
 
@@ -538,8 +540,13 @@ export async function buildLongTermMemoryRecallContext(params: {
 
   return withTimeout(
     (async () => {
-      const candidateLimit = Math.max(cfg.recallLimit * 4, 20);
-      const searchPlan = resolveRecallSearchPlan(cfg.recallTargetTypes, {
+      const queryConfig = params.queryConfig;
+      const candidateLimit = queryConfig?.candidateLimit ?? Math.max(cfg.recallLimit * 4, 20);
+      const scoreThreshold = queryConfig?.scoreThreshold ?? cfg.recallScoreThreshold;
+      const recallLimit = queryConfig?.recallLimit ?? cfg.recallLimit;
+      const maxInjectedChars = queryConfig?.maxInjectedChars ?? cfg.recallMaxInjectedChars;
+      const recallPreferAbstract = queryConfig?.recallPreferAbstract ?? cfg.recallPreferAbstract;
+      const searchPlan = resolveRecallSearchPlan(queryConfig?.resourceTypes ?? cfg.recallTargetTypes, {
         ovSessionId: params.ovSessionId,
         agentId,
       });
@@ -624,9 +631,13 @@ export async function buildLongTermMemoryRecallContext(params: {
       const leafOnly = uniqueMemories.filter((m) => (!m.level || m.level === 2) && !isExperienceMemory(m));
       const processed = postProcessMemories(leafOnly, {
         limit: candidateLimit,
-        scoreThreshold: cfg.recallScoreThreshold,
+        scoreThreshold,
       });
-      const memories = pickMemoriesForInjection(processed, cfg.recallLimit, queryText);
+      const memories = pickMemoriesForInjection(processed, recallLimit, queryText, scoreThreshold, queryConfig ? {
+        weights: queryConfig.rankingWeights,
+        categoryWeights: queryConfig.categoryWeights,
+        resourceTypeWeights: queryConfig.resourceTypeWeights,
+      } : undefined);
       const recordTrace = (injectedMemories: FindResultItem[], injectedCount: number, estimatedTokens?: number) => {
         params.traceRecorder?.record({
           schemaVersion: "1.0",
@@ -671,15 +682,15 @@ export async function buildLongTermMemoryRecallContext(params: {
         memories,
         (uri) => client.read(uri, peerId),
         {
-          recallPreferAbstract: cfg.recallPreferAbstract,
-          recallMaxInjectedChars: cfg.recallMaxInjectedChars,
+          recallPreferAbstract,
+          recallMaxInjectedChars: maxInjectedChars,
           includeUri: true,
         },
       );
 
       if (memoryLines.length === 0) {
         verbose?.(
-          `openviking: skipping auto-recall injection; no complete memories fit maxInjectedChars=${cfg.recallMaxInjectedChars}`,
+          `openviking: skipping auto-recall injection; no complete memories fit maxInjectedChars=${maxInjectedChars}`,
         );
         recordTrace([], 0, 0);
         return { memoryCount: 0, estimatedTokens: 0 };
@@ -687,7 +698,7 @@ export async function buildLongTermMemoryRecallContext(params: {
 
       const section = buildLongTermMemorySection(memoryLines);
       verbose?.(
-        `openviking: injecting ${memoryLines.length} memories (${section.length} chars, ~${estimatedTokens} tokens, maxInjectedChars=${cfg.recallMaxInjectedChars})`,
+        `openviking: injecting ${memoryLines.length} memories (${section.length} chars, ~${estimatedTokens} tokens, maxInjectedChars=${maxInjectedChars})`,
       );
       verbose?.(
         `openviking: inject-detail ${toJsonLog({ count: memories.length, memories: summarizeInjectionMemories(memories) })}`,
