@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.volcengine_api_key_collection import (
@@ -177,3 +177,25 @@ class VolcengineCollectionAdapter(CollectionAdapter):
 
     def _normalize_record_for_read(self, record: Dict[str, Any]) -> Dict[str, Any]:
         return super()._normalize_record_for_read(record)
+
+    def update_data(self, data_list: List[Dict[str, Any]]):
+        collection = self.get_collection()
+        result = collection.update_data(data_list)
+        if isinstance(result, dict):
+            updated = result.get("updated")
+            primary_keys = result.get("primary_keys")
+            if isinstance(primary_keys, list):
+                return list(primary_keys)
+            ids = result.get("ids")
+            if isinstance(ids, list):
+                return list(ids)
+            if updated == 0:
+                return []
+            if isinstance(updated, int) and updated > 0:
+                fallback_ids = [item.get("id") for item in data_list if item.get("id") is not None]
+                return [str(item) for item in fallback_ids]
+            return []
+        if isinstance(result, list):
+            return [str(item) for item in result if item is not None]
+        fallback_ids = [item.get("id") for item in data_list if item.get("id") is not None]
+        return [str(item) for item in fallback_ids]

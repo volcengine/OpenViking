@@ -12,6 +12,7 @@ from openviking.core.namespace import canonicalize_uri, visible_roots
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.expr import And, Eq, FilterExpr, In, Or, PathScope, RawDSL
 from openviking.storage.vectordb.collection.collection import Collection
+from openviking.storage.vectordb.collection.result import UpdateResult
 from openviking.storage.vectordb.utils.logging_init import init_cpp_logging
 from openviking.storage.vectordb_adapters import create_collection_adapter
 from openviking_cli.utils import get_logger
@@ -262,6 +263,56 @@ class _SingleAccountBackend:
         payload = await self._async_adapter.run(self._prepare_upsert_payload, payload)
         ids = await self._async_adapter.call("upsert", payload)
         return ids[0] if ids else ""
+
+    async def update(self, data: Dict[str, Any]) -> UpdateResult:
+        try:
+            payload = dict(data)
+            logger.debug(
+                f"[_SingleAccountBackend.update] Input data.account_id={payload.get('account_id')}, bound_account_id={self._bound_account_id}"
+            )
+
+            if self._bound_account_id and not payload.get("account_id"):
+                payload["account_id"] = self._bound_account_id
+
+            if not payload.get("id"):
+                raise ValueError("id is required for update")
+
+            context_type = payload.get("context_type")
+            if context_type and context_type not in VikingVectorIndexBackend.ALLOWED_CONTEXT_TYPES:
+                allowed = sorted(VikingVectorIndexBackend.ALLOWED_CONTEXT_TYPES)
+                raise ValueError(f"Invalid context_type: {context_type}. Must be one of {allowed}")
+
+            payload = await self._async_adapter.run(self._prepare_upsert_payload, payload)
+            ids = await self._async_adapter.call("update_data", [payload])
+            normalized_ids = [str(item) for item in (ids or []) if item is not None]
+            return UpdateResult(
+                ok=bool(normalized_ids),
+                ids=normalized_ids,
+                updated_count=len(normalized_ids),
+                error_code=None if normalized_ids else "UPDATE_FAILED",
+                error_message=None
+                if normalized_ids
+                else "update completed without any updated ids",
+            )
+        except ValueError as e:
+            message = str(e)
+            error_code = "NOT_FOUND" if "not found" in message.lower() else "INVALID_ARGUMENT"
+            return UpdateResult(
+                ok=False,
+                ids=[],
+                updated_count=0,
+                error_code=error_code,
+                error_message=message,
+            )
+        except Exception as e:
+            logger.error("Error updating record: %s", e)
+            return UpdateResult(
+                ok=False,
+                ids=[],
+                updated_count=0,
+                error_code="UPDATE_FAILED",
+                error_message=str(e),
+            )
 
     async def get(self, ids: List[str]) -> List[Dict[str, Any]]:
         try:
@@ -637,6 +688,18 @@ class VikingVectorIndexBackend:
         )
         result = await backend.upsert(data)
         logger.debug(f"[VikingVectorIndexBackend.upsert] Completed, result={result}")
+        return result
+
+    async def update(self, data: Dict[str, Any], *, ctx: RequestContext) -> UpdateResult:
+        logger.debug(
+            f"[VikingVectorIndexBackend.update] Called with ctx.account_id={ctx.account_id}, data={data}"
+        )
+        backend = self._get_backend_for_context(ctx)
+        logger.debug(
+            f"[VikingVectorIndexBackend.update] Using backend for account_id={ctx.account_id}"
+        )
+        result = await backend.update(data)
+        logger.debug(f"[VikingVectorIndexBackend.update] Completed, result={result}")
         return result
 
     async def get(self, ids: List[str], *, ctx: RequestContext) -> List[Dict[str, Any]]:

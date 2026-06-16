@@ -20,7 +20,13 @@ from openviking.storage.collection_schemas import (
 from openviking.storage.errors import EmbeddingRebuildRequiredError
 from openviking.storage.expr import Eq
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
-from openviking.storage.viking_vector_index_backend import _SingleAccountBackend
+from openviking.storage.vectordb import engine as vectordb_engine
+from openviking.storage.vectordb.collection.result import UpsertDataResult
+from openviking.storage.vectordb_adapters.local_adapter import LocalCollectionAdapter
+from openviking.storage.viking_vector_index_backend import (
+    VikingVectorIndexBackend,
+    _SingleAccountBackend,
+)
 from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
 
 
@@ -846,6 +852,395 @@ async def test_single_account_backend_upsert_runs_adapter_in_threadpool(monkeypa
             "account_id": "acc1",
         },
     )
+
+
+@pytest.mark.asyncio
+async def test_single_account_backend_update_runs_adapter_in_threadpool(monkeypatch):
+    calls = []
+
+    class _Collection:
+        def get_meta_data(self):
+            return {
+                "Fields": [
+                    {"FieldName": "id"},
+                    {"FieldName": "uri"},
+                    {"FieldName": "abstract"},
+                    {"FieldName": "account_id"},
+                ]
+            }
+
+    class _Adapter:
+        mode = "local"
+
+        def get_collection(self):
+            return _Collection()
+
+        def update_data(self, data):
+            return [data[0]["id"]]
+
+    async def _fake_to_thread(func, /, *args, **kwargs):
+        calls.append((func.__name__, args, kwargs))
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "openviking.storage.viking_vector_index_backend.asyncio.to_thread", _fake_to_thread
+    )
+
+    backend = _SingleAccountBackend(
+        config=VectorDBBackendConfig(backend="local", name="context", dimension=2),
+        bound_account_id="acc1",
+        shared_adapter=_Adapter(),
+    )
+
+    result = await backend.update(
+        {
+            "id": "rec-1",
+            "uri": "viking://resources/sample",
+            "abstract": "sample",
+            "account_id": "acc1",
+            "unknown": "legacy",
+        }
+    )
+
+    assert result.ok is True
+    assert result.ids == ["rec-1"]
+    assert result.updated_count == 1
+    assert result.error_code is None
+    assert result.error_message is None
+    assert [call[0] for call in calls] == ["_prepare_upsert_payload", "update_data"]
+    assert calls[-1][1] == (
+        [
+            {
+                "id": "rec-1",
+                "uri": "viking://resources/sample",
+                "abstract": "sample",
+                "account_id": "acc1",
+            }
+        ],
+    )
+
+
+@pytest.mark.asyncio
+async def test_local_backend_update_preserves_omitted_fields_end_to_end(tmp_path):
+    if not getattr(vectordb_engine, "PersistStore", None):
+        pytest.skip("local persistent vectordb engine is not available in this environment")
+
+    backend = VikingVectorIndexBackend(
+        config=VectorDBBackendConfig(
+            backend="local",
+            name="context",
+            dimension=4,
+            path=str(tmp_path),
+        )
+    )
+    ctx = SimpleNamespace(account_id="acc1")
+
+    created = await backend.create_collection(
+        "context", CollectionSchemas.context_collection("context", 4)
+    )
+    assert created is True
+
+    record_id = await backend.upsert(
+        {
+            "id": "rec-1",
+            "uri": "viking://resources/sample",
+            "account_id": "acc1",
+            "abstract": "before",
+            "name": "keep-me",
+            "vector": [0.1, 0.2, 0.3, 0.4],
+        },
+        ctx=ctx,
+    )
+
+    assert record_id == "rec-1"
+
+    result = await backend.update(
+        {
+            "id": "rec-1",
+            "account_id": "acc1",
+            "abstract": "after",
+        },
+        ctx=ctx,
+    )
+
+    assert result.ok is True
+    assert result.ids == ["rec-1"]
+    assert result.updated_count == 1
+
+    records = await backend.get(["rec-1"], ctx=ctx)
+
+    assert len(records) == 1
+    assert records[0]["abstract"] == "after"
+    assert records[0]["name"] == "keep-me"
+    assert records[0]["account_id"] == "acc1"
+    assert records[0]["uri"] == "viking://resources/sample"
+    assert records[0]["vector"] == pytest.approx([0.1, 0.2, 0.3, 0.4])
+
+
+@pytest.mark.asyncio
+async def test_local_backend_update_can_clear_string_field_end_to_end(tmp_path):
+    if not getattr(vectordb_engine, "PersistStore", None):
+        pytest.skip("local persistent vectordb engine is not available in this environment")
+
+    backend = VikingVectorIndexBackend(
+        config=VectorDBBackendConfig(
+            backend="local",
+            name="context",
+            dimension=4,
+            path=str(tmp_path),
+        )
+    )
+    ctx = SimpleNamespace(account_id="acc1")
+
+    created = await backend.create_collection(
+        "context", CollectionSchemas.context_collection("context", 4)
+    )
+    assert created is True
+
+    record_id = await backend.upsert(
+        {
+            "id": "rec-1",
+            "uri": "viking://resources/sample",
+            "account_id": "acc1",
+            "name": "keep-me",
+            "tags": "alpha,beta",
+            "vector": [0.1, 0.2, 0.3, 0.4],
+        },
+        ctx=ctx,
+    )
+
+    assert record_id == "rec-1"
+
+    result = await backend.update(
+        {
+            "id": "rec-1",
+            "account_id": "acc1",
+            "tags": "",
+        },
+        ctx=ctx,
+    )
+
+    assert result.ok is True
+    assert result.ids == ["rec-1"]
+    assert result.updated_count == 1
+
+    records = await backend.get(["rec-1"], ctx=ctx)
+
+    assert len(records) == 1
+    assert records[0]["tags"] == ""
+    assert records[0]["name"] == "keep-me"
+    assert records[0]["vector"] == pytest.approx([0.1, 0.2, 0.3, 0.4])
+
+
+def test_local_collection_adapter_update_data_returns_ids():
+    adapter = LocalCollectionAdapter(
+        collection_name="context", project_path="", index_name="default"
+    )
+
+    class _Collection:
+        def update_data(self, data_list):
+            assert data_list == [{"id": "doc-1", "name": "updated"}]
+            return UpsertDataResult(ids=["doc-1"])
+
+    adapter._collection = _Collection()
+
+    result = adapter.update_data([{"id": "doc-1", "name": "updated"}])
+
+    assert result == ["doc-1"]
+
+
+@pytest.mark.asyncio
+async def test_single_account_backend_update_injects_bound_account_id(monkeypatch):
+    calls = []
+
+    class _Collection:
+        def get_meta_data(self):
+            return {
+                "Fields": [
+                    {"FieldName": "id"},
+                    {"FieldName": "abstract"},
+                    {"FieldName": "account_id"},
+                ]
+            }
+
+    class _Adapter:
+        mode = "local"
+
+        def get_collection(self):
+            return _Collection()
+
+        def update_data(self, data):
+            calls.append(("update_data_payload", data))
+            return [data[0]["id"]]
+
+    backend = _SingleAccountBackend(
+        config=VectorDBBackendConfig(backend="local", name="context", dimension=2),
+        bound_account_id="acc1",
+        shared_adapter=_Adapter(),
+    )
+
+    result = await backend.update({"id": "rec-1", "abstract": "patched"})
+
+    assert result.ok is True
+    assert result.ids == ["rec-1"]
+    assert result.updated_count == 1
+    assert calls == [
+        (
+            "update_data_payload",
+            [{"id": "rec-1", "abstract": "patched", "account_id": "acc1"}],
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_single_account_backend_update_requires_id_before_adapter_call():
+    class _Collection:
+        def get_meta_data(self):
+            return {"Fields": [{"FieldName": "id"}, {"FieldName": "account_id"}]}
+
+    class _Adapter:
+        mode = "local"
+
+        def get_collection(self):
+            return _Collection()
+
+        def update_data(self, data):  # pragma: no cover - should never run
+            raise AssertionError("update_data should not be called without id")
+
+    backend = _SingleAccountBackend(
+        config=VectorDBBackendConfig(backend="local", name="context", dimension=2),
+        bound_account_id="acc1",
+        shared_adapter=_Adapter(),
+    )
+
+    result = await backend.update({"abstract": "patched"})
+
+    assert result.ok is False
+    assert result.ids == []
+    assert result.updated_count == 0
+    assert result.error_code == "INVALID_ARGUMENT"
+    assert "id is required for update" in (result.error_message or "")
+
+
+@pytest.mark.asyncio
+async def test_single_account_backend_update_rejects_invalid_context_type_without_adapter_call():
+    calls = []
+
+    class _Collection:
+        def get_meta_data(self):
+            return {
+                "Fields": [
+                    {"FieldName": "id"},
+                    {"FieldName": "abstract"},
+                    {"FieldName": "account_id"},
+                    {"FieldName": "context_type"},
+                ]
+            }
+
+    class _Adapter:
+        mode = "local"
+
+        def get_collection(self):
+            return _Collection()
+
+        def update_data(self, data):  # pragma: no cover - should never run
+            calls.append(data)
+            raise AssertionError("update_data should not be called for invalid context_type")
+
+    backend = _SingleAccountBackend(
+        config=VectorDBBackendConfig(backend="local", name="context", dimension=2),
+        bound_account_id="acc1",
+        shared_adapter=_Adapter(),
+    )
+
+    result = await backend.update(
+        {
+            "id": "rec-1",
+            "abstract": "patched",
+            "context_type": "not-a-real-type",
+        }
+    )
+
+    assert result.ok is False
+    assert result.ids == []
+    assert result.updated_count == 0
+    assert result.error_code == "INVALID_ARGUMENT"
+    assert "Invalid context_type" in (result.error_message or "")
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_single_account_backend_update_returns_structured_error_when_adapter_update_fails():
+    class _Collection:
+        def get_meta_data(self):
+            return {
+                "Fields": [
+                    {"FieldName": "id"},
+                    {"FieldName": "abstract"},
+                    {"FieldName": "account_id"},
+                ]
+            }
+
+    class _Adapter:
+        mode = "local"
+
+        def get_collection(self):
+            return _Collection()
+
+        def update_data(self, data):
+            del data
+            raise RuntimeError("backend exploded")
+
+    backend = _SingleAccountBackend(
+        config=VectorDBBackendConfig(backend="local", name="context", dimension=2),
+        bound_account_id="acc1",
+        shared_adapter=_Adapter(),
+    )
+
+    result = await backend.update({"id": "rec-1", "abstract": "patched"})
+
+    assert result.ok is False
+    assert result.ids == []
+    assert result.updated_count == 0
+    assert result.error_code == "UPDATE_FAILED"
+    assert "backend exploded" in (result.error_message or "")
+
+
+@pytest.mark.asyncio
+async def test_single_account_backend_update_returns_not_found_when_adapter_reports_missing_record():
+    class _Collection:
+        def get_meta_data(self):
+            return {
+                "Fields": [
+                    {"FieldName": "id"},
+                    {"FieldName": "abstract"},
+                    {"FieldName": "account_id"},
+                ]
+            }
+
+    class _Adapter:
+        mode = "local"
+
+        def get_collection(self):
+            return _Collection()
+
+        def update_data(self, data):
+            del data
+            raise ValueError("record not found for primary key(s): ['rec-404']")
+
+    backend = _SingleAccountBackend(
+        config=VectorDBBackendConfig(backend="local", name="context", dimension=2),
+        bound_account_id="acc1",
+        shared_adapter=_Adapter(),
+    )
+
+    result = await backend.update({"id": "rec-404", "abstract": "patched"})
+
+    assert result.ok is False
+    assert result.ids == []
+    assert result.updated_count == 0
+    assert result.error_code == "NOT_FOUND"
+    assert "record not found" in (result.error_message or "")
 
 
 @pytest.mark.asyncio
