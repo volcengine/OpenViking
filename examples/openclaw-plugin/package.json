@@ -23,6 +23,7 @@
     "*.ts",
     "commands/setup.ts",
     "plugin/openviking-feature-gates.ts",
+    "plugin/openviking-query-formatters.ts",
     "config/feature-gates.json",
     "!vitest.config.ts",
     "install-manifest.json",

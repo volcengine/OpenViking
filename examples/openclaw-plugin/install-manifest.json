@@ -22,6 +22,7 @@
       "runtime-utils.ts",
       "recall-trace.ts",
       "query-config.ts",
+      "plugin/openviking-query-formatters.ts",
       "commands/setup.ts",
       "plugin/openviking-feature-gates.ts",
       "config/feature-gates.json",
