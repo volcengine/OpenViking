@@ -121,7 +121,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 3. 调用对应 Parser 解析内容
 4. 构建目录树并写入 AGFS
 5. `wait=true` 时等待语义处理完成；`wait=false` 时返回 `task_id` 用于队列跟踪
-6. 如果 `reason` 非空，通过一次短临时 session 复用常规记忆抽取链路，让合适的用户记忆引用该资源 URI
+6. 如果 `reason` 非空，将其追加到固定的资源 reason session 并 commit，复用常规记忆抽取链路，让合适的用户记忆引用该资源 URI
 7. 如指定 `--watch-interval`，设置定时更新任务
 
 **代码入口**：

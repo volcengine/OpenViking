@@ -2,12 +2,16 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for resource-memory linking service."""
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
 from openviking.server.identity import RequestContext, Role
-from openviking.service.resource_memory_link_service import ResourceMemoryLinkService
+from openviking.service.resource_memory_link_service import (
+    _RESOURCE_REASON_SESSION_ID,
+    ResourceMemoryLinkService,
+)
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.memory_updater import MemoryUpdateResult
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
@@ -54,6 +58,7 @@ class _ReadFailVikingFS:
 class _FakeSession:
     def __init__(self):
         self.messages = []
+        self.meta = SimpleNamespace(memory_policy=None)
 
     def add_messages(self, specs):
         self.messages.extend(specs)
@@ -63,6 +68,7 @@ class _FakeSessionService:
     def __init__(self):
         self.session = _FakeSession()
         self.created = []
+        self.got = []
         self.committed = []
         self.deleted = []
 
@@ -76,7 +82,18 @@ class _FakeSessionService:
         )
         return self.session
 
+    async def get(self, session_id, ctx, auto_create=False):
+        self.got.append(
+            {
+                "ctx": ctx,
+                "session_id": session_id,
+                "auto_create": auto_create,
+            }
+        )
+        return self.session
+
     async def commit_async(self, session_id, ctx, keep_recent_count=0):
+        archive_index = len(self.committed) + 1
         self.committed.append(
             {
                 "ctx": ctx,
@@ -86,7 +103,9 @@ class _FakeSessionService:
         )
         return {
             "task_id": None,
-            "archive_uri": f"viking://user/alice/sessions/{session_id}/history/archive_001",
+            "archive_uri": (
+                f"viking://user/alice/sessions/{session_id}/history/archive_{archive_index:03d}"
+            ),
         }
 
     async def delete(self, session_id, ctx):
@@ -102,7 +121,7 @@ def request_context():
 
 
 @pytest.mark.asyncio
-async def test_on_resource_added_bridges_reason_through_temporary_session(request_context):
+async def test_on_resource_added_bridges_reason_through_fixed_session(request_context):
     resource_uri = "viking://resources/images/2026/06/11/yueqian_jpeg"
     session_service = _FakeSessionService()
     service = ResourceMemoryLinkService(
@@ -121,18 +140,20 @@ async def test_on_resource_added_bridges_reason_through_temporary_session(reques
 
     session_id = result["session_id"]
     assert result["status"] == "success"
-    assert session_id.startswith("resource_reason_")
-    assert session_service.created == [
+    assert session_id == _RESOURCE_REASON_SESSION_ID
+    assert session_service.got == [
         {
             "ctx": request_context,
             "session_id": session_id,
-            "memory_policy": {
-                "self": {"enabled": True},
-                "peer": {"enabled": False},
-                "memory_types": ["entities", "events", "preferences"],
-            },
+            "auto_create": True,
         }
     ]
+    assert session_service.created == []
+    assert session_service.session.meta.memory_policy == {
+        "self": {"enabled": True},
+        "peer": {"enabled": False},
+        "memory_types": ["entities", "events", "preferences"],
+    }
     assert session_service.committed == [
         {
             "ctx": request_context,
@@ -140,12 +161,49 @@ async def test_on_resource_added_bridges_reason_through_temporary_session(reques
             "keep_recent_count": 0,
         }
     ]
-    assert session_service.deleted == [{"ctx": request_context, "session_id": session_id}]
+    assert session_service.deleted == []
     message_text = session_service.session.messages[0]["parts"][0].text
     assert resource_uri in message_text
     assert "这是越前龙马的照片" in message_text
     assert "yueqian.jpeg" in message_text
     assert "动漫角色照片合集" in message_text
+
+
+@pytest.mark.asyncio
+async def test_on_resource_added_reuses_same_reason_session(request_context):
+    session_service = _FakeSessionService()
+    service = ResourceMemoryLinkService(
+        viking_fs=_FakeVikingFS({}),
+        session_service=session_service,
+    )
+
+    first = await service.on_resource_added(
+        ctx=request_context,
+        resource_uri="viking://resources/images/ryoma.jpeg",
+        reason="这是越前龙马的照片",
+        source_name="ryoma.jpeg",
+    )
+    second = await service.on_resource_added(
+        ctx=request_context,
+        resource_uri="viking://resources/images/fuji.jpeg",
+        reason="这是不二周助的照片",
+        source_name="fuji.jpeg",
+    )
+
+    assert first["session_id"] == _RESOURCE_REASON_SESSION_ID
+    assert second["session_id"] == _RESOURCE_REASON_SESSION_ID
+    assert [call["session_id"] for call in session_service.got] == [
+        _RESOURCE_REASON_SESSION_ID,
+        _RESOURCE_REASON_SESSION_ID,
+    ]
+    assert [call["session_id"] for call in session_service.committed] == [
+        _RESOURCE_REASON_SESSION_ID,
+        _RESOURCE_REASON_SESSION_ID,
+    ]
+    assert session_service.deleted == []
+    messages = [item["parts"][0].text for item in session_service.session.messages]
+    assert "这是越前龙马的照片" in messages[0]
+    assert "这是不二周助的照片" in messages[1]
 
 
 @pytest.mark.asyncio

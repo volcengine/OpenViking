@@ -126,7 +126,7 @@ This endpoint is the core entry point for resource management, supporting adding
 3. Call the corresponding Parser to parse content
 4. Build the directory tree and write to AGFS
 5. Wait for semantic processing completion when `wait=true`; with `wait=false`, return a `task_id` for queue tracking
-6. If `reason` is non-empty, commit a short temporary session through the normal memory extraction pipeline so suitable user memories can reference the resource URI
+6. If `reason` is non-empty, append it to the fixed resource reason session and commit through the normal memory extraction pipeline so suitable user memories can reference the resource URI
 7. Set up scheduled update task if `watch_interval` is specified
 
 **Code Entry Points**:

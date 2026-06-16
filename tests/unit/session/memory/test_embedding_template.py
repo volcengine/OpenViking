@@ -33,7 +33,10 @@ class TestEmbeddingTemplateYamlParsing:
 
     def test_events_exposes_embedding_template(self):
         schema = self.registry.get("events")
-        assert schema.embedding_template == "{{ event_name }}\n\n{{ goal }}\n\n{{ content }}"
+        assert (
+            schema.embedding_template
+            == "EventName: {{ event_name }}\nGoal: {{ goal }}\n{{ content }}"
+        )
 
     def test_preferences_exposes_embedding_template(self):
         schema = self.registry.get("preferences")

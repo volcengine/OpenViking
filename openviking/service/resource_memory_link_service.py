@@ -12,7 +12,6 @@ import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
-from uuid import uuid4
 
 from openviking.core.namespace import canonical_user_root, context_type_for_uri
 from openviking.message.part import TextPart
@@ -39,6 +38,7 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+_RESOURCE_REASON_SESSION_ID = "__openviking_resource_reason__"
 _RESOURCE_REASON_MEMORY_TYPES = ["entities", "events", "preferences"]
 _RESOURCE_REASON_COMMIT_TIMEOUT_SECONDS = 1800.0
 _RESOURCE_ABSTRACT_MAX_CHARS = 200
@@ -46,6 +46,14 @@ _ABSTRACT_NOT_READY_MARKERS = (
     "[.abstract.md is not ready]",
     "[Directory abstract is not ready]",
 )
+
+
+def _resource_reason_memory_policy() -> Dict[str, Any]:
+    return {
+        "self": {"enabled": True},
+        "peer": {"enabled": False},
+        "memory_types": list(_RESOURCE_REASON_MEMORY_TYPES),
+    }
 
 
 @dataclass
@@ -68,7 +76,7 @@ class ResourceMemoryLinkService:
         self._vikingdb = vikingdb
         self._viking_fs = viking_fs
         self._session_service = session_service
-        self._background_tasks: set[asyncio.Task] = set()
+        self._reason_session_lock = asyncio.Lock()
 
     def set_dependencies(
         self,
@@ -105,20 +113,17 @@ class ResourceMemoryLinkService:
 
         added_at = datetime.now(timezone.utc).isoformat()
         resource_abstract = await self._read_resource_directory_abstract(resource_uri, ctx)
-        session_id = f"resource_reason_{uuid4().hex}"
+        session_id = _RESOURCE_REASON_SESSION_ID
         commit_result: Dict[str, Any] = {}
         task_result: Optional[Dict[str, Any]] = None
-        delete_session_now = True
-        try:
-            session = await self._session_service.create(
+
+        async with self._reason_session_lock:
+            session = await self._session_service.get(
+                session_id,
                 ctx,
-                session_id=session_id,
-                memory_policy={
-                    "self": {"enabled": True},
-                    "peer": {"enabled": False},
-                    "memory_types": _RESOURCE_REASON_MEMORY_TYPES,
-                },
+                auto_create=True,
             )
+            session.meta.memory_policy = _resource_reason_memory_policy()
             session.add_messages(
                 [
                     {
@@ -143,32 +148,21 @@ class ResourceMemoryLinkService:
                 ctx,
                 keep_recent_count=0,
             )
-            task_id = commit_result.get("task_id")
-            if task_id:
-                try:
-                    task_result = await self._wait_for_commit_task(
-                        task_id=str(task_id),
-                        ctx=ctx,
-                        timeout=timeout,
-                    )
-                except asyncio.TimeoutError:
-                    delete_session_now = False
-                    self._schedule_session_delete_after_task(
-                        session_id=session_id,
-                        task_id=str(task_id),
-                        ctx=ctx,
-                    )
-                    raise
-            return {
-                "status": "success",
-                "session_id": session_id,
-                "commit_task_id": task_id,
-                "archive_uri": commit_result.get("archive_uri"),
-                "commit_task": task_result,
-            }
-        finally:
-            if delete_session_now:
-                await self._delete_temporary_session(session_id, ctx)
+
+        task_id = commit_result.get("task_id")
+        if task_id:
+            task_result = await self._wait_for_commit_task(
+                task_id=str(task_id),
+                ctx=ctx,
+                timeout=timeout,
+            )
+        return {
+            "status": "success",
+            "session_id": session_id,
+            "commit_task_id": task_id,
+            "archive_uri": commit_result.get("archive_uri"),
+            "commit_task": task_result,
+        }
 
     @staticmethod
     def _build_resource_addition_message(
@@ -187,51 +181,6 @@ class ResourceMemoryLinkService:
             f"Resource abstract: {resource_abstract or 'N/A'}\n"
             f"User reason: {reason}"
         )
-
-    def _schedule_session_delete_after_task(
-        self,
-        *,
-        session_id: str,
-        task_id: str,
-        ctx: RequestContext,
-    ) -> None:
-        task = asyncio.create_task(
-            self._delete_session_after_task(session_id=session_id, task_id=task_id, ctx=ctx)
-        )
-        self._background_tasks.add(task)
-        task.add_done_callback(self._background_tasks.discard)
-
-    async def _delete_session_after_task(
-        self,
-        *,
-        session_id: str,
-        task_id: str,
-        ctx: RequestContext,
-    ) -> None:
-        try:
-            await self._wait_for_commit_task(
-                task_id=task_id,
-                ctx=ctx,
-                timeout=_RESOURCE_REASON_COMMIT_TIMEOUT_SECONDS,
-            )
-        except Exception as exc:
-            logger.warning(
-                "Skipped temporary resource reason session cleanup after task %s: %s",
-                task_id,
-                exc,
-            )
-            return
-        await self._delete_temporary_session(session_id, ctx)
-
-    async def _delete_temporary_session(self, session_id: str, ctx: RequestContext) -> None:
-        if not self._session_service:
-            return
-        try:
-            await self._session_service.delete(session_id, ctx)
-        except NotFoundError:
-            pass
-        except Exception as exc:
-            logger.warning("Failed to delete temporary resource reason session: %s", exc)
 
     async def _wait_for_commit_task(
         self,
