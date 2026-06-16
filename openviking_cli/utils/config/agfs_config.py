@@ -79,6 +79,12 @@ class S3Config(BaseModel):
         "Set to an empty string to disable key normalization. Defaults to ?#%+@.",
     )
 
+    auto_detect_content_type: bool = Field(
+        default=False,
+        description="Automatically infer S3 object Content-Type from the object key filename extension "
+        "during uploads. Disabled by default for backward compatibility.",
+    )
+
     model_config = {"extra": "forbid"}
 
     def validate_config(self):

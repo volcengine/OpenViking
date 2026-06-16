@@ -1054,6 +1054,7 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 | `prefix` | str | 用于命名空间隔离的可选键前缀 | "" |
 | `use_ssl` | bool | 为 S3 连接启用/禁用 SSL（HTTPS）。也用于决定 `endpoint` 仅填主机名时自动补的协议前缀 | true |
 | `use_path_style` | bool | true 表示对 MinIO 和某些 S3 兼容服务使用 PathStyle；false 表示对 TOS 和某些 S3 兼容服务使用 VirtualHostStyle | true |
+| `auto_detect_content_type` | bool | 上传时根据 object key / 文件名后缀自动推断 MIME 类型，并写入 S3 对象的 `Content-Type` | false |
 | `directory_marker_mode` | str | 目录 marker 的持久化方式，可选 `none`、`empty`、`nonempty` | `"empty"` |
 | `normalize_encoding_chars` | str | 需要在 S3 object key 中转义为 `!HH` 十六进制字节的字符集合；空字符串表示关闭编码 | `"?#%+@"` |
 
@@ -1075,6 +1076,32 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 - 被转义的字节会编码成 `!HH`，其中 `HH` 是该字节的大写十六进制值。
 - 没有列在 `normalize_encoding_chars` 里的字符，包括中文和其他 Unicode 字符，都会保持原样。
 - 设为 `""` 时，会在 object key 中保留原始路径段。
+
+`auto_detect_content_type` 默认关闭，以兼容历史行为。开启后，RAGFS 会根据 object key / 文件名后缀推断 MIME 类型，并写入 S3 对象的 `Content-Type`：
+
+- 探测依据是 object key / 文件名后缀，不做文件内容 sniff。
+- key 以 `/` 结尾的目录 marker 不会写 `Content-Type`。
+- 无法识别的后缀会回退到 `application/octet-stream`。
+
+示例：
+
+```json
+{
+  "storage": {
+    "agfs": {
+      "backend": "s3",
+      "s3": {
+        "bucket": "my-bucket",
+        "endpoint": "s3.amazonaws.com",
+        "region": "us-east-1",
+        "access_key": "your-ak",
+        "secret_key": "your-sk",
+        "auto_detect_content_type": true
+      }
+    }
+  }
+}
+```
 
 <details>
 <summary><b>PathStyle S3</b></summary>
