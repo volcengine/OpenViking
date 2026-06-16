@@ -57,6 +57,9 @@ from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+SUMMARY_CACHE_FILENAME = ".summary_cache.json"
+SUMMARY_CACHE_VERSION = 1
+
 
 @dataclass
 class DiffResult:
@@ -561,7 +564,19 @@ class SemanticProcessor(DequeueHandlerBase):
                 return
 
             existing_summaries: Dict[str, str] = {}
-            if msg.changes:
+            cache_entries: Dict[str, Dict[str, str]] = {}
+            sidecar_present = False
+            try:
+                cache_entries = await self._load_summary_cache(dir_uri, ctx=ctx)
+                sidecar_present = bool(cache_entries)
+                if sidecar_present:
+                    logger.info(
+                        f"Loaded {len(cache_entries)} entries from summary cache sidecar"
+                    )
+            except Exception as e:
+                logger.debug(f"No summary cache sidecar for {dir_uri}: {e}")
+
+            if not sidecar_present and msg.changes:
                 try:
                     old_overview = await viking_fs.read_file(f"{dir_uri}/.overview.md", ctx=ctx)
                     if old_overview:
@@ -585,10 +600,27 @@ class SemanticProcessor(DequeueHandlerBase):
 
             pending_indices: List[Tuple[int, str]] = []
             file_summaries: List[Optional[Dict[str, str]]] = [None] * len(file_paths)
+            file_cache_keys: List[Optional[str]] = [None] * len(file_paths)
 
             for idx, file_path in enumerate(file_paths):
                 file_name = file_path.split("/")[-1]
-                if file_path not in changed_files and file_name in existing_summaries:
+                current_key = await self._compute_summary_cache_key(file_path, ctx=ctx)
+                file_cache_keys[idx] = current_key
+
+                cached_entry = cache_entries.get(file_name)
+                sidecar_hit = (
+                    cached_entry is not None
+                    and current_key is not None
+                    and cached_entry.get("cache_key") == current_key
+                    and file_path not in changed_files
+                )
+                if sidecar_hit:
+                    file_summaries[idx] = {
+                        "name": file_name,
+                        "summary": cached_entry.get("summary", ""),
+                    }
+                    logger.debug(f"Reused sidecar-cached summary for {file_name}")
+                elif file_path not in changed_files and file_name in existing_summaries:
                     file_summaries[idx] = {
                         "name": file_name,
                         "summary": existing_summaries[file_name],
@@ -675,6 +707,23 @@ class SemanticProcessor(DequeueHandlerBase):
                 _mark_done()
                 return
             logger.info(f"Generated abstract.md and overview.md for {dir_uri}")
+
+            try:
+                new_cache_entries: Dict[str, Dict[str, str]] = {}
+                for file_path, summary, cache_key in zip(
+                    file_paths, file_summaries, file_cache_keys, strict=False
+                ):
+                    if summary is None or cache_key is None:
+                        continue
+                    file_name = file_path.split("/")[-1]
+                    new_cache_entries[file_name] = {
+                        "cache_key": cache_key,
+                        "summary": summary.get("summary", ""),
+                    }
+                if new_cache_entries:
+                    await self._persist_summary_cache(dir_uri, new_cache_entries, ctx=ctx)
+            except Exception as e:
+                logger.debug(f"Failed to persist summary cache sidecar for {dir_uri}: {e}")
 
             if msg.skip_vectorization:
                 logger.info(f"Skipping vectorization for {dir_uri} (requested via SemanticMsg)")
@@ -1178,6 +1227,73 @@ class SemanticProcessor(DequeueHandlerBase):
         if len(abstract) > semantic.abstract_max_chars:
             abstract = abstract[: semantic.abstract_max_chars - 3] + "..."
         return overview, abstract
+
+    async def _compute_summary_cache_key(
+        self, file_path: str, ctx: Optional[RequestContext] = None
+    ) -> Optional[str]:
+        try:
+            stat = await get_viking_fs().stat(file_path, ctx=ctx)
+        except Exception:
+            return None
+        if not isinstance(stat, dict):
+            return None
+        size = stat.get("size")
+        mod_time = stat.get("modTime") or stat.get("mtime")
+        if size is None and mod_time is None:
+            return None
+        return f"{size}:{mod_time}"
+
+    async def _load_summary_cache(
+        self, dir_uri: str, ctx: Optional[RequestContext] = None
+    ) -> Dict[str, Dict[str, str]]:
+        viking_fs = get_viking_fs()
+        raw = await viking_fs.read_file(f"{dir_uri}/{SUMMARY_CACHE_FILENAME}", ctx=ctx)
+        if not raw:
+            return {}
+        try:
+            data = json.loads(raw)
+        except Exception:
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        if data.get("version") != SUMMARY_CACHE_VERSION:
+            return {}
+        entries = data.get("entries")
+        if not isinstance(entries, dict):
+            return {}
+        result: Dict[str, Dict[str, str]] = {}
+        for name, entry in entries.items():
+            if (
+                isinstance(entry, dict)
+                and isinstance(entry.get("cache_key"), str)
+                and isinstance(entry.get("summary"), str)
+            ):
+                result[name] = {
+                    "cache_key": entry["cache_key"],
+                    "summary": entry["summary"],
+                }
+        return result
+
+    async def _persist_summary_cache(
+        self,
+        dir_uri: str,
+        entries: Dict[str, Dict[str, str]],
+        ctx: Optional[RequestContext] = None,
+    ) -> None:
+        viking_fs = get_viking_fs()
+        payload = {"version": SUMMARY_CACHE_VERSION, "entries": entries}
+        body = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        final_uri = f"{dir_uri}/{SUMMARY_CACHE_FILENAME}"
+        tmp_uri = f"{final_uri}.tmp"
+        await viking_fs.write_file(tmp_uri, body, ctx=ctx)
+        try:
+            await viking_fs.mv(tmp_uri, final_uri, ctx=ctx)
+        except Exception:
+            await viking_fs.write_file(final_uri, body, ctx=ctx)
+            try:
+                await viking_fs.rm(tmp_uri, ctx=ctx)
+            except Exception:
+                pass
 
     def _parse_overview_md(self, overview_content: str) -> Dict[str, str]:
         """Parse overview.md and extract file summaries.
