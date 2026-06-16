@@ -28,3 +28,4 @@ _[Checkpoint: 6a30f6f3 — session ended (auto-checkpoint)]_
 [07:27:46] ACT: edited openviking/session/train/batch_runner.py
 [07:28:31] ACT: edited openviking/session/train/batch_runner.py
 [07:30:01] THINK: Now I need to add the `_print_baseline_cache_hit` function.
+[07:30:01] THINK: Let me add it near the `_load_baseline_cache` function.
