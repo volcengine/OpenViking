@@ -4,10 +4,12 @@
 Play chess with Codex via h5i messaging
 
 ## Milestones
-- [ ] Initial setup
+- [x] Initial setup
+- [x] session ended (auto-checkpoint)
 
 ## Active Branches
 - main (primary)
 
 ## Notes
+- [2026-06-16 07:07 UTC] `main`: session ended (auto-checkpoint)
 _Add project-wide notes here._
