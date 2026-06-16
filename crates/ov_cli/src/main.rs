@@ -15,6 +15,7 @@ mod help_ui;
 mod i18n;
 mod output;
 mod status_ui;
+mod terminal_ui;
 mod theme;
 mod tui;
 mod utils;

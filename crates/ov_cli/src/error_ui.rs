@@ -1,12 +1,13 @@
 use std::ffi::OsString;
 
 use colored::Colorize;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 
 use crate::{
     error::Error,
     error_classifier::looks_like_auth_error,
     i18n::{Language, copy},
+    terminal_ui::{fit_to_display_width, truncate_to_display_width},
     theme,
 };
 
@@ -707,19 +708,13 @@ fn render_card(report: &ErrorReport, verbose: bool, width: usize) -> String {
 #[cfg(not(test))]
 fn error_output_width() -> usize {
     crossterm::terminal::size()
-        .map(|(columns, _)| terminal_width(columns as usize, CARD_WIDTH))
+        .map(|(columns, _)| crate::terminal_ui::terminal_width(columns as usize, CARD_WIDTH))
         .unwrap_or(CARD_WIDTH)
 }
 
 #[cfg(test)]
 fn error_output_width() -> usize {
     CARD_WIDTH
-}
-
-#[cfg(not(test))]
-fn terminal_width(columns: usize, default_width: usize) -> usize {
-    let available = columns.saturating_sub(1).max(4);
-    available.min(default_width)
 }
 
 fn action_command_width(actions: &[ErrorAction], width: usize) -> usize {
@@ -805,41 +800,6 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
         lines.push(current);
     }
     lines
-}
-
-fn truncate_to_display_width(value: &str, width: usize) -> String {
-    if value.width() <= width {
-        return value.to_string();
-    }
-
-    if width <= 3 {
-        return ".".repeat(width);
-    }
-
-    let target = width - 3;
-    let mut truncated = String::new();
-    let mut used = 0;
-
-    for ch in value.chars() {
-        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
-        if used + ch_width > target {
-            break;
-        }
-        truncated.push(ch);
-        used += ch_width;
-    }
-
-    truncated.push_str("...");
-    truncated
-}
-
-fn fit_to_display_width(value: &str, width: usize) -> String {
-    let value = truncate_to_display_width(value, width);
-    format!(
-        "{}{}",
-        value,
-        " ".repeat(width.saturating_sub(value.width()))
-    )
 }
 
 pub(crate) fn display_command(args: &[OsString]) -> String {

@@ -2,12 +2,14 @@ use std::ffi::OsString;
 
 use clap::{Arg, ArgAction, Command, CommandFactory};
 use colored::Colorize;
-use unicode_width::UnicodeWidthStr;
 
 use crate::{
     Cli,
     cli_arg_scan::ValueOptions,
     i18n::{Language, copy},
+    terminal_ui::{
+        display_width, fit_to_display_width, pad_to_display_width, truncate_to_display_width,
+    },
     theme,
 };
 
@@ -1938,19 +1940,13 @@ fn localized_global_option_description<'a>(
 #[cfg(not(test))]
 fn help_output_width() -> usize {
     crossterm::terminal::size()
-        .map(|(columns, _)| terminal_width(columns as usize, BOX_WIDTH))
+        .map(|(columns, _)| crate::terminal_ui::terminal_width(columns as usize, BOX_WIDTH))
         .unwrap_or(BOX_WIDTH)
 }
 
 #[cfg(test)]
 fn help_output_width() -> usize {
     BOX_WIDTH
-}
-
-#[cfg(not(test))]
-fn terminal_width(columns: usize, default_width: usize) -> usize {
-    let available = columns.saturating_sub(1).max(4);
-    available.min(default_width)
 }
 
 fn boxed_command_width(width: usize) -> usize {
@@ -2041,48 +2037,6 @@ fn two_column_line_with_style(
     let description = truncate_to_display_width(description, description_width);
 
     format!("  {} {}", label, theme::body(description))
-}
-
-fn display_width(value: &str) -> usize {
-    UnicodeWidthStr::width(value)
-}
-
-fn truncate_to_display_width(value: &str, width: usize) -> String {
-    if display_width(value) <= width {
-        return value.to_string();
-    }
-
-    if width <= 3 {
-        return ".".repeat(width);
-    }
-
-    let target = width - 3;
-    let mut truncated = String::new();
-    let mut used = 0;
-
-    for ch in value.chars() {
-        let ch_width = display_width(&ch.to_string());
-        if used + ch_width > target {
-            break;
-        }
-        truncated.push(ch);
-        used += ch_width;
-    }
-
-    truncated.push_str("...");
-    truncated
-}
-
-fn pad_to_display_width(value: &str, width: usize) -> String {
-    format!(
-        "{}{}",
-        value,
-        " ".repeat(width.saturating_sub(display_width(value)))
-    )
-}
-
-fn fit_to_display_width(value: &str, width: usize) -> String {
-    pad_to_display_width(&truncate_to_display_width(value, width), width)
 }
 
 fn localized_section_title(title: &str, language: Language) -> &str {

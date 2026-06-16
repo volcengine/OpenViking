@@ -11,7 +11,7 @@ use crossterm::{
     event::{self, Event, KeyCode, KeyModifiers},
     terminal::{self, Clear, ClearType, disable_raw_mode, enable_raw_mode},
 };
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthChar;
 use uuid::Uuid;
 
 use crate::{
@@ -19,6 +19,7 @@ use crate::{
     config::{Config, DEFAULT_CUSTOM_URL},
     error::{Error, Result},
     i18n::{self, Language, copy},
+    terminal_ui::{RenderedRegion, display_width, rendered_line_rows, rendered_row_count},
     theme::{self, Rgb},
 };
 use serde_json::Value;
@@ -35,6 +36,7 @@ const OPENVIKING_SERVICE_API_KEY_URL: &str =
 const HEADER_TAGLINE: &str = "Context Database for AI Agents";
 const HEADER_TAGLINE_ZH: &str = "AI Agent 上下文数据库";
 const STATUS_BOX_PROBE_TIMEOUT_SECS: f64 = 3.0;
+const TEXT_INPUT_PROMPT: &str = "  > ";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum IdentityMode {
@@ -76,6 +78,8 @@ const OV_LOGO_LINES: [&str; 14] = [
     "            ⠈⠉⠉⠉⠁",
 ];
 
+// Full mode needs enough height for the standalone wordmark, logo art,
+// status box, and prompts without wrapping into each other.
 const FULL_STATUS_BOX_MIN_ROWS: u16 = 30;
 
 pub async fn run_config_wizard() -> Result<()> {
@@ -88,7 +92,7 @@ async fn run_config_wizard_with_store(store: ConfigStore) -> Result<()> {
     if !ensure_language_selected(&mut ui)? {
         return Ok(());
     }
-    print_header(live_status_box_frame().mode);
+    print_full_header(live_status_box_frame().mode);
     print_status_box(&store).await?;
 
     loop {
@@ -595,7 +599,7 @@ pub(crate) fn should_prompt_root_identity(
         && (api_key_was_entered || is_blank(account) || is_blank(user))
 }
 
-fn print_header(mode: StatusBoxMode) {
+fn print_full_header(mode: StatusBoxMode) {
     if mode != StatusBoxMode::Full {
         return;
     }
@@ -773,25 +777,6 @@ fn print_status_box_with_runtime(
     }
     io::stdout().flush()?;
     Ok(RenderedRegion::from_lines(&lines, render_columns))
-}
-
-struct RenderedRegion {
-    lines: Vec<String>,
-    rows_drawn: usize,
-}
-
-impl RenderedRegion {
-    fn from_lines(lines: &[String], columns: usize) -> Self {
-        Self {
-            lines: lines.to_vec(),
-            rows_drawn: rendered_row_count(lines, columns),
-        }
-    }
-
-    fn rows_to_clear(&self, columns: usize) -> usize {
-        self.rows_drawn
-            .max(rendered_row_count(&self.lines, columns))
-    }
 }
 
 fn clear_rendered_region(region: &RenderedRegion, cursor_on_last_line: bool) -> io::Result<()> {
@@ -1690,31 +1675,6 @@ fn truncate_to_width(text: &str, width: usize) -> String {
     }
     truncated.push('…');
     truncated
-}
-
-fn display_width(text: &str) -> usize {
-    UnicodeWidthStr::width(text)
-}
-
-fn visible_display_width(text: &str) -> usize {
-    let mut width = 0usize;
-    let mut chars = text.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        if ch == '\u{1b}' && chars.peek() == Some(&'[') {
-            chars.next();
-            for next in chars.by_ref() {
-                if next.is_ascii_alphabetic() {
-                    break;
-                }
-            }
-            continue;
-        }
-
-        width += UnicodeWidthChar::width(ch).unwrap_or(0);
-    }
-
-    width
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3115,7 +3075,11 @@ async fn run_switch_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<b
                         ))?;
                         if let Err(error) = validate_config(&selected_config.config).await {
                             ui.clear()?;
-                            print_switch_validation_error(&selected_config.name, &error);
+                            print_switch_validation_error(
+                                &selected_config.name,
+                                selected_config.kind,
+                                &error,
+                            );
                             return Ok(true);
                         }
 
@@ -3729,29 +3693,37 @@ fn config_already_active_message(name: &str) -> String {
     }
 }
 
-fn print_switch_validation_error(name: &str, error: &Error) {
-    println!();
-    println!(
-        "{} {}",
-        theme::error("✗"),
-        theme::error(match Language::current() {
-            Language::En => format!("Target config '{name}' failed validation."),
-            Language::ZhCn => format!("目标配置 '{name}' 验证失败。"),
-        })
-    );
-    println!(
-        "  {}",
-        theme::muted(localized_validation_error(ConfigKind::Custom, error))
-    );
-    println!(
-        "{} {}",
-        theme::muted(copy(Language::current(), "Next:", "下一步：")),
-        theme::body(copy(
-            Language::current(),
-            "Run ov config and edit this config before switching.",
-            "请运行 ov config 编辑该配置后再切换。",
-        ))
-    );
+fn switch_validation_error_lines(name: &str, kind: ConfigKind, error: &Error) -> Vec<String> {
+    vec![
+        String::new(),
+        format!(
+            "{} {}",
+            theme::error("✗"),
+            theme::error(match Language::current() {
+                Language::En => format!("Target config '{name}' failed validation."),
+                Language::ZhCn => format!("目标配置 '{name}' 验证失败。"),
+            })
+        ),
+        format!(
+            "  {}",
+            theme::muted(localized_validation_error(kind, error))
+        ),
+        format!(
+            "{} {}",
+            theme::muted(copy(Language::current(), "Next:", "下一步：")),
+            theme::body(copy(
+                Language::current(),
+                "Run ov config and edit this config before switching.",
+                "请运行 ov config 编辑该配置后再切换。",
+            ))
+        ),
+    ]
+}
+
+fn print_switch_validation_error(name: &str, kind: ConfigKind, error: &Error) {
+    for line in switch_validation_error_lines(name, kind, error) {
+        println!("{line}");
+    }
 }
 
 pub(crate) fn add_save_action_labels() -> Vec<&'static str> {
@@ -3837,8 +3809,8 @@ fn prompt_select<T: ToString>(
             helper_lines,
         ))?;
 
-        if let Event::Key(key) = event::read()? {
-            match key.code {
+        match event::read()? {
+            Event::Key(key) => match key.code {
                 KeyCode::Up => {
                     selected = if selected == 0 {
                         items.len().saturating_sub(1)
@@ -3863,7 +3835,11 @@ fn prompt_select<T: ToString>(
                     return Ok(PromptResult::Quit);
                 }
                 _ => {}
+            },
+            Event::Resize(_, _) => {
+                // Redraw on the next loop using the new terminal width.
             }
+            _ => {}
         }
     }
 }
@@ -3882,23 +3858,24 @@ fn prompt_text(
     'attempt: loop {
         let mut value = String::new();
         let default_copy = default.unwrap_or_default();
-        ui.render_input(
-            &input_live_lines(
+        render_text_prompt(
+            ui,
+            TextPromptView {
                 section,
                 prompt,
                 default,
                 value_label,
                 secret,
                 helper_lines,
-                error.as_deref(),
-            ),
-            "  > ",
+                error: error.as_deref(),
+                value: &value,
+            },
         )?;
 
         let raw = RawPrompt::enter(false)?;
         loop {
-            if let Event::Key(key) = event::read()? {
-                match key.code {
+            match event::read()? {
+                Event::Key(key) => match key.code {
                     KeyCode::Enter => {
                         let chosen = if value.trim().is_empty() {
                             default_copy.trim().to_string()
@@ -3934,6 +3911,7 @@ fn prompt_text(
                     KeyCode::Backspace => {
                         if let Some(ch) = value.pop() {
                             raw_write(erase_sequence_for_char(ch, secret))?;
+                            ui.set_input_prompt(input_prompt_with_value(&value, secret));
                             io::stdout().flush()?;
                         }
                     }
@@ -3945,14 +3923,80 @@ fn prompt_text(
                             } else {
                                 raw_write(ch.to_string())?;
                             }
+                            ui.set_input_prompt(input_prompt_with_value(&value, secret));
                             io::stdout().flush()?;
                         }
                     }
                     _ => {}
+                },
+                Event::Resize(_, _) => {
+                    render_text_prompt(
+                        ui,
+                        TextPromptView {
+                            section,
+                            prompt,
+                            default,
+                            value_label,
+                            secret,
+                            helper_lines,
+                            error: error.as_deref(),
+                            value: &value,
+                        },
+                    )?;
                 }
+                _ => {}
             }
         }
     }
+}
+
+struct TextPromptView<'a> {
+    section: &'a str,
+    prompt: &'a str,
+    default: Option<&'a str>,
+    value_label: Option<InputValueLabel>,
+    secret: bool,
+    helper_lines: &'a [String],
+    error: Option<&'a str>,
+    value: &'a str,
+}
+
+fn render_text_prompt(ui: &mut LiveRegion, view: TextPromptView<'_>) -> Result<()> {
+    ui.render_input(
+        &input_live_lines(
+            view.section,
+            view.prompt,
+            view.default,
+            view.value_label,
+            view.secret,
+            view.helper_lines,
+            view.error,
+        ),
+        TEXT_INPUT_PROMPT,
+    )?;
+    let input_prompt = input_prompt_with_value(view.value, view.secret);
+    if input_prompt.len() > TEXT_INPUT_PROMPT.len() {
+        if view.secret {
+            raw_write("*".repeat(view.value.chars().count()))?;
+        } else {
+            raw_write(view.value)?;
+        }
+    }
+    ui.set_input_prompt(input_prompt);
+    io::stdout().flush()?;
+    Ok(())
+}
+
+fn input_prompt_with_value(value: &str, secret: bool) -> String {
+    if value.is_empty() {
+        return TEXT_INPUT_PROMPT.to_string();
+    }
+    let rendered_value = if secret {
+        "*".repeat(value.chars().count())
+    } else {
+        value.to_string()
+    };
+    format!("{TEXT_INPUT_PROMPT}{rendered_value}")
 }
 
 fn erase_sequence_for_char(ch: char, secret: bool) -> String {
@@ -4056,6 +4100,15 @@ impl LiveRegion {
         Ok(())
     }
 
+    fn set_input_prompt(&mut self, prompt: String) {
+        self.input_prompt = Some(prompt);
+        self.rows_drawn = self.rows_drawn.max(rendered_live_region_rows(
+            &self.lines,
+            self.input_prompt.as_deref(),
+            live_region_columns(),
+        ));
+    }
+
     fn rows_to_clear(&self, columns: usize) -> usize {
         self.rows_drawn.max(rendered_live_region_rows(
             &self.lines,
@@ -4071,13 +4124,6 @@ fn live_region_columns() -> usize {
         .unwrap_or_else(|_| status_box_width())
 }
 
-fn rendered_row_count(lines: &[String], columns: usize) -> usize {
-    lines
-        .iter()
-        .map(|line| rendered_rows_for_columns(line, columns))
-        .sum()
-}
-
 fn rendered_live_region_rows(
     lines: &[String],
     input_prompt: Option<&str>,
@@ -4085,14 +4131,8 @@ fn rendered_live_region_rows(
 ) -> usize {
     rendered_row_count(lines, columns)
         + input_prompt
-            .map(|prompt| rendered_rows_for_columns(prompt, columns))
+            .map(|prompt| rendered_line_rows(prompt, columns))
             .unwrap_or(0)
-}
-
-fn rendered_rows_for_columns(text: &str, columns: usize) -> usize {
-    let columns = columns.max(1);
-    let width = visible_display_width(text);
-    width.max(1).div_ceil(columns)
 }
 
 pub(crate) fn select_live_lines<T: ToString>(
@@ -4290,23 +4330,25 @@ impl Drop for RawPrompt {
 #[cfg(test)]
 mod tests {
     use super::{
-        CustomKeyMode, FULL_STATUS_BOX_MIN_ROWS, IdentityMode, InputValueLabel, LiveRegion,
-        OV_LOGO_LINES, RenderedRegion, Rgb, StatusBoxFrame, StatusBoxMode, StatusBoxRuntime,
-        active_delete_block_helper_lines, active_summary_lines, active_summary_render_parts,
-        add_config_name_label, add_save_action_labels, allocate_config_name, box_content_line,
-        box_footer_line, box_title_line, compact_status_box_width, config_select_label,
-        custom_api_key_helper_lines, custom_api_key_input_helper_lines, custom_key_mode_labels,
+        COMPACT_STATUS_DETAIL_WIDTH, CustomKeyMode, FULL_STATUS_BOX_MIN_ROWS, IdentityMode,
+        InputValueLabel, LiveRegion, OV_LOGO_LINES, RenderedRegion, Rgb, StatusBoxFrame,
+        StatusBoxMode, StatusBoxRuntime, active_delete_block_helper_lines, active_summary_lines,
+        active_summary_render_parts, add_config_name_label, add_save_action_labels,
+        allocate_config_name, box_content_line, box_footer_line, box_title_line,
+        compact_status_box_width, config_select_label, custom_api_key_helper_lines,
+        custom_api_key_input_helper_lines, custom_key_mode_labels,
         custom_validation_failure_choices, display_config_home, display_width,
         edit_api_key_choice_labels, edit_custom_key_action_labels, edit_save_action_labels,
         erase_sequence_for_char, extract_models_from_status_payload, identity_prompt_parts,
-        input_live_lines, logo_glass_color_for_theme, main_action_labels, next_step_copy,
-        openviking_service_api_key_helper_lines, openviking_service_validation_failure_choices,
-        ov_logo_width, provider_labels, rendered_live_region_rows, rendered_row_count,
-        root_key_normal_command_notice_lines, root_key_redirect_labels, saved_summary_render_parts,
-        select_live_lines, should_confirm_detected_user_key, should_prompt_root_identity,
-        status_box_frame_for_size, status_box_lines, status_box_lines_with_runtime,
-        status_box_lines_with_runtime_width, status_box_width, status_payload_is_healthy,
-        styled_logo_to_width_for_color_level, styled_wordmark_line_for_color_level,
+        input_live_lines, input_prompt_with_value, logo_glass_color_for_theme, main_action_labels,
+        next_step_copy, openviking_service_api_key_helper_lines,
+        openviking_service_validation_failure_choices, ov_logo_width, provider_labels,
+        rendered_live_region_rows, rendered_row_count, root_key_normal_command_notice_lines,
+        root_key_redirect_labels, saved_summary_render_parts, select_live_lines,
+        should_confirm_detected_user_key, should_prompt_root_identity, status_box_frame_for_size,
+        status_box_lines, status_box_lines_with_runtime, status_box_lines_with_runtime_width,
+        status_box_width, status_payload_is_healthy, styled_logo_to_width_for_color_level,
+        styled_wordmark_line_for_color_level, switch_validation_error_lines,
         tagline_ice_color_for_theme, user_key_redirect_labels, validate_config_name,
         validate_draft, wizard_header_lines, wordmark_gradient_color_for_theme, wordmark_lines,
         wordmark_width,
@@ -4316,6 +4358,7 @@ mod tests {
         ApiKeyRole, ConfigDraft, ConfigEntry, ConfigKind, ConfigStore, OPENVIKING_SERVICE_URL,
         validate_account_id_value, validate_user_id_value,
     };
+    use crate::error::Error;
     use crate::i18n::Language;
     use crate::theme::{self, ThemeColor};
     use colored::Colorize;
@@ -4372,6 +4415,27 @@ mod tests {
         assert_eq!(erase_sequence_for_char('a', false), "\x08 \x08");
         assert_eq!(erase_sequence_for_char('中', false), "\x08 \x08\x08 \x08");
         assert_eq!(erase_sequence_for_char('中', true), "\x08 \x08");
+    }
+
+    #[test]
+    fn input_prompt_tracks_visible_or_secret_value() {
+        assert_eq!(input_prompt_with_value("", false), "  > ");
+        assert_eq!(input_prompt_with_value("abc", false), "  > abc");
+        assert_eq!(input_prompt_with_value("secret", true), "  > ******");
+    }
+
+    #[test]
+    fn switch_validation_error_uses_selected_config_kind() {
+        let lines = switch_validation_error_lines(
+            "cloud",
+            ConfigKind::OpenVikingService,
+            &Error::Config("invalid".to_string()),
+        );
+        let plain = strip_ansi(&lines.join("\n"));
+
+        assert!(plain.contains("Target config 'cloud' failed validation."));
+        assert!(plain.contains("Check your API key"));
+        assert!(!plain.contains("server URL"));
     }
 
     #[test]
@@ -4473,7 +4537,8 @@ mod tests {
         );
         let text = lines.join("\n");
 
-        assert_eq!(width, 56);
+        assert!(width >= COMPACT_STATUS_DETAIL_WIDTH + 4);
+        assert!(width <= status_box_width());
         assert!(lines[0].contains("OpenViking | Context Database for AI Agents"));
         assert!(text.contains("Active:"));
         assert!(!text.contains('⣿'));
@@ -4529,6 +4594,20 @@ mod tests {
         };
 
         assert_eq!(ui.rows_to_clear(30), 3);
+    }
+
+    #[test]
+    fn live_region_keeps_largest_input_rows_until_clear() {
+        let mut ui = LiveRegion {
+            lines: vec!["Prompt".to_string()],
+            input_prompt: Some(format!("  > {}", "x".repeat(90))),
+            rows_drawn: 10,
+            cursor_on_last_line: true,
+        };
+
+        ui.set_input_prompt("  > x".to_string());
+
+        assert_eq!(ui.rows_to_clear(120), 10);
     }
 
     #[test]

@@ -1,6 +1,10 @@
 use crate::client::HttpClient;
 use crate::error::{Error, Result};
 use crate::output::{OutputFormat, output_success};
+use crate::terminal_ui::{
+    RenderedRegion as RenderedSkillSelectRegion, clear_rendered_lines, live_select_block,
+    truncate_to_display_width,
+};
 use crate::theme;
 use colored::Colorize;
 use serde::{Deserialize, Serialize};
@@ -10,7 +14,6 @@ use std::io::{self, IsTerminal, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use tempfile::TempDir;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use url::Url;
 
 enum PreparedSource {
@@ -46,26 +49,6 @@ struct AddTarget {
 struct InstalledSkillSummary {
     name: String,
     description: String,
-}
-
-#[derive(Default)]
-struct RenderedSkillSelectRegion {
-    lines: Vec<String>,
-    rows_drawn: usize,
-}
-
-impl RenderedSkillSelectRegion {
-    fn from_lines(lines: &[String], columns: usize) -> Self {
-        Self {
-            lines: lines.to_vec(),
-            rows_drawn: rendered_skill_select_rows(lines, columns),
-        }
-    }
-
-    fn rows_to_clear(&self, columns: usize) -> usize {
-        self.rows_drawn
-            .max(rendered_skill_select_rows(&self.lines, columns))
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1404,8 +1387,7 @@ fn prompt_multi_select_skills(
     use crossterm::{
         cursor,
         event::{self, Event, KeyCode, KeyModifiers},
-        execute,
-        terminal::{self, Clear, ClearType},
+        execute, terminal,
     };
 
     if skills.is_empty() {
@@ -1490,34 +1472,6 @@ fn prompt_multi_select_skills(
     fn clear_rendered_region(region: &RenderedSkillSelectRegion) -> Result<()> {
         clear_rendered_lines(region.rows_to_clear(live_skill_select_columns()))
     }
-
-    fn clear_rendered_lines(lines: usize) -> Result<()> {
-        if lines == 0 {
-            return Ok(());
-        }
-        let mut stdout = io::stdout();
-        execute!(
-            stdout,
-            cursor::MoveUp(lines as u16),
-            cursor::MoveToColumn(0)
-        )?;
-        for line in 0..lines {
-            execute!(
-                stdout,
-                cursor::MoveToColumn(0),
-                Clear(ClearType::CurrentLine)
-            )?;
-            if line + 1 < lines {
-                execute!(stdout, cursor::MoveDown(1))?;
-            }
-        }
-        execute!(
-            stdout,
-            cursor::MoveUp(lines.saturating_sub(1) as u16),
-            cursor::MoveToColumn(0)
-        )?;
-        Ok(())
-    }
 }
 
 fn selected_skill_names(
@@ -1586,38 +1540,7 @@ fn skill_selection_label(skill: &InstalledSkillSummary, width: usize) -> String 
     } else {
         format!("{} - {}", skill.name, skill.description)
     };
-    truncate_display_width(&label, width)
-}
-
-fn truncate_display_width(text: &str, max_width: usize) -> String {
-    if UnicodeWidthStr::width(text) <= max_width {
-        return text.to_string();
-    }
-
-    let ellipsis = "...";
-    let target_width = max_width.saturating_sub(ellipsis.len());
-    let mut width = 0usize;
-    let mut out = String::new();
-    for ch in text.chars() {
-        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
-        if width + ch_width > target_width {
-            break;
-        }
-        out.push(ch);
-        width += ch_width;
-    }
-    out.push_str(ellipsis);
-    out
-}
-
-fn live_select_block(lines: &[String]) -> String {
-    if lines.is_empty() {
-        return String::new();
-    }
-
-    let mut rendered = lines.join("\r\n");
-    rendered.push_str("\r\n");
-    rendered
+    truncate_to_display_width(&label, width)
 }
 
 fn live_skill_select_columns() -> usize {
@@ -1627,38 +1550,9 @@ fn live_skill_select_columns() -> usize {
         .max(1)
 }
 
+#[cfg(test)]
 fn rendered_skill_select_rows(lines: &[String], columns: usize) -> usize {
-    lines
-        .iter()
-        .map(|line| rendered_skill_select_row_count(line, columns))
-        .sum()
-}
-
-fn rendered_skill_select_row_count(line: &str, columns: usize) -> usize {
-    let columns = columns.max(1);
-    let width = ansi_stripped_display_width(line);
-
-    (width / columns) + usize::from(width == 0 || !width.is_multiple_of(columns))
-}
-
-fn ansi_stripped_display_width(line: &str) -> usize {
-    let mut width = 0usize;
-    let mut chars = line.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        if ch == '\u{1b}' && chars.peek() == Some(&'[') {
-            chars.next();
-            for next in chars.by_ref() {
-                if next.is_ascii_alphabetic() {
-                    break;
-                }
-            }
-        } else {
-            width += UnicodeWidthChar::width(ch).unwrap_or(0);
-        }
-    }
-
-    width
+    crate::terminal_ui::rendered_row_count(lines, columns)
 }
 
 fn confirm_action(action: &str, names: &[String]) -> Result<bool> {

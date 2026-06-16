@@ -5,11 +5,13 @@ use crate::commands;
 use crate::config::merge_csv_options;
 use crate::config_agent;
 use crate::error::{Error, Result};
+use crate::terminal_ui::{
+    RenderedRegion as RenderedSelectRegion, clear_rendered_lines, live_select_block,
+};
 use crate::theme;
 use crate::tui;
 use colored::Colorize;
 use serde_json::{Map, Value};
-use unicode_width::UnicodeWidthChar;
 
 pub async fn handle_add_resource(
     mut path: String,
@@ -963,34 +965,13 @@ enum SelectOutcome {
     Quit,
 }
 
-#[derive(Default)]
-struct RenderedSelectRegion {
-    lines: Vec<String>,
-    rows_drawn: usize,
-}
-
-impl RenderedSelectRegion {
-    fn from_lines(lines: &[String], columns: usize) -> Self {
-        Self {
-            lines: lines.to_vec(),
-            rows_drawn: rendered_select_rows(lines, columns),
-        }
-    }
-
-    fn rows_to_clear(&self, columns: usize) -> usize {
-        self.rows_drawn
-            .max(rendered_select_rows(&self.lines, columns))
-    }
-}
-
 fn prompt_select(prompt: &str, items: &[String], default: usize) -> Result<SelectOutcome> {
     use std::io::{self, Write};
 
     use crossterm::{
         cursor,
         event::{self, Event, KeyCode, KeyModifiers},
-        execute,
-        terminal::{self, Clear, ClearType},
+        execute, terminal,
     };
 
     if items.is_empty() {
@@ -1065,34 +1046,6 @@ fn prompt_select(prompt: &str, items: &[String], default: usize) -> Result<Selec
     fn clear_rendered_region(region: &RenderedSelectRegion) -> Result<()> {
         clear_rendered_lines(region.rows_to_clear(live_select_columns()))
     }
-
-    fn clear_rendered_lines(lines: usize) -> Result<()> {
-        if lines == 0 {
-            return Ok(());
-        }
-        let mut stdout = io::stdout();
-        execute!(
-            stdout,
-            cursor::MoveUp(lines as u16),
-            cursor::MoveToColumn(0)
-        )?;
-        for line in 0..lines {
-            execute!(
-                stdout,
-                cursor::MoveToColumn(0),
-                Clear(ClearType::CurrentLine)
-            )?;
-            if line + 1 < lines {
-                execute!(stdout, cursor::MoveDown(1))?;
-            }
-        }
-        execute!(
-            stdout,
-            cursor::MoveUp(lines.saturating_sub(1) as u16),
-            cursor::MoveToColumn(0)
-        )?;
-        Ok(())
-    }
 }
 
 fn live_select_columns() -> usize {
@@ -1101,48 +1054,9 @@ fn live_select_columns() -> usize {
         .unwrap_or(80)
 }
 
+#[cfg(test)]
 fn rendered_select_rows(lines: &[String], columns: usize) -> usize {
-    lines
-        .iter()
-        .map(|line| rendered_select_line_rows(line, columns))
-        .sum()
-}
-
-fn rendered_select_line_rows(line: &str, columns: usize) -> usize {
-    let columns = columns.max(1);
-    let width = visible_display_width(line);
-    width.max(1).div_ceil(columns)
-}
-
-fn visible_display_width(value: &str) -> usize {
-    let mut width = 0usize;
-    let mut chars = value.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        if ch == '\u{1b}' && chars.peek() == Some(&'[') {
-            chars.next();
-            for next in chars.by_ref() {
-                if next.is_ascii_alphabetic() {
-                    break;
-                }
-            }
-            continue;
-        }
-
-        width += UnicodeWidthChar::width(ch).unwrap_or(0);
-    }
-
-    width
-}
-
-fn live_select_block(lines: &[String]) -> String {
-    if lines.is_empty() {
-        return String::new();
-    }
-
-    let mut rendered = lines.join("\r\n");
-    rendered.push_str("\r\n");
-    rendered
+    crate::terminal_ui::rendered_row_count(lines, columns)
 }
 
 fn switch_confirmation_labels() -> Vec<String> {
