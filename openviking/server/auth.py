@@ -276,13 +276,7 @@ async def resolve_identity(
                     "X-OpenViking-Account or explicit account_id in the URL and "
                     "X-OpenViking-User or explicit user_id in the URL."
                 )
-            if configured_root_api_key:
-                return ResolvedIdentity(
-                    role=Role.ROOT,
-                    account_id=effective_account_id or "trusted",
-                    user_id=effective_user_id or "trusted",
-                )
-            if not effective_account_id and not effective_user_id:
+            if not configured_root_api_key and not effective_account_id and not effective_user_id:
                 return ResolvedIdentity(
                     role=Role.ROOT,
                     account_id="trusted",
@@ -299,6 +293,19 @@ async def resolve_identity(
                 raise InvalidArgumentError(
                     "Trusted mode requests must include " + " and ".join(missing_fields) + "."
                 )
+
+        # When the request authenticated with the configured root_api_key
+        # (already verified above), grant Role.ROOT for ALL paths, not only
+        # /api/v1/admin/*. This is what allows ROOT-only operations such as
+        # `ov reindex --sudo` (POST /api/v1/content/reindex) to succeed in
+        # trusted mode. Non-root keys never reach this branch because the
+        # hmac.compare_digest check above rejects them with UNAUTHENTICATED.
+        if configured_root_api_key:
+            return ResolvedIdentity(
+                role=Role.ROOT,
+                account_id=effective_account_id or "trusted",
+                user_id=effective_user_id or "trusted",
+            )
 
         trusted_role = Role.USER
         if api_key_manager and effective_account_id and effective_user_id:

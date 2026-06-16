@@ -28,6 +28,7 @@ class OVCLIConfig(BaseModel):
 
     url: Optional[str] = None
     api_key: Optional[str] = None
+    root_api_key: Optional[str] = None
     account: Optional[str] = None
     user: Optional[str] = None
     actor_peer_id: Optional[str] = None

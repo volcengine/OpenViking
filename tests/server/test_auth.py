@@ -1042,7 +1042,12 @@ async def test_trusted_mode_with_root_api_key_requires_matching_api_key():
 
 
 async def test_trusted_mode_with_root_api_key_accepts_matching_api_key():
-    """Trusted mode should accept explicit identity headers plus the configured server API key."""
+    """Trusted mode with the configured root_api_key should grant ROOT for any path.
+
+    Regression test for #1722: previously the matching root key only granted ROOT
+    on /api/v1/admin/* paths, which broke `ov reindex --sudo` and other ROOT-only
+    operations in trusted mode.
+    """
     request = _make_request(
         "/api/v1/resources",
         headers={
@@ -1062,7 +1067,33 @@ async def test_trusted_mode_with_root_api_key_accepts_matching_api_key():
         x_openviking_user="alice",
     )
 
-    assert identity.role == Role.USER
+    assert identity.role == Role.ROOT
+    assert identity.account_id == "acme"
+    assert identity.user_id == "alice"
+
+
+async def test_trusted_mode_with_root_api_key_grants_root_on_non_admin_paths():
+    """Trusted mode with matching root_api_key should grant ROOT on tenant data paths too."""
+    request = _make_request(
+        "/api/v1/content/reindex",
+        headers={
+            "X-API-Key": ROOT_KEY,
+            "X-OpenViking-Account": "acme",
+            "X-OpenViking-User": "alice",
+        },
+        auth_enabled=False,
+        auth_mode="trusted",
+        root_api_key=ROOT_KEY,
+    )
+
+    identity = await resolve_identity(
+        request,
+        x_api_key=ROOT_KEY,
+        x_openviking_account="acme",
+        x_openviking_user="alice",
+    )
+
+    assert identity.role == Role.ROOT
     assert identity.account_id == "acme"
     assert identity.user_id == "alice"
 
