@@ -155,6 +155,233 @@ Recall semantic memories and resources. Current semantic recall target types are
 }
 ```
 
+参数：
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `query` | string | 是 | 召回查询文本 |
+| `limit` | number | 否 | 最终返回条数，默认使用插件配置 |
+| `scoreThreshold` | number | 否 | 最低分数，范围 0-1 |
+| `targetUri` | string | 否 | 指定单一搜索范围，例如 `viking://user/memories` |
+| `resourceTypes` | string[] | 否 | 未指定 `targetUri` 时使用，当前支持 `resource`、`user`、`agent`；session 历史走 `ov_archive_search` / `ov_archive_expand` |
+
+### `memory_store`
+
+把文本写入 OpenViking session，并立即触发记忆抽取。
+
+```json
+{
+  "type": "req",
+  "id": "memory-store-1",
+  "method": "tools.invoke",
+  "params": {
+    "name": "memory_store",
+    "sessionKey": "main",
+    "args": {
+      "text": "用户偏好使用 TypeScript 编写 OpenClaw 插件。",
+      "role": "user"
+    }
+  }
+}
+```
+
+参数：
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `text` | string | 是 | 作为记忆来源的文本 |
+| `role` | string | 否 | session 消息角色，默认 `user` |
+| `sessionId` | string | 否 | 指定已有 OpenViking session；不传则使用临时 session |
+
+### `memory_forget`
+
+删除记忆。可以传精确 URI，也可以先按 query 搜索候选。
+
+按 URI 删除：
+
+```json
+{
+  "type": "req",
+  "id": "memory-forget-1",
+  "method": "tools.invoke",
+  "params": {
+    "name": "memory_forget",
+    "sessionKey": "main",
+    "args": {
+      "uri": "viking://user/default/memories/memory_123"
+    }
+  }
+}
+```
+
+按 query 查找候选：
+
+```json
+{
+  "type": "req",
+  "id": "memory-forget-2",
+  "method": "tools.invoke",
+  "params": {
+    "name": "memory_forget",
+    "sessionKey": "main",
+    "args": {
+      "query": "偏好 Python 后端",
+      "targetUri": "viking://user/memories",
+      "limit": 5,
+      "scoreThreshold": 0.85
+    }
+  }
+}
+```
+
+参数：
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `uri` | string | 否 | 精确记忆 URI，仅允许当前 user/peer 记忆 URI |
+| `query` | string | 否 | 未提供 `uri` 时用于搜索候选 |
+| `targetUri` | string | 否 | 搜索范围，默认使用插件配置 |
+| `limit` | number | 否 | 候选展示数量，默认 5 |
+| `scoreThreshold` | number | 否 | 候选最低分数 |
+
+### `add_skill`
+
+导入 Agent Skill 到当前用户/peer 的 OpenViking skill namespace。
+
+```json
+{
+  "type": "req",
+  "id": "add-skill-1",
+  "method": "tools.invoke",
+  "params": {
+    "name": "add_skill",
+    "sessionKey": "main",
+    "args": {
+      "source": "/absolute/path/to/my-skill",
+      "wait": true,
+      "timeout": 120
+    }
+  }
+}
+```
+
+也可以传原始 skill 内容或 MCP tool dict：
+
+```json
+{
+  "type": "req",
+  "id": "add-skill-2",
+  "method": "tools.invoke",
+  "params": {
+    "name": "add_skill",
+    "sessionKey": "main",
+    "args": {
+      "data": "# My Skill\n\nSkill content...",
+      "wait": true
+    }
+  }
+}
+```
+
+参数：
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `source` | string | 二选一 | 本地 `SKILL.md` 文件或 skill 目录 |
+| `data` | any | 二选一 | 原始 `SKILL.md` 内容或 MCP tool dict |
+| `wait` | boolean | 否 | 是否等待服务端处理完成 |
+| `timeout` | number | 否 | `wait=true` 时的超时时间，单位秒 |
+
+### `add_resource`
+
+导入文档、目录、URL 或 Git 仓库到 OpenViking resources。
+
+注意：该工具默认不暴露给 Agent，必须在插件配置中设置 `enableAddResourceTool=true`，并且工具策略允许它，才能通过 `tools.invoke` 调用。未启用时可使用 slash command `/add-resource`。
+
+```json
+{
+  "type": "req",
+  "id": "add-resource-1",
+  "method": "tools.invoke",
+  "params": {
+    "name": "add_resource",
+    "sessionKey": "main",
+    "args": {
+      "source": "/absolute/path/to/docs",
+      "parent": "viking://resources/project-docs",
+      "reason": "导入项目文档",
+      "instruction": "保留 API 示例和配置说明",
+      "wait": true,
+      "timeout": 300
+    }
+  }
+}
+```
+
+参数：
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `source` | string | 是 | 本地文件、目录、OpenClaw media path、公开 URL 或 Git URL |
+| `to` | string | 否 | 精确目标 URI，不能和 `parent` 同时使用 |
+| `parent` | string | 否 | 父级 URI，不能和 `to` 同时使用 |
+| `reason` | string | 否 | 导入原因或说明 |
+| `instruction` | string | 否 | 服务端处理指令 |
+| `wait` | boolean | 否 | 是否等待服务端处理完成 |
+| `timeout` | number | 否 | `wait=true` 时的超时时间，单位秒 |
+
+### `ov_archive_search`
+
+在当前 session 已归档的原始消息中做关键词 grep。
+
+```json
+{
+  "type": "req",
+  "id": "archive-search-1",
+  "method": "tools.invoke",
+  "params": {
+    "name": "ov_archive_search",
+    "sessionKey": "main",
+    "args": {
+      "query": "tcpdump",
+      "archiveId": "archive_003"
+    }
+  }
+}
+```
+
+参数：
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `query` | string | 是 | 单个关键词或短语 |
+| `archiveId` | string | 否 | 限定某个 archive，例如 `archive_003` |
+
+### `ov_archive_expand`
+
+展开某个归档，读取原始消息。
+
+```json
+{
+  "type": "req",
+  "id": "archive-expand-1",
+  "method": "tools.invoke",
+  "params": {
+    "name": "ov_archive_expand",
+    "sessionKey": "main",
+    "args": {
+      "archiveId": "archive_003"
+    }
+  }
+}
+```
+
+参数：
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `archiveId` | string | 是 | archive ID，例如 `archive_003` |
+
 ### `ov_recall_trace`
 
 Inspect recall traces when `traceRecall` is enabled.
@@ -170,6 +397,109 @@ Inspect recall traces when `traceRecall` is enabled.
   }
 }
 ```
+
+参数：
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `turn` | string | 否 | `latest` 或 `all`，默认 `latest` |
+| `traceId` | string | 否 | 精确 trace id |
+| `sessionId` | string | 否 | OpenClaw session id |
+| `sessionKey` | string | 否 | OpenClaw session key |
+| `ovSessionId` | string | 否 | OpenViking session id |
+| `source` | string | 否 | `auto_recall`、`memory_recall`、`ov_search` 或 `ov_archive_search` |
+| `resourceTypes` | string[] | 否 | `resource`、`user`、`agent` |
+| `since` | number | 否 | Unix timestamp 毫秒下界 |
+| `until` | number | 否 | Unix timestamp 毫秒上界 |
+| `includeContent` | boolean | 否 | 是否按需读取 URI 内容预览 |
+| `limit` | number | 否 | 最多返回 trace 数量，默认 20 |
+
+### `openviking_tool_result_list`
+
+列出当前 session 中被 OpenViking 外置的大工具结果。
+
+```json
+{
+  "type": "req",
+  "id": "tool-result-list-1",
+  "method": "tools.invoke",
+  "params": {
+    "name": "openviking_tool_result_list",
+    "sessionKey": "main",
+    "args": {
+      "tool_name": "RunCommand",
+      "limit": 20
+    }
+  }
+}
+```
+
+参数：
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `tool_name` | string | 否 | 按工具名过滤，也兼容 `toolName` |
+| `limit` | number | 否 | 最多返回数量，默认 50 |
+
+### `openviking_tool_result_search`
+
+在外置的大工具结果中搜索关键词。
+
+```json
+{
+  "type": "req",
+  "id": "tool-result-search-1",
+  "method": "tools.invoke",
+  "params": {
+    "name": "openviking_tool_result_search",
+    "sessionKey": "main",
+    "args": {
+      "tool_output_ref": "viking://session/<session_id>/tool-results/<tool_result_id>",
+      "query": "error",
+      "limit": 10,
+      "context_chars": 300
+    }
+  }
+}
+```
+
+参数：
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `tool_output_ref` | string | 是 | `viking://session/.../tool-results/...` URI，也兼容 `ref` 或 `uri` |
+| `query` | string | 是 | 搜索关键词或精确文本 |
+| `limit` | number | 否 | 最多匹配数，默认 20 |
+| `context_chars` | number | 否 | 每个命中周围保留字符数，默认 300，也兼容 `contextChars` |
+
+### `openviking_tool_result_read`
+
+读取外置的大工具结果全文或片段。
+
+```json
+{
+  "type": "req",
+  "id": "tool-result-read-1",
+  "method": "tools.invoke",
+  "params": {
+    "name": "openviking_tool_result_read",
+    "sessionKey": "main",
+    "args": {
+      "tool_output_ref": "viking://session/<session_id>/tool-results/<tool_result_id>",
+      "offset": 0,
+      "limit": 4000
+    }
+  }
+}
+```
+
+参数：
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `tool_output_ref` | string | 是 | `viking://session/.../tool-results/...` URI，也兼容 `ref` 或 `uri` |
+| `offset` | number | 否 | 起始字符偏移，默认 0 |
+| `limit` | number | 否 | 最多返回字符数 |
 
 ## Response Shape
 
