@@ -10,22 +10,7 @@ import re
 import tempfile
 from typing import NamedTuple
 
-try:
-    import tos
-except ModuleNotFoundError:
-
-    class _MissingTosModule:
-        class ACLType:
-            ACL_Public_Read = "public-read"
-
-        def __getattr__(self, name):
-            raise RuntimeError(
-                "Python package 'tos' is required for real TOS uploads. "
-                "Install the Volcengine TOS Python SDK before running without --dry-run."
-            )
-
-    tos = _MissingTosModule()
-
+import tos
 
 SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
 DEFAULT_INSTALL_SH = SCRIPT_DIR / "install.sh"
