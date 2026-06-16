@@ -20,6 +20,7 @@ The parser handles scenarios:
 import asyncio
 import hashlib
 import io
+import json as _json
 import os
 import re
 import time
@@ -97,12 +98,18 @@ def _gh_slug(text: str) -> str:
 class _LayoutOp:
     """One planned VikingFS operation. ``parse`` (``_compute_layout``) produces an
     ordered list of these without touching the store; ``write`` (``_apply_layout``)
-    replays them. ``mkdir`` creates ``uri``; ``write`` stores ``content`` at ``uri``."""
+    replays them. ``mkdir`` creates ``uri``; ``write`` stores ``content`` at ``uri``.
+
+    ``chunk_meta``: when this op writes one of N split chunks for the same logical
+    parent file, holds ``(chunk_index, chunk_total)``. ``_apply_layout`` collects
+    these and writes a ``.chunks.json`` sidecar so reassembly can re-order chunks.
+    """
 
     kind: str  # "mkdir" | "write"
     uri: str
     content: Optional[str] = None
     exist_ok: bool = False
+    chunk_meta: Optional[Tuple[int, int]] = None  # (chunk_index, chunk_total)
 
 
 @dataclass
@@ -390,11 +397,32 @@ class MarkdownParser(BaseParser):
         create dirs, write each section (rewriting relative links when enabled), then
         ingest the local images those sections reference."""
         viking_fs = self._get_viking_fs()
+        # Group chunk metadata by parent directory so each chunked dir gets a
+        # single ``.chunks.json`` sidecar that callers (e.g. /resources/full)
+        # can use to reassemble the original file. Keys are filenames (not full
+        # URIs) so the sidecar survives the temp→final move done by the
+        # source-commit step.
+        chunks_by_dir: Dict[str, Dict[str, Dict[str, int]]] = {}
         for op in layout.ops:
             if op.kind == "mkdir":
                 await viking_fs.mkdir(op.uri, exist_ok=op.exist_ok)
             else:
                 await self._write_section(op.uri, op.content)
+                if op.chunk_meta is not None:
+                    parent, _, fname = op.uri.rpartition("/")
+                    idx, total = op.chunk_meta
+                    chunks_by_dir.setdefault(parent, {})[fname] = {
+                        "chunk_index": int(idx),
+                        "chunk_total": int(total),
+                    }
+
+        for parent_uri, mapping in chunks_by_dir.items():
+            sidecar_uri = f"{parent_uri}/.chunks.json"
+            try:
+                payload = '{"version": 1, "chunks": ' + _json.dumps(mapping, ensure_ascii=False, sort_keys=True) + "}"
+                await viking_fs.write_file(sidecar_uri, payload)
+            except Exception as exc:
+                logger.warning(f"[MarkdownParser] Failed to write chunk sidecar {sidecar_uri}: {exc}")
 
         # Ingest local image files, placing each image next to the markdown file
         # that references it.
@@ -1151,8 +1179,16 @@ class MarkdownParser(BaseParser):
         if not headings:
             logger.info("[MarkdownParser] No headings, splitting by paragraphs")
             parts = self._smart_split_content(content, max_size)
+            total = len(parts)
             for part_idx, part in enumerate(parts, 1):
-                ops.append(_LayoutOp("write", f"{root_dir}/{doc_name}_{part_idx}.md", part))
+                ops.append(
+                    _LayoutOp(
+                        "write",
+                        f"{root_dir}/{doc_name}_{part_idx}.md",
+                        part,
+                        chunk_meta=(part_idx - 1, total),
+                    )
+                )
             logger.debug(f"[MarkdownParser] Split into {len(parts)} parts")
             return
 
@@ -1390,8 +1426,16 @@ class MarkdownParser(BaseParser):
         """Split content by paragraphs, planning each part as a write into ``ops``."""
         logger.info(f"[MarkdownParser] Splitting: {name}")
         parts = self._smart_split_content(content, max_size)
+        total = len(parts)
         for i, part in enumerate(parts, 1):
-            ops.append(_LayoutOp("write", f"{section_dir}/{name}_{i}.md", part))
+            ops.append(
+                _LayoutOp(
+                    "write",
+                    f"{section_dir}/{name}_{i}.md",
+                    part,
+                    chunk_meta=(i - 1, total),
+                )
+            )
 
     def _generate_merged_filename(self, sections: List[Tuple[str, str, int]]) -> str:
         """
@@ -1446,8 +1490,16 @@ class MarkdownParser(BaseParser):
         if len(content) > max_chars:
             max_size = self.config.max_section_size or self.DEFAULT_MAX_SECTION_SIZE
             parts = self._smart_split_content(content, max_size)
+            total = len(parts)
             for i, part in enumerate(parts, 1):
-                ops.append(_LayoutOp("write", f"{parent_dir}/{name}_{i}.md", part))
+                ops.append(
+                    _LayoutOp(
+                        "write",
+                        f"{parent_dir}/{name}_{i}.md",
+                        part,
+                        chunk_meta=(i - 1, total),
+                    )
+                )
             logger.debug(
                 f"[MarkdownParser] Merged then split: {name} ({len(sections)} sections → {len(parts)} parts)"
             )

@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Resource endpoints for OpenViking HTTP Server."""
 
-from typing import Any, Dict, Optional
+import json as _json
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -16,11 +17,18 @@ from openviking.server.skill_source_metadata import persist_skill_source_metadat
 from openviking.server.telemetry import run_operation
 from openviking.server.temp_upload_store import TempUploadStore
 from openviking.server.upload_token_store import UploadTokenError, upload_token_store
+from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import TelemetryRequest
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 
 router = APIRouter(prefix="/api/v1", tags=["resources"])
+
+# Maximum reassembled response size in bytes for GET /resources/full.
+# Hard-coded so callers can rely on a stable contract; tune later via PR.
+_MAX_REASSEMBLY_BYTES = 5 * 1024 * 1024
+_CHUNKS_SIDECAR_NAME = ".chunks.json"
+_RESERVED_FILENAMES = {".abstract.md", ".overview.md", _CHUNKS_SIDECAR_NAME}
 
 
 class AddResourceRequest(BaseModel):
@@ -332,3 +340,145 @@ async def add_skill(
         fn=_add,
     )
     return response_from_result(execution.result, telemetry=execution.telemetry)
+
+
+class ReassembledResource(BaseModel):
+    uri: str
+    kind: str  # "file" | "directory"
+    content: str
+    chunk_count: int
+    is_complete: bool
+
+
+def _is_reassemblable_md(name: str) -> bool:
+    return name.endswith(".md") and name not in _RESERVED_FILENAMES
+
+
+async def _collect_chunks(
+    dir_uri: str,
+    ctx: RequestContext,
+) -> Tuple[List[Tuple[Optional[int], Optional[int], str, str]], bool]:
+    """Walk a chunked resource directory depth-first, returning chunks as
+    (chunk_index, chunk_total, sort_path, content_uri) tuples plus a hint
+    whether sidecar metadata was found anywhere in the tree.
+
+    ``sort_path`` is a stable filename-based key used as fallback when
+    ``chunk_index`` is missing. Only ``.md`` leaves that aren't ``.abstract.md``
+    or ``.overview.md`` are returned.
+    """
+    viking_fs = get_viking_fs()
+    out: List[Tuple[Optional[int], Optional[int], str, str]] = []
+    saw_metadata = False
+
+    async def walk(uri: str, rel: str) -> None:
+        nonlocal saw_metadata
+        try:
+            entries = await viking_fs.ls(uri, ctx=ctx, show_all_hidden=True)
+        except FileNotFoundError:
+            return
+        sidecar: Dict[str, Dict[str, int]] = {}
+        for entry in entries:
+            if entry.get("name") == _CHUNKS_SIDECAR_NAME and not entry.get("isDir"):
+                try:
+                    raw = await viking_fs.read_file(entry.get("uri") or f"{uri}/{_CHUNKS_SIDECAR_NAME}", ctx=ctx)
+                    parsed = _json.loads(raw)
+                    chunks = parsed.get("chunks") if isinstance(parsed, dict) else None
+                    if isinstance(chunks, dict):
+                        sidecar = {k: v for k, v in chunks.items() if isinstance(v, dict)}
+                        saw_metadata = True
+                except Exception:
+                    pass
+                break
+        for entry in entries:
+            name = entry.get("name", "")
+            if name in (".", ".."):
+                continue
+            entry_uri = entry.get("uri") or f"{uri}/{name}"
+            if entry.get("isDir"):
+                await walk(entry_uri, f"{rel}/{name}" if rel else name)
+            else:
+                if not _is_reassemblable_md(name):
+                    continue
+                meta = sidecar.get(name) or {}
+                idx = meta.get("chunk_index") if isinstance(meta.get("chunk_index"), int) else None
+                total = meta.get("chunk_total") if isinstance(meta.get("chunk_total"), int) else None
+                sort_path = f"{rel}/{name}" if rel else name
+                out.append((idx, total, sort_path, entry_uri))
+
+    await walk(dir_uri, "")
+    return out, saw_metadata
+
+
+@router.get("/resources/full", response_model=ReassembledResource)
+async def get_full_resource(
+    uri: str = Query(..., min_length=1),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Return the reassembled original content for a file or chunked resource directory."""
+    viking_fs = get_viking_fs()
+    try:
+        info = await viking_fs.stat(uri, ctx=_ctx)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    if not info.get("isDir", False):
+        try:
+            content = await viking_fs.read_file(uri, ctx=_ctx)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if len(content.encode("utf-8")) > _MAX_REASSEMBLY_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Resource exceeds {_MAX_REASSEMBLY_BYTES}-byte reassembly cap.",
+            )
+        return ReassembledResource(
+            uri=uri, kind="file", content=content, chunk_count=1, is_complete=True
+        )
+
+    chunks, saw_metadata = await _collect_chunks(uri, _ctx)
+    is_complete = True
+    if saw_metadata and chunks:
+        # Use indexed sort when any sidecar was found, but flag incompleteness if
+        # any chunk lacks an index, indices collide, or the set isn't 0..N-1.
+        indexed = [c for c in chunks if c[0] is not None]
+        if len(indexed) != len(chunks):
+            is_complete = False
+        seen: Dict[int, int] = {}
+        totals = {c[1] for c in indexed if c[1] is not None}
+        for idx, _total, _sp, _u in indexed:
+            seen[idx] = seen.get(idx, 0) + 1
+        if any(v > 1 for v in seen.values()):
+            is_complete = False
+        if len(totals) == 1:
+            expected = next(iter(totals))
+            if expected != len(chunks) or set(seen) != set(range(expected)):
+                is_complete = False
+        chunks.sort(key=lambda c: (c[0] if c[0] is not None else 1 << 30, c[2]))
+    else:
+        chunks.sort(key=lambda c: c[2])
+
+    parts: List[str] = []
+    total_bytes = 0
+    for _idx, _total, _sp, content_uri in chunks:
+        try:
+            text = await viking_fs.read_file(content_uri, ctx=_ctx)
+        except FileNotFoundError:
+            is_complete = False
+            continue
+        encoded_len = len(text.encode("utf-8"))
+        if total_bytes + encoded_len > _MAX_REASSEMBLY_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Reassembled resource exceeds {_MAX_REASSEMBLY_BYTES}-byte cap.",
+            )
+        total_bytes += encoded_len
+        parts.append(text)
+
+    content = "\n\n".join(parts)
+    return ReassembledResource(
+        uri=uri,
+        kind="directory",
+        content=content,
+        chunk_count=len(chunks),
+        is_complete=is_complete,
+    )
