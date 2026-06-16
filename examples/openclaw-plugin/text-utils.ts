@@ -44,14 +44,9 @@ function looksLikeMetadataJsonBlock(content: string): boolean {
   return matchedKeys.size >= 3;
 }
 
-const HEARTBEAT_RE = /\bHEARTBEAT(?:\.md|_OK)\b/;
 const TOOL_PLACEHOLDER_RE = /^\s*\[tool(?::\s*|Use:\s*)[^\]]+\]\s*$/i;
 
 export function sanitizeUserTextForCapture(text: string): string {
-  // 过滤 HEARTBEAT 健康检查消息
-  if (HEARTBEAT_RE.test(text)) {
-    return "";
-  }
   // Drop legacy synthetic tool placeholders before they reach memory extraction.
   if (TOOL_PLACEHOLDER_RE.test(text)) {
     return "";
