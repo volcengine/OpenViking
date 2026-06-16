@@ -28,6 +28,7 @@ WEBDAV_RESERVED_FILENAMES = frozenset(
         ".abstract.md",
         ".overview.md",
         ".relations.json",
+        ".embedding_cache.json",
         *MULTIWRITE_INTERNAL_FILE_NAMES,
     }
 )

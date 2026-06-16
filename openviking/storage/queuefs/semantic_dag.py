@@ -9,6 +9,13 @@ from dataclasses import dataclass, field
 from typing import ClassVar, Dict, List, Optional, Set
 
 from openviking.server.identity import RequestContext
+from openviking.storage.queuefs.embedding_cache import (
+    compute_embedding_cache_key,
+    load_embedding_cache,
+    make_cache_entry,
+    probe_vectors_present,
+    write_embedding_cache,
+)
 from openviking.storage.queuefs.semantic_sidecar import write_semantic_sidecars
 from openviking.storage.transaction import NO_LOCK, LockLease
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
@@ -212,6 +219,17 @@ class SemanticDagExecutor:
         self._dir_change_status: Dict[str, bool] = {}
         self._overview_cache: Dict[str, Dict[str, str]] = {}
         self._overview_cache_lock = asyncio.Lock()
+        # Per-directory embedding-skip sidecar state. Indexed by parent dir URI.
+        # _embedding_cache holds the loaded entries (filename -> {content_hash, embedded_at}).
+        # _embedding_vectors_present holds a per-file presence map from a single
+        # batched probe of the vector backend.
+        # _embedding_cache_updates accumulates entries for files we (re-)embedded
+        # in this run; flushed when the directory's overview is written.
+        self._embedding_cache: Dict[str, Dict[str, Dict[str, str]]] = {}
+        self._embedding_vectors_present: Dict[str, Dict[str, bool]] = {}
+        self._embedding_cache_updates: Dict[str, Dict[str, Dict[str, str]]] = {}
+        self._embedding_cache_lock = asyncio.Lock()
+        self._embedding_skip_counts: Dict[str, int] = {}
 
     async def run(self, root_uri: str) -> None:
         """Run DAG execution starting from root_uri."""
@@ -596,6 +614,110 @@ class SemanticDagExecutor:
 
         return None
 
+    async def _load_embedding_cache_for_dir(self, parent_uri: str) -> Dict[str, Dict[str, str]]:
+        """Load (and memoize) the .embedding_cache.json for ``parent_uri``."""
+        if parent_uri in self._embedding_cache:
+            return self._embedding_cache[parent_uri]
+        async with self._embedding_cache_lock:
+            if parent_uri not in self._embedding_cache:
+                try:
+                    self._embedding_cache[parent_uri] = await load_embedding_cache(
+                        self._viking_fs, parent_uri, self._ctx
+                    )
+                except Exception as e:
+                    logger.debug(
+                        "failed to load embedding cache for %s: %s", parent_uri, e
+                    )
+                    self._embedding_cache[parent_uri] = {}
+        return self._embedding_cache[parent_uri]
+
+    async def _vectors_present_for_dir(self, parent_uri: str) -> Dict[str, bool]:
+        """Batch-probe the vector backend once per directory."""
+        if parent_uri in self._embedding_vectors_present:
+            return self._embedding_vectors_present[parent_uri]
+        async with self._embedding_cache_lock:
+            if parent_uri not in self._embedding_vectors_present:
+                node = self._nodes.get(parent_uri)
+                file_uris = list(node.file_paths) if node else []
+                try:
+                    self._embedding_vectors_present[parent_uri] = await probe_vectors_present(
+                        file_uris, self._ctx
+                    )
+                except Exception as e:
+                    logger.debug(
+                        "failed to probe vector backend for %s: %s", parent_uri, e
+                    )
+                    self._embedding_vectors_present[parent_uri] = {u: False for u in file_uris}
+        return self._embedding_vectors_present[parent_uri]
+
+    async def _check_embedding_cache_hit(
+        self, parent_uri: str, file_path: str
+    ) -> Optional[str]:
+        """Return the cached content hash if it still matches and vectors exist.
+
+        ``None`` means: cache miss, stale, or vectors absent — caller must embed.
+        """
+        file_name = file_path.split("/")[-1]
+        cache = await self._load_embedding_cache_for_dir(parent_uri)
+        entry = cache.get(file_name)
+        if not entry:
+            return None
+        cached_key = entry.get("content_hash")
+        if not cached_key:
+            return None
+        current_key = await compute_embedding_cache_key(
+            self._viking_fs, file_path, self._ctx
+        )
+        if not current_key or current_key != cached_key:
+            return None
+        presence = await self._vectors_present_for_dir(parent_uri)
+        if not presence.get(file_path, False):
+            return None
+        return cached_key
+
+    async def _record_embedding_cache_entry(
+        self, parent_uri: str, file_path: str, *, skipped: bool
+    ) -> None:
+        """Record that ``file_path`` is embedded; track skip count for logging."""
+        file_name = file_path.split("/")[-1]
+        key = await compute_embedding_cache_key(self._viking_fs, file_path, self._ctx)
+        if not key:
+            return
+        async with self._embedding_cache_lock:
+            updates = self._embedding_cache_updates.setdefault(parent_uri, {})
+            updates[file_name] = make_cache_entry(key)
+            if skipped:
+                self._embedding_skip_counts[parent_uri] = (
+                    self._embedding_skip_counts.get(parent_uri, 0) + 1
+                )
+
+    async def _flush_embedding_cache(self, parent_uri: str) -> None:
+        """Persist the merged cache for ``parent_uri`` (called after overview write)."""
+        async with self._embedding_cache_lock:
+            updates = self._embedding_cache_updates.pop(parent_uri, None)
+            existing = dict(self._embedding_cache.get(parent_uri, {}))
+            skipped = self._embedding_skip_counts.pop(parent_uri, 0)
+        if not updates:
+            return
+        existing.update(updates)
+        # Drop entries for files no longer in the directory.
+        node = self._nodes.get(parent_uri)
+        if node is not None:
+            current_names = {fp.split("/")[-1] for fp in node.file_paths}
+            existing = {n: e for n, e in existing.items() if n in current_names}
+        try:
+            await write_embedding_cache(self._viking_fs, parent_uri, existing, self._ctx)
+        except Exception as e:
+            logger.debug("failed to persist embedding cache for %s: %s", parent_uri, e)
+            return
+        self._embedding_cache[parent_uri] = existing
+        if skipped:
+            logger.info(
+                "embedding cache hit: skipped %d files for directory %s",
+                skipped,
+                parent_uri,
+            )
+
     async def _check_dir_children_changed(
         self, dir_uri: str, current_files: List[str], current_dirs: List[str]
     ) -> bool:
@@ -664,7 +786,17 @@ class SemanticDagExecutor:
                     if summary_dict is not None:
                         need_vectorize = False
                     else:
-                        self._file_change_status[file_path] = True
+                        # Overview parsing returned nothing (free-text, non-English,
+                        # or "overview not generated" fallback). Consult the
+                        # .embedding_cache.json sidecar so we don't pointlessly
+                        # re-embed identical content (issue #2383).
+                        cache_hit = await self._check_embedding_cache_hit(
+                            parent_uri, file_path
+                        )
+                        if cache_hit is not None:
+                            need_vectorize = False
+                        else:
+                            self._file_change_status[file_path] = True
             else:
                 self._file_change_status[file_path] = True
             if summary_dict is None:
@@ -693,6 +825,13 @@ class SemanticDagExecutor:
                     use_summary=use_summary,
                 )
                 await self._add_vectorize_task(task)
+                await self._record_embedding_cache_entry(
+                    parent_uri, file_path, skipped=False
+                )
+            else:
+                await self._record_embedding_cache_entry(
+                    parent_uri, file_path, skipped=True
+                )
         except Exception as e:
             logger.error(f"Failed to schedule vectorization for {file_path}: {e}", exc_info=True)
         await self._on_file_done(parent_uri, file_path, summary_dict)
@@ -820,6 +959,8 @@ class SemanticDagExecutor:
                 wrote = await self._write_directory_semantics(dir_uri, overview, abstract)
                 if not wrote:
                     need_vectorize = False
+                else:
+                    await self._flush_embedding_cache(dir_uri)
             except Exception:
                 logger.info(f"[SemanticDag] {dir_uri} write failed, skipping")
 
