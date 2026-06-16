@@ -207,6 +207,66 @@ async def test_on_resource_added_reuses_same_reason_session(request_context):
 
 
 @pytest.mark.asyncio
+async def test_on_resource_added_routes_reason_to_actor_peer(request_context):
+    peer_ctx = RequestContext(
+        user=request_context.user,
+        role=request_context.role,
+        actor_peer_id="web-visitor-alice",
+    )
+    session_service = _FakeSessionService()
+    service = ResourceMemoryLinkService(
+        viking_fs=_FakeVikingFS({}),
+        session_service=session_service,
+    )
+
+    result = await service.on_resource_added(
+        ctx=peer_ctx,
+        resource_uri="viking://resources/images/ryoma.jpeg",
+        reason="这是越前龙马的照片",
+        source_name="ryoma.jpeg",
+    )
+
+    assert result["session_id"] == _RESOURCE_REASON_SESSION_ID
+    assert session_service.session.meta.memory_policy == {
+        "self": {"enabled": False},
+        "peer": {"enabled": True},
+        "memory_types": ["entities", "events", "preferences"],
+    }
+    assert session_service.session.messages[0]["peer_id"] == "web-visitor-alice"
+    assert session_service.committed == [
+        {
+            "ctx": peer_ctx,
+            "session_id": _RESOURCE_REASON_SESSION_ID,
+            "keep_recent_count": 0,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_on_resource_added_routes_peer_resource_uri_to_peer(request_context):
+    resource_uri = "viking://user/alice/peers/web-visitor-alice/resources/images/ryoma.jpeg"
+    session_service = _FakeSessionService()
+    service = ResourceMemoryLinkService(
+        viking_fs=_FakeVikingFS({}),
+        session_service=session_service,
+    )
+
+    await service.on_resource_added(
+        ctx=request_context,
+        resource_uri=resource_uri,
+        reason="这是越前龙马的照片",
+        source_name="ryoma.jpeg",
+    )
+
+    assert session_service.session.meta.memory_policy == {
+        "self": {"enabled": False},
+        "peer": {"enabled": True},
+        "memory_types": ["entities", "events", "preferences"],
+    }
+    assert session_service.session.messages[0]["peer_id"] == "web-visitor-alice"
+
+
+@pytest.mark.asyncio
 async def test_read_resource_directory_abstract_uses_parent_abstract(request_context):
     service = ResourceMemoryLinkService(
         viking_fs=_FakeVikingFS({"viking://resources/images/.abstract.md": "动漫角色照片合集"})
@@ -273,6 +333,41 @@ async def test_find_referencing_memories_uses_memory_refs(request_context):
     matches = await service._find_referencing_memories(
         ctx=request_context,
         resource_uri="viking://resources/docs",
+        recursive=True,
+    )
+
+    assert len(matches) == 1
+    assert matches[0].memory_uri == memory_uri
+    assert matches[0].resource_ref["resource_uri"] == resource_uri
+
+
+@pytest.mark.asyncio
+async def test_find_referencing_memories_scans_actor_peer_memory(request_context):
+    peer_ctx = RequestContext(
+        user=request_context.user,
+        role=request_context.role,
+        actor_peer_id="web-visitor-alice",
+    )
+    memory_uri = "viking://user/alice/peers/web-visitor-alice/memories/entities/wang.md"
+    resource_uri = "viking://resources/docs/id_card.pdf"
+    raw = (
+        "王大锤资料。\n\n"
+        "<!-- MEMORY_FIELDS\n"
+        "{\n"
+        '  "resource_refs": [\n'
+        "    {\n"
+        f'      "resource_uri": "{resource_uri}",\n'
+        '      "reason": "这是王大锤的身份证"\n'
+        "    }\n"
+        "  ]\n"
+        "}\n"
+        "-->"
+    )
+    service = ResourceMemoryLinkService(viking_fs=_FakeVikingFS({memory_uri: raw}))
+
+    matches = await service._find_referencing_memories(
+        ctx=peer_ctx,
+        resource_uri=resource_uri,
         recursive=True,
     )
 

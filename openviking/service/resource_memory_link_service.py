@@ -13,7 +13,14 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
 
-from openviking.core.namespace import canonical_user_root, context_type_for_uri
+from openviking.core.namespace import (
+    NamespaceShapeError,
+    canonical_user_root,
+    canonicalize_uri,
+    context_type_for_uri,
+    uri_parts,
+)
+from openviking.core.peer_id import normalize_peer_id
 from openviking.message.part import TextPart
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import MemoryFile
@@ -48,12 +55,38 @@ _ABSTRACT_NOT_READY_MARKERS = (
 )
 
 
-def _resource_reason_memory_policy() -> Dict[str, Any]:
+def _resource_reason_memory_policy(target_peer_id: Optional[str] = None) -> Dict[str, Any]:
+    peer_targeted = bool(target_peer_id)
     return {
-        "self": {"enabled": True},
-        "peer": {"enabled": False},
+        "self": {"enabled": not peer_targeted},
+        "peer": {"enabled": peer_targeted},
         "memory_types": list(_RESOURCE_REASON_MEMORY_TYPES),
     }
+
+
+def _resource_reason_peer_id(ctx: RequestContext, resource_uri: str) -> Optional[str]:
+    actor_peer_id = normalize_peer_id(ctx.actor_peer_id)
+    if actor_peer_id:
+        return actor_peer_id
+    return _peer_id_from_resource_uri(resource_uri, ctx)
+
+
+def _peer_id_from_resource_uri(resource_uri: str, ctx: RequestContext) -> Optional[str]:
+    try:
+        parts = uri_parts(canonicalize_uri(resource_uri, ctx))
+    except (NamespaceShapeError, ValueError):
+        return None
+    if len(parts) >= 5 and parts[0] == "user" and parts[2] == "peers":
+        return normalize_peer_id(parts[3])
+    return None
+
+
+def _memory_roots_for_resource_refs(ctx: RequestContext, resource_uri: str) -> List[str]:
+    user_root = canonical_user_root(ctx)
+    target_peer_id = _resource_reason_peer_id(ctx, resource_uri)
+    if target_peer_id:
+        return [f"{user_root}/peers/{target_peer_id}/memories"]
+    return [f"{user_root}/memories"]
 
 
 @dataclass
@@ -114,6 +147,7 @@ class ResourceMemoryLinkService:
         added_at = datetime.now(timezone.utc).isoformat()
         resource_abstract = await self._read_resource_directory_abstract(resource_uri, ctx)
         session_id = _RESOURCE_REASON_SESSION_ID
+        target_peer_id = _resource_reason_peer_id(ctx, resource_uri)
         commit_result: Dict[str, Any] = {}
         task_result: Optional[Dict[str, Any]] = None
 
@@ -123,26 +157,25 @@ class ResourceMemoryLinkService:
                 ctx,
                 auto_create=True,
             )
-            session.meta.memory_policy = _resource_reason_memory_policy()
-            session.add_messages(
-                [
-                    {
-                        "role": "user",
-                        "parts": [
-                            TextPart(
-                                text=self._build_resource_addition_message(
-                                    resource_uri=resource_uri,
-                                    reason=reason,
-                                    source_name=source_name,
-                                    added_at=added_at,
-                                    resource_abstract=resource_abstract,
-                                )
-                            )
-                        ],
-                        "created_at": added_at,
-                    }
-                ]
-            )
+            session.meta.memory_policy = _resource_reason_memory_policy(target_peer_id)
+            message_spec: Dict[str, Any] = {
+                "role": "user",
+                "parts": [
+                    TextPart(
+                        text=self._build_resource_addition_message(
+                            resource_uri=resource_uri,
+                            reason=reason,
+                            source_name=source_name,
+                            added_at=added_at,
+                            resource_abstract=resource_abstract,
+                        )
+                    )
+                ],
+                "created_at": added_at,
+            }
+            if target_peer_id:
+                message_spec["peer_id"] = target_peer_id
+            session.add_messages([message_spec])
             commit_result = await self._session_service.commit_async(
                 session_id,
                 ctx,
@@ -380,18 +413,21 @@ class ResourceMemoryLinkService:
         recursive: bool,
     ) -> List[_MemoryRefMatch]:
         viking_fs = self._get_viking_fs()
-        memory_root = f"{canonical_user_root(ctx)}/memories"
-        try:
-            entries = await viking_fs.tree(
-                memory_root,
-                ctx=ctx,
-                node_limit=1000000,
-                level_limit=None,
-            )
-        except Exception:
-            return []
-
         matches: List[_MemoryRefMatch] = []
+        entries: List[Dict[str, Any]] = []
+        for memory_root in _memory_roots_for_resource_refs(ctx, resource_uri):
+            try:
+                entries.extend(
+                    await viking_fs.tree(
+                        memory_root,
+                        ctx=ctx,
+                        node_limit=1000000,
+                        level_limit=None,
+                    )
+                )
+            except Exception:
+                continue
+
         for entry in entries:
             uri = entry.get("uri", "")
             rel_path = entry.get("rel_path", "")
