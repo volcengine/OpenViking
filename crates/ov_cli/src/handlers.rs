@@ -9,6 +9,7 @@ use crate::theme;
 use crate::tui;
 use colored::Colorize;
 use serde_json::{Map, Value};
+use unicode_width::UnicodeWidthChar;
 
 pub async fn handle_add_resource(
     mut path: String,
@@ -962,6 +963,26 @@ enum SelectOutcome {
     Quit,
 }
 
+#[derive(Default)]
+struct RenderedSelectRegion {
+    lines: Vec<String>,
+    rows_drawn: usize,
+}
+
+impl RenderedSelectRegion {
+    fn from_lines(lines: &[String], columns: usize) -> Self {
+        Self {
+            lines: lines.to_vec(),
+            rows_drawn: rendered_select_rows(lines, columns),
+        }
+    }
+
+    fn rows_to_clear(&self, columns: usize) -> usize {
+        self.rows_drawn
+            .max(rendered_select_rows(&self.lines, columns))
+    }
+}
+
 fn prompt_select(prompt: &str, items: &[String], default: usize) -> Result<SelectOutcome> {
     use std::io::{self, Write};
 
@@ -1000,18 +1021,18 @@ fn prompt_select(prompt: &str, items: &[String], default: usize) -> Result<Selec
     }
 
     let mut selected = default.min(items.len().saturating_sub(1));
-    let mut rendered_lines = 0usize;
+    let mut rendered_region = RenderedSelectRegion::default();
     let _raw_guard = RawGuard::enter()?;
 
     loop {
-        clear_rendered_lines(rendered_lines)?;
+        clear_rendered_region(&rendered_region)?;
         let lines = select_lines(prompt, items, selected);
-        rendered_lines = lines.len();
+        rendered_region = RenderedSelectRegion::from_lines(&lines, live_select_columns());
         print!("{}", live_select_block(&lines));
         io::stdout().flush()?;
 
-        if let Event::Key(key) = event::read()? {
-            match key.code {
+        match event::read()? {
+            Event::Key(key) => match key.code {
                 KeyCode::Up => {
                     selected = if selected == 0 {
                         items.len().saturating_sub(1)
@@ -1021,20 +1042,28 @@ fn prompt_select(prompt: &str, items: &[String], default: usize) -> Result<Selec
                 }
                 KeyCode::Down => selected = (selected + 1) % items.len(),
                 KeyCode::Enter | KeyCode::Char('\n') | KeyCode::Char('\r') => {
-                    clear_rendered_lines(rendered_lines)?;
+                    clear_rendered_region(&rendered_region)?;
                     return Ok(SelectOutcome::Selected(selected));
                 }
                 KeyCode::Esc => {
-                    clear_rendered_lines(rendered_lines)?;
+                    clear_rendered_region(&rendered_region)?;
                     return Ok(SelectOutcome::Back);
                 }
                 KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    clear_rendered_lines(rendered_lines)?;
+                    clear_rendered_region(&rendered_region)?;
                     return Ok(SelectOutcome::Quit);
                 }
                 _ => {}
+            },
+            Event::Resize(_, _) => {
+                // Redraw on the next loop using the new terminal width.
             }
+            _ => {}
         }
+    }
+
+    fn clear_rendered_region(region: &RenderedSelectRegion) -> Result<()> {
+        clear_rendered_lines(region.rows_to_clear(live_select_columns()))
     }
 
     fn clear_rendered_lines(lines: usize) -> Result<()> {
@@ -1064,6 +1093,46 @@ fn prompt_select(prompt: &str, items: &[String], default: usize) -> Result<Selec
         )?;
         Ok(())
     }
+}
+
+fn live_select_columns() -> usize {
+    crossterm::terminal::size()
+        .map(|(columns, _)| usize::from(columns).saturating_sub(1).max(1))
+        .unwrap_or(80)
+}
+
+fn rendered_select_rows(lines: &[String], columns: usize) -> usize {
+    lines
+        .iter()
+        .map(|line| rendered_select_line_rows(line, columns))
+        .sum()
+}
+
+fn rendered_select_line_rows(line: &str, columns: usize) -> usize {
+    let columns = columns.max(1);
+    let width = visible_display_width(line);
+    width.max(1).div_ceil(columns)
+}
+
+fn visible_display_width(value: &str) -> usize {
+    let mut width = 0usize;
+    let mut chars = value.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' && chars.peek() == Some(&'[') {
+            chars.next();
+            for next in chars.by_ref() {
+                if next.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+            continue;
+        }
+
+        width += UnicodeWidthChar::width(ch).unwrap_or(0);
+    }
+
+    width
 }
 
 fn live_select_block(lines: &[String]) -> String {
@@ -1570,6 +1639,26 @@ mod config_switch_prompt_tests {
 
         assert_eq!(rendered, "Choose config\r\n  › local\r\n");
         assert!(!rendered.contains("config\n"));
+    }
+
+    #[test]
+    fn switch_selector_counts_physical_rows_after_wrapping_and_ansi_styles() {
+        let lines = vec![
+            "\u{1b}[31m12345678901\u{1b}[0m".to_string(),
+            "short".to_string(),
+        ];
+
+        assert_eq!(rendered_select_rows(&lines, 10), 3);
+    }
+
+    #[test]
+    fn switch_selector_recomputes_clear_rows_after_resize() {
+        let lines = vec!["x".repeat(90)];
+        let region = RenderedSelectRegion::from_lines(&lines, 90);
+
+        assert_eq!(rendered_select_rows(&lines, 90), 1);
+        assert_eq!(rendered_select_rows(&lines, 30), 3);
+        assert_eq!(region.rows_to_clear(30), 3);
     }
 
     #[test]

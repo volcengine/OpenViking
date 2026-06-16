@@ -48,6 +48,26 @@ struct InstalledSkillSummary {
     description: String,
 }
 
+#[derive(Default)]
+struct RenderedSkillSelectRegion {
+    lines: Vec<String>,
+    rows_drawn: usize,
+}
+
+impl RenderedSkillSelectRegion {
+    fn from_lines(lines: &[String], columns: usize) -> Self {
+        Self {
+            lines: lines.to_vec(),
+            rows_drawn: rendered_skill_select_rows(lines, columns),
+        }
+    }
+
+    fn rows_to_clear(&self, columns: usize) -> usize {
+        self.rows_drawn
+            .max(rendered_skill_select_rows(&self.lines, columns))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 struct SkillSourceRecord {
@@ -1141,10 +1161,8 @@ async fn resolve_update_target(
         return update_target_from_record(&record, name, allow_prompt);
     }
 
-    if allow_prompt {
-        if let Some(target) = prompt_update_source(name)? {
-            return Ok(target);
-        }
+    if allow_prompt && let Some(target) = prompt_update_source(name)? {
+        return Ok(target);
     }
 
     Err(Error::Client(format!(
@@ -1422,17 +1440,18 @@ fn prompt_multi_select_skills(
     let _raw_guard = RawGuard::enter()?;
     let mut current = 0usize;
     let mut checked = vec![false; skills.len()];
-    let mut rendered_lines = 0usize;
+    let mut rendered_region = RenderedSkillSelectRegion::default();
 
     loop {
-        clear_rendered_lines(rendered_lines)?;
+        clear_rendered_region(&rendered_region)?;
         let lines = skill_multi_select_lines(prompt, skills, current, &checked);
-        rendered_lines = lines.len();
+        rendered_region =
+            RenderedSkillSelectRegion::from_lines(&lines, live_skill_select_columns());
         print!("{}", live_select_block(&lines));
         io::stdout().flush()?;
 
-        if let Event::Key(key) = event::read()? {
-            match key.code {
+        match event::read()? {
+            Event::Key(key) => match key.code {
                 KeyCode::Up => {
                     current = if current == 0 {
                         skills.len().saturating_sub(1)
@@ -1447,21 +1466,29 @@ fn prompt_multi_select_skills(
                     checked.fill(select_all);
                 }
                 KeyCode::Enter | KeyCode::Char('\n') | KeyCode::Char('\r') => {
-                    clear_rendered_lines(rendered_lines)?;
+                    clear_rendered_region(&rendered_region)?;
                     let selected = selected_skill_names(skills, current, &checked);
                     return Ok(Some(selected));
                 }
                 KeyCode::Esc => {
-                    clear_rendered_lines(rendered_lines)?;
+                    clear_rendered_region(&rendered_region)?;
                     return Ok(None);
                 }
                 KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    clear_rendered_lines(rendered_lines)?;
+                    clear_rendered_region(&rendered_region)?;
                     return Err(Error::Client("Aborted.".to_string()));
                 }
                 _ => {}
+            },
+            Event::Resize(_, _) => {
+                // Redraw on the next loop using the new terminal width.
             }
+            _ => {}
         }
+    }
+
+    fn clear_rendered_region(region: &RenderedSkillSelectRegion) -> Result<()> {
+        clear_rendered_lines(region.rows_to_clear(live_skill_select_columns()))
     }
 
     fn clear_rendered_lines(lines: usize) -> Result<()> {
@@ -1501,7 +1528,8 @@ fn selected_skill_names(
     let mut selected = skills
         .iter()
         .zip(checked)
-        .filter_map(|(skill, checked)| checked.then(|| skill.name.clone()))
+        .filter(|(_, checked)| **checked)
+        .map(|(skill, _)| skill.name.clone())
         .collect::<Vec<_>>();
     if selected.is_empty()
         && let Some(skill) = skills.get(current)
@@ -1590,6 +1618,47 @@ fn live_select_block(lines: &[String]) -> String {
     let mut rendered = lines.join("\r\n");
     rendered.push_str("\r\n");
     rendered
+}
+
+fn live_skill_select_columns() -> usize {
+    crossterm::terminal::size()
+        .map(|(columns, _)| columns as usize)
+        .unwrap_or(100)
+        .max(1)
+}
+
+fn rendered_skill_select_rows(lines: &[String], columns: usize) -> usize {
+    lines
+        .iter()
+        .map(|line| rendered_skill_select_row_count(line, columns))
+        .sum()
+}
+
+fn rendered_skill_select_row_count(line: &str, columns: usize) -> usize {
+    let columns = columns.max(1);
+    let width = ansi_stripped_display_width(line);
+
+    (width / columns) + usize::from(width == 0 || !width.is_multiple_of(columns))
+}
+
+fn ansi_stripped_display_width(line: &str) -> usize {
+    let mut width = 0usize;
+    let mut chars = line.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' && chars.peek() == Some(&'[') {
+            chars.next();
+            for next in chars.by_ref() {
+                if next.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            width += UnicodeWidthChar::width(ch).unwrap_or(0);
+        }
+    }
+
+    width
 }
 
 fn confirm_action(action: &str, names: &[String]) -> Result<bool> {
@@ -1783,9 +1852,10 @@ fn output_message_result(
 #[cfg(test)]
 mod tests {
     use super::{
-        PreparedSource, SkillSourceRecord, SourceOrigin, filter_skill_show_level,
-        parse_github_tree_source, parse_skill_md, prepare_source_from_git_record,
-        render_skill_show_for_table, resolve_add_targets, update_target_from_record,
+        PreparedSource, RenderedSkillSelectRegion, SkillSourceRecord, SourceOrigin,
+        filter_skill_show_level, parse_github_tree_source, parse_skill_md,
+        prepare_source_from_git_record, render_skill_show_for_table, rendered_skill_select_rows,
+        resolve_add_targets, update_target_from_record,
     };
     use serde_json::json;
     use std::path::Path;
@@ -2024,5 +2094,25 @@ mod tests {
                 .iter()
                 .any(|target| target.data.ends_with("skill-b"))
         );
+    }
+
+    #[test]
+    fn skill_remove_selector_counts_wrapped_ansi_rows() {
+        let lines = vec![
+            "\u{1b}[32m12345678901\u{1b}[0m".to_string(),
+            "short".to_string(),
+        ];
+
+        assert_eq!(rendered_skill_select_rows(&lines, 10), 3);
+    }
+
+    #[test]
+    fn skill_remove_selector_recomputes_clear_rows_after_resize() {
+        let lines = vec!["x".repeat(90)];
+        let region = RenderedSkillSelectRegion::from_lines(&lines, 90);
+
+        assert_eq!(rendered_skill_select_rows(&lines, 90), 1);
+        assert_eq!(rendered_skill_select_rows(&lines, 30), 3);
+        assert_eq!(region.rows_to_clear(30), 3);
     }
 }
