@@ -112,6 +112,8 @@ if sys.platform == "win32":
 
 GATEWAY_URL = "http://127.0.0.1:19789"
 OPENVIKING_URL = "http://127.0.0.1:2934"
+AGENT_ID = "main"
+
 console = Console(force_terminal=True)
 assertions: list[dict] = []
 
@@ -190,11 +192,14 @@ def has_tool_use_in_output(data: dict) -> bool:
 
 
 class OVInspector:
-    def __init__(self, base_url: str):
+    def __init__(self, base_url: str, agent_id: str = AGENT_ID):
         self.base_url = base_url.rstrip("/")
+        self.agent_id = agent_id
 
     def _headers(self) -> dict:
         h: dict[str, str] = {"Content-Type": "application/json"}
+        if self.agent_id:
+            h["X-OpenViking-Actor-Peer"] = self.agent_id
         return h
 
     def _get(self, path: str, timeout: int = 10):
@@ -278,10 +283,11 @@ def run_test(
     delay: float,
     verbose: bool,
     token: str = "",
+    agent_id: str = "",
 ):
     if not token:
         token = load_gateway_token()
-    inspector = OVInspector(openviking_url)
+    inspector = OVInspector(openviking_url, agent_id=agent_id or AGENT_ID)
 
     console.print(
         Panel(
@@ -541,6 +547,9 @@ def main():
     parser.add_argument("--gateway", default=GATEWAY_URL, help="Gateway 地址")
     parser.add_argument("--openviking", default=OPENVIKING_URL, help="OpenViking 地址")
     parser.add_argument("--token", default="", help="Gateway auth token (默认: 自动发现)")
+    parser.add_argument(
+        "--agent-id", default=AGENT_ID, help=f"OpenViking agent ID (默认: {AGENT_ID})"
+    )
     parser.add_argument("--delay", type=float, default=3.0, help="消息间延迟秒数")
     parser.add_argument("--verbose", "-v", action="store_true", help="详细输出")
     args = parser.parse_args()
@@ -554,6 +563,7 @@ def main():
         delay=args.delay,
         verbose=args.verbose,
         token=args.token,
+        agent_id=args.agent_id,
     )
 
 

@@ -1,46 +1,46 @@
 import { describe, expect, it } from "vitest";
 
+import { prepareRecallQuery } from "../../auto-recall.js";
 import {
-  prepareRecallQuery,
-  sanitizeRuntimeAgentId,
   createSessionAgentResolver,
-} from "../../index.js";
+  sanitizeOpenVikingAgentIdHeader,
+} from "../../routing/identity-routing.js";
 
-describe("sanitizeRuntimeAgentId", () => {
+describe("sanitizeOpenVikingAgentIdHeader", () => {
   it("keeps clean alphanumeric+dash+underscore strings", () => {
-    expect(sanitizeRuntimeAgentId("my-agent_v2")).toBe("my-agent_v2");
+    expect(sanitizeOpenVikingAgentIdHeader("my-agent_v2")).toBe("my-agent_v2");
   });
 
   it("replaces special characters with underscore", () => {
-    expect(sanitizeRuntimeAgentId("agent:role:v1")).toBe("agent_role_v1");
+    expect(sanitizeOpenVikingAgentIdHeader("agent:role:v1")).toBe("agent_role_v1");
   });
 
   it("collapses multiple underscores", () => {
-    expect(sanitizeRuntimeAgentId("a::b:::c")).toBe("a_b_c");
+    expect(sanitizeOpenVikingAgentIdHeader("a::b:::c")).toBe("a_b_c");
   });
 
   it("strips leading/trailing underscores", () => {
-    expect(sanitizeRuntimeAgentId("_agent_")).toBe("agent");
+    expect(sanitizeOpenVikingAgentIdHeader("_agent_")).toBe("agent");
   });
 
   it("returns 'default' for empty string", () => {
-    expect(sanitizeRuntimeAgentId("")).toBe("default");
+    expect(sanitizeOpenVikingAgentIdHeader("")).toBe("default");
   });
 
   it("returns 'default' for whitespace-only", () => {
-    expect(sanitizeRuntimeAgentId("   ")).toBe("default");
+    expect(sanitizeOpenVikingAgentIdHeader("   ")).toBe("default");
   });
 
   it("returns 'ov_agent' for all-symbol input", () => {
-    expect(sanitizeRuntimeAgentId("@#$%")).toBe("ov_agent");
+    expect(sanitizeOpenVikingAgentIdHeader("@#$%")).toBe("ov_agent");
   });
 
   it("handles spaces by replacing with underscore", () => {
-    expect(sanitizeRuntimeAgentId("my agent")).toBe("my_agent");
+    expect(sanitizeOpenVikingAgentIdHeader("my agent")).toBe("my_agent");
   });
 
   it("preserves mixed case", () => {
-    expect(sanitizeRuntimeAgentId("MyAgent")).toBe("MyAgent");
+    expect(sanitizeOpenVikingAgentIdHeader("MyAgent")).toBe("MyAgent");
   });
 });
 

@@ -4,22 +4,32 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { fileURLToPath } from "node:url";
 
-import { __test__ } from "../../commands/setup.js";
-
-const {
+import {
+  COMPATIBLE_SERVER_MAX,
+  COMPATIBLE_SERVER_MIN,
+  findPluginPackageRoot,
+} from "../../services/setup/package-metadata.js";
+import {
   parseVersionTuple,
   compareVersions,
-  checkVersionCompatibility,
-  isLegacyLocalMode,
+  checkVersionCompatibility as checkVersionCompatibilityForRange,
+} from "../../services/setup/version-compatibility.js";
+import { setExitCodeOnFailure } from "../../services/setup/exit-utils.js";
+import { isLegacyLocalMode } from "../../services/setup/setup-flow.js";
+import {
   activateContextEngineSlot,
-  isContextEngineSlotActive,
   ensureInstallRecord,
-  findPluginPackageRoot,
-  setExitCodeOnFailure,
-} = __test__;
+  isContextEngineSlotActive,
+} from "../../services/setup/config-writer.js";
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 let tmpDir: string;
+
+const checkVersionCompatibility = (serverVersion: string) =>
+  checkVersionCompatibilityForRange(serverVersion, {
+    min: COMPATIBLE_SERVER_MIN,
+    max: COMPATIBLE_SERVER_MAX,
+  });
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ov-setup-test-"));

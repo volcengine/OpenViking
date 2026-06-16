@@ -161,7 +161,7 @@ describe("RecallTraceJsonlStore", () => {
     await store.flush();
 
     const reloaded = new RecallTraceJsonlStore({ dir });
-    const result = await reloaded.query({ turn: "all", sessionId: "session-jsonl", limit: 10 });
+    const result = await reloaded.query({ turn: "all", sessionId: "session-jsonl", since: Date.UTC(2026, 5, 1), until: Date.UTC(2026, 5, 2), limit: 10 });
 
     expect(result.entries.map((entry) => entry.traceId)).toEqual(["persisted"]);
     expect(result.lookupLayer).toBe("persistent");
@@ -182,7 +182,7 @@ describe("RecallTraceJsonlStore", () => {
     await store.flush();
 
     const reloaded = new RecallTraceJsonlStore({ dir });
-    const result = await reloaded.query({ turn: "all", traceId: "redacted-preview", limit: 10 });
+    const result = await reloaded.query({ turn: "all", traceId: "redacted-preview", since: Date.UTC(2026, 5, 1), until: Date.UTC(2026, 5, 2), limit: 10 });
 
     expect(result.entries[0]!.trigger.query).toBe("safe query");
     expect(result.entries[0]!.trigger.rawUserTextPreview).toBeUndefined();
@@ -284,7 +284,7 @@ describe("RecallTraceRecorder", () => {
       persist: true,
       traceDir: dir,
     });
-    const result = await freshReader.queryWithFallback({ turn: "all", sessionId: "durable-session", limit: 10 });
+    const result = await freshReader.queryWithFallback({ turn: "all", sessionId: "durable-session", since: Date.UTC(2026, 5, 1), until: Date.UTC(2026, 5, 2), limit: 10 });
 
     expect(result.lookupLayer).toBe("persistent");
     expect(result.entries.map((entry) => entry.traceId)).toEqual(["durable-before-return"]);
