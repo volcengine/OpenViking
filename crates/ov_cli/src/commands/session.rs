@@ -364,6 +364,51 @@ pub async fn commit_session(
     Ok(())
 }
 
+pub async fn fix_session_archive(
+    client: &HttpClient,
+    session_id: &str,
+    archive_id: &str,
+    force: bool,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    let path = format!(
+        "/api/v1/sessions/{}/archives/{}/clear-failed",
+        url_encode(session_id),
+        url_encode(archive_id)
+    );
+    let params: Vec<(String, String)> = if force {
+        vec![("force".to_string(), "true".to_string())]
+    } else {
+        Vec::new()
+    };
+    let result: std::result::Result<serde_json::Value, _> =
+        client.post_with_query(&path, &json!({}), &params).await;
+    match result {
+        Ok(response) => {
+            output_success(&response, output_format, compact);
+            Ok(())
+        }
+        Err(err) => {
+            if !force && is_archive_data_present_conflict(&err) {
+                eprintln!(
+                    "{}",
+                    theme::muted(
+                        "archive data is still present on disk. Inspect the archive directory \
+                         and re-run with --force once you have decided the residue can be \
+                         discarded (the data directory itself is NOT removed by this command)."
+                    )
+                );
+            }
+            Err(err)
+        }
+    }
+}
+
+fn is_archive_data_present_conflict(err: &Error) -> bool {
+    matches!(err, Error::Api { status: Some(409), .. })
+}
+
 /// Add memory in one shot: creates a session, adds messages, and commits.
 ///
 /// Input can be:

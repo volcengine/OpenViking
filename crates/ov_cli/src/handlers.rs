@@ -493,6 +493,21 @@ pub async fn handle_session(cmd: SessionCommands, ctx: CliContext) -> Result<()>
             commands::session::commit_session(&client, &session_id, ctx.output_format, ctx.compact)
                 .await
         }
+        SessionCommands::FixArchive {
+            session_id,
+            archive_id,
+            force,
+        } => {
+            commands::session::fix_session_archive(
+                &client,
+                &session_id,
+                &archive_id,
+                force,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
     }
 }
 

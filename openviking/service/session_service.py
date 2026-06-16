@@ -294,6 +294,24 @@ class SessionService:
         self._record_archive_metric("ok" if result.get("archived") else "skip")
         return result
 
+    async def clear_failed_archive(
+        self,
+        session_id: str,
+        archive_id: str,
+        ctx: RequestContext,
+        *,
+        force: bool = False,
+    ) -> Dict[str, Any]:
+        """Resolve a wedged session by removing a stale ``.failed.json`` marker.
+
+        See :meth:`openviking.session.session.Session.clear_failed_archive`
+        for the contract. This wrapper just resolves the session and
+        delegates.
+        """
+        self._ensure_initialized()
+        session = await self.get(session_id, ctx)
+        return await session.clear_failed_archive(archive_id, force=force)
+
     async def get_commit_task(self, task_id: str, ctx: RequestContext) -> Optional[Dict[str, Any]]:
         """Query background commit task status by task_id for the calling owner."""
         task = await get_task_tracker().get(

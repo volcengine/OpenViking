@@ -1123,6 +1123,20 @@ enum SessionCommands {
         #[arg(value_name = "session-id")]
         session_id: String,
     },
+    /// Resolve a wedged session by clearing a stale .failed.json archive marker
+    FixArchive {
+        /// Session ID
+        #[arg(value_name = "session-id")]
+        session_id: String,
+        /// Archive ID
+        #[arg(value_name = "archive-id")]
+        archive_id: String,
+        /// Clear the marker even when the archive data directory still has
+        /// contents. By default the command refuses with a 409 to give the
+        /// operator a chance to inspect the residue first.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand)]
