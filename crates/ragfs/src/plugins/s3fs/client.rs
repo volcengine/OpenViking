@@ -255,7 +255,7 @@ fn aws_datetime_to_systemtime(dt: &aws_sdk_s3::primitives::DateTime) -> SystemTi
     }
 }
 
-/// 根据对象 key 的文件名后缀推断要写入 S3 的 Content-Type。
+/// The Content-Type to be written to S3 is inferred from the filename suffix of the object key.
 fn detect_content_type_for_key(key: &str) -> Option<String> {
     if key.ends_with('/') {
         return None;
