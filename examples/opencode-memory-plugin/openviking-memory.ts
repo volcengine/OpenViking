@@ -13,7 +13,9 @@
 
 import type { Hooks, PluginInput } from "@opencode-ai/plugin"
 import { tool } from "@opencode-ai/plugin"
+import { spawn } from "child_process"
 import * as fs from "fs"
+import * as os from "os"
 import * as path from "path"
 import { fileURLToPath } from "url"
 
@@ -282,6 +284,9 @@ interface OpenVikingConfig {
   peerId: string
   enabled: boolean
   timeoutMs: number
+  // Opt-in: auto-start `openviking-server` when the configured endpoint is
+  // local and not yet healthy. Default false preserves existing behavior.
+  autoStartServer?: boolean
   autoCommit?: {
     enabled: boolean
     intervalMinutes: number
@@ -366,6 +371,7 @@ const DEFAULT_CONFIG: OpenVikingConfig = {
   peerId: "",
   enabled: true,
   timeoutMs: 30000,
+  autoStartServer: false,
   autoCommit: {
     enabled: true,
     intervalMinutes: 10
@@ -634,6 +640,184 @@ async function checkServiceHealth(config: OpenVikingConfig): Promise<boolean> {
     })
     return false
   }
+}
+
+// ============================================================================
+// Server Auto-Start (opt-in)
+// ============================================================================
+
+const SERVER_BINARY_CANDIDATES = ["ov", "openviking-server"]
+const AUTO_START_HEALTH_TIMEOUT_MS = 30_000
+const AUTO_START_HEALTH_INTERVAL_MS = 1_000
+
+function isLocalEndpoint(endpoint: string): boolean {
+  try {
+    const url = new URL(endpoint)
+    const host = url.hostname.toLowerCase()
+    if (host === "localhost" || host === "127.0.0.1") return true
+    // URL parser strips brackets from IPv6 hostnames; accept both forms.
+    if (host === "::1" || host === "[::1]") return true
+    return false
+  } catch {
+    return false
+  }
+}
+
+function ovConfPath(): string {
+  return path.join(os.homedir(), ".openviking", "ov.conf")
+}
+
+function ovConfExists(): boolean {
+  try {
+    return fs.existsSync(ovConfPath())
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Resolve the first server binary on PATH. Returns the resolved name or null.
+ * Uses `where` on Windows and `command -v` on POSIX, mirroring the convention
+ * used by examples/opencode/plugin/index.mjs.
+ */
+async function findServerBinary(): Promise<string | null> {
+  const isWindows = process.platform === "win32"
+  for (const candidate of SERVER_BINARY_CANDIDATES) {
+    const found = await new Promise<boolean>((resolve) => {
+      const child = isWindows
+        ? spawn("where", [candidate], { stdio: "ignore", shell: false })
+        : spawn("command", ["-v", candidate], { stdio: "ignore", shell: true })
+      const timer = setTimeout(() => {
+        try { child.kill() } catch {}
+        resolve(false)
+      }, 2000)
+      child.on("error", () => {
+        clearTimeout(timer)
+        resolve(false)
+      })
+      child.on("exit", (code) => {
+        clearTimeout(timer)
+        resolve(code === 0)
+      })
+    })
+    if (found) return candidate
+  }
+  return null
+}
+
+/**
+ * Spawn the server detached and poll /health until healthy or the 30s budget
+ * expires. If the child exits before /health responds, fail fast instead of
+ * waiting out the polling loop.
+ */
+async function spawnAndWaitHealthy(
+  binary: string,
+  config: OpenVikingConfig,
+): Promise<boolean> {
+  let child
+  try {
+    // The `ov` CLI dispatches to subcommands; `openviking-server` is the server
+    // binary itself. Mirror the precedent in examples/opencode/plugin/index.mjs
+    // which simply runs `openviking-server`.
+    const args = binary === "openviking-server" ? [] : ["server"]
+    child = spawn(binary, args, {
+      detached: true,
+      stdio: "ignore",
+    })
+    child.unref()
+  } catch (error: any) {
+    log("ERROR", "auto-start", "Failed to spawn openviking server", {
+      binary,
+      error: error.message,
+    })
+    return false
+  }
+
+  let earlyExit = false
+  const onExit = (code: number | null) => {
+    earlyExit = true
+    log("ERROR", "auto-start", "Server process exited before becoming healthy", {
+      binary,
+      code,
+    })
+  }
+  child.on("exit", onExit)
+  child.on("error", (error: Error) => {
+    earlyExit = true
+    log("ERROR", "auto-start", "Server process emitted error", {
+      binary,
+      error: error.message,
+    })
+  })
+
+  const startedAt = Date.now()
+  try {
+    while (Date.now() - startedAt < AUTO_START_HEALTH_TIMEOUT_MS) {
+      if (earlyExit) return false
+      if (await checkServiceHealth(config)) {
+        log("INFO", "auto-start", "Server became healthy", {
+          binary,
+          elapsed_ms: Date.now() - startedAt,
+        })
+        return true
+      }
+      await new Promise((r) => setTimeout(r, AUTO_START_HEALTH_INTERVAL_MS))
+    }
+  } finally {
+    child.removeListener("exit", onExit)
+  }
+
+  // Timed out — try to clean up the child if it's still running.
+  try {
+    if (!earlyExit) child.kill()
+  } catch {}
+  log("ERROR", "auto-start", "Server did not become healthy within timeout", {
+    binary,
+    timeout_ms: AUTO_START_HEALTH_TIMEOUT_MS,
+  })
+  return false
+}
+
+/**
+ * Opt-in auto-start with preflight checks. Returns true if the server is
+ * healthy after the call, false otherwise. Refuses to spawn against remote
+ * endpoints, missing binaries, or missing ov.conf.
+ */
+async function ensureServerRunning(config: OpenVikingConfig): Promise<boolean> {
+  // 1. Already running? No-op.
+  if (await checkServiceHealth(config)) return true
+
+  // 2. Opt-out — preserve existing behavior.
+  if (!config.autoStartServer) return false
+
+  // 3. Local-only — never spawn against remote endpoints.
+  if (!isLocalEndpoint(config.endpoint)) {
+    log("INFO", "auto-start", "Skipping auto-start: endpoint is not local", {
+      endpoint: config.endpoint,
+    })
+    return false
+  }
+
+  // 4. Binary preflight.
+  const binary = await findServerBinary()
+  if (!binary) {
+    log("ERROR", "auto-start", "openviking is not installed (ov / openviking-server not on PATH). Run: pip install openviking")
+    return false
+  }
+
+  // 5. Config preflight.
+  if (!ovConfExists()) {
+    log("ERROR", "auto-start", `OpenViking config not found at ${ovConfPath()} — run \`ov init\` or create ov.conf first`)
+    return false
+  }
+
+  // 6. Spawn + health-check loop.
+  const started = await spawnAndWaitHealthy(binary, config)
+  if (!started) {
+    log("ERROR", "auto-start", "Failed to auto-start openviking-server")
+    return false
+  }
+  return true
 }
 
 // ============================================================================
@@ -1748,9 +1932,10 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
   // Load session map from disk
   await loadSessionMap()
 
-  const healthy = await checkServiceHealth(config)
+  const healthy = await ensureServerRunning(config)
   log("INFO", "health", healthy ? "OpenViking health check passed" : "OpenViking health check failed", {
     endpoint: config.endpoint,
+    auto_start: config.autoStartServer === true,
   })
 
   // Start auto-commit scheduler

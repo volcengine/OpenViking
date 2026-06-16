@@ -92,6 +92,7 @@ Example config:
   "peerId": "",
   "enabled": true,
   "timeoutMs": 30000,
+  "autoStartServer": false,
   "autoCommit": {
     "enabled": true,
     "intervalMinutes": 10
@@ -103,6 +104,18 @@ Example config:
 `peerId` is sent as `X-OpenViking-Actor-Peer` on data-plane memory requests; captured session messages store it as body `peer_id`. Leave it empty to preserve existing behavior.
 
 The environment variables `OPENVIKING_API_KEY`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, and `OPENVIKING_PEER_ID` take precedence over the config file.
+
+### Auto-start the OpenViking server (opt-in)
+
+Set `"autoStartServer": true` to let the plugin spawn `openviking-server` when the configured endpoint is local and `/health` is not yet responding. The default is `false` so existing users see no behavior change.
+
+When enabled, the plugin will only attempt auto-start when **all** of the following preflight checks pass:
+
+- The configured `endpoint` resolves to `localhost`, `127.0.0.1`, or `::1`. Remote endpoints are skipped silently.
+- An OpenViking binary (`ov` or `openviking-server`) is on `PATH` (`command -v` on POSIX, `where` on Windows). If neither resolves, the attempt is skipped with a clear log entry.
+- `~/.openviking/ov.conf` exists. If it doesn't, the plugin logs `OpenViking config not found — run \`ov init\` first` and skips.
+
+If all checks pass, the server is spawned detached and the plugin polls `/health` every 1s for up to 30s. If the child exits before becoming healthy, the failure is surfaced immediately rather than waiting out the full timeout.
 
 ## Runtime Files
 
@@ -228,6 +241,7 @@ Add an `autoRecall` block to your `openviking-config.json` to customize recall b
   "user": "opencode",
   "enabled": true,
   "timeoutMs": 30000,
+  "autoStartServer": false,
   "autoCommit": {
     "enabled": true,
     "intervalMinutes": 10

@@ -92,6 +92,7 @@ export OPENVIKING_USER="opencode"
   "peerId": "",
   "enabled": true,
   "timeoutMs": 30000,
+  "autoStartServer": false,
   "autoCommit": {
     "enabled": true,
     "intervalMinutes": 10
@@ -103,6 +104,18 @@ export OPENVIKING_USER="opencode"
 `peerId` 会作为 `X-OpenViking-Actor-Peer` 用于数据面的 memory 请求；捕获 session message 时仍写入 body `peer_id`。留空则保持现有行为。
 
 环境变量 `OPENVIKING_API_KEY`、`OPENVIKING_ACCOUNT`、`OPENVIKING_USER` 和 `OPENVIKING_PEER_ID` 优先于配置文件。
+
+### 自动启动 OpenViking 服务器（可选）
+
+将 `"autoStartServer"` 设为 `true`，插件会在配置的端点为本地且 `/health` 尚未响应时自动启动 `openviking-server`。默认值为 `false`，现有用户不会受到任何行为变化的影响。
+
+启用后，插件只会在以下**所有**预检都通过时才尝试自动启动：
+
+- 配置的 `endpoint` 解析为 `localhost`、`127.0.0.1` 或 `::1`。远程端点会被静默跳过。
+- `PATH` 上存在 OpenViking 可执行文件（`ov` 或 `openviking-server`）（POSIX 使用 `command -v`，Windows 使用 `where`）。两者都没有则跳过并记录清晰的日志。
+- 存在 `~/.openviking/ov.conf`。如果不存在，插件会记录 `OpenViking config not found — run \`ov init\` first` 并跳过。
+
+预检全部通过后，插件会以 detached 方式启动服务器，并每 1 秒轮询一次 `/health`，最多 30 秒。如果子进程在变为健康状态之前退出，将立即上报失败而不是等待整个超时窗口。
 
 ## 运行时文件
 
