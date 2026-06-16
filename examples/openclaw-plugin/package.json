@@ -22,6 +22,7 @@
     "dist/",
     "*.ts",
     "commands/setup.ts",
+    "plugin/openviking-query-formatters.ts",
     "!vitest.config.ts",
     "install-manifest.json",
     "openclaw.plugin.json",

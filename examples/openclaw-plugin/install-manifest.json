@@ -21,6 +21,7 @@
       "session-transcript-repair.ts",
       "runtime-utils.ts",
       "recall-trace.ts",
+      "plugin/openviking-query-formatters.ts",
       "commands/setup.ts",
       "tsconfig.json",
       "tsconfig.build.json",
