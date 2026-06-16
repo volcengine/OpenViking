@@ -1,6 +1,6 @@
 //! Provider-independent cache eligibility rules.
 
-const DEFAULT_MAX_CACHED_DIR_ENTRIES: usize = 1024;
+const DEFAULT_MAX_CACHED_DIR_ENTRIES: usize = 4096;
 
 /// Cache admission decision for a filesystem object.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,21 +19,24 @@ impl CacheDecision {
     }
 }
 
-/// Strategy used by [`super::CachedFileSystem`] for recursive tree traversal.
+/// Strategy used by [`super::CachedFileSystem`] for recursive traversal APIs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CacheTreeMode {
-    /// Delegate `tree_directory()` to the wrapped backend.
+pub enum CacheTraversalMode {
+    /// Delegate traversal APIs to the wrapped backend.
     Backend,
-    /// Traverse through `CachedFileSystem::read_dir()` so directory cache can be reused.
+    /// Traverse through `CachedFileSystem` so directory and file caches can be reused.
     CachedTraversal,
 }
+
+/// Backwards-compatible alias for the earlier tree-only traversal name.
+pub type CacheTreeMode = CacheTraversalMode;
 
 /// Rules used by [`super::CachedFileSystem`] before accessing the cache.
 #[derive(Debug, Clone)]
 pub struct CachePolicy {
     max_file_size: usize,
     max_cached_dir_entries: usize,
-    tree_mode: CacheTreeMode,
+    traversal_mode: CacheTraversalMode,
     bypass_prefixes: Vec<String>,
 }
 
@@ -43,7 +46,7 @@ impl CachePolicy {
         Self {
             max_file_size,
             max_cached_dir_entries: DEFAULT_MAX_CACHED_DIR_ENTRIES,
-            tree_mode: CacheTreeMode::Backend,
+            traversal_mode: CacheTraversalMode::Backend,
             bypass_prefixes: Vec::new(),
         }
     }
@@ -54,10 +57,15 @@ impl CachePolicy {
         self
     }
 
-    /// Set the tree traversal strategy.
-    pub fn with_tree_mode(mut self, mode: CacheTreeMode) -> Self {
-        self.tree_mode = mode;
+    /// Set the traversal strategy for recursive APIs such as tree and grep.
+    pub fn with_traversal_mode(mut self, mode: CacheTraversalMode) -> Self {
+        self.traversal_mode = mode;
         self
+    }
+
+    /// Set the tree traversal strategy.
+    pub fn with_tree_mode(self, mode: CacheTreeMode) -> Self {
+        self.with_traversal_mode(mode)
     }
 
     /// Return the maximum cacheable file size.
@@ -70,9 +78,14 @@ impl CachePolicy {
         self.max_cached_dir_entries
     }
 
+    /// Return the traversal strategy for recursive APIs such as tree and grep.
+    pub fn traversal_mode(&self) -> CacheTraversalMode {
+        self.traversal_mode
+    }
+
     /// Return the tree traversal strategy.
     pub fn tree_mode(&self) -> CacheTreeMode {
-        self.tree_mode
+        self.traversal_mode()
     }
 
     /// Return the admission decision for a full-file object.

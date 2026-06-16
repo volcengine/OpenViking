@@ -1,8 +1,13 @@
 //! A transparent [`FileSystem`](crate::FileSystem) cache wrapper.
 
 use super::envelope::{CacheEnvelope, CacheObjectKind, GenerationSnapshot};
-use super::{CacheError, CacheMetrics, CachePolicy, CacheProvider, CacheResult, CacheTreeMode};
-use crate::core::filesystem::{normalize_prefix_path, relative_depth, relative_match_file};
+use super::{
+    CacheError, CacheMetrics, CachePolicy, CacheProvider, CacheResult, CacheTraversalMode,
+};
+use crate::core::filesystem::{
+    compile_grep_regex, is_excluded_path, normalize_prefix_path, relative_depth,
+    relative_match_file,
+};
 use crate::core::{
     FileInfo, FileSystem, GrepResult, MultiWriteWrappedFS, Result, TreeEntry, WriteFlag,
 };
@@ -155,6 +160,98 @@ impl CachedFileSystem {
                             stack.push(TreeTask::VisitDir(entry_path));
                         }
                         stack.push(TreeTask::Emit(tree_entry));
+                    }
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
+    async fn grep_via_cache(
+        &self,
+        path: &str,
+        pattern: &str,
+        recursive: bool,
+        case_insensitive: bool,
+        node_limit: Option<usize>,
+        exclude_path: Option<&str>,
+        level_limit: Option<usize>,
+    ) -> Result<GrepResult> {
+        enum GrepTask {
+            Visit { path: String, is_dir: Option<bool> },
+        }
+
+        let re = compile_grep_regex(pattern, case_insensitive)?;
+        let base_path = normalize_prefix_path(path);
+        let normalized_exclude = exclude_path.map(normalize_prefix_path);
+        let mut result = GrepResult::new();
+        let mut stack = vec![GrepTask::Visit {
+            path: base_path.clone(),
+            is_dir: None,
+        }];
+
+        while let Some(GrepTask::Visit {
+            path: current_path,
+            is_dir,
+        }) = stack.pop()
+        {
+            if node_limit.is_some_and(|limit| result.count >= limit) {
+                break;
+            }
+
+            if let Some(exclude) = normalized_exclude.as_deref() {
+                if is_excluded_path(&current_path, exclude) {
+                    continue;
+                }
+            }
+
+            let is_dir = match is_dir {
+                Some(is_dir) => is_dir,
+                None => self.stat(&current_path).await?.is_dir,
+            };
+            if is_dir {
+                if !recursive && current_path != base_path {
+                    continue;
+                }
+
+                if let Some(limit) = level_limit {
+                    let rel = relative_match_file(&base_path, &current_path);
+                    if relative_depth(&rel) >= limit {
+                        continue;
+                    }
+                }
+
+                let entries = self.read_dir(&current_path).await?;
+                for entry in entries.into_iter().rev() {
+                    let entry_path = if current_path == "/" {
+                        format!("/{}", entry.name)
+                    } else {
+                        format!("{}/{}", current_path, entry.name)
+                    };
+                    stack.push(GrepTask::Visit {
+                        path: entry_path,
+                        is_dir: Some(entry.is_dir),
+                    });
+                }
+            } else {
+                if let Some(limit) = level_limit {
+                    let rel = relative_match_file(&base_path, &current_path);
+                    if relative_depth(&rel) > limit {
+                        continue;
+                    }
+                }
+
+                let content = self.read(&current_path, 0, 0).await?;
+                let content_str = String::from_utf8_lossy(&content);
+                let rel_file = relative_match_file(&base_path, &current_path);
+
+                for (line_num, line) in content_str.lines().enumerate() {
+                    if node_limit.is_some_and(|limit| result.count >= limit) {
+                        break;
+                    }
+                    if re.is_match(line) {
+                        result.add_match(rel_file.clone(), (line_num + 1) as u64, line.to_string());
                     }
                 }
             }
@@ -699,6 +796,22 @@ impl FileSystem for CachedFileSystem {
         exclude_path: Option<&str>,
         level_limit: Option<usize>,
     ) -> Result<GrepResult> {
+        if self.policy.traversal_mode() == CacheTraversalMode::CachedTraversal
+            && !self.wraps_multiwrite()
+        {
+            return self
+                .grep_via_cache(
+                    path,
+                    pattern,
+                    recursive,
+                    case_insensitive,
+                    node_limit,
+                    exclude_path,
+                    level_limit,
+                )
+                .await;
+        }
+
         self.backend
             .grep(
                 path,
@@ -719,7 +832,9 @@ impl FileSystem for CachedFileSystem {
         node_limit: Option<usize>,
         level_limit: Option<usize>,
     ) -> Result<Vec<TreeEntry>> {
-        if self.policy.tree_mode() == CacheTreeMode::CachedTraversal && !self.wraps_multiwrite() {
+        if self.policy.traversal_mode() == CacheTraversalMode::CachedTraversal
+            && !self.wraps_multiwrite()
+        {
             return self
                 .tree_directory_via_cache(path, show_hidden, node_limit, level_limit)
                 .await;

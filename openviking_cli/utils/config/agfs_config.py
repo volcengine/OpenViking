@@ -156,6 +156,13 @@ class AGFSCacheProvider(str, Enum):
     REDIS = "redis"
 
 
+class AGFSCacheTraversalMode(str, Enum):
+    """Traversal strategy for cache-aware recursive RAGFS APIs."""
+
+    BACKEND = "backend"
+    CACHED_TRAVERSAL = "cached_traversal"
+
+
 class YuanrongCacheConfig(BaseModel):
     """Configuration for Yuanrong cache provider."""
 
@@ -278,6 +285,10 @@ class AGFSCacheConfig(BaseModel):
     max_file_size_bytes: int = Field(
         default=1024 * 1024,
         description="Maximum full-file object size admitted to cache",
+    )
+    traversal_mode: AGFSCacheTraversalMode = Field(
+        default=AGFSCacheTraversalMode.BACKEND,
+        description="Traversal strategy for tree, glob, and grep",
     )
     bypass_prefixes: list[str] = Field(
         default_factory=list,

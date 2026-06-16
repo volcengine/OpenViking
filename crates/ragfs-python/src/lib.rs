@@ -14,7 +14,8 @@ use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
 use ragfs::cache::{
-    CacheError, CacheNamespace, CachePolicy, CacheProvider, CacheResult, MemoryCacheProvider,
+    CacheError, CacheNamespace, CachePolicy, CacheProvider, CacheResult, CacheTraversalMode,
+    MemoryCacheProvider,
 };
 use ragfs::core::builder::EncryptionConfig;
 use ragfs::core::{
@@ -37,6 +38,7 @@ struct RagfsCacheConfig {
     provider: CacheProviderKind,
     namespace: String,
     max_file_size_bytes: usize,
+    traversal_mode: CacheTraversalMode,
     bypass_prefixes: Vec<String>,
     yuanrong: YuanrongCacheConfig,
     mooncake: MooncakeCacheConfig,
@@ -87,6 +89,7 @@ impl Default for RagfsCacheConfig {
             provider: CacheProviderKind::Memory,
             namespace: "openviking".to_string(),
             max_file_size_bytes: CachePolicy::default().max_file_size(),
+            traversal_mode: CacheTraversalMode::Backend,
             bypass_prefixes: Vec::new(),
             yuanrong: YuanrongCacheConfig::default(),
             mooncake: MooncakeCacheConfig::default(),
@@ -271,6 +274,7 @@ fn cache_config_from_value(cache: &serde_json::Value) -> Result<RagfsCacheConfig
     }
     config.max_file_size_bytes =
         usize_field(cache, "max_file_size_bytes", config.max_file_size_bytes)?;
+    config.traversal_mode = traversal_mode(string_field(cache, "traversal_mode", "backend")?)?;
     config.bypass_prefixes = string_array_field(cache, "bypass_prefixes")?;
 
     if let Some(yuanrong) = cache.get("yuanrong") {
@@ -369,6 +373,16 @@ fn provider_kind(value: String) -> Result<CacheProviderKind, String> {
         "redis" => Ok(CacheProviderKind::Redis),
         other => Err(format!(
             "unsupported storage.agfs.cache.provider: {other}; expected memory, yuanrong, mooncake, or redis"
+        )),
+    }
+}
+
+fn traversal_mode(value: String) -> Result<CacheTraversalMode, String> {
+    match value.as_str() {
+        "backend" => Ok(CacheTraversalMode::Backend),
+        "cached_traversal" => Ok(CacheTraversalMode::CachedTraversal),
+        other => Err(format!(
+            "unsupported storage.agfs.cache.traversal_mode: {other}; expected backend or cached_traversal"
         )),
     }
 }
@@ -477,7 +491,7 @@ fn string_array_field_or_default(
 
 fn cache_policy_from_config(config: &RagfsCacheConfig) -> CachePolicy {
     config.bypass_prefixes.iter().fold(
-        CachePolicy::new(config.max_file_size_bytes),
+        CachePolicy::new(config.max_file_size_bytes).with_traversal_mode(config.traversal_mode),
         |policy, prefix| policy.with_bypass_prefix(prefix),
     )
 }
@@ -1665,7 +1679,8 @@ mod tests {
                         "cache": {
                             "enabled": true,
                             "provider": "memory",
-                            "namespace": "ov-test"
+                            "namespace": "ov-test",
+                            "traversal_mode": "cached_traversal"
                         }
                     }
                 }
@@ -1679,6 +1694,10 @@ mod tests {
         assert!(cache_config.enabled);
         assert_eq!(cache_config.provider, CacheProviderKind::Memory);
         assert_eq!(cache_config.namespace, "ov-test");
+        assert_eq!(
+            cache_config.traversal_mode,
+            CacheTraversalMode::CachedTraversal
+        );
         assert_eq!(provider.name(), "memory");
 
         fs::remove_file(path).unwrap();
@@ -1697,6 +1716,26 @@ mod tests {
         assert!(!cache_config.enabled);
         assert_eq!(cache_config.provider, CacheProviderKind::Memory);
         assert_eq!(cache_config.namespace, "openviking");
+        assert_eq!(cache_config.traversal_mode, CacheTraversalMode::Backend);
+
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn cache_config_rejects_invalid_traversal_mode() {
+        let path = std::env::temp_dir().join(format!(
+            "openviking-invalid-cache-traversal-{}.json",
+            std::process::id()
+        ));
+        fs::write(
+            &path,
+            r#"{"storage": {"agfs": {"cache": {"traversal_mode": "bogus"}}}}"#,
+        )
+        .unwrap();
+
+        let error = cache_config_from_ov_conf(path.to_str().unwrap()).unwrap_err();
+
+        assert!(error.contains("traversal_mode"));
 
         fs::remove_file(path).unwrap();
     }

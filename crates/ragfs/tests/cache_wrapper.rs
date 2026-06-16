@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use ragfs::cache::{
     CacheDecision, CacheError, CacheNamespace, CachePolicy, CacheProvider, CacheResult,
-    CacheTreeMode, CachedFileSystem, MemoryCacheProvider, MemoryMockProvider,
+    CacheTraversalMode, CachedFileSystem, MemoryCacheProvider, MemoryMockProvider,
 };
 use ragfs::core::{FsContextInner, GrepResult, MultiWriteWrappedFS, TreeEntry, FS_CTX};
 use ragfs::plugins::MemFileSystem;
@@ -16,6 +16,8 @@ struct CountingFileSystem {
     inner: Arc<MemFileSystem>,
     reads: Arc<AtomicU64>,
     read_dirs: Arc<AtomicU64>,
+    stats: Arc<AtomicU64>,
+    greps: Arc<AtomicU64>,
     trees: Arc<AtomicU64>,
     read_delay: Duration,
 }
@@ -80,6 +82,8 @@ impl CountingFileSystem {
             inner: Arc::new(MemFileSystem::new()),
             reads: Arc::new(AtomicU64::new(0)),
             read_dirs: Arc::new(AtomicU64::new(0)),
+            stats: Arc::new(AtomicU64::new(0)),
+            greps: Arc::new(AtomicU64::new(0)),
             trees: Arc::new(AtomicU64::new(0)),
             read_delay: Duration::ZERO,
         }
@@ -96,6 +100,14 @@ impl CountingFileSystem {
 
     fn read_dir_count(&self) -> u64 {
         self.read_dirs.load(Ordering::Relaxed)
+    }
+
+    fn stat_count(&self) -> u64 {
+        self.stats.load(Ordering::Relaxed)
+    }
+
+    fn grep_count(&self) -> u64 {
+        self.greps.load(Ordering::Relaxed)
     }
 
     fn tree_count(&self) -> u64 {
@@ -139,6 +151,7 @@ impl FileSystem for CountingFileSystem {
     }
 
     async fn stat(&self, path: &str) -> Result<FileInfo> {
+        self.stats.fetch_add(1, Ordering::Relaxed);
         self.inner.stat(path).await
     }
 
@@ -164,6 +177,7 @@ impl FileSystem for CountingFileSystem {
         exclude_path: Option<&str>,
         level_limit: Option<usize>,
     ) -> Result<GrepResult> {
+        self.greps.fetch_add(1, Ordering::Relaxed);
         self.inner
             .grep(
                 path,
@@ -210,8 +224,11 @@ fn cached_fs_with_policy(
 }
 
 #[test]
-fn cache_policy_tree_mode_defaults_to_backend() {
-    assert_eq!(CachePolicy::default().tree_mode(), CacheTreeMode::Backend);
+fn cache_policy_traversal_mode_defaults_to_backend() {
+    assert_eq!(
+        CachePolicy::default().traversal_mode(),
+        CacheTraversalMode::Backend
+    );
 }
 
 #[tokio::test]
@@ -233,6 +250,28 @@ async fn default_tree_directory_delegates_to_backend() {
 }
 
 #[tokio::test]
+async fn default_grep_delegates_to_backend() {
+    let backend = CountingFileSystem::new();
+    backend.mkdir("/docs", 0o755).await.unwrap();
+    backend
+        .write("/docs/one.md", b"needle", 0, WriteFlag::Create)
+        .await
+        .unwrap();
+    let probe = backend.clone();
+    let (fs, _) = cached_fs(backend);
+
+    let result = fs
+        .grep("/docs", "needle", true, false, None, None, None)
+        .await
+        .unwrap();
+
+    assert_eq!(result.count, 1);
+    assert_eq!(probe.grep_count(), 1);
+    assert_eq!(probe.read_dir_count(), 0);
+    assert_eq!(probe.read_count(), 0);
+}
+
+#[tokio::test]
 async fn cached_tree_traversal_reuses_directory_cache_after_warmup() {
     let backend = CountingFileSystem::new();
     backend.mkdir("/docs", 0o755).await.unwrap();
@@ -248,7 +287,7 @@ async fn cached_tree_traversal_reuses_directory_cache_after_warmup() {
     let probe = backend.clone();
     let (fs, _) = cached_fs_with_policy(
         backend,
-        CachePolicy::default().with_tree_mode(CacheTreeMode::CachedTraversal),
+        CachePolicy::default().with_traversal_mode(CacheTraversalMode::CachedTraversal),
     );
 
     let first = fs.tree_directory("/docs", false, None, None).await.unwrap();
@@ -262,6 +301,157 @@ async fn cached_tree_traversal_reuses_directory_cache_after_warmup() {
         probe.read_dir_count(),
         2,
         "second tree should reuse cached read_dir entries"
+    );
+}
+
+#[tokio::test]
+async fn cached_grep_traversal_reuses_directory_and_file_cache_after_warmup() {
+    let backend = CountingFileSystem::new();
+    backend.mkdir("/docs", 0o755).await.unwrap();
+    backend.mkdir("/docs/sub", 0o755).await.unwrap();
+    backend
+        .write("/docs/a.md", b"needle\nplain", 0, WriteFlag::Create)
+        .await
+        .unwrap();
+    backend
+        .write("/docs/sub/b.md", b"other\nneedle", 0, WriteFlag::Create)
+        .await
+        .unwrap();
+    let probe = backend.clone();
+    let (fs, _) = cached_fs_with_policy(
+        backend,
+        CachePolicy::default().with_traversal_mode(CacheTraversalMode::CachedTraversal),
+    );
+
+    let first = fs
+        .grep("/docs", "needle", true, false, None, None, None)
+        .await
+        .unwrap();
+    assert_eq!(first.count, 2);
+    assert_eq!(probe.grep_count(), 0);
+    assert_eq!(probe.read_dir_count(), 2);
+    assert_eq!(probe.read_count(), 2);
+    assert_eq!(probe.stat_count(), 1);
+
+    let second = fs
+        .grep("/docs", "needle", true, false, None, None, None)
+        .await
+        .unwrap();
+    assert_eq!(second.count, 2);
+    assert_eq!(
+        probe.read_dir_count(),
+        2,
+        "second grep should reuse cached read_dir entries"
+    );
+    assert_eq!(
+        probe.read_count(),
+        2,
+        "second grep should reuse cached file contents"
+    );
+    assert_eq!(
+        probe.stat_count(),
+        2,
+        "second grep should only stat the query root, not every cached entry"
+    );
+}
+
+#[tokio::test]
+async fn cached_grep_traversal_matches_default_grep_semantics() {
+    let backend = CountingFileSystem::new();
+    backend.mkdir("/docs", 0o755).await.unwrap();
+    backend.mkdir("/docs/sub", 0o755).await.unwrap();
+    backend.mkdir("/docs/skip", 0o755).await.unwrap();
+    backend
+        .write("/docs/a.md", b"Needle\nneedle", 0, WriteFlag::Create)
+        .await
+        .unwrap();
+    backend
+        .write("/docs/sub/b.md", b"needle\nmiss", 0, WriteFlag::Create)
+        .await
+        .unwrap();
+    backend
+        .write("/docs/skip/c.md", b"needle", 0, WriteFlag::Create)
+        .await
+        .unwrap();
+    let direct = backend.clone();
+    let (fs, _) = cached_fs_with_policy(
+        backend,
+        CachePolicy::default().with_traversal_mode(CacheTraversalMode::CachedTraversal),
+    );
+
+    let cached = fs
+        .grep(
+            "/docs",
+            "needle",
+            true,
+            true,
+            Some(2),
+            Some("/docs/skip"),
+            Some(1),
+        )
+        .await
+        .unwrap();
+    let direct_result = direct
+        .grep(
+            "/docs",
+            "needle",
+            true,
+            true,
+            Some(2),
+            Some("/docs/skip"),
+            Some(1),
+        )
+        .await
+        .unwrap();
+
+    let tuples = |result: &GrepResult| {
+        result
+            .matches
+            .iter()
+            .map(|m| (m.file.clone(), m.line, m.content.clone()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(tuples(&cached), tuples(&direct_result));
+}
+
+#[tokio::test]
+async fn cached_grep_traversal_falls_back_for_multiwrite_backend() {
+    let primary = CountingFileSystem::new();
+    primary.mkdir("/docs", 0o755).await.unwrap();
+    primary
+        .write("/docs/a.md", b"needle", 0, WriteFlag::Create)
+        .await
+        .unwrap();
+    let primary_probe = primary.clone();
+    let multiwrite = MultiWriteWrappedFS::builder(Arc::new(primary))
+        .build()
+        .unwrap();
+    let fs = CachedFileSystem::new(
+        Box::new(multiwrite),
+        Arc::new(MemoryCacheProvider::new()),
+        CacheNamespace::new("grep-multiwrite"),
+        CachePolicy::default().with_traversal_mode(CacheTraversalMode::CachedTraversal),
+    );
+
+    let ctx = Arc::new(FsContextInner::new("acct"));
+    let result = FS_CTX
+        .scope(ctx, async {
+            fs.grep("/docs", "needle", true, false, None, None, None)
+                .await
+                .unwrap()
+        })
+        .await;
+
+    assert_eq!(result.count, 1);
+    assert_eq!(
+        primary_probe.grep_count(),
+        1,
+        "multi-write backends must keep their backend grep path"
+    );
+    assert_eq!(
+        primary_probe.read_dir_count(),
+        0,
+        "cached traversal must not bypass multi-write grep semantics"
     );
 }
 
@@ -285,7 +475,7 @@ async fn cached_tree_traversal_matches_default_tree_semantics() {
     let direct = backend.clone();
     let (fs, _) = cached_fs_with_policy(
         backend,
-        CachePolicy::default().with_tree_mode(CacheTreeMode::CachedTraversal),
+        CachePolicy::default().with_traversal_mode(CacheTraversalMode::CachedTraversal),
     );
 
     let cached = fs
@@ -320,7 +510,7 @@ async fn cached_tree_traversal_matches_default_tree_semantics() {
 async fn cached_tree_traversal_returns_oversized_directories_without_caching_them() {
     let backend = CountingFileSystem::new();
     backend.mkdir("/large", 0o755).await.unwrap();
-    for index in 0..1025 {
+    for index in 0..4097 {
         backend
             .write(
                 &format!("/large/{index:04}.txt"),
@@ -334,7 +524,7 @@ async fn cached_tree_traversal_returns_oversized_directories_without_caching_the
     let probe = backend.clone();
     let (fs, _) = cached_fs_with_policy(
         backend,
-        CachePolicy::default().with_tree_mode(CacheTreeMode::CachedTraversal),
+        CachePolicy::default().with_traversal_mode(CacheTraversalMode::CachedTraversal),
     );
 
     assert_eq!(
@@ -342,14 +532,14 @@ async fn cached_tree_traversal_returns_oversized_directories_without_caching_the
             .await
             .unwrap()
             .len(),
-        1025
+        4097
     );
     assert_eq!(
         fs.tree_directory("/large", false, None, None)
             .await
             .unwrap()
             .len(),
-        1025
+        4097
     );
     assert_eq!(
         probe.read_dir_count(),
@@ -371,7 +561,7 @@ async fn cached_tree_traversal_falls_back_when_provider_is_unavailable() {
         Box::new(backend),
         Arc::new(UnavailableProvider),
         CacheNamespace::new("tree-unavailable"),
-        CachePolicy::default().with_tree_mode(CacheTreeMode::CachedTraversal),
+        CachePolicy::default().with_traversal_mode(CacheTraversalMode::CachedTraversal),
     );
 
     assert_eq!(
@@ -408,7 +598,7 @@ async fn cached_tree_traversal_falls_back_for_multiwrite_backend() {
         Box::new(multiwrite),
         Arc::new(MemoryCacheProvider::new()),
         CacheNamespace::new("tree-multiwrite"),
-        CachePolicy::default().with_tree_mode(CacheTreeMode::CachedTraversal),
+        CachePolicy::default().with_traversal_mode(CacheTraversalMode::CachedTraversal),
     );
 
     let ctx = Arc::new(FsContextInner::new("acct"));
@@ -552,7 +742,7 @@ async fn read_dir_is_cached_and_parent_changes_invalidate_it() {
 async fn oversized_directories_bypass_directory_cache() {
     let cacheable = CountingFileSystem::new();
     cacheable.mkdir("/small", 0o755).await.unwrap();
-    for index in 0..1024 {
+    for index in 0..4096 {
         cacheable
             .write(
                 &format!("/small/{index:04}.txt"),
@@ -566,13 +756,13 @@ async fn oversized_directories_bypass_directory_cache() {
     let cacheable_probe = cacheable.clone();
     let (cacheable_fs, _) = cached_fs(cacheable);
 
-    assert_eq!(cacheable_fs.read_dir("/small").await.unwrap().len(), 1024);
-    assert_eq!(cacheable_fs.read_dir("/small").await.unwrap().len(), 1024);
+    assert_eq!(cacheable_fs.read_dir("/small").await.unwrap().len(), 4096);
+    assert_eq!(cacheable_fs.read_dir("/small").await.unwrap().len(), 4096);
     assert_eq!(cacheable_probe.read_dir_count(), 1);
 
     let oversized = CountingFileSystem::new();
     oversized.mkdir("/large", 0o755).await.unwrap();
-    for index in 0..1025 {
+    for index in 0..4097 {
         oversized
             .write(
                 &format!("/large/{index:04}.txt"),
@@ -586,8 +776,8 @@ async fn oversized_directories_bypass_directory_cache() {
     let oversized_probe = oversized.clone();
     let (oversized_fs, _) = cached_fs(oversized);
 
-    assert_eq!(oversized_fs.read_dir("/large").await.unwrap().len(), 1025);
-    assert_eq!(oversized_fs.read_dir("/large").await.unwrap().len(), 1025);
+    assert_eq!(oversized_fs.read_dir("/large").await.unwrap().len(), 4097);
+    assert_eq!(oversized_fs.read_dir("/large").await.unwrap().len(), 4097);
     assert_eq!(oversized_probe.read_dir_count(), 2);
 }
 

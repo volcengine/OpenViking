@@ -28,7 +28,9 @@ use super::stats::{FilesystemStats, StatsCollector};
 use super::stats_wrapper::StatsWrappedFS;
 use super::types::{BackendsConfig, FileInfo, GrepResult, PluginConfig, TreeEntry, WriteFlag};
 #[cfg(feature = "cache")]
-use crate::cache::{CacheNamespace, CachePolicy, CacheProvider, CacheTreeMode, CachedFileSystem};
+use crate::cache::{
+    CacheNamespace, CachePolicy, CacheProvider, CacheTraversalMode, CachedFileSystem,
+};
 
 /// Information about a mounted filesystem
 #[derive(Clone)]
@@ -328,7 +330,10 @@ impl MountableFS {
                             Box::new(ArcFileSystem(arc)),
                             cache.provider.clone(),
                             mount_namespace(&cache.namespace, &normalized_path),
-                            cache.policy.clone().with_tree_mode(CacheTreeMode::Backend),
+                            cache
+                                .policy
+                                .clone()
+                                .with_traversal_mode(CacheTraversalMode::Backend),
                         )),
                         None => arc,
                     }
@@ -385,10 +390,13 @@ impl MountableFS {
     fn maybe_wrap_cache(&self, fs: Arc<dyn FileSystem>, mount_path: &str) -> Arc<dyn FileSystem> {
         match &self.cache {
             Some(cache) => {
-                let policy = if cache.policy.tree_mode() == CacheTreeMode::CachedTraversal
+                let policy = if cache.policy.traversal_mode() == CacheTraversalMode::CachedTraversal
                     && Self::as_multiwrite(&fs).is_some()
                 {
-                    cache.policy.clone().with_tree_mode(CacheTreeMode::Backend)
+                    cache
+                        .policy
+                        .clone()
+                        .with_traversal_mode(CacheTraversalMode::Backend)
                 } else {
                     cache.policy.clone()
                 };

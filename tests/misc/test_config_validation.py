@@ -159,6 +159,7 @@ def test_agfs_cache_defaults_to_disabled_memory_provider():
     assert config.cache.enabled is False
     assert config.cache.provider == "memory"
     assert config.cache.namespace == "openviking"
+    assert config.cache.traversal_mode == "backend"
 
 
 def test_agfs_cache_accepts_yuanrong_provider_config():
@@ -170,6 +171,7 @@ def test_agfs_cache_accepts_yuanrong_provider_config():
             "provider": "yuanrong",
             "namespace": "ov-test",
             "max_file_size_bytes": 4096,
+            "traversal_mode": "cached_traversal",
             "bypass_prefixes": ["/queue"],
             "yuanrong": {
                 "host": "10.0.0.1",
@@ -185,6 +187,7 @@ def test_agfs_cache_accepts_yuanrong_provider_config():
     assert config.cache.provider == "yuanrong"
     assert config.cache.namespace == "ov-test"
     assert config.cache.max_file_size_bytes == 4096
+    assert config.cache.traversal_mode == "cached_traversal"
     assert config.cache.bypass_prefixes == ["/queue"]
     assert config.cache.yuanrong.host == "10.0.0.1"
     assert config.cache.yuanrong.sdk_concurrency == 2
@@ -225,6 +228,15 @@ def test_agfs_cache_rejects_invalid_provider():
             path="/tmp/ov-test",
             backend="local",
             cache={"provider": "bogus"},
+        )
+
+
+def test_agfs_cache_rejects_invalid_traversal_mode():
+    with pytest.raises(ValueError, match="traversal_mode"):
+        AGFSConfig(
+            path="/tmp/ov-test",
+            backend="local",
+            cache={"traversal_mode": "bogus"},
         )
 
 
