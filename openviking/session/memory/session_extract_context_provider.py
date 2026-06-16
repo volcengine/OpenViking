@@ -91,8 +91,6 @@ class SessionExtractContextProvider(ExtractContextProvider):
 
     def get_conversation_text(self) -> str:
         """Get the full conversation text for match_text validation."""
-        from openviking.message.part import TextPart
-
         text_parts = []
         for message in self.messages or []:
             for part in getattr(message, "parts", []):
@@ -139,7 +137,6 @@ class SessionExtractContextProvider(ExtractContextProvider):
 
     def _detect_language(self) -> str:
         """检测输出语言"""
-        from openviking.message.part import TextPart
         from openviking.session.memory.utils import (
             resolve_output_language,
             strip_language_detection_noise,
