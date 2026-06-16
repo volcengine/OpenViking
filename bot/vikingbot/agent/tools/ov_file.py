@@ -27,10 +27,17 @@ class OVFileTool(Tool, ABC):
         return bool(getattr(tool_context, "openviking_connection", None))
 
     async def _get_client(self, tool_context: ToolContext):
+        actor_peer_id = getattr(tool_context, "sender_id", None)
         if self._has_request_connection(tool_context):
             return await VikingClient.create(
                 tool_context.workspace_id,
                 connection=tool_context.openviking_connection,
+                actor_peer_id=actor_peer_id,
+            )
+        if actor_peer_id:
+            return await VikingClient.create(
+                tool_context.workspace_id,
+                actor_peer_id=actor_peer_id,
             )
         cache_key = str(tool_context.workspace_id or "__default__")
         client = self._clients.get(cache_key)
@@ -40,8 +47,12 @@ class OVFileTool(Tool, ABC):
         return client
 
     async def _release_client(self, tool_context: ToolContext, client: VikingClient | None) -> None:
-        if client is not None and self._has_request_connection(tool_context):
-            await client.close()
+        if client is not None and (
+            self._has_request_connection(tool_context) or getattr(tool_context, "sender_id", None)
+        ):
+            close = getattr(client, "close", None)
+            if callable(close):
+                await close()
 
     @staticmethod
     def _normalize_uri(uri: str | None) -> str:
@@ -113,6 +124,13 @@ class OVFileTool(Tool, ABC):
         tool_context: ToolContext,
         uri: str | None,
     ) -> list[str]:
+        if getattr(client, "actor_peer_id", None):
+            if self._is_default_root_uri(uri):
+                return [uri or "viking://"]
+            if self._is_default_memory_uri(client, uri):
+                return [uri or self._current_memory_uri(client)]
+            return [uri or ""]
+
         if not self._is_default_memory_uri(client, uri):
             if not self._is_default_root_uri(uri):
                 return [uri or ""]
@@ -387,11 +405,12 @@ class VikingSearchTool(OVFileTool):
 
             if (
                 not target_uri
+                and not getattr(client, "actor_peer_id", None)
                 and client.should_sender_fanout()
                 and (memory_owner_user_ids or legacy_memory_user_ids)
             ):
                 user_ids = memory_owner_user_ids or legacy_memory_user_ids
-                search_requests = [{"target_uri": "viking://resources/", "peer_id": None}]
+                target_uris = ["viking://resources/"]
                 for user_id in self._dedupe_strings(list(user_ids or [])):
                     memory_uri = client._memory_target_uri(user_id)
                     skill_uri = (
@@ -399,54 +418,44 @@ class VikingSearchTool(OVFileTool):
                         if memory_uri.rstrip("/").endswith("/memories")
                         else "viking://user/skills/"
                     )
-                    search_requests.extend(
-                        [
-                            {"target_uri": memory_uri, "peer_id": None},
-                            {"target_uri": skill_uri, "peer_id": None},
-                        ]
-                    )
+                    target_uris.extend([memory_uri, skill_uri])
             else:
                 peer_ids = self._memory_peer_ids(tool_context)
                 if not target_uri:
-                    search_requests = (
-                        [{"target_uri": "", "peer_id": peer_ids[0]}]
-                        if peer_ids
-                        else [{"target_uri": "", "peer_id": None}]
-                    )
-                    peer_memory_uris = self._peer_memory_uris(
-                        client, tool_context, peer_ids=peer_ids[1:]
-                    )
-                    if peer_memory_uris:
-                        search_requests.extend(
-                            {"target_uri": peer_uri, "peer_id": None}
-                            for peer_uri in peer_memory_uris
+                    if getattr(client, "actor_peer_id", None):
+                        target_uris = [""]
+                    elif peer_ids:
+                        target_uris = self._dedupe_strings(
+                            [
+                                "viking://resources/",
+                                self._current_memory_uri(client),
+                                self._current_skill_uri(client),
+                                *self._peer_memory_uris(
+                                    client, tool_context, peer_ids=peer_ids
+                                ),
+                            ]
                         )
                     else:
-                        search_requests.extend(
-                            {"target_uri": "viking://user/memories/", "peer_id": peer_id}
-                            for peer_id in peer_ids[1:]
-                        )
-                elif self._is_default_memory_uri(client, target_uri) and peer_ids:
-                    memory_uris = self._dedupe_strings(
+                        target_uris = [""]
+                elif (
+                    self._is_default_memory_uri(client, target_uri)
+                    and not getattr(client, "actor_peer_id", None)
+                    and peer_ids
+                ):
+                    target_uris = self._dedupe_strings(
                         [
                             "viking://user/memories/",
                             *self._peer_memory_uris(client, tool_context, peer_ids=peer_ids),
                         ]
                     )
-                    search_requests = [
-                        {"target_uri": memory_uri, "peer_id": None}
-                        for memory_uri in memory_uris
-                    ]
                 else:
-                    search_requests = [{"target_uri": target_uri, "peer_id": None}]
+                    target_uris = [target_uri]
 
-            for request in search_requests:
+            for search_target_uri in target_uris:
                 search_kwargs = {
-                    "target_uri": request["target_uri"],
+                    "target_uri": search_target_uri,
                     "limit": 10,
                 }
-                if request.get("peer_id") is not None:
-                    search_kwargs["peer_id"] = request.get("peer_id")
                 results = await client.search(query, **search_kwargs)
                 filtered_items = self._filter_search_items(results, min_score=min_score)
                 for item_type, items in filtered_items.items():
