@@ -92,9 +92,10 @@ export type MemoryOpenVikingConfig = {
 
 /** Runtime config after memoryOpenVikingConfigSchema.parse() has applied defaults. */
 export type ParsedMemoryOpenVikingConfig = Required<
-  Omit<MemoryOpenVikingConfig, "agentExperience">
+  Omit<MemoryOpenVikingConfig, "agentExperience" | "recallTargetTypes">
 > & {
   agentExperience: Required<NonNullable<MemoryOpenVikingConfig["agentExperience"]>>;
+  recallTargetTypes: Array<"resource" | "user" | "agent">;
 };
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:1933";

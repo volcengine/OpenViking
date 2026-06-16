@@ -2,7 +2,7 @@ import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import type { MemoryOpenVikingConfig } from "./config.js";
-import { normalizeResourceTypes, type RecallResourceType } from "./recall-trace.js";
+import { normalizeRecallResourceTypes, type RecallResourceType } from "./registries/recall-resource-types.js";
 
 export type RuntimeQueryParams = {
   recallLimit?: number;
@@ -133,7 +133,7 @@ export function normalizeRuntimeQueryParams(value: RuntimeQueryParamsPatch): { p
   if (ovSearchLimit !== undefined) params.ovSearchLimit = ovSearchLimit;
 
   if (typeof value.recallPreferAbstract === "boolean") params.recallPreferAbstract = value.recallPreferAbstract;
-  if (value.resourceTypes !== undefined) params.resourceTypes = normalizeResourceTypes(value.resourceTypes);
+  if (value.resourceTypes !== undefined) params.resourceTypes = normalizeRecallResourceTypes(value.resourceTypes);
   if (typeof value.targetUri === "string" && value.targetUri.trim()) {
     const targetUri = value.targetUri.trim();
     if (!targetUri.startsWith("viking://")) throw new Error("targetUri must start with viking://");
@@ -271,7 +271,7 @@ export class RuntimeQueryConfigStore {
       scoreThreshold: cfg.recallScoreThreshold,
       maxInjectedChars: cfg.recallMaxInjectedChars,
       recallPreferAbstract: cfg.recallPreferAbstract,
-      resourceTypes: normalizeResourceTypes(cfg.recallTargetTypes),
+      resourceTypes: normalizeRecallResourceTypes(cfg.recallTargetTypes),
       ovSearchLimit: DEFAULT_OV_SEARCH_LIMIT,
       rankingWeights: { ...DEFAULT_RANKING_WEIGHTS },
       resourceTypeWeights: {},
@@ -344,7 +344,7 @@ export class RuntimeQueryConfigStore {
       effective.sources.recallPreferAbstract = source;
     }
     if (params.resourceTypes !== undefined) {
-      effective.resourceTypes = Array.isArray(params.resourceTypes) ? [...params.resourceTypes] : normalizeResourceTypes(params.resourceTypes);
+      effective.resourceTypes = Array.isArray(params.resourceTypes) ? [...params.resourceTypes] : normalizeRecallResourceTypes(params.resourceTypes);
       effective.sources.resourceTypes = source;
     }
     if (params.targetUri !== undefined) {

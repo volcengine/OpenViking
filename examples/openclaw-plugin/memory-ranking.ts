@@ -215,11 +215,7 @@ function buildRecallQueryProfile(query: string): RecallQueryProfile {
   };
 }
 
-function lexicalOverlapBoost(
-  tokens: string[],
-  text: string,
-  maxBoost = DEFAULT_RANKING_WEIGHTS.lexicalOverlapMax,
-): number {
+function lexicalOverlapBoost(tokens: string[], text: string, maxBoost = DEFAULT_RANKING_WEIGHTS.lexicalOverlapMax): number {
   if (tokens.length === 0 || !text) {
     return 0;
   }
@@ -236,16 +232,12 @@ function lexicalOverlapBoost(
 function inferResourceType(item: FindResultItem): string | undefined {
   if (item.uri.startsWith("viking://resources")) return "resource";
   if (item.uri.startsWith("viking://session/")) return "session";
+  if (item.uri.startsWith("viking://user/skills") || item.uri.startsWith("viking://skills")) return "agent";
   if (item.uri.startsWith("viking://user/")) return "user";
-  if (item.uri.startsWith("viking://agent/")) return "agent";
   return undefined;
 }
 
-function rankForInjection(
-  item: FindResultItem,
-  query: RecallQueryProfile,
-  options?: RankingOptions,
-): number {
+function rankForInjection(item: FindResultItem, query: RecallQueryProfile, options?: RankingOptions): number {
   // Keep ranking simple and stable: semantic score + light query-aware boosts.
   const weights = { ...DEFAULT_RANKING_WEIGHTS, ...(options?.weights ?? {}) };
   const baseScore = clampScore(item.score) * weights.baseScore;
@@ -255,9 +247,7 @@ function rankForInjection(
   const preferenceBoost = query.wantsPreference && isPreferencesMemory(item) ? weights.preference : 0;
   const overlapBoost = lexicalOverlapBoost(query.tokens, `${item.uri} ${abstract}`, weights.lexicalOverlapMax);
   const category = (item.category ?? "").toLowerCase();
-  const categoryBoost = category
-    ? (options?.categoryWeights?.[category] ?? options?.categoryWeights?.[item.category ?? ""] ?? 0)
-    : 0;
+  const categoryBoost = category ? (options?.categoryWeights?.[category] ?? options?.categoryWeights?.[item.category ?? ""] ?? 0) : 0;
   const resourceType = inferResourceType(item);
   const resourceTypeBoost = resourceType ? (options?.resourceTypeWeights?.[resourceType] ?? 0) : 0;
   return baseScore + leafBoost + eventBoost + preferenceBoost + overlapBoost + categoryBoost + resourceTypeBoost;
@@ -275,9 +265,7 @@ export function pickMemoriesForInjection(
   }
 
   const query = buildRecallQueryProfile(queryText);
-  const sorted = [...items].sort((a, b) =>
-    rankForInjection(b, query, rankingOptions) - rankForInjection(a, query, rankingOptions)
-  );
+  const sorted = [...items].sort((a, b) => rankForInjection(b, query, rankingOptions) - rankForInjection(a, query, rankingOptions));
   const deduped: FindResultItem[] = [];
   const seen = new Set<string>();
   for (const item of sorted) {

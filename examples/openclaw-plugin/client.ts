@@ -7,6 +7,12 @@ import { basename, dirname, join, relative } from "node:path";
 
 import { Zip, ZipDeflate } from "fflate";
 
+import { defaultHttpTransport, type HttpTransport } from "./adapters/http-transport.js";
+import {
+  defaultResourcePackager,
+  type ResourcePackager,
+} from "./adapters/resource-packager.js";
+
 export type FindResultItem = {
   uri: string;
   level?: number;
@@ -32,6 +38,13 @@ export type CaptureMode = "semantic" | "keyword";
 function userSessionUri(sessionId: string): string {
   return `viking://user/sessions/${encodeURIComponent(sessionId)}`;
 }
+
+export type OpenVikingClientOptions = {
+  transport?: HttpTransport;
+  resourcePackager?: ResourcePackager;
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+};
 
 export type CommitSessionResult = {
   session_id: string;
@@ -240,6 +253,11 @@ async function cleanupUploadTempPath(path?: string): Promise<void> {
 }
 
 export class OpenVikingClient {
+  private readonly transport: HttpTransport;
+  private readonly now: () => number;
+  private readonly sleep: (ms: number) => Promise<void>;
+  private readonly resourcePackager: ResourcePackager;
+
   constructor(
     private readonly baseUrl: string,
     private readonly apiKey: string,
@@ -250,7 +268,19 @@ export class OpenVikingClient {
     private readonly userId: string = "",
     /** When set, logs routing for find + session writes (tenant headers + paths; never apiKey). */
     private readonly routingDebugLog?: (message: string) => void,
-  ) {}
+	    optionsOrLegacyUserScope: OpenVikingClientOptions | boolean = {},
+	    _legacyAgentScope?: boolean,
+	    legacyOptions?: OpenVikingClientOptions,
+	  ) {
+	    const options =
+	      typeof optionsOrLegacyUserScope === "object" && optionsOrLegacyUserScope !== null
+	        ? optionsOrLegacyUserScope
+	        : (legacyOptions ?? {});
+	    this.transport = options.transport ?? defaultHttpTransport;
+	    this.now = options.now ?? Date.now;
+	    this.sleep = options.sleep ?? sleep;
+    this.resourcePackager = options.resourcePackager ?? defaultResourcePackager;
+  }
 
   getDefaultAgentId(): string {
     return this.defaultAgentId;
@@ -274,20 +304,28 @@ export class OpenVikingClient {
     return value || undefined;
   }
 
+  private resolveDefaultActorPeerHeader(): string {
+    const peerPrefix = this.defaultAgentId.trim();
+    return peerPrefix ? `${peerPrefix}_main` : "main";
+  }
+
   private async emitRoutingDebug(
     label: string,
     detail: Record<string, unknown>,
+    actorPeerId?: string,
   ): Promise<void> {
     if (!this.routingDebugLog) {
       return;
     }
     const tenantHeaders = this.resolveTenantHeaders();
+    const actorPeerHeader = this.resolveActorPeerHeader(actorPeerId);
     this.routingDebugLog(
       `openviking: ${label} ` +
         JSON.stringify({
           ...detail,
           X_OpenViking_Account: tenantHeaders.accountId ?? null,
           X_OpenViking_User: tenantHeaders.userId ?? null,
+          X_OpenViking_Actor_Peer: actorPeerHeader ?? null,
           session_vfs_hint: detail.sessionId
             ? userSessionUri(String(detail.sessionId))
             : undefined,
@@ -323,7 +361,7 @@ export class OpenVikingClient {
         headers.set("Content-Type", "application/json");
       }
 
-      const response = await fetch(`${this.baseUrl}${path}`, {
+      const response = await this.transport(`${this.baseUrl}${path}`, {
         ...init,
         headers,
         signal: controller.signal,
@@ -347,8 +385,13 @@ export class OpenVikingClient {
     }
   }
 
-  async healthCheck(requestTimeoutMs?: number): Promise<void> {
-    await this.request<{ status: string }>("/health", {}, requestTimeoutMs);
+  async healthCheck(requestTimeoutMs?: number, actorPeerId?: string): Promise<void> {
+    await this.request<{ status: string }>(
+      "/health",
+      {},
+      requestTimeoutMs,
+      actorPeerId ?? this.resolveDefaultActorPeerHeader(),
+    );
   }
 
   async createSession(
@@ -390,6 +433,7 @@ export class OpenVikingClient {
       contextType?: string | string[];
       actorPeerId?: string;
     },
+    legacyActorPeerId?: string,
   ): Promise<FindResult> {
     const targetUri = options.targetUri?.trim().replace(/\/+$/, "") ?? "";
     const body: {
@@ -407,7 +451,7 @@ export class OpenVikingClient {
     if (targetUri) {
       body.target_uri = targetUri;
     }
-    const actorPeerId = this.resolveActorPeerHeader(options.actorPeerId);
+    const actorPeerId = this.resolveActorPeerHeader(options.actorPeerId ?? legacyActorPeerId);
     const tenantHeaders = this.resolveTenantHeaders();
     this.routingDebugLog?.(
       `openviking: find POST ${this.baseUrl}/api/v1/search/find ` +
@@ -521,13 +565,7 @@ export class OpenVikingClient {
   }
 
   async uploadTempFile(filePath: string, actorPeerId?: string): Promise<string> {
-    const fileBytes = await readFile(filePath);
-    const form = new FormData();
-    form.append(
-      "file",
-      new Blob([toBlobPart(fileBytes)], { type: "application/octet-stream" }),
-      basename(filePath),
-    );
+    const form = await this.resourcePackager.createTempUploadBody(filePath);
     const result = await this.request<{ temp_file_id: string }>(
       "/api/v1/resources/temp_upload",
       { method: "POST", body: form },
@@ -622,23 +660,18 @@ export class OpenVikingClient {
       body.preserve_structure = input.preserveStructure;
     }
 
-    let cleanupPath: string | undefined;
+    let packagedSource: Awaited<ReturnType<ResourcePackager["prepareResourceSource"]>> | undefined;
     const requestTimeoutMs =
       input.wait ? resolveWaitRequestTimeoutMs(this.timeoutMs, input.timeout) : undefined;
     try {
-      if (isRemoteResourceSource(pathOrUrl)) {
-        body.path = pathOrUrl;
+      packagedSource = await this.resourcePackager.prepareResourceSource(pathOrUrl);
+      if (packagedSource.kind === "remote") {
+        body.path = packagedSource.path;
       } else {
-        const localStats = await stat(pathOrUrl);
-        let uploadPath = pathOrUrl;
-        if (localStats.isDirectory()) {
-          uploadPath = await this.zipDirectoryForUpload(pathOrUrl);
-          cleanupPath = uploadPath;
-          body.source_name = basename(pathOrUrl);
-        } else if (!localStats.isFile()) {
-          throw new Error(`Path is not a file or directory: ${pathOrUrl}`);
+        if (packagedSource.sourceName) {
+          body.source_name = packagedSource.sourceName;
         }
-        body.temp_file_id = await this.uploadTempFile(uploadPath, actorPeerId);
+        body.temp_file_id = await this.uploadTempFile(packagedSource.uploadPath, actorPeerId);
       }
       return this.request<AddResourceResult>(
         "/api/v1/resources",
@@ -647,7 +680,7 @@ export class OpenVikingClient {
         actorPeerId,
       );
     } finally {
-      await cleanupUploadTempPath(cleanupPath);
+      await this.resourcePackager.cleanup(packagedSource);
     }
   }
 
@@ -662,21 +695,17 @@ export class OpenVikingClient {
       wait: input.wait ?? false,
       timeout: input.timeout,
     };
-    let cleanupPath: string | undefined;
+    let packagedSource: Awaited<ReturnType<ResourcePackager["prepareLocalUploadSource"]>> | undefined;
     const requestTimeoutMs =
       input.wait ? resolveWaitRequestTimeoutMs(this.timeoutMs, input.timeout) : undefined;
     try {
       if (hasPath) {
         const skillPath = input.path!.trim();
-        const localStats = await stat(skillPath);
-        let uploadPath = skillPath;
-        if (localStats.isDirectory()) {
-          uploadPath = await this.zipDirectoryForUpload(skillPath);
-          cleanupPath = uploadPath;
-        } else if (!localStats.isFile()) {
+        packagedSource = await this.resourcePackager.prepareLocalUploadSource(skillPath);
+        if (packagedSource.kind !== "upload") {
           throw new Error(`Path is not a file or directory: ${skillPath}`);
         }
-        body.temp_file_id = await this.uploadTempFile(uploadPath, actorPeerId);
+        body.temp_file_id = await this.uploadTempFile(packagedSource.uploadPath, actorPeerId);
       } else {
         body.data = input.data;
       }
@@ -687,7 +716,7 @@ export class OpenVikingClient {
         actorPeerId,
       );
     } finally {
-      await cleanupUploadTempPath(cleanupPath);
+      await this.resourcePackager.cleanup(packagedSource);
     }
   }
 
@@ -720,20 +749,21 @@ export class OpenVikingClient {
       abstract?: string;
       context_type?: "memory" | "resource" | "skill";
     }>,
+    actorPeerId?: string,
     createdAt?: string,
-    peerId?: string,
+    roleId?: string,
   ): Promise<void> {
     const body: {
       role: string;
-      peer_id?: string;
+      role_id?: string;
       parts: typeof parts;
       created_at?: string;
     } = { role, parts };
     if (createdAt) {
       body.created_at = createdAt;
     }
-    if (peerId) {
-      body.peer_id = peerId;
+    if (roleId) {
+      body.role_id = roleId;
     }
     await this.emitRoutingDebug(
       "session message POST (with parts)",
@@ -741,10 +771,11 @@ export class OpenVikingClient {
         path: `/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`,
         sessionId,
         role,
-        peer_id: peerId ?? null,
+        role_id: roleId ?? null,
         partCount: parts.length,
         created_at: createdAt ?? null,
       },
+      actorPeerId,
     );
     await this.request<{ session_id: string }>(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`,
@@ -752,11 +783,13 @@ export class OpenVikingClient {
         method: "POST",
         body: JSON.stringify(body),
       },
+      undefined,
+      actorPeerId,
     );
   }
 
   /** GET session — server auto-creates if absent; returns session meta including message stats and token usage. */
-  async getSession(sessionId: string): Promise<{
+  async getSession(sessionId: string, actorPeerId?: string): Promise<{
     message_count?: number;
     commit_count?: number;
     last_commit_at?: string;
@@ -772,6 +805,8 @@ export class OpenVikingClient {
     }>(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}`,
       { method: "GET" },
+      undefined,
+      actorPeerId,
     );
   }
 
@@ -791,8 +826,9 @@ export class OpenVikingClient {
        * WM v2: number of most-recent messages to keep live after commit.
        * Forwarded as `keep_recent_count` in the POST body. 0 (default)
        * preserves the pre-v2 "archive everything" behavior.
-       */
+      */
       keepRecentCount?: number;
+      agentId?: string;
     },
   ): Promise<CommitSessionResult> {
     const keepRecentCount =
@@ -807,6 +843,7 @@ export class OpenVikingClient {
         wait: options?.wait ?? false,
         keepRecentCount,
       },
+      options?.agentId,
     );
     const body: Record<string, unknown> = {};
     if (keepRecentCount > 0) {
@@ -815,6 +852,8 @@ export class OpenVikingClient {
     const result = await this.request<CommitSessionResult>(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`,
       { method: "POST", body: JSON.stringify(body) },
+      undefined,
+      options?.agentId,
     );
 
     if (!options?.wait || !result.task_id) {
@@ -822,11 +861,11 @@ export class OpenVikingClient {
     }
 
     // Client-side poll until Phase 2 finishes
-    const deadline = Date.now() + (options.timeoutMs ?? DEFAULT_PHASE2_POLL_TIMEOUT_MS);
+    const deadline = this.now() + (options.timeoutMs ?? DEFAULT_PHASE2_POLL_TIMEOUT_MS);
     const pollInterval = 500;
-    while (Date.now() < deadline) {
-      await sleep(pollInterval);
-      const task = await this.getTask(result.task_id).catch(() => null);
+    while (this.now() < deadline) {
+      await this.sleep(pollInterval);
+      const task = await this.getTask(result.task_id, options.agentId).catch(() => null);
       if (!task) break;
       if (task.status === "completed") {
         const taskResult = (task.result ?? {}) as Record<string, unknown>;
@@ -846,30 +885,38 @@ export class OpenVikingClient {
   }
 
   /** Poll a background task by ID. */
-  async getTask(taskId: string): Promise<TaskResult> {
+  async getTask(taskId: string, actorPeerId?: string): Promise<TaskResult> {
     return this.request<TaskResult>(
       `/api/v1/tasks/${encodeURIComponent(taskId)}`,
       { method: "GET" },
+      undefined,
+      actorPeerId,
     );
   }
 
   async getSessionContext(
     sessionId: string,
     tokenBudget: number = 128_000,
+    actorPeerId?: string,
   ): Promise<SessionContextResult> {
     return this.request(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/context?token_budget=${tokenBudget}`,
       { method: "GET" },
+      undefined,
+      actorPeerId,
     );
   }
 
   async getSessionArchive(
     sessionId: string,
     archiveId: string,
+    actorPeerId?: string,
   ): Promise<SessionArchiveResult> {
     return this.request(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/archives/${encodeURIComponent(archiveId)}`,
       { method: "GET" },
+      undefined,
+      actorPeerId,
     );
   }
 

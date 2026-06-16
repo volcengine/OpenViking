@@ -1,5 +1,5 @@
 import type { FindResult, FindResultItem, OpenVikingClient } from "./client.js";
-import type { ParsedMemoryOpenVikingConfig } from "./config.js";
+import type { MemoryOpenVikingConfig } from "./config.js";
 import type { EffectiveQueryConfig } from "./query-config.js";
 import {
   pickMemoriesForInjection,
@@ -8,18 +8,20 @@ import {
   toJsonLog,
 } from "./memory-ranking.js";
 import { quickRecallPrecheck, withTimeout } from "./process-manager.js";
+import {
+  resolveRecallSearchPlan,
+  type RecallResourceType,
+} from "./registries/recall-resource-types.js";
+import {
+  type RecallTraceEntry,
+  type RecallTraceResult,
+} from "./recall-trace.js";
 import { sanitizeUserTextForCapture } from "./text-utils.js";
 import { estimateTextTokens } from "./token-estimator.js";
-import type {
-  RecallResourceType,
-  RecallTraceEntry,
-  RecallTraceResult,
-} from "./recall-trace.js";
-import { resolveRecallSearchPlan } from "./recall-trace.js";
 
+const AUTO_RECALL_TIMEOUT_MS = 5_000;
 const RECALL_QUERY_MAX_CHARS = 4_000;
 export const AUTO_RECALL_SOURCE_MARKER = "Source: openviking-auto-recall";
-export const OPENVIKING_CONTEXT_TAG = "openviking-context";
 
 type Logger = {
   info: (msg: string) => void;
@@ -125,16 +127,6 @@ function formatMemoryLine(
   ].join("\n");
 }
 
-function isExperienceMemory(item: FindResultItem): boolean {
-  const category = (item.category ?? "").toLowerCase();
-  return (
-    item.uri.includes("/memories/experiences/") ||
-    item.uri.includes("/experiences/") ||
-    category === "experience" ||
-    category === "experiences"
-  );
-}
-
 async function resolveMemoryContent(
   item: FindResultItem,
   readFn: (uri: string) => Promise<string>,
@@ -220,48 +212,24 @@ export async function buildMemoryLinesWithBudget(
   return { lines, estimatedTokens: totalTokens };
 }
 
-export function buildLongTermMemorySection(memoryLines: string[]): string {
+export function buildRecallContextBlock(memoryLines: string[]): string {
   return [
-    "## Long-term Memories",
-    "",
+    "<relevant-memories>",
     AUTO_RECALL_SOURCE_MARKER,
     "The following OpenViking memories may be relevant:",
     ...memoryLines,
-  ].join("\n");
-}
-
-export function buildOpenVikingContextBlock(params: {
-  sections: Array<string | undefined>;
-}): string {
-  const sections = params.sections
-    .map((section) => section?.trim())
-    .filter((section): section is string => Boolean(section));
-  if (sections.length === 0) {
-    return "";
-  }
-  return [
-    `<${OPENVIKING_CONTEXT_TAG}>`,
-    sections.join("\n\n"),
-    `</${OPENVIKING_CONTEXT_TAG}>`,
+    "</relevant-memories>",
   ].join("\n");
 }
 
 function newTraceId(): string {
-  return `auto_recall_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+  return `recall_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function preview(value: string | undefined | null, maxChars: number): string | undefined {
-  const normalized = typeof value === "string" ? value.trim().replace(/\s+/g, " ") : "";
-  if (!normalized) {
-    return undefined;
-  }
-  return normalized.length > maxChars ? normalized.slice(0, maxChars) : normalized;
-}
-
-function traceResourceTypeForUri(uri: string | undefined): RecallResourceType {
-  if (uri?.startsWith("viking://resources")) return "resource";
-  if (uri?.startsWith("viking://session/") || uri?.includes("/sessions/")) return "session";
-  return "user";
+function preview(value: string | undefined, maxChars: number): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  return trimmed.length > maxChars ? trimmed.slice(0, maxChars) : trimmed;
 }
 
 function toTraceResults(items: FindResultItem[], resourceType: RecallResourceType): RecallTraceResult[] {
@@ -277,9 +245,10 @@ function toTraceResults(items: FindResultItem[], resourceType: RecallResourceTyp
 }
 
 function boundTraceQuery(query: string, maxChars: number): { query: string; queryTruncated?: boolean } {
-  return query.length <= maxChars
-    ? { query }
-    : { query: query.slice(0, maxChars), queryTruncated: true };
+  if (query.length <= maxChars) {
+    return { query };
+  }
+  return { query: query.slice(0, maxChars), queryTruncated: true };
 }
 
 function runtimeFlag(runtimeContext: unknown, key: string): unknown {
@@ -340,199 +309,30 @@ export function shouldRecallAgentExperience(input: {
   return { recall: false, score, reason: score < 0 ? "non_execution" : "below_threshold" };
 }
 
-function sectionAfter(markdown: string, heading: string): string {
-  const re = new RegExp(`(?:^|\\n)##\\s+${heading}\\s*\\n([\\s\\S]*?)(?=\\n##\\s+|$)`, "i");
-  return markdown.match(re)?.[1]?.trim() ?? "";
-}
-
-function bulletize(text: string, fallback: string): string[] {
-  const cleaned = text
-    .split(/\n+/)
-    .map((line) => line.replace(/^[-*]\s*/, "").trim())
-    .filter(Boolean);
-  const lines = cleaned.length > 0 ? cleaned : [fallback];
-  return lines.slice(0, 5).map((line) => `- ${line}`);
-}
-
-function titleFromUri(uri: string): string {
-  const raw = decodeURIComponent(uri.split("/").pop() ?? "experience").replace(/\.md$/i, "");
-  return raw || "experience";
-}
-
-function renderExperience(item: FindResultItem, content: string): string | null {
-  const situation = sectionAfter(content, "Situation");
-  const approach = sectionAfter(content, "Approach");
-  const reflect = sectionAfter(content, "Reflect");
-  const hasStructuredExperience = Boolean(situation || approach || reflect);
-  if (!hasStructuredExperience && !isExperienceMemory(item)) {
-    return null;
-  }
-
-  const score = typeof item.score === "number" ? item.score.toFixed(3) : "n/a";
-  return [
-    `### Experience: ${titleFromUri(item.uri)}`,
-    `Source: ${item.uri}`,
-    `Score: ${score}`,
-    "",
-    "Trigger:",
-    ...bulletize(situation, item.abstract?.trim() || content.slice(0, 240).trim() || "Similar execution situation."),
-    "",
-    "Do:",
-    ...bulletize(approach, "Use the proven execution path from this experience."),
-    "",
-    "Avoid:",
-    ...bulletize(reflect, "Avoid repeating failure modes called out by this experience."),
-    "",
-    "Scope:",
-    ...bulletize(situation, "Applies to similar agent execution tasks."),
-    "",
-    "Check:",
-    ...bulletize(reflect || approach, "Verify the task outcome before final response."),
-  ].join("\n");
-}
-
-export async function buildAgentExperienceRecallContext(params: {
-  cfg: ParsedMemoryOpenVikingConfig;
+export async function buildAutoRecallContext(params: {
+  cfg: Required<MemoryOpenVikingConfig>;
+  queryConfig?: EffectiveQueryConfig;
   client: OpenVikingClient;
   agentId: string;
-  peerId?: string;
-  queryText: string;
-  trigger: ExperienceRecallTrigger;
-  logger: Logger;
-  verbose?: (message: string) => void;
-}): Promise<{ block?: string; count: number; estimatedTokens: number; skippedReason?: string }> {
-  const { cfg, client, agentId, peerId, queryText, trigger, logger, verbose } = params;
-  const expCfg = cfg.agentExperience;
-  if (!expCfg.enabled) {
-    return { count: 0, estimatedTokens: 0, skippedReason: "disabled" };
-  }
-
-  const precheck = await quickRecallPrecheck(client);
-  if (!precheck.ok) {
-    verbose?.(`openviking: skipping agent experience recall because precheck failed (${precheck.reason})`);
-    return { count: 0, estimatedTokens: 0, skippedReason: precheck.reason };
-  }
-
-  return withTimeout(
-    (async () => {
-      const result = await client.find(queryText, {
-        targetUri: "viking://user/memories/experiences",
-        limit: Math.max(expCfg.recallLimit * 4, 12),
-        scoreThreshold: expCfg.scoreThreshold,
-        actorPeerId: peerId,
-      });
-
-      const candidates = (result.memories ?? [])
-        .filter(isExperienceMemory)
-        .filter((item, index, self) => index === self.findIndex((m) => m.uri === item.uri))
-        .slice(0, expCfg.recallLimit);
-
-      if (candidates.length === 0) {
-        return { count: 0, estimatedTokens: 0, skippedReason: "no_hits" };
-      }
-
-      const rendered: string[] = [];
-      let chars = 0;
-      for (const item of candidates) {
-        const content = item.level === 2
-          ? await client.read(item.uri, peerId).catch(() => item.abstract ?? item.uri)
-          : item.abstract ?? item.overview ?? item.uri;
-        const exp = renderExperience(item, content);
-        if (!exp) continue;
-        const projected = chars + (rendered.length > 0 ? 2 : 0) + exp.length;
-        if (projected > expCfg.maxInjectedChars) continue;
-        rendered.push(exp);
-        chars = projected;
-      }
-
-      if (rendered.length === 0) {
-        return { count: 0, estimatedTokens: 0, skippedReason: "no_structured_hits" };
-      }
-
-      const block = [
-        "## Agent Experiences",
-        "",
-        "These are prior execution lessons learned by this agent. Use them as task guidance, not as user facts.",
-        "",
-        ...rendered,
-      ].join("\n");
-      verbose?.(`openviking: injecting ${rendered.length} agent experiences for trigger=${trigger}`);
-      return { block, count: rendered.length, estimatedTokens: estimateTokenCount(block) };
-    })(),
-    cfg.autoRecallTimeoutMs,
-    "openviking: agent experience recall timeout",
-  ).catch((err) => {
-    logger.warn?.(`openviking: agent experience recall failed: ${String(err)}`);
-    return { count: 0, estimatedTokens: 0, skippedReason: "failed" };
-  });
-}
-
-export async function buildGatedAgentExperienceRecallContext(params: {
-  cfg: ParsedMemoryOpenVikingConfig;
-  client: OpenVikingClient;
-  agentId: string;
-  peerId?: string;
-  queryText: string;
-  sessionKey?: string;
-  runtimeContext?: unknown;
-  logger: Logger;
-  verbose?: (message: string) => void;
-}): Promise<{ block?: string; count: number; estimatedTokens: number; skippedReason?: string }> {
-  const { cfg, client, agentId, peerId, queryText, sessionKey, runtimeContext, logger, verbose } = params;
-  if (!cfg.agentExperience.enabled) {
-    return { count: 0, estimatedTokens: 0, skippedReason: "disabled" };
-  }
-
-  const triggerHint = isCronSession(sessionKey, runtimeContext)
-    ? "cron_start"
-    : "task_start";
-  const decision = shouldRecallAgentExperience({
-    latestUserText: queryText,
-    sessionKey,
-    runtimeContext,
-    triggerHint,
-    minQueryChars: cfg.agentExperience.minQueryChars,
-    isBypassed: false,
-  });
-  if (!decision.recall) {
-    return { count: 0, estimatedTokens: 0, skippedReason: decision.reason };
-  }
-
-  return buildAgentExperienceRecallContext({
-    cfg,
-    client,
-    agentId,
-    peerId,
-    queryText,
-    trigger: decision.trigger ?? "task_start",
-    logger,
-    verbose,
-  });
-}
-
-export async function buildLongTermMemoryRecallContext(params: {
-  cfg: ParsedMemoryOpenVikingConfig;
-  client: OpenVikingClient;
-  agentId: string;
-  peerId?: string;
   queryText: string;
   logger: Logger;
   verbose?: (message: string) => void;
-  traceRecorder?: { record(entry: RecallTraceEntry): void };
+  traceRecorder?: { record(entry: RecallTraceEntry): void; recordAndFlush?: (entry: RecallTraceEntry) => Promise<unknown> };
   sessionId?: string;
   sessionKey?: string;
   ovSessionId?: string;
   rawUserTextPreview?: string;
   queryTruncated?: boolean;
-  queryConfig?: EffectiveQueryConfig;
-}): Promise<{ section?: string; memoryCount: number; estimatedTokens: number }> {
-  const { cfg, client, agentId, peerId, queryText, logger, verbose } = params;
+  resourceTypes?: RecallResourceType[];
+}): Promise<{ block?: string; memoryCount: number; estimatedTokens: number }> {
+  const { cfg, client, agentId, queryText, logger, verbose } = params;
+  const queryConfig = params.queryConfig;
 
   if (!cfg.autoRecall || queryText.length < 5) {
     return { memoryCount: 0, estimatedTokens: 0 };
   }
 
-  const precheck = await quickRecallPrecheck(client);
+  const precheck = await quickRecallPrecheck(client, agentId);
   if (!precheck.ok) {
     verbose?.(`openviking: skipping auto-recall because precheck failed (${precheck.reason})`);
     return { memoryCount: 0, estimatedTokens: 0 };
@@ -540,30 +340,14 @@ export async function buildLongTermMemoryRecallContext(params: {
 
   return withTimeout(
     (async () => {
-      const queryConfig = params.queryConfig;
       const candidateLimit = queryConfig?.candidateLimit ?? Math.max(cfg.recallLimit * 4, 20);
       const scoreThreshold = queryConfig?.scoreThreshold ?? cfg.recallScoreThreshold;
       const recallLimit = queryConfig?.recallLimit ?? cfg.recallLimit;
       const maxInjectedChars = queryConfig?.maxInjectedChars ?? cfg.recallMaxInjectedChars;
       const recallPreferAbstract = queryConfig?.recallPreferAbstract ?? cfg.recallPreferAbstract;
-      const searchPlan = resolveRecallSearchPlan(queryConfig?.resourceTypes ?? cfg.recallTargetTypes, {
+      const searchPlan = resolveRecallSearchPlan(params.resourceTypes ?? queryConfig?.resourceTypes ?? cfg.recallTargetTypes, {
         ovSessionId: params.ovSessionId,
         agentId,
-      });
-      const autoRecallPromises = searchPlan.searches.map(async (search) => {
-        const started = Date.now();
-        const result = await client.find(queryText, {
-          targetUri: search.targetUri,
-          limit: candidateLimit,
-          scoreThreshold: 0,
-          contextType: search.contextType,
-          actorPeerId: peerId,
-        });
-        return {
-          search,
-          result,
-          durationMs: Date.now() - started,
-        };
       });
       const traceSearches: RecallTraceEntry["searches"] = searchPlan.skipped.map((skipped) => ({
         resourceType: skipped.resourceType,
@@ -574,32 +358,49 @@ export async function buildLongTermMemoryRecallContext(params: {
         results: [],
         error: skipped.reason,
       }));
+      const autoRecallPromises: Promise<{
+        resourceType: RecallResourceType;
+        targetUri?: string;
+        result?: FindResult;
+        durationMs: number;
+      }>[] = searchPlan.searches.map(async (search) => {
+        const start = Date.now();
+        const result = await client.find(queryText, {
+          targetUri: search.targetUri,
+          limit: candidateLimit,
+          scoreThreshold: 0,
+          contextType: search.contextType,
+          actorPeerId: agentId,
+        });
+        return {
+          resourceType: search.resourceType,
+          targetUri: search.targetUri,
+          result,
+          durationMs: Date.now() - start,
+        };
+      });
       const autoRecallSettled = await Promise.allSettled(autoRecallPromises);
 
       const allMemories: FindResultItem[] = [];
-      for (let index = 0; index < autoRecallSettled.length; index += 1) {
-        const s = autoRecallSettled[index]!;
-        const search = searchPlan.searches[index]!;
+      for (const s of autoRecallSettled) {
         if (s.status === "fulfilled") {
-          const result = s.value.result;
+          const result = s.value.result ?? {};
           const memories = result.memories ?? [];
           const resources = result.resources ?? [];
           allMemories.push(...memories, ...resources);
           traceSearches.push({
-            resourceType: s.value.search.resourceType,
-            contextType: s.value.search.contextType,
-            targetUriInput: s.value.search.targetUri,
-            targetUriResolved: s.value.search.targetUri,
+            resourceType: s.value.resourceType,
+            targetUriInput: s.value.targetUri,
             limit: candidateLimit,
             scoreThreshold: 0,
             durationMs: s.value.durationMs,
             total: result.total ?? memories.length + resources.length + (result.skills?.length ?? 0),
             results: [
-              ...toTraceResults(memories, s.value.search.resourceType),
+              ...toTraceResults(memories, s.value.resourceType),
               ...toTraceResults(resources, "resource"),
               ...(result.skills ?? []).map((item): RecallTraceResult => ({
                 uri: item.uri,
-                resourceType: s.value.search.resourceType,
+                resourceType: s.value.resourceType,
                 category: item.category,
                 score: item.score,
                 level: item.level,
@@ -610,11 +411,11 @@ export async function buildLongTermMemoryRecallContext(params: {
           });
         } else {
           logger.warn?.(`openviking: auto-recall search failed: ${String(s.reason)}`);
+          const failedIndex = traceSearches.length;
+          const search = searchPlan.searches[failedIndex - searchPlan.skipped.length];
           traceSearches.push({
-            resourceType: search.resourceType,
-            contextType: search.contextType,
-            targetUriInput: search.targetUri,
-            targetUriResolved: search.targetUri,
+            resourceType: search?.resourceType ?? "user",
+            targetUriInput: search?.targetUri,
             limit: candidateLimit,
             scoreThreshold: 0,
             durationMs: 0,
@@ -628,7 +429,7 @@ export async function buildLongTermMemoryRecallContext(params: {
       const uniqueMemories = allMemories.filter((memory, index, self) =>
         index === self.findIndex((m) => m.uri === memory.uri)
       );
-      const leafOnly = uniqueMemories.filter((m) => (!m.level || m.level === 2) && !isExperienceMemory(m));
+      const leafOnly = uniqueMemories.filter((m) => !m.level || m.level === 2);
       const processed = postProcessMemories(leafOnly, {
         limit: candidateLimit,
         scoreThreshold,
@@ -638,8 +439,9 @@ export async function buildLongTermMemoryRecallContext(params: {
         categoryWeights: queryConfig.categoryWeights,
         resourceTypeWeights: queryConfig.resourceTypeWeights,
       } : undefined);
-      const recordTrace = (injectedMemories: FindResultItem[], injectedCount: number, estimatedTokens?: number) => {
-        params.traceRecorder?.record({
+
+      const recordTrace = async (injectedMemories: FindResultItem[], injectedCount: number, estimatedTokens?: number) => {
+        const entry: RecallTraceEntry = {
           schemaVersion: "1.0",
           traceId: newTraceId(),
           ts: Date.now(),
@@ -653,12 +455,13 @@ export async function buildLongTermMemoryRecallContext(params: {
           trigger: {
             rawUserTextPreview: params.rawUserTextPreview,
             ...boundTraceQuery(queryText, cfg.traceRecallQueryMaxChars),
+            derivedKeywords: [],
             queryTruncated: params.queryTruncated || queryText.length > cfg.traceRecallQueryMaxChars,
           },
           searches: traceSearches,
           selected: injectedMemories.map((memory) => ({
             uri: memory.uri,
-            resourceType: traceResourceTypeForUri(memory.uri),
+            resourceType: memory.uri.startsWith("viking://resources") ? "resource" : undefined,
             category: memory.category,
             score: memory.score,
             abstractPreview: preview(memory.abstract ?? memory.overview, cfg.traceRecallPreviewChars),
@@ -670,17 +473,19 @@ export async function buildLongTermMemoryRecallContext(params: {
             injectedCount,
             estimatedTokens,
           },
-        });
+        };
+        // Trace persistence is diagnostic best-effort; never put JSONL flush latency on the auto-recall critical path.
+        params.traceRecorder?.record(entry);
       };
 
       if (memories.length === 0) {
-        recordTrace([], 0, 0);
+        await recordTrace([], 0, 0);
         return { memoryCount: 0, estimatedTokens: 0 };
       }
 
       const { lines: memoryLines, estimatedTokens } = await buildMemoryLinesWithBudget(
         memories,
-        (uri) => client.read(uri, peerId),
+        (uri) => client.read(uri, agentId),
         {
           recallPreferAbstract,
           recallMaxInjectedChars: maxInjectedChars,
@@ -692,22 +497,22 @@ export async function buildLongTermMemoryRecallContext(params: {
         verbose?.(
           `openviking: skipping auto-recall injection; no complete memories fit maxInjectedChars=${maxInjectedChars}`,
         );
-        recordTrace([], 0, 0);
+        await recordTrace([], 0, 0);
         return { memoryCount: 0, estimatedTokens: 0 };
       }
 
-      const section = buildLongTermMemorySection(memoryLines);
+      const block = buildRecallContextBlock(memoryLines);
       verbose?.(
-        `openviking: injecting ${memoryLines.length} memories (${section.length} chars, ~${estimatedTokens} tokens, maxInjectedChars=${maxInjectedChars})`,
+        `openviking: injecting ${memoryLines.length} memories (${block.length} chars, ~${estimatedTokens} tokens, maxInjectedChars=${maxInjectedChars})`,
       );
       verbose?.(
         `openviking: inject-detail ${toJsonLog({ count: memories.length, memories: summarizeInjectionMemories(memories) })}`,
       );
 
-      recordTrace(memories.slice(0, memoryLines.length), memoryLines.length, estimatedTokens);
-      return { section, memoryCount: memoryLines.length, estimatedTokens };
+      await recordTrace(memories.slice(0, memoryLines.length), memoryLines.length, estimatedTokens);
+      return { block, memoryCount: memoryLines.length, estimatedTokens };
     })(),
-    cfg.autoRecallTimeoutMs,
+    AUTO_RECALL_TIMEOUT_MS,
     "openviking: auto-recall search timeout",
   );
 }
