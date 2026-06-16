@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse
 
 from openviking.pyagfs.exceptions import AGFSNotFoundError
 from openviking.server.api_keys import APIKeyManager
+from openviking.server.api_keys.models import AccountInfo
 from openviking.server.app import create_app
 from openviking.server.config import ServerConfig
 from openviking.server.dependencies import set_service
@@ -348,6 +349,31 @@ async def test_delete_account(admin_client: httpx.AsyncClient):
         headers={"X-API-Key": user_key},
     )
     assert resp.status_code == 401
+
+
+async def test_delete_legacy_nonconforming_account(
+    admin_app: FastAPI, admin_client: httpx.AsyncClient
+):
+    """ROOT can delete legacy account ids that predate account id validation."""
+    acct = "chatwoot:1"
+    manager = admin_app.state.api_key_manager
+    manager._legacy._accounts[acct] = AccountInfo(
+        created_at="2026-03-30T08:54:32.006457+00:00",
+        users={},
+    )
+    await manager._legacy._save_accounts_json()
+    await manager._legacy._save_users_json(acct)
+
+    resp = await admin_client.delete(
+        f"/api/v1/admin/accounts/{acct}", headers=root_headers()
+    )
+    assert resp.status_code == 200
+    assert resp.json()["result"]["deleted"] is True
+
+    resp = await admin_client.get("/api/v1/admin/accounts", headers=root_headers())
+    accounts = resp.json()["result"]
+    account_ids = {a["account_id"] for a in accounts}
+    assert acct not in account_ids
 
 
 async def test_create_duplicate_account_fails(admin_client: httpx.AsyncClient):
