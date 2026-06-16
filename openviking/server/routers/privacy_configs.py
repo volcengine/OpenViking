@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, Path
 from pydantic import BaseModel, ConfigDict
 
-from openviking.server.auth import get_request_context
+from openviking.server.auth import get_request_context, require_write_access
 from openviking_cli.exceptions import NotFoundError
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
@@ -115,7 +115,7 @@ async def upsert_privacy_config(
     request: UpsertPrivacyConfigRequest,
     category: str = Path(..., description="Privacy config category"),
     target_key: str = Path(..., description="Privacy config target key"),
-    _ctx: RequestContext = Depends(get_request_context),
+    _ctx: RequestContext = Depends(require_write_access),
 ):
     service = get_service()
     privacy = service.privacy_configs
@@ -138,7 +138,7 @@ async def activate_privacy_version(
     request: ActivatePrivacyConfigVersionRequest,
     category: str = Path(..., description="Privacy config category"),
     target_key: str = Path(..., description="Privacy config target key"),
-    _ctx: RequestContext = Depends(get_request_context),
+    _ctx: RequestContext = Depends(require_write_access),
 ):
     service = get_service()
     privacy = service.privacy_configs

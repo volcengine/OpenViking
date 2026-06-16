@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 from openviking.core.namespace import canonical_user_root
 from openviking.core.skill_loader import SkillLoader
 from openviking.privacy.service import UserPrivacyConfigVersion
-from openviking.server.auth import get_request_context
+from openviking.server.auth import get_request_context, require_write_access
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
@@ -536,7 +536,7 @@ async def update_skill(
     http_request: Request,
     request: UpdateSkillRequest,
     skill_name: str = ApiPath(..., description="Skill name"),
-    _ctx: RequestContext = Depends(get_request_context),
+    _ctx: RequestContext = Depends(require_write_access),
 ):
     """Replace an existing agent skill with new content."""
     service = get_service()
@@ -660,7 +660,7 @@ async def update_skill(
 @router.delete("/{skill_name}")
 async def delete_skill(
     skill_name: str = ApiPath(..., description="Skill name"),
-    _ctx: RequestContext = Depends(get_request_context),
+    _ctx: RequestContext = Depends(require_write_access),
 ):
     """Remove one installed agent skill."""
     service = get_service()

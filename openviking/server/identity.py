@@ -18,6 +18,10 @@ class Role(str, Enum):
     ROOT = "root"
     ADMIN = "admin"
     USER = "user"
+    # Strictly weaker than USER: read/search only on shared/public workspace
+    # resources. Still allowed to write within the caller's own session and
+    # memory namespace. See server.auth.require_write_access.
+    READONLY = "readonly"
 
 
 class AuthMode(str, Enum):

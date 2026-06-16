@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, field_validator
 
 from openviking.resource import watch_manager as wm_mod
 from openviking.resource.watch_manager import WatchManager, WatchTask
-from openviking.server.auth import get_request_context
+from openviking.server.auth import get_request_context, require_write_access
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
@@ -235,7 +235,7 @@ async def patch_watch_by_id(
         ),
     ),
     body: UpdateWatchRequest = Body(...),
-    _ctx: RequestContext = Depends(get_request_context),
+    _ctx: RequestContext = Depends(require_write_access),
 ):
     """Partial update by task_id. Fields left null are preserved."""
     task = await _resolve_task(task_id, to_uri, _ctx)
@@ -246,7 +246,7 @@ async def patch_watch_by_id(
 async def patch_watch_by_uri(
     to_uri: str = Query(..., description="Target URI of the watch task"),
     body: UpdateWatchRequest = Body(...),
-    _ctx: RequestContext = Depends(get_request_context),
+    _ctx: RequestContext = Depends(require_write_access),
 ):
     """Partial update by to_uri (query parameter)."""
     task = await _resolve_task(None, to_uri, _ctx)
@@ -282,7 +282,7 @@ async def delete_watch_by_id(
             "task, so omit it unless the cross-check is desired."
         ),
     ),
-    _ctx: RequestContext = Depends(get_request_context),
+    _ctx: RequestContext = Depends(require_write_access),
 ):
     """Delete a watch task by ID."""
     task = await _resolve_task(task_id, to_uri, _ctx)
@@ -292,7 +292,7 @@ async def delete_watch_by_id(
 @router.delete("/watches")
 async def delete_watch_by_uri(
     to_uri: str = Query(..., description="Target URI of the watch task"),
-    _ctx: RequestContext = Depends(get_request_context),
+    _ctx: RequestContext = Depends(require_write_access),
 ):
     """Delete a watch task by to_uri."""
     task = await _resolve_task(None, to_uri, _ctx)
@@ -333,7 +333,7 @@ async def trigger_watch_by_id(
             "task, so omit it unless the cross-check is desired."
         ),
     ),
-    _ctx: RequestContext = Depends(get_request_context),
+    _ctx: RequestContext = Depends(require_write_access),
 ):
     """Immediately schedule the watch task for execution (fire-and-forget).
 
@@ -348,7 +348,7 @@ async def trigger_watch_by_id(
 @router.post("/watches/trigger")
 async def trigger_watch_by_uri(
     to_uri: str = Query(..., description="Target URI of the watch task"),
-    _ctx: RequestContext = Depends(get_request_context),
+    _ctx: RequestContext = Depends(require_write_access),
 ):
     """Trigger by to_uri (fire-and-forget; see by-id variant for semantics)."""
     task = await _resolve_task(None, to_uri, _ctx)

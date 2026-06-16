@@ -14,6 +14,7 @@ from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
 from openviking.server.auth import (
     get_request_context,
     require_role,
+    require_write_access,
 )
 from openviking.server.dependencies import get_service
 from openviking.server.error_mapping import map_exception
@@ -174,7 +175,7 @@ async def download(
 @router.post("/write")
 async def write(
     request: WriteContentRequest = Body(...),
-    _ctx: RequestContext = Depends(get_request_context),
+    _ctx: RequestContext = Depends(require_write_access),
 ):
     """Write text content to a file (replace, append, or create) and refresh semantics/vectors."""
     service = get_service()
