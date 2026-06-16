@@ -2,9 +2,9 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use ragfs::cache::{
     CacheDecision, CacheError, CacheNamespace, CachePolicy, CacheProvider, CacheResult,
-    CachedFileSystem, MemoryCacheProvider, MemoryMockProvider,
+    CacheTreeMode, CachedFileSystem, MemoryCacheProvider, MemoryMockProvider,
 };
-use ragfs::core::{GrepResult, TreeEntry};
+use ragfs::core::{FsContextInner, GrepResult, MultiWriteWrappedFS, TreeEntry, FS_CTX};
 use ragfs::plugins::MemFileSystem;
 use ragfs::{FileInfo, FileSystem, Result, WriteFlag};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -16,6 +16,7 @@ struct CountingFileSystem {
     inner: Arc<MemFileSystem>,
     reads: Arc<AtomicU64>,
     read_dirs: Arc<AtomicU64>,
+    trees: Arc<AtomicU64>,
     read_delay: Duration,
 }
 
@@ -79,6 +80,7 @@ impl CountingFileSystem {
             inner: Arc::new(MemFileSystem::new()),
             reads: Arc::new(AtomicU64::new(0)),
             read_dirs: Arc::new(AtomicU64::new(0)),
+            trees: Arc::new(AtomicU64::new(0)),
             read_delay: Duration::ZERO,
         }
     }
@@ -94,6 +96,10 @@ impl CountingFileSystem {
 
     fn read_dir_count(&self) -> u64 {
         self.read_dirs.load(Ordering::Relaxed)
+    }
+
+    fn tree_count(&self) -> u64 {
+        self.trees.load(Ordering::Relaxed)
     }
 }
 
@@ -178,6 +184,7 @@ impl FileSystem for CountingFileSystem {
         node_limit: Option<usize>,
         level_limit: Option<usize>,
     ) -> Result<Vec<TreeEntry>> {
+        self.trees.fetch_add(1, Ordering::Relaxed);
         self.inner
             .tree_directory(path, show_hidden, node_limit, level_limit)
             .await
@@ -185,14 +192,243 @@ impl FileSystem for CountingFileSystem {
 }
 
 fn cached_fs(backend: CountingFileSystem) -> (Arc<CachedFileSystem>, Arc<MemoryCacheProvider>) {
+    cached_fs_with_policy(backend, CachePolicy::default())
+}
+
+fn cached_fs_with_policy(
+    backend: CountingFileSystem,
+    policy: CachePolicy,
+) -> (Arc<CachedFileSystem>, Arc<MemoryCacheProvider>) {
     let provider = Arc::new(MemoryCacheProvider::new());
     let fs = Arc::new(CachedFileSystem::new(
         Box::new(backend),
         provider.clone(),
         CacheNamespace::new("test"),
-        CachePolicy::default(),
+        policy,
     ));
     (fs, provider)
+}
+
+#[test]
+fn cache_policy_tree_mode_defaults_to_backend() {
+    assert_eq!(CachePolicy::default().tree_mode(), CacheTreeMode::Backend);
+}
+
+#[tokio::test]
+async fn default_tree_directory_delegates_to_backend() {
+    let backend = CountingFileSystem::new();
+    backend.mkdir("/docs", 0o755).await.unwrap();
+    backend
+        .write("/docs/one.md", b"one", 0, WriteFlag::Create)
+        .await
+        .unwrap();
+    let probe = backend.clone();
+    let (fs, _) = cached_fs(backend);
+
+    let entries = fs.tree_directory("/docs", false, None, None).await.unwrap();
+
+    assert_eq!(entries.len(), 1);
+    assert_eq!(probe.tree_count(), 1);
+    assert_eq!(probe.read_dir_count(), 0);
+}
+
+#[tokio::test]
+async fn cached_tree_traversal_reuses_directory_cache_after_warmup() {
+    let backend = CountingFileSystem::new();
+    backend.mkdir("/docs", 0o755).await.unwrap();
+    backend.mkdir("/docs/sub", 0o755).await.unwrap();
+    backend
+        .write("/docs/one.md", b"one", 0, WriteFlag::Create)
+        .await
+        .unwrap();
+    backend
+        .write("/docs/sub/two.md", b"two", 0, WriteFlag::Create)
+        .await
+        .unwrap();
+    let probe = backend.clone();
+    let (fs, _) = cached_fs_with_policy(
+        backend,
+        CachePolicy::default().with_tree_mode(CacheTreeMode::CachedTraversal),
+    );
+
+    let first = fs.tree_directory("/docs", false, None, None).await.unwrap();
+    assert_eq!(first.len(), 3);
+    assert_eq!(probe.tree_count(), 0);
+    assert_eq!(probe.read_dir_count(), 2);
+
+    let second = fs.tree_directory("/docs", false, None, None).await.unwrap();
+    assert_eq!(second.len(), 3);
+    assert_eq!(
+        probe.read_dir_count(),
+        2,
+        "second tree should reuse cached read_dir entries"
+    );
+}
+
+#[tokio::test]
+async fn cached_tree_traversal_matches_default_tree_semantics() {
+    let backend = CountingFileSystem::new();
+    backend.mkdir("/docs", 0o755).await.unwrap();
+    backend.mkdir("/docs/sub", 0o755).await.unwrap();
+    backend
+        .write("/docs/a.md", b"a", 0, WriteFlag::Create)
+        .await
+        .unwrap();
+    backend
+        .write("/docs/.hidden.md", b"hidden", 0, WriteFlag::Create)
+        .await
+        .unwrap();
+    backend
+        .write("/docs/sub/b.md", b"b", 0, WriteFlag::Create)
+        .await
+        .unwrap();
+    let direct = backend.clone();
+    let (fs, _) = cached_fs_with_policy(
+        backend,
+        CachePolicy::default().with_tree_mode(CacheTreeMode::CachedTraversal),
+    );
+
+    let cached = fs
+        .tree_directory("/docs", false, None, Some(1))
+        .await
+        .unwrap();
+    let direct_entries = direct
+        .tree_directory("/docs", false, None, Some(1))
+        .await
+        .unwrap();
+    assert_eq!(
+        cached
+            .iter()
+            .map(|entry| entry.rel_path.as_str())
+            .collect::<Vec<_>>(),
+        direct_entries
+            .iter()
+            .map(|entry| entry.rel_path.as_str())
+            .collect::<Vec<_>>()
+    );
+
+    let with_hidden = fs.tree_directory("/docs", true, None, None).await.unwrap();
+    assert!(
+        with_hidden
+            .iter()
+            .any(|entry| entry.rel_path == ".hidden.md"),
+        "show_hidden=true should include hidden files"
+    );
+}
+
+#[tokio::test]
+async fn cached_tree_traversal_returns_oversized_directories_without_caching_them() {
+    let backend = CountingFileSystem::new();
+    backend.mkdir("/large", 0o755).await.unwrap();
+    for index in 0..1025 {
+        backend
+            .write(
+                &format!("/large/{index:04}.txt"),
+                b"x",
+                0,
+                WriteFlag::Create,
+            )
+            .await
+            .unwrap();
+    }
+    let probe = backend.clone();
+    let (fs, _) = cached_fs_with_policy(
+        backend,
+        CachePolicy::default().with_tree_mode(CacheTreeMode::CachedTraversal),
+    );
+
+    assert_eq!(
+        fs.tree_directory("/large", false, None, None)
+            .await
+            .unwrap()
+            .len(),
+        1025
+    );
+    assert_eq!(
+        fs.tree_directory("/large", false, None, None)
+            .await
+            .unwrap()
+            .len(),
+        1025
+    );
+    assert_eq!(
+        probe.read_dir_count(),
+        2,
+        "oversized directories should not be cached by tree traversal"
+    );
+}
+
+#[tokio::test]
+async fn cached_tree_traversal_falls_back_when_provider_is_unavailable() {
+    let backend = CountingFileSystem::new();
+    backend.mkdir("/docs", 0o755).await.unwrap();
+    backend
+        .write("/docs/a.md", b"a", 0, WriteFlag::Create)
+        .await
+        .unwrap();
+    let probe = backend.clone();
+    let fs = CachedFileSystem::new(
+        Box::new(backend),
+        Arc::new(UnavailableProvider),
+        CacheNamespace::new("tree-unavailable"),
+        CachePolicy::default().with_tree_mode(CacheTreeMode::CachedTraversal),
+    );
+
+    assert_eq!(
+        fs.tree_directory("/docs", false, None, None)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        fs.tree_directory("/docs", false, None, None)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(probe.read_dir_count(), 2);
+    assert!(fs.metrics().snapshot().errors >= 1);
+}
+
+#[tokio::test]
+async fn cached_tree_traversal_falls_back_for_multiwrite_backend() {
+    let primary = CountingFileSystem::new();
+    primary.mkdir("/docs", 0o755).await.unwrap();
+    primary
+        .write("/docs/a.md", b"a", 0, WriteFlag::Create)
+        .await
+        .unwrap();
+    let primary_probe = primary.clone();
+    let multiwrite = MultiWriteWrappedFS::builder(Arc::new(primary))
+        .build()
+        .unwrap();
+    let fs = CachedFileSystem::new(
+        Box::new(multiwrite),
+        Arc::new(MemoryCacheProvider::new()),
+        CacheNamespace::new("tree-multiwrite"),
+        CachePolicy::default().with_tree_mode(CacheTreeMode::CachedTraversal),
+    );
+
+    let ctx = Arc::new(FsContextInner::new("acct"));
+    let entries = FS_CTX
+        .scope(ctx, async {
+            fs.tree_directory("/docs", false, None, None).await.unwrap()
+        })
+        .await;
+
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        primary_probe.tree_count(),
+        1,
+        "multi-write backends must keep their backend tree_directory path"
+    );
+    assert_eq!(
+        primary_probe.read_dir_count(),
+        0,
+        "cached traversal must not bypass multi-write tree semantics"
+    );
 }
 
 #[test]

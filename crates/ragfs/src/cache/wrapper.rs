@@ -1,8 +1,11 @@
 //! A transparent [`FileSystem`](crate::FileSystem) cache wrapper.
 
 use super::envelope::{CacheEnvelope, CacheObjectKind, GenerationSnapshot};
-use super::{CacheError, CacheMetrics, CachePolicy, CacheProvider, CacheResult};
-use crate::core::{FileInfo, FileSystem, GrepResult, Result, TreeEntry, WriteFlag};
+use super::{CacheError, CacheMetrics, CachePolicy, CacheProvider, CacheResult, CacheTreeMode};
+use crate::core::filesystem::{normalize_prefix_path, relative_depth, relative_match_file};
+use crate::core::{
+    FileInfo, FileSystem, GrepResult, MultiWriteWrappedFS, Result, TreeEntry, WriteFlag,
+};
 use async_trait::async_trait;
 use bytes::Bytes;
 use std::collections::HashMap;
@@ -85,10 +88,79 @@ impl CachedFileSystem {
         self.backend.as_ref()
     }
 
+    fn wraps_multiwrite(&self) -> bool {
+        let any = self.backend.as_ref() as &dyn std::any::Any;
+        any.downcast_ref::<MultiWriteWrappedFS>().is_some()
+    }
+
     /// Invalidate cache objects affected by a write that bypassed this wrapper.
     pub(crate) async fn invalidate_external_write(&self, path: &str) {
         self.invalidate_path_objects(path).await;
         self.invalidate_parent_directory(path).await;
+    }
+
+    async fn tree_directory_via_cache(
+        &self,
+        path: &str,
+        show_hidden: bool,
+        node_limit: Option<usize>,
+        level_limit: Option<usize>,
+    ) -> Result<Vec<TreeEntry>> {
+        enum TreeTask {
+            VisitDir(String),
+            Emit(TreeEntry),
+        }
+
+        let base_path = normalize_prefix_path(path);
+        let mut result = Vec::new();
+        let mut stack = vec![TreeTask::VisitDir(base_path.clone())];
+
+        while let Some(task) = stack.pop() {
+            if node_limit.is_some_and(|limit| result.len() >= limit) {
+                break;
+            }
+
+            match task {
+                TreeTask::Emit(entry) => result.push(entry),
+                TreeTask::VisitDir(current_path) => {
+                    if let Some(limit) = level_limit {
+                        let current_rel = relative_match_file(&base_path, &current_path);
+                        if relative_depth(&current_rel) >= limit {
+                            continue;
+                        }
+                    }
+
+                    let entries = self.read_dir(&current_path).await?;
+                    for entry in entries.into_iter().rev() {
+                        let is_hidden_file = !entry.is_dir && entry.name.starts_with('.');
+                        if is_hidden_file && !show_hidden {
+                            continue;
+                        }
+
+                        let entry_path = if current_path == "/" {
+                            format!("/{}", entry.name)
+                        } else {
+                            format!("{}/{}", current_path, entry.name)
+                        };
+                        let rel_path = relative_match_file(&base_path, &entry_path);
+                        let is_dir = entry.is_dir;
+                        let tree_entry = TreeEntry {
+                            path: entry_path.clone(),
+                            rel_path,
+                            info: entry,
+                            extra: HashMap::new(),
+                        };
+
+                        if is_dir {
+                            stack.push(TreeTask::VisitDir(entry_path));
+                        }
+                        stack.push(TreeTask::Emit(tree_entry));
+                    }
+                }
+            }
+        }
+
+        Ok(result)
     }
 
     async fn cache_get(&self, key: &str) -> CacheResult<Option<Bytes>> {
@@ -647,6 +719,12 @@ impl FileSystem for CachedFileSystem {
         node_limit: Option<usize>,
         level_limit: Option<usize>,
     ) -> Result<Vec<TreeEntry>> {
+        if self.policy.tree_mode() == CacheTreeMode::CachedTraversal && !self.wraps_multiwrite() {
+            return self
+                .tree_directory_via_cache(path, show_hidden, node_limit, level_limit)
+                .await;
+        }
+
         self.backend
             .tree_directory(path, show_hidden, node_limit, level_limit)
             .await

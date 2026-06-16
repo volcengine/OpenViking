@@ -28,7 +28,7 @@ use super::stats::{FilesystemStats, StatsCollector};
 use super::stats_wrapper::StatsWrappedFS;
 use super::types::{BackendsConfig, FileInfo, GrepResult, PluginConfig, TreeEntry, WriteFlag};
 #[cfg(feature = "cache")]
-use crate::cache::{CacheNamespace, CachePolicy, CacheProvider, CachedFileSystem};
+use crate::cache::{CacheNamespace, CachePolicy, CacheProvider, CacheTreeMode, CachedFileSystem};
 
 /// Information about a mounted filesystem
 #[derive(Clone)]
@@ -323,7 +323,15 @@ impl MountableFS {
                     );
                     arc
                 } else {
-                    self.maybe_wrap_cache(arc, &normalized_path)
+                    match &self.cache {
+                        Some(cache) => Arc::new(CachedFileSystem::new(
+                            Box::new(ArcFileSystem(arc)),
+                            cache.provider.clone(),
+                            mount_namespace(&cache.namespace, &normalized_path),
+                            cache.policy.clone().with_tree_mode(CacheTreeMode::Backend),
+                        )),
+                        None => arc,
+                    }
                 };
                 (arc, None)
             }
@@ -376,12 +384,21 @@ impl MountableFS {
     #[cfg(feature = "cache")]
     fn maybe_wrap_cache(&self, fs: Arc<dyn FileSystem>, mount_path: &str) -> Arc<dyn FileSystem> {
         match &self.cache {
-            Some(cache) => Arc::new(CachedFileSystem::new(
-                Box::new(ArcFileSystem(fs)),
-                cache.provider.clone(),
-                mount_namespace(&cache.namespace, mount_path),
-                cache.policy.clone(),
-            )),
+            Some(cache) => {
+                let policy = if cache.policy.tree_mode() == CacheTreeMode::CachedTraversal
+                    && Self::as_multiwrite(&fs).is_some()
+                {
+                    cache.policy.clone().with_tree_mode(CacheTreeMode::Backend)
+                } else {
+                    cache.policy.clone()
+                };
+                Arc::new(CachedFileSystem::new(
+                    Box::new(ArcFileSystem(fs)),
+                    cache.provider.clone(),
+                    mount_namespace(&cache.namespace, mount_path),
+                    policy,
+                ))
+            }
             None => fs,
         }
     }

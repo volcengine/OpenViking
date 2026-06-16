@@ -19,11 +19,21 @@ impl CacheDecision {
     }
 }
 
+/// Strategy used by [`super::CachedFileSystem`] for recursive tree traversal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CacheTreeMode {
+    /// Delegate `tree_directory()` to the wrapped backend.
+    Backend,
+    /// Traverse through `CachedFileSystem::read_dir()` so directory cache can be reused.
+    CachedTraversal,
+}
+
 /// Rules used by [`super::CachedFileSystem`] before accessing the cache.
 #[derive(Debug, Clone)]
 pub struct CachePolicy {
     max_file_size: usize,
     max_cached_dir_entries: usize,
+    tree_mode: CacheTreeMode,
     bypass_prefixes: Vec<String>,
 }
 
@@ -33,6 +43,7 @@ impl CachePolicy {
         Self {
             max_file_size,
             max_cached_dir_entries: DEFAULT_MAX_CACHED_DIR_ENTRIES,
+            tree_mode: CacheTreeMode::Backend,
             bypass_prefixes: Vec::new(),
         }
     }
@@ -40,6 +51,12 @@ impl CachePolicy {
     /// Add a path prefix that always bypasses the cache.
     pub fn with_bypass_prefix(mut self, prefix: impl Into<String>) -> Self {
         self.bypass_prefixes.push(normalize_path(&prefix.into()));
+        self
+    }
+
+    /// Set the tree traversal strategy.
+    pub fn with_tree_mode(mut self, mode: CacheTreeMode) -> Self {
+        self.tree_mode = mode;
         self
     }
 
@@ -51,6 +68,11 @@ impl CachePolicy {
     /// Return the maximum cacheable raw directory entry count.
     pub fn max_cached_dir_entries(&self) -> usize {
         self.max_cached_dir_entries
+    }
+
+    /// Return the tree traversal strategy.
+    pub fn tree_mode(&self) -> CacheTreeMode {
+        self.tree_mode
     }
 
     /// Return the admission decision for a full-file object.
