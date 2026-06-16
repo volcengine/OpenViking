@@ -405,4 +405,4 @@ openclaw openviking status --json
 bash examples/openclaw-plugin/upgrade_scripts/cleanup-memory-openviking.sh
 ```
 
-另见：[INSTALL.md](./INSTALL.md) 和 [INSTALL-AGENT.md](./INSTALL-AGENT.md)。
+另见：[INSTALL.md](./INSTALL.md)、[INSTALL-AGENT.md](./INSTALL-AGENT.md) 和 [docs/openviking-tos-install-guide.md](./docs/openviking-tos-install-guide.md)。
