@@ -15,7 +15,7 @@ filename_template: "{{ trajectory_name }}_{{ extract_context.get_session_timesta
 enabled: true
 operation_mode: "add_only"
 stage: agent
-
+peer_routing: false
 fields:
   - name: trajectory_name
     type: string
