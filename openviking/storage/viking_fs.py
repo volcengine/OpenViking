@@ -347,6 +347,12 @@ class VikingFS:
 
     def _ensure_supported_write_namespace(self, normalized_uri: str) -> None:
         parts = [p for p in normalized_uri[len("viking://") :].strip("/").split("/") if p]
+        if parts == ["user"]:
+            raise PermissionDeniedError(
+                "Writing viking://user is not supported; use an explicit user namespace "
+                "or current-user content path instead.",
+                resource=normalized_uri,
+            )
         if parts and parts[0] in {"agent", "session"}:
             raise PermissionDeniedError(
                 f"Writing {normalized_uri} is not supported; use user-owned namespaces instead.",
