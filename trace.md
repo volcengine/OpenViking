@@ -44,3 +44,9 @@ _[Checkpoint: 6a30fb79 — edited openviking/session/train/batch_runner.py; edit
 
 If I'm White (I played e4), and Codex is Black playing the Sicilian:
 1.
+
+
+---
+_[Checkpoint: 6a30fbc0 — edited openviking/session/train/batch_runner.py; edited openviking/session/train/batch_runner.py]_
+---
+
