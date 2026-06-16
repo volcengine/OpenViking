@@ -295,6 +295,19 @@ type RecallTraceRouteAdapter = {
       url?: string;
     }) => Promise<unknown>;
   }) => void;
+  registerHttpRoute?: (route: {
+    path: string;
+    auth: "plugin";
+    match: "exact" | "prefix";
+    handler: (
+      req: { method?: string; url?: string },
+      res: {
+        statusCode?: number;
+        setHeader?: (name: string, value: string) => void;
+        end?: (body?: string) => void;
+      },
+    ) => Promise<boolean>;
+  }) => void;
 };
 
 const DEFAULT_OPENCLAW_AGENT_ID = "main";
@@ -842,24 +855,41 @@ const contextEnginePlugin = {
       resultType,
     });
 
+    const hasExplicitRecallTraceIdentityFilter = (input: RecallTraceToolInput): boolean => [
+      input.traceId,
+      input.sessionId,
+      input.sessionKey,
+      input.ovSessionId,
+    ].some((value) => typeof value === "string" && value.trim());
+
     const parseRecallTraceInput = (
       input: RecallTraceToolInput,
       ctx: { sessionId?: string; sessionKey?: string; ovSessionId?: string },
-    ): RecallTraceQuery => ({
-      turn: input.turn === "all" ? "all" : "latest",
-      traceId: typeof input.traceId === "string" && input.traceId.trim() ? input.traceId.trim() : undefined,
-      sessionId: typeof input.sessionId === "string" && input.sessionId.trim() ? input.sessionId.trim() : ctx.sessionId,
-      sessionKey: typeof input.sessionKey === "string" && input.sessionKey.trim() ? input.sessionKey.trim() : undefined,
-      ovSessionId: typeof input.ovSessionId === "string" && input.ovSessionId.trim() ? input.ovSessionId.trim() : ctx.ovSessionId,
-      source: typeof input.source === "string" && input.source.trim() ? input.source as RecallTraceSource : undefined,
-      resourceTypes: input.resourceTypes ? normalizeResourceTypes(input.resourceTypes) : undefined,
-      since: typeof input.since === "number" ? input.since : undefined,
-      until: typeof input.until === "number" ? input.until : undefined,
-      limit: getPositiveInteger(input.limit, 20),
-    });
+    ): RecallTraceQuery => {
+      const traceId = typeof input.traceId === "string" && input.traceId.trim() ? input.traceId.trim() : undefined;
+      const explicitSessionId = typeof input.sessionId === "string" && input.sessionId.trim() ? input.sessionId.trim() : undefined;
+      const explicitSessionKey = typeof input.sessionKey === "string" && input.sessionKey.trim() ? input.sessionKey.trim() : undefined;
+      const explicitOvSessionId = typeof input.ovSessionId === "string" && input.ovSessionId.trim() ? input.ovSessionId.trim() : undefined;
+      const hasExplicitIdentityFilter = !!(traceId || explicitSessionId || explicitSessionKey || explicitOvSessionId);
+      const defaultSessionKey = !hasExplicitIdentityFilter ? ctx.sessionKey : undefined;
+      const defaultSessionId = !hasExplicitIdentityFilter && !defaultSessionKey ? ctx.sessionId : undefined;
+      const defaultOvSessionId = !hasExplicitIdentityFilter && !defaultSessionKey && !defaultSessionId ? ctx.ovSessionId : undefined;
+      return {
+        turn: input.turn === "all" ? "all" : "latest",
+        traceId,
+        sessionId: explicitSessionId ?? defaultSessionId,
+        sessionKey: explicitSessionKey ?? defaultSessionKey,
+        ovSessionId: explicitOvSessionId ?? defaultOvSessionId,
+        source: typeof input.source === "string" && input.source.trim() ? input.source as RecallTraceSource : undefined,
+        resourceTypes: input.resourceTypes ? normalizeResourceTypes(input.resourceTypes) : undefined,
+        since: typeof input.since === "number" ? input.since : undefined,
+        until: typeof input.until === "number" ? input.until : undefined,
+        limit: getPositiveInteger(input.limit, 20),
+      };
+    };
 
     const shouldIncludeTraceContent = (input?: { includeContent?: boolean }): boolean =>
-      input?.includeContent === true || cfg.traceRecallIncludeContentByDefault;
+      typeof input?.includeContent === "boolean" ? input.includeContent : cfg.traceRecallIncludeContentByDefault;
 
     const enrichTraceEntriesWithContent = async (
       result: { entries: RecallTraceEntry[]; lookupLayer: "memory" | "persistent"; warnings: string[] },
@@ -895,15 +925,38 @@ const contextEnginePlugin = {
       session: PluginSessionRouting,
       actorPeerId?: string,
     ): Promise<{ entries: RecallTraceEntry[]; lookupLayer: "memory" | "persistent"; warnings: string[] }> => {
+      const query = parseRecallTraceInput(input, session);
       const base = traceRecorder
-        ? await traceRecorder.queryWithFallback(parseRecallTraceInput(input, session))
+        ? await traceRecorder.queryWithFallback(query)
         : { entries: [], lookupLayer: "memory" as const, warnings: ["traceRecall is disabled"] };
+      if (
+        traceRecorder &&
+        base.entries.length === 0 &&
+        !hasExplicitRecallTraceIdentityFilter(input) &&
+        query.sessionKey
+      ) {
+        const fallbackIdentities: RecallTraceQuery[] = [];
+        if (session.sessionId) {
+          fallbackIdentities.push({ ...query, sessionKey: undefined, sessionId: session.sessionId, ovSessionId: undefined });
+        }
+        if (session.ovSessionId) {
+          fallbackIdentities.push({ ...query, sessionKey: undefined, sessionId: undefined, ovSessionId: session.ovSessionId });
+        }
+        for (const fallbackQuery of fallbackIdentities) {
+          const fallback = await traceRecorder.queryWithFallback(fallbackQuery);
+          if (fallback.entries.length > 0) {
+            return enrichTraceEntriesWithContent(fallback, shouldIncludeTraceContent(input), actorPeerId);
+          }
+        }
+      }
       return enrichTraceEntriesWithContent(base, shouldIncludeTraceContent(input), actorPeerId);
     };
 
     const registerRecallTraceRoutes = (ctx?: unknown): boolean => {
       const routeAdapter = ctx as RecallTraceRouteAdapter | undefined;
-      if (typeof routeAdapter?.registerRoute !== "function") {
+      const canRegisterLegacyRoute = typeof routeAdapter?.registerRoute === "function";
+      const canRegisterHttpRoute = typeof routeAdapter?.registerHttpRoute === "function";
+      if (!canRegisterLegacyRoute && !canRegisterHttpRoute) {
         return false;
       }
       const toQueryObject = (request?: {
@@ -933,7 +986,53 @@ const contextEnginePlugin = {
         }
         return undefined;
       };
-      const handle = async (request?: {
+      const toString = (value: unknown): string | undefined =>
+        typeof value === "string" && value.trim() ? value.trim() : undefined;
+      const queryValue = (query: Record<string, unknown>, ...keys: string[]): unknown => {
+        for (const key of keys) {
+          if (query[key] !== undefined) {
+            return query[key];
+          }
+        }
+        return undefined;
+      };
+      const toSessionKey = (query: Record<string, unknown>): string | undefined =>
+        toString(queryValue(query, "sessionKey", "sessionkey", "session_key", "session-key"));
+      const toLimitedInteger = (
+        value: unknown,
+        fallback: number,
+        min: number,
+        max: number,
+      ): number | undefined => {
+        const parsed = toNumber(value);
+        const raw = parsed === undefined ? fallback : Math.floor(parsed);
+        return Number.isFinite(raw) && raw >= min && raw <= max ? raw : undefined;
+      };
+      const inferUriType = (uri: string): string => {
+        if (uri.startsWith("viking://resources") || uri.startsWith("viking://resource")) return "resource";
+        if (uri.startsWith("viking://user/skills") || uri.startsWith("viking://skills")) return "skill";
+        if (uri.startsWith("viking://user/")) return "user_memory";
+        if (uri.startsWith("viking://session/")) return "session";
+        if (uri.includes("/archive") || uri.includes("/history/")) return "archive";
+        return "unknown";
+      };
+      const findTraceItem = (entry: RecallTraceEntry, uri: string) => {
+        const selected = entry.selected.find((item) => item.uri === uri);
+        const searchResult = entry.searches.flatMap((search) => search.results).find((item) => item.uri === uri);
+        if (!selected && !searchResult) {
+          return undefined;
+        }
+        return {
+          category: selected?.category ?? searchResult?.category,
+          score: selected?.score ?? searchResult?.score,
+          level: searchResult?.level,
+          abstractPreview: selected?.abstractPreview ?? searchResult?.abstractPreview,
+          resultType: searchResult?.resultType,
+          sourceTraceId: entry.traceId,
+          source: entry.source,
+        };
+      };
+      const handleRecallTraces = async (request?: {
         query?: Record<string, unknown>;
         params?: Record<string, unknown>;
         url?: string;
@@ -942,31 +1041,363 @@ const contextEnginePlugin = {
         const session = resolvePluginSessionRouting(query as SessionAgentLookup);
         const result = await queryRecallTraces({
           turn: query.turn === "all" ? "all" : "latest",
-          traceId: typeof query.traceId === "string" ? query.traceId : undefined,
-          sessionId: typeof query.sessionId === "string" ? query.sessionId : undefined,
-          sessionKey: typeof query.sessionKey === "string" ? query.sessionKey : undefined,
-          ovSessionId: typeof query.ovSessionId === "string" ? query.ovSessionId : undefined,
-          source: typeof query.source === "string" ? query.source as RecallTraceSource : undefined,
+          traceId: toString(queryValue(query, "traceId", "trace-id", "trace_id")),
+          sessionId: toString(query.sessionId),
+          sessionKey: toSessionKey(query),
+          ovSessionId: toString(query.ovSessionId),
+          source: toString(query.source) as RecallTraceSource | undefined,
           resourceTypes: typeof query.resourceTypes === "string" ? query.resourceTypes : undefined,
           since: toNumber(query.since),
           until: toNumber(query.until),
-          includeContent: toBoolean(query.includeContent),
+          includeContent: toBoolean(queryValue(query, "includeContent", "include-content", "include_content")),
           limit: toNumber(query.limit),
         }, session, resolveToolSearchPeerId(query, session));
         return { status: 200, body: { ok: true, ...result } };
       };
-      routeAdapter.registerRoute({ method: "GET", path: "/api/openviking/recall-traces", handler: handle });
-      routeAdapter.registerRoute({
-        method: "GET",
-        path: "/api/openviking/recall-traces/:traceId",
-        handler: (request) => handle({
-          ...request,
-          query: {
-            ...(request?.query ?? {}),
-            traceId: typeof request?.params?.traceId === "string" ? request.params.traceId : undefined,
+      const handleUriDetail = async (request?: {
+        query?: Record<string, unknown>;
+        params?: Record<string, unknown>;
+        url?: string;
+      }) => {
+        const query = toQueryObject(request);
+        const uri = toString(query.uri);
+        if (!uri || !uri.startsWith("viking://") || uri.endsWith("...") || uri.includes("…")) {
+          return {
+            status: 400,
+            body: {
+              ok: false,
+              uri: uri ?? "",
+              readStatus: "not_requested",
+              warnings: [],
+              error: { code: "invalid_uri", message: "uri must be a complete viking:// URI" },
+            },
+          };
+        }
+        const offset = toLimitedInteger(query.offset, 0, 0, 1_000_000_000);
+        const contentLimit = toLimitedInteger(
+          queryValue(query, "contentLimit", "content-limit", "content_limit"),
+          20_000,
+          1,
+          100_000,
+        );
+        if (offset === undefined || contentLimit === undefined) {
+          return {
+            status: 400,
+            body: {
+              ok: false,
+              uri,
+              readStatus: "not_requested",
+              warnings: [],
+              error: { code: "invalid_param", message: "offset or contentLimit is invalid" },
+            },
+          };
+        }
+        const includeContent = toBoolean(queryValue(query, "includeContent", "include-content", "include_content")) ?? true;
+        const preferTracePreview = toBoolean(
+          queryValue(query, "preferTracePreview", "prefer-trace-preview", "prefer_trace_preview"),
+        ) ?? true;
+        const session = resolvePluginSessionRouting(query as SessionAgentLookup);
+        const traceId = toString(queryValue(query, "traceId", "trace-id", "trace_id"));
+        const actorPeerId = resolveToolSearchPeerId(query, session);
+        let traceMetadata:
+          | {
+            category?: string;
+            score?: number;
+            level?: number;
+            abstractPreview?: string;
+            resultType?: RecallTraceResult["resultType"];
+            sourceTraceId?: string;
+            source?: RecallTraceSource;
+          }
+          | undefined;
+        const warnings: string[] = [];
+        if (preferTracePreview && traceId && traceRecorder) {
+          const traceResult = await traceRecorder.queryWithFallback({
+            turn: "latest",
+            traceId,
+            limit: 1,
+          });
+          warnings.push(...traceResult.warnings);
+          traceMetadata = traceResult.entries[0] ? findTraceItem(traceResult.entries[0], uri) : undefined;
+        }
+        const baseBody = {
+          ok: true,
+          uri,
+          uriType: inferUriType(uri),
+          abstractPreview: traceMetadata?.abstractPreview,
+          metadata: {
+            category: traceMetadata?.category,
+            score: traceMetadata?.score,
+            level: traceMetadata?.level,
+            resultType: traceMetadata?.resultType,
+            sourceTraceId: traceMetadata?.sourceTraceId,
+            source: traceMetadata?.source,
           },
-        }),
-      });
+          readStatus: "not_requested" as const,
+          warnings,
+        };
+        if (!includeContent) {
+          return { status: 200, body: baseBody };
+        }
+        try {
+          const client = await getClient();
+          const content = await client.read(uri, actorPeerId);
+          const text = typeof content === "string" ? content : JSON.stringify(content, null, 2);
+          const chars = Array.from(text);
+          const slice = chars.slice(offset, offset + contentLimit).join("");
+          return {
+            status: 200,
+            body: {
+              ...baseBody,
+              content: {
+                text: slice,
+                offset,
+                limit: contentLimit,
+                returnedChars: Array.from(slice).length,
+                totalChars: chars.length,
+                hasMore: offset + contentLimit < chars.length,
+              },
+              readStatus: "ok" as const,
+            },
+          };
+        } catch (err) {
+          return {
+            status: 502,
+            body: {
+              ...baseBody,
+              ok: false,
+              readStatus: "read_failed" as const,
+              error: { code: "read_failed", message: err instanceof Error ? err.message : String(err) },
+            },
+          };
+        }
+      };
+      const handleLatestOvSearchList = async (request?: {
+        query?: Record<string, unknown>;
+        params?: Record<string, unknown>;
+        url?: string;
+      }) => {
+        const query = toQueryObject(request);
+        const session = resolvePluginSessionRouting(query as SessionAgentLookup);
+        const limit = toLimitedInteger(query.limit, 20, 1, 100);
+        if (limit === undefined) {
+          return {
+            status: 400,
+            body: {
+              ok: false,
+              items: [],
+              totalItems: 0,
+              warnings: [],
+              error: { code: "invalid_param", message: "limit is invalid" },
+            },
+          };
+        }
+        const includeSelected = toBoolean(query.includeSelected) ?? true;
+        const dedupe = toBoolean(query.dedupe) ?? true;
+        const includeSkills = toBoolean(query.includeSkills) ?? true;
+        const strict = toBoolean(query.strict) ?? false;
+        const traceQuery = parseRecallTraceInput({
+          turn: "latest",
+          source: "ov_search",
+          sessionId: toString(query.sessionId),
+          sessionKey: toSessionKey(query),
+          ovSessionId: toString(query.ovSessionId),
+          limit: 1,
+        }, session);
+        const result = traceRecorder
+          ? await traceRecorder.queryWithFallback(traceQuery)
+          : { entries: [], lookupLayer: "memory" as const, warnings: ["traceRecall is disabled"] };
+        const agentId = toString(query.agentId);
+        const entry = agentId ? result.entries.find((candidate) => candidate.agentId === agentId) : result.entries[0];
+        if (!entry) {
+          const body = {
+            ok: !strict,
+            lookupLayer: "none" as const,
+            fallbackUsed: false,
+            query: {
+              sessionId: toString(query.sessionId),
+              sessionKey: toSessionKey(query),
+              ovSessionId: toString(query.ovSessionId),
+              agentId,
+              limit,
+              lookup: toString(query.lookup) ?? "auto",
+            },
+            items: [],
+            totalItems: 0,
+            warnings: [...result.warnings, "no ov_search trace found for latest interaction"],
+            ...(strict ? { error: { code: "not_found", message: "no ov_search trace found for latest interaction" } } : {}),
+          };
+          return { status: strict ? 404 : 200, body };
+        }
+        const searchResultByUri = new Map<string, RecallTraceResult & { targetUri?: string }>();
+        for (const search of entry.searches) {
+          for (const item of search.results) {
+            searchResultByUri.set(item.uri, { ...item, targetUri: search.targetUriResolved ?? search.targetUriInput });
+          }
+        }
+        const items: Array<Record<string, unknown>> = [];
+        const addItem = (
+          item: {
+            uri: string;
+            resourceType?: RecallResourceType | "archive";
+            category?: string;
+            score?: number;
+            abstractPreview?: string;
+          },
+          source: "search_result" | "selected",
+        ) => {
+          const matched = searchResultByUri.get(item.uri);
+          const inferredType = inferUriType(item.uri);
+          const resultType = matched?.resultType
+            ?? (inferredType === "skill" ? "skill" : inferredType.includes("memory") ? "memory" : "resource");
+          if (!includeSkills && resultType === "skill") {
+            return;
+          }
+          const row = {
+            uri: item.uri,
+            abstractPreview: item.abstractPreview ?? matched?.abstractPreview,
+            resourceType: item.resourceType ?? matched?.resourceType,
+            resultType,
+            category: item.category ?? matched?.category,
+            score: item.score ?? matched?.score,
+            source,
+            targetUri: matched?.targetUri,
+            detailUrl: `/api/openviking/uri-detail?uri=${encodeURIComponent(item.uri)}&traceId=${encodeURIComponent(entry.traceId)}`,
+          };
+          if (dedupe) {
+            const existing = items.findIndex((candidate) => candidate.uri === item.uri);
+            if (existing >= 0) {
+              if (source === "selected") {
+                items[existing] = row;
+              }
+              return;
+            }
+          }
+          items.push(row);
+        };
+        if (includeSelected) {
+          entry.selected.forEach((item) => addItem(item, "selected"));
+        }
+        for (const search of entry.searches) {
+          search.results.forEach((item) => addItem(item, "search_result"));
+        }
+        const limited = items.slice(0, limit);
+        return {
+          status: 200,
+          body: {
+            ok: true,
+            lookupLayer: result.lookupLayer,
+            fallbackUsed: result.lookupLayer === "persistent",
+            query: {
+              sessionId: toString(query.sessionId),
+              sessionKey: toSessionKey(query),
+              ovSessionId: toString(query.ovSessionId),
+              agentId,
+              limit,
+              lookup: toString(query.lookup) ?? "auto",
+            },
+            trace: {
+              traceId: entry.traceId,
+              ts: entry.ts,
+              isoTime: new Date(entry.ts).toISOString(),
+              triggerQuery: entry.trigger.query,
+              totalSearches: entry.searches.length,
+            },
+            items: limited,
+            totalItems: limited.length,
+            warnings: result.warnings,
+          },
+        };
+      };
+      const routes = [
+        { method: "GET" as const, path: "/api/openviking/recall-traces", handler: handleRecallTraces },
+        { method: "GET" as const, path: "/api/openviking/uri-detail", handler: handleUriDetail },
+        { method: "GET" as const, path: "/api/openviking/recall-traces/latest-ov-search-list", handler: handleLatestOvSearchList },
+        {
+          method: "GET" as const,
+          path: "/api/openviking/recall-traces/:traceId",
+          handler: (request?: {
+            query?: Record<string, unknown>;
+            params?: Record<string, unknown>;
+            url?: string;
+          }) => handleRecallTraces({
+            ...request,
+            query: {
+              ...(request?.query ?? {}),
+              traceId: typeof request?.params?.traceId === "string" ? request.params.traceId : undefined,
+            },
+          }),
+        },
+      ];
+      if (canRegisterLegacyRoute) {
+        for (const route of routes) {
+          routeAdapter.registerRoute?.(route);
+        }
+      }
+      if (canRegisterHttpRoute) {
+        const sendJson = (
+          res: {
+            statusCode?: number;
+            setHeader?: (name: string, value: string) => void;
+            end?: (body?: string) => void;
+          },
+          status: number,
+          body: unknown,
+        ) => {
+          res.statusCode = status;
+          res.setHeader?.("Cache-Control", "no-store");
+          res.setHeader?.("Content-Type", "application/json; charset=utf-8");
+          res.end?.(JSON.stringify(body));
+        };
+        const makeHttpHandler = (
+          route: (typeof routes)[number],
+          getParams?: (url: string) => Record<string, unknown>,
+        ) => async (
+          req: { method?: string; url?: string },
+          res: {
+            statusCode?: number;
+            setHeader?: (name: string, value: string) => void;
+            end?: (body?: string) => void;
+          },
+        ): Promise<boolean> => {
+          if ((req.method ?? "GET").toUpperCase() !== route.method) {
+            sendJson(res, 405, {
+              ok: false,
+              error: { code: "method_not_allowed", message: `${route.method} is required` },
+            });
+            return true;
+          }
+          const url = req.url ?? route.path;
+          const result = await route.handler({ url, params: getParams?.(url) });
+          const response = result as { status?: number; body?: unknown };
+          sendJson(res, typeof response.status === "number" ? response.status : 200, response.body ?? response);
+          return true;
+        };
+        for (const route of routes) {
+          if (route.path === "/api/openviking/recall-traces/:traceId") {
+            const prefix = "/api/openviking/recall-traces/";
+            routeAdapter.registerHttpRoute?.({
+              path: "/api/openviking/recall-traces",
+              auth: "plugin",
+              match: "prefix",
+              handler: makeHttpHandler(route, (url) => {
+                const pathname = new URL(url, "http://openclaw.local").pathname;
+                const traceId = pathname.startsWith(prefix)
+                  ? decodeURIComponent(pathname.slice(prefix.length))
+                  : "";
+                return traceId ? { traceId } : {};
+              }),
+            });
+          } else {
+            routeAdapter.registerHttpRoute?.({
+              path: route.path,
+              auth: "plugin",
+              match: "exact",
+              handler: makeHttpHandler(route),
+            });
+          }
+        }
+      }
       return true;
     };
 
