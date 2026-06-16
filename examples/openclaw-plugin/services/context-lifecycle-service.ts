@@ -4,7 +4,7 @@ import type { EffectiveQueryConfig } from "../query-config.js";
 import { buildAutoRecallContext, prepareRecallQuery } from "../auto-recall.js";
 import { toJsonLog } from "../memory-ranking.js";
 import { openClawSessionToOvStorageId } from "../routing/identity-routing.js";
-import { extractNewTurnMessages } from "../text-utils.js";
+import { extractLatestUserText, extractNewTurnMessages } from "../text-utils.js";
 import { estimateAgentMessageTokens, estimateTextTokens } from "../token-estimator.js";
 import {
   convertToAgentMessages,
@@ -15,6 +15,39 @@ import {
 } from "./context-message-adapter.js";
 
 type ExtractedTurnMessage = ReturnType<typeof extractNewTurnMessages>["messages"][number];
+
+// ─── Memory-intent commit (issue #1682) ─────────────────────────────────────
+// Inline patterns matching explicit user memory intent. Override in a
+// follow-up if the heuristic needs to be configurable. Patterns are evaluated
+// in order; the first match wins so log output names a single pattern.
+const INTENT_COMMIT_PATTERNS: Array<{ name: string; re: RegExp }> = [
+  { name: "en.remember", re: /\b(please\s+)?remember\b/i },
+  { name: "en.dont_forget", re: /\bdon'?t\s+forget\b/i },
+  { name: "en.write_save_store_note", re: /\b(write|save|store|note)\s+(this|that|down)\b/i },
+  { name: "en.long_term_memory", re: /\b(long[- ]term\s+)?memory\b.*\b(this|fact)\b/i },
+  { name: "en.make_set_note", re: /\b(make\s+a|set\s+a)\s+note\b/i },
+  { name: "zh.remember_short", re: /记住|记下|记一下/ },
+  { name: "zh.remember_polite", re: /请记住|请记下/ },
+  { name: "zh.write_to_memory", re: /写入(长期)?记忆/ },
+  { name: "zh.save_to_memory", re: /保存到(长期)?记忆/ },
+  { name: "zh.record_this", re: /记录这条/ },
+  { name: "zh.stash_short", re: /存一下/ },
+];
+
+// Module-level rate-cap so a chatty "remember!" user can't trigger a commit
+// storm. Single shared timestamp: at most one intent-driven commit per
+// INTENT_COMMIT_MIN_INTERVAL_MS across all sessions in this process.
+const INTENT_COMMIT_MIN_INTERVAL_MS = 30_000;
+let lastIntentCommitAt = 0;
+
+function detectIntentCommit(text: string): { matched: true; pattern: string } | { matched: false } {
+  if (!text) return { matched: false };
+  for (const { name, re } of INTENT_COMMIT_PATTERNS) {
+    if (re.test(text)) return { matched: true, pattern: name };
+  }
+  return { matched: false };
+}
+// ────────────────────────────────────────────────────────────────────────────
 
 export type ContextEngineLifecycleLogger = {
   info: (msg: string) => void;
@@ -129,6 +162,7 @@ export type AfterTurnOpenVikingSessionParams = {
     commitTokenThreshold: number;
     commitKeepRecentCount: number;
     logFindRequests: boolean;
+    intentCommitEnabled?: boolean;
   };
   getClient: () => Promise<AfterTurnClient>;
   logger: ContextEngineLifecycleLogger;
@@ -880,7 +914,40 @@ export async function afterTurnOpenVikingSession({
     const session = await client.getSession(ovSessionId, agentId);
     const pendingTokens = session.pending_tokens ?? 0;
 
-    if (pendingTokens < cfg.commitTokenThreshold) {
+    // Issue #1682: short but explicit memory-intent messages may never
+    // push pending_tokens past commitTokenThreshold (default 20K). When
+    // the latest user message in this turn signals memory intent, force
+    // a commit — rate-capped so chatty "remember!" inputs can't storm.
+    let intentForceCommit: { pattern: string } | null = null;
+    if (
+      cfg.intentCommitEnabled &&
+      pendingTokens < cfg.commitTokenThreshold
+    ) {
+      const latestUserText = extractLatestUserText(extractedMessages);
+      const detected = detectIntentCommit(latestUserText);
+      if (detected.matched) {
+        const now = Date.now();
+        if (now - lastIntentCommitAt >= INTENT_COMMIT_MIN_INTERVAL_MS) {
+          lastIntentCommitAt = now;
+          intentForceCommit = { pattern: detected.pattern };
+          logger.info(
+            `openviking: force-commit on memory-intent match: ` +
+              `pattern=${detected.pattern}, sid=${ovSessionId}`,
+          );
+        } else {
+          diag("afterTurn_skip", ovSessionId, {
+            reason: "intent_rate_capped",
+            pendingTokens,
+            commitTokenThreshold: cfg.commitTokenThreshold,
+            intentPattern: detected.pattern,
+            intentMinIntervalMs: INTENT_COMMIT_MIN_INTERVAL_MS,
+            msSinceLastIntentCommit: now - lastIntentCommitAt,
+          });
+        }
+      }
+    }
+
+    if (pendingTokens < cfg.commitTokenThreshold && !intentForceCommit) {
       diag("afterTurn_skip", ovSessionId, {
         reason: "below_threshold",
         pendingTokens,
@@ -911,6 +978,7 @@ export async function afterTurnOpenVikingSession({
       extractedMemories: totalExtractedMemories(commitResult.memories_extracted),
       senderIdFound: sender.found,
       senderId: sender.senderId ?? null,
+      intentForceCommit: intentForceCommit?.pattern ?? null,
     });
     if (commitResult.task_id && cfg.logFindRequests) {
       logger.info(

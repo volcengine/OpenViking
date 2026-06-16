@@ -212,6 +212,10 @@ After that, the plugin checks `pending_tokens`. Once the session crosses `commit
 
 This automatic path is best-effort and commit-dependent. Short but important facts can stay only in the live session until a threshold commit, `/compact`, or an explicit store happens.
 
+#### Memory-intent commit (issue #1682)
+
+If the latest user message in the turn matches an explicit memory-intent phrase (e.g. "remember this", "don't forget", "save this", or Chinese equivalents like "记住" / "写入长期记忆"), `afterTurn()` forces `commit(wait=false)` even when `pending_tokens` is below `commitTokenThreshold`. The pattern list lives inline in `services/context-lifecycle-service.ts`; override it in a follow-up if needed. The behavior is on by default; set `intentCommitEnabled: false` to disable. Force-commits are rate-capped at one per 30 s across the process so a chatty "remember!" user cannot trigger a commit storm.
+
 ### Explicit long-term memory writes
 
 When the user explicitly asks the agent to remember, save, or store an important long-term fact, preference, project, or decision, prefer `memory_store` over waiting for normal auto-capture. `memory_store` writes the text to an OpenViking session and calls `commit(wait=true)`, so it is the reliable integration-side path for facts that should be available as long-term memory as soon as possible.

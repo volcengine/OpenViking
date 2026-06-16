@@ -33,6 +33,12 @@ export type MemoryOpenVikingConfig = {
   recallTokenBudget?: number;
   commitTokenThreshold?: number;
   /**
+   * Force a commit at the end of afterTurn when the latest user message matches
+   * an explicit memory-intent pattern (English + Chinese), even if pending
+   * tokens are still below `commitTokenThreshold`. Default true.
+   */
+  intentCommitEnabled?: boolean;
+  /**
    * WM v2: number of most-recent messages to keep live after an afterTurn
    * commit so the next turn still has immediate context. Forwarded to the
    * server as `keep_recent_count`. Default 10. The compact path ignores this
@@ -110,6 +116,7 @@ const DEFAULT_RECALL_MAX_CONTENT_CHARS = 5000;
 const DEFAULT_RECALL_PREFER_ABSTRACT = false;
 const DEFAULT_RECALL_MAX_INJECTED_CHARS = 4000;
 const DEFAULT_COMMIT_TOKEN_THRESHOLD = 20000;
+const DEFAULT_INTENT_COMMIT_ENABLED = true;
 const DEFAULT_COMMIT_KEEP_RECENT_COUNT = 10;
 const DEFAULT_BYPASS_SESSION_PATTERNS: string[] = [];
 const DEFAULT_EMIT_STANDARD_DIAGNOSTICS = false;
@@ -394,6 +401,7 @@ export const memoryOpenVikingConfigSchema = {
         "recallPreferAbstract",
         "recallTokenBudget",
         "commitTokenThreshold",
+        "intentCommitEnabled",
         "commitKeepRecentCount",
         "bypassSessionPatterns",
         "ingestReplyAssist",
@@ -514,6 +522,10 @@ export const memoryOpenVikingConfigSchema = {
         0,
         Math.min(100_000, Math.floor(toNumber(cfg.commitTokenThreshold, DEFAULT_COMMIT_TOKEN_THRESHOLD))),
       ),
+      intentCommitEnabled:
+        typeof cfg.intentCommitEnabled === "boolean"
+          ? cfg.intentCommitEnabled
+          : DEFAULT_INTENT_COMMIT_ENABLED,
       commitKeepRecentCount: Math.max(
         0,
         Math.min(
@@ -752,6 +764,16 @@ export const memoryOpenVikingConfigSchema = {
       placeholder: String(DEFAULT_COMMIT_TOKEN_THRESHOLD),
       advanced: true,
       help: "Minimum estimated pending tokens before auto-commit triggers. Set to 0 to commit every turn.",
+    },
+    intentCommitEnabled: {
+      label: "Intent-driven commit",
+      placeholder: String(DEFAULT_INTENT_COMMIT_ENABLED),
+      advanced: true,
+      help:
+        "When the latest user message matches an explicit memory-intent phrase " +
+        "(\"remember this\", \"记住\", etc.), force an afterTurn commit even if " +
+        "pending tokens are below the threshold. Rate-capped to once per 30 s. " +
+        "Set false to disable.",
     },
     commitKeepRecentCount: {
       label: "Commit Keep Recent Count",
