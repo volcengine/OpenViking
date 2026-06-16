@@ -24,6 +24,10 @@ type DocsSearchResult = {
   url?: string
 }
 
+type ResolvedDocsSearchResult = DocsSearchResult & {
+  resolvedUrl: string
+}
+
 type RemoteSearchFailureReason = 'rate_limited' | 'timeout' | 'unavailable'
 
 type RemoteSearchResponse =
@@ -32,7 +36,6 @@ type RemoteSearchResponse =
 
 const PRODUCTION_SEARCH_URL = 'https://openviking.ai/studio/gateway/docs/search'
 const SEARCH_LIMIT = 8
-const LOCAL_SEARCH_DEBOUNCE_MS = 120
 const REMOTE_SEARCH_DEBOUNCE_MS = 700
 const REMOTE_SEARCH_TIMEOUT_MS = 5000
 
@@ -58,6 +61,8 @@ const modes: { command: string; label: string; placeholder: string; value: Searc
 ]
 
 const inputRef = ref<HTMLInputElement | null>(null)
+const triggerRef = ref<HTMLButtonElement | null>(null)
+const dialogRef = ref<HTMLElement | null>(null)
 const isOpen = ref(false)
 const isMounted = ref(false)
 const isLoading = ref(false)
@@ -73,13 +78,15 @@ let localIndexPromise: Promise<DocsIndexRecord[]> | null = null
 
 const trimmedQuery = computed(() => query.value.trim())
 const activeMode = computed(() => modes.find((item) => item.value === mode.value) ?? modes[0])
+const resolvedResults = computed<ResolvedDocsSearchResult[]>(() =>
+  results.value.flatMap((result) => {
+    const resolvedUrl = resultUrl(result)
+    return resolvedUrl ? [{ ...result, resolvedUrl }] : []
+  })
+)
 
 function docsLocale(): SearchLocale {
   return window.location.pathname.startsWith('/zh/') ? 'zh' : 'en'
-}
-
-function searchEndpoint(): string {
-  return PRODUCTION_SEARCH_URL
 }
 
 function openSearch() {
@@ -89,8 +96,12 @@ function openSearch() {
 }
 
 function closeSearch() {
+  const shouldRestoreFocus = isOpen.value
   isOpen.value = false
   isModeMenuOpen.value = false
+  if (shouldRestoreFocus) {
+    void nextTick(() => triggerRef.value?.focus())
+  }
 }
 
 function toggleModeMenu() {
@@ -130,15 +141,54 @@ function handleKeydown(event: KeyboardEvent) {
   openSearch()
 }
 
+function handleDialogKeydown(event: KeyboardEvent) {
+  if (event.key !== 'Tab') return
+
+  const focusable = dialogFocusableElements()
+  if (focusable.length === 0) {
+    event.preventDefault()
+    return
+  }
+
+  const first = focusable[0]
+  const last = focusable[focusable.length - 1]
+  const activeElement = document.activeElement
+
+  if (event.shiftKey && activeElement === first) {
+    event.preventDefault()
+    last.focus()
+    return
+  }
+
+  if (!event.shiftKey && activeElement === last) {
+    event.preventDefault()
+    first.focus()
+  }
+}
+
+function dialogFocusableElements() {
+  const elements = dialogRef.value?.querySelectorAll<HTMLElement>(
+    [
+      'a[href]',
+      'button:not([disabled])',
+      'input:not([disabled])',
+      'select:not([disabled])',
+      'textarea:not([disabled])',
+      '[tabindex]:not([tabindex="-1"])'
+    ].join(',')
+  )
+
+  return Array.from(elements ?? []).filter((element) => element.tabIndex >= 0)
+}
+
 function scheduleSearch() {
   if (debounceTimer) {
     window.clearTimeout(debounceTimer)
   }
 
-  const delay = searchEndpoint() ? REMOTE_SEARCH_DEBOUNCE_MS : LOCAL_SEARCH_DEBOUNCE_MS
   debounceTimer = window.setTimeout(() => {
     void runSearch()
-  }, delay)
+  }, REMOTE_SEARCH_DEBOUNCE_MS)
 }
 
 async function runSearch() {
@@ -155,10 +205,12 @@ async function runSearch() {
   isLoading.value = true
 
   try {
-    const endpoint = searchEndpoint()
-    const remoteResponse = endpoint
-      ? await fetchRemoteResults(endpoint, currentQuery, mode.value, docsLocale())
-      : null
+    const remoteResponse = await fetchRemoteResults(
+      PRODUCTION_SEARCH_URL,
+      currentQuery,
+      mode.value,
+      docsLocale()
+    )
 
     if (currentSequence !== searchSequence) return
 
@@ -246,7 +298,10 @@ async function loadLocalIndex() {
   localIndexPromise ??= fetch(withBase('/docs-search-index.json'))
     .then((response) => (response.ok ? response.json() : []))
     .then((payload) => (Array.isArray(payload) ? (payload as DocsIndexRecord[]) : []))
-    .catch(() => [])
+    .catch((error) => {
+      console.warn('Failed to load local docs search index.', error)
+      return []
+    })
 
   return localIndexPromise
 }
@@ -331,8 +386,9 @@ function resultUrl(result: DocsSearchResult) {
   const url =
     result.url ||
     routeFromRelativePath(result.relativePath, docsLocale()) ||
-    routeFromVikingUri(result.uri) ||
-    '/'
+    routeFromVikingUri(result.uri)
+
+  if (!url) return ''
 
   if (/^https?:\/\//.test(url)) return url
   return withBase(url)
@@ -380,7 +436,7 @@ onUnmounted(() => {
 
 <template>
   <div class="ov-docs-search">
-    <button class="ov-docs-search-trigger" type="button" @click="openSearch">
+    <button ref="triggerRef" class="ov-docs-search-trigger" type="button" @click="openSearch">
       <span>Search docs</span>
       <kbd>Ctrl K</kbd>
     </button>
@@ -388,9 +444,12 @@ onUnmounted(() => {
     <Teleport v-if="isMounted && isOpen" to="body">
       <div class="ov-docs-search-backdrop" @click.self="closeSearch">
         <section
+          ref="dialogRef"
           aria-label="OpenViking docs search"
+          aria-modal="true"
           class="ov-docs-search-dialog"
           role="dialog"
+          @keydown="handleDialogKeydown"
         >
           <div class="ov-docs-search-bar">
             <div class="ov-docs-search-mode-picker">
@@ -445,7 +504,7 @@ onUnmounted(() => {
 
           <div class="ov-docs-search-results">
             <p v-if="isLoading" class="ov-docs-search-empty">Searching...</p>
-            <p v-else-if="trimmedQuery && results.length === 0" class="ov-docs-search-empty">
+            <p v-else-if="trimmedQuery && resolvedResults.length === 0" class="ov-docs-search-empty">
               No results found.
             </p>
             <p v-else-if="!trimmedQuery" class="ov-docs-search-empty">
@@ -453,10 +512,10 @@ onUnmounted(() => {
             </p>
             <template v-else>
               <a
-                v-for="result in results"
-                :key="`${result.url}-${result.line ?? ''}`"
+                v-for="result in resolvedResults"
+                :key="`${result.resolvedUrl}-${result.line ?? ''}-${result.snippet ?? ''}`"
                 class="ov-docs-search-result"
-                :href="resultUrl(result)"
+                :href="result.resolvedUrl"
                 @click="closeSearch"
               >
                 <span class="ov-docs-search-result-title">{{ result.title }}</span>

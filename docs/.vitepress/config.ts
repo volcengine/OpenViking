@@ -133,9 +133,13 @@ const zhNav: DefaultTheme.NavItem[] = [
   { text: navLabels.zh.about, link: '/zh/about/01-about-us', activeMatch: '/zh/about/' }
 ]
 
-function collectAllMdFiles(srcDir: string): { relativePath: string; absPath: string }[] {
+function collectAllMdFiles(
+  srcDir: string,
+  options: { includeIndex?: boolean } = {}
+): { relativePath: string; absPath: string }[] {
   const results: { relativePath: string; absPath: string }[] = []
   const ignored = new Set(['node_modules', '.vitepress'])
+  const includeIndex = options.includeIndex ?? false
 
   function walk(dir: string) {
     for (const entry of fs.readdirSync(dir)) {
@@ -144,7 +148,7 @@ function collectAllMdFiles(srcDir: string): { relativePath: string; absPath: str
       const stat = fs.statSync(abs)
       if (stat.isDirectory()) {
         walk(abs)
-      } else if (entry.endsWith('.md') && entry !== 'index.md') {
+      } else if (entry.endsWith('.md') && (includeIndex || entry !== 'index.md')) {
         results.push({ relativePath: path.relative(srcDir, abs), absPath: abs })
       }
     }
@@ -161,7 +165,15 @@ function markdownToSearchText(content: string): string {
     .replace(/`([^`]+)`/g, '$1')
     .replace(/!\[[^\]]*\]\([^)]+\)/g, ' ')
     .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
-    .replace(/[#>*_~|:-]+/g, ' ')
+    .replace(/^\s{0,3}#{1,6}\s+/gm, ' ')
+    .replace(/^\s{0,3}>\s?/gm, ' ')
+    .replace(/^\s*[-*+]\s+/gm, ' ')
+    .replace(/^\s*\|?[\s:-]+\|[\s|:-]*$/gm, ' ')
+    .replace(/\*\*([^*\n]+)\*\*/g, '$1')
+    .replace(/__([^_\n]+)__/g, '$1')
+    .replace(/~~([^~\n]+)~~/g, '$1')
+    .replace(/(^|[\s([{"'（【])\*([^*\n]+)\*(?=$|[\s.,;:!?，。；：！？、）】\])}"'])/g, '$1$2')
+    .replace(/(^|[\s([{"'（【])_([^_\n]+)_(?=$|[\s.,;:!?，。；：！？、）】\])}"'])/g, '$1$2')
     .replace(/\s+/g, ' ')
     .trim()
 }
@@ -173,7 +185,7 @@ function docsSearchLocale(relativePath: string): 'en' | 'zh' | null {
 }
 
 function buildDocsSearchRecords(srcDir: string) {
-  return collectAllMdFiles(srcDir)
+  return collectAllMdFiles(srcDir, { includeIndex: true })
     .map(({ relativePath, absPath }) => {
       const normalizedPath = relativePath.replace(/\\/g, '/')
       const locale = docsSearchLocale(normalizedPath)
