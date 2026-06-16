@@ -1,6 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import { memoryOpenVikingConfigSchema } from "./config.js";
 import { registerSetupCli } from "./commands/setup.js";
+import { registerOpenVikingFeatureGatesMethod } from "./plugin/openviking-feature-gates.js";
 
 import { OpenVikingClient, isMemoryUri } from "./client.js";
 import type {
@@ -266,6 +267,13 @@ type OpenClawPluginApi = {
     stop?: (ctx?: unknown) => void | Promise<void>;
   }) => void;
   registerContextEngine?: (id: string, factory: () => unknown) => void;
+  registerGatewayMethod?: (
+    name: string,
+    handler: (input: {
+      params?: unknown;
+      respond: (success: boolean, data: unknown) => void;
+    }) => void | Promise<void>,
+  ) => void;
   registerCli?: (
     factory: (ctx: { program: unknown; workspaceDir?: string }) => void,
     opts?: { commands?: string[] },
@@ -662,6 +670,8 @@ const contextEnginePlugin = {
   configSchema: memoryOpenVikingConfigSchema,
 
   register(api: OpenClawPluginApi) {
+    registerOpenVikingFeatureGatesMethod(api);
+
     const rawCfg =
       api.pluginConfig && typeof api.pluginConfig === "object" && !Array.isArray(api.pluginConfig)
         ? (api.pluginConfig as Record<string, unknown>)
