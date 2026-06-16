@@ -463,32 +463,32 @@ class MemoryStore:
         peer_ids: list[str],
         quotas: dict[str, int],
     ) -> list[Any]:
-        all_memories: list[Any] = []
         current_actor_peer_id = getattr(base_client, "actor_peer_id", None)
+        normalized_peer_ids = VikingClient._dedupe_strings(
+            [
+                normalized_peer_id
+                for normalized_peer_id in (VikingClient._peer_id(peer_id) for peer_id in peer_ids)
+                if normalized_peer_id
+            ]
+        )
 
-        for peer_id in peer_ids:
-            normalized_peer_id = VikingClient._peer_id(peer_id)
-            if not normalized_peer_id:
-                continue
-
+        async def search_peer(normalized_peer_id: str) -> list[Any]:
             peer_client = base_client
             should_close = False
             if normalized_peer_id != current_actor_peer_id:
                 peer_client = await VikingClient.create(
                     agent_id=workspace_id,
                     connection=openviking_connection,
-                    actor_peer_id=peer_id,
+                    actor_peer_id=normalized_peer_id,
                 )
                 should_close = True
 
             try:
-                all_memories.extend(
-                    await self._search_viking_memory_by_type_quota(
-                        client=peer_client,
-                        query=query,
-                        peer_ids=[peer_id],
-                        quotas=quotas,
-                    )
+                return await self._search_viking_memory_by_type_quota(
+                    client=peer_client,
+                    query=query,
+                    peer_ids=[normalized_peer_id],
+                    quotas=quotas,
                 )
             finally:
                 if should_close:
@@ -496,6 +496,17 @@ class MemoryStore:
                         await peer_client.close()
                     except Exception as e:
                         logger.warning(f"Error closing VikingClient: {e}")
+
+        results = await asyncio.gather(
+            *(search_peer(peer_id) for peer_id in normalized_peer_ids),
+            return_exceptions=True,
+        )
+        all_memories: list[Any] = []
+        for result in results:
+            if isinstance(result, Exception):
+                logger.warning(f"Failed to search actor peer memories: {result}")
+                continue
+            all_memories.extend(result)
 
         return self._select_type_quota_memories(all_memories, quotas)
 
@@ -731,14 +742,14 @@ class MemoryStore:
         workspace_id: str,
         peer_ids: list[str],
         openviking_connection: dict[str, Any] | None = None,
-        use_actor_scope: bool = False,
+        use_peer_actor_scope: bool = False,
     ) -> str:
         if not peer_ids:
             return ""
 
         client = None
         try:
-            if not use_actor_scope:
+            if not use_peer_actor_scope:
                 client = await VikingClient.create(
                     agent_id=workspace_id,
                     connection=openviking_connection,
@@ -748,7 +759,7 @@ class MemoryStore:
                 peer_client = client
                 should_close = False
                 try:
-                    if use_actor_scope:
+                    if use_peer_actor_scope:
                         peer_client = await VikingClient.create(
                             agent_id=workspace_id,
                             connection=openviking_connection,

@@ -184,7 +184,7 @@ Skills with available="false" need dependencies installed first - you can try in
                     workspace_id=workspace_id,
                     peer_ids=additional_peer_ids,
                     openviking_connection=self._openviking_connection,
-                    use_actor_scope=bool(self._sender_id),
+                    use_peer_actor_scope=bool(self._sender_id),
                 )
                 if profiles:
                     parts.append(profiles)

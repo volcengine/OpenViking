@@ -354,12 +354,6 @@ class VikingClient:
             raise ValueError("peer memory target requires current user_id")
         return f"viking://user/{user_space}/peers/{normalized_peer_id}/memories/"
 
-    def _current_skill_target_uri(self) -> str:
-        memory_uri = self._memory_target_uri(None).rstrip("/")
-        if memory_uri.endswith("/memories"):
-            return f"{memory_uri[: -len('/memories')]}/skills/"
-        return "viking://user/skills/"
-
     def _current_peer_profile_uri(self, peer_id: str) -> str:
         return f"{self._current_peer_memory_target_uri(peer_id).rstrip('/')}/profile.md"
 

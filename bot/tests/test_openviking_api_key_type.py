@@ -1526,7 +1526,7 @@ async def test_viking_peer_profiles_use_target_peer_actor_clients(monkeypatch, t
     result = await store.get_viking_peer_profiles(
         workspace_id="workspace",
         peer_ids=["speaker-a", "speaker-b"],
-        use_actor_scope=True,
+        use_peer_actor_scope=True,
     )
 
     assert [call["actor_peer_id"] for call in create_calls] == ["speaker-a", "speaker-b"]
@@ -2222,7 +2222,7 @@ async def test_context_loads_profiles_for_memory_peers(tmp_path):
             "workspace_id": "cli__default__chat-1",
             "peer_ids": ["speaker-a", "speaker-b"],
             "openviking_connection": None,
-            "use_actor_scope": True,
+            "use_peer_actor_scope": True,
         }
     ]
     assert "sender profile" in system_prompt
