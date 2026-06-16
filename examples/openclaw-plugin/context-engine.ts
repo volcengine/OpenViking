@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { DEFAULT_PHASE2_POLL_TIMEOUT_MS } from "./client.js";
 import type { OpenVikingClient, OVMemoryPolicy, OVMessage } from "./client.js";
 import type { MemoryOpenVikingConfig, ParsedMemoryOpenVikingConfig } from "./config.js";
+import type { RuntimeQueryConfigStore } from "./query-config.js";
 import {
   AUTO_RECALL_SOURCE_MARKER,
   buildGatedAgentExperienceRecallContext,
@@ -1092,6 +1093,7 @@ export function createMemoryOpenVikingContextEngine(params: {
     sessionKey?: string;
     ovSessionId?: string;
   }) => void;
+  queryConfigStore?: RuntimeQueryConfigStore;
   traceRecorder?: { record(entry: RecallTraceEntry): void };
 }): ContextEngineWithCommit {
   const {
@@ -1103,6 +1105,7 @@ export function createMemoryOpenVikingContextEngine(params: {
     getClient,
     resolveAgentId,
     rememberSessionAgentId,
+    queryConfigStore,
     traceRecorder,
   } = params;
 
@@ -1407,6 +1410,14 @@ export function createMemoryOpenVikingContextEngine(params: {
                 `chars=${recallQuery.originalChars}->${recallQuery.finalChars})`,
             );
           }
+          const effectiveQuery = queryConfigStore
+            ? await queryConfigStore.getEffective({
+              peerId: agentId,
+              sessionId: assembleParams.sessionId,
+              sessionKey,
+              ovSessionId: OVSessionId,
+            })
+            : undefined;
           const experienceRecall = experienceRecallEnabled
             ? await buildGatedAgentExperienceRecallContext({
                 cfg,
@@ -1435,6 +1446,7 @@ export function createMemoryOpenVikingContextEngine(params: {
                 ovSessionId: OVSessionId,
                 rawUserTextPreview: recallQuery.query,
                 queryTruncated: recallQuery.truncated,
+                queryConfig: effectiveQuery,
               })
             : { memoryCount: 0, estimatedTokens: 0 };
           const longTermRecallWithQuery: AssembleRecall = { ...longTermRecall, queryChars: recallQuery.finalChars };

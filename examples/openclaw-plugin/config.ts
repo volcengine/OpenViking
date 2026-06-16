@@ -79,6 +79,8 @@ export type MemoryOpenVikingConfig = {
   enabledTools?: string[] | string;
   /** Agent-visible tool blocklist applied after enabledTools. Supports exact tool names or groups. */
   disabledTools?: string[] | string;
+  /** Optional JSON file path for runtime query config overrides. Empty means in-memory only. */
+  runtimeQueryConfigPath?: string;
   agentExperience?: {
     enabled?: boolean;
     recallLimit?: number;
@@ -415,6 +417,7 @@ export const memoryOpenVikingConfigSchema = {
         "enableAddResourceTool",
         "enabledTools",
         "disabledTools",
+        "runtimeQueryConfigPath",
         "agentExperience",
       ],
       "openviking config",
@@ -586,6 +589,10 @@ export const memoryOpenVikingConfigSchema = {
       enableAddResourceTool: cfg.enableAddResourceTool === true,
       enabledTools,
       disabledTools,
+      runtimeQueryConfigPath:
+        typeof cfg.runtimeQueryConfigPath === "string" && cfg.runtimeQueryConfigPath.trim()
+          ? expandHomeDir(cfg.runtimeQueryConfigPath.trim())
+          : "",
       agentExperience: {
         enabled:
           typeof agentExperienceRaw.enabled === "boolean"
@@ -799,6 +806,12 @@ export const memoryOpenVikingConfigSchema = {
       label: "Disabled Tools",
       placeholder: "memory",
       help: "Agent-visible tool blocklist applied after enabledTools. Accepts the same tool names or groups.",
+      advanced: true,
+    },
+    runtimeQueryConfigPath: {
+      label: "Runtime Query Config Path",
+      placeholder: "~/.openclaw/openviking/runtime-query-config.json",
+      help: "Optional JSON file for /ov-query-config runtime overrides. Empty keeps overrides in memory only.",
       advanced: true,
     },
   },

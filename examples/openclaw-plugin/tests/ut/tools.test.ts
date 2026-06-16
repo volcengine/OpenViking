@@ -393,6 +393,156 @@ describe("Tool: memory_recall (registration)", () => {
     expect(result.content[0]!.text).not.toContain("x".repeat(200));
     expect(result.details.count).toBe(1);
   });
+
+  it("applies /ov-query-config session settings to subsequent memory_recall", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const requestUrl = new URL(url);
+      if (requestUrl.pathname === "/api/v1/system/status") {
+        return okResponse({ user: "default" });
+      }
+      if (requestUrl.pathname === "/api/v1/search/find") {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        expect(body.context_type).toBe("memory");
+        expect(body.target_uri).toBeUndefined();
+        return okResponse({
+          memories: [
+            makeMemory({
+              uri: "viking://user/default/memories/high",
+              abstract: "High score runtime memory",
+              score: 0.92,
+            }),
+            makeMemory({
+              uri: "viking://user/default/memories/low",
+              abstract: "Low score runtime memory",
+              score: 0.1,
+            }),
+          ],
+          resources: [],
+          skills: [],
+          total: 2,
+        });
+      }
+      if (requestUrl.pathname === "/api/v1/content/read") {
+        return okResponse("High score runtime memory content");
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { factoryTools, commands, api } = setupPlugin(undefined, {
+      recallLimit: 6,
+      recallTargetTypes: ["user", "agent"],
+    });
+    contextEnginePlugin.register(api as any);
+    const command = commands.get("ov-query-config");
+    expect(command).toBeDefined();
+
+    await command!.handler({
+      args: "set --scope session --recallLimit 1 --candidateLimit 3 --scoreThreshold 0.5 --resourceTypes user",
+      commandBody: "",
+      sessionId: "runtime-session",
+      agentId: "main",
+    });
+
+    const tool = factoryTools.get("memory_recall")!({ sessionId: "runtime-session", agentId: "main" });
+    const result = await tool.execute("tc-memory-recall-runtime", {
+      query: "runtime memory",
+    }) as ToolResult;
+
+    expect(result.content[0]!.text).toContain("High score runtime memory content");
+    expect(result.content[0]!.text).not.toContain("Low score runtime memory");
+    const findCalls = fetchMock.mock.calls.filter(([calledUrl]) =>
+      String(calledUrl).includes("/api/v1/search/find")
+    );
+    expect(findCalls).toHaveLength(1);
+    const body = JSON.parse(String((findCalls[0]![1] as RequestInit).body));
+    expect(body.context_type).toBe("memory");
+    expect(body.target_uri).toBeUndefined();
+    expect(body.limit).toBe(3);
+  });
+
+  it("applies /ov-query-config session settings to subsequent ov_search", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const requestUrl = new URL(url);
+      if (requestUrl.pathname === "/api/v1/system/status") {
+        return okResponse({ user: "default" });
+      }
+      if (requestUrl.pathname === "/api/v1/search/find") {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        expect(body.target_uri).toBe("viking://resources/project");
+        expect(body.limit).toBe(2);
+        return okResponse({
+          memories: [],
+          resources: [makeMemory({
+            uri: "viking://resources/project/spec.md",
+            abstract: "Project spec",
+            score: 0.9,
+          })],
+          skills: [],
+          total: 1,
+        });
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { factoryTools, commands, api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+    const command = commands.get("ov-query-config");
+    expect(command).toBeDefined();
+
+    await command!.handler({
+      args: "set --scope session --ovSearchLimit 2 --targetUri viking://resources/project",
+      commandBody: "",
+      sessionId: "runtime-search-session",
+      agentId: "main",
+    });
+
+    const search = factoryTools.get("ov_search")!({ sessionId: "runtime-search-session", agentId: "main" });
+    const result = await search.execute("tc-ov-search-runtime", {
+      query: "project spec",
+    }) as ToolResult;
+
+    expect(result.details.uri).toBe("viking://resources/project");
+    expect(result.details.total).toBe(1);
+  });
+
+  it("supports /ov-query-config get, unset, and reset for session scope", async () => {
+    const { commands, api } = setupPlugin(undefined, {
+      recallLimit: 6,
+      recallScoreThreshold: 0.15,
+    });
+    contextEnginePlugin.register(api as any);
+    const command = commands.get("ov-query-config");
+    expect(command).toBeDefined();
+    const ctx = {
+      commandBody: "",
+      sessionId: "runtime-session-config",
+      agentId: "main",
+    };
+
+    const setResult = await command!.handler({
+      ...ctx,
+      args: "set --scope session --recallLimit 2 --scoreThreshold 0.4",
+    });
+    expect(setResult.text).toContain("Updated OpenViking query config");
+    expect((setResult.details?.effective as any).recallLimit).toBe(2);
+    expect((setResult.details?.effective as any).scoreThreshold).toBe(0.4);
+
+    const getResult = await command!.handler({ ...ctx, args: "get --scope session" });
+    expect((getResult.details?.effective as any).recallLimit).toBe(2);
+    expect((getResult.details?.effective as any).scoreThreshold).toBe(0.4);
+
+    const unsetResult = await command!.handler({ ...ctx, args: "unset recallLimit --scope session" });
+    expect(unsetResult.text).toContain("Unset OpenViking query config fields");
+    expect((unsetResult.details?.effective as any).recallLimit).toBe(6);
+    expect((unsetResult.details?.effective as any).scoreThreshold).toBe(0.4);
+
+    const resetResult = await command!.handler({ ...ctx, args: "reset --scope session" });
+    expect(resetResult.text).toContain("Reset OpenViking query config");
+    expect((resetResult.details?.effective as any).recallLimit).toBe(6);
+    expect((resetResult.details?.effective as any).scoreThreshold).toBe(0.15);
+  });
 });
 
 describe("Tool: memory_store (behavioral)", () => {

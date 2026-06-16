@@ -54,6 +54,12 @@ import {
   type RecallTraceResult,
   type RecallTraceSource,
 } from "./recall-trace.js";
+import {
+  RuntimeQueryConfigStore,
+  normalizeRuntimeQueryParams,
+  type QueryConfigContext,
+  type RuntimeQueryParams,
+} from "./query-config.js";
 export {
   buildMemoryLines,
   buildMemoryLinesWithBudget,
@@ -438,6 +444,68 @@ function getBoolFlag(flags: Map<string, string | boolean>, name: string): boolea
   return flags.get(name) === true;
 }
 
+function getOptionalBoolFlag(flags: Map<string, string | boolean>, name: string): boolean | undefined {
+  const value = flags.get(name);
+  if (value === undefined) return undefined;
+  if (value === true) return true;
+  if (value === false) return false;
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  throw new Error(`--${name} must be a boolean`);
+}
+
+function parseNumberMapFlag(flags: Map<string, string | boolean>, name: string): Record<string, number> | undefined {
+  const raw = getStringFlag(flags, name);
+  if (!raw) return undefined;
+  const result: Record<string, number> = {};
+  for (const item of raw.split(",")) {
+    const [key, rawValue, ...rest] = item.split("=");
+    const trimmedKey = key?.trim();
+    const trimmedValue = rawValue?.trim();
+    if (!trimmedKey || !trimmedValue || rest.length > 0) {
+      throw new Error(`--${name} must use key=value pairs separated by commas`);
+    }
+    const value = Number(trimmedValue);
+    if (!Number.isFinite(value)) {
+      throw new Error(`--${name} value for ${trimmedKey} must be a number`);
+    }
+    result[trimmedKey] = value;
+  }
+  return result;
+}
+
+function parseQueryConfigPatch(flags: Map<string, string | boolean>): RuntimeQueryParams {
+  const patch: RuntimeQueryParams = {};
+  const numberFields: Array<[string, keyof RuntimeQueryParams]> = [
+    ["recallLimit", "recallLimit"],
+    ["candidateLimit", "candidateLimit"],
+    ["candidateMultiplier", "candidateMultiplier"],
+    ["scoreThreshold", "scoreThreshold"],
+    ["maxInjectedChars", "maxInjectedChars"],
+    ["ovSearchLimit", "ovSearchLimit"],
+  ];
+  for (const [flag, field] of numberFields) {
+    if (flags.has(flag)) {
+      (patch as Record<string, unknown>)[field] = getNumberFlag(flags, flag);
+    }
+  }
+  const resourceTypes = getStringFlag(flags, "resourceTypes");
+  if (resourceTypes) patch.resourceTypes = resourceTypes;
+  const targetUri = getStringFlag(flags, "targetUri");
+  if (targetUri) patch.targetUri = targetUri;
+  const recallPreferAbstract = getOptionalBoolFlag(flags, "recallPreferAbstract");
+  if (recallPreferAbstract !== undefined) patch.recallPreferAbstract = recallPreferAbstract;
+
+  const rankingWeights = parseNumberMapFlag(flags, "weight") ?? parseNumberMapFlag(flags, "rankingWeights");
+  if (rankingWeights) patch.rankingWeights = rankingWeights;
+  const categoryWeights = parseNumberMapFlag(flags, "categoryWeight") ?? parseNumberMapFlag(flags, "categoryWeights");
+  if (categoryWeights) patch.categoryWeights = categoryWeights;
+  const resourceTypeWeights = parseNumberMapFlag(flags, "resourceTypeWeight") ?? parseNumberMapFlag(flags, "resourceTypeWeights");
+  if (resourceTypeWeights) patch.resourceTypeWeights = resourceTypeWeights as RuntimeQueryParams["resourceTypeWeights"];
+  return patch;
+}
+
 function createTraceId(source: RecallTraceSource): string {
   return `${source}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -784,6 +852,17 @@ const contextEnginePlugin = {
           queryMaxDays: cfg.traceRecallQueryMaxDays,
         })
       : undefined;
+    const queryConfigStore = new RuntimeQueryConfigStore({
+      staticConfig: cfg,
+      path: cfg.runtimeQueryConfigPath || undefined,
+    });
+    const queryConfigReady = queryConfigStore.load();
+    const toQueryConfigContext = (session: PluginSessionRouting): QueryConfigContext => ({
+      peerId: session.agentId,
+      sessionId: session.sessionId,
+      sessionKey: session.sessionKey,
+      ovSessionId: session.ovSessionId,
+    });
 
     const isBypassedSession = (ctx?: {
       sessionId?: string;
@@ -1611,22 +1690,29 @@ const contextEnginePlugin = {
       if (!query) {
         throw new Error("query is required");
       }
-      const limit = Math.max(1, Math.floor(input.limit ?? 10));
+      const effectiveQuery = traceCtx
+        ? await queryConfigStore.getEffective(toQueryConfigContext(traceCtx), {
+          ovSearchLimit: input.limit,
+          targetUri: input.uri,
+        })
+        : undefined;
+      const limit = Math.max(1, Math.floor(input.limit ?? effectiveQuery?.ovSearchLimit ?? 10));
+      const searchUri = input.uri ?? effectiveQuery?.targetUri;
       const client = await getClient();
       let result: FindResult;
       const searches: RecallTraceEntry["searches"] = [];
-      if (input.uri) {
+      if (searchUri) {
         const started = Date.now();
-        result = await client.find(query, { targetUri: input.uri, limit, actorPeerId });
+        result = await client.find(query, { targetUri: searchUri, limit, actorPeerId });
         const items = [
           ...(result.memories ?? []).map((item) => toTraceResult(item, "memory")),
           ...(result.resources ?? []).map((item) => toTraceResult(item, "resource")),
           ...(result.skills ?? []).map((item) => toTraceResult(item, "skill")),
         ].slice(0, cfg.traceRecallMaxResultsPerSearch);
         searches.push({
-          resourceType: inferRecallResourceType(input.uri) ?? "resource",
-          targetUriInput: input.uri,
-          targetUriResolved: input.uri,
+          resourceType: inferRecallResourceType(searchUri) ?? "resource",
+          targetUriInput: searchUri,
+          targetUriResolved: searchUri,
           limit,
           durationMs: Date.now() - started,
           total: result.total ?? items.length,
@@ -1747,12 +1833,13 @@ const contextEnginePlugin = {
         },
       });
       return {
-        content: [{ type: "text" as const, text: formatOVSearchText(query, input.uri, result) }],
+        content: [{ type: "text" as const, text: formatOVSearchText(query, searchUri, result) }],
         details: {
           action: "searched",
           query,
-          uri: input.uri,
+          uri: searchUri,
           peer_id: actorPeerId ?? null,
+          queryConfig: effectiveQuery,
           memories: result.memories ?? [],
           resources: result.resources ?? [],
           skills: result.skills ?? [],
@@ -2099,6 +2186,65 @@ const contextEnginePlugin = {
       },
     });
 
+    api.registerCommand?.({
+      name: "ov-query-config",
+      description: "Get or update OpenViking runtime query config.",
+      acceptsArgs: true,
+      handler: async (ctx: PluginCommandContext) => {
+        try {
+          if (isBypassedSession(ctx)) {
+            const bypassed = makeBypassedToolResult("ov-query-config");
+            return { text: bypassed.content[0]!.text, details: bypassed.details };
+          }
+          const parsed = parseFlagArgs(ctx.args ?? "");
+          const action = parsed.positionals[0] ?? "get";
+          const rawScope = getStringFlag(parsed.flags, "scope");
+          const scope: "claw" | "session" =
+            rawScope === "peer" || rawScope === "claw" ? "claw" : "session";
+          const session = resolvePluginSessionRouting(ctx);
+          const queryCtx = toQueryConfigContext(session);
+
+          if (action === "get") {
+            const effective = await queryConfigStore.getEffective(queryCtx);
+            return { text: JSON.stringify({ scope, effective }, null, 2), details: { scope, effective } };
+          }
+          if (action === "set") {
+            const patch = parseQueryConfigPatch(parsed.flags);
+            const { params, warnings } = normalizeRuntimeQueryParams(patch as RuntimeQueryParams & Record<string, unknown>);
+            if (Object.keys(params).length === 0) {
+              throw new Error("No query config parameters provided for /ov-query-config set");
+            }
+            await queryConfigStore.set(scope, queryCtx, params);
+            const effective = await queryConfigStore.getEffective(queryCtx);
+            return {
+              text: `Updated OpenViking query config (${scope}).${warnings.length ? ` Warnings: ${warnings.join("; ")}` : ""}`,
+              details: { scope, params, warnings, effective },
+            };
+          }
+          if (action === "unset") {
+            const fields = parsed.positionals.slice(1);
+            if (fields.length === 0) {
+              throw new Error("Usage: /ov-query-config unset <field...> [--scope session|peer]");
+            }
+            await queryConfigStore.unset(scope, queryCtx, fields);
+            const effective = await queryConfigStore.getEffective(queryCtx);
+            return {
+              text: `Unset OpenViking query config fields (${scope}): ${fields.join(", ")}`,
+              details: { scope, fields, effective },
+            };
+          }
+          if (action === "reset") {
+            await queryConfigStore.reset(scope, queryCtx);
+            const effective = await queryConfigStore.getEffective(queryCtx);
+            return { text: `Reset OpenViking query config (${scope}).`, details: { scope, effective } };
+          }
+          throw new Error("Usage: /ov-query-config get|set|unset|reset [--scope session|peer] [--recallLimit N] [--candidateLimit N] [--scoreThreshold N] [--resourceTypes user,resource]");
+        } catch (err) {
+          return { text: `OpenViking query config failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    });
+
     registerOpenVikingTool(
       (ctx: ToolContext) => ({
         name: "memory_recall",
@@ -2127,22 +2273,31 @@ const contextEnginePlugin = {
           const session = resolvePluginSessionRouting(ctx);
           const peerId = resolveToolSearchPeerId(ctx, session);
           const { query } = params as { query: string };
-          const limit =
-            typeof (params as { limit?: number }).limit === "number"
-              ? Math.max(1, Math.floor((params as { limit: number }).limit))
-              : cfg.recallLimit;
-          const scoreThreshold =
-            typeof (params as { scoreThreshold?: number }).scoreThreshold === "number"
-              ? Math.max(0, Math.min(1, (params as { scoreThreshold: number }).scoreThreshold))
-              : cfg.recallScoreThreshold;
-          const targetUri =
-            typeof (params as { targetUri?: string }).targetUri === "string"
-              ? (params as { targetUri: string }).targetUri
-              : undefined;
-          const requestedResourceTypes = Object.prototype.hasOwnProperty.call(params, "resourceTypes")
-            ? (params as { resourceTypes?: unknown }).resourceTypes
-            : undefined;
-          const requestLimit = Math.max(limit * 4, 20);
+          const requestOverrides: RuntimeQueryParams = {};
+          if (typeof (params as { limit?: number }).limit === "number") {
+            requestOverrides.recallLimit = (params as { limit: number }).limit;
+          }
+          if (typeof (params as { scoreThreshold?: number }).scoreThreshold === "number") {
+            requestOverrides.scoreThreshold = (params as { scoreThreshold: number }).scoreThreshold;
+          }
+          if (typeof (params as { targetUri?: string }).targetUri === "string") {
+            requestOverrides.targetUri = (params as { targetUri: string }).targetUri;
+          }
+          if (Object.prototype.hasOwnProperty.call(params, "resourceTypes")) {
+            requestOverrides.resourceTypes = (params as { resourceTypes?: unknown }).resourceTypes as RuntimeQueryParams["resourceTypes"];
+          }
+          const effectiveQuery = await queryConfigStore.getEffective(
+            toQueryConfigContext(session),
+            requestOverrides,
+          );
+          const limit = effectiveQuery.recallLimit;
+          const scoreThreshold = effectiveQuery.scoreThreshold;
+          const targetUri = effectiveQuery.targetUri;
+          const requestedResourceTypes = effectiveQuery.resourceTypes;
+          const requestLimit = effectiveQuery.candidateLimit;
+          const recallPreferAbstract = effectiveQuery.sources.recallPreferAbstract === "static"
+            ? false
+            : effectiveQuery.recallPreferAbstract;
 
           const recallClient = await getClient();
           if (cfg.logFindRequests) {
@@ -2263,7 +2418,11 @@ const contextEnginePlugin = {
             limit: requestLimit,
             scoreThreshold,
           });
-          const memories = pickMemoriesForInjection(processed, limit, query);
+          const memories = pickMemoriesForInjection(processed, limit, query, scoreThreshold, {
+            weights: effectiveQuery.rankingWeights,
+            categoryWeights: effectiveQuery.categoryWeights,
+            resourceTypeWeights: effectiveQuery.resourceTypeWeights,
+          });
           const candidateTraceResults = leafOnly
             .map((item) => toTraceResult(item, inferRecallResourceType(item.uri) === "resource" ? "resource" : "memory"))
             .slice(0, cfg.traceRecallMaxResultsPerSearch);
@@ -2322,8 +2481,8 @@ const contextEnginePlugin = {
             memories,
             (uri) => recallClient.read(uri, peerId),
             {
-              recallPreferAbstract: false,
-              recallMaxInjectedChars: cfg.recallMaxInjectedChars,
+              recallPreferAbstract,
+              recallMaxInjectedChars: effectiveQuery.maxInjectedChars,
             },
           );
           if (memoryLines.length === 0) {
@@ -2332,7 +2491,7 @@ const contextEnginePlugin = {
               content: [
                 {
                   type: "text",
-                  text: `No complete OpenViking memories fit recallMaxInjectedChars=${cfg.recallMaxInjectedChars}.`,
+                  text: `No complete OpenViking memories fit recallMaxInjectedChars=${effectiveQuery.maxInjectedChars}.`,
                 },
               ],
               details: {
@@ -2341,7 +2500,8 @@ const contextEnginePlugin = {
                 total: result.total ?? memories.length,
                 scoreThreshold,
                 requestLimit,
-                recallMaxInjectedChars: cfg.recallMaxInjectedChars,
+                recallMaxInjectedChars: effectiveQuery.maxInjectedChars,
+                queryConfig: effectiveQuery,
               },
             };
           }
@@ -2359,7 +2519,8 @@ const contextEnginePlugin = {
               total: result.total ?? memories.length,
               scoreThreshold,
               requestLimit,
-              recallMaxInjectedChars: cfg.recallMaxInjectedChars,
+              recallMaxInjectedChars: effectiveQuery.maxInjectedChars,
+              queryConfig: effectiveQuery,
             },
           };
         },
@@ -3294,6 +3455,7 @@ const contextEnginePlugin = {
           getClient,
           resolveAgentId,
           rememberSessionAgentId,
+          queryConfigStore,
           traceRecorder,
         });
         return contextEngineRef;
@@ -3312,6 +3474,7 @@ const contextEnginePlugin = {
     api.registerService({
       id: "openviking",
       start: async (ctx?: unknown) => {
+        await queryConfigReady;
         const routeRegistered = registerRecallTraceRoutes(ctx);
         await (await getClient()).healthCheck().catch(() => {});
         api.logger.info(

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenVikingClient } from "../../client.js";
 import { memoryOpenVikingConfigSchema } from "../../config.js";
 import { createMemoryOpenVikingContextEngine } from "../../context-engine.js";
+import { RuntimeQueryConfigStore } from "../../query-config.js";
 import { RecallTraceMemoryStore } from "../../recall-trace.js";
 import { estimateAgentMessagesTokens, estimateTextTokens } from "../../token-estimator.js";
 
@@ -45,6 +46,7 @@ function makeEngine(
   opts?: {
     cfgOverrides?: Record<string, unknown>;
     traceRecorder?: RecallTraceMemoryStore;
+    queryConfigStore?: RuntimeQueryConfigStore;
   },
 ) {
   const logger = makeLogger();
@@ -72,6 +74,7 @@ function makeEngine(
     getClient,
     resolveAgentId,
     traceRecorder: opts?.traceRecorder,
+    queryConfigStore: opts?.queryConfigStore,
   });
 
   return {
@@ -257,6 +260,75 @@ describe("context-engine assemble()", () => {
     expect(recorded.searches).toHaveLength(1);
     expect(recorded.searches[0]).toMatchObject({ contextType: "memory" });
     expect(recorded.searches[0]!.targetUriResolved).toBeUndefined();
+  });
+
+  it("applies session effective query config to transformContext auto-recall", async () => {
+    const localCfg = memoryOpenVikingConfigSchema.parse({
+      ...cfg,
+      autoRecall: true,
+      recallPreferAbstract: true,
+    });
+    const queryConfigStore = RuntimeQueryConfigStore.createInMemory(localCfg);
+    await queryConfigStore.set(
+      "session",
+      { peerId: "agent:session-dynamic-query", sessionId: "session-dynamic-query" },
+      {
+        recallLimit: 1,
+        candidateLimit: 3,
+        scoreThreshold: 0.5,
+        resourceTypes: ["user"],
+        maxInjectedChars: 1000,
+      },
+    );
+    const { engine, client } = makeEngine(
+      {
+        latest_archive_overview: "unused",
+        pre_archive_abstracts: [],
+        messages: [],
+        estimatedTokens: 0,
+        stats: makeStats(),
+      },
+      {
+        cfgOverrides: {
+          autoRecall: true,
+          recallPreferAbstract: true,
+        },
+        queryConfigStore,
+      },
+    );
+    client.find.mockResolvedValueOnce({
+      memories: [
+        {
+          uri: "viking://user/default/memories/high",
+          level: 2,
+          category: "preferences",
+          abstract: "High-confidence dynamic query memory.",
+          score: 0.9,
+        },
+        {
+          uri: "viking://user/default/memories/low",
+          level: 2,
+          category: "facts",
+          abstract: "Low-confidence memory should be filtered.",
+          score: 0.1,
+        },
+      ],
+      total: 2,
+    });
+
+    const result = await engine.assemble({
+      sessionId: "session-dynamic-query",
+      messages: [{ role: "user", content: "which dynamic query memory applies?" }],
+    });
+
+    expect(client.find).toHaveBeenCalledTimes(1);
+    expect(client.find.mock.calls[0]?.[1]).toMatchObject({
+      contextType: "memory",
+      limit: 3,
+    });
+    expect(client.find.mock.calls[0]?.[1].targetUri).toBeUndefined();
+    expect(String(result.messages[0]?.content)).toContain("High-confidence dynamic query memory.");
+    expect(String(result.messages[0]?.content)).not.toContain("Low-confidence memory should be filtered.");
   });
 
   it("passes sender peer_id to transformContext auto-recall when peer_role is person", async () => {
