@@ -43,6 +43,7 @@ class BaseClient(ABC):
         wait: bool = False,
         timeout: Optional[float] = None,
         watch_interval: float = 0,
+        args: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
@@ -309,7 +310,7 @@ class BaseClient(ABC):
             session_id: Session ID
             role: Message role ("user" or "assistant")
             content: Text content (simple mode)
-            parts: Parts array (full Part support: TextPart, ContextPart, ToolPart)
+            parts: Parts array (full Part support: TextPart, ContextPart, ImagePart, ToolPart)
             created_at: Message creation time (ISO format string)
             peer_id: Optional stable interaction peer identity.
             telemetry: Whether to attach operation telemetry data to the result.

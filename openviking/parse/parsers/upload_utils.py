@@ -4,7 +4,6 @@
 
 import asyncio
 import os
-import re
 from pathlib import Path
 from typing import Any, List, Optional, Set, Tuple, Union
 
@@ -18,6 +17,7 @@ from openviking.parse.parsers.constants import (
     TEXT_ENCODINGS,
     UTF8_VARIANTS,
 )
+from openviking.utils.path_safety import safe_join_viking_uri, sanitize_relative_viking_path
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -150,29 +150,9 @@ def should_skip_directory(
     return dir_name in effective_ignore_dirs or dir_name.startswith(".")
 
 
-_UNSAFE_PATH_RE = re.compile(r"(^|[\\/])\.\.($|[\\/])")
-_DRIVE_RE = re.compile(r"^[A-Za-z]:")
-
-
 def _sanitize_rel_path(rel_path: str) -> str:
-    """Normalize a relative path and reject unsafe components.
-
-    Uses OS-independent checks so that Windows-style drive prefixes and
-    backslash separators are rejected even when running on Linux/macOS.
-    """
-    if not rel_path:
-        raise ValueError(f"Unsafe relative path rejected: {rel_path!r}")
-    # Reject absolute paths (Unix or Windows style)
-    if rel_path.startswith("/") or rel_path.startswith("\\"):
-        raise ValueError(f"Unsafe relative path rejected: {rel_path}")
-    # Reject Windows drive letters (C:\..., C:foo)
-    if _DRIVE_RE.match(rel_path):
-        raise ValueError(f"Unsafe relative path rejected: {rel_path}")
-    # Reject parent-directory traversal (../ or ..\)
-    if _UNSAFE_PATH_RE.search(rel_path):
-        raise ValueError(f"Unsafe relative path rejected: {rel_path}")
-    # Normalize to forward slashes
-    return rel_path.replace("\\", "/")
+    """Compatibility wrapper for existing upload utility callers/tests."""
+    return sanitize_relative_viking_path(rel_path)
 
 
 async def upload_text_files(
@@ -186,8 +166,7 @@ async def upload_text_files(
 
     for file_path, rel_path in file_paths:
         try:
-            safe_rel = _sanitize_rel_path(rel_path)
-            target_uri = f"{viking_uri_base}/{safe_rel}"
+            target_uri = safe_join_viking_uri(viking_uri_base, rel_path)
             content = file_path.read_bytes()
             content = detect_and_convert_encoding(content, file_path)
             await viking_fs.write_file_bytes(target_uri, content)
@@ -262,13 +241,12 @@ async def upload_directory(
 
             rel_path_str = str(file_path.relative_to(local_dir)).replace(os.sep, "/")
             try:
-                safe_rel = _sanitize_rel_path(rel_path_str)
+                target_uri = safe_join_viking_uri(viking_uri_base, rel_path_str)
             except ValueError as exc:
                 warning = f"Skipping {file_path}: {exc}"
                 warnings.append(warning)
                 logger.warning(warning)
                 continue
-            target_uri = f"{viking_uri_base}/{safe_rel}"
             files_to_upload.append((file_path, target_uri))
             parent_uris.add(target_uri.rsplit("/", 1)[0])
 

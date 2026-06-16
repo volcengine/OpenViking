@@ -434,6 +434,7 @@ class AsyncHTTPClient(BaseClient):
         directly_upload_media: bool = True,
         preserve_structure: Optional[bool] = None,
         watch_interval: float = 0,
+        args: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
@@ -454,6 +455,7 @@ class AsyncHTTPClient(BaseClient):
             "exclude": exclude,
             "directly_upload_media": directly_upload_media,
             "watch_interval": watch_interval,
+            "args": args or {},
             "telemetry": telemetry,
         }
         if preserve_structure is not None:

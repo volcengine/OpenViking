@@ -75,7 +75,7 @@ $OPENCLAW_STATE_DIR/openclaw.json
 
 | 参数 | 类型 | 默认值 | 环境变量 | 说明 |
 | --- | --- | --- | --- | --- |
-| `peer_role` | `"none"` \| `"assistant"` \| `"person"` | `"none"` | — | 控制哪些 session message 写入 `peer_id`，并为数据面 recall/search/read/import/delete 提供 actor peer 视图。 |
+| `peer_role` | `"none"` \| `"assistant"` \| `"person"` | `"assistant"` | — | 控制哪些 session message 写入 `peer_id`，并为数据面 recall/search/read/import/delete 提供 actor peer 视图。 |
 | `peer_prefix` | string | 空 | — | `peer_role=assistant` 时 assistant `peer_id` 的可选前缀；仅允许字母、数字、`_`、`-`。 |
 
 ### 3.3 自动捕获与提交

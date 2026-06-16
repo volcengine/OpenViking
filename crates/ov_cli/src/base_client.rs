@@ -52,6 +52,20 @@ fn ignore_dirs_filter<'a>(
     }
 }
 
+fn normalize_zip_entry_name(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
+fn zip_entry_name(relative_path: &Path) -> Result<String> {
+    let name = relative_path.to_str().ok_or_else(|| {
+        Error::InvalidPath(format!(
+            "Non-UTF-8 path: {}",
+            relative_path.to_string_lossy()
+        ))
+    })?;
+    Ok(normalize_zip_entry_name(name))
+}
+
 pub fn api_error_from_envelope(json: &Value, status: StatusCode) -> String {
     let error_code = json
         .get("error")
@@ -626,6 +640,22 @@ mod tests {
 
         assert_eq!(params, vec![("profile".to_string(), "1".to_string())]);
     }
+
+    #[test]
+    fn zip_entry_name_normalizes_windows_separators() {
+        let entry = zip_entry_name(Path::new("scripts\\check_bounding_boxes.py"))
+            .expect("path should be utf-8");
+
+        assert_eq!(entry, "scripts/check_bounding_boxes.py");
+    }
+
+    #[test]
+    fn zip_entry_name_preserves_posix_separators() {
+        let entry = zip_entry_name(Path::new("scripts/check_bounding_boxes.py"))
+            .expect("path should be utf-8");
+
+        assert_eq!(entry, "scripts/check_bounding_boxes.py");
+    }
 }
 
 // ============ FileUploader ============
@@ -677,9 +707,7 @@ impl<'a> FileUploader<'a> {
             let path = entry.path();
             if path.is_file() {
                 let name = path.strip_prefix(dir_path).unwrap_or(path);
-                let name_str = name.to_str().ok_or_else(|| {
-                    Error::InvalidPath(format!("Non-UTF-8 path: {}", name.to_string_lossy()))
-                })?;
+                let name_str = zip_entry_name(name)?;
                 zip.start_file(name_str, options)?;
                 let mut file = File::open(path)?;
                 std::io::copy(&mut file, &mut zip)?;
@@ -752,9 +780,7 @@ impl<'a> FileUploader<'a> {
             let path = entry.path();
             if path.is_file() {
                 let name = path.strip_prefix(dir_path).unwrap_or(path);
-                let name_str = name.to_str().ok_or_else(|| {
-                    Error::InvalidPath(format!("Non-UTF-8 path: {}", name.to_string_lossy()))
-                })?;
+                let name_str = zip_entry_name(name)?;
                 if verbose {
                     eprintln!("  Adding: {}", name_str);
                 }

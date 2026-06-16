@@ -682,7 +682,7 @@ openclaw config get plugins.slots.contextEngine
 | `apiKey` | 环境变量或空 | OpenViking API Key |
 | `accountId` | 空 | Root key/trusted 部署需要 |
 | `userId` | 空 | Root key/trusted 部署需要 |
-| `peer_role` | `none` | 控制哪些 session message 写 `peer_id`，并为数据面请求提供 actor peer 视图：`none`、`assistant` 或 `person` |
+| `peer_role` | `assistant` | 控制哪些 session message 写 `peer_id`，并为数据面请求提供 actor peer 视图：`none`、`assistant` 或 `person` |
 | `peer_prefix` | 空 | `peer_role=assistant` 时 assistant `peer_id` 的可选前缀 |
 | `targetUri` | `viking://user/memories` | 默认 memory search 目标 |
 | `timeoutMs` | `15000` | HTTP 请求超时 |
@@ -729,7 +729,7 @@ openclaw config get plugins.slots.contextEngine
 | `apiKey` | 所有搜索/召回请求 | 空 | 是 | 是 | `OPENVIKING_API_KEY` | HTTP 认证 key；不配通常只能访问关闭认证的本地服务：`config.ts:202` |
 | `accountId` | 多租户搜索路由 | 空 | 是 | 是 | `OPENVIKING_ACCOUNT_ID` | Root key / trusted 部署下显式指定 account，影响搜索命中空间：`config.ts:212` |
 | `userId` | 多租户搜索路由 | 空 | 是 | 是 | `OPENVIKING_USER_ID` | Root key / trusted 部署下显式指定 user，影响 user memory 检索范围：`config.ts:216` |
-| `peer_role` | session 归因和数据面 actor peer 视图 | `none` | 是 | 否 | — | `none` 不写 `peer_id`；`assistant` 使用 runtime agent；`person` 使用 OpenClaw sender 身份：`config.ts:430` |
+| `peer_role` | session 归因和数据面 actor peer 视图 | `assistant` | 是 | 否 | — | `none` 不写 `peer_id`；`assistant` 使用 runtime agent；`person` 使用 OpenClaw sender 身份：`config.ts:430` |
 | `peer_prefix` | assistant peer id 前缀 | 空 | 是 | 否 | — | `peer_role=assistant` 时可把 assistant `peer_id` 写成 `<peer_prefix>_<agentId>`：`config.ts:431` |
 | `targetUri` | `memory_recall` / `memory_forget` 默认搜索范围 | `viking://user/memories` | 是 | 否 | — | 未显式传 `targetUri` 时的默认 memory 搜索位置：`config.ts:275`、`index.ts:1366` |
 | `timeoutMs` | 所有搜索/读取请求超时 | `15000` | 是 | 否 | — | 控制 `find/read/grep/session` 等 HTTP 请求超时：`config.ts:276` |

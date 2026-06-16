@@ -15,6 +15,7 @@ mod help_ui;
 mod i18n;
 mod output;
 mod status_ui;
+mod terminal_ui;
 mod theme;
 mod tui;
 mod utils;
@@ -322,6 +323,9 @@ enum Commands {
             help_heading = "Advanced options"
         )]
         watch_interval: f64,
+        /// Parser-specific import options, e.g. --args feishu_access_token:u-xxx
+        #[arg(long = "args")]
+        resource_args: Option<String>,
         #[command(flatten)]
         upload_options: UploadCliOptions,
     },
@@ -2532,6 +2536,7 @@ async fn main() {
             exclude,
             no_directly_upload_media,
             watch_interval,
+            resource_args,
             upload_options,
         } => {
             let ctx =
@@ -2551,6 +2556,7 @@ async fn main() {
                 exclude,
                 no_directly_upload_media,
                 watch_interval,
+                resource_args,
                 ctx,
             )
             .await

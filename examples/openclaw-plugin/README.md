@@ -120,8 +120,8 @@ The main rules are:
 - reuse `sessionId` directly when it is already a UUID
 - prefer `sessionKey` when deriving a stable `ovSessionId`
 - normalize unsafe path characters, or fall back to a stable SHA-256 when needed
-- `peer_role=none` is the default and does not write `peer_id` on session messages
-- `peer_role=assistant` writes assistant messages with `peer_id=<sessionAgent>`; if `peer_prefix` is set, the value becomes `<peer_prefix>_<sessionAgent>`
+- `peer_role=assistant` is the default and writes assistant messages with `peer_id=<sessionAgent>`; if `peer_prefix` is set, the value becomes `<peer_prefix>_<sessionAgent>`
+- `peer_role=none` disables peer message attribution and actor-peer routing
 - `peer_role=person` writes user messages with `peer_id` derived from OpenClaw sender identity; assistant messages do not get `peer_id`
 - data-plane recall/search/read/import/delete sends the same resolved peer identity as `X-OpenViking-Actor-Peer` when `peer_role` is `assistant` or `person`
 - when OpenClaw does not provide a session agent, use its default agent `main` for local session and assistant peer metadata
@@ -139,7 +139,7 @@ The recommended remote-mode configuration only needs:
 In this setup:
 
 - `apiKey` should usually be a user key
-- new installs default to `peer_role=none`
+- new installs default to `peer_role=assistant`
 - `accountId` / `userId` are advanced options only when the deployment needs explicit identity headers, such as root-key or trusted-server flows
 
 ### User namespace

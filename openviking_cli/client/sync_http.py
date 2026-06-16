@@ -143,7 +143,7 @@ class SyncHTTPClient:
             session_id: Session ID
             role: Message role ("user" or "assistant")
             content: Text content (simple mode)
-            parts: Parts array (full Part support: TextPart, ContextPart, ToolPart)
+            parts: Parts array (full Part support: TextPart, ContextPart, ImagePart, ToolPart)
             created_at: Message creation time (ISO format string)
             peer_id: Optional stable interaction peer identity.
 
@@ -238,6 +238,7 @@ class SyncHTTPClient:
         exclude: Optional[str] = None,
         directly_upload_media: bool = True,
         watch_interval: float = 0,
+        args: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
@@ -258,6 +259,7 @@ class SyncHTTPClient:
                 exclude=exclude,
                 directly_upload_media=directly_upload_media,
                 watch_interval=watch_interval,
+                args=args,
                 telemetry=telemetry,
             )
         )

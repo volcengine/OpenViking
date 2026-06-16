@@ -1028,8 +1028,9 @@ describe("Tool: add_resource, add_skill, and ov_search (registration)", () => {
     contextEnginePlugin.register(api as any);
     const service = (api.registerService as any).mock.calls[0][0];
     const registerRoute = vi.fn();
+    const registerHttpRoute = vi.fn();
 
-    await service.start({ registerRoute });
+    await service.start({ registerRoute, registerHttpRoute });
 
     expect(registerRoute).toHaveBeenCalledWith(expect.objectContaining({
       method: "GET",
@@ -1037,8 +1038,99 @@ describe("Tool: add_resource, add_skill, and ov_search (registration)", () => {
     }));
     expect(registerRoute).toHaveBeenCalledWith(expect.objectContaining({
       method: "GET",
+      path: "/api/openviking/uri-detail",
+    }));
+    expect(registerRoute).toHaveBeenCalledWith(expect.objectContaining({
+      method: "GET",
+      path: "/api/openviking/recall-traces/latest-ov-search-list",
+    }));
+    expect(registerRoute).toHaveBeenCalledWith(expect.objectContaining({
+      method: "GET",
       path: "/api/openviking/recall-traces/:traceId",
     }));
+    expect(registerHttpRoute).toHaveBeenCalledWith(expect.objectContaining({
+      path: "/api/openviking/recall-traces",
+      auth: "plugin",
+      match: "exact",
+    }));
+    expect(registerHttpRoute).toHaveBeenCalledWith(expect.objectContaining({
+      path: "/api/openviking/uri-detail",
+      auth: "plugin",
+      match: "exact",
+    }));
+    expect(registerHttpRoute).toHaveBeenCalledWith(expect.objectContaining({
+      path: "/api/openviking/recall-traces/latest-ov-search-list",
+      auth: "plugin",
+      match: "exact",
+    }));
+  });
+
+  it("serves latest ov_search list and URI detail recall trace routes", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const requestUrl = new URL(url);
+      if (requestUrl.pathname === "/api/v1/system/status") {
+        return okResponse({ user: "default" });
+      }
+      if (requestUrl.pathname === "/api/v1/search/find") {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        return okResponse({
+          memories: [],
+          resources: body.context_type === "resource" ? [makeMemory({
+            uri: "viking://resources/project/spec.md",
+            abstract: "Project spec abstract",
+            score: 0.88,
+          })] : [],
+          skills: body.context_type === "skill" ? [makeMemory({
+            uri: "viking://user/skills/project-skill",
+            abstract: "Project skill abstract",
+            score: 0.72,
+          })] : [],
+          total: 1,
+        });
+      }
+      if (requestUrl.pathname === "/api/v1/content/read") {
+        expect(requestUrl.searchParams.get("uri")).toBe("viking://resources/project/spec.md");
+        return okResponse("Full project spec content");
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { tools, api } = setupPlugin(undefined, { traceRecall: true });
+    contextEnginePlugin.register(api as any);
+    await tools.get("ov_search")!.execute("tc-search", { query: "project spec" });
+
+    const service = (api.registerService as any).mock.calls[0][0];
+    const routes: Array<{ path: string; handler: (request?: { query?: Record<string, unknown> }) => Promise<any> }> = [];
+    await service.start({
+      registerRoute: (route: { path: string; handler: (request?: { query?: Record<string, unknown> }) => Promise<any> }) => {
+        routes.push(route);
+      },
+    });
+
+    const latest = routes.find((route) => route.path === "/api/openviking/recall-traces/latest-ov-search-list");
+    expect(latest).toBeDefined();
+    const latestResult = await latest!.handler({ query: { limit: "5" } });
+    expect(latestResult.status).toBe(200);
+    expect(latestResult.body.ok).toBe(true);
+    expect(latestResult.body.items.map((item: any) => item.uri)).toContain("viking://resources/project/spec.md");
+    expect(latestResult.body.items.map((item: any) => item.uri)).toContain("viking://user/skills/project-skill");
+    expect(latestResult.body.items[0].detailUrl).toContain("/api/openviking/uri-detail");
+
+    const detail = routes.find((route) => route.path === "/api/openviking/uri-detail");
+    expect(detail).toBeDefined();
+    const detailResult = await detail!.handler({
+      query: {
+        uri: "viking://resources/project/spec.md",
+        traceId: latestResult.body.trace.traceId,
+        contentLimit: "4",
+      },
+    });
+    expect(detailResult.status).toBe(200);
+    expect(detailResult.body.uriType).toBe("resource");
+    expect(detailResult.body.abstractPreview).toContain("Project spec abstract");
+    expect(detailResult.body.content.text).toBe("Full");
+    expect(detailResult.body.content.hasMore).toBe(true);
   });
 
   it("applies enabledTools and disabledTools to runtime tool registration", () => {

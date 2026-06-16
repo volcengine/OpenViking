@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import contextEnginePlugin from "../../index.js";
+import { OPENVIKING_FEATURE_GATES_RPC } from "../../plugin/openviking-feature-gates.js";
 
 function withOpenVikingEnv<T>(
   values: Partial<Record<"OPENVIKING_API_KEY" | "OPENVIKING_BASE_URL", string | undefined>>,
@@ -43,6 +44,7 @@ function createPluginApi(pluginConfig: Record<string, unknown>) {
     registerCommand: vi.fn(),
     registerService: vi.fn(),
     registerContextEngine: vi.fn(),
+    registerGatewayMethod: vi.fn(),
     on: vi.fn(),
   };
 }
@@ -83,6 +85,17 @@ describe("plugin registration", () => {
         expect(api.registerTool).toHaveBeenCalled();
         expect(api.registerContextEngine).toHaveBeenCalledWith("openviking", expect.any(Function));
       },
+    );
+  });
+
+  it("registers the feature-gates Gateway RPC when Gateway methods are available", () => {
+    const api = createPluginApi({});
+
+    contextEnginePlugin.register(api as any);
+
+    expect(api.registerGatewayMethod).toHaveBeenCalledWith(
+      OPENVIKING_FEATURE_GATES_RPC,
+      expect.any(Function),
     );
   });
 });

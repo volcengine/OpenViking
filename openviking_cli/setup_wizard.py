@@ -405,16 +405,16 @@ VLM_PRESETS: list[VLMPreset] = [
 # intent analyzer based on the configured model name.
 QUERY_PLANNER_PRESETS: list[QueryPlannerPreset] = [
     QueryPlannerPreset(
-        "ov_intent_analysis_sft v4_q8",
-        "guoxuter/ov_intent_analysis_sft:v4_q8",
-        "ollama/guoxuter/ov_intent_analysis_sft:v4_q8",
+        "ov_intent_analysis_sft v7_q8",
+        "guoxuter/ov_intent_analysis_sft:v7_q8",
+        "ollama/guoxuter/ov_intent_analysis_sft:v7_q8",
         "~0.8B, recommended",
     ),
     QueryPlannerPreset(
-        "ov_intent_analysis_sft v1_q8",
-        "guoxuter/ov_intent_analysis_sft:v1_q8",
-        "ollama/guoxuter/ov_intent_analysis_sft:v1_q8",
-        "~0.8B, compatible with the bundled prompt",
+        "ov_intent_analysis_sft v4_q8",
+        "guoxuter/ov_intent_analysis_sft:v4_q8",
+        "ollama/guoxuter/ov_intent_analysis_sft:v4_q8",
+        "~0.8B",
     ),
 ]
 

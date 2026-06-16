@@ -692,12 +692,12 @@ Optional lightweight model for retrieval intent analysis and query planning. It 
 
 > In `openviking-server init` you can optionally enable a local lightweight query planner; the wizard pulls the Ollama model and writes the `query_planner` config for you. For recognized query-planner models, `search()` selects the matching bundled prompt at runtime. Models not in the mapping keep using `retrieval.intent_analysis`.
 
-We recommend the local Ollama model [`guoxuter/ov_intent_analysis_sft:v4_q8`](https://ollama.com/guoxuter/ov_intent_analysis_sft:v4_q8). Fine-tuned from Qwen3.5-0.8B, it can be deployed locally and is well suited to letting a small model handle retrieval planning: for small talk, greetings, or turns where the context is already sufficient, it returns no queries to reduce unnecessary memory injection and token consumption; when retrieval is needed, it emits structured queries targeting `skill`, `resource`, and `memory`.
+We recommend the local Ollama model [`guoxuter/ov_intent_analysis_sft:v7_q8`](https://ollama.com/guoxuter/ov_intent_analysis_sft:v7_q8). Fine-tuned from Qwen3.5-0.8B, it can be deployed locally and is well suited to letting a small model handle retrieval planning: for small talk, greetings, or turns where the context is already sufficient, it returns no queries to reduce unnecessary memory injection and token consumption; when retrieval is needed, it emits structured queries targeting `skill`, `resource`, and `memory`. The earlier [`v4_q8`](https://ollama.com/guoxuter/ov_intent_analysis_sft:v4_q8) revision is still supported as an alternative.
 
 Pull the model first and make sure the Ollama service is reachable:
 
 ```bash
-ollama pull guoxuter/ov_intent_analysis_sft:v4_q8
+ollama pull guoxuter/ov_intent_analysis_sft:v7_q8
 ```
 
 Then add the following to your OpenViking configuration:
@@ -706,7 +706,7 @@ Then add the following to your OpenViking configuration:
 {
   "query_planner": {
     "provider": "litellm",
-    "model": "ollama/guoxuter/ov_intent_analysis_sft:v4_q8",
+    "model": "ollama/guoxuter/ov_intent_analysis_sft:v7_q8",
     "api_base": "http://127.0.0.1:11434",
     "temperature": 0.0,
     "timeout": 60,
@@ -717,7 +717,7 @@ Then add the following to your OpenViking configuration:
 }
 ```
 
-For `ollama/guoxuter/ov_intent_analysis_sft:v4_q8`, OpenViking automatically uses the bundled `retrieval.ov_intent_analysis_sft_v4` prompt during search. No prompt file replacement or `prompts.templates_dir` override is required. If you use an unmapped model, OpenViking keeps the default `retrieval.intent_analysis` prompt; `v1_q8` remains compatible with that default.
+For `ollama/guoxuter/ov_intent_analysis_sft:v7_q8` (and `v4_q8`), OpenViking automatically uses the matching bundled prompt during search (`retrieval.ov_intent_analysis_sft_v7` and `retrieval.ov_intent_analysis_sft_v4` respectively). No prompt file replacement or `prompts.templates_dir` override is required. If you use an unmapped model, OpenViking keeps the default `retrieval.intent_analysis` prompt.
 
 This lets a small model handle retrieval planning with lower latency, while keeping a stronger `vlm` for semantic extraction, memory extraction, and multimodal processing.
 
@@ -1082,6 +1082,7 @@ Legacy compatibility example:
 | `prefix` | str | Optional key prefix for namespace isolation | "" |
 | `use_ssl` | bool | Enable/disable SSL (HTTPS) for S3 connections. Also controls the scheme auto-prefixed onto bare-hostname `endpoint` values | true |
 | `use_path_style` | bool | true for PathStyle used by MinIO and some S3-compatible services; false for VirtualHostStyle used by TOS and some S3-compatible services | true |
+| `auto_detect_content_type` | bool | Automatically infer MIME type from the object key / filename extension and set the S3 object `Content-Type` header during upload | false |
 | `directory_marker_mode` | str | How to persist directory markers: `none`, `empty`, or `nonempty` | `"empty"` |
 | `normalize_encoding_chars` | str | Characters to escape in S3 object keys as `!HH` hexadecimal bytes; empty string disables normalization | `"?#%+@"` |
 
@@ -1103,6 +1104,32 @@ Typical choices:
 - Escaped bytes are encoded as `!HH`, where `HH` is the uppercase hexadecimal value of the byte.
 - Characters not listed in `normalize_encoding_chars`, including Chinese and other Unicode characters, remain unchanged.
 - Set `normalize_encoding_chars` to `""` to keep original path segments in object keys.
+
+`auto_detect_content_type` is disabled by default for backward compatibility. When enabled, RAGFS infers the MIME type from the object key / filename extension and writes it to the S3 object `Content-Type`:
+
+- Detection is based on the object key / filename extension, not file content sniffing.
+- Directory markers whose keys end with `/` do not get a `Content-Type`.
+- Unknown extensions fall back to `application/octet-stream`.
+
+Example:
+
+```json
+{
+  "storage": {
+    "agfs": {
+      "backend": "s3",
+      "s3": {
+        "bucket": "my-bucket",
+        "endpoint": "s3.amazonaws.com",
+        "region": "us-east-1",
+        "access_key": "your-ak",
+        "secret_key": "your-sk",
+        "auto_detect_content_type": true
+      }
+    }
+  }
+}
+```
 
 <details>
 <summary><b>PathStyle S3</b></summary>

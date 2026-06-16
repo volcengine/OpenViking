@@ -195,7 +195,7 @@ class AsyncOpenViking:
             session_id: Session ID
             role: Message role ("user" or "assistant")
             content: Text content (simple mode)
-            parts: Parts array (full Part support: TextPart, ContextPart, ToolPart)
+            parts: Parts array (full Part support: TextPart, ContextPart, ImagePart, ToolPart)
             created_at: Message creation time (ISO format string)
             peer_id: Optional stable interaction peer identity.
 
@@ -274,6 +274,7 @@ class AsyncOpenViking:
         build_index: bool = True,
         summarize: bool = False,
         watch_interval: float = 0,
+        args: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
         **kwargs,
     ) -> Dict[str, Any]:
@@ -308,6 +309,7 @@ class AsyncOpenViking:
             summarize=summarize,
             telemetry=telemetry,
             watch_interval=watch_interval,
+            args=args,
             **kwargs,
         )
 

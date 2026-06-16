@@ -344,12 +344,17 @@ class AgentLoop:
         self,
         session_key: SessionKey,
         openviking_connection: dict[str, Any] | None = None,
+        actor_peer_id: str | None = None,
     ):
         workspace_id = self._get_ov_workspace_id(session_key)
-        if openviking_connection:
+        if openviking_connection or actor_peer_id:
             from vikingbot.openviking_mount.ov_server import VikingClient
 
-            return await VikingClient.create(workspace_id, connection=openviking_connection)
+            return await VikingClient.create(
+                workspace_id,
+                connection=openviking_connection,
+                actor_peer_id=actor_peer_id,
+            )
 
         client = self._ov_clients.get(workspace_id)
         if client is None:
@@ -433,6 +438,7 @@ class AgentLoop:
         session: Session,
         provider_name: str | None = None,
         openviking_connection: dict[str, Any] | None = None,
+        actor_peer_id: str | None = None,
     ) -> list[dict[str, Any]]:
         if not self._ov_session_context_enabled():
             return session.get_history(provider_name=provider_name)
@@ -446,8 +452,9 @@ class AgentLoop:
             client = await self._get_ov_client(
                 session.key,
                 openviking_connection=openviking_connection,
+                actor_peer_id=actor_peer_id,
             )
-            if openviking_connection:
+            if openviking_connection or actor_peer_id:
                 request_client = client
             context_payload = await client.get_session_context(
                 session_id=session_id,
@@ -1083,6 +1090,7 @@ class AgentLoop:
                 session,
                 provider_name=provider_name,
                 openviking_connection=openviking_connection,
+                actor_peer_id=msg.sender_id,
             )
             messages = await message_context.build_messages(
                 history=history,
@@ -1359,7 +1367,11 @@ class AgentLoop:
 
         # Build messages with the announce content
         provider_name = self.config.get_provider_name(self.model) if self.config else None
-        history = await self._build_prompt_history(session, provider_name=provider_name)
+        history = await self._build_prompt_history(
+            session,
+            provider_name=provider_name,
+            actor_peer_id=msg.sender_id,
+        )
         messages = await self.context.build_messages(
             history=history,
             current_message=msg.content,

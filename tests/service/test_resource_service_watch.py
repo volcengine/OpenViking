@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Integration tests for ResourceService watch functionality."""
 
+from types import SimpleNamespace
 from typing import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock
 
@@ -10,6 +11,7 @@ import pytest_asyncio
 
 from openviking.resource.watch_manager import WatchManager
 from openviking.server.identity import RequestContext, Role
+from openviking.service import resource_service as resource_service_module
 from openviking.service.resource_service import ResourceService
 from openviking_cli.exceptions import ConflictError
 from openviking_cli.session.user_id import UserIdentifier
@@ -27,7 +29,11 @@ async def get_task_by_uri(service: ResourceService, to_uri: str, ctx: RequestCon
 class MockResourceProcessor:
     """Mock ResourceProcessor for testing."""
 
+    def __init__(self):
+        self.calls = []
+
     async def process_resource(self, **kwargs):
+        self.calls.append(kwargs)
         return {"root_uri": kwargs.get("to") or "viking://resources/test"}
 
 
@@ -48,6 +54,24 @@ class MockVikingDB:
     """Mock VikingDBManager for testing."""
 
     pass
+
+
+class NoopTaskTracker:
+    async def create(self, *_args, **_kwargs):
+        return SimpleNamespace(task_id="test-task")
+
+    async def start(self, *_args, **_kwargs):
+        pass
+
+    async def complete(self, *_args, **_kwargs):
+        pass
+
+
+def disable_task_tracker(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "openviking.service.task_tracker.get_task_tracker",
+        lambda: NoopTaskTracker(),
+    )
 
 
 @pytest_asyncio.fixture
@@ -207,6 +231,69 @@ class TestWatchTaskCreation:
 
         task = await get_task_by_uri(resource_service, to_uri, request_context)
         assert task is None
+
+
+class TestAddResourceArgs:
+    """Tests for parser-specific add_resource args."""
+
+    @pytest.mark.asyncio
+    async def test_forwards_args_to_resource_processor(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        resource_service: ResourceService,
+        request_context: RequestContext,
+    ):
+        disable_task_tracker(monkeypatch)
+
+        await resource_service.add_resource(
+            path="/test/path",
+            ctx=request_context,
+            args={"feishu_access_token": " u-test "},
+        )
+
+        processor = resource_service._resource_processor
+        assert processor.calls[-1]["feishu_access_token"] == "u-test"
+
+    @pytest.mark.asyncio
+    async def test_feishu_user_token_watch_stores_private_auth_state(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        resource_service: ResourceService,
+        request_context: RequestContext,
+    ):
+        monkeypatch.setattr(
+            resource_service_module,
+            "load_feishu_app_credentials",
+            lambda: object(),
+        )
+        disable_task_tracker(monkeypatch)
+        to_uri = "viking://resources/feishu_user_watch"
+
+        await resource_service.add_resource(
+            path="https://example.feishu.cn/docx/doc_token",
+            ctx=request_context,
+            to=to_uri,
+            watch_interval=30,
+            args={
+                "feishu_access_token": " u-test ",
+                "feishu_refresh_token": " r-test ",
+            },
+        )
+
+        processor = resource_service._resource_processor
+        assert processor.calls[-1]["feishu_access_token"] == "u-test"
+        assert "feishu_refresh_token" not in processor.calls[-1]
+
+        task = await get_task_by_uri(resource_service, to_uri, request_context)
+        assert task is not None
+        assert task.processor_kwargs == {}
+        assert task.auth_state == {
+            "provider": "feishu",
+            "access_token": "u-test",
+            "refresh_token": "r-test",
+            "expires_at": None,
+        }
+        assert "auth_state" not in task.to_dict()
 
 
 class TestWatchTaskConflict:

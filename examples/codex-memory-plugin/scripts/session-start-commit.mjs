@@ -3,10 +3,11 @@
 /**
  * SessionStart hook for Codex.
  *
- * Triggers (matcher = "clear|startup" in hooks.json):
+ * Triggers (matcher = "clear|startup|resume" in hooks.json):
  *   - source=startup → fresh codex CLI / `/new` / zouk daemon spawn-without-sessionId
  *   - source=clear   → `/clear` (orphans the current process's previous session)
- *   - source=resume  → `/resume` or short reconnect (HARD no-op for commit)
+ *   - source=resume  → `/resume` or short reconnect (no commit/sweep;
+ *     may inject latest archive summary if the live OV session was already committed)
  *
  * Behavior (see DESIGN.md §3 — "SessionStart source=startup, heuristic"):
  *   On `startup` or `clear`, run the active-window heuristic over state files
@@ -27,12 +28,14 @@
  *   clearState — we keep the state file with ovSessionId still set so the
  *   next sweep retries. A transient OV outage shouldn't lose memory.
  *
- * Output schema accepts {} as a no-op.
+ * Output schema accepts {} as a no-op, or hookSpecificOutput.additionalContext
+ * for resume archive context injection.
  */
 
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
-import { clearState, listStates } from "./session-state.mjs";
+import { detectRecallCompressorProfile } from "./recall-compressor-profile.mjs";
+import { clearState, deriveOvSessionId, listStates, loadState } from "./session-state.mjs";
 
 const cfg = loadConfig();
 const { log, logError } = createLogger("session-start");
@@ -55,6 +58,24 @@ function noop(message) {
   output(message ? { systemMessage: message } : {});
 }
 
+function emitAdditionalContext(additionalContext) {
+  if (!additionalContext) {
+    noop();
+    return;
+  }
+  const wrappedContext = wrapResumeContext(additionalContext);
+  if (!wrappedContext) {
+    noop();
+    return;
+  }
+  output({
+    hookSpecificOutput: {
+      hookEventName: "SessionStart",
+      additionalContext: wrappedContext,
+    },
+  });
+}
+
 async function fetchJSON(path, init = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), cfg.captureTimeoutMs);
@@ -66,6 +87,7 @@ async function fetchJSON(path, init = {}) {
     }
     if (cfg.account) headers["X-OpenViking-Account"] = cfg.account;
     if (cfg.user) headers["X-OpenViking-User"] = cfg.user;
+    if (cfg.peerId) headers["X-OpenViking-Actor-Peer"] = cfg.peerId;
     const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
     const body = await res.json().catch(() => null);
     if (!body) return null;
@@ -84,6 +106,75 @@ async function commitOvSession(ovSessionId) {
     `/api/v1/sessions/${encodeURIComponent(ovSessionId)}/commit`,
     { method: "POST", body: JSON.stringify({}) },
   );
+}
+
+function truncateText(text, maxChars) {
+  const value = String(text || "").trim();
+  if (value.length <= maxChars) return value;
+  return `${value.slice(0, Math.max(0, maxChars - 20)).trimEnd()}\n[truncated]`;
+}
+
+function buildResumeArchiveContext(ovSessionId, context) {
+  const overview = String(context?.latest_archive_overview || "").trim();
+  if (!overview) return "";
+  const archiveUri = `viking://user/sessions/${ovSessionId}/history/`;
+  const body = truncateText(overview, cfg.resumeArchiveMaxChars);
+  return [
+    "OpenViking session archive digest:",
+    `Latest committed archive for resumed Codex session ${ovSessionId}:`,
+    body,
+    "",
+    `More detail: use the OpenViking MCP read/search tools with ${archiveUri} if you need exact prior commands, files, tool outputs, or messages.`,
+  ].join("\n");
+}
+
+function wrapResumeContext(additionalContext) {
+  const body = String(additionalContext || "")
+    .replace(/<\/?openviking-context\b[^>]*>/gi, "openviking context marker")
+    .trim();
+  if (!body) return "";
+  return [
+    '<openviking-context source="session-resume" format="archive-digest">',
+    body,
+    "</openviking-context>",
+  ].join("\n");
+}
+
+async function injectResumeArchive(newSessionId) {
+  if (!cfg.resumeArchiveInject) {
+    log("skip", { stage: "resume_archive", reason: "disabled" });
+    noop();
+    return;
+  }
+
+  const state = await loadState(newSessionId);
+  if (state.ovSessionId) {
+    log("skip", {
+      stage: "resume_archive",
+      reason: "live OV session still open",
+      ovSessionId: state.ovSessionId,
+    });
+    noop();
+    return;
+  }
+
+  const ovSessionId = deriveOvSessionId(newSessionId);
+  const context = await fetchJSON(
+    `/api/v1/sessions/${encodeURIComponent(ovSessionId)}/context?token_budget=${cfg.resumeArchiveTokenBudget}`,
+  );
+  const additionalContext = buildResumeArchiveContext(ovSessionId, context);
+  if (!additionalContext) {
+    log("skip", { stage: "resume_archive", reason: "no archive overview", ovSessionId });
+    noop();
+    return;
+  }
+
+  log("resume_archive_inject", {
+    ovSessionId,
+    chars: additionalContext.length,
+    tokenBudget: cfg.resumeArchiveTokenBudget,
+  });
+  emitAdditionalContext(additionalContext);
 }
 
 /**
@@ -146,8 +237,20 @@ async function main() {
   const newSessionId = input.session_id || "unknown";
   log("start", { source, newSessionId, activeWindowMs: ACTIVE_WINDOW_MS, idleTtlMs: IDLE_TTL_MS });
 
-  // resume is a hard no-op — we don't even sweep, because resume re-fires on
-  // short reconnects and we'd otherwise sweep on every reconnect blip.
+  try {
+    await detectRecallCompressorProfile(cfg, { log, logError });
+  } catch (err) {
+    logError("compress_profile_detect_uncaught", err);
+  }
+
+  if (source === "resume") {
+    await injectResumeArchive(newSessionId);
+    return;
+  }
+
+  // Other non-startup sources are hard no-ops. We don't sweep there, because
+  // reconnect-like sources may fire often and sweep should stay tied to a new
+  // session boundary.
   if (source !== "startup" && source !== "clear") {
     log("skip", { stage: "source_check", reason: `source=${source} (only startup|clear act)` });
     noop();

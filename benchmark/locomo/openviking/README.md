@@ -24,6 +24,13 @@ LoCoMo samples are imported under `viking://user/sample_{idx}/memories`.
 Evaluation uses the same `sample_{idx}` user id, so import and eval must use the
 same dataset order.
 
+LoCoMo image evidence is imported as text from `blip_caption` by default. This
+keeps benchmark runs compatible with older OpenViking servers and avoids making
+results depend on whether the configured VLM can download external image URLs.
+Use `--use-image-url` when you explicitly want to import structured
+`image_url` parts and let OpenViking's VLM describe images during memory
+extraction.
+
 ## Import
 
 ```bash
@@ -35,6 +42,8 @@ python benchmark/locomo/openviking/import_to_ov.py \
 ```
 
 Use `--force-ingest` only when intentionally re-importing existing samples.
+Use `--use-image-url` only for multimodal import experiments; the default uses
+LoCoMo's `blip_caption` text.
 
 ## Smoke Test
 

@@ -6,12 +6,15 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 
-config_module = types.ModuleType("vikingbot.config")
-loader_module = types.ModuleType("vikingbot.config.loader")
-loader_module.load_config = lambda: None
-config_module.load_config = loader_module.load_config
-sys.modules.setdefault("vikingbot.config", config_module)
-sys.modules.setdefault("vikingbot.config.loader", loader_module)
+try:
+    import vikingbot.config.loader  # noqa: F401
+except Exception:
+    config_module = types.ModuleType("vikingbot.config")
+    loader_module = types.ModuleType("vikingbot.config.loader")
+    loader_module.load_config = lambda: None
+    config_module.load_config = loader_module.load_config
+    sys.modules.setdefault("vikingbot.config", config_module)
+    sys.modules.setdefault("vikingbot.config.loader", loader_module)
 
 from vikingbot.openviking_mount.ov_server import VikingClient  # noqa: E402
 
@@ -114,6 +117,14 @@ async def test_commit_uses_current_user_key_session_and_sender_peer(monkeypatch)
     client = _client(api_key_type="user")
     calls = {}
 
+    async def fake_ensure_session(session_id, user_id=None, memory_policy=None):
+        calls["ensure"] = {
+            "session_id": session_id,
+            "user_id": user_id,
+            "memory_policy": memory_policy,
+        }
+        return {"session_id": session_id}
+
     async def fake_append_messages(
         session_id,
         messages,
@@ -139,6 +150,7 @@ async def test_commit_uses_current_user_key_session_and_sender_peer(monkeypatch)
         }
         return {"archived": True}
 
+    monkeypatch.setattr(client, "ensure_session", fake_ensure_session)
     monkeypatch.setattr(client, "append_messages", fake_append_messages)
     monkeypatch.setattr(client, "commit_session", fake_commit_session)
 
@@ -148,16 +160,25 @@ async def test_commit_uses_current_user_key_session_and_sender_peer(monkeypatch)
         peer_id="telegram:alice",
     )
 
+    assert calls["ensure"]["user_id"] is None
+    assert calls["ensure"]["memory_policy"] == {
+        "self": {"enabled": False},
+        "peer": {"enabled": True},
+    }
     assert calls["append"]["session_user_id"] is None
     assert calls["append"]["default_user_peer_id"] == TELEGRAM_ALICE_PEER_ID
     assert calls["commit"]["user_id"] is None
-    assert calls["commit"]["memory_policy"] is None
+    assert calls["commit"]["memory_policy"] == calls["ensure"]["memory_policy"]
 
 
 @pytest.mark.asyncio
 async def test_commit_keeps_root_owner_user_explicit(monkeypatch):
     client = _client(api_key_type="root")
     calls = {}
+
+    async def fake_ensure_session(session_id, user_id=None, memory_policy=None):
+        calls["ensure"] = {"user_id": user_id, "memory_policy": memory_policy}
+        return {"session_id": session_id}
 
     async def fake_append_messages(
         session_id,
@@ -177,6 +198,7 @@ async def test_commit_keeps_root_owner_user_explicit(monkeypatch):
         calls["commit"] = {"user_id": user_id, "memory_policy": memory_policy}
         return {"archived": True}
 
+    monkeypatch.setattr(client, "ensure_session", fake_ensure_session)
     monkeypatch.setattr(client, "append_messages", fake_append_messages)
     monkeypatch.setattr(client, "commit_session", fake_commit_session)
 
@@ -186,10 +208,15 @@ async def test_commit_keeps_root_owner_user_explicit(monkeypatch):
         peer_id="telegram:alice",
     )
 
+    assert calls["ensure"]["user_id"] == "bot-user"
+    assert calls["ensure"]["memory_policy"] == {
+        "self": {"enabled": False},
+        "peer": {"enabled": True},
+    }
     assert calls["append"]["session_user_id"] == "bot-user"
     assert calls["append"]["default_user_peer_id"] == TELEGRAM_ALICE_PEER_ID
     assert calls["commit"]["user_id"] == "bot-user"
-    assert calls["commit"]["memory_policy"] is None
+    assert calls["commit"]["memory_policy"] == calls["ensure"]["memory_policy"]
 
 
 @pytest.mark.asyncio
@@ -197,16 +224,19 @@ async def test_commit_session_defaults_to_peer_only_memory(monkeypatch):
     client = _client(api_key_type="user")
     calls = {}
 
-    async def fake_ensure_session(session_id, user_id=None):
-        calls["ensure"] = {"session_id": session_id, "user_id": user_id}
+    async def fake_ensure_session(session_id, user_id=None, memory_policy=None):
+        calls["ensure"] = {
+            "session_id": session_id,
+            "user_id": user_id,
+            "memory_policy": memory_policy,
+        }
         return {"session_id": session_id}
 
     class FakeSessionClient:
-        async def commit_session(self, session_id, keep_recent_count=0, memory_policy=None):
+        async def commit_session(self, session_id, keep_recent_count=0):
             calls["commit"] = {
                 "session_id": session_id,
                 "keep_recent_count": keep_recent_count,
-                "memory_policy": memory_policy,
             }
             return {"archived": True}
 
@@ -219,7 +249,11 @@ async def test_commit_session_defaults_to_peer_only_memory(monkeypatch):
 
     await client.commit_session("session-1", keep_recent_count=2)
 
-    assert calls["commit"]["memory_policy"] == {
+    assert calls["ensure"]["memory_policy"] == {
         "self": {"enabled": False},
         "peer": {"enabled": True},
+    }
+    assert calls["commit"] == {
+        "session_id": "session-1",
+        "keep_recent_count": 2,
     }

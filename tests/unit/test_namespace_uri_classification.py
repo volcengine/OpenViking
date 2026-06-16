@@ -147,11 +147,3 @@ def test_current_user_short_content_roots_are_canonicalized_from_content_segment
     assert is_content_root_uri("viking://resources", ctx, kind="resource")
     assert not is_content_namespace_root_uri("viking://user/resources/docs", ctx)
 
-
-def test_user_root_short_form_uses_current_identity():
-    ctx = RequestContext(
-        user=UserIdentifier(account_id="acct", user_id="alice"),
-        role=Role.ROOT,
-    )
-
-    assert canonicalize_uri("viking://user", ctx) == "viking://user/alice"

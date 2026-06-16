@@ -3713,6 +3713,7 @@ dependencies = [
  "hkdf",
  "ignore",
  "lru",
+ "mime_guess",
  "path-clean",
  "radix_trie",
  "rand 0.8.5",

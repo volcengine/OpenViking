@@ -1,6 +1,6 @@
 {
   "manifestVersion": "1.0",
-  "pluginVersion": "2026.5.8",
+  "pluginVersion": "2026.6.11",
   "plugin": {
     "id": "openviking",
     "kind": "context-engine",
@@ -22,6 +22,8 @@
       "runtime-utils.ts",
       "recall-trace.ts",
       "commands/setup.ts",
+      "plugin/openviking-feature-gates.ts",
+      "config/feature-gates.json",
       "tsconfig.json",
       "tsconfig.build.json",
       "package.json",

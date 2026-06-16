@@ -15,7 +15,13 @@ from openviking.utils.embedding_input import (
     resolve_embedding_max_input_tokens,
     truncate_embedding_input,
 )
-from openviking.utils.model_retry import retry_async, retry_sync
+from openviking.utils.exceptions import AllCredentialsFailedError
+from openviking.utils.model_retry import (
+    OrderedCredentialSwitcher,
+    classify_api_error,
+    retry_async,
+    retry_sync,
+)
 from openviking_cli.utils import get_logger
 
 T = TypeVar("T")
@@ -202,9 +208,7 @@ class EmbedderBase(ABC):
                 return content
             return truncate_embedding_input(content, self.max_input_tokens)
 
-    def prepare_embedding_inputs(
-        self, contents: List["EmbeddingInput"]
-    ) -> List["EmbeddingInput"]:
+    def prepare_embedding_inputs(self, contents: List["EmbeddingInput"]) -> List["EmbeddingInput"]:
         """Apply this embedder's input guard to a batch."""
         return [self.prepare_embedding_input(content) for content in contents]
 
@@ -261,9 +265,7 @@ class EmbedderBase(ABC):
         """Batch embed document texts."""
         return self.embed_batch(texts, is_query=False)
 
-    async def embed_async(
-        self, content: "EmbeddingInput", is_query: bool = False
-    ) -> EmbedResult:
+    async def embed_async(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
         """Async embed text or multimodal content.
 
         Subclasses should override this with a non-blocking implementation.
@@ -586,10 +588,7 @@ class CompositeHybridEmbedder(HybridEmbedderBase):
     @property
     def supports_multimodal(self) -> bool:
         """Supports multimodal input only if both sub-embedders do."""
-        return (
-            self.dense_embedder.supports_multimodal
-            and self.sparse_embedder.supports_multimodal
-        )
+        return self.dense_embedder.supports_multimodal and self.sparse_embedder.supports_multimodal
 
     def embed(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
         """Combine results from both embedders"""
@@ -616,9 +615,7 @@ class CompositeHybridEmbedder(HybridEmbedderBase):
             for d, s in zip(dense_results, sparse_results, strict=True)
         ]
 
-    async def embed_async(
-        self, content: "EmbeddingInput", is_query: bool = False
-    ) -> EmbedResult:
+    async def embed_async(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
         dense_input = self.dense_embedder.prepare_embedding_input(content)
         sparse_input = self.sparse_embedder.prepare_embedding_input(content)
         dense_res, sparse_res = await asyncio.gather(
@@ -714,3 +711,246 @@ def exponential_backoff_retry(
                 )
 
             time.sleep(delay)
+
+
+class FailoverEmbedder(EmbedderBase):
+    """Embedder wrapper that provides failover across multiple ordered credentials.
+
+    When a credential fails with a credential-level (auth) or quota/transient
+    error, this wrapper advances to the next credential in the list. After
+    failback thresholds are met, it attempts to move back to a higher-priority
+    credential.
+
+    Credentials are tried in order (index 0 is highest priority).
+    """
+
+    def __init__(
+        self,
+        embedders: List[EmbedderBase],
+        credential_ids: List[str],
+        failback_timeout_seconds: float = 600.0,
+        failback_request_count: int = 50,
+    ):
+        """Initialize FailoverEmbedder with multiple embedder instances.
+
+        Args:
+            embedders: List of embedder instances in priority order (0 is highest)
+            credential_ids: List of credential IDs corresponding to the embedder instances
+            failback_timeout_seconds: Time after which to attempt failback
+            failback_request_count: Number of requests after which to attempt failback
+
+        Note:
+            Request-level errors (e.g. HTTP 400 parameter error, input too
+            large, content safety) fail fast and re-raise the original
+            exception, since the same request fails on every credential of the
+            same model. Credential-level auth errors (401/403) advance to the
+            next credential; only the last credential fails fast. Per-credential
+            retry counts are handled by each underlying embedder; there is no
+            global retry cap.
+        """
+        if not embedders:
+            raise ValueError("At least one embedder instance is required")
+        if len(embedders) != len(credential_ids):
+            raise ValueError("embedders and credential_ids must have the same length")
+
+        # Use the first embedder's config as base
+        first = embedders[0]
+        super().__init__(
+            model_name=first.model_name,
+            config=first.config,
+        )
+
+        self._embedders = embedders
+        self._credential_ids = credential_ids
+        self._switcher = OrderedCredentialSwitcher(
+            n=len(embedders),
+            failback_timeout_seconds=failback_timeout_seconds,
+            failback_request_count=failback_request_count,
+        )
+
+    def _embed_with_failover(self, method_name: str, *args, **kwargs) -> EmbedResult:
+        """Execute an embedder method with multi-credential failover support.
+
+        Args:
+            method_name: Name of the method to call on embedder instances
+            *args: Positional arguments to pass to the method
+            **kwargs: Keyword arguments to pass to the method
+
+        Returns:
+            The result from the embedder method
+
+        Raises:
+            AllCredentialsFailedError if all credentials fail
+        """
+        aggregated_errors = []
+
+        # Start from the current (possibly failed-back) active credential, then
+        # cycle through the whole ring once so an unavailable active credential
+        # does not block the request. A credential that succeeds this cycle
+        # becomes the new active one (fast failover); slow sticky failback to
+        # higher priority is still handled by maybe_failback() across requests.
+        start = self._switcher.maybe_failback()
+        n = self._switcher.n
+
+        for offset in range(n):
+            idx = (start + offset) % n
+            credential_id = self._credential_ids[idx]
+            embedder = self._embedders[idx]
+
+            try:
+                method = getattr(embedder, method_name)
+                result = method(*args, **kwargs)
+                self._switcher.commit_success(idx)
+                return result
+            except Exception as exc:
+                error_class = classify_api_error(exc)
+                aggregated_errors.append((credential_id, error_class, exc, idx))
+
+                if self._switcher.is_fail_fast(error_class):
+                    # Request-level failure: re-raise the original exception;
+                    # trying other credentials is useless.
+                    raise
+
+                logger.warning(
+                    f"Credential {credential_id} failed with {error_class}, trying next credential"
+                )
+
+        raise AllCredentialsFailedError(aggregated_errors)
+
+    async def _embed_with_failover_async(self, method_name: str, *args, **kwargs) -> EmbedResult:
+        """Execute an async embedder method with multi-credential failover support.
+
+        Args:
+            method_name: Name of the async method to call on embedder instances
+            *args: Positional arguments to pass to the method
+            **kwargs: Keyword arguments to pass to the method
+
+        Returns:
+            The result from the async embedder method
+
+        Raises:
+            AllCredentialsFailedError if all credentials fail
+        """
+        aggregated_errors = []
+
+        # See the sync variant for the ring-traversal rationale.
+        start = self._switcher.maybe_failback()
+        n = self._switcher.n
+
+        for offset in range(n):
+            idx = (start + offset) % n
+            credential_id = self._credential_ids[idx]
+            embedder = self._embedders[idx]
+
+            try:
+                method = getattr(embedder, method_name)
+                result = await method(*args, **kwargs)
+                self._switcher.commit_success(idx)
+                return result
+            except Exception as exc:
+                error_class = classify_api_error(exc)
+                aggregated_errors.append((credential_id, error_class, exc, idx))
+
+                if self._switcher.is_fail_fast(error_class):
+                    # Request-level failure: re-raise the original exception;
+                    # trying other credentials is useless.
+                    raise
+
+                logger.warning(
+                    f"Credential {credential_id} failed with {error_class}, trying next credential"
+                )
+
+        raise AllCredentialsFailedError(aggregated_errors)
+
+    @property
+    def supports_multimodal(self) -> bool:
+        """Whether all embedders support multimodal input."""
+        return all(embedder.supports_multimodal for embedder in self._embedders)
+
+    def embed(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
+        """Embed text or multimodal content with multi-credential failover support."""
+        return self._embed_with_failover("embed", content, is_query=is_query)
+
+    def embed_batch(
+        self, contents: List["EmbeddingInput"], is_query: bool = False
+    ) -> List[EmbedResult]:
+        """Batch embed with multi-credential failover support."""
+        return self._embed_with_failover("embed_batch", contents, is_query=is_query)
+
+    async def embed_async(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
+        """Async embed with multi-credential failover support."""
+        return await self._embed_with_failover_async("embed_async", content, is_query=is_query)
+
+    async def embed_batch_async(
+        self, contents: List["EmbeddingInput"], is_query: bool = False
+    ) -> List[EmbedResult]:
+        """Async batch embed with multi-credential failover support."""
+        return await self._embed_with_failover_async(
+            "embed_batch_async", contents, is_query=is_query
+        )
+
+    def get_dimension(self) -> int:
+        """Get the dense dimension from the first embedder.
+
+        Raises:
+            AttributeError: if the wrapped embedders are sparse; sparse
+                embedders have no fixed dense dimension, so a dimension should
+                never be requested from them.
+        """
+        first = self._embedders[0]
+        if not hasattr(first, "get_dimension"):
+            raise AttributeError(
+                f"{type(first).__name__} has no get_dimension "
+                "(sparse embedders have no fixed dimension)"
+            )
+        return first.get_dimension()
+
+    @property
+    def active_credential_index(self) -> int:
+        """Get the index of the currently active credential."""
+        return self._switcher.get_active_index()
+
+    @property
+    def active_credential_id(self) -> str:
+        """Get the ID of the currently active credential."""
+        idx = self._switcher.get_active_index()
+        if idx < len(self._credential_ids):
+            return self._credential_ids[idx]
+        return "exhausted"
+
+    @property
+    def is_dense(self) -> bool:
+        """Check if the first embedder is dense."""
+        return self._embedders[0].is_dense
+
+    @property
+    def is_sparse(self) -> bool:
+        """Check if the first embedder is sparse."""
+        return self._embedders[0].is_sparse
+
+    @property
+    def is_hybrid(self) -> bool:
+        """Check if the first embedder is hybrid."""
+        return self._embedders[0].is_hybrid
+
+    def close(self):
+        """Close all embedder instances."""
+        for embedder in self._embedders:
+            embedder.close()
+
+    def get_token_usage(self) -> Dict[str, Any]:
+        """Get combined token usage across credential instances.
+
+        Embedders share a process-wide singleton token tracker (see
+        ``_get_token_tracker``), so every wrapped embedder reports the same
+        usage. Return a single instance's usage directly; merging would
+        double-count.
+        """
+        if not self._embedders:
+            return {}
+        return self._embedders[0].get_token_usage()
+
+    def reset_token_usage(self) -> None:
+        """Reset token usage for all credential instances."""
+        for embedder in self._embedders:
+            embedder.reset_token_usage()

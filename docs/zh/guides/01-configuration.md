@@ -662,12 +662,12 @@ LiteLLM 的 Bedrock bearer-token API-key 鉴权，请设置 `forward_api_key=tru
 
 > 在 `openviking-server init` 里可勾选启用本地轻量 query planner，向导会自动拉取 Ollama 模型并写入 `query_planner` 配置。对于已知的 query planner 模型，`search()` 会在运行时自动选择匹配的内置 prompt；不在映射表中的模型继续使用 `retrieval.intent_analysis`。
 
-推荐优先使用本地 Ollama 模型 [`guoxuter/ov_intent_analysis_sft:v4_q8`](https://ollama.com/guoxuter/ov_intent_analysis_sft:v4_q8)。该模型基于 Qwen3.5-0.8B 进行微调，可本地部署，适合用小模型承担检索规划：在闲聊、问候或上下文已足够的场景下拒绝检索，从而减少不必要的记忆注入和 token 消耗；需要检索时，再生成面向 `skill`、`resource`、`memory` 的结构化查询。
+推荐优先使用本地 Ollama 模型 [`guoxuter/ov_intent_analysis_sft:v7_q8`](https://ollama.com/guoxuter/ov_intent_analysis_sft:v7_q8)。该模型基于 Qwen3.5-0.8B 进行微调，可本地部署，适合用小模型承担检索规划：在闲聊、问候或上下文已足够的场景下拒绝检索，从而减少不必要的记忆注入和 token 消耗；需要检索时，再生成面向 `skill`、`resource`、`memory` 的结构化查询。此前的 [`v4_q8`](https://ollama.com/guoxuter/ov_intent_analysis_sft:v4_q8) 版本仍作为可选项继续支持。
 
 使用前请先拉取模型，并确保 Ollama 服务可访问：
 
 ```bash
-ollama pull guoxuter/ov_intent_analysis_sft:v4_q8
+ollama pull guoxuter/ov_intent_analysis_sft:v7_q8
 ```
 
 然后在 OpenViking 配置中添加：
@@ -676,7 +676,7 @@ ollama pull guoxuter/ov_intent_analysis_sft:v4_q8
 {
   "query_planner": {
     "provider": "litellm",
-    "model": "ollama/guoxuter/ov_intent_analysis_sft:v4_q8",
+    "model": "ollama/guoxuter/ov_intent_analysis_sft:v7_q8",
     "api_base": "http://127.0.0.1:11434",
     "temperature": 0.0,
     "timeout": 60,
@@ -687,7 +687,7 @@ ollama pull guoxuter/ov_intent_analysis_sft:v4_q8
 }
 ```
 
-对于 `ollama/guoxuter/ov_intent_analysis_sft:v4_q8`，OpenViking 会在 search 阶段自动使用内置的 `retrieval.ov_intent_analysis_sft_v4` prompt，不需要替换 prompt 文件，也不需要设置 `prompts.templates_dir`。如果使用未映射的模型，OpenViking 会继续使用默认的 `retrieval.intent_analysis` prompt；`v1_q8` 与该默认 prompt 兼容。
+对于 `ollama/guoxuter/ov_intent_analysis_sft:v7_q8`（以及 `v4_q8`），OpenViking 会在 search 阶段自动使用对应的内置 prompt（分别为 `retrieval.ov_intent_analysis_sft_v7` 和 `retrieval.ov_intent_analysis_sft_v4`），不需要替换 prompt 文件，也不需要设置 `prompts.templates_dir`。如果使用未映射的模型，OpenViking 会继续使用默认的 `retrieval.intent_analysis` prompt。
 
 这样可以用小模型承担检索规划，降低延迟，同时保留更强的 `vlm` 处理语义提取、记忆提取和多模态内容。
 
@@ -1054,6 +1054,7 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 | `prefix` | str | 用于命名空间隔离的可选键前缀 | "" |
 | `use_ssl` | bool | 为 S3 连接启用/禁用 SSL（HTTPS）。也用于决定 `endpoint` 仅填主机名时自动补的协议前缀 | true |
 | `use_path_style` | bool | true 表示对 MinIO 和某些 S3 兼容服务使用 PathStyle；false 表示对 TOS 和某些 S3 兼容服务使用 VirtualHostStyle | true |
+| `auto_detect_content_type` | bool | 上传时根据 object key / 文件名后缀自动推断 MIME 类型，并写入 S3 对象的 `Content-Type` | false |
 | `directory_marker_mode` | str | 目录 marker 的持久化方式，可选 `none`、`empty`、`nonempty` | `"empty"` |
 | `normalize_encoding_chars` | str | 需要在 S3 object key 中转义为 `!HH` 十六进制字节的字符集合；空字符串表示关闭编码 | `"?#%+@"` |
 
@@ -1075,6 +1076,32 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 - 被转义的字节会编码成 `!HH`，其中 `HH` 是该字节的大写十六进制值。
 - 没有列在 `normalize_encoding_chars` 里的字符，包括中文和其他 Unicode 字符，都会保持原样。
 - 设为 `""` 时，会在 object key 中保留原始路径段。
+
+`auto_detect_content_type` 默认关闭，以兼容历史行为。开启后，RAGFS 会根据 object key / 文件名后缀推断 MIME 类型，并写入 S3 对象的 `Content-Type`：
+
+- 探测依据是 object key / 文件名后缀，不做文件内容 sniff。
+- key 以 `/` 结尾的目录 marker 不会写 `Content-Type`。
+- 无法识别的后缀会回退到 `application/octet-stream`。
+
+示例：
+
+```json
+{
+  "storage": {
+    "agfs": {
+      "backend": "s3",
+      "s3": {
+        "bucket": "my-bucket",
+        "endpoint": "s3.amazonaws.com",
+        "region": "us-east-1",
+        "access_key": "your-ak",
+        "secret_key": "your-sk",
+        "auto_detect_content_type": true
+      }
+    }
+  }
+}
+```
 
 <details>
 <summary><b>PathStyle S3</b></summary>

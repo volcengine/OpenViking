@@ -190,6 +190,11 @@ All configurations are under the `bot` field in `ov.conf`, with default values f
       Legacy configs that put a root key in `api_key` must add `api_key_type: "root"` or move the key to `root_api_key`; otherwise `api_key` is interpreted as a User key.
     - exp_write_tools: Optional list of tool names that trigger experience-memory injection before the call (self-evolving agent memory loop, see #2007). Defaults to `["write_file", "edit_file"]`. This only controls the bot-side injection trigger; stored experience generation is governed by OpenViking memory extraction and the active session `memory_policy.memory_types` whitelist.
     - `recall_exp_first_round_only`: Optional. When `true`, `ContextBuilder._build_user_memory` skips per-turn user/agent experience recall and injects experiences only once on the first user turn. Defaults to `false`.
+    - Per-turn user/peer memory recall uses type-quota search by default. `profile.md` is injected through the profile path and does not occupy auto-search candidates.
+    - `memory_recall_events_limit`: Optional. Number of `events/` memories retrieved per turn. Defaults to `10`.
+    - `memory_recall_entities_limit`: Optional. Number of `entities/` memories retrieved per turn. Defaults to `10`.
+    - `memory_recall_preferences_limit`: Optional. Number of `preferences/` memories retrieved per turn. Defaults to `3`.
+    - `memory_recall_max_chars`: Optional. Character budget for injected user/peer full memories. Defaults to `4000`.
     - `exp_recall_limit`: Optional. Number of experiences to retrieve per task during recall. Defaults to `5`.
     - `exp_recall_max_chars`: Optional. Character budget for the formatted experience block injected into context. Defaults to `2000`.
 - `channels`: Message platform configuration, see [Message Platform Configuration](bot/docs/CHANNEL.md) for details
