@@ -9,15 +9,19 @@ use crate::core::filesystem::{
     relative_match_file,
 };
 use crate::core::{
-    FileInfo, FileSystem, GrepResult, MultiWriteWrappedFS, Result, TreeEntry, WriteFlag,
+    FileInfo, FileSystem, GrepMatch, GrepResult, MultiWriteWrappedFS, Result, TreeEntry, WriteFlag,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures::stream::{self, StreamExt};
+use regex::Regex;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
+
+const GREP_CACHE_FILE_CONCURRENCY: usize = 8;
 
 /// Namespace prepended to every provider key owned by one wrapper.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -186,7 +190,8 @@ impl CachedFileSystem {
         let base_path = normalize_prefix_path(path);
         let normalized_exclude = exclude_path.map(normalize_prefix_path);
         let mut result = GrepResult::new();
-        let mut generation_cache = HashMap::new();
+        let generation_cache = Mutex::new(HashMap::new());
+        let mut file_batch = Vec::new();
         let mut stack = vec![GrepTask::Visit {
             path: base_path.clone(),
             is_dir: None,
@@ -212,6 +217,19 @@ impl CachedFileSystem {
                 None => self.stat(&current_path).await?.is_dir,
             };
             if is_dir {
+                self.flush_grep_file_batch(
+                    &mut file_batch,
+                    &base_path,
+                    &re,
+                    node_limit,
+                    &mut result,
+                    &generation_cache,
+                )
+                .await?;
+                if node_limit.is_some_and(|limit| result.count >= limit) {
+                    break;
+                }
+
                 if !recursive && current_path != base_path {
                     continue;
                 }
@@ -224,7 +242,7 @@ impl CachedFileSystem {
                 }
 
                 let entries = self
-                    .read_dir_with_generation_cache(&current_path, &mut generation_cache)
+                    .read_dir_with_generation_cache(&current_path, &generation_cache)
                     .await?;
                 for entry in entries.into_iter().rev() {
                     let entry_path = if current_path == "/" {
@@ -245,24 +263,106 @@ impl CachedFileSystem {
                     }
                 }
 
-                let content = self
-                    .read_with_generation_cache(&current_path, 0, 0, &mut generation_cache)
+                file_batch.push(current_path);
+                if file_batch.len() >= GREP_CACHE_FILE_CONCURRENCY {
+                    self.flush_grep_file_batch(
+                        &mut file_batch,
+                        &base_path,
+                        &re,
+                        node_limit,
+                        &mut result,
+                        &generation_cache,
+                    )
                     .await?;
-                let content_str = String::from_utf8_lossy(&content);
-                let rel_file = relative_match_file(&base_path, &current_path);
-
-                for (line_num, line) in content_str.lines().enumerate() {
-                    if node_limit.is_some_and(|limit| result.count >= limit) {
-                        break;
-                    }
-                    if re.is_match(line) {
-                        result.add_match(rel_file.clone(), (line_num + 1) as u64, line.to_string());
-                    }
                 }
             }
         }
 
+        self.flush_grep_file_batch(
+            &mut file_batch,
+            &base_path,
+            &re,
+            node_limit,
+            &mut result,
+            &generation_cache,
+        )
+        .await?;
+
         Ok(result)
+    }
+
+    async fn flush_grep_file_batch(
+        &self,
+        file_batch: &mut Vec<String>,
+        base_path: &str,
+        re: &Regex,
+        node_limit: Option<usize>,
+        result: &mut GrepResult,
+        generation_cache: &Mutex<HashMap<String, u64>>,
+    ) -> Result<()> {
+        if file_batch.is_empty() || node_limit.is_some_and(|limit| result.count >= limit) {
+            file_batch.clear();
+            return Ok(());
+        }
+
+        let remaining_limit = node_limit
+            .map(|limit| limit.saturating_sub(result.count))
+            .unwrap_or(usize::MAX);
+        let files = std::mem::take(file_batch);
+        let mut indexed = stream::iter(files.into_iter().enumerate())
+            .map(|(index, path)| async move {
+                let matches = self
+                    .grep_cached_file(&path, base_path, re, remaining_limit, generation_cache)
+                    .await;
+                (index, matches)
+            })
+            .buffer_unordered(GREP_CACHE_FILE_CONCURRENCY)
+            .collect::<Vec<_>>()
+            .await;
+
+        indexed.sort_by_key(|(index, _)| *index);
+        for (_, matches) in indexed {
+            for item in matches? {
+                if node_limit.is_some_and(|limit| result.count >= limit) {
+                    return Ok(());
+                }
+                result.matches.push(item);
+                result.count += 1;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn grep_cached_file(
+        &self,
+        path: &str,
+        base_path: &str,
+        re: &Regex,
+        remaining_limit: usize,
+        generation_cache: &Mutex<HashMap<String, u64>>,
+    ) -> Result<Vec<GrepMatch>> {
+        let content = self
+            .read_with_generation_cache(path, 0, 0, generation_cache)
+            .await?;
+        let content_str = String::from_utf8_lossy(&content);
+        let rel_file = relative_match_file(base_path, path);
+        let mut matches = Vec::new();
+
+        for (line_num, line) in content_str.lines().enumerate() {
+            if matches.len() >= remaining_limit {
+                break;
+            }
+            if re.is_match(line) {
+                matches.push(GrepMatch {
+                    file: rel_file.clone(),
+                    line: (line_num + 1) as u64,
+                    content: line.to_string(),
+                });
+            }
+        }
+
+        Ok(matches)
     }
 
     async fn cache_get(&self, key: &str) -> CacheResult<Option<Bytes>> {
@@ -399,25 +499,31 @@ impl CachedFileSystem {
     async fn current_generations_memoized(
         &self,
         keys: &[String],
-        generation_cache: &mut HashMap<String, u64>,
+        generation_cache: &Mutex<HashMap<String, u64>>,
     ) -> CacheResult<Vec<u64>> {
         let mut values = vec![None; keys.len()];
         let mut missing_keys = Vec::new();
         let mut missing_positions = Vec::new();
 
-        for (index, key) in keys.iter().enumerate() {
-            if let Some(value) = generation_cache.get(key) {
-                values[index] = Some(*value);
-            } else {
-                missing_positions.push(index);
-                missing_keys.push(key.clone());
+        {
+            let generation_cache = generation_cache.lock().await;
+            for (index, key) in keys.iter().enumerate() {
+                if let Some(value) = generation_cache.get(key) {
+                    values[index] = Some(*value);
+                } else {
+                    missing_positions.push(index);
+                    missing_keys.push(key.clone());
+                }
             }
         }
 
         let missing_values = self.current_generations(&missing_keys).await?;
-        for (index, value) in missing_positions.into_iter().zip(missing_values) {
-            generation_cache.insert(keys[index].clone(), value);
-            values[index] = Some(value);
+        if !missing_values.is_empty() {
+            let mut generation_cache = generation_cache.lock().await;
+            for (index, value) in missing_positions.into_iter().zip(missing_values) {
+                generation_cache.insert(keys[index].clone(), value);
+                values[index] = Some(value);
+            }
         }
 
         values
@@ -476,7 +582,7 @@ impl CachedFileSystem {
     async fn generations_match_with_cache(
         &self,
         envelope: &CacheEnvelope,
-        generation_cache: Option<&mut HashMap<String, u64>>,
+        generation_cache: Option<&Mutex<HashMap<String, u64>>>,
     ) -> CacheResult<bool> {
         let keys = envelope
             .generations()
@@ -529,7 +635,7 @@ impl CachedFileSystem {
         key: &str,
         path: &str,
         record_hit: bool,
-        generation_cache: Option<&mut HashMap<String, u64>>,
+        generation_cache: Option<&Mutex<HashMap<String, u64>>>,
     ) -> Option<Vec<u8>> {
         let value = match self.cache_get(key).await {
             Ok(value) => value?,
@@ -593,7 +699,7 @@ impl CachedFileSystem {
         key: &str,
         path: &str,
         record_hit: bool,
-        generation_cache: Option<&mut HashMap<String, u64>>,
+        generation_cache: Option<&Mutex<HashMap<String, u64>>>,
     ) -> Option<Vec<FileInfo>> {
         let value = match self.cache_get(key).await {
             Ok(value) => value?,
@@ -672,7 +778,7 @@ impl CachedFileSystem {
         path: &str,
         offset: u64,
         size: u64,
-        generation_cache: &mut HashMap<String, u64>,
+        generation_cache: &Mutex<HashMap<String, u64>>,
     ) -> Result<Vec<u8>> {
         if offset != 0
             || size != 0
@@ -732,7 +838,7 @@ impl CachedFileSystem {
     async fn read_dir_with_generation_cache(
         &self,
         path: &str,
-        generation_cache: &mut HashMap<String, u64>,
+        generation_cache: &Mutex<HashMap<String, u64>>,
     ) -> Result<Vec<FileInfo>> {
         if !self.policy.cache_directory(path) || self.is_runtime_bypassed(path).await {
             self.metrics.policy_bypass();

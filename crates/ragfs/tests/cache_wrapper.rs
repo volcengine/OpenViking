@@ -30,8 +30,11 @@ struct TrackingProvider {
     inner: MemoryCacheProvider,
     gets: AtomicU64,
     batch_gets: AtomicU64,
+    active_gets: AtomicU64,
+    max_active_gets: AtomicU64,
     seen_get_keys: Mutex<Vec<String>>,
     seen_batch_get_keys: Mutex<Vec<Vec<String>>>,
+    get_delay: Duration,
 }
 
 struct UnavailableProvider;
@@ -50,14 +53,24 @@ impl TrackingProvider {
             inner: MemoryCacheProvider::new(),
             gets: AtomicU64::new(0),
             batch_gets: AtomicU64::new(0),
+            active_gets: AtomicU64::new(0),
+            max_active_gets: AtomicU64::new(0),
             seen_get_keys: Mutex::new(Vec::new()),
             seen_batch_get_keys: Mutex::new(Vec::new()),
+            get_delay: Duration::ZERO,
         }
+    }
+
+    fn with_get_delay(mut self, delay: Duration) -> Self {
+        self.get_delay = delay;
+        self
     }
 
     fn reset_observed_reads(&self) {
         self.gets.store(0, Ordering::Relaxed);
         self.batch_gets.store(0, Ordering::Relaxed);
+        self.active_gets.store(0, Ordering::Relaxed);
+        self.max_active_gets.store(0, Ordering::Relaxed);
         self.seen_get_keys.lock().unwrap().clear();
         self.seen_batch_get_keys.lock().unwrap().clear();
     }
@@ -76,6 +89,30 @@ impl TrackingProvider {
                 .flat_map(|batch| batch.iter().cloned()),
         );
         keys
+    }
+
+    fn max_concurrent_gets(&self) -> u64 {
+        self.max_active_gets.load(Ordering::Relaxed)
+    }
+
+    fn enter_get(&self) {
+        let active = self.active_gets.fetch_add(1, Ordering::Relaxed) + 1;
+        let mut current = self.max_active_gets.load(Ordering::Relaxed);
+        while active > current {
+            match self.max_active_gets.compare_exchange_weak(
+                current,
+                active,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(observed) => current = observed,
+            }
+        }
+    }
+
+    fn exit_get(&self) {
+        self.active_gets.fetch_sub(1, Ordering::Relaxed);
     }
 }
 
@@ -113,7 +150,13 @@ impl CacheProvider for TrackingProvider {
     async fn get(&self, key: &str) -> CacheResult<Option<Bytes>> {
         self.gets.fetch_add(1, Ordering::Relaxed);
         self.seen_get_keys.lock().unwrap().push(key.to_string());
-        self.inner.get(key).await
+        self.enter_get();
+        if !self.get_delay.is_zero() {
+            tokio::time::sleep(self.get_delay).await;
+        }
+        let result = self.inner.get(key).await;
+        self.exit_get();
+        result
     }
 
     async fn put(&self, key: &str, value: Bytes) -> CacheResult<()> {
@@ -309,7 +352,14 @@ fn cached_fs_with_tracking_provider(
     backend: CountingFileSystem,
     policy: CachePolicy,
 ) -> (Arc<CachedFileSystem>, Arc<TrackingProvider>) {
-    let provider = Arc::new(TrackingProvider::new());
+    cached_fs_with_tracking_provider_instance(backend, policy, Arc::new(TrackingProvider::new()))
+}
+
+fn cached_fs_with_tracking_provider_instance(
+    backend: CountingFileSystem,
+    policy: CachePolicy,
+    provider: Arc<TrackingProvider>,
+) -> (Arc<CachedFileSystem>, Arc<TrackingProvider>) {
     let fs = Arc::new(CachedFileSystem::new(
         Box::new(backend),
         provider.clone(),
@@ -527,6 +577,50 @@ async fn cached_grep_memoizes_generation_keys_within_one_traversal() {
         subtree_keys.len(),
         unique.len(),
         "one cached grep traversal should not re-read the same generation key"
+    );
+}
+
+#[tokio::test]
+async fn cached_grep_scans_cached_files_with_bounded_concurrency() {
+    let backend = CountingFileSystem::new();
+    backend.mkdir("/docs", 0o755).await.unwrap();
+    for index in 0..8 {
+        backend
+            .write(
+                &format!("/docs/{index}.md"),
+                b"needle\nplain",
+                0,
+                WriteFlag::Create,
+            )
+            .await
+            .unwrap();
+    }
+    let provider = Arc::new(TrackingProvider::new().with_get_delay(Duration::from_millis(30)));
+    let (fs, provider) = cached_fs_with_tracking_provider_instance(
+        backend,
+        CachePolicy::default().with_traversal_mode(CacheTraversalMode::CachedTraversal),
+        provider,
+    );
+
+    fs.grep("/docs", "needle", true, false, None, None, None)
+        .await
+        .unwrap();
+    provider.reset_observed_reads();
+
+    let result = fs
+        .grep("/docs", "needle", true, false, None, None, None)
+        .await
+        .unwrap();
+
+    assert_eq!(result.count, 8);
+    let max_gets = provider.max_concurrent_gets();
+    assert!(
+        max_gets > 1,
+        "warm cached grep should scan cached file reads concurrently"
+    );
+    assert!(
+        max_gets <= 8,
+        "cached grep file scan concurrency should stay bounded"
     );
 }
 
