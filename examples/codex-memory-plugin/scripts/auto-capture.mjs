@@ -194,25 +194,27 @@ async function main() {
   }
 
   if (state.capturedTurnCount === 0 && allTurns.length > cfg.initialBacklogLimit) {
-    const backfillOvSessionId = `${deriveOvSessionId(sessionId)}-backfill`;
+    const backgroundOvSessionId = `${deriveOvSessionId(sessionId)}-background`;
     const pid = transcriptPath
-      ? startDetachedScript("backfill-transcript.mjs", [
+      ? startDetachedScript("capture-transcript-worker.mjs", [
           "--session-id", sessionId,
           "--transcript", transcriptPath,
-          "--ov-session-id", backfillOvSessionId,
-          "--batch-size", String(cfg.backfillBatchSize),
+          "--ov-session-id", backgroundOvSessionId,
+          "--start-index", "0",
+          "--end-index", String(allTurns.length),
+          "--batch-size", String(cfg.backgroundCaptureBatchSize),
         ])
       : null;
     state.capturedTurnCount = allTurns.length;
     await saveState(state, cfg.stateScope);
-    log("background_backfill_started", {
+    log("background_capture_started", {
       reason: "initial transcript exceeds hook budget",
       totalTurns: allTurns.length,
       initialBacklogLimit: cfg.initialBacklogLimit,
-      ovSessionId: backfillOvSessionId,
+      ovSessionId: backgroundOvSessionId,
       pid,
     });
-    noop(`scheduled OpenViking background backfill for ${allTurns.length} historical turn(s)`);
+    noop(`scheduled OpenViking background capture for ${allTurns.length} historical turn(s)`);
     return;
   }
 

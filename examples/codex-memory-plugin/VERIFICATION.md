@@ -260,25 +260,25 @@ codex                                                                 # interact
 
 Verify with steps 4 + 7 above.
 
-## 9. Large first-run backlog schedules detached backfill
+## 9. Large first-run backlog schedules detached background capture
 
 ```bash
-rm -rf "$STATE_DIR/state" "$STATE_DIR/backfill"
+rm -rf "$STATE_DIR/state" "$STATE_DIR/worker"
 mkdir -p "$STATE_DIR/state"
 seq 1 120 | awk '{print "{\"payload\":{\"role\":\"user\",\"content\":\"historical turn "$1"\"}}"}' > "$STATE_DIR/large.jsonl"
 
 echo '{"session_id":"large-sess","transcript_path":"'"$STATE_DIR"'/large.jsonl"}' \
   | OPENVIKING_CONFIG_FILE=$OV_CONF \
     OPENVIKING_CODEX_STATE_DIR=$STATE_DIR/state \
-    OPENVIKING_CODEX_BACKFILL_STATE_DIR=$STATE_DIR/backfill \
+    OPENVIKING_CODEX_WORKER_STATE_DIR=$STATE_DIR/worker \
     OPENVIKING_INITIAL_BACKLOG_LIMIT=10 \
     CODEX_PLUGIN_ROOT=$PLUGIN \
     node $PLUGIN/scripts/auto-capture.mjs
 ```
 
-Expect: systemMessage mentions background backfill. State `capturedTurnCount`
+Expect: systemMessage mentions background capture. State `capturedTurnCount`
 is 120, while the detached worker continues in the background and writes
-progress under `$STATE_DIR/backfill`.
+progress under `$STATE_DIR/worker`.
 
 ## 10. Oversized live session schedules detached commit
 

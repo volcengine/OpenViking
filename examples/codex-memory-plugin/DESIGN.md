@@ -58,8 +58,8 @@ same `cx-<codex-session-id>` OV session id for the post-compact half.
 compaction (see "Post-compact transcript shrink" below).
 
 The hook has a bounded catch-up budget. If unappended turns exceed
-`OPENVIKING_CAPTURE_MAX_TURNS_PER_STOP`, it schedules detached
-`backfill-transcript.mjs` work and returns instead of trying to upload a huge
+`OPENVIKING_CAPTURE_MAX_TURNS_PER_STOP`, it schedules detached internal
+`capture-transcript-worker.mjs` work and returns instead of trying to upload a huge
 transcript inside Codex's hook timeout. If the live OV session already exceeds
 the commit budget, it schedules detached `commit-session.mjs`, records the old
 session in `blockedOvSessions`, rotates to a fresh OV session id, and returns.
@@ -158,7 +158,7 @@ Stop appends at most `OPENVIKING_CAPTURE_MAX_TURNS_PER_STOP` turns per hook.
 It does not skip older pending turns; small backlogs drain over successive Stop
 events. On first plugin activation for an already-large transcript
 (`allTurns.length > OPENVIKING_INITIAL_BACKLOG_LIMIT`), Stop starts detached
-background backfill and sets `capturedTurnCount` to the current end so current
+background transcript capture and sets `capturedTurnCount` to the current end so current
 interactive use is not blocked by thousands of historical turns.
 
 ## Injected context boundary
@@ -255,8 +255,8 @@ Env var overrides for tuning without rebuilding:
 | `OPENVIKING_CODEX_IDLE_TTL_MS` | `1800000` (30 min) | idle sweep TTL |
 | `OPENVIKING_AUTH_MODE` | inferred | `trusted` sends `X-OpenViking-Account/User`; `api_key` does not |
 | `OPENVIKING_CAPTURE_MAX_TURNS_PER_STOP` | `8` | max turns appended inside one Stop/PreCompact hook |
-| `OPENVIKING_INITIAL_BACKLOG_LIMIT` | `100` | first-run transcript size above which detached backfill is scheduled |
-| `OPENVIKING_BACKFILL_BATCH_SIZE` | `100` | progress batch size for detached backfill |
+| `OPENVIKING_INITIAL_BACKLOG_LIMIT` | `100` | first-run transcript size above which detached background capture is scheduled |
+| `OPENVIKING_BACKGROUND_CAPTURE_BATCH_SIZE` | `100` | progress batch size for detached background capture |
 | `OPENVIKING_MAX_LIVE_MESSAGES_ON_COMPACT` | `200` | inline commit budget by live session message count |
 | `OPENVIKING_MAX_PENDING_TOKENS_ON_COMPACT` | `60000` | inline commit budget by pending token estimate |
 | `OPENVIKING_RECALL_TIMEOUT_MS` | `120000` (2 min) | whole UserPromptSubmit auto-recall deadline |

@@ -1,15 +1,13 @@
 #!/usr/bin/env node
 
 /**
- * Explicit historical transcript backfill for Codex.
- *
- * This is intentionally not a hook: large historical transcripts do not fit
- * Codex's short Stop-hook timeout. Run this manually when you want old
- * transcript history imported into OpenViking.
+ * Internal detached worker for transcript capture that is too large for a
+ * Codex hook timeout. Hooks schedule this process; users should not need to
+ * run it directly.
  */
 
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 import {
@@ -19,39 +17,28 @@ import {
   shouldCaptureText,
 } from "./capture-utils.mjs";
 import { loadConfig } from "./config.mjs";
-import { deriveOvSessionId } from "./session-state.mjs";
+import { createLogger } from "./debug-log.mjs";
 
 const cfg = loadConfig();
-const DEFAULT_BACKFILL_STATE_DIR = join(homedir(), ".openviking", "codex-plugin-backfill-state");
+const { log, logError } = createLogger("capture-transcript-worker");
+const DEFAULT_WORKER_STATE_DIR = join(homedir(), ".openviking", "codex-plugin-worker-state");
 
 function usage() {
   process.stderr.write(`Usage:
-  node scripts/backfill-transcript.mjs \\
+  node scripts/capture-transcript-worker.mjs \\
     --session-id <codex-session-id> \\
     --transcript <rollout.jsonl> \\
-    [--batch-size 100] [--no-commit] [--same-session] [--ov-session-id <id>] [--reset]
-
-Options:
-  --session-id       Codex session id. Used to derive the target OV session.
-  --transcript       Codex rollout JSONL or JSON array transcript path.
-  --batch-size       Number of turns to append before a progress log. Default: 100.
-  --no-commit        Do not commit after appending. By default backfill commits.
-  --same-session     Write to cx-<session-id> instead of cx-<session-id>-backfill.
-  --ov-session-id    Explicit target OpenViking session id.
-  --state-dir        Backfill progress directory. Default: ~/.openviking/codex-plugin-backfill-state.
-  --reset            Clear this backfill job's saved progress before running.
-  --dry-run          Parse and report counts without writing to OpenViking.
+    --ov-session-id <openviking-session-id> \\
+    [--start-index 0] [--end-index <turn-count>] [--batch-size 100]
 `);
 }
 
 function parseArgs(argv) {
   const out = {
-    batchSize: 100,
-    commit: true,
-    sameSession: false,
-    reset: false,
-    dryRun: false,
-    stateDir: process.env.OPENVIKING_CODEX_BACKFILL_STATE_DIR || DEFAULT_BACKFILL_STATE_DIR,
+    startIndex: 0,
+    endIndex: null,
+    batchSize: cfg.backgroundCaptureBatchSize,
+    stateDir: process.env.OPENVIKING_CODEX_WORKER_STATE_DIR || DEFAULT_WORKER_STATE_DIR,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -62,31 +49,32 @@ function parseArgs(argv) {
       out.sessionId = argv[++i];
     } else if (arg === "--transcript") {
       out.transcript = argv[++i];
-    } else if (arg === "--batch-size") {
-      out.batchSize = Number(argv[++i]);
-    } else if (arg === "--commit") {
-      out.commit = true;
-    } else if (arg === "--no-commit") {
-      out.commit = false;
-    } else if (arg === "--same-session") {
-      out.sameSession = true;
     } else if (arg === "--ov-session-id") {
       out.ovSessionId = argv[++i];
-    } else if (arg === "--state-dir") {
-      out.stateDir = argv[++i];
-    } else if (arg === "--reset") {
-      out.reset = true;
-    } else if (arg === "--dry-run") {
-      out.dryRun = true;
+    } else if (arg === "--start-index") {
+      out.startIndex = Number(argv[++i]);
+    } else if (arg === "--end-index") {
+      out.endIndex = Number(argv[++i]);
+    } else if (arg === "--batch-size") {
+      out.batchSize = Number(argv[++i]);
     } else {
       throw new Error(`Unknown argument: ${arg}`);
     }
   }
   if (!out.sessionId) throw new Error("--session-id is required");
   if (!out.transcript) throw new Error("--transcript is required");
+  if (!out.ovSessionId) throw new Error("--ov-session-id is required");
+  if (!Number.isFinite(out.startIndex) || out.startIndex < 0) {
+    throw new Error("--start-index must be a non-negative integer");
+  }
+  if (out.endIndex != null && (!Number.isFinite(out.endIndex) || out.endIndex < out.startIndex)) {
+    throw new Error("--end-index must be >= --start-index");
+  }
   if (!Number.isFinite(out.batchSize) || out.batchSize < 1) {
     throw new Error("--batch-size must be a positive integer");
   }
+  out.startIndex = Math.floor(out.startIndex);
+  out.endIndex = out.endIndex == null ? null : Math.floor(out.endIndex);
   out.batchSize = Math.floor(out.batchSize);
   out.transcript = resolvePath(out.transcript.replace(/^~/, homedir()));
   out.stateDir = resolvePath(out.stateDir.replace(/^~/, homedir()));
@@ -103,52 +91,50 @@ function scopeSuffix(value) {
   return createHash("sha256").update(scope).digest("hex").slice(0, 16);
 }
 
-function targetOvSessionId(args) {
-  if (args.ovSessionId) return args.ovSessionId;
-  const base = deriveOvSessionId(args.sessionId);
-  return args.sameSession ? base : `${base}-backfill`;
+function statePath(args) {
+  const key = [
+    args.sessionId,
+    args.ovSessionId,
+    args.transcript,
+    String(args.startIndex),
+    String(args.endIndex ?? "end"),
+    cfg.stateScope,
+  ].join("|");
+  const digest = createHash("sha256").update(key).digest("hex").slice(0, 16);
+  return join(args.stateDir, `${safeId(args.sessionId)}__${safeId(args.ovSessionId)}__${scopeSuffix(cfg.stateScope)}__${digest}.json`);
 }
 
-function statePath(args, ovSessionId) {
-  const suffix = scopeSuffix(cfg.stateScope);
-  const scoped = suffix ? `__${suffix}` : "";
-  return join(args.stateDir, `${safeId(args.sessionId)}__${safeId(ovSessionId)}${scoped}.json`);
-}
-
-function defaultState(args, ovSessionId) {
+function defaultState(args) {
   return {
     sessionId: args.sessionId,
-    ovSessionId,
+    ovSessionId: args.ovSessionId,
     transcript: args.transcript,
-    capturedTurnCount: 0,
+    startIndex: args.startIndex,
+    endIndex: args.endIndex,
+    nextIndex: args.startIndex,
     committedAt: null,
     createdAt: Date.now(),
     lastUpdatedAt: Date.now(),
   };
 }
 
-async function loadBackfillState(args, ovSessionId) {
+async function loadWorkerState(args) {
   try {
-    const raw = await readFile(statePath(args, ovSessionId), "utf-8");
+    const raw = await readFile(statePath(args), "utf-8");
     const parsed = JSON.parse(raw);
-    if (parsed.transcript !== args.transcript) return defaultState(args, ovSessionId);
-    return { ...defaultState(args, ovSessionId), ...parsed };
+    return { ...defaultState(args), ...parsed };
   } catch {
-    return defaultState(args, ovSessionId);
+    return defaultState(args);
   }
 }
 
-async function saveBackfillState(args, state) {
+async function saveWorkerState(args, state) {
   await mkdir(args.stateDir, { recursive: true });
   const next = { ...state, lastUpdatedAt: Date.now() };
-  const final = statePath(args, state.ovSessionId);
+  const final = statePath(args);
   const tmp = `${final}.tmp`;
   await writeFile(tmp, JSON.stringify(next));
   await rename(tmp, final);
-}
-
-async function resetBackfillState(args, ovSessionId) {
-  await rm(statePath(args, ovSessionId), { force: true });
 }
 
 async function fetchJSON(path, init = {}) {
@@ -162,6 +148,7 @@ async function fetchJSON(path, init = {}) {
     }
     if (cfg.sendIdentityHeaders && cfg.account) headers["X-OpenViking-Account"] = cfg.account;
     if (cfg.sendIdentityHeaders && cfg.user) headers["X-OpenViking-User"] = cfg.user;
+    if (cfg.peerId) headers["X-OpenViking-Actor-Peer"] = cfg.peerId;
     const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
     const body = await res.json().catch(() => null);
     if (!body) return null;
@@ -201,10 +188,7 @@ function extractTurns(entries) {
     const rawText = extractTextFromPayload(payload, { toolMaxChars: cfg.captureToolMaxChars });
     const decision = shouldCaptureText(rawText, role, cfg);
     if (!decision.shouldCapture) continue;
-    turns.push({
-      role,
-      text: decision.text,
-    });
+    turns.push({ role, text: decision.text });
   }
   return turns;
 }
@@ -232,93 +216,66 @@ async function commitSession(ovSessionId) {
 }
 
 async function main() {
-  let args;
-  try {
-    args = parseArgs(process.argv.slice(2));
-  } catch (err) {
-    process.stderr.write(`${err.message}\n\n`);
-    usage();
-    return 2;
-  }
-
-  const ovSessionId = targetOvSessionId(args);
-  if (args.reset) await resetBackfillState(args, ovSessionId);
-
+  const args = parseArgs(process.argv.slice(2));
   const turns = await readTranscriptTurns(args.transcript);
-  const state = await loadBackfillState(args, ovSessionId);
-  const pending = Math.max(0, turns.length - state.capturedTurnCount);
+  const endIndex = Math.min(args.endIndex ?? turns.length, turns.length);
+  const state = await loadWorkerState({ ...args, endIndex });
 
-  process.stdout.write(JSON.stringify({
-    event: "start",
+  log("start", {
     baseUrl: cfg.baseUrl,
     sessionId: args.sessionId,
-    ovSessionId,
+    ovSessionId: args.ovSessionId,
     transcript: args.transcript,
+    startIndex: args.startIndex,
+    endIndex,
+    nextIndex: state.nextIndex,
     totalTurns: turns.length,
-    capturedTurnCount: state.capturedTurnCount,
-    pendingTurns: pending,
     batchSize: args.batchSize,
-    commit: args.commit,
-    dryRun: args.dryRun,
-  }) + "\n");
-
-  if (args.dryRun) return 0;
+  });
 
   await fetchJSON("/health");
 
   let appended = 0;
-  for (let index = state.capturedTurnCount; index < turns.length; index += 1) {
-    await appendOneTurn(ovSessionId, turns[index]);
-    state.capturedTurnCount = index + 1;
-    await saveBackfillState(args, state);
+  for (let index = state.nextIndex; index < endIndex; index += 1) {
+    await appendOneTurn(args.ovSessionId, turns[index]);
+    state.nextIndex = index + 1;
+    await saveWorkerState({ ...args, endIndex }, state);
     appended += 1;
-    if (appended % args.batchSize === 0 || state.capturedTurnCount === turns.length) {
-      process.stdout.write(JSON.stringify({
-        event: "progress",
-        ovSessionId,
+    if (appended % args.batchSize === 0 || state.nextIndex === endIndex) {
+      log("progress", {
+        ovSessionId: args.ovSessionId,
         appended,
-        capturedTurnCount: state.capturedTurnCount,
-        totalTurns: turns.length,
-        remainingTurns: turns.length - state.capturedTurnCount,
-      }) + "\n");
+        nextIndex: state.nextIndex,
+        endIndex,
+        remainingTurns: endIndex - state.nextIndex,
+      });
     }
   }
 
-  if (args.commit && state.capturedTurnCount === turns.length) {
-    if (state.committedAt) {
-      process.stdout.write(JSON.stringify({
-        event: "commit_skipped",
-        reason: "already committed",
-        ovSessionId,
-        committedAt: state.committedAt,
-      }) + "\n");
-    } else {
-      const result = await commitSession(ovSessionId);
-      state.committedAt = Date.now();
-      await saveBackfillState(args, state);
-      process.stdout.write(JSON.stringify({
-        event: "commit",
-        ovSessionId,
-        taskId: result?.task_id,
-        status: result?.status,
-        archived: result?.archived,
-      }) + "\n");
-    }
+  if (state.nextIndex >= endIndex && !state.committedAt) {
+    const result = await commitSession(args.ovSessionId);
+    state.committedAt = Date.now();
+    await saveWorkerState({ ...args, endIndex }, state);
+    log("commit", {
+      ovSessionId: args.ovSessionId,
+      taskId: result?.task_id,
+      status: result?.status,
+      archived: result?.archived,
+    });
   }
 
-  process.stdout.write(JSON.stringify({
-    event: "done",
-    ovSessionId,
+  log("done", {
+    ovSessionId: args.ovSessionId,
     appended,
-    capturedTurnCount: state.capturedTurnCount,
-    totalTurns: turns.length,
-  }) + "\n");
+    nextIndex: state.nextIndex,
+    endIndex,
+  });
   return 0;
 }
 
 main()
   .then((code) => { process.exitCode = code; })
   .catch((err) => {
-    process.stderr.write(`${err?.stack || err}\n`);
+    logError("uncaught", err);
     process.exitCode = 1;
   });
