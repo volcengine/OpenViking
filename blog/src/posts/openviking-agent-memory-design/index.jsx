@@ -5,10 +5,16 @@ import {
 
 const LLM_PATH = '/post/openviking-agent-memory-design/llm.txt';
 const COVER = '/assets/covers/openviking-agent-memory-design.png';
-const SOURCE = 'https://juejin.cn/post/7648649574736134196';
 const REPO = 'https://github.com/volcengine/OpenViking';
 const DOCS = 'https://docs.openviking.ai/';
 const MCP_GUIDE = 'https://docs.openviking.ai/en/guides/06-mcp-integration';
+const IMAGE_BASE = '/post/openviking-agent-memory-design/images';
+const VIDEO_1 = 'https://ospo-website.tos-cn-beijing.volces.com/blog/20260608/1.mp4';
+const VIDEO_2 = 'https://ospo-website.tos-cn-beijing.volces.com/blog/20260608/2.mov';
+const VIDEO_3 = 'https://ospo-website.tos-cn-beijing.volces.com/blog/20260608/3.mov';
+const VIDEO_4 = 'https://ospo-website.tos-cn-beijing.volces.com/blog/20260608/4.mov';
+
+const img = name => `${IMAGE_BASE}/${name}`;
 
 function MemoryDesignStyles() {
   return (
@@ -246,20 +252,20 @@ const OpenVikingAgentMemoryDesign = ({ t }) => {
         size="wide"
         frame="soft"
         alt={T({ en: 'Abstract OpenViking memory hub connecting several AI agent workspaces', zh: 'OpenViking 记忆中枢连接多个 AI Agent 工作区的抽象图' })}
-        caption={T({ en: 'Original generated cover for this OpenViking Blog rewrite.', zh: '本文 OpenViking Blog 改写版的原创生成封面。' })}
+        caption={T({ en: 'OpenViking as a shared memory layer between users and AI agents.', zh: 'OpenViking 作为用户与 AI Agent 之间的共享记忆层。' })}
       />
-
-      <Callout type="info" title={T({ en: 'Source boundary', zh: '来源边界' })}>
-        <P>{T({
-          en: <>This post is an OpenViking-style rewrite based on the public Juejin article <A href={SOURCE}>你的 Agent 每次都“失忆”？这个工具彻底治好了我的前端开发焦虑</A>. It preserves the product argument and examples, adds English coverage, and uses original generated imagery instead of source images.</>,
-          zh: <>本文是基于掘金公开文章 <A href={SOURCE}>《你的 Agent 每次都“失忆”？这个工具彻底治好了我的前端开发焦虑》</A> 的 OpenViking Blog 风格改写。本文保留产品论点和案例信息，补充英文版本，并使用原创生成图片，不搬运原文图片。</>,
-        })}</P>
-      </Callout>
 
       <P dropCap>{T({
         en: 'The failure mode is familiar. You spend a late night teaching an agent the design direction for a frontend page: dark technical background, consistent typography, reusable button patterns, a clear component rhythm. The next morning you open a new session and ask it to continue the dashboard. The agent returns something that looks like a different product.',
         zh: '这个失败模式很常见。你前一晚花很久和 Agent 对齐前端页面方向：深色科技感背景、统一字体、可复用按钮样式、清晰组件节奏。第二天打开新会话，让它继续做数据看板，它却交出一个像另一个产品的页面。',
       })}</P>
+
+      <Figure
+        src={img('figure-01.webp')}
+        size="wide"
+        frame="soft"
+        alt={T({ en: 'A generated frontend page drifting away from the intended style', zh: '新会话生成的前端页面偏离原本风格' })}
+      />
 
       <P>{T({
         en: 'The problem is not that the model never understood you. The problem is that the useful parts of the collaboration stayed trapped inside one session. When you change windows, run out of quota, switch tools, or split work across sub-agents, the context does not automatically travel with the task.',
@@ -283,6 +289,13 @@ const OpenVikingAgentMemoryDesign = ({ t }) => {
         en: 'Frontend design is a good example because the important information is rarely a single fact. It is a mixture of taste, project constraints, component decisions, and corrections made across several turns. A useful memory layer should capture that shape directly.',
         zh: '前端设计是一个很好的例子，因为重要信息很少只是单个事实。它混合了审美偏好、项目约束、组件决策，以及多轮对话中产生的修正。真正有用的记忆层应该直接承接这种形态。',
       })}</P>
+
+      <Figure
+        src={img('figure-02.webp')}
+        size="wide"
+        frame="soft"
+        alt={T({ en: 'Design preferences emerging through agent collaboration', zh: 'Agent 协作过程中产生设计偏好' })}
+      />
 
       <Table
         headers={[
@@ -314,10 +327,24 @@ const OpenVikingAgentMemoryDesign = ({ t }) => {
         ]}
       />
 
+      <Figure
+        src={img('figure-03.webp')}
+        size="wide"
+        frame="soft"
+        alt={T({ en: 'Extracted memories organized into semantic categories', zh: '提取后的记忆按语义类型组织' })}
+      />
+
       <P>{T({
         en: 'Recall should also be structured. OpenViking first interprets what the user is asking for, then routes the search into the relevant memory space. A request about recreating a playground style should not search all memories equally; it should lean toward design preferences, component conventions, and prior project decisions.',
         zh: '召回也应该是结构化的。OpenViking 会先理解用户在问什么，再把检索路由到相关记忆空间。一个“复现 Playground 风格”的请求，不应该平等搜索所有记忆，而应该优先进入设计偏好、组件约定和历史项目决策。',
       })}</P>
+
+      <Figure
+        src={img('figure-04.webp')}
+        size="wide"
+        frame="soft"
+        alt={T({ en: 'Intent analysis routes a user query to the right memory space', zh: '意图分析把用户请求路由到正确记忆空间' })}
+      />
 
       <Callout type="note" title={T({ en: 'The important design choice', zh: '关键设计选择' })}>
         <P>{T({
@@ -325,6 +352,13 @@ const OpenVikingAgentMemoryDesign = ({ t }) => {
           zh: '记忆召回不是聊天记录搜索，而是一个范围选择问题：先识别任务，再选择记忆树里最可能命中的目录，优先在那里检索，证据不足时再扩大范围。',
         })}</P>
       </Callout>
+
+      <Figure
+        src={img('figure-05.webp')}
+        size="wide"
+        frame="soft"
+        alt={T({ en: 'A memory tree narrows retrieval by semantic path', zh: '记忆树按语义路径逐层缩小检索范围' })}
+      />
 
       <H2>{T({ en: 'The Four Practical Wins', zh: '四个实际收益' })}</H2>
 
@@ -340,17 +374,72 @@ const OpenVikingAgentMemoryDesign = ({ t }) => {
         zh: '长链路前端任务往往横跨多个会话。设计会话结束后才出现 Bug 时，修复会话仍然需要旧的设计选择。OpenViking 让新会话可以取回这些背景，而不是让用户重新拼装上下文。',
       })}</P>
 
+      <Figure
+        src={img('figure-06.webp')}
+        size="wide"
+        frame="soft"
+        alt={T({ en: 'A new session without OpenViking loses earlier context', zh: '未接入 OpenViking 的新会话丢失历史记忆' })}
+      />
+
+      <Figure
+        src={img('figure-07.png')}
+        size="wide"
+        frame="soft"
+        alt={T({ en: 'A new session with OpenViking continues from historical memory', zh: '接入 OpenViking 的新会话承接历史记忆' })}
+      />
+
       <H3>{T({ en: '3. Sub-agents Can Share One Project Memory', zh: '3. SubAgent 可以共享同一份项目记忆' })}</H3>
       <P>{T({
         en: 'A requirements agent, coding agent, and review agent can be useful only if their handoff carries enough context. With OpenViking, the output of one agent can become evidence for the next agent, and feedback can be written back into the project memory.',
         zh: '需求 Agent、代码 Agent、审查 Agent 的价值，取决于交接时是否携带足够上下文。接入 OpenViking 后，前一个 Agent 的输出可以成为后一个 Agent 的依据，后一个 Agent 的反馈也能继续写回项目记忆。',
       })}</P>
 
+      <Figure
+        src={img('figure-08.webp')}
+        size="wide"
+        frame="soft"
+        alt={T({ en: 'Sub-agents sharing one project memory', zh: '多个 SubAgent 共享同一份项目记忆' })}
+      />
+
+      <Callout type="info" title={T({ en: 'Demo clip', zh: '演示视频' })}>
+        <P>{T({
+          en: <>The original case includes a short collaboration clip: <A href={VIDEO_1}>open video</A>.</>,
+          zh: <>原案例包含一段 SubAgent 协作演示：<A href={VIDEO_1}>打开视频</A>。</>,
+        })}</P>
+      </Callout>
+
       <H3>{T({ en: '4. Different Tools Stop Diverging', zh: '4. 不同工具不再各说各话' })}</H3>
       <P>{T({
         en: 'A team may use Codex for one part, Trae for another, and Claude Code for debugging. Without a shared memory layer, each tool produces its own component habits. With OpenViking, a rule learned in one tool can be recalled by another.',
         zh: '一个团队可能用 Codex 生成一部分页面，用 Trae 补功能，再用 Claude Code 修 Bug。没有共享记忆层时，每个工具都会产出自己的组件习惯。接入 OpenViking 后，一个工具里沉淀的规则，可以被另一个工具召回。',
       })}</P>
+
+      <Figure
+        src={img('figure-06.webp')}
+        size="wide"
+        frame="soft"
+        alt={T({ en: 'A Trae rule that cannot be inherited by Claude Code without shared memory', zh: '未接入 OpenViking 时 Trae 规范无法被 Claude Code 继承' })}
+      />
+
+      <div className="ovamd-split">
+        <Figure
+          src={img('figure-09.webp')}
+          frame="soft"
+          alt={T({ en: 'Tool output before shared memory alignment', zh: '共享记忆对齐前的工具输出' })}
+        />
+        <Figure
+          src={img('figure-10.webp')}
+          frame="soft"
+          alt={T({ en: 'Tool output after shared memory alignment', zh: '共享记忆对齐后的工具输出' })}
+        />
+      </div>
+
+      <Figure
+        src={img('figure-11.webp')}
+        size="wide"
+        frame="soft"
+        alt={T({ en: 'Trae and Claude Code continue from one memory base after OpenViking is connected', zh: '接入 OpenViking 后 Trae 和 Claude Code 基于同一份记忆继续协作' })}
+      />
 
       <Hr ornament />
 
@@ -368,11 +457,32 @@ const OpenVikingAgentMemoryDesign = ({ t }) => {
         zh: '视觉差异正是记忆层应该影响的部分。背景处理、按钮体系、标题字重、组件语言和助手入口都不是魔法，而是累积起来的决策。记住它们，下一次生成就有依据；丢掉它们，模型就会回到通用默认值。',
       })}</P>
 
+      <Figure
+        src={img('figure-12.webp')}
+        size="wide"
+        frame="soft"
+        alt={T({ en: 'Playground collaboration decisions are written into OpenViking memory', zh: 'Playground 协作决策写入 OpenViking 记忆' })}
+      />
+
+      <Figure
+        src={img('figure-13.webp')}
+        size="wide"
+        frame="soft"
+        alt={T({ en: 'A new playground task recalls prior style and component rules', zh: '新 Playground 任务召回旧的风格和组件规范' })}
+      />
+
+      <Callout type="info" title={T({ en: 'Visual comparison clips', zh: '效果对比视频' })}>
+        <P>{T({
+          en: <>The case includes three comparison clips: <A href={VIDEO_2}>initial page</A>, <A href={VIDEO_3}>without OpenViking</A>, and <A href={VIDEO_4}>with OpenViking</A>.</>,
+          zh: <>案例包含三段效果对比视频：<A href={VIDEO_2}>初始页面</A>、<A href={VIDEO_3}>未接入 OpenViking</A>、<A href={VIDEO_4}>接入 OpenViking</A>。</>,
+        })}</P>
+      </Callout>
+
       <H2>{T({ en: 'Getting Started', zh: '快速开始' })}</H2>
 
       <P>{T({
-        en: <>For local agent tools, the practical path is to run OpenViking, connect the client through MCP or a plugin, and give the agent a rule that tells it when to read or write memory. The repository is on <A href={REPO}>GitHub</A>, the docs live at <A href={DOCS}>docs.openviking.ai</A>, and MCP setup details are in the <A href={MCP_GUIDE}>MCP integration guide</A>.</>,
-        zh: <>对本地 Agent 工具来说，实践路径是先运行 OpenViking，再通过 MCP 或插件接入客户端，并给 Agent 一条规则，说明什么时候读取或写入记忆。项目在 <A href={REPO}>GitHub</A>，文档在 <A href={DOCS}>docs.openviking.ai</A>，MCP 细节见 <A href={MCP_GUIDE}>MCP 集成指南</A>。</>,
+        en: <>Using Trae as the example, the setup path is short: connect OpenViking through MCP, then add a rule that tells the agent when to call memory. The repository is on <A href={REPO}>GitHub</A>, the docs live at <A href={DOCS}>docs.openviking.ai</A>, and MCP setup details are in the <A href={MCP_GUIDE}>MCP integration guide</A>.</>,
+        zh: <>下面以 Trae 为例，完整走一遍 OpenViking 接入流程：先通过 MCP 连接 OpenViking，再给 Agent 配置主动调用记忆的规则。项目在 <A href={REPO}>GitHub</A>，文档在 <A href={DOCS}>docs.openviking.ai</A>，MCP 细节见 <A href={MCP_GUIDE}>MCP 集成指南</A>。</>,
       })}</P>
 
       <Table
@@ -381,19 +491,33 @@ const OpenVikingAgentMemoryDesign = ({ t }) => {
           T({ en: 'Action', zh: '动作' }),
         ]}
         rows={[
-          [T({ en: 'Run OpenViking', zh: '运行 OpenViking' }), T({ en: 'Start the server and make sure durable storage is configured for memory and resources.', zh: '启动服务，并确保记忆和资源有持久化存储。' })],
-          [T({ en: 'Connect the agent', zh: '连接 Agent' }), T({ en: 'Use MCP, a plugin, or CLI integration depending on the client.', zh: '根据客户端选择 MCP、插件或 CLI 集成方式。' })],
-          [T({ en: 'Add usage rules', zh: '添加调用规则' }), T({ en: 'Tell the agent to retrieve relevant memory before work and write back durable corrections after meaningful changes.', zh: '要求 Agent 工作前召回相关记忆，并在重要变更后写回可长期复用的修正。' })],
-          [T({ en: 'Inspect results', zh: '检查结果' }), T({ en: 'Use OpenViking surfaces to inspect what was stored and whether future retrieval sees the right evidence.', zh: '通过 OpenViking 界面检查写入内容，以及后续召回是否命中正确证据。' })],
+          [T({ en: 'Open MCP settings', zh: '打开 MCP 配置入口' }), T({ en: 'In Trae, open Settings -> MCP and enter the MCP service management page.', zh: '在 Trae 中点击 设置 -> MCP，进入 MCP 服务管理页面。' })],
+          [T({ en: 'Add OpenViking', zh: '手动添加 OpenViking' }), T({ en: 'Choose Add -> Manual configuration and paste the OpenViking MCP configuration.', zh: '点击 添加 -> 手动配置，将 OpenViking MCP 配置粘贴进去。' })],
+          [T({ en: 'Start the server', zh: '启动 OpenViking-server' }), T({ en: 'Start OpenViking locally. When Trae shows the MCP status as connected, choose which agents can use OpenViking.', zh: '在本地启动 OpenViking-server。回到 Trae 的 MCP 页面，状态变为连接成功后，即可选择哪些智能体启用 OpenViking。' })],
+          [T({ en: 'Add retrieval rules', zh: '配置检索规则' }), T({ en: 'Create a global or project rule that asks the agent to retrieve relevant memory before work and write durable corrections back after meaningful changes.', zh: '在 设置 -> 规则 中创建全局或项目规则，要求 Agent 工作前召回相关记忆，并在重要变更后写回长期可复用的修正。' })],
         ]}
+      />
+
+      <Figure
+        src={img('figure-14.webp')}
+        size="wide"
+        frame="soft"
+        alt={T({ en: 'Trae MCP configuration screen for OpenViking', zh: 'Trae 中配置 OpenViking MCP' })}
       />
 
       <Callout type="tip" title={T({ en: 'Rule of thumb', zh: '经验法则' })}>
         <P>{T({
           en: <>If you expect to tell the same thing to another agent later, it should probably become OpenViking memory. Local files such as <InlineCode>AGENTS.md</InlineCode>, <InlineCode>CLAUDE.md</InlineCode>, or <InlineCode>MEMORY.md</InlineCode> still matter, but they should not be the only place where cross-tool context survives.</>,
-          zh: <>如果你预期以后还要把同一件事告诉另一个 Agent，它很可能就应该进入 OpenViking 记忆。本地的 <InlineCode>AGENTS.md</InlineCode>、<InlineCode>CLAUDE.md</InlineCode> 或 <InlineCode>MEMORY.md</InlineCode> 仍然重要，但不应该是跨工具上下文唯一能活下来的地方。</>,
+          zh: <>别再用“金鱼记忆”的 AI 搞开发了。真正的 AI 协作，应该是越用越懂你，而不是每次都要重新认识你。本地的 <InlineCode>AGENTS.md</InlineCode>、<InlineCode>CLAUDE.md</InlineCode> 或 <InlineCode>MEMORY.md</InlineCode> 仍然重要，但不应该是跨工具上下文唯一能活下来的地方。</>,
         })}</P>
       </Callout>
+
+      <Figure
+        src={img('figure-15.webp')}
+        size="wide"
+        frame="soft"
+        alt={T({ en: 'OpenViking community QR code', zh: 'OpenViking 社区二维码' })}
+      />
     </Article>
   );
 };
@@ -418,7 +542,6 @@ export default {
     tags: ['openviking', 'memory', 'mcp', 'codex', 'frontend'],
     languages: ['en', 'zh'],
     llmPath: LLM_PATH,
-    source: SOURCE,
     authors: [{ name: 'OpenViking Team' }],
   },
 };

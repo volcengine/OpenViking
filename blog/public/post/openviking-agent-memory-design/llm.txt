@@ -6,17 +6,33 @@ Canonical human page: https://blog.openviking.ai/post/openviking-agent-memory-de
 Agent-readable page: https://blog.openviking.ai/post/openviking-agent-memory-design/llm.txt
 Repository: https://github.com/volcengine/OpenViking
 
-Source boundary: this is a public OpenViking Blog rewrite based on the Juejin article:
-https://juejin.cn/post/7648649574736134196
-
-The rewrite preserves the product argument and examples while avoiding verbatim copying and source images. The cover image is an original generated asset stored at:
+Cover image:
 /assets/covers/openviking-agent-memory-design.png
+
+Article images:
+/post/openviking-agent-memory-design/images/figure-01.webp
+/post/openviking-agent-memory-design/images/figure-02.webp
+/post/openviking-agent-memory-design/images/figure-03.webp
+/post/openviking-agent-memory-design/images/figure-04.webp
+/post/openviking-agent-memory-design/images/figure-05.webp
+/post/openviking-agent-memory-design/images/figure-06.webp
+/post/openviking-agent-memory-design/images/figure-07.png
+/post/openviking-agent-memory-design/images/figure-08.webp
+/post/openviking-agent-memory-design/images/figure-09.webp
+/post/openviking-agent-memory-design/images/figure-10.webp
+/post/openviking-agent-memory-design/images/figure-11.webp
+/post/openviking-agent-memory-design/images/figure-12.webp
+/post/openviking-agent-memory-design/images/figure-13.webp
+/post/openviking-agent-memory-design/images/figure-14.webp
+/post/openviking-agent-memory-design/images/figure-15.webp
 
 ## Thesis
 
 AI coding and frontend design work breaks down when every agent remembers only the current chat. Users teach one agent design direction, component rules, interaction choices, and project constraints, then lose that context when they open a new session, switch tools, run out of quota, or split work across sub-agents.
 
 OpenViking acts as the memory center between users and AI agents. It can connect through MCP, plugins, CLI workflows, and application integrations. Its job is to extract important working context, organize it as retrievable memory, and make it available to the next agent that needs it.
+
+Chinese framing: OpenViking 是连接用户和所有 AI Agent 工具之间的「记忆中枢」。它接入 Trae、Codex、Claude Code 等工具，在协作过程中提炼和存储规范、偏好和决策，并在下次需要时精准召回。
 
 ## Problem
 
@@ -80,7 +96,7 @@ Teams may use Codex for one part, Trae for another, and Claude Code for debuggin
 
 ## Playground Case Pattern
 
-The source article uses a product Playground page as the example. The repeatable workflow is:
+The Playground case uses a product Playground page as the example. The repeatable workflow is:
 
 1. Collaborate normally with an agent while OpenViking extracts stable rules from the process.
 2. Start a fresh task and ask to reuse the previous playground style.
@@ -92,12 +108,12 @@ The expected visual effect is consistency. Background treatment, button system, 
 
 ## Getting Started
 
-Practical path:
+Using Trae as the example:
 
-1. Run OpenViking and configure durable storage for memory and resources.
-2. Connect the agent through MCP, a plugin, or CLI integration depending on the client.
-3. Add usage rules telling the agent to retrieve relevant memory before work and write back durable corrections after meaningful changes.
-4. Inspect what was stored and whether future retrieval sees the right evidence.
+1. Open Settings -> MCP in Trae.
+2. Add OpenViking manually through MCP configuration.
+3. Start OpenViking-server locally and confirm Trae shows the MCP service as connected.
+4. Create a global or project rule telling the agent to retrieve relevant memory before work and write durable corrections back after meaningful changes.
 
 Public references:
 
@@ -108,3 +124,5 @@ Public references:
 ## Rule Of Thumb
 
 If the user expects to tell the same thing to another agent later, it should probably become OpenViking memory. Local files such as `AGENTS.md`, `CLAUDE.md`, or `MEMORY.md` still matter, but they should not be the only place where cross-tool context survives.
+
+Chinese rule of thumb: 别再用“金鱼记忆”的 AI 搞开发。真正的 AI 协作，应该是越用越懂你，而不是每次都要重新认识你。
