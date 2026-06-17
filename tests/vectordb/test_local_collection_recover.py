@@ -6,6 +6,7 @@ Covers issue #2118: when the index directory is empty but the store still
 holds candidate records, _recover() must rebuild a default index instead of
 returning silently.
 """
+
 import os
 import shutil
 import unittest
@@ -53,9 +54,7 @@ class TestLocalCollectionRecover(unittest.TestCase):
             "idx_main",
             {"IndexName": "idx_main", "VectorIndex": {"IndexType": "flat", "Distance": "l2"}},
         )
-        records = [
-            {"id": i, "vector": [0.1] * 4, "data": f"row_{i}"} for i in range(10)
-        ]
+        records = [{"id": i, "vector": [0.1] * 4, "data": f"row_{i}"} for i in range(10)]
         col.upsert_data(records)
         col.close()
 
@@ -106,9 +105,7 @@ class TestLocalCollectionRecover(unittest.TestCase):
             "idx_main",
             {"IndexName": "idx_main", "VectorIndex": {"IndexType": "flat", "Distance": "l2"}},
         )
-        col.upsert_data(
-            [{"id": i, "vector": [0.1] * 4, "data": f"row_{i}"} for i in range(5)]
-        )
+        col.upsert_data([{"id": i, "vector": [0.1] * 4, "data": f"row_{i}"} for i in range(5)])
         col.close()
 
         # Reopen without wiping anything: the healthy "idx_main" must come back

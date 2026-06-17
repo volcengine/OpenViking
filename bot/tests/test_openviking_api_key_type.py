@@ -1339,9 +1339,7 @@ def test_tool_context_syncs_legacy_memory_user_alias():
 
 
 @pytest.mark.asyncio
-async def test_viking_memory_context_keeps_legacy_users_separate_from_peers(
-    monkeypatch, tmp_path
-):
+async def test_viking_memory_context_keeps_legacy_users_separate_from_peers(monkeypatch, tmp_path):
     calls = []
 
     class _FakeClient:
@@ -1379,9 +1377,7 @@ async def test_viking_memory_context_keeps_legacy_users_separate_from_peers(
 
 
 @pytest.mark.asyncio
-async def test_viking_memory_type_quota_groups_with_event_summaries_and_uris(
-    monkeypatch, tmp_path
-):
+async def test_viking_memory_type_quota_groups_with_event_summaries_and_uris(monkeypatch, tmp_path):
     clients = []
     base_uri = "viking://user/default/peers/sender-1/memories"
 
@@ -1393,8 +1389,7 @@ async def test_viking_memory_type_quota_groups_with_event_summaries_and_uris(
                 f"{base_uri}/events/e2.md": (
                     "Summary: long event summary\n"
                     "2023-01-01 (Sunday) ChatLog:\n"
-                    "full long event details "
-                    + ("x" * 800)
+                    "full long event details " + ("x" * 800)
                 ),
                 f"{base_uri}/events/e3.md": "legacy event without summary",
                 f"{base_uri}/entities/en1.md": "short entity",
@@ -1497,9 +1492,7 @@ async def test_viking_memory_type_quota_groups_with_event_summaries_and_uris(
 
 
 @pytest.mark.asyncio
-async def test_viking_memory_type_quota_continues_after_oversized_entity(
-    monkeypatch, tmp_path
-):
+async def test_viking_memory_type_quota_continues_after_oversized_entity(monkeypatch, tmp_path):
     base_uri = "viking://user/default/peers/sender-1/memories"
 
     class _FakeClient:
@@ -1541,17 +1534,15 @@ async def test_viking_memory_type_quota_continues_after_oversized_entity(
     )
 
     assert '<memory index="1" type="uri">' in result
-    assert '<uri>viking://user/default/peers/sender-1/memories/entities/long.md</uri>' in result
+    assert "<uri>viking://user/default/peers/sender-1/memories/entities/long.md</uri>" in result
     assert '<memory index="2" type="full">' in result
-    assert '<uri>viking://user/default/peers/sender-1/memories/entities/short.md</uri>' in result
+    assert "<uri>viking://user/default/peers/sender-1/memories/entities/short.md</uri>" in result
     assert "<content>short fact</content>" in result
     assert "long fact " not in result
 
 
 @pytest.mark.asyncio
-async def test_viking_memory_type_quota_does_not_overflow_preference_budget(
-    monkeypatch, tmp_path
-):
+async def test_viking_memory_type_quota_does_not_overflow_preference_budget(monkeypatch, tmp_path):
     base_uri = "viking://user/default/peers/sender-1/memories"
 
     class _FakeClient:
@@ -1599,9 +1590,7 @@ async def test_viking_memory_type_quota_does_not_overflow_preference_budget(
 
 
 @pytest.mark.asyncio
-async def test_viking_memory_context_returns_empty_after_profile_filter(
-    monkeypatch, tmp_path
-):
+async def test_viking_memory_context_returns_empty_after_profile_filter(monkeypatch, tmp_path):
     class _FakeClient:
         async def search_memory(self, **_kwargs):
             return [
@@ -1704,7 +1693,9 @@ async def test_openviking_grep_default_memory_expands_current_peer(monkeypatch):
 
         def build_current_memory_target_uris(self, *, peer_ids=None, include_self=True):
             uris = ["viking://user/memories/"] if include_self else []
-            uris.extend(f"viking://user/default/peers/{peer_id}/memories/" for peer_id in peer_ids or [])
+            uris.extend(
+                f"viking://user/default/peers/{peer_id}/memories/" for peer_id in peer_ids or []
+            )
             return uris
 
         async def grep(self, uri, pattern, case_insensitive=False, user_id=None):
@@ -1739,7 +1730,9 @@ async def test_openviking_list_default_memory_expands_current_peer(monkeypatch):
 
         def build_current_memory_target_uris(self, *, peer_ids=None, include_self=True):
             uris = ["viking://user/memories/"] if include_self else []
-            uris.extend(f"viking://user/default/peers/{peer_id}/memories/" for peer_id in peer_ids or [])
+            uris.extend(
+                f"viking://user/default/peers/{peer_id}/memories/" for peer_id in peer_ids or []
+            )
             return uris
 
         async def list_resources(self, path=None, recursive=False):
@@ -1773,7 +1766,9 @@ async def test_openviking_glob_root_adds_current_peer_memory(monkeypatch):
 
         def build_current_memory_target_uris(self, *, peer_ids=None, include_self=True):
             uris = ["viking://user/memories/"] if include_self else []
-            uris.extend(f"viking://user/default/peers/{peer_id}/memories/" for peer_id in peer_ids or [])
+            uris.extend(
+                f"viking://user/default/peers/{peer_id}/memories/" for peer_id in peer_ids or []
+            )
             return uris
 
         async def glob(self, pattern, uri="viking://"):
@@ -1810,8 +1805,7 @@ async def test_openviking_glob_root_uses_namespaced_self_targets_for_root_key(mo
         def build_current_memory_target_uris(self, *, peer_ids=None, include_self=True):
             uris = ["viking://user/admin/memories/"] if include_self else []
             uris.extend(
-                f"viking://user/admin/peers/{peer_id}/memories/"
-                for peer_id in peer_ids or []
+                f"viking://user/admin/peers/{peer_id}/memories/" for peer_id in peer_ids or []
             )
             return uris
 

@@ -1113,9 +1113,7 @@ class PersistCollection(LocalCollection):
             try:
                 index.persist()
             except Exception as exc:
-                logger.warning(
-                    "Default index rebuilt in memory but persist() failed: %s", exc
-                )
+                logger.warning("Default index rebuilt in memory but persist() failed: %s", exc)
 
     def _replay_recovery_records(
         self,
