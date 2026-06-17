@@ -30,7 +30,7 @@ def init_queue_manager(
     mount_point: str = "/queue",
     max_concurrent_embedding: int = 10,
     max_concurrent_semantic: int = 64,
-    max_concurrent_dags: int = 1,
+    max_concurrent_dags: Optional[int] = None,
 ) -> "QueueManager":
     """Initialize QueueManager singleton.
 
@@ -78,7 +78,7 @@ class QueueManager:
         mount_point: str = "/queue",
         max_concurrent_embedding: int = 10,
         max_concurrent_semantic: int = 64,
-    max_concurrent_dags: Optional[int] = None,
+        max_concurrent_dags: Optional[int] = None,
     ):
         """Initialize QueueManager."""
         self._agfs = agfs
