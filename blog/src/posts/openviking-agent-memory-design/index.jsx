@@ -247,14 +247,6 @@ const OpenVikingAgentMemoryDesign = ({ t }) => {
         zh: 'AI 编程真正容易断的地方，是每个 Agent 只记得当前聊天。OpenViking 给 Trae、Codex、Claude Code 和 SubAgent 提供一层共享记忆，让设计决策跨过下一个窗口、下一个工具和下一个任务。',
       })}</Lead>
 
-      <Figure
-        src={COVER}
-        size="wide"
-        frame="soft"
-        alt={T({ en: 'Abstract OpenViking memory hub connecting several AI agent workspaces', zh: 'OpenViking 记忆中枢连接多个 AI Agent 工作区的抽象图' })}
-        caption={T({ en: 'OpenViking as a shared memory layer between users and AI agents.', zh: 'OpenViking 作为用户与 AI Agent 之间的共享记忆层。' })}
-      />
-
       <P dropCap>{T({
         en: 'The failure mode is familiar. You spend a late night teaching an agent the design direction for a frontend page: dark technical background, consistent typography, reusable button patterns, a clear component rhythm. The next morning you open a new session and ask it to continue the dashboard. The agent returns something that looks like a different product.',
         zh: '这个失败模式很常见。你前一晚花很久和 Agent 对齐前端页面方向：深色科技感背景、统一字体、可复用按钮样式、清晰组件节奏。第二天打开新会话，让它继续做数据看板，它却交出一个像另一个产品的页面。',
