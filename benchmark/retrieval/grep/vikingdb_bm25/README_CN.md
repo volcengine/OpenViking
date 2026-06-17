@@ -39,12 +39,12 @@ python3 step1_add_resource.py --source ~/.openviking/data/benchmark/OpenViking-m
 #   首次运行必须使用 engine=fs 生成 ground truth 缓存：
 #     1. 设置 ov.conf: "grep": {"engine": "fs"}
 #     2. 重启服务
-python3 step2_quality.py
+python3 step2_quality.py --keywords grep reindex SyncHTTPClient
 
 #   后续运行可使用任意引擎（ground truth 从缓存读取）：
 #     1. 设置 ov.conf: "grep": {"engine": "auto", "switch_to_remote_threshold": 0}
 #     2. 重启服务
-python3 step2_quality.py
+python3 step2_quality.py --keywords grep reindex SyncHTTPClient
 
 # 可选参数：--regenerate-ground-truth  （强制重算，需 engine=fs）
 ```
@@ -65,6 +65,8 @@ python3 step2_quality.py
 ### 目标单词
 
 15 个单词，分 5 个概率层级：
+
+这些词组定义在 `performance/step0_prepare_data.py` 中，并由 `performance/step3_benchmark.py` 复用。
 
 | 概率 | 单词 | 预期命中数（每 20 万文件） |
 |------|------|---------------------------|

@@ -66,6 +66,8 @@ Tests grep speed and returned match count on a large synthetic dataset (default:
 
 15 words across 5 probability tiers:
 
+These word groups are defined in `performance/step0_prepare_data.py` and reused by `performance/step3_benchmark.py`.
+
 | Probability | Words | Expected hits (per 200K files) |
 |-------------|-------|-------------------------------|
 | 1% | heliofract, prismcache, fluxkernel | ~2,000 |
