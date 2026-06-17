@@ -12,11 +12,21 @@ from openviking.service.core import OpenVikingService
 from openviking.utils.agfs_utils import RagfsBindingConfig
 
 
+class _FakeCacheConfig:
+    def model_dump(self, mode: str) -> dict:
+        assert mode == "json"
+        return {"enabled": False, "provider": "memory"}
+
+
 class _FakeConfig:
     """Minimal config object exposing the service-facing to_dict API."""
 
     storage = SimpleNamespace(
-        agfs=SimpleNamespace(path="/tmp/ov-test", backend="local"),
+        agfs=SimpleNamespace(
+            path="/tmp/ov-test",
+            backend="local",
+            cache=_FakeCacheConfig(),
+        ),
         skip_process_lock=False,
     )
 
@@ -58,6 +68,10 @@ async def test_build_ragfs_binding_config_works_inside_running_event_loop(monkey
     assert isinstance(ragfs_config, RagfsBindingConfig)
     assert ragfs_config.agfs is service._config.storage.agfs
     assert ragfs_config.to_binding_dict() == {
+        "cache": {
+            "enabled": False,
+            "provider": "memory",
+        },
         "encryption": {
             "root_key": b"k" * 32,
             "provider_type": 1,

@@ -221,6 +221,22 @@ results = client.find(
 )
 ```
 
+**Go SDK**
+
+```go
+result, err := client.Find(ctx, "how to authenticate users", &openviking.FindOptions{
+    TargetURI:   "viking://resources/docs",
+    Limit:       10,
+    ContextType: []string{"resource"},
+})
+if err != nil {
+    return err
+}
+for _, item := range result.Resources {
+    fmt.Println(item.URI, item.Score)
+}
+```
+
 **CLI**
 
 ```bash
@@ -408,6 +424,20 @@ for ctx in results.resources:
     print(f"Found: {ctx.uri} (score: {ctx.score:.3f})")
 ```
 
+**Go SDK**
+
+```go
+result, err := client.Search(ctx, "best practices", &openviking.SearchOptions{
+    SessionID:   "abc123",
+    ContextType: "skill",
+    Limit:       10,
+})
+if err != nil {
+    return err
+}
+fmt.Println(result.Total)
+```
+
 **CLI**
 
 ```bash
@@ -546,6 +576,18 @@ for match in results['matches']:
     print(f"    {match['content']}")
 ```
 
+**Go SDK**
+
+```go
+result, err := client.Grep(ctx, "viking://resources", "authentication", &openviking.GrepOptions{
+    CaseInsensitive: true,
+})
+if err != nil {
+    return err
+}
+fmt.Println(result["count"])
+```
+
 **CLI**
 
 ```bash
@@ -644,6 +686,16 @@ for uri in results['matches']:
 # 查找所有 Python 文件
 results = client.glob("**/*.py", "viking://resources")
 print(f"Found {results['count']} Python files")
+```
+
+**Go SDK**
+
+```go
+result, err := client.Glob(ctx, "**/*.md", "viking://resources")
+if err != nil {
+    return err
+}
+fmt.Println(result["count"])
 ```
 
 **CLI**

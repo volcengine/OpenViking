@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict
 
+from openviking_cli.utils.config.config_loader import resolve_config_path
+from openviking_cli.utils.config.consts import DEFAULT_OV_CONF, OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -29,7 +31,9 @@ class RagfsBindingConfig:
 
     def to_binding_dict(self) -> Dict[str, Any]:
         """Convert the runtime config into the sectioned dict consumed by `RAGFSBindingClient`."""
-        binding_config: Dict[str, Any] = {}
+        binding_config: Dict[str, Any] = {
+            "cache": self.agfs.cache.model_dump(mode="json"),
+        }
 
         if self.root_key is not None:
             if len(self.root_key) != 32:
@@ -355,7 +359,11 @@ def create_agfs_client(config: RagfsBindingConfig) -> Any:
         )
 
     # Construction-time decides whether the stack includes the encryption layer.
-    client = RAGFSBindingClient(config=config.to_binding_dict())
+    config_path = resolve_config_path(None, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)
+    client = RAGFSBindingClient(
+        str(config_path) if config_path else None,
+        config=config.to_binding_dict(),
+    )
 
     # Automatically mount backend for binding client
     mount_agfs_backend(client, config)

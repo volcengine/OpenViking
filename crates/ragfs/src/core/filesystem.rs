@@ -24,7 +24,7 @@ pub(crate) fn normalize_prefix_path(path: &str) -> String {
 }
 
 /// Check whether `path` is under `exclude_path` (including itself).
-fn is_excluded_path(path: &str, exclude_path: &str) -> bool {
+pub(crate) fn is_excluded_path(path: &str, exclude_path: &str) -> bool {
     if exclude_path == "/" {
         return true;
     }

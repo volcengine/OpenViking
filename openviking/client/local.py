@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Union
 from openviking.core.peer_id import normalize_peer_id, normalize_peer_selector
 from openviking.server.identity import RequestContext, Role
 from openviking.service import OpenVikingService
+from openviking.service.task_tracker import get_task_tracker
 from openviking.telemetry import TelemetryRequest
 from openviking.telemetry.execution import (
     attach_telemetry_payload,
@@ -529,6 +530,24 @@ class LocalClient(BaseClient):
     async def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Query background task status."""
         return await self._service.sessions.get_commit_task(task_id, self._ctx)
+
+    async def list_tasks(
+        self,
+        task_type: Optional[str] = None,
+        status: Optional[str] = None,
+        resource_id: Optional[str] = None,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """List background tasks visible to the current caller."""
+        tasks = await get_task_tracker().list_tasks(
+            task_type=task_type,
+            status=status,
+            resource_id=resource_id,
+            limit=limit,
+            account_id=self._ctx.account_id,
+            user_id=self._ctx.user.user_id,
+        )
+        return [task.to_dict() for task in tasks]
 
     async def add_message(
         self,

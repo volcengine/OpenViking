@@ -16,7 +16,8 @@
     "INSTALL-ZH.md"
   ],
   "scripts": {
-    "check": "node --check index.mjs && node --check lib/runtime.mjs && node --check lib/repo-context.mjs && node --check lib/memory-session.mjs && node --check lib/memadd-local.mjs && node --check lib/memory-tools.mjs && node --check lib/memory-recall.mjs && node --check lib/utils.mjs"
+    "check": "node --check index.mjs && node --check lib/runtime.mjs && node --check lib/repo-context.mjs && node --check lib/memory-session.mjs && node --check lib/memadd-local.mjs && node --check lib/memory-tools.mjs && node --check lib/code-tools.mjs && node --check lib/memory-recall.mjs && node --check lib/utils.mjs && node --check tests/code-tools-request-options.test.mjs",
+    "test": "node --test tests/*.test.mjs"
   },
   "dependencies": {
     "@opencode-ai/plugin": "^1.14.37"

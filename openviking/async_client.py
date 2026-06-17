@@ -246,6 +246,22 @@ class AsyncOpenViking:
         await self._ensure_initialized()
         return await self._client.get_task(task_id)
 
+    async def list_tasks(
+        self,
+        task_type: Optional[str] = None,
+        status: Optional[str] = None,
+        resource_id: Optional[str] = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """List background tasks visible to the current caller."""
+        await self._ensure_initialized()
+        return await self._client.list_tasks(
+            task_type=task_type,
+            status=status,
+            resource_id=resource_id,
+            limit=limit,
+        )
+
     async def reindex(
         self,
         uri: str,

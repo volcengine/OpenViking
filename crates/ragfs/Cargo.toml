@@ -18,6 +18,11 @@ path = "src/lib.rs"
 name = "ragfs-shell"
 path = "src/shell/main.rs"
 
+[[test]]
+name = "cache_wrapper"
+path = "tests/cache_wrapper.rs"
+required-features = ["cache"]
+
 [dependencies]
 # Async runtime
 tokio = { version = "1.38", features = ["full"] }
@@ -88,5 +93,6 @@ criterion = "0.5"
 
 [features]
 default = []
+cache = []
 s3 = ["aws-sdk-s3", "aws-config", "aws-types"]
-full = ["s3"]
+full = ["s3", "cache"]

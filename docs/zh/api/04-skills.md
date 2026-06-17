@@ -321,6 +321,18 @@ result = client.add_skill("./skills/my-skill/", wait=True)
 client.wait_processed()
 ```
 
+**Go SDK**
+
+```go
+result, err := client.AddSkill(ctx, "./skills/my-skill/", &openviking.AddSkillOptions{
+    Wait: true,
+})
+if err != nil {
+    return err
+}
+fmt.Println(result["uri"])
+```
+
 **CLI**：
 
 ```bash
@@ -414,61 +426,59 @@ Python HTTP SDK 会把该响应映射为对应异常（`ProcessingError`）。
 
 ## 技能管理操作
 
+Python HTTP SDK 和 Go SDK 都暴露专用技能管理方法。Python 方法包括
+`list_skills`、`find_skills`、`validate_skill`、`get_skill`、`update_skill`
+和 `delete_skill`；Go 方法包括 `ListSkills`、`FindSkills`、`ValidateSkill`、
+`GetSkill`、`UpdateSkill` 和 `DeleteSkill`。通用文件系统、内容和检索方法仍可用于 URI 级访问。
+
 ### 列出技能
 
 **Python SDK**：
 
 ```python
-# 列出所有技能
-skills = client.ls("viking://user/skills/")
-for skill in skills:
-    print(f"{skill['name']}")
+skills = client.list_skills(node_limit=1000)
+for skill in skills["skills"]:
+    print(skill["name"])
+```
 
-# 简单列表（仅名称）
-names = client.ls("viking://user/skills/", simple=True)
-print(names)
+**Go SDK**：
+
+```go
+skills, err := client.ListSkills(ctx, nil)
+_ = skills
 ```
 
 **HTTP API**：
 
 ```bash
-curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://user/skills/" \
+curl -X GET "http://localhost:1933/api/v1/skills?node_limit=1000" \
   -H "X-API-Key: your-key"
 ```
 
-### 读取技能内容
+### 读取技能
 
 **Python SDK**：
 
 ```python
-uri = "viking://user/skills/search-web/"
+skill = client.get_skill("search-web", include_content=True, include_files=True)
+print(skill["name"])
+print(skill.get("content"))
+```
 
-# L0：简要描述
-abstract = client.abstract(uri)
-print(f"Abstract: {abstract}")
+**Go SDK**：
 
-# L1：参数和使用概览
-overview = client.overview(uri)
-print(f"Overview: {overview}")
-
-# L2：完整技能文档
-content = client.read(uri)
-print(f"Content: {content}")
+```go
+skill, err := client.GetSkill(ctx, "search-web", &openviking.GetSkillOptions{
+    IncludeContent: openviking.Bool(true),
+    IncludeFiles:   openviking.Bool(true),
+})
+_ = skill
 ```
 
 **HTTP API**：
 
 ```bash
-# L0：简要描述
-curl -X GET "http://localhost:1933/api/v1/content/abstract?uri=viking://user/skills/search-web/" \
-  -H "X-API-Key: your-key"
-
-# L1：参数和使用概览
-curl -X GET "http://localhost:1933/api/v1/content/overview?uri=viking://user/skills/search-web/" \
-  -H "X-API-Key: your-key"
-
-# L2：完整技能文档
-curl -X GET "http://localhost:1933/api/v1/content/read?uri=viking://user/skills/search-web/" \
+curl -X GET "http://localhost:1933/api/v1/skills/search-web?include_content=true&include_files=true" \
   -H "X-API-Key: your-key"
 ```
 
@@ -477,30 +487,62 @@ curl -X GET "http://localhost:1933/api/v1/content/read?uri=viking://user/skills/
 **Python SDK**：
 
 ```python
-# 语义搜索技能
-results = client.find(
-    "search the internet",
-    target_uri="viking://user/skills/",
-    limit=5
-)
+results = client.find_skills("search the internet", limit=5)
 
-for ctx in results.skills:
-    print(f"Skill: {ctx.uri}")
-    print(f"Score: {ctx.score:.3f}")
-    print(f"Description: {ctx.abstract}")
+for skill in results["skills"]:
+    print(skill["name"], skill["score"])
+```
+
+**Go SDK**：
+
+```go
+results, err := client.FindSkills(ctx, "search the internet", &openviking.FindSkillsOptions{
+    Limit: 5,
+})
+_ = results
 ```
 
 **HTTP API**：
 
 ```bash
-curl -X POST http://localhost:1933/api/v1/search/find \
+curl -X POST http://localhost:1933/api/v1/skills/find \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
   -d '{
     "query": "search the internet",
-    "target_uri": "viking://user/skills/",
     "limit": 5
   }'
+```
+
+### 校验和更新技能
+
+**Python SDK**：
+
+```python
+validated = client.validate_skill({"name": "search-web", "description": "..."})
+updated = client.update_skill("search-web", "./skills/search-web", wait=True)
+```
+
+**Go SDK**：
+
+```go
+validated, err := client.ValidateSkill(ctx, map[string]any{
+    "name":        "search-web",
+    "description": "...",
+}, nil)
+updated, err := client.UpdateSkill(ctx, "search-web", "./skills/search-web", &openviking.UpdateSkillOptions{
+    Wait: true,
+})
+_, _ = validated, updated
+```
+
+**HTTP API**：
+
+```bash
+curl -X POST http://localhost:1933/api/v1/skills/validate \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{"data": {"name": "search-web", "description": "..."}}'
 ```
 
 ### 删除技能
@@ -508,13 +550,20 @@ curl -X POST http://localhost:1933/api/v1/search/find \
 **Python SDK**：
 
 ```python
-client.rm("viking://user/skills/old-skill/", recursive=True)
+client.delete_skill("old-skill")
+```
+
+**Go SDK**：
+
+```go
+deleted, err := client.DeleteSkill(ctx, "old-skill")
+_ = deleted
 ```
 
 **HTTP API**：
 
 ```bash
-curl -X DELETE "http://localhost:1933/api/v1/fs?uri=viking://user/skills/old-skill/&recursive=true" \
+curl -X DELETE "http://localhost:1933/api/v1/skills/old-skill" \
   -H "X-API-Key: your-key"
 ```
 
