@@ -107,7 +107,6 @@ embedding_template: |-
   {{ content }}
 overview_template: |-
   # Events Overview
-  {% if overview_date %}**Date:** {{ overview_date }}{% endif %}
   {% for item in items %}
   - [{{ item.file_content.overview_title }}](./{{ item.file_name }})
   {% endfor %}

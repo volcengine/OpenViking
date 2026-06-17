@@ -163,20 +163,23 @@ class TestMemoryUpdater:
 
         assert updater._registry == registry
 
-    def test_event_overview_title_falls_back_to_first_sentence(self):
+    def test_event_overview_title_uses_summary_or_filename(self):
         assert (
             MemoryUpdater._event_overview_title(
-                {"content": "第一句话？第二句话！第三句话。"},
+                {"summary": " kept event ", "event_name": "event name"},
                 "fallback",
             )
-            == "第一句话？"
+            == "kept event"
         )
         assert (
             MemoryUpdater._event_overview_title(
-                {"content": "Summary: First sentence. Second sentence."},
+                {
+                    "event_name": "event name",
+                    "content": "First sentence. Second sentence.",
+                },
                 "fallback",
             )
-            == "First sentence."
+            == "fallback"
         )
 
     @pytest.mark.asyncio
@@ -255,7 +258,7 @@ class TestMemoryUpdater:
         assert viking_fs.rm_calls == []
 
     @pytest.mark.asyncio
-    async def test_generate_events_overview_without_extract_context_uses_directory_date(self):
+    async def test_generate_events_overview_without_extract_context_uses_summary_or_filename(self):
         schema = MemoryTypeSchema(
             memory_type="events",
             description="event memory",
@@ -264,7 +267,6 @@ class TestMemoryUpdater:
             fields=[],
             overview_template=(
                 "# Events Overview\n"
-                "{% if overview_date %}**Date:** {{ overview_date }}{% endif %}\n"
                 "{% for item in items %}\n"
                 "- [{{ item.file_content.overview_title }}](./{{ item.file_name }})\n"
                 "{% endfor %}"
@@ -321,9 +323,9 @@ class TestMemoryUpdater:
 
         await updater.generate_overview("events", directory, ctx, extract_context=None)
 
-        assert "**Date:** 2026/06/16" in viking_fs.store[overview_uri]
+        assert "**Date:**" not in viking_fs.store[overview_uri]
         assert "- [kept event](./kept_event.md)" in viking_fs.store[overview_uri]
-        assert "- [Plain event first sentence.](./plain_event.md)" in viking_fs.store[overview_uri]
+        assert "- [plain_event](./plain_event.md)" in viking_fs.store[overview_uri]
         assert "deleted_event.md" not in viking_fs.store[overview_uri]
 
     @pytest.mark.asyncio
