@@ -454,6 +454,7 @@ class SyncHTTPClient:
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         context_type: Optional[SearchContextTypeInput] = None,
+        tags: Optional[List[str]] = None,
         telemetry: TelemetryRequest = False,
     ):
         """Semantic search with optional session context."""
@@ -468,6 +469,7 @@ class SyncHTTPClient:
                 score_threshold=score_threshold,
                 filter=filter,
                 context_type=context_type,
+                tags=tags,
                 telemetry=telemetry,
             )
         )
@@ -481,6 +483,7 @@ class SyncHTTPClient:
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         context_type: Optional[SearchContextTypeInput] = None,
+        tags: Optional[List[str]] = None,
         telemetry: TelemetryRequest = False,
     ):
         """Semantic search without session context."""
@@ -493,6 +496,7 @@ class SyncHTTPClient:
                 score_threshold,
                 filter,
                 context_type,
+                tags,
                 telemetry=telemetry,
             )
         )
@@ -611,6 +615,25 @@ class SyncHTTPClient:
                 mode=mode,
                 wait=wait,
                 timeout=timeout,
+                telemetry=telemetry,
+            )
+        )
+
+    def set_tags(
+        self,
+        uri: str,
+        tags: List[str],
+        mode: str = "replace",
+        recursive: bool = False,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Update explicit retrieval tags metadata for a file or directory."""
+        return run_async(
+            self._async_client.set_tags(
+                uri=uri,
+                tags=tags,
+                mode=mode,
+                recursive=recursive,
                 telemetry=telemetry,
             )
         )

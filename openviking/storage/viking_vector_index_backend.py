@@ -27,6 +27,7 @@ RETRIEVAL_OUTPUT_FIELDS = [
     "abstract",
     "active_count",
     "updated_at",
+    "search_tags",
 ]
 
 LOOKUP_OUTPUT_FIELDS = [
@@ -48,6 +49,7 @@ MEMORY_DEDUP_OUTPUT_FIELDS = [
 ]
 
 FETCH_BY_URI_OUTPUT_FIELDS = [
+    "id",
     "uri",
     "type",
     "context_type",
@@ -58,6 +60,7 @@ FETCH_BY_URI_OUTPUT_FIELDS = [
     "name",
     "description",
     "tags",
+    "search_tags",
     "abstract",
     "account_id",
     "owner_user_id",
@@ -246,7 +249,6 @@ class _SingleAccountBackend:
         logger.debug(
             f"[_SingleAccountBackend.upsert] Input data.account_id={payload.get('account_id')}, bound_account_id={self._bound_account_id}"
         )
-
         if self._bound_account_id and not payload.get("account_id"):
             payload["account_id"] = self._bound_account_id
         logger.debug(
@@ -753,6 +755,70 @@ class VikingVectorIndexBackend:
     async def fetch_by_uri(self, uri: str, *, ctx: RequestContext) -> Optional[Dict[str, Any]]:
         backend = self._get_backend_for_context(ctx)
         return await backend.fetch_by_uri(uri)
+
+    async def update_search_tags(
+        self,
+        uri: str,
+        tags: List[str],
+        *,
+        mode: str,
+        ctx: RequestContext,
+    ) -> bool:
+        """Update search tags for the exact indexed record at the given URI."""
+        if mode not in {"replace", "append"}:
+            raise ValueError(f"unsupported tag mode: {mode}")
+
+        canonical_uri = canonicalize_uri(uri, ctx)
+        record = await self.fetch_by_uri(canonical_uri, ctx=ctx)
+        if not record or not record.get("id"):
+            return False
+
+        from openviking.utils.tags import merge_search_tags
+
+        updated_record = dict(record)
+        if mode == "append":
+            updated_record["search_tags"] = merge_search_tags(record.get("search_tags"), tags)
+        else:
+            updated_record["search_tags"] = list(tags)
+        return bool(await self.upsert(updated_record, ctx=ctx))
+
+    async def update_directory_search_tags(
+        self,
+        uri: str,
+        tags: List[str],
+        *,
+        mode: str,
+        levels: List[int],
+        ctx: RequestContext,
+    ) -> List[Dict[str, Any]]:
+        """Update search tags for directory summary records stored as (uri, level)."""
+        if mode not in {"replace", "append"}:
+            raise ValueError(f"unsupported tag mode: {mode}")
+
+        canonical_uri = canonicalize_uri(uri, ctx)
+        records = await self.filter(
+            filter=And([Eq("uri", canonical_uri), In("level", levels)]),
+            limit=max(len(levels), 2),
+            output_fields=FETCH_BY_URI_OUTPUT_FIELDS,
+            ctx=ctx,
+        )
+        if not records:
+            return []
+
+        from openviking.utils.tags import merge_search_tags
+
+        updated_records: List[Dict[str, Any]] = []
+        for record in records:
+            if not record or not record.get("id"):
+                continue
+            updated_record = dict(record)
+            if mode == "append":
+                updated_record["search_tags"] = merge_search_tags(record.get("search_tags"), tags)
+            else:
+                updated_record["search_tags"] = list(tags)
+            if await self.upsert(updated_record, ctx=ctx):
+                updated_records.append(updated_record)
+        return updated_records
 
     async def query(
         self,

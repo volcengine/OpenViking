@@ -40,6 +40,18 @@ class WriteContentRequest(BaseModel):
     telemetry: TelemetryRequest = False
 
 
+class SetTagsRequest(BaseModel):
+    """Request to set explicit k=v retrieval tags metadata for a file or directory."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    uri: str
+    tags: list[str]
+    mode: str = "replace"
+    recursive: bool = False
+    telemetry: TelemetryRequest = False
+
+
 class ReindexRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -189,6 +201,32 @@ async def write(
             mode=request.mode,
             wait=request.wait,
             timeout=request.timeout,
+        ),
+    )
+    return Response(
+        status="ok",
+        result=execution.result,
+        telemetry=execution.telemetry,
+    ).model_dump(exclude_none=True)
+
+
+@router.post("/set_tags")
+async def set_tags(
+    request: SetTagsRequest = Body(...),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Set explicit k=v retrieval tags metadata for a file or directory."""
+    service = get_service()
+    uri = resolve_path_variables(request.uri)
+    execution = await run_operation(
+        operation="content.set_tags",
+        telemetry=request.telemetry,
+        fn=lambda: service.fs.set_tags(
+            uri=uri,
+            tags=request.tags,
+            mode=request.mode,
+            recursive=request.recursive,
+            ctx=_ctx,
         ),
     )
     return Response(

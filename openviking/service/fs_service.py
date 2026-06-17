@@ -507,3 +507,23 @@ class FSService:
             wait=wait,
             timeout=timeout,
         )
+
+    async def set_tags(
+        self,
+        uri: str,
+        tags: list[str],
+        mode: str,
+        recursive: bool,
+        ctx: RequestContext,
+    ) -> Dict[str, Any]:
+        """Set explicit retrieval tags for a file or directory semantic nodes."""
+        uri = validate_viking_uri(uri)
+        viking_fs = self._ensure_initialized()
+        coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
+        return await coordinator.set_tags(
+            uri=uri,
+            tags=tags,
+            mode=mode,
+            recursive=recursive,
+            ctx=ctx,
+        )

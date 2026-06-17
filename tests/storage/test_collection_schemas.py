@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
+from openviking.server.identity import RequestContext, Role, UserIdentifier
 from openviking.storage.collection_schemas import (
     CollectionSchemas,
     TextEmbeddingHandler,
@@ -1764,6 +1765,133 @@ async def test_volcengine_backend_upsert_partial_update_creates_when_record_does
             "account_id": "acc1",
         },
     )
+
+
+@pytest.mark.asyncio
+async def test_viking_vector_index_backend_update_search_tags_updates_exact_uri_only():
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    backend = object.__new__(VikingVectorIndexBackend)
+    calls = {"fetch_by_uri": [], "upsert": []}
+
+    resource_uri = "viking://resources/demo/doc.md"
+
+    async def _fake_fetch_by_uri(uri, *, ctx):
+        calls["fetch_by_uri"].append((uri, ctx.account_id))
+        return {"id": "root-id", "uri": resource_uri, "search_tags": ["old=root"]}
+
+    async def _fake_upsert(data, *, ctx, partial_update=False):
+        del ctx, partial_update
+        calls["upsert"].append(dict(data))
+        return data["id"]
+
+    backend.fetch_by_uri = _fake_fetch_by_uri
+    backend.upsert = _fake_upsert
+
+    updated = await backend.update_search_tags(
+        resource_uri,
+        ["team=search"],
+        mode="append",
+        ctx=ctx,
+    )
+
+    assert updated is True
+    assert calls["fetch_by_uri"] == [(resource_uri, ctx.account_id)]
+    assert calls["upsert"] == [
+        {"id": "root-id", "uri": resource_uri, "search_tags": ["old=root", "team=search"]}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_update_search_tags_for_leaf_uri_queries_exact_uri_only(monkeypatch):
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    overview_uri = "viking://resources/demo/doc.md/.overview.md"
+    calls = {"fetch_by_uri": [], "upsert": []}
+
+    backend = VikingVectorIndexBackend.__new__(VikingVectorIndexBackend)
+
+    async def _fake_fetch_by_uri(uri, *, ctx):
+        calls["fetch_by_uri"].append((uri, ctx.account_id))
+        assert uri == overview_uri
+        return {"id": "overview-id", "uri": overview_uri, "search_tags": ["existing=1"]}
+
+    async def _fake_upsert(data, *, ctx, partial_update=False):
+        del ctx, partial_update
+        calls["upsert"].append(dict(data))
+        return data["id"]
+
+    backend.fetch_by_uri = _fake_fetch_by_uri
+    backend.upsert = _fake_upsert
+
+    updated = await backend.update_search_tags(
+        overview_uri,
+        ["team=search"],
+        mode="append",
+        ctx=ctx,
+    )
+
+    assert updated is True
+    assert calls["fetch_by_uri"] == [(overview_uri, ctx.account_id)]
+    assert calls["upsert"] == [
+        {"id": "overview-id", "uri": overview_uri, "search_tags": ["existing=1", "team=search"]}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_update_directory_search_tags_queries_directory_uri_with_levels_only():
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    directory_uri = "viking://resources/demo/doc.md"
+    calls = {"filter": [], "upsert": []}
+
+    backend = VikingVectorIndexBackend.__new__(VikingVectorIndexBackend)
+
+    async def _fake_filter(*, filter, limit, output_fields, ctx):
+        calls["filter"].append(
+            {
+                "filter": filter,
+                "limit": limit,
+                "output_fields": list(output_fields),
+                "account_id": ctx.account_id,
+            }
+        )
+        return [
+            {"id": "dir-l0", "uri": directory_uri, "level": 0, "search_tags": ["old=0"]},
+            {"id": "dir-l1", "uri": directory_uri, "level": 1, "search_tags": ["old=1"]},
+        ]
+
+    async def _fake_upsert(data, *, ctx, partial_update=False):
+        del ctx, partial_update
+        calls["upsert"].append(dict(data))
+        return data["id"]
+
+    backend.filter = _fake_filter
+    backend.upsert = _fake_upsert
+
+    updated = await backend.update_directory_search_tags(
+        directory_uri,
+        ["team=search"],
+        mode="append",
+        levels=[0, 1],
+        ctx=ctx,
+    )
+
+    assert len(updated) == 2
+    assert len(calls["filter"]) == 1
+    assert calls["filter"][0]["limit"] == 2
+    assert "id" in calls["filter"][0]["output_fields"]
+    assert calls["upsert"] == [
+        {
+            "id": "dir-l0",
+            "uri": directory_uri,
+            "level": 0,
+            "search_tags": ["old=0", "team=search"],
+        },
+        {
+            "id": "dir-l1",
+            "uri": directory_uri,
+            "level": 1,
+            "search_tags": ["old=1", "team=search"],
+        },
+    ]
 
 
 @pytest.mark.asyncio

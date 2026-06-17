@@ -17,6 +17,7 @@ from openviking.telemetry.execution import (
     run_with_telemetry,
 )
 from openviking.utils.search_filters import SearchContextTypeInput, merge_search_filter
+from openviking.utils.tags import normalize_search_tags
 from openviking_cli.client.base import BaseClient
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
@@ -41,15 +42,23 @@ def _resolve_search_filter(
     since: Optional[str],
     until: Optional[str],
     time_field: Optional[str],
+    tags: Optional[List[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Merge public retrieval filter shortcuts into the metadata filter."""
-    return merge_search_filter(
+    merged = merge_search_filter(
         filter,
         context_type=context_type,
         since=since,
         until=until,
         time_field=time_field,
     )
+    normalized_tags = normalize_search_tags(tags)
+    if not normalized_tags:
+        return merged
+    tag_filter = {"op": "must", "field": "search_tags", "conds": normalized_tags}
+    if merged:
+        return {"op": "and", "conds": [merged, tag_filter]}
+    return tag_filter
 
 
 class LocalClient(BaseClient):
@@ -316,6 +325,31 @@ class LocalClient(BaseClient):
             execution.telemetry,
         )
 
+    async def set_tags(
+        self,
+        uri: str,
+        tags: List[str],
+        mode: str = "replace",
+        recursive: bool = False,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Replace explicit retrieval tags for a file or directory."""
+        execution = await run_with_telemetry(
+            operation="content.set_tags",
+            telemetry=telemetry,
+            fn=lambda: self._service.fs.set_tags(
+                uri=uri,
+                tags=tags,
+                mode=mode,
+                recursive=recursive,
+                ctx=self._ctx,
+            ),
+        )
+        return attach_telemetry_payload(
+            execution.result,
+            execution.telemetry,
+        )
+
     # ============= Search =============
 
     async def find(
@@ -326,6 +360,7 @@ class LocalClient(BaseClient):
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
         context_type: Optional[SearchContextTypeInput] = None,
+        tags: Optional[List[str]] = None,
         telemetry: TelemetryRequest = False,
         since: Optional[str] = None,
         until: Optional[str] = None,
@@ -333,7 +368,9 @@ class LocalClient(BaseClient):
         level: Optional[List[int]] = None,
     ) -> Any:
         """Semantic search without session context."""
-        resolved_filter = _resolve_search_filter(filter, context_type, since, until, time_field)
+        resolved_filter = _resolve_search_filter(
+            filter, context_type, since, until, time_field, tags
+        )
         execution = await run_with_telemetry(
             operation="search.find",
             telemetry=telemetry,
@@ -361,6 +398,7 @@ class LocalClient(BaseClient):
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
         context_type: Optional[SearchContextTypeInput] = None,
+        tags: Optional[List[str]] = None,
         telemetry: TelemetryRequest = False,
         since: Optional[str] = None,
         until: Optional[str] = None,
@@ -368,7 +406,9 @@ class LocalClient(BaseClient):
         level: Optional[List[int]] = None,
     ) -> Any:
         """Semantic search with optional session context."""
-        resolved_filter = _resolve_search_filter(filter, context_type, since, until, time_field)
+        resolved_filter = _resolve_search_filter(
+            filter, context_type, since, until, time_field, tags
+        )
 
         async def _search():
             session = None

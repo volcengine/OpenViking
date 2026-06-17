@@ -51,6 +51,21 @@ pub async fn write(
     Ok(())
 }
 
+pub async fn set_tags(
+    client: &HttpClient,
+    uri: &str,
+    tags: Vec<String>,
+    mode: &str,
+    recursive: bool,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    // Tags are explicit k=v metadata labels; append mode replaces any existing value for the same key.
+    let result = client.set_tags(uri, tags, mode, recursive).await?;
+    crate::output::output_success(result, output_format, compact);
+    Ok(())
+}
+
 pub async fn reindex(
     client: &HttpClient,
     uri: &str,

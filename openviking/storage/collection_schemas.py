@@ -102,6 +102,7 @@ class CollectionSchemas:
                 {"FieldName": "name", "FieldType": "string"},
                 {"FieldName": "description", "FieldType": "string"},
                 {"FieldName": "tags", "FieldType": "string"},
+                {"FieldName": "search_tags", "FieldType": "list<string>"},
                 {"FieldName": "abstract", "FieldType": "string"},
                 {"FieldName": "account_id", "FieldType": "string"},
                 {"FieldName": "owner_user_id", "FieldType": "string"},
@@ -120,6 +121,7 @@ class CollectionSchemas:
                 "level",
                 "name",
                 "tags",
+                "search_tags",
                 "account_id",
                 "owner_user_id",
             ]

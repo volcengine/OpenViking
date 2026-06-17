@@ -961,6 +961,30 @@ class AsyncHTTPClient(BaseClient):
         response_data = self._handle_response_data(response)
         return self._attach_telemetry(response_data.get("result") or {}, response_data)
 
+    async def set_tags(
+        self,
+        uri: str,
+        tags: List[str],
+        mode: str = "replace",
+        recursive: bool = False,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Update explicit retrieval tags metadata for a file or directory."""
+        telemetry = self._validate_telemetry(telemetry)
+        uri = VikingURI.normalize(uri)
+        response = await self._http.post(
+            "/api/v1/content/set_tags",
+            json={
+                "uri": uri,
+                "tags": tags,
+                "mode": mode,
+                "recursive": recursive,
+                "telemetry": telemetry,
+            },
+        )
+        response_data = self._handle_response_data(response)
+        return self._attach_telemetry(response_data.get("result") or {}, response_data)
+
     # ============= Search =============
 
     async def find(
@@ -972,6 +996,7 @@ class AsyncHTTPClient(BaseClient):
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
         context_type: Optional[SearchContextTypeInput] = None,
+        tags: Optional[List[str]] = None,
         telemetry: TelemetryRequest = False,
     ) -> FindResult:
         """Semantic search without session context."""
@@ -986,6 +1011,7 @@ class AsyncHTTPClient(BaseClient):
                 "score_threshold": score_threshold,
                 "filter": filter,
                 "context_type": context_type,
+                "tags": tags,
                 "telemetry": telemetry,
             }
         )
@@ -1004,6 +1030,7 @@ class AsyncHTTPClient(BaseClient):
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
         context_type: Optional[SearchContextTypeInput] = None,
+        tags: Optional[List[str]] = None,
         telemetry: TelemetryRequest = False,
     ) -> FindResult:
         """Semantic search with optional session context."""
@@ -1020,6 +1047,7 @@ class AsyncHTTPClient(BaseClient):
                 "score_threshold": score_threshold,
                 "filter": filter,
                 "context_type": context_type,
+                "tags": tags,
                 "telemetry": telemetry,
             }
         )

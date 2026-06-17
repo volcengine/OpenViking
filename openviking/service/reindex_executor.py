@@ -1247,6 +1247,14 @@ class ReindexExecutor:
     ) -> None:
         service = get_service()
         assert service.vikingdb_manager is not None
+        merged_meta = dict(meta or {})
+        existing = await self._fetch_existing_record(uri=uri, level=int(level), ctx=ctx)
+        if (
+            existing
+            and existing.get("search_tags") is not None
+            and "search_tags" not in merged_meta
+        ):
+            merged_meta["search_tags"] = existing.get("search_tags")
 
         context = Context(
             uri=uri,
@@ -1258,7 +1266,7 @@ class ReindexExecutor:
             user=ctx.user,
             account_id=ctx.account_id,
             owner_space=owner_space_for_uri(uri, ctx),
-            meta=meta or {},
+            meta=merged_meta,
         )
         context.set_vectorize(Vectorize(text=vector_text))
         msg = EmbeddingMsgConverter.from_context(context)
