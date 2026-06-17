@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  openviking:
+    image: openviking:latest
+    environment:
+      - OV_DAEMON_ENABLED=true
+      - OV_DAEMON_WATCH_DIR=/data/claude-projects
+      - OV_DAEMON_DB_PATH=/data/daemon.db
+    volumes:
+      - ./claude-projects:/data/claude-projects
+      - ./daemon-data:/data
+    ports:
+      - "1933:1933"

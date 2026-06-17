@@ -34,6 +34,7 @@ from openviking.server.routers import (
     code_router,
     console_router,
     content_router,
+    daemon_router,
     debug_router,
     filesystem_router,
     metrics_router,
@@ -276,6 +277,33 @@ def create_app(
         task_tracker = get_task_tracker()
         task_tracker.start_cleanup_loop()
 
+        # Start Active Daemon if enabled
+        daemon_service = None
+        if config.daemon.enabled:
+            try:
+                from openviking.daemon.service import DaemonService
+                from openviking.server.config import DaemonConfig
+
+                daemon_config = config.daemon
+                if not daemon_config.enabled:
+                    daemon_config = DaemonConfig.from_env()
+
+                if daemon_config.enabled:
+                    resource_service = service.resources
+                    daemon_service = DaemonService(
+                        resource_service=resource_service,
+                        watcher_configs=daemon_config.get_effective_watchers(),
+                        db_path=daemon_config.db_path,
+                        batch_trigger_lines=daemon_config.batch_trigger_lines,
+                        batch_trigger_seconds=daemon_config.batch_trigger_seconds,
+                    )
+                    await daemon_service.start()
+                    from openviking.server.routers.daemon import set_daemon_service
+                    set_daemon_service(daemon_service)
+                    logger.info("Active Daemon started with %d watcher(s)", len(daemon_service.watchers))
+            except Exception as e:
+                logger.warning("Failed to start Active Daemon: %s", e)
+
         # Initialize tracing and OTLP log export from server.observability.
         from openviking.telemetry import tracer_module
 
@@ -289,6 +317,16 @@ def create_app(
             if service is not None:
                 await _initialize_runtime_state(app, service, config)
             yield
+
+        # Stop Active Daemon on shutdown
+        if daemon_service is not None:
+            try:
+                from openviking.server.routers.daemon import set_daemon_service
+                set_daemon_service(None)
+                await daemon_service.stop()
+                logger.info("Active Daemon stopped")
+            except Exception as e:
+                logger.warning("Failed to stop Active Daemon: %s", e)
 
         # Cleanup
         from openviking.metrics.global_api import shutdown_metrics_async
@@ -539,6 +577,7 @@ def create_app(
     app.include_router(watches_router)
     app.include_router(webdav_router)
     app.include_router(bot_router, prefix="/bot/v1")
+    app.include_router(daemon_router)
 
     # OAuth 2.1: when enabled, mount the official MCP SDK auth routes
     # (DCR / authorize / token / metadata) plus our authorize page + consent /

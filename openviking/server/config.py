@@ -3,7 +3,8 @@
 """Server configuration for OpenViking HTTP Server."""
 
 import sys
-from typing import Dict, List, Literal, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -156,6 +157,84 @@ class ToolOutputExternalizationConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class WatcherConfig(BaseModel):
+    """Configuration for a single tool watcher."""
+
+    tool_name: str
+    watch_dir: str
+    file_pattern: str = "*.jsonl"
+    enabled: bool = True
+    batch_trigger_lines: int = Field(50, gt=0)
+    batch_trigger_seconds: int = Field(300, gt=0)
+    extra: Dict[str, Any] = Field(default_factory=dict)
+
+    model_config = {"extra": "forbid"}
+
+
+class DaemonConfig(BaseModel):
+    """Configuration for OpenViking Active Daemon."""
+
+    enabled: bool = False
+    db_path: Optional[str] = None
+    watchers: List[WatcherConfig] = Field(default_factory=list)
+
+    # Backward-compatible deprecated fields
+    watch_dir: Optional[str] = None
+    batch_trigger_lines: int = Field(50, gt=0)
+    batch_trigger_seconds: int = Field(300, gt=0)
+
+    model_config = {"extra": "forbid"}
+
+    def get_effective_watchers(self) -> List[WatcherConfig]:
+        """
+        Return list of enabled watchers.
+        If watchers list is empty but watch_dir is set, create a single claude_code watcher
+        for backward compatibility.
+        """
+        if self.watchers:
+            return [w for w in self.watchers if w.enabled]
+        elif self.watch_dir:
+            return [WatcherConfig(
+                tool_name="claude_code",
+                watch_dir=self.watch_dir,
+                batch_trigger_lines=self.batch_trigger_lines,
+                batch_trigger_seconds=self.batch_trigger_seconds,
+            )]
+        else:
+            return [WatcherConfig(
+                tool_name="claude_code",
+                watch_dir=str(Path.home() / ".claude" / "projects"),
+                batch_trigger_lines=self.batch_trigger_lines,
+                batch_trigger_seconds=self.batch_trigger_seconds,
+            )]
+
+    @classmethod
+    def from_env(cls) -> "DaemonConfig":
+        """Load configuration from OV_DAEMON_* environment variables."""
+        import os
+        import json as json_lib
+
+        enabled = os.getenv("OV_DAEMON_ENABLED", "false").lower() == "true"
+        watchers_json = os.getenv("OV_DAEMON_WATCHERS")
+
+        watchers = []
+        if watchers_json:
+            try:
+                raw = json_lib.loads(watchers_json)
+                watchers = [WatcherConfig(**w) for w in raw]
+            except (json_lib.JSONDecodeError, ValueError):
+                pass
+
+        return cls(
+            enabled=enabled,
+            watch_dir=os.getenv("OV_DAEMON_WATCH_DIR"),
+            db_path=os.getenv("OV_DAEMON_DB_PATH"),
+            batch_trigger_lines=int(os.getenv("OV_DAEMON_BATCH_LINES", "50")),
+            batch_trigger_seconds=int(os.getenv("OV_DAEMON_BATCH_SECONDS", "300")),
+            watchers=watchers,
+        )
+
+
 class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 1933
@@ -180,6 +259,7 @@ class ServerConfig(BaseModel):
     tool_output_externalization: ToolOutputExternalizationConfig = Field(
         default_factory=ToolOutputExternalizationConfig
     )
+    daemon: DaemonConfig = Field(default_factory=DaemonConfig)
 
     model_config = {"extra": "forbid"}
 

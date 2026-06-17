@@ -298,6 +298,21 @@ const zhCN = {
     },
     usageDisabled: 'Usage/Audit 未初始化，暂无实时统计。',
   },
+  daemon: {
+    status: '主动守护进程',
+    enabled: '已启用',
+    disabled: '已禁用',
+    running: '运行中',
+    stopped: '已停止',
+    watchDir: '监听目录',
+    batchLines: '批处理行数',
+    batchSeconds: '批处理间隔(秒)',
+    cursorCount: '追踪文件数',
+    lastFlush: '上次刷新',
+    watcherCount: '个监听器运行中',
+    activeWatchers: '活跃监听器',
+    availableTools: '可用工具',
+  },
   operations: {
     page: {
       placeholder: '运维面板能力尚未接入。',
