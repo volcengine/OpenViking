@@ -42,9 +42,7 @@ class _FakeVikingFS:
 
     def __init__(self, tree: Dict[str, List[Dict[str, Any]]], file_contents: Dict[str, str]):
         self._tree = {self._norm(k): v for k, v in tree.items()}
-        self._file_contents: Dict[str, str] = {
-            self._norm(k): v for k, v in file_contents.items()
-        }
+        self._file_contents: Dict[str, str] = {self._norm(k): v for k, v in file_contents.items()}
         self._mod_times: Dict[str, str] = {}
         self.writes: List[tuple] = []
 

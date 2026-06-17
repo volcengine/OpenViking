@@ -341,11 +341,7 @@ class VikingClient:
             uris.append(self._memory_target_uri(None))
 
         normalized_peer_ids = self._dedupe_strings(
-            [
-                pid
-                for pid in (self._peer_id(peer_id) for peer_id in (peer_ids or []))
-                if pid
-            ]
+            [pid for pid in (self._peer_id(peer_id) for peer_id in (peer_ids or [])) if pid]
         )
         for peer_id in normalized_peer_ids:
             try:
@@ -378,11 +374,7 @@ class VikingClient:
             [str(user_id).strip() for user_id in (user_ids or []) if str(user_id).strip()]
         )
         normalized_peer_ids = self._dedupe_strings(
-            [
-                pid
-                for pid in (self._peer_id(peer_id) for peer_id in (peer_ids or []))
-                if pid
-            ]
+            [pid for pid in (self._peer_id(peer_id) for peer_id in (peer_ids or [])) if pid]
         )
         effective_owner_user_id = self._effective_user_id(owner_user_id) if owner_user_id else None
 
@@ -703,18 +695,14 @@ class VikingClient:
         if peer_id:
             peer_values.append(peer_id)
         normalized_peer_ids = self._dedupe_strings(
-            [
-                pid
-                for pid in (self._peer_id(peer_value) for peer_value in peer_values)
-                if pid
-            ]
+            [pid for pid in (self._peer_id(peer_value) for peer_value in peer_values) if pid]
         )
         effective_owner_user_id = self._effective_user_id(owner_user_id) if owner_user_id else None
 
         user_ids_to_check = self._dedupe_strings(
             [
                 *normalized_user_ids,
-                *( [effective_owner_user_id] if effective_owner_user_id else [] ),
+                *([effective_owner_user_id] if effective_owner_user_id else []),
             ]
         )
 

@@ -625,9 +625,7 @@ class SemanticDagExecutor:
                         self._viking_fs, parent_uri, self._ctx
                     )
                 except Exception as e:
-                    logger.debug(
-                        "failed to load embedding cache for %s: %s", parent_uri, e
-                    )
+                    logger.debug("failed to load embedding cache for %s: %s", parent_uri, e)
                     self._embedding_cache[parent_uri] = {}
         return self._embedding_cache[parent_uri]
 
@@ -644,15 +642,11 @@ class SemanticDagExecutor:
                         file_uris, self._ctx
                     )
                 except Exception as e:
-                    logger.debug(
-                        "failed to probe vector backend for %s: %s", parent_uri, e
-                    )
+                    logger.debug("failed to probe vector backend for %s: %s", parent_uri, e)
                     self._embedding_vectors_present[parent_uri] = {u: False for u in file_uris}
         return self._embedding_vectors_present[parent_uri]
 
-    async def _check_embedding_cache_hit(
-        self, parent_uri: str, file_path: str
-    ) -> Optional[str]:
+    async def _check_embedding_cache_hit(self, parent_uri: str, file_path: str) -> Optional[str]:
         """Return the cached content hash if it still matches and vectors exist.
 
         ``None`` means: cache miss, stale, or vectors absent — caller must embed.
@@ -665,9 +659,7 @@ class SemanticDagExecutor:
         cached_key = entry.get("content_hash")
         if not cached_key:
             return None
-        current_key = await compute_embedding_cache_key(
-            self._viking_fs, file_path, self._ctx
-        )
+        current_key = await compute_embedding_cache_key(self._viking_fs, file_path, self._ctx)
         if not current_key or current_key != cached_key:
             return None
         presence = await self._vectors_present_for_dir(parent_uri)
@@ -790,9 +782,7 @@ class SemanticDagExecutor:
                         # or "overview not generated" fallback). Consult the
                         # .embedding_cache.json sidecar so we don't pointlessly
                         # re-embed identical content (issue #2383).
-                        cache_hit = await self._check_embedding_cache_hit(
-                            parent_uri, file_path
-                        )
+                        cache_hit = await self._check_embedding_cache_hit(parent_uri, file_path)
                         if cache_hit is not None:
                             need_vectorize = False
                         else:
@@ -825,13 +815,9 @@ class SemanticDagExecutor:
                     use_summary=use_summary,
                 )
                 await self._add_vectorize_task(task)
-                await self._record_embedding_cache_entry(
-                    parent_uri, file_path, skipped=False
-                )
+                await self._record_embedding_cache_entry(parent_uri, file_path, skipped=False)
             else:
-                await self._record_embedding_cache_entry(
-                    parent_uri, file_path, skipped=True
-                )
+                await self._record_embedding_cache_entry(parent_uri, file_path, skipped=True)
         except Exception as e:
             logger.error(f"Failed to schedule vectorization for {file_path}: {e}", exc_info=True)
         await self._on_file_done(parent_uri, file_path, summary_dict)
