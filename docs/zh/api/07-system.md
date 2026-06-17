@@ -2,6 +2,33 @@
 
 OpenViking 提供系统健康检查、可观测性和调试 API，用于监控各组件状态。
 
+## Go SDK 快速参考
+
+```go
+healthy, err := client.Health(ctx)
+
+waitResult, err := client.WaitProcessed(ctx, &openviking.WaitProcessedOptions{
+    Timeout: openviking.Float64(600),
+})
+
+reindex, err := client.Reindex(ctx, "viking://resources/docs", &openviking.ReindexOptions{
+    Mode: "vectors_only",
+    Wait: true,
+})
+
+consistency, err := client.CheckConsistency(ctx, "viking://resources/docs")
+system, err := client.GetStatus(ctx)
+queue, err := client.QueueStatus(ctx)
+vikingdb, err := client.VikingDBStatus(ctx)
+models, err := client.ModelsStatus(ctx)
+observerHealthy, err := client.IsHealthy(ctx)
+
+_, _, _, _, _, _, _, _ = healthy, waitResult, reindex, consistency, system, queue, vikingdb, models
+_ = observerHealthy
+```
+
+下面文档中的 backend sync、ready、debug 和扩展 observer 端点，如果上面没有对应 Go SDK 方法，则仍按 raw HTTP/CLI 使用。
+
 ## API 参考
 
 ### health

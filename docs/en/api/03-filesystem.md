@@ -25,6 +25,45 @@ Behavior notes:
 - User-created dot-directories and dot-files remain visible unless they match one of the reserved internal filenames above.
 - When multi-write storage is enabled, files redirected to a backup are still exposed through the filesystem APIs as normal files; internal redirect and sync metadata never become visible to callers.
 
+## Go SDK Quick Reference
+
+The Go SDK exposes the same filesystem and content operations as the Python HTTP
+client. All methods accept `context.Context`.
+
+```go
+client, err := openviking.NewClient(openviking.Config{
+    BaseURL: "http://localhost:1933",
+    APIKey:  "your-key",
+})
+if err != nil {
+    log.Fatal(err)
+}
+
+entries, err := client.List(ctx, "viking://resources/docs", &openviking.ListOptions{
+    Recursive: true,
+    Output:    "original",
+})
+
+tree, err := client.Tree(ctx, "viking://resources/docs", nil)
+stat, err := client.Stat(ctx, "viking://resources/docs/api.md")
+
+err = client.Mkdir(ctx, "viking://resources/docs/drafts", "Draft docs")
+err = client.Move(ctx, "viking://resources/docs/old.md", "viking://resources/docs/new.md")
+err = client.Remove(ctx, "viking://resources/docs/old.md", &openviking.RemoveOptions{
+    Wait: true,
+})
+
+abstract, err := client.Abstract(ctx, "viking://resources/docs")
+overview, err := client.Overview(ctx, "viking://resources/docs")
+content, err := client.Read(ctx, "viking://resources/docs/api.md", 0, -1)
+writeResult, err := client.Write(ctx, "viking://resources/docs/api.md", content, &openviking.WriteOptions{
+    Mode: "replace",
+    Wait: true,
+})
+
+_, _, _, _, _, _ = entries, tree, stat, abstract, overview, writeResult
+```
+
 ## API Reference
 
 ### abstract()

@@ -55,6 +55,34 @@ Configure `root_api_key` in `~/.openviking/ovcli.conf`:
 - `--sudo` only works with the commands above - using it with regular data commands will error
 - Must have `root_api_key` configured to use `--sudo`
 
+## Go SDK Quick Reference
+
+Use a client configured with a ROOT-capable API key for ROOT-only operations.
+
+```go
+rootClient, err := openviking.NewClient(openviking.Config{
+    BaseURL: "http://localhost:1933",
+    APIKey:  "root-key",
+})
+if err != nil {
+    log.Fatal(err)
+}
+
+account, err := rootClient.AdminCreateAccount(ctx, "acme", "alice")
+accounts, err := rootClient.AdminListAccounts(ctx)
+user, err := rootClient.AdminRegisterUser(ctx, "acme", "bob", "user")
+users, err := rootClient.AdminListUsers(ctx, "acme")
+role, err := rootClient.AdminSetRole(ctx, "acme", "bob", "admin")
+key, err := rootClient.AdminRegenerateKey(ctx, "acme", "bob")
+removed, err := rootClient.AdminRemoveUser(ctx, "acme", "bob")
+deleted, err := rootClient.AdminDeleteAccount(ctx, "acme")
+migration, err := rootClient.AdminMigrate(ctx, &openviking.AdminMigrateOptions{
+    Cleanup: false,
+})
+
+_, _, _, _, _, _, _, _, _ = account, accounts, user, users, role, key, removed, deleted, migration
+```
+
 ## API Reference
 
 ### create_account

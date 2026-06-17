@@ -309,6 +309,41 @@ client.add_resource(
 )
 ```
 
+**Go SDK**
+
+```go
+client, err := openviking.NewClient(openviking.Config{
+    BaseURL: "http://localhost:1933",
+    APIKey:  "your-key",
+})
+if err != nil {
+    log.Fatal(err)
+}
+
+result, err := client.AddResource(ctx, "./documents/guide.md", &openviking.AddResourceOptions{
+    Reason: "User guide documentation",
+    Wait:   true,
+})
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println(result["root_uri"])
+
+result, err = client.AddResource(ctx, "https://example.com/api-docs.md", &openviking.AddResourceOptions{
+    To:     "viking://resources/external/api-docs.md",
+    Reason: "External API docs",
+})
+
+result, err = client.AddResource(ctx, "https://example.feishu.cn/docx/doc_token", &openviking.AddResourceOptions{
+    To:            "viking://resources/feishu/doc",
+    WatchInterval: 1440,
+    Args: map[string]any{
+        "feishu_access_token":  "u-...",
+        "feishu_refresh_token": "r-...",
+    },
+})
+```
+
 **CLI**
 
 ```bash
@@ -502,6 +537,34 @@ curl -X DELETE "http://localhost:1933/api/v1/watches?to_uri=viking://resources/g
   -H "X-API-Key: your-key"
 ```
 
+**Python SDK**
+
+```python
+watches = client.list_watches(active_only=True)
+client.update_watch(to_uri="viking://resources/guide.md", is_active=False)
+client.trigger_watch(to_uri="viking://resources/guide.md")
+client.delete_watch(to_uri="viking://resources/guide.md")
+```
+
+**Go SDK**
+
+```go
+watches, err := client.ListWatches(ctx, &openviking.ListWatchesOptions{
+    ActiveOnly: true,
+})
+updated, err := client.UpdateWatch(ctx, openviking.UpdateWatchOptions{
+    ToURI:    "viking://resources/guide.md",
+    IsActive: openviking.Bool(false),
+})
+triggered, err := client.TriggerWatch(ctx, openviking.WatchRef{
+    ToURI: "viking://resources/guide.md",
+})
+deleted, err := client.DeleteWatch(ctx, openviking.WatchRef{
+    ToURI: "viking://resources/guide.md",
+})
+_, _, _, _ = watches, updated, triggered, deleted
+```
+
 **CLI**（`ov task watch` 子命令）
 
 ```bash
@@ -624,6 +687,18 @@ result = client.add_skill("./skills/my-skill.json")
 
 # 等待处理完成
 client.wait_processed()
+```
+
+**Go SDK**
+
+```go
+result, err := client.AddSkill(ctx, "./skills/my-skill.json", &openviking.AddSkillOptions{
+    Wait: true,
+})
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println(result["uri"])
 ```
 
 **CLI**
@@ -760,6 +835,12 @@ curl -X POST http://localhost:1933/api/v1/resources/temp_upload \
 **Python SDK**
 
 Python SDK 中的 `add_resource`、`add_skill` 等接口会自动处理本地文件上传，无需手动调用此接口。在 Python HTTP client 模式下，如果要启用分布式 shared 临时上传，可以在 `ovcli.conf` 中设置 `upload.mode = "shared"`。
+
+**Go SDK**
+
+`client.AddResource`、`client.AddSkill`、`client.ImportOVPack` 和
+`client.RestoreOVPack` 会为本地文件自动调用 `temp_upload`。如需 shared 临时上传，设置
+`openviking.Config{UploadMode: "shared"}`。
 
 **CLI**
 

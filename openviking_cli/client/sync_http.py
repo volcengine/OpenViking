@@ -190,6 +190,23 @@ class SyncHTTPClient:
         """Query background task status."""
         return run_async(self._async_client.get_task(task_id))
 
+    def list_tasks(
+        self,
+        task_type: Optional[str] = None,
+        status: Optional[str] = None,
+        resource_id: Optional[str] = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """List background tasks visible to the current caller."""
+        return run_async(
+            self._async_client.list_tasks(
+                task_type=task_type,
+                status=status,
+                resource_id=resource_id,
+                limit=limit,
+            )
+        )
+
     def reindex(
         self,
         uri: str,
@@ -275,6 +292,150 @@ class SyncHTTPClient:
         return run_async(
             self._async_client.add_skill(data, wait=wait, timeout=timeout, telemetry=telemetry)
         )
+
+    # ============= Skill Management =============
+
+    def list_skills(self, node_limit: int = 1000) -> Dict[str, Any]:
+        """List installed agent skills."""
+        return run_async(self._async_client.list_skills(node_limit=node_limit))
+
+    def find_skills(
+        self,
+        query: str,
+        limit: int = 10,
+        score_threshold: Optional[float] = None,
+        level: Optional[List[int]] = None,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Find installed agent skills by semantic search."""
+        return run_async(
+            self._async_client.find_skills(
+                query=query,
+                limit=limit,
+                score_threshold=score_threshold,
+                level=level,
+                telemetry=telemetry,
+            )
+        )
+
+    def validate_skill(
+        self,
+        data: Any,
+        strict: bool = False,
+        source_path: Optional[str] = None,
+        skill_dir_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Validate a skill payload without installing it."""
+        return run_async(
+            self._async_client.validate_skill(
+                data=data,
+                strict=strict,
+                source_path=source_path,
+                skill_dir_name=skill_dir_name,
+            )
+        )
+
+    def get_skill(
+        self,
+        skill_name: str,
+        include_content: Optional[bool] = None,
+        include_files: bool = True,
+        include_source: bool = False,
+        level: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Get one installed agent skill."""
+        return run_async(
+            self._async_client.get_skill(
+                skill_name,
+                include_content=include_content,
+                include_files=include_files,
+                include_source=include_source,
+                level=level,
+            )
+        )
+
+    def update_skill(
+        self,
+        skill_name: str,
+        data: Any,
+        wait: bool = False,
+        timeout: Optional[float] = None,
+        source_metadata: Optional[Dict[str, Any]] = None,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Replace an installed agent skill."""
+        return run_async(
+            self._async_client.update_skill(
+                skill_name,
+                data,
+                wait=wait,
+                timeout=timeout,
+                source_metadata=source_metadata,
+                telemetry=telemetry,
+            )
+        )
+
+    def delete_skill(self, skill_name: str) -> Dict[str, Any]:
+        """Remove an installed agent skill."""
+        return run_async(self._async_client.delete_skill(skill_name))
+
+    # ============= Watch Management =============
+
+    def list_watches(
+        self,
+        active_only: bool = False,
+        to_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """List watch tasks, or get one by target URI."""
+        return run_async(self._async_client.list_watches(active_only=active_only, to_uri=to_uri))
+
+    def get_watch(
+        self,
+        task_id: str,
+        to_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Get one watch task by task ID, optionally cross-checking the target URI."""
+        return run_async(self._async_client.get_watch(task_id, to_uri=to_uri))
+
+    def update_watch(
+        self,
+        task_id: Optional[str] = None,
+        *,
+        to_uri: Optional[str] = None,
+        watch_interval: Optional[float] = None,
+        is_active: Optional[bool] = None,
+        reason: Optional[str] = None,
+        instruction: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Partially update a watch task by task ID or target URI."""
+        return run_async(
+            self._async_client.update_watch(
+                task_id,
+                to_uri=to_uri,
+                watch_interval=watch_interval,
+                is_active=is_active,
+                reason=reason,
+                instruction=instruction,
+            )
+        )
+
+    def delete_watch(
+        self,
+        task_id: Optional[str] = None,
+        *,
+        to_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Delete a watch task by task ID or target URI."""
+        return run_async(self._async_client.delete_watch(task_id, to_uri=to_uri))
+
+    def trigger_watch(
+        self,
+        task_id: Optional[str] = None,
+        *,
+        to_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Schedule a watch task for immediate background execution."""
+        return run_async(self._async_client.trigger_watch(task_id, to_uri=to_uri))
 
     def wait_processed(self, timeout: Optional[float] = None) -> Dict[str, Any]:
         """Wait for all processing to complete."""

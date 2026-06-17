@@ -25,6 +25,36 @@ Query → Intent Analysis (search only) → Vector Search (L0) → Rerank (L1) �
 3. **Rerank**: Re-score using content for better accuracy
 4. **Results**: Return top-k contexts
 
+## Go SDK Quick Reference
+
+```go
+findResult, err := client.Find(ctx, "how to authenticate users", &openviking.FindOptions{
+    TargetURI:   "viking://resources/docs",
+    Limit:       10,
+    ContextType: []string{"resource"},
+})
+for _, item := range findResult.Resources {
+    fmt.Println(item.URI, item.Score)
+}
+
+searchResult, err := client.Search(ctx, "what did we decide about auth?", &openviking.SearchOptions{
+    SessionID: "demo-session",
+    TargetURI: []string{
+        "viking://resources/docs",
+        "viking://user/memories",
+    },
+    Limit: 5,
+})
+
+grepResult, err := client.Grep(ctx, "viking://resources/docs", "OPENVIKING_API_KEY", &openviking.GrepOptions{
+    CaseInsensitive: true,
+})
+
+globResult, err := client.Glob(ctx, "**/*.md", "viking://resources/docs")
+
+_, _, _ = searchResult, grepResult, globResult
+```
+
 ## API Reference
 
 ### find()

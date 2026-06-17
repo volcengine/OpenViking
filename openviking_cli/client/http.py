@@ -558,6 +558,231 @@ class AsyncHTTPClient(BaseClient):
         response_data = self._handle_response_data(response)
         return self._attach_telemetry(response_data.get("result"), response_data)
 
+    # ============= Skill Management =============
+
+    async def list_skills(self, node_limit: int = 1000) -> Dict[str, Any]:
+        """List installed agent skills."""
+        response = await self._http.get(
+            "/api/v1/skills",
+            params={"node_limit": node_limit},
+        )
+        return self._handle_response(response)
+
+    async def find_skills(
+        self,
+        query: str,
+        limit: int = 10,
+        score_threshold: Optional[float] = None,
+        level: Optional[List[int]] = None,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Find installed agent skills by semantic search."""
+        telemetry = self._validate_telemetry(telemetry)
+        payload: Dict[str, Any] = {
+            "query": query,
+            "limit": limit,
+            "score_threshold": score_threshold,
+            "level": level,
+            "telemetry": telemetry,
+        }
+        response = await self._http.post("/api/v1/skills/find", json=payload)
+        response_data = self._handle_response_data(response)
+        return self._attach_telemetry(response_data.get("result"), response_data)
+
+    async def validate_skill(
+        self,
+        data: Any,
+        strict: bool = False,
+        source_path: Optional[str] = None,
+        skill_dir_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Validate a skill payload without installing it."""
+        payload: Dict[str, Any] = {"data": data, "strict": strict}
+        if source_path is not None:
+            payload["source_path"] = source_path
+        if skill_dir_name is not None:
+            payload["skill_dir_name"] = skill_dir_name
+        response = await self._http.post("/api/v1/skills/validate", json=payload)
+        return self._handle_response(response)
+
+    async def get_skill(
+        self,
+        skill_name: str,
+        include_content: Optional[bool] = None,
+        include_files: bool = True,
+        include_source: bool = False,
+        level: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Get one installed agent skill."""
+        params: Dict[str, Any] = {
+            "include_files": include_files,
+            "include_source": include_source,
+        }
+        if include_content is not None:
+            params["include_content"] = include_content
+        if level is not None:
+            params["level"] = level
+        response = await self._http.get(f"/api/v1/skills/{skill_name}", params=params)
+        return self._handle_response(response)
+
+    async def update_skill(
+        self,
+        skill_name: str,
+        data: Any,
+        wait: bool = False,
+        timeout: Optional[float] = None,
+        source_metadata: Optional[Dict[str, Any]] = None,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Replace an installed agent skill."""
+        telemetry = self._validate_telemetry(telemetry)
+        request_data: Dict[str, Any] = {
+            "wait": wait,
+            "timeout": timeout,
+            "source_metadata": source_metadata,
+            "telemetry": telemetry,
+        }
+
+        if isinstance(data, str):
+            path_obj = Path(data)
+            if path_obj.exists():
+                if path_obj.is_dir():
+                    zip_path = self._zip_directory(data)
+                    try:
+                        request_data["temp_file_id"] = await self._upload_temp_file(zip_path)
+                    finally:
+                        Path(zip_path).unlink(missing_ok=True)
+                elif path_obj.is_file():
+                    request_data["temp_file_id"] = await self._upload_temp_file(data)
+                else:
+                    request_data["data"] = data
+            else:
+                request_data["data"] = data
+        else:
+            request_data["data"] = data
+
+        response = await self._http.put(
+            f"/api/v1/skills/{skill_name}",
+            json=request_data,
+        )
+        response_data = self._handle_response_data(response)
+        return self._attach_telemetry(response_data.get("result"), response_data)
+
+    async def delete_skill(self, skill_name: str) -> Dict[str, Any]:
+        """Remove an installed agent skill."""
+        response = await self._http.delete(f"/api/v1/skills/{skill_name}")
+        return self._handle_response(response)
+
+    # ============= Watch Management =============
+
+    async def list_watches(
+        self,
+        active_only: bool = False,
+        to_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """List watch tasks, or get one by target URI."""
+        params: Dict[str, Any] = {"active_only": active_only}
+        if to_uri is not None:
+            params["to_uri"] = VikingURI.normalize(to_uri)
+        response = await self._http.get("/api/v1/watches", params=params)
+        return self._handle_response(response)
+
+    async def get_watch(
+        self,
+        task_id: str,
+        to_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Get one watch task by task ID, optionally cross-checking the target URI."""
+        params = {}
+        if to_uri is not None:
+            params["to_uri"] = VikingURI.normalize(to_uri)
+        response = await self._http.get(f"/api/v1/watches/{task_id}", params=params)
+        return self._handle_response(response)
+
+    async def update_watch(
+        self,
+        task_id: Optional[str] = None,
+        *,
+        to_uri: Optional[str] = None,
+        watch_interval: Optional[float] = None,
+        is_active: Optional[bool] = None,
+        reason: Optional[str] = None,
+        instruction: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Partially update a watch task by task ID or target URI."""
+        if not task_id and not to_uri:
+            raise ValueError("Either task_id or to_uri is required")
+        payload: Dict[str, Any] = {}
+        if watch_interval is not None:
+            payload["watch_interval"] = watch_interval
+        if is_active is not None:
+            payload["is_active"] = is_active
+        if reason is not None:
+            payload["reason"] = reason
+        if instruction is not None:
+            payload["instruction"] = instruction
+        if task_id:
+            params = {}
+            if to_uri is not None:
+                params["to_uri"] = VikingURI.normalize(to_uri)
+            response = await self._http.patch(
+                f"/api/v1/watches/{task_id}",
+                params=params,
+                json=payload,
+            )
+        else:
+            response = await self._http.patch(
+                "/api/v1/watches",
+                params={"to_uri": VikingURI.normalize(to_uri)},
+                json=payload,
+            )
+        return self._handle_response(response)
+
+    async def delete_watch(
+        self,
+        task_id: Optional[str] = None,
+        *,
+        to_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Delete a watch task by task ID or target URI."""
+        if not task_id and not to_uri:
+            raise ValueError("Either task_id or to_uri is required")
+        if task_id:
+            params = {}
+            if to_uri is not None:
+                params["to_uri"] = VikingURI.normalize(to_uri)
+            response = await self._http.delete(f"/api/v1/watches/{task_id}", params=params)
+        else:
+            response = await self._http.delete(
+                "/api/v1/watches",
+                params={"to_uri": VikingURI.normalize(to_uri)},
+            )
+        return self._handle_response(response)
+
+    async def trigger_watch(
+        self,
+        task_id: Optional[str] = None,
+        *,
+        to_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Schedule a watch task for immediate background execution."""
+        if not task_id and not to_uri:
+            raise ValueError("Either task_id or to_uri is required")
+        if task_id:
+            params = {}
+            if to_uri is not None:
+                params["to_uri"] = VikingURI.normalize(to_uri)
+            response = await self._http.post(
+                f"/api/v1/watches/{task_id}/trigger",
+                params=params,
+            )
+        else:
+            response = await self._http.post(
+                "/api/v1/watches/trigger",
+                params={"to_uri": VikingURI.normalize(to_uri)},
+            )
+        return self._handle_response(response)
+
     async def wait_processed(self, timeout: Optional[float] = None) -> Dict[str, Any]:
         """Wait for all processing to complete."""
         http_timeout = timeout if timeout else 600.0
@@ -940,6 +1165,24 @@ class AsyncHTTPClient(BaseClient):
         response = await self._http.get(f"/api/v1/tasks/{task_id}")
         if response.status_code == 404:
             return None
+        return self._handle_response(response)
+
+    async def list_tasks(
+        self,
+        task_type: Optional[str] = None,
+        status: Optional[str] = None,
+        resource_id: Optional[str] = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """List background tasks visible to the current caller."""
+        params: Dict[str, Any] = {"limit": limit}
+        if task_type is not None:
+            params["task_type"] = task_type
+        if status is not None:
+            params["status"] = status
+        if resource_id is not None:
+            params["resource_id"] = resource_id
+        response = await self._http.get("/api/v1/tasks", params=params)
         return self._handle_response(response)
 
     async def commit_session(

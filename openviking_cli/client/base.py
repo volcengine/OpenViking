@@ -339,6 +339,22 @@ class BaseClient(ABC):
         """
         ...
 
+    @abstractmethod
+    async def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Query background task status."""
+        ...
+
+    @abstractmethod
+    async def list_tasks(
+        self,
+        task_type: Optional[str] = None,
+        status: Optional[str] = None,
+        resource_id: Optional[str] = None,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """List background tasks visible to the current caller."""
+        ...
+
     # ============= Pack =============
 
     @abstractmethod

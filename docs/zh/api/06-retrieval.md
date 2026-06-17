@@ -25,6 +25,36 @@ OpenViking 提供多种检索方法，包括简单的向量相似度搜索、带
 3. **重排序**：使用内容重新评分以提高准确性
 4. **结果**：返回 top-k 上下文
 
+## Go SDK 快速参考
+
+```go
+findResult, err := client.Find(ctx, "how to authenticate users", &openviking.FindOptions{
+    TargetURI:   "viking://resources/docs",
+    Limit:       10,
+    ContextType: []string{"resource"},
+})
+for _, item := range findResult.Resources {
+    fmt.Println(item.URI, item.Score)
+}
+
+searchResult, err := client.Search(ctx, "what did we decide about auth?", &openviking.SearchOptions{
+    SessionID: "demo-session",
+    TargetURI: []string{
+        "viking://resources/docs",
+        "viking://user/memories",
+    },
+    Limit: 5,
+})
+
+grepResult, err := client.Grep(ctx, "viking://resources/docs", "OPENVIKING_API_KEY", &openviking.GrepOptions{
+    CaseInsensitive: true,
+})
+
+globResult, err := client.Glob(ctx, "**/*.md", "viking://resources/docs")
+
+_, _, _ = searchResult, grepResult, globResult
+```
+
 ## API 参考
 
 ### find()

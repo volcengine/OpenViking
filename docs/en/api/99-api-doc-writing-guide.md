@@ -63,6 +63,12 @@ Explain the purpose of this API, point to the corresponding code entry, and brie
 <SDK call example>
 ```
 
+**Go SDK**
+
+```go
+<SDK call example>
+```
+
 **CLI**
 
 ```bash
@@ -125,6 +131,7 @@ Each API is organized in the following three parts:
 Provide in order:
 - HTTP API (method + path + curl example)
 - Python SDK example
+- Go SDK example, when the endpoint is part of the Go SDK surface
 - CLI example
 - Response example
 

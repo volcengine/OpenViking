@@ -55,6 +55,34 @@ Admin API 用于多租户环境下的账户和用户管理。包括工作区（a
 - `--sudo` 仅适用于上面的命令，用于普通数据命令会报错
 - 必须配置 `root_api_key` 才能使用 `--sudo`
 
+## Go SDK 快速参考
+
+执行 ROOT-only 操作时，用具备 ROOT 权限的 API key 初始化客户端。
+
+```go
+rootClient, err := openviking.NewClient(openviking.Config{
+    BaseURL: "http://localhost:1933",
+    APIKey:  "root-key",
+})
+if err != nil {
+    log.Fatal(err)
+}
+
+account, err := rootClient.AdminCreateAccount(ctx, "acme", "alice")
+accounts, err := rootClient.AdminListAccounts(ctx)
+user, err := rootClient.AdminRegisterUser(ctx, "acme", "bob", "user")
+users, err := rootClient.AdminListUsers(ctx, "acme")
+role, err := rootClient.AdminSetRole(ctx, "acme", "bob", "admin")
+key, err := rootClient.AdminRegenerateKey(ctx, "acme", "bob")
+removed, err := rootClient.AdminRemoveUser(ctx, "acme", "bob")
+deleted, err := rootClient.AdminDeleteAccount(ctx, "acme")
+migration, err := rootClient.AdminMigrate(ctx, &openviking.AdminMigrateOptions{
+    Cleanup: false,
+})
+
+_, _, _, _, _, _, _, _, _ = account, accounts, user, users, role, key, removed, deleted, migration
+```
+
 ## API 参考
 
 ### create_account

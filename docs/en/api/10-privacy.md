@@ -4,6 +4,10 @@ Privacy configs manage sensitive values by `category + target_key` (for example,
 
 Each update creates a version snapshot. You can query history and switch the active version.
 
+Privacy config endpoints are currently documented as raw HTTP/CLI operations.
+They are not part of the Go SDK v1 surface, which intentionally follows the
+existing Python HTTP client method boundary.
+
 ## Endpoint Summary
 
 | Method | Path | Description |

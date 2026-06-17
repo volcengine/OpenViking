@@ -8,6 +8,10 @@ Unlike `/api/v1/observer/*` and `/api/v1/stats/*`, `/metrics` is intended for:
 - Prometheus exposition text rather than the standard JSON API wrapper
 - runtime health and service quality signals rather than business analytics
 
+The Go SDK does not wrap `/metrics` because it is a Prometheus scrape endpoint,
+not a standard OpenViking JSON API. Use Prometheus, Grafana Agent, or Go's
+standard `net/http` package to scrape it directly.
+
 ## API Reference
 
 ### metrics()
