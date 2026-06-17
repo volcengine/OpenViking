@@ -8,5 +8,6 @@ import openvikingTooManyAgents from './openviking-too-many-agents/index.jsx';
 import openvikingContextDatabaseArchitecture from './openviking-context-database-architecture/index.jsx';
 import openvikingContextDatabase from './openviking-context-database/index.jsx';
 import vikingbotMemoryGame from './vikingbot-memory-game/index.jsx';
+import openvikingAgentMemoryDesign from './openviking-agent-memory-design/index.jsx';
 
-[openvikingUserPeerModel, openvikingBenchmarkResults, openvikingTooManyAgents, vikingbotMemoryGame, openvikingCodingAgent, agentRuntime, openvikingContextDatabaseArchitecture, openvikingContextDatabase].forEach(registerPost);
+[openvikingAgentMemoryDesign, openvikingUserPeerModel, openvikingBenchmarkResults, openvikingTooManyAgents, vikingbotMemoryGame, openvikingCodingAgent, agentRuntime, openvikingContextDatabaseArchitecture, openvikingContextDatabase].forEach(registerPost);
