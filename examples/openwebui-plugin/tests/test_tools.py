@@ -52,7 +52,9 @@ async def test_ov_search_calls_find(client: httpx.AsyncClient) -> None:
             json={
                 "status": "ok",
                 "result": {
-                    "memories": [{"uri": "viking://user/memories/a.md", "score": 0.9, "snippet": "hi"}],
+                    "memories": [
+                        {"uri": "viking://user/memories/a.md", "score": 0.9, "snippet": "hi"}
+                    ],
                     "resources": [],
                 },
             },
@@ -135,7 +137,9 @@ async def test_ov_read_resource_calls_content_read(client: httpx.AsyncClient) ->
 @respx.mock
 async def test_ov_add_resource_posts_resources(client: httpx.AsyncClient) -> None:
     route = respx.post("http://ov.test/api/v1/resources").mock(
-        return_value=httpx.Response(200, json={"status": "ok", "result": {"root_uri": "viking://x"}})
+        return_value=httpx.Response(
+            200, json={"status": "ok", "result": {"root_uri": "viking://x"}}
+        )
     )
     resp = await client.post(
         "/tools/ov_add_resource",
