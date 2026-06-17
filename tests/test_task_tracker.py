@@ -15,15 +15,12 @@ from openviking.service.task_store import PersistentTaskStore
 from openviking.service.task_tracker import (
     TaskStatus,
     TaskTracker,
-    _build_default_task_tracker,
     _sanitize_error,
     get_task_tracker,
     reset_task_tracker,
     set_task_tracker,
 )
-from openviking.utils.agfs_utils import RagfsBindingConfig
 from openviking_cli.session.user_id import UserIdentifier
-from openviking_cli.utils.config import AGFSConfig
 
 pytestmark = pytest.mark.asyncio
 
@@ -430,60 +427,11 @@ async def test_singleton_reset():
     assert t1 is not t2
 
 
-async def test_build_default_task_tracker_uses_runtime_encryption_binding(monkeypatch):
-    captured = {}
-    fake_agfs = object()
-
-    class _FakeStorage:
-        def __init__(self):
-            self.agfs = AGFSConfig(backend="memory")
-
-        def build_task_tracker(self, agfs):
-            captured["build_arg"] = agfs
-            return "fake-tracker"
-
-    class _FakeConfig:
-        def __init__(self):
-            self.storage = _FakeStorage()
-
-        def to_dict(self):
-            return {"encryption": {"enabled": True, "provider": "local"}}
-
-    class _FakeProvider:
-        async def get_root_key(self):
-            return b"t" * 32
-
-    class _FakeEncryptor:
-        provider_type = 9
-
-        def __init__(self):
-            self.provider = _FakeProvider()
-
-    async def _bootstrap(config):
-        assert config["encryption"]["enabled"] is True
-        return _FakeEncryptor()
-
-    def _fake_create_agfs_client(config):
-        captured["binding_config"] = config
-        return fake_agfs
-
-    monkeypatch.setattr("openviking.crypto.config.bootstrap_encryption", _bootstrap)
-    monkeypatch.setattr("openviking.utils.agfs_utils.create_agfs_client", _fake_create_agfs_client)
-    monkeypatch.setattr(
-        "openviking_cli.utils.config.get_openviking_config",
-        lambda: _FakeConfig(),
-    )
-
-    tracker = _build_default_task_tracker()
-
-    assert tracker == "fake-tracker"
-    assert captured["build_arg"] is fake_agfs
-    assert isinstance(captured["binding_config"], RagfsBindingConfig)
-    assert isinstance(captured["binding_config"].agfs, AGFSConfig)
-    assert captured["binding_config"].to_binding_dict()["encryption"] == {
-        "root_key": b"t" * 32,
-        "provider_type": 9,
-    }
+async def test_get_task_tracker_requires_service_initialization(caplog):
+    caplog.set_level("ERROR")
+    with pytest.raises(RuntimeError, match="TaskTracker not initialized"):
+        get_task_tracker()
+    assert "refusing to create a separate AGFS client" in caplog.text
 
 
 async def test_persistent_store_cross_tracker_visibility():

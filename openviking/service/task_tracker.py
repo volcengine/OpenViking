@@ -74,13 +74,20 @@ _init_lock = threading.Lock()
 
 
 def get_task_tracker() -> "TaskTracker":
-    """Get or create the global persistent TaskTracker singleton."""
-    global _instance
-    if _instance is None:
-        with _init_lock:
-            if _instance is None:
-                _instance = _build_default_task_tracker()
-    return _instance
+    """Get the global TaskTracker singleton installed by service storage initialization."""
+    with _init_lock:
+        if _instance is None:
+            logger.error(
+                "TaskTracker accessed before service storage initialization; refusing to create "
+                "a separate AGFS client. Ensure OpenVikingService installs the shared tracker "
+                "with set_task_tracker() before task APIs are used.",
+                stack_info=True,
+            )
+            raise RuntimeError(
+                "TaskTracker not initialized. OpenVikingService must install the shared "
+                "tracker with set_task_tracker() during storage initialization."
+            )
+        return _instance
 
 
 def set_task_tracker(tracker: "TaskTracker") -> None:
@@ -519,14 +526,3 @@ class TaskTracker:
         for t in tasks:
             grouped[t.task_type][t.status.value] += 1
         return {k: dict(v) for k, v in grouped.items()}
-
-
-def _build_default_task_tracker() -> TaskTracker:
-    """Build the default persistent tracker from the active storage config."""
-    from openviking.utils.agfs_utils import build_runtime_ragfs_binding_config, create_agfs_client
-    from openviking_cli.utils.config import get_openviking_config
-
-    config = get_openviking_config()
-    binding_config, _ = build_runtime_ragfs_binding_config(config)
-    agfs = create_agfs_client(binding_config)
-    return config.storage.build_task_tracker(agfs)
