@@ -22,6 +22,7 @@ _BACKEND_MODULES = {
 }
 _X86_DISPLAY_ORDER = ("x86_sse3", "x86_avx2", "x86_avx512")
 _X86_PRIORITY = ("x86_avx512", "x86_avx2", "x86_sse3")
+_WINDOWS_X86_PRIORITY = ("x86_avx2", "x86_sse3")
 _REQUEST_ALIASES = {
     "sse3": "x86_sse3",
     "avx2": "x86_avx2",
@@ -109,7 +110,8 @@ def _select_variant() -> tuple[str | None, tuple[str, ...], str | None]:
         return "native", available, None
 
     supported_x86 = _supported_x86_variants()
-    for variant in _X86_PRIORITY:
+    priority = _WINDOWS_X86_PRIORITY if sys.platform == "win32" else _X86_PRIORITY
+    for variant in priority:
         if variant in available and variant in supported_x86:
             return variant, available, None
 
