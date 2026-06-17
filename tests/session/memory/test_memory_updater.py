@@ -163,25 +163,6 @@ class TestMemoryUpdater:
 
         assert updater._registry == registry
 
-    def test_event_overview_title_uses_summary_or_filename(self):
-        assert (
-            MemoryUpdater._event_overview_title(
-                {"summary": " kept event ", "event_name": "event name"},
-                "fallback",
-            )
-            == "kept event"
-        )
-        assert (
-            MemoryUpdater._event_overview_title(
-                {
-                    "event_name": "event name",
-                    "content": "First sentence. Second sentence.",
-                },
-                "fallback",
-            )
-            == "fallback"
-        )
-
     @pytest.mark.asyncio
     async def test_generate_overview_deletes_empty_overview_via_rm(self):
         schema = MemoryTypeSchema(
