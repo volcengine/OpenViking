@@ -8,24 +8,13 @@
  * in OpenViking and the OV session to be committed (so the extractor runs on
  * the full pre-compact transcript).
  *
- * Hybrid behavior (compat-first):
- *   - Small backlog (newTurns.length <= captureMaxTurnsPerStop): inline path
- *     1. Append every pending turn to the live OV session.
- *     2. Check OV session size. If it exceeds the commit budget, spawn
- *        `commit-session.mjs` and rotate `ovSessionId` to a
- *        `cx-...-part-<ts>` so the inline path doesn't stall codex.
- *     3. Otherwise inline `/commit`. On success clear `state.ovSessionId`.
- *
- *   - Large backlog (newTurns.length > captureMaxTurnsPerStop): snapshot+async
- *     1. Hook synchronously `fs.copyFile`s `transcript_path` to a snapshot
- *        under `~/.openviking/codex-plugin-snapshots/<id>-<ts>.jsonl`
- *        (~10ms regardless of size — decouples the worker from codex's
- *        transcript rewrite).
- *     2. Hook spawns detached `capture-transcript-worker.mjs` against the
- *        snapshot with `--start-index <capturedTurnCount> --end-index <total>
- *        --cleanup-snapshot`. Worker appends every unappended turn and
- *        commits.
- *     3. Hook clears `state.ovSessionId` and bumps `capturedTurnCount = total`.
+ * Inline behavior:
+ *   1. Append every pending turn to the live OV session in batches via
+ *      `/messages/batch` (atomic per chunk, capped by `captureBatchSize`).
+ *   2. Check OV session size. If it exceeds the commit budget, spawn
+ *      `commit-session.mjs` and rotate `ovSessionId` to a `cx-...-part-<ts>`
+ *      so the hook returns quickly without blocking codex.
+ *   3. Otherwise inline `/commit`. On success clear `state.ovSessionId`.
  *
  * The post-compact Stop re-derives `cx-<codex-session-id>` and starts a new
  * live session on the server (POST /messages auto-creates).
@@ -36,18 +25,10 @@
  * Inline-path failure: state preserved; the next PreCompact or SessionStart
  * commit picks up the still-open server session.
  *
- * Async-path failure (worker crash, OV unreachable): next Stop sees
- * `state.ovSessionId === null`, lazily re-derives `cx-<codex-session-id>`,
- * and continues appending; the next commit picks up the still-open server
- * session. Snapshot files for failed workers stay on disk under
- * `~/.openviking/codex-plugin-snapshots/` for diagnosis.
- *
  * PreCompact output schema accepts {} as a no-op.
  */
 
-import { copyFile, mkdir, readFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { readFile } from "node:fs/promises";
 import {
   extractTextFromPayload,
   isAssistantSideCaptureRole,
@@ -66,9 +47,6 @@ import {
 
 const cfg = loadConfig();
 const { log, logError } = createLogger("pre-compact");
-
-const SNAPSHOT_DIR = process.env.OPENVIKING_CODEX_SNAPSHOT_DIR
-  || join(homedir(), ".openviking", "codex-plugin-snapshots");
 
 function output(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
@@ -102,13 +80,25 @@ async function fetchJSON(path, init = {}) {
   }
 }
 
-async function appendOneTurn(ovSessionId, turn) {
-  const body = { role: turn.role, content: turn.text };
-  if (cfg.peerId) body.peer_id = cfg.peerId;
-  return fetchJSON(`/api/v1/sessions/${encodeURIComponent(ovSessionId)}/messages`, {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
+async function appendTurnsBatch(ovSessionId, turns, state) {
+  let appended = 0;
+  for (let i = 0; i < turns.length; i += cfg.captureBatchSize) {
+    const chunk = turns.slice(i, i + cfg.captureBatchSize);
+    const messages = chunk.map((turn) => {
+      const msg = { role: turn.role, content: turn.text };
+      if (cfg.peerId) msg.peer_id = cfg.peerId;
+      return msg;
+    });
+    const result = await fetchJSON(
+      `/api/v1/sessions/${encodeURIComponent(ovSessionId)}/messages/batch`,
+      { method: "POST", body: JSON.stringify({ messages }) },
+    );
+    if (!result) return { appended, ok: false };
+    appended += chunk.length;
+    state.capturedTurnCount += chunk.length;
+    await saveState(state);
+  }
+  return { appended, ok: true };
 }
 
 async function commitOvSession(ovSessionId) {
@@ -178,75 +168,22 @@ async function readTranscriptTurns(transcriptPath) {
   }
 }
 
-function safeId(value) {
-  return String(value).replace(/[^a-zA-Z0-9_-]/g, "_");
-}
-
-async function snapshotTranscript(transcriptPath, sessionId) {
-  await mkdir(SNAPSHOT_DIR, { recursive: true });
-  const snapshotPath = join(
-    SNAPSHOT_DIR,
-    `${safeId(sessionId)}-${Date.now().toString(36)}.jsonl`,
-  );
-  await copyFile(transcriptPath, snapshotPath);
-  return snapshotPath;
-}
-
 function hasCaptureKeyword(turns) {
   return turns.some((turn) => /\b(remember|memorize|store|save|capture|note|record)\b|记住|保存|记录|记忆/i.test(turn.text));
 }
 
-async function runAsyncSnapshotPath({ sessionId, transcriptPath, allTurns, state, ovSessionId }) {
-  let snapshotPath;
-  try {
-    snapshotPath = await snapshotTranscript(transcriptPath, sessionId);
-  } catch (err) {
-    logError("snapshot_failed", err);
-    noop();
-    return;
-  }
-
-  const previouslyCaptured = state.capturedTurnCount;
-  const pid = startDetachedScript("capture-transcript-worker.mjs", [
-    "--session-id", sessionId,
-    "--transcript", snapshotPath,
-    "--ov-session-id", ovSessionId,
-    "--start-index", String(previouslyCaptured),
-    "--end-index", String(allTurns.length),
-    "--batch-size", String(cfg.backgroundCaptureBatchSize),
-    "--cleanup-snapshot",
-  ]);
-
-  state.capturedTurnCount = allTurns.length;
-  state.ovSessionId = null;
-  await saveState(state);
-
-  log("async_scheduled", {
-    sessionId,
-    ovSessionId,
-    snapshotPath,
-    startIndex: previouslyCaptured,
-    endIndex: allTurns.length,
-    pid,
-  });
-  noop(`OpenViking commit scheduled for ${ovSessionId} (pid ${pid ?? "?"})`);
-}
-
 async function runInlinePath({ sessionId, state, ovSessionId, newTurns, allTurns }) {
-  for (const turn of newTurns) {
-    const result = await appendOneTurn(ovSessionId, turn);
-    if (!result) {
+  if (newTurns.length > 0) {
+    const result = await appendTurnsBatch(ovSessionId, newTurns, state);
+    if (!result.ok) {
       logError("inline_append_failed_keep_state", {
         sessionId,
         ovSessionId,
         capturedTurnCount: state.capturedTurnCount,
       });
-      await saveState(state);
       noop();
       return;
     }
-    state.capturedTurnCount += 1;
-    await saveState(state);
   }
 
   const sessionMeta = await getOvSessionMeta(ovSessionId);
@@ -281,7 +218,6 @@ async function runInlinePath({ sessionId, state, ovSessionId, newTurns, allTurns
   const commit = await commitOvSession(ovSessionId);
   if (!commit) {
     logError("inline_commit_failed_keep_state", { sessionId, ovSessionId });
-    await saveState(state);
     noop();
     return;
   }
@@ -356,7 +292,7 @@ async function main() {
   }
 
   if (!transcriptPath) {
-    // No transcript to snapshot or read, but a live OV session exists.
+    // No transcript to read, but a live OV session exists.
     // Schedule a commit-only worker.
     const pid = startDetachedScript("commit-session.mjs", [
       "--ov-session-id", ovSessionId,
@@ -369,21 +305,6 @@ async function main() {
     return;
   }
 
-  if (newTurns.length > cfg.captureMaxTurnsPerStop) {
-    log("path_choice", {
-      branch: "async_snapshot",
-      newTurnCount: newTurns.length,
-      threshold: cfg.captureMaxTurnsPerStop,
-    });
-    await runAsyncSnapshotPath({ sessionId, transcriptPath, allTurns, state, ovSessionId });
-    return;
-  }
-
-  log("path_choice", {
-    branch: "inline",
-    newTurnCount: newTurns.length,
-    threshold: cfg.captureMaxTurnsPerStop,
-  });
   await runInlinePath({ sessionId, state, ovSessionId, newTurns, allTurns });
 }
 

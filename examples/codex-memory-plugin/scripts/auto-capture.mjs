@@ -20,7 +20,7 @@
  * Stop output schema accepts {} as a no-op.
  *
  * Note: we deliberately do NOT run an idle-TTL sweep here. State-write-on-
- * every-turn already gives us the freshness signal we need; running the
+ * every-batch already gives us the freshness signal we need; running the
  * sweep once per session start (in session-start-commit.mjs) is the right
  * cadence. See DESIGN.md §5 ("Sweep trigger").
  */
@@ -32,10 +32,9 @@ import {
   normalizeCaptureRole,
   shouldCaptureText,
 } from "./capture-utils.mjs";
-import { startDetachedScript } from "./background-jobs.mjs";
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
-import { deriveOvSessionId, loadState, resolveOvSessionId, saveState } from "./session-state.mjs";
+import { loadState, resolveOvSessionId, saveState } from "./session-state.mjs";
 
 const cfg = loadConfig();
 const { log, logError } = createLogger("auto-capture");
@@ -120,25 +119,22 @@ async function readTranscriptTurns(transcriptPath) {
   }
 }
 
-function selectStopTurns(turns) {
-  const limit = cfg.captureMaxTurnsPerStop;
-  if (turns.length <= limit) return turns;
-  log("backlog_batched", { newTurns: turns.length, selected: limit, deferred: turns.length - limit });
-  return turns.slice(0, limit);
-}
-
 async function appendTurns(ovSessionId, turns, state) {
   let appended = 0;
-  for (const turn of turns) {
-    const body = { role: turn.role, content: turn.text };
-    if (cfg.peerId) body.peer_id = cfg.peerId;
-    const result = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(ovSessionId)}/messages`, {
-      method: "POST",
-      body: JSON.stringify(body),
+  for (let i = 0; i < turns.length; i += cfg.captureBatchSize) {
+    const chunk = turns.slice(i, i + cfg.captureBatchSize);
+    const messages = chunk.map((turn) => {
+      const msg = { role: turn.role, content: turn.text };
+      if (cfg.peerId) msg.peer_id = cfg.peerId;
+      return msg;
     });
+    const result = await fetchJSON(
+      `/api/v1/sessions/${encodeURIComponent(ovSessionId)}/messages/batch`,
+      { method: "POST", body: JSON.stringify({ messages }) },
+    );
     if (!result) break;
-    appended += 1;
-    state.capturedTurnCount += 1;
+    appended += chunk.length;
+    state.capturedTurnCount += chunk.length;
     await saveState(state);
   }
   return appended;
@@ -193,29 +189,8 @@ async function main() {
     state.capturedTurnCount = 0;
   }
 
-  if (state.capturedTurnCount === 0 && allTurns.length > cfg.initialBacklogLimit) {
-    const backgroundOvSessionId = `${deriveOvSessionId(sessionId)}-background`;
-    const pid = transcriptPath
-      ? startDetachedScript("capture-transcript-worker.mjs", [
-          "--session-id", sessionId,
-          "--transcript", transcriptPath,
-          "--ov-session-id", backgroundOvSessionId,
-          "--start-index", "0",
-          "--end-index", String(allTurns.length),
-          "--batch-size", String(cfg.backgroundCaptureBatchSize),
-        ])
-      : null;
-    state.capturedTurnCount = allTurns.length;
-    await saveState(state);
-    log("background_capture_started", {
-      reason: "initial transcript exceeds hook budget",
-      totalTurns: allTurns.length,
-      initialBacklogLimit: cfg.initialBacklogLimit,
-      ovSessionId: backgroundOvSessionId,
-      pid,
-    });
-    noop(`scheduled OpenViking background capture for ${allTurns.length} historical turn(s)`);
-    return;
+  if (state.capturedTurnCount === 0) {
+    log("initial_capture", { totalTurns: allTurns.length });
   }
 
   const newTurns = allTurns.slice(state.capturedTurnCount);
@@ -239,9 +214,8 @@ async function main() {
     if (!ovSessionId) {
       logError("resolve_ov_session", "failed to derive OV session id");
     } else {
-      const turnsToAppend = selectStopTurns(newTurns);
       await saveState(state);
-      added = await appendTurns(ovSessionId, turnsToAppend, state);
+      added = await appendTurns(ovSessionId, newTurns, state);
       log("appended", { ovSessionId, added });
     }
   }

@@ -86,8 +86,7 @@ export OPENVIKING_RECALL_COMPRESS_MODEL=gpt-5.3-codex-spark
 export OPENVIKING_RECALL_COMPRESS_THINKING=default
 export OPENVIKING_RECALL_TIMEOUT_MS=120000
 export OPENVIKING_CAPTURE_ASSISTANT_TURNS=1
-export OPENVIKING_CAPTURE_MAX_TURNS_PER_STOP=8
-export OPENVIKING_INITIAL_BACKLOG_LIMIT=100
+export OPENVIKING_CAPTURE_BATCH_SIZE=100
 export OPENVIKING_MAX_LIVE_MESSAGES_ON_COMPACT=200
 export OPENVIKING_MAX_PENDING_TOKENS_ON_COMPACT=60000
 export OPENVIKING_AUTO_COMMIT_ON_COMPACT=1
@@ -187,19 +186,18 @@ Config knobs:
 
 ### Stop (turn end → `add_message`, NOT `commit`)
 
-`auto-capture.mjs` derives one long-lived OpenViking session id per Codex `session_id` as `cx-<safe-session-id>` and incrementally appends every new user/assistant turn via `/api/v1/sessions/{id}/messages`. The `/messages` endpoint auto-creates the session on first append. Per-codex-session state lives at `~/.openviking/codex-plugin-state/<safe-session-id>.json`. No `/commit` per turn — that would over-fragment memory extraction. Capture sanitizes obvious hook noise, metadata wrappers, and plugin-injected `<openviking-context ...>` blocks before append; tool calls/results are retained as compact `[tool-call ...]` / `[tool-result ...]` lines capped by `OPENVIKING_CAPTURE_TOOL_MAX_CHARS` (default 2000).
+`auto-capture.mjs` derives one long-lived OpenViking session id per Codex `session_id` as `cx-<safe-session-id>` and incrementally appends every new user/assistant turn via `POST /api/v1/sessions/{id}/messages/batch` (atomic batch, capped by `OPENVIKING_CAPTURE_BATCH_SIZE`, default 100). The endpoint auto-creates the session on first append. Per-codex-session state lives at `~/.openviking/codex-plugin-state/<safe-session-id>.json`. No `/commit` per turn — that would over-fragment memory extraction. Capture sanitizes obvious hook noise, metadata wrappers, and plugin-injected `<openviking-context ...>` blocks before append; tool calls/results are retained as compact `[tool-call ...]` / `[tool-result ...]` lines capped by `OPENVIKING_CAPTURE_TOOL_MAX_CHARS` (default 2000).
 
-If a first-run transcript is already larger than `OPENVIKING_INITIAL_BACKLOG_LIMIT`, the Stop hook schedules internal `capture-transcript-worker.mjs` work and starts live capture from the current end of the transcript. Smaller missed-turn backlogs are appended in batches of `OPENVIKING_CAPTURE_MAX_TURNS_PER_STOP` without dropping older pending turns.
+Even a multi-thousand-turn first-run backlog drains inline within a single Stop hook because each batch is a single HTTP round-trip, so historical and live capture share the same `cx-<safe-session-id>` OV session.
 
 ### PreCompact (deterministic commit)
 
 `pre-compact-capture.mjs`:
 
-1. Catch-up append for any turns Stop hasn't captured yet (race-safe via `capturedTurnCount`)
-2. If catch-up is too large for the hook budget, schedule detached background transcript capture instead of blocking `/compact`
-3. Commit the long-lived OV session so the extractor runs against the full pre-compact transcript
-4. If the live OV session exceeds `OPENVIKING_MAX_LIVE_MESSAGES_ON_COMPACT` or `OPENVIKING_MAX_PENDING_TOKENS_ON_COMPACT`, schedule detached background commit and rotate to a fresh OV session id for future turns
-5. Reset `ovSessionId` to `null` after a synchronous successful commit so the next `Stop` re-derives the same `cx-<safe-session-id>` and appends the post-compact half under that deterministic OV session id
+1. Catch-up append for any turns Stop hasn't captured yet (race-safe via `capturedTurnCount`), uploaded via `/messages/batch` so even a large catch-up finishes inline
+2. Commit the long-lived OV session so the extractor runs against the full pre-compact transcript
+3. If the live OV session exceeds `OPENVIKING_MAX_LIVE_MESSAGES_ON_COMPACT` or `OPENVIKING_MAX_PENDING_TOKENS_ON_COMPACT`, schedule detached background commit and rotate to a fresh OV session id for future turns
+4. Reset `ovSessionId` to `null` after a synchronous successful commit so the next `Stop` re-derives the same `cx-<safe-session-id>` and appends the post-compact half under that deterministic OV session id
 
 ### Known gap: SIGTERM / Ctrl+C / `/exit` are silent
 
@@ -238,10 +236,9 @@ codex-memory-plugin/
 │   ├── recall-compressor-profile.mjs # Compressor profile detection/cache
 │   ├── session-state.mjs        # Per-codex-session OV session state
 │   ├── background-jobs.mjs      # Detached worker launcher for slow jobs
-│   ├── capture-transcript-worker.mjs # Internal detached transcript capture worker
 │   ├── commit-session.mjs       # Detached OV session commit worker
 │   ├── auto-recall.mjs          # UserPromptSubmit hook (REST /search/find)
-│   ├── auto-capture.mjs         # Stop hook (REST /sessions/{id}/messages)
+│   ├── auto-capture.mjs         # Stop hook (REST /sessions/{id}/messages/batch)
 │   ├── session-start-commit.mjs # SessionStart hook (active-window + idle TTL)
 │   └── pre-compact-capture.mjs  # PreCompact hook
 ├── setup-helper/

@@ -32,9 +32,7 @@
  *   OPENVIKING_TIMEOUT_MS, OPENVIKING_CAPTURE_TIMEOUT_MS
  *   OPENVIKING_RECALL_TIMEOUT_MS, OPENVIKING_RECALL_COMPRESS_TIMEOUT_MS
  *   OPENVIKING_RECALL_COMPRESS_MODEL, OPENVIKING_RECALL_COMPRESS_THINKING
- *   OPENVIKING_CAPTURE_MAX_TURNS_PER_STOP
- *   OPENVIKING_INITIAL_BACKLOG_LIMIT
- *   OPENVIKING_BACKGROUND_CAPTURE_BATCH_SIZE
+ *   OPENVIKING_CAPTURE_BATCH_SIZE
  *   OPENVIKING_MAX_LIVE_MESSAGES_ON_COMPACT
  *   OPENVIKING_MAX_PENDING_TOKENS_ON_COMPACT
  *   OPENVIKING_RECALL_LIMIT, OPENVIKING_SCORE_THRESHOLD
@@ -188,18 +186,10 @@ export function loadConfig() {
       process.env.OPENVIKING_CAPTURE_MAX_LENGTH,
       num(cx.captureMaxLength, 24000),
     ))),
-    captureMaxTurnsPerStop: Math.max(1, Math.floor(num(
-      process.env.OPENVIKING_CAPTURE_MAX_TURNS_PER_STOP,
-      num(cx.captureMaxTurnsPerStop, 8),
-    ))),
-    initialBacklogLimit: Math.max(0, Math.floor(num(
-      process.env.OPENVIKING_INITIAL_BACKLOG_LIMIT,
-      num(cx.initialBacklogLimit, 100),
-    ))),
-    backgroundCaptureBatchSize: Math.max(1, Math.floor(num(
-      process.env.OPENVIKING_BACKGROUND_CAPTURE_BATCH_SIZE,
-      num(cx.backgroundCaptureBatchSize, 100),
-    ))),
+    captureBatchSize: Math.min(100, Math.max(1, Math.floor(num(
+      process.env.OPENVIKING_CAPTURE_BATCH_SIZE,
+      num(cx.captureBatchSize, 100),
+    )))),
     maxLiveMessagesOnCompact: Math.max(1, Math.floor(num(
       process.env.OPENVIKING_MAX_LIVE_MESSAGES_ON_COMPACT,
       num(cx.maxLiveMessagesOnCompact, 200),
