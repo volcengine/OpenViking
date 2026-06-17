@@ -455,6 +455,14 @@ Below are all HTTP API endpoints provided by OpenViking, grouped by functional m
 | POST | `/api/v1/search/grep` | Content pattern search |
 | POST | `/api/v1/search/glob` | File pattern matching |
 
+### Code Navigation
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/code/outline` | Outline symbols in a source file |
+| POST | `/api/v1/code/search` | Search symbols under a `viking://` code URI |
+| POST | `/api/v1/code/expand` | Expand a symbol definition from a source file |
+
 ### Relations (Experimental, may change in future versions)
 
 | Method | Path | Description |
