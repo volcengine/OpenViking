@@ -1,0 +1,110 @@
+# Stop Teaching Every Agent From Scratch
+
+Published: 2026-06-17
+
+Canonical human page: https://blog.openviking.ai/post/openviking-agent-memory-design/
+Agent-readable page: https://blog.openviking.ai/post/openviking-agent-memory-design/llm.txt
+Repository: https://github.com/volcengine/OpenViking
+
+Source boundary: this is a public OpenViking Blog rewrite based on the Juejin article:
+https://juejin.cn/post/7648649574736134196
+
+The rewrite preserves the product argument and examples while avoiding verbatim copying and source images. The cover image is an original generated asset stored at:
+/assets/covers/openviking-agent-memory-design.png
+
+## Thesis
+
+AI coding and frontend design work breaks down when every agent remembers only the current chat. Users teach one agent design direction, component rules, interaction choices, and project constraints, then lose that context when they open a new session, switch tools, run out of quota, or split work across sub-agents.
+
+OpenViking acts as the memory center between users and AI agents. It can connect through MCP, plugins, CLI workflows, and application integrations. Its job is to extract important working context, organize it as retrievable memory, and make it available to the next agent that needs it.
+
+## Problem
+
+Without a shared memory layer:
+
+- A new agent session starts from blank context.
+- Switching from Trae to Codex or Claude Code requires repeating design rules and project history.
+- A requirements agent, coding agent, and review agent must pass brittle summaries through chat.
+- Frontend outputs drift into generic defaults, such as changed backgrounds, different button systems, weaker title hierarchy, or inconsistent component vocabulary.
+
+The root issue is lack of structured, retrievable, cross-session and cross-agent long-term memory.
+
+## OpenViking Memory Loop
+
+OpenViking turns agent collaboration into a four-part loop:
+
+1. Capture: extract useful information from normal dialogue, such as design preferences, layout decisions, component rules, and project facts.
+2. Organize: store those memories by semantic path instead of dumping everything into one transcript-shaped pile.
+3. Recall: interpret the next request, route it into the relevant memory space, and retrieve likely evidence first.
+4. Reuse: let new sessions, sub-agents, and different tools continue from the same durable project background.
+
+## Design Memory Examples
+
+Frontend design is a strong example because important context is a mixture of taste, constraints, component rules, and corrections.
+
+| Memory type | Example | Later value |
+| --- | --- | --- |
+| Taste and visual direction | Warm off-white background, fine grid texture, black and white primary actions | Keeps a new page from drifting into a generic admin template |
+| Component conventions | Capsule labels, demo window, floating assistant entry, heavy hero title | Lets another agent reuse the same interface vocabulary |
+| Project decisions | Which sections belong in the playground and how they should be ordered | Keeps product structure stable across iterations |
+| Corrections | A button color or spacing rule corrected during review | Turns feedback into a future default instead of a repeated reminder |
+
+## Retrieval Model
+
+Memory retrieval is not only transcript search. It is a scope-selection problem:
+
+1. Identify the user's task.
+2. Choose the likely directory in the memory tree.
+3. Retrieve there first.
+4. Expand only when evidence is missing.
+
+A request such as "recreate the previous playground style" should lean toward design preferences, component conventions, and prior project decisions instead of searching all memories equally.
+
+## Practical Wins
+
+### Personal Design Rules Become Durable
+
+Repeated design decisions stop being disposable chat content. OpenViking can preserve them as reusable context so the next page starts with the right visual system instead of a blank slate.
+
+### Sessions Can Continue Each Other
+
+Long frontend tasks often span several sessions. If a bug appears after the design conversation is gone, the repair session still needs old choices. OpenViking gives the new session a way to retrieve that background.
+
+### Sub-agents Can Share One Project Memory
+
+A requirements agent, coding agent, and review agent become more useful when their handoff carries enough context. With OpenViking, one agent's output can become evidence for the next agent, and feedback can be written back into project memory.
+
+### Different Tools Stop Diverging
+
+Teams may use Codex for one part, Trae for another, and Claude Code for debugging. Without a shared memory layer, each tool develops its own component habits. With OpenViking, a rule learned in one tool can be recalled by another.
+
+## Playground Case Pattern
+
+The source article uses a product Playground page as the example. The repeatable workflow is:
+
+1. Collaborate normally with an agent while OpenViking extracts stable rules from the process.
+2. Start a fresh task and ask to reuse the previous playground style.
+3. Let OpenViking retrieve old design decisions, component rules, and layout preferences.
+4. Add new rules or corrections during iteration and write them back to memory.
+5. Let multiple agents share the resulting project memory.
+
+The expected visual effect is consistency. Background treatment, button system, title weight, component vocabulary, and assistant affordances are accumulated decisions. If remembered, the next generation has a basis; if lost, the model falls back to generic defaults.
+
+## Getting Started
+
+Practical path:
+
+1. Run OpenViking and configure durable storage for memory and resources.
+2. Connect the agent through MCP, a plugin, or CLI integration depending on the client.
+3. Add usage rules telling the agent to retrieve relevant memory before work and write back durable corrections after meaningful changes.
+4. Inspect what was stored and whether future retrieval sees the right evidence.
+
+Public references:
+
+- OpenViking GitHub: https://github.com/volcengine/OpenViking
+- OpenViking docs: https://docs.openviking.ai/
+- MCP integration guide: https://docs.openviking.ai/en/guides/06-mcp-integration
+
+## Rule Of Thumb
+
+If the user expects to tell the same thing to another agent later, it should probably become OpenViking memory. Local files such as `AGENTS.md`, `CLAUDE.md`, or `MEMORY.md` still matter, but they should not be the only place where cross-tool context survives.
