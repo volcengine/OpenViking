@@ -39,6 +39,7 @@ from openviking_cli.exceptions import NotInitializedError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import OPENVIKING_ENABLE_RECORDER_ENV, get_openviking_config
+from openviking_cli.utils.config.git_config import GitConfig
 from openviking_cli.utils.config.open_viking_config import initialize_openviking_config
 from openviking_cli.utils.config.storage_config import StorageConfig
 
@@ -118,6 +119,7 @@ class OpenVikingService:
             config.embedding.max_concurrent,
             config.vlm.max_concurrent,
             binding_config=binding_config,
+            git_config=config.git,
         )
 
         # Initialize embedder
@@ -132,13 +134,15 @@ class OpenVikingService:
         max_concurrent_embedding: int = 10,
         max_concurrent_semantic: int = 64,
         binding_config: Any = None,
+        *,
+        git_config: Optional[GitConfig] = None,
     ) -> None:
         """Initialize storage resources."""
         from openviking.utils.agfs_utils import RagfsBindingConfig, create_agfs_client
 
         # Create RAGFS client using utility
         runtime_binding_config = binding_config or RagfsBindingConfig(agfs=config.agfs)
-        self._agfs_client = create_agfs_client(runtime_binding_config)
+        self._agfs_client = create_agfs_client(runtime_binding_config, git_config=git_config)
 
         # Initialize QueueManager with agfs_client
         if self._agfs_client:
@@ -287,6 +291,7 @@ class OpenVikingService:
                 self._config.embedding.max_concurrent,
                 self._config.vlm.max_concurrent,
                 binding_config=self._build_ragfs_binding_config(),
+                git_config=self._config.git,
             )
 
         if self._embedder is None:
@@ -412,6 +417,14 @@ class OpenVikingService:
             agfs_client=self._agfs_client,
         )
 
+        # Register as the process-wide service so flows that resolve the
+        # service via the dependency global (e.g. background reindex tasks
+        # triggered by git restore) work in embedded mode, not just under the
+        # HTTP server which calls set_service() during bootstrap.
+        from openviking.server.dependencies import set_service
+
+        set_service(self)
+
         self._initialized = True
         logger.info("OpenVikingService initialized")
 
@@ -447,6 +460,13 @@ class OpenVikingService:
         self._directory_initializer = None
         self._privacy_config_service = None
         self._initialized = False
+
+        # Clear the process-wide registration if it still points at us, so a
+        # closed service is never resolved via the dependency global.
+        from openviking.server.dependencies import get_service_or_none, set_service
+
+        if get_service_or_none() is self:
+            set_service(None)
 
         logger.info("OpenVikingService closed")
 

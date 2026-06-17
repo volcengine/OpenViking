@@ -469,3 +469,49 @@ class BaseClient(ABC):
     def observer(self) -> Any:
         """Get observer service for component status."""
         ...
+
+    # ============= Git Version Control =============
+
+    @abstractmethod
+    async def git_commit(
+        self,
+        *,
+        message: str,
+        paths: Optional[List[str]] = None,
+        branch: str = "main",
+        author_name: Optional[str] = None,
+        author_email: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create a git snapshot. See VikingFS.commit for semantics."""
+
+    @abstractmethod
+    async def git_restore(
+        self,
+        *,
+        project_dir: Optional[str] = None,
+        source_commit: str,
+        branch: str = "main",
+        dry_run: bool = False,
+        message: Optional[str] = None,
+        author_name: Optional[str] = None,
+        author_email: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Restore a subtree, or the full account tree when project_dir is omitted."""
+
+    @abstractmethod
+    async def git_show(
+        self,
+        target_ref: str,
+        *,
+        path: Optional[str] = None,
+    ) -> Any:
+        """Read a commit's metadata or a single blob."""
+
+    @abstractmethod
+    async def git_log(
+        self,
+        *,
+        branch: str = "main",
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """Walk back along parents[0] up to limit commits."""

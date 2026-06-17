@@ -899,6 +899,11 @@ enum Commands {
         #[command(subcommand)]
         action: TaskCommands,
     },
+    /// [Version] Manage workspace snapshots (commit, restore, show, log)
+    Snapshot {
+        #[command(subcommand)]
+        cmd: SnapshotCmd,
+    },
     /// [Status] All OpenViking Server components status
     Status {
         /// Show full component tables
@@ -1015,6 +1020,58 @@ enum TaskCommands {
     Watch {
         #[command(subcommand)]
         action: WatchCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum SnapshotCmd {
+    /// Create a snapshot of current workspace state
+    Commit {
+        #[arg(short = 'm', long)]
+        message: String,
+        /// Limit to specific viking:// URIs (comma-separated); omit for full snapshot
+        #[arg(long, value_delimiter = ',')]
+        paths: Option<Vec<String>>,
+        #[arg(long, default_value = "main")]
+        branch: String,
+        #[arg(long)]
+        author_name: Option<String>,
+        #[arg(long)]
+        author_email: Option<String>,
+    },
+    /// Restore a project directory or the full account tree to a past snapshot (forward commit)
+    Restore {
+        /// Commit oid, branch, or tag
+        source_commit: String,
+        /// Optional viking:// directory or relative tree path; omit for full-tree restore
+        project_dir: Option<String>,
+        #[arg(long, default_value = "main")]
+        branch: String,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(short = 'm', long)]
+        message: Option<String>,
+        #[arg(long)]
+        author_name: Option<String>,
+        #[arg(long)]
+        author_email: Option<String>,
+    },
+    /// Show a commit's metadata, or a single blob at a path
+    Show {
+        target_ref: String,
+        /// viking:// URI of a file; omit to show commit metadata
+        #[arg(long)]
+        path: Option<String>,
+        /// Write blob bytes to this file (default: stdout)
+        #[arg(long = "out-file")]
+        out_path: Option<std::path::PathBuf>,
+    },
+    /// Walk commit history (newest first)
+    Log {
+        #[arg(long, default_value = "main")]
+        branch: String,
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
     },
 }
 
@@ -2769,6 +2826,10 @@ async fn main() {
                 }
             }
         },
+        Commands::Snapshot { cmd } => {
+            let client = ctx.get_client();
+            commands::snapshot::dispatch(&client, cmd, ctx.output_format, ctx.compact).await
+        }
         Commands::Status { verbose } => {
             let client = ctx.get_client();
             commands::system::diagnostic_status(

@@ -34,6 +34,7 @@ from .exceptions import (
     AGFSPluginError,
     AGFSSerializationError,
     AGFSTimeoutError,
+    GitConcurrentCommitError,
 )
 from .helpers import cp, download, upload
 from .protocols import AGFSSyncClientProtocol
@@ -180,6 +181,7 @@ __all__ = [
     "AGFSNetworkError",
     "AGFSInternalError",
     "AGFSPluginError",
+    "GitConcurrentCommitError",
     "cp",
     "upload",
     "download",

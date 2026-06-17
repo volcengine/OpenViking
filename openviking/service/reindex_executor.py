@@ -712,6 +712,68 @@ class ReindexExecutor:
                 counters.failed_records += 1
                 counters.warnings.append(f"Failed to reindex {file_uri} vector: {exc}")
 
+    async def reindex_directory_marker(
+        self, *, dir_uri: str, level: ContextLevel, ctx: RequestContext
+    ) -> None:
+        """Recompute ONLY this directory's L0 (ABSTRACT) or L1 (OVERVIEW) vector.
+
+        Non-recursive: does not touch descendants. Used by git restore when a
+        directory's ``.abstract.md`` / ``.overview.md`` marker changed. When the
+        on-disk semantic source is empty, the corresponding vector is deleted
+        instead of upserted.
+        """
+        if level not in (ContextLevel.ABSTRACT, ContextLevel.OVERVIEW):
+            raise ValueError(f"reindex_directory_marker only supports L0/L1, got {level!r}")
+        if dir_uri == "viking://":
+            return
+
+        viking_fs = get_viking_fs()
+        marker_name = ".abstract.md" if level == ContextLevel.ABSTRACT else ".overview.md"
+        lock_path = viking_fs._uri_to_path(f"{dir_uri}/{marker_name}", ctx=ctx)
+        async with LockContext(get_lock_manager(), [lock_path], lock_mode="exact"):
+            abstract = await self._read_directory_abstract(dir_uri, ctx=ctx)
+            if level == ContextLevel.ABSTRACT:
+                vector_text = abstract
+            else:
+                overview = await self._read_directory_overview(dir_uri, ctx=ctx)
+                vector_text = overview or abstract
+
+            if not vector_text:
+                await self.delete_uri_level(uri=dir_uri, level=level, ctx=ctx)
+                return
+
+            await self._upsert_context(
+                uri=dir_uri,
+                parent_uri=VikingURI(dir_uri).parent.uri,
+                abstract=abstract,
+                vector_text=vector_text,
+                is_leaf=False,
+                context_type=context_type_for_uri(dir_uri),
+                level=level,
+                ctx=ctx,
+            )
+
+    async def delete_uri_level(
+        self, *, uri: str, level: ContextLevel, ctx: RequestContext
+    ) -> int:
+        """Delete ONLY the vector record at ``(uri, level)``. Returns count.
+
+        Used by git restore for both directory markers (dir + L0/L1) and
+        deleted source files (file + DETAIL).
+        """
+        service = get_service()
+        assert service.vikingdb_manager is not None
+        records = await service.vikingdb_manager.get_context_by_uri(
+            uri=uri,
+            level=int(level),
+            limit=100,
+            ctx=ctx,
+        )
+        ids = [str(rec["id"]) for rec in records if rec.get("id")]
+        if not ids:
+            return 0
+        return await service.vikingdb_manager.delete(ids, ctx=ctx)
+
     async def _reindex_user_namespace(
         self,
         *,

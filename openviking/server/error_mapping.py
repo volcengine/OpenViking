@@ -25,6 +25,7 @@ from openviking.pyagfs.exceptions import (
     AGFSPluginError,
     AGFSSerializationError,
     AGFSTimeoutError,
+    GitConcurrentCommitError,
 )
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking_cli.exceptions import (
@@ -447,6 +448,14 @@ def map_exception(
             "retryable": True,
         }
         return OpenVikingError(str(exc), code="CONFLICT", details=details)
+    if isinstance(exc, GitConcurrentCommitError):
+        details = {
+            "conflict_type": "git_ref_cas",
+            "retryable": True,
+        }
+        return OpenVikingError(
+            str(exc) or "concurrent git commit", code="CONFLICT", details=details
+        )
     if isinstance(exc, PermissionError):
         return PermissionDeniedError(str(exc), resource=resource)
     if isinstance(exc, FileNotFoundError):

@@ -33,6 +33,38 @@ fn compact_request_body(body: &mut Value) {
     });
 }
 
+#[derive(serde::Serialize)]
+pub struct SnapshotCommitReq {
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub paths: Option<Vec<String>>,
+    pub branch: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub author_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub author_email: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+pub struct SnapshotRestoreReq {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_dir: Option<String>,
+    pub source_commit: String,
+    pub branch: String,
+    pub dry_run: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub author_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub author_email: Option<String>,
+}
+
+pub enum SnapshotShowResult {
+    Metadata(Value),
+    Blob { oid: String, size: u64, bytes: Vec<u8> },
+}
+
 // ============ HttpClient ============
 
 /// High-level HTTP client for OpenViking API
@@ -1447,6 +1479,108 @@ impl HttpClient {
         let empty = serde_json::json!({});
         self.post_with_query("/api/v1/watches/trigger", &empty, &params)
             .await
+    }
+
+    // ============= Snapshot =============
+
+    pub async fn snapshot_commit(&self, req: &SnapshotCommitReq) -> Result<Value> {
+        self.post("/api/v1/snapshot/commit", req).await
+    }
+
+    pub async fn snapshot_restore(&self, req: &SnapshotRestoreReq) -> Result<Value> {
+        self.post("/api/v1/snapshot/restore", req).await
+    }
+
+    pub async fn snapshot_log(&self, branch: &str, limit: u32) -> Result<Value> {
+        let params = vec![
+            ("branch".to_string(), branch.to_string()),
+            ("limit".to_string(), limit.to_string()),
+        ];
+        self.get("/api/v1/snapshot/log", &params).await
+    }
+
+    pub async fn snapshot_show(
+        &self,
+        target_ref: &str,
+        path: Option<&str>,
+    ) -> Result<SnapshotShowResult> {
+        let url = format!("{}/api/v1/snapshot/show", self.base.base_url);
+        let mut query: Vec<(String, String)> = vec![("target_ref".to_string(), target_ref.to_string())];
+        if let Some(p) = path {
+            query.push(("path".to_string(), p.to_string()));
+        }
+
+        let response = self
+            .base
+            .http
+            .get(&url)
+            .headers(self.base.build_headers())
+            .query(&query)
+            .send()
+            .await
+            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
+
+        let status = response.status();
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+
+        if path.is_some() && status.is_success() && content_type.starts_with("application/octet-stream") {
+            let oid = response
+                .headers()
+                .get("x-snapshot-oid")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("")
+                .to_string();
+            let size: u64 = response
+                .headers()
+                .get("x-snapshot-size")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+            let bytes = response
+                .bytes()
+                .await
+                .map_err(|e| Error::Network(format!("Failed to read blob bytes: {}", e)))?
+                .to_vec();
+            return Ok(SnapshotShowResult::Blob { oid, size, bytes });
+        }
+
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| Error::Network(format!("Failed to read response body: {}", e)))?;
+        let json: Value = match serde_json::from_slice(&bytes) {
+            Ok(v) => v,
+            Err(e) => {
+                let body_str = String::from_utf8_lossy(&bytes);
+                return Err(Error::Network(format!(
+                    "Failed to parse JSON response: {}\n\nRaw response body:\n{}",
+                    e, body_str
+                )));
+            }
+        };
+
+        if !status.is_success() {
+            return Err(Error::api_with_status(
+                crate::base_client::api_error_from_envelope(&json, status),
+                status.as_u16(),
+            ));
+        }
+        if let Some(error) = json.get("error") {
+            if !error.is_null() {
+                return Err(Error::api_with_status(
+                    crate::base_client::api_error_from_envelope(&json, status),
+                    status.as_u16(),
+                ));
+            }
+        }
+
+        let result = json.get("result").cloned().unwrap_or(Value::Null);
+        Ok(SnapshotShowResult::Metadata(result))
     }
 }
 

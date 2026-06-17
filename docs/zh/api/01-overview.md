@@ -431,6 +431,15 @@ JSON 输出 - 错误：
 | DELETE | `/api/v1/fs` | 删除资源 |
 | POST | `/api/v1/fs/mv` | 移动/重命名资源 |
 
+### 快照端点（多版本管理）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/v1/snapshot/commit` | 把当前工作区状态保存成新快照 |
+| GET | `/api/v1/snapshot/log` | 从最新提交开始回溯历史 |
+| GET | `/api/v1/snapshot/show` | 查看提交元数据，或读取提交中某个文件 |
+| POST | `/api/v1/snapshot/restore` | 恢复目录或整棵账号树到某个历史快照（正向提交） |
+
 ### 内容端点
 
 | 方法 | 路径 | 说明 |
@@ -564,6 +573,7 @@ VikingBot API 需要服务器启动时指定 `--with-bot` 选项：
 |------|------|
 | [资源管理](02-resources.md) | 资源和技能的添加、导入、导出 |
 | [文件系统](03-filesystem.md) | 目录操作、内容读写 |
+| [多版本管理](11-snapshot.md) | 快照提交、历史回溯、版本恢复 |
 | [技能](04-skills.md) | 技能管理 API |
 | [会话管理](05-sessions.md) | 会话创建、消息管理、记忆提取 |
 | [检索](06-retrieval.md) | 搜索、关联、上下文获取 |

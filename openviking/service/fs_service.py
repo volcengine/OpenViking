@@ -531,3 +531,90 @@ class FSService:
             recursive=recursive,
             ctx=ctx,
         )
+
+    async def commit(
+        self,
+        *,
+        message: str,
+        ctx: RequestContext,
+        paths: Optional[List[str]] = None,
+        branch: str = "main",
+        author_name: Optional[str] = None,
+        author_email: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Forward to VikingFS.commit. See viking_fs.commit for semantics."""
+        viking_fs = self._ensure_initialized()
+        validated = (
+            [validate_viking_uri(p) for p in paths] if paths is not None else None
+        )
+        return await viking_fs.commit(
+            message=message,
+            paths=validated,
+            branch=branch,
+            author_name=author_name,
+            author_email=author_email,
+            ctx=ctx,
+        )
+
+    async def restore(
+        self,
+        *,
+        project_dir: Optional[str],
+        source_commit: str,
+        ctx: RequestContext,
+        branch: str = "main",
+        dry_run: bool = False,
+        message: Optional[str] = None,
+        author_name: Optional[str] = None,
+        author_email: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Forward to VikingFS.restore. See viking_fs.restore for semantics."""
+        viking_fs = self._ensure_initialized()
+        if project_dir is not None:
+            project_dir = validate_viking_uri(project_dir, field_name="project_dir")
+        return await viking_fs.restore(
+            project_dir=project_dir,
+            source_commit=source_commit,
+            branch=branch,
+            dry_run=dry_run,
+            message=message,
+            author_name=author_name,
+            author_email=author_email,
+            ctx=ctx,
+        )
+
+    async def show(
+        self,
+        target_ref: str,
+        ctx: RequestContext,
+        *,
+        path: Optional[str] = None,
+    ) -> Any:
+        """Forward to VikingFS.show. Returns dict (metadata) or bytes (blob)."""
+        viking_fs = self._ensure_initialized()
+        # validate_optional_viking_uri returns "" for None input; VikingFS.show needs None.
+        path = validate_optional_viking_uri(path, field_name="path") or None
+        return await viking_fs.show(target_ref, path=path, ctx=ctx)
+
+    async def show_blob_raw(
+        self,
+        target_ref: str,
+        ctx: RequestContext,
+        *,
+        path: str,
+    ) -> Dict[str, Any]:
+        """Forward to VikingFS.show_blob_raw. Returns ``{"oid", "size", "bytes"}``."""
+        viking_fs = self._ensure_initialized()
+        path = validate_viking_uri(path, field_name="path")
+        return await viking_fs.show_blob_raw(target_ref, path=path, ctx=ctx)
+
+    async def log(
+        self,
+        ctx: RequestContext,
+        *,
+        branch: str = "main",
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """Forward to VikingFS.log. Walks parents[0] up to limit commits."""
+        viking_fs = self._ensure_initialized()
+        return await viking_fs.log(branch=branch, limit=limit, ctx=ctx)

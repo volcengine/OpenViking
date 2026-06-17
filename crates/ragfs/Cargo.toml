@@ -35,6 +35,17 @@ serde_json = "1.0"
 # Logging
 tracing = "0.1"
 
+# Git (gitoxide)
+gix-hash = "0.14"
+gix-object = "0.42"
+gix-features = { version = "0.38", features = ["zlib"] }
+gix-actor = "0.31"
+gix-date = "0.8"
+
+# Git backend dependencies
+dashmap = "5.0"
+flate2 = "1.0"
+
 # Path handling and filesystem
 path-clean = "1.0"
 
@@ -90,6 +101,14 @@ grep-searcher = "0.1.16"
 [dev-dependencies]
 tempfile = "3.12"
 criterion = "0.5"
+tokio = { version = "1.38", features = ["full"] }
+toml = "0.8"
+# Used by the S3/TOS git integration tests (crates/ragfs/tests/git_s3_integration.rs)
+gix-hash = "0.14"
+gix-object = "0.42"
+bytes = "1.5"
+serde_json = "1.0"
+uuid = { version = "1.0", features = ["v4"] }
 
 [features]
 default = []

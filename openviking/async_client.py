@@ -64,6 +64,7 @@ class AsyncOpenViking:
 
         self.user = UserIdentifier.the_default_user()
         self._initialized = False
+        self._snapshot: Optional["AsyncSnapshotNamespace"] = None
         # Mark initialized only after LocalClient is successfully constructed.
         self._singleton_initialized = False
 
@@ -332,6 +333,18 @@ class AsyncOpenViking:
     @property
     def _service(self):
         return self._client.service
+
+    @property
+    def snapshot(self) -> "AsyncSnapshotNamespace":
+        """Snapshot version control namespace.
+
+        Lazy-initialized on first access so importing the client does not
+        pull in the snapshot module when it's not needed.
+        """
+        if getattr(self, "_snapshot", None) is None:
+            from openviking.snapshot_namespace import AsyncSnapshotNamespace
+            self._snapshot = AsyncSnapshotNamespace(self)
+        return self._snapshot
 
     async def wait_processed(self, timeout: float = None) -> Dict[str, Any]:
         """Wait for all queued processing to complete."""

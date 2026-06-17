@@ -784,6 +784,68 @@ class LocalClient(BaseClient):
             vector_mode=vector_mode,
         )
 
+    # ============= Git Version Control =============
+
+    async def git_commit(
+        self,
+        *,
+        message: str,
+        paths: Optional[List[str]] = None,
+        branch: str = "main",
+        author_name: Optional[str] = None,
+        author_email: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create a git snapshot. See VikingFS.commit for semantics."""
+        return await self._service.fs.commit(
+            message=message,
+            paths=paths,
+            branch=branch,
+            author_name=author_name,
+            author_email=author_email,
+            ctx=self._ctx,
+        )
+
+    async def git_restore(
+        self,
+        *,
+        project_dir: Optional[str] = None,
+        source_commit: str,
+        branch: str = "main",
+        dry_run: bool = False,
+        message: Optional[str] = None,
+        author_name: Optional[str] = None,
+        author_email: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Restore a subtree, or the full account tree when project_dir is omitted."""
+        return await self._service.fs.restore(
+            project_dir=project_dir,
+            source_commit=source_commit,
+            branch=branch,
+            dry_run=dry_run,
+            message=message,
+            author_name=author_name,
+            author_email=author_email,
+            ctx=self._ctx,
+        )
+
+    async def git_show(
+        self,
+        target_ref: str,
+        *,
+        path: Optional[str] = None,
+    ) -> Any:
+        """Read a commit's metadata or a single blob."""
+        return await self._service.fs.show(target_ref, path=path, ctx=self._ctx)
+
+    async def git_log(
+        self,
+        *,
+        branch: str = "main",
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """Walk back along parents[0] up to limit commits."""
+        return await self._service.fs.log(branch=branch, limit=limit, ctx=self._ctx)
+
     # ============= Debug =============
 
     async def check_consistency(self, uri: str) -> Dict[str, Any]:

@@ -35,6 +35,7 @@ class SyncOpenViking:
             agent_id=agent_id,
         )
         self._initialized = False
+        self._snapshot: Optional["SyncSnapshotNamespace"] = None
 
     def initialize(self) -> None:
         """Initialize OpenViking storage and indexes."""
@@ -522,6 +523,14 @@ class SyncOpenViking:
         if not self._initialized:
             self.initialize()
         return self._async_client.observer
+
+    @property
+    def snapshot(self) -> "SyncSnapshotNamespace":
+        """Snapshot version control namespace (synchronous)."""
+        if getattr(self, "_snapshot", None) is None:
+            from openviking.snapshot_namespace import SyncSnapshotNamespace
+            self._snapshot = SyncSnapshotNamespace(self)
+        return self._snapshot
 
     @classmethod
     def reset(cls) -> None:

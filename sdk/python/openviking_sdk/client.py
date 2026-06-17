@@ -243,6 +243,7 @@ class AsyncHTTPClient:
         self._upload_mode = config.upload_mode
         self._http: Optional[httpx.AsyncClient] = None
         self._observer: Optional[_HTTPObserver] = None
+        self._snapshot: Optional["AsyncHTTPSnapshotNamespace"] = None
 
     async def initialize(self) -> None:
         headers: Dict[str, str] = {}
@@ -1225,11 +1226,108 @@ class AsyncHTTPClient:
             self._observer = _HTTPObserver(self)
         return self._observer
 
+    # ============= Git Version Control =============
+
+    async def git_commit(
+        self,
+        *,
+        message: str,
+        paths: Optional[List[str]] = None,
+        branch: str = "main",
+        author_name: Optional[str] = None,
+        author_email: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create a snapshot of the current workspace state."""
+        body: Dict[str, Any] = {"message": message, "branch": branch}
+        if paths is not None:
+            body["paths"] = paths
+        if author_name is not None:
+            body["author_name"] = author_name
+        if author_email is not None:
+            body["author_email"] = author_email
+        response = await self._http.post("/api/v1/snapshot/commit", json=body)
+        return self._handle_response(response)
+
+    async def git_restore(
+        self,
+        *,
+        project_dir: Optional[str] = None,
+        source_commit: str,
+        branch: str = "main",
+        dry_run: bool = False,
+        message: Optional[str] = None,
+        author_name: Optional[str] = None,
+        author_email: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Forward-commit restore of a subtree, or the full account tree when project_dir is omitted."""
+        body: Dict[str, Any] = {
+            "source_commit": source_commit,
+            "branch": branch,
+            "dry_run": dry_run,
+        }
+        if project_dir is not None:
+            body["project_dir"] = project_dir
+        if message is not None:
+            body["message"] = message
+        if author_name is not None:
+            body["author_name"] = author_name
+        if author_email is not None:
+            body["author_email"] = author_email
+        response = await self._http.post("/api/v1/snapshot/restore", json=body)
+        return self._handle_response(response)
+
+    async def git_show(
+        self,
+        target_ref: str,
+        *,
+        path: Optional[str] = None,
+    ) -> Any:
+        """Fetch commit metadata (path=None) or a blob's {oid, size, bytes} (path=<uri>)."""
+        params: Dict[str, Any] = {"target_ref": target_ref}
+        if path is not None:
+            params["path"] = path
+        response = await self._http.get("/api/v1/snapshot/show", params=params)
+
+        if path is None:
+            return self._handle_response(response)
+
+        # Binary branch: server sets application/octet-stream + X-Snapshot-* headers.
+        content_type = response.headers.get("content-type", "")
+        if content_type.startswith("application/octet-stream"):
+            return {
+                "oid": response.headers.get("x-snapshot-oid", ""),
+                "size": int(response.headers.get("x-snapshot-size", "0")),
+                "bytes": response.content,
+            }
+        # Fallback: server returned a JSON error envelope. Let the standard handler raise.
+        return self._handle_response(response)
+
+    async def git_log(
+        self,
+        *,
+        branch: str = "main",
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """Walk commit history newest-first."""
+        response = await self._http.get(
+            "/api/v1/snapshot/log",
+            params={"branch": branch, "limit": limit},
+        )
+        return self._handle_response(response)
+
+    @property
+    def snapshot(self) -> "AsyncHTTPSnapshotNamespace":
+        """Snapshot version control namespace (async HTTP)."""
+        if self._snapshot is None:
+            self._snapshot = AsyncHTTPSnapshotNamespace(self)
+        return self._snapshot
+
 
 class SyncHTTPClient:
     def __init__(self, *args, **kwargs):
         self._async_client = AsyncHTTPClient(*args, **kwargs)
         self._initialized = False
+        self._snapshot: Optional["SyncHTTPSnapshotNamespace"] = None
 
     def initialize(self) -> None:
         run_async(self._async_client.initialize())
@@ -1823,6 +1921,13 @@ class SyncHTTPClient:
     def observer(self) -> _HTTPObserver:
         return self._async_client.observer
 
+    @property
+    def snapshot(self) -> "SyncHTTPSnapshotNamespace":
+        """Snapshot version control namespace (sync HTTP)."""
+        if self._snapshot is None:
+            self._snapshot = SyncHTTPSnapshotNamespace(self)
+        return self._snapshot
+
     def __getattr__(self, name: str):
         attr = getattr(self._async_client, name)
         if inspect.iscoroutinefunction(attr):
@@ -1832,3 +1937,132 @@ class SyncHTTPClient:
 
             return wrapper
         return attr
+
+
+class AsyncHTTPSnapshotNamespace:
+    """Snapshot version control namespace forwarding to AsyncHTTPClient git_* methods."""
+
+    def __init__(self, client: "AsyncHTTPClient"):
+        self._client = client
+
+    async def commit(
+        self,
+        *,
+        message: str,
+        paths: Optional[List[str]] = None,
+        branch: str = "main",
+        author_name: Optional[str] = None,
+        author_email: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return await self._client.git_commit(
+            message=message,
+            paths=paths,
+            branch=branch,
+            author_name=author_name,
+            author_email=author_email,
+        )
+
+    async def restore(
+        self,
+        *,
+        project_dir: Optional[str] = None,
+        source_commit: str,
+        branch: str = "main",
+        dry_run: bool = False,
+        message: Optional[str] = None,
+        author_name: Optional[str] = None,
+        author_email: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return await self._client.git_restore(
+            project_dir=project_dir,
+            source_commit=source_commit,
+            branch=branch,
+            dry_run=dry_run,
+            message=message,
+            author_name=author_name,
+            author_email=author_email,
+        )
+
+    async def show(
+        self,
+        target_ref: str,
+        *,
+        path: Optional[str] = None,
+    ) -> Any:
+        return await self._client.git_show(target_ref, path=path)
+
+    async def log(
+        self,
+        *,
+        branch: str = "main",
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        return await self._client.git_log(branch=branch, limit=limit)
+
+
+class SyncHTTPSnapshotNamespace:
+    """Synchronous wrapper around the HTTP client's snapshot namespace."""
+
+    def __init__(self, client: "SyncHTTPClient"):
+        self._client = client
+
+    def _ns(self) -> AsyncHTTPSnapshotNamespace:
+        return self._client._async_client.snapshot
+
+    def commit(
+        self,
+        *,
+        message: str,
+        paths: Optional[List[str]] = None,
+        branch: str = "main",
+        author_name: Optional[str] = None,
+        author_email: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return run_async(
+            self._ns().commit(
+                message=message,
+                paths=paths,
+                branch=branch,
+                author_name=author_name,
+                author_email=author_email,
+            )
+        )
+
+    def restore(
+        self,
+        *,
+        project_dir: Optional[str] = None,
+        source_commit: str,
+        branch: str = "main",
+        dry_run: bool = False,
+        message: Optional[str] = None,
+        author_name: Optional[str] = None,
+        author_email: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return run_async(
+            self._ns().restore(
+                project_dir=project_dir,
+                source_commit=source_commit,
+                branch=branch,
+                dry_run=dry_run,
+                message=message,
+                author_name=author_name,
+                author_email=author_email,
+            )
+        )
+
+    def show(
+        self,
+        target_ref: str,
+        *,
+        path: Optional[str] = None,
+    ) -> Any:
+        return run_async(self._ns().show(target_ref, path=path))
+
+    def log(
+        self,
+        *,
+        branch: str = "main",
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        return run_async(self._ns().log(branch=branch, limit=limit))

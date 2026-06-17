@@ -133,3 +133,13 @@ class AGFSPluginError(AGFSClientError):
     """Plugin error"""
 
     pass
+
+
+class GitConcurrentCommitError(AGFSClientError):
+    """Raised when a git ref CAS update lost the race against another writer.
+
+    The branch ref moved between the read-parent step and the cas_update step.
+    Callers should refresh and retry, or surface the conflict to the user.
+    """
+
+    pass
