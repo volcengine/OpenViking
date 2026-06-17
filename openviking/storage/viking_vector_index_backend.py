@@ -156,6 +156,11 @@ class _SingleAccountBackend:
         filtered = self._filter_known_fields(payload)
         return {k: v for k, v in filtered.items() if v is not None}
 
+    @staticmethod
+    def _is_not_found_error(exc: Exception) -> bool:
+        message = str(exc).lower()
+        return "not found" in message or "does not exist" in message
+
     async def _refresh_meta_data_async(self) -> None:
         self._meta_data_cache = await self._async_adapter.collection_meta()
 
@@ -236,7 +241,7 @@ class _SingleAccountBackend:
     # Data Operations (with tenant enforcement)
     # =========================================================================
 
-    async def upsert(self, data: Dict[str, Any]) -> str:
+    async def upsert(self, data: Dict[str, Any], partial_update: bool = False) -> str:
         payload = dict(data)
         logger.debug(
             f"[_SingleAccountBackend.upsert] Input data.account_id={payload.get('account_id')}, bound_account_id={self._bound_account_id}"
@@ -260,11 +265,30 @@ class _SingleAccountBackend:
         if not payload.get("id"):
             payload["id"] = str(uuid.uuid4())
 
+        if partial_update:
+            try:
+                existing_records = await self._async_adapter.call("get", [payload["id"]])
+                if self._bound_account_id:
+                    existing_records = [
+                        record
+                        for record in existing_records
+                        if record.get("account_id") == self._bound_account_id
+                    ]
+            except Exception as e:
+                logger.error("Error reading existing record before partial update: %s", e)
+                return ""
+
+            if existing_records:
+                existing = dict(existing_records[0])
+                existing.update({k: v for k, v in payload.items() if v is not None})
+                payload = existing
+
         payload = await self._async_adapter.run(self._prepare_upsert_payload, payload)
         ids = await self._async_adapter.call("upsert", payload)
         return ids[0] if ids else ""
 
     async def update(self, data: Dict[str, Any]) -> UpdateResult:
+        """Strict update path. The target record must already exist."""
         try:
             payload = dict(data)
             logger.debug(
@@ -678,19 +702,31 @@ class VikingVectorIndexBackend:
     # 公开数据操作 API（强制要求 ctx）
     # =========================================================================
 
-    async def upsert(self, data: Dict[str, Any], *, ctx: RequestContext) -> str:
+    async def upsert(
+        self, data: Dict[str, Any], *, ctx: RequestContext, partial_update: bool = False
+    ) -> str:
+        """Main write entrypoint.
+
+        With the default ``partial_update=False``, this preserves the legacy
+        full-record upsert behavior. When ``partial_update=True``, the backend
+        first reads the current record and preserves unspecified existing
+        fields before issuing the final upsert.
+        """
         logger.debug(
-            f"[VikingVectorIndexBackend.upsert] Called with ctx.account_id={ctx.account_id}, data={data}"
+            f"[VikingVectorIndexBackend.upsert] Called with ctx.account_id={ctx.account_id}, partial_update={partial_update}, data={data}"
         )
         backend = self._get_backend_for_context(ctx)
         logger.debug(
             f"[VikingVectorIndexBackend.upsert] Using backend for account_id={ctx.account_id}"
         )
-        result = await backend.upsert(data)
-        logger.debug(f"[VikingVectorIndexBackend.upsert] Completed, result={result}")
+        result = await backend.upsert(data, partial_update=partial_update)
+        logger.debug(
+            f"[VikingVectorIndexBackend.upsert] Completed with partial_update={partial_update}, result={result}"
+        )
         return result
 
     async def update(self, data: Dict[str, Any], *, ctx: RequestContext) -> UpdateResult:
+        """Strict update path. The target record must already exist."""
         logger.debug(
             f"[VikingVectorIndexBackend.update] Called with ctx.account_id={ctx.account_id}, data={data}"
         )
@@ -1110,7 +1146,8 @@ class VikingVectorIndexBackend:
                     record.get("id"),
                 )
                 continue
-            if await self.upsert(updated, ctx=ctx):
+            result = await self.upsert(updated, ctx=ctx)
+            if result:
                 success = True
                 old_id = record.get("id")
                 if old_id and old_id != new_id:
@@ -1135,8 +1172,8 @@ class VikingVectorIndexBackend:
             uri_updated = False
             for record in full_records:
                 current = int(record.get("active_count", 0) or 0)
-                record["active_count"] = current + 1
-                if await self.upsert(record, ctx=ctx):
+                result = await self.upsert(record | {"active_count": current + 1}, ctx=ctx)
+                if result:
                     uri_updated = True
             if uri_updated:
                 updated += 1

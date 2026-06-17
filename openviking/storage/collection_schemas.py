@@ -688,7 +688,12 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                         user_id="default",
                     )
                     ctx = RequestContext(user=user, role=Role.ROOT)
-                    record_id = await self._vikingdb.upsert(inserted_data, ctx=ctx)
+                    result = await self._vikingdb.upsert(
+                        inserted_data,
+                        ctx=ctx,
+                        partial_update=True,
+                    )
+                    record_id = result
                     if record_id:
                         logger.debug(
                             f"Successfully wrote embedding to database: {record_id} abstract {inserted_data['abstract']} vector {inserted_data['vector'][:5]}"
