@@ -61,13 +61,13 @@ class SessionCommitPolicyTrainer:
         context: PipelineContext | Any = None,
         analyses: list[RolloutAnalysis] | None = None,
     ) -> RolloutTrainingResult:
-        del context
         rollout_list = list(rollouts)
         _validate_rollouts_have_cases(rollout_list)
         if analyses is not None and len(analyses) != len(rollout_list):
             raise ValueError(
                 "SessionCommitPolicyTrainer analyses length must match rollouts length when provided"
             )
+        execution_metadata = dict(getattr(context, "execution_metadata", {}) or {})
         progress = ProgressPrinter(
             total=len(rollout_list),
             label="train_start",
@@ -85,7 +85,11 @@ class SessionCommitPolicyTrainer:
             async with semaphore:
                 progress.start_one()
                 try:
-                    result = await self._commit_one(rollout, idx)
+                    result = await self._commit_one(
+                        rollout,
+                        idx,
+                        execution_metadata=execution_metadata,
+                    )
                     progress.complete_one()
                     return result
                 except Exception:
@@ -129,6 +133,8 @@ class SessionCommitPolicyTrainer:
         self,
         rollout: Rollout,
         index: int,
+        *,
+        execution_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         session_id = _session_id_for_rollout(rollout, run_id=self.run_id)
         stage = "prepare_messages"
@@ -161,6 +167,7 @@ class SessionCommitPolicyTrainer:
                 index=index,
                 session_id=session_id,
                 stage=stage,
+                execution_metadata=execution_metadata,
                 task_id=task_id,
                 archive_uri=archive_uri,
                 trace_id=trace_id,
@@ -183,6 +190,7 @@ class SessionCommitPolicyTrainer:
                 index=index,
                 session_id=session_id,
                 stage=stage,
+                execution_metadata=execution_metadata,
                 task_id=task_id,
                 archive_uri=archive_uri,
                 trace_id=trace_id,
@@ -215,6 +223,7 @@ class SessionCommitPolicyTrainer:
                 index=index,
                 session_id=session_id,
                 stage=stage,
+                execution_metadata=execution_metadata,
                 task_id="",
                 archive_uri="",
                 trace_id=None,
@@ -245,6 +254,7 @@ class SessionCommitPolicyTrainer:
         index: int,
         session_id: str,
         stage: str,
+        execution_metadata: dict[str, Any] | None = None,
         **fields: Any,
     ) -> None:
         if self.event_recorder is None:
@@ -256,7 +266,10 @@ class SessionCommitPolicyTrainer:
             "index": index,
             "stage": stage,
             "session_id": session_id,
-            **_rollout_event_fields(rollout),
+            **_rollout_event_fields(
+                rollout,
+                execution_metadata=execution_metadata,
+            ),
             **fields,
         }
         result = record(event, **payload)
@@ -282,18 +295,24 @@ class SessionCommitPolicyTrainer:
             await asyncio.sleep(self.poll_interval_seconds)
 
 
-def _rollout_event_fields(rollout: Rollout) -> dict[str, Any]:
+def _rollout_event_fields(
+    rollout: Rollout,
+    *,
+    execution_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     case = rollout.case
     metadata = rollout.metadata or {}
-    execution_metadata = metadata.get("execution_metadata", {})
-    if not isinstance(execution_metadata, dict):
-        execution_metadata = {}
+    rollout_execution_metadata = metadata.get("execution_metadata", {})
+    if not isinstance(rollout_execution_metadata, dict):
+        rollout_execution_metadata = {}
+    event_execution_metadata = dict(rollout_execution_metadata)
+    event_execution_metadata.update(execution_metadata or {})
     case_input = case.input or {}
     return {
-        "epoch": execution_metadata.get("epoch"),
-        "training": execution_metadata.get("training"),
-        "rollout_stage": execution_metadata.get("rollout_stage")
-        or execution_metadata.get("stage"),
+        "epoch": event_execution_metadata.get("epoch"),
+        "training": event_execution_metadata.get("training"),
+        "rollout_stage": event_execution_metadata.get("rollout_stage")
+        or event_execution_metadata.get("stage"),
         "case_name": case.name,
         "task_signature": case.task_signature,
         "split": (
@@ -307,6 +326,7 @@ def _rollout_event_fields(rollout: Rollout) -> dict[str, Any]:
             if case_input.get("task_no") is not None
             else metadata.get("task_no")
         ),
+        "case_task_id": case_input.get("task_id") or metadata.get("task_id"),
         "task_id": case_input.get("task_id") or metadata.get("task_id"),
         "policy_snapshot_id": rollout.policy_snapshot_id,
         "passed": bool(rollout.evaluation.passed) if rollout.evaluation is not None else None,

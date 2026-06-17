@@ -1153,6 +1153,120 @@ async def test_jsonl_pipeline_event_hook_omits_full_commit_results(tmp_path):
     assert "commit_results" not in data
 
 
+@pytest.mark.asyncio
+async def test_rollout_artifact_recorder_writes_train_rollouts_before_commit(tmp_path):
+    from openviking.session.train import RolloutArtifactRecorder
+    from openviking.session.train.context import ExecutionContext
+
+    recorder = RolloutArtifactRecorder(run_dir=tmp_path)
+    case = Case(
+        name="tau2_airline_train_7",
+        task_signature="tau2:airline:train:7",
+        input={
+            "data_split": "airline_train",
+            "task_no": 7,
+            "task_id": "task-7",
+            "user_request": "change my seat",
+        },
+        rubric=Rubric(name="reward", description="reward", criteria=[]),
+    )
+    rollout = Rollout(
+        case=case,
+        messages=[Message(id="m1", role="user", parts=[TextPart(text="hello")])],
+        policy_snapshot_id="snapshot-1",
+        evaluation=RubricEvaluation(passed=False, score=0.0, criterion_results=[], feedback=[]),
+        metadata={"memory": "remember airline seat-change rules"},
+    )
+
+    recorder.record_rollout_completion(
+        rollout=rollout,
+        index=0,
+        context=ExecutionContext(
+            policy_snapshot_id="snapshot-1",
+            metadata={"epoch": 0, "training": True, "stage": "train_rollout epoch=0"},
+        ),
+    )
+
+    rollout_dir = (
+        tmp_path
+        / "rollouts"
+        / "airline_train_task_7_task-7"
+        / "epoch_0"
+        / "rollout_0"
+    )
+    assert (rollout_dir / "status.json").exists()
+    assert (rollout_dir / "rollout.json").exists()
+    assert (rollout_dir / "evaluation.json").exists()
+    assert (rollout_dir / "prompt_for_llm.md").exists()
+    assert (rollout_dir / "memory_context.md").read_text() == "remember airline seat-change rules"
+    assert (rollout_dir / "commit_messages.json").exists()
+    assert not (rollout_dir / "commit_result.json").exists()
+    status = json.loads((rollout_dir / "status.json").read_text())
+    assert status["artifact_state"] == "rollout_done"
+    index = json.loads((tmp_path / "rollouts_index.json").read_text())
+    assert index["case_groups"][0]["rollouts"][0]["artifact_state"] == "rollout_done"
+
+
+def test_rollout_artifact_event_recorder_enriches_commit_result(tmp_path):
+    from openviking.session.train import RolloutArtifactEventRecorder, RolloutArtifactRecorder
+
+    recorder = RolloutArtifactRecorder(run_dir=tmp_path)
+    case = Case(
+        name="tau2_airline_train_7",
+        task_signature="tau2:airline:train:7",
+        input={
+            "data_split": "airline_train",
+            "task_no": 7,
+            "task_id": "task-7",
+            "user_request": "change my seat",
+        },
+        rubric=Rubric(name="reward", description="reward", criteria=[]),
+    )
+    rollout = Rollout(
+        case=case,
+        messages=[Message(id="m1", role="user", parts=[TextPart(text="hello")])],
+        policy_snapshot_id="snapshot-1",
+        evaluation=RubricEvaluation(passed=True, score=1.0, criterion_results=[], feedback=[]),
+    )
+    recorder.record_train_rollouts(epoch=0, rollouts=[rollout])
+    event_recorder = RolloutArtifactEventRecorder(recorder)
+
+    event_recorder.record(
+        "train_commit_submitted",
+        index=0,
+        epoch=0,
+        split="airline_train",
+        task_no=7,
+        case_task_id="task-7",
+        case_name="tau2_airline_train_7",
+        session_id="session-1",
+        stage="commit_session",
+        task_id="commit-task-1",
+        archive_uri="viking://archive",
+        trace_id="trace-1",
+        telemetry_id="telemetry-1",
+        task_status=None,
+        score=1.0,
+        error=None,
+    )
+
+    rollout_dir = (
+        tmp_path
+        / "rollouts"
+        / "airline_train_task_7_task-7"
+        / "epoch_0"
+        / "rollout_0"
+    )
+    commit_result = json.loads((rollout_dir / "commit_result.json").read_text())
+    status = json.loads((rollout_dir / "status.json").read_text())
+    index = json.loads((tmp_path / "rollouts_index.json").read_text())
+    assert commit_result["artifact_state"] == "commit_submitted"
+    assert commit_result["session_id"] == "session-1"
+    assert status["artifact_state"] == "commit_submitted"
+    assert status["archive_uri"] == "viking://archive"
+    assert index["case_groups"][0]["rollouts"][0]["artifact_state"] == "commit_submitted"
+
+
 class DelayedSessionCommitClient(FakeSessionCommitClient):
     def __init__(self, *, pending_polls: int):
         super().__init__()

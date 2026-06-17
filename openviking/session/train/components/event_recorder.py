@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -43,6 +44,22 @@ class JsonlEventRecorder:
                 file.write(json.dumps(_jsonable(payload), ensure_ascii=False, sort_keys=True))
                 file.write("\n")
                 file.flush()
+
+
+@dataclass(slots=True)
+class CompositeEventRecorder:
+    """Fan out event records to multiple recorder implementations."""
+
+    recorders: tuple[Any, ...]
+
+    async def record(self, event: str, **fields: Any) -> None:
+        for recorder in self.recorders:
+            record = getattr(recorder, "record", None)
+            if record is None:
+                continue
+            result = record(event, **fields)
+            if inspect.isawaitable(result):
+                await result
 
 
 @dataclass(slots=True)

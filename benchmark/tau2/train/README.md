@@ -157,4 +157,6 @@ result/tau2/train/<domain>_<timestamp>/
 `result/tau2/train/latest_rollouts` points to the most recent rollouts directory.
 Each rollout artifact group is one original task; each rollout has its own subdirectory
 with `memory_context.md`, `messages.json`, `tool_calls.json`, `evaluation.json`,
-and, for train rollouts when available, `commit_result.json` and `memory_diff.json`.
+and `commit_messages.json`. These files, plus `rollouts_index.json`, are written
+as soon as each remote rollout finishes. Train rollouts are enriched later with
+`commit_result.json` and `memory_diff.json` as commit progress becomes available.

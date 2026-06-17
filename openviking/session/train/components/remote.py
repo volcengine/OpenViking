@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
@@ -110,6 +111,7 @@ class RemoteRolloutExecutor:
     execution_timeout_seconds: float = 3600.0
     show_progress: bool = False
     progress_label: str = "rollout"
+    on_rollout_complete: Any | None = None
 
     def __post_init__(self) -> None:
         if self.concurrency <= 0:
@@ -143,11 +145,16 @@ class RemoteRolloutExecutor:
         timeout = httpx.Timeout(self.request_timeout_seconds)
         async with httpx.AsyncClient(base_url=self.service_url.rstrip("/"), timeout=timeout) as client:
 
-            async def execute_one(case: Case) -> Rollout:
+            async def execute_one(index: int, case: Case) -> Rollout:
                 async with semaphore:
                     progress.start_one()
                     try:
                         rollout = await self._execute_one(client, case, policy_set, context)
+                        await self._emit_rollout_complete(
+                            rollout=rollout,
+                            index=index,
+                            context=context,
+                        )
                         progress.complete_one()
                         return rollout
                     except Exception:
@@ -155,9 +162,30 @@ class RemoteRolloutExecutor:
                         raise
 
             try:
-                return list(await asyncio.gather(*(execute_one(case) for case in case_list)))
+                return list(
+                    await asyncio.gather(
+                        *(execute_one(index, case) for index, case in enumerate(case_list))
+                    )
+                )
             finally:
                 progress.finish()
+
+    async def _emit_rollout_complete(
+        self,
+        *,
+        rollout: Rollout,
+        index: int,
+        context: ExecutionContext,
+    ) -> None:
+        if self.on_rollout_complete is None:
+            return
+        result = self.on_rollout_complete(
+            rollout=rollout,
+            index=index,
+            context=context,
+        )
+        if inspect.isawaitable(result):
+            await result
 
     async def _execute_one(
         self,

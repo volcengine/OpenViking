@@ -14,13 +14,17 @@ from typing import Any
 from openviking.server.config import load_server_config
 from openviking.server.identity import AuthMode
 from openviking.session.train.components.event_recorder import (
+    CompositeEventRecorder,
     JsonlEventRecorder,
     JsonlPipelineEventHook,
 )
 from openviking.session.train.components.remote import RemoteCaseLoader, RemoteRolloutExecutor
 from openviking.session.train.components.report_builder import PipelineReportBuilder
 from openviking.session.train.components.reporter import emit_run_summary
-from openviking.session.train.components.rollout_artifact_recorder import RolloutArtifactRecorder
+from openviking.session.train.components.rollout_artifact_recorder import (
+    RolloutArtifactEventRecorder,
+    RolloutArtifactRecorder,
+)
 from openviking.session.train.components.session_commit import SessionCommitPolicyTrainer
 from openviking.session.train.components.snapshotter import ContentHashPolicySnapshotter
 from openviking.session.train.context import PipelineContext
@@ -209,7 +213,6 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             commit_concurrency=config.commit_concurrency,
             show_progress=True,
             progress_label="train",
-            event_recorder=event_recorder,
         )
         event_recorder.default_fields["run_id"] = policy_trainer.run_id
         pipeline = _build_pipeline(config, policy_trainer)
@@ -217,6 +220,14 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             run_dir=run_dir,
             client=client,
             latest_pointer_path=_latest_rollouts_path(config),
+        )
+        remote_executor = getattr(pipeline, "rollout_executor", None)
+        if isinstance(remote_executor, RemoteRolloutExecutor):
+            remote_executor.on_rollout_complete = (
+                rollout_artifact_recorder.record_rollout_completion
+            )
+        policy_trainer.event_recorder = CompositeEventRecorder(
+            (event_recorder, RolloutArtifactEventRecorder(rollout_artifact_recorder))
         )
 
         baseline_eval: dict[str, Any] | None = None

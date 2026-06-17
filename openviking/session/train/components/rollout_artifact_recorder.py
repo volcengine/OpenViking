@@ -65,6 +65,32 @@ class RolloutArtifactRecorder(NoopPipelineLifecycleHook):
         self._case_groups: dict[str, dict[str, Any]] = {}
         self._latest_failed_rollout: Path | None = None
 
+    def record_rollout_completion(
+        self,
+        *,
+        rollout: Rollout,
+        index: int,
+        context: Any,
+    ) -> None:
+        metadata = dict(getattr(context, "metadata", {}) or {})
+        training = bool(metadata.get("training"))
+        epoch = int(metadata.get("epoch", 0) or 0)
+        stage = _stage_from_execution_metadata(metadata)
+        commit_index = index if training else None
+        records = [
+            _RolloutRecord(
+                rollout=rollout,
+                evaluation=_rollout_evaluation_or_default(rollout),
+                stage=stage,
+                epoch=epoch,
+                commit_index=commit_index,
+                artifact_state="rollout_done" if training else "complete",
+            )
+        ]
+        for group_id, group_records in self._group_records(records).items():
+            self._write_group(group_id, group_records)
+        self._write_index()
+
     def record_eval(
         self,
         *,
@@ -86,6 +112,27 @@ class RolloutArtifactRecorder(NoopPipelineLifecycleHook):
         )
         for group_id, records in grouped.items():
             self._write_group(group_id, records)
+
+    def record_train_rollouts(
+        self,
+        *,
+        epoch: int,
+        rollouts: list[Rollout],
+    ) -> None:
+        records = [
+            _RolloutRecord(
+                rollout=rollout,
+                evaluation=_rollout_evaluation_or_default(rollout),
+                stage=f"epoch_{epoch}",
+                epoch=epoch,
+                commit_index=idx,
+                artifact_state="rollout_done",
+            )
+            for idx, rollout in enumerate(rollouts)
+        ]
+        grouped = self._group_records(records)
+        for group_id, group_records in grouped.items():
+            self._write_group(group_id, group_records)
 
     async def record_train_epoch(
         self,
@@ -113,12 +160,50 @@ class RolloutArtifactRecorder(NoopPipelineLifecycleHook):
                     epoch=epoch,
                     commit_result=commit_result,
                     commit_index=idx,
+                    artifact_state=_artifact_state_from_commit_result(commit_result),
                 )
             )
         grouped = self._group_records(records)
         for group_id, group_records in grouped.items():
-            self._write_group(group_id, group_records)
+            self._rewrite_commit_artifact_group(group_id, group_records)
             await self._write_train_commit_artifacts(group_records)
+
+    def record_train_commit_result(self, event: str, **fields: Any) -> None:
+        if event not in {"train_commit_submitted", "train_commit_done", "train_commit_failed"}:
+            return
+        rollout_dir = self._rollout_dir_from_event_fields(fields)
+        if rollout_dir is None:
+            return
+        commit_result = _commit_result_from_event(event, fields)
+        _write_json(rollout_dir / "commit_result.json", commit_result)
+        status_path = rollout_dir / "status.json"
+        if status_path.exists():
+            try:
+                status = json.loads(status_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                status = {}
+            status.update(
+                {
+                    "artifact_state": _artifact_state_from_commit_event(event),
+                    "commit_error": commit_result.get("error"),
+                    "commit_task_status": commit_result.get("task_status"),
+                    "archive_uri": commit_result.get("archive_uri"),
+                }
+            )
+            _write_json(status_path, status)
+
+        if commit_result.get("error"):
+            self._latest_failed_rollout = rollout_dir
+        self._update_rollout_index_entry(
+            path=str(rollout_dir),
+            updates={
+                "artifact_state": _artifact_state_from_commit_event(event),
+                "commit_error": commit_result.get("error"),
+                "archive_uri": commit_result.get("archive_uri"),
+                "commit_task_status": commit_result.get("task_status"),
+            },
+        )
+        self._write_index()
 
     async def on_epoch_end(
         self,
@@ -236,6 +321,12 @@ class RolloutArtifactRecorder(NoopPipelineLifecycleHook):
         _write_json(rollout_dir / "evaluation.json", evaluation_to_dict(record.evaluation))
         (rollout_dir / "memory_context.md").write_text(_memory_context(rollout), encoding="utf-8")
         (rollout_dir / "prompt_for_llm.md").write_text(_prompt_for_llm(record), encoding="utf-8")
+        # Full commit messages (as sent to session.commit)
+        commit_msgs = _build_commit_messages(rollout)
+        _write_json(rollout_dir / "commit_messages.json", commit_msgs)
+        (rollout_dir / "commit_messages.md").write_text(
+            _format_commit_messages_markdown(commit_msgs), encoding="utf-8"
+        )
         if record.commit_result is not None:
             _write_json(rollout_dir / "commit_result.json", record.commit_result)
 
@@ -261,8 +352,98 @@ class RolloutArtifactRecorder(NoopPipelineLifecycleHook):
                     rollout_dir / "memory_diff_error.json",
                     {"archive_uri": archive_uri, "error": str(exc)},
                 )
+                self._update_rollout_status(
+                    rollout_dir,
+                    memory_diff_error=str(exc),
+                )
+                self._update_rollout_index_entry(
+                    path=str(rollout_dir),
+                    updates={"memory_diff_error": str(exc)},
+                )
                 continue
             (rollout_dir / "memory_diff.json").write_text(str(memory_diff), encoding="utf-8")
+            self._update_rollout_status(
+                rollout_dir,
+                artifact_state="memory_diff_done",
+                memory_diff_path=str(rollout_dir / "memory_diff.json"),
+            )
+            self._update_rollout_index_entry(
+                path=str(rollout_dir),
+                updates={
+                    "artifact_state": "memory_diff_done",
+                    "memory_diff_path": str(rollout_dir / "memory_diff.json"),
+                },
+            )
+            self._write_index()
+
+    def _update_rollout_status(self, rollout_dir: Path, **updates: Any) -> None:
+        status_path = rollout_dir / "status.json"
+        if not status_path.exists():
+            return
+        try:
+            status = json.loads(status_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            status = {}
+        status.update(updates)
+        _write_json(status_path, status)
+
+    def _rewrite_commit_artifact_group(
+        self,
+        group_id: str,
+        records: list["_RolloutRecord"],
+    ) -> None:
+        group_entry = self._case_groups.get(group_id)
+        if group_entry is None:
+            self._write_group(group_id, records)
+            return
+        for record in records:
+            rollout_dir = (
+                self.rollouts_root
+                / group_id
+                / record.stage
+                / _rollout_dir_name(record)
+            )
+            if record.commit_result is not None:
+                _write_json(rollout_dir / "commit_result.json", record.commit_result)
+            updates = {
+                "artifact_state": record.artifact_state,
+                "commit_error": (
+                    record.commit_result.get("error") if record.commit_result else None
+                ),
+                "archive_uri": (
+                    record.commit_result.get("archive_uri") if record.commit_result else None
+                ),
+                "commit_task_status": (
+                    record.commit_result.get("task_status") if record.commit_result else None
+                ),
+            }
+            self._update_rollout_status(rollout_dir, **updates)
+            self._update_rollout_index_entry(path=str(rollout_dir), updates=updates)
+            if not record.passed or _commit_failed(record.commit_result):
+                self._latest_failed_rollout = rollout_dir
+        self._write_group_readme(self.rollouts_root / group_id, group_entry)
+
+    def _update_rollout_index_entry(self, *, path: str, updates: dict[str, Any]) -> None:
+        for group_entry in self._case_groups.values():
+            for item in group_entry.get("rollouts", []):
+                if item.get("path") == path:
+                    item.update(updates)
+                    return
+
+    def _rollout_dir_from_event_fields(self, fields: dict[str, Any]) -> Path | None:
+        split = fields.get("split")
+        task_no = fields.get("task_no")
+        task_id = fields.get("case_task_id") or fields.get("case_name")
+        epoch = fields.get("epoch")
+        index = fields.get("index")
+        if split is None or task_no is None or task_id is None or epoch is None or index is None:
+            return None
+        group_id = (
+            f"{_safe_fragment(split)}_task_"
+            f"{_safe_fragment(str(task_no))}_"
+            f"{_safe_fragment(task_id)}"
+        )[:120]
+        return self.rollouts_root / group_id / f"epoch_{epoch}" / f"rollout_{index}"
 
     def _write_group_readme(self, group_dir: Path, group_entry: dict[str, Any]) -> None:
         failed = [item for item in group_entry["rollouts"] if not item.get("passed") or item.get("commit_error")]
@@ -303,6 +484,7 @@ class _RolloutRecord:
     epoch: int
     commit_result: dict[str, Any] | None = None
     commit_index: int | None = None
+    artifact_state: str = "complete"
 
     @property
     def passed(self) -> bool:
@@ -314,7 +496,76 @@ class _RolloutRecord:
 
 
 def _write_json(path: Path, value: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(jsonable(value), ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+@dataclass(slots=True)
+class RolloutArtifactEventRecorder:
+    """Event recorder adapter that enriches rollout artifacts from commit events."""
+
+    recorder: RolloutArtifactRecorder
+
+    def record(self, event: str, **fields: Any) -> None:
+        self.recorder.record_train_commit_result(event, **fields)
+
+
+def _rollout_evaluation_or_default(rollout: Rollout) -> Any:
+    if rollout.evaluation is not None:
+        return rollout.evaluation
+    from openviking.session.train.components.session_commit import (
+        _rollout_evaluation_or_default as default_evaluation,
+    )
+
+    return default_evaluation(rollout)
+
+
+def _commit_result_from_event(event: str, fields: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "index": fields.get("index"),
+        "session_id": fields.get("session_id"),
+        "stage": fields.get("stage"),
+        "task_id": fields.get("task_id"),
+        "archive_uri": fields.get("archive_uri"),
+        "trace_id": fields.get("trace_id"),
+        "telemetry_id": fields.get("telemetry_id"),
+        "task_status": fields.get("task_status"),
+        "score": fields.get("score"),
+        "error": fields.get("error"),
+        "event": event,
+        "artifact_state": _artifact_state_from_commit_event(event),
+    }
+
+
+def _artifact_state_from_commit_event(event: str) -> str:
+    if event == "train_commit_submitted":
+        return "commit_submitted"
+    if event == "train_commit_done":
+        return "commit_done"
+    if event == "train_commit_failed":
+        return "commit_failed"
+    return "rollout_done"
+
+
+def _artifact_state_from_commit_result(commit_result: dict[str, Any] | None) -> str:
+    if not commit_result:
+        return "rollout_done"
+    if commit_result.get("error"):
+        return "commit_failed"
+    return "commit_done"
+
+
+def _stage_from_execution_metadata(metadata: dict[str, Any]) -> str:
+    stage = str(metadata.get("rollout_stage") or metadata.get("stage") or "")
+    if not stage:
+        training = bool(metadata.get("training"))
+        epoch = int(metadata.get("epoch", 0) or 0)
+        if training:
+            return f"epoch_{epoch}"
+        return "baseline_test" if epoch < 0 else f"test_rollout_epoch_{epoch}"
+    if stage.startswith("train_rollout"):
+        return f"epoch_{metadata.get('epoch', 0)}"
+    return _stage_dir(stage.split(maxsplit=1)[0])
 
 
 def _case_to_dict(case: Any) -> dict[str, Any]:
@@ -358,7 +609,12 @@ def _status_payload(record: _RolloutRecord) -> dict[str, Any]:
         "score": record.score,
         "policy_snapshot_id": rollout.policy_snapshot_id,
         "has_memory_context": bool(_memory_context(rollout).strip()),
+        "artifact_state": record.artifact_state,
         "commit_error": record.commit_result.get("error") if record.commit_result else None,
+        "commit_task_status": (
+            record.commit_result.get("task_status") if record.commit_result else None
+        ),
+        "archive_uri": record.commit_result.get("archive_uri") if record.commit_result else None,
     }
 
 
@@ -380,9 +636,13 @@ def _rollout_index(record: _RolloutRecord, rollout_dir: Path) -> dict[str, Any]:
         "trial": _trial(record.rollout),
         "passed": record.passed,
         "score": record.score,
+        "artifact_state": record.artifact_state,
         "path": str(rollout_dir),
         "commit_error": record.commit_result.get("error") if record.commit_result else None,
         "archive_uri": record.commit_result.get("archive_uri") if record.commit_result else None,
+        "commit_task_status": (
+            record.commit_result.get("task_status") if record.commit_result else None
+        ),
     }
 
 
@@ -515,3 +775,59 @@ def _safe_fragment(value: Any) -> str:
     text = str(value)
     text = re.sub(r"[^A-Za-z0-9_.-]+", "_", text).strip("_")
     return text or "unknown"
+
+
+def _build_commit_messages(rollout: Rollout) -> list[dict[str, Any]]:
+    """Build the full message list as sent to session.commit.
+
+    Matches the message assembly in session_commit._commit_one:
+      [case_spec] + rollout.messages + [evaluation]
+    """
+    from openviking.session.train.components.session_commit import (
+        _case_spec_message_to_request,
+        _evaluation_message_to_request,
+        _message_to_request,
+    )
+
+    messages: list[dict[str, Any]] = [_case_spec_message_to_request(rollout)]
+    for msg in rollout.messages:
+        messages.append(_message_to_request(msg))
+    messages.append(_evaluation_message_to_request(rollout))
+    return messages
+
+
+def _format_commit_messages_markdown(messages: list[dict[str, Any]]) -> str:
+    """Format commit messages as a readable Markdown document."""
+    lines: list[str] = ["# Commit Messages", ""]
+    for idx, msg in enumerate(messages):
+        role = msg.get("role", "unknown")
+        parts = msg.get("parts", [])
+        lines.append(f"## [{idx}] {role}")
+        lines.append("")
+        for part in parts:
+            part_type = part.get("type", "text")
+            if part_type == "text":
+                text = part.get("text", "")
+                # Indent to make it a blockquote / code block if needed
+                lines.append(text)
+            elif part_type == "tool_call":
+                lines.append(f"**Tool call:** `{part.get('tool_name', '?')}`")
+                lines.append("")
+                lines.append("```json")
+                lines.append(json.dumps(part.get("tool_input", {}), ensure_ascii=False, indent=2))
+                lines.append("```")
+            elif part_type == "tool_result":
+                lines.append(f"**Tool result:** `{part.get('tool_name', '?')}`")
+                lines.append("")
+                content = str(part.get("text", part.get("tool_result", "")))
+                if len(content) > 2000:
+                    content = content[:2000] + "\n... (truncated)"
+                lines.append("```")
+                lines.append(content)
+                lines.append("```")
+            else:
+                lines.append(f"*[{part_type} part]*")
+            lines.append("")
+        lines.append("---")
+        lines.append("")
+    return "\n".join(lines)
