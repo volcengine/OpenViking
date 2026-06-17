@@ -255,4 +255,31 @@ describe("pickMemoriesForInjection", () => {
     const result = pickMemoriesForInjection(items, 1, "When did the user deploy?");
     expect(result[0]!.uri).toBe("event");
   });
+
+  it("uses custom ranking weights without mutating semantic score", () => {
+    const items = [
+      mem({ uri: "fact", category: "facts", score: 0.8, abstract: "knows Python" }),
+      mem({ uri: "pref", category: "preferences", score: 0.72, abstract: "prefers TypeScript" }),
+    ];
+
+    const result = pickMemoriesForInjection(items, 1, "What does the user prefer?", 0, {
+      weights: { preference: 0.2 },
+    });
+
+    expect(result[0]!.uri).toBe("pref");
+    expect(result[0]!.score).toBe(0.72);
+  });
+
+  it("uses category weights to tune ranking", () => {
+    const items = [
+      mem({ uri: "fact", category: "facts", score: 0.9, abstract: "knows Python" }),
+      mem({ uri: "case", category: "cases", score: 0.7, abstract: "incident case" }),
+    ];
+
+    const result = pickMemoriesForInjection(items, 1, "unrelated query", 0, {
+      categoryWeights: { cases: 0.35 },
+    });
+
+    expect(result[0]!.uri).toBe("case");
+  });
 });

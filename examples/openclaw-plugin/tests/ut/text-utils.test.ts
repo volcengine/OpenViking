@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   sanitizeUserTextForCapture,
-  stripOpenVikingContextInjection,
   getCaptureDecision,
   extractNewTurnMessages,
   extractNewTurnTexts,
@@ -16,14 +15,6 @@ describe("sanitizeUserTextForCapture", () => {
     const input = "hello <relevant-memories>some injected context</relevant-memories> world";
     const result = sanitizeUserTextForCapture(input);
     expect(result).not.toContain("relevant-memories");
-    expect(result).toContain("hello");
-    expect(result).toContain("world");
-  });
-
-  it("strips <openviking-context> blocks", () => {
-    const input = "hello <openviking-context>context</openviking-context> world";
-    const result = sanitizeUserTextForCapture(input);
-    expect(result).not.toContain("openviking-context");
     expect(result).toContain("hello");
     expect(result).toContain("world");
   });
@@ -57,16 +48,6 @@ describe("sanitizeUserTextForCapture", () => {
     expect(sanitizeUserTextForCapture("   ")).toBe("");
   });
 
-  it("drops legacy synthetic tool placeholders", () => {
-    expect(sanitizeUserTextForCapture("[tool: exec]")).toBe("");
-    expect(sanitizeUserTextForCapture(" [toolUse: grep] ")).toBe("");
-  });
-
-  it("preserves ordinary text that mentions a tool placeholder", () => {
-    const input = "The model echoed [tool: exec] in a previous answer.";
-    expect(sanitizeUserTextForCapture(input)).toBe(input);
-  });
-
   it("strips leading timestamp prefix", () => {
     const input = "[2026-03-29T10:00:00Z] actual content here";
     const result = sanitizeUserTextForCapture(input);
@@ -77,19 +58,6 @@ describe("sanitizeUserTextForCapture", () => {
     const input = "hello    world\n\n\tthere";
     const result = sanitizeUserTextForCapture(input);
     expect(result).toBe("hello world there");
-  });
-});
-
-describe("stripOpenVikingContextInjection", () => {
-  it("strips OpenViking context and relevant memories injected blocks", () => {
-    const input = [
-      "hello",
-      "<openviking-context>ctx</openviking-context>",
-      "<relevant-memories>legacy</relevant-memories>",
-      "world",
-    ].join(" ");
-    const result = stripOpenVikingContextInjection(input);
-    expect(result).toBe("hello world");
   });
 });
 
@@ -255,7 +223,7 @@ describe("extractNewTurnTexts", () => {
 });
 
 describe("extractNewTurnMessages", () => {
-  it("drops assistant toolCall messages that have no text block", () => {
+  it("keeps assistant toolCall messages that have no text block", () => {
     const messages = [
       {
         role: "assistant",
@@ -269,10 +237,15 @@ describe("extractNewTurnMessages", () => {
     const { messages: extracted, newCount } = extractNewTurnMessages(messages, 0);
 
     expect(newCount).toBe(1);
-    expect(extracted).toEqual([]);
+    expect(extracted).toEqual([
+      {
+        role: "assistant",
+        parts: [{ type: "text", text: "[tool: read_file]" }],
+      },
+    ]);
   });
 
-  it("drops assistant toolUse messages that have no text block", () => {
+  it("keeps assistant toolUse messages that have no text block", () => {
     const messages = [
       {
         role: "assistant",
@@ -286,10 +259,15 @@ describe("extractNewTurnMessages", () => {
     const { messages: extracted, newCount } = extractNewTurnMessages(messages, 0);
 
     expect(newCount).toBe(1);
-    expect(extracted).toEqual([]);
+    expect(extracted).toEqual([
+      {
+        role: "assistant",
+        parts: [{ type: "text", text: "[tool: grep]" }],
+      },
+    ]);
   });
 
-  it("does not synthesize placeholders for multiple textless assistant tool calls", () => {
+  it("keeps multiple textless assistant tool calls in one placeholder", () => {
     const messages = [
       {
         role: "assistant",
@@ -302,7 +280,12 @@ describe("extractNewTurnMessages", () => {
 
     const { messages: extracted } = extractNewTurnMessages(messages, 0);
 
-    expect(extracted).toEqual([]);
+    expect(extracted).toEqual([
+      {
+        role: "assistant",
+        parts: [{ type: "text", text: "[tool: read_file, grep]" }],
+      },
+    ]);
   });
 
   it("does not create a placeholder for textless assistant messages without tool calls", () => {

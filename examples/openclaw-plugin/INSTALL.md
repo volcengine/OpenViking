@@ -363,4 +363,4 @@ Or use the cleanup script:
 bash examples/openclaw-plugin/upgrade_scripts/cleanup-memory-openviking.sh
 ```
 
-See also: [INSTALL-ZH.md](./INSTALL-ZH.md) and [INSTALL-AGENT.md](./INSTALL-AGENT.md).
+See also: [INSTALL-ZH.md](./INSTALL-ZH.md), [INSTALL-AGENT.md](./INSTALL-AGENT.md), and [docs/openviking-tos-install-guide.md](./docs/openviking-tos-install-guide.md).

@@ -4,8 +4,8 @@ import {
   estimateTokenCount,
   buildMemoryLines,
   buildMemoryLinesWithBudget,
-} from "../../index.js";
-import { buildLongTermMemoryRecallContext } from "../../auto-recall.js";
+} from "../../auto-recall.js";
+import { buildAutoRecallContext } from "../../auto-recall.js";
 import type { FindResultItem } from "../../client.js";
 import { memoryOpenVikingConfigSchema } from "../../config.js";
 import { RecallTraceMemoryStore } from "../../recall-trace.js";
@@ -33,8 +33,8 @@ describe("estimateTokenCount", () => {
   });
 
   it("uses CJK-aware weighting for non-Latin text and emoji", () => {
-    expect(estimateTokenCount("\u4f60\u597d\u4e16\u754c")).toBe(6);
-    expect(estimateTokenCount("A\u4f60\ud83d\ude42")).toBe(4);
+    expect(estimateTokenCount("你好世界")).toBe(6);
+    expect(estimateTokenCount("A你🙂")).toBe(4);
   });
 
   it("handles long text", () => {
@@ -259,18 +259,16 @@ describe("buildMemoryLinesWithBudget", () => {
   });
 });
 
-describe("buildLongTermMemoryRecallContext trace", () => {
+describe("buildAutoRecallContext trace", () => {
   function makeCfg(overrides: Record<string, unknown> = {}) {
     return memoryOpenVikingConfigSchema.parse({
-      mode: "remote",
-      baseUrl: "http://127.0.0.1:1933",
       autoRecall: true,
       recallPreferAbstract: true,
       ...overrides,
     });
   }
 
-  it("records auto-recall trace without changing the generated section", async () => {
+  it("records auto-recall trace without changing the generated context block", async () => {
     const cfg = makeCfg({ recallTargetTypes: ["user"] });
     const memory = makeMemory({
       uri: "viking://user/memories/rust-pref",
@@ -285,7 +283,7 @@ describe("buildLongTermMemoryRecallContext trace", () => {
     });
     const logger = { info: vi.fn(), warn: vi.fn() };
 
-    const withoutTrace = await buildLongTermMemoryRecallContext({
+    const withoutTrace = await buildAutoRecallContext({
       cfg,
       client: makeClient() as any,
       agentId: "agent-1",
@@ -293,7 +291,7 @@ describe("buildLongTermMemoryRecallContext trace", () => {
       logger,
     });
     const traces = new RecallTraceMemoryStore(10);
-    const withTrace = await buildLongTermMemoryRecallContext({
+    const withTrace = await buildAutoRecallContext({
       cfg,
       client: makeClient() as any,
       agentId: "agent-1",
@@ -305,7 +303,7 @@ describe("buildLongTermMemoryRecallContext trace", () => {
       queryTruncated: false,
     });
 
-    expect(withTrace.section).toBe(withoutTrace.section);
+    expect(withTrace.block).toBe(withoutTrace.block);
     const recorded = traces.query({ turn: "latest", sessionId: "session-1", limit: 10 }).entries[0]!;
     expect(recorded.source).toBe("auto_recall");
     expect(recorded.operationType).toBe("semantic_find");
@@ -320,7 +318,6 @@ describe("buildLongTermMemoryRecallContext trace", () => {
       total: 1,
     });
     expect(recorded.searches[0]!.targetUriInput).toBeUndefined();
-    expect(recorded.searches[0]!.targetUriResolved).toBeUndefined();
     expect(recorded.searches[0]!.results[0]).toMatchObject({
       uri: "viking://user/memories/rust-pref",
       resourceType: "user",
@@ -333,16 +330,56 @@ describe("buildLongTermMemoryRecallContext trace", () => {
     expect(recorded.stats.injectedCount).toBe(1);
   });
 
+  it("defaults auto-recall to backward-compatible user and agent memory recall", async () => {
+    const cfg = makeCfg();
+    const userMemory = makeMemory({
+      uri: "viking://user/memories/project-docs",
+      category: "memory",
+      abstract: "Project documentation preference.",
+      score: 0.9,
+    });
+    const client = {
+      healthCheck: vi.fn().mockResolvedValue(undefined),
+      find: vi.fn(async (_query: string, options: { contextType?: string }) => ({
+        memories: options.contextType === "memory" ? [userMemory] : [],
+        resources: [],
+        total: options.contextType === "memory" ? 1 : 0,
+      })),
+      read: vi.fn().mockResolvedValue("unused"),
+    };
+    const traces = new RecallTraceMemoryStore(10);
+
+    await buildAutoRecallContext({
+      cfg,
+      client: client as any,
+      agentId: "agent-1",
+      queryText: "where are the project docs?",
+      logger: { info: vi.fn(), warn: vi.fn() },
+      traceRecorder: traces,
+      sessionId: "session-resource-only",
+      ovSessionId: "ov-1",
+    });
+
+    expect(client.find).toHaveBeenCalledTimes(1);
+    expect(client.find.mock.calls[0]?.[1]).toMatchObject({
+      contextType: "memory",
+      targetUri: undefined,
+    });
+    const recorded = traces.query({ turn: "latest", sessionId: "session-resource-only", limit: 10 }).entries[0]!;
+    expect(recorded.resourceTypes).toEqual(["user", "agent"]);
+    expect(recorded.searches.map((search) => search.resourceType)).toEqual(["user"]);
+  });
+
   it("records search errors while still injecting successful recall hits", async () => {
-    const cfg = makeCfg({ recallTargetTypes: ["user", "resource"] });
+    const cfg = makeCfg({ recallTargetTypes: ["resource", "user"] });
     const client = {
       healthCheck: vi.fn().mockResolvedValue(undefined),
       find: vi.fn()
-        .mockRejectedValueOnce(new Error("user search failed"))
+        .mockRejectedValueOnce(new Error("resource search failed"))
         .mockResolvedValueOnce({
-          resources: [makeMemory({
-            uri: "viking://resources/backend-pref",
-            abstract: "Use TypeScript for this service.",
+          memories: [makeMemory({
+            uri: "viking://user/memories/backend-pref",
+            abstract: "Agent recommends TypeScript for this service.",
             score: 0.88,
           })],
           total: 1,
@@ -352,7 +389,7 @@ describe("buildLongTermMemoryRecallContext trace", () => {
     const logger = { info: vi.fn(), warn: vi.fn() };
     const traces = new RecallTraceMemoryStore(10);
 
-    const result = await buildLongTermMemoryRecallContext({
+    const result = await buildAutoRecallContext({
       cfg,
       client: client as any,
       agentId: "agent-1",
@@ -362,21 +399,17 @@ describe("buildLongTermMemoryRecallContext trace", () => {
       sessionId: "session-err",
     });
 
-    expect(result.section).toContain("Use TypeScript for this service.");
+    expect(result.block).toContain("Agent recommends TypeScript for this service.");
     const recorded = traces.query({ turn: "latest", sessionId: "session-err", limit: 10 }).entries[0]!;
     expect(recorded.searches).toHaveLength(2);
     expect(recorded.searches[0]).toMatchObject({
-      resourceType: "user",
-      error: "Error: user search failed",
-    });
-    expect(recorded.searches[0]!.targetUriInput).toBeUndefined();
-    expect(recorded.searches[0]!.targetUriResolved).toBeUndefined();
-    expect(recorded.searches[1]).toMatchObject({
       resourceType: "resource",
+      error: "Error: resource search failed",
+    });
+    expect(recorded.searches[1]).toMatchObject({
+      resourceType: "user",
       total: 1,
     });
-    expect(recorded.searches[1]!.targetUriInput).toBeUndefined();
-    expect(recorded.searches[1]!.targetUriResolved).toBeUndefined();
     expect(recorded.selected[0]).toMatchObject({ injected: true });
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("auto-recall search failed"));
   });

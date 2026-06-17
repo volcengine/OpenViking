@@ -21,9 +21,13 @@
   "files": [
     "dist/",
     "*.ts",
+    "adapters/",
     "commands/setup.ts",
-    "plugin/openviking-feature-gates.ts",
     "config/feature-gates.json",
+    "registries/",
+    "routing/",
+    "plugin/",
+    "services/",
     "!vitest.config.ts",
     "install-manifest.json",
     "openclaw.plugin.json",
@@ -36,7 +40,7 @@
     "skills/"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.build.json",
     "prepack": "npm run build",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json",
@@ -75,6 +79,7 @@
   },
   "devDependencies": {
     "@types/node": "^25.3.5",
+    "@volcengine/tos-sdk": "^2.9.1",
     "typescript": "^5.8.0",
     "vitest": "^4.1.0"
   }

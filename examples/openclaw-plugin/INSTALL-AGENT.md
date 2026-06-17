@@ -96,10 +96,10 @@ openclaw openviking setup \
   --json
 ```
 
-Assistant peer prefix (optional; only when the user explicitly requests assistant `peer_id` / actor peer scoping):
+Custom agent routing prefix (optional; only when the user explicitly requests a prefix):
 
 ```bash
-openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --peer-role assistant --peer-prefix <PREFIX> --json
+openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --peer-prefix <PREFIX> --json
 ```
 
 Slot replacement retry, only after user approval:
@@ -139,8 +139,7 @@ Also inspect:
 | `health.version` | Records server version |
 | `health.compatibility` | Determines whether to warn |
 | `config.hasApiKey` | Confirms whether an API key was saved |
-| `config.peer_role` | Confirms which messages write body `peer_id` and which data-plane requests use actor peer scope |
-| `config.peer_prefix` | Confirms configured assistant peer / actor peer prefix when present |
+| `config.peer_prefix` | Confirms configured peer prefix when present |
 
 ## Environment Detection
 
@@ -268,8 +267,7 @@ Core fields:
 | `mode` | Legacy compatibility field. Expected value: `remote`. |
 | `baseUrl` | OpenViking HTTP endpoint |
 | `apiKey` | OpenViking API key |
-| `peer_role` | Peer identity mode: `none`, `assistant`, or `person`. New installs default to `assistant`. Session messages use body `peer_id`; data-plane recall/search uses `X-OpenViking-Actor-Peer`. |
-| `peer_prefix` | Optional prefix for assistant `peer_id` / actor peer values when `peer_role=assistant`. |
+| `peer_prefix` | Optional; prefix for OpenClaw agent IDs when set. Interactive setup accepts only letters, digits, `_`, and `-`. If unset, the plugin follows session agent IDs. |
 | `accountId` | Required for root API keys |
 | `userId` | Required for root API keys |
 
@@ -331,8 +329,7 @@ Existing config fields are preserved during migration. The new plugin reads old 
 
 - `baseUrl`
 - `apiKey`
-- `peer_role`: optional; default `assistant`; selects the peer identity mode
-- `peer_prefix`: optional assistant `peer_id` / actor peer prefix when `peer_role=assistant`
+- `peer_prefix`: optional; interactive setup accepts only letters, digits, `_`, and `-`
 
 ## Backup Path: ov-install
 

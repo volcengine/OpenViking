@@ -33,6 +33,8 @@ from rich.table import Table
 
 GATEWAY_URL = "http://127.0.0.1:18789"
 OPENVIKING_URL = "http://127.0.0.1:1933"
+AGENT_ID = "openclaw"
+
 console = Console()
 assertions: list[dict] = []
 
@@ -99,11 +101,14 @@ def has_tool_use_in_output(data: dict) -> bool:
 
 
 class OVInspector:
-    def __init__(self, base_url: str):
+    def __init__(self, base_url: str, agent_id: str = AGENT_ID):
         self.base_url = base_url.rstrip("/")
+        self.agent_id = agent_id
 
     def _headers(self) -> dict:
         h: dict[str, str] = {"Content-Type": "application/json"}
+        if self.agent_id:
+            h["X-OpenViking-Actor-Peer"] = self.agent_id
         return h
 
     def _get(self, path: str, timeout: int = 10):

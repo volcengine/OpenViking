@@ -18,10 +18,11 @@ export function withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutMe
 
 export async function quickHealthCheck(
   client: OpenVikingClient,
+  agentId: string | undefined,
   timeoutMs: number,
 ): Promise<boolean> {
   try {
-    await client.healthCheck(timeoutMs);
+    await client.healthCheck(timeoutMs, agentId);
     return true;
   } catch {
     return false;
@@ -30,8 +31,9 @@ export async function quickHealthCheck(
 
 export async function quickRecallPrecheck(
   client: OpenVikingClient,
+  agentId?: string,
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
-  const healthOk = await quickHealthCheck(client, 500);
+  const healthOk = await quickHealthCheck(client, agentId, 500);
   if (healthOk) {
     return { ok: true };
   }
