@@ -8,7 +8,7 @@ use ragfs::core::{FsContextInner, GrepResult, MultiWriteWrappedFS, TreeEntry, FS
 use ragfs::plugins::MemFileSystem;
 use ragfs::{FileInfo, FileSystem, Result, WriteFlag};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 #[derive(Clone)]
@@ -26,6 +26,14 @@ struct DeleteFailingProvider {
     inner: MemoryCacheProvider,
 }
 
+struct TrackingProvider {
+    inner: MemoryCacheProvider,
+    gets: AtomicU64,
+    batch_gets: AtomicU64,
+    seen_get_keys: Mutex<Vec<String>>,
+    seen_batch_get_keys: Mutex<Vec<Vec<String>>>,
+}
+
 struct UnavailableProvider;
 
 impl DeleteFailingProvider {
@@ -33,6 +41,41 @@ impl DeleteFailingProvider {
         Self {
             inner: MemoryCacheProvider::new(),
         }
+    }
+}
+
+impl TrackingProvider {
+    fn new() -> Self {
+        Self {
+            inner: MemoryCacheProvider::new(),
+            gets: AtomicU64::new(0),
+            batch_gets: AtomicU64::new(0),
+            seen_get_keys: Mutex::new(Vec::new()),
+            seen_batch_get_keys: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn reset_observed_reads(&self) {
+        self.gets.store(0, Ordering::Relaxed);
+        self.batch_gets.store(0, Ordering::Relaxed);
+        self.seen_get_keys.lock().unwrap().clear();
+        self.seen_batch_get_keys.lock().unwrap().clear();
+    }
+
+    fn batch_get_count(&self) -> u64 {
+        self.batch_gets.load(Ordering::Relaxed)
+    }
+
+    fn observed_read_keys(&self) -> Vec<String> {
+        let mut keys = self.seen_get_keys.lock().unwrap().clone();
+        keys.extend(
+            self.seen_batch_get_keys
+                .lock()
+                .unwrap()
+                .iter()
+                .flat_map(|batch| batch.iter().cloned()),
+        );
+        keys
     }
 }
 
@@ -54,6 +97,45 @@ impl CacheProvider for DeleteFailingProvider {
         Err(CacheError::Unavailable(
             "delete intentionally failed".to_string(),
         ))
+    }
+}
+
+#[async_trait]
+impl CacheProvider for TrackingProvider {
+    fn name(&self) -> &'static str {
+        "tracking"
+    }
+
+    fn capabilities(&self) -> ragfs::cache::ProviderCapabilities {
+        self.inner.capabilities()
+    }
+
+    async fn get(&self, key: &str) -> CacheResult<Option<Bytes>> {
+        self.gets.fetch_add(1, Ordering::Relaxed);
+        self.seen_get_keys.lock().unwrap().push(key.to_string());
+        self.inner.get(key).await
+    }
+
+    async fn put(&self, key: &str, value: Bytes) -> CacheResult<()> {
+        self.inner.put(key, value).await
+    }
+
+    async fn delete(&self, key: &str) -> CacheResult<()> {
+        self.inner.delete(key).await
+    }
+
+    async fn batch_get(&self, keys: &[String]) -> CacheResult<Vec<Option<Bytes>>> {
+        self.batch_gets.fetch_add(1, Ordering::Relaxed);
+        self.seen_batch_get_keys.lock().unwrap().push(keys.to_vec());
+        self.inner.batch_get(keys).await
+    }
+
+    async fn batch_put(&self, entries: Vec<(String, Bytes)>) -> CacheResult<()> {
+        self.inner.batch_put(entries).await
+    }
+
+    async fn invalidate(&self, keys: &[String]) -> CacheResult<()> {
+        self.inner.invalidate(keys).await
     }
 }
 
@@ -223,6 +305,20 @@ fn cached_fs_with_policy(
     (fs, provider)
 }
 
+fn cached_fs_with_tracking_provider(
+    backend: CountingFileSystem,
+    policy: CachePolicy,
+) -> (Arc<CachedFileSystem>, Arc<TrackingProvider>) {
+    let provider = Arc::new(TrackingProvider::new());
+    let fs = Arc::new(CachedFileSystem::new(
+        Box::new(backend),
+        provider.clone(),
+        CacheNamespace::new("tracking"),
+        policy,
+    ));
+    (fs, provider)
+}
+
 #[test]
 fn cache_policy_traversal_mode_defaults_to_backend() {
     assert_eq!(
@@ -352,6 +448,85 @@ async fn cached_grep_traversal_reuses_directory_and_file_cache_after_warmup() {
         probe.stat_count(),
         2,
         "second grep should only stat the query root, not every cached entry"
+    );
+}
+
+#[tokio::test]
+async fn cached_grep_batches_generation_validation_after_warmup() {
+    let backend = CountingFileSystem::new();
+    backend.mkdir("/docs", 0o755).await.unwrap();
+    backend.mkdir("/docs/sub", 0o755).await.unwrap();
+    backend
+        .write("/docs/a.md", b"needle\nplain", 0, WriteFlag::Create)
+        .await
+        .unwrap();
+    backend
+        .write("/docs/sub/b.md", b"other\nneedle", 0, WriteFlag::Create)
+        .await
+        .unwrap();
+    let (fs, provider) = cached_fs_with_tracking_provider(
+        backend,
+        CachePolicy::default().with_traversal_mode(CacheTraversalMode::CachedTraversal),
+    );
+
+    fs.grep("/docs", "needle", true, false, None, None, None)
+        .await
+        .unwrap();
+    provider.reset_observed_reads();
+
+    let result = fs
+        .grep("/docs", "needle", true, false, None, None, None)
+        .await
+        .unwrap();
+
+    assert_eq!(result.count, 2);
+    assert!(
+        provider.batch_get_count() > 0,
+        "warm cached grep should batch generation validation reads"
+    );
+}
+
+#[tokio::test]
+async fn cached_grep_memoizes_generation_keys_within_one_traversal() {
+    let backend = CountingFileSystem::new();
+    backend.mkdir("/docs", 0o755).await.unwrap();
+    backend.mkdir("/docs/sub", 0o755).await.unwrap();
+    backend
+        .write("/docs/a.md", b"needle\nplain", 0, WriteFlag::Create)
+        .await
+        .unwrap();
+    backend
+        .write("/docs/sub/b.md", b"other\nneedle", 0, WriteFlag::Create)
+        .await
+        .unwrap();
+    let (fs, provider) = cached_fs_with_tracking_provider(
+        backend,
+        CachePolicy::default().with_traversal_mode(CacheTraversalMode::CachedTraversal),
+    );
+
+    fs.grep("/docs", "needle", true, false, None, None, None)
+        .await
+        .unwrap();
+    provider.reset_observed_reads();
+
+    let result = fs
+        .grep("/docs", "needle", true, false, None, None, None)
+        .await
+        .unwrap();
+
+    assert_eq!(result.count, 2);
+    let subtree_keys = provider
+        .observed_read_keys()
+        .into_iter()
+        .filter(|key| key.contains(":subtree:"))
+        .collect::<Vec<_>>();
+    let unique = subtree_keys
+        .iter()
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(
+        subtree_keys.len(),
+        unique.len(),
+        "one cached grep traversal should not re-read the same generation key"
     );
 }
 

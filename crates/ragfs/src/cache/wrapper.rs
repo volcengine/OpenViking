@@ -186,6 +186,7 @@ impl CachedFileSystem {
         let base_path = normalize_prefix_path(path);
         let normalized_exclude = exclude_path.map(normalize_prefix_path);
         let mut result = GrepResult::new();
+        let mut generation_cache = HashMap::new();
         let mut stack = vec![GrepTask::Visit {
             path: base_path.clone(),
             is_dir: None,
@@ -222,7 +223,9 @@ impl CachedFileSystem {
                     }
                 }
 
-                let entries = self.read_dir(&current_path).await?;
+                let entries = self
+                    .read_dir_with_generation_cache(&current_path, &mut generation_cache)
+                    .await?;
                 for entry in entries.into_iter().rev() {
                     let entry_path = if current_path == "/" {
                         format!("/{}", entry.name)
@@ -242,7 +245,9 @@ impl CachedFileSystem {
                     }
                 }
 
-                let content = self.read(&current_path, 0, 0).await?;
+                let content = self
+                    .read_with_generation_cache(&current_path, 0, 0, &mut generation_cache)
+                    .await?;
                 let content_str = String::from_utf8_lossy(&content);
                 let rel_file = relative_match_file(&base_path, &current_path);
 
@@ -265,6 +270,33 @@ impl CachedFileSystem {
         let result = self.provider.get(key).await;
         self.metrics.get(started.elapsed());
         result
+    }
+
+    async fn cache_batch_get(&self, keys: &[String]) -> CacheResult<Vec<Option<Bytes>>> {
+        if keys.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        if keys.len() == 1 || !self.provider.capabilities().batch_get {
+            let mut values = Vec::with_capacity(keys.len());
+            for key in keys {
+                values.push(self.cache_get(key).await?);
+            }
+            return Ok(values);
+        }
+
+        let started = Instant::now();
+        let result = self.provider.batch_get(keys).await;
+        self.metrics.get(started.elapsed());
+        let values = result?;
+        if values.len() != keys.len() {
+            return Err(CacheError::InvalidData(format!(
+                "batch_get returned {} values for {} keys",
+                values.len(),
+                keys.len()
+            )));
+        }
+        Ok(values)
     }
 
     async fn cache_put(&self, key: &str, value: Bytes, affected_path: &str) -> bool {
@@ -317,38 +349,108 @@ impl CachedFileSystem {
     }
 
     async fn current_generation(&self, key: &str) -> CacheResult<u64> {
-        let provider_value = self.cache_get(key).await?;
-        let was_missing = provider_value.is_none();
-        let value = match provider_value {
-            None => self
-                .generations
-                .read()
-                .await
-                .get(key)
-                .copied()
-                .unwrap_or(self.generation_epoch),
-            Some(value) if value.len() == std::mem::size_of::<u64>() => {
-                let mut bytes = [0_u8; 8];
-                bytes.copy_from_slice(&value);
-                u64::from_be_bytes(bytes)
-            }
-            Some(_) => {
-                return Err(CacheError::InvalidData(format!(
-                    "generation key {key} has invalid length"
-                )))
-            }
-        };
+        let values = self.current_generations(&[key.to_string()]).await?;
+        Ok(values[0])
+    }
 
-        self.generations
-            .write()
-            .await
-            .insert(key.to_string(), value);
+    async fn current_generations(&self, keys: &[String]) -> CacheResult<Vec<u64>> {
+        let provider_values = self.cache_batch_get(keys).await?;
+        let local_generations = self.generations.read().await;
+        let mut values = Vec::with_capacity(keys.len());
+        let mut missing = Vec::new();
 
-        if was_missing {
+        for (key, provider_value) in keys.iter().zip(provider_values) {
+            let value = match provider_value {
+                None => {
+                    let value = local_generations
+                        .get(key)
+                        .copied()
+                        .unwrap_or(self.generation_epoch);
+                    missing.push((key.clone(), value));
+                    value
+                }
+                Some(value) if value.len() == std::mem::size_of::<u64>() => {
+                    let mut bytes = [0_u8; 8];
+                    bytes.copy_from_slice(&value);
+                    u64::from_be_bytes(bytes)
+                }
+                Some(_) => {
+                    return Err(CacheError::InvalidData(format!(
+                        "generation key {key} has invalid length"
+                    )))
+                }
+            };
+            values.push(value);
+        }
+        drop(local_generations);
+
+        {
+            let mut local_generations = self.generations.write().await;
+            for (key, value) in keys.iter().zip(values.iter()) {
+                local_generations.insert(key.clone(), *value);
+            }
+        }
+
+        self.put_missing_generations(missing).await;
+
+        Ok(values)
+    }
+
+    async fn current_generations_memoized(
+        &self,
+        keys: &[String],
+        generation_cache: &mut HashMap<String, u64>,
+    ) -> CacheResult<Vec<u64>> {
+        let mut values = vec![None; keys.len()];
+        let mut missing_keys = Vec::new();
+        let mut missing_positions = Vec::new();
+
+        for (index, key) in keys.iter().enumerate() {
+            if let Some(value) = generation_cache.get(key) {
+                values[index] = Some(*value);
+            } else {
+                missing_positions.push(index);
+                missing_keys.push(key.clone());
+            }
+        }
+
+        let missing_values = self.current_generations(&missing_keys).await?;
+        for (index, value) in missing_positions.into_iter().zip(missing_values) {
+            generation_cache.insert(keys[index].clone(), value);
+            values[index] = Some(value);
+        }
+
+        values
+            .into_iter()
+            .map(|value| {
+                value.ok_or_else(|| CacheError::Internal("missing generation value".to_string()))
+            })
+            .collect()
+    }
+
+    async fn put_missing_generations(&self, missing: Vec<(String, u64)>) {
+        if missing.is_empty() {
+            return;
+        }
+
+        if missing.len() > 1 && self.provider.capabilities().batch_put {
+            let entries = missing
+                .into_iter()
+                .map(|(key, value)| (key, Bytes::copy_from_slice(&value.to_be_bytes())))
+                .collect();
+            let started = Instant::now();
+            if self.provider.batch_put(entries).await.is_err() {
+                self.metrics.error();
+            }
+            self.metrics.put(started.elapsed());
+            return;
+        }
+
+        for (key, value) in missing {
             let started = Instant::now();
             if self
                 .provider
-                .put(key, Bytes::copy_from_slice(&value.to_be_bytes()))
+                .put(&key, Bytes::copy_from_slice(&value.to_be_bytes()))
                 .await
                 .is_err()
             {
@@ -356,23 +458,41 @@ impl CachedFileSystem {
             }
             self.metrics.put(started.elapsed());
         }
-
-        Ok(value)
     }
 
     async fn generation_snapshots(&self, path: &str) -> CacheResult<Vec<GenerationSnapshot>> {
-        let mut snapshots = Vec::new();
-        for scope in ancestor_scopes(path) {
-            let key = self.generation_key(&scope);
-            let value = self.current_generation(&key).await?;
-            snapshots.push(GenerationSnapshot { key, value });
-        }
-        Ok(snapshots)
+        let keys = ancestor_scopes(path)
+            .into_iter()
+            .map(|scope| self.generation_key(&scope))
+            .collect::<Vec<_>>();
+        let values = self.current_generations(&keys).await?;
+        Ok(keys
+            .into_iter()
+            .zip(values)
+            .map(|(key, value)| GenerationSnapshot { key, value })
+            .collect())
     }
 
-    async fn generations_match(&self, envelope: &CacheEnvelope) -> CacheResult<bool> {
-        for snapshot in envelope.generations() {
-            if self.current_generation(&snapshot.key).await? != snapshot.value {
+    async fn generations_match_with_cache(
+        &self,
+        envelope: &CacheEnvelope,
+        generation_cache: Option<&mut HashMap<String, u64>>,
+    ) -> CacheResult<bool> {
+        let keys = envelope
+            .generations()
+            .iter()
+            .map(|snapshot| snapshot.key.clone())
+            .collect::<Vec<_>>();
+        let values = match generation_cache {
+            Some(generation_cache) => {
+                self.current_generations_memoized(&keys, generation_cache)
+                    .await?
+            }
+            None => self.current_generations(&keys).await?,
+        };
+
+        for (snapshot, value) in envelope.generations().iter().zip(values) {
+            if value != snapshot.value {
                 return Ok(false);
             }
         }
@@ -400,6 +520,17 @@ impl CachedFileSystem {
     }
 
     async fn probe_file(&self, key: &str, path: &str, record_hit: bool) -> Option<Vec<u8>> {
+        self.probe_file_with_generation_cache(key, path, record_hit, None)
+            .await
+    }
+
+    async fn probe_file_with_generation_cache(
+        &self,
+        key: &str,
+        path: &str,
+        record_hit: bool,
+        generation_cache: Option<&mut HashMap<String, u64>>,
+    ) -> Option<Vec<u8>> {
         let value = match self.cache_get(key).await {
             Ok(value) => value?,
             Err(_) => {
@@ -418,7 +549,10 @@ impl CachedFileSystem {
             }
         };
 
-        match self.generations_match(&envelope).await {
+        match self
+            .generations_match_with_cache(&envelope, generation_cache)
+            .await
+        {
             Ok(true) => match envelope.into_file() {
                 Ok(data) => {
                     if record_hit {
@@ -450,6 +584,17 @@ impl CachedFileSystem {
         path: &str,
         record_hit: bool,
     ) -> Option<Vec<FileInfo>> {
+        self.probe_directory_with_generation_cache(key, path, record_hit, None)
+            .await
+    }
+
+    async fn probe_directory_with_generation_cache(
+        &self,
+        key: &str,
+        path: &str,
+        record_hit: bool,
+        generation_cache: Option<&mut HashMap<String, u64>>,
+    ) -> Option<Vec<FileInfo>> {
         let value = match self.cache_get(key).await {
             Ok(value) => value?,
             Err(_) => {
@@ -468,7 +613,10 @@ impl CachedFileSystem {
             }
         };
 
-        match self.generations_match(&envelope).await {
+        match self
+            .generations_match_with_cache(&envelope, generation_cache)
+            .await
+        {
             Ok(true) => match envelope.into_directory() {
                 Ok(entries) => {
                     if !self.policy.cache_directory_entries(path, entries.len()) {
@@ -517,6 +665,129 @@ impl CachedFileSystem {
         {
             inflight.remove(key);
         }
+    }
+
+    async fn read_with_generation_cache(
+        &self,
+        path: &str,
+        offset: u64,
+        size: u64,
+        generation_cache: &mut HashMap<String, u64>,
+    ) -> Result<Vec<u8>> {
+        if offset != 0
+            || size != 0
+            || !self.policy.cache_file(path, 0)
+            || self.is_runtime_bypassed(path).await
+        {
+            self.metrics.policy_bypass();
+            return self.backend.read(path, offset, size).await;
+        }
+
+        let _operation_guard = self.operation_lock.read().await;
+        if self.is_runtime_bypassed(path).await {
+            self.metrics.policy_bypass();
+            return self.backend.read(path, offset, size).await;
+        }
+
+        let normalized = normalize_path(path);
+        let key = self.file_key(&normalized);
+        if let Some(data) = self
+            .probe_file_with_generation_cache(&key, &normalized, true, Some(generation_cache))
+            .await
+        {
+            return Ok(data);
+        }
+        self.metrics.file_miss();
+
+        let (inflight, leader) = self.acquire_inflight(&key).await;
+        if leader {
+            self.metrics.inflight_leader();
+        } else {
+            self.metrics.inflight_follower();
+        }
+        let inflight_guard = inflight.lock().await;
+
+        if !leader {
+            if let Some(data) = self
+                .probe_file_with_generation_cache(&key, &normalized, false, Some(generation_cache))
+                .await
+            {
+                self.metrics.inflight_backend_saved();
+                drop(inflight_guard);
+                self.release_inflight(&key, &inflight).await;
+                return Ok(data);
+            }
+        }
+
+        let data = self.backend.read(path, 0, 0).await;
+        if let Ok(value) = &data {
+            self.metrics.backend_fallback(value.len());
+            self.fill_file(&key, &normalized, value).await;
+        }
+        drop(inflight_guard);
+        self.release_inflight(&key, &inflight).await;
+        data
+    }
+
+    async fn read_dir_with_generation_cache(
+        &self,
+        path: &str,
+        generation_cache: &mut HashMap<String, u64>,
+    ) -> Result<Vec<FileInfo>> {
+        if !self.policy.cache_directory(path) || self.is_runtime_bypassed(path).await {
+            self.metrics.policy_bypass();
+            return self.backend.read_dir(path).await;
+        }
+
+        let _operation_guard = self.operation_lock.read().await;
+        if self.is_runtime_bypassed(path).await {
+            self.metrics.policy_bypass();
+            return self.backend.read_dir(path).await;
+        }
+
+        let normalized = normalize_path(path);
+        let key = self.directory_key(&normalized);
+        if let Some(entries) = self
+            .probe_directory_with_generation_cache(&key, &normalized, true, Some(generation_cache))
+            .await
+        {
+            return Ok(entries);
+        }
+        self.metrics.read_dir_miss();
+
+        let (inflight, leader) = self.acquire_inflight(&key).await;
+        if leader {
+            self.metrics.inflight_leader();
+        } else {
+            self.metrics.inflight_follower();
+        }
+        let inflight_guard = inflight.lock().await;
+
+        if !leader {
+            if let Some(entries) = self
+                .probe_directory_with_generation_cache(
+                    &key,
+                    &normalized,
+                    false,
+                    Some(generation_cache),
+                )
+                .await
+            {
+                self.metrics.inflight_backend_saved();
+                drop(inflight_guard);
+                self.release_inflight(&key, &inflight).await;
+                return Ok(entries);
+            }
+        }
+
+        let entries = self.backend.read_dir(path).await;
+        if let Ok(value) = &entries {
+            self.metrics.backend_fallback(0);
+            self.fill_directory(&key, &normalized, value).await;
+        }
+        drop(inflight_guard);
+        self.release_inflight(&key, &inflight).await;
+        entries
     }
 
     async fn fill_file(&self, key: &str, path: &str, data: &[u8]) {
