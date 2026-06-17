@@ -645,37 +645,6 @@ html {
   height: 15px;
 }
 
-.zouk-reader-launcher {
-  position: fixed;
-  z-index: 84;
-  right: 24px;
-  bottom: calc(24px + env(safe-area-inset-bottom, 0px));
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 52px;
-  height: 52px;
-  padding: 0;
-  border: 1px solid color-mix(in oklab, var(--th-line) 82%, transparent);
-  border-radius: 999px;
-  background: color-mix(in oklab, var(--th-bg) 92%, var(--th-bg-2));
-  color: var(--th-ink);
-  box-shadow: 0 16px 42px color-mix(in oklab, #000 18%, transparent);
-  cursor: pointer;
-  transition: transform 0.15s, background 0.15s, border-color 0.15s, box-shadow 0.15s;
-}
-
-.zouk-reader-launcher:hover,
-.zouk-reader-launcher:focus-visible {
-  border-color: color-mix(in oklab, var(--th-accent) 42%, var(--th-line));
-  background: color-mix(in oklab, var(--th-bg) 78%, var(--th-bg-2));
-  box-shadow: 0 18px 48px color-mix(in oklab, #000 22%, transparent);
-}
-
-.zouk-reader-launcher:active {
-  transform: scale(0.97);
-}
-
 .zouk-reader-bottom-composer {
   --zouk-reader-field-radius: 22px;
   position: fixed;
@@ -686,6 +655,12 @@ html {
   padding: 0;
   border: 0;
   background: transparent;
+}
+
+.zouk-reader-bottom-composer.is-index-route {
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
 }
 
 .zouk-reader-panel {
@@ -1451,6 +1426,11 @@ html {
     max-width: 428px;
   }
 
+  .zouk-reader-bottom-composer.is-index-route {
+    left: 50%;
+    right: auto;
+  }
+
   .zouk-reader-close {
     top: -2px;
     right: 0;
@@ -1509,6 +1489,11 @@ html {
     right: 24px;
     bottom: calc(24px + env(safe-area-inset-bottom, 0px));
     width: var(--zouk-reader-panel-width);
+  }
+
+  .zouk-reader-bottom-composer.is-index-route {
+    left: 50%;
+    right: auto;
   }
 
   .zouk-reader-panel {
