@@ -810,6 +810,30 @@ def _format_commit_messages_markdown(messages: list[dict[str, Any]]) -> str:
                 text = part.get("text", "")
                 # Indent to make it a blockquote / code block if needed
                 lines.append(text)
+            elif part_type == "control":
+                lines.append(f"**Control:** `{part.get('control_type', '?')}`")
+                if part.get("payload") is not None:
+                    lines.append("")
+                    lines.append("```json")
+                    lines.append(json.dumps(part.get("payload"), ensure_ascii=False, indent=2))
+                    lines.append("```")
+            elif part_type == "tool":
+                status = str(part.get("tool_status") or "")
+                label = "Tool result" if status in {"completed", "error"} else "Tool call"
+                lines.append(f"**{label}:** `{part.get('tool_name', '?')}` status={status or '?'}")
+                if part.get("tool_input") is not None:
+                    lines.append("")
+                    lines.append("```json")
+                    lines.append(json.dumps(part.get("tool_input"), ensure_ascii=False, indent=2))
+                    lines.append("```")
+                if part.get("tool_output"):
+                    content = str(part.get("tool_output", ""))
+                    if len(content) > 2000:
+                        content = content[:2000] + "\n... (truncated)"
+                    lines.append("")
+                    lines.append("```")
+                    lines.append(content)
+                    lines.append("```")
             elif part_type == "tool_call":
                 lines.append(f"**Tool call:** `{part.get('tool_name', '?')}`")
                 lines.append("")

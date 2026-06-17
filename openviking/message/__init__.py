@@ -8,6 +8,7 @@ Message = role + parts
 from openviking.message.message import Message
 from openviking.message.part import (
     ContextPart,
+    ControlPart,
     ImagePart,
     Part,
     TextPart,
@@ -19,6 +20,7 @@ __all__ = [
     "Part",
     "TextPart",
     "ContextPart",
+    "ControlPart",
     "ImagePart",
     "ToolPart",
 ]

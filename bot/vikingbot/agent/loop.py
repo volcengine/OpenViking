@@ -644,6 +644,7 @@ class AgentLoop:
         memory_owner_user_ids: list[str] | None = None,
         disabled_tools: list[str] | None = None,
         openviking_connection: dict[str, Any] | None = None,
+        stop_tool_names: list[str] | None = None,
     ) -> tuple[str | None, str | None, list[dict], dict[str, int], int]:
         """
         Run the core agent loop: call LLM, execute tools, repeat until done.
@@ -658,6 +659,7 @@ class AgentLoop:
                 legacy root-key fanout searches
             disabled_tools: Tool names to hide from the model for this request
             openviking_connection: Request-scoped OpenViking identity for tools
+            stop_tool_names: Tool names that terminate the loop immediately after execution
 
         Returns:
             tuple of (final_content, final_reasoning_content, tools_used, token_usage, iteration)
@@ -672,6 +674,7 @@ class AgentLoop:
             "total_tokens": 0,
         }
         write_exp_injected = False
+        stop_tools = set(stop_tool_names or [])
 
         while iteration < self.max_iterations:
             iteration += 1
@@ -832,6 +835,13 @@ class AgentLoop:
                     }
                     tools_used.append(tool_used_dict)
 
+                if any(
+                    tool_call.name in stop_tools
+                    for _idx, tool_call, _result, _duration in results
+                ):
+                    final_content = ""
+                    break
+
                 messages.append(
                     {"role": "user", "content": "Reflect on the results and decide next steps."}
                 )
@@ -840,7 +850,9 @@ class AgentLoop:
                 final_reasoning_content = response.reasoning_content
                 break
 
-        if final_content is None or (isinstance(final_content, str) and not final_content.strip()):
+        if final_content == "" and tools_used and tools_used[-1].get("tool_name") in stop_tools:
+            pass
+        elif final_content is None or (isinstance(final_content, str) and not final_content.strip()):
             if iteration >= self.max_iterations:
                 final_content = f"Reached {self.max_iterations} iterations without completion."
             else:

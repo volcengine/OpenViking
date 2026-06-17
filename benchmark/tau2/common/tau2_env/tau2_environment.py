@@ -130,6 +130,39 @@ class _GymTau2BenchEnv:
         self.terminated = terminated
         return _clean_obs(obs)
 
+    def append_agent_message(self, content: str) -> None:
+        if not content.strip():
+            return
+        simulation = self._simulation_run_from_env_info()
+        if simulation is None:
+            return
+
+        from tau2.data_model.message import AssistantMessage
+
+        simulation.messages.append(
+            AssistantMessage(role="assistant", content=content)
+        )
+        self.env._simulation_run = simulation
+        self.simulation_run = simulation.model_dump_json(indent=2)
+
+    def _get_reward(self):
+        reward, reward_info = self.env._get_reward()
+        try:
+            return reward, json.loads(reward_info)
+        except (TypeError, json.JSONDecodeError):
+            return reward, reward_info
+
+    def _simulation_run_from_env_info(self):
+        simulation_run_json = self.env._get_info().get("simulation_run")
+        if not simulation_run_json:
+            return None
+        try:
+            from tau2.data_model.simulation import SimulationRun
+
+            return SimulationRun.model_validate_json(simulation_run_json)
+        except Exception:
+            return None
+
 
 class _NativeTau2BenchEnv:
     def __init__(self, domain: str, task_id: str):

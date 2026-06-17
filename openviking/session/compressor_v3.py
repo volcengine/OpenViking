@@ -829,11 +829,35 @@ def _training_case_from_first_message(
     if not set(allowed_memory_types).issubset(_TRAINING_FAST_PATH_MEMORY_TYPES):
         return None
 
-    text = _message_text(messages[0]).strip()
+    payload = _training_case_spec_payload_from_message(messages[0])
+    if payload is None:
+        return None
+    return _case_from_payload(payload)
+
+
+def _training_case_spec_payload_from_message(message: Message) -> dict[str, Any] | None:
+    for part in getattr(message, "parts", []) or []:
+        if getattr(part, "type", "") != "control":
+            continue
+        if getattr(part, "control_type", "") != "batch_training_case_spec":
+            continue
+        payload = getattr(part, "payload", None)
+        if not isinstance(payload, dict):
+            raise ValueError("Training CaseSpec control payload must be a JSON object")
+        protocol = str(payload.get("protocol") or "")
+        if protocol != _TRAINING_CASE_SPEC_PROTOCOL:
+            raise ValueError(
+                "Training CaseSpec fast path protocol mismatch: "
+                f"expected {_TRAINING_CASE_SPEC_PROTOCOL!r}, got {protocol!r}"
+            )
+        if not isinstance(payload.get("case"), dict):
+            raise ValueError("Training CaseSpec fast path payload must contain a case object")
+        return payload
+
+    text = _message_text(message).strip()
     if not text.startswith(_TRAINING_CASE_SPEC_HEADER):
         return None
-    payload = _parse_training_case_spec_payload(text)
-    return _case_from_payload(payload)
+    return _parse_training_case_spec_payload(text)
 
 
 def _message_text(message: Message) -> str:

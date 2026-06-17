@@ -151,7 +151,7 @@ def test_dataset_service_policy_set_from_dict_preserves_policies():
 
 def test_tau2_rollout_messages_use_structured_tool_parts():
     from benchmark.tau2.train.rollout_executor import _build_rollout_messages
-    from openviking.message import TextPart, ToolPart
+    from openviking.message import ControlPart, TextPart, ToolPart
 
     rollout_messages = _build_rollout_messages(
         system_prompt="policy",
@@ -167,6 +167,9 @@ def test_tau2_rollout_messages_use_structured_tool_parts():
         evaluation_result=None,
         reward=1.0,
     )
+
+    assert isinstance(rollout_messages[0].parts[0], ControlPart)
+    assert rollout_messages[0].parts[0].control_type == "tau2_system_prompt"
 
     tool_call_message = rollout_messages[2]
     assert tool_call_message.role == "assistant"
@@ -185,6 +188,21 @@ def test_tau2_rollout_messages_use_structured_tool_parts():
     assert tool_result_message.parts[0].tool_status == "completed"
     assert tool_result_message.parts[0].tool_output == '{"membership": "gold"}'
 
+
+def test_tau2_rollout_messages_omit_empty_final_after_done():
+    from benchmark.tau2.train.rollout_executor import _build_rollout_messages
+
+    rollout_messages = _build_rollout_messages(
+        system_prompt="policy",
+        user_prompt="user request",
+        tools_used=[{"tool_name": "done", "args": "{}", "result": "Task Terminated"}],
+        final_content=None,
+        evaluation_result=None,
+        reward=1.0,
+    )
+
+    assert "tau2-final" not in {message.id for message in rollout_messages}
+    assert rollout_messages[-1].id == "tau2-reward"
 
 
 def test_tau2_reward_info_is_json_safe_in_rollout_messages_and_evaluation():
@@ -217,9 +235,11 @@ def test_tau2_reward_info_is_json_safe_in_rollout_messages_and_evaluation():
     json.dumps(evaluation.metadata, sort_keys=True)
 
 
-def test_tau2_native_env_reward_handles_required_id_and_tool_call_ids():
+def test_tau2_native_env_reward_handles_required_id_and_tool_call_ids(monkeypatch):
+    import benchmark.tau2.common.tau2_env.tau2_environment as tau2_environment
     from benchmark.tau2.common.tau2_env.tau2_environment import Tau2BenchEnv
 
+    monkeypatch.setattr(tau2_environment, "AgentGymEnv", None)
     env = Tau2BenchEnv("airline", "1")
     env.reset()
     env.tool_call("get_user_details", {"user_id": "raj_sanchez_7340"})
@@ -231,9 +251,11 @@ def test_tau2_native_env_reward_handles_required_id_and_tool_call_ids():
     assert evaluation.reward == 1.0
 
 
-def test_tau2_native_env_records_communication_as_assistant_text():
+def test_tau2_native_env_records_communication_as_assistant_text(monkeypatch):
+    import benchmark.tau2.common.tau2_env.tau2_environment as tau2_environment
     from benchmark.tau2.common.tau2_env.tau2_environment import Tau2BenchEnv
 
+    monkeypatch.setattr(tau2_environment, "AgentGymEnv", None)
     env = Tau2BenchEnv("airline", "3")
     env.reset()
     env.tool_call("communicate_with_user", {"content": "You may bring 4 suitcases."})
@@ -244,10 +266,12 @@ def test_tau2_native_env_records_communication_as_assistant_text():
     assert evaluation.communicate_checks[0].met is True
 
 
-def test_tau2_final_answer_is_appended_for_native_evaluation():
+def test_tau2_final_answer_is_appended_for_native_evaluation(monkeypatch):
+    import benchmark.tau2.common.tau2_env.tau2_environment as tau2_environment
     from benchmark.tau2.common.tau2_env.tau2_environment import Tau2BenchEnv
     from benchmark.tau2.train.rollout_executor import _append_final_answer_for_tau2_evaluation
 
+    monkeypatch.setattr(tau2_environment, "AgentGymEnv", None)
     env = Tau2BenchEnv("airline", "3")
     env.reset()
     _append_final_answer_for_tau2_evaluation(env, "You may bring 4 suitcases.")

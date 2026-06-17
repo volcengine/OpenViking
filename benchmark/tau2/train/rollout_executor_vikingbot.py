@@ -12,7 +12,7 @@ from typing import Any
 
 from fastapi.encoders import jsonable_encoder
 
-from openviking.message import Message, TextPart, ToolPart
+from openviking.message import ControlPart, Message, TextPart, ToolPart
 from openviking.session.train import (
     Case,
     CriterionResult,
@@ -217,7 +217,8 @@ class VikingBotTau2RolloutExecutor:
         stage_started_at = time.perf_counter()
         if provider.env is not None:
             try:
-                _append_final_answer_for_tau2_evaluation(provider.env, final_content)
+                # Customer-facing content should be sent before `done`; do not append
+                # the post-done final response to tau2's simulator/evaluator.
                 reward, evaluation_result = provider.env._get_reward()
                 reward = _to_jsonable(reward)
                 evaluation_result = _to_jsonable(evaluation_result)
@@ -373,8 +374,9 @@ def _build_system_prompt(policy: str, *, keep_default_tools: bool, rollout_langu
         "verbatim even if the surrounding response is in another language."
     )
     instructions.append(
-        "When the task is finished or terminated, call tool `done` first and output an ending "
-        "content without using any tool calling for the next round to exit."
+        "When the task is finished or terminated, send any final customer-facing message "
+        "through `communicate_with_user` before calling `done`. After `done`, do not call "
+        "any more tools and do not emit extra ending content."
     )
     return "\n".join(instructions)
 
@@ -427,10 +429,23 @@ async def _run_agent(
         publish_events=False,
         sender_id=sender_id,
         ov_tools_enable=False,
+        stop_tool_names=["done"],
     )
     if timings is not None:
         timings.record("agent_loop", stage_started_at)
-    return (*result, memory_content, experience_reminder_text)
+    final_content, final_reasoning_content, tools_used, token_usage, iteration = result
+    if _last_tool_name(tools_used) == "done":
+        final_content = None
+        final_reasoning_content = None
+    return (
+        final_content,
+        final_reasoning_content,
+        tools_used,
+        token_usage,
+        iteration,
+        memory_content,
+        experience_reminder_text,
+    )
 
 
 @dataclass(slots=True)
@@ -539,7 +554,12 @@ def _build_rollout_messages(
     experience_reminder: str | None = None,
 ) -> list[Message]:
     messages = [
-        _message("tau2-system", "user", f"system:\n{system_prompt}"),
+        _control_message(
+            "tau2-system",
+            "tau2_system_prompt",
+            {"system_prompt": system_prompt},
+            text=f"system:\n{system_prompt}",
+        ),
     ]
     # Experience Reminder 放在 system 之后、user 之前，与 agent 实际看到的顺序一致
     if experience_reminder:
@@ -582,7 +602,8 @@ def _build_rollout_messages(
                         ],
                     )
                 )
-    messages.append(_message("tau2-final", "assistant", final_content or ""))
+    if final_content and str(final_content).strip():
+        messages.append(_message("tau2-final", "assistant", str(final_content)))
     reward_jsonable = _to_jsonable(reward)
     evaluation_jsonable = _to_jsonable(evaluation_result)
     success = reward_jsonable == 1 or reward_jsonable == 1.0
@@ -599,6 +620,29 @@ def _build_rollout_messages(
 
 def _message(message_id: str, role: str, text: str) -> Message:
     return Message(id=message_id, role=role, parts=[TextPart(text=text)])
+
+
+def _control_message(
+    message_id: str,
+    control_type: str,
+    payload: dict[str, Any],
+    *,
+    text: str = "",
+) -> Message:
+    return Message(
+        id=message_id,
+        role="user",
+        parts=[ControlPart(control_type=control_type, payload=payload, text=text)],
+    )
+
+
+def _last_tool_name(tools_used: Any) -> str:
+    if not isinstance(tools_used, list) or not tools_used:
+        return ""
+    last = tools_used[-1]
+    if not isinstance(last, dict):
+        return ""
+    return str(last.get("tool_name") or "")
 
 
 def _as_tool_input(args: Any) -> dict[str, Any]:

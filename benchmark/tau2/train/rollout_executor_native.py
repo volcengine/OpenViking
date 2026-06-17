@@ -16,7 +16,7 @@ from benchmark.tau2.train.rollout_executor_vikingbot import (
     _stringify,
     _to_jsonable,
 )
-from openviking.message import Message, TextPart, ToolPart
+from openviking.message import ControlPart, Message, TextPart, ToolPart
 from openviking.session.train import (
     Case,
     CriterionResult,
@@ -784,7 +784,14 @@ def _simulation_message_to_rollout_messages(message: Any, index: int) -> list[Me
     role = _role_value(getattr(message, "role", "assistant"))
     if role == "system":
         content = str(getattr(message, "content", "") or "")
-        return [_message(f"tau2-system-{index}", "user", f"system:\n{content}")]
+        return [
+            _control_message(
+                f"tau2-system-{index}",
+                "tau2_system_prompt",
+                {"system_prompt": content},
+                text=f"system:\n{content}",
+            )
+        ]
     if role in {"user", "assistant"}:
         content = str(getattr(message, "content", "") or "")
         tool_calls = list(getattr(message, "tool_calls", None) or [])
@@ -837,6 +844,20 @@ def _simulation_message_to_rollout_messages(message: Any, index: int) -> list[Me
         ]
     content = str(getattr(message, "content", "") or "")
     return [_message(f"tau2-message-{index}", "assistant", content)]
+
+
+def _control_message(
+    message_id: str,
+    control_type: str,
+    payload: dict[str, Any],
+    *,
+    text: str = "",
+) -> Message:
+    return Message(
+        id=message_id,
+        role="user",
+        parts=[ControlPart(control_type=control_type, payload=payload, text=text)],
+    )
 
 
 def _tool_usage_from_simulation(simulation: Any) -> list[dict[str, Any]]:

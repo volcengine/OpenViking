@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import List, Literal, Optional
 
 from openviking.core.peer_id import normalize_peer_id
-from openviking.message.part import ContextPart, ImagePart, Part, TextPart, ToolPart
+from openviking.message.part import ContextPart, ControlPart, ImagePart, Part, TextPart, ToolPart
 from openviking.utils.token_estimation import estimate_text_tokens
 
 
@@ -58,6 +58,9 @@ class Message:
                 token_text.append(p.text)
             elif isinstance(p, ContextPart):
                 token_text.append(p.abstract)
+            elif isinstance(p, ControlPart):
+                if p.text:
+                    token_text.append(p.text)
             elif isinstance(p, ToolPart):
                 token_text.extend([p.tool_id, p.tool_name])
                 if p.tool_input:
@@ -103,6 +106,16 @@ class Message:
                 "type": part.type,
                 "image_url": image_url,
             }
+        elif isinstance(part, ControlPart):
+            d = {
+                "type": part.type,
+                "control_type": part.control_type,
+            }
+            if part.payload is not None:
+                d["payload"] = part.payload
+            if part.text:
+                d["text"] = part.text
+            return d
         elif isinstance(part, ToolPart):
             d = {
                 "type": part.type,
@@ -190,6 +203,15 @@ class Message:
                 if not url.strip():
                     raise ValueError("image_url part requires a non-empty URL")
                 parts.append(ImagePart(url=url, detail=detail))
+            elif p["type"] == "control":
+                payload = p.get("payload")
+                parts.append(
+                    ControlPart(
+                        control_type=str(p.get("control_type", "") or ""),
+                        payload=payload if isinstance(payload, dict) else None,
+                        text=str(p.get("text", "") or ""),
+                    )
+                )
             elif p["type"] == "tool":
                 parts.append(
                     ToolPart(

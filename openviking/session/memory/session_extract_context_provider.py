@@ -245,11 +245,13 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             user utterances and can leak environment/database state into user
             memories. Agent-scope providers enable tool evidence explicitly.
             """
-            from openviking.message.part import ToolPart
+            from openviking.message.part import ControlPart, ToolPart
 
             parts = getattr(msg, "parts", [])
             formatted_parts: List[str] = []
             for part in parts:
+                if isinstance(part, ControlPart):
+                    continue
                 if hasattr(part, "text") and part.text:
                     formatted_parts.append(part.text)
                 elif self.include_tool_parts_in_conversation and isinstance(part, ToolPart):

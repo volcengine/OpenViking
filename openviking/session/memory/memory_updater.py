@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 
 from openviking.message import Message
-from openviking.message.part import TextPart
+from openviking.message.part import ControlPart, TextPart
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import (
     MemoryFile,
@@ -447,7 +447,7 @@ class MessageRange:
         )
 
     def _format_merged_content(self, messages: List[Message]) -> str:
-        content = "".join((msg.content or "") for msg in messages)
+        content = "".join((self._message_content(msg) or "") for msg in messages)
         if not messages or not self._contains_chunk_message(messages):
             return content
 
@@ -458,6 +458,17 @@ class MessageRange:
         if last_chunk is not None and last_chunk.chunk_index < last_chunk.chunk_count - 1:
             content = content.rstrip() + "..."
         return content
+
+    def _message_content(self, message: Message) -> str:
+        texts: List[str] = []
+        for part in getattr(message, "parts", []) or []:
+            if isinstance(part, ControlPart):
+                continue
+            if isinstance(part, TextPart):
+                texts.append(part.text or "")
+        if texts:
+            return "".join(texts)
+        return getattr(message, "content", "") or ""
 
     def _contains_chunk_message(self, messages: List[Message]) -> bool:
         return any(self._chunk_meta_for(msg) is not None for msg in messages)

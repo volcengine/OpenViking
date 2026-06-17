@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from openviking.message import ContextPart, ImagePart, Message, TextPart, ToolPart
+from openviking.message import ContextPart, ControlPart, ImagePart, Message, TextPart, ToolPart
 from openviking.message.part import part_from_dict
 
 
@@ -108,6 +108,22 @@ class TestContextPart:
         )
 
         assert part.context_type == "resource"
+
+
+class TestControlPart:
+    """Test ControlPart dataclass."""
+
+    def test_custom_values(self):
+        part = ControlPart(
+            control_type="batch_training_case_spec",
+            payload={"protocol": "v1"},
+            text="human-readable control payload",
+        )
+
+        assert part.type == "control"
+        assert part.control_type == "batch_training_case_spec"
+        assert part.payload == {"protocol": "v1"}
+        assert part.text == "human-readable control payload"
 
 
 class TestImagePart:
@@ -249,6 +265,23 @@ class TestPartFromDict:
         assert part.uri == "viking://test/"
         assert part.context_type == "resource"
         assert part.abstract == "Test abstract"
+
+
+    def test_control_part_from_dict(self):
+        """Test creating ControlPart from dict."""
+        data = {
+            "type": "control",
+            "control_type": "batch_training_case_spec",
+            "payload": {"protocol": "v1"},
+            "text": "control text",
+        }
+
+        part = part_from_dict(data)
+
+        assert isinstance(part, ControlPart)
+        assert part.control_type == "batch_training_case_spec"
+        assert part.payload == {"protocol": "v1"}
+        assert part.text == "control text"
 
     def test_tool_part_from_dict(self):
         """Test creating ToolPart from dict."""

@@ -426,18 +426,21 @@ def _new_run_id() -> str:
 
 
 def _case_spec_message_to_request(rollout: Rollout) -> dict[str, Any]:
+    text = (
+        f"{_TRAINING_CASE_SPEC_HEADER}\n\n"
+        "The following structured case and rubric describe the task that "
+        "produced this rollout. It is control-plane metadata for the "
+        "batch training pipeline.\n\n"
+        f"```json\n{_case_spec_payload_json(rollout)}\n```"
+    )
     return {
         "role": "user",
         "parts": [
             {
-                "type": "text",
-                "text": (
-                    f"{_TRAINING_CASE_SPEC_HEADER}\n\n"
-                    "The following structured case and rubric describe the task that "
-                    "produced this rollout. It is control-plane metadata for the "
-                    "batch training pipeline.\n\n"
-                    f"```json\n{_case_spec_payload_json(rollout)}\n```"
-                ),
+                "type": "control",
+                "control_type": "batch_training_case_spec",
+                "payload": _case_spec_payload(rollout),
+                "text": text,
             }
         ],
     }
@@ -446,8 +449,12 @@ def _case_spec_message_to_request(rollout: Rollout) -> dict[str, Any]:
 def _case_spec_payload_json(rollout: Rollout) -> str:
     import json
 
+    return json.dumps(_case_spec_payload(rollout), ensure_ascii=False, indent=2, sort_keys=True)
+
+
+def _case_spec_payload(rollout: Rollout) -> dict[str, Any]:
     case = rollout.case
-    payload = {
+    return {
         "protocol": _TRAINING_CASE_SPEC_PROTOCOL,
         "case": {
             "name": case.name,
@@ -469,22 +476,24 @@ def _case_spec_payload_json(rollout: Rollout) -> str:
             },
         },
     }
-    return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
 
 
 def _evaluation_message_to_request(rollout: Rollout) -> dict[str, Any]:
+    text = (
+        "# OpenViking OutcomeEvaluation\n\n"
+        "The following structured evaluation describes the outcome of the "
+        "preceding rollout. Use it as the training signal when extracting "
+        "training memories.\n\n"
+        f"```json\n{_evaluation_payload_json(rollout)}\n```"
+    )
     return {
         "role": "user",
         "parts": [
             {
-                "type": "text",
-                "text": (
-                    "# OpenViking OutcomeEvaluation\n\n"
-                    "The following structured evaluation describes the outcome of the "
-                    "preceding rollout. Use it as the training signal when extracting "
-                    "training memories.\n\n"
-                    f"```json\n{_evaluation_payload_json(rollout)}\n```"
-                ),
+                "type": "control",
+                "control_type": "batch_training_outcome_evaluation",
+                "payload": {"evaluation": _evaluation_payload(rollout.evaluation)},
+                "text": text,
             }
         ],
     }
