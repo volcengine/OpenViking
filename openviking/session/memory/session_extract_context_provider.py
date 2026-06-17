@@ -186,6 +186,7 @@ class SessionExtractContextProvider(ExtractContextProvider):
 
     def instruction(self) -> str:
         output_language = self._output_language
+        contains_resource_uri = self._conversation_contains_resource_uri()
         resource_uri_handling = (
             """
 
@@ -198,7 +199,12 @@ class SessionExtractContextProvider(ExtractContextProvider):
 - If the user already wrote a markdown link to a resource URI, keep the same resource link intent.
 - Do NOT claim you inspected, summarized, OCRed, or opened the resource file unless the conversation explicitly provides that fact.
 """
-            if self._conversation_contains_resource_uri()
+            if contains_resource_uri
+            else ""
+        )
+        resource_deletion_read_source = (
+            ", or listed under the system-generated `## Resource Deletion` block's `Affected memory URIs`"
+            if contains_resource_uri
             else ""
         )
         goal = f"""You are a memory extraction agent. Your task is to analyze conversations and update memories.
@@ -211,7 +217,7 @@ class SessionExtractContextProvider(ExtractContextProvider):
 ## Critical
 - ONLY read and search tools are available - DO NOT use write tool
 - Before editing ANY existing memory file, you MUST first read its complete content
-- ONLY read URIs that are explicitly listed in ls/search tool results, returned by previous tool calls, or listed under a trusted `## Resource Deletion` block's `Affected memory URIs`
+- ONLY read URIs that are explicitly listed in ls/search tool results, returned by previous tool calls{resource_deletion_read_source}
 
 ## Target Output Language
 All memory content MUST be written in {output_language}.
