@@ -3,7 +3,6 @@
 """Tests for resource-memory linking service."""
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -13,7 +12,6 @@ from openviking.service.resource_memory_link_service import (
     ResourceMemoryLinkService,
 )
 from openviking.session.memory.dataclass import MemoryFile
-from openviking.session.memory.memory_updater import MemoryUpdateResult
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -267,6 +265,37 @@ async def test_on_resource_added_routes_peer_resource_uri_to_peer(request_contex
 
 
 @pytest.mark.asyncio
+async def test_on_resource_deleted_bridges_through_fixed_session(request_context):
+    resource_uri = "viking://resources/images/2026/06/11/yueqian_jpeg"
+    memory_uri = "viking://user/alice/memories/entities/photos.md"
+    session_service = _FakeSessionService()
+    service = ResourceMemoryLinkService(
+        viking_fs=_FakeVikingFS({}),
+        session_service=session_service,
+    )
+
+    result = await service.on_resource_deleted(
+        ctx=request_context,
+        resource_uri=resource_uri,
+        memory_uris=[memory_uri],
+        recursive=True,
+    )
+
+    assert result["status"] == "success"
+    assert result["session_id"] == _RESOURCE_REASON_SESSION_ID
+    assert session_service.session.meta.memory_policy == {
+        "self": {"enabled": True},
+        "peer": {"enabled": False},
+        "memory_types": ["entities", "preferences"],
+    }
+    message_text = session_service.session.messages[0]["parts"][0].text
+    assert "## Resource Deletion" in message_text
+    assert resource_uri in message_text
+    assert memory_uri in message_text
+    assert "Do not create a new event" in message_text
+
+
+@pytest.mark.asyncio
 async def test_read_resource_directory_abstract_uses_parent_abstract(request_context):
     service = ResourceMemoryLinkService(
         viking_fs=_FakeVikingFS({"viking://resources/images/.abstract.md": "动漫角色照片合集"})
@@ -377,7 +406,7 @@ async def test_find_referencing_memories_scans_actor_peer_memory(request_context
 
 
 @pytest.mark.asyncio
-async def test_before_resource_delete_removes_refs_when_cleanup_has_no_changes(request_context):
+async def test_before_resource_delete_commits_then_unlinks_stale_refs(request_context):
     memory_uri = "viking://user/alice/memories/entities/wang.md"
     resource_uri = "viking://resources/id_card.pdf"
     raw = (
@@ -393,8 +422,11 @@ async def test_before_resource_delete_removes_refs_when_cleanup_has_no_changes(r
         "}\n"
         "-->"
     )
-    service = ResourceMemoryLinkService(viking_fs=_FakeVikingFS({memory_uri: raw}))
-    service._cleanup_memory_reference = AsyncMock(return_value=MemoryUpdateResult())
+    session_service = _FakeSessionService()
+    service = ResourceMemoryLinkService(
+        viking_fs=_FakeVikingFS({memory_uri: raw}),
+        session_service=session_service,
+    )
 
     result = await service.before_resource_delete(
         ctx=request_context,
@@ -402,12 +434,20 @@ async def test_before_resource_delete_removes_refs_when_cleanup_has_no_changes(r
     )
 
     assert result["status"] == "success"
+    assert result["memory_commit"]["status"] == "success"
+    assert session_service.committed == [
+        {
+            "ctx": request_context,
+            "session_id": _RESOURCE_REASON_SESSION_ID,
+            "keep_recent_count": 0,
+        }
+    ]
     mf = MemoryFileUtils.read(service._get_viking_fs().store[memory_uri], uri=memory_uri)
     assert "resource_refs" not in mf.extra_fields
 
 
 @pytest.mark.asyncio
-async def test_cleanup_memory_reference_does_not_introduce_schema_metadata(request_context):
+async def test_unlink_memory_reference_keeps_visible_text_and_no_schema_metadata(request_context):
     memory_uri = "viking://user/ryoma/memories/entities/动漫角色/不二周助-write-test3.md"
     resource_uri = "viking://resources/images/2026/06/10/不二周助_jpeg"
     original_raw = MemoryFileUtils.write(
@@ -427,27 +467,25 @@ async def test_cleanup_memory_reference_does_not_introduce_schema_metadata(reque
     store = {memory_uri: original_raw}
     service = ResourceMemoryLinkService(viking_fs=_FakeVikingFS(store))
 
-    result = await service._cleanup_memory_reference(
+    result = await service._unlink_memory_reference(
         ctx=request_context,
         memory_uri=memory_uri,
         memory_file=MemoryFileUtils.read(original_raw, uri=memory_uri),
         resource_uri=resource_uri,
-        reason="",
     )
 
     assert result.edited_uris == [memory_uri]
     mf = MemoryFileUtils.read(store[memory_uri], uri=memory_uri)
-    assert mf.content == "今天是清明节。"
+    assert mf.content == "今天是清明节。用户保存了一张不二周助的照片"
     assert mf.extra_fields == {}
     assert mf.memory_type is None
 
 
 @pytest.mark.asyncio
-async def test_cleanup_memory_reference_deletes_empty_memory_shell(
+async def test_unlink_memory_reference_does_not_delete_event_memory(
     request_context,
-    monkeypatch,
 ):
-    memory_uri = "viking://user/ryoma/memories/entities/动漫角色/越前龙马.md"
+    memory_uri = "viking://user/ryoma/memories/events/2026/06/11/越前龙马.md"
     resource_uri = "viking://resources/images/2026/06/11/yueqian_jpeg"
     original_raw = MemoryFileUtils.write(
         MemoryFile(
@@ -463,31 +501,25 @@ async def test_cleanup_memory_reference_deletes_empty_memory_shell(
     )
     store = {memory_uri: original_raw}
     service = ResourceMemoryLinkService(viking_fs=_FakeVikingFS(store))
-    refresh_overview = AsyncMock()
-    monkeypatch.setattr(
-        "openviking.service.resource_memory_link_service.MemoryUpdater.refresh_schema_overview",
-        refresh_overview,
-    )
 
-    result = await service._cleanup_memory_reference(
+    result = await service._unlink_memory_reference(
         ctx=request_context,
         memory_uri=memory_uri,
         memory_file=MemoryFileUtils.read(original_raw, uri=memory_uri),
         resource_uri=resource_uri,
-        reason="这是越前龙马的照片",
     )
 
-    assert memory_uri not in store
-    assert service._get_viking_fs().rm_calls == [(memory_uri, False)]
-    assert result.edited_uris == []
-    assert result.deleted_uris == [memory_uri]
-    refresh_overview.assert_awaited_once()
+    assert memory_uri in store
+    assert service._get_viking_fs().rm_calls == []
+    assert result.edited_uris == [memory_uri]
+    assert result.deleted_uris == []
+    mf = MemoryFileUtils.read(store[memory_uri], uri=memory_uri)
+    assert mf.content == "用户保存了一张越前龙马的照片"
 
 
 @pytest.mark.asyncio
 async def test_before_resource_delete_cleans_visible_uri_without_resource_refs(
     request_context,
-    monkeypatch,
 ):
     memory_uri = "viking://user/alice/memories/events/2026/06/11/yueqian.md"
     resource_uri = "viking://resources/images/2026/06/12/yueqian_jpeg"
@@ -502,11 +534,6 @@ async def test_before_resource_delete_cleans_visible_uri_without_resource_refs(
     )
     store = {memory_uri: raw}
     service = ResourceMemoryLinkService(viking_fs=_FakeVikingFS(store))
-    refresh_overview = AsyncMock()
-    monkeypatch.setattr(
-        "openviking.service.resource_memory_link_service.MemoryUpdater.refresh_schema_overview",
-        refresh_overview,
-    )
 
     result = await service.before_resource_delete(
         ctx=request_context,
@@ -516,7 +543,7 @@ async def test_before_resource_delete_cleans_visible_uri_without_resource_refs(
     assert result["status"] == "success"
     assert result["memory_uris"] == [memory_uri]
     mf = MemoryFileUtils.read(store[memory_uri], uri=memory_uri)
-    assert mf.content == "今天是清明节。"
+    assert mf.content == "今天是清明节。\n用户昨晚查看了越前龙马照片，之后可参考该资源。"
     assert "resource_refs" not in mf.extra_fields
 
 
@@ -553,48 +580,10 @@ async def test_before_resource_delete_exact_keeps_child_resource_refs(
     assert result["status"] == "success"
     mf = MemoryFileUtils.read(store[memory_uri], uri=memory_uri)
     assert f"[相册资源]({resource_uri})" not in mf.content
+    assert "用户保存了相册资源。" in mf.content
     assert f"[相册里的子图]({child_uri})" in mf.content
     refs = mf.extra_fields["resource_refs"]
     assert refs == [{"resource_uri": child_uri, "source": "content.write"}]
-
-
-@pytest.mark.asyncio
-async def test_before_resource_delete_deletes_previous_failed_cleanup_artifact(
-    request_context,
-    monkeypatch,
-):
-    memory_uri = "viking://user/alice/memories/events/2026/06/11/yueqian.md"
-    resource_uri = "viking://resources/images/2026/06/12/yueqian_jpeg"
-    raw = MemoryFileUtils.write(
-        MemoryFile(
-            uri=memory_uri,
-            content=(
-                f"Summary: 用户查看了[越前龙马照片]({resource_uri})。\n"
-                "None ChatLog:\n"
-                f"[[user]: Deleted resource URI:]({resource_uri})\n"
-                "Original reason: \n"
-                f"Memory URI: {memory_uri}"
-            ),
-            extra_fields={"memory_type": "events"},
-        )
-    )
-    store = {memory_uri: raw}
-    service = ResourceMemoryLinkService(viking_fs=_FakeVikingFS(store))
-    refresh_overview = AsyncMock()
-    monkeypatch.setattr(
-        "openviking.service.resource_memory_link_service.MemoryUpdater.refresh_schema_overview",
-        refresh_overview,
-    )
-
-    result = await service.before_resource_delete(
-        ctx=request_context,
-        resource_uri=resource_uri,
-    )
-
-    assert result["status"] == "success"
-    assert result["deleted_memory_uris"] == [memory_uri]
-    assert memory_uri not in store
-    refresh_overview.assert_awaited_once()
 
 
 @pytest.mark.asyncio

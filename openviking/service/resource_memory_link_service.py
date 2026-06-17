@@ -24,16 +24,13 @@ from openviking.core.peer_id import normalize_peer_id
 from openviking.message.part import TextPart
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import MemoryFile
-from openviking.session.memory.memory_updater import (
-    MemoryUpdater,
-    MemoryUpdateResult,
-)
+from openviking.session.memory.memory_updater import MemoryUpdateResult
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.resource_refs import (
     content_references_resource,
     extract_resource_uris,
-    remove_resource_references_from_memory,
     resource_ref_matches,
+    unlink_resource_references_from_memory,
 )
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import VikingFS, get_viking_fs
@@ -47,6 +44,7 @@ logger = get_logger(__name__)
 
 _RESOURCE_REASON_SESSION_ID = "__openviking_resource_reason__"
 _RESOURCE_REASON_MEMORY_TYPES = ["entities", "events", "preferences"]
+_RESOURCE_DELETION_MEMORY_TYPES = ["entities", "preferences"]
 _RESOURCE_REASON_COMMIT_TIMEOUT_SECONDS = 1800.0
 _RESOURCE_ABSTRACT_MAX_CHARS = 200
 _ABSTRACT_NOT_READY_MARKERS = (
@@ -55,13 +53,32 @@ _ABSTRACT_NOT_READY_MARKERS = (
 )
 
 
-def _resource_reason_memory_policy(target_peer_id: Optional[str] = None) -> Dict[str, Any]:
+def _resource_memory_policy(
+    *,
+    memory_types: Sequence[str],
+    target_peer_id: Optional[str] = None,
+) -> Dict[str, Any]:
     peer_targeted = bool(target_peer_id)
     return {
         "self": {"enabled": not peer_targeted},
         "peer": {"enabled": peer_targeted},
-        "memory_types": list(_RESOURCE_REASON_MEMORY_TYPES),
+        "memory_types": list(memory_types),
     }
+
+
+def _resource_reason_memory_policy(target_peer_id: Optional[str] = None) -> Dict[str, Any]:
+    return _resource_memory_policy(
+        memory_types=_RESOURCE_REASON_MEMORY_TYPES,
+        target_peer_id=target_peer_id,
+    )
+
+
+def _resource_deletion_memory_policy(target_peer_id: Optional[str] = None) -> Dict[str, Any]:
+    # Events are append-only, so deletion commits update only mutable memory types.
+    return _resource_memory_policy(
+        memory_types=_RESOURCE_DELETION_MEMORY_TYPES,
+        target_peer_id=target_peer_id,
+    )
 
 
 def _resource_reason_peer_id(ctx: RequestContext, resource_uri: str) -> Optional[str]:
@@ -197,6 +214,72 @@ class ResourceMemoryLinkService:
             "commit_task": task_result,
         }
 
+    async def on_resource_deleted(
+        self,
+        *,
+        ctx: RequestContext,
+        resource_uri: str,
+        memory_uris: Sequence[str],
+        recursive: bool = False,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Bridge resource deletion through normal session commit for mutable memories."""
+        if not resource_uri:
+            return {"status": "skipped", "reason": "empty_resource_uri"}
+        if not self._session_service:
+            return {"status": "skipped", "reason": "session_service_unavailable"}
+
+        deleted_at = datetime.now(timezone.utc).isoformat()
+        session_id = _RESOURCE_REASON_SESSION_ID
+        target_peer_id = _resource_reason_peer_id(ctx, resource_uri)
+        commit_result: Dict[str, Any] = {}
+        task_result: Optional[Dict[str, Any]] = None
+
+        async with self._reason_session_lock:
+            session = await self._session_service.get(
+                session_id,
+                ctx,
+                auto_create=True,
+            )
+            session.meta.memory_policy = _resource_deletion_memory_policy(target_peer_id)
+            message_spec: Dict[str, Any] = {
+                "role": "user",
+                "parts": [
+                    TextPart(
+                        text=self._build_resource_deletion_message(
+                            resource_uri=resource_uri,
+                            deleted_at=deleted_at,
+                            memory_uris=memory_uris,
+                            recursive=recursive,
+                        )
+                    )
+                ],
+                "created_at": deleted_at,
+            }
+            if target_peer_id:
+                message_spec["peer_id"] = target_peer_id
+            session.add_messages([message_spec])
+            commit_result = await self._session_service.commit_async(
+                session_id,
+                ctx,
+                keep_recent_count=0,
+            )
+
+        task_id = commit_result.get("task_id")
+        if task_id:
+            task_result = await self._wait_for_commit_task(
+                task_id=str(task_id),
+                ctx=ctx,
+                timeout=timeout,
+            )
+        return {
+            "status": "success",
+            "session_id": session_id,
+            "commit_task_id": task_id,
+            "archive_uri": commit_result.get("archive_uri"),
+            "commit_task": task_result,
+        }
+
     @staticmethod
     def _build_resource_addition_message(
         *,
@@ -213,6 +296,30 @@ class ResourceMemoryLinkService:
             f"Added at: {added_at or 'N/A'}\n"
             f"Resource abstract: {resource_abstract or 'N/A'}\n"
             f"User reason: {reason}"
+        )
+
+    @staticmethod
+    def _build_resource_deletion_message(
+        *,
+        resource_uri: str,
+        deleted_at: str,
+        memory_uris: Sequence[str],
+        recursive: bool,
+    ) -> str:
+        affected = "\n".join(f"- {uri}" for uri in dict.fromkeys(memory_uris))
+        if not affected:
+            affected = "- N/A"
+        recursive_text = "true" if recursive else "false"
+        return (
+            "## Resource Deletion\n"
+            f"Resource URI: {resource_uri}\n"
+            f"Deleted at: {deleted_at or 'N/A'}\n"
+            f"Recursive delete: {recursive_text}\n"
+            "Affected memory URIs:\n"
+            f"{affected}\n\n"
+            "Update existing mutable memories that mention or depend on this resource. "
+            "Do not create a new event solely for this resource deletion; event memories are "
+            "append-only and stale resource links are cleaned by the system."
         )
 
     async def _wait_for_commit_task(
@@ -253,7 +360,7 @@ class ResourceMemoryLinkService:
         resource_uri: str,
         recursive: bool = False,
     ) -> Dict[str, Any]:
-        """Remove references from user memories before deleting a resource."""
+        """Commit mutable memory updates and unlink stale references to a deleted resource."""
         if context_type_for_uri(resource_uri) != "resource":
             return {"status": "skipped", "reason": "not_resource"}
 
@@ -265,34 +372,43 @@ class ResourceMemoryLinkService:
         if not matches:
             return {"status": "no_references", "memory_uris": []}
 
+        memory_uris = self._memory_uris_from_matches(matches)
+        try:
+            commit_result = await self.on_resource_deleted(
+                ctx=ctx,
+                resource_uri=resource_uri,
+                memory_uris=memory_uris,
+                recursive=recursive,
+            )
+        except Exception as exc:
+            logger.warning("Resource deletion memory commit failed for %s: %s", resource_uri, exc)
+            commit_result = {"status": "failed", "error": str(exc)}
+
+        post_commit_matches = await self._find_referencing_memories(
+            ctx=ctx,
+            resource_uri=resource_uri,
+            recursive=recursive,
+        )
+        matches = self._merge_memory_ref_matches(matches, post_commit_matches)
+
         cleaned: List[str] = []
         deleted: List[str] = []
         errors: List[str] = []
         grouped = self._group_matches_by_memory(matches)
         for memory_uri, memory_matches in grouped.items():
             first = memory_matches[0]
-            reason = str(first.resource_ref.get("reason") or "")
             try:
-                cleanup_result = await self._cleanup_memory_reference(
+                cleanup_result = await self._unlink_memory_reference(
                     ctx=ctx,
                     memory_uri=memory_uri,
                     memory_file=first.memory_file,
                     resource_uri=resource_uri,
-                    reason=reason,
                     recursive=recursive,
                 )
                 cleaned.extend(cleanup_result.written_uris + cleanup_result.edited_uris)
                 deleted.extend(cleanup_result.deleted_uris)
                 if memory_uri in cleanup_result.deleted_uris:
                     continue
-                if not cleanup_result.has_changes():
-                    await self._remove_resource_refs(
-                        memory_uri,
-                        resource_uri,
-                        ctx,
-                        recursive=recursive,
-                    )
-                    cleaned.append(memory_uri)
                 await self._assert_resource_unlinked(
                     memory_uri,
                     resource_uri,
@@ -312,19 +428,18 @@ class ResourceMemoryLinkService:
             "status": "success",
             "memory_uris": list(dict.fromkeys(cleaned)),
             "deleted_memory_uris": list(dict.fromkeys(deleted)),
+            "memory_commit": commit_result,
         }
 
-    async def _cleanup_memory_reference(
+    async def _unlink_memory_reference(
         self,
         *,
         ctx: RequestContext,
         memory_uri: str,
         memory_file: MemoryFile,
         resource_uri: str,
-        reason: str,
         recursive: bool = False,
     ) -> MemoryUpdateResult:
-        del reason
         viking_fs = self._get_viking_fs()
         current = memory_file
         try:
@@ -335,7 +450,7 @@ class ResourceMemoryLinkService:
             result.add_deleted(memory_uri)
             return result
 
-        changed = remove_resource_references_from_memory(
+        changed = unlink_resource_references_from_memory(
             current,
             resource_uri,
             recursive=recursive,
@@ -346,64 +461,7 @@ class ResourceMemoryLinkService:
 
         await viking_fs.write_file(memory_uri, MemoryFileUtils.write(current), ctx=ctx)
         result.add_edited(memory_uri)
-        if await self._delete_empty_cleanup_memory(memory_uri, ctx):
-            self._mark_result_deleted(result, memory_uri)
         return result
-
-    async def _delete_empty_cleanup_memory(self, memory_uri: str, ctx: RequestContext) -> bool:
-        """Delete memory files whose visible content was emptied by resource cleanup."""
-        if context_type_for_uri(memory_uri) != "memory":
-            return False
-        viking_fs = self._get_viking_fs()
-        try:
-            raw = await viking_fs.read_file(memory_uri, ctx=ctx)
-        except (NotFoundError, FileNotFoundError):
-            return True
-        mf = MemoryFileUtils.read(raw, uri=memory_uri)
-        if (mf.content or "").strip():
-            return False
-        directory_uri = memory_uri.rsplit("/", 1)[0]
-        await viking_fs.rm(memory_uri, recursive=False, ctx=ctx)
-        await MemoryUpdater.refresh_schema_overview(
-            viking_fs=viking_fs,
-            directory_uri=directory_uri,
-            ctx=ctx,
-        )
-        logger.info("Deleted empty memory after resource cleanup: %s", memory_uri)
-        return True
-
-    @staticmethod
-    def _mark_result_deleted(result: MemoryUpdateResult, uri: str) -> None:
-        result.written_uris = [item for item in result.written_uris if item != uri]
-        result.edited_uris = [item for item in result.edited_uris if item != uri]
-        if uri not in result.deleted_uris:
-            result.add_deleted(uri)
-
-    async def _remove_resource_refs(
-        self,
-        memory_uri: str,
-        resource_uri: str,
-        ctx: RequestContext,
-        *,
-        recursive: bool,
-    ) -> None:
-        viking_fs = self._get_viking_fs()
-        raw = await viking_fs.read_file(memory_uri, ctx=ctx)
-        mf = MemoryFileUtils.read(raw, uri=memory_uri)
-        refs = [
-            ref
-            for ref in self._coerce_resource_refs(mf.extra_fields.get("resource_refs"))
-            if not self._resource_ref_matches(
-                ref.get("resource_uri"),
-                resource_uri,
-                recursive=recursive,
-            )
-        ]
-        if refs:
-            mf.extra_fields["resource_refs"] = refs
-        else:
-            mf.extra_fields.pop("resource_refs", None)
-        await viking_fs.write_file(memory_uri, MemoryFileUtils.write(mf), ctx=ctx)
 
     async def _find_referencing_memories(
         self,
@@ -557,6 +615,26 @@ class ResourceMemoryLinkService:
         for match in matches:
             grouped.setdefault(match.memory_uri, []).append(match)
         return grouped
+
+    @staticmethod
+    def _memory_uris_from_matches(matches: Sequence[_MemoryRefMatch]) -> List[str]:
+        return list(dict.fromkeys(match.memory_uri for match in matches))
+
+    @staticmethod
+    def _merge_memory_ref_matches(
+        first: Sequence[_MemoryRefMatch],
+        second: Sequence[_MemoryRefMatch],
+    ) -> List[_MemoryRefMatch]:
+        merged: List[_MemoryRefMatch] = []
+        seen: set[tuple[str, str]] = set()
+        for match in [*first, *second]:
+            ref_uri = str(match.resource_ref.get("resource_uri") or "")
+            key = (match.memory_uri, ref_uri)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(match)
+        return merged
 
     @staticmethod
     def _resource_ref_matches(
