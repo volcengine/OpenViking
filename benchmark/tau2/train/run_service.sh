@@ -43,7 +43,7 @@ KILL_EXISTING=1
 ROLLOUT_LANGUAGE="default"
 ROLLOUT_BACKEND="${TAU2_ROLLOUT_BACKEND:-native}"
 NATIVE_THREAD_WORKERS="${TAU2_NATIVE_THREAD_WORKERS:-128}"
-REPAIR_VIKINGBOT_GYM=0
+REPAIR_VIKINGBOT_GYM="${TAU2_REPAIR_VIKINGBOT_GYM:-1}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -55,6 +55,7 @@ while [[ $# -gt 0 ]]; do
     --rollout-backend) ROLLOUT_BACKEND="$2"; shift 2 ;;
     --native-thread-workers) NATIVE_THREAD_WORKERS="$2"; shift 2 ;;
     --repair-vikingbot-gym) REPAIR_VIKINGBOT_GYM=1; shift 1 ;;
+    --no-repair-vikingbot-gym) REPAIR_VIKINGBOT_GYM=0; shift 1 ;;
     --no-kill-existing) KILL_EXISTING=0; shift 1 ;;
     -h|--help)
       cat <<'EOF'
@@ -73,6 +74,8 @@ Options:
   --repair-vikingbot-gym
                      If --rollout-backend=vikingbot and tau2.gym/gymnasium is missing,
                      install tau2-bench[gym] into the current Python environment.
+                     Default: enabled. Set TAU2_REPAIR_VIKINGBOT_GYM=0 or pass
+                     --no-repair-vikingbot-gym to disable automatic repair.
   --no-kill-existing Do not stop existing process listening on --port
 EOF
       exit 0 ;;
@@ -92,6 +95,11 @@ fi
 
 if ! [[ "${NATIVE_THREAD_WORKERS}" =~ ^[0-9]+$ ]] || [[ "${NATIVE_THREAD_WORKERS}" -le 0 ]]; then
   echo "[tau2-service] invalid --native-thread-workers: ${NATIVE_THREAD_WORKERS}. Expected positive integer" >&2
+  exit 1
+fi
+
+if [[ "${REPAIR_VIKINGBOT_GYM}" != "0" && "${REPAIR_VIKINGBOT_GYM}" != "1" ]]; then
+  echo "[tau2-service] invalid TAU2_REPAIR_VIKINGBOT_GYM: ${REPAIR_VIKINGBOT_GYM}. Expected 0 or 1" >&2
   exit 1
 fi
 
