@@ -570,9 +570,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 cache_entries = await self._load_summary_cache(dir_uri, ctx=ctx)
                 sidecar_present = bool(cache_entries)
                 if sidecar_present:
-                    logger.info(
-                        f"Loaded {len(cache_entries)} entries from summary cache sidecar"
-                    )
+                    logger.info(f"Loaded {len(cache_entries)} entries from summary cache sidecar")
             except Exception as e:
                 logger.debug(f"No summary cache sidecar for {dir_uri}: {e}")
 
@@ -1038,9 +1036,15 @@ class SemanticProcessor(DequeueHandlerBase):
                     d = d.rsplit("/", 1)[0]
 
             for rel in candidate_rels:
-                src_mapping = f"{root_prefix}/{rel}/{mapping_name}" if rel else f"{root_prefix}/{mapping_name}"
+                src_mapping = (
+                    f"{root_prefix}/{rel}/{mapping_name}"
+                    if rel
+                    else f"{root_prefix}/{mapping_name}"
+                )
                 target_mapping = (
-                    f"{target_prefix}/{rel}/{mapping_name}" if rel else f"{target_prefix}/{mapping_name}"
+                    f"{target_prefix}/{rel}/{mapping_name}"
+                    if rel
+                    else f"{target_prefix}/{mapping_name}"
                 )
                 try:
                     await viking_fs.stat(target_mapping, ctx=ctx)
