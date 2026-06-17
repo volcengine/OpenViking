@@ -7,7 +7,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 import {
@@ -29,7 +29,7 @@ function usage() {
     --session-id <codex-session-id> \\
     --transcript <rollout.jsonl> \\
     --ov-session-id <openviking-session-id> \\
-    [--start-index 0] [--end-index <turn-count>] [--batch-size 100]
+    [--start-index 0] [--end-index <turn-count>] [--batch-size 100] [--cleanup-snapshot]
 `);
 }
 
@@ -39,6 +39,7 @@ function parseArgs(argv) {
     endIndex: null,
     batchSize: cfg.backgroundCaptureBatchSize,
     stateDir: process.env.OPENVIKING_CODEX_WORKER_STATE_DIR || DEFAULT_WORKER_STATE_DIR,
+    cleanupSnapshot: false,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -57,6 +58,8 @@ function parseArgs(argv) {
       out.endIndex = Number(argv[++i]);
     } else if (arg === "--batch-size") {
       out.batchSize = Number(argv[++i]);
+    } else if (arg === "--cleanup-snapshot") {
+      out.cleanupSnapshot = true;
     } else {
       throw new Error(`Unknown argument: ${arg}`);
     }
@@ -255,6 +258,15 @@ async function main() {
       status: result?.status,
       archived: result?.archived,
     });
+  }
+
+  if (args.cleanupSnapshot && state.committedAt) {
+    try {
+      await unlink(args.transcript);
+      log("snapshot_cleaned", { transcript: args.transcript });
+    } catch (err) {
+      logError("snapshot_cleanup_failed", err);
+    }
   }
 
   log("done", {

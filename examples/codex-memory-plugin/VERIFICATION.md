@@ -82,7 +82,16 @@ echo '{"session_id":"verify-sess","transcript_path":"'"$STATE_DIR"'/transcript.j
 Expect: `appended 2 turn(s)` (only the new ones). Re-read
 `viking://user/sessions/cx-verify-sess/messages.jsonl` — 4 records now.
 
-## 4. PreCompact — commit + reset
+## 4. PreCompact — hybrid (inline | snapshot-async) commit + reset
+
+PreCompact picks one of two paths based on how many turns still need to be
+appended this hook:
+- `newTurns.length <= OPENVIKING_CAPTURE_MAX_TURNS_PER_STOP` (default 8)
+  → inline append + inline commit (compat path).
+- `newTurns.length >  OPENVIKING_CAPTURE_MAX_TURNS_PER_STOP`
+  → `copyFile` snapshot + spawn detached `capture-transcript-worker.mjs`.
+
+### 4a. Inline path (small backlog, default for the §1–§3 fixtures)
 
 ```bash
 echo '{"session_id":"verify-sess","transcript_path":"'"$STATE_DIR"'/transcript.jsonl","trigger":"manual"}' \
@@ -92,17 +101,48 @@ echo '{"session_id":"verify-sess","transcript_path":"'"$STATE_DIR"'/transcript.j
     node $PLUGIN/scripts/pre-compact-capture.mjs
 ```
 
-Expect: `OpenViking session cx-verify-sess is committed`.
+Expect: `{"systemMessage":"OpenViking session cx-verify-sess is committed"}`.
 
-State file: `ovSessionId` is now `null`, `capturedTurnCount` stays at 4.
+State file: `ovSessionId` is now `null`, `capturedTurnCount` is 4. No
+snapshot file is created (inline path doesn't snapshot).
 
-OV side:
+OV side (synchronous — already archived by the time the hook returns):
 ```bash
 OPENVIKING_CONFIG_FILE=$OV_CONF ov ls viking://user/sessions/cx-verify-sess
 # messages.jsonl is now size 0 (archived)
 # history/archive_001/ exists with the committed messages
 OPENVIKING_CONFIG_FILE=$OV_CONF ov read viking://user/sessions/cx-verify-sess/history/archive_001/messages.jsonl
 ```
+
+### 4b. Async snapshot path (large backlog, threshold forced low)
+
+Re-fixture a fresh state with a transcript large enough to trip the async
+threshold:
+
+```bash
+rm -rf "$STATE_DIR/state" "$STATE_DIR/snapshots"
+mkdir -p "$STATE_DIR/state"
+seq 1 30 | awk '{print "{\"payload\":{\"role\":\"user\",\"content\":\"async-fixture turn "$1"\"}}"}' > "$STATE_DIR/transcript-async.jsonl"
+
+echo '{"session_id":"verify-async","transcript_path":"'"$STATE_DIR"'/transcript-async.jsonl","trigger":"manual"}' \
+  | OPENVIKING_CONFIG_FILE=$OV_CONF \
+    OPENVIKING_CODEX_STATE_DIR=$STATE_DIR/state \
+    OPENVIKING_CODEX_SNAPSHOT_DIR=$STATE_DIR/snapshots \
+    OPENVIKING_CAPTURE_MAX_TURNS_PER_STOP=8 \
+    CODEX_PLUGIN_ROOT=$PLUGIN \
+    node $PLUGIN/scripts/pre-compact-capture.mjs
+```
+
+Expect: `{"systemMessage":"OpenViking commit scheduled for cx-verify-async (pid <N>)"}`.
+Hook returns in well under a second regardless of transcript size.
+
+State file: `ovSessionId` is `null`, `capturedTurnCount` bumped to 30. A
+snapshot file `verify-async-*.jsonl` exists briefly under
+`$STATE_DIR/snapshots/` and is removed by the worker after `/commit`
+succeeds. Worker state is under `$STATE_DIR/worker/` (default
+`~/.openviking/codex-plugin-worker-state/`). Worker progress is logged
+under `~/.openviking/logs/codex-hooks.log` lines tagged
+`capture-transcript-worker`.
 
 ## 5. Post-compact Stop — same deterministic OV session id
 
@@ -276,17 +316,21 @@ Expect: systemMessage mentions background capture. State `capturedTurnCount`
 is 120, while the detached worker continues in the background and writes
 progress under `$STATE_DIR/worker`.
 
-## 10. Oversized live session schedules detached commit
+## 10. Oversized live session schedules detached commit (SessionStart path)
 
-Lower the budget to force the background path:
+PreCompact is always async now (§4), so the oversize-budget split only
+matters for `session-start-commit.mjs`. To exercise it, leave an open OV
+session via Stop, then fire a fresh `SessionStart` with a low budget so
+the heuristic commits the orphan via the detached path:
 
 ```bash
-echo '{"session_id":"large-sess","transcript_path":"'"$STATE_DIR"'/large.jsonl","trigger":"manual"}' \
+# Assumes step 9 left large-sess with a live OV session.
+echo '{"session_id":"fresh-after-large","source":"startup","cwd":"/tmp","model":"x","permission_mode":"default","transcript_path":null,"hook_event_name":"SessionStart"}' \
   | OPENVIKING_CONFIG_FILE=$OV_CONF \
     OPENVIKING_CODEX_STATE_DIR=$STATE_DIR/state \
     OPENVIKING_MAX_LIVE_MESSAGES_ON_COMPACT=1 \
     CODEX_PLUGIN_ROOT=$PLUGIN \
-    node $PLUGIN/scripts/pre-compact-capture.mjs
+    node $PLUGIN/scripts/session-start-commit.mjs
 ```
 
 Expect: if `large-sess` has a live OV session with more than one message,

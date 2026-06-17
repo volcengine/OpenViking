@@ -3,24 +3,51 @@
 /**
  * PreCompact hook for Codex.
  *
- * Codex is about to summarize/compact the conversation. We commit the
- * long-lived OpenViking session for this codex session_id (Stop hooks
- * have already been appending turns), which triggers OV's memory
- * extractor on the full pre-compact transcript.
+ * Codex is about to summarize/compact the conversation, after which it will
+ * rewrite/truncate `transcript_path`. We need every pre-compact turn to land
+ * in OpenViking and the OV session to be committed (so the extractor runs on
+ * the full pre-compact transcript).
  *
- * Catch-up: if the transcript has new turns the Stop hook hasn't
- * appended yet, we append them before committing.
+ * Hybrid behavior (compat-first):
+ *   - Small backlog (newTurns.length <= captureMaxTurnsPerStop): inline path
+ *     1. Append every pending turn to the live OV session.
+ *     2. Check OV session size. If it exceeds the commit budget, spawn
+ *        `commit-session.mjs` and rotate `ovSessionId` to a
+ *        `cx-...-part-<ts>` so the inline path doesn't stall codex.
+ *     3. Otherwise inline `/commit`. On success clear `state.ovSessionId`.
  *
- * After commit, we clear ovSessionId from state but keep
- * capturedTurnCount so post-compact Stop hooks don't re-capture pre-
- * compact turns. The next Stop will append to the same deterministic
- * `cx-<codex-session-id>` OV session id; `/messages` auto-creates it if
- * needed.
+ *   - Large backlog (newTurns.length > captureMaxTurnsPerStop): snapshot+async
+ *     1. Hook synchronously `fs.copyFile`s `transcript_path` to a snapshot
+ *        under `~/.openviking/codex-plugin-snapshots/<id>-<ts>.jsonl`
+ *        (~10ms regardless of size — decouples the worker from codex's
+ *        transcript rewrite).
+ *     2. Hook spawns detached `capture-transcript-worker.mjs` against the
+ *        snapshot with `--start-index <capturedTurnCount> --end-index <total>
+ *        --cleanup-snapshot`. Worker appends every unappended turn and
+ *        commits.
+ *     3. Hook clears `state.ovSessionId` and bumps `capturedTurnCount = total`.
+ *
+ * The post-compact Stop re-derives `cx-<codex-session-id>` and starts a new
+ * live session on the server (POST /messages auto-creates).
+ *
+ * If `transcript_path` is missing but a live OV session exists, the hook
+ * spawns `commit-session.mjs` (commit-only path — no append needed).
+ *
+ * Inline-path failure: state preserved; the next PreCompact or SessionStart
+ * commit picks up the still-open server session.
+ *
+ * Async-path failure (worker crash, OV unreachable): next Stop sees
+ * `state.ovSessionId === null`, lazily re-derives `cx-<codex-session-id>`,
+ * and continues appending; the next commit picks up the still-open server
+ * session. Snapshot files for failed workers stay on disk under
+ * `~/.openviking/codex-plugin-snapshots/` for diagnosis.
  *
  * PreCompact output schema accepts {} as a no-op.
  */
 
-import { readFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import {
   extractTextFromPayload,
   isAssistantSideCaptureRole,
@@ -31,7 +58,6 @@ import { startDetachedScript } from "./background-jobs.mjs";
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
 import {
-  deriveOvSessionId,
   loadState,
   resolveOvSessionId,
   rotateOvSessionId,
@@ -40,6 +66,9 @@ import {
 
 const cfg = loadConfig();
 const { log, logError } = createLogger("pre-compact");
+
+const SNAPSHOT_DIR = process.env.OPENVIKING_CODEX_SNAPSHOT_DIR
+  || join(homedir(), ".openviking", "codex-plugin-snapshots");
 
 function output(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
@@ -71,6 +100,38 @@ async function fetchJSON(path, init = {}) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function appendOneTurn(ovSessionId, turn) {
+  const body = { role: turn.role, content: turn.text };
+  if (cfg.peerId) body.peer_id = cfg.peerId;
+  return fetchJSON(`/api/v1/sessions/${encodeURIComponent(ovSessionId)}/messages`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+async function commitOvSession(ovSessionId) {
+  if (!ovSessionId) return null;
+  return fetchJSON(
+    `/api/v1/sessions/${encodeURIComponent(ovSessionId)}/commit`,
+    { method: "POST", body: JSON.stringify({}) },
+  );
+}
+
+async function getOvSessionMeta(ovSessionId) {
+  if (!ovSessionId) return null;
+  return fetchJSON(`/api/v1/sessions/${encodeURIComponent(ovSessionId)}`);
+}
+
+function sessionExceedsCommitBudget(meta) {
+  if (!meta) return false;
+  const messageCount = Number(meta.message_count || 0);
+  const pendingTokens = Number(meta.pending_tokens || 0);
+  return (
+    messageCount > cfg.maxLiveMessagesOnCompact ||
+    pendingTokens > cfg.maxPendingTokensOnCompact
+  );
 }
 
 function parseTranscript(content) {
@@ -117,35 +178,125 @@ async function readTranscriptTurns(transcriptPath) {
   }
 }
 
-async function appendTurns(ovSessionId, turns, onAppended) {
-  let appended = 0;
-  for (const turn of turns) {
-    const body = { role: turn.role, content: turn.text };
-    if (cfg.peerId) body.peer_id = cfg.peerId;
-    const result = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(ovSessionId)}/messages`, {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
-    if (!result) break;
-    appended += 1;
-    if (onAppended) await onAppended(appended);
-  }
-  return appended;
+function safeId(value) {
+  return String(value).replace(/[^a-zA-Z0-9_-]/g, "_");
 }
 
-async function getOvSessionMeta(ovSessionId) {
-  if (!ovSessionId) return null;
-  return fetchJSON(`/api/v1/sessions/${encodeURIComponent(ovSessionId)}`);
-}
-
-function sessionExceedsCommitBudget(meta) {
-  if (!meta) return false;
-  const messageCount = Number(meta.message_count || 0);
-  const pendingTokens = Number(meta.pending_tokens || 0);
-  return (
-    messageCount > cfg.maxLiveMessagesOnCompact ||
-    pendingTokens > cfg.maxPendingTokensOnCompact
+async function snapshotTranscript(transcriptPath, sessionId) {
+  await mkdir(SNAPSHOT_DIR, { recursive: true });
+  const snapshotPath = join(
+    SNAPSHOT_DIR,
+    `${safeId(sessionId)}-${Date.now().toString(36)}.jsonl`,
   );
+  await copyFile(transcriptPath, snapshotPath);
+  return snapshotPath;
+}
+
+function hasCaptureKeyword(turns) {
+  return turns.some((turn) => /\b(remember|memorize|store|save|capture|note|record)\b|记住|保存|记录|记忆/i.test(turn.text));
+}
+
+async function runAsyncSnapshotPath({ sessionId, transcriptPath, allTurns, state, ovSessionId }) {
+  let snapshotPath;
+  try {
+    snapshotPath = await snapshotTranscript(transcriptPath, sessionId);
+  } catch (err) {
+    logError("snapshot_failed", err);
+    noop();
+    return;
+  }
+
+  const previouslyCaptured = state.capturedTurnCount;
+  const pid = startDetachedScript("capture-transcript-worker.mjs", [
+    "--session-id", sessionId,
+    "--transcript", snapshotPath,
+    "--ov-session-id", ovSessionId,
+    "--start-index", String(previouslyCaptured),
+    "--end-index", String(allTurns.length),
+    "--batch-size", String(cfg.backgroundCaptureBatchSize),
+    "--cleanup-snapshot",
+  ]);
+
+  state.capturedTurnCount = allTurns.length;
+  state.ovSessionId = null;
+  await saveState(state);
+
+  log("async_scheduled", {
+    sessionId,
+    ovSessionId,
+    snapshotPath,
+    startIndex: previouslyCaptured,
+    endIndex: allTurns.length,
+    pid,
+  });
+  noop(`OpenViking commit scheduled for ${ovSessionId} (pid ${pid ?? "?"})`);
+}
+
+async function runInlinePath({ sessionId, state, ovSessionId, newTurns, allTurns }) {
+  for (const turn of newTurns) {
+    const result = await appendOneTurn(ovSessionId, turn);
+    if (!result) {
+      logError("inline_append_failed_keep_state", {
+        sessionId,
+        ovSessionId,
+        capturedTurnCount: state.capturedTurnCount,
+      });
+      await saveState(state);
+      noop();
+      return;
+    }
+    state.capturedTurnCount += 1;
+    await saveState(state);
+  }
+
+  const sessionMeta = await getOvSessionMeta(ovSessionId);
+  if (sessionExceedsCommitBudget(sessionMeta)) {
+    const messageCount = Number(sessionMeta.message_count || 0);
+    const pendingTokens = Number(sessionMeta.pending_tokens || 0);
+    const pid = startDetachedScript("commit-session.mjs", [
+      "--ov-session-id", ovSessionId,
+      "--reason", "precompact_oversize_inline",
+    ]);
+    const nextOvSessionId = rotateOvSessionId(state, {
+      reason: "precompact_commit_budget",
+      messageCount,
+      pendingTokens,
+      maxLiveMessagesOnCompact: cfg.maxLiveMessagesOnCompact,
+      maxPendingTokensOnCompact: cfg.maxPendingTokensOnCompact,
+      backgroundPid: pid,
+    });
+    await saveState(state);
+    log("inline_background_commit_started", {
+      sessionId,
+      ovSessionId,
+      nextOvSessionId,
+      messageCount,
+      pendingTokens,
+      pid,
+    });
+    noop(`OpenViking commit scheduled for ${ovSessionId} (pid ${pid ?? "?"}); next session ${nextOvSessionId}`);
+    return;
+  }
+
+  const commit = await commitOvSession(ovSessionId);
+  if (!commit) {
+    logError("inline_commit_failed_keep_state", { sessionId, ovSessionId });
+    await saveState(state);
+    noop();
+    return;
+  }
+  state.ovSessionId = null;
+  await saveState(state);
+  log("inline_commit", {
+    sessionId,
+    ovSessionId,
+    appended: newTurns.length,
+    totalTurns: allTurns.length,
+    archived: commit.archived ?? false,
+    taskId: commit.task_id,
+    status: commit.status,
+  });
+  noop(`OpenViking session ${ovSessionId} is committed`);
 }
 
 async function main() {
@@ -171,55 +322,24 @@ async function main() {
   const trigger = input.trigger || "auto";
   log("start", { sessionId, transcriptPath, trigger });
 
-  const health = await fetchJSON("/health");
-  if (!health) {
-    logError("health_check", "server unreachable");
-    noop();
-    return;
-  }
-
   const state = await loadState(sessionId);
   const allTurns = await readTranscriptTurns(transcriptPath);
-  const previouslyCaptured = state.capturedTurnCount;
-  const pendingTurns = allTurns.slice(state.capturedTurnCount);
-  let newTurns = pendingTurns;
 
-  if (pendingTurns.length > cfg.captureMaxTurnsPerStop) {
-    const backgroundOvSessionId = `${deriveOvSessionId(sessionId)}-compact-background`;
-    const pid = transcriptPath
-      ? startDetachedScript("capture-transcript-worker.mjs", [
-          "--session-id", sessionId,
-          "--transcript", transcriptPath,
-          "--ov-session-id", backgroundOvSessionId,
-          "--start-index", "0",
-          "--end-index", String(allTurns.length),
-          "--batch-size", String(cfg.backgroundCaptureBatchSize),
-        ])
-      : null;
-    state.capturedTurnCount = allTurns.length;
-    await saveState(state);
-    newTurns = [];
-    log("background_capture_started", {
-      reason: "pre-compact pending turns exceed hook budget",
-      pendingTurns: pendingTurns.length,
-      maxTurnsPerStop: cfg.captureMaxTurnsPerStop,
-      ovSessionId: backgroundOvSessionId,
-      pid,
+  if (allTurns.length < state.capturedTurnCount) {
+    log("transcript_shrink_detected", {
+      cached: state.capturedTurnCount,
+      observed: allTurns.length,
     });
+    state.capturedTurnCount = 0;
   }
-
-  log("transcript_parse", {
-    totalTurns: allTurns.length,
-    previouslyCaptured,
-    pendingTurns: pendingTurns.length,
-    newTurns: newTurns.length,
-  });
 
   if (allTurns.length === 0 && !state.ovSessionId) {
     log("skip", { stage: "nothing_to_commit", reason: "no transcript and no open OV session" });
     noop();
     return;
   }
+
+  const newTurns = allTurns.slice(state.capturedTurnCount);
 
   if (newTurns.length > 0 && !state.ovSessionId && cfg.captureMode === "keyword" && !hasCaptureKeyword(newTurns)) {
     log("skip", { stage: "capture_mode", reason: "keyword mode without capture trigger" });
@@ -228,97 +348,43 @@ async function main() {
     return;
   }
 
-  if (newTurns.length > 0) {
-    const ovSessionId = resolveOvSessionId(state);
-    if (!ovSessionId) {
-      logError("resolve_ov_session", "failed to derive OV session id for catch-up");
-      noop();
-      return;
-    }
-    const added = await appendTurns(ovSessionId, newTurns, async () => {
-      state.capturedTurnCount += 1;
-      await saveState(state);
-    });
-    log("appended_catchup", { ovSessionId, added });
-    if (added < newTurns.length) {
-      logError("append_failed_keep_state", { ovSessionId, attempted: newTurns.length, added });
-      await saveState(state);
-      noop(`pre-compact catch-up append incomplete for ${ovSessionId}; state preserved for retry`);
-      return;
-    }
-  }
-
-  if (!state.ovSessionId) {
-    log("skip", { stage: "commit", reason: "no OV session for this codex session" });
-    await saveState(state);
+  const ovSessionId = resolveOvSessionId(state);
+  if (!ovSessionId) {
+    logError("resolve_ov_session", "failed to derive OV session id");
     noop();
     return;
   }
 
-  const ovSessionId = state.ovSessionId;
-  const sessionMeta = await getOvSessionMeta(ovSessionId);
-  if (sessionExceedsCommitBudget(sessionMeta)) {
-    const messageCount = Number(sessionMeta.message_count || 0);
-    const pendingTokens = Number(sessionMeta.pending_tokens || 0);
+  if (!transcriptPath) {
+    // No transcript to snapshot or read, but a live OV session exists.
+    // Schedule a commit-only worker.
     const pid = startDetachedScript("commit-session.mjs", [
       "--ov-session-id", ovSessionId,
-      "--reason", "precompact_commit_budget",
+      "--reason", "precompact_no_transcript",
     ]);
-    const nextOvSessionId = rotateOvSessionId(state, {
-      reason: "precompact_commit_budget",
-      messageCount,
-      pendingTokens,
-      maxLiveMessagesOnCompact: cfg.maxLiveMessagesOnCompact,
-      maxPendingTokensOnCompact: cfg.maxPendingTokensOnCompact,
-      backgroundPid: pid,
-    });
+    state.ovSessionId = null;
     await saveState(state);
-    log("background_commit_started", {
-      ovSessionId,
-      nextOvSessionId,
-      pid,
-      messageCount,
-      pendingTokens,
-      maxLiveMessagesOnCompact: cfg.maxLiveMessagesOnCompact,
-      maxPendingTokensOnCompact: cfg.maxPendingTokensOnCompact,
+    log("commit_only_scheduled", { ovSessionId, pid });
+    noop(`OpenViking commit scheduled for ${ovSessionId} (pid ${pid ?? "?"})`);
+    return;
+  }
+
+  if (newTurns.length > cfg.captureMaxTurnsPerStop) {
+    log("path_choice", {
+      branch: "async_snapshot",
+      newTurnCount: newTurns.length,
+      threshold: cfg.captureMaxTurnsPerStop,
     });
-    noop(`OpenViking scheduled background commit for oversized session ${ovSessionId}`);
+    await runAsyncSnapshotPath({ sessionId, transcriptPath, allTurns, state, ovSessionId });
     return;
   }
 
-  const commit = await fetchJSON(
-    `/api/v1/sessions/${encodeURIComponent(ovSessionId)}/commit`,
-    { method: "POST", body: JSON.stringify({}) },
-  );
-
-  // Commit failure handling (see DESIGN.md "Commit failure"): if /commit
-  // fails (server unreachable, non-2xx, timeout) we MUST NOT reset
-  // ovSessionId — keep state intact so the next sweep / SessionStart can
-  // retry. A transient OV outage shouldn't lose a session's memory.
-  if (!commit) {
-    logError("commit_failed_keep_state", { ovSessionId });
-    await saveState(state); // bumps lastUpdatedAt only, keeps ovSessionId
-    noop(`pre-compact commit attempted on ${ovSessionId}; result unavailable (state preserved for retry)`);
-    return;
-  }
-
-  log("commit", {
-    ovSessionId,
-    archived: commit.archived ?? false,
-    taskId: commit.task_id,
-    status: commit.status,
+  log("path_choice", {
+    branch: "inline",
+    newTurnCount: newTurns.length,
+    threshold: cfg.captureMaxTurnsPerStop,
   });
-
-  // Reset OV session for the post-compact half. Keep capturedTurnCount so
-  // we don't re-capture pre-compact turns when Stop fires next.
-  state.ovSessionId = null;
-  await saveState(state);
-
-  noop(`OpenViking session ${ovSessionId} is committed`);
-}
-
-function hasCaptureKeyword(turns) {
-  return turns.some((turn) => /\b(remember|memorize|store|save|capture|note|record)\b|记住|保存|记录|记忆/i.test(turn.text));
+  await runInlinePath({ sessionId, state, ovSessionId, newTurns, allTurns });
 }
 
 main().catch((err) => { logError("uncaught", err); noop(); });
