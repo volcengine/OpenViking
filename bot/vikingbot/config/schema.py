@@ -542,7 +542,7 @@ class OpenVikingConfig(BaseModel):
     exp_recall_limit: int = 5
     # Total character budget for the injected experience block. Memories beyond this
     # budget are degraded to link-only (uri + score) instead of being dropped.
-    exp_recall_max_chars: int = 2000
+    exp_recall_max_chars: int = 10000
 
     @field_validator("api_key_type", mode="before")
     @classmethod

@@ -226,28 +226,6 @@ Skills with available="false" need dependencies installed first - you can try in
 
         workspace_id = self._get_workspace_id(session_key)
 
-        # Automatic experience recall can be enabled independently from exposing
-        # OpenViking tools to the model, so benchmark rollouts can receive
-        # recalled experience without callable openviking_* tools.
-        if experience_recall_enable is None:
-            experience_recall_enable = ov_tools_enable
-        self.latest_relevant_memories = None
-        if experience_recall_enable:
-            start = _time.time()
-            exp_memory = await self.memory.get_viking_experience_context(
-                query=current_message,
-                workspace_id=workspace_id,
-                openviking_connection=self._openviking_connection,
-            )
-            cost = round(_time.time() - start, 2)
-            logger.info(
-                f"[READ_EXP_AUTO]: cost {cost}s, "
-                f"exp={exp_memory[:50] if exp_memory else 'None'}"
-            )
-            if exp_memory:
-                self.latest_relevant_memories = exp_memory
-                parts.append(f"## Relevant Agent Experience\n{exp_memory}")
-
         if ov_tools_enable:
             start = _time.time()
             # Default recall runs under the configured/request OpenViking user.
@@ -352,6 +330,7 @@ IMPORTANT:
         memory_peer_ids: list[str] | None = None,
         memory_owner_user_ids: list[str] | None = None,
         experience_recall_enable: bool | None = None,
+        exp_exclude_uris: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """
         Build the complete message list for an LLM call.
@@ -367,6 +346,8 @@ IMPORTANT:
             memory_owner_user_ids: Deprecated legacy owner-user IDs used for root-key fanout.
             experience_recall_enable: Whether automatic experience recall may run independently
                 from exposing OpenViking tools. Defaults to ov_tools_enable.
+            exp_exclude_uris: Optional list of experience URIs that have already been recalled
+                in this session and should be skipped (deduplication).
 
         Returns:
             List of messages including system prompt.
@@ -387,6 +368,36 @@ IMPORTANT:
         # History
         if not self._eval:
             messages.extend(history)
+
+        # Experience recall (reminder message, deduplicated by URI)
+        self.latest_recalled_exp_content = ""
+        self.latest_recalled_exp_uris: list[str] = []
+        if experience_recall_enable is None:
+            experience_recall_enable = ov_tools_enable
+        if experience_recall_enable and session_key:
+            workspace_id = self._get_workspace_id(session_key)
+            start = _time.time()
+            exp_content, exp_uris = await self.memory.get_viking_experience_reminder(
+                query=current_message,
+                workspace_id=workspace_id,
+                exclude_uris=exp_exclude_uris,
+                openviking_connection=self._openviking_connection,
+            )
+            cost = round(_time.time() - start, 2)
+            logger.info(
+                f"[READ_EXP_AUTO]: cost {cost}s, "
+                f"new={len(exp_uris)} uris, "
+                f"exp={exp_content[:50] if exp_content else 'None'}"
+            )
+            if exp_content:
+                self.latest_recalled_exp_content = exp_content
+                self.latest_recalled_exp_uris = exp_uris
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": f"[Experience Reminder]\n## Relevant Agent Experience\n{exp_content}",
+                    }
+                )
 
         # User
         user_info = await self._build_user_memory(

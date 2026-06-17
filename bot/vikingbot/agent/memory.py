@@ -12,7 +12,6 @@ from vikingbot.config.loader import load_config
 from vikingbot.openviking_mount.ov_server import VikingClient
 from vikingbot.utils.helpers import ensure_dir
 
-
 _LEGACY_MEMORY_RECALL_LIMIT = 30
 _TYPE_QUOTA_MEMORY_TYPES = ("events", "entities", "preferences")
 _TYPE_QUOTA_EVENT_CHAR_RATIO = 0.75
@@ -53,6 +52,14 @@ class MemoryStore:
     @staticmethod
     def _get_uri(memory: Any) -> str:
         return memory.get("uri", "") if isinstance(memory, dict) else getattr(memory, "uri", "")
+
+    @staticmethod
+    def _filename_from_uri(uri: str) -> str:
+        """Extract the filename (basename) from a memory URI."""
+        stripped = uri.rstrip("/")
+        if not stripped:
+            return ""
+        return stripped.rsplit("/", 1)[-1]
 
     @staticmethod
     def _get_abstract(memory: Any) -> str:
@@ -190,9 +197,11 @@ class MemoryStore:
 
     @staticmethod
     def _format_full_memory(idx: int, uri: str, score: float, content: str) -> str:
+        filename = MemoryStore._filename_from_uri(uri)
         return (
             f'<memory index="{idx}" type="full">\n'
             f"  <uri>{uri}</uri>\n"
+            f"  <filename>{filename}</filename>\n"
             f"  <score>{score}</score>\n"
             f"  <content>{content}</content>\n"
             f"</memory>"
@@ -200,9 +209,11 @@ class MemoryStore:
 
     @staticmethod
     def _format_summary_memory(idx: int, uri: str, score: float, summary: str) -> str:
+        filename = MemoryStore._filename_from_uri(uri)
         return (
             f'<memory index="{idx}" type="summary">\n'
             f"  <uri>{uri}</uri>\n"
+            f"  <filename>{filename}</filename>\n"
             f"  <score>{score}</score>\n"
             f"  <summary>{summary}</summary>\n"
             f"</memory>"
@@ -210,9 +221,11 @@ class MemoryStore:
 
     @staticmethod
     def _format_uri_memory(idx: int, uri: str, score: float) -> str:
+        filename = MemoryStore._filename_from_uri(uri)
         return (
             f'<memory index="{idx}" type="uri">\n'
             f"  <uri>{uri}</uri>\n"
+            f"  <filename>{filename}</filename>\n"
             f"  <score>{score}</score>\n"
             f"</memory>"
         )
@@ -276,7 +289,7 @@ class MemoryStore:
 
         grouped_memories: dict[str, list[str]] = {}
         total_chars = 0
-        type_chars = {memory_type: 0 for memory_type in _TYPE_QUOTA_MEMORY_TYPES}
+        type_chars = dict.fromkeys(_TYPE_QUOTA_MEMORY_TYPES, 0)
         preference_full_count = 0
         seen_content_hashes = set()
         full_limit = len(filtered_memories) if full_limit is None else max(0, full_limit)
@@ -511,6 +524,27 @@ class MemoryStore:
         openviking_connection: dict[str, Any] | None = None,
     ) -> str:
         """用当前任务 query 检索 experience 记忆，注入到 system prompt。"""
+        content, _ = await self.get_viking_experience_reminder(
+            query=query,
+            workspace_id=workspace_id,
+            exclude_uris=None,
+            openviking_connection=openviking_connection,
+        )
+        return content
+
+    async def get_viking_experience_reminder(
+        self,
+        query: str,
+        workspace_id: str,
+        exclude_uris: list[str] | None = None,
+        openviking_connection: dict[str, Any] | None = None,
+    ) -> tuple[str, list[str]]:
+        """检索 experience 记忆并排除已召回过的 URI。
+
+        Returns:
+            (formatted_content, recalled_uris) — 格式化后的记忆块和实际命中的 URI 列表。
+            无命中时返回 ("", [])。
+        """
         client = None
         try:
             ov_cfg = load_config().ov_server
@@ -527,13 +561,39 @@ class MemoryStore:
                 score = exp.get("score", 0) if isinstance(exp, dict) else getattr(exp, "score", 0)
                 logger.info(f"  {i},{uri},{score}")
             if not experiences:
-                return ""
-            return await self._parse_viking_memory(
+                return "", []
+
+            # 过滤掉已召回过的 URI
+            if exclude_uris:
+                exclude_set = set(exclude_uris)
+                experiences = [
+                    exp
+                    for exp in experiences
+                    if self._get_uri(exp) not in exclude_set
+                ]
+                logger.info(
+                    f"[READ_EXPERIENCE_MEMORY]: after exclude {len(exclude_set)} uris, "
+                    f"{len(experiences)} remaining"
+                )
+                if not experiences:
+                    return "", []
+
+            content = await self._parse_viking_memory(
                 experiences, client, min_score=0.3, max_chars=ov_cfg.exp_recall_max_chars
             )
+
+            # 收集实际被注入（full/summary/uri 都算）的 URI
+            # _parse_viking_memory 会按 score 过滤并去重，这里简单取过滤后的列表的 URI
+            recalled_uris = [
+                self._get_uri(exp)
+                for exp in experiences
+                if self._get_score(exp) >= 0.3
+            ]
+
+            return content, recalled_uris
         except Exception as e:
             logger.error(f"[READ_EXPERIENCE_MEMORY]: error. {e}")
-            return ""
+            return "", []
         finally:
             if client:
                 try:

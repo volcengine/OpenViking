@@ -191,16 +191,22 @@ class VikingBotTau2RolloutExecutor:
         )
         timings.record("prepare_prompt", stage_started_at)
 
-        final_content, final_reasoning_content, tools_used, token_usage, iteration, memory_content = (
-            await _run_agent(
-                agent=agent,
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                session_key=session_key,
-                sender_id="tau2_user",
-                keep_default_tools=self.keep_default_tools,
-                timings=timings,
-            )
+        (
+            final_content,
+            final_reasoning_content,
+            tools_used,
+            token_usage,
+            iteration,
+            memory_content,
+            experience_reminder,
+        ) = await _run_agent(
+            agent=agent,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            session_key=session_key,
+            sender_id="tau2_user",
+            keep_default_tools=self.keep_default_tools,
+            timings=timings,
         )
 
         reward = None
@@ -232,6 +238,7 @@ class VikingBotTau2RolloutExecutor:
                 final_content=final_content,
                 evaluation_result=evaluation_result,
                 reward=reward,
+                experience_reminder=experience_reminder,
             ),
             policy_snapshot_id=context.policy_snapshot_id,
             evaluation=_tau2_evaluation(reward=reward, evaluation_result=evaluation_result),
@@ -393,9 +400,23 @@ async def _run_agent(
         timings.record("build_messages", stage_started_at)
     if system_prompt:
         messages.insert(1, {"role": "system", "content": system_prompt})
-    memory_content = None
-    if len(messages) > 2 and isinstance(messages[2].get("content"), str):
-        memory_content = _extract_memory_content(messages[2]["content"])
+    user_memory = None
+    experience_reminder_text = None  # 完整的 [Experience Reminder] 消息文本（用于 messages.json）
+    for msg in messages:
+        content = msg.get("content", "") if isinstance(msg, dict) else ""
+        if not isinstance(content, str):
+            continue
+        # Experience Reminder (经验记忆) - role=user, starts with [Experience Reminder]
+        if "[Experience Reminder]" in content and "## Relevant Agent Experience" in content:
+            experience_reminder_text = content
+            continue
+        # User memory (用户记忆) - starts with "## Current Session"
+        if content.startswith("## Current Session"):
+            user_memory = _extract_memory_content(content)
+
+    # 合并用户记忆 + 经验记忆正文，去重
+    exp_content = _extract_experience_content(experience_reminder_text) if experience_reminder_text else None
+    memory_content = _merge_memories(user_memory, exp_content)
     stage_started_at = time.perf_counter()
     result = await agent._run_agent_loop(
         messages=messages,
@@ -406,7 +427,7 @@ async def _run_agent(
     )
     if timings is not None:
         timings.record("agent_loop", stage_started_at)
-    return (*result, memory_content)
+    return (*result, memory_content, experience_reminder_text)
 
 
 @dataclass(slots=True)
@@ -479,6 +500,31 @@ def _extract_memory_content(content: str) -> str | None:
     return content[start:end]
 
 
+def _extract_experience_content(content: str) -> str | None:
+    """从 Experience Reminder 消息中提取经验记忆正文。"""
+    prefix = "[Experience Reminder]\n## Relevant Agent Experience\n"
+    start = content.find(prefix)
+    if start == -1:
+        return None
+    start += len(prefix)
+    return content[start:].strip() or None
+
+
+def _merge_memories(user_memory: str | None, exp_memory: str | None) -> str | None:
+    """合并用户记忆和经验记忆，去重。
+
+    两者都为 None 时返回 None；只有一个时直接返回它；都有时拼接并标记类型。
+    """
+    parts: list[str] = []
+    if user_memory and user_memory.strip():
+        parts.append(f"## User Memories\n{user_memory.strip()}")
+    if exp_memory and exp_memory.strip():
+        parts.append(f"## Experience Memories\n{exp_memory.strip()}")
+    if not parts:
+        return None
+    return "\n\n---\n\n".join(parts)
+
+
 def _build_rollout_messages(
     *,
     system_prompt: str,
@@ -487,11 +533,15 @@ def _build_rollout_messages(
     final_content: str | None,
     evaluation_result: Any,
     reward: Any,
+    experience_reminder: str | None = None,
 ) -> list[Message]:
     messages = [
         _message("tau2-system", "user", f"system:\n{system_prompt}"),
-        _message("tau2-user", "user", user_prompt),
     ]
+    # Experience Reminder 放在 system 之后、user 之前，与 agent 实际看到的顺序一致
+    if experience_reminder:
+        messages.append(_message("tau2-experience", "user", experience_reminder))
+    messages.append(_message("tau2-user", "user", user_prompt))
     if isinstance(tools_used, list):
         for idx, tool_info in enumerate(tools_used):
             if not isinstance(tool_info, dict):

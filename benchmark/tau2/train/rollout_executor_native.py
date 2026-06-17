@@ -370,7 +370,12 @@ def _optional_metadata_str(metadata: dict[str, Any], *keys: str) -> str | None:
 
 def _register_native_memory_agent(executor: NativeTau2RolloutExecutor) -> str:
     from tau2.agent.llm_agent import LLMAgent, LLMAgentState
-    from tau2.data_model.message import AssistantMessage, MultiToolMessage, SystemMessage
+    from tau2.data_model.message import (
+        AssistantMessage,
+        MultiToolMessage,
+        SystemMessage,
+        UserMessage,
+    )
     from tau2.registry import registry
     from tau2.utils.llm_utils import generate
 
@@ -403,10 +408,6 @@ def _register_native_memory_agent(executor: NativeTau2RolloutExecutor) -> str:
                         ),
                     )
                 )
-            if executor_config.retrieval_mode in {"first_user", "first_user_prewrite"}:
-                state.system_messages.append(
-                    SystemMessage(role="system", content="<openviking_memory_not_loaded/>")
-                )
             return state
 
         def _retrieve(
@@ -416,10 +417,19 @@ def _register_native_memory_agent(executor: NativeTau2RolloutExecutor) -> str:
             search_limit: int,
             inject_limit: int,
             inject_max_chars: int | None = None,
-        ) -> tuple[str, list[dict[str, Any]]]:
+            exclude_uris: set[str] | None = None,
+        ) -> tuple[str, list[dict[str, Any]], set[str]]:
+            """Retrieve and rank memories.
+
+            Returns:
+                block: joined text of injected memories
+                rows: detail rows for each match
+                injected_uris: set of URIs that were actually injected
+            """
             executor_config = self._executor
             client = _client(executor_config)
             rows: list[dict[str, Any]] = []
+            injected_uris: set[str] = set()
             try:
                 result = client.search(
                     query=query,
@@ -427,13 +437,35 @@ def _register_native_memory_agent(executor: NativeTau2RolloutExecutor) -> str:
                     limit=search_limit,
                 )
                 memories = list(getattr(result, "memories", []) or [])
+                # URI deduplication: keep the highest-scoring match per URI
+                deduped: dict[str, Any] = {}
+                for match in memories[:search_limit]:
+                    uri = getattr(match, "uri", "")
+                    if not uri:
+                        continue
+                    if exclude_uris and uri in exclude_uris:
+                        continue
+                    if uri in deduped:
+                        prev_score = getattr(deduped[uri], "score", 0) or 0
+                        curr_score = getattr(match, "score", 0) or 0
+                        if curr_score <= prev_score:
+                            continue
+                    deduped[uri] = match
+                deduped_memories = sorted(
+                    deduped.values(),
+                    key=lambda m: getattr(m, "score", 0) or 0,
+                    reverse=True,
+                )
+
                 blocks: list[str] = []
                 injected_chars_used = 0
-                for index, match in enumerate(memories[:search_limit], 1):
+                for index, match in enumerate(deduped_memories, 1):
                     uri = getattr(match, "uri", "")
                     text, read_error = _read_memory_text(client, match)
                     clean_text = text.strip()
-                    block_text = f"Memory {index} ({uri}):\n{clean_text}" if clean_text else ""
+                    block_text = (
+                        f"Memory {index} ({uri}):\n{clean_text}" if clean_text else ""
+                    )
                     block_chars = len(block_text)
                     budget_used_before = injected_chars_used
                     budget_dropped = False
@@ -454,6 +486,7 @@ def _register_native_memory_agent(executor: NativeTau2RolloutExecutor) -> str:
                                 budget_dropped = True
                     if injected:
                         injected_chars_used += block_chars
+                        injected_uris.add(uri)
                     row = {
                         "uri": uri,
                         "score": getattr(match, "score", None),
@@ -472,7 +505,7 @@ def _register_native_memory_agent(executor: NativeTau2RolloutExecutor) -> str:
                     rows.append(row)
                     if injected:
                         blocks.append(block_text)
-                return "\n\n".join(blocks), rows
+                return "\n\n".join(blocks), rows, injected_uris
             finally:
                 client.close()
 
@@ -533,20 +566,19 @@ def _register_native_memory_agent(executor: NativeTau2RolloutExecutor) -> str:
                 state.messages.extend(message.tool_messages)
             else:
                 state.messages.append(message)
-            marker_index = next(
-                (
-                    i
-                    for i, item in enumerate(state.system_messages)
-                    if isinstance(item, SystemMessage)
-                    and item.content == "<openviking_memory_not_loaded/>"
-                ),
-                None,
-            )
+
             role = getattr(message, "role", "")
             role_value = getattr(role, "value", role)
-            if marker_index is not None and str(role_value) == "user":
+            is_first_user = (
+                executor_config.retrieval_mode in {"first_user", "first_user_prewrite"}
+                and str(role_value) == "user"
+                and not getattr(self, "_first_user_memory_injected", False)
+            )
+            injected_uris: set[str] = getattr(self, "_injected_memory_uris", set())
+
+            if is_first_user:
                 query = str(getattr(message, "content", "") or "")
-                block, matches = self._retrieve(
+                block, matches, new_injected = self._retrieve(
                     query,
                     search_limit=int(
                         executor_config.first_user_retrieval_top_k
@@ -556,15 +588,21 @@ def _register_native_memory_agent(executor: NativeTau2RolloutExecutor) -> str:
                         executor_config.first_user_inject_top_k or executor_config.retrieval_top_k
                     ),
                     inject_max_chars=executor_config.first_user_memory_inject_max_chars,
+                    exclude_uris=injected_uris,
                 )
-                prompt = (
-                    "No OpenViking memory matched this user request."
-                    if not block
-                    else "Use these OpenViking memories only when they match the current task:\n\n"
-                    + block
-                )
-                state.system_messages[marker_index] = SystemMessage(role="system", content=prompt)
+                self._first_user_memory_injected = True
                 if block:
+                    injected_uris.update(new_injected)
+                    self._injected_memory_uris = injected_uris
+                    # Prepend experience reminder to the user message content
+                    # so it becomes part of the conversation history (visible in messages.json)
+                    reminder_prefix = (
+                        "[Experience Reminder]\n"
+                        "## Relevant Agent Experience\n\n"
+                        + block
+                        + "\n\n---\n\n"
+                    )
+                    message.content = reminder_prefix + str(message.content or "")
                     self._openviking_memory_contexts.append(block)
 
             assistant_message = self._generate(state.system_messages + state.messages)
@@ -573,7 +611,7 @@ def _register_native_memory_agent(executor: NativeTau2RolloutExecutor) -> str:
                 write_calls = [call for call in tool_calls if _is_write_tool_call(call)]
                 if write_calls:
                     query = _tool_call_query(write_calls, state.messages)
-                    block, _matches = self._retrieve(
+                    block, matches, new_injected = self._retrieve(
                         query,
                         search_limit=int(
                             executor_config.prewrite_retrieval_top_k
@@ -583,17 +621,21 @@ def _register_native_memory_agent(executor: NativeTau2RolloutExecutor) -> str:
                             executor_config.prewrite_inject_top_k or executor_config.retrieval_top_k
                         ),
                         inject_max_chars=executor_config.prewrite_memory_inject_max_chars,
+                        exclude_uris=injected_uris,
                     )
                     if block:
+                        injected_uris.update(new_injected)
+                        self._injected_memory_uris = injected_uris
                         self._openviking_memory_contexts.append(block)
-                        prompt = (
-                            "Before executing the pending write-like tool call, use these "
-                            "OpenViking memories only when they match the current task:\n\n" + block
+                        reminder_content = (
+                            "[Experience Reminder]\n"
+                            "## Relevant Agent Experience (before write action)\n\n"
+                            + block
                         )
+                        # Inject as a user message so it's part of the conversation history
+                        state.messages.append(UserMessage(role="user", content=reminder_content))
                         assistant_message = self._generate(
-                            state.system_messages
-                            + state.messages
-                            + [SystemMessage(role="system", content=prompt)]
+                            state.system_messages + state.messages
                         )
             contexts = list(getattr(self, "_openviking_memory_contexts", []) or [])
             if contexts:

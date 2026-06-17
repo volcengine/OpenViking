@@ -1084,6 +1084,13 @@ class AgentLoop:
                 provider_name=provider_name,
                 openviking_connection=openviking_connection,
             )
+
+            # Experience recall deduplication: URIs already recalled in this session
+            # are stored in session.metadata and survive restarts (persisted to JSONL).
+            exp_exclude_uris = session.metadata.get("recalled_exp_uris", [])
+            if not isinstance(exp_exclude_uris, list):
+                exp_exclude_uris = []
+
             messages = await message_context.build_messages(
                 history=history,
                 current_message=msg.content,
@@ -1093,6 +1100,7 @@ class AgentLoop:
                 profile_user_list=profile_user_list,
                 memory_peer_ids=memory_peer_ids,
                 memory_owner_user_ids=memory_owner_user_ids,
+                exp_exclude_uris=exp_exclude_uris,
             )
             relevant_memories = message_context.latest_relevant_memories
             auto_memory_tool = None
@@ -1102,6 +1110,19 @@ class AgentLoop:
                     query=msg.content,
                     result=relevant_memories,
                 )
+
+            # Track newly recalled experience URIs for deduplication
+            newly_recalled_exp_uris = getattr(message_context, "latest_recalled_exp_uris", [])
+            newly_recalled_exp_content = getattr(
+                message_context, "latest_recalled_exp_content", ""
+            )
+            if newly_recalled_exp_uris:
+                existing_uris = set(exp_exclude_uris)
+                for uri in newly_recalled_exp_uris:
+                    if uri not in existing_uris:
+                        existing_uris.add(uri)
+                        exp_exclude_uris.append(uri)
+                session.metadata["recalled_exp_uris"] = exp_exclude_uris
             # logger.info(f"New messages: {json.dumps(messages, indent=4)}")
 
             # Run agent loop within a stable response identity for tracing/tool spans.
@@ -1145,6 +1166,15 @@ class AgentLoop:
 
             is_heartbeat = bool(msg.metadata.get(HEARTBEAT_METADATA_KEY))
             if not (is_heartbeat and is_heartbeat_noop_response(final_content)):
+                # Write experience reminder into session history so it persists
+                # across turns and survives bot restarts (in JSONL).
+                if newly_recalled_exp_content:
+                    session.add_message(
+                        "user",
+                        f"[Experience Reminder]\n## Relevant Agent Experience\n{newly_recalled_exp_content}",
+                        exp_uris=newly_recalled_exp_uris,
+                        experience_reminder=True,
+                    )
                 session.add_message("user", msg.content, sender_id=msg.sender_id)
                 session.add_message(
                     "assistant",
