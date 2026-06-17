@@ -163,6 +163,22 @@ class TestMemoryUpdater:
 
         assert updater._registry == registry
 
+    def test_event_overview_title_falls_back_to_first_sentence(self):
+        assert (
+            MemoryUpdater._event_overview_title(
+                {"content": "第一句话？第二句话！第三句话。"},
+                "fallback",
+            )
+            == "第一句话？"
+        )
+        assert (
+            MemoryUpdater._event_overview_title(
+                {"content": "Summary: First sentence. Second sentence."},
+                "fallback",
+            )
+            == "First sentence."
+        )
+
     @pytest.mark.asyncio
     async def test_generate_overview_deletes_empty_overview_via_rm(self):
         schema = MemoryTypeSchema(
@@ -237,6 +253,78 @@ class TestMemoryUpdater:
         )
 
         assert viking_fs.rm_calls == []
+
+    @pytest.mark.asyncio
+    async def test_generate_events_overview_without_extract_context_uses_directory_date(self):
+        schema = MemoryTypeSchema(
+            memory_type="events",
+            description="event memory",
+            directory="viking://user/{{ user_space }}/memories/events",
+            filename_template="{{ event_name }}.md",
+            fields=[],
+            overview_template=(
+                "# Events Overview\n"
+                "{% if overview_date %}**Date:** {{ overview_date }}{% endif %}\n"
+                "{% for item in items %}\n"
+                "- [{{ item.file_content.overview_title }}](./{{ item.file_name }})\n"
+                "{% endfor %}"
+            ),
+        )
+        registry = MagicMock()
+        registry.get.return_value = schema
+
+        directory = "viking://user/alice/memories/events/2026/06/16"
+        event_uri = f"{directory}/kept_event.md"
+        plain_event_uri = f"{directory}/plain_event.md"
+        overview_uri = f"{directory}/.overview.md"
+
+        class FakeVikingFS:
+            def __init__(self):
+                self.store = {
+                    event_uri: MemoryFileUtils.write(
+                        MemoryFile(
+                            uri=event_uri,
+                            content="Summary: kept event",
+                            memory_type="events",
+                            extra_fields={
+                                "event_name": "kept_event",
+                                "summary": "kept event",
+                                "ranges": "0",
+                            },
+                        )
+                    ),
+                    plain_event_uri: "Plain event first sentence. More detail on the same line.",
+                    overview_uri: (
+                        "# Events Overview\n"
+                        "**Date:** 2026/06/16\n"
+                        "- [deleted event](./deleted_event.md)\n"
+                    ),
+                }
+
+            async def ls(self, uri, show_all_hidden=False, ctx=None):
+                return [
+                    {"name": "kept_event.md", "isDir": False},
+                    {"name": "plain_event.md", "isDir": False},
+                    {"name": ".overview.md", "isDir": False},
+                ]
+
+            async def read_file(self, uri, ctx=None):
+                return self.store[uri]
+
+            async def write_file(self, uri, content, ctx=None):
+                self.store[uri] = content
+
+        viking_fs = FakeVikingFS()
+        updater = MemoryUpdater(registry=registry)
+        updater._get_viking_fs = MagicMock(return_value=viking_fs)
+        ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
+
+        await updater.generate_overview("events", directory, ctx, extract_context=None)
+
+        assert "**Date:** 2026/06/16" in viking_fs.store[overview_uri]
+        assert "- [kept event](./kept_event.md)" in viking_fs.store[overview_uri]
+        assert "- [Plain event first sentence.](./plain_event.md)" in viking_fs.store[overview_uri]
+        assert "deleted_event.md" not in viking_fs.store[overview_uri]
 
     @pytest.mark.asyncio
     async def test_apply_operations_preserves_pre_resolved_multi_uris_for_new_page_ids(self):

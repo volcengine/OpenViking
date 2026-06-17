@@ -46,6 +46,7 @@ logger = get_logger(__name__)
 
 _EXTRACTION_CHUNK_MIN_CHARS = 100
 _EXTRACTION_CHUNK_BOUNDARY_RE = re.compile(r"(\n+|[。！？；!?;]+|(?<!\d)\.(?!\d))")
+_EVENT_OVERVIEW_SENTENCE_RE = re.compile(r"(.+?(?:[。！？；!?;]+|(?<!\d)\.(?!\d)))", re.DOTALL)
 _RESOURCE_ADDITION_FIELD_RE = re.compile(
     r"^(Resource URI|Source name|Added at|Resource abstract|User reason):\s*(.*)$",
     re.MULTILINE,
@@ -1249,14 +1250,17 @@ class MemoryUpdater:
             logger.debug(f"No valid memory files parsed in {directory}")
             return
 
+        overview_context = {
+            "memory_type": memory_type,
+            "items": items,
+            "overview_date": self._overview_date_from_directory(memory_type, directory),
+        }
+
         # Render the template
         try:
             rendered = render_template(
                 schema.overview_template,
-                {
-                    "memory_type": memory_type,
-                    "items": items,
-                },
+                overview_context,
                 extract_context=extract_context,
             )
         except Exception as e:
@@ -1286,3 +1290,54 @@ class MemoryUpdater:
         elif memory_type == "preferences":
             metadata.setdefault("user", parent_name)
             metadata.setdefault("topic", stem)
+        elif memory_type == "events":
+            metadata["overview_title"] = MemoryUpdater._event_overview_title(metadata, stem)
+
+    @staticmethod
+    def _overview_date_from_directory(memory_type: str, directory: str) -> str:
+        if memory_type != "events":
+            return ""
+        parts = [part for part in directory.rstrip("/").split("/") if part]
+        if len(parts) < 3:
+            return ""
+        year, month, day = parts[-3], parts[-2], parts[-1]
+        if not (
+            re.fullmatch(r"\d{4}", year)
+            and re.fullmatch(r"\d{2}", month)
+            and re.fullmatch(r"\d{2}", day)
+        ):
+            return ""
+        return f"{year}/{month}/{day}"
+
+    @staticmethod
+    def _event_overview_title(metadata: Dict[str, Any], fallback_name: str) -> str:
+        for key in ("summary", "event_name"):
+            value = metadata.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+        content = metadata.get("content")
+        if isinstance(content, str):
+            title = MemoryUpdater._first_sentence_for_overview(content)
+            if title:
+                return title
+
+        return fallback_name
+
+    @staticmethod
+    def _first_sentence_for_overview(content: str) -> str:
+        text = content.strip()
+        text = re.sub(r"^#+\s*", "", text).strip()
+        text = re.sub(r"^(?:Summary|摘要)[:：]\s*", "", text, flags=re.IGNORECASE).strip()
+        if not text:
+            return ""
+        match = _EVENT_OVERVIEW_SENTENCE_RE.match(text)
+        sentence = match.group(1) if match else text
+        return MemoryUpdater._truncate_overview_title(sentence)
+
+    @staticmethod
+    def _truncate_overview_title(title: str, max_chars: int = 120) -> str:
+        title = " ".join(title.split())
+        if len(title) <= max_chars:
+            return title
+        return title[: max_chars - 3].rstrip() + "..."
