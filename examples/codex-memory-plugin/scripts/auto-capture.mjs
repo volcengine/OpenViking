@@ -32,9 +32,10 @@ import {
   normalizeCaptureRole,
   shouldCaptureText,
 } from "./capture-utils.mjs";
+import { startDetachedScript } from "./background-jobs.mjs";
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
-import { loadState, resolveOvSessionId, saveState } from "./session-state.mjs";
+import { deriveOvSessionId, loadState, resolveOvSessionId, saveState } from "./session-state.mjs";
 
 const cfg = loadConfig();
 const { log, logError } = createLogger("auto-capture");
@@ -56,8 +57,8 @@ async function fetchJSON(path, init = {}) {
       headers["Authorization"] = `Bearer ${cfg.apiKey}`;
       headers["X-API-Key"] = cfg.apiKey;
     }
-    if (cfg.account) headers["X-OpenViking-Account"] = cfg.account;
-    if (cfg.user) headers["X-OpenViking-User"] = cfg.user;
+    if (cfg.sendIdentityHeaders && cfg.account) headers["X-OpenViking-Account"] = cfg.account;
+    if (cfg.sendIdentityHeaders && cfg.user) headers["X-OpenViking-User"] = cfg.user;
     if (cfg.peerId) headers["X-OpenViking-Actor-Peer"] = cfg.peerId;
     const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
     const body = await res.json().catch(() => null);
@@ -119,13 +120,11 @@ async function readTranscriptTurns(transcriptPath) {
   }
 }
 
-function selectStopTurns(state, turns) {
+function selectStopTurns(turns) {
   const limit = cfg.captureMaxTurnsPerStop;
   if (turns.length <= limit) return turns;
-  const skipped = turns.length - limit;
-  state.capturedTurnCount += skipped;
-  log("backlog_trimmed", { newTurns: turns.length, skipped, selected: limit });
-  return turns.slice(-limit);
+  log("backlog_batched", { newTurns: turns.length, selected: limit, deferred: turns.length - limit });
+  return turns.slice(0, limit);
 }
 
 async function appendTurns(ovSessionId, turns, state) {
@@ -140,7 +139,7 @@ async function appendTurns(ovSessionId, turns, state) {
     if (!result) break;
     appended += 1;
     state.capturedTurnCount += 1;
-    await saveState(state);
+    await saveState(state, cfg.stateScope);
   }
   return appended;
 }
@@ -178,7 +177,7 @@ async function main() {
     return;
   }
 
-  const state = await loadState(sessionId);
+  const state = await loadState(sessionId, cfg.stateScope);
   const allTurns = await readTranscriptTurns(transcriptPath);
 
   // Post-compact transcript-shrink defense: codex's /compact may rewrite or
@@ -194,6 +193,29 @@ async function main() {
     state.capturedTurnCount = 0;
   }
 
+  if (state.capturedTurnCount === 0 && allTurns.length > cfg.initialBacklogLimit) {
+    const backfillOvSessionId = `${deriveOvSessionId(sessionId)}-backfill`;
+    const pid = transcriptPath
+      ? startDetachedScript("backfill-transcript.mjs", [
+          "--session-id", sessionId,
+          "--transcript", transcriptPath,
+          "--ov-session-id", backfillOvSessionId,
+          "--batch-size", String(cfg.backfillBatchSize),
+        ])
+      : null;
+    state.capturedTurnCount = allTurns.length;
+    await saveState(state, cfg.stateScope);
+    log("background_backfill_started", {
+      reason: "initial transcript exceeds hook budget",
+      totalTurns: allTurns.length,
+      initialBacklogLimit: cfg.initialBacklogLimit,
+      ovSessionId: backfillOvSessionId,
+      pid,
+    });
+    noop(`scheduled OpenViking background backfill for ${allTurns.length} historical turn(s)`);
+    return;
+  }
+
   const newTurns = allTurns.slice(state.capturedTurnCount);
 
   log("transcript_parse", {
@@ -204,7 +226,7 @@ async function main() {
 
   if (cfg.captureMode === "keyword" && newTurns.length > 0 && !hasCaptureKeyword(newTurns)) {
     log("skip", { stage: "capture_mode", reason: "keyword mode without capture trigger" });
-    await saveState(state);
+    await saveState(state, cfg.stateScope);
     noop();
     return;
   }
@@ -215,14 +237,14 @@ async function main() {
     if (!ovSessionId) {
       logError("resolve_ov_session", "failed to derive OV session id");
     } else {
-      const turnsToAppend = selectStopTurns(state, newTurns);
-      await saveState(state);
+      const turnsToAppend = selectStopTurns(newTurns);
+      await saveState(state, cfg.stateScope);
       added = await appendTurns(ovSessionId, turnsToAppend, state);
       log("appended", { ovSessionId, added });
     }
   }
 
-  await saveState(state);
+  await saveState(state, cfg.stateScope);
 
   // could also sweep here, deliberately not — see header comment + DESIGN.md §5.
 

@@ -35,7 +35,15 @@
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
 import { detectRecallCompressorProfile } from "./recall-compressor-profile.mjs";
-import { clearState, deriveOvSessionId, listStates, loadState } from "./session-state.mjs";
+import { startDetachedScript } from "./background-jobs.mjs";
+import {
+  clearState,
+  deriveOvSessionId,
+  listStates,
+  loadState,
+  rotateOvSessionId,
+  saveState,
+} from "./session-state.mjs";
 
 const cfg = loadConfig();
 const { log, logError } = createLogger("session-start");
@@ -85,8 +93,8 @@ async function fetchJSON(path, init = {}) {
       headers["Authorization"] = `Bearer ${cfg.apiKey}`;
       headers["X-API-Key"] = cfg.apiKey;
     }
-    if (cfg.account) headers["X-OpenViking-Account"] = cfg.account;
-    if (cfg.user) headers["X-OpenViking-User"] = cfg.user;
+    if (cfg.sendIdentityHeaders && cfg.account) headers["X-OpenViking-Account"] = cfg.account;
+    if (cfg.sendIdentityHeaders && cfg.user) headers["X-OpenViking-User"] = cfg.user;
     if (cfg.peerId) headers["X-OpenViking-Actor-Peer"] = cfg.peerId;
     const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
     const body = await res.json().catch(() => null);
@@ -105,6 +113,21 @@ async function commitOvSession(ovSessionId) {
   return fetchJSON(
     `/api/v1/sessions/${encodeURIComponent(ovSessionId)}/commit`,
     { method: "POST", body: JSON.stringify({}) },
+  );
+}
+
+async function getOvSessionMeta(ovSessionId) {
+  if (!ovSessionId) return null;
+  return fetchJSON(`/api/v1/sessions/${encodeURIComponent(ovSessionId)}`);
+}
+
+function sessionExceedsCommitBudget(meta) {
+  if (!meta) return false;
+  const messageCount = Number(meta.message_count || 0);
+  const pendingTokens = Number(meta.pending_tokens || 0);
+  return (
+    messageCount > cfg.maxLiveMessagesOnCompact ||
+    pendingTokens > cfg.maxPendingTokensOnCompact
   );
 }
 
@@ -147,7 +170,7 @@ async function injectResumeArchive(newSessionId) {
     return;
   }
 
-  const state = await loadState(newSessionId);
+  const state = await loadState(newSessionId, cfg.stateScope);
   if (state.ovSessionId) {
     log("skip", {
       stage: "resume_archive",
@@ -186,6 +209,36 @@ async function injectResumeArchive(newSessionId) {
 async function commitAndClear(state, reason) {
   if (state.ovSessionId) {
     const ovSessionId = state.ovSessionId;
+    const sessionMeta = await getOvSessionMeta(ovSessionId);
+    if (sessionExceedsCommitBudget(sessionMeta)) {
+      const messageCount = Number(sessionMeta.message_count || 0);
+      const pendingTokens = Number(sessionMeta.pending_tokens || 0);
+      const pid = startDetachedScript("commit-session.mjs", [
+        "--ov-session-id", ovSessionId,
+        "--reason", reason,
+      ]);
+      const nextOvSessionId = rotateOvSessionId(state, {
+        reason: "session_start_commit_budget",
+        trigger: reason,
+        messageCount,
+        pendingTokens,
+        maxLiveMessagesOnCompact: cfg.maxLiveMessagesOnCompact,
+        maxPendingTokensOnCompact: cfg.maxPendingTokensOnCompact,
+        backgroundPid: pid,
+      });
+      await saveState(state, cfg.stateScope);
+      log("background_commit_started", {
+        reason,
+        codexSessionId: state.codexSessionId,
+        ovSessionId,
+        nextOvSessionId,
+        pid,
+        messageCount,
+        pendingTokens,
+      });
+      return { committed: false, ovSessionId: null };
+    }
+
     const commit = await commitOvSession(state.ovSessionId);
     if (!commit) {
       logError("commit_failed_keep_state", {
@@ -203,13 +256,13 @@ async function commitAndClear(state, reason) {
       taskId: commit.task_id,
       status: commit.status,
     });
-    await clearState(state.codexSessionId);
+    await clearState(state.codexSessionId, cfg.stateScope);
     return { committed: true, ovSessionId };
   }
   // No OV session attached — nothing to commit on the server, but the local
   // state file is still stale and should be removed.
   log("clear_no_ov", { reason, codexSessionId: state.codexSessionId });
-  await clearState(state.codexSessionId);
+  await clearState(state.codexSessionId, cfg.stateScope);
   return { committed: true, ovSessionId: null };
 }
 
@@ -265,7 +318,7 @@ async function main() {
   }
 
   const now = Date.now();
-  const states = await listStates();
+  const states = await listStates(cfg.stateScope);
 
   // -------------------------------------------------------------------------
   // Active-window heuristic (DESIGN.md §3)
@@ -313,7 +366,7 @@ async function main() {
   // skipped above (≥2 active path). We re-list because the heuristic branch
   // may have removed entries.
   // -------------------------------------------------------------------------
-  const postHeuristic = await listStates();
+  const postHeuristic = await listStates(cfg.stateScope);
   let idleCommitted = 0;
   const idleSessionIds = [];
 

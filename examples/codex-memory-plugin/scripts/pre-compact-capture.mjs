@@ -27,9 +27,16 @@ import {
   normalizeCaptureRole,
   shouldCaptureText,
 } from "./capture-utils.mjs";
+import { startDetachedScript } from "./background-jobs.mjs";
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
-import { loadState, resolveOvSessionId, saveState } from "./session-state.mjs";
+import {
+  deriveOvSessionId,
+  loadState,
+  resolveOvSessionId,
+  rotateOvSessionId,
+  saveState,
+} from "./session-state.mjs";
 
 const cfg = loadConfig();
 const { log, logError } = createLogger("pre-compact");
@@ -51,8 +58,8 @@ async function fetchJSON(path, init = {}) {
       headers["Authorization"] = `Bearer ${cfg.apiKey}`;
       headers["X-API-Key"] = cfg.apiKey;
     }
-    if (cfg.account) headers["X-OpenViking-Account"] = cfg.account;
-    if (cfg.user) headers["X-OpenViking-User"] = cfg.user;
+    if (cfg.sendIdentityHeaders && cfg.account) headers["X-OpenViking-Account"] = cfg.account;
+    if (cfg.sendIdentityHeaders && cfg.user) headers["X-OpenViking-User"] = cfg.user;
     if (cfg.peerId) headers["X-OpenViking-Actor-Peer"] = cfg.peerId;
     const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
     const body = await res.json().catch(() => null);
@@ -110,7 +117,7 @@ async function readTranscriptTurns(transcriptPath) {
   }
 }
 
-async function appendTurns(ovSessionId, turns) {
+async function appendTurns(ovSessionId, turns, onAppended) {
   let appended = 0;
   for (const turn of turns) {
     const body = { role: turn.role, content: turn.text };
@@ -121,8 +128,24 @@ async function appendTurns(ovSessionId, turns) {
     });
     if (!result) break;
     appended += 1;
+    if (onAppended) await onAppended(appended);
   }
   return appended;
+}
+
+async function getOvSessionMeta(ovSessionId) {
+  if (!ovSessionId) return null;
+  return fetchJSON(`/api/v1/sessions/${encodeURIComponent(ovSessionId)}`);
+}
+
+function sessionExceedsCommitBudget(meta) {
+  if (!meta) return false;
+  const messageCount = Number(meta.message_count || 0);
+  const pendingTokens = Number(meta.pending_tokens || 0);
+  return (
+    messageCount > cfg.maxLiveMessagesOnCompact ||
+    pendingTokens > cfg.maxPendingTokensOnCompact
+  );
 }
 
 async function main() {
@@ -155,13 +178,38 @@ async function main() {
     return;
   }
 
-  const state = await loadState(sessionId);
+  const state = await loadState(sessionId, cfg.stateScope);
   const allTurns = await readTranscriptTurns(transcriptPath);
-  const newTurns = allTurns.slice(state.capturedTurnCount);
+  const previouslyCaptured = state.capturedTurnCount;
+  const pendingTurns = allTurns.slice(state.capturedTurnCount);
+  let newTurns = pendingTurns;
+
+  if (pendingTurns.length > cfg.captureMaxTurnsPerStop) {
+    const backfillOvSessionId = `${deriveOvSessionId(sessionId)}-backfill`;
+    const pid = transcriptPath
+      ? startDetachedScript("backfill-transcript.mjs", [
+          "--session-id", sessionId,
+          "--transcript", transcriptPath,
+          "--ov-session-id", backfillOvSessionId,
+          "--batch-size", String(cfg.backfillBatchSize),
+        ])
+      : null;
+    state.capturedTurnCount = allTurns.length;
+    await saveState(state, cfg.stateScope);
+    newTurns = [];
+    log("background_backfill_started", {
+      reason: "pre-compact pending turns exceed hook budget",
+      pendingTurns: pendingTurns.length,
+      maxTurnsPerStop: cfg.captureMaxTurnsPerStop,
+      ovSessionId: backfillOvSessionId,
+      pid,
+    });
+  }
 
   log("transcript_parse", {
     totalTurns: allTurns.length,
-    previouslyCaptured: state.capturedTurnCount,
+    previouslyCaptured,
+    pendingTurns: pendingTurns.length,
     newTurns: newTurns.length,
   });
 
@@ -173,7 +221,7 @@ async function main() {
 
   if (newTurns.length > 0 && !state.ovSessionId && cfg.captureMode === "keyword" && !hasCaptureKeyword(newTurns)) {
     log("skip", { stage: "capture_mode", reason: "keyword mode without capture trigger" });
-    await saveState(state);
+    await saveState(state, cfg.stateScope);
     noop();
     return;
   }
@@ -185,12 +233,14 @@ async function main() {
       noop();
       return;
     }
-    const added = await appendTurns(ovSessionId, newTurns);
-    state.capturedTurnCount += added;
+    const added = await appendTurns(ovSessionId, newTurns, async () => {
+      state.capturedTurnCount += 1;
+      await saveState(state, cfg.stateScope);
+    });
     log("appended_catchup", { ovSessionId, added });
     if (added < newTurns.length) {
       logError("append_failed_keep_state", { ovSessionId, attempted: newTurns.length, added });
-      await saveState(state);
+      await saveState(state, cfg.stateScope);
       noop(`pre-compact catch-up append incomplete for ${ovSessionId}; state preserved for retry`);
       return;
     }
@@ -198,12 +248,42 @@ async function main() {
 
   if (!state.ovSessionId) {
     log("skip", { stage: "commit", reason: "no OV session for this codex session" });
-    await saveState(state);
+    await saveState(state, cfg.stateScope);
     noop();
     return;
   }
 
   const ovSessionId = state.ovSessionId;
+  const sessionMeta = await getOvSessionMeta(ovSessionId);
+  if (sessionExceedsCommitBudget(sessionMeta)) {
+    const messageCount = Number(sessionMeta.message_count || 0);
+    const pendingTokens = Number(sessionMeta.pending_tokens || 0);
+    const pid = startDetachedScript("commit-session.mjs", [
+      "--ov-session-id", ovSessionId,
+      "--reason", "precompact_commit_budget",
+    ]);
+    const nextOvSessionId = rotateOvSessionId(state, {
+      reason: "precompact_commit_budget",
+      messageCount,
+      pendingTokens,
+      maxLiveMessagesOnCompact: cfg.maxLiveMessagesOnCompact,
+      maxPendingTokensOnCompact: cfg.maxPendingTokensOnCompact,
+      backgroundPid: pid,
+    });
+    await saveState(state, cfg.stateScope);
+    log("background_commit_started", {
+      ovSessionId,
+      nextOvSessionId,
+      pid,
+      messageCount,
+      pendingTokens,
+      maxLiveMessagesOnCompact: cfg.maxLiveMessagesOnCompact,
+      maxPendingTokensOnCompact: cfg.maxPendingTokensOnCompact,
+    });
+    noop(`OpenViking scheduled background commit for oversized session ${ovSessionId}`);
+    return;
+  }
+
   const commit = await fetchJSON(
     `/api/v1/sessions/${encodeURIComponent(ovSessionId)}/commit`,
     { method: "POST", body: JSON.stringify({}) },
@@ -215,7 +295,7 @@ async function main() {
   // retry. A transient OV outage shouldn't lose a session's memory.
   if (!commit) {
     logError("commit_failed_keep_state", { ovSessionId });
-    await saveState(state); // bumps lastUpdatedAt only, keeps ovSessionId
+    await saveState(state, cfg.stateScope); // bumps lastUpdatedAt only, keeps ovSessionId
     noop(`pre-compact commit attempted on ${ovSessionId}; result unavailable (state preserved for retry)`);
     return;
   }
@@ -230,7 +310,7 @@ async function main() {
   // Reset OV session for the post-compact half. Keep capturedTurnCount so
   // we don't re-capture pre-compact turns when Stop fires next.
   state.ovSessionId = null;
-  await saveState(state);
+  await saveState(state, cfg.stateScope);
 
   noop(`OpenViking session ${ovSessionId} is committed`);
 }

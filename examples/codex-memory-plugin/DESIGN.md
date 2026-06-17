@@ -16,8 +16,11 @@ events imply "context for a particular codex `session_id` is gone".
   append messages on every `Stop`, and commit it (which triggers OV's
   memory extractor) at session-end-equivalent moments. `/messages`
   auto-creates the OV session, so the plugin does not call session create.
-- **State file** — `~/.openviking/codex-plugin-state/<safe-codex-session-id>.json`,
-  shape `{ codexSessionId, ovSessionId, capturedTurnCount, createdAt, lastUpdatedAt }`.
+- **State file** — `~/.openviking/codex-plugin-state/<safe-codex-session-id>.<scope-hash>.json`,
+  shape `{ codexSessionId, stateScope, ovSessionId, blockedOvSessions, capturedTurnCount, createdAt, lastUpdatedAt }`.
+  The scope hash is derived from OpenViking base URL, auth mode, account, user,
+  and peer. This prevents switching `ovcli.conf` from reusing another identity's
+  `capturedTurnCount` or `ovSessionId`.
 - **Active window** — state files whose `lastUpdatedAt` is within
   `ACTIVE_WINDOW_MS` (default 2 min) of "now". Used to detect "the codex
   session that just ended".
@@ -53,6 +56,13 @@ unappended turns from the transcript, commit the OV session for this codex
 same `cx-<codex-session-id>` OV session id for the post-compact half.
 `capturedTurnCount` is preserved unless the transcript was truncated by
 compaction (see "Post-compact transcript shrink" below).
+
+The hook has a bounded catch-up budget. If unappended turns exceed
+`OPENVIKING_CAPTURE_MAX_TURNS_PER_STOP`, it schedules detached
+`backfill-transcript.mjs` work and returns instead of trying to upload a huge
+transcript inside Codex's hook timeout. If the live OV session already exceeds
+the commit budget, it schedules detached `commit-session.mjs`, records the old
+session in `blockedOvSessions`, rotates to a fresh OV session id, and returns.
 
 ### 2. `SessionStart` source=`clear` — heuristic, same shape as `startup`
 
@@ -144,6 +154,13 @@ and appends each new user/assistant turn to the OV session for this codex
 State is updated:
 `{ovSessionId, capturedTurnCount, lastUpdatedAt: now}`. Never commits.
 
+Stop appends at most `OPENVIKING_CAPTURE_MAX_TURNS_PER_STOP` turns per hook.
+It does not skip older pending turns; small backlogs drain over successive Stop
+events. On first plugin activation for an already-large transcript
+(`allTurns.length > OPENVIKING_INITIAL_BACKLOG_LIMIT`), Stop starts detached
+background backfill and sets `capturedTurnCount` to the current end so current
+interactive use is not blocked by thousands of historical turns.
+
 ## Injected context boundary
 
 `UserPromptSubmit` stdin `prompt` is the user's prompt only. Recalled
@@ -182,6 +199,15 @@ the result as null. We must NOT call `clearState` on failure — keep the
 state file so the next sweep / SessionStart can retry. A transient OV
 outage shouldn't lose a session's worth of memory.
 
+### Oversized commit budget
+
+When `message_count > OPENVIKING_MAX_LIVE_MESSAGES_ON_COMPACT` or
+`pending_tokens > OPENVIKING_MAX_PENDING_TOKENS_ON_COMPACT`, the hook does not
+run `/commit` inline. It starts detached `commit-session.mjs`, rotates
+`ovSessionId` to a new `cx-...-part-...` value, and stores the old session in
+`blockedOvSessions` for observability. This keeps Codex responsive while
+OpenViking extracts memory in the background.
+
 ### Race: SIGTERM before Stop completes
 
 Codex's tokio runtime cancels in-flight async tasks on SIGTERM, so the last
@@ -203,7 +229,9 @@ OV session id, while commits create additional archives under that session.
 ```json
 {
   "codexSessionId": "0193af...",   // codex thread id
+  "stateScope": "http://127.0.0.1:1933|trusted|account|user|peer",
   "ovSessionId": "cx-0193af...-or-null", // null means "committed, awaiting next Stop"
+  "blockedOvSessions": [],
   "capturedTurnCount": 7,            // turns from transcript already appended
   "createdAt": 1715000000000,
   "lastUpdatedAt": 1715000300000
@@ -225,6 +253,12 @@ Env var overrides for tuning without rebuilding:
 | `OPENVIKING_CODEX_STATE_DIR` | `~/.openviking/codex-plugin-state` | state file dir |
 | `OPENVIKING_CODEX_ACTIVE_WINDOW_MS` | `120000` (2 min) | rule-3 active window |
 | `OPENVIKING_CODEX_IDLE_TTL_MS` | `1800000` (30 min) | idle sweep TTL |
+| `OPENVIKING_AUTH_MODE` | inferred | `trusted` sends `X-OpenViking-Account/User`; `api_key` does not |
+| `OPENVIKING_CAPTURE_MAX_TURNS_PER_STOP` | `8` | max turns appended inside one Stop/PreCompact hook |
+| `OPENVIKING_INITIAL_BACKLOG_LIMIT` | `100` | first-run transcript size above which detached backfill is scheduled |
+| `OPENVIKING_BACKFILL_BATCH_SIZE` | `100` | progress batch size for detached backfill |
+| `OPENVIKING_MAX_LIVE_MESSAGES_ON_COMPACT` | `200` | inline commit budget by live session message count |
+| `OPENVIKING_MAX_PENDING_TOKENS_ON_COMPACT` | `60000` | inline commit budget by pending token estimate |
 | `OPENVIKING_RECALL_TIMEOUT_MS` | `120000` (2 min) | whole UserPromptSubmit auto-recall deadline |
 | `OPENVIKING_RECALL_COMPRESS` | `1` | set `0` / `off` to skip `codex exec` compression |
 | `OPENVIKING_RECALL_COMPRESS_MODEL` | unset | custom first-choice compressor model; `off` disables compression |

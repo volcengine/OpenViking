@@ -26,12 +26,17 @@
  * Connection / identity env vars:
  *   OPENVIKING_URL / OPENVIKING_BASE_URL
  *   OPENVIKING_API_KEY / OPENVIKING_BEARER_TOKEN
- *   OPENVIKING_ACCOUNT, OPENVIKING_USER, OPENVIKING_PEER_ID
+ *   OPENVIKING_AUTH_MODE, OPENVIKING_ACCOUNT, OPENVIKING_USER, OPENVIKING_PEER_ID
  *
  * Misc env vars:
  *   OPENVIKING_TIMEOUT_MS, OPENVIKING_CAPTURE_TIMEOUT_MS
  *   OPENVIKING_RECALL_TIMEOUT_MS, OPENVIKING_RECALL_COMPRESS_TIMEOUT_MS
  *   OPENVIKING_RECALL_COMPRESS_MODEL, OPENVIKING_RECALL_COMPRESS_THINKING
+ *   OPENVIKING_CAPTURE_MAX_TURNS_PER_STOP
+ *   OPENVIKING_INITIAL_BACKLOG_LIMIT
+ *   OPENVIKING_BACKFILL_BATCH_SIZE
+ *   OPENVIKING_MAX_LIVE_MESSAGES_ON_COMPACT
+ *   OPENVIKING_MAX_PENDING_TOKENS_ON_COMPACT
  *   OPENVIKING_RECALL_LIMIT, OPENVIKING_SCORE_THRESHOLD
  *   OPENVIKING_DEBUG=1, OPENVIKING_DEBUG_LOG
  */
@@ -67,12 +72,32 @@ function hasOwn(obj, key) {
   return Object.prototype.hasOwnProperty.call(obj || {}, key);
 }
 
+function normalizeAuthMode(val) {
+  const mode = str(val, "").toLowerCase();
+  return ["trusted", "api_key"].includes(mode) ? mode : "";
+}
+
 export function loadConfig() {
   const creds = resolveOpenVikingCredentials();
   const { cliPath, ovFile, ovPath } = creds;
   const configPath = cliPath || ovPath || null;
 
   const cx = ovFile.codex || {};
+  const server = ovFile.server || {};
+
+  const explicitAuthMode =
+    normalizeAuthMode(process.env.OPENVIKING_AUTH_MODE) ||
+    normalizeAuthMode(cx.authMode) ||
+    normalizeAuthMode(cx.auth_mode) ||
+    normalizeAuthMode(server.auth_mode);
+  const authMode = explicitAuthMode || ((creds.account || creds.user) ? "trusted" : "api_key");
+  const stateScope = [
+    creds.baseUrl || "",
+    authMode,
+    creds.account || "",
+    creds.user || "",
+    creds.peerId || "",
+  ].join("|");
 
   const debug = envBool("OPENVIKING_DEBUG") ?? (cx.debug === true);
   const defaultLogPath = join(homedir(), ".openviking", "logs", "codex-hooks.log");
@@ -116,10 +141,13 @@ export function loadConfig() {
     ovConfigPath: ovPath,
     credentialSource: creds.credentialSource,
     baseUrl: creds.baseUrl,
+    authMode,
+    sendIdentityHeaders: authMode === "trusted",
     apiKey: creds.apiKey,
     account: creds.account,
     user: creds.user,
     peerId: creds.peerId,
+    stateScope,
     timeoutMs,
     recallTimeoutMs,
 
@@ -171,6 +199,22 @@ export function loadConfig() {
     captureMaxTurnsPerStop: Math.max(1, Math.floor(num(
       process.env.OPENVIKING_CAPTURE_MAX_TURNS_PER_STOP,
       num(cx.captureMaxTurnsPerStop, 8),
+    ))),
+    initialBacklogLimit: Math.max(0, Math.floor(num(
+      process.env.OPENVIKING_INITIAL_BACKLOG_LIMIT,
+      num(cx.initialBacklogLimit, 100),
+    ))),
+    backfillBatchSize: Math.max(1, Math.floor(num(
+      process.env.OPENVIKING_BACKFILL_BATCH_SIZE,
+      num(cx.backfillBatchSize, 100),
+    ))),
+    maxLiveMessagesOnCompact: Math.max(1, Math.floor(num(
+      process.env.OPENVIKING_MAX_LIVE_MESSAGES_ON_COMPACT,
+      num(cx.maxLiveMessagesOnCompact, 200),
+    ))),
+    maxPendingTokensOnCompact: Math.max(1, Math.floor(num(
+      process.env.OPENVIKING_MAX_PENDING_TOKENS_ON_COMPACT,
+      num(cx.maxPendingTokensOnCompact, 60000),
     ))),
     captureTimeoutMs,
     captureToolMaxChars: Math.max(200, Math.floor(num(

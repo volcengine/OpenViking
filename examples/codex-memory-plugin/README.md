@@ -8,6 +8,7 @@ This is the Codex counterpart to [`claude-code-memory-plugin`](../claude-code-me
 - **Incremental capture on `Stop`** (turn end): append the new user/assistant turns to a deterministic OpenViking session id `cx-<codex_session_id>`. No commit per turn.
 - **Commit on `PreCompact`**: trigger OpenViking's memory extractor on the full pre-compact transcript before Codex summarizes it.
 - **Commit on `SessionStart` (source=startup|clear)**: active-window heuristic — if exactly one *other* state file was touched within the last 2 min, commit it (the just-ended session). On `≥2`, defer to idle-TTL sweep at the tail. `source=resume` never commits or sweeps; if the live OV session was already committed, it may inject the latest archive summary for continuity. See `DESIGN.md` for the full decision tree.
+- **Bounded hook work**: large first-run transcripts are backfilled by a detached worker, and oversized live OV sessions are committed by a detached worker, so Codex hooks return within their timeout budget.
 
 It also wires Codex up to OpenViking's native `/mcp` endpoint (streamable HTTP, Bearer auth), so the model has direct access to the `search`, `store`, `read`, `list`, `grep`, `glob`, `forget`, `add_resource`, and `health` tools — no local MCP server process to maintain.
 
@@ -63,6 +64,8 @@ When credentials are forced from env, the wrapper materializes a mode-0600 runti
 
 Auth is sent as `Authorization: Bearer <api_key>` to both the REST API (used by hooks) and the `/mcp` endpoint (used by the model).
 
+`X-OpenViking-Account` and `X-OpenViking-User` are sent only when the plugin is in trusted auth mode. Set `OPENVIKING_AUTH_MODE=trusted` for a trusted local server that accepts identity assertion headers, or `OPENVIKING_AUTH_MODE=api_key` when identity must come from the API key/OAuth token. If unset, the plugin preserves legacy behavior by using trusted mode whenever account/user is configured.
+
 Set `actor_peer_id` in `ovcli.conf` (or `OPENVIKING_PEER_ID` with `OPENVIKING_CREDENTIAL_SOURCE=env`) when multiple Codex peers share the same OpenViking user and should keep separate peer memory. Hooks pass it as `peer_id` for captured session messages and as `X-OpenViking-Actor-Peer` for retrieval/filesystem calls; MCP gets the same header mapping. The legacy `codex.peerId` / `codex.peer_id` fields in `ov.conf` still resolve as a fallback.
 
 For **unauthenticated local OV** (`ovcli.conf` without `api_key`, or no ovcli.conf at all), `.mcp.json` is rendered *without* `bearer_token_env_var`. Codex 0.130 hard-fails MCP startup with `Environment variable ... is empty` if `bearer_token_env_var` points at an empty/unset env var, so it must be omitted entirely when there's no key.
@@ -83,6 +86,10 @@ export OPENVIKING_RECALL_COMPRESS_MODEL=gpt-5.3-codex-spark
 export OPENVIKING_RECALL_COMPRESS_THINKING=default
 export OPENVIKING_RECALL_TIMEOUT_MS=120000
 export OPENVIKING_CAPTURE_ASSISTANT_TURNS=1
+export OPENVIKING_CAPTURE_MAX_TURNS_PER_STOP=8
+export OPENVIKING_INITIAL_BACKLOG_LIMIT=100
+export OPENVIKING_MAX_LIVE_MESSAGES_ON_COMPACT=200
+export OPENVIKING_MAX_PENDING_TOKENS_ON_COMPACT=60000
 export OPENVIKING_AUTO_COMMIT_ON_COMPACT=1
 export OPENVIKING_DEBUG=1
 ```
@@ -180,15 +187,19 @@ Config knobs:
 
 ### Stop (turn end → `add_message`, NOT `commit`)
 
-`auto-capture.mjs` derives one long-lived OpenViking session id per Codex `session_id` as `cx-<safe-session-id>` and incrementally appends every new user/assistant turn via `/api/v1/sessions/{id}/messages`. The `/messages` endpoint auto-creates the session on first append. Per-codex-session state lives at `~/.openviking/codex-plugin-state/<safe-session-id>.json`. No `/commit` per turn — that would over-fragment memory extraction. Capture sanitizes obvious hook noise, metadata wrappers, and plugin-injected `<openviking-context ...>` blocks before append; tool calls/results are retained as compact `[tool-call ...]` / `[tool-result ...]` lines capped by `OPENVIKING_CAPTURE_TOOL_MAX_CHARS` (default 2000).
+`auto-capture.mjs` derives one long-lived OpenViking session id per Codex `session_id` as `cx-<safe-session-id>` and incrementally appends every new user/assistant turn via `/api/v1/sessions/{id}/messages`. The `/messages` endpoint auto-creates the session on first append. Per-codex-session state lives under `~/.openviking/codex-plugin-state/` and is scoped by active OpenViking base URL, auth mode, account, user, and peer, so changing `ovcli.conf` does not reuse another identity's `capturedTurnCount` or `ovSessionId`. No `/commit` per turn — that would over-fragment memory extraction. Capture sanitizes obvious hook noise, metadata wrappers, and plugin-injected `<openviking-context ...>` blocks before append; tool calls/results are retained as compact `[tool-call ...]` / `[tool-result ...]` lines capped by `OPENVIKING_CAPTURE_TOOL_MAX_CHARS` (default 2000).
+
+If a first-run transcript is already larger than `OPENVIKING_INITIAL_BACKLOG_LIMIT`, the Stop hook schedules `backfill-transcript.mjs` as a detached worker and starts live capture from the current end of the transcript. Smaller missed-turn backlogs are appended in batches of `OPENVIKING_CAPTURE_MAX_TURNS_PER_STOP` without dropping older pending turns.
 
 ### PreCompact (deterministic commit)
 
 `pre-compact-capture.mjs`:
 
 1. Catch-up append for any turns Stop hasn't captured yet (race-safe via `capturedTurnCount`)
-2. Commit the long-lived OV session so the extractor runs against the full pre-compact transcript
-3. Reset `ovSessionId` to `null` so the next `Stop` re-derives the same `cx-<safe-session-id>` and appends the post-compact half under that deterministic OV session id
+2. If catch-up is too large for the hook budget, schedule detached background backfill instead of blocking `/compact`
+3. Commit the long-lived OV session so the extractor runs against the full pre-compact transcript
+4. If the live OV session exceeds `OPENVIKING_MAX_LIVE_MESSAGES_ON_COMPACT` or `OPENVIKING_MAX_PENDING_TOKENS_ON_COMPACT`, schedule detached background commit and rotate to a fresh OV session id for future turns
+5. Reset `ovSessionId` to `null` after a synchronous successful commit so the next `Stop` re-derives the same `cx-<safe-session-id>` and appends the post-compact half under that deterministic OV session id
 
 ### Known gap: SIGTERM / Ctrl+C / `/exit` are silent
 
@@ -226,6 +237,9 @@ codex-memory-plugin/
 │   ├── debug-log.mjs            # Structured JSONL logger
 │   ├── recall-compressor-profile.mjs # Compressor profile detection/cache
 │   ├── session-state.mjs        # Per-codex-session OV session state
+│   ├── background-jobs.mjs      # Detached worker launcher for slow jobs
+│   ├── backfill-transcript.mjs  # Detached/manual historical transcript import
+│   ├── commit-session.mjs       # Detached OV session commit worker
 │   ├── auto-recall.mjs          # UserPromptSubmit hook (REST /search/find)
 │   ├── auto-capture.mjs         # Stop hook (REST /sessions/{id}/messages)
 │   ├── session-start-commit.mjs # SessionStart hook (active-window + idle TTL)

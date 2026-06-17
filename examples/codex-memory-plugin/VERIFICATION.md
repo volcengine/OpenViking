@@ -8,8 +8,8 @@ extractor (~30–60 s).
 
 - `ov` CLI installed and reachable
 - `~/.openviking/ovcli.conf` (or a per-tenant variant like `ovcli.conf.bob`)
-  pointing at the OV server you want to write to. The plugin sends
-  `X-API-Key`, `X-OpenViking-Account`, `X-OpenViking-User` from this file.
+  pointing at the OV server you want to write to. The plugin sends bearer auth
+  from this file and sends `X-OpenViking-Account/User` only in trusted auth mode.
 - Node.js 22+
 
 ```bash
@@ -17,6 +17,7 @@ export OV_CONF=$HOME/.openviking/ovcli.conf.bob   # or whichever tenant
 export PLUGIN=/path/to/OpenViking/examples/codex-memory-plugin
 export STATE_DIR=/tmp/codex-plugin-verify
 rm -rf "$STATE_DIR" && mkdir -p "$STATE_DIR"
+export OPENVIKING_AUTH_MODE=trusted               # use api_key for non-trusted servers
 ```
 
 ## 1. Stop hook — first turn appends
@@ -38,7 +39,8 @@ Expect: `{"systemMessage":"appended 2 turn(s) to OpenViking session cx-verify-se
 
 State file:
 ```bash
-cat $STATE_DIR/state/verify-sess.json
+ls $STATE_DIR/state/verify-sess.*.json
+cat $STATE_DIR/state/verify-sess.*.json
 # {"codexSessionId":"verify-sess","ovSessionId":"cx-verify-sess","capturedTurnCount":2,...}
 ```
 
@@ -143,7 +145,7 @@ echo '{"session_id":"new-after-verify","source":"startup","cwd":"/tmp","model":"
 ```
 
 Expect: `OpenViking session cx-verify-sess is committed`.
-After this `verify-sess.json` is gone from `$STATE_DIR/state`.
+After this `verify-sess.*.json` is gone from `$STATE_DIR/state`.
 
 ### 6b. `0 active` → no-op
 
@@ -164,10 +166,14 @@ echo '{"session_id":"another-fresh","source":"startup","cwd":"/tmp","model":"x",
 # so no real commit needed, just exercise the skip-path log).
 NOW=$(node -e 'console.log(Date.now())')
 mkdir -p "$STATE_DIR/state"
-cat > "$STATE_DIR/state/sess-aaa.json" <<EOF
+SCOPE=$(
+  cd "$PLUGIN" && OPENVIKING_CONFIG_FILE=$OV_CONF node --input-type=module -e \
+    'import { createHash } from "node:crypto"; import { loadConfig } from "./scripts/config.mjs"; console.log(createHash("sha256").update(loadConfig().stateScope).digest("hex").slice(0,16));'
+)
+cat > "$STATE_DIR/state/sess-aaa.${SCOPE}.json" <<EOF
 {"codexSessionId":"sess-aaa","ovSessionId":null,"capturedTurnCount":0,"createdAt":$NOW,"lastUpdatedAt":$NOW}
 EOF
-cat > "$STATE_DIR/state/sess-bbb.json" <<EOF
+cat > "$STATE_DIR/state/sess-bbb.${SCOPE}.json" <<EOF
 {"codexSessionId":"sess-bbb","ovSessionId":null,"capturedTurnCount":0,"createdAt":$NOW,"lastUpdatedAt":$NOW}
 EOF
 
@@ -189,7 +195,7 @@ files are still present — the skip path does not clear them.
 ```bash
 # Backdate one of the state files to be older than IDLE_TTL_MS (default 30 min).
 OLD=$(node -e 'console.log(Date.now() - 60*60*1000)')   # 1 hour ago
-cat > "$STATE_DIR/state/sess-aaa.json" <<EOF
+cat > "$STATE_DIR/state/sess-aaa.${SCOPE}.json" <<EOF
 {"codexSessionId":"sess-aaa","ovSessionId":null,"capturedTurnCount":0,"createdAt":$OLD,"lastUpdatedAt":$OLD}
 EOF
 
@@ -201,7 +207,7 @@ echo '{"session_id":"sess-ddd","source":"startup","cwd":"/tmp","model":"x","perm
 ```
 
 Expect: log shows `idle_sweep` for `sess-aaa` (committed and cleared).
-`sess-bbb.json` is still present (still fresh). `sess-aaa.json` is gone.
+`sess-bbb.*.json` is still present (still fresh). `sess-aaa.*.json` is gone.
 If `sess-bbb` was in `≥2 active` from 6c, the heuristic on this call sees
 just `sess-bbb` (1 active) and commits it — that's expected and shows the
 heuristic + sweep working together.
@@ -236,8 +242,8 @@ echo '{"session_id":"any","source":"startup","cwd":"/tmp","model":"x","permissio
 Wait ~60 s for OV's extractor, then:
 
 ```bash
-OPENVIKING_CONFIG_FILE=$OV_CONF ov ls viking://user/<your-user>/memories/
-OPENVIKING_CONFIG_FILE=$OV_CONF ov read viking://user/<your-user>/memories/profile.md
+OPENVIKING_CONFIG_FILE=$OV_CONF ov ls viking://user/memories/
+OPENVIKING_CONFIG_FILE=$OV_CONF ov read viking://user/memories/profile.md
 ```
 
 Expect new entries describing the captured preferences (favorite color,
@@ -254,6 +260,43 @@ codex                                                                 # interact
 
 Verify with steps 4 + 7 above.
 
+## 9. Large first-run backlog schedules detached backfill
+
+```bash
+rm -rf "$STATE_DIR/state" "$STATE_DIR/backfill"
+mkdir -p "$STATE_DIR/state"
+seq 1 120 | awk '{print "{\"payload\":{\"role\":\"user\",\"content\":\"historical turn "$1"\"}}"}' > "$STATE_DIR/large.jsonl"
+
+echo '{"session_id":"large-sess","transcript_path":"'"$STATE_DIR"'/large.jsonl"}' \
+  | OPENVIKING_CONFIG_FILE=$OV_CONF \
+    OPENVIKING_CODEX_STATE_DIR=$STATE_DIR/state \
+    OPENVIKING_CODEX_BACKFILL_STATE_DIR=$STATE_DIR/backfill \
+    OPENVIKING_INITIAL_BACKLOG_LIMIT=10 \
+    CODEX_PLUGIN_ROOT=$PLUGIN \
+    node $PLUGIN/scripts/auto-capture.mjs
+```
+
+Expect: systemMessage mentions background backfill. State `capturedTurnCount`
+is 120, while the detached worker continues in the background and writes
+progress under `$STATE_DIR/backfill`.
+
+## 10. Oversized live session schedules detached commit
+
+Lower the budget to force the background path:
+
+```bash
+echo '{"session_id":"large-sess","transcript_path":"'"$STATE_DIR"'/large.jsonl","trigger":"manual"}' \
+  | OPENVIKING_CONFIG_FILE=$OV_CONF \
+    OPENVIKING_CODEX_STATE_DIR=$STATE_DIR/state \
+    OPENVIKING_MAX_LIVE_MESSAGES_ON_COMPACT=1 \
+    CODEX_PLUGIN_ROOT=$PLUGIN \
+    node $PLUGIN/scripts/pre-compact-capture.mjs
+```
+
+Expect: if `large-sess` has a live OV session with more than one message,
+stdout says background commit was scheduled and the state records the old
+session in `blockedOvSessions`.
+
 ---
 
-**Cleanup**: `rm -rf $STATE_DIR && rm -rf ~/.openviking/codex-plugin-state/verify-sess.json`
+**Cleanup**: `rm -rf $STATE_DIR && rm -f ~/.openviking/codex-plugin-state/verify-sess*.json`
