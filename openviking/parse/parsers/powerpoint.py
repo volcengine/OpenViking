@@ -107,7 +107,11 @@ class PowerPointParser(BaseParser):
                 slide_parts.append(f"### {title}")
 
             content = self._extract_slide_content(
-                slide, slide_idx=idx, slide_title=title, resource_name=resource_name, storage=storage
+                slide,
+                slide_idx=idx,
+                slide_title=title,
+                resource_name=resource_name,
+                storage=storage,
             )
             if content:
                 slide_parts.append(content)
@@ -210,9 +214,7 @@ class PowerPointParser(BaseParser):
             )
             return ""
 
-    def _convert_table_with_json(
-        self, table, slide_idx: int, slide_title: str = ""
-    ) -> str:
+    def _convert_table_with_json(self, table, slide_idx: int, slide_title: str = "") -> str:
         """Emit fenced JSON block + plain markdown table for a slide table."""
         if not table.rows:
             return ""

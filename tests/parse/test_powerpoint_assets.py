@@ -114,7 +114,7 @@ async def test_pptx_image_and_table_extraction(sample_pptx: Path, isolated_stora
     }
 
     # Plain markdown table emitted after the JSON block (additive).
-    after_json = md[json_match.end():]
+    after_json = md[json_match.end() :]
     assert re.search(r"\|\s*Region\s*\|\s*Revenue\s*\|", after_json)
     assert re.search(r"\|\s*-+\s*\|\s*-+\s*\|", after_json)
     assert re.search(r"\|\s*EMEA\s*\|\s*100\s*\|", after_json)
@@ -126,12 +126,8 @@ async def test_pptx_image_filenames_are_deterministic(sample_pptx: Path, isolate
     parser = PowerPointParser()
     pptx = pytest.importorskip("pptx")
 
-    parser._convert_to_markdown(
-        sample_pptx, pptx, resource_name="sample", storage=isolated_storage
-    )
-    parser._convert_to_markdown(
-        sample_pptx, pptx, resource_name="sample", storage=isolated_storage
-    )
+    parser._convert_to_markdown(sample_pptx, pptx, resource_name="sample", storage=isolated_storage)
+    parser._convert_to_markdown(sample_pptx, pptx, resource_name="sample", storage=isolated_storage)
 
     images_dir = isolated_storage.get_resource_media_dir("sample", "images")
     saved = sorted(images_dir.glob("slide1_image*.*"))
