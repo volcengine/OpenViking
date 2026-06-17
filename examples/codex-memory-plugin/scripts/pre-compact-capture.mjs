@@ -178,7 +178,7 @@ async function main() {
     return;
   }
 
-  const state = await loadState(sessionId, cfg.stateScope);
+  const state = await loadState(sessionId);
   const allTurns = await readTranscriptTurns(transcriptPath);
   const previouslyCaptured = state.capturedTurnCount;
   const pendingTurns = allTurns.slice(state.capturedTurnCount);
@@ -197,7 +197,7 @@ async function main() {
         ])
       : null;
     state.capturedTurnCount = allTurns.length;
-    await saveState(state, cfg.stateScope);
+    await saveState(state);
     newTurns = [];
     log("background_capture_started", {
       reason: "pre-compact pending turns exceed hook budget",
@@ -223,7 +223,7 @@ async function main() {
 
   if (newTurns.length > 0 && !state.ovSessionId && cfg.captureMode === "keyword" && !hasCaptureKeyword(newTurns)) {
     log("skip", { stage: "capture_mode", reason: "keyword mode without capture trigger" });
-    await saveState(state, cfg.stateScope);
+    await saveState(state);
     noop();
     return;
   }
@@ -237,12 +237,12 @@ async function main() {
     }
     const added = await appendTurns(ovSessionId, newTurns, async () => {
       state.capturedTurnCount += 1;
-      await saveState(state, cfg.stateScope);
+      await saveState(state);
     });
     log("appended_catchup", { ovSessionId, added });
     if (added < newTurns.length) {
       logError("append_failed_keep_state", { ovSessionId, attempted: newTurns.length, added });
-      await saveState(state, cfg.stateScope);
+      await saveState(state);
       noop(`pre-compact catch-up append incomplete for ${ovSessionId}; state preserved for retry`);
       return;
     }
@@ -250,7 +250,7 @@ async function main() {
 
   if (!state.ovSessionId) {
     log("skip", { stage: "commit", reason: "no OV session for this codex session" });
-    await saveState(state, cfg.stateScope);
+    await saveState(state);
     noop();
     return;
   }
@@ -272,7 +272,7 @@ async function main() {
       maxPendingTokensOnCompact: cfg.maxPendingTokensOnCompact,
       backgroundPid: pid,
     });
-    await saveState(state, cfg.stateScope);
+    await saveState(state);
     log("background_commit_started", {
       ovSessionId,
       nextOvSessionId,
@@ -297,7 +297,7 @@ async function main() {
   // retry. A transient OV outage shouldn't lose a session's memory.
   if (!commit) {
     logError("commit_failed_keep_state", { ovSessionId });
-    await saveState(state, cfg.stateScope); // bumps lastUpdatedAt only, keeps ovSessionId
+    await saveState(state); // bumps lastUpdatedAt only, keeps ovSessionId
     noop(`pre-compact commit attempted on ${ovSessionId}; result unavailable (state preserved for retry)`);
     return;
   }
@@ -312,7 +312,7 @@ async function main() {
   // Reset OV session for the post-compact half. Keep capturedTurnCount so
   // we don't re-capture pre-compact turns when Stop fires next.
   state.ovSessionId = null;
-  await saveState(state, cfg.stateScope);
+  await saveState(state);
 
   noop(`OpenViking session ${ovSessionId} is committed`);
 }

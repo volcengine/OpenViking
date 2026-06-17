@@ -16,11 +16,8 @@ events imply "context for a particular codex `session_id` is gone".
   append messages on every `Stop`, and commit it (which triggers OV's
   memory extractor) at session-end-equivalent moments. `/messages`
   auto-creates the OV session, so the plugin does not call session create.
-- **State file** — `~/.openviking/codex-plugin-state/<safe-codex-session-id>.<scope-hash>.json`,
-  shape `{ codexSessionId, stateScope, ovSessionId, blockedOvSessions, capturedTurnCount, createdAt, lastUpdatedAt }`.
-  The scope hash is derived from OpenViking base URL, auth mode, account, user,
-  and peer. This prevents switching `ovcli.conf` from reusing another identity's
-  `capturedTurnCount` or `ovSessionId`.
+- **State file** — `~/.openviking/codex-plugin-state/<safe-codex-session-id>.json`,
+  shape `{ codexSessionId, ovSessionId, blockedOvSessions, capturedTurnCount, createdAt, lastUpdatedAt }`.
 - **Active window** — state files whose `lastUpdatedAt` is within
   `ACTIVE_WINDOW_MS` (default 2 min) of "now". Used to detect "the codex
   session that just ended".
@@ -229,7 +226,6 @@ OV session id, while commits create additional archives under that session.
 ```json
 {
   "codexSessionId": "0193af...",   // codex thread id
-  "stateScope": "http://127.0.0.1:1933|trusted|account|user|peer",
   "ovSessionId": "cx-0193af...-or-null", // null means "committed, awaiting next Stop"
   "blockedOvSessions": [],
   "capturedTurnCount": 7,            // turns from transcript already appended

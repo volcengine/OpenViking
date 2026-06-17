@@ -85,12 +85,6 @@ function safeId(value) {
   return String(value).replace(/[^a-zA-Z0-9_-]/g, "_");
 }
 
-function scopeSuffix(value) {
-  const scope = String(value || "").trim();
-  if (!scope) return "";
-  return createHash("sha256").update(scope).digest("hex").slice(0, 16);
-}
-
 function statePath(args) {
   const key = [
     args.sessionId,
@@ -98,10 +92,9 @@ function statePath(args) {
     args.transcript,
     String(args.startIndex),
     String(args.endIndex ?? "end"),
-    cfg.stateScope,
   ].join("|");
   const digest = createHash("sha256").update(key).digest("hex").slice(0, 16);
-  return join(args.stateDir, `${safeId(args.sessionId)}__${safeId(args.ovSessionId)}__${scopeSuffix(cfg.stateScope)}__${digest}.json`);
+  return join(args.stateDir, `${safeId(args.sessionId)}__${safeId(args.ovSessionId)}__${digest}.json`);
 }
 
 function defaultState(args) {

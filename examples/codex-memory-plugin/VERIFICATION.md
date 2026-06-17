@@ -39,8 +39,8 @@ Expect: `{"systemMessage":"appended 2 turn(s) to OpenViking session cx-verify-se
 
 State file:
 ```bash
-ls $STATE_DIR/state/verify-sess.*.json
-cat $STATE_DIR/state/verify-sess.*.json
+ls $STATE_DIR/state/verify-sess.json
+cat $STATE_DIR/state/verify-sess.json
 # {"codexSessionId":"verify-sess","ovSessionId":"cx-verify-sess","capturedTurnCount":2,...}
 ```
 
@@ -145,7 +145,7 @@ echo '{"session_id":"new-after-verify","source":"startup","cwd":"/tmp","model":"
 ```
 
 Expect: `OpenViking session cx-verify-sess is committed`.
-After this `verify-sess.*.json` is gone from `$STATE_DIR/state`.
+After this `verify-sess.json` is gone from `$STATE_DIR/state`.
 
 ### 6b. `0 active` → no-op
 
@@ -166,14 +166,10 @@ echo '{"session_id":"another-fresh","source":"startup","cwd":"/tmp","model":"x",
 # so no real commit needed, just exercise the skip-path log).
 NOW=$(node -e 'console.log(Date.now())')
 mkdir -p "$STATE_DIR/state"
-SCOPE=$(
-  cd "$PLUGIN" && OPENVIKING_CONFIG_FILE=$OV_CONF node --input-type=module -e \
-    'import { createHash } from "node:crypto"; import { loadConfig } from "./scripts/config.mjs"; console.log(createHash("sha256").update(loadConfig().stateScope).digest("hex").slice(0,16));'
-)
-cat > "$STATE_DIR/state/sess-aaa.${SCOPE}.json" <<EOF
+cat > "$STATE_DIR/state/sess-aaa.json" <<EOF
 {"codexSessionId":"sess-aaa","ovSessionId":null,"capturedTurnCount":0,"createdAt":$NOW,"lastUpdatedAt":$NOW}
 EOF
-cat > "$STATE_DIR/state/sess-bbb.${SCOPE}.json" <<EOF
+cat > "$STATE_DIR/state/sess-bbb.json" <<EOF
 {"codexSessionId":"sess-bbb","ovSessionId":null,"capturedTurnCount":0,"createdAt":$NOW,"lastUpdatedAt":$NOW}
 EOF
 
@@ -195,7 +191,7 @@ files are still present — the skip path does not clear them.
 ```bash
 # Backdate one of the state files to be older than IDLE_TTL_MS (default 30 min).
 OLD=$(node -e 'console.log(Date.now() - 60*60*1000)')   # 1 hour ago
-cat > "$STATE_DIR/state/sess-aaa.${SCOPE}.json" <<EOF
+cat > "$STATE_DIR/state/sess-aaa.json" <<EOF
 {"codexSessionId":"sess-aaa","ovSessionId":null,"capturedTurnCount":0,"createdAt":$OLD,"lastUpdatedAt":$OLD}
 EOF
 
@@ -207,7 +203,7 @@ echo '{"session_id":"sess-ddd","source":"startup","cwd":"/tmp","model":"x","perm
 ```
 
 Expect: log shows `idle_sweep` for `sess-aaa` (committed and cleared).
-`sess-bbb.*.json` is still present (still fresh). `sess-aaa.*.json` is gone.
+`sess-bbb.json` is still present (still fresh). `sess-aaa.json` is gone.
 If `sess-bbb` was in `≥2 active` from 6c, the heuristic on this call sees
 just `sess-bbb` (1 active) and commits it — that's expected and shows the
 heuristic + sweep working together.
@@ -299,4 +295,4 @@ session in `blockedOvSessions`.
 
 ---
 
-**Cleanup**: `rm -rf $STATE_DIR && rm -f ~/.openviking/codex-plugin-state/verify-sess*.json`
+**Cleanup**: `rm -rf $STATE_DIR && rm -f ~/.openviking/codex-plugin-state/verify-sess.json`

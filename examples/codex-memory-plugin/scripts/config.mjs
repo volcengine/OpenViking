@@ -91,13 +91,6 @@ export function loadConfig() {
     normalizeAuthMode(cx.auth_mode) ||
     normalizeAuthMode(server.auth_mode);
   const authMode = explicitAuthMode || ((creds.account || creds.user) ? "trusted" : "api_key");
-  const stateScope = [
-    creds.baseUrl || "",
-    authMode,
-    creds.account || "",
-    creds.user || "",
-    creds.peerId || "",
-  ].join("|");
 
   const debug = envBool("OPENVIKING_DEBUG") ?? (cx.debug === true);
   const defaultLogPath = join(homedir(), ".openviking", "logs", "codex-hooks.log");
@@ -147,7 +140,6 @@ export function loadConfig() {
     account: creds.account,
     user: creds.user,
     peerId: creds.peerId,
-    stateScope,
     timeoutMs,
     recallTimeoutMs,
 

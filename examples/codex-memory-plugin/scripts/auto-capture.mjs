@@ -139,7 +139,7 @@ async function appendTurns(ovSessionId, turns, state) {
     if (!result) break;
     appended += 1;
     state.capturedTurnCount += 1;
-    await saveState(state, cfg.stateScope);
+    await saveState(state);
   }
   return appended;
 }
@@ -177,7 +177,7 @@ async function main() {
     return;
   }
 
-  const state = await loadState(sessionId, cfg.stateScope);
+  const state = await loadState(sessionId);
   const allTurns = await readTranscriptTurns(transcriptPath);
 
   // Post-compact transcript-shrink defense: codex's /compact may rewrite or
@@ -206,7 +206,7 @@ async function main() {
         ])
       : null;
     state.capturedTurnCount = allTurns.length;
-    await saveState(state, cfg.stateScope);
+    await saveState(state);
     log("background_capture_started", {
       reason: "initial transcript exceeds hook budget",
       totalTurns: allTurns.length,
@@ -228,7 +228,7 @@ async function main() {
 
   if (cfg.captureMode === "keyword" && newTurns.length > 0 && !hasCaptureKeyword(newTurns)) {
     log("skip", { stage: "capture_mode", reason: "keyword mode without capture trigger" });
-    await saveState(state, cfg.stateScope);
+    await saveState(state);
     noop();
     return;
   }
@@ -240,13 +240,13 @@ async function main() {
       logError("resolve_ov_session", "failed to derive OV session id");
     } else {
       const turnsToAppend = selectStopTurns(newTurns);
-      await saveState(state, cfg.stateScope);
+      await saveState(state);
       added = await appendTurns(ovSessionId, turnsToAppend, state);
       log("appended", { ovSessionId, added });
     }
   }
 
-  await saveState(state, cfg.stateScope);
+  await saveState(state);
 
   // could also sweep here, deliberately not — see header comment + DESIGN.md §5.
 

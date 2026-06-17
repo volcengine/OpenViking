@@ -170,7 +170,7 @@ async function injectResumeArchive(newSessionId) {
     return;
   }
 
-  const state = await loadState(newSessionId, cfg.stateScope);
+  const state = await loadState(newSessionId);
   if (state.ovSessionId) {
     log("skip", {
       stage: "resume_archive",
@@ -226,7 +226,7 @@ async function commitAndClear(state, reason) {
         maxPendingTokensOnCompact: cfg.maxPendingTokensOnCompact,
         backgroundPid: pid,
       });
-      await saveState(state, cfg.stateScope);
+      await saveState(state);
       log("background_commit_started", {
         reason,
         codexSessionId: state.codexSessionId,
@@ -256,13 +256,13 @@ async function commitAndClear(state, reason) {
       taskId: commit.task_id,
       status: commit.status,
     });
-    await clearState(state.codexSessionId, cfg.stateScope);
+    await clearState(state.codexSessionId);
     return { committed: true, ovSessionId };
   }
   // No OV session attached — nothing to commit on the server, but the local
   // state file is still stale and should be removed.
   log("clear_no_ov", { reason, codexSessionId: state.codexSessionId });
-  await clearState(state.codexSessionId, cfg.stateScope);
+  await clearState(state.codexSessionId);
   return { committed: true, ovSessionId: null };
 }
 
@@ -318,7 +318,7 @@ async function main() {
   }
 
   const now = Date.now();
-  const states = await listStates(cfg.stateScope);
+  const states = await listStates();
 
   // -------------------------------------------------------------------------
   // Active-window heuristic (DESIGN.md §3)
@@ -366,7 +366,7 @@ async function main() {
   // skipped above (≥2 active path). We re-list because the heuristic branch
   // may have removed entries.
   // -------------------------------------------------------------------------
-  const postHeuristic = await listStates(cfg.stateScope);
+  const postHeuristic = await listStates();
   let idleCommitted = 0;
   const idleSessionIds = [];
 
