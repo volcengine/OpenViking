@@ -1006,10 +1006,13 @@ async def test_set_tags_updates_vector_record(monkeypatch):
         def __init__(self):
             self.update_calls = []
 
-        async def update_search_tags(self, uri: str, tags, *, mode: str, ctx=None):
+        async def update_search_tags(self, uri: str, tags, *, mode: str, levels=None, ctx=None):
             del ctx
-            self.update_calls.append((uri, list(tags), mode))
-            return True
+            if levels is None:
+                self.update_calls.append((uri, list(tags), mode))
+                return [{"uri": uri}]
+            self.update_calls.append((uri, list(tags), mode, list(levels)))
+            return []
 
     fake_store = _FakeVectorStore()
     fake_vfs.vector_store = fake_store
@@ -1043,10 +1046,11 @@ async def test_set_tags_uses_store_update_api_without_fetch(monkeypatch):
             del uri, ctx
             raise AssertionError("set_tags should not depend on fetch_by_uri")
 
-        async def update_search_tags(self, uri: str, tags, *, mode: str, ctx=None):
+        async def update_search_tags(self, uri: str, tags, *, mode: str, levels=None, ctx=None):
             del ctx
+            assert levels is None
             self.update_calls.append((uri, list(tags), mode))
-            return True
+            return [{"uri": uri}]
 
     fake_store = _FakeVectorStore()
     fake_vfs.vector_store = fake_store
@@ -1076,10 +1080,11 @@ async def test_set_tags_user_scope_resource_leaf_returns_parent_root_uri(monkeyp
         def __init__(self):
             self.update_calls = []
 
-        async def update_search_tags(self, uri: str, tags, *, mode: str, ctx=None):
+        async def update_search_tags(self, uri: str, tags, *, mode: str, levels=None, ctx=None):
             del ctx
+            assert levels is None
             self.update_calls.append((uri, list(tags), mode))
-            return True
+            return [{"uri": uri}]
 
     fake_store = _FakeVectorStore()
     fake_vfs.vector_store = fake_store
@@ -1113,10 +1118,11 @@ async def test_set_tags_append_merges_existing_tags(monkeypatch):
             del uri, ctx
             raise AssertionError("append should be handled inside store update API")
 
-        async def update_search_tags(self, uri: str, tags, *, mode: str, ctx=None):
+        async def update_search_tags(self, uri: str, tags, *, mode: str, levels=None, ctx=None):
             del ctx
+            assert levels is None
             self.update_calls.append((uri, list(tags), mode))
-            return True
+            return [{"uri": uri}]
 
     fake_store = _FakeVectorStore()
     fake_vfs.vector_store = fake_store
@@ -1144,7 +1150,7 @@ async def test_set_tags_rejects_non_kv_tags(monkeypatch):
     coordinator = ContentWriteCoordinator(viking_fs=fake_vfs)
 
     class _FakeVectorStore:
-        async def update_search_tags(self, uri: str, tags, *, mode: str, ctx=None):
+        async def update_search_tags(self, uri: str, tags, *, mode: str, levels=None, ctx=None):
             raise AssertionError("invalid tags must fail before store update")
 
     fake_vfs.vector_store = _FakeVectorStore()
@@ -1178,15 +1184,19 @@ async def test_set_tags_recursive_directory_updates_descendants(monkeypatch):
     class _FakeVectorStore:
         def __init__(self):
             self.update_calls = []
+            self.directory_update_calls = []
 
         async def fetch_by_uri(self, uri: str, ctx=None):
             del uri, ctx
             raise AssertionError("recursive tag updates should use store update API")
 
-        async def update_search_tags(self, uri: str, tags, *, mode: str, ctx=None):
+        async def update_search_tags(self, uri: str, tags, *, mode: str, levels=None, ctx=None):
             del ctx
-            self.update_calls.append((uri, list(tags), mode))
-            return uri != nested_overview_uri
+            if levels is None:
+                self.update_calls.append((uri, list(tags), mode))
+                return [{"uri": uri}] if uri != nested_overview_uri else []
+            self.directory_update_calls.append((uri, list(tags), mode, list(levels)))
+            return []
 
     fake_store = _FakeVectorStore()
     fake_vfs.vector_store = fake_store
@@ -1201,7 +1211,7 @@ async def test_set_tags_recursive_directory_updates_descendants(monkeypatch):
     assert result["mode"] == "append"
     assert "recursive" not in result
     assert result["success_count"] == 5
-    assert result["skipped_count"] == 1
+    assert result["skipped_count"] == 2
     assert result["failed_count"] == 0
     assert set(result["updated_uris"]) == {
         abstract_uri,
@@ -1220,6 +1230,7 @@ async def test_set_tags_recursive_directory_updates_descendants(monkeypatch):
             (nested_file_uri, ["env=prod"], "append"),
         ]
     )
+    assert fake_store.directory_update_calls == [(nested_dir_uri, ["env=prod"], "append", [0, 1])]
     assert nested_overview_uri not in result["updated_uris"]
 
 
@@ -1244,10 +1255,13 @@ async def test_set_tags_recursive_directory_all_missing_vector_records_returns_z
         def __init__(self):
             self.update_calls = []
 
-        async def update_search_tags(self, uri: str, tags, *, mode: str, ctx=None):
+        async def update_search_tags(self, uri: str, tags, *, mode: str, levels=None, ctx=None):
             del ctx
-            self.update_calls.append((uri, list(tags), mode))
-            return False
+            if levels is None:
+                self.update_calls.append((uri, list(tags), mode))
+                return []
+            self.update_calls.append((uri, list(tags), mode, list(levels)))
+            return []
 
     fake_store = _FakeVectorStore()
     fake_vfs.vector_store = fake_store
@@ -1284,10 +1298,13 @@ async def test_set_tags_non_recursive_directory_all_missing_vector_records_retur
         def __init__(self):
             self.update_calls = []
 
-        async def update_search_tags(self, uri: str, tags, *, mode: str, ctx=None):
+        async def update_search_tags(self, uri: str, tags, *, mode: str, levels=None, ctx=None):
             del ctx
-            self.update_calls.append((uri, list(tags), mode))
-            return False
+            if levels is None:
+                self.update_calls.append((uri, list(tags), mode))
+                return []
+            self.update_calls.append((uri, list(tags), mode, list(levels)))
+            return []
 
     fake_store = _FakeVectorStore()
     fake_vfs.vector_store = fake_store
@@ -1300,10 +1317,11 @@ async def test_set_tags_non_recursive_directory_all_missing_vector_records_retur
     )
 
     assert result["success_count"] == 0
-    assert result["skipped_count"] == 2
+    assert result["skipped_count"] == 1
     assert result["failed_count"] == 0
     assert result["updated_uris"] == []
     assert result["tags_updated"] is False
+    assert fake_store.update_calls == [(root_uri, ["env=prod"], "replace", [0, 1])]
 
 
 @pytest.mark.asyncio

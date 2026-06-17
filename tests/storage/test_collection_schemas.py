@@ -1794,7 +1794,9 @@ async def test_viking_vector_index_backend_update_search_tags_updates_exact_uri_
         ctx=ctx,
     )
 
-    assert updated is True
+    assert updated == [
+        {"id": "root-id", "uri": resource_uri, "search_tags": ["old=root", "team=search"]}
+    ]
     assert calls["fetch_by_uri"] == [(resource_uri, ctx.account_id)]
     assert calls["upsert"] == [
         {"id": "root-id", "uri": resource_uri, "search_tags": ["old=root", "team=search"]}
@@ -1829,7 +1831,9 @@ async def test_update_search_tags_for_leaf_uri_queries_exact_uri_only(monkeypatc
         ctx=ctx,
     )
 
-    assert updated is True
+    assert updated == [
+        {"id": "overview-id", "uri": overview_uri, "search_tags": ["existing=1", "team=search"]}
+    ]
     assert calls["fetch_by_uri"] == [(overview_uri, ctx.account_id)]
     assert calls["upsert"] == [
         {"id": "overview-id", "uri": overview_uri, "search_tags": ["existing=1", "team=search"]}
@@ -1837,7 +1841,7 @@ async def test_update_search_tags_for_leaf_uri_queries_exact_uri_only(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_update_directory_search_tags_queries_directory_uri_with_levels_only():
+async def test_update_search_tags_with_levels_queries_directory_uri_only():
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
     directory_uri = "viking://resources/demo/doc.md"
     calls = {"filter": [], "upsert": []}
@@ -1866,7 +1870,7 @@ async def test_update_directory_search_tags_queries_directory_uri_with_levels_on
     backend.filter = _fake_filter
     backend.upsert = _fake_upsert
 
-    updated = await backend.update_directory_search_tags(
+    updated = await backend.update_search_tags(
         directory_uri,
         ["team=search"],
         mode="append",
@@ -1892,6 +1896,111 @@ async def test_update_directory_search_tags_queries_directory_uri_with_levels_on
             "search_tags": ["old=1", "team=search"],
         },
     ]
+
+
+@pytest.mark.asyncio
+async def test_update_search_tags_with_levels_skips_records_without_id_and_private_helper_is_removed():
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    calls = {"filter": [], "upsert": []}
+
+    backend = VikingVectorIndexBackend.__new__(VikingVectorIndexBackend)
+
+    async def _fake_filter(*, filter, limit, output_fields, ctx):
+        del filter, limit, output_fields, ctx
+        calls["filter"].append(True)
+        return [
+            {
+                "id": "r1",
+                "uri": "viking://resources/demo/doc.md",
+                "level": 0,
+                "search_tags": ["old=1"],
+            },
+            {"uri": "viking://resources/demo/missing-id.md", "level": 1, "search_tags": ["old=2"]},
+            {"id": "r2", "uri": "viking://resources/demo/doc.md", "level": 2, "search_tags": None},
+        ]
+
+    async def _fake_upsert(data, *, ctx, partial_update=False):
+        del ctx, partial_update
+        calls["upsert"].append(dict(data))
+        return data["id"]
+
+    backend.filter = _fake_filter
+    backend.upsert = _fake_upsert
+
+    updated = await backend.update_search_tags(
+        "viking://resources/demo/doc.md",
+        ["team=search"],
+        mode="append",
+        levels=[0, 1, 2],
+        ctx=ctx,
+    )
+
+    assert not hasattr(VikingVectorIndexBackend, "_apply_search_tags_to_records")
+    assert calls["filter"] == [True]
+    assert updated == [
+        {
+            "id": "r1",
+            "uri": "viking://resources/demo/doc.md",
+            "level": 0,
+            "search_tags": ["old=1", "team=search"],
+        },
+        {
+            "id": "r2",
+            "uri": "viking://resources/demo/doc.md",
+            "level": 2,
+            "search_tags": ["team=search"],
+        },
+    ]
+    assert calls["upsert"] == updated
+
+
+@pytest.mark.asyncio
+async def test_update_search_tags_rejects_invalid_mode_before_fetch():
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    backend = VikingVectorIndexBackend.__new__(VikingVectorIndexBackend)
+    calls = {"fetch_by_uri": 0}
+
+    async def _fake_fetch_by_uri(uri, *, ctx):
+        del uri, ctx
+        calls["fetch_by_uri"] += 1
+        return None
+
+    backend.fetch_by_uri = _fake_fetch_by_uri
+
+    with pytest.raises(ValueError, match="unsupported tag mode"):
+        await backend.update_search_tags(
+            "viking://resources/demo/doc.md",
+            ["team=search"],
+            mode="invalid",
+            ctx=ctx,
+        )
+
+    assert calls["fetch_by_uri"] == 0
+
+
+@pytest.mark.asyncio
+async def test_update_search_tags_with_levels_rejects_invalid_mode_before_filter():
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    backend = VikingVectorIndexBackend.__new__(VikingVectorIndexBackend)
+    calls = {"filter": 0}
+
+    async def _fake_filter(*, filter, limit, output_fields, ctx):
+        del filter, limit, output_fields, ctx
+        calls["filter"] += 1
+        return []
+
+    backend.filter = _fake_filter
+
+    with pytest.raises(ValueError, match="unsupported tag mode"):
+        await backend.update_search_tags(
+            "viking://resources/demo",
+            ["team=search"],
+            mode="invalid",
+            levels=[0, 1],
+            ctx=ctx,
+        )
+
+    assert calls["filter"] == 0
 
 
 @pytest.mark.asyncio

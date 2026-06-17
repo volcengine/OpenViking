@@ -733,7 +733,7 @@ class ContentWriteCoordinator:
         if not store:
             raise RuntimeError("Vector store not initialized. Call OpenViking.initialize() first.")
         if levels:
-            updated_records = await store.update_directory_search_tags(
+            updated_records = await store.update_search_tags(
                 uri,
                 tags,
                 mode=mode,
@@ -741,10 +741,10 @@ class ContentWriteCoordinator:
                 ctx=ctx,
             )
             return [str(record.get("uri")) for record in updated_records if record.get("uri")]
-        updated = await store.update_search_tags(uri, tags, mode=mode, ctx=ctx)
-        if not updated:
+        updated_records = await store.update_search_tags(uri, tags, mode=mode, ctx=ctx)
+        if not updated_records:
             return []
-        return [uri]
+        return [str(record.get("uri")) for record in updated_records if record.get("uri")]
 
     async def _resolve_root_uri(
         self,

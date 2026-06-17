@@ -762,40 +762,30 @@ class VikingVectorIndexBackend:
         tags: List[str],
         *,
         mode: str,
+        levels: Optional[List[int]] = None,
         ctx: RequestContext,
-    ) -> bool:
-        """Update search tags for the exact indexed record at the given URI."""
+    ) -> List[Dict[str, Any]]:
+        """Update search tags for the exact indexed record or directory summary records."""
         if mode not in {"replace", "append"}:
             raise ValueError(f"unsupported tag mode: {mode}")
-
-        canonical_uri = canonicalize_uri(uri, ctx)
-        record = await self.fetch_by_uri(canonical_uri, ctx=ctx)
-        if not record or not record.get("id"):
-            return False
 
         from openviking.utils.tags import merge_search_tags
 
-        updated_record = dict(record)
-        if mode == "append":
-            updated_record["search_tags"] = merge_search_tags(record.get("search_tags"), tags)
-        else:
-            updated_record["search_tags"] = list(tags)
-        return bool(await self.upsert(updated_record, ctx=ctx))
-
-    async def update_directory_search_tags(
-        self,
-        uri: str,
-        tags: List[str],
-        *,
-        mode: str,
-        levels: List[int],
-        ctx: RequestContext,
-    ) -> List[Dict[str, Any]]:
-        """Update search tags for directory summary records stored as (uri, level)."""
-        if mode not in {"replace", "append"}:
-            raise ValueError(f"unsupported tag mode: {mode}")
-
         canonical_uri = canonicalize_uri(uri, ctx)
+        if levels is None:
+            record = await self.fetch_by_uri(canonical_uri, ctx=ctx)
+            if not record or not record.get("id"):
+                return []
+
+            updated_record = dict(record)
+            if mode == "append":
+                updated_record["search_tags"] = merge_search_tags(record.get("search_tags"), tags)
+            else:
+                updated_record["search_tags"] = list(tags)
+            if await self.upsert(updated_record, ctx=ctx):
+                return [updated_record]
+            return []
+
         records = await self.filter(
             filter=And([Eq("uri", canonical_uri), In("level", levels)]),
             limit=max(len(levels), 2),
@@ -804,8 +794,6 @@ class VikingVectorIndexBackend:
         )
         if not records:
             return []
-
-        from openviking.utils.tags import merge_search_tags
 
         updated_records: List[Dict[str, Any]] = []
         for record in records:
