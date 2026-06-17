@@ -332,7 +332,7 @@ async def resolve_identity(
     if oauth_identity is not None:
         return oauth_identity
 
-    identity = api_key_manager.resolve(api_key)
+    identity = await api_key_manager.resolve_with_refresh(api_key)
     identity.account_id = identity.account_id or "default"
     identity.user_id = identity.user_id or "default"
 
