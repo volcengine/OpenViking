@@ -216,7 +216,7 @@ def main():
 
     total_files = count_local_files()
 
-    client = SyncHTTPClient()
+    client = SyncHTTPClient(timeout=3600)
     client.initialize()
 
     print("=" * 80)

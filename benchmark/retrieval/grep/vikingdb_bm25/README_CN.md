@@ -10,7 +10,7 @@ vikingdb_bm25/
 ├── effectiveness/            # 检索效果测试（召回率/精确率/F1）
 │   ├── step1_add_resource.py
 │   └── step2_quality.py
-└── performance/              # 检索性能测试（延迟 + 大规模召回）
+└── performance/              # 检索性能测试（延迟 + 大规模返回匹配数）
     ├── step0_prepare_data.py
     ├── step1_add_resource.py
     ├── step2_reindex.py
@@ -68,7 +68,6 @@ python3 step2_quality.py
 
 | 概率 | 单词 | 预期命中数（每 20 万文件） |
 |------|------|---------------------------|
-| 50% | quantumnexus, synapseflow, deepvector | ~50,000 |
 | 1% | heliofract, prismcache, fluxkernel | ~2,000 |
 | 0.1% | auroracode, kiteshade, glyphvector | ~200 |
 | 0.1% | cortexmint, latticewave, spiralsync | ~200 |
@@ -109,7 +108,8 @@ python3 step3_benchmark.py --engine-label auto --compare step3_result_fs.json
 
 - **Effectiveness（效果测试）** 将 grep 结果与 fs 引擎的 ground truth 对比（本地缓存）
 - **Performance（性能测试）** 对比不同引擎的延迟和返回匹配数，不生成 ground truth
-- 两者遵循相同流程：导入（含建索引）→ 评估/测试
-- 两者均支持**断点续传**（导入和索引各有独立进度文件）
+- **Effectiveness** 直接一次性导入真实代码仓并建索引，然后执行效果评估
+- **Performance** 先导入合成数据（不建索引），再异步建向量索引，最后执行延迟基准测试
+- **Performance** 的导入与 reindex 步骤支持**断点续传**（各有独立进度文件）
 - 切换 grep 引擎需修改 `ov.conf` 并重启服务，在不同运行之间对比
 - 如需水平扩展合成数据集，可用新的 `--start-dir` 再运行步骤 0，然后重跑步骤 1 和步骤 2。

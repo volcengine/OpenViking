@@ -10,7 +10,7 @@ vikingdb_bm25/
 ├── effectiveness/            # Retrieval effectiveness (recall/precision/F1)
 │   ├── step1_add_resource.py
 │   └── step2_quality.py
-└── performance/              # Retrieval performance (latency + recall at scale)
+└── performance/              # Retrieval performance (latency + returned match count at scale)
     ├── step0_prepare_data.py
     ├── step1_add_resource.py
     ├── step2_reindex.py
@@ -66,9 +66,8 @@ Tests grep speed and returned match count on a large synthetic dataset (default:
 
 15 words across 5 probability tiers:
 
-| Probability | Words | Expected hits (per 100K files) |
+| Probability | Words | Expected hits (per 200K files) |
 |-------------|-------|-------------------------------|
-| 50% | quantumnexus, synapseflow, deepvector | ~50,000 |
 | 1% | heliofract, prismcache, fluxkernel | ~2,000 |
 | 0.1% | auroracode, kiteshade, glyphvector | ~200 |
 | 0.1% | cortexmint, latticewave, spiralsync | ~200 |
@@ -109,8 +108,9 @@ python3 step3_benchmark.py --engine-label auto --compare step3_result_fs.json
 
 - **Effectiveness** tests compare grep results against ground truth from fs-engine grep (cached locally)
 - **Performance** tests compare grep latency and returned match counts between engine configs; no ground truth is generated
-- Both follow the same workflow: import (with indexing) → benchmark/evaluate
-- Both support **resumable** execution via progress files (separate for import and reindex)
+- **Effectiveness** imports real repos with indexing in a single step, then evaluates quality
+- **Performance** imports synthetic data without indexing, builds vector indexes asynchronously, then benchmarks latency
+- **Performance** import/reindex steps support resumable execution via progress files
 - Change grep engine via `ov.conf` and restart the server between benchmark runs
 - To horizontally scale the synthetic dataset, run Step 0 again with a new `--start-dir`,
   then rerun Step 1 and Step 2.
