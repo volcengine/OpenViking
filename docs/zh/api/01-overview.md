@@ -451,6 +451,14 @@ JSON 输出 - 错误：
 | POST | `/api/v1/search/grep` | 内容模式搜索 |
 | POST | `/api/v1/search/glob` | 文件模式匹配 |
 
+### 代码导航端点
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/v1/code/outline` | 提取源文件符号大纲 |
+| POST | `/api/v1/code/search` | 在 `viking://` 代码 URI 下搜索符号 |
+| POST | `/api/v1/code/expand` | 展开源文件中的符号定义 |
+
 ### 关系端点（实验特性，可能在后续版本中改变）
 
 | 方法 | 路径 | 说明 |
