@@ -430,7 +430,7 @@ async def test_singleton_reset():
     assert t1 is not t2
 
 
-async def test_build_default_task_tracker_wraps_agfs_config_for_binding(monkeypatch):
+async def test_build_default_task_tracker_uses_runtime_encryption_binding(monkeypatch):
     captured = {}
     fake_agfs = object()
 
@@ -446,10 +446,28 @@ async def test_build_default_task_tracker_wraps_agfs_config_for_binding(monkeypa
         def __init__(self):
             self.storage = _FakeStorage()
 
+        def to_dict(self):
+            return {"encryption": {"enabled": True, "provider": "local"}}
+
+    class _FakeProvider:
+        async def get_root_key(self):
+            return b"t" * 32
+
+    class _FakeEncryptor:
+        provider_type = 9
+
+        def __init__(self):
+            self.provider = _FakeProvider()
+
+    async def _bootstrap(config):
+        assert config["encryption"]["enabled"] is True
+        return _FakeEncryptor()
+
     def _fake_create_agfs_client(config):
         captured["binding_config"] = config
         return fake_agfs
 
+    monkeypatch.setattr("openviking.crypto.config.bootstrap_encryption", _bootstrap)
     monkeypatch.setattr("openviking.utils.agfs_utils.create_agfs_client", _fake_create_agfs_client)
     monkeypatch.setattr(
         "openviking_cli.utils.config.get_openviking_config",
@@ -462,6 +480,10 @@ async def test_build_default_task_tracker_wraps_agfs_config_for_binding(monkeypa
     assert captured["build_arg"] is fake_agfs
     assert isinstance(captured["binding_config"], RagfsBindingConfig)
     assert isinstance(captured["binding_config"].agfs, AGFSConfig)
+    assert captured["binding_config"].to_binding_dict()["encryption"] == {
+        "root_key": b"t" * 32,
+        "provider_type": 9,
+    }
 
 
 async def test_persistent_store_cross_tracker_visibility():
