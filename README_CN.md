@@ -827,6 +827,8 @@ OpenViking 内置了记忆自迭代循环。在每个会话结束时，开发者
 
 更多详情，请访问我们的[完整文档](./docs/zh/)。
 
+如果 Docker 升级后容器启动失败（例如 `ModuleNotFoundError: No module named 'openviking.console.bootstrap'` 或 `EmbeddingRebuildRequiredError`），请参阅[升级与迁移指南](./docs/zh/guides/14-upgrades-and-migrations.md)。
+
 ### 社区与团队
 
 更多详情，请参见：**[关于我们](./docs/zh/about/01-about-us.md)**
