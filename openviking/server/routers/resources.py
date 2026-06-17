@@ -380,7 +380,9 @@ async def _collect_chunks(
         for entry in entries:
             if entry.get("name") == _CHUNKS_SIDECAR_NAME and not entry.get("isDir"):
                 try:
-                    raw = await viking_fs.read_file(entry.get("uri") or f"{uri}/{_CHUNKS_SIDECAR_NAME}", ctx=ctx)
+                    raw = await viking_fs.read_file(
+                        entry.get("uri") or f"{uri}/{_CHUNKS_SIDECAR_NAME}", ctx=ctx
+                    )
                     parsed = _json.loads(raw)
                     chunks = parsed.get("chunks") if isinstance(parsed, dict) else None
                     if isinstance(chunks, dict):
@@ -401,7 +403,9 @@ async def _collect_chunks(
                     continue
                 meta = sidecar.get(name) or {}
                 idx = meta.get("chunk_index") if isinstance(meta.get("chunk_index"), int) else None
-                total = meta.get("chunk_total") if isinstance(meta.get("chunk_total"), int) else None
+                total = (
+                    meta.get("chunk_total") if isinstance(meta.get("chunk_total"), int) else None
+                )
                 sort_path = f"{rel}/{name}" if rel else name
                 out.append((idx, total, sort_path, entry_uri))
 

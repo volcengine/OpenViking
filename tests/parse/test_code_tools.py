@@ -281,14 +281,14 @@ class TestOutlineFile:
 # ---------------------------------------------------------------------------
 
 
-SECOND_FILE = '''def greet():
+SECOND_FILE = """def greet():
     pass
 
 
 class Other:
     def helper(self):
         pass
-'''
+"""
 
 
 class TestSearchSymbols:

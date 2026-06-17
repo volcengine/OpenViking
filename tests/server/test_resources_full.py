@@ -71,9 +71,7 @@ async def test_full_reassembly_filename_fallback(client: httpx.AsyncClient, serv
     assert body["content"] == "AAA\n\nBBB\n\nCCC"
 
 
-async def test_full_reassembly_missing_chunk_marks_incomplete(
-    client: httpx.AsyncClient, service
-):
+async def test_full_reassembly_missing_chunk_marks_incomplete(client: httpx.AsyncClient, service):
     base = "viking://resources/missing"
     await _seed_dir(base)
     await _seed_file(f"{base}/doc_1.md", "AAA")
