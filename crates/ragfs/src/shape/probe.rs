@@ -9,6 +9,8 @@ use futures::stream::{self, StreamExt};
 use super::manifest::{StorageShape, SHAPE_MANIFEST_PATH};
 
 const SYSTEM_ACCOUNT_ID: &[u8] = b"_system";
+const PATH_LOCK_FILE: &str = ".path.ovlock";
+const EXACT_LOCK_FILE_PREFIX: &str = ".exact.ovlock.";
 
 fn normalize_shape_path(path: &str) -> String {
     let mut normalized = path.trim().to_string();
@@ -30,6 +32,11 @@ fn is_persistent_task_record_path(path: &str) -> bool {
         return !account_id.is_empty() && !user_id.is_empty();
     }
     false
+}
+
+fn is_path_lock_record_path(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or("");
+    name == PATH_LOCK_FILE || name.starts_with(EXACT_LOCK_FILE_PREFIX)
 }
 
 /// Read the raw guard-file bytes from the backend root.
@@ -121,7 +128,10 @@ pub async fn detect_legacy_shape(raw_fs: &Arc<dyn FileSystem>) -> Result<Option<
         }
 
         let normalized = normalize_shape_path(&entry.path);
-        if normalized == SHAPE_MANIFEST_PATH || is_persistent_task_record_path(&normalized) {
+        if normalized == SHAPE_MANIFEST_PATH
+            || is_persistent_task_record_path(&normalized)
+            || is_path_lock_record_path(&normalized)
+        {
             continue;
         }
         candidates.push(normalized);
