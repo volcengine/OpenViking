@@ -96,12 +96,16 @@
   color: var(--vp-c-text-1);
 }
 
-.ov-docs-search-trigger span {
+.ov-docs-search-trigger-label {
   flex: 1;
   overflow: hidden;
   text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.ov-docs-search-trigger-compact {
+  display: none;
 }
 
 .ov-docs-search-trigger kbd {
@@ -299,22 +303,22 @@
 
 @media (max-width: 767px) {
   .ov-docs-search-trigger {
-    min-width: 44px;
-    width: 44px;
-    padding: 0;
+    min-width: 72px;
+    width: 72px;
+    padding: 0 12px;
     justify-content: center;
   }
 
-  .ov-docs-search-trigger span {
+  .ov-docs-search-trigger-label,
+  .ov-docs-search-trigger kbd {
     display: none;
   }
 
-  .ov-docs-search-trigger kbd {
-    min-width: auto;
-    padding: 0;
-    border: 0;
-    background: transparent;
-    font-size: 12px;
+  .ov-docs-search-trigger-compact {
+    display: inline;
+    color: var(--vp-c-text-2);
+    font-size: 13px;
+    font-weight: 600;
   }
 
   .ov-docs-search-backdrop {

@@ -37,8 +37,8 @@ type RemoteSearchResponse =
 
 const PRODUCTION_SEARCH_URL = 'https://openviking.ai/studio/gateway/docs/search'
 const SEARCH_LIMIT = 8
-const REMOTE_SEARCH_DEBOUNCE_MS = 700
-const REMOTE_SEARCH_TIMEOUT_MS = 5000
+const REMOTE_SEARCH_DEBOUNCE_MS = 1000
+const REMOTE_SEARCH_TIMEOUT_MS = 10000
 
 const modes: { command: string; label: string; placeholder: string; value: SearchMode }[] = [
   {
@@ -76,6 +76,7 @@ const notice = ref('')
 let debounceTimer: ReturnType<typeof window.setTimeout> | null = null
 let searchSequence = 0
 let localIndexPromise: Promise<DocsIndexRecord[]> | null = null
+let activeSearchController: AbortController | null = null
 
 const trimmedQuery = computed(() => query.value.trim())
 const activeMode = computed(() => modes.find((item) => item.value === mode.value) ?? modes[0])
@@ -111,6 +112,8 @@ function closeSearch() {
   const shouldRestoreFocus = isOpen.value
   isOpen.value = false
   isModeMenuOpen.value = false
+  clearPendingSearch()
+  cancelActiveSearch()
   if (shouldRestoreFocus) {
     void nextTick(() => triggerRef.value?.focus())
   }
@@ -194,9 +197,7 @@ function dialogFocusableElements() {
 }
 
 function scheduleSearch() {
-  if (debounceTimer) {
-    window.clearTimeout(debounceTimer)
-  }
+  clearPendingSearch()
 
   debounceTimer = window.setTimeout(() => {
     void runSearch()
@@ -204,6 +205,7 @@ function scheduleSearch() {
 }
 
 async function runSearch() {
+  cancelActiveSearch()
   const currentQuery = trimmedQuery.value
   const currentSequence = ++searchSequence
   notice.value = ''
@@ -215,13 +217,16 @@ async function runSearch() {
   }
 
   isLoading.value = true
+  const controller = new AbortController()
+  activeSearchController = controller
 
   try {
     const remoteResponse = await fetchRemoteResults(
       PRODUCTION_SEARCH_URL,
       currentQuery,
       mode.value,
-      docsLocale()
+      docsLocale(),
+      controller
     )
 
     if (currentSequence !== searchSequence) return
@@ -239,6 +244,9 @@ async function runSearch() {
       notice.value = fallbackNotice(remoteResponse.reason, localResults.length)
     }
   } finally {
+    if (activeSearchController === controller) {
+      activeSearchController = null
+    }
     if (currentSequence === searchSequence) {
       isLoading.value = false
     }
@@ -249,10 +257,12 @@ async function fetchRemoteResults(
   endpoint: string,
   searchQuery: string,
   searchMode: SearchMode,
-  locale: SearchLocale
+  locale: SearchLocale,
+  controller: AbortController
 ) {
-  const controller = new AbortController()
-  const timeout = window.setTimeout(() => controller.abort(), REMOTE_SEARCH_TIMEOUT_MS)
+  const timeout = window.setTimeout(() => {
+    controller.abort('timeout')
+  }, REMOTE_SEARCH_TIMEOUT_MS)
 
   try {
     const response = await fetch(endpoint, {
@@ -283,13 +293,30 @@ async function fetchRemoteResults(
       results: Array.isArray(payload.results) ? payload.results : []
     } satisfies RemoteSearchResponse
   } catch (error) {
-    const isTimeout = error instanceof DOMException && error.name === 'AbortError'
+    const isTimeout =
+      controller.signal.reason === 'timeout' ||
+      (error instanceof DOMException && error.name === 'TimeoutError')
     return {
       ok: false,
       reason: isTimeout ? 'timeout' : 'unavailable'
     } satisfies RemoteSearchResponse
   } finally {
     window.clearTimeout(timeout)
+  }
+}
+
+function cancelActiveSearch() {
+  if (activeSearchController && !activeSearchController.signal.aborted) {
+    activeSearchController.abort('superseded')
+  }
+  activeSearchController = null
+  searchSequence += 1
+}
+
+function clearPendingSearch() {
+  if (debounceTimer) {
+    window.clearTimeout(debounceTimer)
+    debounceTimer = null
   }
 }
 
@@ -448,16 +475,22 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeydown)
-  if (debounceTimer) {
-    window.clearTimeout(debounceTimer)
-  }
+  clearPendingSearch()
+  cancelActiveSearch()
 })
 </script>
 
 <template>
   <div class="ov-docs-search">
-    <button ref="triggerRef" class="ov-docs-search-trigger" type="button" @click="openSearch">
-      <span>Search docs</span>
+    <button
+      ref="triggerRef"
+      aria-label="Search docs"
+      class="ov-docs-search-trigger"
+      type="button"
+      @click="openSearch"
+    >
+      <span class="ov-docs-search-trigger-label">Search docs</span>
+      <span aria-hidden="true" class="ov-docs-search-trigger-compact">Search</span>
       <kbd>Ctrl K</kbd>
     </button>
 
