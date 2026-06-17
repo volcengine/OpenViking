@@ -111,9 +111,7 @@ async def test_ttl_expires_entry(monkeypatch):
     # Advance the monotonic clock past the TTL.
     real_monotonic = legacy_module.time.monotonic
     offset = legacy_module.ACCOUNTS_CACHE_TTL_SECONDS + 5.0
-    monkeypatch.setattr(
-        legacy_module.time, "monotonic", lambda: real_monotonic() + offset
-    )
+    monkeypatch.setattr(legacy_module.time, "monotonic", lambda: real_monotonic() + offset)
 
     reads_before = fake.read_count
     await mgr.resolve_with_refresh(user_key)
@@ -219,9 +217,7 @@ async def test_known_invalid_key_does_not_reload_every_time():
 
     # First miss reloads; subsequent ones hit the negative cache and skip.
     # Allow at most a small constant — anything not bounded is a regression.
-    assert reload_count["n"] <= 2, (
-        f"unbounded reloads on known-bad key: {reload_count['n']}"
-    )
+    assert reload_count["n"] <= 2, f"unbounded reloads on known-bad key: {reload_count['n']}"
 
 
 # ---------------------------------------------------------------------------
