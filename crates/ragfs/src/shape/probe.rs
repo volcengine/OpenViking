@@ -112,7 +112,10 @@ pub async fn detect_legacy_shape(raw_fs: &Arc<dyn FileSystem>) -> Result<Option<
     let mut detected: Option<StorageShape> = None;
 
     for entry in entries {
-        if entry.info.is_dir {
+        // Zero-byte files are a legacy plaintext artifact in the current implementation, but they
+        // do not carry enough signal to classify backend shape reliably. Skip them here instead of
+        // forcing a plaintext verdict during legacy shape inference.
+        if entry.info.is_dir || entry.info.size == 0 {
             continue;
         }
 
