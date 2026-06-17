@@ -157,7 +157,7 @@ async def test_powerpoint_parser_offloads_pptx_conversion(monkeypatch, tmp_path:
     fake_pptx = SimpleNamespace()
     monkeypatch.setitem(sys.modules, "pptx", fake_pptx)
 
-    def convert(path: Path, pptx_module) -> str:
+    def convert(path: Path, pptx_module, resource_name=None, storage=None) -> str:
         assert pptx_module is fake_pptx
         return "# converted pptx"
 
@@ -167,7 +167,12 @@ async def test_powerpoint_parser_offloads_pptx_conversion(monkeypatch, tmp_path:
 
     result = await parser.parse(source)
 
-    assert calls == [(convert, (source, fake_pptx), {})]
+    assert len(calls) == 1
+    called_func, called_args, called_kwargs = calls[0]
+    assert called_func is convert
+    assert called_args[0] == source
+    assert called_args[1] is fake_pptx
+    assert called_kwargs == {}
     assert seen["content"] == "# converted pptx"
     assert result.source_format == "pptx"
     assert result.parser_name == "PowerPointParser"
