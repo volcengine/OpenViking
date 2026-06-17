@@ -317,9 +317,7 @@ class ResourceMemoryLinkService:
             f"Recursive delete: {recursive_text}\n"
             "Affected memory URIs:\n"
             f"{affected}\n\n"
-            "Update existing mutable memories that mention or depend on this resource. "
-            "Do not create a new event solely for this resource deletion; event memories are "
-            "append-only and stale resource links are cleaned by the system."
+            "Update existing mutable memories that mention or depend on this resource."
         )
 
     async def _wait_for_commit_task(
