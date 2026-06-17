@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenVikingClient } from "../client.js";
 import { memoryOpenVikingConfigSchema } from "../config.js";
 import { createMemoryOpenVikingContextEngine } from "../context-engine.js";
-import { estimateAgentMessagesTokens, estimateTextTokens } from "../token-estimator.js";
 
 const cfg = memoryOpenVikingConfigSchema.parse({
   mode: "remote",
@@ -15,11 +14,11 @@ const cfg = memoryOpenVikingConfigSchema.parse({
 });
 
 function roughEstimate(messages: unknown[]): number {
-  return estimateAgentMessagesTokens(messages);
+  return Math.ceil(JSON.stringify(messages).length / 4);
 }
 
 function systemPromptTokens(text?: string): number {
-  return estimateTextTokens(text);
+  return text ? Math.ceil(text.length / 4) : 0;
 }
 
 function makeLogger() {
@@ -115,8 +114,8 @@ describe("context-engine assemble()", () => {
       tokenBudget: 4096,
     });
 
-    expect(resolveAgentId).not.toHaveBeenCalled();
-    expect(client.getSessionContext).toHaveBeenCalledWith("session-1", 4096);
+    expect(resolveAgentId).toHaveBeenCalledWith("session-1", undefined, "session-1");
+    expect(client.getSessionContext).toHaveBeenCalledWith("session-1", 4096, "agent:session-1");
     expect(result.estimatedTokens).toBe(
       roughEstimate(result.messages) + systemPromptTokens(result.systemPromptAddition),
     );

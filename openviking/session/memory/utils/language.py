@@ -21,6 +21,7 @@ _JAPANESE_KANA_MIN_CHARS = 3
 _STRONG_DOMINANT_MIN_CHARS = 10
 _STRONG_DOMINANT_RATIO = 0.95
 _PRIMARY_LANGUAGES = {"zh-CN", "en"}
+_URI_LANGUAGE_NOISE_RE = re.compile(r"\b(?:viking|https?)://[^\s<>\]\)\"']+")
 
 _LATIN_STOPWORDS = {
     "en": set(
@@ -52,30 +53,68 @@ _LATIN_ACCENT_BONUSES = {
 }
 _LATIN_HINT_LANGUAGES = {"it", "fr", "es", "de", "pt"}
 
-_LOCALE_LANGUAGE_PREFIXES = dict(
-    zh="zh-CN", ja="ja", ko="ko", ru="ru", ar="ar",
-    it="it", fr="fr", es="es", de="de", pt="pt", en="en",
-    chinese="zh-CN", japanese="ja", korean="ko", russian="ru", arabic="ar",
-    italian="it", french="fr", spanish="es", german="de", portuguese="pt", english="en",
-)
+_LOCALE_LANGUAGE_PREFIXES = {
+    "zh": "zh-CN",
+    "ja": "ja",
+    "ko": "ko",
+    "ru": "ru",
+    "ar": "ar",
+    "it": "it",
+    "fr": "fr",
+    "es": "es",
+    "de": "de",
+    "pt": "pt",
+    "en": "en",
+    "chinese": "zh-CN",
+    "japanese": "ja",
+    "korean": "ko",
+    "russian": "ru",
+    "arabic": "ar",
+    "italian": "it",
+    "french": "fr",
+    "spanish": "es",
+    "german": "de",
+    "portuguese": "pt",
+    "english": "en",
+}
 
 # Use Timezone as a weak fallback signal.
 _TIMEZONE_LANGUAGE_GROUPS = {
     "zh-CN": (
-        "asia/shanghai", "asia/chongqing", "asia/harbin", "asia/urumqi",
-        "asia/hong_kong", "asia/macau", "asia/taipei", "prc", "roc", "hongkong",
-        "china standard time", "taipei standard time",
+        "asia/shanghai",
+        "asia/chongqing",
+        "asia/harbin",
+        "asia/urumqi",
+        "asia/hong_kong",
+        "asia/macau",
+        "asia/taipei",
+        "prc",
+        "roc",
+        "hongkong",
+        "china standard time",
+        "taipei standard time",
     ),
     "ja": ("asia/tokyo", "japan", "tokyo standard time"),
     "ko": ("asia/seoul", "rok", "korea standard time"),
     "ru": (
-        "europe/moscow", "europe/kaliningrad", "asia/yekaterinburg", "asia/vladivostok",
+        "europe/moscow",
+        "europe/kaliningrad",
+        "asia/yekaterinburg",
+        "asia/vladivostok",
         "russian standard time",
     ),
     "ar": (
-        "asia/riyadh", "asia/dubai", "asia/qatar", "asia/kuwait",
-        "asia/baghdad", "africa/cairo", "africa/algiers", "africa/tunis",
-        "arab standard time", "arabian standard time", "egypt standard time",
+        "asia/riyadh",
+        "asia/dubai",
+        "asia/qatar",
+        "asia/kuwait",
+        "asia/baghdad",
+        "africa/cairo",
+        "africa/algiers",
+        "africa/tunis",
+        "arab standard time",
+        "arabian standard time",
+        "egypt standard time",
     ),
     "it": ("europe/rome",),
     "fr": ("europe/paris",),
@@ -83,13 +122,34 @@ _TIMEZONE_LANGUAGE_GROUPS = {
     "de": ("europe/berlin",),
     "pt": ("europe/lisbon", "america/sao_paulo"),
     "en": (
-        "america/new_york", "america/chicago", "america/denver", "america/los_angeles",
-        "america/phoenix", "america/anchorage", "pacific/honolulu", "us/eastern",
-        "us/central", "us/mountain", "us/pacific", "europe/london", "europe/dublin",
-        "gb", "gb-eire", "america/toronto", "america/vancouver", "canada/eastern",
-        "canada/pacific", "australia/sydney", "australia/melbourne",
-        "australia/brisbane", "australia/perth", "pacific/auckland", "nz",
-        "eastern standard time", "pacific standard time", "gmt standard time",
+        "america/new_york",
+        "america/chicago",
+        "america/denver",
+        "america/los_angeles",
+        "america/phoenix",
+        "america/anchorage",
+        "pacific/honolulu",
+        "us/eastern",
+        "us/central",
+        "us/mountain",
+        "us/pacific",
+        "europe/london",
+        "europe/dublin",
+        "gb",
+        "gb-eire",
+        "america/toronto",
+        "america/vancouver",
+        "canada/eastern",
+        "canada/pacific",
+        "australia/sydney",
+        "australia/melbourne",
+        "australia/brisbane",
+        "australia/perth",
+        "pacific/auckland",
+        "nz",
+        "eastern standard time",
+        "pacific standard time",
+        "gmt standard time",
     ),
 }
 
@@ -109,7 +169,11 @@ def _language_allowed_by_fallback(language: str, fallback_language: str) -> bool
 
 
 def _is_strong_dominant(count: int, total: int) -> bool:
-    return count >= _STRONG_DOMINANT_MIN_CHARS and total > 0 and count / total >= _STRONG_DOMINANT_RATIO
+    return (
+        count >= _STRONG_DOMINANT_MIN_CHARS
+        and total > 0
+        and count / total >= _STRONG_DOMINANT_RATIO
+    )
 
 
 def _language_from_locale_value(value: str) -> str:
@@ -231,6 +295,7 @@ def _detect_latin_language(text: str, fallback_language: str) -> str:
 def _detect_language_from_text(user_text: str, fallback_language: str) -> str:
     """Internal shared helper to detect dominant language from text."""
     fallback = (fallback_language or "en").strip() or "en"
+    user_text = strip_language_detection_noise(user_text)
 
     if not user_text:
         return fallback
@@ -289,6 +354,11 @@ def resolve_with_override(config, detect: Callable[[], str]) -> str:
     if override:
         return override
     return detect()
+
+
+def strip_language_detection_noise(text: str) -> str:
+    """Remove URI-like machine tokens that should not affect output language."""
+    return _URI_LANGUAGE_NOISE_RE.sub(" ", text or "")
 
 
 def resolve_output_language(text: str, config=None) -> str:

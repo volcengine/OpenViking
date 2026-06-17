@@ -8,6 +8,7 @@ Session Extract Context Provider - 会话提取 Provider 实现
 
 import json
 import os
+import re
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.message.part import TextPart, ToolPart
@@ -28,6 +29,7 @@ from openviking.session.memory.tools import (
     add_tool_call_pair_to_messages,
     get_tool,
 )
+from openviking.session.memory.utils.resource_refs import contains_resource_uri
 from openviking.session.memory.utils.uri import render_template
 from openviking.session.memory.vision_message_normalizer import (
     replace_image_parts_with_descriptions,
@@ -47,6 +49,9 @@ _PREFETCH_SEARCH_QUERY_MAX_CHARS = 5000
 _PREFETCH_SEARCH_TEXT_PART_MAX_CHARS = 1000
 _PREFETCH_SEARCH_ASSISTANT_TEXT_PART_MAX_CHARS = 500
 _PREFETCH_SEARCH_TOOL_FIELD_MAX_CHARS = 500
+_RESOURCE_REASON_LANGUAGE_RE = re.compile(
+    r"(?im)^\s*(?:User reason|用户说明|用户原因|用户理由)[:：]\s*(.+?)\s*$"
+)
 
 
 class SessionExtractContextProvider(ExtractContextProvider):
@@ -86,8 +91,6 @@ class SessionExtractContextProvider(ExtractContextProvider):
 
     def get_conversation_text(self) -> str:
         """Get the full conversation text for match_text validation."""
-        from openviking.message.part import TextPart
-
         text_parts = []
         for message in self.messages or []:
             for part in getattr(message, "parts", []):
@@ -134,25 +137,69 @@ class SessionExtractContextProvider(ExtractContextProvider):
 
     def _detect_language(self) -> str:
         """检测输出语言"""
-        from openviking.session.memory.utils import resolve_output_language
+        from openviking.session.memory.utils import (
+            resolve_output_language,
+            strip_language_detection_noise,
+        )
 
         user_text_parts = []
         all_text_parts = []
         for message in self.messages or []:
             for part in getattr(message, "parts", []):
                 if isinstance(part, TextPart) and part.text:
-                    all_text_parts.append(part.text)
+                    text = self._language_signal_text(
+                        part.text,
+                        strip_language_detection_noise=strip_language_detection_noise,
+                    )
+                    all_text_parts.append(text)
                     if getattr(message, "role", "") == "user":
-                        user_text_parts.append(part.text)
+                        user_text_parts.append(text)
 
         text_parts = user_text_parts or all_text_parts
         return resolve_output_language("\n".join(text_parts))
 
+    @staticmethod
+    def _language_signal_text(text: str, *, strip_language_detection_noise) -> str:
+        """Keep user-authored language signal and drop machine-oriented URI noise."""
+        reason_lines = [
+            match.group(1).strip()
+            for match in _RESOURCE_REASON_LANGUAGE_RE.finditer(text or "")
+            if match.group(1).strip()
+        ]
+        if reason_lines:
+            return "\n".join(reason_lines)
+        return strip_language_detection_noise(text)
+
     def get_output_language(self) -> str:
         return self._output_language
 
+    def _conversation_contains_resource_uri(self) -> bool:
+        for message in self.messages or []:
+            content = getattr(message, "content", None)
+            if content and contains_resource_uri(content):
+                return True
+            for part in getattr(message, "parts", []) or []:
+                text = getattr(part, "text", None)
+                if text and contains_resource_uri(text):
+                    return True
+        return False
+
     def instruction(self) -> str:
         output_language = self._output_language
+        resource_uri_handling = (
+            """
+
+## Resource URI Handling
+- If the conversation contains a resource URI (`viking://resources/...`, `viking://user/{user_id}/resources/...`, or `viking://user/{user_id}/peers/{peer_id}/resources/...`) and the user says a durable fact, judgment, preference, or event about it, extract that memory into the appropriate normal memory type such as entities, events, or preferences.
+- Preserve resource references as markdown links in visible memory content when useful. Example: user said "用户保存了越前龙马照片 viking://resources/images/ryoma" -> write "用户保存了[越前龙马照片](viking://resources/images/ryoma)".
+- For `## Resource Addition` blocks, use `User reason` as the user's intent and `Resource abstract` only as optional context. Do not copy raw fields such as `Resource URI`, `Added at`, `Resource abstract`, or `User reason` into visible memory content.
+- Use descriptive link text such as `[越前龙马照片](viking://resources/...)`; avoid visible wording like `资源URI为` or `Resource URI`.
+- If the user already wrote a markdown link to a resource URI, keep the same resource link intent.
+- Do NOT claim you inspected, summarized, OCRed, or opened the resource file unless the conversation explicitly provides that fact.
+"""
+            if self._conversation_contains_resource_uri()
+            else ""
+        )
         goal = f"""You are a memory extraction agent. Your task is to analyze conversations and update memories.
 
 ## Workflow
@@ -170,6 +217,7 @@ All memory content MUST be written in {output_language}.
 
 ## URI Handling
 The system automatically generates URIs based on memory_type and fields. Just provide correct memory_type and fields.
+{resource_uri_handling}
 
 ## Self and Peer Memory
 When a memory item describes the current user, omit peer_id.

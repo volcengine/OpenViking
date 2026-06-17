@@ -71,12 +71,12 @@ $OPENCLAW_STATE_DIR/openclaw.json
 | `userId` | string | 空 | `OPENVIKING_USER_ID` | 高级租户路由字段；请求时写入 `X-OpenViking-User`。Root key 或 trusted 部署通常需要。 |
 | `timeoutMs` | number | `15000` | — | OpenViking HTTP 请求超时，最低会 clamp 到 `1000`。 |
 
-### 3.2 Peer 与检索隔离
+### 3.2 Peer 身份与数据面路由
 
 | 参数 | 类型 | 默认值 | 环境变量 | 说明 |
 | --- | --- | --- | --- | --- |
-| `peer_role` | `"none"` \| `"assistant"` \| `"person"` | `"assistant"` | — | 控制哪些 session message 写入 `peer_id`，并为数据面 recall/search/read/import/delete 提供 actor peer 视图。 |
-| `peer_prefix` | string | 空 | — | `peer_role=assistant` 时 assistant `peer_id` 的可选前缀；仅允许字母、数字、`_`、`-`。 |
+| `peer_role` | `"none"` \| `"assistant"` \| `"person"` | `assistant` | — | Peer 身份模式。Session message 使用 body `peer_id`；数据面 recall/search 使用 `X-OpenViking-Actor-Peer`。 |
+| `peer_prefix` | string | 空 | — | `peer_role=assistant` 时 assistant `peer_id` / actor peer 值的可选前缀。交互式 setup 仅允许字母、数字、`_`、`-`。 |
 
 ### 3.3 自动捕获与提交
 
@@ -94,7 +94,7 @@ $OPENCLAW_STATE_DIR/openclaw.json
 | --- | --- | --- | --- | --- |
 | `autoRecall` | boolean | `true` | — | 是否在 assemble 阶段自动召回并注入上下文。 |
 | `targetUri` | string | `viking://user/memories` | — | `memory_recall` / `memory_forget` 默认搜索范围。 |
-| `recallTargetTypes` | string[] | `["user", "agent"]` | — | 自动召回和默认 `memory_recall` 的搜索类型。允许 `resource`、`user`、`agent`；`user` / `agent` 为兼容项，当前合并为一次 `context_type=memory` 检索。 |
+| `recallTargetTypes` | string[] | `["user", "agent"]` | — | 自动召回和默认 `memory_recall` 的搜索类型。允许 `resource`、`user`、`agent`。 |
 | `recallResources` | boolean | `false` | `OPENVIKING_RECALL_RESOURCES` | 旧兼容开关；仅在未显式配置 `recallTargetTypes` 时追加 `resource`。 |
 | `recallLimit` | number | `6` | — | 最终召回条数下限为 `1`。内部请求通常放大为 `max(limit * 4, 20)`。 |
 | `recallScoreThreshold` | number | `0.15` | — | 召回结果分数阈值，范围 `0` 到 `1`。 |
@@ -139,10 +139,10 @@ $OPENCLAW_STATE_DIR/openclaw.json
 
 | 分组 | 包含工具 |
 | --- | --- |
-| `default` | 默认 12 个 Agent tools。 |
-| `all` | `add_resource` + 默认 12 个 Agent tools。注意 `add_resource` 仍需 `enableAddResourceTool=true`。 |
+| `default` | 默认 14 个 Agent tools。 |
+| `all` | `add_resource` + 默认 14 个 Agent tools。注意 `add_resource` 仍需 `enableAddResourceTool=true`。 |
 | `memory` | `memory_recall`、`memory_store`、`memory_forget`。 |
-| `resource_query` | `ov_search`、`ov_read`。 |
+| `resource_query` | `ov_search`、`ov_read`、`ov_multi_read`、`ov_list`。 |
 | `import` | `add_resource`、`add_skill`。 |
 | `recall_trace` | `ov_recall_trace`。 |
 | `archive` | `ov_archive_search`、`ov_archive_expand`。 |
@@ -164,6 +164,8 @@ $OPENCLAW_STATE_DIR/openclaw.json
 
 - `ov_search`
 - `ov_read`
+- `ov_multi_read`
+- `ov_list`
 
 不会注册：
 
@@ -227,7 +229,7 @@ openclaw openviking setup [options]
 | `--zh` | 使用中文提示。 |
 | `--base-url <url>` | OpenViking Server URL。传入后进入非交互模式。 |
 | `--api-key <key>` | API Key。 |
-| `--agent-prefix <prefix>` | Agent 路由前缀。 |
+| `--peer-prefix <prefix>` | Peer 路由前缀。 |
 | `--account-id <id>` | Root API Key 场景下的 Account ID。 |
 | `--user-id <id>` | Root API Key 场景下的 User ID。 |
 | `--recall-target-types <types>` | 逗号分隔的召回类型，例如 `resource` 或 `user,agent,resource`。 |
@@ -379,7 +381,7 @@ Manifest 中声明了 runtime slash alias：
 | 参数 | 必填 | 说明 |
 | --- | --- | --- |
 | `<query>` | 是 | 搜索 query。支持多词 query。 |
-| `--uri URI` | 否 | 搜索目标 URI。未指定时默认搜索 resources 和 user skills。 |
+| `--uri URI` | 否 | 搜索目标 URI。未指定时默认搜索 resources 和 agent skills。 |
 | `--limit N` | 否 | 每个搜索范围返回条数，默认 `10`。 |
 
 示例：
@@ -426,10 +428,12 @@ Manifest 中声明了 runtime slash alias：
 
 | Tool | 参数 | 用途 |
 | --- | --- | --- |
-| `add_skill` | `source?`、`data?`、`wait?`、`timeout?` | 导入或注册 OpenViking skill。 |
+| `add_skill` | `source?`、`data?`、`wait?`、`timeout?` | 导入或注册 OpenViking agent skill。 |
 | `ov_search` | `query`、`uri?`、`limit?` | 搜索 OpenViking resources 和 skills。 |
 | `ov_read` | `uri` | 读取精确 `viking://...` OpenViking URI 的完整内容。 |
-| `memory_recall` | `query`、`limit?`、`scoreThreshold?`、`targetUri?`、`resourceTypes?` | 显式召回长期记忆或资源。 |
+| `ov_multi_read` | `uris` | 一次读取多个精确 `viking://...` URI，适合 overview + 同级切片。 |
+| `ov_list` | `uri`、`recursive?`、`simple?`、`limit?` | 列出 OpenViking 目录，用于补齐同级切片和 `.overview.md`。 |
+| `memory_recall` | `query`、`limit?`、`scoreThreshold?`、`targetUri?`、`resourceTypes?` | 显式召回长期记忆或资源；session 历史请用 archive 工具。 |
 | `ov_recall_trace` | `turn?`、`traceId?`、`sessionId?`、`sessionKey?`、`ovSessionId?`、`source?`、`resourceTypes?`、`since?`、`until?`、`includeContent?`、`limit?` | 查询 recall trace。 |
 | `memory_store` | `text`、`role?`、`sessionId?` | 将文本写入 session 并触发记忆抽取。 |
 | `memory_forget` | `uri?`、`query?`、`targetUri?`、`limit?`、`scoreThreshold?` | 删除记忆 URI，或先搜索后删除唯一高置信候选。 |
@@ -501,8 +505,7 @@ curl 'http://127.0.0.1:<gateway-port>/api/openviking/recall-traces/ov_search-178
 | `X-API-Key` | `apiKey` | API Key。 |
 | `X-OpenViking-Account` | `accountId` | 租户 account。 |
 | `X-OpenViking-User` | `userId` | 租户 user。 |
-
-`peer_role=assistant/person` 时，插件通过请求 body 的 `peer_id` 字段做 session message 归因；recall/search/read/import/delete 等数据面请求通过 `X-OpenViking-Actor-Peer` 进入当前 actor peer 视图。当前实现不发送 `X-OpenViking-Agent` header。
+| `X-OpenViking-Actor-Peer` | 当前解析出的 actor peer | Actor peer 数据面路由。 |
 
 后端 API 封装清单：
 

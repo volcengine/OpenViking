@@ -2,20 +2,20 @@ use std::ffi::OsString;
 
 use clap::{Arg, ArgAction, Command, CommandFactory};
 use colored::Colorize;
-use unicode_width::UnicodeWidthStr;
 
 use crate::{
     Cli,
     cli_arg_scan::ValueOptions,
     i18n::{Language, copy},
+    terminal_ui::{
+        display_width, fit_to_display_width, pad_to_display_width, truncate_to_display_width,
+    },
     theme,
 };
 
 const BOX_WIDTH: usize = 74;
 const COMMAND_WIDTH: usize = 16;
-const DESCRIPTION_WIDTH: usize = BOX_WIDTH - COMMAND_WIDTH - 5;
 const COMMAND_HELP_LEFT_WIDTH: usize = 34;
-const START_HERE_DESCRIPTION_WIDTH: usize = 56;
 
 #[derive(Debug, Clone, Copy)]
 struct HelpCommand {
@@ -264,6 +264,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             HelpItem {
                 label: "ov rm viking://scratch --recursive",
                 description: "Remove a directory subtree.",
+            },
+            HelpItem {
+                label: "ov rm viking://resources/images/foo --recursive --wait",
+                description: "Remove a subtree and wait for generated overviews to refresh.",
             },
         ],
         next_steps: &[
@@ -1145,114 +1149,155 @@ pub(crate) fn render_top_level_help() -> String {
 }
 
 pub(crate) fn render_top_level_help_with_language(language: Language) -> String {
+    render_top_level_help_with_language_and_width(language, help_output_width())
+}
+
+fn render_top_level_help_with_language_and_width(language: Language, width: usize) -> String {
     let mut lines = Vec::new();
     let mut root = Cli::command();
     root.build();
 
-    lines.push(format!(
-        "{} {}",
-        theme::brand_title("OpenViking").bold(),
-        theme::version(version())
-    ));
-    lines.push(
-        theme::heading(copy(
-            language,
-            "Context Database for AI Agents",
-            "AI Agent 上下文数据库",
-        ))
-        .bold()
-        .to_string(),
+    let title = format!("OpenViking {}", version());
+    if width >= BOX_WIDTH || display_width(&title) <= width {
+        lines.push(format!(
+            "{} {}",
+            theme::brand_title("OpenViking").bold(),
+            theme::version(version())
+        ));
+    } else {
+        lines.push(
+            theme::brand_title(truncate_to_display_width(&title, width))
+                .bold()
+                .to_string(),
+        );
+    }
+    let motto = copy(
+        language,
+        "Context Database for AI Agents",
+        "AI Agent 上下文数据库",
     );
+    let motto = if width >= BOX_WIDTH {
+        motto.to_string()
+    } else {
+        truncate_to_display_width(motto, width)
+    };
+    lines.push(theme::heading(motto).bold().to_string());
     lines.push(String::new());
-    lines.push(format!(
-        "{}",
-        theme::warning(copy(language, "Usage:", "用法：")).bold()
-    ));
-    lines.push(format!("  {}", theme::strong("ov <command> [options]")));
+    lines.push(warning_line(copy(language, "Usage:", "用法："), width));
+    let usage = if width >= BOX_WIDTH {
+        "ov <command> [options]".to_string()
+    } else {
+        truncate_to_display_width("ov <command> [options]", width.saturating_sub(2))
+    };
+    lines.push(format!("  {}", theme::strong(usage)));
     lines.push(String::new());
-    lines.push(format!(
-        "{}",
-        theme::strong(copy(language, "Start here:", "从这里开始："))
+    lines.push(strong_line(
+        copy(language, "Start here:", "从这里开始："),
+        width,
     ));
     for command in ["config", "health", "status", "tui"] {
-        if let Some(line) = top_level_start_here_line(&root, command, language) {
+        if let Some(line) = top_level_start_here_line(&root, command, language, width) {
             lines.push(line);
         }
     }
     lines.push(String::new());
 
     for section in HELP_SECTIONS {
-        lines.extend(section_lines(section, &root, language));
+        lines.extend(section_lines(section, &root, language, width));
         lines.push(String::new());
     }
 
-    lines.push(format!(
-        "{}",
-        theme::strong(copy(language, "Global options:", "全局选项："))
+    lines.push(strong_line(
+        copy(language, "Global options:", "全局选项："),
+        width,
     ));
     for item in top_level_global_options(&root, language) {
-        lines.push(option_line(&item.label, &item.description));
+        lines.push(option_line(&item.label, &item.description, width));
     }
     lines.push(String::new());
-    lines.push(format!(
-        "{}",
-        theme::strong(copy(language, "More:", "更多："))
-    ));
+    lines.push(strong_line(copy(language, "More:", "更多："), width));
     lines.push(start_here_line(
         "ov <command> --help",
         copy(language, "Show command details", "查看命令详情"),
+        width,
     ));
     lines.push(start_here_line(
         "ov config",
         copy(language, "Configure the CLI", "配置 CLI"),
+        width,
     ));
 
     format!("{}\n", lines.join("\n"))
 }
 
 fn render_command_help(spec: &CommandHelpSpec) -> String {
+    render_command_help_with_width(spec, help_output_width())
+}
+
+fn render_command_help_with_width(spec: &CommandHelpSpec, width: usize) -> String {
     let mut lines = Vec::new();
     let language = Language::current();
     let command = command_display(spec.path);
     let clap_command = clap_command_for_path(spec.path)
         .unwrap_or_else(|| panic!("curated help path missing from clap: {command}"));
 
-    lines.push(format!(
-        "{} {} {}",
-        theme::brand_title("OpenViking").bold(),
-        theme::version(version()),
-        theme::muted(format!("· {command}"))
-    ));
-    lines.push(theme::body(localized_command_purpose(spec, language)).to_string());
+    let plain_title_line = format!("OpenViking {} · {command}", version());
+    if width >= BOX_WIDTH || display_width(&plain_title_line) <= width {
+        lines.push(format!(
+            "{} {} {}",
+            theme::brand_title("OpenViking").bold(),
+            theme::version(version()),
+            theme::muted(format!("· {command}"))
+        ));
+    } else {
+        lines.push(
+            theme::brand_title(truncate_to_display_width(&plain_title_line, width))
+                .bold()
+                .to_string(),
+        );
+    }
+    let purpose = localized_command_purpose(spec, language);
+    let purpose = if width >= BOX_WIDTH {
+        purpose.to_string()
+    } else {
+        truncate_to_display_width(purpose, width)
+    };
+    lines.push(theme::body(purpose).to_string());
     lines.push(String::new());
-    lines.push(format!(
-        "{}",
-        theme::warning(copy(language, "Usage:", "用法：")).bold()
-    ));
+    lines.push(warning_line(copy(language, "Usage:", "用法："), width));
     let usage = usage_for_command(clap_command.clone(), spec.path);
+    let usage = if width >= BOX_WIDTH {
+        usage
+    } else {
+        truncate_to_display_width(&usage, width.saturating_sub(2))
+    };
     lines.push(format!("  {}", theme::strong(usage)));
     push_section(
         &mut lines,
         copy(language, "Examples", "示例"),
         spec.examples,
+        width,
     );
     let argument_items = arguments_from_command(&clap_command);
     push_dynamic_section(
         &mut lines,
         copy(language, "Arguments", "参数"),
         &argument_items,
+        width,
     );
     let subcommand_items = subcommands_from_command(&clap_command);
     push_dynamic_section(
         &mut lines,
         copy(language, "Subcommands", "子命令"),
         &subcommand_items,
+        width,
     );
     for section in option_sections_from_command(&clap_command) {
         push_dynamic_section(
             &mut lines,
             localized_option_section_title(&section.title, language),
             &section.items,
+            width,
         );
     }
     let global_items = global_options_for(spec);
@@ -1260,11 +1305,13 @@ fn render_command_help(spec: &CommandHelpSpec) -> String {
         &mut lines,
         copy(language, "Global options", "全局选项"),
         &global_items,
+        width,
     );
     push_section(
         &mut lines,
         copy(language, "Next", "下一步"),
         spec.next_steps,
+        width,
     );
 
     format!("{}\n", lines.join("\n"))
@@ -1529,50 +1576,59 @@ fn localized_option_section_title(title: &str, language: Language) -> &str {
     }
 }
 
-fn push_section(lines: &mut Vec<String>, title: &str, items: &[HelpItem]) {
+fn push_section(lines: &mut Vec<String>, title: &str, items: &[HelpItem], width: usize) {
     if items.is_empty() {
         return;
     }
 
     lines.push(String::new());
-    lines.push(format!("{}", theme::heading(title).bold()));
+    lines.push(heading_line(title, width));
     for item in items {
-        lines.push(help_item_line(item));
+        lines.push(help_item_line(item, width));
     }
 }
 
-fn push_dynamic_section(lines: &mut Vec<String>, title: &str, items: &[RenderedHelpItem]) {
+fn push_dynamic_section(
+    lines: &mut Vec<String>,
+    title: &str,
+    items: &[RenderedHelpItem],
+    width: usize,
+) {
     if items.is_empty() {
         return;
     }
 
     lines.push(String::new());
-    lines.push(format!("{}", theme::heading(title).bold()));
+    lines.push(heading_line(title, width));
     for item in items {
-        lines.push(help_item_line_parts(&item.label, &item.description));
+        lines.push(help_item_line_parts(&item.label, &item.description, width));
     }
 }
 
-fn help_item_line(item: &HelpItem) -> String {
+fn help_item_line(item: &HelpItem, width: usize) -> String {
     let language = Language::current();
     let description = localized_help_item_description(item.label, item.description, language);
-    help_item_line_parts(item.label, description)
+    help_item_line_parts(item.label, description, width)
 }
 
-fn help_item_line_parts(label: &str, description: &str) -> String {
-    if display_width(label) > COMMAND_HELP_LEFT_WIDTH {
+fn help_item_line_parts(label: &str, description: &str, width: usize) -> String {
+    if width >= BOX_WIDTH {
+        if display_width(label) > COMMAND_HELP_LEFT_WIDTH {
+            return format!(
+                "  {}\n      {}",
+                theme::command(label),
+                theme::body(description)
+            );
+        }
+
         return format!(
-            "  {}\n      {}",
-            theme::command(label),
+            "  {} {}",
+            theme::command(pad_to_display_width(label, COMMAND_HELP_LEFT_WIDTH)),
             theme::body(description)
         );
     }
 
-    format!(
-        "  {} {}",
-        theme::command(pad_to_display_width(label, COMMAND_HELP_LEFT_WIDTH)),
-        theme::body(description)
-    )
+    two_column_line(label, description, COMMAND_HELP_LEFT_WIDTH, width)
 }
 
 fn localized_command_purpose(spec: &CommandHelpSpec, language: Language) -> &str {
@@ -1659,32 +1715,25 @@ fn localized_help_item_description<'a>(
     }
 }
 
-fn start_here_line(command: &str, description: &str) -> String {
-    let description = truncate_to_display_width(description, START_HERE_DESCRIPTION_WIDTH);
-    format!(
-        "  {} {}",
-        theme::command(pad_to_display_width(command, 22)).bold(),
-        theme::body(description)
-    )
+fn start_here_line(command: &str, description: &str, width: usize) -> String {
+    two_column_line_with_bold_label(command, description, 22, width)
 }
 
-fn option_line(option: &str, description: &str) -> String {
-    format!(
-        "  {} {}",
-        theme::command(pad_to_display_width(option, 26)),
-        theme::body(description)
-    )
+fn option_line(option: &str, description: &str, width: usize) -> String {
+    two_column_line(option, description, 26, width)
 }
 
 fn top_level_start_here_line(
     root: &Command,
     command_name: &str,
     language: Language,
+    width: usize,
 ) -> Option<String> {
     let command = root.find_subcommand(command_name)?;
     Some(start_here_line(
         &format!("ov {command_name}"),
         &top_level_command_description(command, language),
+        width,
     ))
 }
 
@@ -1735,11 +1784,17 @@ fn rendered_global_options(
         .collect()
 }
 
-fn section_lines(section: &HelpSection, root: &Command, language: Language) -> Vec<String> {
+fn section_lines(
+    section: &HelpSection,
+    root: &Command,
+    language: Language,
+    width: usize,
+) -> Vec<String> {
     let mut lines = Vec::new();
     let title_text = localized_section_title(section.title, language);
     let title = format!("─ {title_text} ");
-    let fill = BOX_WIDTH.saturating_sub(2 + display_width(&title));
+    let title = truncate_to_display_width(&title, width.saturating_sub(2));
+    let fill = width.saturating_sub(2 + display_width(&title));
     lines.push(format!(
         "{}{}{}{}",
         theme::border("╭"),
@@ -1750,44 +1805,48 @@ fn section_lines(section: &HelpSection, root: &Command, language: Language) -> V
 
     for command in section.commands {
         if let Some(clap_command) = root.find_subcommand(command.name) {
-            lines.push(command_line(command.name, clap_command, language));
+            lines.push(command_line(command.name, clap_command, language, width));
         }
     }
 
     lines.push(format!(
         "{}{}{}",
         theme::border("╰"),
-        theme::border("─".repeat(BOX_WIDTH.saturating_sub(2))),
+        theme::border("─".repeat(width.saturating_sub(2))),
         theme::border("╯")
     ));
     lines
 }
 
-fn command_line(command_name: &str, command: &Command, language: Language) -> String {
+fn command_line(command_name: &str, command: &Command, language: Language, width: usize) -> String {
     let command_description = top_level_command_description(command, language);
     let badge = top_level_command_badge(command);
+    let command_width = boxed_command_width(width);
+    let description_width = boxed_description_width(width, command_width);
     let description = match badge.as_deref() {
         Some(badge) => {
             let badge = localized_badge(badge, language);
-            let description_width = DESCRIPTION_WIDTH.saturating_sub(display_width(badge) + 1);
+            let badge = truncate_to_display_width(badge, description_width);
+            let badge_width = display_width(&badge);
+            let description_text_width = description_width.saturating_sub(badge_width + 1);
             let command_description =
-                truncate_to_display_width(&command_description, description_width);
-            let used = display_width(&command_description) + display_width(badge);
-            let spacer = DESCRIPTION_WIDTH.saturating_sub(used).max(1);
+                truncate_to_display_width(&command_description, description_text_width);
+            let used = display_width(&command_description) + badge_width;
+            let spacer = description_width.saturating_sub(used);
             format!(
                 "{}{}{}",
                 command_description,
                 " ".repeat(spacer),
-                theme::muted(badge)
+                theme::muted(&badge)
             )
         }
         None => {
             let command_description =
-                truncate_to_display_width(&command_description, DESCRIPTION_WIDTH);
+                truncate_to_display_width(&command_description, description_width);
             format!(
                 "{}{}",
                 command_description,
-                " ".repeat(DESCRIPTION_WIDTH.saturating_sub(display_width(&command_description)))
+                " ".repeat(description_width.saturating_sub(display_width(&command_description)))
             )
         }
     };
@@ -1795,7 +1854,7 @@ fn command_line(command_name: &str, command: &Command, language: Language) -> St
     format!(
         "{} {} {} {}",
         theme::border("│"),
-        theme::command(pad_to_display_width(command_name, COMMAND_WIDTH)).bold(),
+        theme::command(fit_to_display_width(command_name, command_width)).bold(),
         theme::body(description),
         theme::border("│")
     )
@@ -1882,42 +1941,106 @@ fn localized_global_option_description<'a>(
     }
 }
 
-fn display_width(value: &str) -> usize {
-    UnicodeWidthStr::width(value)
+#[cfg(not(test))]
+fn help_output_width() -> usize {
+    crossterm::terminal::size()
+        .map(|(columns, _)| crate::terminal_ui::terminal_width(columns as usize, BOX_WIDTH))
+        .unwrap_or(BOX_WIDTH)
 }
 
-fn truncate_to_display_width(value: &str, width: usize) -> String {
-    if display_width(value) <= width {
-        return value.to_string();
+#[cfg(test)]
+fn help_output_width() -> usize {
+    BOX_WIDTH
+}
+
+fn boxed_command_width(width: usize) -> usize {
+    let content_width = width.saturating_sub(5);
+    COMMAND_WIDTH.min(content_width / 2).max(1)
+}
+
+fn boxed_description_width(width: usize, command_width: usize) -> usize {
+    width.saturating_sub(command_width + 5)
+}
+
+fn two_column_line(
+    label: &str,
+    description: &str,
+    preferred_label_width: usize,
+    width: usize,
+) -> String {
+    two_column_line_with_style(label, description, preferred_label_width, width, false)
+}
+
+fn two_column_line_with_bold_label(
+    label: &str,
+    description: &str,
+    preferred_label_width: usize,
+    width: usize,
+) -> String {
+    two_column_line_with_style(label, description, preferred_label_width, width, true)
+}
+
+fn strong_line(text: &str, width: usize) -> String {
+    let text = if width >= BOX_WIDTH {
+        text.to_string()
+    } else {
+        truncate_to_display_width(text, width)
+    };
+    theme::strong(text).to_string()
+}
+
+fn warning_line(text: &str, width: usize) -> String {
+    let text = if width >= BOX_WIDTH {
+        text.to_string()
+    } else {
+        truncate_to_display_width(text, width)
+    };
+    theme::warning(text).bold().to_string()
+}
+
+fn heading_line(text: &str, width: usize) -> String {
+    let text = if width >= BOX_WIDTH {
+        text.to_string()
+    } else {
+        truncate_to_display_width(text, width)
+    };
+    theme::heading(text).bold().to_string()
+}
+
+fn two_column_line_with_style(
+    label: &str,
+    description: &str,
+    preferred_label_width: usize,
+    width: usize,
+    bold_label: bool,
+) -> String {
+    if width >= BOX_WIDTH {
+        let label = pad_to_display_width(label, preferred_label_width);
+        let label = if bold_label {
+            theme::command(label).bold().to_string()
+        } else {
+            theme::command(label).to_string()
+        };
+
+        return format!("  {} {}", label, theme::body(description));
     }
 
     if width <= 3 {
-        return ".".repeat(width);
+        return truncate_to_display_width(label, width);
     }
 
-    let target = width - 3;
-    let mut truncated = String::new();
-    let mut used = 0;
+    let content_width = width.saturating_sub(3);
+    let label_width = preferred_label_width.min(content_width / 2).max(1);
+    let description_width = width.saturating_sub(label_width + 3);
+    let label = fit_to_display_width(label, label_width);
+    let label = if bold_label {
+        theme::command(label).bold().to_string()
+    } else {
+        theme::command(label).to_string()
+    };
+    let description = truncate_to_display_width(description, description_width);
 
-    for ch in value.chars() {
-        let ch_width = display_width(&ch.to_string());
-        if used + ch_width > target {
-            break;
-        }
-        truncated.push(ch);
-        used += ch_width;
-    }
-
-    truncated.push_str("...");
-    truncated
-}
-
-fn pad_to_display_width(value: &str, width: usize) -> String {
-    format!(
-        "{}{}",
-        value,
-        " ".repeat(width.saturating_sub(display_width(value)))
-    )
+    format!("  {} {}", label, theme::body(description))
 }
 
 fn localized_section_title(title: &str, language: Language) -> &str {
@@ -2263,10 +2386,12 @@ fn cli_value_options() -> ValueOptions {
 mod tests {
     use super::{
         COMMAND_HELP_SPECS, HELP_SECTIONS, command_help_path, display_width,
-        render_command_help_request, render_top_level_help,
+        render_command_help_request, render_command_help_with_width, render_top_level_help,
+        render_top_level_help_with_language_and_width,
     };
     use super::{command_spec, is_top_level_help_request};
     use crate::Cli;
+    use crate::i18n::Language;
     use clap::CommandFactory;
     use std::ffi::OsString;
 
@@ -2391,6 +2516,37 @@ mod tests {
     }
 
     #[test]
+    fn top_level_help_respects_narrow_terminal_width() {
+        let width = 24;
+        let rendered = strip_ansi(&render_top_level_help_with_language_and_width(
+            Language::En,
+            width,
+        ));
+
+        for line in rendered.lines() {
+            assert!(
+                display_width(line) <= width,
+                "line exceeded narrow width: {line:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn command_help_respects_narrow_terminal_width() {
+        let width = 24;
+        let path = vec!["config".to_string()];
+        let spec = command_spec(&path).expect("config command spec");
+        let rendered = strip_ansi(&render_command_help_with_width(spec, width));
+
+        for line in rendered.lines() {
+            assert!(
+                display_width(line) <= width,
+                "line exceeded narrow width: {line:?}"
+            );
+        }
+    }
+
+    #[test]
     fn every_curated_top_level_command_in_help_map_has_command_help() {
         for command in HELP_SECTIONS
             .iter()
@@ -2465,7 +2621,7 @@ mod tests {
             &["ov", "config", "add", "custom", "--help"][..],
         ] {
             let rendered = strip_ansi(
-                &render_command_help_request(&os_args(&args)).expect("help should render"),
+                &render_command_help_request(&os_args(args)).expect("help should render"),
             );
             assert!(
                 rendered.contains("Common options"),
@@ -2523,6 +2679,7 @@ mod tests {
         for args in [
             ["ov", "add-resource", "--help"],
             ["ov", "add-skill", "--help"],
+            ["ov", "rm", "--help"],
             ["ov", "write", "--help"],
         ] {
             let rendered = strip_ansi(

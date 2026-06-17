@@ -634,6 +634,8 @@ openviking rm viking://resources/old.md [--recursive]
 
 The `estimated_deleted_count` field (for recursive deletes) contains the estimated number of items (files and directories) deleted (from vector index). The CLI will display this information in output.
 
+When deleting `viking://resources/...`, the response may include `memory_cleanup`, indicating that user memories referencing that resource URI were cleaned up before deletion.
+
 ---
 
 ### mv()

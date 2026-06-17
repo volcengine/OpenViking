@@ -29,6 +29,10 @@ from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.merge_op import MergeOpFactory
 from openviking.session.memory.page_id_map import PageIdMap
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+from openviking.session.memory.utils.resource_refs import (
+    RESOURCE_REF_SOURCE_SESSION_COMMIT,
+    sync_memory_resource_refs,
+)
 from openviking.session.memory.utils.template_utils import TemplateUtils
 from openviking.session.memory.utils.uri import render_template
 from openviking.storage.viking_fs import get_viking_fs
@@ -36,12 +40,20 @@ from openviking.telemetry import tracer
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.exceptions import NotFoundError
-from openviking_cli.utils import get_logger
+from openviking_cli.utils import VikingURI, get_logger
 
 logger = get_logger(__name__)
 
 _EXTRACTION_CHUNK_MIN_CHARS = 100
 _EXTRACTION_CHUNK_BOUNDARY_RE = re.compile(r"(\n+|[。！？；!?;]+|(?<!\d)\.(?!\d))")
+_RESOURCE_ADDITION_FIELD_RE = re.compile(
+    r"^(Resource URI|Source name|Added at|Resource abstract|User reason):\s*(.*)$",
+    re.MULTILINE,
+)
+_RESOURCE_URI_MARKER_RE = re.compile(
+    r"[，,；;：:\s]*(?:资源\s*URI\s*为|资源\s*URI|Resource\s+URI)\s*[:：为]?\s*",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -282,6 +294,122 @@ class ExtractContext:
             return original
         return summary
 
+    def get_resource_event_content(self, ranges_str: str, summary: str) -> str:
+        """Return a user-readable event body for add-resource derived events."""
+        if not ranges_str:
+            return ""
+        additions = self._resource_additions_from_ranges(ranges_str)
+        if not additions:
+            return ""
+        addition = additions[0]
+        resource_uri = addition.get("Resource URI", "")
+        if not resource_uri:
+            return ""
+        return self._link_resource_summary(summary or "", resource_uri, addition).strip()
+
+    def _resource_additions_from_ranges(self, ranges_str: str) -> List[Dict[str, str]]:
+        msg_range = self.read_message_ranges(ranges_str)
+        additions: List[Dict[str, str]] = []
+        for msg_group in msg_range.elements:
+            for msg in msg_group:
+                text = self._message_text(msg)
+                if "## Resource Addition" not in text:
+                    continue
+                fields = {
+                    match.group(1): match.group(2).strip()
+                    for match in _RESOURCE_ADDITION_FIELD_RE.finditer(text)
+                }
+                if fields.get("Resource URI"):
+                    additions.append(fields)
+        return additions
+
+    @staticmethod
+    def _message_text(message: Message) -> str:
+        parts = getattr(message, "parts", [])
+        texts = [part.text for part in parts if isinstance(part, TextPart) and part.text]
+        if texts:
+            return "\n".join(texts)
+        return message.content or ""
+
+    @classmethod
+    def _link_resource_summary(
+        cls,
+        summary: str,
+        resource_uri: str,
+        addition: Dict[str, str],
+    ) -> str:
+        text = (summary or "").strip()
+        if not text:
+            return cls._resource_addition_fallback_sentence(resource_uri, addition)
+        if f"]({resource_uri})" in text:
+            return text
+        if resource_uri in text:
+            return cls._replace_bare_resource_uri(text, resource_uri, addition)
+        label = cls._resource_label_from_addition(addition)
+        return cls._finish_sentence(f"{text.rstrip('。.!')}，关联资源为[{label}]({resource_uri})")
+
+    @classmethod
+    def _replace_bare_resource_uri(
+        cls,
+        text: str,
+        resource_uri: str,
+        addition: Dict[str, str],
+    ) -> str:
+        uri_start = text.find(resource_uri)
+        if uri_start < 0:
+            return text
+        prefix = text[:uri_start]
+        suffix = text[uri_start + len(resource_uri) :]
+        marker = _RESOURCE_URI_MARKER_RE.search(prefix)
+        if marker:
+            visible_prefix = prefix[: marker.start()].rstrip("，,；;：: ")
+            label = cls._resource_clause_from_summary_prefix(visible_prefix)
+            if not label:
+                label = cls._resource_label_from_addition(addition)
+            if label and visible_prefix.endswith(label):
+                visible_prefix = visible_prefix[: -len(label)] + f"[{label}]({resource_uri})"
+            else:
+                visible_prefix = f"{visible_prefix}[{label}]({resource_uri})"
+            return cls._finish_sentence(visible_prefix)
+
+        label = cls._resource_label_from_addition(addition)
+        return cls._finish_sentence(f"{prefix.rstrip()}[{label}]({resource_uri}){suffix.strip()}")
+
+    @staticmethod
+    def _resource_clause_from_summary_prefix(prefix: str) -> str:
+        text = prefix.strip("，,；;：: ")
+        tail = re.split(r"[，,；;。.!?？]", text)[-1].strip()
+        return tail if 0 < len(tail) <= 120 else ""
+
+    @classmethod
+    def _resource_label_from_addition(cls, addition: Dict[str, str]) -> str:
+        reason = addition.get("User reason", "").strip()
+        for prefix in ("这是一张", "这是一个", "该资源是", "这个是", "这是"):
+            if reason.startswith(prefix):
+                reason = reason[len(prefix) :].strip()
+                break
+        reason = reason.strip("。.!！ ")
+        if reason:
+            return reason[:80]
+        source_name = addition.get("Source name", "").strip()
+        return source_name or "相关资源"
+
+    @classmethod
+    def _resource_addition_fallback_sentence(
+        cls,
+        resource_uri: str,
+        addition: Dict[str, str],
+    ) -> str:
+        label = cls._resource_label_from_addition(addition)
+        return f"用户保存了[{label}]({resource_uri})。"
+
+    @staticmethod
+    def _finish_sentence(text: str) -> str:
+        text = text.strip("，,；;：: ")
+        if text.endswith(("。", ".", "！", "!", "？", "?")):
+            return text
+        return text + "。"
+
     def read_message_ranges(self, ranges_str: str) -> "MessageRange":
         """Parse ranges string like "0-10,50-60" or "7,9,11,13" and return combined MessageRange.
 
@@ -503,6 +631,70 @@ class MemoryUpdater:
             self._viking_fs = get_viking_fs()
         return self._viking_fs
 
+    @classmethod
+    async def refresh_schema_overview(
+        cls,
+        *,
+        viking_fs: Any,
+        directory_uri: str,
+        ctx: RequestContext,
+    ) -> None:
+        memory_type = cls.memory_type_from_uri(directory_uri)
+        if not memory_type:
+            return
+        try:
+            from openviking.session.memory.memory_type_registry import create_default_registry
+
+            updater = cls(registry=create_default_registry())
+            updater._viking_fs = viking_fs
+            await updater.generate_overview(memory_type, directory_uri, ctx)
+        except Exception:
+            logger.warning(
+                "Failed to refresh memory overview for %s",
+                directory_uri,
+                exc_info=True,
+            )
+
+    @classmethod
+    async def refresh_file_embedding(
+        cls,
+        *,
+        viking_fs: Any,
+        vikingdb: Any,
+        uri: str,
+        memory_type: Optional[str],
+        ctx: RequestContext,
+    ) -> bool:
+        if not vikingdb or not bool(getattr(vikingdb, "has_queue_manager", False)):
+            return False
+        try:
+            from openviking.session.memory.memory_type_registry import create_default_registry
+
+            result = MemoryUpdateResult()
+            result.add_written(uri)
+            updater = cls(registry=create_default_registry(), vikingdb=vikingdb)
+            updater._viking_fs = viking_fs
+            attempted = await updater._vectorize_memories(
+                result,
+                ctx,
+                uri_memory_type_map={uri: memory_type} if memory_type else {},
+            )
+            return attempted > 0
+        except Exception:
+            logger.warning("Failed to refresh memory embedding for %s", uri, exc_info=True)
+            return False
+
+    @staticmethod
+    def memory_type_from_uri(uri: str) -> Optional[str]:
+        parts = [part for part in VikingURI(uri).full_path.split("/") if part]
+        try:
+            memories_idx = parts.index("memories")
+        except ValueError:
+            return None
+        if len(parts) <= memories_idx + 1:
+            return None
+        return parts[memories_idx + 1]
+
     @tracer()
     async def apply_operations(
         self,
@@ -588,6 +780,8 @@ class MemoryUpdater:
                 tracer.error(f"Failed to delete memory {file_content.uri}", e)
                 result.add_error(file_content.uri, e)
 
+        await self._sync_resource_refs_for_result(result, ctx)
+
         # Vectorize written and edited memories
         uri_memory_type_map = {}
         for op in operations.upsert_operations:
@@ -630,6 +824,33 @@ class MemoryUpdater:
             await self.generate_overview(memory_type, dir, ctx, extract_context)
 
         return result
+
+    async def _sync_resource_refs_for_result(
+        self,
+        result: MemoryUpdateResult,
+        ctx: RequestContext,
+    ) -> None:
+        """Synchronize resource refs for memory files touched by session extraction."""
+        viking_fs = self._get_viking_fs()
+        deleted_uris = set(result.deleted_uris)
+        for uri in dict.fromkeys(result.written_uris + result.edited_uris):
+            if (
+                uri in deleted_uris
+                or uri.endswith("/.overview.md")
+                or uri.endswith("/.abstract.md")
+            ):
+                continue
+            try:
+                raw = await viking_fs.read_file(uri, ctx=ctx)
+                mf = MemoryFileUtils.read(raw, uri=uri)
+                changed = sync_memory_resource_refs(
+                    mf,
+                    source=RESOURCE_REF_SOURCE_SESSION_COMMIT,
+                )
+                if changed:
+                    await viking_fs.write_file(uri, MemoryFileUtils.write(mf), ctx=ctx)
+            except Exception as exc:
+                logger.warning("Failed to sync resource refs for %s: %s", uri, exc)
 
     async def _apply_upsert(
         self, resolved_op: ResolvedOperation, ctx: RequestContext, extract_context: Any = None
@@ -776,8 +997,16 @@ class MemoryUpdater:
         viking_fs = self._get_viking_fs()
         if not viking_fs:
             return
+        from openviking.core.namespace import context_type_for_uri
+
         upserted_uris = set(result.written_uris + result.edited_uris)
-        skip = upserted_uris | (deleted_uris or set())
+        non_memory_endpoints = {
+            uri
+            for link in resolved_links
+            for uri in (link.from_uri, link.to_uri)
+            if context_type_for_uri(uri) != "memory"
+        }
+        skip = upserted_uris | (deleted_uris or set()) | non_memory_endpoints
         await write_stored_links(resolved_links, ctx, viking_fs, skip_uris=skip)
 
     async def _apply_delete(self, uri: str, ctx: RequestContext) -> None:
@@ -800,7 +1029,7 @@ class MemoryUpdater:
         ctx: RequestContext,
         extract_context: Any = None,
         uri_memory_type_map: Dict[str, str] = None,
-    ) -> None:
+    ) -> int:
         """Vectorize written and edited memory files.
 
         Args:
@@ -811,11 +1040,12 @@ class MemoryUpdater:
         """
         if not self._vikingdb:
             logger.debug("VikingDB not available, skipping vectorization")
-            return
+            return 0
 
         uri_memory_type_map = uri_memory_type_map or {}
         viking_fs = self._get_viking_fs()
         request_wait_tracker = get_request_wait_tracker()
+        attempted_count = 0
 
         # Collect all URIs to vectorize (skip .overview.md and .abstract.md - they are handled separately)
         # Also skip URIs that were deleted in the same batch
@@ -829,7 +1059,7 @@ class MemoryUpdater:
 
         if not uris_to_vectorize:
             logger.debug("No memory files to vectorize")
-            return
+            return 0
 
         for uri in uris_to_vectorize:
             try:
@@ -837,7 +1067,9 @@ class MemoryUpdater:
                 content = await viking_fs.read_file(uri, ctx=ctx) or ""
 
                 mf = MemoryFileUtils.read(content, uri=uri)
-                abstract = mf.plain_content()
+                from openviking.session.memory.utils.link_renderer import LinkRenderer
+
+                abstract = LinkRenderer.strip_all_links(mf.content or "")
                 embedding_text = abstract
 
                 memory_type = uri_memory_type_map.get(uri)
@@ -894,7 +1126,17 @@ class MemoryUpdater:
                         request_wait_tracker.register_embedding_root(
                             embedding_msg.telemetry_id, embedding_msg.id
                         )
-                    enqueued = await self._vikingdb.enqueue_embedding_msg(embedding_msg)
+                    attempted_count += 1
+                    try:
+                        enqueued = await self._vikingdb.enqueue_embedding_msg(embedding_msg)
+                    except Exception as e:
+                        if embedding_msg.telemetry_id:
+                            request_wait_tracker.mark_embedding_failed(
+                                embedding_msg.telemetry_id,
+                                embedding_msg.id,
+                                str(e),
+                            )
+                        raise
                     if not enqueued and embedding_msg.telemetry_id:
                         request_wait_tracker.mark_embedding_failed(
                             embedding_msg.telemetry_id,
@@ -905,6 +1147,7 @@ class MemoryUpdater:
 
             except Exception as e:
                 tracer.error(f"Failed to vectorize memory {uri}: {e}")
+        return attempted_count
 
     async def generate_overview(
         self,
@@ -950,6 +1193,9 @@ class MemoryUpdater:
                 ):
                     md_files.append(f"{base_uri}/{name}")
 
+        except (NotFoundError, FileNotFoundError):
+            logger.debug("Skip overview generation for deleted directory: %s", directory)
+            return
         except Exception as e:
             tracer.error(f"Failed to list files in {directory}: {e}")
             return
@@ -957,15 +1203,19 @@ class MemoryUpdater:
         # If no memory files, delete the .overview.md and the directory if empty
         if not md_files:
             overview_path = f"{directory.rstrip('/')}/.overview.md"
+            can_delete_directory = all(
+                entry.get("name", "") in {"", ".overview.md"} for entry in entries
+            )
             try:
-                await viking_fs.delete_file(overview_path, ctx=ctx)
+                await viking_fs.rm(overview_path, recursive=False, ctx=ctx)
             except Exception:
                 pass
             # Try to delete empty directory
-            try:
-                await viking_fs.delete_file(directory, ctx=ctx)
-            except Exception:
-                pass
+            if can_delete_directory:
+                try:
+                    await viking_fs.rm(directory, recursive=True, ctx=ctx)
+                except Exception:
+                    pass
             return
 
         # Parse each file and collect items
@@ -977,11 +1227,18 @@ class MemoryUpdater:
 
                 # Extract filename from path
                 filename = file_path.split("/")[-1]
+                metadata = mf.to_metadata()
+                self._fill_overview_fallback_fields(
+                    memory_type=memory_type,
+                    directory=directory,
+                    filename=filename,
+                    metadata=metadata,
+                )
 
                 items.append(
                     {
                         "file_name": filename,
-                        "file_content": mf.to_metadata(),
+                        "file_content": metadata,
                     }
                 )
             except Exception as e:
@@ -1012,3 +1269,20 @@ class MemoryUpdater:
             await viking_fs.write_file(overview_path, rendered, ctx=ctx)
         except Exception as e:
             tracer.error(f"Failed to write overview {overview_path}: {e}")
+
+    @staticmethod
+    def _fill_overview_fallback_fields(
+        *,
+        memory_type: str,
+        directory: str,
+        filename: str,
+        metadata: Dict[str, Any],
+    ) -> None:
+        stem = filename.removesuffix(".md")
+        parent_name = directory.rstrip("/").split("/")[-1]
+        if memory_type == "entities":
+            metadata.setdefault("category", parent_name)
+            metadata.setdefault("name", stem)
+        elif memory_type == "preferences":
+            metadata.setdefault("user", parent_name)
+            metadata.setdefault("topic", stem)

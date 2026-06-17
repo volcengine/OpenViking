@@ -182,6 +182,28 @@ type RecallQueryProfile = {
   wantsTemporal: boolean;
 };
 
+export type RankingWeights = {
+  baseScore?: number;
+  leaf?: number;
+  event?: number;
+  preference?: number;
+  lexicalOverlapMax?: number;
+};
+
+export type RankingOptions = {
+  weights?: RankingWeights;
+  categoryWeights?: Record<string, number>;
+  resourceTypeWeights?: Record<string, number>;
+};
+
+const DEFAULT_RANKING_WEIGHTS = {
+  baseScore: 1,
+  leaf: 0.12,
+  event: 0.1,
+  preference: 0.08,
+  lexicalOverlapMax: 0.2,
+};
+
 function buildRecallQueryProfile(query: string): RecallQueryProfile {
   const text = query.trim();
   const allTokens = text.toLowerCase().match(QUERY_TOKEN_RE) ?? [];
@@ -193,7 +215,7 @@ function buildRecallQueryProfile(query: string): RecallQueryProfile {
   };
 }
 
-function lexicalOverlapBoost(tokens: string[], text: string): number {
+function lexicalOverlapBoost(tokens: string[], text: string, maxBoost = DEFAULT_RANKING_WEIGHTS.lexicalOverlapMax): number {
   if (tokens.length === 0 || !text) {
     return 0;
   }
@@ -204,18 +226,31 @@ function lexicalOverlapBoost(tokens: string[], text: string): number {
       matched += 1;
     }
   }
-  return Math.min(0.2, (matched / Math.min(tokens.length, 4)) * 0.2);
+  return Math.min(maxBoost, (matched / Math.min(tokens.length, 4)) * maxBoost);
 }
 
-function rankForInjection(item: FindResultItem, query: RecallQueryProfile): number {
+function inferResourceType(item: FindResultItem): string | undefined {
+  if (item.uri.startsWith("viking://resources")) return "resource";
+  if (item.uri.startsWith("viking://session/")) return "session";
+  if (item.uri.startsWith("viking://user/skills") || item.uri.startsWith("viking://skills")) return "agent";
+  if (item.uri.startsWith("viking://user/")) return "user";
+  return undefined;
+}
+
+function rankForInjection(item: FindResultItem, query: RecallQueryProfile, options?: RankingOptions): number {
   // Keep ranking simple and stable: semantic score + light query-aware boosts.
-  const baseScore = clampScore(item.score);
+  const weights = { ...DEFAULT_RANKING_WEIGHTS, ...(options?.weights ?? {}) };
+  const baseScore = clampScore(item.score) * weights.baseScore;
   const abstract = (item.abstract ?? item.overview ?? "").trim();
-  const leafBoost = isLeafLikeMemory(item) ? 0.12 : 0;
-  const eventBoost = query.wantsTemporal && isEventMemory(item) ? 0.1 : 0;
-  const preferenceBoost = query.wantsPreference && isPreferencesMemory(item) ? 0.08 : 0;
-  const overlapBoost = lexicalOverlapBoost(query.tokens, `${item.uri} ${abstract}`);
-  return baseScore + leafBoost + eventBoost + preferenceBoost + overlapBoost;
+  const leafBoost = isLeafLikeMemory(item) ? weights.leaf : 0;
+  const eventBoost = query.wantsTemporal && isEventMemory(item) ? weights.event : 0;
+  const preferenceBoost = query.wantsPreference && isPreferencesMemory(item) ? weights.preference : 0;
+  const overlapBoost = lexicalOverlapBoost(query.tokens, `${item.uri} ${abstract}`, weights.lexicalOverlapMax);
+  const category = (item.category ?? "").toLowerCase();
+  const categoryBoost = category ? (options?.categoryWeights?.[category] ?? options?.categoryWeights?.[item.category ?? ""] ?? 0) : 0;
+  const resourceType = inferResourceType(item);
+  const resourceTypeBoost = resourceType ? (options?.resourceTypeWeights?.[resourceType] ?? 0) : 0;
+  return baseScore + leafBoost + eventBoost + preferenceBoost + overlapBoost + categoryBoost + resourceTypeBoost;
 }
 
 export function pickMemoriesForInjection(
@@ -223,13 +258,14 @@ export function pickMemoriesForInjection(
   limit: number,
   queryText: string,
   scoreThreshold: number = 0,
+  rankingOptions?: RankingOptions,
 ): FindResultItem[] {
   if (items.length === 0 || limit <= 0) {
     return [];
   }
 
   const query = buildRecallQueryProfile(queryText);
-  const sorted = [...items].sort((a, b) => rankForInjection(b, query) - rankForInjection(a, query));
+  const sorted = [...items].sort((a, b) => rankForInjection(b, query, rankingOptions) - rankForInjection(a, query, rankingOptions));
   const deduped: FindResultItem[] = [];
   const seen = new Set<string>();
   for (const item of sorted) {

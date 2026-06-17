@@ -53,22 +53,22 @@ This is a sample markdown document for server testing.
 
 def _install_fake_embedder(monkeypatch):
     """Use an in-process fake embedder so server tests never hit external APIs."""
-    dimension = 1024
 
     class FakeEmbedder(DenseEmbedderBase):
-        def __init__(self):
+        def __init__(self, dimension: int = 2048):
             super().__init__(model_name="test-fake-embedder")
+            self._dimension = dimension
 
         def embed(self, text: str, is_query: bool = False) -> EmbedResult:
-            return EmbedResult(dense_vector=[0.1] * dimension)
+            return EmbedResult(dense_vector=[0.1] * self._dimension)
 
         def embed_batch(self, texts: list[str], is_query: bool = False) -> list[EmbedResult]:
             return [self.embed(text, is_query=is_query) for text in texts]
 
         def get_dimension(self) -> int:
-            return dimension
+            return self._dimension
 
-    monkeypatch.setattr(EmbeddingConfig, "get_embedder", lambda self: FakeEmbedder())
+    monkeypatch.setattr(EmbeddingConfig, "get_embedder", lambda self: FakeEmbedder(self.dimension))
     return FakeEmbedder
 
 

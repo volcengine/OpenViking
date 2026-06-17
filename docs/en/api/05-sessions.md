@@ -932,6 +932,7 @@ Commit a session. Message archiving (Phase 1) completes immediately. Summary gen
 - Rapid consecutive commits on the same session are accepted; each request gets its own `task_id`.
 - Background Phase 2 work is serialized by archive order: archive `N+1` waits until archive `N` writes `.done`.
 - If an earlier archive failed and left no `.done`, later commit requests fail with `FAILED_PRECONDITION` until that failure is resolved.
+- If committed messages contain durable facts, judgments, preferences, or events that mention `viking://resources/...`, memory extraction preserves the resource as a markdown link and records it in `MEMORY_FIELDS.resource_refs`.
 
 **Code Entries:**
 - `openviking/session/session.py:Session.commit_async()` - Core implementation

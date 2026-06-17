@@ -114,7 +114,13 @@ class BaseClient(ABC):
         ...
 
     @abstractmethod
-    async def rm(self, uri: str, recursive: bool = False) -> None:
+    async def rm(
+        self,
+        uri: str,
+        recursive: bool = False,
+        wait: bool = False,
+        timeout: Optional[float] = None,
+    ) -> None:
         """Remove resource."""
         ...
 

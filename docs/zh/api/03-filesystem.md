@@ -635,6 +635,8 @@ openviking rm viking://resources/old.md [--recursive]
 
 `estimated_deleted_count` 字段（递归删除时）包含删除的项目（文件和目录）估计数量（来自向量索引）。CLI 会在输出中显示此信息。
 
+删除 `viking://resources/...` 时，响应可能包含 `memory_cleanup`，表示删除前已清理引用该资源 URI 的用户记忆。
+
 ---
 
 ### mv()

@@ -6,6 +6,7 @@ import pytest
 from vikingbot.agent.context import ContextBuilder
 from vikingbot.agent.loop import _is_tool_result_success
 from vikingbot.agent.memory import MemoryStore
+from vikingbot.agent.tools import ov_file as ov_file_module
 from vikingbot.agent.tools.base import ToolContext
 from vikingbot.agent.tools.ov_file import (
     VikingGlobTool,
@@ -14,7 +15,6 @@ from vikingbot.agent.tools.ov_file import (
     VikingMemoryCommitTool,
     VikingSearchTool,
 )
-from vikingbot.agent.tools import ov_file as ov_file_module
 from vikingbot.cli import commands as commands_module
 from vikingbot.config import loader as config_loader_module
 from vikingbot.config.schema import OpenVikingConfig, SessionKey
@@ -48,8 +48,8 @@ class _DummyHTTPClient:
     async def initialize(self):
         return None
 
-    async def create_session(self, session_id=None):
-        return {"session_id": session_id or "s-1"}
+    async def create_session(self, session_id=None, memory_policy=None):
+        return {"session_id": session_id or "s-1", "memory_policy": memory_policy}
 
     async def session_exists(self, _session_id):
         return False
@@ -60,14 +60,11 @@ class _DummyHTTPClient:
     async def batch_add_messages(self, session_id, messages):
         return {"session_id": session_id, "added": len(messages), "message_count": len(messages)}
 
-    async def commit_session(
-        self, session_id, keep_recent_count=0, telemetry=False, memory_policy=None
-    ):
+    async def commit_session(self, session_id, keep_recent_count=0, telemetry=False):
         return {
             "session_id": session_id,
             "status": "committed",
             "keep_recent_count": keep_recent_count,
-            "memory_policy": memory_policy,
         }
 
     def session(self, _session_id):
@@ -167,6 +164,16 @@ def test_viking_client_init_user_mode_does_not_set_user_or_account(monkeypatch):
     assert "user" not in first.kwargs
     assert "account" not in first.kwargs
     assert "agent_id" not in first.kwargs
+
+
+def test_viking_client_actor_peer_id_sets_actor_header(monkeypatch):
+    monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("user"))
+
+    client = VikingClient(actor_peer_id="sender with space")
+
+    first = _DummyHTTPClient.instances[0]
+    assert client.actor_peer_id == VikingClient._peer_id("sender with space")
+    assert first.kwargs["actor_peer_id"] == client.actor_peer_id
 
 
 def test_openviking_config_api_key_type_empty_values_are_inferred():
@@ -1263,6 +1270,30 @@ async def test_search_memory_uses_user_namespace_without_agent_scope(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_search_memory_peer_ids_use_explicit_peer_uris(monkeypatch):
+    monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("user"))
+    client = VikingClient()
+
+    calls = []
+
+    class _Result:
+        memories = []
+
+    async def _find(*, query, target_uri, limit):
+        calls.append((query, target_uri, limit))
+        return _Result()
+
+    monkeypatch.setattr(client.client, "find", _find)
+
+    await client.search_memory("hello", peer_ids=["sender-1", "sender-2"], limit=5)
+
+    assert calls == [
+        ("hello", "viking://user/peers/sender-1/memories/", 5),
+        ("hello", "viking://user/peers/sender-2/memories/", 5),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_skill_memory_uri_uses_user_memory_namespace(monkeypatch):
     monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("root"))
     client = VikingClient()
@@ -1376,6 +1407,203 @@ async def test_viking_memory_context_keeps_legacy_users_separate_from_peers(
             "limit": 35,
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_viking_memory_context_creates_actor_scoped_client(monkeypatch, tmp_path):
+    create_calls = []
+
+    class _FakeClient:
+        def build_current_memory_target_uris(self, *, peer_ids=None, include_self=True):
+            return []
+
+        async def close(self):
+            return None
+
+    async def _fake_create(**kwargs):
+        create_calls.append(kwargs)
+        return _FakeClient()
+
+    monkeypatch.setattr("vikingbot.agent.memory.load_config", lambda: _make_config("user"))
+    monkeypatch.setattr("vikingbot.agent.memory.VikingClient.create", _fake_create)
+
+    store = MemoryStore(tmp_path)
+
+    await store.get_viking_memory_context(
+        current_message="hello",
+        workspace_id="workspace",
+        sender_id="sender-1",
+    )
+
+    assert create_calls[0]["actor_peer_id"] == "sender-1"
+
+
+@pytest.mark.asyncio
+async def test_viking_memory_type_quota_actor_scope_keeps_per_type_limits(tmp_path):
+    calls = []
+
+    class _ActorClient:
+        actor_peer_id = "sender-1"
+
+        def _current_peer_memory_target_uri(self, peer_id):
+            return f"viking://user/peers/{peer_id}/memories/"
+
+        async def find(self, *, query, target_uri, context_type=None, limit):
+            calls.append(
+                {
+                    "query": query,
+                    "target_uri": target_uri,
+                    "context_type": context_type,
+                    "limit": limit,
+                }
+            )
+            if target_uri.endswith("/events/"):
+                return {
+                    "memories": [
+                        {
+                            "uri": "viking://user/peers/sender-1/memories/events/e1.md",
+                            "abstract": "event",
+                            "score": 0.9,
+                        },
+                    ]
+                }
+            return {"memories": []}
+
+    store = MemoryStore(tmp_path)
+
+    result = await store._search_viking_memory_by_type_quota(
+        client=_ActorClient(),
+        query="hello",
+        peer_ids=["sender-1", "other"],
+        quotas={"events": 1, "entities": 1, "preferences": 1},
+    )
+
+    assert calls == [
+        {
+            "query": "hello",
+            "target_uri": "viking://user/peers/sender-1/memories/events/",
+            "context_type": "memory",
+            "limit": 1,
+        },
+        {
+            "query": "hello",
+            "target_uri": "viking://user/peers/sender-1/memories/entities/",
+            "context_type": "memory",
+            "limit": 1,
+        },
+        {
+            "query": "hello",
+            "target_uri": "viking://user/peers/sender-1/memories/preferences/",
+            "context_type": "memory",
+            "limit": 1,
+        },
+    ]
+    assert [item["_recall_type"] for item in result] == ["events"]
+
+
+@pytest.mark.asyncio
+async def test_viking_peer_profiles_use_target_peer_actor_clients(monkeypatch, tmp_path):
+    create_calls = []
+    closed = []
+
+    class _FakeClient:
+        def __init__(self, actor_peer_id):
+            self.actor_peer_id = actor_peer_id
+
+        async def read_peer_profile(self, peer_id):
+            return f"profile for {peer_id} via {self.actor_peer_id}"
+
+        async def close(self):
+            closed.append(self.actor_peer_id)
+
+    async def _fake_create(**kwargs):
+        create_calls.append(kwargs)
+        return _FakeClient(kwargs.get("actor_peer_id"))
+
+    monkeypatch.setattr("vikingbot.agent.memory.VikingClient.create", _fake_create)
+
+    store = MemoryStore(tmp_path)
+    result = await store.get_viking_peer_profiles(
+        workspace_id="workspace",
+        peer_ids=["speaker-a", "speaker-b"],
+        use_peer_actor_scope=True,
+    )
+
+    assert [call["actor_peer_id"] for call in create_calls] == ["speaker-a", "speaker-b"]
+    assert closed == ["speaker-a", "speaker-b"]
+    assert "profile for speaker-a via speaker-a" in result
+    assert "profile for speaker-b via speaker-b" in result
+
+
+@pytest.mark.asyncio
+async def test_viking_memory_context_uses_target_peer_actor_for_additional_peer_reads(
+    monkeypatch, tmp_path
+):
+    create_actor_ids = []
+    read_calls = []
+    closed = []
+
+    class _FakeClient:
+        def __init__(self, actor_peer_id):
+            self.actor_peer_id = actor_peer_id
+
+        def _current_peer_memory_target_uri(self, peer_id):
+            return f"viking://user/peers/{peer_id}/memories/"
+
+        async def find(self, *, query, target_uri, context_type=None, limit):
+            if target_uri.endswith("/events/"):
+                return {
+                    "memories": [
+                        {
+                            "uri": (
+                                f"viking://user/peers/{self.actor_peer_id}/"
+                                "memories/events/e1.md"
+                            ),
+                            "score": 0.9,
+                        }
+                    ]
+                }
+            return {"memories": []}
+
+        async def read_content(self, uri, level="read"):
+            read_calls.append((self.actor_peer_id, uri, level))
+            return f"content via {self.actor_peer_id}"
+
+        async def close(self):
+            closed.append(self.actor_peer_id)
+
+    async def _fake_create(**kwargs):
+        create_actor_ids.append(kwargs.get("actor_peer_id"))
+        return _FakeClient(kwargs.get("actor_peer_id"))
+
+    monkeypatch.setattr(
+        "vikingbot.agent.memory.load_config",
+        lambda: _make_config(
+            "user",
+            memory_recall_events_limit=2,
+            memory_recall_entities_limit=0,
+            memory_recall_preferences_limit=0,
+            memory_recall_max_chars=1000,
+        ),
+    )
+    monkeypatch.setattr("vikingbot.agent.memory.VikingClient.create", _fake_create)
+
+    store = MemoryStore(tmp_path)
+    result = await store.get_viking_memory_context(
+        current_message="hello",
+        workspace_id="workspace",
+        sender_id="sender-1",
+        peer_ids=["speaker-a"],
+    )
+
+    assert create_actor_ids == ["sender-1", "speaker-a", "speaker-a"]
+    assert read_calls == [
+        ("sender-1", "viking://user/peers/sender-1/memories/events/e1.md", "read"),
+        ("speaker-a", "viking://user/peers/speaker-a/memories/events/e1.md", "read"),
+    ]
+    assert closed == ["speaker-a", "speaker-a", "sender-1"]
+    assert "content via sender-1" in result
+    assert "content via speaker-a" in result
 
 
 @pytest.mark.asyncio
@@ -1639,8 +1867,8 @@ async def test_openviking_search_uses_user_namespace(monkeypatch):
 
     calls = []
 
-    async def _search(query, target_uri=None, limit=20, user_id=None, peer_id=None):
-        calls.append((target_uri, user_id, peer_id))
+    async def _search(query, target_uri=None, limit=20, user_id=None):
+        calls.append((target_uri, user_id))
         return {"memories": [{"uri": target_uri, "abstract": "a", "score": 0.9, "is_leaf": True}]}
 
     async def _fake_get_client(_tool_context):
@@ -1654,9 +1882,9 @@ async def test_openviking_search_uses_user_namespace(monkeypatch):
 
     assert "sender-1/memories" in result
     assert calls == [
-        ("viking://resources/", None, None),
-        ("viking://user/sender-1/memories/", None, None),
-        ("viking://user/sender-1/skills/", None, None),
+        ("viking://resources/", None),
+        ("viking://user/sender-1/memories/", None),
+        ("viking://user/sender-1/skills/", None),
     ]
 
 
@@ -1668,8 +1896,8 @@ async def test_openviking_search_user_key_mode_uses_current_user_namespace(monke
 
     calls = []
 
-    async def _search(query, target_uri=None, limit=20, user_id=None, peer_id=None):
-        calls.append((target_uri, user_id, peer_id))
+    async def _search(query, target_uri=None, limit=20, user_id=None):
+        calls.append((target_uri, user_id))
         return {"memories": [{"uri": target_uri, "abstract": "a", "score": 0.9, "is_leaf": True}]}
 
     async def _fake_get_client(_tool_context):
@@ -1687,10 +1915,67 @@ async def test_openviking_search_user_key_mode_uses_current_user_namespace(monke
 
     assert "sender-1/memories" in result
     assert calls == [
-        ("", None, "sender-0"),
-        ("viking://user/peers/sender-1/memories/", None, None),
-        ("viking://user/peers/sender-2/memories/", None, None),
+        ("viking://resources/", None),
+        ("viking://user/memories/", None),
+        ("viking://user/skills/", None),
+        ("viking://user/peers/sender-0/memories/", None),
+        ("viking://user/peers/sender-1/memories/", None),
+        ("viking://user/peers/sender-2/memories/", None),
     ]
+
+
+@pytest.mark.asyncio
+async def test_openviking_search_actor_client_uses_server_default_scope(monkeypatch):
+    tool = VikingSearchTool()
+    calls = []
+
+    class _ActorClient:
+        actor_peer_id = "sender-0"
+
+        def should_sender_fanout(self):
+            return True
+
+        async def search(self, query, target_uri=None, limit=20, user_id=None):
+            calls.append((target_uri, user_id))
+            return {
+                "memories": [
+                    {"uri": "viking://user/peers/sender-0/memories/a.md", "score": 0.9}
+                ]
+            }
+
+        async def close(self):
+            calls.append(("close", None))
+
+    async def _fake_get_client(_tool_context):
+        return _ActorClient()
+
+    monkeypatch.setattr(tool, "_get_client", _fake_get_client)
+
+    tool_context = SimpleNamespace(
+        workspace_id="workspace",
+        sender_id="sender-0",
+        memory_peer_ids=["sender-1", "sender-2"],
+    )
+    result = await tool.execute(tool_context, query="hello")
+
+    assert "sender-0/memories" in result
+    assert calls == [("", None), ("close", None)]
+
+
+@pytest.mark.asyncio
+async def test_openviking_tool_sender_uses_actor_scoped_one_shot_client(monkeypatch):
+    monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("user"))
+    tool = VikingSearchTool()
+
+    result = await tool.execute(
+        SimpleNamespace(workspace_id="workspace", sender_id="sender-1"),
+        query="hello",
+    )
+
+    first = _DummyHTTPClient.instances[0]
+    assert first.kwargs["actor_peer_id"] == "sender-1"
+    assert first.closed is True
+    assert "No results found" in result
 
 
 @pytest.mark.asyncio
@@ -1918,7 +2203,7 @@ async def test_context_loads_profiles_for_memory_peers(tmp_path):
             return "sender profile"
 
         async def get_viking_peer_profiles(self, **kwargs):
-            calls["peers"].append(kwargs["peer_ids"])
+            calls["peers"].append(kwargs)
             return "\n".join(f"profile for {peer_id}" for peer_id in kwargs["peer_ids"])
 
     context = ContextBuilder(workspace=tmp_path, sender_id="sender-1")
@@ -1932,7 +2217,14 @@ async def test_context_loads_profiles_for_memory_peers(tmp_path):
     )
 
     assert calls["sender"] == ["sender-1"]
-    assert calls["peers"] == [["speaker-a", "speaker-b"]]
+    assert calls["peers"] == [
+        {
+            "workspace_id": "cli__default__chat-1",
+            "peer_ids": ["speaker-a", "speaker-b"],
+            "openviking_connection": None,
+            "use_peer_actor_scope": True,
+        }
+    ]
     assert "sender profile" in system_prompt
     assert "profile for speaker-a" in system_prompt
     assert "profile for speaker-b" in system_prompt

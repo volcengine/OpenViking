@@ -366,11 +366,21 @@ impl HttpClient {
         self.post("/api/v1/fs/mkdir", &body).await
     }
 
-    pub async fn rm(&self, uri: &str, recursive: bool) -> Result<serde_json::Value> {
-        let params = vec![
+    pub async fn rm(
+        &self,
+        uri: &str,
+        recursive: bool,
+        wait: bool,
+        timeout: Option<f64>,
+    ) -> Result<serde_json::Value> {
+        let mut params = vec![
             ("uri".to_string(), uri.to_string()),
             ("recursive".to_string(), recursive.to_string()),
+            ("wait".to_string(), wait.to_string()),
         ];
+        if let Some(timeout) = timeout {
+            params.push(("timeout".to_string(), timeout.to_string()));
+        }
         self.delete("/api/v1/fs", &params).await
     }
 

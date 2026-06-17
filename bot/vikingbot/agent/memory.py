@@ -12,7 +12,6 @@ from vikingbot.config.loader import load_config
 from vikingbot.openviking_mount.ov_server import VikingClient
 from vikingbot.utils.helpers import ensure_dir
 
-
 _LEGACY_MEMORY_RECALL_LIMIT = 30
 _TYPE_QUOTA_MEMORY_TYPES = ("events", "entities", "preferences")
 _TYPE_QUOTA_EVENT_CHAR_RATIO = 0.75
@@ -141,6 +140,14 @@ class MemoryStore:
     def _memory_type_target(base_uri: str, memory_type: str) -> str:
         return f"{base_uri.rstrip('/')}/{memory_type.strip('/')}/"
 
+    @staticmethod
+    def _peer_id_from_memory_uri(uri: str) -> str | None:
+        parts = [part for part in uri.strip("/").split("/") if part]
+        for idx, part in enumerate(parts):
+            if part == "peers" and idx + 1 < len(parts):
+                return parts[idx + 1]
+        return None
+
     @classmethod
     def _order_type_quota_memories(
         cls,
@@ -164,6 +171,29 @@ class MemoryStore:
             ordered.extend(groups.get(memory_type, []))
         ordered.extend(others)
         return cls._dedupe_memories(ordered)
+
+    @classmethod
+    def _select_type_quota_memories(
+        cls,
+        memories: list[Any],
+        quotas: dict[str, int],
+    ) -> list[Any]:
+        memories = sorted(cls._dedupe_memories(memories), key=cls._get_score, reverse=True)
+        selected: list[Any] = []
+        for memory_type in _TYPE_QUOTA_MEMORY_TYPES:
+            quota = max(0, int(quotas.get(memory_type, 0) or 0))
+            if quota <= 0:
+                continue
+            type_memories = [
+                memory
+                for memory in memories
+                if cls._infer_memory_type(memory) == memory_type
+            ][:quota]
+            selected.extend(
+                cls._with_recall_metadata(memory, memory_type, rank)
+                for rank, memory in enumerate(type_memories, start=1)
+            )
+        return cls._dedupe_memories(selected)
 
     @staticmethod
     def _type_quota_char_budgets(max_chars: int) -> dict[str, int]:
@@ -244,6 +274,7 @@ class MemoryStore:
         type_char_budgets: dict[str, int] | None = None,
         preference_full_limit: int = 0,
         include_uri_entries: bool = True,
+        read_content: Any | None = None,
     ) -> str:
         """Parse viking memory with score filtering and character limit.
         Automatically reads full content for memories that fit the relevant budget;
@@ -276,7 +307,7 @@ class MemoryStore:
 
         grouped_memories: dict[str, list[str]] = {}
         total_chars = 0
-        type_chars = {memory_type: 0 for memory_type in _TYPE_QUOTA_MEMORY_TYPES}
+        type_chars = dict.fromkeys(_TYPE_QUOTA_MEMORY_TYPES, 0)
         preference_full_count = 0
         seen_content_hashes = set()
         full_limit = len(filtered_memories) if full_limit is None else max(0, full_limit)
@@ -298,7 +329,10 @@ class MemoryStore:
 
             content = ""
             try:
-                content = await client.read_content(uri, level="read")
+                if read_content:
+                    content = await read_content(uri, level="read")
+                else:
+                    content = await client.read_content(uri, level="read")
             except Exception as e:
                 logger.warning(f"Failed to read content from {uri}: {e}")
 
@@ -379,10 +413,16 @@ class MemoryStore:
         peer_ids: list[str] | None,
         quotas: dict[str, int],
     ) -> list[Any]:
-        base_targets = client.build_current_memory_target_uris(
-            peer_ids=peer_ids,
-            include_self=not bool(peer_ids),
-        )
+        if getattr(client, "actor_peer_id", None):
+            try:
+                base_targets = [client._current_peer_memory_target_uri(client.actor_peer_id)]
+            except ValueError:
+                base_targets = []
+        else:
+            base_targets = client.build_current_memory_target_uris(
+                peer_ids=peer_ids,
+                include_self=not bool(peer_ids),
+            )
         if not base_targets:
             return []
 
@@ -394,7 +434,14 @@ class MemoryStore:
             for base_target in base_targets:
                 target_uri = self._memory_type_target(base_target, memory_type)
                 try:
-                    result = await client.find(query=query, target_uri=target_uri, limit=quota)
+                    find_kwargs = {
+                        "query": query,
+                        "target_uri": target_uri,
+                        "limit": quota,
+                    }
+                    if getattr(client, "actor_peer_id", None):
+                        find_kwargs["context_type"] = "memory"
+                    result = await client.find(**find_kwargs)
                 except Exception as e:
                     logger.warning(f"Failed to search {target_uri}: {e}")
                     continue
@@ -407,6 +454,62 @@ class MemoryStore:
 
         return self._dedupe_memories(all_memories)
 
+    async def _search_actor_peer_memories_by_type_quota(
+        self,
+        query: str,
+        workspace_id: str,
+        openviking_connection: dict[str, Any] | None,
+        base_client: VikingClient,
+        peer_ids: list[str],
+        quotas: dict[str, int],
+    ) -> list[Any]:
+        current_actor_peer_id = getattr(base_client, "actor_peer_id", None)
+        normalized_peer_ids = VikingClient._dedupe_strings(
+            [
+                normalized_peer_id
+                for normalized_peer_id in (VikingClient._peer_id(peer_id) for peer_id in peer_ids)
+                if normalized_peer_id
+            ]
+        )
+
+        async def search_peer(normalized_peer_id: str) -> list[Any]:
+            peer_client = base_client
+            should_close = False
+            if normalized_peer_id != current_actor_peer_id:
+                peer_client = await VikingClient.create(
+                    agent_id=workspace_id,
+                    connection=openviking_connection,
+                    actor_peer_id=normalized_peer_id,
+                )
+                should_close = True
+
+            try:
+                return await self._search_viking_memory_by_type_quota(
+                    client=peer_client,
+                    query=query,
+                    peer_ids=[normalized_peer_id],
+                    quotas=quotas,
+                )
+            finally:
+                if should_close:
+                    try:
+                        await peer_client.close()
+                    except Exception as e:
+                        logger.warning(f"Error closing VikingClient: {e}")
+
+        results = await asyncio.gather(
+            *(search_peer(peer_id) for peer_id in normalized_peer_ids),
+            return_exceptions=True,
+        )
+        all_memories: list[Any] = []
+        for result in results:
+            if isinstance(result, Exception):
+                logger.warning(f"Failed to search actor peer memories: {result}")
+                continue
+            all_memories.extend(result)
+
+        return self._select_type_quota_memories(all_memories, quotas)
+
     async def get_viking_memory_context(
         self,
         current_message: str,
@@ -417,6 +520,7 @@ class MemoryStore:
         openviking_connection: dict[str, Any] | None = None,
     ) -> str:
         client = None
+        read_clients: dict[str, VikingClient] = {}
         try:
             ov_cfg = load_config().ov_server
             admin_user_id = (
@@ -433,8 +537,12 @@ class MemoryStore:
             client = await VikingClient.create(
                 agent_id=workspace_id,
                 connection=openviking_connection,
+                actor_peer_id=sender_id,
             )
-            search_peer_ids = [sender_id, *(peer_ids or [])] if sender_id else (peer_ids or None)
+            if sender_id:
+                search_peer_ids = [sender_id, *(peer_ids or [])]
+            else:
+                search_peer_ids = peer_ids or None
             type_quotas = {
                 "events": max(0, int(getattr(ov_cfg, "memory_recall_events_limit", 10))),
                 "entities": max(0, int(getattr(ov_cfg, "memory_recall_entities_limit", 10))),
@@ -443,12 +551,22 @@ class MemoryStore:
             recall_max_chars = max(1, int(getattr(ov_cfg, "memory_recall_max_chars", 6500)))
             use_type_quota = not user_ids
             if use_type_quota:
-                result = await self._search_viking_memory_by_type_quota(
-                    client=client,
-                    query=current_message,
-                    peer_ids=search_peer_ids,
-                    quotas=type_quotas,
-                )
+                if getattr(client, "actor_peer_id", None):
+                    result = await self._search_actor_peer_memories_by_type_quota(
+                        query=current_message,
+                        workspace_id=workspace_id,
+                        openviking_connection=openviking_connection,
+                        base_client=client,
+                        peer_ids=search_peer_ids or [],
+                        quotas=type_quotas,
+                    )
+                else:
+                    result = await self._search_viking_memory_by_type_quota(
+                        client=client,
+                        query=current_message,
+                        peer_ids=search_peer_ids,
+                        quotas=type_quotas,
+                    )
             else:
                 result = await client.search_memory(
                     query=current_message,
@@ -467,6 +585,21 @@ class MemoryStore:
                 return ""
             if not use_type_quota:
                 result = self._limit_memories(result, limit=_LEGACY_MEMORY_RECALL_LIMIT)
+
+            async def read_memory_content(uri: str, level: str = "read") -> str:
+                actor_peer_id = getattr(client, "actor_peer_id", None)
+                memory_peer_id = self._peer_id_from_memory_uri(uri)
+                if actor_peer_id and memory_peer_id and memory_peer_id != actor_peer_id:
+                    peer_client = read_clients.get(memory_peer_id)
+                    if not peer_client:
+                        peer_client = await VikingClient.create(
+                            agent_id=workspace_id,
+                            connection=openviking_connection,
+                            actor_peer_id=memory_peer_id,
+                        )
+                        read_clients[memory_peer_id] = peer_client
+                    return await peer_client.read_content(uri, level=level)
+                return await client.read_content(uri, level=level)
 
             # Log raw search results for debugging
             recall_strategy = "type_quota" if use_type_quota else "global"
@@ -492,12 +625,18 @@ class MemoryStore:
                     _TYPE_QUOTA_PREFERENCE_FULL_LIMIT if use_type_quota else 0
                 ),
                 include_uri_entries=True,
+                read_content=read_memory_content,
             )
             return f"### user memories:\n{user_memory}"
         except Exception as e:
             logger.error(f"[READ_USER_MEMORY]: search error. {e}")
             return ""
         finally:
+            for read_client in read_clients.values():
+                try:
+                    await read_client.close()
+                except Exception as e:
+                    logger.warning(f"Error closing VikingClient: {e}")
             if client:
                 try:
                     await client.close()
@@ -509,6 +648,7 @@ class MemoryStore:
         query: str,
         workspace_id: str,
         openviking_connection: dict[str, Any] | None = None,
+        actor_peer_id: str | None = None,
     ) -> str:
         """用当前任务 query 检索 experience 记忆，注入到 system prompt。"""
         client = None
@@ -517,6 +657,7 @@ class MemoryStore:
             client = await VikingClient.create(
                 agent_id=workspace_id,
                 connection=openviking_connection,
+                actor_peer_id=actor_peer_id,
             )
             experiences = await client.search_experiences(query, limit=ov_cfg.exp_recall_limit)
             logger.info(
@@ -546,12 +687,14 @@ class MemoryStore:
         workspace_id: str,
         user_id: str | None,
         openviking_connection: dict[str, Any] | None = None,
+        actor_peer_id: str | None = None,
     ) -> str:
         client = None
         try:
             client = await VikingClient.create(
                 agent_id=workspace_id,
                 connection=openviking_connection,
+                actor_peer_id=actor_peer_id,
             )
             result = await client.read_user_profile(user_id)
             return result or ""
@@ -570,6 +713,7 @@ class MemoryStore:
         workspace_id: str,
         peer_id: str | None,
         openviking_connection: dict[str, Any] | None = None,
+        actor_peer_id: str | None = None,
     ) -> str:
         if not peer_id:
             return ""
@@ -579,6 +723,7 @@ class MemoryStore:
             client = await VikingClient.create(
                 agent_id=workspace_id,
                 connection=openviking_connection,
+                actor_peer_id=actor_peer_id or peer_id,
             )
             result = await client.read_peer_profile(peer_id)
             return result or ""
@@ -597,21 +742,32 @@ class MemoryStore:
         workspace_id: str,
         peer_ids: list[str],
         openviking_connection: dict[str, Any] | None = None,
+        use_peer_actor_scope: bool = False,
     ) -> str:
         if not peer_ids:
             return ""
 
         client = None
         try:
-            client = await VikingClient.create(
-                agent_id=workspace_id,
-                connection=openviking_connection,
-            )
+            if not use_peer_actor_scope:
+                client = await VikingClient.create(
+                    agent_id=workspace_id,
+                    connection=openviking_connection,
+                )
 
             async def fetch_profile(peer_id: str) -> tuple[str, str]:
+                peer_client = client
+                should_close = False
                 try:
+                    if use_peer_actor_scope:
+                        peer_client = await VikingClient.create(
+                            agent_id=workspace_id,
+                            connection=openviking_connection,
+                            actor_peer_id=peer_id,
+                        )
+                        should_close = True
                     start_time = time.time()
-                    profile = await client.read_peer_profile(peer_id)
+                    profile = await peer_client.read_peer_profile(peer_id)
                     cost = round(time.time() - start_time, 2)
                     logger.info(
                         f"[READ_PEER_PROFILE]: peer_id={peer_id}, cost {cost}s, "
@@ -621,6 +777,12 @@ class MemoryStore:
                 except Exception as e:
                     logger.error(f"[READ_PEER_PROFILE]: peer_id={peer_id}, error. {e}")
                     return (peer_id, "")
+                finally:
+                    if should_close and peer_client:
+                        try:
+                            await peer_client.close()
+                        except Exception as e:
+                            logger.warning(f"Error closing VikingClient: {e}")
 
             tasks = [fetch_profile(peer_id) for peer_id in peer_ids]
             results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -649,6 +811,7 @@ class MemoryStore:
         workspace_id: str,
         user_ids: list[str],
         openviking_connection: dict[str, Any] | None = None,
+        actor_peer_id: str | None = None,
     ) -> str:
         """Get multiple user profiles concurrently.
 
@@ -667,6 +830,7 @@ class MemoryStore:
             client = await VikingClient.create(
                 agent_id=workspace_id,
                 connection=openviking_connection,
+                actor_peer_id=actor_peer_id,
             )
 
             async def fetch_profile(user_id: str) -> tuple[str, str]:

@@ -15,6 +15,7 @@ mod help_ui;
 mod i18n;
 mod output;
 mod status_ui;
+mod terminal_ui;
 mod theme;
 mod tui;
 mod utils;
@@ -437,6 +438,12 @@ enum Commands {
         /// Remove recursively
         #[arg(short, long, help_heading = "Common options")]
         recursive: bool,
+        /// Wait until semantic refresh is complete
+        #[arg(long, help_heading = "Common options")]
+        wait: bool,
+        /// Wait timeout in seconds (only used with --wait)
+        #[arg(long, value_name = "seconds", help_heading = "Common options")]
+        timeout: Option<f64>,
     },
     /// [Data] Move or rename resource
     #[command(alias = "rename")]
@@ -2777,7 +2784,12 @@ async fn main() {
             level_limit,
         } => handlers::handle_tree(uri, abs_limit, all, node_limit, level_limit, ctx).await,
         Commands::Mkdir { uri, description } => handlers::handle_mkdir(uri, description, ctx).await,
-        Commands::Rm { uri, recursive } => handlers::handle_rm(uri, recursive, ctx).await,
+        Commands::Rm {
+            uri,
+            recursive,
+            wait,
+            timeout,
+        } => handlers::handle_rm(uri, recursive, wait, timeout, ctx).await,
         Commands::Mv { from_uri, to_uri } => handlers::handle_mv(from_uri, to_uri, ctx).await,
         Commands::Stat { uri } => handlers::handle_stat(uri, ctx).await,
         Commands::AddMemory { content } => handlers::handle_add_memory(content, ctx).await,

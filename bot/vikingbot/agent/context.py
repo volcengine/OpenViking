@@ -163,6 +163,7 @@ Skills with available="false" need dependencies installed first - you can try in
                 workspace_id=workspace_id,
                 peer_id=self._sender_id,
                 openviking_connection=self._openviking_connection,
+                actor_peer_id=self._sender_id,
             )
             cost = round(_time.time() - start, 2)
             logger.info(
@@ -183,6 +184,7 @@ Skills with available="false" need dependencies installed first - you can try in
                     workspace_id=workspace_id,
                     peer_ids=additional_peer_ids,
                     openviking_connection=self._openviking_connection,
+                    use_peer_actor_scope=bool(self._sender_id),
                 )
                 if profiles:
                     parts.append(profiles)
@@ -250,6 +252,7 @@ Skills with available="false" need dependencies installed first - you can try in
                         query=current_message,
                         workspace_id=exp_workspace_id,
                         openviking_connection=self._openviking_connection,
+                        actor_peer_id=sender_id,
                     )
                     cost = round(_time.time() - start, 2)
                     logger.info(

@@ -10,7 +10,12 @@ from typing import Any, Dict, Optional
 from openviking.core.namespace import NamespaceShapeError, canonicalize_uri, context_type_for_uri
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext
+from openviking.session.memory.memory_updater import MemoryUpdater
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+from openviking.session.memory.utils.resource_refs import (
+    RESOURCE_REF_SOURCE_CONTENT_WRITE,
+    sync_memory_resource_refs,
+)
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
 from openviking.storage.transaction import get_lock_manager
@@ -38,8 +43,9 @@ _CREATE_ALLOWED_EXTENSIONS = frozenset(
 class ContentWriteCoordinator:
     """Write a file (create or modify) and trigger downstream maintenance."""
 
-    def __init__(self, viking_fs: VikingFS):
+    def __init__(self, viking_fs: VikingFS, vikingdb: Any = None):
         self._viking_fs = viking_fs
+        self._vikingdb = vikingdb
 
     async def write(
         self,
@@ -113,12 +119,16 @@ class ContentWriteCoordinator:
         written_bytes: int,
         wait: bool,
         queue_status: Optional[Dict[str, Any]],
+        semantic_status: Optional[str] = None,
+        vector_status: Optional[str] = None,
+        overview_status: Optional[str] = None,
     ) -> Dict[str, Any]:
-        semantic_status, vector_status = self._refresh_statuses(
-            wait=wait,
-            queue_status=queue_status,
-        )
-        return {
+        if semantic_status is None or vector_status is None:
+            semantic_status, vector_status = self._refresh_statuses(
+                wait=wait,
+                queue_status=queue_status,
+            )
+        result = {
             "uri": uri,
             "root_uri": root_uri,
             "context_type": context_type,
@@ -129,6 +139,9 @@ class ContentWriteCoordinator:
             "vector_status": vector_status,
             "queue_status": queue_status,
         }
+        if overview_status is not None:
+            result["overview_status"] = overview_status
+        return result
 
     def _refresh_statuses(
         self,
@@ -345,12 +358,19 @@ class ContentWriteCoordinator:
         mode: str,
         ctx: RequestContext,
     ) -> None:
-        if mode == "replace" and context_type_for_uri(uri) == "memory":
-            existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
-            mf = MemoryFileUtils.read(existing_raw, uri=uri)
-            mf.content = content
-            content = MemoryFileUtils.write(mf)
-            await self._viking_fs.write_file(uri, content, ctx=ctx)
+        if context_type_for_uri(uri) == "memory":
+            if mode == "replace":
+                existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
+                mf = MemoryFileUtils.read(existing_raw, uri=uri)
+                mf.content = content
+            elif mode == "append":
+                existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
+                mf = MemoryFileUtils.read(existing_raw, uri=uri)
+                mf.content = mf.content + content
+            else:
+                mf = MemoryFileUtils.read(content, uri=uri)
+            sync_memory_resource_refs(mf, source=RESOURCE_REF_SOURCE_CONTENT_WRITE)
+            await self._viking_fs.write_file(uri, MemoryFileUtils.write(mf), ctx=ctx)
             return
 
         if mode == "append":
@@ -407,43 +427,6 @@ class ContentWriteCoordinator:
                 get_request_wait_tracker().mark_semantic_failed(msg.telemetry_id, msg.id, str(e))
             raise
 
-    async def _enqueue_memory_refresh(
-        self,
-        *,
-        root_uri: str,
-        modified_uri: str,
-        ctx: RequestContext,
-    ) -> None:
-        queue_manager = get_queue_manager()
-        semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
-        telemetry = get_current_telemetry()
-        msg = SemanticMsg(
-            uri=root_uri,
-            context_type="memory",
-            account_id=ctx.account_id,
-            user_id=ctx.user.user_id,
-            peer_id=ctx.user.user_id,
-            role=ctx.role.value,
-            skip_vectorization=False,
-            telemetry_id=telemetry.telemetry_id,
-            coalesce_key=build_semantic_coalesce_key(
-                context_type="memory",
-                uri=root_uri,
-                account_id=ctx.account_id,
-                user_id=ctx.user.user_id,
-                peer_id=ctx.user.user_id,
-            ),
-            changes={"modified": [modified_uri]},
-        )
-        if msg.telemetry_id:
-            get_request_wait_tracker().register_semantic_root(msg.telemetry_id, msg.id)
-        try:
-            await semantic_queue.enqueue(msg)
-        except Exception as e:
-            if msg.telemetry_id:
-                get_request_wait_tracker().mark_semantic_failed(msg.telemetry_id, msg.id, str(e))
-            raise
-
     async def _wait_for_queues(self, *, timeout: Optional[float]) -> Dict[str, Any]:
         queue_manager = get_queue_manager()
         try:
@@ -489,21 +472,37 @@ class ContentWriteCoordinator:
             raise InvalidArgumentError(f"resource is busy and cannot be written now: {uri}")
 
         released = False
+        request_registered = False
         try:
-            if wait and telemetry_id:
-                get_request_wait_tracker().register_request(telemetry_id)
             await self._write_in_place(uri, content, mode=mode, ctx=ctx)
-            await self._enqueue_memory_refresh(
-                root_uri=root_uri,
-                modified_uri=uri,
-                ctx=ctx,
-            )
             await lock_manager.release(handle)
             released = True
-            queue_status = (
-                await self._wait_for_request(telemetry_id=telemetry_id, timeout=timeout)
-                if wait
-                else None
+            if wait and telemetry_id and self._vikingdb_has_queue():
+                get_request_wait_tracker().register_request(telemetry_id)
+                request_registered = True
+            await MemoryUpdater.refresh_schema_overview(
+                viking_fs=self._viking_fs,
+                directory_uri=root_uri,
+                ctx=ctx,
+            )
+            embedding_requested = await MemoryUpdater.refresh_file_embedding(
+                viking_fs=self._viking_fs,
+                vikingdb=self._vikingdb,
+                uri=uri,
+                memory_type=MemoryUpdater.memory_type_from_uri(root_uri),
+                ctx=ctx,
+            )
+            queue_status = None
+            if embedding_requested and wait:
+                queue_status = (
+                    await self._wait_for_request(telemetry_id=telemetry_id, timeout=timeout)
+                    if telemetry_id
+                    else await self._wait_for_queues(timeout=timeout)
+                )
+            vector_status = self._memory_vector_status(
+                embedding_requested=embedding_requested,
+                wait=wait,
+                queue_status=queue_status,
             )
             return self._build_write_result(
                 uri=uri,
@@ -513,14 +512,36 @@ class ContentWriteCoordinator:
                 written_bytes=written_bytes,
                 wait=wait,
                 queue_status=queue_status,
+                semantic_status="skipped",
+                vector_status=vector_status,
+                overview_status="complete",
             )
         except Exception:
             if not released:
                 await lock_manager.release(handle)
             raise
         finally:
-            if wait and telemetry_id:
+            if request_registered:
                 get_request_wait_tracker().cleanup(telemetry_id)
+
+    def _vikingdb_has_queue(self) -> bool:
+        if not self._vikingdb:
+            return False
+        return bool(getattr(self._vikingdb, "has_queue_manager", False))
+
+    def _memory_vector_status(
+        self,
+        *,
+        embedding_requested: bool,
+        wait: bool,
+        queue_status: Optional[Dict[str, Any]],
+    ) -> str:
+        if not embedding_requested:
+            return "skipped"
+        if not wait:
+            return "queued"
+        _, vector_status = self._refresh_statuses(wait=True, queue_status=queue_status)
+        return vector_status
 
     async def _resolve_root_uri(
         self,
@@ -549,7 +570,10 @@ class ContentWriteCoordinator:
                 raise InvalidArgumentError(
                     f"memory write target must be inside a memory type directory: {uri}"
                 )
-            root_uri = VikingURI.build(*parts[: memories_idx + 2])
+            parent = VikingURI(uri).parent
+            if parent is None:
+                raise InvalidArgumentError(f"could not resolve write root for {uri}")
+            root_uri = parent.uri
 
         stat = await self._safe_stat(root_uri, ctx=ctx, allow_not_found=_allow_not_found)
         if stat.get("not_found") or not stat.get("isDir"):

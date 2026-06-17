@@ -4,9 +4,9 @@
 //! Supports AWS S3 and S3-compatible services (MinIO, LocalStack, TOS).
 
 use crate::core::{ConfigValue, Error, Result};
-use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::config::{BehaviorVersion, Credentials, Region};
 use aws_sdk_s3::error::ProvideErrorMetadata;
+use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::operation::{RequestId, RequestIdExt};
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::Client;
@@ -526,7 +526,11 @@ impl S3Client {
             .send()
             .await
             .map_err(|e| {
-                format_sdk_s3_error("DeleteObject", &format!("bucket={} key={key}", self.bucket), &e)
+                format_sdk_s3_error(
+                    "DeleteObject",
+                    &format!("bucket={} key={key}", self.bucket),
+                    &e,
+                )
             })?;
 
         Ok(())
@@ -725,16 +729,13 @@ impl S3Client {
                 req = req.continuation_token(token);
             }
 
-            let resp = req
-                .send()
-                .await
-                .map_err(|e| {
-                    format_sdk_s3_error(
-                        "ListObjectsV2",
-                        &format!("bucket={} prefix={prefix}", self.bucket),
-                        &e,
-                    )
-                })?;
+            let resp = req.send().await.map_err(|e| {
+                format_sdk_s3_error(
+                    "ListObjectsV2",
+                    &format!("bucket={} prefix={prefix}", self.bucket),
+                    &e,
+                )
+            })?;
 
             for obj in resp.contents() {
                 let key = obj.key().unwrap_or("");
@@ -1048,12 +1049,8 @@ mod tests {
 
     #[test]
     fn test_format_generic_s3_error_includes_operation_bucket_key_and_raw_error() {
-        let err = format_generic_s3_error(
-            "PutObject",
-            "test-bucket",
-            "tenant/a.txt",
-            "service error",
-        );
+        let err =
+            format_generic_s3_error("PutObject", "test-bucket", "tenant/a.txt", "service error");
 
         match err {
             Error::Internal(message) => {

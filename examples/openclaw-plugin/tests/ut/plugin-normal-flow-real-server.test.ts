@@ -115,18 +115,6 @@ describe("plugin normal flow with healthy backend", () => {
 
       if (
         method === "POST" &&
-        url.pathname === "/api/v1/sessions"
-      ) {
-        const parsed = JSON.parse(body ?? "{}") as Record<string, unknown>;
-        json(res, 200, {
-          result: { session_id: parsed.session_id ?? "session-normal" },
-          status: "ok",
-        });
-        return;
-      }
-
-      if (
-        method === "POST" &&
         /^\/api\/v1\/sessions\/[^/]+\/messages$/.test(url.pathname)
       ) {
         json(res, 200, {
@@ -244,20 +232,14 @@ describe("plugin normal flow with healthy backend", () => {
       messages: [{ role: "user", content: "fallback" }],
     });
 
-    expect(assembled.messages[0]?.role).toBe("user");
-    const firstAssembledMessage = String(assembled.messages[0]?.content);
-    expect(firstAssembledMessage).not.toContain("Source: openviking-auto-recall");
-    expect(firstAssembledMessage).not.toContain("User prefers Rust for backend tasks.");
-    expect(firstAssembledMessage).toContain(
-      "[Session History Summary]\nEarlier work focused on backend stack choices.",
-    );
+    expect(assembled.messages[0]).toEqual({
+      role: "user",
+      content: "[Session History Summary]\nEarlier work focused on backend stack choices.",
+    });
     expect(assembled.messages[1]).toEqual({
       role: "assistant",
       content: [{ type: "text", text: "Stored answer from OpenViking." }],
     });
-    expect(
-      requests.some((entry) => entry.method === "POST" && entry.path === "/api/v1/search/find"),
-    ).toBe(false);
 
     const transformed = await contextEngine.assemble({
       sessionId: "session-normal",
@@ -290,17 +272,6 @@ describe("plugin normal flow with healthy backend", () => {
     expect(
       requests.some((entry) => entry.method === "GET" && entry.path.startsWith("/api/v1/sessions/session-normal/context")),
     ).toBe(true);
-    const createSessionRequest = requests.find(
-      (entry) => entry.method === "POST" && entry.path === "/api/v1/sessions",
-    );
-    expect(createSessionRequest).toBeTruthy();
-    expect(JSON.parse(createSessionRequest!.body ?? "{}")).toMatchObject({
-      session_id: "session-normal",
-      memory_policy: {
-        self: { enabled: true },
-        peer: { enabled: true },
-      },
-    });
     expect(
       requests.some((entry) => entry.method === "POST" && entry.path === "/api/v1/sessions/session-normal/messages"),
     ).toBe(true);

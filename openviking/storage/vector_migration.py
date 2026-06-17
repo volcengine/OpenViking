@@ -32,7 +32,6 @@ VECTOR_MIGRATION_OUTPUT_FIELDS = [
     "abstract",
     "account_id",
     "owner_user_id",
-    "owner_space",
 ]
 
 _VECTOR_PAYLOAD_FIELDS = ("vector", "sparse_vector")
@@ -112,9 +111,15 @@ async def _records_in_scope(
     uri: str,
     recursive: bool,
 ) -> list[dict[str, Any]]:
-    filters = [Eq("uri", uri), Contains("uri", uri + "#")]
+    filters = [Eq("uri", uri)]
     if recursive:
         filters.append(PathScope("uri", uri, depth=-1))
+    if getattr(vector_store, "mode", None) == "volcengine":
+        parent = VikingURI(uri).parent
+        if parent is not None and parent.uri != "viking://":
+            filters.append(PathScope("uri", parent.uri, depth=1))
+    else:
+        filters.append(Contains("uri", uri + "#"))
 
     ctx = _root_ctx(account_id)
     records = await vector_store.filter(

@@ -401,9 +401,15 @@ class SyncOpenViking:
         """Get relations"""
         return run_async(self._async_client.relations(uri))
 
-    def rm(self, uri: str, recursive: bool = False) -> None:
+    def rm(
+        self,
+        uri: str,
+        recursive: bool = False,
+        wait: bool = False,
+        timeout: float = None,
+    ) -> None:
         """Delete resource"""
-        return run_async(self._async_client.rm(uri, recursive))
+        return run_async(self._async_client.rm(uri, recursive, wait=wait, timeout=timeout))
 
     def wait_processed(self, timeout: float = None) -> Dict[str, Any]:
         """Wait for all async operations to complete"""
