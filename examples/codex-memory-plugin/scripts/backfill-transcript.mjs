@@ -12,6 +12,12 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
+import {
+  extractTextFromPayload,
+  isAssistantSideCaptureRole,
+  normalizeCaptureRole,
+  shouldCaptureText,
+} from "./capture-utils.mjs";
 import { loadConfig } from "./config.mjs";
 import { deriveOvSessionId } from "./session-state.mjs";
 
@@ -168,18 +174,6 @@ async function fetchJSON(path, init = {}) {
   }
 }
 
-function extractTextFromContent(content) {
-  if (!content) return "";
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .filter((b) => b && (b.type === "text" || b.type === "input_text" || b.type === "output_text"))
-      .map((b) => b.text || "")
-      .join("\n");
-  }
-  return "";
-}
-
 function parseTranscript(content) {
   try {
     const data = JSON.parse(content);
@@ -198,27 +192,18 @@ function extractTurns(entries) {
   for (const entry of entries) {
     if (!entry || typeof entry !== "object") continue;
     const payload = entry.payload && typeof entry.payload === "object" ? entry.payload : entry;
-    let role = payload.role;
-    let text = "";
+    const message = payload.message && typeof payload.message === "object" ? payload.message : null;
+    const rawRole = message?.role || payload.role || payload.type || payload.kind;
+    const role = normalizeCaptureRole(rawRole);
+    if (!role) continue;
+    if (isAssistantSideCaptureRole(rawRole) && !cfg.captureAssistantTurns) continue;
 
-    if (typeof payload.content === "string") {
-      text = payload.content;
-    } else if (Array.isArray(payload.content)) {
-      text = extractTextFromContent(payload.content);
-    } else if (payload.message && typeof payload.message === "object") {
-      role = payload.message.role || role;
-      text = typeof payload.message.content === "string"
-        ? payload.message.content
-        : extractTextFromContent(payload.message.content);
-    }
-
-    if (role !== "user" && role !== "assistant") continue;
-    if (role === "assistant" && !cfg.captureAssistantTurns) continue;
-    const trimmed = text.trim();
-    if (!trimmed) continue;
+    const rawText = extractTextFromPayload(payload, { toolMaxChars: cfg.captureToolMaxChars });
+    const decision = shouldCaptureText(rawText, role, cfg);
+    if (!decision.shouldCapture) continue;
     turns.push({
       role,
-      text: trimmed.length > cfg.captureMaxLength ? trimmed.slice(0, cfg.captureMaxLength) : trimmed,
+      text: decision.text,
     });
   }
   return turns;
