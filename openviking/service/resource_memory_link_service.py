@@ -389,12 +389,11 @@ class ResourceMemoryLinkService:
             resource_uri=resource_uri,
             recursive=recursive,
         )
-        matches = self._merge_memory_ref_matches(matches, post_commit_matches)
 
         cleaned: List[str] = []
         deleted: List[str] = []
         errors: List[str] = []
-        grouped = self._group_matches_by_memory(matches)
+        grouped = self._group_matches_by_memory(post_commit_matches)
         for memory_uri, memory_matches in grouped.items():
             first = memory_matches[0]
             try:
@@ -619,22 +618,6 @@ class ResourceMemoryLinkService:
     @staticmethod
     def _memory_uris_from_matches(matches: Sequence[_MemoryRefMatch]) -> List[str]:
         return list(dict.fromkeys(match.memory_uri for match in matches))
-
-    @staticmethod
-    def _merge_memory_ref_matches(
-        first: Sequence[_MemoryRefMatch],
-        second: Sequence[_MemoryRefMatch],
-    ) -> List[_MemoryRefMatch]:
-        merged: List[_MemoryRefMatch] = []
-        seen: set[tuple[str, str]] = set()
-        for match in [*first, *second]:
-            ref_uri = str(match.resource_ref.get("resource_uri") or "")
-            key = (match.memory_uri, ref_uri)
-            if key in seen:
-                continue
-            seen.add(key)
-            merged.append(match)
-        return merged
 
     @staticmethod
     def _resource_ref_matches(
