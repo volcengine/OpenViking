@@ -1069,6 +1069,54 @@ class PersistCollection(LocalCollection):
             logger.info("Index '%s': replay complete (%d records)", index_name, _processed)
             self.indexes.set(index_name, index)
 
+        # Self-heal: if no indexes were recovered but the store still holds
+        # candidate records, the previous shutdown lost the index before the
+        # background persist could flush. Synchronously rebuild a default
+        # index from the store so the collection is searchable again.
+        if self.indexes.list_names():
+            return
+        if not self.store_mgr:
+            return
+        try:
+            cands_list = self.store_mgr.get_all_cands_data()
+        except Exception as exc:
+            logger.warning("Failed to inspect store during recovery rebuild: %s", exc)
+            return
+        if not cands_list:
+            return
+        logger.warning(
+            "auto-rebuilding default index: found %d records with no index in %s",
+            len(cands_list),
+            self.index_dir,
+        )
+        try:
+            self._rebuild_default_index_from_store(cands_list)
+        except Exception as exc:
+            self._index_rebuild_failed = True
+            logger.error(
+                "Failed to auto-rebuild default index from %d store records: %s",
+                len(cands_list),
+                exc,
+            )
+
+    def _rebuild_default_index_from_store(self, cands_list: List[CandidateData]) -> None:
+        """Build a default index in-place from store candidate records and persist it."""
+        default_name = "default"
+        default_meta_data: Dict[str, Any] = {
+            "VectorIndex": {"IndexType": "flat", "Distance": "l2"},
+        }
+        index = self._new_index(default_name, default_meta_data, cands_list)
+        self.indexes.set(default_name, index)
+        # Persist synchronously so the rebuilt index survives the next restart
+        # without depending on the background maintenance job.
+        if hasattr(index, "persist") and callable(index.persist):
+            try:
+                index.persist()
+            except Exception as exc:
+                logger.warning(
+                    "Default index rebuilt in memory but persist() failed: %s", exc
+                )
+
     def _replay_recovery_records(
         self,
         *,
