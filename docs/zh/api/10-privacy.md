@@ -4,8 +4,6 @@
 
 每次更新都会生成版本快照，可查询历史版本并切换生效版本。
 
-Privacy config 端点当前作为 raw HTTP/CLI 能力记录在文档中，不属于 Go SDK v1 方法边界。Go SDK v1 按当前 Python HTTP client 的公开方法范围实现。
-
 ## 典型场景
 
 - 为某个 skill 保存密钥等敏感配置

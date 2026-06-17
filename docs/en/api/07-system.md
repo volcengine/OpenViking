@@ -2,34 +2,6 @@
 
 OpenViking provides system health, observability, and debug APIs for monitoring component status.
 
-## Go SDK Quick Reference
-
-```go
-healthy, err := client.Health(ctx)
-
-waitResult, err := client.WaitProcessed(ctx, &openviking.WaitProcessedOptions{
-    Timeout: openviking.Float64(600),
-})
-
-reindex, err := client.Reindex(ctx, "viking://resources/docs", &openviking.ReindexOptions{
-    Mode: "vectors_only",
-    Wait: true,
-})
-
-consistency, err := client.CheckConsistency(ctx, "viking://resources/docs")
-system, err := client.GetStatus(ctx)
-queue, err := client.QueueStatus(ctx)
-vikingdb, err := client.VikingDBStatus(ctx)
-models, err := client.ModelsStatus(ctx)
-observerHealthy, err := client.IsHealthy(ctx)
-
-_, _, _, _, _, _, _, _ = healthy, waitResult, reindex, consistency, system, queue, vikingdb, models
-_ = observerHealthy
-```
-
-Backend sync, ready, debug, and extended observer endpoints documented below are
-raw HTTP/CLI operations unless a matching Go SDK method is listed above.
-
 ## API Reference
 
 ### health
@@ -92,6 +64,16 @@ client.initialize()
 
 healthy = client.health()
 print(f"Healthy: {healthy}")
+```
+
+**Go SDK**
+
+```go
+healthy, err := client.Health(ctx)
+if err != nil {
+    return err
+}
+fmt.Println(healthy)
 ```
 
 **CLI**
@@ -290,6 +272,16 @@ print(report["ok"])
 print(report["missing_records"])
 ```
 
+**Go SDK**
+
+```go
+report, err := client.CheckConsistency(ctx, "viking://resources/my-project")
+if err != nil {
+    return err
+}
+fmt.Println(report["ok"])
+```
+
 **CLI**
 
 ```bash
@@ -365,6 +357,18 @@ client.add_resource("./docs/")
 # Wait for all processing to complete
 status = client.wait_processed(timeout=60.0)
 print(f"Processing complete: {status}")
+```
+
+**Go SDK**
+
+```go
+status, err := client.WaitProcessed(ctx, &openviking.WaitProcessedOptions{
+    Timeout: openviking.Float64(60),
+})
+if err != nil {
+    return err
+}
+fmt.Println(status)
 ```
 
 **CLI**
@@ -462,6 +466,19 @@ result = client.reindex(
     wait=False,
 )
 print(result["status"])
+```
+
+**Go SDK**
+
+```go
+result, err := client.Reindex(ctx, "viking://resources", &openviking.ReindexOptions{
+    Mode: "vectors_only",
+    Wait: true,
+})
+if err != nil {
+    return err
+}
+fmt.Println(result["status"])
 ```
 
 **HTTP API**
@@ -625,6 +642,16 @@ print(client.observer.queue)
 # TOTAL                 0        0            20         0       20
 ```
 
+**Go SDK**
+
+```go
+status, err := client.QueueStatus(ctx)
+if err != nil {
+    return err
+}
+fmt.Println(status["is_healthy"])
+```
+
 **CLI**
 
 ```bash
@@ -692,6 +719,16 @@ print(client.observer.vikingdb().is_healthy)  # True
 print(client.observer.vikingdb().status)      # Status table string
 ```
 
+**Go SDK**
+
+```go
+status, err := client.VikingDBStatus(ctx)
+if err != nil {
+    return err
+}
+fmt.Println(status["is_healthy"])
+```
+
 **CLI**
 
 ```bash
@@ -754,6 +791,16 @@ print(client.observer.models)
 # dense_embedding        yes      ...
 # rerank                 yes      ...
 # vlm                    yes      ...
+```
+
+**Go SDK**
+
+```go
+status, err := client.ModelsStatus(ctx)
+if err != nil {
+    return err
+}
+fmt.Println(status["is_healthy"])
 ```
 
 **CLI**
@@ -996,6 +1043,16 @@ print(client.observer.system())
 # ...
 #
 # [system] (healthy)
+```
+
+**Go SDK**
+
+```go
+status, err := client.GetStatus(ctx)
+if err != nil {
+    return err
+}
+fmt.Println(status["is_healthy"])
 ```
 
 **CLI**

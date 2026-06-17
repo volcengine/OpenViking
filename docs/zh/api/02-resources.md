@@ -312,36 +312,14 @@ client.add_resource(
 **Go SDK**
 
 ```go
-client, err := openviking.NewClient(openviking.Config{
-    BaseURL: "http://localhost:1933",
-    APIKey:  "your-key",
-})
-if err != nil {
-    log.Fatal(err)
-}
-
 result, err := client.AddResource(ctx, "./documents/guide.md", &openviking.AddResourceOptions{
     Reason: "User guide documentation",
     Wait:   true,
 })
 if err != nil {
-    log.Fatal(err)
+    return err
 }
 fmt.Println(result["root_uri"])
-
-result, err = client.AddResource(ctx, "https://example.com/api-docs.md", &openviking.AddResourceOptions{
-    To:     "viking://resources/external/api-docs.md",
-    Reason: "External API docs",
-})
-
-result, err = client.AddResource(ctx, "https://example.feishu.cn/docx/doc_token", &openviking.AddResourceOptions{
-    To:            "viking://resources/feishu/doc",
-    WatchInterval: 1440,
-    Args: map[string]any{
-        "feishu_access_token":  "u-...",
-        "feishu_refresh_token": "r-...",
-    },
-})
 ```
 
 **CLI**
@@ -696,7 +674,7 @@ result, err := client.AddSkill(ctx, "./skills/my-skill.json", &openviking.AddSki
     Wait: true,
 })
 if err != nil {
-    log.Fatal(err)
+    return err
 }
 fmt.Println(result["uri"])
 ```

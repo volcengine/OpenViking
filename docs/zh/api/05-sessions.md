@@ -85,15 +85,7 @@ print(f"Session ID: {result['session_id']}")
 **Go SDK**
 
 ```go
-// 创建新会话（自动生成 ID）
-session, err := client.CreateSession(ctx, nil)
-if err != nil {
-    return err
-}
-fmt.Println(session["session_id"])
-
-// 创建指定 ID 的新会话
-session, err = client.CreateSession(ctx, &openviking.CreateSessionOptions{
+session, err := client.CreateSession(ctx, &openviking.CreateSessionOptions{
     SessionID: "my-custom-session-id",
 })
 if err != nil {
@@ -776,27 +768,9 @@ await client.add_message(
 **Go SDK**
 
 ```go
-// 简单模式：添加用户消息
 result, err := client.AddMessage(ctx, "a1b2c3d4", "user", openviking.AddMessageOptions{
     Content: openviking.String("How do I authenticate users?"),
     PeerID:  "web-visitor-alice",
-})
-if err != nil {
-    return err
-}
-fmt.Println(result["message_count"])
-
-// Parts 模式：添加带有上下文引用的助手消息
-result, err = client.AddMessage(ctx, "a1b2c3d4", "assistant", openviking.AddMessageOptions{
-    Parts: []map[string]any{
-        {"type": "text", "text": "Based on the documentation, you can configure embedding..."},
-        {
-            "type":         "context",
-            "uri":          "viking://resources/docs/auth/",
-            "context_type": "resource",
-            "abstract":     "Authentication guide",
-        },
-    },
 })
 if err != nil {
     return err

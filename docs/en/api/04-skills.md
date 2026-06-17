@@ -324,24 +324,13 @@ client.wait_processed()
 **Go SDK**
 
 ```go
-skill := map[string]any{
-    "name":        "search-web",
-    "description": "Search the web for current information",
-    "content":     "# search-web\n\nSearch the web for current information.",
-}
-result, err := client.AddSkill(ctx, skill, nil)
+result, err := client.AddSkill(ctx, "./skills/my-skill/", &openviking.AddSkillOptions{
+    Wait: true,
+})
 if err != nil {
-    log.Fatal(err)
+    return err
 }
 fmt.Println(result["uri"])
-
-result, err = client.AddSkill(ctx, "./skills/search-web/SKILL.md", &openviking.AddSkillOptions{
-    Wait: true,
-})
-
-result, err = client.AddSkill(ctx, "./skills/code-runner/", &openviking.AddSkillOptions{
-    Wait: true,
-})
 ```
 
 **CLI**

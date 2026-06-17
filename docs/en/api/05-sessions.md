@@ -85,15 +85,7 @@ print(f"Session ID: {result['session_id']}")
 **Go SDK**
 
 ```go
-// Create new session with an auto-generated ID.
-session, err := client.CreateSession(ctx, nil)
-if err != nil {
-    return err
-}
-fmt.Println(session["session_id"])
-
-// Create new session with a specified ID.
-session, err = client.CreateSession(ctx, &openviking.CreateSessionOptions{
+session, err := client.CreateSession(ctx, &openviking.CreateSessionOptions{
     SessionID: "my-custom-session-id",
 })
 if err != nil {
@@ -802,27 +794,9 @@ await client.add_message(
 **Go SDK**
 
 ```go
-// Simple mode: add user message.
 result, err := client.AddMessage(ctx, "a1b2c3d4", "user", openviking.AddMessageOptions{
     Content: openviking.String("How do I authenticate users?"),
     PeerID:  "web-visitor-alice",
-})
-if err != nil {
-    return err
-}
-fmt.Println(result["message_count"])
-
-// Parts mode: add assistant message with context reference.
-result, err = client.AddMessage(ctx, "a1b2c3d4", "assistant", openviking.AddMessageOptions{
-    Parts: []map[string]any{
-        {"type": "text", "text": "Based on the documentation, you can configure embedding..."},
-        {
-            "type":         "context",
-            "uri":          "viking://resources/docs/auth/",
-            "context_type": "resource",
-            "abstract":     "Authentication guide",
-        },
-    },
 })
 if err != nil {
     return err

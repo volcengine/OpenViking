@@ -83,34 +83,14 @@ go get github.com/volcengine/OpenViking/sdk/go
 ```
 
 ```go
-package main
-
-import (
-    "context"
-    "log"
-    "time"
-
-    openviking "github.com/volcengine/OpenViking/sdk/go"
-)
-
-func main() {
-    ctx := context.Background()
-    client, err := openviking.NewClient(openviking.Config{
-        BaseURL: "http://localhost:1933",
-        APIKey:  "your-key",
-        Timeout: 120 * time.Second,
-    })
-    if err != nil {
-        log.Fatal(err)
-    }
-    defer client.CloseIdleConnections()
-
-    ok, err := client.Health(ctx)
-    if err != nil {
-        log.Fatal(err)
-    }
-    log.Printf("OpenViking healthy: %v", ok)
+client, err := openviking.NewClient(openviking.Config{
+    BaseURL: "http://localhost:1933",
+    APIKey:  "your-key",
+})
+if err != nil {
+    return err
 }
+defer client.CloseIdleConnections()
 ```
 
 Go SDK 发送的身份请求头与 Python HTTP client 一致：

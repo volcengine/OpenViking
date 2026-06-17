@@ -131,9 +131,15 @@ Each API is organized in the following three parts:
 Provide in order:
 - HTTP API (method + path + curl example)
 - Python SDK example
-- Go SDK example, when the endpoint is part of the Go SDK surface
+- Go SDK example, when it adds endpoint-specific value and can stay concise
 - CLI example
 - Response example
+
+Keep API documentation organized around API modules and individual operations,
+not around client languages. SDK snippets should be short call examples inside
+the relevant operation's Usage Examples. Put language-specific quick references,
+walkthroughs, and combined workflows in that SDK's own documentation instead of
+adding language-owned sections to API module pages.
 
 ## Example: Complete API Documentation
 

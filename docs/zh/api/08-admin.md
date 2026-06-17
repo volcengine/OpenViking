@@ -55,34 +55,6 @@ Admin API 用于多租户环境下的账户和用户管理。包括工作区（a
 - `--sudo` 仅适用于上面的命令，用于普通数据命令会报错
 - 必须配置 `root_api_key` 才能使用 `--sudo`
 
-## Go SDK 快速参考
-
-执行 ROOT-only 操作时，用具备 ROOT 权限的 API key 初始化客户端。
-
-```go
-rootClient, err := openviking.NewClient(openviking.Config{
-    BaseURL: "http://localhost:1933",
-    APIKey:  "root-key",
-})
-if err != nil {
-    log.Fatal(err)
-}
-
-account, err := rootClient.AdminCreateAccount(ctx, "acme", "alice")
-accounts, err := rootClient.AdminListAccounts(ctx)
-user, err := rootClient.AdminRegisterUser(ctx, "acme", "bob", "user")
-users, err := rootClient.AdminListUsers(ctx, "acme")
-role, err := rootClient.AdminSetRole(ctx, "acme", "bob", "admin")
-key, err := rootClient.AdminRegenerateKey(ctx, "acme", "bob")
-removed, err := rootClient.AdminRemoveUser(ctx, "acme", "bob")
-deleted, err := rootClient.AdminDeleteAccount(ctx, "acme")
-migration, err := rootClient.AdminMigrate(ctx, &openviking.AdminMigrateOptions{
-    Cleanup: false,
-})
-
-_, _, _, _, _, _, _, _, _ = account, accounts, user, users, role, key, removed, deleted, migration
-```
-
 ## API 参考
 
 ### create_account
@@ -190,6 +162,16 @@ print(f"Admin user: {result['admin_user_id']}")
 print(f"User key: {result.get('user_key', '(not exposed in trusted mode)')}")
 ```
 
+**Go SDK**
+
+```go
+result, err := client.AdminCreateAccount(ctx, "acme", "alice")
+if err != nil {
+    return err
+}
+fmt.Println(result["account_id"])
+```
+
 **CLI**
 
 ```bash
@@ -257,6 +239,16 @@ client.initialize()
 accounts = client.admin_list_accounts()
 for account in accounts:
     print(f"Account: {account['account_id']}, created: {account['created_at']}, users: {account['user_count']}")
+```
+
+**Go SDK**
+
+```go
+accounts, err := client.AdminListAccounts(ctx)
+if err != nil {
+    return err
+}
+fmt.Println(accounts)
 ```
 
 **CLI**
@@ -333,6 +325,16 @@ client.initialize()
 
 result = client.admin_delete_account("acme")
 print(f"Account deleted: {result['deleted']}")
+```
+
+**Go SDK**
+
+```go
+result, err := client.AdminDeleteAccount(ctx, "acme")
+if err != nil {
+    return err
+}
+fmt.Println(result["deleted"])
 ```
 
 **CLI**
@@ -417,6 +419,16 @@ client.initialize()
 result = client.admin_register_user("acme", "bob", role="user")
 print(f"User registered: {result['user_id']}")
 print(f"User key: {result.get('user_key', '(not exposed in trusted mode)')}")
+```
+
+**Go SDK**
+
+```go
+result, err := client.AdminRegisterUser(ctx, "acme", "bob", "user")
+if err != nil {
+    return err
+}
+fmt.Println(result["user_id"])
 ```
 
 **CLI**
@@ -508,6 +520,16 @@ for user in users:
     print(f"User: {user['user_id']}, role: {user['role']}")
 ```
 
+**Go SDK**
+
+```go
+users, err := client.AdminListUsers(ctx, "acme")
+if err != nil {
+    return err
+}
+fmt.Println(users)
+```
+
 **CLI**
 
 ```bash
@@ -585,6 +607,16 @@ client.initialize()
 
 result = client.admin_remove_user("acme", "bob")
 print(f"User deleted: {result['deleted']}")
+```
+
+**Go SDK**
+
+```go
+result, err := client.AdminRemoveUser(ctx, "acme", "bob")
+if err != nil {
+    return err
+}
+fmt.Println(result["deleted"])
 ```
 
 **CLI**
@@ -668,6 +700,16 @@ result = client.admin_set_role("acme", "bob", "admin")
 print(f"User: {result['user_id']}, new role: {result['role']}")
 ```
 
+**Go SDK**
+
+```go
+result, err := client.AdminSetRole(ctx, "acme", "bob", "admin")
+if err != nil {
+    return err
+}
+fmt.Println(result["role"])
+```
+
 **CLI**
 
 ```bash
@@ -745,6 +787,16 @@ client.initialize()
 
 result = client.admin_regenerate_key("acme", "bob")
 print(f"New user key: {result['user_key']}")
+```
+
+**Go SDK**
+
+```go
+result, err := client.AdminRegenerateKey(ctx, "acme", "bob")
+if err != nil {
+    return err
+}
+fmt.Println(result["user_key"])
 ```
 
 **CLI**
@@ -840,6 +892,18 @@ curl -X POST http://localhost:1933/api/v1/admin/migrate \
   -H "Content-Type: application/json" \
   -H "X-API-Key: <root-key>" \
   -d '{"action": "cleanup"}'
+```
+
+**Go SDK**
+
+```go
+result, err := client.AdminMigrate(ctx, &openviking.AdminMigrateOptions{
+    Cleanup: false,
+})
+if err != nil {
+    return err
+}
+fmt.Println(result["task_id"])
 ```
 
 **CLI**

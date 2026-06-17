@@ -25,44 +25,6 @@ Phase 1 有意把范围控制得比较小：
 - 用户自己创建的点目录或点文件仍然可见，只有上面列出的保留内部文件名会被隐藏。
 - 启用多写存储时，被 redirect 到 backup 的文件仍会通过文件系统 API 呈现为普通文件；内部 redirect 和同步元数据不会暴露给调用方。
 
-## Go SDK 快速参考
-
-Go SDK 暴露与 Python HTTP client 对齐的文件系统和内容操作。所有网络方法都接收 `context.Context`。
-
-```go
-client, err := openviking.NewClient(openviking.Config{
-    BaseURL: "http://localhost:1933",
-    APIKey:  "your-key",
-})
-if err != nil {
-    log.Fatal(err)
-}
-
-entries, err := client.List(ctx, "viking://resources/docs", &openviking.ListOptions{
-    Recursive: true,
-    Output:    "original",
-})
-
-tree, err := client.Tree(ctx, "viking://resources/docs", nil)
-stat, err := client.Stat(ctx, "viking://resources/docs/api.md")
-
-err = client.Mkdir(ctx, "viking://resources/docs/drafts", "Draft docs")
-err = client.Move(ctx, "viking://resources/docs/old.md", "viking://resources/docs/new.md")
-err = client.Remove(ctx, "viking://resources/docs/old.md", &openviking.RemoveOptions{
-    Wait: true,
-})
-
-abstract, err := client.Abstract(ctx, "viking://resources/docs")
-overview, err := client.Overview(ctx, "viking://resources/docs")
-content, err := client.Read(ctx, "viking://resources/docs/api.md", 0, -1)
-writeResult, err := client.Write(ctx, "viking://resources/docs/api.md", content, &openviking.WriteOptions{
-    Mode: "replace",
-    Wait: true,
-})
-
-_, _, _, _, _, _ = entries, tree, stat, abstract, overview, writeResult
-```
-
 ## API 参考
 
 ### abstract()
