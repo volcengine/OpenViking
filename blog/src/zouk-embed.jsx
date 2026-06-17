@@ -746,8 +746,8 @@ export function ZoukInteractiveBlog({ route }) {
   const target = `#${CONFIG.channel}`;
   const isPostRoute = route?.name === 'post';
   const panelVisible = open || closing;
-  const showBottomComposer = isPostRoute && !panelVisible;
-  const showLauncher = !isPostRoute && !panelVisible;
+  const showBottomComposer = !panelVisible;
+  const showPostEdgeToggle = isPostRoute && showBottomComposer;
   const composerPlaceholder = currentComposerPlaceholder();
   const referencedText = compactText(selectedText);
   const contextUrlChanged = Boolean(sourceUrl && sourceUrl !== lastContextUrl);
@@ -1217,18 +1217,7 @@ export function ZoukInteractiveBlog({ route }) {
         </button>
       ) : null}
 
-      {showLauncher ? (
-        <button
-          type="button"
-          className="zouk-reader-launcher"
-          aria-label={launcherLabel}
-          onClick={() => openChat()}
-        >
-          <MessageIcon />
-        </button>
-      ) : null}
-
-      {showBottomComposer ? (
+      {showPostEdgeToggle ? (
         <button
           type="button"
           className="zouk-reader-edge-toggle"
@@ -1238,7 +1227,11 @@ export function ZoukInteractiveBlog({ route }) {
       ) : null}
 
       {showBottomComposer ? (
-        <form className="zouk-reader-bottom-composer" onSubmit={onSubmit} aria-label="Ask OpenViking">
+        <form
+          className={`zouk-reader-bottom-composer${isPostRoute ? '' : ' is-index-route'}`}
+          onSubmit={onSubmit}
+          aria-label="Ask OpenViking"
+        >
           <div className="zouk-reader-input-shell">
             <textarea
               ref={textareaRef}
