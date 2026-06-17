@@ -4,6 +4,7 @@ use crate::core::errors::{Error, Result};
 use crate::core::filesystem::FileSystem;
 use crate::core::WriteFlag;
 use crate::crypto;
+use futures::stream::{self, StreamExt};
 
 use super::manifest::{StorageShape, SHAPE_MANIFEST_PATH};
 
@@ -109,7 +110,7 @@ pub async fn write_shape_guard(
 /// Probe existing backend files to infer the legacy storage shape.
 pub async fn detect_legacy_shape(raw_fs: &Arc<dyn FileSystem>) -> Result<Option<StorageShape>> {
     let entries = raw_fs.tree_directory("/", true, None, None).await?;
-    let mut detected: Option<StorageShape> = None;
+    let mut candidates = Vec::new();
 
     for entry in entries {
         // Zero-byte files are a legacy plaintext artifact in the current implementation, but they
@@ -123,9 +124,22 @@ pub async fn detect_legacy_shape(raw_fs: &Arc<dyn FileSystem>) -> Result<Option<
         if normalized == SHAPE_MANIFEST_PATH || is_persistent_task_record_path(&normalized) {
             continue;
         }
+        candidates.push(normalized);
+    }
 
-        let header = raw_fs.read(&normalized, 0, 6).await?;
-        let current = shape_from_raw_bytes(&normalized, &header)?;
+    let mut detected: Option<StorageShape> = None;
+    let mut probes = stream::iter(candidates.into_iter().map(|normalized| {
+        let raw_fs = Arc::clone(raw_fs);
+        async move {
+            let header = raw_fs.read(&normalized, 0, 6).await?;
+            let current = shape_from_raw_bytes(&normalized, &header)?;
+            Ok::<(String, StorageShape), Error>((normalized, current))
+        }
+    }))
+    .buffer_unordered(16);
+
+    while let Some(item) = probes.next().await {
+        let (normalized, current) = item?;
 
         match &detected {
             None => detected = Some(current),
