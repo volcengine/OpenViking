@@ -25,6 +25,7 @@ type DocsSearchResult = {
 }
 
 type ResolvedDocsSearchResult = DocsSearchResult & {
+  cleanedSnippet: string
   resolvedUrl: string
 }
 
@@ -81,12 +82,23 @@ const activeMode = computed(() => modes.find((item) => item.value === mode.value
 const resolvedResults = computed<ResolvedDocsSearchResult[]>(() =>
   results.value.flatMap((result) => {
     const resolvedUrl = resultUrl(result)
-    return resolvedUrl ? [{ ...result, resolvedUrl }] : []
+    return resolvedUrl ? [{ ...result, cleanedSnippet: cleanSearchSnippet(result.snippet), resolvedUrl }] : []
   })
 )
 
 function docsLocale(): SearchLocale {
-  return window.location.pathname.startsWith('/zh/') ? 'zh' : 'en'
+  const basePath = normalizeBasePath(import.meta.env.BASE_URL)
+  const pathname = window.location.pathname
+  const localizedPath = pathname.startsWith(basePath)
+    ? pathname.slice(basePath.length - 1)
+    : pathname
+
+  return localizedPath.startsWith('/zh/') ? 'zh' : 'en'
+}
+
+function normalizeBasePath(basePath: string) {
+  if (!basePath || basePath === '/') return '/'
+  return `/${basePath.replace(/^\/+|\/+$/g, '')}/`
 }
 
 function openSearch() {
@@ -296,9 +308,17 @@ function fallbackNotice(reason: RemoteSearchFailureReason, localResultCount: num
 
 async function loadLocalIndex() {
   localIndexPromise ??= fetch(withBase('/docs-search-index.json'))
-    .then((response) => (response.ok ? response.json() : []))
+    .then((response) => {
+      if (!response.ok) {
+        localIndexPromise = null
+        return []
+      }
+
+      return response.json()
+    })
     .then((payload) => (Array.isArray(payload) ? (payload as DocsIndexRecord[]) : []))
     .catch((error) => {
+      localIndexPromise = null
       console.warn('Failed to load local docs search index.', error)
       return []
     })
@@ -519,8 +539,8 @@ onUnmounted(() => {
                 @click="closeSearch"
               >
                 <span class="ov-docs-search-result-title">{{ result.title }}</span>
-                <span v-if="cleanSearchSnippet(result.snippet)" class="ov-docs-search-result-snippet">
-                  {{ cleanSearchSnippet(result.snippet) }}
+                <span v-if="result.cleanedSnippet" class="ov-docs-search-result-snippet">
+                  {{ result.cleanedSnippet }}
                 </span>
                 <span class="ov-docs-search-result-path">{{ result.relativePath }}</span>
               </a>
