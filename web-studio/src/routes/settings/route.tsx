@@ -295,7 +295,7 @@ function AccountFilterChips({
   return (
     <div className="flex min-w-0 flex-col gap-2">
       <span className="text-xs font-medium text-muted-foreground">{label}</span>
-      <div className="flex max-w-full flex-wrap gap-2">
+      <div className="flex max-w-full min-w-0 flex-wrap gap-2">
         {options.map((accountId) => {
           const isSelected = selected.has(accountId)
 
@@ -306,8 +306,9 @@ function AccountFilterChips({
               aria-pressed={isSelected}
               disabled={disabled}
               onClick={() => toggle(accountId)}
+              title={accountId}
               className={cn(
-                'h-8 rounded-full border px-3 font-mono text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+                'h-8 max-w-full truncate rounded-full border px-3 font-mono text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50 sm:max-w-72',
                 isSelected
                   ? 'border-primary bg-primary text-primary-foreground'
                   : 'border-border bg-background text-muted-foreground hover:border-primary/50 hover:text-foreground',
@@ -1161,48 +1162,54 @@ function SettingsRoute() {
       {hasAdminAccess ? (
         <Card className="overflow-hidden">
           <CardHeader className="gap-4 border-b bg-muted/20">
-            <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+            <div className="flex min-w-0 flex-col gap-4">
               <div className="min-w-0">
                 <CardTitle>{t('management.title')}</CardTitle>
-                <CardDescription>{t('management.description')}</CardDescription>
+                <CardDescription className="max-w-3xl">
+                  {t('management.description')}
+                </CardDescription>
               </div>
-              <div className="flex flex-wrap items-end gap-2 lg:justify-end">
-                <AccountFilterChips
-                  accounts={accountOptions}
-                  disabled={!canQueryAdmin || accountsQuery.isLoading}
-                  label={t('management.accountFilter')}
-                  selectedAccountIds={selectedManagedAccountIds}
-                  onChange={setManagedAccountIds}
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => void refreshAdmin()}
-                  disabled={!canQueryAdmin || managedUsersQuery.isFetching}
-                >
-                  <RefreshCwIcon
-                    className={cn(
-                      managedUsersQuery.isFetching && 'animate-spin',
-                    )}
+              <div className="flex min-w-0 flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
+                <div className="min-w-0 flex-1">
+                  <AccountFilterChips
+                    accounts={accountOptions}
+                    disabled={!canQueryAdmin || accountsQuery.isLoading}
+                    label={t('management.accountFilter')}
+                    selectedAccountIds={selectedManagedAccountIds}
+                    onChange={setManagedAccountIds}
                   />
-                  {t('actions.refresh')}
-                </Button>
-                <Button
-                  type="button"
-                  onClick={() => setAddAccountOpen(true)}
-                  disabled={!canQueryAdmin}
-                >
-                  <PlusIcon />
-                  {t('actions.addAccount')}
-                </Button>
-                <Button
-                  type="button"
-                  onClick={() => setAddUserOpen(true)}
-                  disabled={!canQueryAdmin}
-                >
-                  <PlusIcon />
-                  {t('actions.addUser')}
-                </Button>
+                </div>
+                <div className="flex shrink-0 flex-wrap gap-2 xl:justify-end">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => void refreshAdmin()}
+                    disabled={!canQueryAdmin || managedUsersQuery.isFetching}
+                  >
+                    <RefreshCwIcon
+                      className={cn(
+                        managedUsersQuery.isFetching && 'animate-spin',
+                      )}
+                    />
+                    {t('actions.refresh')}
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={() => setAddAccountOpen(true)}
+                    disabled={!canQueryAdmin}
+                  >
+                    <PlusIcon />
+                    {t('actions.addAccount')}
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={() => setAddUserOpen(true)}
+                    disabled={!canQueryAdmin}
+                  >
+                    <PlusIcon />
+                    {t('actions.addUser')}
+                  </Button>
+                </div>
               </div>
             </div>
           </CardHeader>
